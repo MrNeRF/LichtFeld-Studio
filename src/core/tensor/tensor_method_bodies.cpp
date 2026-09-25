@@ -4,12 +4,11 @@
 #include "core/detail/tensor_impl.hpp"
 
 #include "core/cuda_error.hpp"
+#include "core/cuda_types.hpp"
 #include "core/detail/lazy_executor.hpp"
 #include "core/detail/tensor_broadcast.hpp"
 #include "core/detail/tensor_cpu_apply.hpp"
 #include "core/detail/tensor_dtype_dispatch.hpp"
-
-#include <cuda_runtime.h>
 
 namespace lfs::core {
 
