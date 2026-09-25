@@ -125,9 +125,7 @@ class PluginMarketplacePanel(Panel):
         from .manager import PluginManager
 
         self._plugin_manager = PluginManager.instance()
-        self._plugin_manager.on_plugin_loaded(self._on_manager_plugin_changed)
-        self._plugin_manager.on_plugin_unloaded(self._on_manager_plugin_changed)
-        self._plugin_manager.on_plugin_changed(self._on_manager_plugin_changed)
+        self._manager_callbacks_registered = False
 
         set_catalog_on_change = getattr(self._catalog, "set_on_change", None)
         if callable(set_catalog_on_change):
@@ -195,6 +193,7 @@ class PluginMarketplacePanel(Panel):
 
     def on_mount(self, doc):
         super().on_mount(doc)
+        self._subscribe_manager_callbacks()
         self._doc = doc
         self._last_lang = lf.ui.get_current_language()
         self._entries_dirty = True
@@ -250,9 +249,7 @@ class PluginMarketplacePanel(Panel):
         self._request_model_update()
 
     def on_unmount(self, doc):
-        self._plugin_manager.remove_plugin_loaded_callback(self._on_manager_plugin_changed)
-        self._plugin_manager.remove_plugin_unloaded_callback(self._on_manager_plugin_changed)
-        self._plugin_manager.remove_plugin_changed_callback(self._on_manager_plugin_changed)
+        self._unsubscribe_manager_callbacks()
         self._unsubscribe_reactive_state()
         self._cancel_dismiss_timers()
         self._escape_revert.clear()
@@ -264,6 +261,22 @@ class PluginMarketplacePanel(Panel):
         self._handle = None
         if doc:
             doc.remove_data_model("plugin_marketplace")
+
+    def _subscribe_manager_callbacks(self):
+        if self._manager_callbacks_registered:
+            return
+        self._plugin_manager.on_plugin_loaded(self._on_manager_plugin_changed)
+        self._plugin_manager.on_plugin_unloaded(self._on_manager_plugin_changed)
+        self._plugin_manager.on_plugin_changed(self._on_manager_plugin_changed)
+        self._manager_callbacks_registered = True
+
+    def _unsubscribe_manager_callbacks(self):
+        if not self._manager_callbacks_registered:
+            return
+        self._plugin_manager.remove_plugin_loaded_callback(self._on_manager_plugin_changed)
+        self._plugin_manager.remove_plugin_unloaded_callback(self._on_manager_plugin_changed)
+        self._plugin_manager.remove_plugin_changed_callback(self._on_manager_plugin_changed)
+        self._manager_callbacks_registered = False
 
     def _subscribe_reactive_state(self):
         if self._reactive_unsubscribers:
