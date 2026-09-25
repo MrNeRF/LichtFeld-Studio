@@ -1630,23 +1630,29 @@ namespace lfs::training {
             }
 
             auto gather_new_swizzled_rows = [&](lfs::core::Tensor& tensor) {
+                const auto stream = lfs::core::getCurrentCUDAStream();
+                (indices_are_i64 ? indices : indices_i32).sync_to_stream(stream);
+                tensor.set_stream(stream);
                 float* ptr = tensor.ptr<float>();
                 if (indices_are_i64) {
                     lfs::core::shN_swizzled_gather_self_i64(
-                        ptr, ptr, indices.ptr<int64_t>(), n_new, old_N, layout_rest);
+                        ptr, ptr, indices.ptr<int64_t>(), n_new, old_N, layout_rest, stream);
                 } else {
                     lfs::core::shN_swizzled_gather_self(
-                        ptr, ptr, indices_i32_ptr, n_new, old_N, layout_rest);
+                        ptr, ptr, indices_i32_ptr, n_new, old_N, layout_rest, stream);
                 }
             };
             auto gather_new_swizzled_rows_u8 = [&](lfs::core::Tensor& tensor) {
+                const auto stream = lfs::core::getCurrentCUDAStream();
+                (indices_are_i64 ? indices : indices_i32).sync_to_stream(stream);
+                tensor.set_stream(stream);
                 uint8_t* ptr = tensor.ptr<uint8_t>();
                 if (indices_are_i64) {
                     lfs::core::shN_swizzled_gather_self_u8_i64(
-                        ptr, ptr, indices.ptr<int64_t>(), n_new, old_N, layout_rest);
+                        ptr, ptr, indices.ptr<int64_t>(), n_new, old_N, layout_rest, stream);
                 } else {
                     lfs::core::shN_swizzled_gather_self_u8(
-                        ptr, ptr, indices_i32_ptr, n_new, old_N, layout_rest);
+                        ptr, ptr, indices_i32_ptr, n_new, old_N, layout_rest, stream);
                 }
             };
 
