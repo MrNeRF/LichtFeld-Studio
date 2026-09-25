@@ -4,6 +4,7 @@
 
 #include "buffer_utils.h"
 #include "core/crash_handler.hpp"
+#include "core/cuda_error.hpp"
 #include "forward.h"
 #include "helper_math.h"
 #include "kernels_forward.cuh"

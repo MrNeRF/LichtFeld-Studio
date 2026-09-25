@@ -1,5 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "core/detail/gpu_backend_ops.hpp"
 #include "cuda_backend_test.hpp"
 
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"

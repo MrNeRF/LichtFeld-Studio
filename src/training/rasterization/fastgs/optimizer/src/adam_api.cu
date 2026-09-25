@@ -4,6 +4,7 @@
 
 #include "adam_api.h"
 #include "adam_kernels.cuh"
+#include "core/cuda_error.hpp"
 #include "optimizer_config.h"
 #include "utils.h"
 

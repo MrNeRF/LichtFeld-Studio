@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "cuda_backend_test.hpp"
 
 #include "core/cuda_error_typed.hpp"

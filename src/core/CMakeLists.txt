@@ -71,6 +71,7 @@ set(TENSOR_SOURCES
         tensor/backend/cuda/cuda_services.cpp
         tensor/backend/vulkan/vma_implementation.cpp
         tensor/tensor.cpp
+        tensor/tensor_method_bodies.cpp
         tensor/tensor_serialization.cpp
         tensor/tensor_factory.cpp
         tensor/tensor_utils.cpp

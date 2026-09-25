@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "adam_api.h"
+#include "core/cuda_error.hpp"
 #include "fused_adam_types.h"
 #include "kernel_utils.cuh"
 #include "utils.h"

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/detail/tensor_broadcast.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/lazy_executor.hpp"
 #include "core/tensor/internal/lazy_ir.hpp"

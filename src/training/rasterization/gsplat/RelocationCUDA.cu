@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include <cuda_runtime.h>
 
 #include "Common.h"

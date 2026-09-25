@@ -4,6 +4,7 @@
 
 #include "backward.h"
 #include "buffer_utils.h"
+#include "core/cuda_error.hpp"
 #include "forward.h"
 #include "helper_math.h"
 #include "kernels_backward.cuh"
