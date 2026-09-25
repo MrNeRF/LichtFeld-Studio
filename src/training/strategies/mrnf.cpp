@@ -12,6 +12,7 @@
 #include "core/logger.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/tensor_completion.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "core/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "kernels/densification_kernels.hpp"
@@ -347,8 +348,12 @@ namespace lfs::training {
                         auto idx_i32 = indices.dtype() == lfs::core::DataType::Int32
                                            ? indices
                                            : indices.to(lfs::core::DataType::Int32);
+                        const auto stream = lfs::core::getCurrentCUDAStream();
+                        idx_i32.sync_to_stream(stream);
+                        state->grad.set_stream(stream);
                         lfs::core::shN_swizzled_zero_at_indices(
-                            state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
+                            state->grad.ptr<float>(), idx_i32.ptr<int>(),
+                            idx_i32.numel(), layout_rest, stream);
                     }
                     return;
                 }
