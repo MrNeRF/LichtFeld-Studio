@@ -25,6 +25,7 @@
 #include "viewport/pivot.frag.spv.h"
 #include "viewport/pivot.vert.spv.h"
 #include "viewport/scene.frag.spv.h"
+#include "viewport/scene_reproject.frag.spv.h"
 #include "viewport/scene_spatial.frag.spv.h"
 #include "viewport/screen_quad.vert.spv.h"
 #include "viewport/shape_overlay.frag.spv.h"
@@ -110,6 +111,15 @@ namespace lfs::vis {
             glm::vec2 uv_scale{1.0f, 1.0f};
             glm::vec2 uv_clamp_max{1.0f, 1.0f};
         };
+
+        struct SceneReprojectPush {
+            glm::mat4 source_to_current{1.0f};
+            glm::vec4 viewport_rect{0.0f};
+            glm::vec4 color_uv_region{1.0f};
+            glm::vec4 depth_uv_region{1.0f};
+            glm::vec4 flip_y{0.0f};
+        };
+        static_assert(sizeof(SceneReprojectPush) <= 128, "push constants beyond the guaranteed 128 bytes");
 
         struct TexturedOverlayPush {
             glm::vec4 tint_opacity{1.0f, 1.0f, 1.0f, 0.8f};
@@ -256,6 +266,8 @@ namespace lfs::vis {
         VkPipeline scene_pipeline = VK_NULL_HANDLE;
         VkPipelineLayout scene_spatial_pipeline_layout = VK_NULL_HANDLE;
         VkPipeline scene_spatial_pipeline = VK_NULL_HANDLE;
+        VkPipelineLayout scene_reproject_pipeline_layout = VK_NULL_HANDLE;
+        VkPipeline scene_reproject_pipeline = VK_NULL_HANDLE;
         bool scene_spatial_pipeline_failed = false;
         SceneUpscalerSelection scene_upscaler_selection{};
         std::optional<SceneUpscalerSelection> logged_scene_upscaler_selection;
@@ -1602,9 +1614,18 @@ namespace lfs::vis {
             scene_push.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
             scene_push.offset = 0;
             scene_push.size = sizeof(ScenePush);
+            VkPushConstantRange scene_reproject_push{};
+            scene_reproject_push.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+            scene_reproject_push.offset = 0;
+            scene_reproject_push.size = sizeof(SceneReprojectPush);
             return createPipeline(kScreenQuadVertSpv, kSceneFragSpv, "scene",
                                   scene_descriptor_layout, &scene_push, true, PipelineVertexLayout::ScreenQuad,
                                   scene_pipeline_layout, scene_pipeline) &&
+                   createPipeline(kScreenQuadVertSpv, kSceneReprojectFragSpv, "scene_reproject",
+                                  scene_descriptor_layout, &scene_reproject_push, true,
+                                  PipelineVertexLayout::ScreenQuad,
+                                  scene_reproject_pipeline_layout, scene_reproject_pipeline,
+                                  shape_overlay_descriptor_layout) &&
                    createPipeline(kScreenQuadVertSpv, kVignetteFragSpv, "vignette",
                                   VK_NULL_HANDLE, &vignette_push, true, PipelineVertexLayout::ScreenQuad,
                                   vignette_pipeline_layout, vignette_pipeline) &&
@@ -2307,6 +2328,11 @@ namespace lfs::vis {
                                static_cast<std::uint32_t>(rect.height)},
                 };
                 split_view_pass.record(command_buffer, panel_rect, adjusted, params.frame_slot);
+            } else if (has_scene && params.scene_reprojection.enabled &&
+                       scene_reproject_pipeline != VK_NULL_HANDLE &&
+                       depth_blit_pass.hasDepth(params.frame_slot) &&
+                       frame.shape_overlay_descriptor_set != VK_NULL_HANDLE) {
+                recordReprojectedScene(command_buffer, rect, params);
             } else if (has_scene) {
                 const bool use_spatial =
                     scene_upscaler_selection.effective == SceneUpscalerBackend::Spatial &&
@@ -2340,6 +2366,45 @@ namespace lfs::vis {
                                    &scene_push);
                 vkCmdDraw(command_buffer, 6, 1, 0, 0);
             }
+        }
+
+        void recordReprojectedScene(VkCommandBuffer command_buffer, const FramebufferRect& rect,
+                                    const VulkanViewportPassParams& params) {
+            auto& frame = resourcesForFrame(params.frame_slot);
+            const std::array<VkDescriptorSet, 2> sets{frame.scene_descriptor_set,
+                                                      frame.shape_overlay_descriptor_set};
+            vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, scene_reproject_pipeline);
+            vkCmdBindDescriptorSets(command_buffer,
+                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    scene_reproject_pipeline_layout,
+                                    0,
+                                    static_cast<std::uint32_t>(sets.size()),
+                                    sets.data(),
+                                    0,
+                                    nullptr);
+            const glm::ivec2 valid = params.scene_image_size;
+            const glm::ivec2 alloc =
+                params.scene_image_alloc_size.x > 0 && params.scene_image_alloc_size.y > 0
+                    ? params.scene_image_alloc_size
+                    : valid;
+            const SceneReprojectPush push{
+                .source_to_current = params.scene_reprojection.source_to_current,
+                .viewport_rect = {static_cast<float>(rect.x), static_cast<float>(rect.y),
+                                  static_cast<float>(rect.width), static_cast<float>(rect.height)},
+                .color_uv_region = glm::vec4(outputUvScale(valid, alloc), outputUvClampMax(valid, alloc)),
+                .depth_uv_region = glm::vec4(params.depth_blit.uv_scale, params.depth_blit.uv_clamp_max),
+                .flip_y = {params.scene_image_flip_y ? 1.0f : 0.0f,
+                           params.depth_blit.flip_y ? 1.0f : 0.0f,
+                           0.0f,
+                           0.0f},
+            };
+            vkCmdPushConstants(command_buffer,
+                               scene_reproject_pipeline_layout,
+                               VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0,
+                               sizeof(push),
+                               &push);
+            vkCmdDraw(command_buffer, 6, 1, 0, 0);
         }
 
         void recordDepthBlitPass(VkCommandBuffer command_buffer, const FramebufferRect& rect,
@@ -2730,6 +2795,8 @@ namespace lfs::vis {
                     vkDestroyPipeline(device, scene_pipeline, nullptr);
                 if (scene_spatial_pipeline != VK_NULL_HANDLE)
                     vkDestroyPipeline(device, scene_spatial_pipeline, nullptr);
+                if (scene_reproject_pipeline != VK_NULL_HANDLE)
+                    vkDestroyPipeline(device, scene_reproject_pipeline, nullptr);
                 if (vignette_pipeline != VK_NULL_HANDLE)
                     vkDestroyPipeline(device, vignette_pipeline, nullptr);
                 if (grid_pipeline != VK_NULL_HANDLE)
@@ -2748,6 +2815,8 @@ namespace lfs::vis {
                     vkDestroyPipelineLayout(device, scene_pipeline_layout, nullptr);
                 if (scene_spatial_pipeline_layout != VK_NULL_HANDLE)
                     vkDestroyPipelineLayout(device, scene_spatial_pipeline_layout, nullptr);
+                if (scene_reproject_pipeline_layout != VK_NULL_HANDLE)
+                    vkDestroyPipelineLayout(device, scene_reproject_pipeline_layout, nullptr);
                 if (vignette_pipeline_layout != VK_NULL_HANDLE)
                     vkDestroyPipelineLayout(device, vignette_pipeline_layout, nullptr);
                 if (grid_pipeline_layout != VK_NULL_HANDLE)

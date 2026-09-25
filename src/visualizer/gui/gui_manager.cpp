@@ -66,6 +66,7 @@
 #include "python/ui_hooks.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/image_layout.hpp"
+#include "rendering/passes/scene_reprojection.hpp"
 #include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
@@ -5306,6 +5307,21 @@ namespace lfs::vis::gui {
             // run after params.split_view is populated (split stitching is gated on
             // params.split_view.enabled).
             rendering_manager->bindViewportInteropParams(params, frame_slot, export_locked);
+
+            if (mesh_frame.scene_reprojectable && !export_locked && !params.split_view.enabled &&
+                params.external_scene_image != VK_NULL_HANDLE &&
+                params.external_scene_image_generation == mesh_frame.scene_image_generation) {
+                const auto& viewport = viewer_->getViewport();
+                const glm::mat4 current_view =
+                    lfs::rendering::makeViewMatrix(viewport.getRotationMatrix(), viewport.getTranslation());
+                if (current_view != mesh_frame.scene_view) {
+                    params.scene_reprojection = {
+                        .enabled = true,
+                        .source_to_current = sceneReprojectionMatrix(
+                            mesh_frame.scene_view, mesh_frame.scene_projection, current_view),
+                    };
+                }
+            }
         }
 
         // Use the same window-relative snapshot as cursor selection and hit tests.
