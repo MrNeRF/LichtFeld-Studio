@@ -907,6 +907,7 @@
     "pointing_device_tooltip": "ビューポートのマウス／トラックパッド操作。ステータスバーのアイコンでも切り替えられます。",
     "pointing_device_mouse": "マウス（デスクトップ）",
     "pointing_device_trackpad": "トラックパッド（ノート PC）",
+    "pointing_device_automatic": "自動（両方）",
     "trackpad_swipe_pans": "2本指スワイプでパン",
     "trackpad_swipe_tooltip": "オフ: スワイプでオービット、Shift+スワイプでパン。オン: その逆。ピンチまたは Ctrl+スワイプでズーム。",
     "trackpad_swipe_speed": "スワイプ速度",
@@ -2477,8 +2478,9 @@
     "perf_expand": "Expand",
     "perf_collapse": "Collapse",
     "perf_hud_tooltip": "Show or hide the performance HUD",
-    "input_mouse_tooltip": "マウス操作: 中ボタンドラッグで回転、右ドラッグでパン、ホイールでズーム。クリックでトラックパッド操作に切り替え",
-    "input_trackpad_tooltip": "トラックパッド操作: 2本指スワイプで回転、Shift+スワイプでパン、ピンチまたはCtrl+スワイプでズーム。クリックでマウス操作に切り替え"
+    "input_mouse_tooltip": "マウス操作: 中ボタンドラッグで回転、右ドラッグでパン、ホイールでズーム。クリックで切り替え",
+    "input_trackpad_tooltip": "トラックパッド操作: 2本指スワイプで回転、Shift+スワイプでパン、ピンチまたはCtrl+スワイプでズーム。クリックで切り替え",
+    "input_automatic_tooltip": "自動操作: トラックパッドではトラックパッド操作、マウスではホイールでズーム。クリックで切り替え"
   },
   "runtime": {
     "training_save_no_memory": "プロジェクトを保存できませんでした: {}",

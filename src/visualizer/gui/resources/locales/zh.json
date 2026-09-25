@@ -907,6 +907,7 @@
     "pointing_device_tooltip": "视口的鼠标或触控板操作。也可以通过状态栏图标切换。",
     "pointing_device_mouse": "鼠标（台式机）",
     "pointing_device_trackpad": "触控板（笔记本）",
+    "pointing_device_automatic": "自动（两者）",
     "trackpad_swipe_pans": "双指滑动平移",
     "trackpad_swipe_tooltip": "关闭：滑动环绕，Shift+滑动平移。开启：相反。双指捏合或 Ctrl+滑动缩放。",
     "trackpad_swipe_speed": "滑动速度",
@@ -2477,8 +2478,9 @@
     "perf_expand": "Expand",
     "perf_collapse": "Collapse",
     "perf_hud_tooltip": "Show or hide the performance HUD",
-    "input_mouse_tooltip": "鼠标导航：中键拖动环绕，右键拖动平移，滚轮缩放。点击切换到触控板",
-    "input_trackpad_tooltip": "触控板导航：双指滑动环绕，Shift+滑动平移，双指捏合或 Ctrl+滑动缩放。点击切换到鼠标"
+    "input_mouse_tooltip": "鼠标导航：中键拖动环绕，右键拖动平移，滚轮缩放。点击切换",
+    "input_trackpad_tooltip": "触控板导航：双指滑动环绕，Shift+滑动平移，双指捏合或 Ctrl+滑动缩放。点击切换",
+    "input_automatic_tooltip": "自动导航：触控板上使用触控板手势，鼠标上用滚轮缩放。点击切换"
   },
   "runtime": {
     "training_save_no_memory": "项目保存失败：{}",

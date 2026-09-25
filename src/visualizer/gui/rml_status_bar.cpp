@@ -137,6 +137,35 @@ namespace lfs::vis::gui {
             return s.substr(0, end + 1);
         }
 
+        // Automatic detection needs the trackpad touches only macOS reports.
+        NavigationDevice nextNavigationDevice(const NavigationDevice device) {
+            switch (device) {
+            case NavigationDevice::Mouse:
+                return NavigationDevice::Trackpad;
+            case NavigationDevice::Trackpad:
+#ifdef __APPLE__
+                return NavigationDevice::Automatic;
+#else
+                return NavigationDevice::Mouse;
+#endif
+            case NavigationDevice::Automatic:
+                break;
+            }
+            return NavigationDevice::Mouse;
+        }
+
+        const char* navigationDeviceTooltip(const NavigationDevice device) {
+            switch (device) {
+            case NavigationDevice::Trackpad:
+                return "ui.input_trackpad_tooltip";
+            case NavigationDevice::Automatic:
+                return "ui.input_automatic_tooltip";
+            case NavigationDevice::Mouse:
+                break;
+            }
+            return "ui.input_mouse_tooltip";
+        }
+
         std::string formatStepLabel(const size_t step) {
             return std::format("{} {}", stripColon(LOC(lichtfeld::Strings::Status::STEP)), lfs::core::format_count(step));
         }
@@ -445,7 +474,8 @@ namespace lfs::vis::gui {
         ctor.Bind("show_lfs_memory", &model_.show_lfs_memory);
         ctor.Bind("show_gpu_model", &model_.show_gpu_model);
         ctor.Bind("gpu_panel_active", &model_.gpu_panel_active);
-        ctor.Bind("trackpad_navigation", &model_.trackpad_navigation);
+        ctor.Bind("input_device", &model_.input_device);
+        ctor.Bind("input_device_tooltip", &model_.input_device_tooltip);
         ctor.Bind("gpu_model_text", &model_.gpu_model_text);
         ctor.Bind("gpu_mem_text", &model_.gpu_mem_text);
         ctor.Bind("gpu_mem_color", &model_.gpu_mem_color);
@@ -823,11 +853,10 @@ namespace lfs::vis::gui {
         if (!input_device_listener_) {
             input_device_listener_ = new CallbackListener([this] {
                 auto trackpad = lfs::vis::loadTrackpadPreferences();
-                trackpad.enabled = !trackpad.enabled;
+                trackpad.device = nextNavigationDevice(trackpad.device);
                 if (auto* const ic = lfs::vis::InputController::instance())
                     ic->setTrackpadPreferences(trackpad);
                 lfs::vis::saveTrackpadPreferences(trackpad);
-                setModelBool("trackpad_navigation", model_.trackpad_navigation, trackpad.enabled);
                 markModelDirty();
             });
         }
@@ -1167,8 +1196,10 @@ namespace lfs::vis::gui {
 
         setModelString("safe_mode_text", model_.safe_mode_text, LOC("status_bar.safe_mode"));
         const auto* const input_controller = lfs::vis::InputController::instance();
-        setModelBool("trackpad_navigation", model_.trackpad_navigation,
-                     input_controller && input_controller->trackpadPreferences().enabled);
+        const auto device = input_controller ? input_controller->trackpadPreferences().device
+                                             : NavigationDevice::Mouse;
+        setModelString("input_device", model_.input_device, std::string(navigationDeviceName(device)));
+        setModelString("input_device_tooltip", model_.input_device_tooltip, LOC(navigationDeviceTooltip(device)));
         setModelString("mcp_preferences_label", model_.mcp_preferences_label,
                        LOC("status_bar.mcp_preferences"));
         if (mcp_status_provider_) {

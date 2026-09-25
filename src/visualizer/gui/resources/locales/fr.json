@@ -907,6 +907,7 @@
     "pointing_device_tooltip": "Commandes souris ou trackpad pour la vue. L'icône de la barre d'état permet aussi de basculer.",
     "pointing_device_mouse": "Souris (bureau)",
     "pointing_device_trackpad": "Trackpad (portable)",
+    "pointing_device_automatic": "Automatique (les deux)",
     "trackpad_swipe_pans": "Le balayage à deux doigts fait un panoramique",
     "trackpad_swipe_tooltip": "Désactivé : le balayage fait orbiter et Maj+balayage fait un panoramique. Activé : l'inverse. Pincer ou Ctrl+balayage zoome.",
     "trackpad_swipe_speed": "Vitesse de balayage",
@@ -2477,8 +2478,9 @@
     "perf_expand": "Expand",
     "perf_collapse": "Collapse",
     "perf_hud_tooltip": "Show or hide the performance HUD",
-    "input_mouse_tooltip": "Navigation à la souris : glisser avec le bouton du milieu pour orbiter, avec le bouton droit pour déplacer, molette pour zoomer. Cliquer pour passer au trackpad",
-    "input_trackpad_tooltip": "Navigation au trackpad : balayer à deux doigts pour orbiter, Maj+balayer pour déplacer, pincer ou Ctrl+balayer pour zoomer. Cliquer pour passer à la souris"
+    "input_mouse_tooltip": "Navigation à la souris : glisser avec le bouton du milieu pour orbiter, avec le bouton droit pour déplacer, molette pour zoomer. Cliquer pour changer",
+    "input_trackpad_tooltip": "Navigation au trackpad : balayer à deux doigts pour orbiter, Maj+balayer pour déplacer, pincer ou Ctrl+balayer pour zoomer. Cliquer pour changer",
+    "input_automatic_tooltip": "Navigation automatique : gestes du trackpad sur le trackpad, zoom à la molette sur la souris. Cliquer pour changer"
   },
   "runtime": {
     "training_save_no_memory": "Échec de l'enregistrement du projet : {}",

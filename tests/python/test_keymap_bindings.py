@@ -284,7 +284,7 @@ def _install_lf_stub(monkeypatch):
         get_navigation_speed_preference=lambda: 0.0,
         set_navigation_speed_preference=lambda _speed: None,
         get_trackpad_preferences=lambda: {
-            "enabled": False, "swipe_pans": False, "swipe_speed": 50.0, "zoom_speed": 50.0,
+            "device": "mouse", "swipe_pans": False, "swipe_speed": 50.0, "zoom_speed": 50.0,
         },
         set_trackpad_preferences=lambda *_args: None,
         remember_camera_navigation=lambda: False,

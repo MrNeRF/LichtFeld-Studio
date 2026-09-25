@@ -3,6 +3,7 @@
 """Application-level appearance and language preferences."""
 
 import lichtfeld as lf
+import sys
 import threading
 
 from .asset_index import AssetIndex, resolve_asset_manager_storage_path, resolve_default_asset_directory
@@ -208,7 +209,13 @@ class PreferencesPanel(Panel):
         model.bind("language_idx", self._language_index, self._set_language_index)
         model.bind("navigation_idx", self._navigation_index, self._set_navigation_index)
         model.bind("zoom_speed", lf.ui.get_zoom_speed_preference, self._set_zoom_speed)
-        model.bind("pointing_device", self._pointing_device, self._set_pointing_device)
+        model.bind(
+            "pointing_device",
+            lambda: lf.ui.get_trackpad_preferences()["device"],
+            lambda value: self._set_trackpad(device=str(value)),
+        )
+        # Automatic detection needs the trackpad touches only macOS reports.
+        model.bind_func("automatic_navigation_available", lambda: sys.platform == "darwin")
         model.bind(
             "trackpad_swipe_pans",
             lambda: lf.ui.get_trackpad_preferences()["swipe_pans"],
@@ -828,16 +835,10 @@ class PreferencesPanel(Panel):
         lf.ui.set_navigation_speed_preference(float(value))
         self._refresh_selection()
 
-    def _pointing_device(self):
-        return "trackpad" if lf.ui.get_trackpad_preferences()["enabled"] else "mouse"
-
-    def _set_pointing_device(self, value):
-        self._set_trackpad(enabled=value == "trackpad")
-
     def _set_trackpad(self, **changes):
         state = {**lf.ui.get_trackpad_preferences(), **changes}
         lf.ui.set_trackpad_preferences(
-            bool(state["enabled"]),
+            str(state["device"]),
             bool(state["swipe_pans"]),
             float(state["swipe_speed"]),
             float(state["zoom_speed"]),
@@ -1623,7 +1624,7 @@ class PreferencesPanel(Panel):
         elif section == "input":
             lf.ui.set_zoom_speed_preference(11.0)
             lf.ui.set_navigation_speed_preference(8.0)
-            lf.ui.set_trackpad_preferences(False, False, 50.0, 50.0)
+            lf.ui.set_trackpad_preferences("mouse", False, 50.0, 50.0)
             lf.ui.set_remember_camera_navigation(False)
             lf.ui.set_remember_camera_view_snap(False)
             lf.set_camera_navigation_mode("orbit")

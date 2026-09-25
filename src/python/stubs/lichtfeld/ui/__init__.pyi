@@ -2744,9 +2744,9 @@ def get_navigation_speed_preference() -> float:
 def get_trackpad_preferences() -> dict:
     """Get trackpad navigation preferences"""
 
-def set_trackpad_preferences(enabled: bool, swipe_pans: bool, swipe_speed: float, zoom_speed: float) -> None:
+def set_trackpad_preferences(device: str, swipe_pans: bool, swipe_speed: float, zoom_speed: float) -> None:
     """
-    Persist and apply trackpad navigation preferences (speeds 1-100, 50 is the default)
+    Persist and apply trackpad navigation preferences (device 'mouse', 'trackpad' or 'automatic'; speeds 1-100, 50 is the default)
     """
 
 def get_project_manager_preferences() -> dict:

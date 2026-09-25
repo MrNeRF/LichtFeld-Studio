@@ -907,6 +907,7 @@
     "pointing_device_tooltip": "Controlli mouse o trackpad per la vista. Anche l'icona nella barra di stato lo cambia.",
     "pointing_device_mouse": "Mouse (desktop)",
     "pointing_device_trackpad": "Trackpad (notebook)",
+    "pointing_device_automatic": "Automatico (entrambi)",
     "trackpad_swipe_pans": "Lo scorrimento con due dita sposta",
     "trackpad_swipe_tooltip": "Disattivato: lo scorrimento orbita e Maiusc+scorrimento sposta. Attivato: il contrario. Pizzica o Ctrl+scorrimento per lo zoom.",
     "trackpad_swipe_speed": "Velocità di scorrimento",
@@ -2477,8 +2478,9 @@
     "perf_expand": "Expand",
     "perf_collapse": "Collapse",
     "perf_hud_tooltip": "Show or hide the performance HUD",
-    "input_mouse_tooltip": "Navigazione con mouse: trascina con il tasto centrale per orbitare, con il destro per spostare, rotella per lo zoom. Fai clic per passare al trackpad",
-    "input_trackpad_tooltip": "Navigazione con trackpad: scorri con due dita per orbitare, Maiusc+scorri per spostare, pizzica o Ctrl+scorri per lo zoom. Fai clic per passare al mouse"
+    "input_mouse_tooltip": "Navigazione con mouse: trascina con il tasto centrale per orbitare, con il destro per spostare, rotella per lo zoom. Fai clic per cambiare",
+    "input_trackpad_tooltip": "Navigazione con trackpad: scorri con due dita per orbitare, Maiusc+scorri per spostare, pizzica o Ctrl+scorri per lo zoom. Fai clic per cambiare",
+    "input_automatic_tooltip": "Navigazione automatica: gesti del trackpad sul trackpad, zoom con la rotella sul mouse. Fai clic per cambiare"
   },
   "runtime": {
     "training_save_no_memory": "Salvataggio del progetto non riuscito: {}",
