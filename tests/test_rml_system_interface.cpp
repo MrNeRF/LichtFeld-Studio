@@ -30,3 +30,12 @@ TEST(RmlSystemInterfaceTest, EmojiTextRequestsTheEmojiFont) {
     system_interface.TranslateString(translated, "plain text");
     EXPECT_TRUE(system_interface.sawAstralText());
 }
+
+TEST(RmlSystemInterfaceTest, ShownTextOutsideTranslationRequestsTheEmojiFont) {
+    RmlSystemInterface system_interface(nullptr);
+
+    system_interface.noteShownText("A plain description");
+    EXPECT_FALSE(system_interface.sawAstralText());
+    system_interface.noteShownText("First scan \U0001F680");
+    EXPECT_TRUE(system_interface.sawAstralText());
+}

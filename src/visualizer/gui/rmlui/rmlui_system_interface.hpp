@@ -7,6 +7,8 @@
 #include "core/export.hpp"
 #include <RmlUi/Core/SystemInterface.h>
 
+#include <string_view>
+
 #include <cstdint>
 
 struct SDL_Window;
@@ -37,8 +39,10 @@ namespace lfs::vis::gui {
 
         void beginFrame();
         void trackContext(const Rml::Context* context, int window_x, int window_y);
-        // True once translated text contained a code point above U+FFFF (emoji, pictographs).
+        // True once shown text contained a code point above U+FFFF (emoji, pictographs).
         [[nodiscard]] bool sawAstralText() const { return saw_astral_text_; }
+        // Text that reaches the screen without TranslateString, such as text field values.
+        void noteShownText(std::string_view text);
         void releaseContext(const Rml::Context* context);
         RmlCursorRequest consumeCursorRequest();
 

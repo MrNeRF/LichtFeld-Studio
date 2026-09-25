@@ -28,6 +28,8 @@
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/ElementInstancer.h>
+#include <RmlUi/Core/Elements/ElementFormControlInput.h>
+#include <RmlUi/Core/Elements/ElementFormControlTextArea.h>
 #include <RmlUi/Core/Factory.h>
 #include <RmlUi/Core/Matrix4.h>
 #include <RmlUi/Debugger.h>
@@ -49,6 +51,24 @@
 namespace lfs::vis::gui {
 
     namespace {
+        // Text field values never pass through TranslateString, so typed, pasted
+        // and bound values report emoji here for the fallback font.
+        template <typename FormControl>
+        class TextFieldNotingEmoji final : public FormControl {
+        public:
+            using FormControl::FormControl;
+
+        protected:
+            void OnAttributeChange(const Rml::ElementAttributes& changed_attributes) override {
+                FormControl::OnAttributeChange(changed_attributes);
+                const auto value = changed_attributes.find("value");
+                if (value == changed_attributes.end())
+                    return;
+                if (auto* const system_interface = dynamic_cast<RmlSystemInterface*>(Rml::GetSystemInterface()))
+                    system_interface->noteShownText(value->second.Get<Rml::String>());
+            }
+        };
+
         bool pointInRect(const RmlRect& rect, const float x, const float y) {
             return x >= rect.x1 && y >= rect.y1 && x < rect.x2 && y < rect.y2;
         }
@@ -188,6 +208,10 @@ namespace lfs::vis::gui {
             return false;
         }
 
+        static Rml::ElementInstancerGeneric<TextFieldNotingEmoji<Rml::ElementFormControlInput>> input_instancer;
+        static Rml::ElementInstancerGeneric<TextFieldNotingEmoji<Rml::ElementFormControlTextArea>> textarea_instancer;
+        Rml::Factory::RegisterElementInstancer("input", &input_instancer);
+        Rml::Factory::RegisterElementInstancer("textarea", &textarea_instancer);
         static Rml::ElementInstancerGeneric<ChromaticityElement> chromaticity_instancer;
         static Rml::ElementInstancerGeneric<ColorPickerElement> color_picker_instancer;
         static Rml::ElementInstancerGeneric<CRFCurveElement> crf_curve_instancer;
