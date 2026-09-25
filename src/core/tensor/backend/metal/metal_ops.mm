@@ -10,6 +10,7 @@
 #include "core/assert.hpp"
 #include "core/detail/fused_pointwise.hpp"
 #include "core/logger.hpp"
+#include "core/tensor_spatial.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1270,6 +1271,24 @@ namespace lfs::core::internal {
                           thread_groups(program.count));
         }
 
+        // Address of a storage's first element, for kernels that take operands
+        // as GPU addresses in their parameters.
+        API_AVAILABLE(macos(26.0))
+        uint64_t address_of(Context& context, const StorageRef& storage) {
+            const auto at = context.locate(storage);
+            return at.address + at.offset;
+        }
+
+        // Dispatches a kernel whose operands are all addresses in its parameters.
+        template <class Params>
+        API_AVAILABLE(macos(26.0))
+        void dispatch_addressed(Context& context, const std::span<const StorageRef> uses,
+                                const id<MTLComputePipelineState> pipeline, const Params& params, const size_t count) {
+            if (count == 0)
+                return;
+            context.dispatch(uses, {.pipeline = pipeline, .buffers = {}, .params = param_bytes(params), .grid = threads(count)});
+        }
+
         bool is_contiguous(const StridedLayout& layout) {
             size_t expected = 1;
             for (size_t dimension = layout.rank; dimension-- > 0;) {
@@ -1990,6 +2009,108 @@ namespace lfs::core::internal {
         encode_random(*context, kRankSelect, output, {}, keys, {.count = categories, .sample_count = samples},
                       thread_groups(program.count));
         context->release(keys);
+    }
+
+    void MetalBackendOps::radius_neighbors(const StorageRef points, const StorageRef references, const StorageRef heads,
+                                           const StorageRef next, const StorageRef output, const size_t count,
+                                           const size_t buckets, const float radius, ExecContext) {
+        LFS_FACADE_TRACE(radius_neighbors);
+        struct RadiusParams {
+            uint64_t points, references, heads, next, output;
+            uint32_t count, bucket_mask;
+            float radius;
+            uint32_t padding;
+        };
+        const auto context = acquire_context();
+        const RadiusParams params{
+            .points = address_of(*context, points),
+            .references = address_of(*context, references),
+            .heads = address_of(*context, heads),
+            .next = address_of(*context, next),
+            .output = address_of(*context, output),
+            .count = checked_u32(count, "Metal radius query count exceeds uint32"),
+            .bucket_mask = checked_u32(buckets - 1, "Metal radius bucket count exceeds uint32"),
+            .radius = radius,
+        };
+        const std::array uses{points, references, heads, next, output};
+        dispatch_addressed(*context, uses, context->pipeline("radius_neighbors", {{0, 0}}), params, count);
+        dispatch_addressed(*context, uses, context->pipeline("radius_neighbors", {{0, 1}}), params, count);
+    }
+
+    void MetalBackendOps::project_points(const StorageRef points, const StorageRef output, const size_t count,
+                                         const PointProjection& projection, const StorageRef* transforms,
+                                         const size_t transform_count, const StorageRef* indices,
+                                         const StorageRef* visibility, const size_t visibility_count, ExecContext) {
+        LFS_FACADE_TRACE(project_points);
+        struct ProjectionParams {
+            std::array<float, 4> row0, row1, row2;
+            uint64_t points, output, transforms, indices, visibility;
+            std::array<float, 2> scale, center;
+            float invalid_value, near_distance;
+            uint32_t count, transform_count, visibility_count, padding;
+        };
+        static_assert(sizeof(ProjectionParams) == 128);
+        const auto context = acquire_context();
+        const auto& r = projection.rotation;
+        const auto& t = projection.translation;
+        std::array<float, 2> scale{projection.focal_x, projection.focal_y};
+        if (projection.model == PointProjectionModel::Orthographic)
+            scale = {projection.ortho_scale, projection.ortho_scale};
+        else if (projection.model == PointProjectionModel::Equirectangular)
+            scale = {static_cast<float>(projection.width), static_cast<float>(projection.height)};
+        const ProjectionParams params{
+            .row0 = {r[0], r[1], r[2], t[0]},
+            .row1 = {r[3], r[4], r[5], t[1]},
+            .row2 = {r[6], r[7], r[8], t[2]},
+            .points = address_of(*context, points),
+            .output = address_of(*context, output),
+            .transforms = transforms ? address_of(*context, *transforms) : 0,
+            .indices = indices ? address_of(*context, *indices) : 0,
+            .visibility = visibility ? address_of(*context, *visibility) : 0,
+            .scale = scale,
+            .center = {projection.center_x, projection.center_y},
+            .invalid_value = projection.invalid_value,
+            .near_distance = projection.near_distance,
+            .count = checked_u32(count, "Metal projection count exceeds uint32"),
+            .transform_count = checked_u32(transform_count, "Metal transform count exceeds uint32"),
+            .visibility_count = checked_u32(visibility_count, "Metal visibility count exceeds uint32"),
+        };
+        std::vector<StorageRef> uses{points, output};
+        for (const StorageRef* const storage : {transforms, indices, visibility}) {
+            if (storage)
+                uses.push_back(*storage);
+        }
+        const uint32_t inputs = (transforms ? 1u : 0u) | (indices ? 2u : 0u) | (visibility ? 4u : 0u);
+        dispatch_addressed(*context, uses,
+                           context->pipeline("project_points", {{0, static_cast<uint32_t>(projection.model)}, {20, inputs}}),
+                           params, count);
+    }
+
+    void MetalBackendOps::mark_points_2d(const StorageRef mask, const StorageRef points, const size_t count,
+                                         const PointRegion2D& region, const StorageRef* geometry,
+                                         const size_t geometry_count, ExecContext) {
+        LFS_FACADE_TRACE(mark_points_2d);
+        struct RegionParams {
+            uint64_t mask, points, geometry;
+            uint32_t count, geometry_count;
+            std::array<float, 4> bounds;
+            float radius_sq, minimum_coordinate;
+        };
+        static_assert(sizeof(RegionParams) == 56);
+        const auto context = acquire_context();
+        const RegionParams params{
+            .mask = address_of(*context, mask),
+            .points = address_of(*context, points),
+            .geometry = geometry ? address_of(*context, *geometry) : 0,
+            .count = checked_u32(count, "Metal region point count exceeds uint32"),
+            .geometry_count = checked_u32(geometry_count, "Metal region geometry count exceeds uint32"),
+            .bounds = {region.x0, region.y0, region.x1, region.y1},
+            .radius_sq = region.radius * region.radius,
+            .minimum_coordinate = region.minimum_coordinate,
+        };
+        const std::array uses{mask, points, geometry ? *geometry : points};
+        dispatch_addressed(*context, uses, context->pipeline("mark_points_2d", {{0, static_cast<uint32_t>(region.kind)}}),
+                           params, count);
     }
 
     void MetalBackendOps::reduce(const StorageRef input, const StorageRef output, const StridedLayout& input_layout,

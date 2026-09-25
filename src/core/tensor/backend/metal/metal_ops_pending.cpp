@@ -20,18 +20,6 @@ namespace lfs::core::internal {
         }
     } // namespace
 
-    void MetalBackendOps::project_points(StorageRef, StorageRef, size_t, const PointProjection&, const StorageRef*, size_t, const StorageRef*, const StorageRef*, size_t, ExecContext) {
-        not_ported("project_points");
-    }
-
-    void MetalBackendOps::radius_neighbors(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef, size_t, size_t, float, ExecContext) {
-        not_ported("radius_neighbors");
-    }
-
-    void MetalBackendOps::mark_points_2d(StorageRef, StorageRef, size_t, const PointRegion2D&, const StorageRef*, size_t, ExecContext) {
-        not_ported("mark_points_2d");
-    }
-
     void MetalBackendOps::filter_points(StorageRef, const PointFilterProgram&, ExecContext) {
         not_ported("filter_points");
     }

@@ -8,6 +8,7 @@
 #include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_fused.hpp"
+#include "core/tensor_spatial.hpp"
 
 #include <gtest/gtest.h>
 
@@ -699,6 +700,58 @@ namespace {
                 const Tensor wide = random_tensor(9 * length, -3.0f, 3.0f, 67).reshape({9, static_cast<int>(length)});
                 compare(kernel, {9, length}, {wide}, 1.0e-5f);
             }
+        }
+    }
+
+    // Domain kernels port the Vulkan shaders; both backends of the Mac must agree.
+    template <class Run>
+    void expect_same_on_both(const Run& run, const float tolerance = 0.0f) {
+        if (!gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP() << "No Vulkan device";
+        const auto result = [&](const GpuBackend backend) {
+            GpuBackendScope scope(backend);
+            return run().cpu();
+        };
+        expect_close(result(GpuBackend::Metal), result(GpuBackend::Vulkan), tolerance, tolerance);
+    }
+
+    TEST_F(TensorMetal, SpatialSelectionMatchesVulkan) {
+        const Tensor points = random_tensor(4000 * 3, -2.0f, 2.0f, 68).reshape({4000, 3});
+        const Tensor references = random_tensor(4000, 0.0f, 1.0f, 69) > 0.9f;
+        expect_same_on_both([&] { return radius_neighbors(points.to(Device::GPU), references.to(Device::GPU), 0.15f); });
+
+        PointProjection projection;
+        projection.rotation = {0.8f, 0.0f, -0.6f, 0.0f, 1.0f, 0.0f, 0.6f, 0.0f, 0.8f};
+        projection.translation = {0.1f, -0.2f, 5.0f};
+        projection.focal_x = projection.focal_y = 500.0f;
+        projection.center_x = 320.0f;
+        projection.center_y = 240.0f;
+        projection.width = 640;
+        projection.height = 480;
+        const Tensor transforms = Tensor::eye(4, Device::CPU).reshape({1, 4, 4});
+        for (const PointProjectionModel model : {PointProjectionModel::Pinhole, PointProjectionModel::Orthographic,
+                                                 PointProjectionModel::Equirectangular}) {
+            SCOPED_TRACE(static_cast<int>(model));
+            projection.model = model;
+            expect_same_on_both([&] { return project_points(points.to(Device::GPU), projection); });
+            expect_same_on_both([&] {
+                const Tensor gpu_transforms = transforms.to(Device::GPU);
+                return project_points(points.to(Device::GPU), projection, &gpu_transforms);
+            });
+        }
+
+        const Tensor flat = random_tensor(5000 * 2, 0.0f, 100.0f, 70).reshape({5000, 2});
+        const Tensor polygon = Tensor::from_vector(std::vector<float>{10, 10, 80, 20, 60, 90, 20, 70}, {4, 2}, Device::CPU);
+        for (const PointRegion2DKind kind : {PointRegion2DKind::Disk, PointRegion2DKind::Rectangle,
+                                             PointRegion2DKind::Polygon, PointRegion2DKind::Disks}) {
+            SCOPED_TRACE(static_cast<int>(kind));
+            const PointRegion2D region{.kind = kind, .x0 = 20, .y0 = 30, .x1 = 70, .y1 = 60, .radius = 15};
+            expect_same_on_both([&] {
+                Tensor mask = Tensor::zeros_bool({5000}, Device::GPU);
+                const Tensor geometry = polygon.to(Device::GPU);
+                mark_points_2d(mask, flat.to(Device::GPU), region, &geometry);
+                return mask;
+            });
         }
     }
 

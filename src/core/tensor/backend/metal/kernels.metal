@@ -1928,6 +1928,191 @@ kernel void random_op(device uchar* output_buffer [[buffer(0)]],
 }
 
 // ---------------------------------------------------------------------------
+// Spatial selection, ported from radius_neighbors.slang, point_region.slang
+// and project_points.slang. Operands are GPU addresses in the parameters.
+// Every operation rounds on its own (no contraction), as the rounded_math
+// helpers of the Slang shaders do.
+
+static float dot_rounded(float3 a, float3 b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+// kOp 0 links reference points into hashed cells, 1 marks the points within
+// the radius of a reference.
+struct RadiusParams {
+    device const float* points;
+    device const uchar* references;
+    device int* heads;
+    device int* next;
+    device uchar* output;
+    uint count;
+    uint bucket_mask;
+    float radius;
+    uint padding;
+};
+
+static float3 radius_point(constant RadiusParams& params, uint i) {
+    return float3(params.points[3 * ulong(i)], params.points[3 * ulong(i) + 1], params.points[3 * ulong(i) + 2]);
+}
+
+static int3 radius_cell(float3 point, float radius) {
+    return int3(clamp(floor(point / radius * 0.5f), -268435456.0f, 268435456.0f));
+}
+
+static uint radius_bucket(int3 cell, uint mask) {
+    return ((uint(cell.x) * 73856093u) ^ (uint(cell.y) * 19349663u) ^ (uint(cell.z) * 83492791u)) & mask;
+}
+
+static bool within_radius(float3 a, float3 b, float radius) {
+    float3 d = a - b;
+    float r2 = radius * radius;
+    if (r2 < 1.17549435e-38f || !isfinite(r2)) {
+        d = d / radius;
+        r2 = 1.0f;
+    }
+    return dot_rounded(d, d) <= r2;
+}
+
+kernel void radius_neighbors(constant RadiusParams& params [[buffer(0)]], uint i [[thread_position_in_grid]]) {
+    if (i >= params.count)
+        return;
+    const float3 point = radius_point(params, i);
+    const bool finite = all(isfinite(point));
+    if (kOp == 0) {
+        if (params.references[i] != 0 && finite) {
+            const uint bucket = radius_bucket(radius_cell(point, params.radius), params.bucket_mask);
+            params.next[i] = atomic_exchange_explicit((device atomic_int*)&params.heads[bucket], int(i), memory_order_relaxed);
+        }
+        return;
+    }
+    bool found = finite && params.references[i] != 0;
+    const int3 center = radius_cell(point, params.radius);
+    for (int z = -1; finite && !found && z <= 1; ++z) {
+        for (int y = -1; !found && y <= 1; ++y) {
+            for (int x = -1; !found && x <= 1; ++x) {
+                for (int j = params.heads[radius_bucket(center + int3(x, y, z), params.bucket_mask)]; j >= 0 && !found;
+                     j = params.next[j])
+                    found = within_radius(point, radius_point(params, uint(j)), params.radius);
+            }
+        }
+    }
+    params.output[i] = found ? 1 : 0;
+}
+
+// kOp is the region: 0 disk, 1 rectangle (edges included), 2 even-odd polygon,
+// 3 any of several disks. Points inside set their mask byte; others keep it.
+struct RegionParams {
+    device uchar* mask;
+    device const float* points;
+    device const float* geometry;
+    uint count;
+    uint geometry_count;
+    float4 bounds;
+    float radius_sq;
+    float minimum_coordinate;
+};
+
+static bool in_disk(float2 point, float2 center, float radius_sq) {
+    const float dx = point.x - center.x, dy = point.y - center.y;
+    return dx * dx + dy * dy <= radius_sq;
+}
+
+kernel void mark_points_2d(constant RegionParams& params [[buffer(0)]], uint i [[thread_position_in_grid]]) {
+    if (i >= params.count)
+        return;
+    const float2 point = float2(params.points[2 * ulong(i)], params.points[2 * ulong(i) + 1]);
+    if (!(point.x >= params.minimum_coordinate && point.y >= params.minimum_coordinate))
+        return;
+    bool inside = false;
+    if (kOp == 0) {
+        inside = in_disk(point, params.bounds.xy, params.radius_sq);
+    } else if (kOp == 1) {
+        inside = point.x >= params.bounds.x && point.y >= params.bounds.y && point.x <= params.bounds.z &&
+                 point.y <= params.bounds.w;
+    } else if (kOp == 3) {
+        for (uint k = 0; k < params.geometry_count && !inside; ++k)
+            inside = in_disk(point, float2(params.geometry[2 * k], params.geometry[2 * k + 1]), params.radius_sq);
+    } else {
+        for (uint k = 0, j = params.geometry_count - 1; k < params.geometry_count; j = k++) {
+            const float xi = params.geometry[2 * k], yi = params.geometry[2 * k + 1];
+            const float xj = params.geometry[2 * j], yj = params.geometry[2 * j + 1];
+            if ((yi > point.y) != (yj > point.y) && point.x < (xj - xi) * (point.y - yi) / (yj - yi) + xi)
+                inside = !inside;
+        }
+    }
+    if (inside)
+        params.mask[i] = 1;
+}
+
+// kOp is the PointProjectionModel; kProjectionInputs flags transforms (1),
+// indices (2) and visibility (4).
+constant uint kProjectionInputs [[function_constant(20)]];
+
+struct ProjectionParams {
+    float4 row0;
+    float4 row1;
+    float4 row2;
+    device const float* points;
+    device float2* output;
+    device const uchar* transforms;
+    device const int* indices;
+    device const uchar* visibility;
+    float2 scale;
+    float2 center;
+    float invalid_value;
+    float near_distance;
+    uint count;
+    uint transform_count;
+    uint visibility_count;
+    uint padding;
+};
+
+static float4 view_position(constant ProjectionParams& params, uint i) {
+    int node = (kProjectionInputs & 2u) != 0 ? params.indices[i] : 0;
+    if ((kProjectionInputs & 6u) == 6u &&
+        (node < 0 || uint(node) >= params.visibility_count || params.visibility[node] == 0))
+        return float4(0.0f);
+    float3 position = float3(params.points[3 * ulong(i)], params.points[3 * ulong(i) + 1], params.points[3 * ulong(i) + 2]);
+    if ((kProjectionInputs & 1u) != 0 && params.transform_count > 0) {
+        device const float* m = (device const float*)(params.transforms + ulong(clamp(node, 0, int(params.transform_count - 1))) * 64);
+        position = float3(dot_rounded(float3(m[0], m[1], m[2]), position) + m[3],
+                          dot_rounded(float3(m[4], m[5], m[6]), position) + m[7],
+                          dot_rounded(float3(m[8], m[9], m[10]), position) + m[11]);
+    }
+    const float3 d = position - float3(params.row0.w, params.row1.w, params.row2.w);
+    const float3 view = float3(dot_rounded(params.row0.xyz, d), dot_rounded(params.row1.xyz, d), dot_rounded(params.row2.xyz, d));
+    return all(isfinite(view)) ? float4(view, 1.0f) : float4(0.0f);
+}
+
+kernel void project_points(constant ProjectionParams& params [[buffer(0)]], uint i [[thread_position_in_grid]]) {
+    if (i >= params.count)
+        return;
+    const float4 view = view_position(params, i);
+    const float2 invalid = float2(params.invalid_value);
+    float2 pixel = invalid;
+    if (kOp == 3) {
+        const float3 direction = float3(view.x, -view.y, -view.z);
+        const float length = view.w == 0.0f ? 0.0f : sqrt(dot_rounded(direction, direction));
+        if (isfinite(length) && length > params.near_distance) {
+            const float3 unit = direction / length;
+            constexpr float pi = 3.14159265358979323846f;
+            pixel = float2((atan2(unit.x, unit.z) / (2.0f * pi) + 0.5f) * params.scale.x,
+                           (asin(clamp(unit.y, -1.0f, 1.0f)) / pi + 0.5f) * params.scale.y);
+        }
+    } else if (view.w != 0.0f && view.z < -params.near_distance) {
+        if (kOp == 1) {
+            if (isfinite(params.scale.x) && params.scale.x > 0.0f)
+                pixel = float2(view.x * params.scale.x + params.center.x, -view.y * params.scale.y + params.center.y);
+        } else {
+            const float depth = -view.z;
+            pixel = float2(view.x * params.scale.x / depth + params.center.x,
+                           -view.y * params.scale.y / depth + params.center.y);
+        }
+    }
+    params.output[i] = pixel;
+}
+
+// ---------------------------------------------------------------------------
 // Float32 GEMM on the matrix units through Metal Performance Primitives:
 // C[m][n] = A[m][k] * B, with B stored as [k][n] or, with kTransposeB, as
 // [n][k]; batches are packed. kBiasRelu applies max(value + bias[row], 0) to
