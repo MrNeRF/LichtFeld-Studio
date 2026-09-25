@@ -9,6 +9,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/tensor_cuda_interop.hpp"
 #include "cuda/image_format_kernels.cuh"
 #include "diagnostics/vram_profiler.hpp"
@@ -552,11 +553,13 @@ namespace lfs::io {
             }
         }
 
-        decode_queue_ = std::make_unique<lfs::core::TensorWorkQueue>(lfs::core::GpuBackend::CUDA);
-        decode_stream_ = static_cast<cudaStream_t>(decode_queue_->native_handle());
-        for (size_t i = 0; i < config_.cold_process_threads; ++i) {
-            sidecar_queues_.push_back(std::make_unique<lfs::core::TensorWorkQueue>(lfs::core::GpuBackend::CUDA));
-            sidecar_streams_.push_back(static_cast<cudaStream_t>(sidecar_queues_.back()->native_handle()));
+        if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
+            decode_queue_ = std::make_unique<lfs::core::TensorWorkQueue>(lfs::core::GpuBackend::CUDA);
+            decode_stream_ = static_cast<cudaStream_t>(decode_queue_->native_handle());
+            for (size_t i = 0; i < config_.cold_process_threads; ++i) {
+                sidecar_queues_.push_back(std::make_unique<lfs::core::TensorWorkQueue>(lfs::core::GpuBackend::CUDA));
+                sidecar_streams_.push_back(static_cast<cudaStream_t>(sidecar_queues_.back()->native_handle()));
+            }
         }
         running_ = true;
         decoded_frame_ring_ = std::make_shared<DecodedFrameRing>(
@@ -568,11 +571,11 @@ namespace lfs::io {
             io_threads_.emplace_back([this] { prefetch_thread_func(); });
         }
 
-        if (nvcodec_available) {
+        if (nvcodec_available && decode_queue_) {
             gpu_decode_thread_ = std::thread([this] { gpu_batch_decode_thread_func(); });
         }
 
-        for (size_t i = 0; i < config_.cold_process_threads; ++i) {
+        for (size_t i = 0; i < sidecar_queues_.size(); ++i) {
             cold_process_threads_.emplace_back([this, i] { cold_process_thread_func(i); });
         }
 
@@ -618,7 +621,8 @@ namespace lfs::io {
         // too late because shutdown destroys the stream first.
         clear();
 
-        decode_queue_->wait();
+        if (decode_queue_)
+            decode_queue_->wait();
         for (const auto& queue : sidecar_queues_)
             queue->wait();
         decode_queue_.reset();
@@ -1997,6 +2001,11 @@ namespace lfs::io {
                 publish_image_failure(request.sequence_id, request.loader_generation,
                                       request.path, std::move(message));
             };
+
+            if (!decode_queue_) {
+                fail_image_request("CUDA image processing is unavailable");
+                continue;
+            }
 
             auto enqueue_depth_request = [&] {
                 if (!request.depth_path) {
