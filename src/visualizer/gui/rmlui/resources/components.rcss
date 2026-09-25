@@ -386,26 +386,23 @@ progress fill {
     min-width: 0;
 }
 
-/* On a narrow panel the label truncates before a number loses its digits. */
-.setting-row > input.number-input {
-    flex: 1 1 72dp;
-    min-width: 48dp;
-}
-
 .setting-row > input[type="checkbox"] {
     margin: 0;
 }
 
+/* One label column for every row: on a narrow panel it narrows as a whole, so the
+   fields stay aligned and number fields keep space for their digits. */
 .prop-label,
 .setting-row__label-col {
-    width: 120dp;
+    width: 40%;
+    max-width: 120dp;
     min-width: 64dp;
     color: #cdd6f4;
     font-size: 12dp;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    flex-shrink: 3;
+    flex-shrink: 0;
 }
 
 .prop-label {
@@ -1130,6 +1127,11 @@ crf-curve {
     flex-shrink: 0;
     cursor: pointer;
     transition: background-color 0.12s quadratic-out, border-color 0.12s quadratic-out;
+}
+
+/* Steppers sit against their field: the row gap stays between columns. */
+.setting-row > .num-step-btn {
+    margin-left: -4dp;
 }
 
 /* ── Full-width button ─────────────────────────────────── */

@@ -398,6 +398,7 @@ body {
 .crop-roi-setting-row > .setting-row__label-col {
     width: 180dp;
     min-width: 180dp;
+    max-width: 180dp;
 }
 
 .crop-roi-setting-row .setting-slider {
