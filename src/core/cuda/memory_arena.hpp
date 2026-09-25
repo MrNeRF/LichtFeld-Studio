@@ -265,6 +265,10 @@ namespace lfs::core {
             RenderHandoffToken current_token = 0, uint32_t training_frames_first = 0);
         void cancel_render_handoff(RenderHandoffToken token);
         [[nodiscard]] bool has_render_handoff(RenderHandoffToken token) const;
+        // True while this live reservation still lets training frames begin first.
+        [[nodiscard]] bool render_handoff_owes_training(RenderHandoffToken token) const;
+        // Stops this reservation from letting any further training frame begin.
+        void withdraw_render_handoff_training_frames(RenderHandoffToken token);
         // Host-waits for GPU work only within timeout_ms: while the previous
         // CUDA frame is still running on the GPU it polls that frame, then
         // declines like a busy arena, and the caller's reservation keeps the

@@ -2042,6 +2042,11 @@ namespace lfs::vis {
         return lfs::core::GlobalArenaManager::instance().get_arena().render_frame_ready(arena_handoff_token_);
     }
 
+    bool VksplatViewportRenderer::waitForArenaHandoff(const std::chrono::milliseconds timeout) {
+        return waitForViewerArenaWindow(lfs::core::GlobalArenaManager::instance().get_arena(),
+                                        arena_handoff_token_, timeout, kNavigationTrainingGrace);
+    }
+
     void VksplatViewportRenderer::renewArenaHandoff() {
         if (arena_handoff_token_ == 0) {
             return;

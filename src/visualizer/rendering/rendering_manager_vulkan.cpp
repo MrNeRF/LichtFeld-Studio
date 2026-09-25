@@ -1946,6 +1946,11 @@ namespace lfs::vis {
         // layout only after matches_viewport_extent reports a fresh output.
         // First frame / no cache still falls back to one blocking acquire below.
         const bool training_try_lock = is_training;
+        if (is_training && vksplat_viewport_renderer_ &&
+            (dirty_mask_.load(std::memory_order_relaxed) & DirtyFlag::CAMERA) != 0) {
+            // No lock is held yet, so a refining trainer can still take the exclusive one.
+            (void)vksplat_viewport_renderer_->waitForArenaHandoff(kNavigationArenaWait);
+        }
         auto render_lock = acquireLiveModelRenderLock(scene_manager, training_try_lock);
         bool render_lock_contended = training_try_lock && !render_lock.has_value() &&
                                      scene_manager && scene_manager->getTrainerManager() &&

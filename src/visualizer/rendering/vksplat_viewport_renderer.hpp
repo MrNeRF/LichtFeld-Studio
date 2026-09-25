@@ -21,6 +21,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cuda_runtime.h>
@@ -192,6 +193,9 @@ namespace lfs::vis {
         // Keeps a pending reservation alive and reports whether the next render
         // could claim the arena without waiting.
         [[nodiscard]] bool pollArenaHandoff();
+        // Reserves the arena and waits, holding no lock, until the next render can
+        // claim it or the timeout passes.
+        [[nodiscard]] bool waitForArenaHandoff(std::chrono::milliseconds timeout);
         // While the camera moves during training, the viewer and training take
         // turns on the shared scratch (see kTrainingFramesPerNavigationRender).
         void setCameraNavigating(bool navigating);

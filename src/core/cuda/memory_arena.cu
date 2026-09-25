@@ -304,6 +304,26 @@ namespace lfs::core {
                render_handoff_deadline_ > std::chrono::steady_clock::now();
     }
 
+    bool RasterizerMemoryArena::render_handoff_owes_training(const RenderHandoffToken token) const {
+        if (token == 0) {
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(sync_mutex_);
+        return render_handoff_token_ == token &&
+               render_handoff_deadline_ > std::chrono::steady_clock::now() &&
+               render_handoff_training_frames_ != 0;
+    }
+
+    void RasterizerMemoryArena::withdraw_render_handoff_training_frames(const RenderHandoffToken token) {
+        if (token == 0) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(sync_mutex_);
+        if (render_handoff_token_ == token) {
+            render_handoff_training_frames_ = 0;
+        }
+    }
+
     std::optional<uint64_t> RasterizerMemoryArena::try_begin_render_frame_for(
         const uint32_t timeout_ms, const RenderHandoffToken token) {
         return begin_frame_impl(nullptr, true, timeout_ms, token, true);
