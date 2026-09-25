@@ -264,327 +264,404 @@ namespace lfs::core::internal {
         return gathered;
     }
 
-    void emit_expression(ExpressionEmitter& e, const ExpressionProgram& program,
-                         const ExpressionSignature& signature) {
+    class ExpressionCodegen {
         using V = ExpressionEmitter::Value;
-        const auto layout = expression_layout(program, signature);
-        const auto instructions = program.instructions();
-        const auto sources = expression_sources(program);
-        const auto phases = expression_phases(program, signature);
-        const int fold = signature.fold_dim;
-        const uint32_t fold_n = signature.fold_length;
-        const auto k = [&](uint32_t n) { return e.literal(n); };
-        const auto word = [&](uint32_t offset) { return e.argument(k(offset)); };
-        const auto add = [&](V a, V b) { return e.math(ExprOp::AddInt, a, b); };
-        const auto sub = [&](V a, V b) { return e.math(ExprOp::SubInt, a, b); };
-        const auto mul = [&](V a, V b) { return e.math(ExprOp::MulInt, a, b); };
-        const auto less = [&](V a, V b) { return e.math(ExprOp::LessUInt, a, b); };
-        const auto equal = [&](V a, V b) { return e.math(ExprOp::EqualInt, a, b); };
-        const auto bit_and = [&](V a, V b) { return e.math(ExprOp::BitAnd, a, b); };
-        const auto bit_or = [&](V a, V b) { return e.math(ExprOp::BitOr, a, b); };
-        const auto shl = [&](V a, V b) { return e.math(ExprOp::ShiftLeft, a, b); };
-        const uint32_t packing = e.cuda() ? 1 : expression_packing(signature);
-        std::vector<uint32_t> uses(instructions.size());
-        for (uint32_t pc = 0; pc < instructions.size(); ++pc)
-            for (uint32_t a = 0; a < expr_arity(opcode(instructions[pc])); ++a)
-                ++uses[sources[pc][a]];
-        std::vector<int> owner(instructions.size(), -1);
-        std::vector<bool> gathered(instructions.size()), zero_select(instructions.size());
-        for (uint32_t pc = 0; pc < instructions.size(); ++pc) {
-            gathered[pc] = gather_rank(opcode(instructions[pc])) != 0;
-            for (uint32_t a = 0; a < expr_arity(opcode(instructions[pc])); ++a)
-                gathered[pc] = gathered[pc] || gathered[sources[pc][a]];
-        }
-        for (uint32_t pc = 0; pc < instructions.size(); ++pc) {
-            const auto op = opcode(instructions[pc]);
-            if (op != ExprOp::LogicalAnd && op != ExprOp::LogicalOr && op != ExprOp::Select)
-                continue;
-            std::function<void(uint32_t)> claim = [&](uint32_t node) {
-                const auto kind = opcode(instructions[node]);
-                if (uses[node] != 1 || owner[node] >= 0 || kind == ExprOp::LogicalAnd ||
-                    kind == ExprOp::LogicalOr || kind == ExprOp::Select || kind == ExprOp::Fold ||
-                    phases[node] != phases[pc])
-                    return;
-                owner[node] = int(pc);
-                for (uint32_t a = 0; a < expr_arity(kind); ++a)
-                    claim(sources[node][a]);
-            };
-            zero_select[pc] = op == ExprOp::Select && gathered[sources[pc][0]] &&
-                              opcode(instructions[sources[pc][1]]) == ExprOp::Load &&
-                              opcode(instructions[sources[pc][2]]) == ExprOp::Immediate &&
-                              instructions[sources[pc][2]].immediate == 0;
-            claim(sources[pc][zero_select[pc] ? 0 : 1]);
-            if (op == ExprOp::Select)
-                claim(sources[pc][2]);
-        }
-        std::array<bool, ExpressionProgram::max_rank> needed{};
-        const auto need = [&](const ExpressionSignature::Binding& binding) {
-            if (!binding.linear)
-                for (uint32_t d = 0; d < signature.rank; ++d)
-                    needed[d] = needed[d] || (int(d) != fold && binding.strides[d] != ExprStride::Zero);
-        };
-        for (const auto& ins : instructions) {
-            if (opcode(ins) == ExprOp::Iota && int(aux_of(ins)) != fold)
-                needed[aux_of(ins)] = true;
-            if (opcode(ins) == ExprOp::Load)
-                need(signature.input[aux_of(ins)]);
-        }
-        for (uint32_t o = 0; o < signature.outputs; ++o)
-            need(signature.output[o]);
-        int outer = -1;
-        for (uint32_t d = 0; d < signature.rank && outer < 0; ++d)
-            if (int(d) != fold)
-                outer = int(d);
-        int lowest = int(signature.rank);
-        for (uint32_t d = 0; d < signature.rank && lowest == int(signature.rank); ++d)
-            if (needed[d])
-                lowest = int(d);
 
-        const V count = word(layout.count);
-        const auto write_packed = [&](uint32_t o, V begin, V packed) {
-            const uint32_t width = dtype_size(signature.output[o].dtype) * 8, lanes = 32 / width;
-            e.condition(less(begin, count), [&] {
-                const auto word_index = e.math(ExprOp::UIntDiv, begin, k(lanes));
-                const auto valid = sub(count, begin);
-                const auto value = e.select(less(valid, k(lanes)), [&] {
-                    const auto mask = sub(shl(k(1), mul(valid, k(width))), k(1));
-                    return bit_or(bit_and(e.output(layout.output[o], word_index), e.math(ExprOp::BitNot, mask)), bit_and(packed, mask)); }, [&] { return packed; });
-                e.store(layout.output[o], word_index, value);
-            });
-        };
-        const V work = packing > 1 ? e.math(ExprOp::UIntDiv, add(count, k(packing - 1)), k(packing))
-                                   : count;
-        e.loop(e.thread(), work, e.grid_stride(), [&](V thread) {
-            std::vector<std::array<V, 2>> packed(signature.outputs);
-            for (uint32_t o = 0; o < signature.outputs; ++o)
-                for (uint32_t group = 0; group < packing * dtype_size(signature.output[o].dtype) / 4; ++group)
-                    if (dtype_size(signature.output[o].dtype) < 4)
-                        packed[o][group] = e.variable(k(0));
-            const auto emit_lane = [&](V lane) {
-                const V element = add(mul(thread, k(packing)), lane);
-                e.condition(less(element, count), [&] {
-                    std::array<V, ExpressionProgram::max_rank> coords{};
-                    V rest = element;
-                    for (int d = int(signature.rank) - 1; d >= lowest; --d) {
-                        if (d == fold)
-                            continue;
-                        if (d == outer) {
-                            coords[d] = rest;
-                            break;
-                        }
-                        // Exact for dividends below 2^31: q = (mulhi(n, magic) + n) >> shift.
-                        const auto quotient = e.math(ExprOp::ShiftRight, add(e.mul_hi(rest, word(layout.magic[d])), rest),
-                                                     word(layout.shift[d]));
-                        if (needed[d])
-                            coords[d] = sub(rest, mul(quotient, word(layout.dims[d])));
-                        rest = quotient;
+        ExpressionEmitter& e_;
+        const ExpressionSignature& signature_;
+        ExpressionLayout layout_;
+        std::span<const ExprInstruction> instructions_;
+        std::span<const std::array<uint32_t, 3>> sources_;
+        std::vector<ExprPhase> phases_;
+        int fold_;
+        uint32_t fold_n_;
+        uint32_t packing_;
+        std::vector<int> owner_;
+        std::vector<bool> gathered_, zero_select_;
+        std::array<bool, ExpressionProgram::max_rank> needed_{};
+        int outer_ = -1, lowest_ = 0;
+        std::array<V, ExpressionProgram::max_rank> coords_{};
+        V element_ = 0, fold_index_ = 0;
+        std::vector<V> values_, accumulators_, compensations_;
+
+        V k(uint32_t value) { return e_.literal(value); }
+        V word(uint32_t offset) { return e_.argument(k(offset)); }
+        V add(V a, V b) { return e_.math(ExprOp::AddInt, a, b); }
+        V sub(V a, V b) { return e_.math(ExprOp::SubInt, a, b); }
+        V mul(V a, V b) { return e_.math(ExprOp::MulInt, a, b); }
+        V less(V a, V b) { return e_.math(ExprOp::LessUInt, a, b); }
+        V equal(V a, V b) { return e_.math(ExprOp::EqualInt, a, b); }
+        V bit_and(V a, V b) { return e_.math(ExprOp::BitAnd, a, b); }
+        V bit_or(V a, V b) { return e_.math(ExprOp::BitOr, a, b); }
+        V shl(V a, V b) { return e_.math(ExprOp::ShiftLeft, a, b); }
+
+        void claim(uint32_t pc, uint32_t node, const std::vector<uint32_t>& uses) {
+            const auto kind = opcode(instructions_[node]);
+            if (uses[node] != 1 || owner_[node] >= 0 || kind == ExprOp::LogicalAnd ||
+                kind == ExprOp::LogicalOr || kind == ExprOp::Select || kind == ExprOp::Fold ||
+                phases_[node] != phases_[pc])
+                return;
+            owner_[node] = int(pc);
+            for (uint32_t a = 0; a < expr_arity(kind); ++a)
+                claim(pc, sources_[node][a], uses);
+        }
+
+        void initialize_analysis() {
+            std::vector<uint32_t> uses(instructions_.size());
+            for (uint32_t pc = 0; pc < instructions_.size(); ++pc)
+                for (uint32_t a = 0; a < expr_arity(opcode(instructions_[pc])); ++a)
+                    ++uses[sources_[pc][a]];
+            owner_.assign(instructions_.size(), -1);
+            gathered_.resize(instructions_.size());
+            zero_select_.resize(instructions_.size());
+            for (uint32_t pc = 0; pc < instructions_.size(); ++pc) {
+                gathered_[pc] = gather_rank(opcode(instructions_[pc])) != 0;
+                for (uint32_t a = 0; a < expr_arity(opcode(instructions_[pc])); ++a)
+                    gathered_[pc] = gathered_[pc] || gathered_[sources_[pc][a]];
+            }
+            for (uint32_t pc = 0; pc < instructions_.size(); ++pc) {
+                const auto op = opcode(instructions_[pc]);
+                if (op != ExprOp::LogicalAnd && op != ExprOp::LogicalOr && op != ExprOp::Select)
+                    continue;
+                zero_select_[pc] = op == ExprOp::Select && gathered_[sources_[pc][0]] &&
+                                   opcode(instructions_[sources_[pc][1]]) == ExprOp::Load &&
+                                   opcode(instructions_[sources_[pc][2]]) == ExprOp::Immediate &&
+                                   instructions_[sources_[pc][2]].immediate == 0;
+                claim(pc, sources_[pc][zero_select_[pc] ? 0 : 1], uses);
+                if (op == ExprOp::Select)
+                    claim(pc, sources_[pc][2], uses);
+            }
+            for (const auto& ins : instructions_) {
+                if (opcode(ins) == ExprOp::Iota && int(aux_of(ins)) != fold_)
+                    needed_[aux_of(ins)] = true;
+                if (opcode(ins) == ExprOp::Load)
+                    need(signature_.input[aux_of(ins)]);
+            }
+            for (uint32_t o = 0; o < signature_.outputs; ++o)
+                need(signature_.output[o]);
+            for (uint32_t d = 0; d < signature_.rank && outer_ < 0; ++d)
+                if (int(d) != fold_)
+                    outer_ = int(d);
+            lowest_ = int(signature_.rank);
+            for (uint32_t d = 0; d < signature_.rank && lowest_ == int(signature_.rank); ++d)
+                if (needed_[d])
+                    lowest_ = int(d);
+        }
+
+        void need(const ExpressionSignature::Binding& binding) {
+            if (!binding.linear)
+                for (uint32_t d = 0; d < signature_.rank; ++d)
+                    needed_[d] = needed_[d] || (int(d) != fold_ && binding.strides[d] != ExprStride::Zero);
+        }
+
+        V coord(uint32_t d) const { return int(d) == fold_ ? fold_index_ : coords_[d]; }
+
+        V strided(const ExpressionSignature::Binding& binding, uint32_t d, V index, uint32_t stride) {
+            if (binding.strides[d] == ExprStride::Unit)
+                return index;
+            return binding.strides[d] == ExprStride::Strided ? mul(index, word(stride)) : k(0);
+        }
+
+        V view_index(const ExpressionSignature::Binding& binding,
+                     const std::array<uint32_t, ExpressionProgram::max_rank>& strides) {
+            if (binding.linear)
+                return element_;
+            V index = k(0);
+            for (uint32_t d = 0; d < signature_.rank; ++d)
+                if (binding.strides[d] != ExprStride::Zero)
+                    index = add(index, strided(binding, d, coord(d), strides[d]));
+            return index;
+        }
+
+        V read(uint32_t i, V index) {
+            const auto& binding = signature_.input[i];
+            if (!binding.host)
+                return e_.load(layout_.input[i], index, binding.dtype);
+            const auto start = layout_.input[i] == ExpressionLayout::none ? k(layout_.bank) : add(k(layout_.bank), word(layout_.input[i]));
+            return e_.argument(add(start, index));
+        }
+
+        V truth(V value) { return e_.math(ExprOp::NotEqualInt, value, k(0)); }
+
+        V eval(uint32_t pc) {
+            if (values_[pc])
+                return values_[pc];
+            const auto ins = instructions_[pc];
+            const auto op = opcode(ins);
+            const auto aux = aux_of(ins);
+            V result = 0;
+            if (op == ExprOp::Immediate)
+                result = k(ins.immediate);
+            else if (op == ExprOp::Iota)
+                result = coord(aux);
+            else if (op == ExprOp::Extent)
+                result = int(aux) == fold_ && fold_n_ ? k(fold_n_) : word(layout_.dims[aux]);
+            else if (op == ExprOp::Load) {
+                const auto& binding = signature_.input[aux];
+                const auto index = view_index(binding, layout_.input_stride[aux]);
+                int low = binding.pair >= 0 ? int(aux) : -1;
+                for (uint32_t i = 0; i < signature_.inputs && low < 0; ++i)
+                    if (signature_.input[i].pair == int(aux))
+                        low = int(i);
+                result = low >= 0 && e_.cuda() ? e_.load_pair(layout_.input[low], index)[low == int(aux) ? 0 : 1]
+                                               : read(aux, index);
+            } else if (const auto rank = gather_rank(op)) {
+                const auto& binding = signature_.input[aux];
+                const auto policy = ExprOob(policy_of(ins));
+                V index = k(0), valid = k(1);
+                for (uint32_t d = 0; d < rank; ++d) {
+                    auto position = eval(sources_[pc][d]);
+                    if (policy != ExprOob::Checked && !signature_.gather_in_range) {
+                        const auto n = word(layout_.bound[aux][d]);
+                        if (policy == ExprOob::Clamp) {
+                            position = e_.math(ExprOp::Select, e_.math(ExprOp::LessInt, position, k(0)), k(0), position);
+                            position = e_.math(ExprOp::Select, less(position, n), position, sub(n, k(1)));
+                        } else if (policy == ExprOob::Wrap) {
+                            position = e_.math(ExprOp::IntMod, position, n);
+                            position = e_.math(ExprOp::Select, e_.math(ExprOp::LessInt, position, k(0)), add(position, n), position);
+                        } else
+                            valid = d == 0 ? less(position, n) : bit_and(valid, less(position, n));
                     }
-                    V fold_index = 0;
-                    const auto coord = [&](uint32_t d) { return int(d) == fold ? fold_index : coords[d]; };
-                    const auto strided = [&](const ExpressionSignature::Binding& binding, uint32_t d, V index, uint32_t stride) {
-                        if (binding.strides[d] == ExprStride::Unit)
-                            return index;
-                        return binding.strides[d] == ExprStride::Strided ? mul(index, word(stride)) : k(0);
-                    };
-                    const auto view_index = [&](const ExpressionSignature::Binding& binding, const auto& strides) {
-                        if (binding.linear)
-                            return element;
-                        V index = k(0);
-                        for (uint32_t d = 0; d < signature.rank; ++d)
-                            if (binding.strides[d] != ExprStride::Zero)
-                                index = add(index, strided(binding, d, coord(d), strides[d]));
-                        return index;
-                    };
-                    const auto read = [&](uint32_t i, V index) {
-                        const auto& binding = signature.input[i];
-                        if (!binding.host)
-                            return e.load(layout.input[i], index, binding.dtype);
-                        const auto start = layout.input[i] == ExpressionLayout::none ? k(layout.bank) : add(k(layout.bank), word(layout.input[i]));
-                        return e.argument(add(start, index));
-                    };
-                    std::vector<V> values(instructions.size());
-                    std::function<V(uint32_t)> node = [&](uint32_t pc) -> V {
-                        if (values[pc])
-                            return values[pc];
-                        const auto ins = instructions[pc];
-                        const auto op = opcode(ins);
-                        const auto aux = aux_of(ins);
-                        const auto arg = [&](uint32_t n) { return node(sources[pc][n]); };
-                        V result = 0;
-                        if (op == ExprOp::Immediate)
-                            result = k(ins.immediate);
-                        else if (op == ExprOp::Iota)
-                            result = coord(aux);
-                        else if (op == ExprOp::Extent)
-                            result = int(aux) == fold && fold_n ? k(fold_n) : word(layout.dims[aux]);
-                        else if (op == ExprOp::Load) {
-                            const auto& binding = signature.input[aux];
-                            const auto index = view_index(binding, layout.input_stride[aux]);
-                            int low = binding.pair >= 0 ? int(aux) : -1;
-                            for (uint32_t i = 0; i < signature.inputs && low < 0; ++i)
-                                if (signature.input[i].pair == int(aux))
-                                    low = int(i);
-                            result = low >= 0 && e.cuda() ? e.load_pair(layout.input[low], index)[low == int(aux) ? 0 : 1]
-                                                          : read(aux, index);
-                        } else if (const auto rank = gather_rank(op)) {
-                            const auto& binding = signature.input[aux];
-                            const auto policy = ExprOob(policy_of(ins));
-                            V index = k(0), valid = k(1);
-                            for (uint32_t d = 0; d < rank; ++d) {
-                                auto position = arg(d);
-                                if (policy != ExprOob::Checked && !signature.gather_in_range) {
-                                    const auto n = word(layout.bound[aux][d]);
-                                    if (policy == ExprOob::Clamp) {
-                                        position = e.math(ExprOp::Select, e.math(ExprOp::LessInt, position, k(0)), k(0), position);
-                                        position = e.math(ExprOp::Select, less(position, n), position, sub(n, k(1)));
-                                    } else if (policy == ExprOob::Wrap) {
-                                        position = e.math(ExprOp::IntMod, position, n);
-                                        position = e.math(ExprOp::Select, e.math(ExprOp::LessInt, position, k(0)), add(position, n), position);
-                                    } else
-                                        valid = d == 0 ? less(position, n) : bit_and(valid, less(position, n));
-                                }
-                                if (binding.strides[d] != ExprStride::Zero)
-                                    index = add(index, strided(binding, d, position, layout.input_stride[aux][d]));
-                            }
-                            result = policy == ExprOob::Zero
-                                         ? e.select(valid, [&] { return read(aux, index); }, [&] { return k(0); })
-                                         : read(aux, index);
-                        } else if (zero_select[pc]) {
-                            const auto value = arg(1);
-                            result = e.select(value, [&] { return e.math(ExprOp::Select, arg(0), value, k(0)); }, [&] { return k(0); });
-                        } else if ((op == ExprOp::LogicalAnd || op == ExprOp::LogicalOr || op == ExprOp::Select) &&
-                                   std::find(owner.begin(), owner.end(), int(pc)) != owner.end()) {
-                            const auto a = arg(0);
-                            const auto boolean = [&](V v) { return e.math(ExprOp::NotEqualInt, v, k(0)); };
-                            result = e.select(a, [&] { return op == ExprOp::LogicalOr ? k(1) : op == ExprOp::Select ? arg(1)
-                                                                                                                    : boolean(arg(1)); }, [&] { return op == ExprOp::LogicalAnd ? k(0) : op == ExprOp::Select ? arg(2)
-                                                                                                                                                                                                                       : boolean(arg(1)); });
-                        } else if (op == ExprOp::Fold || op == ExprOp::Store) {
-                            throw std::logic_error("expression fold or store evaluated as a value");
-                        } else {
-                            const auto a = arg(0), b = expr_arity(op) > 1 ? arg(1) : k(0), c = expr_arity(op) > 2 ? arg(2) : k(0);
-                            result = e.math(op, a, b, c);
-                        }
-                        return values[pc] = result;
-                    };
-                    if (fold >= 0) {
-                        // Values defined inside the fold loop do not dominate the code after it.
-                        for (uint32_t pc = 0; pc < instructions.size(); ++pc)
-                            if (phases[pc] == ExprPhase::Invariant && owner[pc] < 0 && opcode(instructions[pc]) != ExprOp::Store)
-                                node(pc);
-                        std::vector<V> accumulators(instructions.size()), compensations(instructions.size());
-                        for (uint32_t pc = 0; pc < instructions.size(); ++pc) {
-                            if (opcode(instructions[pc]) != ExprOp::Fold)
-                                continue;
-                            const auto kind = ExprReduce(aux_of(instructions[pc]));
-                            const auto type = DataType(instructions[pc].immediate);
-                            const bool floating = type == DataType::Float32;
-                            uint32_t initial = 0;
-                            if (kind == ExprReduce::Min)
-                                initial = floating ? 0x7f800000u : type == DataType::Int32 ? 0x7fffffffu
-                                                                                           : ~0u;
-                            if (kind == ExprReduce::Max)
-                                initial = floating ? 0xff800000u : type == DataType::Int32 ? 0x80000000u
-                                                                                           : 0u;
-                            if (kind == ExprReduce::And)
-                                initial = type == DataType::Bool ? 1u : ~0u;
-                            accumulators[pc] = e.variable(k(initial));
-                            if (kind == ExprReduce::Sum && floating)
-                                compensations[pc] = e.variable(k(0));
-                        }
-                        const auto fold_body = [&](V i) {
-                            fold_index = i;
-                            if (fold_n)
-                                for (uint32_t pc = 0; pc < instructions.size(); ++pc)
-                                    if (phases[pc] == ExprPhase::Variant)
-                                        values[pc] = 0;
-                            for (uint32_t pc = 0; pc < instructions.size(); ++pc) {
-                                if (opcode(instructions[pc]) != ExprOp::Fold) {
-                                    if (phases[pc] == ExprPhase::Variant && owner[pc] < 0)
-                                        node(pc);
-                                    continue;
-                                }
-                                const auto kind = ExprReduce(aux_of(instructions[pc]));
-                                const auto type = DataType(instructions[pc].immediate);
-                                const bool floating = type == DataType::Float32;
-                                auto value = node(sources[pc][0]), acc = e.read(accumulators[pc]);
-                                switch (kind) {
-                                case ExprReduce::Sum:
-                                    if (floating) {
-                                        // Compensated summation keeps the low-order bits a serial Float32 sum drops.
-                                        const auto y = e.math(ExprOp::Sub, value, e.read(compensations[pc]));
-                                        const auto t = e.math(ExprOp::Add, acc, y);
-                                        const auto correction = e.math(ExprOp::Sub, e.math(ExprOp::Sub, t, acc), y);
-                                        e.assign(compensations[pc], e.math(ExprOp::Select, e.math(ExprOp::IsFinite, t), correction, k(0)));
-                                        value = t;
-                                    } else
-                                        value = add(acc, value);
-                                    break;
-                                case ExprReduce::And: value = bit_and(acc, value); break;
-                                case ExprReduce::Or: value = bit_or(acc, value); break;
-                                case ExprReduce::Xor: value = e.math(ExprOp::BitXor, acc, value); break;
-                                case ExprReduce::Count: value = add(acc, e.math(ExprOp::NotEqualInt, value, k(0))); break;
-                                default:
-                                    if (floating)
-                                        value = e.math(kind == ExprReduce::Min ? ExprOp::Min : ExprOp::Max, acc, value);
-                                    else {
-                                        const auto pred = e.math(type == DataType::Int32 ? ExprOp::LessInt : ExprOp::LessUInt, acc, value);
-                                        value = kind == ExprReduce::Min ? e.math(ExprOp::Select, pred, acc, value)
-                                                                        : e.math(ExprOp::Select, pred, value, acc);
-                                    }
-                                }
-                                e.assign(accumulators[pc], value);
-                            }
-                        };
-                        if (fold_n)
-                            for (uint32_t i = 0; i < fold_n; ++i)
-                                fold_body(k(i));
-                        else
-                            e.loop(k(0), word(layout.dims[fold]), k(1), fold_body);
-                        for (uint32_t pc = 0; pc < instructions.size(); ++pc)
-                            if (opcode(instructions[pc]) == ExprOp::Fold)
-                                values[pc] = e.read(accumulators[pc]);
+                    if (binding.strides[d] != ExprStride::Zero)
+                        index = add(index, strided(binding, d, position, layout_.input_stride[aux][d]));
+                }
+                result = policy == ExprOob::Zero
+                             ? e_.select(valid, [this, aux, index] { return read(aux, index); }, [this] { return k(0); })
+                             : read(aux, index);
+            } else if (zero_select_[pc]) {
+                const auto value = eval(sources_[pc][1]);
+                result = e_.select(value, [this, pc, value] { return e_.math(ExprOp::Select, eval(sources_[pc][0]), value, k(0)); }, [this] { return k(0); });
+            } else if ((op == ExprOp::LogicalAnd || op == ExprOp::LogicalOr || op == ExprOp::Select) &&
+                       std::find(owner_.begin(), owner_.end(), int(pc)) != owner_.end()) {
+                const auto a = eval(sources_[pc][0]);
+                result = e_.select(a, [this, pc, op] {
+                    if (op == ExprOp::LogicalOr)
+                        return k(1);
+                    const auto value = eval(sources_[pc][1]);
+                    return op == ExprOp::Select ? value : truth(value); }, [this, pc, op] {
+                    if (op == ExprOp::LogicalAnd)
+                        return k(0);
+                    const auto value = eval(sources_[pc][op == ExprOp::Select ? 2 : 1]);
+                    return op == ExprOp::Select ? value : truth(value); });
+            } else if (op == ExprOp::Fold || op == ExprOp::Store) {
+                throw std::logic_error("expression fold or store evaluated as a value");
+            } else {
+                const auto a = eval(sources_[pc][0]);
+                const auto b = expr_arity(op) > 1 ? eval(sources_[pc][1]) : k(0);
+                const auto c = expr_arity(op) > 2 ? eval(sources_[pc][2]) : k(0);
+                result = e_.math(op, a, b, c);
+            }
+            return values_[pc] = result;
+        }
+
+        void fold_body(V i) {
+            fold_index_ = i;
+            if (fold_n_)
+                for (uint32_t pc = 0; pc < instructions_.size(); ++pc)
+                    if (phases_[pc] == ExprPhase::Variant)
+                        values_[pc] = 0;
+            for (uint32_t pc = 0; pc < instructions_.size(); ++pc) {
+                if (opcode(instructions_[pc]) != ExprOp::Fold) {
+                    if (phases_[pc] == ExprPhase::Variant && owner_[pc] < 0)
+                        eval(pc);
+                    continue;
+                }
+                const auto kind = ExprReduce(aux_of(instructions_[pc]));
+                const auto type = DataType(instructions_[pc].immediate);
+                const bool floating = type == DataType::Float32;
+                auto value = eval(sources_[pc][0]), acc = e_.read(accumulators_[pc]);
+                switch (kind) {
+                case ExprReduce::Sum:
+                    if (floating) {
+                        // Compensated summation keeps the low-order bits a serial Float32 sum drops.
+                        const auto y = e_.math(ExprOp::Sub, value, e_.read(compensations_[pc]));
+                        const auto t = e_.math(ExprOp::Add, acc, y);
+                        const auto correction = e_.math(ExprOp::Sub, e_.math(ExprOp::Sub, t, acc), y);
+                        e_.assign(compensations_[pc], e_.math(ExprOp::Select, e_.math(ExprOp::IsFinite, t), correction, k(0)));
+                        value = t;
+                    } else
+                        value = add(acc, value);
+                    break;
+                case ExprReduce::And: value = bit_and(acc, value); break;
+                case ExprReduce::Or: value = bit_or(acc, value); break;
+                case ExprReduce::Xor: value = e_.math(ExprOp::BitXor, acc, value); break;
+                case ExprReduce::Count: value = add(acc, e_.math(ExprOp::NotEqualInt, value, k(0))); break;
+                default:
+                    if (floating)
+                        value = e_.math(kind == ExprReduce::Min ? ExprOp::Min : ExprOp::Max, acc, value);
+                    else {
+                        const auto pred = e_.math(type == DataType::Int32 ? ExprOp::LessInt : ExprOp::LessUInt, acc, value);
+                        value = kind == ExprReduce::Min ? e_.math(ExprOp::Select, pred, acc, value)
+                                                        : e_.math(ExprOp::Select, pred, value, acc);
                     }
-                    std::array<V, ExpressionProgram::max_outputs> output_values{};
-                    for (uint32_t pc = 0; pc < instructions.size(); ++pc) {
-                        if (opcode(instructions[pc]) != ExprOp::Store) {
-                            if (opcode(instructions[pc]) != ExprOp::Fold &&
-                                phases[pc] != ExprPhase::Variant && owner[pc] < 0)
-                                node(pc);
-                            continue;
-                        }
-                        output_values[aux_of(instructions[pc])] = node(sources[pc][0]);
-                    }
-                    // Positional aliases read the original inputs before any output is written.
-                    for (uint32_t o = 0; o < signature.outputs; ++o) {
-                        const auto& binding = signature.output[o];
-                        auto value = output_values[o];
-                        if (dtype_size(binding.dtype) == 4 || e.cuda())
-                            e.store(layout.output[o], view_index(binding, layout.output_stride[o]), value, binding.dtype);
-                        else {
-                            const uint32_t width = dtype_size(binding.dtype) * 8, lanes = 32 / width;
-                            value = binding.dtype == DataType::Float16 ? e.half(value, true) : bit_and(value, k(255));
-                            const auto shifted = shl(value, mul(e.math(ExprOp::UIntMod, lane, k(lanes)), k(width)));
-                            for (uint32_t group = 0; group < packing / lanes; ++group)
-                                e.condition(equal(e.math(ExprOp::UIntDiv, lane, k(lanes)), k(group)), [&] {
-                                    e.assign(packed[o][group], bit_or(e.read(packed[o][group]), shifted));
-                                });
-                        }
-                    }
-                });
-            };
-            if (packing > 1)
-                e.loop(k(0), k(packing), k(1), emit_lane);
+                }
+                e_.assign(accumulators_[pc], value);
+            }
+        }
+
+        void initialize_fold() {
+            for (uint32_t pc = 0; pc < instructions_.size(); ++pc)
+                if (phases_[pc] == ExprPhase::Invariant && owner_[pc] < 0 && opcode(instructions_[pc]) != ExprOp::Store)
+                    eval(pc);
+            accumulators_.resize(instructions_.size());
+            compensations_.resize(instructions_.size());
+            for (uint32_t pc = 0; pc < instructions_.size(); ++pc) {
+                if (opcode(instructions_[pc]) != ExprOp::Fold)
+                    continue;
+                const auto kind = ExprReduce(aux_of(instructions_[pc]));
+                const auto type = DataType(instructions_[pc].immediate);
+                const bool floating = type == DataType::Float32;
+                uint32_t initial = 0;
+                if (kind == ExprReduce::Min)
+                    initial = floating ? 0x7f800000u : type == DataType::Int32 ? 0x7fffffffu
+                                                                               : ~0u;
+                if (kind == ExprReduce::Max)
+                    initial = floating ? 0xff800000u : type == DataType::Int32 ? 0x80000000u
+                                                                               : 0u;
+                if (kind == ExprReduce::And)
+                    initial = type == DataType::Bool ? 1u : ~0u;
+                accumulators_[pc] = e_.variable(k(initial));
+                if (kind == ExprReduce::Sum && floating)
+                    compensations_[pc] = e_.variable(k(0));
+            }
+            if (fold_n_)
+                for (uint32_t i = 0; i < fold_n_; ++i)
+                    fold_body(k(i));
             else
-                emit_lane(k(0));
-            if (!e.cuda())
-                for (uint32_t o = 0; o < signature.outputs; ++o) {
-                    const uint32_t width = dtype_size(signature.output[o].dtype) * 8, lanes = 32 / width;
+                e_.loop(k(0), word(layout_.dims[fold_]), k(1), [this](V i) { fold_body(i); });
+            for (uint32_t pc = 0; pc < instructions_.size(); ++pc)
+                if (opcode(instructions_[pc]) == ExprOp::Fold)
+                    values_[pc] = e_.read(accumulators_[pc]);
+        }
+
+        void emit_element(V lane, V element, std::vector<std::array<V, 2>>& packed) {
+            element_ = element;
+            fold_index_ = 0;
+            coords_.fill(0);
+            V rest = element;
+            for (int d = int(signature_.rank) - 1; d >= lowest_; --d) {
+                if (d == fold_)
+                    continue;
+                if (d == outer_) {
+                    coords_[d] = rest;
+                    break;
+                }
+                // Exact for dividends below 2^31: q = (mulhi(n, magic) + n) >> shift.
+                const auto quotient = e_.math(ExprOp::ShiftRight, add(e_.mul_hi(rest, word(layout_.magic[d])), rest),
+                                              word(layout_.shift[d]));
+                if (needed_[d])
+                    coords_[d] = sub(rest, mul(quotient, word(layout_.dims[d])));
+                rest = quotient;
+            }
+            values_.assign(instructions_.size(), 0);
+            if (fold_ >= 0)
+                initialize_fold();
+            std::array<V, ExpressionProgram::max_outputs> output_values{};
+            for (uint32_t pc = 0; pc < instructions_.size(); ++pc) {
+                if (opcode(instructions_[pc]) != ExprOp::Store) {
+                    if (opcode(instructions_[pc]) != ExprOp::Fold &&
+                        phases_[pc] != ExprPhase::Variant && owner_[pc] < 0)
+                        eval(pc);
+                    continue;
+                }
+                output_values[aux_of(instructions_[pc])] = eval(sources_[pc][0]);
+            }
+            // Positional aliases read the original inputs before any output is written.
+            for (uint32_t o = 0; o < signature_.outputs; ++o) {
+                const auto& binding = signature_.output[o];
+                auto value = output_values[o];
+                if (dtype_size(binding.dtype) == 4 || e_.cuda())
+                    e_.store(layout_.output[o], view_index(binding, layout_.output_stride[o]), value, binding.dtype);
+                else {
+                    const uint32_t width = dtype_size(binding.dtype) * 8, lanes = 32 / width;
+                    value = binding.dtype == DataType::Float16 ? e_.half(value, true) : bit_and(value, k(255));
+                    const auto width_value = k(width);
+                    const auto lane_in_word = e_.math(ExprOp::UIntMod, lane, k(lanes));
+                    const auto shift = mul(lane_in_word, width_value);
+                    const auto shifted = shl(value, shift);
+                    for (uint32_t group = 0; group < packing_ / lanes; ++group) {
+                        const auto group_index = k(group);
+                        const auto word_in_group = e_.math(ExprOp::UIntDiv, lane, k(lanes));
+                        const auto matches_group = equal(word_in_group, group_index);
+                        e_.condition(matches_group, [this, &packed, o, group, shifted] {
+                            const auto previous = e_.read(packed[o][group]);
+                            const auto combined = bit_or(previous, shifted);
+                            e_.assign(packed[o][group], combined);
+                        });
+                    }
+                }
+            }
+        }
+
+        void emit_lane(V thread, V lane, std::vector<std::array<V, 2>>& packed, V count) {
+            const V element = add(mul(thread, k(packing_)), lane);
+            e_.condition(less(element, count), [this, lane, element, &packed] {
+                emit_element(lane, element, packed);
+            });
+        }
+
+        void emit_thread(V thread, V count) {
+            std::vector<std::array<V, 2>> packed(signature_.outputs);
+            for (uint32_t o = 0; o < signature_.outputs; ++o)
+                for (uint32_t group = 0; group < packing_ * dtype_size(signature_.output[o].dtype) / 4; ++group)
+                    if (dtype_size(signature_.output[o].dtype) < 4)
+                        packed[o][group] = e_.variable(k(0));
+            if (packing_ > 1)
+                e_.loop(k(0), k(packing_), k(1), [this, thread, count, &packed](V lane) {
+                    emit_lane(thread, lane, packed, count);
+                });
+            else
+                emit_lane(thread, k(0), packed, count);
+            if (!e_.cuda())
+                for (uint32_t o = 0; o < signature_.outputs; ++o) {
+                    const uint32_t width = dtype_size(signature_.output[o].dtype) * 8, lanes = 32 / width;
                     if (width == 32)
                         continue;
-                    for (uint32_t group = 0; group < packing / lanes; ++group)
-                        write_packed(o, add(mul(thread, k(packing)), k(group * lanes)), e.read(packed[o][group]));
+                    for (uint32_t group = 0; group < packing_ / lanes; ++group) {
+                        const auto begin = add(mul(thread, k(packing_)), k(group * lanes));
+                        const auto packed_value = e_.read(packed[o][group]);
+                        write_packed(o, begin, packed_value, count);
+                    }
                 }
-        });
+        }
+
+        void write_packed(uint32_t o, V begin, V packed, V count) {
+            const uint32_t width = dtype_size(signature_.output[o].dtype) * 8, lanes = 32 / width;
+            e_.condition(less(begin, count), [this, o, begin, packed, count, lanes, width] {
+                const auto word_index = e_.math(ExprOp::UIntDiv, begin, k(lanes));
+                const auto valid = sub(count, begin);
+                const auto value = e_.select(less(valid, k(lanes)), [this, valid, packed, o, word_index, width] {
+                    const auto existing = e_.output(layout_.output[o], word_index);
+                    const auto sub_one = k(1);
+                    const auto width_value = k(width);
+                    const auto scaled_valid = mul(valid, width_value);
+                    const auto shift_one = k(1);
+                    const auto mask_bits = shl(shift_one, scaled_valid);
+                    const auto mask = sub(mask_bits, sub_one);
+                    const auto inserted = bit_and(packed, mask);
+                    const auto inverse_mask = e_.math(ExprOp::BitNot, mask);
+                    const auto preserved = bit_and(existing, inverse_mask);
+                    return bit_or(preserved, inserted); }, [packed] { return packed; });
+                e_.store(layout_.output[o], word_index, value);
+            });
+        }
+
+    public:
+        ExpressionCodegen(ExpressionEmitter& emitter, const ExpressionProgram& program,
+                          const ExpressionSignature& signature)
+            : e_(emitter), signature_(signature), layout_(expression_layout(program, signature)), instructions_(program.instructions()), sources_(expression_sources(program)), phases_(expression_phases(program, signature)), fold_(signature.fold_dim), fold_n_(signature.fold_length), packing_(emitter.cuda() ? 1 : expression_packing(signature)) {
+            initialize_analysis();
+        }
+
+        void emit() {
+            const V count = word(layout_.count);
+            const V work = packing_ > 1 ? e_.math(ExprOp::UIntDiv, add(count, k(packing_ - 1)), k(packing_)) : count;
+            e_.loop(e_.thread(), work, e_.grid_stride(), [this, count](V thread) { emit_thread(thread, count); });
+        }
+    };
+
+    void emit_expression(ExpressionEmitter& e, const ExpressionProgram& program,
+                         const ExpressionSignature& signature) {
+        ExpressionCodegen(e, program, signature).emit();
     }
 } // namespace lfs::core::internal
