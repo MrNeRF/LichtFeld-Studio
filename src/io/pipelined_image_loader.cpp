@@ -1857,15 +1857,13 @@ namespace lfs::io {
         }
 
         const auto publish_stream = pair.image->stream();
-        if (pair.mask)
-            pair.mask->sync_to_stream(publish_stream);
-        pair.stream = publish_stream;
-
         ReadyImage ready{
             .sequence_id = sequence_id,
             .tensor = std::move(*pair.image),
             .mask = mask_has_value ? std::optional(std::move(*pair.mask)) : std::nullopt,
-            .stream = pair.stream,
+            .stream = publish_stream,
+            .image_ready = std::move(pair.image_ready),
+            .mask_ready = std::move(pair.mask_ready),
             .depth = depth_has_value ? std::optional(std::move(*pair.depth)) : std::nullopt,
             .normal = normal_has_value ? std::optional(std::move(*pair.normal)) : std::nullopt,
             .depth_ready_event = pair.depth_ready_event,
@@ -1938,6 +1936,17 @@ namespace lfs::io {
         cudaEvent_t sidecar_ready_event,
         std::shared_ptr<void> decoded_frame_lease) {
 
+        // Capture each producer before publishing. Waiting belongs to the consumer,
+        // otherwise a slow mask stalls subsequent work on the shared decode queue.
+        std::optional<lfs::core::TensorFence> image_ready, mask_ready;
+        if (image) {
+            image_ready.emplace(lfs::core::GpuBackend::CUDA);
+            image_ready->record(image->stream());
+        }
+        if (mask) {
+            mask_ready.emplace(lfs::core::GpuBackend::CUDA);
+            mask_ready->record(mask->stream());
+        }
         std::unique_lock<std::mutex> lock(pending_pairs_mutex_);
         auto it = pending_pairs_.find(sequence_id);
         if (it == pending_pairs_.end() || it->second.loader_generation != loader_generation) {
@@ -1953,12 +1962,14 @@ namespace lfs::io {
         if (image) {
             subtract_clamped(pending_image_bytes_, pair.image_bytes);
             pair.image = std::move(*image);
+            pair.image_ready = std::move(image_ready);
             pair.image_bytes = tensor_reserved_bytes(*pair.image);
             pending_image_bytes_.fetch_add(pair.image_bytes, std::memory_order_acq_rel);
         }
         if (mask) {
             subtract_clamped(pending_mask_bytes_, pair.mask_bytes);
             pair.mask = std::move(*mask);
+            pair.mask_ready = std::move(mask_ready);
             pair.mask_bytes = tensor_reserved_bytes(*pair.mask);
             pending_mask_bytes_.fetch_add(pair.mask_bytes, std::memory_order_acq_rel);
         }

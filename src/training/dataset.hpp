@@ -218,6 +218,8 @@ namespace lfs::training {
         std::optional<lfs::core::Tensor> mask = {};   // Optional mask [H,W], float32
         std::optional<lfs::core::Tensor> depth = {};  // Optional depth [H,W], float32
         std::optional<lfs::core::Tensor> normal = {}; // Optional normals [3,H,W], float32 in [-1,1]
+        std::optional<lfs::core::TensorFence> image_ready = {};
+        std::optional<lfs::core::TensorFence> mask_ready = {};
         CUevent_st* depth_ready_event = nullptr;
         CUevent_st* normal_ready_event = nullptr;
         // Ring-backed tensors must never outlive this keepalive handle.
@@ -447,6 +449,8 @@ namespace lfs::training {
                 CameraExample example{
                     .data = {cam.get(), std::move(ready.tensor)},
                     .target = lfs::core::Tensor(),
+                    .image_ready = std::move(ready.image_ready),
+                    .mask_ready = std::move(ready.mask_ready),
                     .depth_ready_event = ready.depth_ready_event,
                     .normal_ready_event = ready.normal_ready_event,
                 };

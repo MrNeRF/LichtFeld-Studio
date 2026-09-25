@@ -8490,6 +8490,11 @@ namespace lfs::training {
                 cam = example.data.camera;
                 gt_image = std::move(example.data.image);
 
+                for (const auto* fence : {&example.image_ready, &example.mask_ready}) {
+                    if (*fence)
+                        training_queue_->wait_for(**fence);
+                }
+
                 // The 8-bit decode ring keeps its leases compact. Widen only the
                 // frame being consumed, on the training stream, using the exact
                 // normalization used by the original float decode path.

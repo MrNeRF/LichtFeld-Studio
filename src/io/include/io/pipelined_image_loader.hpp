@@ -134,6 +134,8 @@ namespace lfs::io {
         lfs::core::Tensor tensor;              // Image tensor [C,H,W], float32
         std::optional<lfs::core::Tensor> mask; // Optional mask [H,W], float32
         cudaStream_t stream = nullptr;
+        std::optional<lfs::core::TensorFence> image_ready = {};
+        std::optional<lfs::core::TensorFence> mask_ready = {};
         std::optional<lfs::core::Tensor> depth;  // Optional depth [H,W], float32
         std::optional<lfs::core::Tensor> normal; // Optional normals [3,H,W], float32 in [-1,1]
         // Depth and normal record readiness on different worker streams, so
@@ -253,6 +255,8 @@ namespace lfs::io {
         [[nodiscard]] std::filesystem::path run_spill_directory() const;
 
     private:
+        friend struct PipelinedImageLoaderTestAccess;
+
         struct PrefetchedImage {
             size_t sequence_id;
             std::uint64_t loader_generation = 0;
@@ -289,6 +293,8 @@ namespace lfs::io {
             std::optional<lfs::core::Tensor> depth;
             std::optional<lfs::core::Tensor> normal;
             cudaStream_t stream = nullptr;
+            std::optional<lfs::core::TensorFence> image_ready = {};
+            std::optional<lfs::core::TensorFence> mask_ready = {};
             CUevent_st* depth_ready_event = nullptr;
             CUevent_st* normal_ready_event = nullptr;
             bool mask_expected = false; // True if a mask was requested for this sequence_id
