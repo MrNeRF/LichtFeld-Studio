@@ -158,6 +158,26 @@ if(LFS_TENSOR_VULKAN)
         COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU,Clang>:-ffp-contract=off>")
 endif()
 
+# Metal tensor backend: kernels.metal is embedded and compiled at runtime, so
+# the build needs no Metal toolchain.
+if(APPLE)
+    set(_lfs_metal_kernels_cpp ${CMAKE_CURRENT_BINARY_DIR}/lfs_metal_kernels.cpp)
+    add_custom_command(
+        OUTPUT ${_lfs_metal_kernels_cpp}
+        COMMAND ${CMAKE_COMMAND}
+            -DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/tensor/backend/metal/kernels.metal
+            -DOUTPUT=${_lfs_metal_kernels_cpp}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tensor/backend/metal/embed_kernels.cmake
+        DEPENDS tensor/backend/metal/kernels.metal tensor/backend/metal/embed_kernels.cmake
+        COMMENT "Embedding Metal tensor kernels")
+    list(APPEND TENSOR_SOURCES
+        tensor/backend/metal/metal_context.mm
+        tensor/backend/metal/metal_ops.mm
+        tensor/backend/metal/metal_ops_pending.cpp
+        ${_lfs_metal_kernels_cpp}
+    )
+endif()
+
 # Core module sources
 set(CORE_SOURCES
         abi.cpp
@@ -238,6 +258,11 @@ if(LFS_TENSOR_VULKAN)
     add_dependencies(lfs_core lfs_tensor_vulkan_shaders)
     target_sources(lfs_core PRIVATE ${LFS_TENSOR_SHADER_TABLE} tensor/backend/vulkan/nn_ops.cpp)
     target_compile_definitions(lfs_core PRIVATE LFS_TENSOR_VULKAN=1)
+endif()
+if(APPLE)
+    target_compile_definitions(lfs_core PRIVATE LFS_TENSOR_METAL=1)
+    target_compile_options(lfs_core PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+    target_link_libraries(lfs_core PRIVATE "-framework Metal" "-framework Foundation")
 endif()
 
 add_dependencies(lfs_core lfs_core_abi_stamp)

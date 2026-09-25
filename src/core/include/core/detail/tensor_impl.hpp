@@ -479,6 +479,7 @@ namespace lfs::core {
         CudaExternal,
         VulkanOwned,
         VulkanExternal,
+        MetalOwned,
     };
 
     struct GpuStorageDescriptor {

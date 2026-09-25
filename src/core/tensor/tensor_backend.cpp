@@ -38,6 +38,9 @@
 #include <vector>
 #ifdef LFS_TENSOR_VULKAN
 #include "backend/gpu_backend_ops.hpp"
+#ifdef LFS_TENSOR_METAL
+#include "backend/metal/metal_context.hpp"
+#endif
 #include "backend/vulkan/vk_context.hpp"
 #if LFS_HAS_CUDA
 #include "backend/vulkan/vk_cuda_bridge.hpp"
@@ -85,6 +88,11 @@ namespace lfs::core {
             return internal::vulkan_device_count();
         }
 #endif
+#ifdef LFS_TENSOR_METAL
+        if (backend == GpuBackend::Metal) {
+            return internal::metal_backend_available() ? 1 : 0;
+        }
+#endif
         return 0;
     }
 
@@ -118,6 +126,8 @@ namespace lfs::core {
         internal::TensorVulkanInteropBackend& backend(GpuBackend backend) {
             std::lock_guard lock(mutex);
             auto& result = backends[static_cast<size_t>(backend)];
+            if (!result && backend == GpuBackend::Metal)
+                throw TensorError("Metal tensors cannot be shared with the Vulkan viewer yet");
             if (!result) {
 #ifdef LFS_TENSOR_VULKAN
 #if LFS_HAS_CUDA
@@ -257,6 +267,8 @@ namespace lfs::core {
 #else
             throw TensorError("CUDA tensor backend is unavailable");
 #endif
+        } else if (*backend == GpuBackend::Metal) {
+            throw TensorError("Metal backend: where_into is not implemented yet");
         } else {
 #ifdef LFS_TENSOR_VULKAN
             internal::vulkan_where_into(output, condition, value, source);
@@ -332,6 +344,7 @@ namespace lfs::core {
         switch (backend) {
         case GpuBackend::CUDA: return "CUDA";
         case GpuBackend::Vulkan: return "Vulkan";
+        case GpuBackend::Metal: return "Metal";
         }
         return "Unknown";
     }
@@ -392,6 +405,13 @@ namespace lfs::core {
             return false;
 #endif
         }
+        if (backend == GpuBackend::Metal) {
+#ifdef LFS_TENSOR_METAL
+            return internal::metal_backend_available();
+#else
+            return false;
+#endif
+        }
 
 #if LFS_HAS_CUDA
         static const bool cuda_available = [] {
@@ -413,6 +433,13 @@ namespace lfs::core {
         if (backend == GpuBackend::Vulkan) {
 #ifdef LFS_TENSOR_VULKAN
             return internal::vulkan_backend_live();
+#else
+            return false;
+#endif
+        }
+        if (backend == GpuBackend::Metal) {
+#ifdef LFS_TENSOR_METAL
+            return internal::metal_backend_live();
 #else
             return false;
 #endif
@@ -478,6 +505,10 @@ namespace lfs::core {
             return {};
 #endif
         }
+#ifdef LFS_TENSOR_METAL
+        if (backend == GpuBackend::Metal)
+            return internal::backend_ops(GpuBackend::Metal).stats();
+#endif
 #ifdef LFS_TENSOR_VULKAN
         return internal::backend_ops(GpuBackend::Vulkan).stats();
 #else
@@ -498,6 +529,7 @@ namespace lfs::core {
         std::shared_ptr<internal::VulkanContext> context;
         uint64_t value = 0;
 #endif
+        uint64_t metal_value = 0;
 
         void capture(const std::span<const Tensor* const> tensors) {
             std::vector<cudaStream_t> streams;
@@ -518,6 +550,8 @@ namespace lfs::core {
                         streams.push_back(tensor->stream());
 #endif
                 }
+                if (*backend == GpuBackend::Metal && storage.meta)
+                    metal_value = std::max(metal_value, storage.meta->pending_value.load(std::memory_order_acquire));
 #ifdef LFS_TENSOR_VULKAN
                 if (*backend == GpuBackend::Vulkan) {
                     if (!storage.meta)
@@ -555,6 +589,10 @@ namespace lfs::core {
                 value = std::max(value, pending);
                 context->recorders().flush_storage(latest);
             }
+#endif
+#ifdef LFS_TENSOR_METAL
+            if (metal_value != 0)
+                internal::metal_flush();
 #endif
         }
     };
@@ -626,6 +664,10 @@ namespace lfs::core {
                 return false;
         }
 #endif
+#ifdef LFS_TENSOR_METAL
+        if (impl_->metal_value != 0 && internal::metal_completed_serial() < impl_->metal_value)
+            return false;
+#endif
         return true;
     }
 
@@ -688,6 +730,10 @@ namespace lfs::core {
                 impl_->context->check_fault_buffer();
             });
         impl_->context.reset();
+#endif
+#ifdef LFS_TENSOR_METAL
+        if (const auto value = std::exchange(impl_->metal_value, 0))
+            settle([&] { internal::metal_wait(value); });
 #endif
         if (failure)
             std::rethrow_exception(failure);
@@ -814,6 +860,10 @@ namespace lfs::core {
             return result;
         }
 #endif
+#ifdef LFS_TENSOR_METAL
+        if (backend == GpuBackend::Metal)
+            return internal::metal_device_info();
+#endif
         return std::nullopt;
     }
 
@@ -827,6 +877,21 @@ namespace lfs::core {
 #endif
 
     lfs::Status shutdown_gpu_backend(const GpuBackend backend) {
+#ifdef LFS_TENSOR_METAL
+        if (backend == GpuBackend::Metal) {
+            try {
+                internal::shutdown_metal_backend();
+            } catch (...) {
+                return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::Internal,
+                    .domain = lfs::ErrorDomain::Core,
+                    .user_message = "Metal tensor backend shutdown failed",
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }));
+            }
+            return {};
+        }
+#endif
 #ifdef LFS_TENSOR_VULKAN
         if (backend == GpuBackend::Vulkan) {
             try {

@@ -394,7 +394,7 @@ namespace lfs::core {
             result.id_ = next_id_++;
             result.ensure_state();
             result.state_->stream =
-                gpu_backend == GpuBackend::Vulkan ? nullptr : getCurrentCUDAStream();
+                gpu_backend && *gpu_backend != GpuBackend::CUDA ? nullptr : getCurrentCUDAStream();
 
             LFS_ASSERT_MSG(result.shape_.elements() == 0 ||
                                dtype_size(result.dtype_) <=
@@ -674,7 +674,7 @@ namespace lfs::core {
             result.id_ = next_id_++;
             result.ensure_state();
             result.state_->stream =
-                gpu_backend == GpuBackend::Vulkan ? nullptr : getCurrentCUDAStream();
+                gpu_backend && *gpu_backend != GpuBackend::CUDA ? nullptr : getCurrentCUDAStream();
 
             size_t bytes = count * dtype_size(result.dtype_);
 

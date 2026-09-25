@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "../facade_trace.hpp"
+#include "../scalar_operand.hpp"
 #include "core/tensor_backend.hpp"
 #include "vk_backend_ops.hpp"
 
@@ -29,27 +30,6 @@ namespace lfs::core::internal {
         using vk::checked_u32;
         using vk::dispatch_groups;
         using vk::kLocalSize;
-
-        uint64_t scalar_integer(const ScalarOperand scalar) {
-            switch (scalar.kind) {
-            case ScalarKind::Float: return 0;
-            case ScalarKind::Int32:
-                return static_cast<uint64_t>(static_cast<int64_t>(scalar.value.int32_value));
-            case ScalarKind::Int64: return static_cast<uint64_t>(scalar.value.int64_value);
-            case ScalarKind::Bool: return scalar.value.bool_value ? 1 : 0;
-            }
-            return 0;
-        }
-
-        float scalar_float(const ScalarOperand scalar) {
-            switch (scalar.kind) {
-            case ScalarKind::Float: return scalar.value.float_value;
-            case ScalarKind::Int32: return static_cast<float>(scalar.value.int32_value);
-            case ScalarKind::Int64: return static_cast<float>(scalar.value.int64_value);
-            case ScalarKind::Bool: return scalar.value.bool_value ? 1.0f : 0.0f;
-            }
-            return 0.0f;
-        }
 
         struct PointwisePush {
             uint64_t lhs_address;
@@ -175,36 +155,6 @@ namespace lfs::core::internal {
                                         "Vulkan dimension exceeds uint32");
             }
             return result;
-        }
-
-        uint64_t fill_pattern(const DataType dtype, const ScalarOperand value) {
-            uint64_t pattern = 0;
-            switch (dtype) {
-            case DataType::Float32: {
-                const float converted = scalar_float(value);
-                std::memcpy(&pattern, &converted, sizeof(converted));
-                return pattern;
-            }
-            case DataType::Float16: {
-                const detail::tensor_half_t converted = detail::tensor_float_to_half(scalar_float(value));
-                std::memcpy(&pattern, &converted, sizeof(converted));
-                return pattern;
-            }
-            case DataType::Int32: {
-                const int32_t converted = static_cast<int32_t>(scalar_integer(value));
-                std::memcpy(&pattern, &converted, sizeof(converted));
-                return pattern;
-            }
-            case DataType::UInt32: {
-                const uint32_t converted = static_cast<uint32_t>(scalar_integer(value));
-                std::memcpy(&pattern, &converted, sizeof(converted));
-                return pattern;
-            }
-            case DataType::Int64: return scalar_integer(value);
-            case DataType::Bool: return scalar_float(value) != 0.0f ? 1 : 0;
-            case DataType::UInt8: return static_cast<uint8_t>(scalar_integer(value));
-            }
-            return 0;
         }
 
         struct FillPush {

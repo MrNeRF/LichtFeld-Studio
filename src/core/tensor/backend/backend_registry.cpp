@@ -8,6 +8,9 @@
 #ifdef LFS_TENSOR_VULKAN
 #include "vulkan/vk_backend_ops.hpp"
 #endif
+#ifdef LFS_TENSOR_METAL
+#include "metal/metal_backend_ops.hpp"
+#endif
 
 #include <utility>
 
@@ -22,6 +25,16 @@ namespace lfs::core::internal {
             return *cuda_ops;
 #else
             LFS_ASSERT_MSG(false, "GPU backend 'CUDA' is not compiled into this build");
+            std::unreachable();
+#endif
+        }
+
+        if (backend == GpuBackend::Metal) {
+#ifdef LFS_TENSOR_METAL
+            static MetalBackendOps* const metal_ops = new MetalBackendOps();
+            return *metal_ops;
+#else
+            LFS_ASSERT_MSG(false, "GPU backend 'Metal' is not compiled into this build");
             std::unreachable();
 #endif
         }

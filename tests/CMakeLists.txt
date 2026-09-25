@@ -456,6 +456,7 @@ if(NOT LFS_HAS_CUDA)
         test_tensor_vulkan_matrix_nn.cpp
         test_tensor_vulkan_random.cpp
         test_tensor_vulkan_buffer.cpp
+        test_tensor_metal.cpp
         test_viewer_no_cuda.cpp
     )
     add_executable(lichtfeld_tests ${TEST_SOURCES})
@@ -477,6 +478,14 @@ if(NOT LFS_HAS_CUDA)
     )
     add_test(NAME lichtfeld_tests COMMAND lichtfeld_tests --tensor-backend=vulkan)
     set_tests_properties(lichtfeld_tests PROPERTIES TIMEOUT 300)
+
+    # Metal vs Vulkan tensor benchmark, built on demand and not registered with ctest.
+    if(APPLE)
+        add_executable(bench_tensor_metal_vulkan EXCLUDE_FROM_ALL bench_tensor_metal_vulkan.cpp)
+        target_compile_features(bench_tensor_metal_vulkan PRIVATE cxx_std_23)
+        target_include_directories(bench_tensor_metal_vulkan PRIVATE ${LFS_CORE_ABI_INCLUDE_DIR})
+        target_link_libraries(bench_tensor_metal_vulkan PRIVATE lfs_core)
+    endif()
     return()
 elseif(NOT LFS_BUILD_TRAINER)
     include(${CMAKE_CURRENT_SOURCE_DIR}/ViewerTests.cmake)

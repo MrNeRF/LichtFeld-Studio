@@ -299,6 +299,8 @@ namespace lfs::core {
         case StorageAccountingKind::VulkanExternal:
             add_counter(state.vulkan_external, bytes);
             break;
+        case StorageAccountingKind::MetalOwned:
+            break;
         }
     }
 
@@ -316,6 +318,8 @@ namespace lfs::core {
             break;
         case StorageAccountingKind::VulkanExternal:
             subtract_counter(state.vulkan_external, bytes);
+            break;
+        case StorageAccountingKind::MetalOwned:
             break;
         }
     }
@@ -626,7 +630,7 @@ namespace lfs::core {
             const GpuBackend backend = internal::gpu_backend_tag(*this);
             LFS_ASSERT_MSG(!lazy_backend || backend == *lazy_backend,
                            "deferred tensor materialized on a different GPU backend than its tag");
-            if (backend == GpuBackend::Vulkan) {
+            if (backend != GpuBackend::CUDA) {
                 state_->stream = nullptr;
             }
         }
@@ -846,9 +850,9 @@ namespace lfs::core {
     }
 
     void Tensor::set_stream(cudaStream_t stream) {
-        // Vulkan storage orders on its own timeline; a CUDA stream identity on it
-        // would make every cross-stream check bridge (a queue submit) for nothing.
-        if (internal::gpu_backend_tag(*this) == GpuBackend::Vulkan) {
+        // Vulkan and Metal storage order on their own timelines; a CUDA stream identity
+        // on it would make every cross-stream check bridge (a queue submit) for nothing.
+        if (internal::gpu_backend_tag(*this) != GpuBackend::CUDA) {
             stream = nullptr;
         }
         if (stream) {
@@ -918,7 +922,7 @@ namespace lfs::core {
         LFS_ASSERT_MSG(is_valid(),
                        "sync_to_stream requires a valid tensor");
         if (device_ != Device::GPU ||
-            internal::gpu_backend_tag(*this) == GpuBackend::Vulkan) {
+            internal::gpu_backend_tag(*this) != GpuBackend::CUDA) {
             return;
         }
         const cudaStream_t home = stream();
@@ -1674,7 +1678,7 @@ namespace lfs::core {
             if (numel() == 0)
                 return result;
 
-            if (gpu_backend_of(*this) == GpuBackend::Vulkan) {
+            if (const auto backend = gpu_backend_of(*this); backend && *backend != GpuBackend::CUDA) {
                 internal::backend_ops_for(*this).convert_type(
                     internal::storage_ref(*this), internal::storage_ref(result),
                     numel(), internal::ExecContext{result.stream()});
@@ -3526,9 +3530,9 @@ namespace lfs::core {
         std::shared_ptr<void> new_owner;
         if (device_ == Device::GPU) {
             const StorageAccountingKind accounting_kind =
-                new_gpu_storage.backend == GpuBackend::Vulkan
-                    ? StorageAccountingKind::VulkanOwned
-                    : StorageAccountingKind::CudaDirect;
+                new_gpu_storage.backend == GpuBackend::Vulkan  ? StorageAccountingKind::VulkanOwned
+                : new_gpu_storage.backend == GpuBackend::Metal ? StorageAccountingKind::MetalOwned
+                                                               : StorageAccountingKind::CudaDirect;
             record_storage_allocation(accounting_kind, new_bytes);
             const cudaStream_t allocation_stream = stream();
             const GpuStorageDescriptor released_descriptor =

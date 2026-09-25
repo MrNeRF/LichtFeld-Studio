@@ -15,9 +15,15 @@ namespace lfs::core {
     enum class GpuBackend : uint8_t {
         CUDA = 0,
         Vulkan = 1,
+        Metal = 2,
     };
 
+    // Metal exists only on Apple platforms, so other builds keep two backends.
+#ifdef __APPLE__
+    inline constexpr std::array kGpuBackends{GpuBackend::CUDA, GpuBackend::Vulkan, GpuBackend::Metal};
+#else
     inline constexpr std::array kGpuBackends{GpuBackend::CUDA, GpuBackend::Vulkan};
+#endif
     inline constexpr size_t kGpuBackendCount = kGpuBackends.size();
 
     LFS_CORE_API const char* gpu_backend_name(GpuBackend backend);

@@ -96,7 +96,8 @@ lfs_validate_vcpkg_profile()
 
 # APPLE is only defined after project(); the host variable exists before it.
 if(CMAKE_HOST_APPLE)
-    project(LichtFeld-Studio VERSION 0.5.3 LANGUAGES CXX C)
+    # Objective-C++ builds the Metal tensor backend.
+    project(LichtFeld-Studio VERSION 0.5.3 LANGUAGES CXX C OBJCXX)
     set(LFS_HAS_CUDA OFF)
 else()
     project(LichtFeld-Studio VERSION 0.5.3 LANGUAGES CUDA CXX C)
