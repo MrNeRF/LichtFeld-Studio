@@ -23,7 +23,6 @@ namespace lfs::core::internal {
         using vk::checked_u32;
         using vk::dispatch_groups;
         using vk::kLocalSize;
-        using vk_index::fill_bits;
         using vk_index::shader_dims;
         using vk_index::shader_dtype;
 

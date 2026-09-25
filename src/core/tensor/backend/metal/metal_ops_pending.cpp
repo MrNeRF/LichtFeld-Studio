@@ -120,28 +120,4 @@ namespace lfs::core::internal {
         not_ported("normal");
     }
 
-    void MetalBackendOps::masked_fill(StorageRef, StorageRef, const MaskProgram&, ExecContext) {
-        not_ported("masked_fill");
-    }
-
-    size_t MetalBackendOps::masked_select(StorageRef, StorageRef, StorageRef, const MaskProgram&, ExecContext) {
-        not_ported("masked_select");
-    }
-
-    void MetalBackendOps::masked_scatter(StorageRef, StorageRef, StorageRef, const MaskProgram&, ExecContext) {
-        not_ported("masked_scatter");
-    }
-
-    void MetalBackendOps::and_live(StorageRef, StorageRef, const MaskProgram&, ExecContext) {
-        not_ported("and_live");
-    }
-
-    size_t MetalBackendOps::nonzero(StorageRef, StorageRef, const MaskProgram&, ExecContext) {
-        not_ported("nonzero");
-    }
-
-    size_t MetalBackendOps::nonzero_bool(StorageRef, StorageRef, const MaskProgram&, ExecContext) {
-        not_ported("nonzero_bool");
-    }
-
 } // namespace lfs::core::internal

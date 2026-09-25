@@ -1484,6 +1484,59 @@ kernel void index_op(device uchar* input_buffer [[buffer(0)]],
 }
 
 // ---------------------------------------------------------------------------
+// Masked ops, ported from mask.slang. kOp: 0 masked_fill, 1 and_live (keep a
+// mask byte only where the live mask is set), 2 compact select, 3 compact
+// scatter, 4 nonzero positions (Int64), 5 predicate values for an inclusive
+// scan; compacted slots are scan[i] - 1. kPredicate reads a byte mask (0) or
+// nonzero Float32 elements (1).
+
+constant uint kPredicate [[function_constant(19)]];
+
+struct MaskParams {
+    ulong data_offset;
+    ulong mask_offset;
+    ulong source_offset;
+    ulong scan_offset;
+    uint count;
+    uint fill_low;
+    uint fill_high;
+    uint padding;
+};
+
+kernel void mask_op(device uchar* data_buffer [[buffer(0)]],
+                    device const uchar* mask_buffer [[buffer(1)]],
+                    device uchar* source_buffer [[buffer(2)]],
+                    device uchar* scan_buffer [[buffer(3)]],
+                    constant MaskParams& params [[buffer(4)]],
+                    uint index [[thread_position_in_grid]]) {
+    if (index >= params.count)
+        return;
+    device uchar* data = data_buffer + params.data_offset;
+    device const uchar* mask = mask_buffer + params.mask_offset;
+    device uchar* source = source_buffer + params.source_offset;
+    device uint* scan = (device uint*)(scan_buffer + params.scan_offset);
+    const bool selected = kPredicate == 0 ? mask[index] != 0 : ((device const float*)mask)[index] != 0.0f;
+    if (kOp == 0) {
+        if (selected)
+            store_fill(data, index, params.fill_low, params.fill_high);
+    } else if (kOp == 1) {
+        if (!selected)
+            data[index] = 0;
+    } else if (kOp == 2) {
+        if (selected)
+            copy_element(data, index, source, scan[index] - 1);
+    } else if (kOp == 3) {
+        if (selected)
+            copy_element(source, scan[index] - 1, data, index);
+    } else if (kOp == 4) {
+        if (selected)
+            ((device long*)source)[scan[index] - 1] = long(index);
+    } else {
+        scan[index] = selected ? 1u : 0u;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Float32 GEMM on the matrix units through Metal Performance Primitives:
 // C[m][n] = A[m][k] * B, with B stored as [k][n] or, with kTransposeB, as
 // [n][k]; batches are packed. kBiasRelu applies max(value + bias[row], 0) to

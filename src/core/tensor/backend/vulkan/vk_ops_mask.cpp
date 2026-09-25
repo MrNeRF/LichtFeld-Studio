@@ -64,7 +64,6 @@ namespace lfs::core::internal {
         };
         static_assert(sizeof(WherePush) == 184);
 
-        using vk_index::fill_bits;
         using vk_index::shader_dims;
         using vk_index::shader_dtype;
 

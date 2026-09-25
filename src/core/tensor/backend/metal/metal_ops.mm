@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <tuple>
 #include <vector>
 
 namespace lfs::core::internal {
@@ -1028,6 +1029,93 @@ namespace lfs::core::internal {
             encode_index(context, launch);
         }
 
+        // mask_op modes and predicates.
+        constexpr uint32_t kMaskFill = 0, kAndLive = 1, kCompactSelect = 2, kCompactScatter = 3, kNonzeroPositions = 4,
+                           kMaskScan = 5;
+        constexpr uint32_t kBytePredicate = 0, kFloatPredicate = 1;
+
+        struct MaskLaunch {
+            uint32_t mode;
+            DataType dtype;
+            size_t count;
+            StorageRef data{};
+            StorageRef mask{};
+            StorageRef source{};
+            StorageRef scan{};
+            uint32_t predicate = kBytePredicate;
+            std::pair<uint32_t, uint32_t> fill{};
+        };
+
+        API_AVAILABLE(macos(26.0))
+        void encode_mask(Context& context, const MaskLaunch& launch) {
+            if (launch.count == 0)
+                return;
+            struct MaskParams {
+                uint64_t data_offset;
+                uint64_t mask_offset;
+                uint64_t source_offset;
+                uint64_t scan_offset;
+                uint32_t count;
+                uint32_t fill_low;
+                uint32_t fill_high;
+                uint32_t padding;
+            };
+            MaskParams params{.count = checked_u32(launch.count, "Metal mask count exceeds uint32"),
+                              .fill_low = launch.fill.first,
+                              .fill_high = launch.fill.second};
+            std::vector<StorageRef> uses;
+            std::array<uint64_t, 4> addresses{};
+            const auto bind = [&](const StorageRef& storage, const size_t slot, uint64_t& offset) {
+                if (storage.data == nullptr)
+                    return;
+                const auto at = context.locate(storage);
+                addresses[slot] = at.address;
+                offset = at.offset;
+                uses.push_back(storage);
+            };
+            bind(launch.data, 0, params.data_offset);
+            bind(launch.mask, 1, params.mask_offset);
+            bind(launch.source, 2, params.source_offset);
+            bind(launch.scan, 3, params.scan_offset);
+            const auto dtype = static_cast<uint32_t>(launch.dtype);
+            const auto pipeline = context.pipeline(
+                "mask_op", {{0, launch.mode}, {1, dtype}, {2, dtype},
+                            {5, static_cast<uint32_t>(dtype_size(launch.dtype))}, {19, launch.predicate}});
+            context.dispatch(uses, {.pipeline = pipeline,
+                                    .buffers = {addresses[0], addresses[1], addresses[2], addresses[3]},
+                                    .params = param_bytes(params),
+                                    .grid = threads(launch.count)});
+        }
+
+        // Inclusive scan of the predicate: the compacted slot of i is scan[i] - 1.
+        API_AVAILABLE(macos(26.0))
+        StorageRef scan_predicate(Context& context, const uint32_t predicate, const StorageRef mask, const size_t count) {
+            StorageRef scan = context.allocate(count * sizeof(uint32_t));
+            scan.dtype = DataType::Int32;
+            encode_mask(context, {.mode = kMaskScan, .dtype = DataType::UInt8, .count = count, .mask = mask,
+                                  .scan = scan, .predicate = predicate});
+            encode_scan(context, scan, 1, count, 1);
+            return scan;
+        }
+
+        // Writes the Int64 positions where the predicate holds and returns
+        // their count, which the scan's last element holds.
+        API_AVAILABLE(macos(26.0))
+        size_t compact_nonzero(const uint32_t predicate, const StorageRef input, const StorageRef output,
+                               const MaskProgram& program) {
+            if (program.count == 0 || program.selected_count == 0)
+                return 0;
+            const auto context = acquire_context();
+            const StorageRef scan = scan_predicate(*context, predicate, input, program.count);
+            encode_mask(*context, {.mode = kNonzeroPositions, .dtype = DataType::Int64, .count = program.count,
+                                   .mask = input, .source = output, .scan = scan, .predicate = predicate});
+            context->wait(context->pending(scan));
+            uint32_t total = 0;
+            std::memcpy(&total, context->host(scan) + (program.count - 1) * sizeof(uint32_t), sizeof(total));
+            context->release(scan);
+            return total;
+        }
+
         bool is_contiguous(const StridedLayout& layout) {
             size_t expected = 1;
             for (size_t dimension = layout.rank; dimension-- > 0;) {
@@ -1586,9 +1674,7 @@ namespace lfs::core::internal {
         LFS_FACADE_TRACE(index_fill);
         IndexLaunch launch = scatter_launch(kIndexFillMode, output, indices, {}, output_layout, program.dim,
                                             program.index_size);
-        const uint64_t pattern = fill_pattern(output.dtype, value);
-        launch.params.fill_low = static_cast<uint32_t>(pattern);
-        launch.params.fill_high = static_cast<uint32_t>(pattern >> 32);
+        std::tie(launch.params.fill_low, launch.params.fill_high) = fill_bits(output.dtype, value);
         encode_index(*acquire_context(), launch);
     }
 
@@ -1599,6 +1685,60 @@ namespace lfs::core::internal {
                      {.mode = kIndexPutMode, .dtype = output.dtype, .total = program.index_size, .input = output,
                       .indices = indices, .values = values,
                       .params = {.input_size = checked_u32(program.input_size, "Metal index_put size exceeds uint32")}});
+    }
+
+    void MetalBackendOps::masked_fill(const StorageRef output, const StorageRef mask, const MaskProgram& program,
+                                      ExecContext) {
+        LFS_FACADE_TRACE(masked_fill);
+        encode_mask(*acquire_context(), {.mode = kMaskFill, .dtype = output.dtype, .count = program.count,
+                                         .data = output, .mask = mask,
+                                         .fill = fill_bits(output.dtype, program.value)});
+    }
+
+    size_t MetalBackendOps::masked_select(const StorageRef input, const StorageRef mask, const StorageRef output,
+                                          const MaskProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(masked_select);
+        if (program.count == 0 || program.selected_count == 0)
+            return 0;
+        const auto context = acquire_context();
+        const StorageRef scan = scan_predicate(*context, kBytePredicate, mask, program.count);
+        encode_mask(*context, {.mode = kCompactSelect, .dtype = input.dtype, .count = program.count, .data = input,
+                               .mask = mask, .source = output, .scan = scan});
+        context->release(scan);
+        // The host sized the output from the same mask; like CUDA, the launch trusts it.
+        return program.selected_count;
+    }
+
+    void MetalBackendOps::masked_scatter(const StorageRef output, const StorageRef mask, const StorageRef source,
+                                         const MaskProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(masked_scatter);
+        if (program.count == 0 || program.selected_count == 0)
+            return;
+        const auto context = acquire_context();
+        const StorageRef scan = scan_predicate(*context, kBytePredicate, mask, program.count);
+        encode_mask(*context, {.mode = kCompactScatter, .dtype = output.dtype, .count = program.count, .data = output,
+                               .mask = mask, .source = source, .scan = scan});
+        context->release(scan);
+    }
+
+    void MetalBackendOps::and_live(const StorageRef mask, const StorageRef live_mask, const MaskProgram& program,
+                                   ExecContext) {
+        LFS_FACADE_TRACE(and_live);
+        encode_mask(*acquire_context(), {.mode = kAndLive, .dtype = DataType::UInt8, .count = program.count,
+                                         .data = mask, .mask = live_mask});
+    }
+
+    size_t MetalBackendOps::nonzero(const StorageRef input, const StorageRef output, const MaskProgram& program,
+                                    ExecContext) {
+        LFS_FACADE_TRACE(nonzero);
+        LFS_ASSERT_MSG(input.dtype == DataType::Float32, "Metal nonzero supports only Float32");
+        return compact_nonzero(kFloatPredicate, input, output, program);
+    }
+
+    size_t MetalBackendOps::nonzero_bool(const StorageRef input, const StorageRef output, const MaskProgram& program,
+                                         ExecContext) {
+        LFS_FACADE_TRACE(nonzero_bool);
+        return compact_nonzero(kBytePredicate, input, output, program);
     }
 
     void MetalBackendOps::reduce(const StorageRef input, const StorageRef output, const StridedLayout& input_layout,

@@ -508,6 +508,42 @@ namespace {
         expect_close(put, put_cpu, 0.0f, 0.0f);
     }
 
+    TEST_F(TensorMetal, MasksMatchCpu) {
+        for (const size_t count : {size_t{1}, size_t{7}, size_t{4099}, size_t{300000}}) {
+            SCOPED_TRACE(count);
+            std::vector<float> values = random_tensor(count, -1.0f, 3.0f, 59).to_vector();
+            for (size_t i = 0; i < count; i += 3)
+                values[i] = 0.0f;
+            const Tensor x_cpu = Tensor::from_vector(values, {count}, Device::CPU);
+            const Tensor x = to_metal(x_cpu);
+            const Tensor mask = x > 0.0f, mask_cpu = x_cpu > 0.0f;
+            expect_close(x.masked_select(mask), x_cpu.masked_select(mask_cpu), 0.0f, 0.0f);
+            Tensor filled = x.clone(), filled_cpu = x_cpu.clone();
+            filled.masked_fill_(mask, 9.0f);
+            filled_cpu.masked_fill_(mask_cpu, 9.0f);
+            expect_close(filled, filled_cpu, 0.0f, 0.0f);
+            const size_t selected = mask_cpu.count_nonzero();
+            if (selected > 0) {
+                const Tensor replacement = random_tensor(selected, -5.0f, -1.0f, 60);
+                Tensor scattered = x.clone(), scattered_cpu = x_cpu.clone();
+                scattered[mask] = to_metal(replacement);
+                scattered_cpu[mask_cpu] = replacement;
+                expect_close(scattered, scattered_cpu, 0.0f, 0.0f);
+            }
+            expect_close(x.nonzero(), x_cpu.nonzero(), 0.0f, 0.0f);
+            expect_close(mask.nonzero(), mask_cpu.nonzero(), 0.0f, 0.0f);
+            Tensor live = x > 0.0f, live_cpu = x_cpu > 0.0f;
+            live.and_live_(x < 2.0f);
+            live_cpu.and_live_(x_cpu < 2.0f);
+            expect_close(live, live_cpu, 0.0f, 0.0f);
+        }
+        const Tensor integers = (random_tensor(4099, -3.0f, 3.0f, 61)).to(DataType::Int32);
+        Tensor integers_metal = to_metal(integers), integers_cpu = integers.clone();
+        integers_metal.masked_fill_(to_metal(integers) > 0.0f, 7.0f);
+        integers_cpu.masked_fill_(integers > 0.0f, 7.0f);
+        expect_close(integers_metal, integers_cpu, 0.0f, 0.0f);
+    }
+
     TEST_F(TensorMetal, UnportedOperationsSaySo) {
         const Tensor x = to_metal(random_tensor(16, 0.0f, 1.0f, 9));
         try {
