@@ -858,6 +858,13 @@ namespace lfs::training {
             crop_damping_mask_.sync_to_stream(execution_stream);
         }
 
+        if (frozen_mask_.is_valid()) {
+            frozen_mask_.sync_to_stream(execution_stream);
+        }
+        if (splat_data_._max_screen_share.is_valid()) {
+            splat_data_._max_screen_share.sync_to_stream(execution_stream);
+        }
+
         FastGSFusedAdamState fused;
         fused.enabled = true;
         fused.beta1 = static_cast<float>(config_.beta1);
@@ -1002,6 +1009,10 @@ namespace lfs::training {
                 }
             }
 
+            param.set_stream(execution_stream);
+            state.exp_avg.set_stream(execution_stream);
+            state.joint_bounds.set_stream(execution_stream);
+
             const auto next_step = state.step_count + 1;
             const double bias_correction1_rcp = 1.0 / (1.0 - std::pow(config_.beta1, next_step));
             const double bias_correction2_sqrt_rcp = 1.0 / std::sqrt(1.0 - std::pow(config_.beta2, next_step));
@@ -1042,6 +1053,7 @@ namespace lfs::training {
         // Generation-checked q16 fetch — never bake a pre-grow exportable pointer.
         if (fused.shN.enabled && splat_data_.shN_value_quantized() &&
             splat_data_.shN_value_bounds().is_valid()) {
+            splat_data_.shN_value_bounds().set_stream(execution_stream);
             const auto q16 = lfs::core::resolve_q16_bind_ptrs(splat_data_);
             fused.shN.param = const_cast<float*>(q16.codes);
             fused.shN.sh_value_bounds = const_cast<float*>(q16.bounds);
