@@ -124,6 +124,28 @@ def test_literal_localization_calls_resolve():
                             assert value.value in keys, f"{path}: missing {value.value}"
 
 
+def test_input_action_name_keys_resolve_in_every_locale():
+    source = (ROOT / "src" / "visualizer" / "input" / "input_bindings.cpp").read_text(
+        encoding="utf-8"
+    )
+    start = source.index("std::string_view actionNameKey")
+    end = source.index("namespace {", start)
+    action_name_key = source[start:end]
+    suffixes = set(
+        re.findall(r'case Action::[A-Z0-9_]+:\s*return "([a-z0-9_]+)";', action_name_key)
+    )
+    assert suffixes, "actionNameKey() must expose localization suffixes"
+
+    for locale_path in sorted(LOCALES.glob("*.json")):
+        localized = dict(_flatten(json.loads(locale_path.read_text(encoding="utf-8"))))
+        missing = sorted(
+            f"input_settings.action.{suffix}"
+            for suffix in suffixes
+            if f"input_settings.action.{suffix}" not in localized
+        )
+        assert not missing, f"{locale_path.name}: missing action labels: {missing}"
+
+
 def test_hardcoded_ui_audit_has_no_candidates():
     result = subprocess.run([sys.executable, str(ROOT / "tools" / "check_ui_hardcoded.py")],
                             cwd=ROOT, capture_output=True, text=True, check=True)
@@ -460,6 +482,7 @@ if __name__ == "__main__":
         test_shipped_locale_files_are_strict_utf8_without_bom_or_replacement_characters,
         test_rml_translation_directives_resolve,
         test_literal_localization_calls_resolve,
+        test_input_action_name_keys_resolve_in_every_locale,
         test_hardcoded_ui_audit_has_no_candidates,
         test_hardcoded_ui_audit_detects_common_bypasses,
         test_counted_messages_use_supported_plural_forms,
