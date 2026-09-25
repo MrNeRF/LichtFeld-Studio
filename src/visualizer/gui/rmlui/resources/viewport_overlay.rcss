@@ -48,6 +48,50 @@ body {
     z-index: 12;
 }
 
+/* Centered in the viewport; the side padding keeps the wrapped lines clear of
+   the docked tool rail. */
+.empty-state-hint {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    padding: 0 72dp;
+    text-align: center;
+    pointer-events: none;
+}
+
+/* viewport-cramped is set from the viewport size: the hint shows whole or not at all. */
+#viewport-content.viewport-cramped .empty-state-hint {
+    display: none;
+}
+
+.empty-state-icon {
+    width: 48dp;
+    height: 48dp;
+    margin-bottom: 16dp;
+}
+
+.empty-state-title {
+    font-size: 15dp;
+}
+
+.empty-state-subtitle {
+    max-width: 480dp;
+    margin-top: 10dp;
+    font-size: 13dp;
+}
+
+.empty-state-import {
+    margin-top: 10dp;
+    font-size: 12dp;
+}
+
 .project-drop-overlay {
     position: absolute;
     left: 0;

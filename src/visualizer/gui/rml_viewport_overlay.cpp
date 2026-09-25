@@ -34,11 +34,15 @@
 
 namespace lfs::vis::gui {
     namespace {
+        // Below this the empty-scene hint no longer fits beside the tool rail.
+        constexpr float kCrampedViewportWidthDp = 360.0f;
+        constexpr float kCrampedViewportHeightDp = 240.0f;
+
         [[nodiscard]] bool isInteractiveViewportOverlayElement(const Rml::Element* const element) {
             if (!element)
                 return false;
             for (auto* node = element; node; node = node->GetParentNode()) {
-                if (node->GetId() == "project-drop-overlay")
+                if (node->GetId() == "project-drop-overlay" || node->GetId() == "empty-state-hint")
                     return false;
             }
             return element->GetTagName() != "body" &&
@@ -889,6 +893,16 @@ namespace lfs::vis::gui {
         viewport_content_offset_dirty_ = false;
     }
 
+    void RmlViewportOverlay::updateViewportContentClasses(const float dp_ratio) {
+        auto* const content = document_ ? document_->GetElementById("viewport-content") : nullptr;
+        if (!content)
+            return;
+        const float width_dp = (vp_size_.x - viewport_content_offset_) / dp_ratio;
+        const float height_dp = vp_size_.y / dp_ratio;
+        content->SetClass("viewport-cramped",
+                          width_dp < kCrampedViewportWidthDp || height_dp < kCrampedViewportHeightDp);
+    }
+
     void RmlViewportOverlay::applySplitDividerOverlay() {
         if (!document_) {
             return;
@@ -1532,6 +1546,7 @@ namespace lfs::vis::gui {
         const bool size_changed = (w != last_render_w_ || h != last_render_h_);
         const bool toolbar_changed = updateToolbarRoots();
         updateViewportContentOffset();
+        updateViewportContentClasses(toolbar_dpi);
         const bool python_document_dirty = lfs::python::consume_pending_rml_document_updates(document_);
         const bool document_force = theme_changed || size_changed || toolbar_changed;
         bool document_dirty = syncBuiltinDocument(document_force);

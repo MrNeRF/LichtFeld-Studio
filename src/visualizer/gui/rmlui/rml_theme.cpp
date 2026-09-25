@@ -450,6 +450,12 @@ namespace lfs::vis::gui::rml_theme {
                 return t.menu_border();
             if (name == "toolbar.background")
                 return t.toolbar_background();
+            if (name == "overlay.text")
+                return t.overlay.text;
+            if (name == "overlay.text_dim")
+                return t.overlay.text_dim;
+            if (name == "overlay.icon")
+                return t.overlay.icon;
             if (name == "toolbar.sub_background")
                 return t.subtoolbar_background();
             return std::nullopt;

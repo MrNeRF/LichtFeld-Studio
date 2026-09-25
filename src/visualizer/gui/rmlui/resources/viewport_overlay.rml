@@ -7,6 +7,12 @@
     <div id="left-dock-resize-indicator" class="left-dock-resize-indicator hidden"></div>
     <div id="viewport-content">
     <div id="split-divider-overlay" class="viewport-split-divider hidden"></div>
+    <div id="empty-state-hint" class="empty-state-hint" data-if="show_empty_state">
+        <img class="empty-state-icon" src="../icon/archive.png" />
+        <div class="empty-state-title">{{empty_state_title}}</div>
+        <div class="empty-state-subtitle">{{empty_state_subtitle}}</div>
+        <div class="empty-state-import">{{empty_state_import_hint}}</div>
+    </div>
     <div id="project-drop-overlay" class="project-drop-overlay hidden">
         <div class="project-drop-card">
             <div id="project-drop-title" class="project-drop-title">@tr:projects.drag.open_project</div>

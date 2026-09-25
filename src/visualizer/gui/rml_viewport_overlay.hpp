@@ -138,6 +138,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] float toolbarFreeTop(float toolbar_height) const;
         [[nodiscard]] float toolbarFreeTravel(float toolbar_height) const;
         void updateViewportContentOffset();
+        void updateViewportContentClasses(float dp_ratio);
         void bindReactiveStore();
         void refreshGTMetricsOverlayFromStore();
         void applySplitDividerOverlay();

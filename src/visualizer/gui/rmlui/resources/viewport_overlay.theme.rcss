@@ -31,6 +31,22 @@
     background-color: @{menu.background};
 }
 
+.empty-state-icon {
+    image-color: @{overlay.icon};
+}
+
+.empty-state-title {
+    color: @{overlay.text};
+}
+
+.empty-state-subtitle {
+    color: @{overlay.text_dim};
+}
+
+.empty-state-import {
+    color: @{alpha(overlay.text_dim,0.5)};
+}
+
 .project-drop-overlay {
     background-color: @{alpha(primary,0.10)};
     border-color: @{primary};
