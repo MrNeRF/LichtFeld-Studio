@@ -138,7 +138,7 @@ namespace lfs::vis {
             [[nodiscard]] GlobalContextMenu& globalContextMenu() { return *global_context_menu_; }
 
             // State queries
-            bool needsAnimationFrame() const;
+            bool needsAnimationFrame(bool include_export_progress = true) const;
             [[nodiscard]] std::string describeAnimationDemand() const;
             [[nodiscard]] bool needsImmediateAnimationFrame() const;
             // Min finite scheduled GUI animation/update delay (seconds). Used by the

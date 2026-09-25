@@ -2807,19 +2807,22 @@ namespace lfs::vis {
         last_frame_demand_ = next_demand;
         has_last_frame_demand_ = true;
 
-        // Continuous demand that is only python_redraw and/or gui_animation — pace it
-        // so GUI-only animation does not free-run against a MAILBOX swapchain.
+        // Pace GUI-only animation, including progress frames while an export
+        // holds scene changes pending instead of rendering the viewport.
+        const bool export_progress_only = next_demand.viewport_export_locked &&
+                                          gui_manager_ && !gui_manager_->needsAnimationFrame(false);
         const bool gui_only_animation =
             next_demand.needsContinuousLoop() &&
             !(gui_manager_ && gui_manager_->needsImmediateAnimationFrame()) &&
             !python::is_plugin_preload_running() &&
-            !next_demand.scene_dirty && !next_demand.continuous_input &&
+            (export_progress_only || !next_demand.scene_dirty) &&
+            !next_demand.continuous_input &&
             !next_demand.python_animation && !next_demand.python_overlay &&
             !next_demand.input_event && !next_demand.posted_work &&
             !next_demand.render_work && !next_demand.store_dirty &&
             !next_demand.swapchain_resize_pending && !next_demand.swapchain_resize_ready &&
             !next_demand.window_resize_paint_pending && !next_demand.viewport_resize_deferring &&
-            !next_demand.viewport_resize_settle_ready && !next_demand.viewport_export_locked;
+            !next_demand.viewport_resize_settle_ready;
 
         const auto py_redraw_due = python::seconds_until_scheduled_redraw();
         const double py_redraw_due_in = py_redraw_due ? *py_redraw_due : -1.0;
@@ -2856,9 +2859,11 @@ namespace lfs::vis {
 
         if (next_demand.needsContinuousLoop()) {
             if (gui_only_animation) {
-                // GUI-only animation must not free-run against a MAILBOX swapchain.
-                // Cap at the display interval; waitEvents still wakes instantly on input.
-                const double gui_animation_frame_interval = guiAnimationFrameInterval();
+                // Refresh export progress at 10 Hz to leave GPU time for the export.
+                // The event wait still wakes immediately for input and posted work.
+                const double gui_animation_frame_interval = export_progress_only
+                                                                ? 0.1
+                                                                : guiAnimationFrameInterval();
                 if (presented_gui_frame) {
                     if (auto* const vulkan_context = window_manager_->getVulkanContext())
                         static_cast<void>(vulkan_context->waitForNextFrameSlot());

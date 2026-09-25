@@ -8941,7 +8941,7 @@ namespace lfs::vis::gui {
                           draw_ctx);
     }
 
-    bool GuiManager::needsAnimationFrame() const {
+    bool GuiManager::needsAnimationFrame(const bool include_export_progress) const {
         const auto now = std::chrono::steady_clock::now();
         if (cameraThumbnailRefreshDue(now)) {
             if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr)
@@ -8956,7 +8956,7 @@ namespace lfs::vis::gui {
             now < interactive_transition_guard_until_) {
             return true;
         }
-        if (isViewportExportLocked())
+        if (include_export_progress && isViewportExportLocked())
             return true;
         if (rmlui_manager_.dragPayload())
             return true;
