@@ -605,9 +605,11 @@ namespace lfs::training {
             return;
         }
 
+        const auto stream = lfs::core::getCurrentCUDAStream();
+        _edge_view_scores.set_stream(stream);
         kernels::launch_normalize_by_positive_median(
             _edge_view_scores.ptr<float>(), _edge_view_scores.numel(),
-            _edge_view_scores.stream(), &_edge_median_scratch);
+            stream, &_edge_median_scratch);
         zero_frozen_scores_inplace(*_splat_data, _edge_view_scores);
         _edge_score_sum.add_(_edge_view_scores);
         ++_edge_sample_count;
