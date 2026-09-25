@@ -23,6 +23,7 @@
 #include "core/exif.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/number_format.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
@@ -2799,17 +2800,18 @@ namespace lfs::training {
                 }
 
                 if (params.overrides.has_dataset_key("test_every") ||
-                    params.overrides.has_optimization_key("enable_eval")) {
+                    params.overrides.has_optimization_key("enable_eval") ||
+                    params.overrides.has_optimization_key("eval_all")) {
                     std::sort(
                         source_cameras.begin(), source_cameras.end(),
                         [](const auto& lhs, const auto& rhs) {
                             return lhs->uid() < rhs->uid();
                         });
-                    const bool enable_eval = params.optimization.enable_eval;
+                    const bool hold_out = params.optimization.holds_out_eval_images();
                     const int test_every = std::max(1, params.dataset.test_every);
                     for (size_t i = 0; i < source_cameras.size(); ++i) {
                         const bool is_val =
-                            enable_eval &&
+                            hold_out &&
                             (i % static_cast<size_t>(test_every)) == 0;
                         source_cameras[i]->set_split(
                             is_val ? lfs::core::CameraSplit::Eval
@@ -2817,7 +2819,7 @@ namespace lfs::training {
                     }
                 }
 
-                if (params.optimization.enable_eval) {
+                if (params.optimization.holds_out_eval_images()) {
                     for (const auto& camera : source_cameras) {
                         switch (camera->split()) {
                         case lfs::core::CameraSplit::Train:
@@ -2842,7 +2844,16 @@ namespace lfs::training {
             }
 
             // Handle dataset split based on evaluation flag
-            if (params.optimization.enable_eval) {
+            if (params.optimization.enable_eval && params.optimization.eval_all) {
+                train_dataset_ = std::make_shared<CameraDataset>(
+                    source_cameras, dataset_config, CameraDataset::Split::ALL);
+                val_dataset_ = std::make_shared<CameraDataset>(
+                    source_cameras, dataset_config, CameraDataset::Split::ALL);
+                for (const auto& camera : source_cameras) {
+                    camera->set_split(lfs::core::CameraSplit::Train);
+                }
+                LOG_INFO("Training on all {} images and evaluating on them", train_dataset_->size());
+            } else if (params.optimization.enable_eval) {
                 train_dataset_ = std::make_shared<CameraDataset>(
                     train_cameras, dataset_config, CameraDataset::Split::ALL);
                 val_dataset_ = std::make_shared<CameraDataset>(
@@ -3084,6 +3095,17 @@ namespace lfs::training {
             }
             if (current_iteration_ > 0) {
                 LOG_INFO("Starting from iteration: {}", current_iteration_.load());
+            }
+            if (evaluator_->is_enabled()) {
+                evaluator_->write_training_config(params_);
+                std::string unreachable;
+                for (const size_t step : lfs::training::unreachable_eval_steps(
+                         params_.optimization.eval_steps, static_cast<size_t>(get_total_iterations())))
+                    unreachable += (unreachable.empty() ? "" : ", ") + lfs::core::format_count(step);
+                if (!unreachable.empty()) {
+                    LOG_WARN("Evaluation steps beyond the last iteration {} never run: {}",
+                             lfs::core::format_count(get_total_iterations()), unreachable);
+                }
             }
 
             // Expose initial snapshot for Python control (iteration 0)
@@ -7971,7 +7993,7 @@ namespace lfs::training {
                     }
 
                     // Clean evaluation - let the evaluator handle everything
-                    if (evaluator_->is_enabled() && evaluator_->should_evaluate(iter)) {
+                    if (evaluator_->is_enabled() && evaluator_->should_evaluate(iter, get_total_iterations())) {
                         evaluator_->print_evaluation_header(iter);
                         eval_ppisp_applied_.store(0);
                         eval_ppisp_exif_.store(0);
@@ -8727,7 +8749,7 @@ namespace lfs::training {
             // training step in which to service an evaluation scheduled at max.
             if (iter > get_total_iterations() &&
                 evaluator_->is_enabled() &&
-                evaluator_->should_evaluate(current_iteration_.load())) {
+                evaluator_->should_evaluate(current_iteration_.load(), get_total_iterations())) {
                 const int eval_iteration = current_iteration_.load();
                 evaluator_->print_evaluation_header(eval_iteration);
                 eval_ppisp_applied_.store(0);

@@ -439,7 +439,13 @@
             <input type="checkbox" data-checked="row.checked"
                    data-event-click="pv_value_change(row.id, !row.checked)" />
           </div>
-          <div class="setting-row" data-if="dep_eval &amp;&amp; !pv_search_active" data-tooltip="training.tooltip.test_every">
+          <div class="setting-row" data-for="row : pv_dataset_eval_train_rows" data-if="dep_eval"
+               data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="checkbox" data-checked="row.checked"
+                   data-event-click="pv_value_change(row.id, !row.checked)" />
+          </div>
+          <div class="setting-row" data-if="dep_eval_holdout &amp;&amp; !pv_search_active" data-tooltip="training.tooltip.test_every">
             <span class="prop-label">{{label_test_every}}</span>
             <input type="text" class="number-input" data-value="test_every_str" />
             <button class="num-step-btn" data-event-mousedown="num_step('test_every', -1)">-</button>

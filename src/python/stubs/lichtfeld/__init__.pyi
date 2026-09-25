@@ -2129,6 +2129,13 @@ class OptimizationParams:
     def enable_eval(self, arg: bool, /) -> None: ...
 
     @property
+    def eval_all(self) -> bool:
+        """Train on every image and evaluate all of them; no image is held out"""
+
+    @eval_all.setter
+    def eval_all(self, arg: bool, /) -> None: ...
+
+    @property
     def background_improvements(self) -> bool:
         """
         Improve distant background reconstruction (MRNF): far-field seeding and splits, decay relief, growth cap, per-splat position steps, visibility-ratio growth ranking, paced capacity fill

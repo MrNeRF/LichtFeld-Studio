@@ -1652,3 +1652,201 @@ TEST(ArgumentParserTest, ViewModeRejectsOutOfRangeMcpPort) {
     EXPECT_NE(parsed.error().find("must be between 1 and 65535"),
               std::string::npos);
 }
+
+TEST(ArgumentParserTest, EvalStepsAcceptCommaListsAndRepeats) {
+    const auto data_path = make_test_path("lfs_arg_parser_eval_steps_data");
+    const auto output_path = make_test_path("lfs_arg_parser_eval_steps_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "-d",
+        data_path.c_str(),
+        "-o",
+        output_path.c_str(),
+        "--eval",
+        "--eval-steps",
+        "7000, 1000,7000",
+        "--eval-steps",
+        "30000",
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    EXPECT_TRUE((*parsed)->optimization.enable_eval);
+    EXPECT_EQ((*parsed)->optimization.eval_steps, (std::vector<size_t>{1000, 7000, 30000}));
+}
+
+TEST(ArgumentParserTest, EvalStepsRejectNonPositiveOrMalformedValues) {
+    const auto data_path = make_test_path("lfs_arg_parser_bad_eval_steps_data");
+    const auto output_path = make_test_path("lfs_arg_parser_bad_eval_steps_output");
+
+    for (const char* value : {"1000,abc", "0", "1000,,2000", "-5", "7000x"}) {
+        const char* argv[] = {
+            "LichtFeld-Studio",
+            "-d",
+            data_path.c_str(),
+            "-o",
+            output_path.c_str(),
+            "--eval-steps",
+            value,
+        };
+        auto parsed = lfs::core::args::parse_args_and_params(
+            static_cast<int>(std::size(argv)), argv);
+        ASSERT_FALSE(parsed.has_value()) << value;
+        EXPECT_NE(parsed.error().find("--eval-steps"), std::string::npos) << parsed.error();
+    }
+}
+
+TEST(ArgumentParserTest, EvaluationFlagsOverrideTheConfigFile) {
+    const auto data_path = make_test_path("lfs_arg_parser_eval_config_data");
+    const auto output_path = make_test_path("lfs_arg_parser_eval_config_output");
+    const auto config_path = std::filesystem::path(make_test_path("lfs_arg_parser_eval_config")) / "config.json";
+    auto optimization = lfs::core::param::OptimizationParameters::mrnf_defaults().to_json();
+    optimization["enable_eval"] = false;
+    optimization["eval_steps"] = {100};
+    std::ofstream(config_path) << nlohmann::json{{"dataset", {{"test_every", 4}}}, {"optimization", optimization}}.dump();
+    const auto config_text = config_path.string();
+
+    const char* config_only[] = {
+        "LichtFeld-Studio",
+        "-d",
+        data_path.c_str(),
+        "-o",
+        output_path.c_str(),
+        "--config",
+        config_text.c_str(),
+    };
+    auto from_config = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(config_only)), config_only);
+    ASSERT_TRUE(from_config.has_value()) << from_config.error();
+    EXPECT_FALSE((*from_config)->optimization.enable_eval);
+    EXPECT_EQ((*from_config)->optimization.eval_steps, (std::vector<size_t>{100}));
+
+    const char* with_cli[] = {
+        "LichtFeld-Studio",
+        "-d",
+        data_path.c_str(),
+        "-o",
+        output_path.c_str(),
+        "--config",
+        config_text.c_str(),
+        "--eval",
+        "--eval-steps",
+        "5,10",
+        "--test-every",
+        "2",
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(with_cli)), with_cli);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    const auto& params = **parsed;
+    EXPECT_TRUE(params.optimization.enable_eval);
+    EXPECT_EQ(params.optimization.eval_steps, (std::vector<size_t>{5, 10}));
+    EXPECT_EQ(params.dataset.test_every, 2);
+
+    // Resume and project flows re-apply the recorded overrides; the CLI still wins there.
+    lfs::core::param::TrainingParameters restored;
+    apply_explicit_training_overrides(restored, params.overrides);
+    EXPECT_TRUE(restored.optimization.enable_eval);
+    EXPECT_EQ(restored.optimization.eval_steps, (std::vector<size_t>{5, 10}));
+    EXPECT_EQ(restored.dataset.test_every, 2);
+}
+
+TEST(ArgumentParserTest, EvalStepsWithoutEvaluationStopTheRun) {
+    const auto data_path = make_test_path("lfs_arg_parser_eval_steps_no_eval_data");
+    const auto output_path = make_test_path("lfs_arg_parser_eval_steps_no_eval_output");
+
+    for (const char* flag : {"--eval-steps", "--eval-steps=7000,20000"}) {
+        std::vector<const char*> argv = {"LichtFeld-Studio", "-d", data_path.c_str(), "-o", output_path.c_str(), flag};
+        if (std::string_view(flag) == "--eval-steps")
+            argv.push_back("7000,20000");
+        auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(argv.size()), argv.data());
+        ASSERT_FALSE(parsed.has_value()) << flag;
+        EXPECT_NE(parsed.error().find("--eval-steps needs --eval"), std::string::npos) << parsed.error();
+    }
+
+    const char* with_eval[] = {
+        "LichtFeld-Studio",
+        "-d",
+        data_path.c_str(),
+        "-o",
+        output_path.c_str(),
+        "--eval-steps",
+        "7000,20000",
+        "--eval",
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(with_eval)), with_eval);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_EQ((*parsed)->optimization.eval_steps, (std::vector<size_t>{7000, 20000}));
+}
+
+TEST(ArgumentParserTest, EvalStepsAcceptEvaluationEnabledByTheConfigFile) {
+    const auto data_path = make_test_path("lfs_arg_parser_eval_steps_config_data");
+    const auto output_path = make_test_path("lfs_arg_parser_eval_steps_config_output");
+    const auto config_path =
+        std::filesystem::path(make_test_path("lfs_arg_parser_eval_steps_config")) / "config.json";
+    auto optimization = lfs::core::param::OptimizationParameters::mrnf_defaults().to_json();
+    optimization["enable_eval"] = true;
+    std::ofstream(config_path) << nlohmann::json{{"optimization", optimization}}.dump();
+    const auto config_text = config_path.string();
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "-d",
+        data_path.c_str(),
+        "-o",
+        output_path.c_str(),
+        "--config",
+        config_text.c_str(),
+        "--eval-steps",
+        "500",
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE((*parsed)->optimization.enable_eval);
+    EXPECT_EQ((*parsed)->optimization.eval_steps, (std::vector<size_t>{500}));
+}
+
+TEST(ArgumentParserTest, EvalAllTrainsOnEveryImageAndEnablesEvaluation) {
+    const auto data_path = make_test_path("lfs_arg_parser_eval_all_data");
+    const auto output_path = make_test_path("lfs_arg_parser_eval_all_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "-d",
+        data_path.c_str(),
+        "-o",
+        output_path.c_str(),
+        "--eval-all",
+        "--eval-steps",
+        "500,1000",
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE((*parsed)->optimization.enable_eval);
+    EXPECT_TRUE((*parsed)->optimization.eval_all);
+    EXPECT_FALSE((*parsed)->optimization.holds_out_eval_images());
+    EXPECT_EQ((*parsed)->optimization.eval_steps, (std::vector<size_t>{500, 1000}));
+}
+
+TEST(ArgumentParserTest, EvalAllRejectsTestEvery) {
+    const auto data_path = make_test_path("lfs_arg_parser_eval_all_bad_data");
+    const auto output_path = make_test_path("lfs_arg_parser_eval_all_bad_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "-d",
+        data_path.c_str(),
+        "-o",
+        output_path.c_str(),
+        "--eval-all",
+        "--test-every",
+        "4",
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_NE(parsed.error().find("--test-every"), std::string::npos) << parsed.error();
+}

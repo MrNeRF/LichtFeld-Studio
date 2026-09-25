@@ -914,6 +914,11 @@ namespace lfs::python {
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.enable_eval = v; }); },
                 "Enable evaluation during training")
             .def_prop_rw(
+                "eval_all",
+                [](PyOptimizationParams& self) { return self.params().eval_all; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.eval_all = v; }); },
+                "Train on every image and evaluate all of them; no image is held out")
+            .def_prop_rw(
                 "background_improvements",
                 [](PyOptimizationParams& self) { return self.params().background_improvements; },
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.background_improvements = v; }); },

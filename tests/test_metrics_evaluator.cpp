@@ -18,8 +18,10 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <torch/torch.h>
 #include <vector>
@@ -427,4 +429,198 @@ TEST(MetricsEvaluatorGeom, SparsePointAbsRelAgainstRenderedDepth) {
     EXPECT_LT(*metrics.depth_absrel, 0.15f);
 
     std::filesystem::remove_all(tmp);
+}
+
+TEST(ViewEvaluationJson, AddsStepsInOrderAndReplacesARepeatedStep) {
+    const lfs::training::ViewMetrics measured{
+        .index = 0,
+        .image_name = "a.png",
+        .width = 8,
+        .height = 4,
+        .psnr = 24.0f,
+        .ssim = 0.8f,
+        .lpips = 0.2f};
+    const lfs::training::ViewMetrics remeasured{
+        .index = 0,
+        .image_name = "a.png",
+        .width = 8,
+        .height = 4,
+        .psnr = 26.0f,
+        .ssim = 0.9f,
+        .masked = true};
+    const lfs::training::ViewMetrics skipped{
+        .index = 0,
+        .image_name = "a.png",
+        .skipped_reason = "failed to load ground truth image: gone"};
+
+    auto document = lfs::training::add_view_evaluation({}, measured, 7000, "test");
+    document = lfs::training::add_view_evaluation(std::move(document), skipped, 3000, "test");
+    document = lfs::training::add_view_evaluation(std::move(document), remeasured, 7000, "test");
+    document = lfs::training::add_view_evaluation(std::move(document), measured, 7000, "train");
+
+    ASSERT_EQ(document.size(), 1u);
+    const auto& record = document.at("a.png");
+    EXPECT_EQ(record.at("width"), 8);
+    EXPECT_EQ(record.at("height"), 4);
+    const auto& evaluations = record.at("evaluations");
+    ASSERT_EQ(evaluations.size(), 3u);
+    EXPECT_EQ(evaluations[0].at("step"), 3000);
+    EXPECT_TRUE(evaluations[0].at("psnr").is_null());
+    EXPECT_EQ(evaluations[0].at("skipped_reason"), "failed to load ground truth image: gone");
+    EXPECT_EQ(evaluations[1].at("step"), 7000);
+    EXPECT_EQ(evaluations[1].at("split"), "test");
+    EXPECT_FLOAT_EQ(evaluations[1].at("psnr").get<float>(), 26.0f);
+    EXPECT_TRUE(evaluations[1].at("lpips").is_null());
+    EXPECT_EQ(evaluations[1].at("masked"), true);
+    EXPECT_FALSE(evaluations[1].contains("skipped_reason"));
+    EXPECT_EQ(evaluations[2].at("step"), 7000);
+    EXPECT_EQ(evaluations[2].at("split"), "train");
+    EXPECT_FLOAT_EQ(evaluations[2].at("psnr").get<float>(), 24.0f);
+}
+
+TEST(ViewEvaluationJson, OneFileKeyedByImageNameInTheOutputFolder) {
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_view_json_keyed";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    lfs::training::MetricsReporter reporter(tmp);
+    EXPECT_EQ(reporter.per_image_path(), tmp / "per_image_metrics.json");
+
+    EvalMetrics metrics;
+    metrics.iteration = 100;
+    metrics.views = {
+        {.index = 0, .image_name = "frame.png", .width = 2, .height = 2, .psnr = 30.0f, .ssim = 0.9f},
+        {.index = 1, .image_name = "frame.jpg", .width = 2, .height = 2, .psnr = 20.0f, .ssim = 0.5f},
+        {.index = 2, .image_name = "cam0/frame.png", .width = 2, .height = 2, .psnr = 25.0f, .ssim = 0.7f},
+    };
+    reporter.write_view_evaluations(metrics, "test");
+    metrics.iteration = 200;
+    reporter.write_view_evaluations(metrics, "test");
+
+    std::ifstream in(tmp / "per_image_metrics.json");
+    const auto document = nlohmann::json::parse(in);
+    ASSERT_EQ(document.size(), 3u);
+    for (const char* name : {"frame.png", "frame.jpg", "cam0/frame.png"}) {
+        ASSERT_TRUE(document.contains(name)) << name;
+        ASSERT_EQ(document.at(name).at("evaluations").size(), 2u) << name;
+        EXPECT_EQ(document.at(name).at("evaluations")[1].at("step"), 200) << name;
+    }
+    EXPECT_FALSE(std::filesystem::exists(tmp / "eval"));
+    EXPECT_FALSE(std::filesystem::exists(tmp / "per_image_metrics.json.tmp"));
+    std::filesystem::remove_all(tmp);
+}
+
+TEST(MetricsEvaluatorJson, WritesTheTrainingConfigAndPerImageMetricsNextToTheCsv) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    ensure_image_loader();
+
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_view_json_eval";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    constexpr int kW = 16;
+    constexpr int kH = 12;
+    const auto close_path = tmp / "close.png";
+    const auto far_path = tmp / "far.png";
+    write_rgb_png(close_path, 126, 126, 126, kH, kW);
+    write_rgb_png(far_path, 20, 200, 60, kH, kW);
+    auto dataset = std::make_shared<CameraDataset>(
+        std::vector<std::shared_ptr<Camera>>{
+            make_eval_camera(close_path, {}, kW, kH),
+            make_eval_camera(far_path, {}, kW, kH)},
+        DatasetConfig{}, CameraDataset::Split::ALL);
+    auto splat = make_front_facing_splat();
+    auto background = Tensor::zeros({3}, Device::CUDA);
+
+    auto params = make_eval_params(tmp / "out");
+    params.optimization.eval_steps = {3};
+    std::filesystem::create_directories(params.dataset.output_path);
+    MetricsEvaluator evaluator(params);
+    EXPECT_TRUE(evaluator.should_evaluate(3, 5));
+    EXPECT_TRUE(evaluator.should_evaluate(5, 5));
+    EXPECT_FALSE(evaluator.should_evaluate(4, 5));
+
+    evaluator.write_training_config(params);
+    const auto out_dir = params.dataset.output_path;
+    const auto read = [](const std::filesystem::path& path) {
+        std::ifstream in(path);
+        return nlohmann::json::parse(in);
+    };
+    const auto config = read(out_dir / "training_config.json");
+    EXPECT_EQ(config.at("optimization").at("eval_steps"), nlohmann::json::array({3}));
+    EXPECT_EQ(config.at("optimization").at("enable_eval"), true);
+    EXPECT_TRUE(config.contains("dataset"));
+
+    const auto first = evaluator.evaluate(3, splat, dataset, background);
+    const auto final_step = evaluator.evaluate(5, splat, dataset, background);
+    ASSERT_TRUE(first.valid);
+    ASSERT_TRUE(final_step.valid);
+
+    EXPECT_TRUE(std::filesystem::exists(out_dir / "metrics.csv"));
+    EXPECT_FALSE(std::filesystem::exists(out_dir / "eval"));
+    const auto per_image = read(out_dir / "per_image_metrics.json");
+    ASSERT_EQ(per_image.size(), 2u);
+    const auto& close = per_image.at("close.png");
+    const auto& far = per_image.at("far.png");
+    for (const auto& document : {close, far}) {
+        EXPECT_EQ(document.at("width"), kW);
+        EXPECT_EQ(document.at("height"), kH);
+        ASSERT_EQ(document.at("evaluations").size(), 2u);
+        EXPECT_EQ(document.at("evaluations")[0].at("step"), 3);
+        EXPECT_EQ(document.at("evaluations")[1].at("step"), 5);
+        EXPECT_EQ(document.at("evaluations")[1].at("split"), "test");
+        EXPECT_EQ(document.at("evaluations")[1].at("masked"), false);
+    }
+    EXPECT_FLOAT_EQ(close.at("evaluations")[1].at("psnr").get<float>(), *final_step.views[0].psnr);
+    EXPECT_FLOAT_EQ(far.at("evaluations")[1].at("psnr").get<float>(), *final_step.views[1].psnr);
+    EXPECT_GT(close.at("evaluations")[1].at("psnr").get<float>(),
+              far.at("evaluations")[1].at("psnr").get<float>() + 10.0f);
+
+    std::filesystem::remove_all(tmp);
+}
+
+TEST(ViewEvaluationJson, StepsBeyondTheLastIterationAreReported) {
+    using lfs::training::unreachable_eval_steps;
+    EXPECT_EQ(unreachable_eval_steps({7000, 10000, 200000}, 30000), (std::vector<size_t>{200000}));
+    EXPECT_EQ(unreachable_eval_steps({7000, 30000}, 30000), (std::vector<size_t>{}));
+    EXPECT_EQ(unreachable_eval_steps({7000, 30000}, 5000), (std::vector<size_t>{7000, 30000}));
+}
+
+// per_image_metrics.json is read by scripts outside LichtFeld Studio: its keys
+// only change together with a documented format change.
+TEST(ViewEvaluationJson, FileFormatStaysFixed) {
+    const lfs::training::ViewMetrics measured{
+        .index = 3,
+        .image_name = "cam/frame.png",
+        .width = 8,
+        .height = 4,
+        .psnr = 24.0f,
+        .ssim = 0.8f,
+        .lpips = 0.2f};
+    const lfs::training::ViewMetrics skipped{
+        .index = 3,
+        .image_name = "cam/frame.png",
+        .skipped_reason = "failed to load mask: gone"};
+    auto document = lfs::training::add_view_evaluation({}, measured, 7000, "test");
+    document = lfs::training::add_view_evaluation(std::move(document), skipped, 30000, "test");
+
+    const auto keys = [](const nlohmann::json& object) {
+        std::vector<std::string> names;
+        for (const auto& item : object.items())
+            names.push_back(item.key());
+        return names;
+    };
+    EXPECT_EQ(keys(document), (std::vector<std::string>{"cam/frame.png"}));
+    const auto& record = document.at("cam/frame.png");
+    EXPECT_EQ(keys(record), (std::vector<std::string>{"evaluations", "height", "width"}));
+    ASSERT_EQ(record.at("evaluations").size(), 2u);
+    EXPECT_EQ(keys(record.at("evaluations")[0]),
+              (std::vector<std::string>{"lpips", "masked", "psnr", "split", "ssim", "step"}));
+    EXPECT_EQ(keys(record.at("evaluations")[1]),
+              (std::vector<std::string>{"lpips", "masked", "psnr", "skipped_reason", "split", "ssim", "step"}));
+    EXPECT_TRUE(record.at("evaluations")[0].at("step").is_number_integer());
+    EXPECT_TRUE(record.at("evaluations")[0].at("psnr").is_number_float());
+    EXPECT_TRUE(record.at("evaluations")[0].at("masked").is_boolean());
+    EXPECT_EQ(record.at("evaluations")[0].at("split"), "test");
+    EXPECT_TRUE(record.at("evaluations")[1].at("psnr").is_null());
 }

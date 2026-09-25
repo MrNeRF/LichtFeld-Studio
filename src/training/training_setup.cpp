@@ -819,14 +819,14 @@ namespace lfs::training {
                 }
 
                 const auto& cameras = data.cameras;
-                const bool enable_eval = params.optimization.enable_eval;
+                const bool hold_out = params.optimization.holds_out_eval_images();
                 const int test_every = params.dataset.test_every;
 
                 size_t train_count = 0;
                 size_t val_count = 0;
                 size_t mask_count = 0;
                 for (size_t i = 0; i < cameras.size(); ++i) {
-                    const bool is_eval = enable_eval && (i % test_every) == 0;
+                    const bool is_eval = hold_out && (i % test_every) == 0;
                     cameras[i]->set_split(is_eval ? lfs::core::CameraSplit::Eval : lfs::core::CameraSplit::Train);
                     if (is_eval) {
                         val_count++;
@@ -846,12 +846,12 @@ namespace lfs::training {
                     train_count);
 
                 for (size_t i = 0; i < cameras.size(); ++i) {
-                    if (!enable_eval || (i % test_every) != 0) {
+                    if (!hold_out || (i % test_every) != 0) {
                         scene.addCamera(cameras[i]->image_name(), train_cameras_id, cameras[i]);
                     }
                 }
 
-                if (enable_eval && val_count > 0) {
+                if (hold_out && val_count > 0) {
                     const auto val_cameras_id = scene.addCameraGroup(
                         "Validation",
                         cameras_group_id,
@@ -866,7 +866,7 @@ namespace lfs::training {
 
                 LOG_INFO("Loaded dataset '{}' into scene: {} train{} cameras{}",
                          dataset_name, train_count,
-                         enable_eval ? std::format(" + {} val", val_count) : "",
+                         hold_out ? std::format(" + {} val", val_count) : "",
                          mask_count > 0 ? std::format(" ({} with masks)", mask_count) : "");
                 return {};
 
@@ -1174,12 +1174,12 @@ namespace lfs::training {
                 }
 
                 const auto& cameras = data.cameras;
-                const bool enable_eval = params.optimization.enable_eval;
+                const bool hold_out = params.optimization.holds_out_eval_images();
                 const int test_every = params.dataset.test_every;
 
                 size_t train_count = 0, val_count = 0, mask_count = 0;
                 for (size_t i = 0; i < cameras.size(); ++i) {
-                    const bool is_val = enable_eval && (i % test_every) == 0;
+                    const bool is_val = hold_out && (i % test_every) == 0;
                     cameras[i]->set_split(is_val ? lfs::core::CameraSplit::Eval : lfs::core::CameraSplit::Train);
                     is_val ? ++val_count : ++train_count;
                     if (cameras[i]->has_mask())
@@ -1191,12 +1191,12 @@ namespace lfs::training {
                     "Training", cameras_group_id, train_count);
 
                 for (size_t i = 0; i < cameras.size(); ++i) {
-                    if (!enable_eval || (i % test_every) != 0) {
+                    if (!hold_out || (i % test_every) != 0) {
                         scene.addCamera(cameras[i]->image_name(), train_cameras_id, cameras[i]);
                     }
                 }
 
-                if (enable_eval && val_count > 0) {
+                if (hold_out && val_count > 0) {
                     const auto val_cameras_id = scene.addCameraGroup(
                         "Validation", cameras_group_id, val_count);
                     for (size_t i = 0; i < cameras.size(); ++i) {
@@ -1208,7 +1208,7 @@ namespace lfs::training {
 
                 LOG_INFO("Dataset '{}': {} train{} cameras{}",
                          dataset_name, train_count,
-                         enable_eval ? std::format(" + {} val", val_count) : "",
+                         hold_out ? std::format(" + {} val", val_count) : "",
                          mask_count > 0 ? std::format(" ({} masked)", mask_count) : "");
                 return {};
 

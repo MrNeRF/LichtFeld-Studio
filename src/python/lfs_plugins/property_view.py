@@ -89,6 +89,7 @@ BOOL_PROPS = (
     "ppisp_freeze_gaussians",
     "random",
     "enable_eval",
+    "eval_all",
     "background_improvements",
 )
 
@@ -215,6 +216,7 @@ BASIC_RUNS = (
 
 DATASET_RUNS = (
     _run("dataset_eval", "enable_eval", visibility_condition_id="has_dataset"),
+    _run("dataset_eval_train", "eval_all", visibility_condition_id="dep_eval"),
 )
 
 OPTIMIZATION_RUNS = (
