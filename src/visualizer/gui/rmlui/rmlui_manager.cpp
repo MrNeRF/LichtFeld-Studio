@@ -6,6 +6,7 @@
 #include "config.h"
 #include "core/environment.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "gui/rmlui/elements/chromaticity_element.hpp"
 #include "gui/rmlui/elements/color_picker_element.hpp"
 #include "gui/rmlui/elements/crf_curve_element.hpp"
@@ -36,6 +37,7 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -329,6 +331,87 @@ namespace lfs::vis::gui {
         cjk_fonts_loaded_ = any_loaded;
         if (any_loaded)
             Rml::ReleaseFontResources();
+    }
+
+    namespace {
+        std::string systemEmojiFontPath() {
+#ifdef _WIN32
+            const char* const windir = std::getenv("WINDIR");
+            const std::filesystem::path candidate =
+                std::filesystem::path(windir ? windir : "C:\\Windows") / "Fonts" / "seguiemj.ttf";
+            std::error_code ec;
+            return std::filesystem::is_regular_file(candidate, ec) ? lfs::core::path_to_utf8(candidate) : std::string{};
+#elif defined(__APPLE__)
+            // Apple Color Emoji is a collection of roughly 180 MB; holding it in memory is not worth a fallback.
+            return {};
+#else
+            constexpr std::array<const char*, 7> candidates = {
+                "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+                "/usr/share/fonts/noto/NotoColorEmoji.ttf",
+                "/usr/share/fonts/google-noto-emoji/NotoColorEmoji.ttf",
+                "/usr/share/fonts/google-noto-color-emoji-fonts/NotoColorEmoji.ttf",
+                "/usr/share/fonts/noto-emoji/NotoColorEmoji.ttf",
+                "/usr/share/fonts/TTF/NotoColorEmoji.ttf",
+                "/usr/local/share/fonts/NotoColorEmoji.ttf",
+            };
+            for (const char* const candidate : candidates) {
+                std::error_code ec;
+                if (std::filesystem::is_regular_file(candidate, ec))
+                    return candidate;
+            }
+            return {};
+#endif
+        }
+
+        std::vector<std::byte> readFontFile(const std::string& path) {
+            std::vector<std::byte> bytes;
+            std::ifstream f(lfs::core::utf8_to_path(path), std::ios::binary | std::ios::ate);
+            if (!f)
+                return bytes;
+            const auto size = f.tellg();
+            if (size <= 0)
+                return bytes;
+            f.seekg(0, std::ios::beg);
+            bytes.resize(static_cast<std::size_t>(size));
+            if (!f.read(reinterpret_cast<char*>(bytes.data()), size))
+                bytes.clear();
+            return bytes;
+        }
+    } // namespace
+
+    void RmlUIManager::serviceEmojiFont() {
+        if (emoji_font_settled_ || !initialized_)
+            return;
+        if (!emoji_font_read_.valid()) {
+            if (!system_interface_ || !system_interface_->sawAstralText())
+                return;
+            emoji_font_path_ = systemEmojiFontPath();
+            if (emoji_font_path_.empty()) {
+                LOG_INFO("RmlUI: no system color emoji font found; emoji show as missing glyphs");
+                emoji_font_settled_ = true;
+                return;
+            }
+            emoji_font_read_ = std::async(std::launch::async, readFontFile, emoji_font_path_);
+            return;
+        }
+        if (emoji_font_read_.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+            return;
+        emoji_font_settled_ = true;
+        auto bytes = emoji_font_read_.get();
+        if (bytes.empty()) {
+            LOG_WARN("RmlUI: failed to read emoji font {}", emoji_font_path_);
+            return;
+        }
+        font_blobs_.push_back(std::move(bytes));
+        const auto& blob = font_blobs_.back();
+        const Rml::Span<const Rml::byte> data{reinterpret_cast<const Rml::byte*>(blob.data()), blob.size()};
+        if (!Rml::LoadFontFace(data, "Emoji", Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Normal, true)) {
+            LOG_WARN("RmlUI: failed to register emoji font {}", emoji_font_path_);
+            font_blobs_.pop_back();
+            return;
+        }
+        LOG_INFO("RmlUI: loaded emoji font {}", emoji_font_path_);
+        Rml::ReleaseFontResources();
     }
 
     void RmlUIManager::shutdown() {

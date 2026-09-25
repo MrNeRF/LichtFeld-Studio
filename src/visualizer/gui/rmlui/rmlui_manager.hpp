@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -106,6 +107,9 @@ namespace lfs::vis::gui {
         void destroyContext(const std::string& name);
 
         void ensureCjkFontsLoaded();
+        // Registers the system color emoji font as a fallback face once text
+        // above U+FFFF has been shown; the file is read off the UI thread.
+        void serviceEmojiFont();
 
         void setResizeDeferring(bool defer) { resize_deferring_ = defer; }
         [[nodiscard]] bool isResizeDeferring() const { return resize_deferring_; }
@@ -219,6 +223,9 @@ namespace lfs::vis::gui {
         std::vector<std::vector<std::byte>> font_blobs_;
         bool cjk_fonts_loaded_ = false;
         bool cjk_fonts_load_attempted_ = false;
+        std::future<std::vector<std::byte>> emoji_font_read_;
+        std::string emoji_font_path_;
+        bool emoji_font_settled_ = false;
         std::unordered_map<std::string, Rml::Context*> contexts_;
         std::unordered_map<const Rml::Context*, std::string> context_names_;
         std::unordered_map<const Rml::Context*, TrackedContextFrame> tracked_context_frames_;

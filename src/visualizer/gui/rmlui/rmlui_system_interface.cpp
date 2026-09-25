@@ -13,6 +13,7 @@
 #include <SDL3/SDL_rect.h>
 #include <SDL3/SDL_timer.h>
 
+#include <algorithm>
 #include <cmath>
 
 namespace lfs::vis::gui {
@@ -69,11 +70,15 @@ namespace lfs::vis::gui {
         const std::string_view view(input);
         if (!view.starts_with(kPrefix)) {
             translated = input;
-            return 0;
+        } else {
+            translated = lfs::event::LocalizationManager::getInstance().get(view.substr(kPrefix.size()));
         }
-
-        translated = lfs::event::LocalizationManager::getInstance().get(view.substr(kPrefix.size()));
-        return 1;
+        // UTF-8 lead bytes 0xF0 and up start four-byte sequences, i.e. U+10000 and above.
+        if (!saw_astral_text_)
+            saw_astral_text_ = std::ranges::any_of(translated, [](const char ch) {
+                return static_cast<unsigned char>(ch) >= 0xF0;
+            });
+        return view.starts_with(kPrefix) ? 1 : 0;
     }
 
     bool RmlSystemInterface::LogMessage(Rml::Log::Type type, const Rml::String& message) {
