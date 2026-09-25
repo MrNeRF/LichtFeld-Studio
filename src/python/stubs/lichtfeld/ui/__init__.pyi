@@ -2741,6 +2741,14 @@ def set_navigation_speed_preference(speed: float) -> None:
 def get_navigation_speed_preference() -> float:
     """Get the default WASD navigation speed"""
 
+def get_trackpad_preferences() -> dict:
+    """Get trackpad navigation preferences"""
+
+def set_trackpad_preferences(enabled: bool, swipe_pans: bool, swipe_speed: float, zoom_speed: float) -> None:
+    """
+    Persist and apply trackpad navigation preferences (speeds 1-100, 50 is the default)
+    """
+
 def get_project_manager_preferences() -> dict:
     """
     Get Project Manager preferences from the canonical user preferences store

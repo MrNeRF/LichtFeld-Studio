@@ -899,6 +899,16 @@
     "zoom_speed_tooltip": "Default speed for zooming the camera with the mouse wheel.",
     "navigation_speed": "Navigation speed",
     "navigation_speed_tooltip": "Default speed for moving the camera with WASD.",
+    "pointing_device": "Navigation device",
+    "pointing_device_tooltip": "Mouse or trackpad controls for the viewport. The status bar icon switches it too.",
+    "pointing_device_mouse": "Mouse (desktop)",
+    "pointing_device_trackpad": "Trackpad (notebook)",
+    "trackpad_swipe_pans": "Two-finger swipe pans",
+    "trackpad_swipe_tooltip": "Off: swipe orbits and Shift+swipe pans. On: the reverse. Pinch or Ctrl+swipe zooms.",
+    "trackpad_swipe_speed": "Swipe speed",
+    "trackpad_swipe_speed_tooltip": "Orbit and pan speed of two-finger swipes. 50 is the default; every 25 doubles it.",
+    "trackpad_zoom_speed": "Zoom speed",
+    "trackpad_zoom_speed_tooltip": "Zoom speed of pinch and Ctrl+swipe. 50 is the default; every 25 doubles it.",
     "camera_view_snap": "Snap Axis Views",
     "enable_axis_view_snap": "Enable Axis View Snap",
     "remember_camera_navigation": "Remember Camera Navigation",
@@ -2465,7 +2475,9 @@
     "perf_enable_tracking": "Enable",
     "perf_expand": "Expand",
     "perf_collapse": "Collapse",
-    "perf_hud_tooltip": "Show or hide the performance HUD"
+    "perf_hud_tooltip": "Show or hide the performance HUD",
+    "input_mouse_tooltip": "Mouse navigation: middle-drag orbits, right-drag pans, wheel zooms. Click to switch to trackpad",
+    "input_trackpad_tooltip": "Trackpad navigation: two-finger swipe orbits, Shift+swipe pans, pinch or Ctrl+swipe zooms. Click to switch to mouse"
   },
   "runtime": {
     "training_save_no_memory": "Project save failed: {}",

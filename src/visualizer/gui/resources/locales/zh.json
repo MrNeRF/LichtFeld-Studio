@@ -903,6 +903,16 @@
     "zoom_speed_tooltip": "Default speed for zooming the camera with the mouse wheel.",
     "navigation_speed": "Navigation speed",
     "navigation_speed_tooltip": "Default speed for moving the camera with WASD.",
+    "pointing_device": "导航设备",
+    "pointing_device_tooltip": "视口的鼠标或触控板操作。也可以通过状态栏图标切换。",
+    "pointing_device_mouse": "鼠标（台式机）",
+    "pointing_device_trackpad": "触控板（笔记本）",
+    "trackpad_swipe_pans": "双指滑动平移",
+    "trackpad_swipe_tooltip": "关闭：滑动环绕，Shift+滑动平移。开启：相反。双指捏合或 Ctrl+滑动缩放。",
+    "trackpad_swipe_speed": "滑动速度",
+    "trackpad_swipe_speed_tooltip": "双指滑动的环绕和平移速度。默认为 50，每增加 25 翻倍。",
+    "trackpad_zoom_speed": "缩放速度",
+    "trackpad_zoom_speed_tooltip": "双指捏合和 Ctrl+滑动的缩放速度。默认为 50，每增加 25 翻倍。",
     "camera_view_snap": "对齐轴视图",
     "enable_axis_view_snap": "启用轴视图对齐",
     "remember_camera_navigation": "记住相机导航",
@@ -2466,7 +2476,9 @@
     "perf_enable_tracking": "Enable",
     "perf_expand": "Expand",
     "perf_collapse": "Collapse",
-    "perf_hud_tooltip": "Show or hide the performance HUD"
+    "perf_hud_tooltip": "Show or hide the performance HUD",
+    "input_mouse_tooltip": "鼠标导航：中键拖动环绕，右键拖动平移，滚轮缩放。点击切换到触控板",
+    "input_trackpad_tooltip": "触控板导航：双指滑动环绕，Shift+滑动平移，双指捏合或 Ctrl+滑动缩放。点击切换到鼠标"
   },
   "runtime": {
     "training_save_no_memory": "项目保存失败：{}",

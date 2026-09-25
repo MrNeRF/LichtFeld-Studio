@@ -50,6 +50,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         test_panel_layout_render_demand.cpp
         test_preferences_migration.cpp
         test_startup_overlay_geometry.cpp
+        test_trackpad_navigation.cpp
     )
     add_executable(lichtfeld_visualizer_tests EXCLUDE_FROM_ALL
         ${LICHTFELD_VISUALIZER_TEST_SOURCES}
@@ -74,6 +75,11 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         target_link_options(lichtfeld_visualizer_tests PRIVATE
             "LINKER:-force_load,$<TARGET_LINKER_FILE:Python::Python>")
         target_link_libraries(lichtfeld_visualizer_tests PRIVATE lfs_python_embed)
+    endif()
+    # The trackpad tests set SDL's modifier state. A static SDL is reached through
+    # lfs_visualizer; a shared one (Windows) must be linked so both see one state.
+    if(TARGET SDL3::SDL3-shared)
+        target_link_libraries(lichtfeld_visualizer_tests PRIVATE SDL3::SDL3-shared)
     endif()
     add_test(
         NAME lichtfeld_visualizer_tests

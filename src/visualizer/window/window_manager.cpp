@@ -1141,6 +1141,13 @@ namespace lfs::vis {
             }
             break;
 
+        case SDL_EVENT_PINCH_UPDATE:
+            // macOS sends trackpad pinches without a window, so no window filter.
+            if (input_controller_) {
+                input_controller_->handlePinch(event.pinch.scale);
+            }
+            break;
+
         case SDL_EVENT_KEY_DOWN:
         case SDL_EVENT_KEY_UP: {
             if (!eventTargetsWindow(event, main_window_id))

@@ -527,6 +527,35 @@ namespace lfs::vis {
         impl_->loadLocked();
         return impl_->values.value("scene_graph_selection_markers", false);
     }
+    void UserPreferences::setTrackpad(const TrackpadPreferenceState& state) {
+        const TrackpadPreferenceState defaults;
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["trackpad"] = {
+            {"enabled", state.enabled},
+            {"swipe_pans", state.swipe_pans},
+            {"swipe_speed", clampNavigationSpeed(state.swipe_speed, defaults.swipe_speed)},
+            {"zoom_speed", clampNavigationSpeed(state.zoom_speed, defaults.zoom_speed)},
+        };
+        impl_->saveLocked();
+    }
+    TrackpadPreferenceState UserPreferences::trackpad() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        TrackpadPreferenceState result;
+        const auto it = impl_->values.find("trackpad");
+        if (it == impl_->values.end() || !it->is_object())
+            return result;
+        if (const auto enabled = it->find("enabled"); enabled != it->end() && enabled->is_boolean())
+            result.enabled = enabled->get<bool>();
+        if (const auto pans = it->find("swipe_pans"); pans != it->end() && pans->is_boolean())
+            result.swipe_pans = pans->get<bool>();
+        if (const auto speed = it->find("swipe_speed"); speed != it->end() && speed->is_number())
+            result.swipe_speed = clampNavigationSpeed(speed->get<float>(), result.swipe_speed);
+        if (const auto speed = it->find("zoom_speed"); speed != it->end() && speed->is_number())
+            result.zoom_speed = clampNavigationSpeed(speed->get<float>(), result.zoom_speed);
+        return result;
+    }
     void UserPreferences::setProgressBarStyle(const std::string_view value) {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
@@ -846,6 +875,10 @@ namespace lfs::vis {
     bool loadSceneGraphSelectionMarkersPreference() {
         return UserPreferences::instance().sceneGraphSelectionMarkers();
     }
+    void saveTrackpadPreferences(const TrackpadPreferenceState& state) {
+        UserPreferences::instance().setTrackpad(state);
+    }
+    TrackpadPreferenceState loadTrackpadPreferences() { return UserPreferences::instance().trackpad(); }
     void saveProgressBarStylePreference(const std::string_view style) {
         UserPreferences::instance().setProgressBarStyle(style);
     }

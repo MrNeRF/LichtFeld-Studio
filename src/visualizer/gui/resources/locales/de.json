@@ -903,6 +903,16 @@
     "zoom_speed_tooltip": "Default speed for zooming the camera with the mouse wheel.",
     "navigation_speed": "Navigation speed",
     "navigation_speed_tooltip": "Default speed for moving the camera with WASD.",
+    "pointing_device": "Navigationsgerät",
+    "pointing_device_tooltip": "Maus- oder Trackpad-Steuerung für den Viewport. Das Symbol in der Statusleiste schaltet ebenfalls um.",
+    "pointing_device_mouse": "Maus (Desktop)",
+    "pointing_device_trackpad": "Trackpad (Notebook)",
+    "trackpad_swipe_pans": "Wischen mit zwei Fingern verschiebt",
+    "trackpad_swipe_tooltip": "Aus: Wischen macht Orbit, Umschalt+Wischen verschiebt. An: umgekehrt. Aufziehen/Zuziehen oder Strg+Wischen zoomt.",
+    "trackpad_swipe_speed": "Wischgeschwindigkeit",
+    "trackpad_swipe_speed_tooltip": "Orbit- und Verschiebegeschwindigkeit beim Wischen mit zwei Fingern. 50 ist der Standard; alle 25 verdoppeln sie.",
+    "trackpad_zoom_speed": "Zoomgeschwindigkeit",
+    "trackpad_zoom_speed_tooltip": "Zoomgeschwindigkeit für Aufziehen/Zuziehen und Strg+Wischen. 50 ist der Standard; alle 25 verdoppeln sie.",
     "camera_view_snap": "Ansichten an Achsen ausrichten",
     "enable_axis_view_snap": "Achsansichtsausrichtung aktivieren",
     "remember_camera_navigation": "Kameranavigation merken",
@@ -2466,7 +2476,9 @@
     "perf_enable_tracking": "Enable",
     "perf_expand": "Expand",
     "perf_collapse": "Collapse",
-    "perf_hud_tooltip": "Show or hide the performance HUD"
+    "perf_hud_tooltip": "Show or hide the performance HUD",
+    "input_mouse_tooltip": "Mausnavigation: mittlere Maustaste ziehen dreht die Ansicht, rechte Maustaste ziehen verschiebt, Mausrad zoomt. Klicken, um zum Trackpad zu wechseln",
+    "input_trackpad_tooltip": "Trackpad-Navigation: Wischen mit zwei Fingern dreht die Ansicht, Umschalt+Wischen verschiebt, Aufziehen/Zuziehen oder Strg+Wischen zoomt. Klicken, um zur Maus zu wechseln"
   },
   "runtime": {
     "training_save_no_memory": "Projekt konnte nicht gespeichert werden: {}",

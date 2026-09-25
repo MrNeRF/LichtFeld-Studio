@@ -903,6 +903,16 @@
     "zoom_speed_tooltip": "Default speed for zooming the camera with the mouse wheel.",
     "navigation_speed": "Navigation speed",
     "navigation_speed_tooltip": "Default speed for moving the camera with WASD.",
+    "pointing_device": "ナビゲーションデバイス",
+    "pointing_device_tooltip": "ビューポートのマウス／トラックパッド操作。ステータスバーのアイコンでも切り替えられます。",
+    "pointing_device_mouse": "マウス（デスクトップ）",
+    "pointing_device_trackpad": "トラックパッド（ノート PC）",
+    "trackpad_swipe_pans": "2本指スワイプでパン",
+    "trackpad_swipe_tooltip": "オフ: スワイプでオービット、Shift+スワイプでパン。オン: その逆。ピンチまたは Ctrl+スワイプでズーム。",
+    "trackpad_swipe_speed": "スワイプ速度",
+    "trackpad_swipe_speed_tooltip": "2本指スワイプのオービットとパンの速度。既定値は 50、25 ごとに 2 倍になります。",
+    "trackpad_zoom_speed": "ズーム速度",
+    "trackpad_zoom_speed_tooltip": "ピンチと Ctrl+スワイプのズーム速度。既定値は 50、25 ごとに 2 倍になります。",
     "camera_view_snap": "軸ビューにスナップ",
     "enable_axis_view_snap": "軸ビュースナップを有効化",
     "remember_camera_navigation": "カメラ操作を記憶",
@@ -2466,7 +2476,9 @@
     "perf_enable_tracking": "Enable",
     "perf_expand": "Expand",
     "perf_collapse": "Collapse",
-    "perf_hud_tooltip": "Show or hide the performance HUD"
+    "perf_hud_tooltip": "Show or hide the performance HUD",
+    "input_mouse_tooltip": "マウス操作: 中ボタンドラッグで回転、右ドラッグでパン、ホイールでズーム。クリックでトラックパッド操作に切り替え",
+    "input_trackpad_tooltip": "トラックパッド操作: 2本指スワイプで回転、Shift+スワイプでパン、ピンチまたはCtrl+スワイプでズーム。クリックでマウス操作に切り替え"
   },
   "runtime": {
     "training_save_no_memory": "プロジェクトを保存できませんでした: {}",

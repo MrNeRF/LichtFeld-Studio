@@ -20,6 +20,7 @@
 #include "gui/status_bar_mining.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/ui_context.hpp"
+#include "input/input_controller.hpp"
 #include "internal/resource_paths.hpp"
 #include "preferences.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -444,6 +445,7 @@ namespace lfs::vis::gui {
         ctor.Bind("show_lfs_memory", &model_.show_lfs_memory);
         ctor.Bind("show_gpu_model", &model_.show_gpu_model);
         ctor.Bind("gpu_panel_active", &model_.gpu_panel_active);
+        ctor.Bind("trackpad_navigation", &model_.trackpad_navigation);
         ctor.Bind("gpu_model_text", &model_.gpu_model_text);
         ctor.Bind("gpu_mem_text", &model_.gpu_mem_text);
         ctor.Bind("gpu_mem_color", &model_.gpu_mem_color);
@@ -535,6 +537,8 @@ namespace lfs::vis::gui {
         mcp_power_listener_ = nullptr;
         delete mcp_preferences_listener_;
         mcp_preferences_listener_ = nullptr;
+        delete input_device_listener_;
+        input_device_listener_ = nullptr;
     }
 
     void RmlStatusBar::reloadResources() {
@@ -815,6 +819,20 @@ namespace lfs::vis::gui {
         }
         if (auto* el = document_->GetElementById("mcp-toggle"))
             el->AddEventListener(Rml::EventId::Click, mcp_power_listener_);
+
+        if (!input_device_listener_) {
+            input_device_listener_ = new CallbackListener([this] {
+                auto trackpad = lfs::vis::loadTrackpadPreferences();
+                trackpad.enabled = !trackpad.enabled;
+                if (auto* const ic = lfs::vis::InputController::instance())
+                    ic->setTrackpadPreferences(trackpad);
+                lfs::vis::saveTrackpadPreferences(trackpad);
+                setModelBool("trackpad_navigation", model_.trackpad_navigation, trackpad.enabled);
+                markModelDirty();
+            });
+        }
+        if (auto* el = document_->GetElementById("input-device-toggle"))
+            el->AddEventListener(Rml::EventId::Click, input_device_listener_);
     }
 
     void RmlStatusBar::setModelString(const char* name, std::string& field, std::string value) {
@@ -1148,6 +1166,9 @@ namespace lfs::vis::gui {
         const auto& p = lfs::vis::theme().palette;
 
         setModelString("safe_mode_text", model_.safe_mode_text, LOC("status_bar.safe_mode"));
+        const auto* const input_controller = lfs::vis::InputController::instance();
+        setModelBool("trackpad_navigation", model_.trackpad_navigation,
+                     input_controller && input_controller->trackpadPreferences().enabled);
         setModelString("mcp_preferences_label", model_.mcp_preferences_label,
                        LOC("status_bar.mcp_preferences"));
         if (mcp_status_provider_) {

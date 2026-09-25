@@ -903,6 +903,16 @@
     "zoom_speed_tooltip": "Default speed for zooming the camera with the mouse wheel.",
     "navigation_speed": "Navigation speed",
     "navigation_speed_tooltip": "Default speed for moving the camera with WASD.",
+    "pointing_device": "Urządzenie nawigacji",
+    "pointing_device_tooltip": "Sterowanie myszą lub gładzikiem w widoku. Ikona na pasku stanu też przełącza.",
+    "pointing_device_mouse": "Mysz (komputer)",
+    "pointing_device_trackpad": "Gładzik (laptop)",
+    "trackpad_swipe_pans": "Przesunięcie dwoma palcami przesuwa widok",
+    "trackpad_swipe_tooltip": "Wyłączone: przesunięcie obraca po orbicie, Shift+przesunięcie przesuwa. Włączone: odwrotnie. Uszczypnięcie lub Ctrl+przesunięcie przybliża.",
+    "trackpad_swipe_speed": "Szybkość przesunięcia",
+    "trackpad_swipe_speed_tooltip": "Szybkość orbity i przesuwania dwoma palcami. Domyślnie 50; każde 25 ją podwaja.",
+    "trackpad_zoom_speed": "Szybkość przybliżania",
+    "trackpad_zoom_speed_tooltip": "Szybkość przybliżania uszczypnięciem i Ctrl+przesunięciem. Domyślnie 50; każde 25 ją podwaja.",
     "camera_view_snap": "Przyciągaj widoki osi",
     "enable_axis_view_snap": "Włącz przyciąganie widoków osi",
     "remember_camera_navigation": "Zapamiętaj nawigację kamery",
@@ -2466,7 +2476,9 @@
     "perf_enable_tracking": "Enable",
     "perf_expand": "Expand",
     "perf_collapse": "Collapse",
-    "perf_hud_tooltip": "Show or hide the performance HUD"
+    "perf_hud_tooltip": "Show or hide the performance HUD",
+    "input_mouse_tooltip": "Nawigacja myszą: przeciąganie środkowym przyciskiem obraca, prawym przesuwa, kółko przybliża. Kliknij, aby przełączyć na gładzik",
+    "input_trackpad_tooltip": "Nawigacja gładzikiem: przesunięcie dwoma palcami obraca, Shift+przesunięcie przesuwa, uszczypnięcie lub Ctrl+przesunięcie przybliża. Kliknij, aby przełączyć na mysz"
   },
   "runtime": {
     "training_save_no_memory": "Nie udało się zapisać projektu: {}",

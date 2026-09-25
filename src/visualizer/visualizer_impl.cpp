@@ -2104,6 +2104,7 @@ namespace lfs::vis {
                 window_manager_->getWindow(), viewport_);
             input_controller_->setViewer(this);
             input_controller_->initialize();
+            input_controller_->setTrackpadPreferences(loadTrackpadPreferences());
             window_manager_->setInputController(input_controller_.get());
             python::set_keymap_bindings(&input_controller_->getBindings());
             callback_cleanup_.add([] { python::set_keymap_bindings(nullptr); });

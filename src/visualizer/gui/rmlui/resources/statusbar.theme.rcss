@@ -23,6 +23,14 @@ body,
     border-color: @{alpha(text_dim,0.55)};
 }
 
+.input-device {
+    image-color: @{text_dim};
+}
+
+#input-device-toggle:hover .input-device {
+    image-color: @{text};
+}
+
 #mcp-chip:hover,
 #mcp-chip.expanded {
     background-color: @{alpha(surface_bright,0.45)};

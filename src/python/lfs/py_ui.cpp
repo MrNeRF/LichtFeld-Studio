@@ -5342,6 +5342,37 @@ namespace lfs::python {
             "Get the default WASD navigation speed");
 
         m.def(
+            "get_trackpad_preferences",
+            [] {
+                const auto state = vis::loadTrackpadPreferences();
+                nb::dict result;
+                result["enabled"] = state.enabled;
+                result["swipe_pans"] = state.swipe_pans;
+                result["swipe_speed"] = state.swipe_speed;
+                result["zoom_speed"] = state.zoom_speed;
+                return result;
+            },
+            "Get trackpad navigation preferences");
+
+        m.def(
+            "set_trackpad_preferences",
+            [](const bool enabled, const bool swipe_pans, const float swipe_speed, const float zoom_speed) {
+                vis::saveTrackpadPreferences({
+                    .enabled = enabled,
+                    .swipe_pans = swipe_pans,
+                    .swipe_speed = swipe_speed,
+                    .zoom_speed = zoom_speed,
+                });
+                const auto state = vis::loadTrackpadPreferences();
+                invoke_on_viewer([state] {
+                    if (auto* const controller = vis::InputController::instance())
+                        controller->setTrackpadPreferences(state);
+                });
+            },
+            nb::arg("enabled"), nb::arg("swipe_pans"), nb::arg("swipe_speed"), nb::arg("zoom_speed"),
+            "Persist and apply trackpad navigation preferences (speeds 1-100, 50 is the default)");
+
+        m.def(
             "get_project_manager_preferences",
             [] {
                 auto& preferences = vis::UserPreferences::instance();

@@ -903,6 +903,16 @@
     "zoom_speed_tooltip": "Default speed for zooming the camera with the mouse wheel.",
     "navigation_speed": "Navigation speed",
     "navigation_speed_tooltip": "Default speed for moving the camera with WASD.",
+    "pointing_device": "Navigatieapparaat",
+    "pointing_device_tooltip": "Muis- of trackpadbediening voor de viewport. Het pictogram in de statusbalk wisselt ook.",
+    "pointing_device_mouse": "Muis (desktop)",
+    "pointing_device_trackpad": "Trackpad (notebook)",
+    "trackpad_swipe_pans": "Vegen met twee vingers verschuift",
+    "trackpad_swipe_tooltip": "Uit: vegen draait rond en Shift+vegen verschuift. Aan: omgekeerd. Knijpen of Ctrl+vegen zoomt.",
+    "trackpad_swipe_speed": "Veegsnelheid",
+    "trackpad_swipe_speed_tooltip": "Orbit- en verschuifsnelheid bij vegen met twee vingers. 50 is de standaard; elke 25 verdubbelt die.",
+    "trackpad_zoom_speed": "Zoomsnelheid",
+    "trackpad_zoom_speed_tooltip": "Zoomsnelheid van knijpen en Ctrl+vegen. 50 is de standaard; elke 25 verdubbelt die.",
     "camera_view_snap": "Asweergaven uitlijnen",
     "enable_axis_view_snap": "Uitlijning van asweergaven inschakelen",
     "remember_camera_navigation": "Cameranavigatie onthouden",
@@ -2466,7 +2476,9 @@
     "perf_enable_tracking": "Enable",
     "perf_expand": "Expand",
     "perf_collapse": "Collapse",
-    "perf_hud_tooltip": "Show or hide the performance HUD"
+    "perf_hud_tooltip": "Show or hide the performance HUD",
+    "input_mouse_tooltip": "Muisnavigatie: slepen met middelste knop draait rond, slepen met rechterknop verschuift, scrollwiel zoomt. Klik om naar trackpad te wisselen",
+    "input_trackpad_tooltip": "Trackpadnavigatie: vegen met twee vingers draait rond, Shift+vegen verschuift, knijpen of Ctrl+vegen zoomt. Klik om naar muis te wisselen"
   },
   "runtime": {
     "training_save_no_memory": "Project opslaan mislukt: {}",

@@ -903,6 +903,16 @@
     "zoom_speed_tooltip": "Default speed for zooming the camera with the mouse wheel.",
     "navigation_speed": "Navigation speed",
     "navigation_speed_tooltip": "Default speed for moving the camera with WASD.",
+    "pointing_device": "Périphérique de navigation",
+    "pointing_device_tooltip": "Commandes souris ou trackpad pour la vue. L'icône de la barre d'état permet aussi de basculer.",
+    "pointing_device_mouse": "Souris (bureau)",
+    "pointing_device_trackpad": "Trackpad (portable)",
+    "trackpad_swipe_pans": "Le balayage à deux doigts fait un panoramique",
+    "trackpad_swipe_tooltip": "Désactivé : le balayage fait orbiter et Maj+balayage fait un panoramique. Activé : l'inverse. Pincer ou Ctrl+balayage zoome.",
+    "trackpad_swipe_speed": "Vitesse de balayage",
+    "trackpad_swipe_speed_tooltip": "Vitesse d'orbite et de panoramique des balayages à deux doigts. 50 par défaut ; chaque palier de 25 la double.",
+    "trackpad_zoom_speed": "Vitesse de zoom",
+    "trackpad_zoom_speed_tooltip": "Vitesse de zoom du pincement et de Ctrl+balayage. 50 par défaut ; chaque palier de 25 la double.",
     "camera_view_snap": "Aligner les vues d'axe",
     "enable_axis_view_snap": "Activer l'alignement des vues d'axe",
     "remember_camera_navigation": "Mémoriser la navigation de la caméra",
@@ -2466,7 +2476,9 @@
     "perf_enable_tracking": "Enable",
     "perf_expand": "Expand",
     "perf_collapse": "Collapse",
-    "perf_hud_tooltip": "Show or hide the performance HUD"
+    "perf_hud_tooltip": "Show or hide the performance HUD",
+    "input_mouse_tooltip": "Navigation à la souris : glisser avec le bouton du milieu pour orbiter, avec le bouton droit pour déplacer, molette pour zoomer. Cliquer pour passer au trackpad",
+    "input_trackpad_tooltip": "Navigation au trackpad : balayer à deux doigts pour orbiter, Maj+balayer pour déplacer, pincer ou Ctrl+balayer pour zoomer. Cliquer pour passer à la souris"
   },
   "runtime": {
     "training_save_no_memory": "Échec de l'enregistrement du projet : {}",

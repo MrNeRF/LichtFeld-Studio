@@ -30,6 +30,15 @@ namespace lfs::vis {
         bool request_logging = false;
     };
 
+    // Trackpad navigation reads two-finger swipes over the viewport as orbit,
+    // pan and zoom. Speeds are 1..100 levels; 50 is the default speed.
+    struct TrackpadPreferenceState {
+        bool enabled = false;
+        bool swipe_pans = false; // Swipe pans and Shift+swipe orbits.
+        float swipe_speed = 50.0f;
+        float zoom_speed = 50.0f; // Pinch and Ctrl+swipe.
+    };
+
     /** Process-local, atomically persisted user preferences. */
     class LFS_VIS_API UserPreferences {
     public:
@@ -62,6 +71,8 @@ namespace lfs::vis {
         [[nodiscard]] bool rememberCameraViewSnap();
         void setSceneGraphSelectionMarkers(bool enabled);
         [[nodiscard]] bool sceneGraphSelectionMarkers();
+        void setTrackpad(const TrackpadPreferenceState& state);
+        [[nodiscard]] TrackpadPreferenceState trackpad();
         void setProgressBarStyle(std::string_view value);
         [[nodiscard]] std::string progressBarStyle();
         void setViewportChromeStyle(std::string_view value);
@@ -122,6 +133,8 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API bool rememberCameraViewSnapPreference();
     LFS_VIS_API void saveSceneGraphSelectionMarkersPreference(bool enabled);
     [[nodiscard]] LFS_VIS_API bool loadSceneGraphSelectionMarkersPreference();
+    LFS_VIS_API void saveTrackpadPreferences(const TrackpadPreferenceState& state);
+    [[nodiscard]] LFS_VIS_API TrackpadPreferenceState loadTrackpadPreferences();
     LFS_VIS_API void saveProgressBarStylePreference(std::string_view style);
     [[nodiscard]] LFS_VIS_API std::string loadProgressBarStylePreference();
     LFS_VIS_API void saveViewportChromeStylePreference(std::string_view style);

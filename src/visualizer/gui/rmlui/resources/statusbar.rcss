@@ -37,6 +37,19 @@ body {
     font-weight: bold;
 }
 
+#input-device-toggle {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    margin-right: 10dp;
+    cursor: pointer;
+}
+
+.input-device {
+    width: 14dp;
+    height: 14dp;
+}
+
 #mcp-chip {
     position: relative;
     display: flex;

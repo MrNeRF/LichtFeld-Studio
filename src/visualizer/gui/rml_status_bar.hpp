@@ -147,6 +147,7 @@ namespace lfs::vis::gui {
         Rml::EventListener* mcp_toggle_listener_ = nullptr;
         Rml::EventListener* mcp_power_listener_ = nullptr;
         Rml::EventListener* mcp_preferences_listener_ = nullptr;
+        Rml::EventListener* input_device_listener_ = nullptr;
 
         std::size_t last_theme_signature_ = 0;
         bool has_theme_signature_ = false;
@@ -251,6 +252,7 @@ namespace lfs::vis::gui {
             bool show_lfs_memory = true;
             bool show_gpu_model = false;
             bool gpu_panel_active = false;
+            bool trackpad_navigation = false;
             std::string gpu_model_text;
             std::string gpu_mem_text;
             std::string gpu_mem_color;

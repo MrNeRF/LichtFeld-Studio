@@ -903,6 +903,16 @@
     "zoom_speed_tooltip": "Default speed for zooming the camera with the mouse wheel.",
     "navigation_speed": "Navigation speed",
     "navigation_speed_tooltip": "Default speed for moving the camera with WASD.",
+    "pointing_device": "탐색 장치",
+    "pointing_device_tooltip": "뷰포트의 마우스 또는 트랙패드 조작입니다. 상태 표시줄 아이콘으로도 전환할 수 있습니다.",
+    "pointing_device_mouse": "마우스 (데스크톱)",
+    "pointing_device_trackpad": "트랙패드 (노트북)",
+    "trackpad_swipe_pans": "두 손가락 스와이프로 이동",
+    "trackpad_swipe_tooltip": "끄기: 스와이프는 궤도 회전, Shift+스와이프는 이동. 켜기: 반대. 핀치 또는 Ctrl+스와이프는 확대/축소.",
+    "trackpad_swipe_speed": "스와이프 속도",
+    "trackpad_swipe_speed_tooltip": "두 손가락 스와이프의 궤도 및 이동 속도입니다. 기본값은 50이며 25마다 두 배가 됩니다.",
+    "trackpad_zoom_speed": "확대/축소 속도",
+    "trackpad_zoom_speed_tooltip": "핀치와 Ctrl+스와이프의 확대/축소 속도입니다. 기본값은 50이며 25마다 두 배가 됩니다.",
     "camera_view_snap": "축 보기 스냅",
     "enable_axis_view_snap": "축 보기 스냅 활성화",
     "remember_camera_navigation": "카메라 탐색 기억",
@@ -2466,7 +2476,9 @@
     "perf_enable_tracking": "Enable",
     "perf_expand": "Expand",
     "perf_collapse": "Collapse",
-    "perf_hud_tooltip": "Show or hide the performance HUD"
+    "perf_hud_tooltip": "Show or hide the performance HUD",
+    "input_mouse_tooltip": "마우스 탐색: 가운데 버튼 드래그로 궤도 회전, 오른쪽 드래그로 이동, 휠로 확대/축소. 클릭하여 트랙패드로 전환",
+    "input_trackpad_tooltip": "트랙패드 탐색: 두 손가락 스와이프로 궤도 회전, Shift+스와이프로 이동, 핀치 또는 Ctrl+스와이프로 확대/축소. 클릭하여 마우스로 전환"
   },
   "runtime": {
     "training_save_no_memory": "프로젝트를 저장하지 못했습니다: {}",

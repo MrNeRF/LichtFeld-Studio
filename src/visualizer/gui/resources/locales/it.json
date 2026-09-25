@@ -903,6 +903,16 @@
     "zoom_speed_tooltip": "Default speed for zooming the camera with the mouse wheel.",
     "navigation_speed": "Navigation speed",
     "navigation_speed_tooltip": "Default speed for moving the camera with WASD.",
+    "pointing_device": "Dispositivo di navigazione",
+    "pointing_device_tooltip": "Controlli mouse o trackpad per la vista. Anche l'icona nella barra di stato lo cambia.",
+    "pointing_device_mouse": "Mouse (desktop)",
+    "pointing_device_trackpad": "Trackpad (notebook)",
+    "trackpad_swipe_pans": "Lo scorrimento con due dita sposta",
+    "trackpad_swipe_tooltip": "Disattivato: lo scorrimento orbita e Maiusc+scorrimento sposta. Attivato: il contrario. Pizzica o Ctrl+scorrimento per lo zoom.",
+    "trackpad_swipe_speed": "Velocità di scorrimento",
+    "trackpad_swipe_speed_tooltip": "Velocità di orbita e spostamento con due dita. 50 è il valore predefinito; ogni 25 la raddoppia.",
+    "trackpad_zoom_speed": "Velocità dello zoom",
+    "trackpad_zoom_speed_tooltip": "Velocità dello zoom con pizzico e Ctrl+scorrimento. 50 è il valore predefinito; ogni 25 la raddoppia.",
     "camera_view_snap": "Aggancia alle viste assiali",
     "enable_axis_view_snap": "Abilita aggancio alle viste assiali",
     "remember_camera_navigation": "Ricorda navigazione della camera",
@@ -2466,7 +2476,9 @@
     "perf_enable_tracking": "Enable",
     "perf_expand": "Expand",
     "perf_collapse": "Collapse",
-    "perf_hud_tooltip": "Show or hide the performance HUD"
+    "perf_hud_tooltip": "Show or hide the performance HUD",
+    "input_mouse_tooltip": "Navigazione con mouse: trascina con il tasto centrale per orbitare, con il destro per spostare, rotella per lo zoom. Fai clic per passare al trackpad",
+    "input_trackpad_tooltip": "Navigazione con trackpad: scorri con due dita per orbitare, Maiusc+scorri per spostare, pizzica o Ctrl+scorri per lo zoom. Fai clic per passare al mouse"
   },
   "runtime": {
     "training_save_no_memory": "Salvataggio del progetto non riuscito: {}",

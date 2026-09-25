@@ -241,18 +241,18 @@
           <span class="text-accent">@tr:preferences.camera_navigation</span>
         </div>
         <div class="section-content" data-if="navigation_expanded">
+          <div class="preferences-row" data-tooltip="preferences.pointing_device_tooltip">
+            <span class="preferences-label">@tr:preferences.pointing_device</span>
+            <select class="preferences-select" data-value="pointing_device">
+              <option value="mouse">@tr:preferences.pointing_device_mouse</option>
+              <option value="trackpad">@tr:preferences.pointing_device_trackpad</option>
+            </select>
+          </div>
           <div class="preferences-row">
             <span class="preferences-label">@tr:preferences.navigation_mode</span>
             <select class="preferences-select" data-value="navigation_idx">
               <option data-for="mode : navigation_modes" data-attr-value="mode.index">{{ mode.label }}</option>
             </select>
-          </div>
-          <div class="setting-row setting-row--aligned" data-tooltip="preferences.zoom_speed_tooltip">
-            <span class="setting-row__label-col">@tr:preferences.zoom_speed</span>
-            <div class="setting-row__control-col setting-row__control-col--slider">
-              <input type="range" class="setting-slider" data-value="zoom_speed" min="1" max="100" step="1" />
-              <span class="slider-value">{{ zoom_speed | format_int }}</span>
-            </div>
           </div>
           <div class="setting-row setting-row--aligned" data-tooltip="preferences.navigation_speed_tooltip">
             <span class="setting-row__label-col">@tr:preferences.navigation_speed</span>
@@ -264,6 +264,45 @@
           <div class="preferences-row preferences-checkbox-row">
             <span class="preferences-label">@tr:preferences.remember_camera_navigation</span>
             <input type="checkbox" data-checked="remember_navigation" />
+          </div>
+        </div>
+
+        <div class="section-header text-accent" data-class-is-expanded="mouse_expanded" data-event-click="toggle_section('mouse')">
+          <span class="section-arrow text-accent" data-class-is-expanded="mouse_expanded">&#x25B6;</span>
+          <span class="text-accent">@tr:preferences.pointing_device_mouse</span>
+        </div>
+        <div class="section-content" data-if="mouse_expanded">
+          <div class="setting-row setting-row--aligned" data-tooltip="preferences.zoom_speed_tooltip">
+            <span class="setting-row__label-col">@tr:preferences.zoom_speed</span>
+            <div class="setting-row__control-col setting-row__control-col--slider">
+              <input type="range" class="setting-slider" data-value="zoom_speed" min="1" max="100" step="1" />
+              <span class="slider-value">{{ zoom_speed | format_int }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-header text-accent" data-class-is-expanded="trackpad_expanded" data-event-click="toggle_section('trackpad')">
+          <span class="section-arrow text-accent" data-class-is-expanded="trackpad_expanded">&#x25B6;</span>
+          <span class="text-accent">@tr:preferences.pointing_device_trackpad</span>
+        </div>
+        <div class="section-content" data-if="trackpad_expanded">
+          <div class="preferences-row preferences-checkbox-row" data-tooltip="preferences.trackpad_swipe_tooltip">
+            <span class="preferences-label">@tr:preferences.trackpad_swipe_pans</span>
+            <input type="checkbox" data-checked="trackpad_swipe_pans" />
+          </div>
+          <div class="setting-row setting-row--aligned" data-tooltip="preferences.trackpad_swipe_speed_tooltip">
+            <span class="setting-row__label-col">@tr:preferences.trackpad_swipe_speed</span>
+            <div class="setting-row__control-col setting-row__control-col--slider">
+              <input type="range" class="setting-slider" data-value="trackpad_swipe_speed" min="1" max="100" step="1" />
+              <span class="slider-value">{{ trackpad_swipe_speed | format_int }}</span>
+            </div>
+          </div>
+          <div class="setting-row setting-row--aligned" data-tooltip="preferences.trackpad_zoom_speed_tooltip">
+            <span class="setting-row__label-col">@tr:preferences.trackpad_zoom_speed</span>
+            <div class="setting-row__control-col setting-row__control-col--slider">
+              <input type="range" class="setting-slider" data-value="trackpad_zoom_speed" min="1" max="100" step="1" />
+              <span class="slider-value">{{ trackpad_zoom_speed | format_int }}</span>
+            </div>
           </div>
         </div>
 

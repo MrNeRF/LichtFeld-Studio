@@ -64,6 +64,8 @@ class PreferencesPanel(Panel):
     SPEED_SCRUB_FIELD_DEFS = {
         "zoom_speed": ScrubFieldSpec(1.0, 100.0, 1.0, "%d", data_type=int),
         "navigation_speed": ScrubFieldSpec(1.0, 100.0, 1.0, "%d", data_type=int),
+        "trackpad_swipe_speed": ScrubFieldSpec(1.0, 100.0, 1.0, "%d", data_type=int),
+        "trackpad_zoom_speed": ScrubFieldSpec(1.0, 100.0, 1.0, "%d", data_type=int),
     }
 
     EXPANDABLE_SECTIONS = (
@@ -76,6 +78,8 @@ class PreferencesPanel(Panel):
         "appearance",
         "scene_rendering",
         "navigation",
+        "mouse",
+        "trackpad",
         "view_snap",
         "key_bindings",
         "interface",
@@ -204,6 +208,22 @@ class PreferencesPanel(Panel):
         model.bind("language_idx", self._language_index, self._set_language_index)
         model.bind("navigation_idx", self._navigation_index, self._set_navigation_index)
         model.bind("zoom_speed", lf.ui.get_zoom_speed_preference, self._set_zoom_speed)
+        model.bind("pointing_device", self._pointing_device, self._set_pointing_device)
+        model.bind(
+            "trackpad_swipe_pans",
+            lambda: lf.ui.get_trackpad_preferences()["swipe_pans"],
+            lambda value: self._set_trackpad(swipe_pans=bool(value)),
+        )
+        model.bind(
+            "trackpad_swipe_speed",
+            lambda: lf.ui.get_trackpad_preferences()["swipe_speed"],
+            lambda value: self._set_trackpad(swipe_speed=float(value)),
+        )
+        model.bind(
+            "trackpad_zoom_speed",
+            lambda: lf.ui.get_trackpad_preferences()["zoom_speed"],
+            lambda value: self._set_trackpad(zoom_speed=float(value)),
+        )
         model.bind(
             "navigation_speed",
             lf.ui.get_navigation_speed_preference,
@@ -395,6 +415,7 @@ class PreferencesPanel(Panel):
             lf.get_camera_navigation_mode(),
             float(lf.ui.get_zoom_speed_preference()),
             float(lf.ui.get_navigation_speed_preference()),
+            tuple(sorted(lf.ui.get_trackpad_preferences().items())),
             lf.get_camera_view_snap_enabled(),
             getattr(lf.ui, "get_embed_dataset_by_default", lambda: False)(),
             project_manager_preferences["defaultView"],
@@ -807,11 +828,31 @@ class PreferencesPanel(Panel):
         lf.ui.set_navigation_speed_preference(float(value))
         self._refresh_selection()
 
+    def _pointing_device(self):
+        return "trackpad" if lf.ui.get_trackpad_preferences()["enabled"] else "mouse"
+
+    def _set_pointing_device(self, value):
+        self._set_trackpad(enabled=value == "trackpad")
+
+    def _set_trackpad(self, **changes):
+        state = {**lf.ui.get_trackpad_preferences(), **changes}
+        lf.ui.set_trackpad_preferences(
+            bool(state["enabled"]),
+            bool(state["swipe_pans"]),
+            float(state["swipe_speed"]),
+            float(state["zoom_speed"]),
+        )
+        self._refresh_selection()
+
     def _get_scrub_value(self, prop):
         if prop == "zoom_speed":
             return float(lf.ui.get_zoom_speed_preference())
         if prop == "navigation_speed":
             return float(lf.ui.get_navigation_speed_preference())
+        if prop == "trackpad_swipe_speed":
+            return float(lf.ui.get_trackpad_preferences()["swipe_speed"])
+        if prop == "trackpad_zoom_speed":
+            return float(lf.ui.get_trackpad_preferences()["zoom_speed"])
         return self.SPEED_SCRUB_FIELD_DEFS[prop].min_value
 
     def _set_scrub_value(self, prop, value):
@@ -819,6 +860,10 @@ class PreferencesPanel(Panel):
             self._set_zoom_speed(value)
         elif prop == "navigation_speed":
             self._set_navigation_speed(value)
+        elif prop == "trackpad_swipe_speed":
+            self._set_trackpad(swipe_speed=float(value))
+        elif prop == "trackpad_zoom_speed":
+            self._set_trackpad(zoom_speed=float(value))
 
     def _set_view_snap(self, enabled):
         lf.set_camera_view_snap_enabled(bool(enabled))
@@ -1578,6 +1623,7 @@ class PreferencesPanel(Panel):
         elif section == "input":
             lf.ui.set_zoom_speed_preference(11.0)
             lf.ui.set_navigation_speed_preference(8.0)
+            lf.ui.set_trackpad_preferences(False, False, 50.0, 50.0)
             lf.ui.set_remember_camera_navigation(False)
             lf.ui.set_remember_camera_view_snap(False)
             lf.set_camera_navigation_mode("orbit")
@@ -1613,6 +1659,10 @@ class PreferencesPanel(Panel):
             self._handle.dirty("navigation_idx")
             self._handle.dirty("zoom_speed")
             self._handle.dirty("navigation_speed")
+            self._handle.dirty("pointing_device")
+            self._handle.dirty("trackpad_swipe_pans")
+            self._handle.dirty("trackpad_swipe_speed")
+            self._handle.dirty("trackpad_zoom_speed")
             self._handle.dirty("view_snap")
             self._handle.dirty("remember_navigation")
             self._handle.dirty("remember_view_snap")
