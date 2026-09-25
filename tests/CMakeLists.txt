@@ -536,6 +536,7 @@ set(TEST_FILES
     test_fused_reg_loss.cpp
     test_fused_bg_blend.cpp
     test_photometric_hygiene.cpp
+    test_photometric_ops.cpp
     test_persistent_masks.cpp
     test_fused_noise_injection.cpp
     test_densification_info_zero.cpp

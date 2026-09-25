@@ -88,6 +88,9 @@ set(TRAINING_NEW_SOURCES
     optimizer/scheduler.cpp
     losses/regularization.cpp
     losses/photometric_loss.cpp
+    ops/registry.cpp
+    ops/requirements.cpp
+    ops/photometric_cuda.cpp
     losses/mask_loss.cpp
     strategies/strategy_utils.cpp
     strategies/mcmc.cpp
