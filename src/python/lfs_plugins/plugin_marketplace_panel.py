@@ -197,6 +197,9 @@ class PluginMarketplacePanel(Panel):
         self._doc = doc
         self._last_lang = lf.ui.get_current_language()
         self._entries_dirty = True
+        # Plugin lifecycle events are not observed while the panel is closed.
+        self._discover_cache = None
+        self._installed_state_dirty = True
         self._last_card_phases.clear()
         self._last_grid_signature = None
         self._last_catalog_status_signature = None
