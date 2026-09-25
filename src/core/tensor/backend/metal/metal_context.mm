@@ -87,7 +87,9 @@ namespace lfs::core::internal::metal {
 
         // Match the Vulkan kernels, which are compiled precise: no fast math,
         // precise transcendental functions, and no contraction (in the source).
+        // MSL 4 brings the tensor types the matrix-unit GEMM is built on.
         MTLCompileOptions* const options = [MTLCompileOptions new];
+        options.languageVersion = MTLLanguageVersion4_0;
         options.mathMode = MTLMathModeSafe;
         options.mathFloatingPointFunctions = MTLMathFloatingPointFunctionsPrecise;
         library_ = [device_ newLibraryWithSource:@(kernel_source().c_str()) options:options error:&error];

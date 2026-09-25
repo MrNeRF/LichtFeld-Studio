@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <functional>
 #include <string>
@@ -115,6 +116,16 @@ int main() {
             return in.a.reshape({static_cast<int>(count / 64), 64}).transpose(0, 1).contiguous();
         });
         compare("sum", [](const Inputs& in) { return Tensor::full({1}, in.a.sum_scalar(), Device::CPU); });
+        // Square matrices of count elements: 64, 1024 and 4096 on a side.
+        const int side = static_cast<int>(std::lround(std::sqrt(static_cast<double>(count))));
+        compare("matmul", [&](const Inputs& in) {
+            return in.a.reshape({side, side}).mm(in.b.reshape({side, side}));
+        });
+        // A 64 -> 64 fully connected layer with bias over count / 64 rows.
+        compare("linear64", [&](const Inputs& in) {
+            return in.a.reshape({static_cast<int>(count / 64), 64})
+                .linear(in.b.slice(0, 0, 64 * 64).reshape({64, 64}), in.b.slice(0, 0, 64));
+        });
         compare("upload", [](const Inputs& in) { return in.host.to(Device::GPU); });
         compare("download", [](const Inputs& in) { return in.a.cpu(); });
         if (count == 4096) {

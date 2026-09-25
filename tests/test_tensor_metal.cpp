@@ -14,6 +14,7 @@
 #include <limits>
 #include <random>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -215,11 +216,82 @@ namespace {
         }
     }
 
+    TEST_F(TensorMetal, MatrixProductsMatchCpu) {
+        // Single elements, tile edges, and depths that are no multiple of a tile.
+        for (const auto& [m, k, n] : {std::tuple{1, 1, 1}, std::tuple{4, 0, 3}, std::tuple{3, 7, 5}, std::tuple{65, 17, 33},
+                                      std::tuple{128, 256, 64}, std::tuple{257, 1025, 129}}) {
+            SCOPED_TRACE(std::to_string(m) + "x" + std::to_string(k) + "x" + std::to_string(n));
+            const Tensor a = random_tensor(static_cast<size_t>(m * k), -1.0f, 1.0f, 11).reshape({m, k});
+            const Tensor b = random_tensor(static_cast<size_t>(k * n), -1.0f, 1.0f, 12).reshape({k, n});
+            expect_close(to_metal(a).mm(to_metal(b)), a.mm(b), 1.0e-4f, 1.0e-4f);
+        }
+        const Tensor a = random_tensor(3 * 20 * 30, -1.0f, 1.0f, 13).reshape({3, 20, 30});
+        const Tensor b = random_tensor(3 * 30 * 10, -1.0f, 1.0f, 14).reshape({3, 30, 10});
+        expect_close(to_metal(a).bmm(to_metal(b)), a.bmm(b), 1.0e-4f, 1.0e-4f);
+
+        // linear is x @ weight^T, conv1x1 is weight @ x per image; both add the bias per output channel.
+        const Tensor x = random_tensor(37 * 24, -1.0f, 1.0f, 15).reshape({37, 24});
+        const Tensor weight = random_tensor(16 * 24, -1.0f, 1.0f, 16).reshape({16, 24});
+        const Tensor bias = random_tensor(16, -1.0f, 1.0f, 17);
+        expect_close(to_metal(x).linear(to_metal(weight)), x.linear(weight), 1.0e-4f, 1.0e-4f);
+        expect_close(to_metal(x).linear(to_metal(weight), to_metal(bias)), x.linear(weight, bias), 1.0e-4f, 1.0e-4f);
+        const Tensor image = random_tensor(24 * 9 * 11, -1.0f, 1.0f, 18).reshape({1, 24, 9, 11});
+        expect_close(to_metal(image).conv1x1(to_metal(weight), to_metal(bias)), image.conv1x1(weight, bias),
+                     1.0e-4f, 1.0e-4f);
+
+        // The fused bias and ReLU epilogues, and ReLU on its own.
+        Tensor linear_out = to_metal(Tensor::zeros({37, 16}, Device::CPU));
+        to_metal(x).linear_bias_relu_out(to_metal(weight), to_metal(bias), linear_out);
+        expect_close(linear_out, x.linear(weight, bias).relu(), 1.0e-4f, 1.0e-4f);
+        Tensor conv_out = to_metal(Tensor::zeros({1, 16, 9, 11}, Device::CPU));
+        to_metal(image).conv1x1_bias_relu_out(to_metal(weight), to_metal(bias), conv_out);
+        expect_close(conv_out, image.conv1x1(weight, bias).relu(), 1.0e-4f, 1.0e-4f);
+        Tensor relu_out = to_metal(Tensor::zeros({37, 24}, Device::CPU));
+        to_metal(x).relu_out(relu_out);
+        expect_close(relu_out, x.relu(), 0.0f, 0.0f);
+    }
+
+    TEST_F(TensorMetal, PoolingMatchesCpu) {
+        const Tensor x_cpu = random_tensor(2 * 3 * 9 * 11, -2.0f, 2.0f, 19).reshape({2, 3, 9, 11});
+        const Tensor x = to_metal(x_cpu);
+        expect_close(x.max_pool2d(2), x_cpu.max_pool2d(2), 0.0f, 0.0f);
+        expect_close(x.max_pool2d(3, 2, 1), x_cpu.max_pool2d(3, 2, 1), 0.0f, 0.0f);
+        expect_close(x.adaptive_avg_pool2d(4, 5), x_cpu.adaptive_avg_pool2d(4, 5));
+    }
+
+    TEST_F(TensorMetal, MatrixHelpersMatchCpu) {
+        {
+            GpuBackendScope scope(GpuBackend::Metal);
+            expect_close(Tensor::eye(5, 7, Device::GPU), Tensor::eye(5, 7, Device::CPU), 0.0f, 0.0f);
+        }
+        const Tensor diagonal = random_tensor(6, -1.0f, 1.0f, 20);
+        expect_close(Tensor::diag(to_metal(diagonal)), Tensor::diag(diagonal), 0.0f, 0.0f);
+
+        for (const size_t count : {size_t{1}, size_t{1000}, size_t{3} << 20}) {
+            SCOPED_TRACE(count);
+            const Tensor a = random_tensor(count, -1.0f, 1.0f, 21);
+            const Tensor b = random_tensor(count, -1.0f, 1.0f, 22);
+            const auto a_values = a.to_vector(), b_values = b.to_vector();
+            double expected = 0.0;
+            for (size_t i = 0; i < count; ++i)
+                expected += static_cast<double>(a_values[i]) * b_values[i];
+            EXPECT_NEAR(to_metal(a).dot(to_metal(b)).item(), expected,
+                        1.0e-5 * std::sqrt(static_cast<double>(count)) + 1.0e-6);
+        }
+
+        const Tensor lhs = random_tensor(7 * 5, -1.0f, 1.0f, 23).reshape({7, 5});
+        const Tensor rhs = random_tensor(9 * 5, -1.0f, 1.0f, 24).reshape({9, 5});
+        for (const float p : {0.0f, 1.0f, 2.0f, 3.0f, std::numeric_limits<float>::infinity()}) {
+            SCOPED_TRACE(p);
+            expect_close(to_metal(lhs).cdist(to_metal(rhs), p), lhs.cdist(rhs, p));
+        }
+    }
+
     TEST_F(TensorMetal, UnportedOperationsSaySo) {
-        const Tensor x = to_metal(random_tensor(16, 0.0f, 1.0f, 9)).reshape({4, 4});
+        const Tensor x = to_metal(random_tensor(16, 0.0f, 1.0f, 9));
         try {
-            (void)x.matmul(x).cpu();
-            ADD_FAILURE() << "matmul should not be ported yet";
+            (void)x.cumsum(0).cpu();
+            ADD_FAILURE() << "cumsum should not be ported yet";
         } catch (const std::exception& error) {
             EXPECT_NE(std::string(error.what()).find("Metal backend:"), std::string::npos) << error.what();
         }

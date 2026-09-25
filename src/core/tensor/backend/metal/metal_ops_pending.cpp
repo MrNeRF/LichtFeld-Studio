@@ -92,38 +92,6 @@ namespace lfs::core::internal {
         not_ported("sort_2d");
     }
 
-    void MetalBackendOps::sgemm(StorageRef, StorageRef, StorageRef, const GemmProgram&, ExecContext) {
-        not_ported("sgemm");
-    }
-
-    void MetalBackendOps::sgemm_tn(StorageRef, StorageRef, StorageRef, const GemmProgram&, ExecContext) {
-        not_ported("sgemm_tn");
-    }
-
-    void MetalBackendOps::sgemm_batched(StorageRef, StorageRef, StorageRef, const GemmProgram&, ExecContext) {
-        not_ported("sgemm_batched");
-    }
-
-    void MetalBackendOps::sgemm_bias_relu(StorageRef, StorageRef, StorageRef, StorageRef, const GemmProgram&, ExecContext) {
-        not_ported("sgemm_bias_relu");
-    }
-
-    void MetalBackendOps::dot_product(StorageRef, StorageRef, StorageRef, size_t, ExecContext) {
-        not_ported("dot_product");
-    }
-
-    void MetalBackendOps::diag(StorageRef, StorageRef, size_t, ExecContext) {
-        not_ported("diag");
-    }
-
-    void MetalBackendOps::eye(StorageRef, size_t, size_t, ExecContext) {
-        not_ported("eye");
-    }
-
-    void MetalBackendOps::cdist(StorageRef, StorageRef, StorageRef, size_t, size_t, size_t, float, ExecContext) {
-        not_ported("cdist");
-    }
-
     void MetalBackendOps::project_points(StorageRef, StorageRef, size_t, const PointProjection&, const StorageRef*, size_t, const StorageRef*, const StorageRef*, size_t, ExecContext) {
         not_ported("project_points");
     }
@@ -190,26 +158,6 @@ namespace lfs::core::internal {
 
     DecimateMerge MetalBackendOps::decimate_merge(const Tensor&, const Tensor&, const Tensor&, const Tensor&, const Tensor&, const Tensor&, int, const std::vector<int>&, const std::vector<uint32_t>&, const std::vector<uint32_t>&, const std::vector<uint32_t>&, size_t, ExecContext) {
         not_ported("decimate_merge");
-    }
-
-    void MetalBackendOps::max_pool2d(StorageRef, StorageRef, const PoolProgram&, ExecContext) {
-        not_ported("max_pool2d");
-    }
-
-    void MetalBackendOps::adaptive_avg_pool2d(StorageRef, StorageRef, const PoolProgram&, ExecContext) {
-        not_ported("adaptive_avg_pool2d");
-    }
-
-    void MetalBackendOps::bias_add(StorageRef, StorageRef, StorageRef, int, int, int, ExecContext) {
-        not_ported("bias_add");
-    }
-
-    void MetalBackendOps::bias_relu(StorageRef, StorageRef, StorageRef, int, int, int, ExecContext) {
-        not_ported("bias_relu");
-    }
-
-    void MetalBackendOps::relu(StorageRef, StorageRef, int, ExecContext) {
-        not_ported("relu");
     }
 
     void MetalBackendOps::uniform(StorageRef, const RandomProgram&, ExecContext) {

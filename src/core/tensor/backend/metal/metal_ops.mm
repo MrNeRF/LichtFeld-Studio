@@ -320,6 +320,186 @@ namespace lfs::core::internal {
             return op == metal::kReduceMean ? sum * (1.0f / static_cast<float>(count)) : sum;
         }
 
+        // nn kernel kinds.
+        constexpr uint32_t kMaxPool = 0, kAdaptiveAvgPool = 1, kBiasAdd = 2, kBiasRelu = 3, kRelu = 4;
+
+        struct NnParams {
+            uint64_t input_offset;
+            uint64_t bias_offset;
+            uint64_t output_offset;
+            uint32_t total;
+            uint32_t channels;
+            uint32_t input_height;
+            uint32_t input_width;
+            uint32_t output_height;
+            uint32_t output_width;
+            uint32_t window;
+            uint32_t stride;
+            int32_t padding;
+            uint32_t spatial;
+        };
+        static_assert(sizeof(NnParams) == 64);
+
+        uint32_t checked_dimension(const int value, const char* const description) {
+            LFS_ASSERT_MSG(value >= 0, description);
+            return static_cast<uint32_t>(value);
+        }
+
+        API_AVAILABLE(macos(26.0))
+        void encode_nn(const uint32_t kind, const StorageRef input, const StorageRef* const bias,
+                       const StorageRef output, NnParams params) {
+            if (params.total == 0)
+                return;
+            LFS_ASSERT_MSG(input.dtype == DataType::Float32 && output.dtype == DataType::Float32,
+                           "Metal neural-network kernels require Float32");
+            const auto context = acquire_context();
+            const auto input_at = context->locate(input);
+            const auto output_at = context->locate(output);
+            const auto bias_at = bias != nullptr ? context->locate(*bias) : input_at;
+            params.input_offset = input_at.offset;
+            params.bias_offset = bias_at.offset;
+            params.output_offset = output_at.offset;
+            const std::array uses{input, output, bias != nullptr ? *bias : input};
+            context->dispatch(uses, {.pipeline = context->pipeline("nn", {{0, kind}}),
+                                     .buffers = {input_at.address, bias_at.address, output_at.address},
+                                     .params = param_bytes(params),
+                                     .grid = threads(params.total)});
+        }
+
+        NnParams pool_params(const PoolProgram& program) {
+            const size_t total = static_cast<size_t>(checked_dimension(program.batch, "pool batch")) *
+                                 checked_dimension(program.channels, "pool channels") *
+                                 checked_dimension(program.output_height, "pool output height") *
+                                 checked_dimension(program.output_width, "pool output width");
+            return NnParams{
+                .total = checked_u32(total, "Metal pooling output count exceeds uint32"),
+                .channels = static_cast<uint32_t>(program.channels),
+                .input_height = checked_dimension(program.input_height, "pool input height"),
+                .input_width = checked_dimension(program.input_width, "pool input width"),
+                .output_height = static_cast<uint32_t>(program.output_height),
+                .output_width = static_cast<uint32_t>(program.output_width),
+                .window = checked_dimension(program.kernel_size, "pool kernel size"),
+                .stride = checked_dimension(program.stride, "pool stride"),
+                .padding = program.padding,
+            };
+        }
+
+        NnParams bias_params(const int count, const int channels, const int spatial_size) {
+            LFS_ASSERT_MSG(channels > 0 && spatial_size > 0, "Metal bias kernel requires positive layout sizes");
+            return NnParams{
+                .total = checked_dimension(count, "bias element count"),
+                .channels = static_cast<uint32_t>(channels),
+                .spatial = static_cast<uint32_t>(spatial_size),
+            };
+        }
+
+        struct GemmParams {
+            uint64_t lhs_offset;
+            uint64_t rhs_offset;
+            uint64_t output_offset;
+            uint64_t bias_offset;
+            uint64_t lhs_stride;
+            uint64_t rhs_stride;
+            uint64_t output_stride;
+            uint32_t m;
+            uint32_t n;
+            uint32_t k;
+            uint32_t padding;
+        };
+        static_assert(sizeof(GemmParams) == 72);
+
+        // The matmul tiles index with int32.
+        uint32_t checked_extent(const size_t value, const char* const description) {
+            LFS_ASSERT_MSG(value <= static_cast<size_t>(std::numeric_limits<int32_t>::max()), description);
+            return static_cast<uint32_t>(value);
+        }
+
+        // C[m][n] = A[m][k] * B, with B stored as [k][n] or, transposed, as
+        // [n][k]; batches are packed. A bias applies max(value + bias[row], 0).
+        API_AVAILABLE(macos(26.0))
+        void encode_gemm(const StorageRef lhs, const StorageRef rhs, const StorageRef* const bias,
+                         const StorageRef output, const GemmProgram& program, const bool transpose_rhs) {
+            if (program.m == 0 || program.n == 0 || program.batch == 0)
+                return;
+            LFS_ASSERT_MSG(lhs.dtype == DataType::Float32 && rhs.dtype == DataType::Float32 &&
+                               output.dtype == DataType::Float32 &&
+                               (bias == nullptr || bias->dtype == DataType::Float32),
+                           "Metal GEMM requires Float32 operands");
+            constexpr size_t kGemmTile = 32; // kGemmTile in kernels.metal
+            const auto context = acquire_context();
+            if (program.k == 0) {
+                // An empty product is zero; the bias epilogue still applies.
+                const size_t count = program.batch * program.m * program.n;
+                encode_fill(*context, output, count * sizeof(float), 0, sizeof(float));
+                if (bias != nullptr) {
+                    encode_nn(kBiasRelu, output, bias, output,
+                              NnParams{.total = checked_u32(count, "Metal GEMM output count exceeds uint32"),
+                                       .channels = checked_u32(program.m, "Metal GEMM rows exceed uint32"),
+                                       .spatial = checked_u32(program.n, "Metal GEMM columns exceed uint32")});
+                }
+                return;
+            }
+            const auto lhs_at = context->locate(lhs);
+            const auto rhs_at = context->locate(rhs);
+            const auto output_at = context->locate(output);
+            const auto bias_at = bias != nullptr ? context->locate(*bias) : output_at;
+            const GemmParams params{
+                .lhs_offset = lhs_at.offset,
+                .rhs_offset = rhs_at.offset,
+                .output_offset = output_at.offset,
+                .bias_offset = bias_at.offset,
+                .lhs_stride = program.m * program.k,
+                .rhs_stride = program.k * program.n,
+                .output_stride = program.m * program.n,
+                .m = checked_extent(program.m, "Metal GEMM rows exceed int32"),
+                .n = checked_extent(program.n, "Metal GEMM columns exceed int32"),
+                .k = checked_extent(program.k, "Metal GEMM depth exceeds int32"),
+                .padding = 0,
+            };
+            const auto pipeline = context->pipeline(
+                "gemm", {{14, transpose_rhs ? 1u : 0u}, {15, bias != nullptr ? 1u : 0u}});
+            const std::array uses{lhs, rhs, output, bias != nullptr ? *bias : output};
+            context->dispatch(uses, {.pipeline = pipeline,
+                                     .buffers = {lhs_at.address, rhs_at.address, output_at.address, bias_at.address},
+                                     .params = param_bytes(params),
+                                     .grid = MTLSizeMake((program.n + kGemmTile - 1) / kGemmTile,
+                                                         (program.m + kGemmTile - 1) / kGemmTile, program.batch),
+                                     // The matmul runs on four SIMD groups.
+                                     .group_size = MTLSizeMake(4 * pipeline.threadExecutionWidth, 1, 1)});
+        }
+
+        struct MatrixFillParams {
+            uint64_t diagonal_offset;
+            uint64_t output_offset;
+            uint32_t columns;
+            uint32_t count;
+        };
+
+        // eye (kind 0) or diag (kind 1) into a [rows][columns] Float32 matrix.
+        API_AVAILABLE(macos(26.0))
+        void encode_matrix_fill(const uint32_t kind, const StorageRef* const diagonal, const StorageRef output,
+                                const size_t rows, const size_t columns) {
+            const size_t count = rows * columns;
+            if (count == 0)
+                return;
+            LFS_ASSERT_MSG(output.dtype == DataType::Float32 && (diagonal == nullptr || diagonal->dtype == DataType::Float32),
+                           "Metal eye and diag write Float32");
+            const auto context = acquire_context();
+            const auto output_at = context->locate(output);
+            const auto diagonal_at = diagonal != nullptr ? context->locate(*diagonal) : output_at;
+            const MatrixFillParams params{
+                .diagonal_offset = diagonal_at.offset,
+                .output_offset = output_at.offset,
+                .columns = checked_u32(columns, "Metal matrix columns exceed uint32"),
+                .count = checked_u32(count, "Metal matrix element count exceeds uint32"),
+            };
+            const std::array uses{output, diagonal != nullptr ? *diagonal : output};
+            context->dispatch(uses, {.pipeline = context->pipeline("matrix_fill", {{0, kind}}),
+                                     .buffers = {diagonal_at.address, output_at.address},
+                                     .params = param_bytes(params),
+                                     .grid = threads(count)});
+        }
+
         bool is_contiguous(const StridedLayout& layout) {
             size_t expected = 1;
             for (size_t dimension = layout.rank; dimension-- > 0;) {
@@ -646,6 +826,159 @@ namespace lfs::core::internal {
     float MetalBackendOps::min_scalar(const StorageRef input, const size_t count, ExecContext) {
         LFS_FACADE_TRACE(min_scalar);
         return scalar_reduce(metal::kReduceMin, input, count);
+    }
+
+    void MetalBackendOps::sgemm(const StorageRef lhs, const StorageRef rhs, const StorageRef output,
+                                const GemmProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(sgemm);
+        encode_gemm(lhs, rhs, nullptr, output, program, false);
+    }
+
+    void MetalBackendOps::sgemm_tn(const StorageRef lhs, const StorageRef rhs, const StorageRef output,
+                                   const GemmProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(sgemm_tn);
+        encode_gemm(lhs, rhs, nullptr, output, program, true);
+    }
+
+    void MetalBackendOps::sgemm_batched(const StorageRef lhs, const StorageRef rhs, const StorageRef output,
+                                        const GemmProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(sgemm_batched);
+        encode_gemm(lhs, rhs, nullptr, output, program, false);
+    }
+
+    void MetalBackendOps::sgemm_bias_relu(const StorageRef lhs, const StorageRef rhs, const StorageRef bias,
+                                          const StorageRef output, const GemmProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(sgemm_bias_relu);
+        encode_gemm(lhs, rhs, &bias, output, program, false);
+    }
+
+    void MetalBackendOps::dot_product(const StorageRef lhs, const StorageRef rhs, const StorageRef output,
+                                      const size_t count, ExecContext) {
+        LFS_FACADE_TRACE(dot_product);
+        LFS_ASSERT_MSG(lhs.dtype == DataType::Float32 && rhs.dtype == DataType::Float32 &&
+                           output.dtype == DataType::Float32,
+                       "Metal dot product requires Float32");
+        const auto context = acquire_context();
+        if (count == 0) {
+            encode_fill(*context, output, sizeof(float), 0, sizeof(float));
+            return;
+        }
+        struct DotParams {
+            uint64_t lhs_offset;
+            uint64_t rhs_offset;
+            uint64_t output_offset;
+            uint32_t count;
+            uint32_t padding;
+        };
+        constexpr size_t kElementsPerGroup = kThreadgroupWidth * 4;
+        const size_t groups = std::clamp<size_t>((count + kElementsPerGroup - 1) / kElementsPerGroup, 1, 1024);
+        const StorageRef partials = context->allocate(groups * 2 * sizeof(float));
+        const auto lhs_at = context->locate(lhs);
+        const auto rhs_at = context->locate(rhs);
+        const auto partials_at = context->locate(partials);
+        const auto output_at = context->locate(output);
+        const DotParams partial_params{
+            .lhs_offset = lhs_at.offset,
+            .rhs_offset = rhs_at.offset,
+            .count = checked_u32(count, "Metal dot product count exceeds uint32"),
+        };
+        const std::array partial_uses{lhs, rhs, partials};
+        context->dispatch(partial_uses, {.pipeline = context->pipeline("dot_partial", {{6, metal::kReduceSum}}),
+                                         .buffers = {lhs_at.address, rhs_at.address, partials_at.address + partials_at.offset},
+                                         .params = param_bytes(partial_params),
+                                         .grid = MTLSizeMake(groups, 1, 1),
+                                         .group_size = MTLSizeMake(kThreadgroupWidth, 1, 1)});
+        const DotParams fold_params{.output_offset = output_at.offset, .count = static_cast<uint32_t>(groups)};
+        const std::array fold_uses{partials, output};
+        context->dispatch(fold_uses, {.pipeline = context->pipeline("fold_pairs", {{6, metal::kReduceSum}}),
+                                      .buffers = {partials_at.address + partials_at.offset, output_at.address},
+                                      .params = param_bytes(fold_params),
+                                      .grid = MTLSizeMake(1, 1, 1),
+                                      .group_size = MTLSizeMake(kThreadgroupWidth, 1, 1)});
+        context->release(partials);
+    }
+
+    void MetalBackendOps::diag(const StorageRef diagonal, const StorageRef output, const size_t count, ExecContext) {
+        LFS_FACADE_TRACE(diag);
+        encode_matrix_fill(1, &diagonal, output, count, count);
+    }
+
+    void MetalBackendOps::eye(const StorageRef output, const size_t rows, const size_t columns, ExecContext) {
+        LFS_FACADE_TRACE(eye);
+        encode_matrix_fill(0, nullptr, output, rows, columns);
+    }
+
+    void MetalBackendOps::cdist(const StorageRef lhs, const StorageRef rhs, const StorageRef output,
+                                const size_t lhs_rows, const size_t rhs_rows, const size_t columns, const float p,
+                                ExecContext) {
+        LFS_FACADE_TRACE(cdist);
+        const size_t count = lhs_rows * rhs_rows;
+        if (count == 0)
+            return;
+        LFS_ASSERT_MSG(lhs.dtype == DataType::Float32 && rhs.dtype == DataType::Float32 &&
+                           output.dtype == DataType::Float32,
+                       "Metal cdist requires Float32");
+        struct CdistParams {
+            uint64_t lhs_offset;
+            uint64_t rhs_offset;
+            uint64_t output_offset;
+            uint32_t rows;
+            uint32_t columns;
+            uint32_t features;
+            float p;
+        };
+        const auto context = acquire_context();
+        const auto lhs_at = context->locate(lhs);
+        const auto rhs_at = context->locate(rhs);
+        const auto output_at = context->locate(output);
+        const CdistParams params{
+            .lhs_offset = lhs_at.offset,
+            .rhs_offset = rhs_at.offset,
+            .output_offset = output_at.offset,
+            .rows = checked_u32(lhs_rows, "Metal cdist rows exceed uint32"),
+            .columns = checked_u32(rhs_rows, "Metal cdist columns exceed uint32"),
+            .features = checked_u32(columns, "Metal cdist features exceed uint32"),
+            .p = p,
+        };
+        checked_u32(count, "Metal cdist output count exceeds uint32");
+        const std::array uses{lhs, rhs, output};
+        context->dispatch(uses, {.pipeline = context->pipeline("cdist"),
+                                 .buffers = {lhs_at.address, rhs_at.address, output_at.address},
+                                 .params = param_bytes(params),
+                                 .grid = threads(count)});
+    }
+
+    void MetalBackendOps::max_pool2d(const StorageRef input, const StorageRef output,
+                                     const PoolProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(max_pool2d);
+        LFS_ASSERT_MSG(program.kernel_size > 0 && program.stride > 0,
+                       "Metal max_pool2d requires a positive kernel and stride");
+        encode_nn(kMaxPool, input, nullptr, output, pool_params(program));
+    }
+
+    void MetalBackendOps::adaptive_avg_pool2d(const StorageRef input, const StorageRef output,
+                                              const PoolProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(adaptive_avg_pool2d);
+        LFS_ASSERT_MSG(program.output_height > 0 && program.output_width > 0,
+                       "Metal adaptive_avg_pool2d requires a positive output size");
+        encode_nn(kAdaptiveAvgPool, input, nullptr, output, pool_params(program));
+    }
+
+    void MetalBackendOps::bias_add(const StorageRef input, const StorageRef bias, const StorageRef output,
+                                   const int count, const int channels, const int spatial_size, ExecContext) {
+        LFS_FACADE_TRACE(bias_add);
+        encode_nn(kBiasAdd, input, &bias, output, bias_params(count, channels, spatial_size));
+    }
+
+    void MetalBackendOps::bias_relu(const StorageRef input, const StorageRef bias, const StorageRef output,
+                                    const int count, const int channels, const int spatial_size, ExecContext) {
+        LFS_FACADE_TRACE(bias_relu);
+        encode_nn(kBiasRelu, input, &bias, output, bias_params(count, channels, spatial_size));
+    }
+
+    void MetalBackendOps::relu(const StorageRef input, const StorageRef output, const int count, ExecContext) {
+        LFS_FACADE_TRACE(relu);
+        encode_nn(kRelu, input, nullptr, output, NnParams{.total = checked_dimension(count, "relu element count")});
     }
 
     StorageRef MetalBackendOps::allocate(const size_t bytes, size_t, ExecContext) {

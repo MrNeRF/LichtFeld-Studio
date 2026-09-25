@@ -8,6 +8,8 @@
 // bound whole and addressed by byte offsets, so any element offset is legal.
 
 #include <metal_stdlib>
+#include <metal_tensor>
+#include <MetalPerformancePrimitives/MetalPerformancePrimitives.h>
 #pragma METAL fp contract(off)
 using namespace metal;
 
@@ -19,6 +21,8 @@ constant uint kVectorized [[function_constant(4)]];
 constant uint kElementSize [[function_constant(5)]];
 constant uint kReduce [[function_constant(6)]];
 constant uint kScatter [[function_constant(7)]];
+constant uint kTransposeB [[function_constant(14)]];
+constant uint kBiasRelu [[function_constant(15)]];
 
 constant uint kReduceThreads = 256;
 
@@ -839,6 +843,16 @@ static float2 reduce_simdgroup(float2 pair) {
     return pair;
 }
 
+// Folds a threadgroup's pairs; the result is valid in thread 0.
+static float2 reduce_threadgroup(float2 pair, threadgroup float2* shared, ushort lane, ushort simdgroup) {
+    const float2 folded = reduce_simdgroup(pair);
+    if (lane == 0)
+        shared[simdgroup] = folded;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    return reduce_simdgroup(simdgroup == 0 && lane < kReduceThreads / 32 ? shared[lane]
+                                                                          : float2(reduce_identity(), 0.0f));
+}
+
 kernel void reduce_partial(device const uchar* input_buffer [[buffer(0)]],
                            device float2* partials [[buffer(1)]],
                            constant ReduceParams& params [[buffer(2)]],
@@ -853,13 +867,280 @@ kernel void reduce_partial(device const uchar* input_buffer [[buffer(0)]],
     float compensation = 0.0f;
     for (uint index = group * kReduceThreads + thread_index; index < params.count; index += groups * kReduceThreads)
         combine_value(accumulator, compensation, input[index]);
-    const float2 folded = reduce_simdgroup(float2(accumulator, compensation));
-    if (lane == 0)
-        shared[simdgroup] = folded;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    if (simdgroup == 0) {
-        const float2 result = reduce_simdgroup(lane < kReduceThreads / 32 ? shared[lane] : float2(reduce_identity(), 0.0f));
-        if (lane == 0)
-            partials[group] = result;
+    const float2 result = reduce_threadgroup(float2(accumulator, compensation), shared, lane, simdgroup);
+    if (thread_index == 0)
+        partials[group] = result;
+}
+
+// Dot products stay on the GPU: per-threadgroup compensated sums of products,
+// then one threadgroup folds the partials into the output.
+
+struct DotParams {
+    ulong lhs_offset;
+    ulong rhs_offset;
+    ulong output_offset;
+    uint count;
+    uint padding;
+};
+
+kernel void dot_partial(device const uchar* lhs_buffer [[buffer(0)]],
+                        device const uchar* rhs_buffer [[buffer(1)]],
+                        device float2* partials [[buffer(2)]],
+                        constant DotParams& params [[buffer(3)]],
+                        uint thread_index [[thread_position_in_threadgroup]],
+                        uint group [[threadgroup_position_in_grid]],
+                        uint groups [[threadgroups_per_grid]],
+                        ushort lane [[thread_index_in_simdgroup]],
+                        ushort simdgroup [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float2 shared[kReduceThreads / 32];
+    device const float* lhs = (device const float*)(lhs_buffer + params.lhs_offset);
+    device const float* rhs = (device const float*)(rhs_buffer + params.rhs_offset);
+    float accumulator = 0.0f;
+    float compensation = 0.0f;
+    for (uint index = group * kReduceThreads + thread_index; index < params.count; index += groups * kReduceThreads)
+        combine_value(accumulator, compensation, lhs[index] * rhs[index]);
+    const float2 result = reduce_threadgroup(float2(accumulator, compensation), shared, lane, simdgroup);
+    if (thread_index == 0)
+        partials[group] = result;
+}
+
+kernel void fold_pairs(device const float2* partials [[buffer(0)]],
+                       device uchar* output_buffer [[buffer(1)]],
+                       constant DotParams& params [[buffer(2)]],
+                       uint thread_index [[thread_position_in_threadgroup]],
+                       ushort lane [[thread_index_in_simdgroup]],
+                       ushort simdgroup [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float2 shared[kReduceThreads / 32];
+    float accumulator = 0.0f;
+    float compensation = 0.0f;
+    for (uint index = thread_index; index < params.count; index += kReduceThreads)
+        combine_pair(accumulator, compensation, partials[index]);
+    const float2 total = reduce_threadgroup(float2(accumulator, compensation), shared, lane, simdgroup);
+    if (thread_index == 0)
+        *(device float*)(output_buffer + params.output_offset) = isfinite(total.y) ? total.x + total.y : total.x;
+}
+
+// ---------------------------------------------------------------------------
+// Float32 GEMM on the matrix units through Metal Performance Primitives:
+// C[m][n] = A[m][k] * B, with B stored as [k][n] or, with kTransposeB, as
+// [n][k]; batches are packed. kBiasRelu applies max(value + bias[row], 0) to
+// the tile in registers before it is stored. A threadgroup of four SIMD
+// groups computes one 32x32 tile, and the matmul checks the matrix edges.
+
+constant int kGemmTile = 32;
+
+struct GemmParams {
+    ulong lhs_offset;
+    ulong rhs_offset;
+    ulong output_offset;
+    ulong bias_offset;
+    ulong lhs_stride;
+    ulong rhs_stride;
+    ulong output_stride;
+    uint m;
+    uint n;
+    uint k;
+    uint padding;
+};
+
+using Matrix = tensor<device float, dextents<int32_t, 2>, tensor_inline>;
+
+template <bool TransposeB>
+static void gemm_tile(device float* lhs, device float* rhs, device float* output, device const float* bias,
+                      constant GemmParams& params, uint2 group) {
+    const int m = int(params.m), n = int(params.n), k = int(params.k);
+    // Extents list the innermost dimension first.
+    Matrix a(lhs, dextents<int32_t, 2>(k, m));
+    Matrix b(rhs, TransposeB ? dextents<int32_t, 2>(k, n) : dextents<int32_t, 2>(n, k));
+    Matrix c(output, dextents<int32_t, 2>(n, m));
+    constexpr auto descriptor = mpp::tensor_ops::matmul2d_descriptor(
+        kGemmTile, kGemmTile, static_cast<int>(dynamic_extent), false, TransposeB);
+    mpp::tensor_ops::matmul2d<descriptor, execution_simdgroups<4>> matmul;
+    const int row = int(group.y) * kGemmTile, column = int(group.x) * kGemmTile;
+    auto a_tile = a.slice(0, row);
+    auto b_tile = TransposeB ? b.slice(0, column) : b.slice(column, 0);
+    auto c_tile = c.slice(column, row);
+    if (kBiasRelu == 0) {
+        matmul.run(a_tile, b_tile, c_tile);
+        return;
     }
+    auto result = matmul.template get_destination_cooperative_tensor<decltype(a_tile), decltype(b_tile), float>();
+    for (uint16_t i = 0; i < result.get_capacity(); ++i) {
+        if (result.is_valid_element(i))
+            result[i] = 0.0f;
+    }
+    matmul.run(a_tile, b_tile, result);
+    for (uint16_t i = 0; i < result.get_capacity(); ++i) {
+        const int element_row = row + result.get_multidimensional_index(i)[1];
+        if (result.is_valid_element(i) && element_row < m) {
+            const float value = result[i] + bias[element_row];
+            result[i] = value > 0.0f ? value : 0.0f;
+        }
+    }
+    result.store(c_tile);
+}
+
+kernel void gemm(device const uchar* lhs_buffer [[buffer(0)]],
+                 device const uchar* rhs_buffer [[buffer(1)]],
+                 device uchar* output_buffer [[buffer(2)]],
+                 device const uchar* bias_buffer [[buffer(3)]],
+                 constant GemmParams& params [[buffer(4)]],
+                 uint3 group [[threadgroup_position_in_grid]]) {
+    device float* lhs = (device float*)(lhs_buffer + params.lhs_offset) + group.z * params.lhs_stride;
+    device float* rhs = (device float*)(rhs_buffer + params.rhs_offset) + group.z * params.rhs_stride;
+    device float* output = (device float*)(output_buffer + params.output_offset) + group.z * params.output_stride;
+    device const float* bias = kBiasRelu != 0 ? (device const float*)(bias_buffer + params.bias_offset) : nullptr;
+    if (kTransposeB != 0)
+        gemm_tile<true>(lhs, rhs, output, bias, params, group.xy);
+    else
+        gemm_tile<false>(lhs, rhs, output, bias, params, group.xy);
+}
+
+// ---------------------------------------------------------------------------
+// Neural-network helpers, ported from nn.slang. kOp picks the kind:
+// 0 max_pool2d and 1 adaptive_avg_pool2d over [N, C, H, W], 2 bias_add and
+// 3 bias_relu with the bias indexed by (index / spatial) % channels, 4 relu.
+
+struct NnParams {
+    ulong input_offset;
+    ulong bias_offset;
+    ulong output_offset;
+    uint total;
+    uint channels;
+    uint input_height;
+    uint input_width;
+    uint output_height;
+    uint output_width;
+    uint window;
+    uint stride;
+    int padding;
+    uint spatial;
+};
+
+kernel void nn(device const uchar* input_buffer [[buffer(0)]],
+               device const uchar* bias_buffer [[buffer(1)]],
+               device uchar* output_buffer [[buffer(2)]],
+               constant NnParams& params [[buffer(3)]],
+               uint index [[thread_position_in_grid]]) {
+    if (index >= params.total)
+        return;
+    device const float* input = (device const float*)(input_buffer + params.input_offset);
+    device float* output = (device float*)(output_buffer + params.output_offset);
+    if (kOp == 4) {
+        const float value = input[index];
+        output[index] = value > 0.0f ? value : 0.0f;
+        return;
+    }
+    if (kOp == 2 || kOp == 3) {
+        device const float* bias = (device const float*)(bias_buffer + params.bias_offset);
+        const float value = input[index] + bias[(index / params.spatial) % params.channels];
+        output[index] = kOp == 3 && !(value > 0.0f) ? 0.0f : value;
+        return;
+    }
+    const uint w_out = index % params.output_width;
+    const uint h_out = (index / params.output_width) % params.output_height;
+    const uint plane_index = index / (params.output_width * params.output_height);
+    device const float* plane = input + ulong(plane_index) * params.input_height * params.input_width;
+    if (kOp == 0) {
+        const int h_start = int(h_out * params.stride) - params.padding;
+        const int w_start = int(w_out * params.stride) - params.padding;
+        float best = -INFINITY;
+        for (uint kh = 0; kh < params.window; ++kh) {
+            const int h_in = h_start + int(kh);
+            if (h_in < 0 || h_in >= int(params.input_height))
+                continue;
+            for (uint kw = 0; kw < params.window; ++kw) {
+                const int w_in = w_start + int(kw);
+                if (w_in >= 0 && w_in < int(params.input_width))
+                    best = ieee_maximum(best, plane[ulong(h_in) * params.input_width + uint(w_in)]);
+            }
+        }
+        output[index] = best;
+        return;
+    }
+    const uint h_begin = h_out * params.input_height / params.output_height;
+    const uint h_end = ((h_out + 1) * params.input_height + params.output_height - 1) / params.output_height;
+    const uint w_begin = w_out * params.input_width / params.output_width;
+    const uint w_end = ((w_out + 1) * params.input_width + params.output_width - 1) / params.output_width;
+    float sum = 0.0f;
+    uint count = 0;
+    for (uint h = h_begin; h < h_end; ++h) {
+        for (uint w = w_begin; w < w_end; ++w) {
+            sum += plane[ulong(h) * params.input_width + w];
+            ++count;
+        }
+    }
+    output[index] = count > 0 ? sum / float(count) : 0.0f;
+}
+
+// ---------------------------------------------------------------------------
+// eye (kOp 0) and diag (kOp 1): a [rows][columns] Float32 matrix that is zero
+// off the diagonal and one, or the diagonal vector's element, on it.
+
+struct MatrixFillParams {
+    ulong diagonal_offset;
+    ulong output_offset;
+    uint columns;
+    uint count;
+};
+
+kernel void matrix_fill(device const uchar* diagonal_buffer [[buffer(0)]],
+                        device uchar* output_buffer [[buffer(1)]],
+                        constant MatrixFillParams& params [[buffer(2)]],
+                        uint index [[thread_position_in_grid]]) {
+    if (index >= params.count)
+        return;
+    const uint row = index / params.columns;
+    float value = 0.0f;
+    if (row == index - row * params.columns)
+        value = kOp == 0 ? 1.0f : ((device const float*)(diagonal_buffer + params.diagonal_offset))[row];
+    ((device float*)(output_buffer + params.output_offset))[index] = value;
+}
+
+// ---------------------------------------------------------------------------
+// out[i][j] = p-norm distance between row i of a and row j of b, with the
+// p == 0 (count of differing features) and p == infinity (largest absolute
+// difference) conventions of cdist.slang.
+
+struct CdistParams {
+    ulong lhs_offset;
+    ulong rhs_offset;
+    ulong output_offset;
+    uint rows;
+    uint columns;
+    uint features;
+    float p;
+};
+
+kernel void cdist(device const uchar* lhs_buffer [[buffer(0)]],
+                  device const uchar* rhs_buffer [[buffer(1)]],
+                  device uchar* output_buffer [[buffer(2)]],
+                  constant CdistParams& params [[buffer(3)]],
+                  uint index [[thread_position_in_grid]]) {
+    if (index >= params.rows * params.columns)
+        return;
+    const uint i = index / params.columns;
+    const uint j = index - i * params.columns;
+    device const float* a = (device const float*)(lhs_buffer + params.lhs_offset) + ulong(i) * params.features;
+    device const float* b = (device const float*)(rhs_buffer + params.rhs_offset) + ulong(j) * params.features;
+    const float p = params.p;
+    float distance = 0.0f;
+    for (uint d = 0; d < params.features; ++d) {
+        const float difference = a[d] - b[d];
+        if (p == 2.0f)
+            distance += difference * difference;
+        else if (p == 1.0f)
+            distance += abs(difference);
+        else if (p == 0.0f)
+            distance += difference != 0.0f ? 1.0f : 0.0f;
+        else if (isinf(p))
+            distance = max(distance, abs(difference));
+        else
+            distance += pow(abs(difference), p);
+    }
+    if (p == 2.0f)
+        distance = sqrt(distance);
+    else if (p != 1.0f && p != 0.0f && !isinf(p))
+        distance = pow(distance, 1.0f / p);
+    ((device float*)(output_buffer + params.output_offset))[index] = distance;
 }
