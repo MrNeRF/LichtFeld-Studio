@@ -778,51 +778,6 @@ namespace lfs::io {
         return formatted;
     }
 
-    static std::unordered_map<std::string, BasenameLayoutInfo>
-    scan_image_basename_layout(const fs::path& images_path,
-                               const LoadOptions& options = {}) {
-        std::unordered_map<std::string, BasenameLayoutInfo> layout;
-
-        if (!safe_is_directory(images_path)) {
-            return layout;
-        }
-
-        std::error_code ec;
-        size_t scanned_entries = 0;
-        for (fs::recursive_directory_iterator it(
-                 images_path,
-                 fs::directory_options::skip_permission_denied,
-                 ec),
-             end;
-             !ec && it != end;
-             it.increment(ec)) {
-            if (should_poll_cancel(scanned_entries)) {
-                throw_if_load_cancel_requested(options, "COLMAP image layout scan cancelled");
-            }
-            ++scanned_entries;
-
-            const auto& entry = *it;
-            std::error_code file_ec;
-            if (!entry.is_regular_file(file_ec) || file_ec || !is_image_file(entry.path())) {
-                continue;
-            }
-
-            const fs::path relative_path = entry.path().lexically_relative(images_path);
-            if (relative_path.empty()) {
-                continue;
-            }
-
-            const std::string basename_key = detail::normalize_lookup_key(entry.path().filename());
-            auto& info = layout[basename_key];
-            ++info.file_count;
-            if (info.sample_relative_paths.size() < 2) {
-                info.sample_relative_paths.push_back(relative_path);
-            }
-        }
-
-        return layout;
-    }
-
     static std::unexpected<Error> make_nested_image_contract_error(
         const fs::path& images_path,
         const std::string& image_name,
@@ -891,11 +846,23 @@ namespace lfs::io {
     static ColmapDatasetCaches build_colmap_dataset_caches(
         const fs::path& base,
         const fs::path& images_path,
-        const LoadOptions& options) {
+        const LoadOptions& options,
+        std::unordered_map<std::string, BasenameLayoutInfo>& basename_layout) {
         ColmapDatasetCaches caches;
         tbb::task_group tasks;
         tasks.run([&] {
-            caches.images = std::make_unique<RecursiveFileCache>(images_path, options.cancel_requested);
+            caches.images = std::make_unique<RecursiveFileCache>(
+                images_path, options.cancel_requested, [&](const fs::path& relative_path) {
+                    if (!is_image_file(relative_path)) {
+                        return;
+                    }
+                    const std::string basename_key = detail::normalize_lookup_key(relative_path.filename());
+                    auto& info = basename_layout[basename_key];
+                    ++info.file_count;
+                    if (info.sample_relative_paths.size() < 2) {
+                        info.sample_relative_paths.push_back(relative_path);
+                    }
+                });
         });
         tasks.run([&] {
             caches.masks = std::make_unique<MaskDirCache>(base, options.cancel_requested);
@@ -926,11 +893,11 @@ namespace lfs::io {
         }
 
         log_unused_sidecars(base, options);
-        const auto basename_layout = scan_image_basename_layout(images_path, options);
+        std::unordered_map<std::string, BasenameLayoutInfo> basename_layout;
         ColmapDatasetCaches caches;
         {
             LOG_TIMER_DEBUG("COLMAP assemble: caches");
-            caches = build_colmap_dataset_caches(base, images_path, options);
+            caches = build_colmap_dataset_caches(base, images_path, options, basename_layout);
         }
 
         std::unordered_map<std::string, size_t> basename_only_metadata_counts;

@@ -10,6 +10,8 @@
 #include "io/loaders/blender_loader.hpp"
 #include "io/loaders/colmap_loader.hpp"
 #include "io/pipelined_image_loader.hpp"
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 
 #include <atomic>
@@ -18,10 +20,12 @@
 #include <fstream>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
+#include <iostream>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
+#include <unordered_map>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -826,6 +830,129 @@ TEST_F(ColmapImageLayoutTest, ValidationFailsWhenDuplicateBasenameWasCollapsedIn
     EXPECT_NE(result.error().message.find("basename only"), std::string::npos);
     EXPECT_NE(result.error().message.find("Metadata contains 1 record"), std::string::npos);
     EXPECT_NE(result.error().message.find("flattened or dropped"), std::string::npos);
+}
+
+TEST_F(ColmapImageLayoutTest, RecursiveFileCacheObserverVisitsOnlyRegularFiles) {
+    const fs::path images_dir = temp_dir_ / "images";
+    const fs::path image = images_dir / "nested" / "frame_0001.png";
+    const fs::path duplicate_image = images_dir / "other" / "frame_0001.png";
+    const fs::path text_file = images_dir / "nested" / "notes.txt";
+    write_png(image);
+    write_png(duplicate_image);
+    write_text_file(text_file, "not an image");
+    fs::create_directories(images_dir / "other" / "directory.png");
+
+    std::vector<fs::path> visited;
+    lfs::io::RecursiveFileCache cache(images_dir, nullptr, [&](const fs::path& path) {
+        visited.push_back(path);
+    });
+
+    ASSERT_EQ(visited.size(), 3u);
+    EXPECT_NE(std::find(visited.begin(), visited.end(), image.lexically_relative(images_dir)),
+              visited.end());
+    EXPECT_NE(std::find(visited.begin(), visited.end(), duplicate_image.lexically_relative(images_dir)),
+              visited.end());
+    EXPECT_NE(std::find(visited.begin(), visited.end(), text_file.lexically_relative(images_dir)),
+              visited.end());
+    EXPECT_TRUE(cache.lookup("frame_0001.png").ambiguous());
+}
+
+// Opt-in benchmark: creating thousands of files would slow every normal test run.
+// Compare the former separate layout scan + cache construction with the new
+// observer path on the same synthetic tree; timing is diagnostic, not an assertion.
+TEST_F(ColmapImageLayoutTest, DISABLED_LargeSyntheticTreeSinglePassMatchesTwoPass) {
+    const fs::path images_dir = temp_dir_ / "large_images";
+    constexpr int directory_count = 40;
+    constexpr int images_per_directory = 100;
+    for (int directory_index = 0; directory_index < directory_count; ++directory_index) {
+        const fs::path directory = images_dir / ("camera_" + std::to_string(directory_index));
+        ASSERT_TRUE(fs::create_directories(directory));
+        for (int image_index = 0; image_index < images_per_directory; ++image_index) {
+            const fs::path image = directory / ("frame_" + std::to_string(image_index) + ".png");
+            std::ofstream out(image, std::ios::binary);
+            ASSERT_TRUE(out.is_open()) << image;
+        }
+        std::ofstream non_image(directory / "notes.txt", std::ios::binary);
+        ASSERT_TRUE(non_image.is_open());
+    }
+
+    using Counts = std::unordered_map<std::string, size_t>;
+    struct ScanResult {
+        Counts image_counts;
+        bool exact_image_found;
+        bool duplicate_basename_detected;
+
+        bool operator==(const ScanResult&) const = default;
+    };
+    const auto collect_image = [](Counts& counts, const fs::path& relative_path) {
+        if (lfs::io::is_image_file(relative_path)) {
+            ++counts[lfs::io::detail::normalize_lookup_key(relative_path.filename())];
+        }
+    };
+    const auto finish = [&](Counts counts, const lfs::io::RecursiveFileCache& cache) {
+        return ScanResult{
+            std::move(counts),
+            cache.lookup("camera_0/frame_0.png").found(),
+            cache.lookup("frame_0.png").ambiguous(),
+        };
+    };
+    const auto two_passes = [&] {
+        Counts counts;
+        std::error_code ec;
+        for (fs::recursive_directory_iterator it(
+                 images_dir, fs::directory_options::skip_permission_denied, ec),
+             end;
+             !ec && it != end;
+             it.increment(ec)) {
+            std::error_code file_ec;
+            if (!it->is_regular_file(file_ec) || file_ec) {
+                continue;
+            }
+            const fs::path relative_path = it->path().lexically_relative(images_dir);
+            if (!relative_path.empty()) {
+                collect_image(counts, relative_path);
+            }
+        }
+        lfs::io::RecursiveFileCache cache(images_dir);
+        return finish(std::move(counts), cache);
+    };
+    const auto single_pass = [&] {
+        Counts counts;
+        lfs::io::RecursiveFileCache cache(images_dir, nullptr, [&](const fs::path& relative_path) {
+            collect_image(counts, relative_path);
+        });
+        return finish(std::move(counts), cache);
+    };
+
+    const ScanResult expected = two_passes();
+    ASSERT_EQ(expected.image_counts.size(), static_cast<size_t>(images_per_directory));
+    ASSERT_EQ(expected.image_counts.at("frame_0.png"), static_cast<size_t>(directory_count));
+    ASSERT_TRUE(expected.exact_image_found);
+    ASSERT_TRUE(expected.duplicate_basename_detected);
+    EXPECT_EQ(single_pass(), expected);
+
+    std::vector<double> two_pass_ms;
+    std::vector<double> single_pass_ms;
+    const auto measure = [&](const auto& scan, std::vector<double>& samples) {
+        const auto start = std::chrono::steady_clock::now();
+        const ScanResult result = scan();
+        const auto end = std::chrono::steady_clock::now();
+        EXPECT_EQ(result, expected);
+        samples.push_back(std::chrono::duration<double, std::milli>(end - start).count());
+    };
+    for (int repeat = 0; repeat < 5; ++repeat) {
+        if (repeat % 2 == 0) {
+            measure(two_passes, two_pass_ms);
+            measure(single_pass, single_pass_ms);
+        } else {
+            measure(single_pass, single_pass_ms);
+            measure(two_passes, two_pass_ms);
+        }
+    }
+    std::sort(two_pass_ms.begin(), two_pass_ms.end());
+    std::sort(single_pass_ms.begin(), single_pass_ms.end());
+    std::cout << "COLMAP synthetic scan (4000 images): two-pass median=" << two_pass_ms[2]
+              << " ms, single-pass median=" << single_pass_ms[2] << " ms\n";
 }
 
 TEST_F(ColmapImageLayoutTest, ValidationFailsWhenMasksDoNotMirrorRelativeImageLayout) {
