@@ -1711,6 +1711,9 @@ TEST_F(GsplatRasterizerTest, BackwardJoinsAuxiliaryProducersAndOutputs) {
             auto alpha_gradient = Tensor::zeros_like(result->first.alpha);
             Tensor* target = std::array<Tensor*, 4>{&error, &edge, &scores, &splat->_densification_info}[delayed];
             target->fill_(delayed < 2 ? 0.f : -100.f);
+            auto produced = Tensor::full(target->shape(), delayed < 2 ? 1.f : 0.f, Device::GPU);
+            auto* destination = target->ptr<float>();
+            const auto* source = produced.ptr<float>();
             forward.wait();
             {
                 TensorWorkQueue::Scope producer_scope(producer);
@@ -1718,13 +1721,16 @@ TEST_F(GsplatRasterizerTest, BackwardJoinsAuxiliaryProducersAndOutputs) {
                 ASSERT_EQ(tensor_hardening::launch_delay_kernel(
                               static_cast<cudaStream_t>(producer.native_handle()), 150000000),
                           cudaSuccess);
-                target->fill_(delayed < 2 ? 1.f : 0.f);
+                ASSERT_EQ(cudaMemcpyAsync(destination, source, target->bytes(), cudaMemcpyDeviceToDevice,
+                                          static_cast<cudaStream_t>(producer.native_handle())),
+                          cudaSuccess);
             }
             {
                 TensorWorkQueue::Scope backward_scope(backward);
                 gsplat_rasterize_backward(result->second, gradient, alpha_gradient, *splat, optimizer,
                                           use_error ? error : Tensor{}, edge, scores);
                 EXPECT_EQ(splat->_densification_info.stream(), backward.native_handle());
+                EXPECT_EQ(scores.stream(), backward.native_handle());
                 const auto score_cpu = scores.cpu();
                 const auto info_cpu = splat->_densification_info.cpu();
                 EXPECT_GT(*std::max_element(score_cpu.ptr<float>(), score_cpu.ptr<float>() + score_cpu.numel()), 0.f);

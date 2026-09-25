@@ -433,7 +433,7 @@ TEST_F(PipelinedPairOrdering, MaskCompletionDoesNotBlockTheImageProducer) {
     config.io_threads = 1;
     config.cold_process_threads = 1;
     PipelinedImageLoader loader(config);
-    Tensor image, mask;
+    Tensor image, mask, produced_mask;
     {
         TensorWorkQueue::Scope scope(image_queue);
         image = Tensor::ones({3, 8, 8}, Device::GPU);
@@ -441,7 +441,10 @@ TEST_F(PipelinedPairOrdering, MaskCompletionDoesNotBlockTheImageProducer) {
     {
         TensorWorkQueue::Scope scope(mask_queue);
         mask = Tensor::zeros({8, 8}, Device::GPU);
+        produced_mask = Tensor::ones({8, 8}, Device::GPU);
     }
+    auto* mask_destination = mask.ptr<float>();
+    const auto* mask_source = produced_mask.ptr<float>();
     image_queue.wait();
     mask_queue.wait();
     {
@@ -449,7 +452,9 @@ TEST_F(PipelinedPairOrdering, MaskCompletionDoesNotBlockTheImageProducer) {
         ASSERT_EQ(tensor_hardening::launch_delay_kernel(
                       static_cast<cudaStream_t>(mask_queue.native_handle()), 600000000),
                   cudaSuccess);
-        mask.fill_(1.f);
+        ASSERT_EQ(cudaMemcpyAsync(mask_destination, mask_source, mask.bytes(), cudaMemcpyDeviceToDevice,
+                                  static_cast<cudaStream_t>(mask_queue.native_handle())),
+                  cudaSuccess);
     }
     TensorFence mask_done(GpuBackend::CUDA);
     mask_queue.record(mask_done);
