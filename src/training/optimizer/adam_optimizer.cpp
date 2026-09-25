@@ -1642,19 +1642,6 @@ namespace lfs::training {
                         ptr, ptr, indices_i32_ptr, n_new, old_N, layout_rest, stream);
                 }
             };
-            auto gather_new_swizzled_rows_u8 = [&](lfs::core::Tensor& tensor) {
-                const auto stream = lfs::core::getCurrentCUDAStream();
-                (indices_are_i64 ? indices : indices_i32).sync_to_stream(stream);
-                tensor.set_stream(stream);
-                uint8_t* ptr = tensor.ptr<uint8_t>();
-                if (indices_are_i64) {
-                    lfs::core::shN_swizzled_gather_self_u8_i64(
-                        ptr, ptr, indices.ptr<int64_t>(), n_new, old_N, layout_rest, stream);
-                } else {
-                    lfs::core::shN_swizzled_gather_self_u8(
-                        ptr, ptr, indices_i32_ptr, n_new, old_N, layout_rest, stream);
-                }
-            };
 
             // q16: gather-decode sources and encode only the appended 256-splat
             // blocks. fp32: in-swizzle gather into the grown tail.

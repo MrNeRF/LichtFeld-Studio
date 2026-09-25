@@ -112,15 +112,6 @@ namespace lfs::core {
         std::uint32_t active_coeffs_rest,
         cudaStream_t stream = nullptr);
 
-    void shN_swizzled_gather_self_u8_i64(
-        const std::uint8_t* src_swizzled,
-        std::uint8_t* dst_swizzled,
-        const std::int64_t* src_indices,
-        std::size_t n_dst,
-        std::size_t dst_offset,
-        std::uint32_t active_coeffs_rest,
-        cudaStream_t stream = nullptr);
-
     // Copy the first n_src primitives from one swizzled buffer into dst_offset in another
     // swizzled buffer. Source and destination may have different padded block boundaries.
     void shN_swizzled_copy_contiguous(

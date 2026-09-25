@@ -524,26 +524,6 @@ namespace lfs::core {
         LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.gather_self_i32_u8");
     }
 
-    void shN_swizzled_gather_self_u8_i64(
-        const std::uint8_t* src_swizzled,
-        std::uint8_t* dst_swizzled,
-        const std::int64_t* src_indices,
-        std::size_t n_dst,
-        std::size_t dst_offset,
-        std::uint32_t active_coeffs_rest,
-        cudaStream_t stream) {
-        const auto slots = sh_float4_slots_for_rest(active_coeffs_rest);
-        if (n_dst == 0 || slots == 0)
-            return;
-        const int grid = static_cast<int>((n_dst + BLOCK - 1) / BLOCK);
-        gather_self_kernel<std::int64_t, uchar4><<<grid, BLOCK, 0, stream>>>(
-            reinterpret_cast<const uchar4*>(src_swizzled),
-            reinterpret_cast<uchar4*>(dst_swizzled), src_indices,
-            static_cast<std::uint32_t>(n_dst),
-            static_cast<std::uint32_t>(dst_offset), slots);
-        LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.gather_self_i64_u8");
-    }
-
     void shN_swizzled_gather_self_i64(
         const float* src_swizzled,
         float* dst_swizzled,
