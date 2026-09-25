@@ -25,14 +25,11 @@
       "src/io/nvcodec_image_loader.cpp:1505",
       "src/io/nvcodec_image_loader.cpp:2273",
       "src/io/nvcodec_image_loader.cpp:2451",
-      "src/io/pipelined_image_loader.cpp:622",
-      "src/io/pipelined_image_loader.cpp:625",
-      "src/io/pipelined_image_loader.cpp:631",
-      "src/io/pipelined_image_loader.cpp:1400",
-      "src/io/pipelined_image_loader.cpp:1407",
-      "src/io/pipelined_image_loader.cpp:1408",
-      "src/io/pipelined_image_loader.cpp:1770",
-      "src/io/pipelined_image_loader.cpp:1990"
+      "src/io/pipelined_image_loader.cpp:1383",
+      "src/io/pipelined_image_loader.cpp:1390",
+      "src/io/pipelined_image_loader.cpp:1391",
+      "src/io/pipelined_image_loader.cpp:1753",
+      "src/io/pipelined_image_loader.cpp:1978"
     ],
     "rendering": [
       "src/rendering/rasterizer/cuda/point_cloud_raster.cu:286",
@@ -40,9 +37,8 @@
       "src/rendering/rasterizer/cuda/point_cloud_raster.cu:309"
     ],
     "training": [
-      "src/training/components/ppisp_controller_pool.cu:256",
-      "src/training/components/ppisp_controller_pool.cu:335",
       "src/training/components/ppisp_controller_pool.cu:338",
+      "src/training/components/ppisp_controller_pool.cu:341",
       "src/training/kernels/depth_loss.cu:689",
       "src/training/kernels/depth_loss.cu:692",
       "src/training/kernels/depth_loss.cu:704",
