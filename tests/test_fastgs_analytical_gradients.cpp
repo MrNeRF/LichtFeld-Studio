@@ -970,7 +970,7 @@ TEST_F(AnalyticalGradientTest, DepthAnchorFitRecoversAffineDisparityAlignment) {
 
     const float aabb_lo[3] = {-1e30f, -1e30f, -1e30f};
     const float aabb_hi[3] = {1e30f, 1e30f, 1e30f};
-    const auto anchor = lfs::training::kernels::fit_depth_anchor(
+    const auto samples = lfs::training::kernels::collect_depth_anchor_samples(
         points.data_ptr<float>(),
         static_cast<size_t>(points.size(0)),
         w2c.data_ptr<float>(),
@@ -980,6 +980,7 @@ TEST_F(AnalyticalGradientTest, DepthAnchorFitRecoversAffineDisparityAlignment) {
         0.01f,
         aabb_lo,
         aabb_hi);
+    const auto anchor = lfs::training::kernels::fit_depth_anchor_from_samples(samples);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
     ASSERT_TRUE(anchor.valid);

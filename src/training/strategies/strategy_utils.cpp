@@ -622,10 +622,6 @@ namespace lfs::training {
         }
     }
 
-    int collect_adam_scale_ptrs(AdamOptimizer& /*optimizer*/, float* /*out_ptrs*/[12]) {
-        return 0;
-    }
-
     void zero_adam_grads_at_indices(
         AdamOptimizer& optimizer,
         const lfs::core::Tensor& indices,

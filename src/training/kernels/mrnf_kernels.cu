@@ -184,29 +184,6 @@ namespace lfs::training::mrnf_strategy {
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.decay");
     }
 
-    __global__ void elementwise_add_inplace_kernel(
-        float* __restrict__ a,
-        const float* __restrict__ b,
-        size_t N) {
-        const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
-        if (idx < N)
-            a[idx] += b[idx];
-    }
-
-    void launch_elementwise_add_inplace(
-        float* a,
-        const float* b,
-        size_t N,
-        void* stream) {
-        if (N == 0)
-            return;
-        constexpr int threads = 256;
-        const int blocks = static_cast<int>((N + threads - 1) / threads);
-        cudaStream_t s = resolve_stream(stream);
-        elementwise_add_inplace_kernel<<<blocks, threads, 0, s>>>(a, b, N);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.elementwise_add");
-    }
-
     __global__ void fold_densification_and_zero_kernel(
         float* __restrict__ vis_count,
         float* __restrict__ refine_weight_max,

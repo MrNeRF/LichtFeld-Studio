@@ -124,7 +124,6 @@ TEST_F(VramLeakRegressionTest, FixedSizeCyclesHostRssAndVramStable) {
             ASSERT_TRUE(storage->grow(1024).has_value());
         }
         release_fast_rasterizer_thread_local_caches();
-        release_fastgs_sort_workspace_buffers();
         GlobalArenaManager::instance().get_arena().full_reset();
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     }
@@ -152,7 +151,6 @@ TEST_F(VramLeakRegressionTest, FixedSizeCyclesHostRssAndVramStable) {
 
         // End-of-step cleanup (training thread shutdown pattern).
         release_fast_rasterizer_thread_local_caches();
-        release_fastgs_sort_workspace_buffers();
         GlobalArenaManager::instance().get_arena().full_reset();
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 

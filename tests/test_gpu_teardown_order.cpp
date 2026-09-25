@@ -5,24 +5,12 @@
 // shuts down the pool needed by later tests. CUDA death tests are also avoided
 // because forked CUDA processes are unreliable.
 
-#include "components/ppisp_controller.hpp"
 #include "core/tensor.hpp"
 #include "training/strategies/strategy_utils.hpp"
 
 #include <gtest/gtest.h>
 
 namespace {
-
-    TEST(GpuTeardownOrderTest, ReleaseSharedBuffersIsIdempotent) {
-        using lfs::training::PPISPController;
-        PPISPController::preallocate_shared_buffers(32, 32);
-        PPISPController::release_shared_buffers();
-        PPISPController::release_shared_buffers();
-        // Re-allocate after release must work (pool still alive in-process).
-        PPISPController::preallocate_shared_buffers(32, 32);
-        PPISPController::release_shared_buffers();
-        SUCCEED();
-    }
 
     TEST(GpuTeardownOrderTest, DensifyNScratchReleaseDropsStorage) {
         using lfs::core::Device;

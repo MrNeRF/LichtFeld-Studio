@@ -31,12 +31,6 @@ namespace fast_lfs::rasterization {
         // count cudaPointerGetAttributes preflight calls (test/telemetry).
         std::atomic<std::uint64_t> g_preflight_pointer_attr_calls{0};
 
-        void free_sorted_primitive_indices(void* ptr, cudaStream_t stream) noexcept {
-            // The pointer belongs to the active rasterizer arena frame; the
-            // frame release returns it after backward has finished.
-            release_sorted_primitive_indices(ptr, stream);
-        }
-
 #ifndef NDEBUG
         // Debug-only preflight helpers (skipped entirely in Release).
         const char* cuda_memory_type_name(cudaMemoryType type) {
@@ -434,7 +428,6 @@ namespace fast_lfs::rasterization {
         }
         // Release on the context's stream, not the caller's current one —
         // robust against unwind paths on threads whose guard already popped.
-        free_sorted_primitive_indices(forward_ctx.sorted_primitive_indices, forward_ctx.stream);
         auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
         arena.end_frame(forward_ctx.frame_id, forward_ctx.stream);
     }

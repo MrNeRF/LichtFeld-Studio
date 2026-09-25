@@ -219,15 +219,8 @@ namespace lfs::training {
             params.screen_share_penalty * penalty_scale);
     }
 
-    /// Collect leftover per-primitive Adam scale pointers from the removed
-    /// legacy moment codec. Always returns 0 under joint-only Adam state.
-    int collect_adam_scale_ptrs(
-        AdamOptimizer& optimizer,
-        float* out_ptrs[12]);
-
     /// Zero fp32 Adam grad rows at indices (and ShN via swizzled zero when
-    /// layout_rest > 0). Scales/moments are left alone — pair with fused scale
-    /// zero. Required because strategy::step runs Adam after densify.
+    /// layout_rest > 0). Required because strategy::step runs Adam after densify.
     void zero_adam_grads_at_indices(
         AdamOptimizer& optimizer,
         const lfs::core::Tensor& indices,

@@ -86,40 +86,6 @@ namespace gsplat_lfs {
         cudaStream_t stream = nullptr);
 
     //=========================================================================
-    // Quaternion to Rotation Matrix
-    //=========================================================================
-
-    void quats_to_rotmats(
-        const float* quats, // [N, 4]
-        int64_t N,
-        float* rotmats, // [N, 3, 3] output
-        cudaStream_t stream = nullptr);
-
-    //=========================================================================
-    // Relocation (MCMC densification)
-    //=========================================================================
-
-    void relocation(
-        float* opacities,    // [N] - modified in-place
-        float* scales,       // [N, 3] - modified in-place
-        const float* ratios, // [N]
-        const float* binoms, // [n_max, n_max]
-        int64_t N,
-        int32_t n_max,
-        float min_opacity,
-        cudaStream_t stream = nullptr);
-
-    void add_noise(
-        float* raw_opacities, // [N] - modified in-place
-        float* raw_scales,    // [N, 3] - modified in-place
-        float* raw_quats,     // [N, 4] - modified in-place
-        const float* noise,   // [N, 3]
-        float* means,         // [N, 3] - modified in-place
-        int64_t N,
-        float current_lr,
-        cudaStream_t stream = nullptr);
-
-    //=========================================================================
     // View Direction Computation for SH
     //=========================================================================
 

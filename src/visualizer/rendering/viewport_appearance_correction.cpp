@@ -14,7 +14,6 @@
 #include "core/camera_metrics.hpp"
 #include "core/training_manager.hpp"
 #include "training/components/ppisp.hpp"
-#include "training/components/ppisp_controller.hpp"
 #include "training/components/ppisp_controller_pool.hpp"
 #include "training/trainer.hpp"
 #endif

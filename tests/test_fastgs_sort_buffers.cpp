@@ -10,7 +10,6 @@
 #include "core/tensor.hpp"
 #include "cuda_backend_test.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
-#include "training/rasterization/fastgs/rasterization/include/forward.h"
 #include "training/rasterization/fastgs/rasterization/include/rasterization_api.h"
 
 #include <algorithm>
@@ -82,7 +81,6 @@ protected:
             return;
         splat_.reset();
         camera_.reset();
-        release_fastgs_sort_workspace_buffers();
         cleanup_arena();
     }
 
@@ -92,8 +90,6 @@ protected:
 };
 
 TEST_F(FastGSSortBufferTest, SortWorkspaceIsExactAndArenaOwned) {
-    using fast_lfs::rasterization::sort_workspace_allocated_bytes;
-    using fast_lfs::rasterization::sort_workspace_required_bytes;
 
     auto warm = fast_rasterize_forward(*camera_, *splat_, bg_, 0, 0, 0, 0, false);
     ASSERT_TRUE(warm.has_value()) << lfs::format_for_developer(warm.error());
@@ -101,8 +97,6 @@ TEST_F(FastGSSortBufferTest, SortWorkspaceIsExactAndArenaOwned) {
         << "fixture must produce visible instances so the sort path runs";
     const auto sort_bytes = warm->second.forward_ctx.per_instance_sort_total_size;
     ASSERT_GT(sort_bytes, 0u);
-    EXPECT_EQ(sort_workspace_required_bytes(), 0u);
-    EXPECT_EQ(sort_workspace_allocated_bytes(), 0u);
 
     const auto frame_buffers = GlobalArenaManager::instance().get_arena().get_frame_buffers(
         warm->second.forward_ctx.frame_id);
@@ -204,7 +198,6 @@ TEST_F(FastGSThreadLocalCacheTest, SpawnRenderJoinReturnsVram) {
         ASSERT_TRUE(r.has_value()) << lfs::format_for_developer(r.error());
         r->second.release_forward_context();
         release_fast_rasterizer_thread_local_caches();
-        release_fastgs_sort_workspace_buffers();
         cleanup_arena();
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     }
@@ -237,7 +230,6 @@ TEST_F(FastGSThreadLocalCacheTest, SpawnRenderJoinReturnsVram) {
             // Explicit TLS release (mirrors training-thread shutdown). Without
             // this, join relies solely on TLS destructors — which must also free.
             release_fast_rasterizer_thread_local_caches();
-            release_fastgs_sort_workspace_buffers();
             if (cudaDeviceSynchronize() != cudaSuccess) {
                 failures.fetch_add(1);
             }

@@ -232,8 +232,6 @@ namespace lfs::training::kernels {
         float* __restrict__ dst_sh0,
         float* __restrict__ dst_opacities,
         int opacity_dim,
-        float* const* __restrict__ adam_scale_ptrs,
-        int n_adam_scales,
         bool* __restrict__ free_mask,
         size_t N) {
 
@@ -270,13 +268,6 @@ namespace lfs::training::kernels {
             dst_opacities[dst] = src_opacities[i];
         }
 
-        for (int a = 0; a < n_adam_scales; ++a) {
-            float* scales = adam_scale_ptrs[a];
-            if (scales != nullptr) {
-                scales[dst] = 0.0f;
-            }
-        }
-
         if (free_mask != nullptr) {
             free_mask[dst] = false;
         }
@@ -296,8 +287,6 @@ namespace lfs::training::kernels {
         float* dst_sh0,
         float* dst_opacities,
         int opacity_dim,
-        float* const* adam_scale_ptrs,
-        int n_adam_scales,
         bool* free_mask,
         size_t N,
         cudaStream_t stream) {
@@ -306,85 +295,14 @@ namespace lfs::training::kernels {
         if (n_fill == 0)
             return;
 
-        // Copy pointer table to device (tiny; stack H2D once per launch).
-        float** d_adam = nullptr;
-        if (n_adam_scales > 0 && adam_scale_ptrs != nullptr) {
-            LFS_CUDA_CHECK_MSG(
-                cudaMallocAsync(reinterpret_cast<void**>(&d_adam),
-                                sizeof(float*) * static_cast<size_t>(n_adam_scales), stream),
-                "fill_free_slots adam ptr table");
-            LFS_CUDA_CHECK_MSG(
-                cudaMemcpyAsync(d_adam, adam_scale_ptrs,
-                                sizeof(float*) * static_cast<size_t>(n_adam_scales),
-                                cudaMemcpyHostToDevice, stream),
-                "fill_free_slots adam ptr H2D");
-        }
-
         const int block = 256;
         const int grid = static_cast<int>((n_fill + block - 1) / block);
         fill_free_slots_fused_kernel<<<grid, block, 0, stream>>>(
             target_indices, n_fill,
             src_means, src_rotations, src_scales, src_sh0, src_opacities,
             dst_means, dst_rotations, dst_scales, dst_sh0, dst_opacities,
-            opacity_dim, d_adam, n_adam_scales, free_mask, N);
+            opacity_dim, free_mask, N);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.fill_free_slots_fused");
-
-        if (d_adam != nullptr) {
-            LFS_CUDA_CHECK_MSG(cudaFreeAsync(d_adam, stream), "fill_free_slots free adam ptrs");
-        }
-    }
-
-    __global__ void zero_adam_scales_kernel(
-        const int64_t* __restrict__ indices,
-        size_t n_indices,
-        float* const* __restrict__ adam_scale_ptrs,
-        int n_adam_scales,
-        size_t N) {
-
-        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-        if (i >= n_indices)
-            return;
-        const int64_t t = indices[i];
-        if (t < 0 || static_cast<size_t>(t) >= N)
-            return;
-        const size_t dst = static_cast<size_t>(t);
-        for (int a = 0; a < n_adam_scales; ++a) {
-            float* scales = adam_scale_ptrs[a];
-            if (scales != nullptr) {
-                scales[dst] = 0.0f;
-            }
-        }
-    }
-
-    void launch_zero_adam_scales_at_indices(
-        const int64_t* indices,
-        size_t n_indices,
-        float* const* adam_scale_ptrs,
-        int n_adam_scales,
-        size_t N,
-        cudaStream_t stream) {
-
-        stream = resolve_stream(stream);
-        if (n_indices == 0 || n_adam_scales <= 0)
-            return;
-
-        float** d_adam = nullptr;
-        LFS_CUDA_CHECK_MSG(
-            cudaMallocAsync(reinterpret_cast<void**>(&d_adam),
-                            sizeof(float*) * static_cast<size_t>(n_adam_scales), stream),
-            "zero_adam adam ptr table");
-        LFS_CUDA_CHECK_MSG(
-            cudaMemcpyAsync(d_adam, adam_scale_ptrs,
-                            sizeof(float*) * static_cast<size_t>(n_adam_scales),
-                            cudaMemcpyHostToDevice, stream),
-            "zero_adam adam ptr H2D");
-
-        const int block = 256;
-        const int grid = static_cast<int>((n_indices + block - 1) / block);
-        zero_adam_scales_kernel<<<grid, block, 0, stream>>>(
-            indices, n_indices, d_adam, n_adam_scales, N);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.zero_adam_scales");
-        LFS_CUDA_CHECK_MSG(cudaFreeAsync(d_adam, stream), "zero_adam free ptrs");
     }
 
     __global__ void packed_refine_counts_kernel(

@@ -103,26 +103,6 @@ namespace {
 
 } // namespace
 
-void fast_lfs::rasterization::release_sorted_primitive_indices(
-    void* ptr,
-    cudaStream_t /*stream*/) noexcept {
-    // Sorted indices are part of the owning arena frame. The frame release
-    // returns the whole bump allocation after backward has finished.
-    (void)ptr;
-}
-
-void fast_lfs::rasterization::release_sort_workspace_buffers() noexcept {
-    // Kept as a source-compatible no-op for callers that used to release the
-    // removed thread-local sort cache. Arena frames own this storage now.
-}
-
-std::uint64_t fast_lfs::rasterization::n_instances_fallback_sync_count() noexcept {
-    return 0;
-}
-
-void fast_lfs::rasterization::reset_n_instances_fallback_sync_count() noexcept {
-}
-
 void fast_lfs::rasterization::set_warp_cull_mode_for_testing(int mode) noexcept {
     g_warp_cull_mode.store(mode, std::memory_order_relaxed);
 }
@@ -137,25 +117,6 @@ void fast_lfs::rasterization::set_blend_batch_size_for_testing(int batch_size) n
 
 int fast_lfs::rasterization::blend_batch_size_for_testing() noexcept {
     return g_blend_batch_size_override.load(std::memory_order_relaxed);
-}
-
-void fast_lfs::rasterization::set_force_n_instances_sync_for_testing(bool force) noexcept {
-    (void)force;
-}
-
-void fast_lfs::rasterization::reset_sort_capacity_for_testing() noexcept {
-}
-
-std::size_t fast_lfs::rasterization::sort_workspace_required_bytes() noexcept {
-    return 0;
-}
-
-std::size_t fast_lfs::rasterization::sort_workspace_allocated_bytes() noexcept {
-    return 0;
-}
-
-int fast_lfs::rasterization::sort_workspace_capacity_n_instances() noexcept {
-    return 0;
 }
 
 fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(

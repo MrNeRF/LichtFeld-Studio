@@ -138,12 +138,6 @@ namespace lfs::training::mrnf_strategy {
         lfs::training::GumbelTopKScratch* scratch = nullptr,
         size_t known_nnz = 0);
 
-    void launch_elementwise_add_inplace(
-        float* a,
-        const float* b,
-        size_t N,
-        void* stream = nullptr);
-
     // Baked per-splat exploration starvation weights.
     inline constexpr float kStarvEps = 0.0026f;
     inline constexpr float kStarvGamma = 1.72f;

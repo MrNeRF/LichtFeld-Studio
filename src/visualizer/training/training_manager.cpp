@@ -86,7 +86,6 @@ namespace lfs::vis {
             (void)lfs::core::tensor_ops::release_nan_check_thread_buffers();
             // sort workspaces — explicit release before thread join so
             // high-water VRAM is not held until TLS dtor races CUDA teardown.
-            lfs::training::release_fastgs_sort_workspace_buffers();
         }
 
         [[nodiscard]] std::uint64_t thread_id_for_logging(const std::thread::id id) noexcept {

@@ -17,12 +17,85 @@
 #include "lfs/kernels/l1_loss.cuh"
 #include "lfs/kernels/ssim.cuh"
 #include "training/losses/photometric_loss.hpp"
+#include <array>
 #include <cmath>
 #include <cuda_runtime.h>
 #include <limits>
+#include <vector>
 
 using namespace lfs::core;
 using namespace lfs::training::kernels;
+
+namespace {
+
+    Tensor reference_ssim_gradient(const Tensor& image, const Tensor& target, const Tensor& map_gradient) {
+        const auto x = image.cpu().contiguous().to_vector();
+        const auto y = target.cpu().contiguous().to_vector();
+        const auto upstream = map_gradient.cpu().contiguous().to_vector();
+        const int h = static_cast<int>(image.shape()[2]);
+        const int w = static_cast<int>(image.shape()[3]);
+        const size_t plane_size = static_cast<size_t>(h) * w;
+        std::vector<double> gradient(x.size(), 0.0);
+        std::array<double, 11> gaussian;
+        double total = 0.0;
+        for (int i = -5; i <= 5; ++i) {
+            gaussian[i + 5] = std::exp(-i * i / (2.0 * 1.5 * 1.5));
+            total += gaussian[i + 5];
+        }
+        for (auto& weight : gaussian) {
+            weight /= total;
+        }
+
+        // Differentiate the Gaussian-window SSIM formula on the host, with zero padding.
+        for (size_t base = 0; base < x.size(); base += plane_size) {
+            for (int row = 0; row < h; ++row) {
+                for (int col = 0; col < w; ++col) {
+                    const double scale = upstream[base + row * w + col];
+                    if (scale == 0.0) {
+                        continue;
+                    }
+                    double mx = 0.0, my = 0.0, xx = 0.0, yy = 0.0, xy = 0.0;
+                    for (int dy = -5; dy <= 5; ++dy) {
+                        for (int dx = -5; dx <= 5; ++dx) {
+                            const int r = row + dy, c = col + dx;
+                            if (r < 0 || r >= h || c < 0 || c >= w) {
+                                continue;
+                            }
+                            const size_t i = base + r * w + c;
+                            const double weight = gaussian[dy + 5] * gaussian[dx + 5];
+                            mx += weight * x[i];
+                            my += weight * y[i];
+                            xx += weight * x[i] * x[i];
+                            yy += weight * y[i] * y[i];
+                            xy += weight * x[i] * y[i];
+                        }
+                    }
+                    const double a = 2.0 * mx * my + 0.0001;
+                    const double b = 2.0 * (xy - mx * my) + 0.0009;
+                    const double c = mx * mx + my * my + 0.0001;
+                    const double d = xx - mx * mx + yy - my * my + 0.0009;
+                    const double value = a * b / (c * d);
+                    const double d_mean = 2.0 * my * (b - a) / (c * d) + 2.0 * mx * value * (1.0 / d - 1.0 / c);
+                    const double d_square = -value / d;
+                    const double d_product = 2.0 * a / (c * d);
+                    for (int dy = -5; dy <= 5; ++dy) {
+                        for (int dx = -5; dx <= 5; ++dx) {
+                            const int r = row + dy, c = col + dx;
+                            if (r < 0 || r >= h || c < 0 || c >= w) {
+                                continue;
+                            }
+                            const size_t i = base + r * w + c;
+                            const double weight = gaussian[dy + 5] * gaussian[dx + 5];
+                            gradient[i] += scale * weight * (d_mean + 2.0 * x[i] * d_square + y[i] * d_product);
+                        }
+                    }
+                }
+            }
+        }
+        return Tensor::from_vector(std::vector<float>(gradient.begin(), gradient.end()), image.shape(), image.device());
+    }
+
+} // namespace
 
 class FusedL1SSIMTest : public lfs::test::CudaBackendTest {
 protected:
@@ -90,7 +163,7 @@ protected:
 
         // SSIM gradient: need to backprop with -ssim_weight (since loss = 1 - ssim)
         auto ssim_dL_dmap = dL_dmap * (-ssim_weight);
-        auto ssim_grad = ssim_backward_with_grad_map(ssim_result.ctx, ssim_dL_dmap);
+        auto ssim_grad = reference_ssim_gradient(img1_4d, img2_4d, ssim_dL_dmap);
 
         auto combined_grad = l1_grad + ssim_grad;
 
@@ -437,7 +510,7 @@ protected:
 
         // SSIM gradient
         auto dL_dmap = mask_expanded * (-1.0f) / mask_sum;
-        auto ssim_grad = ssim_backward_with_grad_map(ssim_result.ctx, dL_dmap);
+        auto ssim_grad = reference_ssim_gradient(img1_4d, img2_4d, dL_dmap);
 
         // Combined
         float combined_loss = l1_weight * masked_l1_loss + ssim_weight * ssim_loss;

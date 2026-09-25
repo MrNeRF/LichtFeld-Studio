@@ -2835,9 +2835,6 @@ namespace lfs::training {
         const int64_t slots_to_fill = std::min(count, num_free);
         auto target_indices = free_indices.slice(0, 0, slots_to_fill);
 
-        // one fused kernel writes all attrs + zeros Adam scales + clears free mask.
-        float* adam_ptrs[12] = {};
-        const int n_adam = collect_adam_scale_ptrs(*_optimizer, adam_ptrs);
         const int opacity_dim = (_splat_data->opacity_raw().ndim() == 2) ? 1 : 0;
         auto pos_slice = positions.slice(0, 0, slots_to_fill);
         auto rot_slice = rotations.slice(0, 0, slots_to_fill);
@@ -2859,8 +2856,6 @@ namespace lfs::training {
             _splat_data->sh0().ptr<float>(),
             _splat_data->opacity_raw().ptr<float>(),
             opacity_dim,
-            adam_ptrs,
-            n_adam,
             _free_mask.ptr<bool>(),
             current_size);
 

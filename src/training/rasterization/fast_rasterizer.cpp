@@ -10,7 +10,6 @@
 #include "core/splat_exportable_storage.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "training/kernels/grad_alpha.hpp"
-#include "training/rasterization/fastgs/rasterization/include/forward.h"
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -842,11 +841,6 @@ namespace lfs::training {
                !fast_rasterizer_thread_caches.depth.is_valid() &&
                !fast_rasterizer_thread_caches.normal.is_valid() &&
                !fast_rasterizer_thread_caches.grad_alpha.is_valid();
-    }
-
-    void release_fastgs_sort_workspace_buffers() noexcept {
-        // Kept for source compatibility; FastGS sort storage is arena-owned.
-        fast_lfs::rasterization::release_sort_workspace_buffers();
     }
 
     namespace {

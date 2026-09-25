@@ -30,7 +30,7 @@ namespace {
 
 } // namespace
 
-TEST_F(DensifyEvents4x, FillFreeSlotsFusedWritesAttrsAndZerosAdam) {
+TEST_F(DensifyEvents4x, FillFreeSlotsFusedWritesAttrsAndClearsFreeMask) {
     constexpr size_t N = 8;
     constexpr size_t K = 3;
 
@@ -71,17 +71,13 @@ TEST_F(DensifyEvents4x, FillFreeSlotsFusedWritesAttrsAndZerosAdam) {
                   cudaSuccess);
     }
 
-    auto adam0 = Tensor::ones({N}, Device::GPU);
-    auto adam1 = Tensor::ones({N}, Device::GPU);
-    float* adam_ptrs[2] = {adam0.ptr<float>(), adam1.ptr<float>()};
-
     kernels::launch_fill_free_slots_fused(
         targets.ptr<int64_t>(), K,
         src_means.ptr<float>(), src_rots.ptr<float>(), src_scales.ptr<float>(),
         src_sh0.ptr<float>(), src_opac.ptr<float>(),
         means.ptr<float>(), rots.ptr<float>(), scales.ptr<float>(),
         sh0.ptr<float>(), opac.ptr<float>(),
-        /*opacity_dim=*/0, adam_ptrs, 2, free_mask.ptr<bool>(), N);
+        /*opacity_dim=*/0, free_mask.ptr<bool>(), N);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
     auto mh = to_host(means);
@@ -89,13 +85,6 @@ TEST_F(DensifyEvents4x, FillFreeSlotsFusedWritesAttrsAndZerosAdam) {
     EXPECT_FLOAT_EQ(mh[3 * 3 + 1], 21.f);
     EXPECT_FLOAT_EQ(mh[5 * 3 + 2], 32.f);
     EXPECT_FLOAT_EQ(mh[0], 0.f); // untouched
-
-    auto ah0 = to_host(adam0);
-    auto ah1 = to_host(adam1);
-    EXPECT_FLOAT_EQ(ah0[1], 0.f);
-    EXPECT_FLOAT_EQ(ah0[3], 0.f);
-    EXPECT_FLOAT_EQ(ah0[0], 1.f);
-    EXPECT_FLOAT_EQ(ah1[5], 0.f);
 
     auto fm = free_mask.cpu();
     EXPECT_FALSE(fm.ptr<bool>()[1]);

@@ -71,14 +71,12 @@ namespace lfs::training::kernels {
      * fused free-slot write.
      *
      * For each i in [0, n_fill): writes child row i into param row target_indices[i]
-     * (means/rot/scale/sh0/opacity), zeros up to 12 Adam per-primitive scale buffers
-     * at that index, and sets free_mask[target]=false.
+     * (means/rot/scale/sh0/opacity) and sets free_mask[target]=false.
      *
      * sh0 layout: source is always 3 floats per row (flat). Destination is either
      * [N,3] (sh0_dst_stride3=true) or [N,1,3] contiguous (false → write 3 floats at
      * index*3 still works for [N,1,3] since middle dim is 1).
      * opacity_dim: 0 → [N], 1 → [N,1].
-     * adam_scale_ptrs: nullable array of length n_adam_scales; each is [N] float.
      */
     void launch_fill_free_slots_fused(
         const int64_t* target_indices,
@@ -94,21 +92,7 @@ namespace lfs::training::kernels {
         float* dst_sh0,
         float* dst_opacities,
         int opacity_dim,
-        float* const* adam_scale_ptrs,
-        int n_adam_scales,
         bool* free_mask,
-        size_t N,
-        cudaStream_t stream = nullptr);
-
-    /**
-     * Zero Adam per-primitive scales at indices (quantized moments dequant to 0).
-     * Used for parent-split reset without a full free-slot write.
-     */
-    void launch_zero_adam_scales_at_indices(
-        const int64_t* indices,
-        size_t n_indices,
-        float* const* adam_scale_ptrs,
-        int n_adam_scales,
         size_t N,
         cudaStream_t stream = nullptr);
 

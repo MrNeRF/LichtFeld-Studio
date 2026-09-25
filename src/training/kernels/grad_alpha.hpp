@@ -26,40 +26,6 @@ namespace lfs::training::kernels {
         int H, int W,
         cudaStream_t stream = nullptr);
 
-    // Computes output[c,h,w] = image[c,h,w] + (1 - alpha[h,w]) * bg_color[c].
-    void launch_fused_background_blend(
-        const float* image,
-        const float* alpha,
-        const float* bg_color,
-        float* output,
-        int H, int W,
-        cudaStream_t stream = nullptr);
-
-    // Computes output[c,h,w] = image[c,h,w] + (1 - alpha[h,w]) * bg_image[c,h,w].
-    void launch_fused_background_blend_with_image(
-        const float* image,
-        const float* alpha,
-        const float* bg_image,
-        float* output,
-        int H, int W,
-        cudaStream_t stream = nullptr);
-
-    // In-place inverse of launch_fused_background_blend.
-    void launch_fused_background_unblend(
-        float* image,
-        const float* alpha,
-        const float* bg_color,
-        int H, int W,
-        cudaStream_t stream = nullptr);
-
-    // In-place inverse of launch_fused_background_blend_with_image.
-    void launch_fused_background_unblend_with_image(
-        float* image,
-        const float* alpha,
-        const float* bg_image,
-        int H, int W,
-        cudaStream_t stream = nullptr);
-
     /**
      * @brief Add gradients from src to dst buffer (dst += src)
      *

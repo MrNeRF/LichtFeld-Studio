@@ -109,16 +109,7 @@ TEST_F(FusedBgBlendTest, ForwardBlendedMatchesExternalCompose) {
     ASSERT_TRUE(raw_fwd.has_value()) << std::string(raw_fwd.error().user_message());
     auto raw_image = raw_fwd->first.image.clone();
     auto alpha = raw_fwd->first.alpha.clone();
-    const int H = static_cast<int>(raw_image.shape()[1]);
-    const int W = static_cast<int>(raw_image.shape()[2]);
-    auto expected = Tensor::empty_like(raw_image);
-    kernels::launch_fused_background_blend(
-        raw_image.ptr<float>(),
-        alpha.ptr<float>(),
-        color_bg_.ptr<float>(),
-        expected.ptr<float>(),
-        H, W,
-        nullptr);
+    auto expected = raw_image + (Tensor::ones_like(alpha) - alpha) * color_bg_.reshape({3, 1, 1});
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     raw_fwd->second.release_forward_context();
 
@@ -131,8 +122,7 @@ TEST_F(FusedBgBlendTest, ForwardBlendedMatchesExternalCompose) {
     fused_fwd->second.release_forward_context();
 }
 
-// Backward: grad_alpha and param updates bit-equal / <1e-6 whether or not the
-// context image is "raw" (unblend is dead — blend_backward ignores image).
+// Backward: grad_alpha and parameter updates agree for raw and blended context images.
 TEST_F(FusedBgBlendTest, BackwardGradsMatchWithBlendedImage) {
     constexpr float kLr = 0.01f;
 

@@ -99,7 +99,6 @@ set(TRAINING_NEW_SOURCES
     components/config_serialization.cpp
     components/bilateral_grid.cpp
     components/ppisp.cpp
-    components/ppisp_controller.cu
     components/ppisp_controller_pool.cu
     components/ppisp_file.cpp
     components/sparsity_optimizer.cpp

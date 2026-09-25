@@ -37,7 +37,6 @@
 #include <sstream>
 #if LFS_BUILD_TRAINER
 #include "training/components/ppisp.hpp"
-#include "training/components/ppisp_controller.hpp"
 #include "training/components/ppisp_controller_pool.hpp"
 #endif
 #include "core/camera_metrics.hpp"

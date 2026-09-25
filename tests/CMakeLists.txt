@@ -769,13 +769,11 @@ set(TEST_FILES
     test_romav1.cpp
     test_sam2.cpp
     test_lpips.cpp
-    test_ppisp_controller.cpp
     test_ppisp_regularization.cpp
     test_ppisp_sidecar.cpp
     test_ppisp_checkpoint_roundtrip.cpp
     test_bilateral_grid_projection.cpp
     test_bilateral_grid_exposure_chroma.cpp
-    test_bilateral_grid_backward_tiled.cpp
     test_ppisp_projection.cpp
     test_ppisp_cuda_vs_torch.cpp
     test_ppisp_banded_region.cpp
@@ -1163,7 +1161,6 @@ string(CONCAT LFS_SLOW_TEST_FILTER
     "TensorMultiStreamTest.TrainerViewerHandshake*:"
     "CheckpointAtomicReplaceFaultTest.*:"
     "MemoryPressureTest.InjectedFailure*:"
-    "PPISPControllerTest.TrainingLoopConverges:"
     "UndistortCameraTest.BicyclePinholeNoDist:"
     "VideoColorConvertTest.*FullHD*:"
     "PlyToRadLod.*:"

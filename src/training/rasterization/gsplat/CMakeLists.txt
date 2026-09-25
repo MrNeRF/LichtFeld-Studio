@@ -19,18 +19,14 @@ set(GSPLAT_SOURCES
         Common.cpp
         Intersect.cpp
         Projection.cpp
-        QuatToRotmat.cpp
         Rasterization.cpp
-        Relocation.cpp
         SphericalHarmonics.cpp
 
         # CUDA files
         IntersectTile.cu
         ProjectionUT3DGSFused.cu
-        QuatToRotmatCUDA.cu
         RasterizeToPixelsFromWorld3DGSBwd.cu
         RasterizeToPixelsFromWorld3DGSFwd.cu
-        RelocationCUDA.cu
         SphericalHarmonicsCUDA.cu
 )
 

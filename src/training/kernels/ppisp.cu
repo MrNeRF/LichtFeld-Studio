@@ -508,15 +508,6 @@ namespace lfs::training::kernels {
         LFS_CUDA_CHECK_MSG(cudaGetLastError(), "PPISP forward kernel launch failed");
     }
 
-    void launch_ppisp_forward_chw(const float* exposure_params, const float* vignetting_params,
-                                  const float* color_params, const float* crf_params, const float* rgb_in,
-                                  float* rgb_out, int height, int width, int num_cameras, int num_frames,
-                                  int camera_idx, int frame_idx, cudaStream_t stream) {
-        launch_ppisp_forward_chw_region(exposure_params, vignetting_params, color_params, crf_params, rgb_in, rgb_out,
-                                        height, width, 0, height, num_cameras, num_frames, camera_idx, frame_idx,
-                                        stream);
-    }
-
     void launch_ppisp_backward_chw(const float* exposure_params, const float* vignetting_params,
                                    const float* color_params, const float* crf_params, const float* rgb_in,
                                    const float* grad_rgb_out, float* grad_exposure_params,

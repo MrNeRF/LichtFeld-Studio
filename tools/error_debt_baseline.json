@@ -40,9 +40,6 @@
       "src/rendering/rasterizer/cuda/point_cloud_raster.cu:309"
     ],
     "training": [
-      "src/training/components/ppisp_controller.cu:161",
-      "src/training/components/ppisp_controller.cu:239",
-      "src/training/components/ppisp_controller.cu:242",
       "src/training/components/ppisp_controller_pool.cu:256",
       "src/training/components/ppisp_controller_pool.cu:335",
       "src/training/components/ppisp_controller_pool.cu:338",
