@@ -907,6 +907,7 @@
     "pointing_device_tooltip": "Muis- of trackpadbediening voor de viewport. Het pictogram in de statusbalk wisselt ook.",
     "pointing_device_mouse": "Muis (desktop)",
     "pointing_device_trackpad": "Trackpad (notebook)",
+    "pointing_device_automatic": "Automatisch (beide)",
     "trackpad_swipe_pans": "Vegen met twee vingers verschuift",
     "trackpad_swipe_tooltip": "Uit: vegen draait rond en Shift+vegen verschuift. Aan: omgekeerd. Knijpen of Ctrl+vegen zoomt.",
     "trackpad_swipe_speed": "Veegsnelheid",
@@ -2477,8 +2478,9 @@
     "perf_expand": "Expand",
     "perf_collapse": "Collapse",
     "perf_hud_tooltip": "Show or hide the performance HUD",
-    "input_mouse_tooltip": "Muisnavigatie: slepen met middelste knop draait rond, slepen met rechterknop verschuift, scrollwiel zoomt. Klik om naar trackpad te wisselen",
-    "input_trackpad_tooltip": "Trackpadnavigatie: vegen met twee vingers draait rond, Shift+vegen verschuift, knijpen of Ctrl+vegen zoomt. Klik om naar muis te wisselen"
+    "input_mouse_tooltip": "Muisnavigatie: slepen met middelste knop draait rond, slepen met rechterknop verschuift, scrollwiel zoomt. Klik om te wisselen",
+    "input_trackpad_tooltip": "Trackpadnavigatie: vegen met twee vingers draait rond, Shift+vegen verschuift, knijpen of Ctrl+vegen zoomt. Klik om te wisselen",
+    "input_automatic_tooltip": "Automatische navigatie: trackpadgebaren op het trackpad, zoomen met het scrollwiel op de muis. Klik om te wisselen"
   },
   "runtime": {
     "training_save_no_memory": "Project opslaan mislukt: {}",

@@ -76,9 +76,9 @@
         </div>
     </div>
     <div id="status-right">
-        <div id="input-device-toggle">
-            <img class="input-device" src="../icon/mouse.png" data-class-hidden="trackpad_navigation" title="@tr:ui.input_mouse_tooltip"/>
-            <img class="input-device" src="../icon/device-laptop.png" data-class-hidden="!trackpad_navigation" title="@tr:ui.input_trackpad_tooltip"/>
+        <div id="input-device-toggle" data-attr-title="input_device_tooltip">
+            <img class="input-device" src="../icon/mouse.png" data-class-hidden="input_device == 'trackpad'"/>
+            <img class="input-device" src="../icon/device-laptop.png" data-class-hidden="input_device == 'mouse'"/>
         </div>
         <div id="mcp-chip" data-attr-title="mcp_tooltip" data-style-color="mcp_color" data-class-expanded="mcp_details_expanded">
             <span>{{ mcp_summary }}</span>

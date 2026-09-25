@@ -252,7 +252,8 @@ namespace lfs::vis::gui {
             bool show_lfs_memory = true;
             bool show_gpu_model = false;
             bool gpu_panel_active = false;
-            bool trackpad_navigation = false;
+            std::string input_device = "mouse";
+            std::string input_device_tooltip;
             std::string gpu_model_text;
             std::string gpu_mem_text;
             std::string gpu_mem_color;

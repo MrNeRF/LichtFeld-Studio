@@ -907,6 +907,7 @@
     "pointing_device_tooltip": "뷰포트의 마우스 또는 트랙패드 조작입니다. 상태 표시줄 아이콘으로도 전환할 수 있습니다.",
     "pointing_device_mouse": "마우스 (데스크톱)",
     "pointing_device_trackpad": "트랙패드 (노트북)",
+    "pointing_device_automatic": "자동 (둘 다)",
     "trackpad_swipe_pans": "두 손가락 스와이프로 이동",
     "trackpad_swipe_tooltip": "끄기: 스와이프는 궤도 회전, Shift+스와이프는 이동. 켜기: 반대. 핀치 또는 Ctrl+스와이프는 확대/축소.",
     "trackpad_swipe_speed": "스와이프 속도",
@@ -2477,8 +2478,9 @@
     "perf_expand": "Expand",
     "perf_collapse": "Collapse",
     "perf_hud_tooltip": "Show or hide the performance HUD",
-    "input_mouse_tooltip": "마우스 탐색: 가운데 버튼 드래그로 궤도 회전, 오른쪽 드래그로 이동, 휠로 확대/축소. 클릭하여 트랙패드로 전환",
-    "input_trackpad_tooltip": "트랙패드 탐색: 두 손가락 스와이프로 궤도 회전, Shift+스와이프로 이동, 핀치 또는 Ctrl+스와이프로 확대/축소. 클릭하여 마우스로 전환"
+    "input_mouse_tooltip": "마우스 탐색: 가운데 버튼 드래그로 궤도 회전, 오른쪽 드래그로 이동, 휠로 확대/축소. 클릭하여 전환",
+    "input_trackpad_tooltip": "트랙패드 탐색: 두 손가락 스와이프로 궤도 회전, Shift+스와이프로 이동, 핀치 또는 Ctrl+스와이프로 확대/축소. 클릭하여 전환",
+    "input_automatic_tooltip": "자동 탐색: 트랙패드에서는 트랙패드 제스처, 마우스에서는 휠로 확대/축소. 클릭하여 전환"
   },
   "runtime": {
     "training_save_no_memory": "프로젝트를 저장하지 못했습니다: {}",

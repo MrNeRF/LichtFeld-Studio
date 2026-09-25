@@ -167,6 +167,8 @@ namespace lfs::vis {
         void handleScroll(double xoff, double yoff);
         // scale: change since the previous pinch update, > 1 zooms in.
         void handlePinch(float scale);
+        // A finger touched (down) or left the trackpad.
+        void handleTrackpadTouch(bool down);
         void handleKey(int key, int action, int mods);
         void handleKey(int physical_key, int logical_key, int scancode, int action, int mods);
         void handleFileDrop(const std::vector<std::string>& paths);
@@ -293,6 +295,7 @@ namespace lfs::vis {
         CameraNavigationMode camera_navigation_mode_ = CameraNavigationMode::Orbit;
         bool camera_view_snap_enabled_ = false;
         TrackpadPreferenceState trackpad_{};
+        int trackpad_touches_ = 0;
         int drag_button_ = -1;
         glm::dvec2 last_mouse_pos_{0, 0};
         float splitter_start_pos_ = 0.5f;

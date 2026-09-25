@@ -907,6 +907,7 @@
     "pointing_device_tooltip": "Maus- oder Trackpad-Steuerung für den Viewport. Das Symbol in der Statusleiste schaltet ebenfalls um.",
     "pointing_device_mouse": "Maus (Desktop)",
     "pointing_device_trackpad": "Trackpad (Notebook)",
+    "pointing_device_automatic": "Automatisch (beides)",
     "trackpad_swipe_pans": "Wischen mit zwei Fingern verschiebt",
     "trackpad_swipe_tooltip": "Aus: Wischen macht Orbit, Umschalt+Wischen verschiebt. An: umgekehrt. Aufziehen/Zuziehen oder Strg+Wischen zoomt.",
     "trackpad_swipe_speed": "Wischgeschwindigkeit",
@@ -2477,8 +2478,9 @@
     "perf_expand": "Expand",
     "perf_collapse": "Collapse",
     "perf_hud_tooltip": "Show or hide the performance HUD",
-    "input_mouse_tooltip": "Mausnavigation: mittlere Maustaste ziehen dreht die Ansicht, rechte Maustaste ziehen verschiebt, Mausrad zoomt. Klicken, um zum Trackpad zu wechseln",
-    "input_trackpad_tooltip": "Trackpad-Navigation: Wischen mit zwei Fingern dreht die Ansicht, Umschalt+Wischen verschiebt, Aufziehen/Zuziehen oder Strg+Wischen zoomt. Klicken, um zur Maus zu wechseln"
+    "input_mouse_tooltip": "Mausnavigation: mittlere Maustaste ziehen dreht die Ansicht, rechte Maustaste ziehen verschiebt, Mausrad zoomt. Klicken zum Wechseln",
+    "input_trackpad_tooltip": "Trackpad-Navigation: Wischen mit zwei Fingern dreht die Ansicht, Umschalt+Wischen verschiebt, Aufziehen/Zuziehen oder Strg+Wischen zoomt. Klicken zum Wechseln",
+    "input_automatic_tooltip": "Automatische Navigation: Trackpad-Gesten auf dem Trackpad, Zoom mit dem Mausrad. Klicken zum Wechseln"
   },
   "runtime": {
     "training_save_no_memory": "Projekt konnte nicht gespeichert werden: {}",
