@@ -251,7 +251,7 @@ namespace lfs::training {
 
         fast_lfs::optimizer::JointContiguousBatchEntry entries[5];
         int n_entries = 0;
-        cudaStream_t batch_stream = nullptr;
+        const cudaStream_t batch_stream = lfs::core::getCurrentCUDAStream();
         const float* batch_mean_step_scale_raw = nullptr;
         int batch_mean_step_scale_n = 0;
         const ParamType contiguous[] = {
@@ -284,20 +284,10 @@ namespace lfs::training {
             const double bias_correction2_sqrt_rcp =
                 1.0 / std::sqrt(1.0 - std::pow(config_.beta2, state.step_count));
             const float param_lr = static_cast<float>(get_param_lr(type));
-            cudaStream_t execution_stream = state.grad.stream();
-            if (execution_stream == nullptr) {
-                execution_stream = param_live.stream();
-            }
-            if (execution_stream == nullptr) {
-                execution_stream = state.exp_avg.stream();
-            }
-            if (batch_stream == nullptr) {
-                batch_stream = execution_stream;
-            }
-            lfs::core::waitForCUDAStream(batch_stream, param_live.stream());
-            lfs::core::waitForCUDAStream(batch_stream, state.exp_avg.stream());
-            lfs::core::waitForCUDAStream(batch_stream, state.joint_bounds.stream());
-            lfs::core::waitForCUDAStream(batch_stream, state.grad.stream());
+            param_live.sync_to_stream(batch_stream);
+            state.exp_avg.sync_to_stream(batch_stream);
+            state.joint_bounds.sync_to_stream(batch_stream);
+            state.grad.sync_to_stream(batch_stream);
             const size_t feature_dim = param_live.numel() / param_size;
             auto& e = entries[n_entries++];
             e.param = param_live.ptr<float>();
@@ -312,7 +302,7 @@ namespace lfs::training {
             if (type == ParamType::Means && per_splat_mean_step_) {
                 auto& scaling = splat_data_.scaling_raw();
                 if (scaling.is_valid() && scaling.numel() > 0) {
-                    lfs::core::waitForCUDAStream(batch_stream, scaling.stream());
+                    scaling.sync_to_stream(batch_stream);
                     batch_mean_step_scale_raw = scaling.ptr<float>();
                     batch_mean_step_scale_n = static_cast<int>(scaling.numel());
                     e.apply_mean_step = 1;
@@ -335,7 +325,7 @@ namespace lfs::training {
                 mean_step_far_mask_storage_.sync_to_stream(batch_stream);
             }
             if (frozen_mask_.is_valid()) {
-                lfs::core::waitForCUDAStream(batch_stream, frozen_mask_.stream());
+                frozen_mask_.sync_to_stream(batch_stream);
             }
             if (crop_damping_mask_.is_valid()) {
                 crop_damping_mask_.sync_to_stream(batch_stream);
@@ -437,8 +427,11 @@ namespace lfs::training {
             if (state.grad.is_valid() && state.grad.numel() > 0) {
                 const size_t elements =
                     state.size * (state.grad.numel() / state.grad.shape()[0]);
-                if (elements > 0)
-                    state.grad.flatten().slice(0, 0, elements).fill_(0.0f, state.grad.stream());
+                if (elements > 0) {
+                    const auto stream = lfs::core::getCurrentCUDAStream();
+                    state.grad.set_stream(stream);
+                    state.grad.flatten().slice(0, 0, elements).fill_(0.0f, stream);
+                }
             }
         }
     }
@@ -696,20 +689,14 @@ namespace lfs::training {
         const double bias_correction2_sqrt_rcp = 1.0 / std::sqrt(1.0 - std::pow(config_.beta2, state.step_count));
         const float param_lr = static_cast<float>(get_param_lr(type));
 
-        cudaStream_t execution_stream = state.grad.stream();
-        if (execution_stream == nullptr) {
-            execution_stream = param_live.stream();
-        }
-        if (execution_stream == nullptr) {
-            execution_stream = state.exp_avg.stream();
-        }
-        lfs::core::waitForCUDAStream(execution_stream, param_live.stream());
-        lfs::core::waitForCUDAStream(execution_stream, state.exp_avg.stream());
+        const cudaStream_t execution_stream = lfs::core::getCurrentCUDAStream();
+        param_live.sync_to_stream(execution_stream);
+        state.exp_avg.sync_to_stream(execution_stream);
         if (state.joint_bounds.is_valid())
-            lfs::core::waitForCUDAStream(execution_stream, state.joint_bounds.stream());
-        lfs::core::waitForCUDAStream(execution_stream, state.grad.stream());
+            state.joint_bounds.sync_to_stream(execution_stream);
+        state.grad.sync_to_stream(execution_stream);
         if (frozen_mask_.is_valid()) {
-            lfs::core::waitForCUDAStream(execution_stream, frozen_mask_.stream());
+            frozen_mask_.sync_to_stream(execution_stream);
         }
         if (crop_damping_mask_.is_valid()) {
             crop_damping_mask_.sync_to_stream(execution_stream);
@@ -801,7 +788,7 @@ namespace lfs::training {
             if (type == ParamType::Means && per_splat_mean_step_) {
                 auto& scaling = splat_data_.scaling_raw();
                 if (scaling.is_valid() && scaling.numel() > 0) {
-                    lfs::core::waitForCUDAStream(execution_stream, scaling.stream());
+                    scaling.sync_to_stream(execution_stream);
                     mean_step_scale_raw = scaling.ptr<float>();
                     mean_step_scale_n = static_cast<int>(scaling.numel());
                 }
@@ -1148,8 +1135,8 @@ namespace lfs::training {
         reset_indices_upload_.enqueue(
             d_indices_tensor, std::as_bytes(std::span(indices)), reinterpret_cast<void*>(stream));
         int64_t* const d_indices = d_indices_tensor.ptr<int64_t>();
-        lfs::core::waitForCUDAStream(stream, state.exp_avg.stream());
-        lfs::core::waitForCUDAStream(stream, state.joint_bounds.stream());
+        state.exp_avg.sync_to_stream(stream);
+        state.joint_bounds.sync_to_stream(stream);
         if (type == ParamType::ShN) {
             const int slots = static_cast<int>(lfs::core::sh_float4_slots_for_rest(
                 static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest())));
@@ -1258,9 +1245,9 @@ namespace lfs::training {
                 const int n_attr = bpc > 0 ? row_bytes / bpc : 0;
                 if (n_attr > 0) {
                     const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
-                    lfs::core::waitForCUDAStream(stream, state.exp_avg.stream());
-                    lfs::core::waitForCUDAStream(stream, state.joint_bounds.stream());
-                    lfs::core::waitForCUDAStream(stream, indices.stream());
+                    state.exp_avg.sync_to_stream(stream);
+                    state.joint_bounds.sync_to_stream(stream);
+                    indices.sync_to_stream(stream);
                     const bool idx_i64 = indices.dtype() == lfs::core::DataType::Int64;
                     lfs::core::Tensor idx64;
                     const int64_t* idx_ptr = nullptr;
@@ -1410,8 +1397,8 @@ namespace lfs::training {
                     d_idx_tensor, std::as_bytes(std::span(new_idx)),
                     reinterpret_cast<void*>(stream));
                 int64_t* const d_idx = d_idx_tensor.ptr<int64_t>();
-                lfs::core::waitForCUDAStream(stream, state.exp_avg.stream());
-                lfs::core::waitForCUDAStream(stream, state.joint_bounds.stream());
+                state.exp_avg.sync_to_stream(stream);
+                state.joint_bounds.sync_to_stream(stream);
                 if (type == ParamType::ShN) {
                     const int slots = static_cast<int>(lfs::core::sh_float4_slots_for_rest(
                         static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest())));
@@ -1717,8 +1704,8 @@ namespace lfs::training {
                         const int slots = static_cast<int>(
                             lfs::core::sh_float4_slots_for_rest(layout_rest));
                         if (slots > 0) {
-                            lfs::core::waitForCUDAStream(stream, state.exp_avg.stream());
-                            lfs::core::waitForCUDAStream(stream, state.joint_bounds.stream());
+                            state.exp_avg.sync_to_stream(stream);
+                            state.joint_bounds.sync_to_stream(stream);
                             fast_lfs::optimizer::joint_encode_zero_shN_at_indices(
                                 state.exp_avg.ptr<uint8_t>(),
                                 state.joint_bounds.ptr<float>(),
@@ -1789,8 +1776,8 @@ namespace lfs::training {
                 return;
             }
             const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
-            lfs::core::waitForCUDAStream(stream, state.exp_avg.stream());
-            lfs::core::waitForCUDAStream(stream, state.joint_bounds.stream());
+            state.exp_avg.sync_to_stream(stream);
+            state.joint_bounds.sync_to_stream(stream);
             if (type == ParamType::ShN) {
                 const int slots = static_cast<int>(lfs::core::sh_float4_slots_for_rest(
                     static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest())));
@@ -2063,7 +2050,7 @@ namespace lfs::training {
 
         const auto cpu_decode_finished = std::chrono::steady_clock::now();
         // Tensor::to(CUDA, stream) rehomes onto that handle; do not destroy it.
-        cudaStream_t upload_stream = lfs::core::getCurrentCUDAStream();
+        const cudaStream_t upload_stream = lfs::core::getCurrentCUDAStream();
         for (auto& [state_name, state] : loaded_states) {
             (void)state_name;
             auto upload = [&](lfs::core::Tensor& tensor) {
@@ -2071,12 +2058,7 @@ namespace lfs::training {
                     tensor.device() == lfs::core::Device::GPU) {
                     return;
                 }
-                if (upload_stream != nullptr) {
-                    tensor = tensor.to(lfs::core::Device::GPU, upload_stream);
-                    return;
-                }
-                tensor = tensor.to(lfs::core::Device::GPU);
-                upload_stream = tensor.stream();
+                tensor = tensor.to(lfs::core::Device::GPU, upload_stream);
             };
             upload(state.exp_avg);
             upload(state.joint_bounds);
