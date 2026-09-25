@@ -1,15 +1,14 @@
+# vcpkg's sdl3 port turns off SDL's optional system features (XInput2, XRandR,
+# Xcursor, libdecor, ...) since 3.4.14. This overlay keeps the 3.4.2 port so
+# Linux builds still use the X11 and Wayland libraries of the build machine.
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO libsdl-org/SDL
     REF "release-${VERSION}"
-    SHA512 f5da0573118330ecef40d0cbb0a4a01c03a0c0e376624108ed9abe8769cdf68d8c61868d771ab65dd1666690d2a363e1dd1cd5cca408eb8ac9b9b613caa4af40
+    SHA512 d815b28f72d60e4d83e31d878bcf2dd52089353637a4ffd0fd094deaafaaa5b5ee797caad9eeb952f6c28a2bbe26253092c294ce1aefbeb92d85469f35229ed1
     HEAD_REF main
     PATCHES
         fix-freebsd.patch
-        # Backport from SDL main (3.6): macOS trackpads report precise
-        # scrollingDelta values; deltaY arrives in chunks and zero-delta events
-        # are dropped, which makes trackpad scrolling jerky. Drop with SDL 3.6.
-        macos-precise-trackpad-scroll.patch
 )
 
 string(COMPARE EQUAL "${VCPKG_LIBRARY_LINKAGE}" "static" SDL_STATIC)
