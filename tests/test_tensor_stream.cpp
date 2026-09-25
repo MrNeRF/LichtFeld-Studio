@@ -14,6 +14,7 @@
 #include "core/tensor.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "core/tensor_upload.hpp"
 #include "cuda_backend_test.hpp"
 
 using namespace lfs::core;
@@ -610,4 +611,19 @@ TEST_F(TensorStreamTest, ConstantInitializationStaysOnNonBlockingStream) {
             << "Late default-stream initialization overwrote the tensor";
     }
     destroyStreamSafely(stream);
+}
+
+TEST_F(TensorStreamTest, DirectZerosPublishTheExecutionStream) {
+    TensorWorkQueue queue(GpuBackend::CUDA);
+    TensorWorkQueue::Scope scope(queue);
+    for (const size_t capacity : {0, 64}) {
+        auto tensor = Tensor::zeros_direct({0, 3}, capacity, Device::GPU);
+        EXPECT_EQ(tensor.stream(), getCurrentCUDAStream());
+        EXPECT_EQ(tensor.capacity(), capacity);
+        if (capacity != 0) {
+            tensor.append_zeros(capacity);
+            EXPECT_EQ(tensor.cpu().to_vector(), std::vector<float>(capacity * 3, 0.0f));
+        }
+    }
+    queue.wait();
 }

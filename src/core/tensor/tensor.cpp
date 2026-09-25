@@ -3624,6 +3624,7 @@ namespace lfs::core {
         LFS_ASSERT_MSG(shape.rank() > 0,
                        "zeros_direct requires at least one dimension");
         const GpuBackend backend = internal::resolve_new_gpu_storage_backend();
+        const auto stream = backend == GpuBackend::CUDA ? getCurrentCUDAStream() : nullptr;
 
         const size_t current_size = shape[0];
         LFS_ASSERT_MSG(capacity >= current_size,
@@ -3651,6 +3652,7 @@ namespace lfs::core {
             t.device_ = device;
             t.dtype_ = dtype;
             t.ensure_state();
+            t.state_->stream = stream;
             t.state_->capacity = capacity;
             t.state_->logical_size = current_size;
             t.id_ = next_id_++;
@@ -3665,7 +3667,7 @@ namespace lfs::core {
         internal::StorageRef storage = backend_ops.allocate(
             total_bytes, alignof(std::max_align_t),
             internal::ExecContext{
-                .cuda_stream = nullptr,
+                .cuda_stream = stream,
                 .allocation_class = internal::AllocationClass::Direct,
                 .allocation_label = "zeros_direct storage allocation",
                 .allocation_operation = "tensor.zeros_direct",
@@ -3678,10 +3680,10 @@ namespace lfs::core {
                 .bytes = total_bytes,
                 .value = 0,
                 .synchronous = true,
-                .context = internal::ExecContext{nullptr},
+                .context = internal::ExecContext{stream},
             });
         } catch (...) {
-            backend_ops.deallocate(storage, internal::ExecContext{nullptr});
+            backend_ops.deallocate(storage, internal::ExecContext{stream});
             throw;
         }
 
@@ -3725,6 +3727,7 @@ namespace lfs::core {
         t.device_ = device;
         t.dtype_ = dtype;
         t.ensure_state();
+        t.state_->stream = stream;
         t.state_->capacity = capacity;
         t.state_->logical_size = current_size;
         t.id_ = next_id_++;
