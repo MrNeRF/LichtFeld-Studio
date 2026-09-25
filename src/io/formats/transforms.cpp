@@ -9,7 +9,6 @@
 #include "core/tensor.hpp"
 #include "formats/colmap.hpp"
 #include "tinyply.hpp"
-#include "tinyply_body_check.hpp"
 #include <array>
 #include <cmath>
 #include <filesystem>
@@ -723,11 +722,6 @@ namespace lfs::io {
             tinyply::PlyFile file;
             throw_if_load_cancel_requested(options, "Transforms PLY header parse cancelled");
             file.parse_header(ss);
-            const auto header_bytes = static_cast<std::uint64_t>(std::max<std::streamoff>(ss.tellg(), 0));
-            const auto file_bytes = static_cast<std::uint64_t>(std::filesystem::file_size(filepath));
-            if (const auto shortfall = tinyply_body_shortfall(file, file_bytes - std::min(header_bytes, file_bytes))) {
-                throw std::runtime_error(*shortfall);
-            }
 
             // Request vertex positions (x, y, z)
             std::shared_ptr<tinyply::PlyData> vertices;
