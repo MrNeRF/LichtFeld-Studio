@@ -9,6 +9,7 @@
 namespace lfs::core::internal {
     void cuda_where_into(Tensor& output, const Tensor& condition, float value, const Tensor& source);
     void vulkan_where_into(Tensor& output, const Tensor& condition, float value, const Tensor& source);
+    void metal_where_into(Tensor& output, const Tensor& condition, float value, const Tensor& source);
     std::optional<TensorVulkanBuffer> native_vulkan_buffer(const Tensor& tensor);
     class TensorVulkanInteropBackend {
     public:

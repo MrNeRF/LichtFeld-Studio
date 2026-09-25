@@ -6,6 +6,7 @@
 #include "../facade_trace.hpp"
 #include "../readback_buffer.hpp"
 #include "../scalar_operand.hpp"
+#include "../tensor_vulkan_interop.hpp"
 #include "metal_backend_ops.hpp"
 #include "metal_context.hpp"
 
@@ -1038,7 +1039,7 @@ namespace lfs::core::internal {
 
         // mask_op modes and predicates.
         constexpr uint32_t kMaskFill = 0, kAndLive = 1, kCompactSelect = 2, kCompactScatter = 3, kNonzeroPositions = 4,
-                           kMaskScan = 5;
+                           kMaskScan = 5, kWhereInto = 6;
         constexpr uint32_t kBytePredicate = 0, kFloatPredicate = 1;
 
         struct MaskLaunch {
@@ -1933,6 +1934,20 @@ namespace lfs::core::internal {
                      {.mode = kIndexPutMode, .dtype = output.dtype, .total = program.index_size, .input = output,
                       .indices = indices, .values = values,
                       .params = {.input_size = checked_u32(program.input_size, "Metal index_put size exceeds uint32")}});
+    }
+
+    void metal_where_into(Tensor& output, const Tensor& condition, const float value, const Tensor& source) {
+        LFS_FACADE_TRACE(where);
+        pin_operands({&output, &condition, &source});
+        if (@available(macOS 26.0, *)) {
+            encode_mask(*acquire_context(), {.mode = kWhereInto,
+                                             .dtype = output.dtype(),
+                                             .count = output.numel(),
+                                             .data = storage_ref(output),
+                                             .mask = storage_ref(condition),
+                                             .source = storage_ref(source),
+                                             .fill = fill_bits(output.dtype(), scalar_operand(value))});
+        }
     }
 
     void MetalBackendOps::masked_fill(const StorageRef output, const StorageRef mask, const MaskProgram& program,

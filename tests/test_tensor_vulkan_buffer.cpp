@@ -362,6 +362,8 @@ namespace {
                              testing::Values(std::pair{GpuBackend::CUDA, DataType::Float32},
                                              std::pair{GpuBackend::CUDA, DataType::Float16},
                                              std::pair{GpuBackend::Vulkan, DataType::Float32},
-                                             std::pair{GpuBackend::Vulkan, DataType::Float16}));
+                                             std::pair{GpuBackend::Vulkan, DataType::Float16},
+                                             std::pair{GpuBackend::Metal, DataType::Float32},
+                                             std::pair{GpuBackend::Metal, DataType::Float16}));
 
 } // namespace

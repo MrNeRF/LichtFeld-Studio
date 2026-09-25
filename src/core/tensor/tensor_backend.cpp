@@ -268,7 +268,11 @@ namespace lfs::core {
             throw TensorError("CUDA tensor backend is unavailable");
 #endif
         } else if (*backend == GpuBackend::Metal) {
-            throw TensorError("Metal backend: where_into is not implemented yet");
+#ifdef LFS_TENSOR_METAL
+            internal::metal_where_into(output, condition, value, source);
+#else
+            throw TensorError("Metal tensor backend is unavailable");
+#endif
         } else {
 #ifdef LFS_TENSOR_VULKAN
             internal::vulkan_where_into(output, condition, value, source);
