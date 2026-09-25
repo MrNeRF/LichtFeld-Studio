@@ -350,3 +350,35 @@ def test_empty_state_hint_follows_the_scene_and_dirties_only_on_change(overlays_
     module._sync_viewport_overlay_document(document)
     assert funcs["show_empty_state"]() is False
 
+
+@pytest.mark.parametrize("import_overlay", [
+    {"active": True},
+    {"active": False, "show_completion": True},
+])
+def test_empty_state_hint_stays_hidden_while_import_overlay_is_visible(
+    overlays_module, monkeypatch, import_overlay
+):
+    (
+        module,
+        _hook_calls,
+        _remove_calls,
+        _dismiss_calls,
+        _cancel_calls,
+        import_state,
+        _video_state,
+        document,
+    ) = overlays_module
+    monkeypatch.setattr(module.lf.ui, "is_scene_empty", lambda: True)
+    import_state.update(import_overlay)
+
+    module._sync_viewport_overlay_document(document)
+
+    assert document.model.bound_funcs["show_import_overlay"]() is True
+    assert document.model.bound_funcs["show_empty_state"]() is False
+
+    import_state.clear()
+    module._sync_viewport_overlay_document(document)
+
+    assert document.model.bound_funcs["show_import_overlay"]() is False
+    assert document.model.bound_funcs["show_empty_state"]() is True
+

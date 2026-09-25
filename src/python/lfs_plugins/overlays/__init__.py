@@ -64,8 +64,13 @@ def _viewport_bottom_inset(layout, base_inset):
     return bottom_inset
 
 
-def _empty_state_visible():
-    return lf.ui.is_scene_empty() and not lf.ui.is_drag_hovering() and not lf.ui.is_startup_visible()
+def _empty_state_visible(import_visible):
+    return (
+        not import_visible
+        and lf.ui.is_scene_empty()
+        and not lf.ui.is_drag_hovering()
+        and not lf.ui.is_startup_visible()
+    )
 
 
 def _empty_state_import_hint():
@@ -178,7 +183,10 @@ class _OverlayDocumentController:
             dirty_sources.append("video_status")
             status_dirty = True
 
-        empty_state_signature = (RuntimeState.language_generation.value, _empty_state_visible())
+        empty_state_signature = (
+            RuntimeState.language_generation.value,
+            _empty_state_visible(import_visible),
+        )
         if empty_state_signature != self._empty_state_signature:
             self._empty_state_signature = empty_state_signature
             dirty_sources.append("empty_state")
