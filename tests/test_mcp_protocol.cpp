@@ -1411,6 +1411,46 @@ namespace lfs::mcp {
         EXPECT_EQ(missing["error_message"], "Missing required parameter: value");
     }
 
+    TEST(McpProtocolTest, MistypedArgumentsAreRejectedBeforeTheHandler) {
+        static constexpr const char* tool_name = "test.typed_params";
+        ScopedToolRegistration cleanup(tool_name);
+        int handler_calls = 0;
+        json last_arguments;
+        ToolRegistry::instance().register_tool(
+            McpTool{
+                .name = tool_name,
+                .description = "Typed parameters",
+                .input_schema = {.type = "object",
+                                 .properties = json{{"label", {{"type", "string"}}},
+                                                    {"count", {{"type", "integer"}}},
+                                                    {"parent", {{"type", "string"}}}},
+                                 .required = {"label"}},
+                .metadata = McpToolMetadata{.category = "test", .kind = "command"}},
+            [&](const json& args) -> json {
+                ++handler_calls;
+                last_arguments = args;
+                return json{{"success", true}};
+            });
+        auto& registry = ToolRegistry::instance();
+
+        const auto mistyped = registry.call_tool(tool_name, json{{"label", 5}});
+        EXPECT_EQ(mistyped["error"]["code"], "InvalidArgument");
+        EXPECT_EQ(mistyped["error"]["details"]["parameter"], "label");
+        const auto string_count = registry.call_tool(tool_name, json{{"label", "x"}, {"count", "7"}});
+        EXPECT_EQ(string_count["error"]["details"]["parameter"], "count");
+        const auto null_required = registry.call_tool(tool_name, json{{"label", nullptr}});
+        EXPECT_EQ(null_required["error_message"], "Missing required parameter: label");
+        const auto not_an_object = registry.call_tool(tool_name, json::array({1, 2}));
+        EXPECT_EQ(not_an_object["error"]["code"], "InvalidArgument");
+        EXPECT_EQ(handler_calls, 0) << "a rejected call reached the handler";
+
+        EXPECT_EQ(registry.call_tool(tool_name, json{{"label", "x"}, {"count", 3.0}, {"parent", nullptr}})["success"],
+                  true);
+        EXPECT_EQ(handler_calls, 1);
+        EXPECT_TRUE(last_arguments.contains("parent") && last_arguments["parent"].is_null())
+            << "an explicit null lost its meaning before the handler";
+    }
+
     TEST(McpProtocolTest, TypedEnvelopeHandlerResultIsPassedThroughWithMirror) {
         static constexpr const char* tool_name = "test.typed_envelope";
         ScopedToolRegistration cleanup(tool_name);
