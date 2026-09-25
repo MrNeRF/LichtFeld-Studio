@@ -307,7 +307,7 @@ namespace lfs::training {
             temp_path += ".tmp";
             {
                 std::ofstream out;
-                if (!lfs::core::open_file_for_write(temp_path, out)) {
+                if (!lfs::core::open_file_for_write(temp_path, std::ios::out | std::ios::binary, out)) {
                     LOG_WARN("Eval: failed to open '{}'", lfs::core::path_to_utf8(temp_path));
                     return;
                 }
@@ -323,8 +323,8 @@ namespace lfs::training {
         }
 
         [[nodiscard]] nlohmann::json read_json_object(const std::filesystem::path& path) {
-            std::ifstream in(path);
-            if (!in)
+            std::ifstream in;
+            if (!lfs::core::open_file_for_read(path, std::ios::in | std::ios::binary, in))
                 return nlohmann::json::object();
             try {
                 auto document = nlohmann::json::parse(in);
