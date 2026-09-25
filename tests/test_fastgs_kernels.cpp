@@ -1200,6 +1200,46 @@ TEST_F(FastGSKernelTest, Optimizer_ZeroRows) {
     ASSERT_NO_THROW(opt->reset_state_at_indices(ParamType::Means, device_indices));
 }
 
+TEST_F(FastGSKernelTest, Optimizer_ResetRowsTensorMatchesVectorPath) {
+    const auto state_bytes = [](const AdamOptimizer& opt, ParamType type) {
+        const auto* state = opt.get_state(type);
+        EXPECT_NE(state, nullptr);
+        auto packed = state->exp_avg.cpu().contiguous();
+        auto bounds = state->joint_bounds.cpu().contiguous();
+        std::vector<uint8_t> bytes(packed.bytes() + bounds.bytes());
+        std::memcpy(bytes.data(), packed.data_ptr(), packed.bytes());
+        std::memcpy(bytes.data() + packed.bytes(), bounds.data_ptr(), bounds.bytes());
+        return bytes;
+    };
+
+    for (const auto index_dtype : {DataType::Int64, DataType::Int32}) {
+        auto vector_opt = make_optimizer();
+        auto tensor_opt = make_optimizer();
+        for (auto* opt : {vector_opt.get(), tensor_opt.get()}) {
+            opt->get_grad(ParamType::Means).fill_(0.5f);
+            opt->get_grad(ParamType::Opacity).fill_(0.25f);
+            opt->step(1);
+        }
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+        const std::vector<int64_t> rows = {0, 3, 7, static_cast<int64_t>(n_) - 1};
+        auto host_rows = Tensor::empty({rows.size()}, Device::CPU, DataType::Int64);
+        std::memcpy(host_rows.ptr<int64_t>(), rows.data(), rows.size() * sizeof(int64_t));
+        const auto device_rows = host_rows.cuda().to(index_dtype);
+
+        for (const auto type : {ParamType::Means, ParamType::Opacity}) {
+            const auto before = state_bytes(*vector_opt, type);
+            vector_opt->reset_state_at_indices(type, rows);
+            tensor_opt->reset_state_at_indices(type, device_rows);
+            ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+            const auto after_vector = state_bytes(*vector_opt, type);
+            // A tensor overload that skipped the reset would leave `before` in place.
+            EXPECT_NE(after_vector, before);
+            EXPECT_EQ(state_bytes(*tensor_opt, type), after_vector);
+        }
+    }
+}
+
 // Numerical tests
 TEST_F(FastGSKernelTest, Numerical_Deterministic) {
     auto r1 = forward();
