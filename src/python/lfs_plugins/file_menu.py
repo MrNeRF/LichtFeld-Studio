@@ -690,6 +690,12 @@ def _publish_current_project_to_gallery(*, refresh_once: bool = True) -> None:
         project_id = str(card.project_uuid)
         if not project_id:
             raise ValueError(gallery_tr("error.project_changed"))
+        get_panel = getattr(lf.ui, "get_panel_object", None)
+        panel = get_panel("lfs.asset_manager") if callable(get_panel) else None
+        catalog_entry = getattr(panel, "catalog_entry_for_path", None)
+        path_entry = catalog_entry(path) if callable(catalog_entry) else None
+        if path_entry and path_entry.get("copy_of"):
+            raise ValueError(gallery_tr("eligibility.copy"))
 
         from .gallery_controller import get_gallery_controller
         from .gallery_file_panel import open_gallery_file_panel
@@ -729,8 +735,6 @@ def _publish_current_project_to_gallery(*, refresh_once: bool = True) -> None:
                          or scene or {})
         project_name = str(getattr(card, "title", None) or project_path.stem)
         if not link:
-            get_panel = getattr(lf.ui, "get_panel_object", None)
-            panel = get_panel("lfs.asset_manager") if callable(get_panel) else None
             if panel is not None:
                 entry = panel._asset_dict(project_id)
                 if entry and Path(entry["path"]).resolve() == project_path:

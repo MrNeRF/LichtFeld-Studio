@@ -1254,6 +1254,11 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             return getter(asset_id)
         return self._asset_index_assets().get(asset_id)
 
+    def catalog_entry_for_path(self, path: str) -> Optional[Dict[str, Any]]:
+        find_by_path = getattr(self._asset_index, "find_asset_by_path", None)
+        project = find_by_path(path) if path and callable(find_by_path) else None
+        return self._asset_dict(project.id) if project is not None else None
+
     @staticmethod
     def _project_path_key(path: Any) -> str:
         text = str(path or "").strip()

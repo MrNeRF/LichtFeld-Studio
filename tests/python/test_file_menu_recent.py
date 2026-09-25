@@ -721,6 +721,41 @@ def test_file_menu_publish_is_disabled_without_a_scene(monkeypatch):
     assert file_menu.lf.message_dialogs == []
 
 
+def test_file_menu_publish_refuses_a_copy_of_another_project(monkeypatch, tmp_path):
+    project = tmp_path / "copy.licht"
+    project.write_bytes(b"saved")
+    file_menu = _load_file_menu(monkeypatch)
+    file_menu.lf.project_has_path = lambda: True
+    file_menu.lf.project_poll_write = lambda: {"path": str(project)}
+    file_menu.lf.io = SimpleNamespace(
+        inspect_project_card=lambda path: SimpleNamespace(
+            project_uuid="project-id", commit_uuid="commit-id", file_uuid="file-id", title=None,
+            physical_file_size=5, has_preview=False,
+        )
+    )
+    looked_up = []
+    catalog = SimpleNamespace(
+        catalog_entry_for_path=lambda path: looked_up.append(path) or {"id": "copy-id", "copy_of": "project-id"}
+    )
+    file_menu.lf.ui.get_panel_object = lambda name: catalog if name == "lfs.asset_manager" else None
+    opened = []
+    gallery_panel = ModuleType("lfs_plugins.gallery_file_panel")
+    gallery_panel.open_gallery_file_panel = lambda **review: opened.append(review)
+    monkeypatch.setitem(sys.modules, "lfs_plugins.gallery_file_panel", gallery_panel)
+
+    item = next(
+        item for item in file_menu.FileMenu().menu_items()
+        if item.get("label") == "tr:menu.file.publish_to_gallery"
+    )
+    item["callback"]()
+
+    assert opened == []
+    assert looked_up == [str(project.resolve())]
+    assert file_menu.lf.message_dialogs[-1][0] == "tr:menu.file.publish_to_gallery"
+    assert "eligibility.copy" in file_menu.lf.message_dialogs[-1][1]
+    assert file_menu.lf.message_dialogs[-1][2] == "error"
+
+
 def test_file_menu_publish_rejects_missing_saved_project(monkeypatch, tmp_path):
     missing = tmp_path / "missing.licht"
     file_menu = _load_file_menu(monkeypatch)
