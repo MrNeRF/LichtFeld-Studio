@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "../../internal/point_filter.hpp"
 #include "../facade_trace.hpp"
 #include "../readback_buffer.hpp"
 #include "../scalar_operand.hpp"
@@ -10,6 +11,10 @@
 #include "core/assert.hpp"
 #include "core/detail/fused_pointwise.hpp"
 #include "core/logger.hpp"
+#include "core/tensor_environment.hpp"
+#include "core/tensor_image.hpp"
+#include "core/tensor_labels.hpp"
+#include "core/tensor_ppisp.hpp"
 #include "core/tensor_spatial.hpp"
 
 #include <algorithm>
@@ -1289,6 +1294,31 @@ namespace lfs::core::internal {
             context.dispatch(uses, {.pipeline = pipeline, .buffers = {}, .params = param_bytes(params), .grid = threads(count)});
         }
 
+        struct ResampleParams {
+            uint64_t input, output;
+            float src_fx, src_fy, src_cx, src_cy, dst_fx, dst_fy, dst_cx, dst_cy;
+            int32_t sw, sh, dw, dh;
+            float distortion[12];
+            int32_t model, num_distortion, channels, padding;
+        };
+        static_assert(sizeof(ResampleParams) == 128);
+
+        // Resamples a contiguous Float32 image into a new [C,H,W] or [H,W] tensor.
+        API_AVAILABLE(macos(26.0))
+        Tensor resample_image(const Tensor& input, ResampleParams params, const bool plane, const uint32_t kind) {
+            const GpuBackendScope scope(GpuBackend::Metal);
+            const auto height = static_cast<size_t>(params.dh), width = static_cast<size_t>(params.dw);
+            auto output = Tensor::empty(plane ? TensorShape{height, width}
+                                              : TensorShape{static_cast<size_t>(params.channels), height, width},
+                                        Device::GPU);
+            const auto context = acquire_context();
+            const std::array uses{storage_ref(input), storage_ref(output)};
+            params.input = address_of(*context, uses[0]);
+            params.output = address_of(*context, uses[1]);
+            dispatch_addressed(*context, uses, context->pipeline("image_resample", {{0, kind}}), params, height * width);
+            return output;
+        }
+
         bool is_contiguous(const StridedLayout& layout) {
             size_t expected = 1;
             for (size_t dimension = layout.rank; dimension-- > 0;) {
@@ -2111,6 +2141,252 @@ namespace lfs::core::internal {
         const std::array uses{mask, points, geometry ? *geometry : points};
         dispatch_addressed(*context, uses, context->pipeline("mark_points_2d", {{0, static_cast<uint32_t>(region.kind)}}),
                            params, count);
+    }
+
+    void MetalBackendOps::filter_points(const StorageRef mask, const PointFilterProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(filter_points);
+        struct FilterParams {
+            uint64_t mask;
+            std::array<uint64_t, FilterInputCount> inputs;
+            std::array<float, 25> window;
+            uint32_t count, transform_count, allowed_count, padding;
+        };
+        static_assert(sizeof(FilterParams) == 200);
+        const auto context = acquire_context();
+        FilterParams params{.mask = address_of(*context, mask),
+                            .count = program.count,
+                            .transform_count = program.transform_count,
+                            .allowed_count = program.allowed_count};
+        std::vector<StorageRef> uses{mask};
+        for (size_t i = 0; i < program.inputs.size(); ++i) {
+            if (program.inputs[i]) {
+                params.inputs[i] = address_of(*context, *program.inputs[i]);
+                uses.push_back(*program.inputs[i]);
+            }
+        }
+        if (program.flags & LFS_FILTER_WINDOW)
+            params.window = pointFilterWindowBlock(program.window);
+        const auto model = static_cast<uint32_t>(program.window.projection.model);
+        dispatch_addressed(*context, uses, context->pipeline("filter_points", {{0, model}, {21, program.flags}}), params,
+                           program.count);
+    }
+
+    void MetalBackendOps::update_labels(const StorageRef output, const StorageRef selected,
+                                        const LabelUpdateProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(update_labels);
+        struct LabelParams {
+            uint64_t output, selected, existing, locked, indices, categories, allowed;
+            uint32_t count, output_count, allowed_count, label, mode, padding;
+        };
+        static_assert(sizeof(LabelParams) == 80);
+        const auto context = acquire_context();
+        const auto address = [&](const std::optional<StorageRef>& storage) {
+            return storage ? address_of(*context, *storage) : uint64_t{0};
+        };
+        const LabelParams params{
+            .output = address_of(*context, output),
+            .selected = address_of(*context, selected),
+            .existing = address(program.existing),
+            .locked = address(program.locked),
+            .indices = address(program.indices),
+            .categories = address(program.categories),
+            .allowed = address(program.allowed),
+            .count = checked_u32(program.count, "Metal label row count exceeds uint32"),
+            .output_count = checked_u32(program.output_count, "Metal label count exceeds uint32"),
+            .allowed_count = checked_u32(program.allowed_count, "Metal label category count exceeds uint32"),
+            .label = program.label,
+            .mode = program.mode,
+        };
+        std::vector<StorageRef> uses{output, selected};
+        for (const auto* input : {&program.existing, &program.locked, &program.indices, &program.categories,
+                                  &program.allowed}) {
+            if (*input)
+                uses.push_back(**input);
+        }
+        const auto phase = [&](const uint32_t kind, const size_t count) {
+            dispatch_addressed(*context, uses, context->pipeline("update_labels", {{0, kind}}), params, count);
+        };
+        if (!program.indices) {
+            phase(0, program.output_count);
+            return;
+        }
+        phase(3, program.output_count);
+        if (program.mode == static_cast<uint32_t>(LabelUpdateMode::Replace))
+            phase(1, program.count);
+        phase(2, program.count);
+    }
+
+    void MetalBackendOps::histogram_u8(const StorageRef values, const StorageRef counts, const size_t size,
+                                       ExecContext) {
+        LFS_FACADE_TRACE(histogram_u8);
+        struct HistogramParams {
+            uint64_t input, output;
+            uint32_t size, padding;
+        };
+        const auto context = acquire_context();
+        const HistogramParams params{
+            .input = address_of(*context, values),
+            .output = address_of(*context, counts),
+            .size = checked_u32(size, "Metal histogram size exceeds uint32"),
+        };
+        const std::array uses{values, counts};
+        // Every thread of a threadgroup owns one of the 256 shared bins.
+        context->dispatch(uses, {.pipeline = context->pipeline("histogram_u8"),
+                                 .params = param_bytes(params),
+                                 .grid = MTLSizeMake(std::min<NSUInteger>(thread_groups(size).width, 4096), 1, 1),
+                                 .group_size = MTLSizeMake(kThreadgroupWidth, 1, 1)});
+    }
+
+    void MetalBackendOps::ppisp_apply(const StorageRef input, const StorageRef output, const int width, const int height,
+                                      const PpispParams& settings, ExecContext) {
+        LFS_FACADE_TRACE(ppisp_apply);
+        struct PpispApplyParams {
+            uint64_t input, output;
+            int32_t width, height;
+            PpispParams settings;
+        };
+        static_assert(sizeof(PpispApplyParams) == 192);
+        const auto context = acquire_context();
+        const PpispApplyParams params{
+            .input = address_of(*context, input),
+            .output = address_of(*context, output),
+            .width = width,
+            .height = height,
+            .settings = settings,
+        };
+        const std::array uses{input, output};
+        dispatch_addressed(*context, uses, context->pipeline("ppisp_apply"), params, size_t(width) * height);
+    }
+
+    void MetalBackendOps::environment_composite(const StorageRef rgb, const StorageRef alpha, const StorageRef environment,
+                                                const StorageRef output, const EnvironmentCompositeParams& settings,
+                                                ExecContext) {
+        LFS_FACADE_TRACE(environment_composite);
+        struct CompositeParams {
+            uint64_t rgb, alpha, environment, output;
+            EnvironmentCompositeParams p;
+        };
+        static_assert(sizeof(CompositeParams) == 128);
+        const auto context = acquire_context();
+        const CompositeParams params{
+            .rgb = address_of(*context, rgb),
+            .alpha = address_of(*context, alpha),
+            .environment = address_of(*context, environment),
+            .output = address_of(*context, output),
+            .p = settings,
+        };
+        const std::array uses{rgb, alpha, environment, output};
+        dispatch_addressed(*context, uses,
+                           context->pipeline("environment_composite", {{0, settings.equirect_view != 0 ? 1u : 0u}}),
+                           params, size_t(settings.band_width) * settings.band_height);
+    }
+
+    void MetalBackendOps::affine_splat_geometry(const StorageRef scales, const StorageRef rotations,
+                                                const StorageRef out_scales, const StorageRef out_rotations,
+                                                const splat_transform::LinearTransform& linear, const size_t n,
+                                                ExecContext) {
+        LFS_FACADE_TRACE(affine_splat_geometry);
+        struct AffineSplatParams {
+            uint64_t scales, rotations, out_scales, out_rotations;
+            splat_transform::LinearTransform linear;
+            uint32_t count;
+        };
+        static_assert(sizeof(AffineSplatParams) == 72);
+        const auto context = acquire_context();
+        const AffineSplatParams params{
+            .scales = address_of(*context, scales),
+            .rotations = address_of(*context, rotations),
+            .out_scales = address_of(*context, out_scales),
+            .out_rotations = address_of(*context, out_rotations),
+            .linear = linear,
+            .count = checked_u32(n, "Metal affine splat count exceeds uint32"),
+        };
+        const std::array uses{scales, rotations, out_scales, out_rotations};
+        dispatch_addressed(*context, uses, context->pipeline("affine_splat_geometry"), params, n);
+    }
+
+    Tensor MetalBackendOps::image_undistort(const Tensor& input, const UndistortParams& p, const bool mask,
+                                            ExecContext) {
+        LFS_FACADE_TRACE(image_undistort);
+        ResampleParams params{.src_fx = p.src_fx,
+                              .src_fy = p.src_fy,
+                              .src_cx = p.src_cx,
+                              .src_cy = p.src_cy,
+                              .dst_fx = p.dst_fx,
+                              .dst_fy = p.dst_fy,
+                              .dst_cx = p.dst_cx,
+                              .dst_cy = p.dst_cy,
+                              .sw = p.src_width,
+                              .sh = p.src_height,
+                              .dw = p.dst_width,
+                              .dh = p.dst_height,
+                              .model = static_cast<int32_t>(p.model_type),
+                              .num_distortion = p.num_distortion,
+                              .channels = mask ? 1 : static_cast<int32_t>(input.size(0))};
+        std::copy_n(p.distortion, 12, params.distortion);
+        return resample_image(input, params, mask, 0);
+    }
+
+    Tensor MetalBackendOps::image_resize_prior(const Tensor& input, const int height, const int width, const bool normal,
+                                               ExecContext) {
+        LFS_FACADE_TRACE(image_resize_prior);
+        const ResampleParams params{.sw = static_cast<int32_t>(input.size(input.ndim() - 1)),
+                                    .sh = static_cast<int32_t>(input.size(input.ndim() - 2)),
+                                    .dw = width,
+                                    .dh = height,
+                                    .channels = normal ? 3 : 1};
+        return resample_image(input, params, !normal, normal ? 2 : 1);
+    }
+
+    void MetalBackendOps::sh_codec(const StorageRef source, const StorageRef destination,
+                                   const ShCodecProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(sh_codec);
+        const ShCodec& codec = program.codec;
+        struct ShParams {
+            uint64_t source, destination, indices, source_bounds, destination_bounds;
+            uint32_t source_rows, destination_rows, count, source_offset, destination_offset, padding;
+        };
+        static_assert(sizeof(ShParams) == 64);
+        const auto context = acquire_context();
+        const auto address = [&](const std::optional<StorageRef>& storage) {
+            return storage ? address_of(*context, *storage) : uint64_t{0};
+        };
+        const ShParams params{
+            .source = address_of(*context, source),
+            .destination = address_of(*context, destination),
+            .indices = address(program.indices),
+            .source_bounds = address(program.source_bounds),
+            .destination_bounds = address(program.destination_bounds),
+            .source_rows = checked_u32(codec.source_rows, "Metal SH source rows exceed uint32"),
+            .destination_rows = checked_u32(codec.destination_rows, "Metal SH destination rows exceed uint32"),
+            .count = checked_u32(codec.count, "Metal SH row count exceeds uint32"),
+            .source_offset = checked_u32(codec.source_offset, "Metal SH source offset exceeds uint32"),
+            .destination_offset = checked_u32(codec.destination_offset, "Metal SH destination offset exceeds uint32"),
+        };
+        std::vector<StorageRef> uses{source, destination};
+        for (const auto* storage : {&program.indices, &program.source_bounds, &program.destination_bounds}) {
+            if (*storage)
+                uses.push_back(**storage);
+        }
+        const uint32_t indices = program.indices ? (program.indices->dtype == DataType::Int64 ? 2u : 1u) : 0u;
+        const bool encode = codec.destination_format == ShFormat::Q16;
+        const auto pipeline = context->pipeline(encode ? "sh_encode" : "sh_codec",
+                                                {{7, codec.scatter ? 1u : 0u},
+                                                 {22, static_cast<uint32_t>(codec.source_format)},
+                                                 {23, static_cast<uint32_t>(codec.destination_format)},
+                                                 {24, indices},
+                                                 {25, codec.source_rest},
+                                                 {26, codec.destination_rest}});
+        if (encode) {
+            context->dispatch(uses, {.pipeline = pipeline,
+                                     .params = param_bytes(params),
+                                     .grid = MTLSizeMake((codec.count + 255) / 256, 1, 1),
+                                     .group_size = MTLSizeMake(256, 1, 1)});
+            return;
+        }
+        // Tiles pad rows to 32 and cells to float4 groups.
+        const size_t elements = (codec.count + 31) / 32 * 32 * ((codec.destination_rest * 3 + 3) / 4 * 4);
+        dispatch_addressed(*context, uses, pipeline, params, std::min<size_t>(elements, size_t{4096} * kThreadgroupWidth));
     }
 
     void MetalBackendOps::reduce(const StorageRef input, const StorageRef output, const StridedLayout& input_layout,

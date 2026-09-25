@@ -4,6 +4,7 @@
 #include "metal_context.hpp"
 
 #include "../../internal/expression_emitter.hpp"
+#include "../../internal/point_filter.hpp"
 #include "core/assert.hpp"
 #include "core/error.hpp"
 #include "core/gpu_device_info.hpp"
@@ -46,6 +47,15 @@ namespace lfs::core::internal::metal {
                                            {"ANY", ReduceOp::Any},
                                            {"ALL", ReduceOp::All}}) {
                 source += std::format("#define LFS_REDUCE_{} {}\n", name, static_cast<unsigned>(op));
+            }
+            for (const auto& [name, flag] : {std::pair{"NODES", LFS_FILTER_NODES},
+                                             {"BOX", LFS_FILTER_BOX},
+                                             {"ELLIPSOID", LFS_FILTER_ELLIPSOID},
+                                             {"WINDOW", LFS_FILTER_WINDOW},
+                                             {"INVERSE_BOX", LFS_FILTER_INVERSE_BOX},
+                                             {"INVERSE_ELLIPSOID", LFS_FILTER_INVERSE_ELLIPSOID},
+                                             {"GEOMETRY", LFS_FILTER_GEOMETRY}}) {
+                source += std::format("#define LFS_FILTER_{} {}u\n", name, flag);
             }
             return source + kKernelSource;
         }

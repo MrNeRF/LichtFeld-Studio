@@ -4,8 +4,9 @@
 // Tensor kernels of the Metal backend, ported from the Vulkan Slang shaders so
 // both backends compute identical results. The host compiles this source at
 // runtime with safe math and precise functions and prepends the LFS_OP_*,
-// LFS_DT_* and LFS_REDUCE_* ids generated from the C++ enums. Operands are
-// bound whole and addressed by byte offsets, so any element offset is legal.
+// LFS_DT_*, LFS_REDUCE_* and LFS_FILTER_* ids generated from the C++ enums.
+// Operands are bound whole and addressed by byte offsets, so any element
+// offset is legal.
 
 #include <metal_stdlib>
 #include <metal_tensor>
@@ -2110,6 +2111,740 @@ kernel void project_points(constant ProjectionParams& params [[buffer(0)]], uint
         }
     }
     params.output[i] = pixel;
+}
+
+// Clears the mask bytes of points outside the filters, ported from
+// filter_points.slang. kFilter holds the LFS_FILTER_* flags and kOp the
+// window's PointProjectionModel. The window block is the one Vulkan uploads:
+// rotation, translation, focal, center, ortho scale, size, half extents,
+// center and depth range.
+constant uint kFilter [[function_constant(21)]];
+
+struct FilterParams {
+    device uchar* mask;
+    device const float* points;
+    device const float* transforms;
+    device const int* indices;
+    device const uchar* allowed;
+    device const float* box_transform;
+    device const float* box_min;
+    device const float* box_max;
+    device const float* ellipsoid_transform;
+    device const float* radii;
+    float window[25];
+    uint count;
+    uint transform_count;
+    uint allowed_count;
+    uint padding;
+};
+
+static float3 filter_vector(device const float* values, uint i) {
+    return float3(values[3 * ulong(i)], values[3 * ulong(i) + 1], values[3 * ulong(i) + 2]);
+}
+
+// Applies a column-major world-to-local 4x4 matrix.
+static float3 filter_local(float3 position, device const float* m) {
+    return float3(dot_rounded(position, float3(m[0], m[4], m[8])) + m[12],
+                  dot_rounded(position, float3(m[1], m[5], m[9])) + m[13],
+                  dot_rounded(position, float3(m[2], m[6], m[10])) + m[14]);
+}
+
+static bool filter_keep(constant FilterParams& p, uint i) {
+    int node = p.indices != nullptr ? p.indices[i] : 0;
+    if ((kFilter & LFS_FILTER_NODES) != 0 && (node < 0 || uint(node) >= p.allowed_count || p.allowed[node] == 0))
+        return false;
+    if ((kFilter & LFS_FILTER_GEOMETRY) == 0)
+        return true;
+    float3 position = filter_vector(p.points, i);
+    if (p.transforms != nullptr && p.transform_count > 0) {
+        device const float* m = p.transforms + 16 * ulong(clamp(node, 0, int(p.transform_count - 1)));
+        position = float3(dot_rounded(position, float3(m[0], m[1], m[2])) + m[3],
+                          dot_rounded(position, float3(m[4], m[5], m[6])) + m[7],
+                          dot_rounded(position, float3(m[8], m[9], m[10])) + m[11]);
+    }
+    if ((kFilter & LFS_FILTER_BOX) != 0) {
+        const float3 local = filter_local(position, p.box_transform);
+        const bool inside = all(local >= filter_vector(p.box_min, 0)) && all(local <= filter_vector(p.box_max, 0));
+        if (inside == ((kFilter & LFS_FILTER_INVERSE_BOX) != 0))
+            return false;
+    }
+    if ((kFilter & LFS_FILTER_ELLIPSOID) != 0) {
+        const float3 local = filter_local(position, p.ellipsoid_transform), r = filter_vector(p.radii, 0);
+        const float norm = local.x * local.x / (r.x * r.x) + local.y * local.y / (r.y * r.y) + local.z * local.z / (r.z * r.z);
+        if ((norm <= 1.0f) == ((kFilter & LFS_FILTER_INVERSE_ELLIPSOID) != 0))
+            return false;
+    }
+    if ((kFilter & LFS_FILTER_WINDOW) == 0)
+        return true;
+    constant float* w = p.window;
+    const float3 d = position - float3(w[9], w[10], w[11]);
+    const float vx = dot_rounded(d, float3(w[0], w[1], w[2]));
+    const float vy = -dot_rounded(d, float3(w[3], w[4], w[5]));
+    const float vz = -dot_rounded(d, float3(w[6], w[7], w[8]));
+    float px, py, depth = vz;
+    if (kOp == 0) {
+        px = vx * w[12] / vz + w[14];
+        py = vy * w[13] / vz + w[15];
+    } else if (kOp == 1) {
+        px = vx * w[16] + 0.5f * w[17];
+        py = vy * w[16] + 0.5f * w[18];
+    } else {
+        const float len = sqrt(dot_rounded(float3(vx, vy, vz), float3(vx, vy, vz)));
+        if (len <= 1.0e-6f || !isfinite(len))
+            return false;
+        constexpr float pi = 3.14159265358979323846f;
+        px = (atan2(vx / len, vz / len) / (2.0f * pi) + 0.5f) * w[17];
+        py = (asin(clamp(vy / len, -1.0f, 1.0f)) / pi + 0.5f) * w[18];
+        depth = len;
+    }
+    return abs(px - w[21]) <= w[19] && abs(py - w[22]) <= w[20] && depth >= w[23] && depth <= w[24] && depth > 0.0f;
+}
+
+kernel void filter_points(constant FilterParams& params [[buffer(0)]], uint i [[thread_position_in_grid]]) {
+    if (i < params.count && params.mask[i] != 0 && !filter_keep(params, i))
+        params.mask[i] = 0;
+}
+
+// Label edits, ported from update_labels.slang. kOp is the phase: 0 updates
+// every label in place, 3 copies the existing labels, then 1 clears and 2
+// applies the labels of indexed rows. Racing rows of one index store the
+// same byte, so plain stores suffice.
+struct LabelParams {
+    device uchar* output;
+    device const uchar* selected;
+    device const uchar* existing;
+    device const uchar* locked;
+    device const int* indices;
+    device const int* categories;
+    device const uchar* allowed;
+    uint count;
+    uint output_count;
+    uint allowed_count;
+    uint label;
+    uint mode;
+    uint padding;
+};
+
+static bool label_eligible(constant LabelParams& p, uint row) {
+    if (p.categories == nullptr)
+        return true;
+    const int category = p.categories[row];
+    return category >= 0 && uint(category) < p.allowed_count && p.allowed[category] != 0;
+}
+
+static uint label_old(constant LabelParams& p, uint row) {
+    return p.existing != nullptr ? uint(p.existing[row]) : 0u;
+}
+
+static uint label_updated(constant LabelParams& p, uint old, bool selected) {
+    if (!selected)
+        return p.mode == 2 && old == p.label ? 0u : old;
+    if (p.mode == 1)
+        return old == p.label ? 0u : old;
+    if (old != 0 && old != p.label && p.locked != nullptr && p.locked[old] != 0)
+        return old;
+    return p.label;
+}
+
+kernel void update_labels(constant LabelParams& p [[buffer(0)]], uint i [[thread_position_in_grid]]) {
+    if (kOp == 0 || kOp == 3) {
+        if (i >= p.output_count)
+            return;
+        const uint old = label_old(p, i);
+        const bool edit = kOp == 0 && label_eligible(p, i);
+        p.output[i] = uchar(edit ? label_updated(p, old, p.selected[i] != 0) : old);
+        return;
+    }
+    if (i >= p.count)
+        return;
+    const int id = p.indices[i];
+    if (id < 0 || uint(id) >= p.output_count || !label_eligible(p, i))
+        return;
+    const bool selected = p.selected[i] != 0;
+    const uint old = label_old(p, uint(id));
+    if (kOp == 1) {
+        if (!selected && old == p.label)
+            p.output[id] = 0;
+    } else if (selected) {
+        // A selected row also restores its label after the replacement clear.
+        const uint next = label_updated(p, old, true);
+        if (next != old || (p.mode == 2 && old == p.label))
+            p.output[id] = uchar(next);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Counts of the nonzero byte values into 256 bins, ported from histogram_u8.slang.
+
+struct HistogramParams {
+    device const uchar* input;
+    device atomic_uint* output;
+    uint size;
+    uint padding;
+};
+
+kernel void histogram_u8(constant HistogramParams& params [[buffer(0)]],
+                         uint index [[thread_position_in_grid]],
+                         uint lane [[thread_index_in_threadgroup]],
+                         uint threads [[threads_per_grid]]) {
+    threadgroup atomic_uint counts[256];
+    atomic_store_explicit(&counts[lane], 0u, memory_order_relaxed);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint i = index; i < params.size; i += threads) {
+        const uint value = params.input[i];
+        if (value != 0u)
+            atomic_fetch_add_explicit(&counts[value], 1u, memory_order_relaxed);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    const uint count = atomic_load_explicit(&counts[lane], memory_order_relaxed);
+    if (count != 0u)
+        atomic_fetch_add_explicit(&params.output[lane], count, memory_order_relaxed);
+}
+
+// ---------------------------------------------------------------------------
+// PPISP camera response, ported from ppisp_apply.slang (NVIDIA PPISP,
+// Apache-2.0): vignetting, a homography in RG/intensity space, then
+// per-channel response curves over a Float RGB CHW image.
+
+struct PpispParams {
+    float exposure_factor;
+    float vignetting[15];
+    float color_matrix[9];
+    float crf[15];
+    int y_offset;
+    int full_height;
+};
+
+struct PpispApplyParams {
+    device const float* input;
+    device float* output;
+    int width;
+    int height;
+    PpispParams settings;
+};
+
+kernel void ppisp_apply(constant PpispApplyParams& args [[buffer(0)]], uint i [[thread_position_in_grid]]) {
+    constant PpispParams& p = args.settings;
+    const int width = args.width, height = args.height, plane = width * height;
+    if (i >= uint(plane))
+        return;
+    const int full_height = p.full_height > 0 ? p.full_height : height;
+    const float resolution = float(max(width, full_height));
+    const float x = (float(i % uint(width)) + 0.5f - width * 0.5f) / resolution;
+    const float y = (float(int(i / uint(width)) + p.y_offset) + 0.5f - full_height * 0.5f) / resolution;
+    float3 rgb;
+    for (int c = 0; c < 3; ++c) {
+        const int k = c * 5;
+        const float dx = x - p.vignetting[k], dy = y - p.vignetting[k + 1], r2 = fma(dx, dx, dy * dy), r4 = r2 * r2,
+                    r6 = r4 * r2;
+        const float falloff =
+            max(0.0f, min(1.0f, fma(p.vignetting[k + 4], r6, fma(p.vignetting[k + 3], r4, fma(p.vignetting[k + 2], r2, 1.0f)))));
+        rgb[c] = max(args.input[c * plane + i] * p.exposure_factor * falloff, 0.0f);
+    }
+    const float intensity = rgb.x + rgb.y + rgb.z;
+    float3 rgi;
+    for (int c = 0; c < 3; ++c) {
+        const int k = c * 3;
+        rgi[c] = fma(p.color_matrix[k], rgb.x, fma(p.color_matrix[k + 1], rgb.y, p.color_matrix[k + 2] * intensity));
+    }
+    const float norm = intensity / (max(rgi.z, 0.0f) + 1e-5f);
+    rgb.x = rgi.x * norm;
+    rgb.y = rgi.y * norm;
+    rgb.z = rgi.z * norm - rgb.x - rgb.y;
+    for (int c = 0; c < 3; ++c) {
+        const int k = c * 5;
+        const float value = clamp(rgb[c], 0.0f, 1.0f), mid = p.crf[k + 3], a = p.crf[k + 4];
+        const float curve = value <= mid ? a * pow(value / mid, p.crf[k])
+                                         : 1.0f - (1.0f - a) * pow((1.0f - value) / (1.0f - mid), p.crf[k + 1]);
+        args.output[c * plane + i] = pow(max(0.0f, curve), p.crf[k + 2]);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Composites a Float CHW render over an equirectangular environment into
+// u8 HWC, ported from environment_composite.slang. kOp 1 renders a panorama.
+
+struct EnvironmentCompositeParams {
+    float rotation[9];
+    int full_width, full_height, band_width, band_height, y_offset;
+    float focal_x, focal_y, center_x, center_y;
+    int equirect_view;
+    float exposure_factor, env_rotation_radians;
+    int env_width, env_height;
+};
+
+struct CompositeParams {
+    device const float* rgb;
+    device const float* alpha;
+    device const float* environment;
+    device uchar* output;
+    EnvironmentCompositeParams p;
+};
+
+static float3 environment_normalized(float3 v) {
+    const float len = sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+    return len <= 0 ? v : v * (1.0f / len);
+}
+
+static float3 environment_fetch(constant CompositeParams& params, int x, int y) {
+    const uint i = uint(y * params.p.env_width + x) * 3;
+    return float3(params.environment[i], params.environment[i + 1], params.environment[i + 2]);
+}
+
+kernel void environment_composite(constant CompositeParams& params [[buffer(0)]], uint idx [[thread_position_in_grid]]) {
+    constant EnvironmentCompositeParams& p = params.p;
+    const uint count = uint(p.band_width * p.band_height);
+    if (idx >= count)
+        return;
+    constexpr float pi = 3.14159265358979323846f;
+    const int x = int(idx) % p.band_width, y = int(idx) / p.band_width + p.y_offset;
+    const float u = (float(x) + 0.5f) / p.full_width, v = 1.0f - (float(y) + 0.5f) / p.full_height;
+    float3 local;
+    if (kOp != 0) {
+        const float lon = (u - 0.5f) * (2.0f * pi), lat = (v - 0.5f) * pi, c = cos(lat);
+        local = environment_normalized(float3(sin(lon) * c, sin(lat), -cos(lon) * c));
+    } else {
+        local = environment_normalized(float3((u * p.full_width - p.center_x) / max(p.focal_x, 1e-6f),
+                                              (v * p.full_height - p.center_y) / max(p.focal_y, 1e-6f), -1));
+    }
+    float3 dir = environment_normalized(float3(p.rotation[0] * local.x + p.rotation[3] * local.y + p.rotation[6] * local.z,
+                                               p.rotation[1] * local.x + p.rotation[4] * local.y + p.rotation[7] * local.z,
+                                               p.rotation[2] * local.x + p.rotation[5] * local.y + p.rotation[8] * local.z));
+    const float c = cos(p.env_rotation_radians), s = sin(p.env_rotation_radians);
+    dir = environment_normalized(float3(c * dir.x + s * dir.z, dir.y, -s * dir.x + c * dir.z));
+    float eu = atan2(dir.x, -dir.z) / (2.0f * pi) + 0.5f;
+    const float ev = clamp(0.5f - asin(clamp(dir.y, -1.0f, 1.0f)) / pi, 0.0f, 1.0f);
+    eu -= floor(eu);
+    const float ex = eu * (p.env_width - 1), ey = ev * (p.env_height - 1);
+    const int x0 = clamp(int(floor(ex)), 0, p.env_width - 1), y0 = clamp(int(floor(ey)), 0, p.env_height - 1);
+    const int x1 = (x0 + 1) % p.env_width, y1 = min(y0 + 1, p.env_height - 1);
+    const float3 top = mix(environment_fetch(params, x0, y0), environment_fetch(params, x1, y0), ex - x0);
+    const float3 bottom = mix(environment_fetch(params, x0, y1), environment_fetch(params, x1, y1), ex - x0);
+    const float3 hdr = mix(top, bottom, ey - y0) * p.exposure_factor;
+    float3 background = clamp(hdr * (2.51f * hdr + 0.03f) / (hdr * (2.43f * hdr + 0.59f) + 0.14f), 0.0f, 1.0f);
+    background = clamp(pow(background, float3(1.0f / 2.2f)), 0.0f, 1.0f);
+    const float3 render = float3(params.rgb[idx], params.rgb[count + idx], params.rgb[2 * count + idx]);
+    const uint3 color = uint3(clamp(mix(background, render, params.alpha[idx]), 0.0f, 1.0f) * 255.0f + 0.5f);
+    for (uint channel = 0; channel < 3; ++channel)
+        params.output[3 * idx + channel] = uchar(color[channel]);
+}
+
+// ---------------------------------------------------------------------------
+// Applies a linear map to splat log-scales and rotations, ported from
+// affine_splat_geometry.slang. Safe math with contraction off keeps the
+// TwoSum error terms that the Vulkan shader guards with an opaque zero.
+
+struct AffineSplatParams {
+    device const float* scales;
+    device const float* rotations;
+    device float* out_scales;
+    device float* out_rotations;
+    float linear[9];
+    uint count;
+};
+
+static float2 two_sum(float a, float b) {
+    const float total = a + b, part = total - a;
+    return float2(total, (a - (total - part)) + (b - part));
+}
+
+static float2 add_pair(float2 a, float2 b) {
+    const float2 sum = two_sum(a.x, b.x);
+    return two_sum(sum.x, (a.y + b.y) + sum.y);
+}
+
+static float exp_difference(float a, float b) {
+    if (a == -INFINITY)
+        return 0;
+    const float2 delta = two_sum(a, -b);
+    if (delta.x < -104.0f)
+        return 0;
+    const int k = int(rint(delta.x * 1.4426950408889634f));
+    const float r = fma(-float(k), 0.693147182464599609375f, delta.x) + (delta.y + float(k) * 1.904654323148236e-9f);
+    // Range reduction bounds abs(r) by ln(2)/2.
+    float poly = 1.0f / 40320.0f;
+    poly = fma(poly, r, 1.0f / 5040.0f);
+    poly = fma(poly, r, 1.0f / 720.0f);
+    poly = fma(poly, r, 1.0f / 120.0f);
+    poly = fma(poly, r, 1.0f / 24.0f);
+    poly = fma(poly, r, 1.0f / 6.0f);
+    poly = fma(poly, r, 0.5f);
+    poly = fma(poly, r, 1.0f);
+    poly = fma(poly, r, 1.0f);
+    return ldexp(poly, k);
+}
+
+static float2 log_pair(float value) {
+    if (value == 0)
+        return float2(-INFINITY, 0);
+    const uint bits = as_type<uint>(value);
+    int exponent = int((bits >> 23) & 255u) - 127;
+    float m = as_type<float>((bits & 0x7fffffu) | 0x3f800000u);
+    if (m > 1.41421356237f) {
+        m *= 0.5f;
+        ++exponent;
+    }
+    const float z = (m - 1) / (m + 1), z2 = z * z;
+    float poly = 1.0f / 13.0f;
+    poly = fma(poly, z2, 1.0f / 11.0f);
+    poly = fma(poly, z2, 1.0f / 9.0f);
+    poly = fma(poly, z2, 1.0f / 7.0f);
+    poly = fma(poly, z2, 1.0f / 5.0f);
+    poly = fma(poly, z2, 1.0f / 3.0f);
+    const float fraction = 2 * z * fma(poly, z2, 1.0f);
+    const float high = float(exponent) * 0.693147182464599609375f;
+    const float low =
+        fma(float(exponent), 0.693147182464599609375f, -high) + float(exponent) * (-1.904654323148236e-9f) + fraction;
+    return float2(high, low);
+}
+
+static float restore_log_scale(float length, float2 linear_log, float largest_log) {
+    if (length == 0)
+        return -INFINITY;
+    return add_pair(add_pair(log_pair(length), linear_log), float2(largest_log, 0)).x;
+}
+
+static float scaled_length(float3 v) {
+    const float scale = max(abs(v.x), max(abs(v.y), abs(v.z)));
+    return scale == 0 ? 0 : scale * length(v / scale);
+}
+
+static bool orthogonalize(thread float3& a, thread float3& b) {
+    const float aa = dot(a, a), bb = dot(b, b), ab = dot(a, b);
+    if (abs(ab) <= 2e-7f * sqrt(aa) * sqrt(bb))
+        return false;
+    const float delta = 0.5f * (bb - aa);
+    const float scale = max(abs(delta), abs(ab));
+    const float d = delta / scale, e = ab / scale;
+    const float h = sqrt(d * d + e * e);
+    const float t = e / (d + (delta < 0 ? -h : h));
+    const float c = rsqrt(1 + t * t), s = t * c;
+    const float3 old = a;
+    a = c * old - s * b;
+    b = s * old + c * b;
+    return true;
+}
+
+static void sort_axes(thread float3& a, thread float3& b, thread float& la, thread float& lb) {
+    if (la < lb) {
+        const float3 v = a;
+        a = b;
+        b = v;
+        const float l = la;
+        la = lb;
+        lb = l;
+    }
+}
+
+kernel void affine_splat_geometry(constant AffineSplatParams& p [[buffer(0)]], uint i [[thread_position_in_grid]]) {
+    if (i >= p.count)
+        return;
+    device float* const out_scale = p.out_scales + 3 * i;
+    device float* const out_rotation = p.out_rotations + 4 * i;
+    const float3 log_scale(p.scales[3 * i], p.scales[3 * i + 1], p.scales[3 * i + 2]);
+    float4 q(p.rotations[4 * i], p.rotations[4 * i + 1], p.rotations[4 * i + 2], p.rotations[4 * i + 3]);
+    const float qm = max(max(abs(q.x), abs(q.y)), max(abs(q.z), abs(q.w)));
+    q = qm > 0 ? normalize(q / qm) : float4(1, 0, 0, 0);
+    const float w = q.x, x = q.y, y = q.z, z = q.w;
+    // Difference of squares preserves zero diagonal entries at equal quaternion components.
+    const float3 r0((w * w + x * x) - (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y));
+    const float3 r1(2 * (x * y - w * z), (w * w + y * y) - (x * x + z * z), 2 * (y * z + w * x));
+    const float3 r2(2 * (x * z + w * y), 2 * (y * z - w * x), (w * w + z * z) - (x * x + y * y));
+    const float largest_log = max(log_scale.x, max(log_scale.y, log_scale.z));
+    float linear_scale = 0;
+    for (int k = 0; k < 9; ++k)
+        linear_scale = max(linear_scale, abs(p.linear[k]));
+    if (linear_scale == 0 || largest_log == -INFINITY) {
+        for (int k = 0; k < 3; ++k)
+            out_scale[k] = -INFINITY;
+        for (int k = 0; k < 4; ++k)
+            out_rotation[k] = k == 0 ? 1 : 0;
+        return;
+    }
+    // Common scale factors leave singular vectors unchanged and bound matrix entries.
+    const float3 a0 = float3(p.linear[0], p.linear[1], p.linear[2]) / linear_scale;
+    const float3 a1 = float3(p.linear[3], p.linear[4], p.linear[5]) / linear_scale;
+    const float3 a2 = float3(p.linear[6], p.linear[7], p.linear[8]) / linear_scale;
+    float3 b0 = float3(dot(a0, r0), dot(a1, r0), dot(a2, r0)) * exp_difference(log_scale.x, largest_log);
+    float3 b1 = float3(dot(a0, r1), dot(a1, r1), dot(a2, r1)) * exp_difference(log_scale.y, largest_log);
+    float3 b2 = float3(dot(a0, r2), dot(a1, r2), dot(a2, r2)) * exp_difference(log_scale.z, largest_log);
+    for (int sweep = 0; sweep < 8; ++sweep) {
+        bool changed = orthogonalize(b0, b1);
+        changed = orthogonalize(b0, b2) || changed;
+        changed = orthogonalize(b1, b2) || changed;
+        if (!changed)
+            break;
+    }
+    float l0 = scaled_length(b0), l1 = scaled_length(b1), l2 = scaled_length(b2);
+    sort_axes(b0, b1, l0, l1);
+    sort_axes(b0, b2, l0, l2);
+    sort_axes(b1, b2, l1, l2);
+    const float2 linear_log = log_pair(linear_scale);
+    out_scale[0] = restore_log_scale(l0, linear_log, largest_log);
+    out_scale[1] = restore_log_scale(l1, linear_log, largest_log);
+    out_scale[2] = restore_log_scale(l2, linear_log, largest_log);
+    const float3 u = l0 > 0 ? b0 / l0 : float3(1, 0, 0);
+    float3 v = l1 > 0 ? b1 / l1 : float3(0);
+    // The null-space basis is arbitrary; the completed frame must remain orthonormal.
+    v -= u * dot(u, v);
+    if (dot(v, v) < 1e-12f) {
+        const float3 axis = abs(u.x) <= abs(u.y) && abs(u.x) <= abs(u.z) ? float3(1, 0, 0)
+                            : abs(u.y) <= abs(u.z)                        ? float3(0, 1, 0)
+                                                                          : float3(0, 0, 1);
+        v = axis - u * dot(u, axis);
+    }
+    v = normalize(v);
+    const float3 t = cross(u, v);
+    // A right-handed frame represents reflections without changing the covariance.
+    const float trace = u.x + v.y + t.z;
+    if (trace > 0) {
+        const float s = 2 * sqrt(1 + trace);
+        q = float4(s / 4, (v.z - t.y) / s, (t.x - u.z) / s, (u.y - v.x) / s);
+    } else if (u.x > v.y && u.x > t.z) {
+        const float s = 2 * sqrt(1 + u.x - v.y - t.z);
+        q = float4((v.z - t.y) / s, s / 4, (u.y + v.x) / s, (t.x + u.z) / s);
+    } else if (v.y > t.z) {
+        const float s = 2 * sqrt(1 + v.y - u.x - t.z);
+        q = float4((t.x - u.z) / s, (u.y + v.x) / s, s / 4, (v.z + t.y) / s);
+    } else {
+        const float s = 2 * sqrt(1 + t.z - u.x - v.y);
+        q = float4((u.y - v.x) / s, (t.x + u.z) / s, (v.z + t.y) / s, s / 4);
+    }
+    q = normalize(q);
+    if (q.x < 0)
+        q = -q;
+    for (int k = 0; k < 4; ++k)
+        out_rotation[k] = q[k];
+}
+
+// ---------------------------------------------------------------------------
+// Image resampling, ported from image_resample.slang. kOp 0 undistorts CHW
+// images or HW masks with the COLMAP camera models (BSD-3 formulas of
+// sensor/models.h); 1 resizes depth and 2 normal priors over valid taps only.
+
+struct ResampleParams {
+    device const float* input;
+    device float* output;
+    float src_fx, src_fy, src_cx, src_cy, dst_fx, dst_fy, dst_cx, dst_cy;
+    int sw, sh, dw, dh;
+    float distortion[12];
+    int model, num_distortion, channels, padding;
+};
+
+static float2 distort_pinhole(float x, float y, constant float* dist, int n) {
+    const float r2 = x * x + y * y, r4 = r2 * r2, r6 = r4 * r2;
+    const float k1 = n > 0 ? dist[0] : 0.0f, k2 = n > 1 ? dist[1] : 0.0f, k3 = n > 2 ? dist[2] : 0.0f;
+    const float radial = 1.0f + k1 * r2 + k2 * r4 + k3 * r6;
+    const float p1 = n > 3 ? dist[3] : 0.0f, p2 = n > 4 ? dist[4] : 0.0f;
+    return float2(x * radial + 2.0f * p1 * x * y + p2 * (r2 + 2.0f * x * x),
+                  y * radial + p1 * (r2 + 2.0f * y * y) + 2.0f * p2 * x * y);
+}
+
+static float2 distort_fisheye(float x, float y, constant float* dist, int n) {
+    const float r = sqrt(x * x + y * y);
+    if (r < 1e-8f)
+        return float2(x, y);
+    const float theta = atan(r), theta2 = theta * theta, theta4 = theta2 * theta2, theta6 = theta4 * theta2,
+                theta8 = theta4 * theta4;
+    const float k1 = n > 0 ? dist[0] : 0.0f, k2 = n > 1 ? dist[1] : 0.0f, k3 = n > 2 ? dist[2] : 0.0f,
+                k4 = n > 3 ? dist[3] : 0.0f;
+    const float scale = theta * (1.0f + k1 * theta2 + k2 * theta4 + k3 * theta6 + k4 * theta8) / r;
+    return float2(x * scale, y * scale);
+}
+
+static float2 distort_thin_prism_fisheye(float x, float y, constant float* dist, int n) {
+    if (sqrt(x * x + y * y) < 1e-8f)
+        return float2(x, y);
+    const float2 fisheye = distort_fisheye(x, y, dist, n);
+    float xd = fisheye.x, yd = fisheye.y;
+    const float p1 = n > 4 ? dist[4] : 0.0f, p2 = n > 5 ? dist[5] : 0.0f;
+    const float r2 = xd * xd + yd * yd;
+    xd += 2.0f * p1 * xd * yd + p2 * (r2 + 2.0f * xd * xd);
+    yd += p1 * (r2 + 2.0f * yd * yd) + 2.0f * p2 * xd * yd;
+    const float s1 = n > 6 ? dist[6] : 0.0f, s2 = n > 7 ? dist[7] : 0.0f, s3 = n > 8 ? dist[8] : 0.0f,
+                s4 = n > 9 ? dist[9] : 0.0f;
+    const float r2d = xd * xd + yd * yd, r4d = r2d * r2d;
+    return float2(xd + (s1 * r2d + s2 * r4d), yd + (s3 * r2d + s4 * r4d));
+}
+
+static float resample_tap(constant ResampleParams& p, int base, int x, int y) {
+    return x >= 0 && y >= 0 && x < p.sw && y < p.sh ? p.input[base + y * p.sw + x] : 0.0f;
+}
+
+static bool prior_valid(constant ResampleParams& p, int i, int plane) {
+    const float a = p.input[i];
+    if (!isfinite(a))
+        return false;
+    if (kOp == 1)
+        return a > 0;
+    const float b = p.input[plane + i], c = p.input[2 * plane + i];
+    return isfinite(b) && isfinite(c) && a * a + b * b + c * c >= 0.25f;
+}
+
+kernel void image_resample(constant ResampleParams& p [[buffer(0)]], uint idx [[thread_position_in_grid]]) {
+    const int sp = p.sw * p.sh, dp = p.dw * p.dh;
+    if (idx >= uint(dp))
+        return;
+    const int x = int(idx) % p.dw, y = int(idx) / p.dw;
+    if (kOp == 0) {
+        float2 d = float2((float(x) + 0.5f - p.dst_cx) / p.dst_fx, (float(y) + 0.5f - p.dst_cy) / p.dst_fy);
+        if (p.model == 0)
+            d = distort_pinhole(d.x, d.y, p.distortion, p.num_distortion);
+        else if (p.model == 2)
+            d = distort_fisheye(d.x, d.y, p.distortion, p.num_distortion);
+        else if (p.model == 4)
+            d = distort_thin_prism_fisheye(d.x, d.y, p.distortion, p.num_distortion);
+        const float sx = d.x * p.src_fx + p.src_cx - 0.5f, sy = d.y * p.src_fy + p.src_cy - 0.5f;
+        const int x0 = int(floor(sx)), y0 = int(floor(sy));
+        const float fx = sx - floor(sx), fy = sy - floor(sy);
+        for (int c = 0; c < p.channels; ++c) {
+            const float v00 = resample_tap(p, c * sp, x0, y0), v01 = resample_tap(p, c * sp, x0 + 1, y0);
+            const float v10 = resample_tap(p, c * sp, x0, y0 + 1), v11 = resample_tap(p, c * sp, x0 + 1, y0 + 1);
+            p.output[c * dp + int(idx)] = (1.0f - fy) * ((1.0f - fx) * v00 + fx * v01) + fy * ((1.0f - fx) * v10 + fx * v11);
+        }
+        return;
+    }
+    const float sx = max(0.0f, min(p.sw - 1.0f, (float(x) + 0.5f) * p.sw / p.dw - 0.5f));
+    const float sy = max(0.0f, min(p.sh - 1.0f, (float(y) + 0.5f) * p.sh / p.dh - 0.5f));
+    const int x0 = int(sx), y0 = int(sy);
+    float3 value = 0;
+    float weight = 0;
+    if (prior_valid(p, int(sy + 0.5f) * p.sw + int(sx + 0.5f), sp)) {
+        for (int j = 0; j < 2; ++j) {
+            for (int i = 0; i < 2; ++i) {
+                const int index = min(y0 + j, p.sh - 1) * p.sw + min(x0 + i, p.sw - 1);
+                if (!prior_valid(p, index, sp))
+                    continue;
+                const float w = (i != 0 ? sx - x0 : 1.0f - (sx - x0)) * (j != 0 ? sy - y0 : 1.0f - (sy - y0));
+                weight += w;
+                for (int c = 0; c < p.channels; ++c)
+                    value[c] += w * p.input[c * sp + index];
+            }
+        }
+    }
+    if (kOp == 2)
+        weight = sqrt(value.x * value.x + value.y * value.y + value.z * value.z);
+    for (int c = 0; c < p.channels; ++c)
+        p.output[c * dp + int(idx)] = weight > 1e-8f ? value[c] / weight : 0.0f;
+}
+
+// ---------------------------------------------------------------------------
+// Spherical-harmonics storage conversion, ported from sh_codec.slang and
+// sh_encode.slang. Formats are ShFormat: 0 canonical [N,K,3], 1 Float32 and
+// 2 Float16 in float4 cell groups of 32-row tiles, 3 u16 codes in cell columns
+// of 32-row tiles with Float32 bounds per 256 rows. kShIndices is 0 without
+// indices, 1 for Int32 and 2 for Int64.
+constant uint kShSource [[function_constant(22)]];
+constant uint kShDestination [[function_constant(23)]];
+constant uint kShIndices [[function_constant(24)]];
+constant uint kShSourceRest [[function_constant(25)]];
+constant uint kShDestinationRest [[function_constant(26)]];
+
+struct ShParams {
+    device const uchar* source;
+    device uchar* destination;
+    device const uchar* indices;
+    device const float* source_bounds;
+    device float* destination_bounds;
+    uint source_rows, destination_rows, count;
+    uint source_offset, destination_offset, padding;
+};
+
+static uint sh_offset(uint row, uint cell, uint rest, bool q16) {
+    if (q16)
+        return (row / 32 * (rest * 3) + cell) * 32 + row % 32;
+    return ((row / 32 * ((rest * 3 + 3) / 4) + cell / 4) * 32 + row % 32) * 4 + cell % 4;
+}
+
+static uint sh_index(constant ShParams& p, uint i) {
+    return kShIndices == 2 ? uint(((device const long*)p.indices)[i]) : uint(((device const int*)p.indices)[i]);
+}
+
+static float sh_read(constant ShParams& p, uint row, uint c) {
+    const uint width = kShSource == 1 || kShSource == 2 ? (kShSourceRest * 3 + 3) / 4 * 4 : kShSourceRest * 3;
+    if (row >= p.source_rows || c >= width)
+        return 0;
+    const uint offset = kShSource == 0 ? row * kShSourceRest * 3 + c : sh_offset(row, c, kShSourceRest, kShSource == 3);
+    if (kShSource == 3) {
+        const float lo = p.source_bounds[row / 256 * 2], hi = p.source_bounds[row / 256 * 2 + 1];
+        const uint code = ((device const ushort*)p.source)[offset];
+        return fma(hi - lo, float(code) * (1.0f / 65535.0f), lo);
+    }
+    if (kShSource == 2)
+        return float(((device const half*)p.source)[offset]);
+    return ((device const float*)p.source)[offset];
+}
+
+kernel void sh_codec(constant ShParams& p [[buffer(0)]], uint index [[thread_position_in_grid]],
+                     uint threads [[threads_per_grid]]) {
+    const uint width = kShDestination == 0 ? kShDestinationRest * 3 : (kShDestinationRest * 3 + 3) / 4 * 4;
+    uint rows = p.count;
+    // A range that ends the destination also zeroes the tail lanes of its last tile.
+    if (kScatter == 0 && p.destination_offset + p.count == p.destination_rows && kShDestination != 0)
+        rows += (32 - p.destination_rows % 32) % 32;
+    for (uint i = index; i < (rows + 31) / 32 * 32 * width; i += threads) {
+        // Destinations are enumerated in memory order.
+        const uint row = kShDestination == 0 ? i / width : i / (width * 32) * 32 + i / 4 % 32;
+        const uint c = kShDestination == 0 ? i % width : i / 128 % (width / 4) * 4 + i % 4;
+        if (row >= rows)
+            continue;
+        const uint source_row = kShIndices != 0 && kScatter == 0 && row < p.count ? sh_index(p, row) : p.source_offset + row;
+        const uint destination_row = kScatter != 0 ? sh_index(p, row) : p.destination_offset + row;
+        const float value =
+            row < p.count && !(c >= kShDestinationRest * 3 && kShSource != 1) ? sh_read(p, source_row, c) : 0;
+        const uint offset = kShDestination == 0 ? destination_row * width + c
+                                                : sh_offset(destination_row, c, kShDestinationRest, false);
+        if (kShDestination == 2)
+            ((device half*)p.destination)[offset] = half(value);
+        else
+            ((device float*)p.destination)[offset] = value;
+    }
+}
+
+// Q16 encoding: every threadgroup quantizes 256 rows against their bounds.
+kernel void sh_encode(constant ShParams& p [[buffer(0)]], uint group [[threadgroup_position_in_grid]],
+                      uint lane [[thread_index_in_threadgroup]], uint simd [[simdgroup_index_in_threadgroup]],
+                      uint simds [[simdgroups_per_threadgroup]]) {
+    threadgroup float lows[32], highs[32];
+    const uint row = group * 256 + lane;
+    float cells[45];
+    float lo = 1e30f, hi = -1e30f;
+    if (row < p.count) {
+        const uint source_row = kShIndices != 0 ? sh_index(p, row) : p.source_offset + row;
+        for (uint c = 0; c < kShDestinationRest * 3; ++c) {
+            cells[c] = c < kShSourceRest * 3 ? sh_read(p, source_row, c) : 0;
+            lo = fmin(lo, cells[c]);
+            hi = fmax(hi, cells[c]);
+        }
+    }
+    lo = simd_min(lo);
+    hi = simd_max(hi);
+    if (simd_is_first()) {
+        lows[simd] = lo;
+        highs[simd] = hi;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint k = 0; k < simds; ++k) {
+        lo = min(lo, lows[k]);
+        hi = max(hi, highs[k]);
+    }
+    if (lo > hi)
+        lo = hi = 0;
+    if (lane == 0) {
+        p.destination_bounds[group * 2] = lo;
+        p.destination_bounds[group * 2 + 1] = hi;
+    }
+    if (row >= (p.count + 31) / 32 * 32)
+        return;
+    for (uint c = 0; c < kShDestinationRest * 3; ++c) {
+        uint code = 0;
+        if (row < p.count) {
+            const float scaled = 65535.0f * (cells[c] - lo) / fmax(hi - lo, 1e-20f);
+            const float base = floor(scaled);
+            code = uint(fmin(fmax(base + (scaled - base >= 0.5f ? 1.0f : 0.0f), 0.0f), 65535.0f));
+        }
+        ((device ushort*)p.destination)[sh_offset(row, c, kShDestinationRest, true)] = ushort(code);
+    }
 }
 
 // ---------------------------------------------------------------------------

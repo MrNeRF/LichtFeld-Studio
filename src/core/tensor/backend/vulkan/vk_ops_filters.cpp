@@ -33,27 +33,7 @@ namespace lfs::core::internal {
             }
         std::optional<vk::ScopedAllocation> window;
         if (p.flags & LFS_FILTER_WINDOW) {
-            const auto& w = p.window;
-            const auto& v = w.projection;
-            const float width = v.width, height = v.height;
-            const float hw = .5f * w.scale_x * width, hh = .5f * w.scale_y * height;
-            std::array<float, 25> data;
-            std::copy(v.rotation.begin(), v.rotation.end(), data.begin());
-            std::copy(v.translation.begin(), v.translation.end(), data.begin() + 9);
-            const std::array values{v.focal_x,
-                                    v.focal_y,
-                                    v.center_x,
-                                    v.center_y,
-                                    v.ortho_scale,
-                                    width,
-                                    height,
-                                    hw,
-                                    hh,
-                                    .5f * width + w.offset_x * (.5f * width - hw),
-                                    .5f * height + w.offset_y * (.5f * height - hh),
-                                    w.near_depth,
-                                    w.far_depth};
-            std::copy(values.begin(), values.end(), data.begin() + 12);
+            auto data = pointFilterWindowBlock(p.window);
             window.emplace(*context, sizeof(data));
             context->memory().copy_host_to_device(CopyRequest{.src = raw_storage_ref(data.data()),
                                                               .dst = window->storage(),

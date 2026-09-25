@@ -4,14 +4,25 @@
 // Metal backend conformance: every ported operation runs on Metal and on the
 // CPU reference and must agree; operations not ported yet must say so.
 
+#include "core/sh_layout.hpp"
+#include "core/sh_value_quant.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_environment.hpp"
+#include "core/tensor_filters.hpp"
 #include "core/tensor_fused.hpp"
+#include "core/tensor_histogram.hpp"
+#include "core/tensor_image.hpp"
+#include "core/tensor_labels.hpp"
+#include "core/tensor_ppisp.hpp"
+#include "core/tensor_sh.hpp"
 #include "core/tensor_spatial.hpp"
+#include "core/tensor_splat.hpp"
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -705,14 +716,14 @@ namespace {
 
     // Domain kernels port the Vulkan shaders; both backends of the Mac must agree.
     template <class Run>
-    void expect_same_on_both(const Run& run, const float tolerance = 0.0f) {
+    void expect_same_on_both(const Run& run, const float rtol = 0.0f, const float atol = 0.0f) {
         if (!gpu_backend_available(GpuBackend::Vulkan))
             GTEST_SKIP() << "No Vulkan device";
         const auto result = [&](const GpuBackend backend) {
             GpuBackendScope scope(backend);
             return run().cpu();
         };
-        expect_close(result(GpuBackend::Metal), result(GpuBackend::Vulkan), tolerance, tolerance);
+        expect_close(result(GpuBackend::Metal), result(GpuBackend::Vulkan), rtol, atol);
     }
 
     TEST_F(TensorMetal, SpatialSelectionMatchesVulkan) {
@@ -752,6 +763,248 @@ namespace {
                 mark_points_2d(mask, flat.to(Device::GPU), region, &geometry);
                 return mask;
             });
+        }
+    }
+
+    TEST_F(TensorMetal, SelectionEditsMatchVulkan) {
+        constexpr size_t count = 6000;
+        const Tensor points = random_tensor(count * 3, -3.0f, 3.0f, 77).reshape({count, 3});
+        const Tensor nodes = random_tensor(count, -2.0f, 4.0f, 78).to(DataType::Int32);
+        const Tensor allowed = Tensor::from_vector(std::vector<float>{1, 0, 1}, {3}, Device::CPU) > 0.5f;
+        const Tensor transforms =
+            Tensor::from_vector(std::vector<float>{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
+                                                   0.8f, 0, -0.6f, 0.5f, 0, 1, 0, -0.25f, 0.6f, 0, 0.8f, 0.1f, 0, 0, 0, 1},
+                                {2, 4, 4}, Device::CPU);
+        const Tensor frame = Tensor::from_vector(
+            std::vector<float>{0.9f, 0.1f, 0, 0, -0.1f, 0.9f, 0, 0, 0, 0, 1.2f, 0, 0.2f, -0.3f, 0.1f, 1}, {16}, Device::CPU);
+        const Tensor lower = Tensor::from_vector(std::vector<float>{-1.5f, -1.0f, -2.0f}, {3}, Device::CPU);
+        const Tensor upper = Tensor::from_vector(std::vector<float>{1.0f, 2.0f, 1.5f}, {3}, Device::CPU);
+        const Tensor radii = Tensor::from_vector(std::vector<float>{2.0f, 1.5f, 2.5f}, {3}, Device::CPU);
+        const Tensor initial = random_tensor(count, 0.0f, 1.0f, 79) > 0.1f;
+        enum : unsigned { Nodes = 1,
+                          Transforms = 2,
+                          Shapes = 4 };
+        const auto filtered = [&](const unsigned use, const PointFilterWindow* window) {
+            expect_same_on_both([&] {
+                const Tensor p = points.to(Device::GPU), t = transforms.to(Device::GPU), n = nodes.to(Device::GPU),
+                             a = allowed.to(Device::GPU), f = frame.to(Device::GPU), lo = lower.to(Device::GPU),
+                             hi = upper.to(Device::GPU), r = radii.to(Device::GPU);
+                PointFilter filter{.indices = &n, .ellipsoid_inverse = true, .window = window};
+                if (use & Nodes)
+                    filter.allowed = &a;
+                if (use & Transforms)
+                    filter.transforms = &t;
+                if (use & Shapes) {
+                    filter.box_transform = filter.ellipsoid_transform = &f;
+                    filter.box_min = &lo;
+                    filter.box_max = &hi;
+                    filter.ellipsoid_radii = &r;
+                }
+                Tensor mask = initial.to(Device::GPU);
+                filter_points(mask, &p, filter);
+                return mask;
+            });
+        };
+        filtered(Nodes, nullptr);
+        filtered(Transforms | Shapes, nullptr);
+        PointFilterWindow window{.near_depth = 0.5f, .far_depth = 7.0f, .scale_x = 0.6f, .scale_y = 0.8f, .offset_x = 0.3f, .offset_y = -0.2f};
+        window.projection.rotation = {0.8f, 0.0f, -0.6f, 0.0f, 1.0f, 0.0f, 0.6f, 0.0f, 0.8f};
+        window.projection.translation = {0.1f, -0.2f, 5.0f};
+        window.projection.focal_x = window.projection.focal_y = 500.0f;
+        window.projection.center_x = 320.0f;
+        window.projection.center_y = 240.0f;
+        window.projection.ortho_scale = 100.0f;
+        window.projection.width = 640;
+        window.projection.height = 480;
+        for (const PointProjectionModel model : {PointProjectionModel::Pinhole, PointProjectionModel::Orthographic,
+                                                 PointProjectionModel::Equirectangular}) {
+            SCOPED_TRACE(static_cast<int>(model));
+            window.projection.model = model;
+            filtered(Nodes | Transforms, &window);
+        }
+
+        constexpr size_t labels = 3000;
+        const Tensor selected = random_tensor(count, 0.0f, 1.0f, 80) > 0.5f;
+        const Tensor targets = random_tensor(count, -2.0f, 3100.0f, 81).to(DataType::Int32);
+        const Tensor categories = random_tensor(count, -2.0f, 3.0f, 82).to(DataType::Int32);
+        std::vector<float> lock_flags(256, 0.0f);
+        lock_flags[2] = lock_flags[5] = 1.0f;
+        const Tensor locked = Tensor::from_vector(lock_flags, {256}, Device::CPU) > 0.5f;
+        for (const LabelUpdateMode mode : {LabelUpdateMode::Add, LabelUpdateMode::Remove, LabelUpdateMode::Replace}) {
+            for (const bool indexed : {false, true}) {
+                SCOPED_TRACE(static_cast<int>(mode) * 2 + indexed);
+                const Tensor existing = random_tensor(indexed ? labels : count, 0.0f, 5.99f, 83).to(DataType::UInt8);
+                expect_same_on_both([&] {
+                    const Tensor s = selected.to(Device::GPU), e = existing.to(Device::GPU), l = locked.to(Device::GPU),
+                                 i = targets.to(Device::GPU), c = categories.to(Device::GPU), a = allowed.to(Device::GPU);
+                    Tensor output = Tensor::zeros({existing.numel()}, Device::GPU, DataType::UInt8);
+                    update_labels(output, s,
+                                  {.label = 3, .mode = mode, .existing = &e, .locked = &l, .indices = indexed ? &i : nullptr, .categories = &c, .allowed = &a});
+                    return output;
+                });
+            }
+        }
+    }
+
+    TEST_F(TensorMetal, ImageOperationsMatchVulkan) {
+        const Tensor bytes = random_tensor(100003, 0.0f, 255.99f, 71).to(DataType::UInt8);
+        expect_same_on_both([&] {
+            Tensor counts = Tensor::zeros({256}, Device::GPU, DataType::Int32);
+            histogram_u8(bytes.to(Device::GPU), counts);
+            return counts;
+        });
+
+        const Tensor rgb = random_tensor(3 * 40 * 64, 0.0f, 1.0f, 72).reshape({3, 40, 64});
+        PpispParams isp;
+        isp.exposure_factor = 1.3f;
+        for (int c = 0; c < 3; ++c) {
+            const float vignetting[5] = {0.02f * c, -0.01f * c, -0.3f, 0.1f, -0.05f};
+            const float crf[5] = {1.2f + 0.1f * c, 0.8f, 1.1f, 0.45f, 0.5f};
+            std::copy(std::begin(vignetting), std::end(vignetting), isp.vignetting + 5 * c);
+            std::copy(std::begin(crf), std::end(crf), isp.crf + 5 * c);
+        }
+        const float color_matrix[9] = {0.9f, 0.05f, 0.02f, 0.03f, 0.95f, 0.01f, -0.02f, 0.01f, 1.0f};
+        std::copy(std::begin(color_matrix), std::end(color_matrix), isp.color_matrix);
+        isp.y_offset = 12;
+        isp.full_height = 60;
+        expect_same_on_both([&] { return ppisp_apply(rgb.to(Device::GPU), isp); }, 2.0e-5f, 2.0e-5f);
+
+        const Tensor alpha = random_tensor(40 * 64, 0.0f, 1.0f, 73).reshape({40, 64});
+        const Tensor environment = random_tensor(16 * 32 * 3, 0.0f, 4.0f, 74).reshape({16, 32, 3});
+        const float c = std::cos(0.5f), s = std::sin(0.5f);
+        EnvironmentCompositeParams composite{.rotation = {c, 0, -s, 0, 1, 0, s, 0, c},
+                                             .full_width = 64,
+                                             .full_height = 60,
+                                             .band_width = 64,
+                                             .band_height = 40,
+                                             .y_offset = 12,
+                                             .focal_x = 50.0f,
+                                             .focal_y = 45.0f,
+                                             .center_x = 32.0f,
+                                             .center_y = 30.0f,
+                                             .exposure_factor = 1.5f,
+                                             .env_rotation_radians = 0.7f,
+                                             .env_width = 32,
+                                             .env_height = 16};
+        for (const int panorama : {0, 1}) {
+            SCOPED_TRACE(panorama);
+            composite.equirect_view = panorama;
+            // Rounding to bytes may flip where the transcendentals differ in their last bit.
+            expect_same_on_both([&] {
+                return environment_composite(rgb.to(Device::GPU), alpha.to(Device::GPU), environment.to(Device::GPU),
+                                             composite);
+            },
+                                0.0f, 1.0f);
+        }
+    }
+
+    TEST_F(TensorMetal, ImageResamplingMatchesVulkan) {
+        const Tensor image = random_tensor(3 * 45 * 61, -0.2f, 1.0f, 84).reshape({3, 45, 61});
+        UndistortParams camera{.src_fx = 60.0f,
+                               .src_fy = 58.0f,
+                               .src_cx = 30.5f,
+                               .src_cy = 22.5f,
+                               .dst_fx = 55.0f,
+                               .dst_fy = 52.0f,
+                               .dst_cx = 28.0f,
+                               .dst_cy = 20.0f,
+                               .src_width = 61,
+                               .src_height = 45,
+                               .dst_width = 57,
+                               .dst_height = 40,
+                               .model_type = CameraModelType::PINHOLE,
+                               .distortion = {0.12f, -0.03f, 0.004f, 0.002f, -0.003f, 0.001f, 0.002f, -0.001f, 0.001f, -0.002f},
+                               .num_distortion = 10};
+        for (const CameraModelType model :
+             {CameraModelType::PINHOLE, CameraModelType::FISHEYE, CameraModelType::THIN_PRISM_FISHEYE}) {
+            SCOPED_TRACE(static_cast<int>(model));
+            camera.model_type = model;
+            expect_same_on_both([&] { return internal::undistort_image_tensor(image.to(Device::GPU), camera, false); },
+                                1.0e-5f, 1.0e-5f);
+            expect_same_on_both([&] { return internal::undistort_image_tensor(image.slice(0, 0, 1).squeeze(0).to(Device::GPU), camera, true); },
+                                1.0e-5f, 1.0e-5f);
+        }
+        // Negative depths and short normals are invalid taps.
+        const Tensor depth = random_tensor(45 * 61, -0.5f, 3.0f, 85).reshape({45, 61});
+        const Tensor normals = random_tensor(3 * 45 * 61, -1.0f, 1.0f, 86).reshape({3, 45, 61});
+        expect_same_on_both([&] { return internal::resize_image_prior_tensor(depth.to(Device::GPU), 23, 97, false); },
+                            1.0e-6f, 1.0e-6f);
+        expect_same_on_both([&] { return internal::resize_image_prior_tensor(normals.to(Device::GPU), 23, 97, true); },
+                            1.0e-6f, 1.0e-6f);
+    }
+
+    TEST_F(TensorMetal, ShCodecMatchesVulkan) {
+        constexpr size_t rows = 1000, picked = 300;
+        constexpr uint32_t rest = 15;
+        const Tensor canonical = random_tensor(rows * rest * 3, -1.75f, 1.25f, 87).reshape({rows, size_t{rest}, 3});
+        std::vector<float> order(picked);
+        for (size_t i = 0; i < picked; ++i)
+            order[i] = static_cast<float>(i * 7 % rows);
+        const Tensor picks = Tensor::from_vector(order, {picked}, Device::CPU).to(DataType::Int32);
+        const auto resident = [](const ShFormat format) {
+            const size_t count = format == ShFormat::Q16 ? sh_value_quant::sh_value_u16_count(rows, rest)
+                                                         : sh_swizzled_float_count(rows, rest);
+            return Tensor::zeros({count}, Device::GPU, format == ShFormat::Float32 ? DataType::Float32 : DataType::Float16);
+        };
+        for (const ShFormat format : {ShFormat::Float32, ShFormat::Float16, ShFormat::Q16}) {
+            for (const DataType index_type : {DataType::Int32, DataType::Int64}) {
+                SCOPED_TRACE(static_cast<int>(format) * 2 + (index_type == DataType::Int64));
+                // Pack all rows, decode them back, and gather rows at a lower degree.
+                expect_same_on_both([&] {
+                    const bool q16 = format == ShFormat::Q16;
+                    Tensor packed = resident(format);
+                    Tensor bounds = Tensor::zeros({sh_value_quant::n_bounds_for_prims(rows) * 2}, Device::GPU);
+                    const ShCodec all{.source_rows = rows, .destination_rows = rows, .count = rows, .source_rest = rest, .destination_rest = rest};
+                    ShCodec pack = all, unpack = all;
+                    pack.source_format = ShFormat::Canonical;
+                    pack.destination_format = unpack.source_format = format;
+                    unpack.destination_format = ShFormat::Canonical;
+                    sh_codec(canonical.to(Device::GPU), packed, pack, nullptr, nullptr, q16 ? &bounds : nullptr);
+                    Tensor decoded = Tensor::zeros({rows, size_t{rest}, 3}, Device::GPU);
+                    sh_codec(packed, decoded, unpack, nullptr, q16 ? &bounds : nullptr);
+                    const Tensor ids = picks.to(index_type).to(Device::GPU);
+                    Tensor gathered = Tensor::zeros({picked, 8, 3}, Device::GPU);
+                    ShCodec gather = unpack;
+                    gather.destination_rows = gather.count = picked;
+                    gather.destination_rest = 8;
+                    sh_codec(packed, gathered, gather, &ids, q16 ? &bounds : nullptr);
+                    return Tensor::cat({packed.to(DataType::Float32), decoded.flatten(), gathered.flatten(), bounds}, 0);
+                });
+            }
+        }
+        // Scatter canonical rows, then copy a row range that ends the destination.
+        expect_same_on_both([&] {
+            Tensor packed = resident(ShFormat::Float32);
+            const Tensor ids = picks.to(Device::GPU);
+            sh_codec(canonical.slice(0, 0, picked).to(Device::GPU), packed,
+                     {.source_format = ShFormat::Canonical, .destination_format = ShFormat::Float32, .source_rows = picked, .destination_rows = rows, .count = picked, .source_rest = rest, .destination_rest = rest, .scatter = true},
+                     &ids);
+            Tensor copy = Tensor::full({packed.numel()}, 2.0f, Device::GPU);
+            sh_codec(packed, copy,
+                     {.source_rows = rows, .destination_rows = rows, .count = 500, .source_rest = rest, .destination_rest = rest, .source_offset = 100, .destination_offset = 500});
+            return Tensor::cat({packed, copy}, 0);
+        });
+    }
+
+    TEST_F(TensorMetal, SplatTransformMatchesVulkan) {
+        constexpr size_t count = 5000;
+        const Tensor scales = random_tensor(count * 3, -6.0f, 1.0f, 75).reshape({count, 3});
+        const Tensor rotations = random_tensor(count * 4, -1.0f, 1.0f, 76).reshape({count, 4});
+        for (const splat_transform::LinearTransform linear : {
+                 splat_transform::LinearTransform{{2.0f, 0.3f, 0.0f, -0.2f, 0.5f, 0.1f, 0.0f, 0.4f, 1.5f}},
+                 splat_transform::LinearTransform{{-1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f}},
+                 splat_transform::LinearTransform{{1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
+             }) {
+            SCOPED_TRACE(linear.rows[0]);
+            // The null axis of a singular map is the log of rounding noise, so
+            // scales compare linearly.
+            expect_same_on_both([&] {
+                Tensor out_scales = Tensor::empty({count, 3}, Device::GPU);
+                Tensor out_rotations = Tensor::empty({count, 4}, Device::GPU);
+                affine_splat_geometry(linear, scales.to(Device::GPU), rotations.to(Device::GPU), out_scales, out_rotations);
+                return Tensor::cat({out_scales.exp(), out_rotations}, 1);
+            },
+                                2.0e-5f, 2.0e-5f);
         }
     }
 

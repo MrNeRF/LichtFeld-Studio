@@ -20,42 +20,6 @@ namespace lfs::core::internal {
         }
     } // namespace
 
-    void MetalBackendOps::filter_points(StorageRef, const PointFilterProgram&, ExecContext) {
-        not_ported("filter_points");
-    }
-
-    void MetalBackendOps::update_labels(StorageRef, StorageRef, const LabelUpdateProgram&, ExecContext) {
-        not_ported("update_labels");
-    }
-
-    void MetalBackendOps::ppisp_apply(StorageRef, StorageRef, int, int, const PpispParams&, ExecContext) {
-        not_ported("ppisp_apply");
-    }
-
-    void MetalBackendOps::environment_composite(StorageRef, StorageRef, StorageRef, StorageRef, const EnvironmentCompositeParams&, ExecContext) {
-        not_ported("environment_composite");
-    }
-
-    Tensor MetalBackendOps::image_undistort(const Tensor&, const UndistortParams&, bool, ExecContext) {
-        not_ported("image_undistort");
-    }
-
-    Tensor MetalBackendOps::image_resize_prior(const Tensor&, int, int, bool, ExecContext) {
-        not_ported("image_resize_prior");
-    }
-
-    void MetalBackendOps::histogram_u8(StorageRef, StorageRef, size_t, ExecContext) {
-        not_ported("histogram_u8");
-    }
-
-    void MetalBackendOps::affine_splat_geometry(StorageRef, StorageRef, StorageRef, StorageRef, const splat_transform::LinearTransform&, size_t, ExecContext) {
-        not_ported("affine_splat_geometry");
-    }
-
-    void MetalBackendOps::sh_codec(StorageRef, StorageRef, const ShCodecProgram&, ExecContext) {
-        not_ported("sh_codec");
-    }
-
     Tensor MetalBackendOps::morton_sort(const Tensor&, Tensor*, ExecContext) {
         not_ported("morton_sort");
     }
