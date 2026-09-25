@@ -264,7 +264,7 @@ TEST(PreferencesMigration, MalformedTensorPreferencesKeepSafeDefaults) {
                                                      {"force_no_atomic_float", 1},
                                                  }}});
     const auto state = lfs::vis::UserPreferences::instance().tensorBackend();
-    EXPECT_EQ(state.backend, lfs::core::GpuBackend::CUDA);
+    EXPECT_EQ(state.backend, lfs::vis::TensorPreferenceState{}.backend);
     EXPECT_TRUE(state.options.vulkan_device.empty());
     EXPECT_EQ(state.options.vulkan_validation, 0);
     EXPECT_FALSE(state.options.force_fp32_half);

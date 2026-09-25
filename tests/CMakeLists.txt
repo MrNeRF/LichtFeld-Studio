@@ -67,6 +67,14 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         lfs_python_runtime
         GTest::gtest_main
     )
+    if(APPLE)
+        # On macOS the visualizer resolves CPython from the host process. The app
+        # pulls libpython in by embedding it; the test binary must load it whole.
+        find_package(Python REQUIRED COMPONENTS Development.Embed)
+        target_link_options(lichtfeld_visualizer_tests PRIVATE
+            "LINKER:-force_load,$<TARGET_LINKER_FILE:Python::Python>")
+        target_link_libraries(lichtfeld_visualizer_tests PRIVATE lfs_python_embed)
+    endif()
     add_test(
         NAME lichtfeld_visualizer_tests
         COMMAND lichtfeld_visualizer_tests
