@@ -431,6 +431,9 @@ namespace fast_lfs::rasterization {
         auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
         const auto stream = lfs::core::getCurrentCUDAStream();
         lfs::core::bridgeStreams(forward_ctx.stream, stream);
+        // Borrowed camera/model storage can retire on the forward queue.
+        // Include the backward reader before those owners can release it.
+        lfs::core::bridgeStreams(stream, forward_ctx.stream);
         arena.end_frame(forward_ctx.frame_id, stream);
     }
 

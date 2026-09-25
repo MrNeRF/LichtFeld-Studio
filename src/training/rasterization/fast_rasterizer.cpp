@@ -402,6 +402,9 @@ namespace lfs::training {
                 normal.set_stream(raster_stream);
         }
 
+        if (gaussian_model._max_screen_share.is_valid())
+            gaussian_model._max_screen_share.set_stream(raster_stream);
+
         // Call forward_raw with raw pointers (no PyTorch wrappers)
         // Use adjusted cx/cy for tile rendering
         fast_lfs::rasterization::ForwardContext forward_ctx;
