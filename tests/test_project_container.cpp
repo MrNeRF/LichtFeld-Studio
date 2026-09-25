@@ -2,11 +2,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/path_utils.hpp"
+#include "core/project_path.hpp"
 #include "core/uuid.hpp"
 #include "io/project/crc32c.hpp"
 #include "io/project/project_container_internal.hpp"
 #include "io/project_container.hpp"
-#include "io/project_path.hpp"
 #include "io/project_recovery.hpp"
 #include "licht_test_support.hpp"
 
@@ -3860,8 +3860,8 @@ namespace {
         for (const auto& row : rows) {
             SCOPED_TRACE(row.relative);
             const fs::path path = parent / row.relative;
-            EXPECT_EQ(isPublishedLichtPath(path), row.published);
-            const auto derived = derivedPublishedMasterPath(path);
+            EXPECT_EQ(lfs::core::project::isPublishedLichtPath(path), row.published);
+            const auto derived = lfs::core::project::derivedPublishedMasterPath(path);
             if (row.derived == nullptr) {
                 EXPECT_FALSE(derived.has_value());
             } else {
@@ -3879,14 +3879,14 @@ namespace {
         const auto published = parent / published_name;
         const auto temporary = parent / temporary_name;
 
-        EXPECT_TRUE(isPublishedLichtPath(published));
-        EXPECT_FALSE(isPublishedLichtPath(temporary));
+        EXPECT_TRUE(lfs::core::project::isPublishedLichtPath(published));
+        EXPECT_FALSE(lfs::core::project::isPublishedLichtPath(temporary));
 
-        const auto derived = derivedPublishedMasterPath(temporary);
+        const auto derived = lfs::core::project::derivedPublishedMasterPath(temporary);
         ASSERT_TRUE(derived.has_value());
         EXPECT_EQ(*derived, published);
 
-        const auto message = unpublishedLichtUserMessage(temporary);
+        const auto message = lfs::core::project::unpublishedLichtUserMessage(temporary);
         EXPECT_NE(message.find(lfs::core::path_to_generic_utf8(published)), std::string::npos);
     }
 

@@ -17,6 +17,7 @@
 #include "core/modal_request.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/path_utils.hpp"
+#include "core/project_path.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/user_paths.hpp"
 #include "gui/error_event_bridge.hpp"
@@ -29,7 +30,6 @@
 #include "io/loader.hpp"
 #include "io/loaders/missing_dataset_images.hpp"
 #include "io/project_container.hpp"
-#include "io/project_path.hpp"
 #include "io/project_recovery.hpp"
 #include "io/scene_chapter_adapter.hpp"
 #include "io/selection_chapter.hpp"
@@ -1706,7 +1706,7 @@ namespace lfs::vis::project {
 
         [[nodiscard]] bool isLichtPath(
             const std::filesystem::path& path) {
-            return lfs::io::project::isPublishedLichtPath(
+            return lfs::core::project::isPublishedLichtPath(
                 path);
         }
 
@@ -1745,7 +1745,7 @@ namespace lfs::vis::project {
             if (!isLichtPath(path)) {
                 return fail<std::filesystem::path>(
                     lfs::ErrorCode::InvalidArgument,
-                    lfs::io::project::
+                    lfs::core::project::
                         unpublishedLichtUserMessage(
                             path),
                     std::format(
@@ -2393,7 +2393,7 @@ namespace lfs::vis::project {
                         std::filesystem::exists(
                             entry.last_known_path, error);
                     return error || !exists ||
-                           !lfs::io::project::
+                           !lfs::core::project::
                                isPublishedLichtPath(
                                    entry.last_known_path);
                 }),
@@ -2404,7 +2404,7 @@ namespace lfs::vis::project {
         ProjectLifecycleSettings& settings,
         const lfs::core::Uuid& project_uuid,
         const std::filesystem::path& path) {
-        if (!lfs::io::project::isPublishedLichtPath(path)) {
+        if (!lfs::core::project::isPublishedLichtPath(path)) {
             return;
         }
         const auto resolved = resolveProjectMruPath(path);

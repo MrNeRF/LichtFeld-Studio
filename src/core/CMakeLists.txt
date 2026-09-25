@@ -184,7 +184,6 @@ set(CORE_SOURCES
         memory_domain.cpp
         operator_callbacks.cpp
         animatable_property.cpp
-        argument_parser.cpp
         camera.cpp
         checkpoint_format.cpp
         image_loader.cpp
@@ -253,7 +252,6 @@ target_include_directories(lfs_core
         ${CUDAToolkit_INCLUDE_DIRS}
     PRIVATE
         ${CMAKE_SOURCE_DIR}/src
-        ${CMAKE_SOURCE_DIR}/src/io/include
         ${CMAKE_CURRENT_SOURCE_DIR}/tensor  # For internal/ headers
         ${CMAKE_CURRENT_SOURCE_DIR}/nn
 )
@@ -321,7 +319,6 @@ target_link_libraries(lfs_core
         $<$<BOOL:${LFS_HAS_CUDA}>:lfs_core_cuda>
         $<$<BOOL:${LFS_HAS_CUDA}>:lfs_tensor_kernels>
         $<$<BOOL:${LFS_HAS_CUDA}>:lfs_nn_kernels>
-        taywee::args
         JPEG::JPEG
         PNG::PNG
         TIFF::TIFF

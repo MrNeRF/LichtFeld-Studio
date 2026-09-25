@@ -15,7 +15,7 @@
 #include <string>
 #include <string_view>
 
-namespace lfs::io::project {
+namespace lfs::core::project {
 
     namespace detail_path {
 
@@ -139,4 +139,4 @@ namespace lfs::io::project {
             lfs::core::path_to_utf8(path.filename()));
     }
 
-} // namespace lfs::io::project
+} // namespace lfs::core::project

@@ -4,13 +4,13 @@
 
 #include <gtest/gtest.h>
 
-#include "core/argument_parser.hpp"
 #include "core/optimization_properties.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
+#include "core/project_path.hpp"
 #include "core/property_registry.hpp"
-#include "io/project_path.hpp"
+#include "io/argument_parser.hpp"
 
 using lfs::core::param::apply_explicit_training_overrides;
 
@@ -51,7 +51,7 @@ TEST(ArgumentParserTest, DataPathLichtWithoutOutputPathBindsProject) {
         "-d",
         project_text.c_str(),
     };
-    auto parsed = lfs::core::args::parse_args_and_params(
+    auto parsed = lfs::io::args::parse_args_and_params(
         static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed) << parsed.error();
     EXPECT_EQ((*parsed)->dataset_project, project);
@@ -86,14 +86,14 @@ TEST(ArgumentParserTest, GutRejectsUnsupportedFeaturesWithoutChanging3DGS) {
             test.flag,
             "--gut",
         };
-        const auto gut = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        const auto gut = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
         ASSERT_FALSE(gut.has_value());
         EXPECT_NE(gut.error().find("3DGUT"), std::string::npos);
         EXPECT_NE(gut.error().find("3DGS"), std::string::npos);
         EXPECT_EQ(gut.error().find("FastGS"), std::string::npos);
         EXPECT_NE(gut.error().find(test.label), std::string::npos);
 
-        const auto standard_3dgs = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)) - 1, argv);
+        const auto standard_3dgs = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)) - 1, argv);
         ASSERT_TRUE(standard_3dgs.has_value()) << standard_3dgs.error();
         EXPECT_FALSE((*standard_3dgs)->optimization.gut);
         EXPECT_TRUE((*standard_3dgs)->optimization.to_json().at(test.field).get<bool>());
@@ -115,7 +115,7 @@ TEST(ArgumentParserTest, GutAcceptsUndistort) {
         "--undistort",
     };
 
-    const auto parsed = lfs::core::args::parse_args_and_params(
+    const auto parsed = lfs::io::args::parse_args_and_params(
         static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
     EXPECT_TRUE((*parsed)->optimization.gut);
@@ -129,7 +129,7 @@ TEST(ArgumentParserTest, ExplicitBackendSelectionAndLegacyAlias) {
         SCOPED_TRACE(name);
         const char* argv[] = {"LichtFeld-Studio", "-d", data.c_str(), "-o", output.c_str(),
                               "--strategy", "mcmc", "--raster-backend", name, "--gut"};
-        auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)) - 1, argv);
+        auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)) - 1, argv);
         if (std::string_view(name) == "unknown") {
             ASSERT_FALSE(parsed.has_value());
             EXPECT_NE(parsed.error().find("--raster-backend"), std::string::npos);
@@ -143,11 +143,11 @@ TEST(ArgumentParserTest, ExplicitBackendSelectionAndLegacyAlias) {
         restored.optimization.gut = !gut;
         apply_explicit_training_overrides(restored, (*parsed)->overrides);
         EXPECT_EQ(restored.optimization.gut, gut);
-        const auto combined = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        const auto combined = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
         ASSERT_EQ(combined.has_value(), gut);
         const char* reversed_argv[] = {"LichtFeld-Studio", "-d", data.c_str(), "-o", output.c_str(),
                                        "--strategy", "mcmc", "--gut", "--raster-backend", name};
-        const auto reversed = lfs::core::args::parse_args_and_params(
+        const auto reversed = lfs::io::args::parse_args_and_params(
             static_cast<int>(std::size(reversed_argv)), reversed_argv);
         ASSERT_EQ(reversed.has_value(), gut);
         if (gut) {
@@ -164,7 +164,7 @@ TEST(ArgumentParserTest, ExplicitGutBackendAcceptsUndistort) {
     const auto output = make_test_path("lfs_explicit_gut_undistort_output");
     const char* argv[] = {"LichtFeld-Studio", "-d", data.c_str(), "-o", output.c_str(),
                           "--strategy", "mcmc", "--raster-backend", "3dgut", "--undistort"};
-    const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    const auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
     EXPECT_TRUE((*parsed)->optimization.gut);
     EXPECT_TRUE((*parsed)->optimization.undistort);
@@ -183,7 +183,7 @@ TEST(ArgumentParserTest, BackendCliOverrideReplacesConfigAliasesTogether) {
     const auto config_text = config.string();
     const char* argv[] = {"LichtFeld-Studio", "-d", data.c_str(), "-o", output.c_str(),
                           "--config", config_text.c_str(), "--raster-backend", "3dgs"};
-    const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    const auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
     EXPECT_FALSE((*parsed)->optimization.gut);
     lfs::core::param::TrainingParameters restored;
@@ -207,7 +207,7 @@ TEST(ArgumentParserTest, ConfigBackendDisagreementIsRejected) {
     const auto config_text = config.string();
     const char* argv[] = {"LichtFeld-Studio", "-d", data.c_str(), "-o", output.c_str(),
                           "--config", config_text.c_str()};
-    const auto conflict = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    const auto conflict = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_FALSE(conflict.has_value());
     EXPECT_NE(conflict.error().find("Conflicting raster_backend"), std::string::npos);
 
@@ -216,7 +216,7 @@ TEST(ArgumentParserTest, ConfigBackendDisagreementIsRejected) {
         std::ofstream file(config);
         file << json;
     }
-    const auto named = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    const auto named = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(named.has_value()) << named.error();
     EXPECT_FALSE((*named)->optimization.gut);
 }
@@ -229,7 +229,7 @@ TEST(ArgumentParserTest, ViewerBackendSelectionSurvivesParameterDefaults) {
     for (const bool legacy : {false, true}) {
         const char* argv[] = {"LichtFeld-Studio", "-v", path_text.c_str(),
                               legacy ? "--gut" : "--raster-backend", "3dgut"};
-        const auto parsed = lfs::core::args::parse_args_and_params(
+        const auto parsed = lfs::io::args::parse_args_and_params(
             static_cast<int>(std::size(argv)) - (legacy ? 1 : 0), argv);
         ASSERT_TRUE(parsed.has_value()) << parsed.error();
         EXPECT_TRUE((*parsed)->optimization.gut);
@@ -255,7 +255,7 @@ TEST(ArgumentParserTest,
         project_text.c_str(),
     };
     auto project_parsed =
-        lfs::core::args::parse_args_and_params(
+        lfs::io::args::parse_args_and_params(
             static_cast<int>(
                 std::size(project_argv)),
             project_argv);
@@ -273,7 +273,7 @@ TEST(ArgumentParserTest,
         project_text.c_str(),
     };
     auto resume_parsed =
-        lfs::core::args::parse_args_and_params(
+        lfs::io::args::parse_args_and_params(
             static_cast<int>(
                 std::size(resume_argv)),
             resume_argv);
@@ -303,7 +303,7 @@ TEST(ArgumentParserTest, HeadlessResumeSelectsEmbeddedCheckpointFlow) {
     };
 
     auto parsed =
-        lfs::core::args::parse_args_and_params(
+        lfs::io::args::parse_args_and_params(
             static_cast<int>(std::size(argv)),
             argv);
     ASSERT_TRUE(parsed)
@@ -328,7 +328,7 @@ TEST(ArgumentParserTest,
         "--save-project-at-iter",
         "7000",
     };
-    auto parsed = lfs::core::args::parse_args_and_params(
+    auto parsed = lfs::io::args::parse_args_and_params(
         static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
@@ -355,7 +355,7 @@ TEST(ArgumentParserTest,
         "--save-project-at-iter",
         "7000",
     };
-    auto parsed = lfs::core::args::parse_args_and_params(
+    auto parsed = lfs::io::args::parse_args_and_params(
         static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
@@ -383,7 +383,7 @@ TEST(ArgumentParserTest, RemovedProjectAndRecoverFlagsAreUnknown) {
         project_text.c_str(),
     };
     auto project_parsed =
-        lfs::core::args::parse_args_and_params(
+        lfs::io::args::parse_args_and_params(
             static_cast<int>(
                 std::size(project_flag)),
             project_flag);
@@ -394,7 +394,7 @@ TEST(ArgumentParserTest, RemovedProjectAndRecoverFlagsAreUnknown) {
         "--recover",
     };
     auto recover_parsed =
-        lfs::core::args::parse_args_and_params(
+        lfs::io::args::parse_args_and_params(
             static_cast<int>(
                 std::size(recover_flag)),
             recover_flag);
@@ -417,7 +417,7 @@ TEST(ArgumentParserTest, BarePositionalPlyAndLichtFollowViewFlag) {
         "LichtFeld-Studio",
         ply_text.c_str(),
     };
-    auto ply_parsed = lfs::core::args::parse_args_and_params(
+    auto ply_parsed = lfs::io::args::parse_args_and_params(
         static_cast<int>(std::size(ply_argv)), ply_argv);
     ASSERT_TRUE(ply_parsed) << ply_parsed.error();
     ASSERT_EQ((*ply_parsed)->view_paths.size(), 1u);
@@ -428,7 +428,7 @@ TEST(ArgumentParserTest, BarePositionalPlyAndLichtFollowViewFlag) {
         "LichtFeld-Studio",
         project_text.c_str(),
     };
-    auto project_parsed = lfs::core::args::parse_args_and_params(
+    auto project_parsed = lfs::io::args::parse_args_and_params(
         static_cast<int>(std::size(project_argv)), project_argv);
     ASSERT_TRUE(project_parsed) << project_parsed.error();
     EXPECT_EQ((*project_parsed)->project_path, project);
@@ -443,12 +443,12 @@ TEST(ArgumentParserTest, BarePositionalPlyAndLichtFollowViewFlag) {
         "LichtFeld-Studio",
         unpublished_text.c_str(),
     };
-    auto unpublished_parsed = lfs::core::args::parse_args_and_params(
+    auto unpublished_parsed = lfs::io::args::parse_args_and_params(
         static_cast<int>(std::size(unpublished_argv)), unpublished_argv);
     ASSERT_FALSE(unpublished_parsed);
     EXPECT_EQ(
         unpublished_parsed.error(),
-        lfs::io::project::unpublishedLichtUserMessage(unpublished));
+        lfs::core::project::unpublishedLichtUserMessage(unpublished));
 }
 
 TEST(ArgumentParserTest, UsdFilesAcceptExplicitAndBareViewPaths) {
@@ -474,7 +474,7 @@ TEST(ArgumentParserTest, UsdFilesAcceptExplicitAndBareViewPaths) {
                 argv.push_back(flag);
             argv.push_back(path_text.c_str());
 
-            auto parsed = lfs::core::args::parse_args_and_params(
+            auto parsed = lfs::io::args::parse_args_and_params(
                 static_cast<int>(argv.size()), argv.data());
             ASSERT_TRUE(parsed) << parsed.error();
             EXPECT_EQ((*parsed)->view_paths, std::vector<std::filesystem::path>{path});
@@ -515,7 +515,7 @@ TEST(ArgumentParserTest, ViewDirectoryIncludesUsdAndPreservesFiltering) {
         if (flag[0])
             argv.push_back(flag);
         argv.push_back(path_text.c_str());
-        auto parsed = lfs::core::args::parse_args_and_params(
+        auto parsed = lfs::io::args::parse_args_and_params(
             static_cast<int>(argv.size()), argv.data());
         ASSERT_TRUE(parsed) << parsed.error();
         EXPECT_EQ((*parsed)->view_paths, expected);
@@ -529,7 +529,7 @@ TEST(ArgumentParserTest, GuiViewProjectExtensionIsCaseInsensitive) {
     std::ofstream(project).put('\n');
     const auto project_text = project.string();
     const char* argv[] = {"LichtFeld-Studio", "-v", project_text.c_str()};
-    auto parsed = lfs::core::args::parse_args_and_params(
+    auto parsed = lfs::io::args::parse_args_and_params(
         static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed) << parsed.error();
     EXPECT_EQ((*parsed)->project_path, project);
@@ -554,7 +554,7 @@ TEST(ArgumentParserTest,
         temp_text.c_str(),
     };
     auto view_parsed =
-        lfs::core::args::parse_args_and_params(
+        lfs::io::args::parse_args_and_params(
             static_cast<int>(std::size(view_argv)),
             view_argv);
     ASSERT_FALSE(view_parsed);
@@ -568,7 +568,7 @@ TEST(ArgumentParserTest,
         temp_text.c_str(),
     };
     auto resume_parsed =
-        lfs::core::args::parse_args_and_params(
+        lfs::io::args::parse_args_and_params(
             static_cast<int>(std::size(resume_argv)),
             resume_argv);
     ASSERT_FALSE(resume_parsed);
@@ -578,12 +578,12 @@ TEST(ArgumentParserTest,
 }
 
 TEST(ArgumentParserMetadataTest, OptimizationFlagBindingsResolveWithCompatibleTypes) {
-    using lfs::core::args::OptimizationCliParseType;
     using lfs::core::prop::PropType;
+    using lfs::io::args::OptimizationCliParseType;
 
     lfs::core::param::ensure_optimization_properties_registered();
     std::set<std::string_view> flags;
-    for (const auto& binding : lfs::core::args::optimization_cli_bindings()) {
+    for (const auto& binding : lfs::io::args::optimization_cli_bindings()) {
         SCOPED_TRACE(binding.flag);
         EXPECT_TRUE(flags.insert(binding.flag).second);
 
@@ -616,14 +616,14 @@ TEST(ArgumentParserMetadataTest, BuiltHelpContainsRegistryDescriptionsAndDefault
     for (const std::string_view flag : {"--iter", "--strategy", "--depth-loss-weight"}) {
         SCOPED_TRACE(flag);
         const auto binding = std::ranges::find(
-            lfs::core::args::optimization_cli_bindings(), flag,
-            &lfs::core::args::OptimizationCliBinding::flag);
-        ASSERT_NE(binding, lfs::core::args::optimization_cli_bindings().end());
+            lfs::io::args::optimization_cli_bindings(), flag,
+            &lfs::io::args::OptimizationCliBinding::flag);
+        ASSERT_NE(binding, lfs::io::args::optimization_cli_bindings().end());
         const auto meta = lfs::core::prop::PropertyRegistry::instance().get_property(
             "optimization", std::string(binding->property_id));
         ASSERT_TRUE(meta.has_value());
 
-        const auto help = lfs::core::args::optimization_cli_help(flag);
+        const auto help = lfs::io::args::optimization_cli_help(flag);
         EXPECT_NE(help.find(meta->description), std::string::npos);
         EXPECT_NE(help.find("(default: "), std::string::npos);
     }
@@ -642,7 +642,7 @@ TEST(ArgumentParserTest, CliOutputPathSetsExplicitAndSurvivesCreateForDataset) {
         "--export",
         "ply",
     };
-    auto parsed = lfs::core::args::parse_args_and_params(
+    auto parsed = lfs::io::args::parse_args_and_params(
         static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
     EXPECT_TRUE((*parsed)->dataset.output_path_explicit);
@@ -674,7 +674,7 @@ TEST(ArgumentParserTest, TrainingDefaultsApplyMaxWidthCap) {
         "--output-path",
         output_path.c_str()};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
     EXPECT_FALSE((*parsed)->cli_bg_color_set);
@@ -699,7 +699,7 @@ TEST(ArgumentParserTest, ExposureCorrectionFlagSetsField) {
         "--output-path",
         output_path.c_str(),
         "--exposure-correction"};
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
     EXPECT_TRUE((*parsed)->optimization.use_exposure_correction);
     EXPECT_FALSE((*parsed)->optimization.use_bilateral_grid);
@@ -719,7 +719,7 @@ TEST(ArgumentParserTest, NoPpispExifExposureDisablesSeed) {
         "--output-path",
         output_path.c_str()};
     auto default_parsed =
-        lfs::core::args::parse_args_and_params(static_cast<int>(std::size(default_argv)), default_argv);
+        lfs::io::args::parse_args_and_params(static_cast<int>(std::size(default_argv)), default_argv);
     ASSERT_TRUE(default_parsed.has_value()) << default_parsed.error();
     EXPECT_TRUE((*default_parsed)->optimization.ppisp_exposure_from_exif);
 
@@ -731,7 +731,7 @@ TEST(ArgumentParserTest, NoPpispExifExposureDisablesSeed) {
         "--output-path",
         output_path.c_str(),
         "--no-ppisp-exif-exposure"};
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
     EXPECT_FALSE((*parsed)->optimization.ppisp_exposure_from_exif);
 }
@@ -750,7 +750,7 @@ TEST(ArgumentParserTest, MortonReorderIntervalFlag) {
         "--morton-reorder-interval",
         "0"};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
     EXPECT_EQ((*parsed)->optimization.morton_reorder_interval, 0u);
 
@@ -762,7 +762,7 @@ TEST(ArgumentParserTest, MortonReorderIntervalFlag) {
         "--output-path",
         output_path.c_str(),
         "--morton-reorder-interval=1000"};
-    auto parsed_1000 = lfs::core::args::parse_args_and_params(
+    auto parsed_1000 = lfs::io::args::parse_args_and_params(
         static_cast<int>(std::size(argv_1000)), argv_1000);
     ASSERT_TRUE(parsed_1000.has_value()) << parsed_1000.error();
     EXPECT_EQ((*parsed_1000)->optimization.morton_reorder_interval, 1000u);
@@ -788,7 +788,7 @@ TEST(ArgumentParserTest, MrnfKnobFlagsParseAndPopulateExplicitOverrides) {
         "--far-seed-dose",
         "500"};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
     EXPECT_FALSE((*parsed)->optimization.growth_ratio_rank);
@@ -828,7 +828,7 @@ TEST(ArgumentParserTest, SafeModeIsProcessLocalAndNotATrainingConfigurationOptio
         "--output-path",
         output_path.c_str()};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
     EXPECT_TRUE((*parsed)->safe_mode);
 }
@@ -845,7 +845,7 @@ TEST(ArgumentParserTest, ResetAllSettingsIsProcessLocalAndExplicit) {
         "--output-path",
         output_path.c_str()};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
     EXPECT_TRUE((*parsed)->reset_all_settings);
     EXPECT_FALSE((*parsed)->reset_preferences);
@@ -866,7 +866,7 @@ TEST(ArgumentParserTest, MaxWidthCanBeExplicitlySet) {
         "--max-width",
         "8192"};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
     EXPECT_EQ((*parsed)->dataset.max_width, 8192);
@@ -886,7 +886,7 @@ TEST(ArgumentParserTest, MaxWidthZeroDisablesCapExplicitly) {
         "--max-width",
         "0"};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
     EXPECT_EQ((*parsed)->dataset.max_width, 0);
@@ -920,7 +920,7 @@ TEST(ArgumentParserTest, CommandLineOverridesConfigAfterLoading) {
         "-i",
         "777"};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     std::error_code ec;
     std::filesystem::remove(config_path, ec);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
@@ -948,10 +948,10 @@ TEST(ArgumentParserTest, Mesh2SplatParsesOutputPathAndOptions) {
         "--sigma",
         "0.5"};
 
-    auto parsed = lfs::core::args::parse_args(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
-    auto* mode = std::get_if<lfs::core::args::Mesh2SplatMode>(&*parsed);
+    auto* mode = std::get_if<lfs::io::args::Mesh2SplatMode>(&*parsed);
     ASSERT_NE(mode, nullptr);
     EXPECT_EQ(mode->params.input_path, input);
     EXPECT_EQ(mode->params.output_path, output);
@@ -979,10 +979,10 @@ TEST(ArgumentParserTest, Mesh2SplatParsesMultipleOutputFormats) {
         "--format",
         ".ply,.spz,.html,.ssog"};
 
-    auto parsed = lfs::core::args::parse_args(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
-    auto* mode = std::get_if<lfs::core::args::Mesh2SplatMode>(&*parsed);
+    auto* mode = std::get_if<lfs::io::args::Mesh2SplatMode>(&*parsed);
     ASSERT_NE(mode, nullptr);
     ASSERT_EQ(mode->params.formats.size(), 4u);
     EXPECT_EQ(mode->params.formats[0], lfs::core::param::OutputFormat::PLY);
@@ -1004,10 +1004,10 @@ TEST(ArgumentParserTest, ConvertDefaultsIncludeProvenance) {
         "-f",
         "ply"};
 
-    auto parsed = lfs::core::args::parse_args(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
-    auto* mode = std::get_if<lfs::core::args::ConvertMode>(&*parsed);
+    auto* mode = std::get_if<lfs::io::args::ConvertMode>(&*parsed);
     ASSERT_NE(mode, nullptr);
     EXPECT_TRUE(mode->params.include_provenance);
 }
@@ -1026,10 +1026,10 @@ TEST(ArgumentParserTest, ConvertNoProvenanceDisablesStamp) {
         "ply",
         "--no-provenance"};
 
-    auto parsed = lfs::core::args::parse_args(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
-    auto* mode = std::get_if<lfs::core::args::ConvertMode>(&*parsed);
+    auto* mode = std::get_if<lfs::io::args::ConvertMode>(&*parsed);
     ASSERT_NE(mode, nullptr);
     EXPECT_FALSE(mode->params.include_provenance);
 }
@@ -1037,11 +1037,11 @@ TEST(ArgumentParserTest, ConvertNoProvenanceDisablesStamp) {
 TEST(ArgumentParserTest, ConvertHelpListsLichtProjectInput) {
     const char* argv[] = {"LichtFeld-Studio", "convert", "--help"};
     testing::internal::CaptureStdout();
-    auto parsed = lfs::core::args::parse_args(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args(static_cast<int>(std::size(argv)), argv);
     const auto help = testing::internal::GetCapturedStdout();
 
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
-    EXPECT_TRUE(std::holds_alternative<lfs::core::args::HelpMode>(*parsed));
+    EXPECT_TRUE(std::holds_alternative<lfs::io::args::HelpMode>(*parsed));
     EXPECT_NE(help.find(".licht (project)"), std::string::npos);
     EXPECT_NE(help.find("LichtFeld-Studio convert project.licht output.ply"), std::string::npos);
 }
@@ -1073,7 +1073,7 @@ TEST(ArgumentParserTest, TrainingParsesAddSplats) {
         "--add-splat",
         splat_b_str.c_str()};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
     ASSERT_EQ((*parsed)->add_splat_paths.size(), 2u);
@@ -1107,7 +1107,7 @@ TEST(ArgumentParserTest, TrainingParsesFrozenAddSplatExcludeExport) {
         "--freeze",
         "--exclude-export"};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
     ASSERT_EQ((*parsed)->add_splat_paths.size(), 1u);
@@ -1130,7 +1130,7 @@ TEST(ArgumentParserTest, TrainingParsesFrozenLrScale) {
         "--freeze-lr-scale",
         "0.05"};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
     EXPECT_FLOAT_EQ((*parsed)->freeze_lr_scale, 0.05f);
 }
@@ -1151,7 +1151,7 @@ TEST(ArgumentParserTest, TrainingRejectsFrozenLrScaleOutsideUnitInterval) {
             "--freeze-lr-scale",
             scale};
 
-        auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
         ASSERT_FALSE(parsed.has_value());
         EXPECT_NE(parsed.error().find("freeze_lr_scale must be within [0, 1]"), std::string::npos)
             << parsed.error();
@@ -1172,7 +1172,7 @@ TEST(ArgumentParserTest, TrainingParsesCropBoxLrScale) {
         "--cropbox-lr-scale",
         "0.25"};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
     EXPECT_FLOAT_EQ((*parsed)->optimization.cropbox_lr_scale, 0.25f);
 }
@@ -1193,7 +1193,7 @@ TEST(ArgumentParserTest, TrainingRejectsCropBoxLrScaleOutsideUnitInterval) {
             "--cropbox-lr-scale",
             scale};
 
-        auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
         ASSERT_FALSE(parsed.has_value());
         EXPECT_NE(parsed.error().find("cropbox_lr_scale must be finite and within [0, 1]"), std::string::npos)
             << parsed.error();
@@ -1214,7 +1214,7 @@ TEST(ArgumentParserTest, TrainingParsesCropBoxLossWeight) {
         "--cropbox-loss-weight",
         "0.4"};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
     EXPECT_FLOAT_EQ((*parsed)->optimization.cropbox_loss_weight, 0.4f);
 }
@@ -1235,7 +1235,7 @@ TEST(ArgumentParserTest, TrainingRejectsCropBoxLossWeightOutsideUnitInterval) {
             "--cropbox-loss-weight",
             weight};
 
-        auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
         ASSERT_FALSE(parsed.has_value());
         EXPECT_NE(parsed.error().find("cropbox_loss_weight must be finite and within [0, 1]"), std::string::npos)
             << parsed.error();
@@ -1267,7 +1267,7 @@ TEST(ArgumentParserTest, FreezeMustImmediatelyFollowAddedSplat) {
         "0.05",
         "--freeze"};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_FALSE(parsed.has_value());
     EXPECT_NE(parsed.error().find("--freeze must immediately follow --add-splat <path>"),
               std::string::npos)
@@ -1291,7 +1291,7 @@ TEST(ArgumentParserTest, TrainingParsesExplicitDepthLossOptions) {
         "--depth-loss-mode",
         "ssi-disparity"};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
     EXPECT_TRUE((*parsed)->optimization.use_depth_loss);
@@ -1314,7 +1314,7 @@ TEST(ArgumentParserTest, TrainingRejectsLegacyDepthLossAlias) {
         "--depth-loss-mode",
         "lod"};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_FALSE(parsed.has_value());
     EXPECT_NE(parsed.error().find("depth_loss_mode must be 'ssi', 'ssi-disparity', or 'ssi-depth'"), std::string::npos);
 }
@@ -1344,7 +1344,7 @@ TEST(ArgumentParserTest, TrainingParsesExplicitNormalLossOptions) {
         "--normal-loss-space",
         "world"};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
     EXPECT_TRUE((*parsed)->optimization.use_normal_loss);
@@ -1371,7 +1371,7 @@ TEST(ArgumentParserTest, TrainingParsesNoNormalAutoGenerate) {
         "--use-normal-loss",
         "--no-normal-auto-generate"};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
     EXPECT_TRUE((*parsed)->optimization.use_normal_loss);
     EXPECT_FALSE((*parsed)->optimization.normal_auto_generate);
@@ -1394,7 +1394,7 @@ TEST(ArgumentParserTest, TrainingRejectsNormalStartAfterEnd) {
         "--normal-end-fraction",
         "0.4"};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_FALSE(parsed.has_value());
     EXPECT_NE(parsed.error().find("normal_start_fraction must not exceed normal_end_fraction"),
               std::string::npos)
@@ -1421,7 +1421,7 @@ TEST(ArgumentParserTest, TrainingRejectsNormalScheduleOutsideUnitInterval) {
             flag,
             value};
 
-        auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
         ASSERT_FALSE(parsed.has_value());
         EXPECT_NE(parsed.error().find("must be finite and within [0, 1]"), std::string::npos)
             << parsed.error();
@@ -1442,7 +1442,7 @@ TEST(ArgumentParserTest, TrainingParsesBackgroundModeModulation) {
         "--bg-mode",
         "modulation"};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
     EXPECT_EQ((*parsed)->optimization.bg_mode, lfs::core::param::BackgroundMode::Modulation);
@@ -1465,7 +1465,7 @@ TEST(ArgumentParserTest, TrainingRejectsFloatBackgroundColor) {
         "--bg-color",
         "0.1,0.2,0.3"};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_FALSE(parsed.has_value());
     EXPECT_NE(parsed.error().find("--bg-color must be #RRGGBB"), std::string::npos);
 }
@@ -1486,7 +1486,7 @@ TEST(ArgumentParserTest, TrainingParsesHexBackgroundColor) {
         "--bg-color",
         "#FF8040"};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
     EXPECT_TRUE((*parsed)->cli_bg_color_set);
@@ -1511,7 +1511,7 @@ TEST(ArgumentParserTest, TrainingParsesLowercaseHexBackgroundColor) {
         "--bg-color",
         "#ff8040"};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
     EXPECT_TRUE((*parsed)->cli_bg_color_set);
@@ -1536,7 +1536,7 @@ TEST(ArgumentParserTest, TrainingParsesIntegerRgbBackgroundColorWithSpaces) {
         "--bg-color",
         "(255, 64, 32)"};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
     EXPECT_TRUE((*parsed)->cli_bg_color_set);
@@ -1561,7 +1561,7 @@ TEST(ArgumentParserTest, TrainingParsesIntegerRgbBackgroundColorWithoutSpaces) {
         "--bg-color",
         "(255,64,32)"};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
     EXPECT_TRUE((*parsed)->cli_bg_color_set);
@@ -1586,7 +1586,7 @@ TEST(ArgumentParserTest, TrainingRejectsHexBackgroundColorWithoutHash) {
         "--bg-color",
         "FF8040"};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_FALSE(parsed.has_value());
     EXPECT_NE(parsed.error().find("--bg-color must be #RRGGBB"), std::string::npos);
 }
@@ -1607,7 +1607,7 @@ TEST(ArgumentParserTest, TrainingRejectsRgbBackgroundColorOutOfRange) {
         "--bg-color",
         "(256,64,32)"};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_FALSE(parsed.has_value());
     EXPECT_NE(parsed.error().find("--bg-color must be #RRGGBB"), std::string::npos);
 }
@@ -1636,7 +1636,7 @@ TEST(ArgumentParserTest, TrainingParsesImageBackgroundPath) {
         "--bg-image-path",
         image_str.c_str()};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
     EXPECT_EQ((*parsed)->optimization.bg_mode, lfs::core::param::BackgroundMode::Image);
@@ -1657,7 +1657,7 @@ TEST(ArgumentParserTest, TrainingRejectsImageBackgroundWithoutPath) {
         "--bg-mode",
         "image"};
 
-    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    auto parsed = lfs::io::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_FALSE(parsed.has_value());
     EXPECT_NE(parsed.error().find("--bg-image-path is required"), std::string::npos);
 }
@@ -1686,7 +1686,7 @@ TEST(ArgumentParserTest, ResumeCliFlagsPopulateExplicitOverrides) {
         "-o",
         output_text.c_str(),
     };
-    auto parsed = lfs::core::args::parse_args_and_params(
+    auto parsed = lfs::io::args::parse_args_and_params(
         static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
@@ -1744,7 +1744,7 @@ TEST(ArgumentParserTest, ResumeConfigKeysPopulateExplicitOverrides) {
         "-o",
         output_path.c_str(),
     };
-    auto parsed = lfs::core::args::parse_args_and_params(
+    auto parsed = lfs::io::args::parse_args_and_params(
         static_cast<int>(std::size(argv)), argv);
     std::error_code ec;
     std::filesystem::remove(config_path, ec);
@@ -1786,7 +1786,7 @@ TEST(ArgumentParserTest, ViewModeHonorsMcpPortOverride) {
         "--mcp-port",
         "45690",
     };
-    auto parsed = lfs::core::args::parse_args_and_params(
+    auto parsed = lfs::io::args::parse_args_and_params(
         static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
     EXPECT_EQ((*parsed)->mcp_port, std::optional<int>(45690));
@@ -1805,7 +1805,7 @@ TEST(ArgumentParserTest, ViewModeHonorsNoSplash) {
         ply_text.c_str(),
         "--no-splash",
     };
-    auto parsed = lfs::core::args::parse_args_and_params(
+    auto parsed = lfs::io::args::parse_args_and_params(
         static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
     EXPECT_TRUE((*parsed)->optimization.no_splash);
@@ -1825,7 +1825,7 @@ TEST(ArgumentParserTest, ViewModeRejectsOutOfRangeMcpPort) {
         "--mcp-port",
         "70000",
     };
-    auto parsed = lfs::core::args::parse_args_and_params(
+    auto parsed = lfs::io::args::parse_args_and_params(
         static_cast<int>(std::size(argv)), argv);
     ASSERT_FALSE(parsed.has_value());
     EXPECT_NE(parsed.error().find("must be between 1 and 65535"),

@@ -35,7 +35,7 @@ Current implementation lives in:
 | `src/python/lfs/py_plugins.cpp` | `lichtfeld.plugins` bindings |
 | `src/python/lfs/py_ui*.cpp` | Unified panel and UI bindings |
 | `src/python/plugin_runner.cpp` | CLI `plugin` subcommand runner |
-| `src/core/argument_parser.cpp` | CLI parsing for `LichtFeld-Studio plugin ...` |
+| `src/io/argument_parser.cpp` | CLI parsing for `LichtFeld-Studio plugin ...` |
 
 ## Lifecycle
 

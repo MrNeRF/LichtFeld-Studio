@@ -6,8 +6,8 @@
 #include "core/logger.hpp"
 #include "core/optimization_properties.hpp"
 #include "core/path_utils.hpp"
+#include "core/project_path.hpp"
 #include "core/property_registry.hpp"
-#include "io/project_path.hpp"
 #include <any>
 #include <cctype>
 #include <chrono>
@@ -644,8 +644,8 @@ namespace lfs::core {
                 if (extension != ".licht") {
                     return "The project path must reference a .licht file";
                 }
-                if (!lfs::io::project::isPublishedLichtPath(*project_path)) {
-                    return lfs::io::project::unpublishedLichtUserMessage(
+                if (!lfs::core::project::isPublishedLichtPath(*project_path)) {
+                    return lfs::core::project::unpublishedLichtUserMessage(
                         *project_path);
                 }
             }
@@ -660,8 +660,8 @@ namespace lfs::core {
                 if (resume_extension != ".licht") {
                     return "The resume project must reference a .licht file";
                 }
-                if (!lfs::io::project::isPublishedLichtPath(*resume_project)) {
-                    return lfs::io::project::unpublishedLichtUserMessage(
+                if (!lfs::core::project::isPublishedLichtPath(*resume_project)) {
+                    return lfs::core::project::unpublishedLichtUserMessage(
                         *resume_project);
                 }
             }

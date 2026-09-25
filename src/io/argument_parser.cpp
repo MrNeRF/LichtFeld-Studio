@@ -2,16 +2,16 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/argument_parser.hpp"
+#include "io/argument_parser.hpp"
 #include "core/environment.hpp"
 #include "core/logger.hpp"
 #include "core/optimization_properties.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
+#include "core/project_path.hpp"
 #include "core/property_registry.hpp"
 #include "core/user_paths.hpp"
 #include "io/exporter.hpp"
-#include "io/project_path.hpp"
 #include "io/splat_path.hpp"
 #include <algorithm>
 #include <any>
@@ -35,7 +35,7 @@
 #include <Windows.h>
 #endif
 
-namespace lfs::core::args {
+namespace lfs::io::args {
     namespace {
         using enum OptimizationCliParseType;
 
@@ -104,31 +104,31 @@ namespace lfs::core::args {
 
         std::string optimization_default_display(
             const OptimizationCliBinding& binding,
-            const prop::PropertyMeta& meta) {
+            const core::prop::PropertyMeta& meta) {
             if (!meta.getter)
                 throw std::runtime_error("Optimization property has no getter: " + meta.id);
-            auto defaults = param::OptimizationParameters::mrnf_defaults();
-            const auto ref = prop::PropertyObjectRef::cpp(&defaults);
+            auto defaults = core::param::OptimizationParameters::mrnf_defaults();
+            const auto ref = core::prop::PropertyObjectRef::cpp(&defaults);
             const auto value = meta.getter(ref);
 
             std::string display;
             switch (meta.type) {
-            case prop::PropType::Bool:
+            case core::prop::PropType::Bool:
                 display = std::any_cast<bool>(value) ? "true" : "false";
                 break;
-            case prop::PropType::Int:
+            case core::prop::PropType::Int:
                 display = std::format("{}", std::any_cast<int>(value));
                 break;
-            case prop::PropType::SizeT:
+            case core::prop::PropType::SizeT:
                 display = std::format("{}", std::any_cast<size_t>(value));
                 break;
-            case prop::PropType::Float:
+            case core::prop::PropType::Float:
                 display = std::format("{}", std::any_cast<float>(value));
                 break;
-            case prop::PropType::String:
+            case core::prop::PropType::String:
                 display = std::any_cast<std::string>(value);
                 break;
-            case prop::PropType::Enum: {
+            case core::prop::PropType::Enum: {
                 const int enum_value = std::any_cast<int>(value);
                 const auto item = std::ranges::find_if(meta.enum_items, [enum_value](const auto& candidate) {
                     return candidate.value == enum_value;
@@ -153,13 +153,13 @@ namespace lfs::core::args {
     }
 
     std::string optimization_cli_help(const std::string_view flag) {
-        param::ensure_optimization_properties_registered();
+        core::param::ensure_optimization_properties_registered();
         const auto binding = std::ranges::find(OPTIMIZATION_CLI_BINDINGS, flag,
                                                &OptimizationCliBinding::flag);
         if (binding == OPTIMIZATION_CLI_BINDINGS.end())
             throw std::invalid_argument("Unknown optimization CLI flag: " + std::string(flag));
 
-        const auto meta = prop::PropertyRegistry::instance().get_property(
+        const auto meta = core::prop::PropertyRegistry::instance().get_property(
             "optimization", std::string(binding->property_id));
         if (!meta)
             throw std::runtime_error("Missing optimization property for CLI flag: " + std::string(flag));
@@ -170,7 +170,7 @@ namespace lfs::core::args {
                            binding->help_suffix,
                            optimization_default_display(*binding, *meta));
     }
-} // namespace lfs::core::args
+} // namespace lfs::io::args
 
 namespace {
 
@@ -405,9 +405,9 @@ namespace {
                 return static_cast<char>(std::tolower(character));
             });
         if (extension == ".licht") {
-            if (!lfs::io::project::isPublishedLichtPath(view_path)) {
+            if (!lfs::core::project::isPublishedLichtPath(view_path)) {
                 return std::unexpected(
-                    lfs::io::project::unpublishedLichtUserMessage(view_path));
+                    lfs::core::project::unpublishedLichtUserMessage(view_path));
             }
             params.project_path = view_path;
             return {};
@@ -586,36 +586,36 @@ namespace {
             // =============================================================================
             ::args::Group training_sep(parser, " ");
             ::args::Group training_group(parser, "TRAINING PARAMETERS:");
-            ::args::ValueFlag<uint32_t> iterations(training_group, "iterations", lfs::core::args::optimization_cli_help("--iter"), {'i', "iter"});
-            ::args::ValueFlag<std::string> strategy(training_group, "strategy", lfs::core::args::optimization_cli_help("--strategy"), {"strategy"});
-            ::args::ValueFlag<int> sh_degree(training_group, "sh_degree", lfs::core::args::optimization_cli_help("--sh-degree"), {"sh-degree"});
-            ::args::ValueFlag<int> sh_degree_interval(training_group, "sh_degree_interval", lfs::core::args::optimization_cli_help("--sh-degree-interval"), {"sh-degree-interval"});
-            ::args::ValueFlag<int> morton_reorder_interval(training_group, "morton_reorder_interval", lfs::core::args::optimization_cli_help("--morton-reorder-interval"), {"morton-reorder-interval"});
-            ::args::ValueFlag<int> max_cap(training_group, "max_cap", lfs::core::args::optimization_cli_help("--max-cap"), {"max-cap"});
-            ::args::ValueFlag<float> min_opacity(training_group, "min_opacity", lfs::core::args::optimization_cli_help("--min-opacity"), {"min-opacity"});
-            ::args::ValueFlag<float> cropbox_lr_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--cropbox-lr-scale"), {"cropbox-lr-scale"});
-            ::args::ValueFlag<float> cropbox_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--cropbox-loss-weight"), {"cropbox-loss-weight"});
-            ::args::ValueFlag<float> steps_scaler(training_group, "steps_scaler", lfs::core::args::optimization_cli_help("--steps-scaler"), {"steps-scaler"});
-            ::args::Flag no_error_map(training_group, "no_error_map", lfs::core::args::optimization_cli_help("--no-error-map"), {"no-error-map"});
+            ::args::ValueFlag<uint32_t> iterations(training_group, "iterations", lfs::io::args::optimization_cli_help("--iter"), {'i', "iter"});
+            ::args::ValueFlag<std::string> strategy(training_group, "strategy", lfs::io::args::optimization_cli_help("--strategy"), {"strategy"});
+            ::args::ValueFlag<int> sh_degree(training_group, "sh_degree", lfs::io::args::optimization_cli_help("--sh-degree"), {"sh-degree"});
+            ::args::ValueFlag<int> sh_degree_interval(training_group, "sh_degree_interval", lfs::io::args::optimization_cli_help("--sh-degree-interval"), {"sh-degree-interval"});
+            ::args::ValueFlag<int> morton_reorder_interval(training_group, "morton_reorder_interval", lfs::io::args::optimization_cli_help("--morton-reorder-interval"), {"morton-reorder-interval"});
+            ::args::ValueFlag<int> max_cap(training_group, "max_cap", lfs::io::args::optimization_cli_help("--max-cap"), {"max-cap"});
+            ::args::ValueFlag<float> min_opacity(training_group, "min_opacity", lfs::io::args::optimization_cli_help("--min-opacity"), {"min-opacity"});
+            ::args::ValueFlag<float> cropbox_lr_scale(training_group, "scale", lfs::io::args::optimization_cli_help("--cropbox-lr-scale"), {"cropbox-lr-scale"});
+            ::args::ValueFlag<float> cropbox_loss_weight(training_group, "weight", lfs::io::args::optimization_cli_help("--cropbox-loss-weight"), {"cropbox-loss-weight"});
+            ::args::ValueFlag<float> steps_scaler(training_group, "steps_scaler", lfs::io::args::optimization_cli_help("--steps-scaler"), {"steps-scaler"});
+            ::args::Flag no_error_map(training_group, "no_error_map", lfs::io::args::optimization_cli_help("--no-error-map"), {"no-error-map"});
             ::args::MapFlag<std::string, lfs::core::param::DensifyErrorMap> densify_error_map(
                 training_group, "densify_error_map",
-                lfs::core::args::optimization_cli_help("--densify-error-map"),
+                lfs::io::args::optimization_cli_help("--densify-error-map"),
                 {"densify-error-map"},
                 std::unordered_map<std::string, lfs::core::param::DensifyErrorMap>{
                     {"ssim", lfs::core::param::DensifyErrorMap::Ssim},
                     {"ssim_cs", lfs::core::param::DensifyErrorMap::SsimCs}});
-            ::args::ValueFlag<float> max_screen_share(training_group, "max_screen_share", lfs::core::args::optimization_cli_help("--max-screen-share"), {"max-screen-share"});
-            ::args::ValueFlag<float> screen_share_penalty(training_group, "screen_share_penalty", lfs::core::args::optimization_cli_help("--screen-share-penalty"), {"screen-share-penalty"});
-            ::args::ValueFlag<float> oversize_split_fraction(training_group, "oversize_split_fraction", lfs::core::args::optimization_cli_help("--oversize-split-fraction"), {"oversize-split-fraction"});
-            ::args::Flag no_edge_map(training_group, "no_edge_map", lfs::core::args::optimization_cli_help("--no-edge-map"), {"no-edge-map"});
-            ::args::Flag background_improvements(training_group, "background_improvements", lfs::core::args::optimization_cli_help("--background-improvements"), {"background-improvements"});
-            ::args::Flag no_background_improvements(training_group, "no_background_improvements", lfs::core::args::optimization_cli_help("--no-background-improvements"), {"no-background-improvements"});
-            ::args::Flag no_growth_ratio_rank(training_group, "no_growth_ratio_rank", lfs::core::args::optimization_cli_help("--no-growth-ratio-rank"), {"no-growth-ratio-rank"});
-            ::args::ValueFlag<float> far_scene_min_fraction(training_group, "fraction", lfs::core::args::optimization_cli_help("--far-scene-min-fraction"), {"far-scene-min-fraction"});
-            ::args::ValueFlag<float> growth_ratio_pow(training_group, "growth_ratio_pow", lfs::core::args::optimization_cli_help("--growth-ratio-pow"), {"growth-ratio-pow"});
-            ::args::ValueFlag<int> fill_pacing_iter(training_group, "fill_pacing_iter", lfs::core::args::optimization_cli_help("--fill-pacing-iter"), {"fill-pacing-iter"});
-            ::args::ValueFlag<int> far_seed_dose(training_group, "far_seed_dose", lfs::core::args::optimization_cli_help("--far-seed-dose"), {"far-seed-dose"});
-            ::args::ValueFlag<std::string> bg_mode(training_group, "mode", lfs::core::args::optimization_cli_help("--bg-mode"), {"bg-mode"});
+            ::args::ValueFlag<float> max_screen_share(training_group, "max_screen_share", lfs::io::args::optimization_cli_help("--max-screen-share"), {"max-screen-share"});
+            ::args::ValueFlag<float> screen_share_penalty(training_group, "screen_share_penalty", lfs::io::args::optimization_cli_help("--screen-share-penalty"), {"screen-share-penalty"});
+            ::args::ValueFlag<float> oversize_split_fraction(training_group, "oversize_split_fraction", lfs::io::args::optimization_cli_help("--oversize-split-fraction"), {"oversize-split-fraction"});
+            ::args::Flag no_edge_map(training_group, "no_edge_map", lfs::io::args::optimization_cli_help("--no-edge-map"), {"no-edge-map"});
+            ::args::Flag background_improvements(training_group, "background_improvements", lfs::io::args::optimization_cli_help("--background-improvements"), {"background-improvements"});
+            ::args::Flag no_background_improvements(training_group, "no_background_improvements", lfs::io::args::optimization_cli_help("--no-background-improvements"), {"no-background-improvements"});
+            ::args::Flag no_growth_ratio_rank(training_group, "no_growth_ratio_rank", lfs::io::args::optimization_cli_help("--no-growth-ratio-rank"), {"no-growth-ratio-rank"});
+            ::args::ValueFlag<float> far_scene_min_fraction(training_group, "fraction", lfs::io::args::optimization_cli_help("--far-scene-min-fraction"), {"far-scene-min-fraction"});
+            ::args::ValueFlag<float> growth_ratio_pow(training_group, "growth_ratio_pow", lfs::io::args::optimization_cli_help("--growth-ratio-pow"), {"growth-ratio-pow"});
+            ::args::ValueFlag<int> fill_pacing_iter(training_group, "fill_pacing_iter", lfs::io::args::optimization_cli_help("--fill-pacing-iter"), {"fill-pacing-iter"});
+            ::args::ValueFlag<int> far_seed_dose(training_group, "far_seed_dose", lfs::io::args::optimization_cli_help("--far-seed-dose"), {"far-seed-dose"});
+            ::args::ValueFlag<std::string> bg_mode(training_group, "mode", lfs::io::args::optimization_cli_help("--bg-mode"), {"bg-mode"});
             ::args::ValueFlag<std::string> bg_color(training_group, "color", "solidcolor background color as #RRGGBB or (R,G,B) with 0-255 channels (default: #000000)", {"bg-color"});
             ::args::ValueFlag<std::string> bg_image_path(training_group, "path", "Background image path (required when --bg-mode image)", {"bg-image-path"});
 
@@ -624,9 +624,9 @@ namespace {
             // =============================================================================
             ::args::Group init_sep(parser, " ");
             ::args::Group init_group(parser, "INITIALIZATION:");
-            ::args::Flag random(init_group, "random", lfs::core::args::optimization_cli_help("--random"), {"random"});
-            ::args::ValueFlag<int> init_num_pts(init_group, "init_num_pts", lfs::core::args::optimization_cli_help("--init-num-pts"), {"init-num-pts"});
-            ::args::ValueFlag<float> init_extent(init_group, "init_extent", lfs::core::args::optimization_cli_help("--init-extent"), {"init-extent"});
+            ::args::Flag random(init_group, "random", lfs::io::args::optimization_cli_help("--random"), {"random"});
+            ::args::ValueFlag<int> init_num_pts(init_group, "init_num_pts", lfs::io::args::optimization_cli_help("--init-num-pts"), {"init-num-pts"});
+            ::args::ValueFlag<float> init_extent(init_group, "init_extent", lfs::io::args::optimization_cli_help("--init-extent"), {"init-extent"});
 
             // =============================================================================
             // DATASET OPTIONS
@@ -648,7 +648,7 @@ namespace {
             ::args::ValueFlag<int> min_track_length(dataset_group, "min_track_length", "Minimum point track length for COLMAP sparse point import; 0 disables filtering", {"min-track-length"});
             ::args::Flag no_cpu_cache(dataset_group, "no_cpu_cache", "Disable CPU memory caching (default: enabled)", {"no-cpu-cache"});
             ::args::Flag use_16bit(dataset_group, "use_16bit", "Train with 16-bit color images (HDR); caches losslessly as JPEG 2000 (default: 8-bit)", {"use-16bit"});
-            ::args::Flag undistort(dataset_group, "undistort", lfs::core::args::optimization_cli_help("--undistort"), {"undistort"});
+            ::args::Flag undistort(dataset_group, "undistort", lfs::io::args::optimization_cli_help("--undistort"), {"undistort"});
             ::args::MapFlag<std::string, std::string> centralize(dataset_group, "mode",
                                                                  "Centralize dataset origin: off, by_pointcloud, by_cameras (default: off)",
                                                                  {"centralize"},
@@ -663,7 +663,7 @@ namespace {
             ::args::Group mask_sep(parser, " ");
             ::args::Group mask_group(parser, "MASK / DEPTH / NORMAL OPTIONS:");
             ::args::MapFlag<std::string, lfs::core::param::MaskMode> mask_mode(mask_group, "mask_mode",
-                                                                               lfs::core::args::optimization_cli_help("--mask-mode"),
+                                                                               lfs::io::args::optimization_cli_help("--mask-mode"),
                                                                                {"mask-mode"},
                                                                                std::unordered_map<std::string, lfs::core::param::MaskMode>{
                                                                                    {"none", lfs::core::param::MaskMode::None},
@@ -671,44 +671,44 @@ namespace {
                                                                                    {"ignore", lfs::core::param::MaskMode::Ignore},
                                                                                    {"segment_and_ignore", lfs::core::param::MaskMode::SegmentAndIgnore},
                                                                                    {"alpha_consistent", lfs::core::param::MaskMode::AlphaConsistent}});
-            ::args::Flag invert_masks(mask_group, "invert_masks", lfs::core::args::optimization_cli_help("--invert-masks"), {"invert-masks"});
-            ::args::Flag no_alpha_as_mask(mask_group, "no_alpha_as_mask", lfs::core::args::optimization_cli_help("--no-alpha-as-mask"), {"no-alpha-as-mask"});
-            ::args::Flag use_depth_loss(mask_group, "use_depth_loss", lfs::core::args::optimization_cli_help("--use-depth-loss"), {"use-depth-loss"});
-            ::args::ValueFlag<float> depth_loss_weight(mask_group, "depth_loss_weight", lfs::core::args::optimization_cli_help("--depth-loss-weight"), {"depth-loss-weight"});
-            ::args::ValueFlag<std::string> depth_loss_mode(mask_group, "depth_loss_mode", lfs::core::args::optimization_cli_help("--depth-loss-mode"), {"depth-loss-mode"});
-            ::args::Flag use_normal_loss(mask_group, "use_normal_loss", lfs::core::args::optimization_cli_help("--use-normal-loss"), {"use-normal-loss"});
-            ::args::Flag no_normal_auto_generate(mask_group, "no_normal_auto_generate", lfs::core::args::optimization_cli_help("--no-normal-auto-generate"), {"no-normal-auto-generate"});
-            ::args::ValueFlag<float> normal_loss_weight(mask_group, "normal_loss_weight", lfs::core::args::optimization_cli_help("--normal-loss-weight"), {"normal-loss-weight"});
-            ::args::ValueFlag<float> normal_consistency_weight(mask_group, "normal_consistency_weight", lfs::core::args::optimization_cli_help("--normal-consistency-weight"), {"normal-consistency-weight"});
-            ::args::ValueFlag<float> normal_flatten_weight(mask_group, "normal_flatten_weight", lfs::core::args::optimization_cli_help("--normal-flatten-weight"), {"normal-flatten-weight"});
-            ::args::ValueFlag<float> normal_start_fraction(mask_group, "normal_start_fraction", lfs::core::args::optimization_cli_help("--normal-start-fraction"), {"normal-start-fraction"});
-            ::args::ValueFlag<float> normal_end_fraction(mask_group, "normal_end_fraction", lfs::core::args::optimization_cli_help("--normal-end-fraction"), {"normal-end-fraction"});
-            ::args::ValueFlag<std::string> normal_loss_space(mask_group, "normal_loss_space", lfs::core::args::optimization_cli_help("--normal-loss-space"), {"normal-loss-space"});
+            ::args::Flag invert_masks(mask_group, "invert_masks", lfs::io::args::optimization_cli_help("--invert-masks"), {"invert-masks"});
+            ::args::Flag no_alpha_as_mask(mask_group, "no_alpha_as_mask", lfs::io::args::optimization_cli_help("--no-alpha-as-mask"), {"no-alpha-as-mask"});
+            ::args::Flag use_depth_loss(mask_group, "use_depth_loss", lfs::io::args::optimization_cli_help("--use-depth-loss"), {"use-depth-loss"});
+            ::args::ValueFlag<float> depth_loss_weight(mask_group, "depth_loss_weight", lfs::io::args::optimization_cli_help("--depth-loss-weight"), {"depth-loss-weight"});
+            ::args::ValueFlag<std::string> depth_loss_mode(mask_group, "depth_loss_mode", lfs::io::args::optimization_cli_help("--depth-loss-mode"), {"depth-loss-mode"});
+            ::args::Flag use_normal_loss(mask_group, "use_normal_loss", lfs::io::args::optimization_cli_help("--use-normal-loss"), {"use-normal-loss"});
+            ::args::Flag no_normal_auto_generate(mask_group, "no_normal_auto_generate", lfs::io::args::optimization_cli_help("--no-normal-auto-generate"), {"no-normal-auto-generate"});
+            ::args::ValueFlag<float> normal_loss_weight(mask_group, "normal_loss_weight", lfs::io::args::optimization_cli_help("--normal-loss-weight"), {"normal-loss-weight"});
+            ::args::ValueFlag<float> normal_consistency_weight(mask_group, "normal_consistency_weight", lfs::io::args::optimization_cli_help("--normal-consistency-weight"), {"normal-consistency-weight"});
+            ::args::ValueFlag<float> normal_flatten_weight(mask_group, "normal_flatten_weight", lfs::io::args::optimization_cli_help("--normal-flatten-weight"), {"normal-flatten-weight"});
+            ::args::ValueFlag<float> normal_start_fraction(mask_group, "normal_start_fraction", lfs::io::args::optimization_cli_help("--normal-start-fraction"), {"normal-start-fraction"});
+            ::args::ValueFlag<float> normal_end_fraction(mask_group, "normal_end_fraction", lfs::io::args::optimization_cli_help("--normal-end-fraction"), {"normal-end-fraction"});
+            ::args::ValueFlag<std::string> normal_loss_space(mask_group, "normal_loss_space", lfs::io::args::optimization_cli_help("--normal-loss-space"), {"normal-loss-space"});
 
             // =============================================================================
             // SPARSITY OPTIMIZATION
             // =============================================================================
             ::args::Group sparsity_sep(parser, " ");
             ::args::Group sparsity_group(parser, "SPARSITY OPTIMIZATION:");
-            ::args::Flag enable_sparsity(sparsity_group, "enable_sparsity", lfs::core::args::optimization_cli_help("--enable-sparsity"), {"enable-sparsity"});
-            ::args::ValueFlag<int> sparsify_steps(sparsity_group, "sparsify_steps", lfs::core::args::optimization_cli_help("--sparsify-steps"), {"sparsify-steps"});
-            ::args::ValueFlag<float> init_rho(sparsity_group, "init_rho", lfs::core::args::optimization_cli_help("--init-rho"), {"init-rho"});
-            ::args::ValueFlag<float> prune_ratio(sparsity_group, "prune_ratio", lfs::core::args::optimization_cli_help("--prune-ratio"), {"prune-ratio"});
+            ::args::Flag enable_sparsity(sparsity_group, "enable_sparsity", lfs::io::args::optimization_cli_help("--enable-sparsity"), {"enable-sparsity"});
+            ::args::ValueFlag<int> sparsify_steps(sparsity_group, "sparsify_steps", lfs::io::args::optimization_cli_help("--sparsify-steps"), {"sparsify-steps"});
+            ::args::ValueFlag<float> init_rho(sparsity_group, "init_rho", lfs::io::args::optimization_cli_help("--init-rho"), {"init-rho"});
+            ::args::ValueFlag<float> prune_ratio(sparsity_group, "prune_ratio", lfs::io::args::optimization_cli_help("--prune-ratio"), {"prune-ratio"});
 
             // =============================================================================
             // RENDERING OPTIONS
             // =============================================================================
             ::args::Group rendering_sep(parser, " ");
             ::args::Group rendering_group(parser, "RENDERING OPTIONS:");
-            ::args::Flag enable_mip(rendering_group, "enable_mip", lfs::core::args::optimization_cli_help("--enable-mip"), {"enable-mip"});
-            ::args::Flag use_bilateral_grid(rendering_group, "bilateral_grid", lfs::core::args::optimization_cli_help("--bilateral-grid"), {"bilateral-grid"});
-            ::args::Flag use_exposure_correction(rendering_group, "exposure_correction", lfs::core::args::optimization_cli_help("--exposure-correction"), {"exposure-correction"});
-            ::args::Flag use_ppisp(rendering_group, "ppisp", lfs::core::args::optimization_cli_help("--ppisp"), {"ppisp"});
-            ::args::Flag no_ppisp_exif_exposure(rendering_group, "no_ppisp_exif_exposure", lfs::core::args::optimization_cli_help("--no-ppisp-exif-exposure"), {"no-ppisp-exif-exposure"});
-            ::args::Flag ppisp_controller(rendering_group, "ppisp_controller", lfs::core::args::optimization_cli_help("--ppisp-controller"), {"ppisp-controller"});
-            ::args::Flag ppisp_freeze_from_sidecar(rendering_group, "ppisp_freeze", lfs::core::args::optimization_cli_help("--ppisp-freeze"), {"ppisp-freeze"});
+            ::args::Flag enable_mip(rendering_group, "enable_mip", lfs::io::args::optimization_cli_help("--enable-mip"), {"enable-mip"});
+            ::args::Flag use_bilateral_grid(rendering_group, "bilateral_grid", lfs::io::args::optimization_cli_help("--bilateral-grid"), {"bilateral-grid"});
+            ::args::Flag use_exposure_correction(rendering_group, "exposure_correction", lfs::io::args::optimization_cli_help("--exposure-correction"), {"exposure-correction"});
+            ::args::Flag use_ppisp(rendering_group, "ppisp", lfs::io::args::optimization_cli_help("--ppisp"), {"ppisp"});
+            ::args::Flag no_ppisp_exif_exposure(rendering_group, "no_ppisp_exif_exposure", lfs::io::args::optimization_cli_help("--no-ppisp-exif-exposure"), {"no-ppisp-exif-exposure"});
+            ::args::Flag ppisp_controller(rendering_group, "ppisp_controller", lfs::io::args::optimization_cli_help("--ppisp-controller"), {"ppisp-controller"});
+            ::args::Flag ppisp_freeze_from_sidecar(rendering_group, "ppisp_freeze", lfs::io::args::optimization_cli_help("--ppisp-freeze"), {"ppisp-freeze"});
             ::args::ValueFlag<std::string> ppisp_sidecar_path(rendering_group, "path", "Path to PPISP sidecar (.ppisp) used for frozen PPISP training", {"ppisp-sidecar"});
-            ::args::Flag gut(rendering_group, "gut", lfs::core::args::optimization_cli_help("--gut"), {"gut"});
+            ::args::Flag gut(rendering_group, "gut", lfs::io::args::optimization_cli_help("--gut"), {"gut"});
             ::args::ValueFlag<std::string> raster_backend(rendering_group, "raster_backend", "Training raster backend: 3dgs or 3dgut (--gut is the legacy 3dgut alias)", {"raster-backend"});
 
             // =============================================================================
@@ -716,7 +716,7 @@ namespace {
             // =============================================================================
             ::args::Group output_sep(parser, " ");
             ::args::Group output_group(parser, "OUTPUT OPTIONS:");
-            ::args::Flag enable_eval(output_group, "eval", lfs::core::args::optimization_cli_help("--eval"), {"eval"});
+            ::args::Flag enable_eval(output_group, "eval", lfs::io::args::optimization_cli_help("--eval"), {"eval"});
             ::args::Flag no_download(output_group, "no_download", "Do not download optional model weights", {"no-download"});
             ::args::ValueFlagList<int> eval_steps(output_group, "eval_steps", "Held-out evaluation iterations (repeatable; default: 7000 and 30000)", {"eval-steps"});
             ::args::Flag no_save_eval_images(output_group, "no_save_eval_images", "Disable saving of evaluation comparison images (GT vs rendered) during eval (default: enabled)", {"no-save-eval-images"});
@@ -736,7 +736,7 @@ namespace {
             // =============================================================================
             ::args::Group ui_sep(parser, " ");
             ::args::Group ui_group(parser, "UI OPTIONS:");
-            ::args::Flag headless(ui_group, "headless", lfs::core::args::optimization_cli_help("--headless"), {"headless"});
+            ::args::Flag headless(ui_group, "headless", lfs::io::args::optimization_cli_help("--headless"), {"headless"});
             ::args::Flag auto_train(ui_group, "train", "Start training immediately on startup", {"train"});
             ::args::Flag safe_mode(ui_group, "safe_mode", "Start with user plugins disabled (recovery mode)", {"safe-mode"});
             ::args::Flag reset_preferences(ui_group, "reset_preferences", "Back up and reset application preferences", {"reset-preferences"});
@@ -1006,10 +1006,10 @@ namespace {
                                 std::tolower(character));
                         });
                     if (extension == ".licht") {
-                        if (!lfs::io::project::isPublishedLichtPath(
+                        if (!lfs::core::project::isPublishedLichtPath(
                                 ckpt_path)) {
                             return std::unexpected(
-                                lfs::io::project::
+                                lfs::core::project::
                                     unpublishedLichtUserMessage(
                                         ckpt_path));
                         }
@@ -1098,9 +1098,9 @@ namespace {
             // can work without explicit paths (extracted from checkpoint).
             if (has_data_path && (has_output_path || data_path_is_project)) {
                 if (data_path_is_project) {
-                    if (!lfs::io::project::isPublishedLichtPath(data_path_value)) {
+                    if (!lfs::core::project::isPublishedLichtPath(data_path_value)) {
                         return std::unexpected(
-                            lfs::io::project::unpublishedLichtUserMessage(data_path_value));
+                            lfs::core::project::unpublishedLichtUserMessage(data_path_value));
                     }
                     params.dataset_project = data_path_value;
                 } else {
@@ -1715,7 +1715,7 @@ namespace {
 
 // Public interface
 std::expected<std::unique_ptr<lfs::core::param::TrainingParameters>, std::string>
-lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
+lfs::io::args::parse_args_and_params(int argc, const char* const argv[]) {
 
     auto params = std::make_unique<lfs::core::param::TrainingParameters>();
     auto args = convert_args(argc, argv);
@@ -1839,8 +1839,8 @@ namespace {
         "  --inference-backend accepts native (default; auto is an alias).\n"
         "\n";
 
-    std::expected<lfs::core::args::ParsedArgs, std::string> parseConvertArgs(const int argc, const char* const argv[]) {
-        namespace core_args = lfs::core::args;
+    std::expected<lfs::io::args::ParsedArgs, std::string> parseConvertArgs(const int argc, const char* const argv[]) {
+        namespace io_args = lfs::io::args;
         namespace param = lfs::core::param;
 
         ::args::ArgumentParser parser(CONVERT_HELP_HEADER, CONVERT_HELP_FOOTER);
@@ -1868,7 +1868,7 @@ namespace {
             parser.ParseArgs(std::vector<std::string>(args_vec.begin() + 1, args_vec.end()));
         } catch (const ::args::Help&) {
             std::print("{}", parser.Help());
-            return core_args::HelpMode{};
+            return io_args::HelpMode{};
         } catch (const ::args::ParseError& e) {
             return std::unexpected(std::format("{}\n\n{}", e.what(), parser.Help()));
         }
@@ -1967,11 +1967,11 @@ namespace {
         params.rad_export_mode = rad_none_stream ? param::RadExportMode::NonStream
                                                  : param::RadExportMode::Stream;
 
-        return core_args::ConvertMode{params};
+        return io_args::ConvertMode{params};
     }
 
-    std::expected<lfs::core::args::ParsedArgs, std::string> parseMesh2SplatArgs(const int argc, const char* const argv[]) {
-        namespace core_args = lfs::core::args;
+    std::expected<lfs::io::args::ParsedArgs, std::string> parseMesh2SplatArgs(const int argc, const char* const argv[]) {
+        namespace io_args = lfs::io::args;
         namespace param = lfs::core::param;
 
         ::args::ArgumentParser parser(MESH2SPLAT_HELP_HEADER, MESH2SPLAT_HELP_FOOTER);
@@ -1996,7 +1996,7 @@ namespace {
             parser.ParseArgs(std::vector<std::string>(args_vec.begin() + 1, args_vec.end()));
         } catch (const ::args::Help&) {
             std::print("{}", parser.Help());
-            return core_args::HelpMode{};
+            return io_args::HelpMode{};
         } catch (const ::args::ParseError& e) {
             return std::unexpected(std::format("{}\n\n{}", e.what(), parser.Help()));
         }
@@ -2058,11 +2058,11 @@ namespace {
             }
         }
 
-        return core_args::Mesh2SplatMode{params};
+        return io_args::Mesh2SplatMode{params};
     }
 
-    std::expected<lfs::core::args::ParsedArgs, std::string> parsePreprocessArgs(const int argc, const char* const argv[]) {
-        namespace core_args = lfs::core::args;
+    std::expected<lfs::io::args::ParsedArgs, std::string> parsePreprocessArgs(const int argc, const char* const argv[]) {
+        namespace io_args = lfs::io::args;
         namespace param = lfs::core::param;
 
         ::args::ArgumentParser parser(PREPROCESS_HELP_HEADER, PREPROCESS_HELP_FOOTER);
@@ -2102,7 +2102,7 @@ namespace {
             parser.ParseArgs(std::vector<std::string>(args_vec.begin() + 1, args_vec.end()));
         } catch (const ::args::Help&) {
             std::print("{}", parser.Help());
-            return core_args::HelpMode{};
+            return io_args::HelpMode{};
         } catch (const ::args::ParseError& e) {
             return std::unexpected(std::format("{}\n\n{}", e.what(), parser.Help()));
         }
@@ -2172,12 +2172,12 @@ namespace {
             return std::unexpected(std::format("Model not found: {}", lfs::core::path_to_utf8(params.model_path)));
         }
 
-        return core_args::PreprocessMode{params};
+        return io_args::PreprocessMode{params};
     }
 } // namespace
 
-std::expected<lfs::core::args::ParsedArgs, std::string>
-lfs::core::args::parse_args(const int argc, const char* const argv[]) {
+std::expected<lfs::io::args::ParsedArgs, std::string>
+lfs::io::args::parse_args(const int argc, const char* const argv[]) {
     constexpr std::string_view kSelftestFlag = "--tensor-backend-selftest";
     constexpr std::string_view kSelftestPrefix = "--tensor-backend-selftest=";
     for (int i = 1; i < argc; ++i) {
@@ -2200,10 +2200,10 @@ lfs::core::args::parse_args(const int argc, const char* const argv[]) {
             character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
         }
         if (normalized == "cuda") {
-            return TensorBackendSelftestMode{GpuBackend::CUDA};
+            return TensorBackendSelftestMode{core::GpuBackend::CUDA};
         }
         if (normalized == "vulkan") {
-            return TensorBackendSelftestMode{GpuBackend::Vulkan};
+            return TensorBackendSelftestMode{core::GpuBackend::Vulkan};
         }
         return std::unexpected(
             std::format("Invalid --tensor-backend-selftest backend '{}'. Use: cuda, vulkan",

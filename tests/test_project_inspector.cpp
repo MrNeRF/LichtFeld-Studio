@@ -2,10 +2,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/checkpoint_format.hpp"
+#include "core/project_path.hpp"
 #include "io/project_chapters.hpp"
 #include "io/project_container.hpp"
 #include "io/project_inspector.hpp"
-#include "io/project_path.hpp"
 #include "licht_test_support.hpp"
 
 #include <array>

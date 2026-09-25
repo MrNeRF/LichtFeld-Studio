@@ -6,7 +6,6 @@
 #include "app/converter.hpp"
 #include "app/gpu_preflight.hpp"
 #include "core/abi.hpp"
-#include "core/argument_parser.hpp"
 #include "core/crash_handler.hpp"
 #include "core/cuda_error.hpp"
 #include "core/environment.hpp"
@@ -19,6 +18,7 @@
 #include "core/user_paths.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "git_version.h"
+#include "io/argument_parser.hpp"
 #include "lfs_core_abi_stamp.h"
 #include "preferences.hpp"
 #include "preprocessing/preprocess.hpp"
@@ -166,16 +166,16 @@ namespace {
     }
 #endif
 
-    int run_mode(lfs::core::args::ParsedArgs args) {
+    int run_mode(lfs::io::args::ParsedArgs args) {
         return std::visit([](auto&& mode) -> int {
             using T = std::decay_t<decltype(mode)>;
 
-            if constexpr (std::is_same_v<T, lfs::core::args::HelpMode>) {
+            if constexpr (std::is_same_v<T, lfs::io::args::HelpMode>) {
                 return 0;
-            } else if constexpr (std::is_same_v<T, lfs::core::args::VersionMode>) {
+            } else if constexpr (std::is_same_v<T, lfs::io::args::VersionMode>) {
                 std::println("LichtFeld Studio {} ({})", GIT_TAGGED_VERSION, GIT_COMMIT_HASH_SHORT);
                 return 0;
-            } else if constexpr (std::is_same_v<T, lfs::core::args::WarmupMode>) {
+            } else if constexpr (std::is_same_v<T, lfs::io::args::WarmupMode>) {
 #if LFS_HAS_CUDA
                 if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA) {
                     applyCudaContextTuning();
@@ -188,7 +188,7 @@ namespace {
                 }
 #endif
                 return 0;
-            } else if constexpr (std::is_same_v<T, lfs::core::args::TensorBackendSelftestMode>) {
+            } else if constexpr (std::is_same_v<T, lfs::io::args::TensorBackendSelftestMode>) {
                 const char* name = mode.backend == lfs::core::GpuBackend::Vulkan ? "vulkan" : "cuda";
                 const lfs::Status status = lfs::core::tensor_backend_selftest(mode.backend);
                 if (status) {
@@ -198,13 +198,13 @@ namespace {
                 std::println("tensor backend selftest {}: failed: {}",
                              name, lfs::format_for_developer(status.error()));
                 return 1;
-            } else if constexpr (std::is_same_v<T, lfs::core::args::ConvertMode>) {
+            } else if constexpr (std::is_same_v<T, lfs::io::args::ConvertMode>) {
                 preflightGpuOrExit(false);
                 return lfs::app::run_converter(mode.params);
-            } else if constexpr (std::is_same_v<T, lfs::core::args::Mesh2SplatMode>) {
+            } else if constexpr (std::is_same_v<T, lfs::io::args::Mesh2SplatMode>) {
                 preflightGpuOrExit(false);
                 return lfs::app::run_mesh2splat(mode.params);
-            } else if constexpr (std::is_same_v<T, lfs::core::args::PreprocessMode>) {
+            } else if constexpr (std::is_same_v<T, lfs::io::args::PreprocessMode>) {
                 // Native inference validates the selected tensor backend. Only
                 // CUDA execution needs the CUDA driver/SM gate; weight downloads
                 // and Vulkan inference must also work without a CUDA device.
@@ -213,9 +213,9 @@ namespace {
                     preflightGpuOrExit(false);
                 }
                 return lfs::preprocessing::run_preprocess(mode.params);
-            } else if constexpr (std::is_same_v<T, lfs::core::args::PluginMode>) {
+            } else if constexpr (std::is_same_v<T, lfs::io::args::PluginMode>) {
                 return lfs::python::run_plugin_command(mode);
-            } else if constexpr (std::is_same_v<T, lfs::core::args::TrainingMode>) {
+            } else if constexpr (std::is_same_v<T, lfs::io::args::TrainingMode>) {
                 if constexpr (!LFS_BUILD_TRAINER) {
                     if (mode.params->optimization.headless && !mode.params->render_path) {
                         std::println(stderr, "Training is not included in this build.");
@@ -304,14 +304,14 @@ int main(int argc, char* argv[]) {
     lfs::core::initialize_cuda_diagnostics();
 #endif
 
-    auto result = lfs::core::args::parse_args(argc, argv);
+    auto result = lfs::io::args::parse_args(argc, argv);
     if (!result) {
         std::println(stderr, "Error: {}", result.error());
         return 1;
     }
 
     bool use_default_preferences = false;
-    if (const auto* training = std::get_if<lfs::core::args::TrainingMode>(&*result)) {
+    if (const auto* training = std::get_if<lfs::io::args::TrainingMode>(&*result)) {
         use_default_preferences = training->params->safe_mode || training->params->reset_preferences ||
                                   training->params->reset_all_settings;
     }

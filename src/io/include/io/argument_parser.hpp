@@ -15,7 +15,7 @@
 #include <string_view>
 #include <variant>
 
-namespace lfs::core::args {
+namespace lfs::io::args {
 
     enum class OptimizationCliParseType {
         Bool,
@@ -35,27 +35,27 @@ namespace lfs::core::args {
         std::string_view cli_default_alias;
     };
 
-    LFS_CORE_API std::span<const OptimizationCliBinding> optimization_cli_bindings();
-    LFS_CORE_API std::string optimization_cli_help(std::string_view flag);
+    LFS_IO_API std::span<const OptimizationCliBinding> optimization_cli_bindings();
+    LFS_IO_API std::string optimization_cli_help(std::string_view flag);
 
     // Parsed argument modes
     struct TrainingMode {
-        std::unique_ptr<param::TrainingParameters> params;
+        std::unique_ptr<core::param::TrainingParameters> params;
     };
     struct ConvertMode {
-        param::ConvertParameters params;
+        core::param::ConvertParameters params;
     };
     struct Mesh2SplatMode {
-        param::Mesh2SplatParameters params;
+        core::param::Mesh2SplatParameters params;
     };
     struct PreprocessMode {
-        param::PreprocessParameters params;
+        core::param::PreprocessParameters params;
     };
     struct HelpMode {};
     struct VersionMode {};
     struct WarmupMode {}; // JIT compile PTX kernels and exit
     struct TensorBackendSelftestMode {
-        GpuBackend backend;
+        core::GpuBackend backend;
     };
     struct PluginMode {
         enum class Command { CREATE,
@@ -67,10 +67,10 @@ namespace lfs::core::args {
 
     using ParsedArgs = std::variant<TrainingMode, ConvertMode, Mesh2SplatMode, PreprocessMode, HelpMode, VersionMode, WarmupMode, TensorBackendSelftestMode, PluginMode>;
 
-    LFS_CORE_API std::expected<ParsedArgs, std::string> parse_args(int argc, const char* const argv[]);
+    LFS_IO_API std::expected<ParsedArgs, std::string> parse_args(int argc, const char* const argv[]);
 
     // Legacy interface - prefer parse_args()
-    LFS_CORE_API std::expected<std::unique_ptr<param::TrainingParameters>, std::string>
+    LFS_IO_API std::expected<std::unique_ptr<core::param::TrainingParameters>, std::string>
     parse_args_and_params(int argc, const char* const argv[]);
 
-} // namespace lfs::core::args
+} // namespace lfs::io::args

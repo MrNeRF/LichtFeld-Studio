@@ -1,10 +1,10 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "app/include/app/converter.hpp"
-#include "core/argument_parser.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor_export.hpp"
+#include "io/argument_parser.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/sogs.hpp"
 #include "io/formats/ssog.hpp"
@@ -342,9 +342,9 @@ TEST(SsogFormat, CliOptions) {
     const char* argv[] = {"LichtFeld-Studio", "convert", input.c_str(), "-f", "ssog",
                           "--lod-levels", "2", "--lod-ratio", "0.25", "--lod-chunk-count", "32",
                           "--lod-chunk-extent", "8", "--lod-chunk-min", "2", "-o", "result_ssog"};
-    auto parsed = lfs::core::args::parse_args(std::size(argv), argv);
+    auto parsed = lfs::io::args::parse_args(std::size(argv), argv);
     ASSERT_TRUE(parsed) << parsed.error();
-    const auto* mode = std::get_if<lfs::core::args::ConvertMode>(&*parsed);
+    const auto* mode = std::get_if<lfs::io::args::ConvertMode>(&*parsed);
     ASSERT_NE(mode, nullptr);
     EXPECT_EQ(mode->params.format, lfs::core::param::OutputFormat::SSOG);
     EXPECT_EQ(mode->params.output_path, fs::path("result_ssog"));
@@ -354,10 +354,10 @@ TEST(SsogFormat, CliOptions) {
     EXPECT_FLOAT_EQ(mode->params.lod_chunk_extent, 8);
     EXPECT_EQ(mode->params.lod_chunk_min, 2);
     const char* bad[] = {"LichtFeld-Studio", "convert", input.c_str(), "-f", "ssog", "--lod-ratio", "1"};
-    EXPECT_FALSE(lfs::core::args::parse_args(std::size(bad), bad));
+    EXPECT_FALSE(lfs::io::args::parse_args(std::size(bad), bad));
     for (const auto* levels : {"0", "1", "8", "9"}) {
         const char* args[] = {"LichtFeld-Studio", "convert", input.c_str(), "-f", ".ssog", "--lod-levels", levels};
-        auto result = lfs::core::args::parse_args(std::size(args), args);
+        auto result = lfs::io::args::parse_args(std::size(args), args);
         EXPECT_EQ(result.has_value(), std::string_view(levels) == "1" || std::string_view(levels) == "8");
         auto o = options(dir.path, std::stoi(levels));
         EXPECT_EQ(o.validate(), result.has_value());
@@ -707,9 +707,9 @@ TEST(SsogFormat, ConvertBundleDirectoryDefaultAndBack) {
             argv.push_back("-o");
             argv.push_back(output_string.c_str());
         }
-        auto parsed = lfs::core::args::parse_args(static_cast<int>(argv.size()), argv.data());
+        auto parsed = lfs::io::args::parse_args(static_cast<int>(argv.size()), argv.data());
         ASSERT_TRUE(parsed) << parsed.error();
-        const auto* mode = std::get_if<lfs::core::args::ConvertMode>(&*parsed);
+        const auto* mode = std::get_if<lfs::io::args::ConvertMode>(&*parsed);
         ASSERT_NE(mode, nullptr);
         ASSERT_EQ(lfs::app::run_converter(mode->params), 0);
         const auto actual = destination.empty() ? dir.path / "input.ssog" : destination;

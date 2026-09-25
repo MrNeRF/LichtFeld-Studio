@@ -147,6 +147,7 @@ target_include_directories(lfs_python_utils
 target_link_libraries(lfs_python_utils
     PUBLIC
         lfs_core
+        lfs_io
         lfs_python_runtime
         lfs::tree_sitter
         lfs::tree_sitter_python

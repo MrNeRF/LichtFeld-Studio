@@ -205,6 +205,7 @@ else()
 endif()
 
 add_library(lfs_io STATIC
+        argument_parser.cpp
         # Implementation file only (header is in include/io/)
         loader.cpp
         ppisp_file.cpp
@@ -378,6 +379,7 @@ target_link_libraries(lfs_io
         lfs_core            # Link to modular core library for SplatData, Camera, etc.
         PRIVATE
         lfs_geometry
+        taywee::args
         TBB::tbb
         spdlog::spdlog
         nlohmann_json::nlohmann_json
