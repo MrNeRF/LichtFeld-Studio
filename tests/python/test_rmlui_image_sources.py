@@ -87,6 +87,23 @@ def test_first_preview_request_survives_lazy_panel_creation(panel_modules, tmp_p
     assert panel._camera_uids == [17]
 
 
+def test_image_preview_discards_info_for_previous_image_sets(panel_modules, tmp_path):
+    image_preview, _ = panel_modules
+    panel = image_preview.ImagePreviewPanel()
+    old_path = tmp_path / "old.jpg"
+    retained_path = tmp_path / "retained.jpg"
+    panel._image_info_cache = {
+        str(old_path): (640, 480, 3),
+        str(retained_path): (1920, 1080, 3),
+    }
+
+    panel.open([retained_path], [None], 0)
+
+    assert panel._image_info_cache == {
+        str(retained_path): (1920, 1080, 3),
+    }
+
+
 class _ElementStub:
     def __init__(self):
         self.properties = {}

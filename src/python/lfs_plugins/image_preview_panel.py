@@ -297,6 +297,13 @@ class ImagePreviewPanel(Panel):
 
         self._image_paths = [Path(p) for p in image_paths]
         self._mask_paths = [Path(p) if p else None for p in mask_paths] if mask_paths else [None] * len(image_paths)
+        live_paths = {
+            str(path)
+            for path in self._image_paths + [p for p in self._mask_paths if p is not None]
+        }
+        self._image_info_cache = {
+            path: info for path, info in self._image_info_cache.items() if path in live_paths
+        }
         self._path_stat_cache = {}
         for path in self._image_paths + [p for p in self._mask_paths if p is not None]:
             try:
