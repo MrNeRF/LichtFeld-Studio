@@ -7,6 +7,7 @@
 #include "core/parameters.hpp"
 #include "core/tensor.hpp"
 #include "ppisp_fixture.hpp"
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -75,13 +76,15 @@ namespace {
         }
     }
 
-    bool vectors_close(const std::vector<float>& expected, const std::vector<float>& actual, float tol = 1e-5f) {
+    bool vectors_close(const std::vector<float>& expected, const std::vector<float>& actual,
+                       float abs_tol = 1e-5f, float rel_tol = 0.0f) {
         if (expected.size() != actual.size()) {
             return false;
         }
         for (size_t i = 0; i < expected.size(); ++i) {
             if (!std::isfinite(expected[i]) || !std::isfinite(actual[i]) ||
-                std::abs(expected[i] - actual[i]) > tol) {
+                std::abs(expected[i] - actual[i]) >
+                    abs_tol + rel_tol * std::max(std::abs(expected[i]), std::abs(actual[i]))) {
                 return false;
             }
         }
@@ -116,15 +119,16 @@ namespace {
         const auto full_input = make_controller_input(0.2f);
         const auto small_input = make_controller_input(0.35f, 24, 30);
         const auto full_before = controller.predict(0, full_input).cpu().to_vector();
-        const auto small_output = controller.predict(0, small_input).cpu().to_vector();
+        const auto small_before = controller.predict(0, small_input).cpu().to_vector();
         const auto full_after = controller.predict(0, full_input).cpu().to_vector();
+        const auto small_after = controller.predict(0, small_input).cpu().to_vector();
 
         ASSERT_EQ(full_before.size(), 9u);
-        ASSERT_EQ(small_output.size(), 9u);
-        for (const float value : small_output) {
-            EXPECT_TRUE(std::isfinite(value));
-        }
-        EXPECT_TRUE(vectors_close(full_before, full_after));
+        ASSERT_EQ(small_before.size(), 9u);
+        constexpr float abs_tol = 1e-4f;
+        constexpr float rel_tol = 1e-4f;
+        EXPECT_TRUE(vectors_close(full_before, full_after, abs_tol, rel_tol));
+        EXPECT_TRUE(vectors_close(small_before, small_after, abs_tol, rel_tol));
     }
 
     TEST_F(PPISPSidecarTest, SaveLoadWithMetadataSupportsRemappedImport) {

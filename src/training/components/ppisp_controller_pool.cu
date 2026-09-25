@@ -286,8 +286,8 @@ namespace lfs::training {
         buf_w_ = max_w;
 
         const size_t buf_bytes = buf_pool2_.numel() * sizeof(float);
-        LOG_INFO("[PPISPControllerPool] Pooled CNN buffer for max image %zux%zu: %.1f KiB",
-                 max_h, max_w, buf_bytes / 1024.0);
+        LOG_INFO("[PPISPControllerPool] Fixed pooled CNN buffer 1x%dx%dx%d: %.1f KiB; max image bounds %zux%zu",
+                 CNN_CH3, POOL2_SIZE, POOL2_SIZE, buf_bytes / 1024.0, max_h, max_w);
     }
 
     lfs::core::Tensor PPISPControllerPool::predict(const int camera_idx, const lfs::core::Tensor& rendered_rgb,
