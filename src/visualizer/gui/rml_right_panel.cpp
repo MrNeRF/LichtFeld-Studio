@@ -354,15 +354,6 @@ namespace lfs::vis::gui {
         }
     }
 
-    static bool isOrHasAncestor(Rml::Element* el, const Rml::String& id) {
-        while (el) {
-            if (el->GetId() == id)
-                return true;
-            el = el->GetParentNode();
-        }
-        return false;
-    }
-
     void RmlRightPanel::setTabStripScroll(const float value) {
         if (!std::isfinite(value))
             return;
