@@ -1193,6 +1193,11 @@ TEST_F(FastGSKernelTest, Optimizer_ZeroRows) {
 
     std::vector<int64_t> indices = {0, 1, 2, 3, 4};
     ASSERT_NO_THROW(opt->reset_state_at_indices(ParamType::Means, indices));
+
+    auto host_indices = Tensor::empty({indices.size()}, Device::CPU, DataType::Int64);
+    std::memcpy(host_indices.ptr<int64_t>(), indices.data(), indices.size() * sizeof(int64_t));
+    auto device_indices = host_indices.cuda();
+    ASSERT_NO_THROW(opt->reset_state_at_indices(ParamType::Means, device_indices));
 }
 
 // Numerical tests

@@ -118,19 +118,7 @@ namespace lfs::training {
 
             if (state->is_joint()) {
                 // Joint codec: encode true zeros under current bounds via optimizer API.
-                auto idx_cpu = indices.cpu();
-                std::vector<int64_t> host_idx;
-                host_idx.reserve(indices.numel());
-                if (idx_cpu.dtype() == lfs::core::DataType::Int64) {
-                    const auto* p = idx_cpu.ptr<int64_t>();
-                    host_idx.assign(p, p + indices.numel());
-                } else if (idx_cpu.dtype() == lfs::core::DataType::Int32) {
-                    const auto* p = idx_cpu.ptr<int32_t>();
-                    for (size_t i = 0; i < indices.numel(); ++i)
-                        host_idx.push_back(static_cast<int64_t>(p[i]));
-                }
-                if (!host_idx.empty())
-                    optimizer.reset_state_at_indices(param_type, host_idx);
+                optimizer.reset_state_at_indices(param_type, indices);
             }
 
             // grad is transient (re-zeroed each step); only the contiguous case is handled here.

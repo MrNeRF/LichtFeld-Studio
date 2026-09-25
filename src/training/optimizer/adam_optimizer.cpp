@@ -1193,6 +1193,44 @@ namespace lfs::training {
         LFS_CUDA_CHECK(cudaFreeAsync(d_indices, stream));
     }
 
+    void AdamOptimizer::reset_state_at_indices(ParamType type, const lfs::core::Tensor& indices) {
+        if (!indices.is_valid() || indices.numel() == 0)
+            return;
+        if (indices.ndim() != 1)
+            throw std::runtime_error("reset_state_at_indices: indices must be one-dimensional");
+        if (indices.dtype() != lfs::core::DataType::Int32 &&
+            indices.dtype() != lfs::core::DataType::Int64) {
+            throw std::runtime_error("reset_state_at_indices: indices must be int32 or int64");
+        }
+
+        if (indices.device() == lfs::core::Device::CUDA) {
+            auto device_indices = indices.is_contiguous() ? indices : indices.contiguous();
+            if (device_indices.dtype() != lfs::core::DataType::Int64) {
+                device_indices = device_indices.to(lfs::core::DataType::Int64);
+            }
+            const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+            lfs::core::waitForCUDAStream(stream, device_indices.stream());
+            relocate_params_at_indices_gpu(
+                type, device_indices.ptr<int64_t>(), device_indices.numel());
+            device_indices.set_stream(stream);
+            return;
+        }
+
+        const auto cpu_indices = indices.is_contiguous() ? indices : indices.contiguous();
+        std::vector<int64_t> host_indices;
+        host_indices.reserve(cpu_indices.numel());
+        if (cpu_indices.dtype() == lfs::core::DataType::Int64) {
+            const auto* ptr = cpu_indices.ptr<int64_t>();
+            host_indices.assign(ptr, ptr + cpu_indices.numel());
+        } else {
+            const auto* ptr = cpu_indices.ptr<int32_t>();
+            for (size_t i = 0; i < cpu_indices.numel(); ++i) {
+                host_indices.push_back(static_cast<int64_t>(ptr[i]));
+            }
+        }
+        reset_state_at_indices(type, host_indices);
+    }
+
     void AdamOptimizer::extend_state_by_gather(ParamType type, const lfs::core::Tensor& indices) {
         const auto name = param_name(type);
         if (!states_.contains(name))
