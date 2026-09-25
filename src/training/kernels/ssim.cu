@@ -1784,14 +1784,17 @@ namespace lfs::training::kernels {
 
         float grad_per_pixel = grad_loss / static_cast<float>(numel);
 
-        // Use pre-allocated workspace buffer
+        // Keep workspace initialization, the fill and backward on the execution stream.
+        const auto stream = lfs::core::getCurrentCUDAStream();
+        workspace.dL_dmap.set_stream(stream);
+        workspace.dL_dimg1.set_stream(stream);
         workspace.dL_dmap.zero_();
 
         if (ctx.apply_valid_padding && ctx.original_h > 10 && ctx.original_w > 10) {
             auto cropped_view = workspace.dL_dmap.slice(2, 5, ctx.original_h - 5).slice(3, 5, ctx.original_w - 5);
-            cropped_view.fill_(grad_per_pixel, nullptr); // stream-aware version, no sync
+            cropped_view.fill_(grad_per_pixel, stream);
         } else {
-            workspace.dL_dmap.fill_(grad_per_pixel, nullptr);
+            workspace.dL_dmap.fill_(grad_per_pixel, stream);
         }
 
         // Use pre-allocated output buffer

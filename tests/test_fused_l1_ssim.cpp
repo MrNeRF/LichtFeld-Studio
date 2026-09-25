@@ -13,14 +13,18 @@
 #include <gtest/gtest.h>
 
 #include "core/tensor.hpp"
+#include "core/tensor_upload.hpp"
 #include "cuda_backend_test.hpp"
 #include "lfs/kernels/l1_loss.cuh"
 #include "lfs/kernels/ssim.cuh"
 #include "training/losses/photometric_loss.hpp"
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <cstring>
 #include <cuda_runtime.h>
 #include <limits>
+#include <thread>
 #include <vector>
 
 using namespace lfs::core;
@@ -899,4 +903,49 @@ TEST_F(FusedL1SSIMTest, DecoupledRoutesContrastStructureGradientToRawBranch) {
     EXPECT_GT(loss.item<float>(), 0.0f);
     EXPECT_LT(grads.grad_corrected.abs().max().item<float>(), 1e-4f);
     EXPECT_GT(grads.grad_raw.abs().max().item<float>(), 1e-4f);
+}
+
+TEST_F(FusedL1SSIMTest, BackwardFillFollowsIndependentQueue) {
+    constexpr size_t h = 24, w = 28;
+    std::vector<float> pixels(3 * h * w), target(pixels.size());
+    for (size_t i = 0; i < pixels.size(); ++i) {
+        pixels[i] = static_cast<float>(i % 251) / 256.0f;
+        target[i] = static_cast<float>((i * 13) % 251) / 256.0f;
+    }
+    for (const bool crop : {false, true}) {
+        Tensor reference;
+        for (const bool independent : {false, true}) {
+            TensorWorkQueue queue(GpuBackend::CUDA, independent ? TensorWorkQueue::Mode::Independent
+                                                                : TensorWorkQueue::Mode::LegacyOrdered);
+            TensorWorkQueue::Scope scope(queue);
+            auto image = Tensor::from_vector(pixels, {1, 3, h, w}, Device::GPU);
+            auto truth = Tensor::from_vector(target, {1, 3, h, w}, Device::GPU);
+            SSIMWorkspace workspace;
+            auto [loss, context] = ssim_forward(image, truth, workspace, crop);
+            queue.wait();
+            if (independent) {
+                // A legacy-stream fill overtakes the queued workspace clear.
+                queue.enqueue_host_callback([](void*) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+                },
+                                            nullptr);
+            }
+            auto gradient = ssim_backward(context, workspace, 0.75f);
+            queue.wait();
+            const auto map = workspace.dL_dmap.cpu().to_vector();
+            const float expected = 0.75f / static_cast<float>(3 * (crop ? (h - 10) * (w - 10) : h * w));
+            for (size_t i = 0; i < map.size(); ++i) {
+                const size_t row = (i / w) % h, col = i % w;
+                const bool valid = !crop || (row >= 5 && row < h - 5 && col >= 5 && col < w - 5);
+                ASSERT_EQ(map[i], valid ? expected : 0.0f) << "crop=" << crop << " index=" << i;
+            }
+            auto host = gradient.cpu().contiguous();
+            if (independent) {
+                ASSERT_EQ(host.bytes(), reference.bytes());
+                EXPECT_EQ(std::memcmp(host.data_ptr(), reference.data_ptr(), host.bytes()), 0);
+            } else {
+                reference = std::move(host);
+            }
+        }
+    }
 }
