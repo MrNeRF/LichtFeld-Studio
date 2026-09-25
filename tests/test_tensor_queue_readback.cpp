@@ -22,11 +22,11 @@ namespace {
     using namespace lfs::core;
 
     TEST(TensorQueueContract, UnavailableConstructorsRejectExplicitly) {
-        EXPECT_THROW(TensorWorkQueue(GpuBackend::Vulkan), std::runtime_error);
+        EXPECT_THROW((void)TensorWorkQueue(GpuBackend::Vulkan), std::runtime_error);
         EXPECT_THROW(TensorWorkQueue(GpuBackend::Vulkan, nullptr), std::runtime_error);
-        EXPECT_THROW(TensorFence(GpuBackend::Vulkan), std::runtime_error);
+        EXPECT_THROW((void)TensorFence(GpuBackend::Vulkan), std::runtime_error);
         if (!gpu_backend_available(GpuBackend::CUDA)) {
-            EXPECT_THROW(TensorWorkQueue(GpuBackend::CUDA), std::runtime_error);
+            EXPECT_THROW((void)TensorWorkQueue(GpuBackend::CUDA), std::runtime_error);
 #if !LFS_HAS_CUDA
             EXPECT_THROW(TensorWorkQueue(GpuBackend::CUDA, nullptr), std::runtime_error);
 #else
@@ -37,7 +37,7 @@ namespace {
             EXPECT_THROW((void)borrowed.ready(), std::runtime_error);
 #endif
             EXPECT_THROW(TensorWorkQueue(GpuBackend::CUDA, nullptr, nullptr), std::runtime_error);
-            EXPECT_THROW(TensorFence(GpuBackend::CUDA), std::runtime_error);
+            EXPECT_THROW((void)TensorFence(GpuBackend::CUDA), std::runtime_error);
         }
     }
 
