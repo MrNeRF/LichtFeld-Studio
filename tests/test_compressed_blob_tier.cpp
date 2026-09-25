@@ -23,10 +23,12 @@ namespace {
 
     lfs::io::ReadyImage load_one(lfs::io::PipelinedImageLoader& loader,
                                  const size_t sequence,
-                                 const std::filesystem::path& path) {
+                                 const std::filesystem::path& path,
+                                 const int resize_factor = 1) {
         lfs::io::ImageRequest request;
         request.sequence_id = sequence;
         request.path = path;
+        request.params.resize_factor = resize_factor;
         request.params.output_uint8 = false;
         loader.prefetch({request});
         return loader.get();
@@ -86,14 +88,17 @@ TEST(CompressedBlobTier, SixteenBitRgbCacheHitUsesJpeg2000GpuPath) {
     config.use_16bit_color = true;
     lfs::io::PipelinedImageLoader loader(config);
 
-    const auto cold = load_one(loader, 1, cached_source);
+    // Unprocessed original JPEGs decode directly; a resized load takes the cold
+    // path and caches a JPEG 2000 blob that the hot hit decodes on the GPU.
+    constexpr int RESIZE_FACTOR = 2;
+    const auto cold = load_one(loader, 1, cached_source, RESIZE_FACTOR);
     ASSERT_TRUE(cold.error.empty()) << cold.error;
     ASSERT_TRUE(cold.tensor.is_valid());
     ASSERT_EQ(cold.tensor.dtype(), lfs::core::DataType::Float32);
     ASSERT_GT(loader.get_stats().jpeg_cache_entries, 0u);
 
     ASSERT_NO_THROW(std::filesystem::resize_file(cached_source, 0));
-    const auto hot = load_one(loader, 2, cached_source);
+    const auto hot = load_one(loader, 2, cached_source, RESIZE_FACTOR);
     EXPECT_TRUE(hot.error.empty()) << hot.error;
     ASSERT_TRUE(hot.tensor.is_valid());
     EXPECT_EQ(hot.tensor.dtype(), lfs::core::DataType::Float32);
