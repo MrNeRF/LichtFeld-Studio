@@ -1737,7 +1737,7 @@ namespace lfs::training::kernels {
             workspace.reduction_result.ptr<float>(),
             N, C, H, W,
             apply_valid_padding,
-            workspace.ssim_map.stream());
+            lfs::core::getCurrentCUDAStream());
         // The returned scalar aliases the workspace and must be consumed before
         // the next forward using this workspace.
         lfs::core::Tensor ssim_value_tensor = workspace.reduction_result;
@@ -1873,7 +1873,7 @@ namespace lfs::training::kernels {
                 workspace.reduction_result.ptr<float>(),
                 N, C, H, W,
                 apply_valid_padding,
-                workspace.ssim_map.stream());
+                lfs::core::getCurrentCUDAStream());
         });
         lfs::core::Tensor loss_scalar = workspace.reduction_result;
 
@@ -1989,7 +1989,7 @@ namespace lfs::training::kernels {
                 workspace.reduction_result.ptr<float>(),
                 N, C, H, W,
                 apply_valid_padding,
-                workspace.ssim_map.stream());
+                lfs::core::getCurrentCUDAStream());
         });
         lfs::core::Tensor loss_scalar = workspace.reduction_result;
 
@@ -2096,7 +2096,7 @@ namespace lfs::training::kernels {
         const dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, N);
         const dim3 block(BLOCK_X, BLOCK_Y);
 
-        const auto stream = workspace.ssim_map.stream();
+        const auto stream = lfs::core::getCurrentCUDAStream();
         dispatch_target_ptr(img2, [&](auto* img2_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(img2_ptr)>>;
             maskedFusedL1SSIMForwardCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
@@ -2213,7 +2213,7 @@ namespace lfs::training::kernels {
         const dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, N);
         const dim3 block(BLOCK_X, BLOCK_Y);
 
-        const auto stream = workspace.ssim_map.stream();
+        const auto stream = lfs::core::getCurrentCUDAStream();
         dispatch_target_ptr(gt, [&](auto* gt_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(gt_ptr)>>;
             decoupledFusedL1SSIMForwardCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
@@ -2420,6 +2420,11 @@ namespace lfs::training::kernels {
     } // namespace
 
     void SSIMWorkspace::ensure_size(const std::vector<size_t>& shape) {
+        for (auto* tensor : {&ssim_map, &dm_dmu1, &dm_dsigma1_sq, &dm_dsigma12, &dL_dmap, &dL_dimg1, &reduction_temp, &reduction_result, &cs_map}) {
+            if (tensor->is_valid())
+                tensor->set_stream(lfs::core::getCurrentCUDAStream());
+        }
+
         if (arena) {
             arena->ensure_pure_ssim(shape);
             ensure_independent_cs_map(cs_map, ssim_map);
@@ -2441,6 +2446,11 @@ namespace lfs::training::kernels {
     }
 
     void FusedL1SSIMWorkspace::ensure_size(const std::vector<size_t>& shape) {
+        for (auto* tensor : {&ssim_map, &dm_dmu1, &dm_dsigma1_sq, &dm_dsigma12, &grad_img, &reduction_temp, &reduction_result, &cs_map}) {
+            if (tensor->is_valid())
+                tensor->set_stream(lfs::core::getCurrentCUDAStream());
+        }
+
         if (arena) {
             arena->ensure_fused(shape);
             ensure_independent_cs_map(cs_map, ssim_map);
@@ -2463,6 +2473,11 @@ namespace lfs::training::kernels {
     }
 
     void DecoupledFusedL1SSIMWorkspace::ensure_size(const std::vector<size_t>& shape) {
+        for (auto* tensor : {&ssim_map, &app_dm_dmu1, &raw_dm_dmu1, &raw_dm_dsigma1_sq, &raw_dm_dsigma12, &grad_corrected, &grad_raw, &reduction_temp, &reduction_result, &cs_map}) {
+            if (tensor->is_valid())
+                tensor->set_stream(lfs::core::getCurrentCUDAStream());
+        }
+
         if (arena) {
             arena->ensure_decoupled(shape);
             ensure_independent_cs_map(cs_map, ssim_map);
@@ -2487,6 +2502,11 @@ namespace lfs::training::kernels {
     }
 
     void MaskedFusedL1SSIMWorkspace::ensure_size(const std::vector<size_t>& shape) {
+        for (auto* tensor : {&ssim_map, &dm_dmu1, &dm_dsigma1_sq, &dm_dsigma12, &grad_img, &reduction_temp, &masked_loss, &mask_sum, &cs_map}) {
+            if (tensor->is_valid())
+                tensor->set_stream(lfs::core::getCurrentCUDAStream());
+        }
+
         if (arena) {
             arena->ensure_masked_fused(shape);
             ensure_independent_cs_map(cs_map, ssim_map);
@@ -2510,6 +2530,11 @@ namespace lfs::training::kernels {
     }
 
     void MaskedDecoupledFusedL1SSIMWorkspace::ensure_size(const std::vector<size_t>& shape) {
+        for (auto* tensor : {&ssim_map, &app_dm_dmu1, &raw_dm_dmu1, &raw_dm_dsigma1_sq, &raw_dm_dsigma12, &grad_corrected, &grad_raw, &reduction_temp, &masked_loss, &mask_sum, &cs_map}) {
+            if (tensor->is_valid())
+                tensor->set_stream(lfs::core::getCurrentCUDAStream());
+        }
+
         if (arena) {
             arena->ensure_masked_decoupled(shape);
             ensure_independent_cs_map(cs_map, ssim_map);
@@ -2660,6 +2685,8 @@ namespace lfs::training::kernels {
     }
 
     void LossWorkspaceArena::ensure_capacity_for(const Kind kind, const size_t bytes) {
+        if (storage_.is_valid())
+            storage_.set_stream(lfs::core::getCurrentCUDAStream());
         const size_t required_capacity = align_up_bytes(bytes);
         const bool variant_changed = active_kind_ != Kind::None && active_kind_ != kind;
         const bool must_allocate = !storage_.is_valid() || variant_changed ||
@@ -2753,11 +2780,8 @@ namespace lfs::training::kernels {
                            offset, nbytes, capacity_bytes_));
         void* ptr = static_cast<char*>(storage_.data_ptr()) + offset;
         offset += nbytes;
-        // Prefer current stream (matches training step); fall back to storage home.
-        cudaStream_t home = lfs::core::getCurrentCUDAStream();
-        if (home == nullptr) {
-            home = storage_.stream();
-        }
+        const auto home = lfs::core::getCurrentCUDAStream();
+        storage_.set_stream(home);
         return lfs::core::Tensor::from_blob(ptr, lfs::core::TensorShape(shape),
                                             lfs::core::Device::GPU, dtype, home);
     }

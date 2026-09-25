@@ -950,3 +950,24 @@ TEST_F(FusedL1SSIMTest, BackwardFillFollowsIndependentQueue) {
         }
     }
 }
+
+TEST_F(FusedL1SSIMTest, ReusedWorkspaceFollowsExecutionQueue) {
+    TensorWorkQueue producer(GpuBackend::CUDA);
+    TensorWorkQueue consumer(GpuBackend::CUDA);
+    TensorWorkQueue::Scope scope(producer);
+    auto image = Tensor::full({1, 3, 24, 28}, 0.25f, Device::GPU);
+    auto target = Tensor::full({1, 3, 24, 28}, 0.75f, Device::GPU);
+    FusedL1SSIMWorkspace workspace;
+    const auto first = fused_l1_ssim_forward(image, target, 0.2f, workspace);
+    const float reference = first.first.item<float>();
+    {
+        TensorWorkQueue::Scope next(consumer);
+        const auto result = fused_l1_ssim_forward(image, target, 0.2f, workspace);
+        EXPECT_EQ(workspace.ssim_map.stream(), consumer.native_handle());
+        EXPECT_EQ(workspace.reduction_result.stream(), consumer.native_handle());
+        EXPECT_EQ(result.first.item<float>(), reference);
+        const auto gradient = fused_l1_ssim_backward(result.second, workspace);
+        EXPECT_EQ(gradient.stream(), consumer.native_handle());
+        consumer.wait();
+    }
+}
