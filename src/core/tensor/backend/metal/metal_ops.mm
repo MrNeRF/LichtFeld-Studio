@@ -13,6 +13,8 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <vector>
@@ -22,19 +24,17 @@ namespace lfs::core::internal {
     namespace {
         using metal::acquire_context;
         using metal::Context;
+        using metal::kThreadgroupWidth;
         using metal::live_context;
+        using metal::param_bytes;
 
-        constexpr NSUInteger kThreadgroupWidth = 256;
+        MTLSize threads(const size_t count) {
+            return MTLSizeMake(count, 1, 1);
+        }
 
         uint32_t checked_u32(const size_t value, const char* const description) {
             LFS_ASSERT_MSG(value <= std::numeric_limits<uint32_t>::max(), description);
             return static_cast<uint32_t>(value);
-        }
-
-        void dispatch_threads(id<MTLComputeCommandEncoder> encoder,
-                              id<MTLComputePipelineState> pipeline, const size_t threads) {
-            const NSUInteger width = std::min<NSUInteger>(pipeline.maxTotalThreadsPerThreadgroup, kThreadgroupWidth);
-            [encoder dispatchThreads:MTLSizeMake(threads, 1, 1) threadsPerThreadgroup:MTLSizeMake(width, 1, 1)];
         }
 
         struct PointwiseParams {
@@ -49,6 +49,7 @@ namespace lfs::core::internal {
         };
         static_assert(sizeof(PointwiseParams) == 48);
 
+        API_AVAILABLE(macos(26.0))
         void dispatch_pointwise(const PointwiseProgram& program, const StorageRef lhs,
                                 const StorageRef rhs, const StorageRef output,
                                 const size_t count, const uint32_t arity) {
@@ -83,32 +84,26 @@ namespace lfs::core::internal {
                 .flags = program.scalar.scalar_on_right ? 1u : 0u,
             };
             const std::array uses{lhs, arity == 2 ? rhs : lhs, output};
-            context->encode(uses, [&](id<MTLComputeCommandEncoder> encoder) {
-                [encoder setComputePipelineState:pipeline];
-                [encoder setBuffer:lhs_at.buffer offset:0 atIndex:0];
-                [encoder setBuffer:rhs_at.buffer offset:0 atIndex:1];
-                [encoder setBuffer:output_at.buffer offset:0 atIndex:2];
-                [encoder setBytes:&params length:sizeof(params) atIndex:3];
-                dispatch_threads(encoder, pipeline, vectorized ? count / 4 : count);
-            });
+            context->dispatch(uses, {.pipeline = pipeline,
+                                     .buffers = {lhs_at.address, rhs_at.address, output_at.address},
+                                     .params = param_bytes(params),
+                                     .grid = threads(vectorized ? count / 4 : count)});
         }
 
         struct ChainOp {
-            uint32_t kind;
             float scalar;
-            uint32_t slot;
             uint32_t padding;
-            uint64_t rhs_offset;
+            uint64_t rhs_address;
         };
 
         struct ChainParams {
             uint64_t input_offset;
             uint64_t output_offset;
             uint32_t count;
-            uint32_t op_count;
+            uint32_t padding;
             std::array<ChainOp, tensor_ops::FUSED_POINTWISE_MAX_OPS> ops;
         };
-        static_assert(sizeof(ChainOp) == 24 && sizeof(ChainParams) == 24 + 16 * 24);
+        static_assert(sizeof(ChainOp) == 16 && sizeof(ChainParams) == 24 + 16 * 16);
 
         struct FillParams {
             uint64_t output_offset;
@@ -124,6 +119,7 @@ namespace lfs::core::internal {
 
         // Fills bytes with a pattern of element_size bytes, widening to 16-byte
         // stores when the range allows it.
+        API_AVAILABLE(macos(26.0))
         void encode_fill(Context& context, const StorageRef output, const size_t bytes,
                          uint64_t pattern, size_t element_size) {
             if (bytes == 0)
@@ -140,14 +136,13 @@ namespace lfs::core::internal {
             const auto pipeline = context.pipeline("fill", {{5, static_cast<uint32_t>(element_size)}});
             const FillParams params{.output_offset = output_at.offset, .pattern = pattern, .count = bytes / element_size};
             const std::array uses{output};
-            context.encode(uses, [&](id<MTLComputeCommandEncoder> encoder) {
-                [encoder setComputePipelineState:pipeline];
-                [encoder setBuffer:output_at.buffer offset:0 atIndex:0];
-                [encoder setBytes:&params length:sizeof(params) atIndex:1];
-                dispatch_threads(encoder, pipeline, params.count);
-            });
+            context.dispatch(uses, {.pipeline = pipeline,
+                                    .buffers = {output_at.address},
+                                    .params = param_bytes(params),
+                                    .grid = threads(params.count)});
         }
 
+        API_AVAILABLE(macos(26.0))
         void encode_copy(Context& context, const StorageRef source, const StorageRef destination,
                          const size_t bytes) {
             if (bytes == 0)
@@ -166,13 +161,10 @@ namespace lfs::core::internal {
                 .count = bytes / element_size,
             };
             const std::array uses{source, destination};
-            context.encode(uses, [&](id<MTLComputeCommandEncoder> encoder) {
-                [encoder setComputePipelineState:pipeline];
-                [encoder setBuffer:source_at.buffer offset:0 atIndex:0];
-                [encoder setBuffer:destination_at.buffer offset:0 atIndex:1];
-                [encoder setBytes:&params length:sizeof(params) atIndex:2];
-                dispatch_threads(encoder, pipeline, params.count);
-            });
+            context.dispatch(uses, {.pipeline = pipeline,
+                                    .buffers = {source_at.address, destination_at.address},
+                                    .params = param_bytes(params),
+                                    .grid = threads(params.count)});
         }
 
         struct StridedParams {
@@ -185,8 +177,18 @@ namespace lfs::core::internal {
         };
         static_assert(sizeof(StridedParams) == 88);
 
+        struct TransposeParams {
+            uint64_t input_offset;
+            uint64_t output_offset;
+            uint32_t rows;
+            uint32_t columns;
+            uint32_t input_stride;
+            uint32_t padding;
+        };
+
         // Gathers a strided input into contiguous output or, for a scatter, the
         // reverse; the layout describes the strided side.
+        API_AVAILABLE(macos(26.0))
         void encode_strided(const StorageRef input, const StorageRef output, const StridedLayout& layout,
                             const bool scatter, const DataType input_dtype, const DataType output_dtype) {
             if (layout.element_count == 0)
@@ -195,6 +197,27 @@ namespace lfs::core::internal {
             const auto context = acquire_context();
             const auto input_at = context->locate(input);
             const auto output_at = context->locate(output);
+            // A transposed 2D view (rows contiguous, columns strided) goes through tiles.
+            if (!scatter && input_dtype == output_dtype && layout.rank == 2 && layout.strides[0] == 1 &&
+                layout.strides[1] != 1 && layout.dims[0] > 1) {
+                const TransposeParams params{
+                    .input_offset = input_at.offset,
+                    .output_offset = output_at.offset,
+                    .rows = checked_u32(layout.dims[0], "Metal transpose rows exceed uint32"),
+                    .columns = checked_u32(layout.dims[1], "Metal transpose columns exceed uint32"),
+                    .input_stride = checked_u32(layout.strides[1], "Metal transpose stride exceeds uint32"),
+                    .padding = 0,
+                };
+                const auto pipeline = context->pipeline(
+                    "transpose_2d", {{5, static_cast<uint32_t>(dtype_size(output_dtype))}});
+                const std::array uses{input, output};
+                context->dispatch(uses, {.pipeline = pipeline,
+                                         .buffers = {input_at.address, output_at.address},
+                                         .params = param_bytes(params),
+                                         .grid = MTLSizeMake((params.rows + 31) / 32, (params.columns + 31) / 32, 1),
+                                         .group_size = MTLSizeMake(32, 8, 1)});
+                return;
+            }
             StridedParams params{
                 .input_offset = input_at.offset,
                 .output_offset = output_at.offset,
@@ -213,13 +236,10 @@ namespace lfs::core::internal {
                                  {5, static_cast<uint32_t>(dtype_size(output_dtype))},
                                  {7, scatter ? 1u : 0u}});
             const std::array uses{input, output};
-            context->encode(uses, [&](id<MTLComputeCommandEncoder> encoder) {
-                [encoder setComputePipelineState:pipeline];
-                [encoder setBuffer:input_at.buffer offset:0 atIndex:0];
-                [encoder setBuffer:output_at.buffer offset:0 atIndex:1];
-                [encoder setBytes:&params length:sizeof(params) atIndex:2];
-                dispatch_threads(encoder, pipeline, layout.element_count);
-            });
+            context->dispatch(uses, {.pipeline = pipeline,
+                                     .buffers = {input_at.address, output_at.address},
+                                     .params = param_bytes(params),
+                                     .grid = threads(layout.element_count)});
         }
 
         std::array<uint32_t, MAX_TENSOR_RANK> shader_dims(const StridedLayout& layout) {
@@ -232,14 +252,29 @@ namespace lfs::core::internal {
         struct ReduceParams {
             uint64_t input_offset;
             uint32_t count;
-            uint32_t partial_count;
-            float mean_scale;
             uint32_t padding;
         };
 
+        // The kernel's IEEE rules for folding the per-threadgroup partials on
+        // the host: first NaN wins, and equal zeros follow the sign rule.
+        float ieee_extreme(const float lhs, const float rhs, const bool maximum) {
+            const auto lhs_bits = std::bit_cast<uint32_t>(lhs), rhs_bits = std::bit_cast<uint32_t>(rhs);
+            if ((lhs_bits & 0x7fffffffu) > 0x7f800000u)
+                return lhs;
+            if ((rhs_bits & 0x7fffffffu) > 0x7f800000u)
+                return rhs;
+            if ((lhs_bits & 0x7fffffffu) == 0 && (rhs_bits & 0x7fffffffu) == 0)
+                return std::bit_cast<float>((maximum ? lhs_bits & rhs_bits : lhs_bits | rhs_bits) & 0x80000000u);
+            return maximum ? (lhs < rhs ? rhs : lhs) : (rhs < lhs ? rhs : lhs);
+        }
+
+        // One dispatch folds each threadgroup's share to a (value, compensation)
+        // pair; the host folds the pairs, since it waits for the result anyway.
+        API_AVAILABLE(macos(26.0))
         float scalar_reduce(const uint32_t op, const StorageRef input, const size_t count) {
             LFS_ASSERT_MSG(input.dtype == DataType::Float32,
                            "Metal scalar reduction requires Float32 input");
+            const bool extreme = op == metal::kReduceMax || op == metal::kReduceMin;
             if (count == 0) {
                 return op == metal::kReduceMax   ? -std::numeric_limits<float>::infinity()
                        : op == metal::kReduceMin ? std::numeric_limits<float>::infinity()
@@ -250,39 +285,39 @@ namespace lfs::core::internal {
             const auto groups = static_cast<uint32_t>(
                 std::clamp<size_t>((count + kElementsPerGroup - 1) / kElementsPerGroup, 1, 1024));
             const StorageRef partials = context->allocate(groups * 2 * sizeof(float));
-            const StorageRef result = context->allocate(sizeof(float));
             const auto input_at = context->locate(input);
             const auto partials_at = context->locate(partials);
-            const auto result_at = context->locate(result);
-            const auto partial_pipeline = context->pipeline("reduce_partial", {{6, op}});
-            const auto final_pipeline = context->pipeline("reduce_final", {{6, op}});
+            const auto pipeline = context->pipeline("reduce_partial", {{6, op}});
             const ReduceParams params{
                 .input_offset = input_at.offset,
                 .count = checked_u32(count, "Metal reduction count exceeds uint32"),
-                .partial_count = groups,
-                .mean_scale = 1.0f / static_cast<float>(count),
+                .padding = 0,
             };
-            const std::array uses{input, partials, result};
-            context->encode(uses, [&](id<MTLComputeCommandEncoder> encoder) {
-                [encoder setComputePipelineState:partial_pipeline];
-                [encoder setBuffer:input_at.buffer offset:0 atIndex:0];
-                [encoder setBuffer:partials_at.buffer offset:partials_at.offset atIndex:1];
-                [encoder setBytes:&params length:sizeof(params) atIndex:2];
-                [encoder dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
-                        threadsPerThreadgroup:MTLSizeMake(kThreadgroupWidth, 1, 1)];
-                [encoder setComputePipelineState:final_pipeline];
-                [encoder setBuffer:partials_at.buffer offset:partials_at.offset atIndex:0];
-                [encoder setBuffer:result_at.buffer offset:result_at.offset atIndex:1];
-                [encoder setBytes:&params length:sizeof(params) atIndex:2];
-                [encoder dispatchThreadgroups:MTLSizeMake(1, 1, 1)
-                        threadsPerThreadgroup:MTLSizeMake(kThreadgroupWidth, 1, 1)];
-            });
-            context->wait(context->pending(result));
-            float value = 0.0f;
-            std::memcpy(&value, context->host(result), sizeof(value));
+            const std::array uses{input, partials};
+            context->dispatch(uses, {.pipeline = pipeline,
+                                     .buffers = {input_at.address, partials_at.address + partials_at.offset},
+                                     .params = param_bytes(params),
+                                     .grid = MTLSizeMake(groups, 1, 1),
+                                     .group_size = MTLSizeMake(kThreadgroupWidth, 1, 1)});
+            context->wait(context->pending(partials));
+            const auto* const pairs = reinterpret_cast<const float*>(context->host(partials));
+            float accumulator = pairs[0], compensation = extreme ? 0.0f : pairs[1];
+            for (uint32_t group = 1; group < groups; ++group) {
+                const float value = pairs[2 * group];
+                if (extreme) {
+                    accumulator = ieee_extreme(accumulator, value, op == metal::kReduceMax);
+                    continue;
+                }
+                const float total = accumulator + value;
+                const float carried = total - accumulator;
+                compensation += (accumulator - (total - carried)) + (value - carried) + pairs[2 * group + 1];
+                accumulator = total;
+            }
             context->release(partials);
-            context->release(result);
-            return value;
+            if (extreme)
+                return accumulator;
+            const float sum = std::isfinite(compensation) ? accumulator + compensation : accumulator;
+            return op == metal::kReduceMean ? sum * (1.0f / static_cast<float>(count)) : sum;
         }
 
         bool is_contiguous(const StridedLayout& layout) {
@@ -301,7 +336,7 @@ namespace lfs::core::internal {
 
         // A readback snapshots its source on the GPU timeline into a shared
         // staging block; poll() copies it out once that batch completed.
-        class MetalReadbackBuffer final : public ReadbackBuffer {
+        class API_AVAILABLE(macos(26.0)) MetalReadbackBuffer final : public ReadbackBuffer {
         public:
             MetalReadbackBuffer() : context_(acquire_context()) {}
 
@@ -386,38 +421,32 @@ namespace lfs::core::internal {
             .input_offset = input_at.offset,
             .output_offset = output_at.offset,
             .count = checked_u32(count, "Metal fused pointwise count exceeds uint32"),
-            .op_count = static_cast<uint32_t>(chain.num_ops),
+            .padding = 0,
             .ops = {},
         };
-        // Tensor operands bind to rhs slots, one per distinct buffer.
-        std::array<id<MTLBuffer>, tensor_ops::FUSED_POINTWISE_MAX_OPS> slots{};
-        uint32_t used_slots = 0;
+        // The op kinds specialize the kernel; tensor operands are read through
+        // their addresses.
+        std::array<uint32_t, 3> kinds{};
+        bool vectorized = input_at.offset % 16 == 0 && output_at.offset % 16 == 0;
         for (int i = 0; i < chain.num_ops; ++i) {
             const auto& op = chain.ops[i];
-            params.ops[i] = ChainOp{.kind = op.kind, .scalar = op.scalar};
+            kinds[i / 6] |= static_cast<uint32_t>(op.kind & 31u) << (5 * (i % 6));
+            params.ops[i].scalar = op.scalar;
             if (op.kind < 4 || op.kind > 7)
                 continue;
             const auto rhs_at = context->locate(op.rhs);
-            uint32_t slot = 0;
-            while (slot < used_slots && slots[slot] != rhs_at.buffer)
-                ++slot;
-            if (slot == used_slots)
-                slots[used_slots++] = rhs_at.buffer;
-            params.ops[i].slot = slot;
-            params.ops[i].rhs_offset = rhs_at.offset;
+            params.ops[i].rhs_address = rhs_at.address + rhs_at.offset;
+            vectorized = vectorized && params.ops[i].rhs_address % 16 == 0;
         }
-        const auto pipeline = context->pipeline("pointwise_chain");
+        const auto pipeline = context->pipeline(
+            "pointwise_chain", {{4, vectorized ? 1u : 0u}, {8, static_cast<uint32_t>(chain.num_ops)},
+                                {9, kinds[0]}, {10, kinds[1]}, {11, kinds[2]}});
         std::vector<StorageRef> uses{input, output};
         uses.insert(uses.end(), rhs_storages.begin(), rhs_storages.end());
-        context->encode(uses, [&](id<MTLComputeCommandEncoder> encoder) {
-            [encoder setComputePipelineState:pipeline];
-            [encoder setBuffer:input_at.buffer offset:0 atIndex:0];
-            [encoder setBuffer:output_at.buffer offset:0 atIndex:1];
-            [encoder setBytes:&params length:sizeof(params) atIndex:2];
-            for (uint32_t slot = 0; slot < slots.size(); ++slot)
-                [encoder setBuffer:slot < used_slots ? slots[slot] : input_at.buffer offset:0 atIndex:3 + slot];
-            dispatch_threads(encoder, pipeline, count);
-        });
+        context->dispatch(uses, {.pipeline = pipeline,
+                                 .buffers = {input_at.address, output_at.address},
+                                 .params = param_bytes(params),
+                                 .grid = threads(vectorized ? (count + 3) / 4 : count)});
     }
 
     void MetalBackendOps::convert_type(const StorageRef input, const StorageRef output,
@@ -442,13 +471,10 @@ namespace lfs::core::internal {
             .count = checked_u32(count, "Metal conversion count exceeds uint32"),
         };
         const std::array uses{input, output};
-        context->encode(uses, [&](id<MTLComputeCommandEncoder> encoder) {
-            [encoder setComputePipelineState:pipeline];
-            [encoder setBuffer:input_at.buffer offset:0 atIndex:0];
-            [encoder setBuffer:output_at.buffer offset:0 atIndex:1];
-            [encoder setBytes:&params length:sizeof(params) atIndex:2];
-            dispatch_threads(encoder, pipeline, count);
-        });
+        context->dispatch(uses, {.pipeline = pipeline,
+                                 .buffers = {input_at.address, output_at.address},
+                                 .params = param_bytes(params),
+                                 .grid = threads(count)});
     }
 
     void MetalBackendOps::fill_strided(const StorageRef output, const StridedLayout& layout,
@@ -494,12 +520,10 @@ namespace lfs::core::internal {
             .count = checked_u32(count, "Metal arange count exceeds uint32"),
         };
         const std::array uses{output};
-        context->encode(uses, [&](id<MTLComputeCommandEncoder> encoder) {
-            [encoder setComputePipelineState:pipeline];
-            [encoder setBuffer:output_at.buffer offset:0 atIndex:0];
-            [encoder setBytes:&params length:sizeof(params) atIndex:1];
-            dispatch_threads(encoder, pipeline, count);
-        });
+        context->dispatch(uses, {.pipeline = pipeline,
+                                 .buffers = {output_at.address},
+                                 .params = param_bytes(params),
+                                 .grid = threads(count)});
     }
 
     void MetalBackendOps::where(const StorageRef condition, const StorageRef x, const StorageRef y,
@@ -542,15 +566,10 @@ namespace lfs::core::internal {
         const auto pipeline = context->pipeline(
             "where_select", {{1, dtype}, {2, dtype}, {5, static_cast<uint32_t>(dtype_size(output.dtype))}});
         const std::array uses{condition, x, y, output};
-        context->encode(uses, [&](id<MTLComputeCommandEncoder> encoder) {
-            [encoder setComputePipelineState:pipeline];
-            [encoder setBuffer:condition_at.buffer offset:0 atIndex:0];
-            [encoder setBuffer:x_at.buffer offset:0 atIndex:1];
-            [encoder setBuffer:y_at.buffer offset:0 atIndex:2];
-            [encoder setBuffer:output_at.buffer offset:0 atIndex:3];
-            [encoder setBytes:&params length:sizeof(params) atIndex:4];
-            dispatch_threads(encoder, pipeline, output_layout.element_count);
-        });
+        context->dispatch(uses, {.pipeline = pipeline,
+                                 .buffers = {condition_at.address, x_at.address, y_at.address, output_at.address},
+                                 .params = param_bytes(params),
+                                 .grid = threads(output_layout.element_count)});
     }
 
     void MetalBackendOps::strided_copy(const StorageRef input, const StorageRef output,

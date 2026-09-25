@@ -14,6 +14,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <initializer_list>
 #include <map>
 #include <memory>
@@ -48,13 +49,36 @@ namespace lfs::core::internal {
 #ifdef __OBJC__
 namespace lfs::core::internal::metal {
 
+    // The backend is built on Metal 4, so everything below needs macOS 26;
+    // metal_backend_available() gates every path into it.
+    API_AVAILABLE_BEGIN(macos(26.0))
+
     // Scalar reduction ids, defined for kernels.metal as LFS_REDUCE_*.
     inline constexpr uint32_t kReduceSum = 0, kReduceMean = 1, kReduceMax = 2, kReduceMin = 3;
 
+    inline constexpr NSUInteger kThreadgroupWidth = 256;
+
     struct Located {
         id<MTLBuffer> buffer;
+        uint64_t address; // GPU address of the buffer's first byte
         size_t offset;
     };
+
+    // One compute dispatch. Buffers bind by GPU address at [[buffer(0)]] onward
+    // and the parameter block, copied into the batch, at the next index.
+    struct Dispatch {
+        id<MTLComputePipelineState> pipeline;
+        std::initializer_list<uint64_t> buffers;
+        std::span<const std::byte> params;
+        // Threads to run, or threadgroups when group_size is set.
+        MTLSize grid;
+        MTLSize group_size{};
+    };
+
+    template <class Params>
+    std::span<const std::byte> param_bytes(const Params& params) {
+        return std::as_bytes(std::span(&params, 1));
+    }
 
     class Context {
     public:
@@ -71,19 +95,10 @@ namespace lfs::core::internal::metal {
             const char* function,
             std::initializer_list<std::pair<uint32_t, uint32_t>> constants = {});
 
-        // Encodes one dispatch into the open batch and stamps every storage it
-        // uses with the batch serial, which host access and completion wait for.
-        template <class Encode>
-        void encode(std::span<const StorageRef> uses, Encode&& encode) {
-            std::lock_guard lock(encode_mutex_);
-            encode(open_encoder_locked());
-            for (const StorageRef& use : uses) {
-                if (use.meta != nullptr)
-                    const_cast<StorageMeta*>(use.meta)->pending_value.store(open_serial_, std::memory_order_release);
-            }
-            if (++open_dispatches_ >= kBatchDispatches)
-                commit_locked();
-        }
+        // Encodes one dispatch into the open batch, ordered after every earlier
+        // dispatch, and stamps every storage it uses with the batch serial,
+        // which host access and completion wait for.
+        void dispatch(std::span<const StorageRef> uses, const Dispatch& dispatch);
 
         uint64_t flush();
         void wait(uint64_t serial);
@@ -107,10 +122,16 @@ namespace lfs::core::internal::metal {
 
     private:
         static constexpr uint32_t kBatchDispatches = 64;
+        // where_select binds four buffers and its parameters.
+        static constexpr NSUInteger kArgumentSlots = 5;
+        static constexpr size_t kParamsAlignment = 256;
+        static constexpr size_t kMaxParamsBytes = 512;
+        // Batches in flight before recording waits for the oldest.
+        static constexpr size_t kMaxFrames = 64;
 
-        // A block is reused as soon as it is released: batches run in order on
-        // one queue with tracked hazards, so only CPU access and returning the
-        // buffer to the system wait for guard, the last batch of its previous owner.
+        // A block is reused as soon as it is released: batches run in order, so
+        // only CPU access and returning the buffer to the system wait for guard,
+        // the last batch of its previous owner.
         struct Block {
             id<MTLBuffer> buffer;
             uint64_t address = 0;
@@ -119,9 +140,23 @@ namespace lfs::core::internal::metal {
             std::unique_ptr<StorageMeta> meta;
         };
 
+        // A batch records into a frame, its command memory and the parameter
+        // blocks of its dispatches, which are reused once the batch completes.
+        struct Frame {
+            id<MTL4CommandAllocator> allocator;
+            id<MTLBuffer> params;
+            uint64_t serial = 0;
+        };
+
+        // Written by commit feedback, which may arrive after the context is gone.
+        struct Failure {
+            std::mutex mutex;
+            std::string message;
+        };
+
         struct PipelineKey {
             std::string_view function;
-            std::array<uint32_t, 8> values{};
+            std::array<uint32_t, 16> values{};
             uint32_t defined = 0;
             bool operator==(const PipelineKey&) const = default;
         };
@@ -135,39 +170,52 @@ namespace lfs::core::internal::metal {
             }
         };
 
-        id<MTLComputeCommandEncoder> open_encoder_locked();
+        id<MTL4ComputeCommandEncoder> open_encoder_locked();
+        void prepare_locked();
+        size_t acquire_frame_locked();
         void commit_locked();
+        void wait_signaled(uint64_t serial);
+        void check_failures() const;
         void trim_locked();
 
         id<MTLDevice> device_;
-        id<MTLCommandQueue> queue_;
         id<MTLLibrary> library_;
         uint64_t context_id_ = 0;
 
         std::mutex pipeline_mutex_;
         std::unordered_map<PipelineKey, id<MTLComputePipelineState>, PipelineKeyHash> pipelines_;
 
+        // Batches are recorded into one command buffer, reused after each commit.
         std::mutex encode_mutex_;
-        id<MTLCommandBuffer> command_buffer_;
-        id<MTLComputeCommandEncoder> encoder_;
+        id<MTL4CommandQueue> queue_;
+        id<MTL4CommandBuffer> command_buffer_;
+        id<MTL4ComputeCommandEncoder> encoder_;
+        id<MTL4ArgumentTable> arguments_;
+        MTL4CommitOptions* commit_options_;
+        std::vector<Frame> frames_;
+        size_t frame_ = 0;
+        size_t params_used_ = 0;
         uint64_t open_serial_ = 0;
         uint32_t open_dispatches_ = 0;
         std::atomic<uint64_t> submitted_{0};
         // The open batch's serial while one is open, else the last submitted.
         std::atomic<uint64_t> newest_serial_{0};
 
-        // Every batch signals its serial on event_; a failed batch records failure_.
+        // The queue signals every batch's serial on event_ after the batch.
         id<MTLSharedEvent> event_;
-        mutable std::mutex failure_mutex_;
-        std::string failure_;
+        std::shared_ptr<Failure> failure_;
 
+        // Every buffer the context creates stays resident for the queue.
         std::mutex memory_mutex_;
+        id<MTLResidencySet> residency_;
         std::map<uint64_t, Block> live_;
         std::unordered_map<size_t, std::vector<Block>> free_;
     };
 
     std::shared_ptr<Context> acquire_context();
     std::shared_ptr<Context> live_context();
+
+    API_AVAILABLE_END
 
 } // namespace lfs::core::internal::metal
 #endif

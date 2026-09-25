@@ -400,72 +400,98 @@ kernel void pointwise(device const uchar* lhs_buffer [[buffer(0)]],
 }
 
 // ---------------------------------------------------------------------------
-// Lazily fused Float32 chains. Tensor operands of ops 4..7 are bound to rhs
-// slots 0..15 and addressed by the element's index.
+// Lazily fused Float32 chains, specialized per chain shape: the op kinds (5
+// bits each) are function constants, so the chain compiles to straight-line
+// code. Tensor operands are passed by address and read at the element's index;
+// with every operand 16-byte aligned, each thread handles four elements.
+
+constant uint kChainLength [[function_constant(8)]];
+constant uint kChainKinds0 [[function_constant(9)]];
+constant uint kChainKinds1 [[function_constant(10)]];
+constant uint kChainKinds2 [[function_constant(11)]];
+
+static uint chain_kind(uint op) {
+    const uint word = op < 6 ? kChainKinds0 : op < 12 ? kChainKinds1 : kChainKinds2;
+    return (word >> (5 * (op % 6))) & 31u;
+}
 
 struct ChainOp {
-    uint kind;
     float scalar;
-    uint slot;
     uint padding;
-    ulong rhs_offset;
+    device const float* rhs;
 };
 
 struct ChainParams {
     ulong input_offset;
     ulong output_offset;
     uint count;
-    uint op_count;
+    uint padding;
     ChainOp ops[16];
 };
+
+static float chain_unary(float value, uint kind) {
+    switch (kind) {
+    case 10: return abs(value);
+    case 11: return -value;
+    case 12: return exp(value);
+    case 13: return log(value);
+    case 14: return sqrt(value);
+    case 15: return 1.0f / (1.0f + exp(-value));
+    case 16: return isnan(value) ? value : ieee_maximum(value, 0.0f);
+    case 17: return value * value;
+    case 18: return tanh(value);
+    case 19: return rsqrt(value);
+    case 20: return float(int(value > 0.0f) - int(value < 0.0f));
+    case 21: return 1.0f / value;
+    case 22: return floor(value);
+    case 23: return ceil(value);
+    case 24: return ieee_round(value);
+    default: return value;
+    }
+}
+
+static float chain_step(float value, uint kind, float scalar, float rhs) {
+    if (kind <= 3u)
+        return kind == 0u ? value + scalar : kind == 1u ? value - scalar : kind == 2u ? value * scalar : value / scalar;
+    if (kind <= 7u)
+        return kind == 4u ? value + rhs : kind == 5u ? value - rhs : kind == 6u ? value * rhs : value / rhs;
+    return chain_unary(value, kind);
+}
+
+static bool chain_reads_tensor(uint kind) {
+    return kind >= 4u && kind <= 7u;
+}
 
 kernel void pointwise_chain(device const uchar* input_buffer [[buffer(0)]],
                             device uchar* output_buffer [[buffer(1)]],
                             constant ChainParams& params [[buffer(2)]],
-                            device const uchar* rhs0 [[buffer(3)]], device const uchar* rhs1 [[buffer(4)]],
-                            device const uchar* rhs2 [[buffer(5)]], device const uchar* rhs3 [[buffer(6)]],
-                            device const uchar* rhs4 [[buffer(7)]], device const uchar* rhs5 [[buffer(8)]],
-                            device const uchar* rhs6 [[buffer(9)]], device const uchar* rhs7 [[buffer(10)]],
-                            device const uchar* rhs8 [[buffer(11)]], device const uchar* rhs9 [[buffer(12)]],
-                            device const uchar* rhs10 [[buffer(13)]], device const uchar* rhs11 [[buffer(14)]],
-                            device const uchar* rhs12 [[buffer(15)]], device const uchar* rhs13 [[buffer(16)]],
-                            device const uchar* rhs14 [[buffer(17)]], device const uchar* rhs15 [[buffer(18)]],
                             uint index [[thread_position_in_grid]]) {
-    if (index >= params.count)
+    device const float* input = (device const float*)(input_buffer + params.input_offset);
+    device float* output = (device float*)(output_buffer + params.output_offset);
+    const uint width = kVectorized != 0 ? 4u : 1u;
+    const uint first = index * width;
+    if (first >= params.count)
         return;
-    const device uchar* const slots[16] = {rhs0, rhs1, rhs2, rhs3, rhs4, rhs5, rhs6, rhs7,
-                                           rhs8, rhs9, rhs10, rhs11, rhs12, rhs13, rhs14, rhs15};
-    float value = ((device const float*)(input_buffer + params.input_offset))[index];
-    for (uint i = 0; i < params.op_count; ++i) {
-        const ChainOp op = params.ops[i];
-        if (op.kind <= 3u) {
-            value = op.kind == 0u ? value + op.scalar
-                    : op.kind == 1u ? value - op.scalar
-                    : op.kind == 2u ? value * op.scalar
-                                    : value / op.scalar;
-        } else if (op.kind <= 7u) {
-            const float rhs = ((device const float*)(slots[op.slot] + op.rhs_offset))[index];
-            value = op.kind == 4u ? value + rhs
-                    : op.kind == 5u ? value - rhs
-                    : op.kind == 6u ? value * rhs
-                                    : value / rhs;
-        } else if (op.kind == 10u) value = abs(value);
-        else if (op.kind == 11u) value = -value;
-        else if (op.kind == 12u) value = exp(value);
-        else if (op.kind == 13u) value = log(value);
-        else if (op.kind == 14u) value = sqrt(value);
-        else if (op.kind == 15u) value = 1.0f / (1.0f + exp(-value));
-        else if (op.kind == 16u) value = isnan(value) ? value : ieee_maximum(value, 0.0f);
-        else if (op.kind == 17u) value = value * value;
-        else if (op.kind == 18u) value = tanh(value);
-        else if (op.kind == 19u) value = rsqrt(value);
-        else if (op.kind == 20u) value = float(int(value > 0.0f) - int(value < 0.0f));
-        else if (op.kind == 21u) value = 1.0f / value;
-        else if (op.kind == 22u) value = floor(value);
-        else if (op.kind == 23u) value = ceil(value);
-        else if (op.kind == 24u) value = ieee_round(value);
+    if (kVectorized != 0 && first + 4u <= params.count) {
+        float4 value = ((device const float4*)input)[index];
+        for (uint op = 0; op < kChainLength; ++op) {
+            const uint kind = chain_kind(op);
+            const float4 rhs = chain_reads_tensor(kind) ? ((device const float4*)params.ops[op].rhs)[index] : float4(0.0f);
+            for (uint lane = 0; lane < 4; ++lane)
+                value[lane] = chain_step(value[lane], kind, params.ops[op].scalar, rhs[lane]);
+        }
+        ((device float4*)output)[index] = value;
+        return;
     }
-    ((device float*)(output_buffer + params.output_offset))[index] = value;
+    for (uint element = first; element < min(first + width, params.count); ++element) {
+        float value = input[element];
+        for (uint op = 0; op < kChainLength; ++op) {
+            const uint kind = chain_kind(op);
+            const float rhs = chain_reads_tensor(kind) ? params.ops[op].rhs[element] : 0.0f;
+            value = chain_step(value, kind, params.ops[op].scalar, rhs);
+        }
+        output[element] = value;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -707,15 +733,66 @@ kernel void where_select(device const uchar* condition [[buffer(0)]],
 }
 
 // ---------------------------------------------------------------------------
-// Scalar Float32 reductions in two deterministic passes. Sums carry a
-// Neumaier compensation through every step, like reduce.slang; max and min
-// propagate the first NaN.
+// Gathers a transposed 2D view through 32x32 tiles in threadgroup memory, so
+// both the reads and the writes are coalesced.
+
+struct TransposeParams {
+    ulong input_offset;
+    ulong output_offset;
+    uint rows;
+    uint columns;
+    uint input_stride;
+    uint padding;
+};
+
+template <typename T>
+static void transpose_tile(device const uchar* input_buffer, device uchar* output_buffer,
+                           constant TransposeParams& params, threadgroup T* tile,
+                           uint2 local, uint2 group) {
+    device const T* input = (device const T*)(input_buffer + params.input_offset);
+    device T* output = (device T*)(output_buffer + params.output_offset);
+    const uint row0 = group.x * 32, column0 = group.y * 32;
+    for (uint step = 0; step < 32; step += 8) {
+        const uint row = row0 + local.x, column = column0 + local.y + step;
+        if (row < params.rows && column < params.columns)
+            tile[(local.y + step) * 33 + local.x] = input[ulong(column) * params.input_stride + row];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint step = 0; step < 32; step += 8) {
+        const uint row = row0 + local.y + step, column = column0 + local.x;
+        if (row < params.rows && column < params.columns)
+            output[ulong(row) * params.columns + column] = tile[local.x * 33 + local.y + step];
+    }
+}
+
+kernel void transpose_2d(device const uchar* input_buffer [[buffer(0)]],
+                         device uchar* output_buffer [[buffer(1)]],
+                         constant TransposeParams& params [[buffer(2)]],
+                         uint2 local [[thread_position_in_threadgroup]],
+                         uint2 group [[threadgroup_position_in_grid]]) {
+    if (kElementSize == 8) {
+        threadgroup ulong tile[32 * 33];
+        transpose_tile(input_buffer, output_buffer, params, tile, local, group);
+    } else if (kElementSize == 4) {
+        threadgroup uint tile[32 * 33];
+        transpose_tile(input_buffer, output_buffer, params, tile, local, group);
+    } else if (kElementSize == 2) {
+        threadgroup ushort tile[32 * 33];
+        transpose_tile(input_buffer, output_buffer, params, tile, local, group);
+    } else {
+        threadgroup uchar tile[32 * 33];
+        transpose_tile(input_buffer, output_buffer, params, tile, local, group);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scalar Float32 reductions, deterministic: each threadgroup folds its share
+// and the host folds the partials. Sums carry a Neumaier compensation through
+// every step, like reduce.slang; max and min propagate the first NaN.
 
 struct ReduceParams {
     ulong input_offset;
     uint count;
-    uint partial_count;
-    float mean_scale;
     uint padding;
 };
 
@@ -752,19 +829,14 @@ static void combine_pair(thread float& accumulator, thread float& compensation, 
     }
 }
 
-static float2 reduce_threadgroup(float2 pair, threadgroup float2* shared, uint thread_index) {
-    shared[thread_index] = pair;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint span = kReduceThreads / 2; span > 0; span /= 2) {
-        if (thread_index < span) {
-            float accumulator = shared[thread_index].x;
-            float compensation = shared[thread_index].y;
-            combine_pair(accumulator, compensation, shared[thread_index + span]);
-            shared[thread_index] = float2(accumulator, compensation);
-        }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+// Folds the (value, compensation) pairs of a SIMD group through shuffles.
+static float2 reduce_simdgroup(float2 pair) {
+    for (ushort offset = 16; offset > 0; offset /= 2) {
+        float accumulator = pair.x, compensation = pair.y;
+        combine_pair(accumulator, compensation, float2(simd_shuffle_down(pair.x, offset), simd_shuffle_down(pair.y, offset)));
+        pair = float2(accumulator, compensation);
     }
-    return shared[0];
+    return pair;
 }
 
 kernel void reduce_partial(device const uchar* input_buffer [[buffer(0)]],
@@ -772,34 +844,22 @@ kernel void reduce_partial(device const uchar* input_buffer [[buffer(0)]],
                            constant ReduceParams& params [[buffer(2)]],
                            uint thread_index [[thread_position_in_threadgroup]],
                            uint group [[threadgroup_position_in_grid]],
-                           uint groups [[threadgroups_per_grid]]) {
-    threadgroup float2 shared[kReduceThreads];
+                           uint groups [[threadgroups_per_grid]],
+                           ushort lane [[thread_index_in_simdgroup]],
+                           ushort simdgroup [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float2 shared[kReduceThreads / 32];
     device const float* input = (device const float*)(input_buffer + params.input_offset);
     float accumulator = reduce_identity();
     float compensation = 0.0f;
     for (uint index = group * kReduceThreads + thread_index; index < params.count; index += groups * kReduceThreads)
         combine_value(accumulator, compensation, input[index]);
-    const float2 result = reduce_threadgroup(float2(accumulator, compensation), shared, thread_index);
-    if (thread_index == 0)
-        partials[group] = result;
-}
-
-kernel void reduce_final(device const float2* partials [[buffer(0)]],
-                         device float* result [[buffer(1)]],
-                         constant ReduceParams& params [[buffer(2)]],
-                         uint thread_index [[thread_position_in_threadgroup]]) {
-    threadgroup float2 shared[kReduceThreads];
-    float accumulator = reduce_identity();
-    float compensation = 0.0f;
-    for (uint index = thread_index; index < params.partial_count; index += kReduceThreads)
-        combine_pair(accumulator, compensation, partials[index]);
-    const float2 total = reduce_threadgroup(float2(accumulator, compensation), shared, thread_index);
-    if (thread_index == 0) {
-        float value = total.x;
-        if (kReduce != LFS_REDUCE_MAX && kReduce != LFS_REDUCE_MIN && isfinite(total.y))
-            value += total.y;
-        if (kReduce == LFS_REDUCE_MEAN)
-            value *= params.mean_scale;
-        result[0] = value;
+    const float2 folded = reduce_simdgroup(float2(accumulator, compensation));
+    if (lane == 0)
+        shared[simdgroup] = folded;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (simdgroup == 0) {
+        const float2 result = reduce_simdgroup(lane < kReduceThreads / 32 ? shared[lane] : float2(reduce_identity(), 0.0f));
+        if (lane == 0)
+            partials[group] = result;
     }
 }

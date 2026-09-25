@@ -5,11 +5,14 @@
 
 #include "../gpu_backend_ops.hpp"
 
+#include <os/availability.h>
+
 #include <span>
 
 namespace lfs::core::internal {
 
-    class MetalBackendOps final : public GpuBackendOps {
+    // Built on Metal 4; metal_backend_available() is false before macOS 26.
+    class API_AVAILABLE(macos(26.0)) MetalBackendOps final : public GpuBackendOps {
     public:
         void compiled_expression(const ExpressionLaunch& launch, ExecContext context) override;
         ~MetalBackendOps() override = default;

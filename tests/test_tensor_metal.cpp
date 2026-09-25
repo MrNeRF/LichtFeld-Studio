@@ -117,8 +117,8 @@ namespace {
             {"maximum", [](const Tensor& x, const Tensor& y) { return x.maximum(y); }},
             {"chain", [](const Tensor& x, const Tensor& y) { return ((x + y) * 2.0f - y).exp(); }},
         };
-        // Tails, float4-vectorized sizes and a size large enough to defer into a fused chain.
-        for (const size_t count : {size_t{1}, size_t{255}, size_t{1024}, size_t{1} << 20}) {
+        // Eager tails, float4-vectorized sizes, and fused chains with and without a tail.
+        for (const size_t count : {size_t{1}, size_t{255}, size_t{1024}, size_t{1027}, size_t{1} << 20}) {
             SCOPED_TRACE(count);
             const Tensor x_cpu = random_tensor(count, 0.1f, 4.0f, 2);
             const Tensor y_cpu = random_tensor(count, 0.5f, 3.0f, 3);
@@ -184,13 +184,35 @@ namespace {
     }
 
     TEST_F(TensorMetal, OffsetViewsUseTheirOffset) {
-        const Tensor base_cpu = random_tensor(1003, -5.0f, 5.0f, 8);
-        const Tensor base = to_metal(base_cpu);
-        const Tensor view_cpu = base_cpu.slice(0, 3, 1003);
-        const Tensor view = base.slice(0, 3, 1003);
-        expect_close(view * 2.0f, view_cpu * 2.0f);
-        expect_close(view + view, view_cpu + view_cpu);
-        EXPECT_NEAR(view.sum_scalar(), view_cpu.sum_scalar(), 1.0e-3f);
+        // Eager ops and fused chains, with offsets that do and do not allow four-wide access.
+        for (const size_t count : {size_t{1000}, size_t{4096}}) {
+            SCOPED_TRACE(count);
+            const Tensor base_cpu = random_tensor(count + 4, -5.0f, 5.0f, 8);
+            const Tensor base = to_metal(base_cpu);
+            const auto view = [&](const Tensor& tensor, const int64_t offset) {
+                return tensor.slice(0, offset, offset + static_cast<int64_t>(count));
+            };
+            const Tensor misaligned_cpu = view(base_cpu, 3), aligned_cpu = view(base_cpu, 4);
+            const Tensor misaligned = view(base, 3), aligned = view(base, 4);
+            expect_close(misaligned * 2.0f, misaligned_cpu * 2.0f);
+            expect_close(misaligned + misaligned, misaligned_cpu + misaligned_cpu);
+            expect_close(aligned + misaligned, aligned_cpu + misaligned_cpu);
+            expect_close(aligned * aligned, aligned_cpu * aligned_cpu);
+            EXPECT_NEAR(misaligned.sum_scalar(), misaligned_cpu.sum_scalar(), 5.0e-3f);
+        }
+    }
+
+    TEST_F(TensorMetal, TransposedCopiesMatchCpu) {
+        for (const auto& [rows, columns] : {std::pair{3, 5}, std::pair{64, 1000}, std::pair{33, 65}}) {
+            for (const DataType dtype : {DataType::Float32, DataType::Float16, DataType::Int64, DataType::UInt8}) {
+                SCOPED_TRACE(std::to_string(rows) + "x" + std::to_string(columns));
+                SCOPED_TRACE(static_cast<int>(dtype));
+                const Tensor cpu = random_tensor(static_cast<size_t>(rows * columns), 0.0f, 100.0f, 10)
+                                       .to(dtype)
+                                       .reshape({rows, columns});
+                expect_close(to_metal(cpu).transpose(0, 1).contiguous(), cpu.transpose(0, 1).contiguous(), 0.0f, 0.0f);
+            }
+        }
     }
 
     TEST_F(TensorMetal, UnportedOperationsSaySo) {

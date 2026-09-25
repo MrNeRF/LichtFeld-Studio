@@ -31,12 +31,15 @@ namespace lfs::core::internal {
 
         if (backend == GpuBackend::Metal) {
 #ifdef LFS_TENSOR_METAL
-            static MetalBackendOps* const metal_ops = new MetalBackendOps();
-            return *metal_ops;
+            if (__builtin_available(macOS 26.0, *)) {
+                static MetalBackendOps* const metal_ops = new MetalBackendOps();
+                return *metal_ops;
+            }
+            LFS_ASSERT_MSG(false, "GPU backend 'Metal' needs macOS 26");
 #else
             LFS_ASSERT_MSG(false, "GPU backend 'Metal' is not compiled into this build");
-            std::unreachable();
 #endif
+            std::unreachable();
         }
 
 #ifdef LFS_TENSOR_VULKAN
