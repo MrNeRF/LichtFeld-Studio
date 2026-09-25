@@ -24,6 +24,13 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Select Xcode 26
+        run: |
+          # std::jthread is still experimental in the libc++ of Xcode 16.
+          xcode=$(ls -d /Applications/Xcode_26*.app | grep -vi beta | sort -V | tail -1)
+          sudo xcode-select -s "$xcode"
+          clang++ --version
+
       - name: Install build dependencies
         run: |
           brew install autoconf autoconf-archive automake libtool vulkan-loader molten-vk

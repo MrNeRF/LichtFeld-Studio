@@ -6,7 +6,7 @@
 - CMake 3.30+
 - vcpkg (`VCPKG_ROOT` environment variable set)
 - Ninja for preset builds
-- Apple Clang (macOS), GCC 14+ (Linux) or Visual Studio 2022 v17.10+ (Windows)
+- Apple Clang from Xcode 26+ (macOS), GCC 14+ (Linux) or Visual Studio 2022 v17.10+ (Windows)
 
 Windows builds require the **C++ Clang Compiler for Windows** Visual Studio
 Installer individual component in addition to the regular C++ desktop workload.
@@ -55,7 +55,7 @@ If you intentionally want a headless or experimental build, pass `-DLFS_ENFORCE_
 
 ## macOS Apple Silicon viewer build
 
-Install Xcode Command Line Tools, then the host tools and Vulkan driver with Homebrew:
+Install Xcode 26 or newer (older Xcode versions lack `std::jthread`), then the host tools and Vulkan driver with Homebrew:
 
 ```bash
 xcode-select --install

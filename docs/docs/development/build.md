@@ -78,7 +78,7 @@ configuration:
 | macOS arm64 | `macos-release` | Release | `build-macos-release/` |
 
 CMake only lists the profiles for the current host OS. Windows and Linux still
-require their CUDA toolchain; macOS uses Apple Clang and MoltenVK without CUDA.
+require their CUDA toolchain; macOS uses Apple Clang from Xcode 26 or newer and MoltenVK without CUDA.
 The presets do not install or change the development environment.
 
 On Windows, from the existing x64 MSVC/CUDA development shell:
