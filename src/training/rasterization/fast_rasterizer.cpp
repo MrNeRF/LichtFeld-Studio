@@ -645,6 +645,7 @@ namespace lfs::training {
         auto& cached_ga_h = fast_rasterizer_thread_caches.grad_alpha_height;
         auto& cached_ga_w = fast_rasterizer_thread_caches.grad_alpha_width;
         const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+        ctx.completion_stream = stream;
         for (const auto* input : std::initializer_list<const core::Tensor*>{&grad_image, &grad_alpha_extra, &grad_depth, &grad_normal,
                                                                             &ctx.bg_image, &ctx.bg_color, &ctx.image, &ctx.alpha, &pixel_error_map}) {
             if (input->is_valid())

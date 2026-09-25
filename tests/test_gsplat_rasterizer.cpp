@@ -1790,3 +1790,75 @@ TEST_F(GsplatRasterizerTest, ForwardJoinsCameraTransformAndRetainsItForBackward)
     render.wait();
     release_gsplat_rasterizer_thread_local_caches();
 }
+
+TEST_F(GsplatRasterizerTest, FastContextRetiresOutsideExecutionScopeWithoutDeviceWait) {
+    TensorWorkQueue render(GpuBackend::CUDA), unrelated(GpuBackend::CUDA);
+    std::optional<FastRasterizeContext> context;
+    {
+        TensorWorkQueue::Scope scope(render);
+        auto camera = make_camera(64, 64);
+        auto splat = make_visible_splat(32);
+        auto bg = Tensor::zeros({3}, Device::GPU);
+        auto result = fast_rasterize_forward(camera, *splat, bg);
+        ASSERT_TRUE(result.has_value());
+        context.emplace(std::move(result->second));
+        render.wait();
+    }
+    ASSERT_EQ(getCurrentCUDAStream(), nullptr);
+    TensorFence other_work(GpuBackend::CUDA);
+    ASSERT_EQ(tensor_hardening::launch_delay_kernel(
+                  static_cast<cudaStream_t>(unrelated.native_handle()), 600000000),
+              cudaSuccess);
+    unrelated.record(other_work);
+    context.reset();
+    // A streamless retirement also breaks the next frame's event chain.
+    auto& arena = GlobalArenaManager::instance().get_arena();
+    const auto frame = arena.begin_frame(static_cast<cudaStream_t>(render.native_handle()));
+    arena.end_frame(frame, static_cast<cudaStream_t>(render.native_handle()));
+    EXPECT_FALSE(other_work.ready()) << "Context retirement must not synchronize unrelated GPU work";
+    other_work.wait();
+    render.wait();
+    release_fast_rasterizer_thread_local_caches();
+}
+
+TEST_F(GsplatRasterizerTest, FastContextKeepsBackwardQueueAfterException) {
+    TensorWorkQueue forward(GpuBackend::CUDA), backward(GpuBackend::CUDA);
+    std::optional<FastRasterizeContext> context;
+    {
+        TensorWorkQueue::Scope scope(forward);
+        auto camera = make_camera(64, 64);
+        auto splat = make_visible_splat(32);
+        auto bg = Tensor::zeros({3}, Device::GPU);
+        AdamConfig config;
+        config.initial_capacity = 64;
+        AdamOptimizer optimizer(*splat, config);
+        optimizer.allocate_gradients(64);
+        auto result = fast_rasterize_forward(camera, *splat, bg);
+        ASSERT_TRUE(result.has_value());
+        context.emplace(std::move(result->second));
+        auto gradient = Tensor::ones_like(result->first.image);
+        auto invalid_alpha = Tensor::ones({2}, Device::GPU);
+        {
+            TensorWorkQueue::Scope backward_scope(backward);
+            EXPECT_THROW(fast_rasterize_backward(*context, gradient, *splat, optimizer, invalid_alpha), std::exception);
+            EXPECT_EQ(context->completion_stream, backward.native_handle());
+        }
+        forward.wait();
+    }
+    ASSERT_EQ(getCurrentCUDAStream(), nullptr);
+    TensorFence pending(GpuBackend::CUDA);
+    ASSERT_EQ(tensor_hardening::launch_delay_kernel(
+                  static_cast<cudaStream_t>(backward.native_handle()), 150000000),
+              cudaSuccess);
+    backward.record(pending);
+    context.reset();
+    // Reusing the frame must join the last backward reader, without a host wait.
+    auto& arena = GlobalArenaManager::instance().get_arena();
+    const auto frame = arena.begin_frame(static_cast<cudaStream_t>(forward.native_handle()));
+    EXPECT_FALSE(pending.ready());
+    forward.wait();
+    EXPECT_TRUE(pending.ready());
+    arena.end_frame(frame, static_cast<cudaStream_t>(forward.native_handle()));
+    backward.wait();
+    release_fast_rasterizer_thread_local_caches();
+}

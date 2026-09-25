@@ -103,7 +103,7 @@ namespace fast_lfs::rasterization {
         unsigned int sh_value_bits = 0, // 0=fp32, 16=q16(+bounds) or IEEE f16
         float* max_screen_share_ptr = nullptr);
 
-    void release_forward_context(const ForwardContext& forward_ctx);
+    void release_forward_context(const ForwardContext& forward_ctx, cudaStream_t completion_stream);
 
     struct BackwardOutputs {
         bool success;
