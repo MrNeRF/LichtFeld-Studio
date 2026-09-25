@@ -595,7 +595,6 @@ set(TEST_FILES
     test_undistort.cpp
     test_viewport_region_utils.cpp
     test_viewport_interop_decision.cpp
-    test_scene_reprojection.cpp
     test_mesh_data.cpp
     test_mesh_offscreen_renderer.cpp
     test_align_transform.cpp

@@ -25,8 +25,7 @@ namespace lfs::vis {
     }
 
     // While the camera moves during training, training runs one step after every
-    // viewer frame. The viewport reprojects the last frame between fresh renders,
-    // so the viewer never needs a longer turn.
+    // viewer frame: frames keep a steady cadence and training keeps progressing.
     inline constexpr std::uint32_t kTrainingFramesPerNavigationRender = 1;
 
     // Releases a viewer arena frame. With a turn given, the next window is

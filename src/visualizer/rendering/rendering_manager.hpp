@@ -540,12 +540,6 @@ namespace lfs::vis {
         struct VulkanMeshFrame {
             glm::mat4 view_projection{1.0f};
             glm::vec3 camera_position{0.0f};
-            glm::mat4 scene_view{1.0f};
-            glm::mat4 scene_projection{1.0f};
-            // The published splat image with this generation can be warped to a
-            // newer camera through depth_blit's view while its successor renders.
-            bool scene_reprojectable = false;
-            std::uint64_t scene_image_generation = 0;
             std::vector<lfs::vis::VulkanMeshDrawItem> items;
             std::vector<lfs::vis::VulkanMeshViewportPanel> panels;
             lfs::vis::VulkanEnvironmentParams environment;

@@ -106,13 +106,6 @@ namespace lfs::vis {
         std::vector<VulkanViewportFrustumBatch> frustum_batches;
     };
 
-    // Warps a scene image rendered for an earlier camera to the current one with
-    // the splat depth while a newer render is still pending.
-    struct VulkanSceneReprojection {
-        bool enabled = false;
-        glm::mat4 source_to_current{1.0f}; // see sceneReprojectionMatrix
-    };
-
     struct VulkanViewportPassParams {
         std::size_t frame_slot = 0;
         glm::vec2 viewport_pos{0.0f, 0.0f};
@@ -134,7 +127,6 @@ namespace lfs::vis {
         // incompletely prepared image during the deferral window.
         bool preserve_scene_image_binding = false;
         SceneUpscalerBackend scene_upscaler = SceneUpscalerBackend::Native;
-        VulkanSceneReprojection scene_reprojection;
 
         bool grid_enabled = false;
         glm::mat4 grid_view{1.0f};
