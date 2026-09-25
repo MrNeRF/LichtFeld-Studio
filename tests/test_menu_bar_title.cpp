@@ -44,6 +44,10 @@ namespace lfs::vis::gui {
             bar.project_title_el_ = doc->GetElementById("project-title-content");
         }
         static RmlTooltipController& tooltip(RmlMenuBar& bar) { return bar.tooltip_; }
+        static void portalLabel(RmlMenuBar& bar, std::string label) {
+            bar.portal_connection_label_ = std::move(label);
+            bar.menu_model_.DirtyVariable("portal_connection_label");
+        }
         static void rebuildPortalStatus(RmlMenuBar& bar) { bar.rebuildPortalStatus(); }
         static void layout(RmlMenuBar& bar, int width, float dp) {
             bar.updateProjectTitleLayout(width, dp);
@@ -179,6 +183,27 @@ namespace {
                     title = bounds(el("project-title-content"));
                     EXPECT_NEAR((title.left + title.right) / 2, (menus.right + controls.left) / 2, 0.5f);
                 }
+            }
+        }
+    }
+
+    TEST_F(MenuBarTitleTest, NarrowBarsKeepEveryMenuVisible) {
+        bar_.updateLabels({"File", "Edit", "Select", "Tools", "View", "Help"},
+                          {"file", "edit", "select", "tools", "view", "help"});
+        RmlMenuBarTestAccess::portalLabel(bar_, "Portal: Not connected");
+        for (float dp : {1.0f, 1.5f, 2.0f}) {
+            // The narrowest window SDL allows, and a little wider.
+            for (int width : {640, 720}) {
+                SCOPED_TRACE(::testing::Message() << width << " dp=" << dp);
+                resize(static_cast<int>(width * dp), dp, false);
+                const auto controls = bounds(el("menu-window-controls"));
+                Rml::ElementList labels;
+                document_->GetElementsByClassName(labels, "menu-label");
+                std::erase_if(labels, [](Rml::Element* label) { return !label->IsVisible(); });
+                ASSERT_EQ(labels.size(), 6u);
+                for (auto* label : labels)
+                    EXPECT_LE(bounds(label).right, controls.left + 0.5f);
+                EXPECT_LE(bounds(el("menu-window-close")).right, width * dp + 0.5f);
             }
         }
     }
