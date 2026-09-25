@@ -218,6 +218,13 @@ namespace lfs::training {
             throw std::runtime_error("SSIM: prediction and target must have the same shape");
         }
 
+        if (ops_ == nullptr || ops_->metric == nullptr) {
+            throw std::runtime_error("SSIM: photometric ops are unavailable");
+        }
+        if (!saved_.backend) {
+            saved_.backend = ops_->create();
+        }
+
         if (mask.is_valid()) {
             // Match masked training semantics: no valid-padding crop, masked mean over all pixels.
             const auto layout = get_layout_info(pred, "SSIM");
@@ -225,8 +232,8 @@ namespace lfs::training {
             validate_mask_shape_or_throw(mask_f, layout, "SSIM");
             const float mask_sum = get_non_empty_mask_sum_or_throw(mask_f, "SSIM");
 
-            auto map_result = kernels::ssim_forward_map(pred, target, false);
-            auto ssim_map = map_result.ssim_map;
+            (void)ops_->metric(saved_, pred, target, true, false);
+            auto ssim_map = saved_.ssim_map;
             assert(ssim_map.ndim() == 4);
             assert(static_cast<int>(ssim_map.shape()[2]) == layout.h);
             assert(static_cast<int>(ssim_map.shape()[3]) == layout.w);
@@ -242,7 +249,7 @@ namespace lfs::training {
             return masked_ssim;
         }
 
-        auto [ssim_value, ctx] = kernels::ssim_forward(pred, target, apply_valid_padding_);
+        auto ssim_value = ops_->metric(saved_, pred, target, false, apply_valid_padding_);
         const float value = ssim_value.mean().item<float>();
         if (!std::isfinite(value)) {
             throw std::runtime_error("SSIM: produced non-finite SSIM");

@@ -21,6 +21,7 @@
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
 #include "io/project_document.hpp"
+#include "lfs/training/ops/registry.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "normal_auto_generate.hpp"
 #include "trainer.hpp"
@@ -341,6 +342,11 @@ namespace lfs::training {
         lfs::core::SplatTensorAllocator tensor_allocator,
         const TrainingModelGraphCapture* graph_capture) {
 
+        if (const auto unavailable = unavailable_training_reason(
+                params, lfs::core::default_gpu_backend(), training_loader_dependencies(params))) {
+            return std::unexpected(*unavailable);
+        }
+
         const glm::vec3 dataset_origin = graph_capture
                                              ? graph_capture->training_data_origin
                                              : scene.getTrainingDataOrigin();
@@ -534,6 +540,10 @@ namespace lfs::training {
         const std::optional<lfs::io::project::RecoverySession>&
             recovery_session,
         lfs::core::SplatTensorAllocator tensor_allocator) {
+        if (const auto unavailable = unavailable_training_reason(
+                params, lfs::core::default_gpu_backend(), training_loader_dependencies(params))) {
+            return std::unexpected(*unavailable);
+        }
         if (params.dataset.data_path.empty()) {
             return std::unexpected(
                 "Project checkpoint has no dataset path");

@@ -21,6 +21,7 @@
 #include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "core/tensor/backend/cuda/runtime/size_bucketed_pool.hpp"
 #include "core/tensor_backend.hpp"
+#include "lfs/training/ops/registry.hpp"
 #include "python/gil.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
@@ -843,6 +844,16 @@ namespace lfs::vis {
         }
 
         if (!trainer_) {
+            lfs::core::param::TrainingParameters params;
+            if (auto* const param_mgr = services().paramsOrNull()) {
+                params.optimization = param_mgr->copyActiveParams();
+            }
+            if (const auto unavailable = lfs::training::unavailable_training_reason(
+                    params, lfs::core::default_gpu_backend(),
+                    lfs::training::training_loader_dependencies(params))) {
+                static_cast<void>(rejectStart(*unavailable, lfs::ErrorCode::FailedPrecondition));
+                return false;
+            }
             LOG_ERROR("Cannot start training - no trainer available");
             return false;
         }
@@ -866,6 +877,13 @@ namespace lfs::vis {
 
         if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
             static_cast<void>(rejectStart("Training requires an available CUDA device", lfs::ErrorCode::FailedPrecondition));
+            return false;
+        }
+
+        if (const auto unavailable = lfs::training::unavailable_training_reason(
+                start_params, lfs::core::default_gpu_backend(),
+                lfs::training::training_loader_dependencies(start_params))) {
+            static_cast<void>(rejectStart(*unavailable, lfs::ErrorCode::FailedPrecondition));
             return false;
         }
 
@@ -952,6 +970,12 @@ namespace lfs::vis {
                 std::move(applied).error().with_context(
                     "apply pending training parameters",
                     LFS_SOURCE_SITE_CURRENT()));
+        }
+
+        if (const auto unavailable = lfs::training::unavailable_training_reason(
+                trainer_->getParams(), lfs::core::default_gpu_backend(),
+                lfs::training::training_loader_dependencies(trainer_->getParams()))) {
+            return lfs::Result<void>::failure(training_initialization_error(*unavailable));
         }
 
         if (evaluation_weights_preparer_ && trainer_->getParams().optimization.enable_eval)

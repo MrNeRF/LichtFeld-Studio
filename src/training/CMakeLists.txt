@@ -87,7 +87,6 @@ set(TRAINING_NEW_SOURCES
     live_model_mutation_guard.cpp
     optimizer/scheduler.cpp
     losses/regularization.cpp
-    losses/photometric_loss.cpp
     ops/registry.cpp
     ops/requirements.cpp
     ops/photometric_cuda.cpp

@@ -17,7 +17,7 @@
 #include "cuda_backend_test.hpp"
 #include "lfs/kernels/l1_loss.cuh"
 #include "lfs/kernels/ssim.cuh"
-#include "training/losses/photometric_loss.hpp"
+#include "lfs/training/ops/photometric_cuda.hpp"
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -395,21 +395,24 @@ TEST_F(FusedL1SSIMTest, WorkspaceReuse) {
     EXPECT_NE(grad1_norm, grad2_norm);
 }
 
-// Test PhotometricLoss uses fused kernel
-TEST_F(FusedL1SSIMTest, PhotometricLossUsesFusedKernel) {
+TEST_F(FusedL1SSIMTest, PhotometricOpsUsesFusedKernel) {
     const int C = 3, H = 64, W = 64;
     auto rendered = Tensor::randn({C, H, W}, Device::GPU);
     auto gt = Tensor::randn({C, H, W}, Device::GPU);
 
-    lfs::training::losses::PhotometricLoss loss_fn;
-    lfs::training::losses::PhotometricLoss::Params params{.lambda_dssim = 0.2f};
-
-    auto result = loss_fn.forward(rendered, gt, params);
-    ASSERT_TRUE(result.has_value());
-
-    auto [loss, ctx] = *result;
+    const auto& ops = lfs::training::cuda_photometric_ops();
+    lfs::gpu_ops::PhotoSaved saved{.backend = ops.create()};
+    lfs::core::Tensor loss;
+    lfs::core::Tensor grad;
+    lfs::core::Tensor grad_raw;
+    const lfs::gpu_ops::PhotoParams params{
+        .path = lfs::gpu_ops::PhotoPath::Fused,
+        .ssim_weight = 0.2f,
+        .valid_padding = true,
+    };
+    ops.evaluate(saved, rendered, {}, gt, {}, params, loss, grad, grad_raw);
     EXPECT_FALSE(std::isnan(loss.item<float>()));
-    EXPECT_FALSE(std::isnan(ctx.grad_image.abs().max().item<float>()));
+    EXPECT_FALSE(std::isnan(grad.abs().max().item<float>()));
 }
 
 TEST_F(FusedL1SSIMTest, RejectsInvalidImageContractsBeforeKernelLaunch) {
@@ -439,13 +442,26 @@ TEST_F(FusedL1SSIMTest, RejectsInvalidImageContractsBeforeKernelLaunch) {
             0.2f, workspace, true),
         std::exception);
 
-    lfs::training::losses::PhotometricLoss photometric;
-    auto result = photometric.forward(
-        valid, valid.cpu(), {.lambda_dssim = 0.2f});
-    EXPECT_FALSE(result.has_value());
-    result = photometric.forward(
-        valid, valid, {.lambda_dssim = std::numeric_limits<float>::infinity()});
-    EXPECT_FALSE(result.has_value());
+    const auto& ops = lfs::training::cuda_photometric_ops();
+    lfs::gpu_ops::PhotoSaved saved{.backend = ops.create()};
+    lfs::core::Tensor loss;
+    lfs::core::Tensor grad;
+    lfs::core::Tensor grad_raw;
+    EXPECT_THROW(
+        ops.evaluate(
+            saved, valid, {}, valid.cpu(), {},
+            {.path = lfs::gpu_ops::PhotoPath::Fused, .ssim_weight = 0.2f, .valid_padding = true},
+            loss, grad, grad_raw),
+        std::exception);
+    EXPECT_THROW(
+        ops.evaluate(
+            saved, valid, {}, valid,
+            {},
+            {.path = lfs::gpu_ops::PhotoPath::Fused,
+             .ssim_weight = std::numeric_limits<float>::infinity(),
+             .valid_padding = true},
+            loss, grad, grad_raw),
+        std::exception);
 }
 
 TEST_F(FusedL1SSIMTest, UInt8TargetMatchesFloatReference) {

@@ -641,8 +641,6 @@
       "src/training/control/command_api.cpp:455",
       "src/training/control/command_api.cpp:480",
       "src/training/control/command_api.cpp:499",
-      "src/training/losses/photometric_loss.cpp:41",
-      "src/training/losses/photometric_loss.hpp:39",
       "src/training/losses/regularization.cpp:11",
       "src/training/losses/regularization.cpp:59",
       "src/training/losses/regularization.cpp:94",

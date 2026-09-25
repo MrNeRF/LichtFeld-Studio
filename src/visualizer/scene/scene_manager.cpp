@@ -36,6 +36,7 @@
 #include "training/checkpoint.hpp"
 #include <sstream>
 #if LFS_BUILD_TRAINER
+#include "lfs/training/ops/registry.hpp"
 #include "training/components/ppisp.hpp"
 #include "training/components/ppisp_controller_pool.hpp"
 #endif
@@ -2903,6 +2904,12 @@ namespace lfs::vis {
             LOG_INFO("Dataset ready for viewing; CUDA training is unavailable");
             return {};
         }
+        if (const auto unavailable = lfs::training::unavailable_training_reason(
+                params, lfs::core::default_gpu_backend(),
+                lfs::training::training_loader_dependencies(params))) {
+            LOG_INFO("{}", *unavailable);
+            return {};
+        }
         if (!manager) {
             return lfs::Status::failure(lfs::make_error({
                 .code = lfs::ErrorCode::FailedPrecondition,
@@ -3180,6 +3187,7 @@ namespace lfs::vis {
     void SceneManager::loadCheckpointForTraining(const std::filesystem::path& path,
                                                  const lfs::core::param::TrainingParameters& params) {
 #if LFS_BUILD_TRAINER
+        const lfs::core::GpuBackend training_backend = lfs::core::default_gpu_backend();
         const lfs::core::GpuBackendScope backend(lfs::core::GpuBackend::CUDA);
         LOG_TIMER("SceneManager::loadCheckpointForTraining");
 
@@ -3211,6 +3219,12 @@ namespace lfs::vis {
             if (!std::filesystem::exists(checkpoint_params.dataset.data_path)) {
                 throw std::runtime_error("Dataset path does not exist: " +
                                          lfs::core::path_to_utf8(checkpoint_params.dataset.data_path));
+            }
+
+            if (const auto unavailable = lfs::training::unavailable_training_reason(
+                    checkpoint_params, training_backend,
+                    lfs::training::training_loader_dependencies(checkpoint_params))) {
+                throw std::runtime_error(*unavailable);
             }
 
             // Validate dataset structure before clearing

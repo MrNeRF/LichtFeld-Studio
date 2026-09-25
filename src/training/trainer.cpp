@@ -630,24 +630,6 @@ namespace lfs::training {
             return inputs;
         }
 
-        struct WorkspaceDisclosure {
-            size_t required = 0;
-            size_t allocated = 0;
-        };
-
-        [[nodiscard]] WorkspaceDisclosure
-        photometric_workspace_bytes(const losses::PhotometricLoss& photometric_loss) {
-            const auto& arena = photometric_loss.arena();
-            return {
-                .required = arena.required_bytes(),
-                .allocated = arena.allocated_bytes(),
-            };
-        }
-
-        [[nodiscard]] size_t ssim_map_workspace_bytes(const kernels::SSIMMapWorkspace& workspace) {
-            return tensor_reserved_bytes(workspace.ssim_map);
-        }
-
         [[nodiscard]] bool live_vram_profiler_enabled() {
             return lfs::diagnostics::VramProfiler::instance().enabled();
         }
@@ -1098,7 +1080,8 @@ namespace lfs::training {
         pipelined_depth_ = {};
         pipelined_normal_ = {};
 
-        photometric_loss_ = {};
+        photo_saved_ = {};
+        bind_training_ops();
         loss_accumulator_ = {};
         fused_scale_reg_loss_ = {};
         fused_opacity_reg_loss_ = {};
@@ -1118,7 +1101,6 @@ namespace lfs::training {
         normal_consistency_partials_ = {};
         normal_prior_depth_scalar_ = {};
         roi_weight_map_ = {};
-        densification_ssim_workspace_ = {};
         densification_error_map_ = {};
         clearEdgeWeightCache();
         mask_preprocess_workspace_ = {};
@@ -1623,45 +1605,68 @@ namespace lfs::training {
         }
     }
 
+    namespace {
+
+        [[nodiscard]] lfs::gpu_ops::PhotoPath photometric_path(
+            const bool masked, const bool decoupled, const float lambda) {
+            if (masked) {
+                return decoupled ? lfs::gpu_ops::PhotoPath::MaskedDecoupled
+                                 : lfs::gpu_ops::PhotoPath::MaskedFused;
+            }
+            if (decoupled) {
+                return lfs::gpu_ops::PhotoPath::Decoupled;
+            }
+            if (lambda == 0.0f) {
+                return lfs::gpu_ops::PhotoPath::L1;
+            }
+            if (lambda == 1.0f) {
+                return lfs::gpu_ops::PhotoPath::SSIM;
+            }
+            return lfs::gpu_ops::PhotoPath::Fused;
+        }
+
+    } // namespace
+
+    void Trainer::bind_training_ops() {
+        const core::GpuBackend backend = core::default_gpu_backend();
+        training_ops_ = &training_ops(backend);
+        if (training_ops_->photometric != nullptr && !photo_saved_.backend) {
+            photo_saved_.backend = training_ops_->photometric->create();
+        }
+        if (evaluator_) {
+            evaluator_->set_photometric(training_ops_->photometric);
+        }
+    }
+
     // Compute photometric loss AND gradient manually
     std::expected<Trainer::PhotometricLossResult, std::string> Trainer::compute_photometric_loss_with_gradient(
         const lfs::core::Tensor& corrected,
         const lfs::core::Tensor& gt_image,
         const lfs::core::param::OptimizationParameters& opt_params,
         const lfs::core::Tensor& raw_rendered) {
+        if (training_ops_ == nullptr || training_ops_->photometric == nullptr) {
+            return std::unexpected("Photometric training ops are unavailable");
+        }
         const bool use_decoupled_appearance_loss =
             raw_rendered.is_valid() &&
             raw_rendered.numel() > 0 &&
             opt_params.lambda_dssim > 0.0f;
 
-        if (use_decoupled_appearance_loss) {
-            auto& decoupled_ws = photometric_loss_.arena().decoupled();
-            auto [loss_tensor, ctx] = lfs::training::kernels::decoupled_fused_l1_ssim_forward(
-                corrected, raw_rendered, gt_image, opt_params.lambda_dssim, decoupled_ws,
-                /*apply_valid_padding=*/true);
-            auto grads = lfs::training::kernels::decoupled_fused_l1_ssim_backward(ctx, decoupled_ws);
-
-            if (corrected.ndim() == 3) {
-                grads.grad_corrected = grads.grad_corrected.squeeze(0);
-                grads.grad_raw = grads.grad_raw.squeeze(0);
-            }
-
-            return PhotometricLossResult{
-                .loss = loss_tensor,
-                .grad_corrected = grads.grad_corrected,
-                .grad_raw = grads.grad_raw};
-        }
-
-        lfs::training::losses::PhotometricLoss::Params params{.lambda_dssim = opt_params.lambda_dssim};
-        auto result = photometric_loss_.forward(corrected, gt_image, params);
-        if (!result) {
-            return std::unexpected(result.error());
-        }
-        auto [loss_tensor, ctx] = *result;
+        lfs::core::Tensor loss;
+        lfs::core::Tensor grad_corrected;
+        lfs::core::Tensor grad_raw;
+        const lfs::gpu_ops::PhotoParams params{
+            .path = photometric_path(false, use_decoupled_appearance_loss, opt_params.lambda_dssim),
+            .ssim_weight = opt_params.lambda_dssim,
+            .valid_padding = true,
+        };
+        training_ops_->photometric->evaluate(
+            photo_saved_, corrected, raw_rendered, gt_image, {}, params,
+            loss, grad_corrected, grad_raw);
         return PhotometricLossResult{
-            .loss = loss_tensor,
-            .grad_corrected = ctx.grad_image,
-            .grad_raw = {}};
+            .loss = std::move(loss),
+            .grad_corrected = std::move(grad_corrected),
+            .grad_raw = std::move(grad_raw)};
     }
 
     std::expected<void, std::string> Trainer::validate_masks() {
@@ -1760,36 +1765,17 @@ namespace lfs::training {
             opt_params.lambda_dssim > 0.0f;
 
         if (photometric_weight.is_valid()) {
-            if (use_decoupled_appearance_loss) {
-                auto& masked_decoupled_ws = photometric_loss_.arena().masked_decoupled();
-                auto [loss_tensor, ctx] = lfs::training::kernels::masked_decoupled_fused_l1_ssim_forward(
-                    corrected, raw_rendered, gt_image, photometric_weight, opt_params.lambda_dssim,
-                    masked_decoupled_ws);
-                auto grads = lfs::training::kernels::masked_decoupled_fused_l1_ssim_backward(
-                    ctx, masked_decoupled_ws);
-
-                grad_corrected = grads.grad_corrected;
-                grad_raw = grads.grad_raw;
-                loss = loss_tensor;
-
-                if (grad_corrected.ndim() == 4 && corrected.ndim() == 3) {
-                    grad_corrected = grad_corrected.squeeze(0);
-                }
-                if (grad_raw.ndim() == 4 && corrected.ndim() == 3) {
-                    grad_raw = grad_raw.squeeze(0);
-                }
-            } else {
-                auto& masked_ws = photometric_loss_.arena().masked_fused();
-                auto [loss_tensor, ctx] = lfs::training::kernels::masked_fused_l1_ssim_forward(
-                    corrected, gt_image, photometric_weight, opt_params.lambda_dssim, masked_ws);
-
-                grad_corrected = lfs::training::kernels::masked_fused_l1_ssim_backward(ctx, masked_ws);
-                loss = loss_tensor;
-
-                if (grad_corrected.ndim() == 4 && corrected.ndim() == 3) {
-                    grad_corrected = grad_corrected.squeeze(0);
-                }
+            if (training_ops_ == nullptr || training_ops_->photometric == nullptr) {
+                return std::unexpected("Photometric training ops are unavailable");
             }
+            const lfs::gpu_ops::PhotoParams photo_params{
+                .path = photometric_path(true, use_decoupled_appearance_loss, opt_params.lambda_dssim),
+                .ssim_weight = opt_params.lambda_dssim,
+                .valid_padding = true,
+            };
+            training_ops_->photometric->evaluate(
+                photo_saved_, corrected, raw_rendered, gt_image, photometric_weight, photo_params,
+                loss, grad_corrected, grad_raw);
 
             if (has_user_mask &&
                 (mode == param::MaskMode::Segment || mode == param::MaskMode::SegmentAndIgnore) &&
@@ -2612,6 +2598,10 @@ namespace lfs::training {
         if (const auto validation_error = params.validate(); !validation_error.empty()) {
             return std::unexpected("Invalid training parameters: " + validation_error);
         }
+        if (const auto unavailable = unavailable_training_reason(
+                params, lfs::core::default_gpu_backend(), training_loader_dependencies(params))) {
+            return std::unexpected(*unavailable);
+        }
 
         // Thread-safe initialization using mutex
         std::lock_guard<std::mutex> lock(init_mutex_);
@@ -2627,6 +2617,7 @@ namespace lfs::training {
 
         try {
             params_ = params;
+            bind_training_ops();
 
             // Wire CLI instruments (replaces former env flags).
             PerfBenchCollector::configure(
@@ -2907,6 +2898,9 @@ namespace lfs::training {
 
             // Initialize the evaluator - it handles all metrics internally
             evaluator_ = std::make_unique<lfs::training::MetricsEvaluator>(params_);
+            if (training_ops_ != nullptr) {
+                evaluator_->set_photometric(training_ops_->photometric);
+            }
             if (lpips_weights_path_)
                 evaluator_->set_lpips_weights_path(*lpips_weights_path_);
             if (params_.optimization.ppisp_active() && ppisp_ && ppisp_->isFinalized()) {
@@ -3332,7 +3326,8 @@ namespace lfs::training {
         pipelined_mask_ = {};
         pipelined_depth_ = {};
         pipelined_normal_ = {};
-        photometric_loss_ = {};
+        photo_saved_ = {};
+        training_ops_ = nullptr;
         loss_accumulator_ = {};
         depth_loss_scalar_ = {};
         depth_loss_grad_ = {};
@@ -3344,7 +3339,6 @@ namespace lfs::training {
         normal_consistency_scalar_ = {};
         normal_consistency_partials_ = {};
         normal_prior_depth_scalar_ = {};
-        densification_ssim_workspace_ = {};
         densification_error_map_ = {};
         clearEdgeWeightCache();
         strategy_.reset();
@@ -4447,7 +4441,7 @@ namespace lfs::training {
             return;
         }
 
-        photometric_loss_.arena().shrink_to_required();
+        photo_shrink_to_required(photo_saved_);
 
         std::optional<std::filesystem::path> headless_source_path;
         bool first_publish_to_destination =
@@ -5357,7 +5351,7 @@ namespace lfs::training {
                 progress_->pause();
             }
             // B3: the previous step is complete; release the production loss arena.
-            photometric_loss_.arena().reset();
+            photo_reset(photo_saved_);
             resize_rasterizer_arena_at_boundary("B3 pause", true);
             LOG_INFO("Training paused at iteration {}", iter);
             LOG_DEBUG("Click 'Resume Training' to continue.");
@@ -5376,7 +5370,7 @@ namespace lfs::training {
         // Handle stop request - this permanently stops training
         if (stop_requested_.load()) {
             // B3: no new forward work will consume these views.
-            photometric_loss_.arena().reset();
+            photo_reset(photo_saved_);
             LOG_INFO("Stopping training permanently at iteration {}...", iter);
         }
     }
@@ -6546,7 +6540,7 @@ namespace lfs::training {
                             record_vram_tensor("train.appearance", "ppisp_controller.prediction", pred);
                             {
                                 const auto loss_ws =
-                                    photometric_workspace_bytes(photometric_loss_);
+                                    photo_workspace_bytes(photo_saved_);
                                 record_vram_current("train.losses", "loss_workspace_arena",
                                                     loss_ws.allocated);
                                 auto& profiler = lfs::diagnostics::VramProfiler::instance();
@@ -6706,13 +6700,6 @@ namespace lfs::training {
                         // 1) Compute photometric loss (populates ssim_map in workspace)
                         const bool use_mask = params_.optimization.mask_mode != lfs::core::param::MaskMode::None &&
                                               (cam->has_mask() || (params_.optimization.use_alpha_as_mask && cam->has_alpha()));
-                        const bool used_masked_fused =
-                            (roi_weight.is_valid() ||
-                             (use_mask &&
-                              (params_.optimization.mask_mode == lfs::core::param::MaskMode::Segment ||
-                               params_.optimization.mask_mode == lfs::core::param::MaskMode::Ignore ||
-                               params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore))) &&
-                            params_.optimization.lambda_dssim > 0.0f;
                         {
                             LFS_VRAM_SCOPE("train.photometric_loss");
                             LOG_VRAM_DIFF("train.photometric_loss");
@@ -7206,24 +7193,8 @@ namespace lfs::training {
                             LFS_VRAM_SCOPE("train.densification_error_map");
                             LOG_VRAM_DIFF("train.densification_error_map");
                             if (use_ssim_error && params_.optimization.lambda_dssim > 0.0f) {
-                                lfs::core::Tensor ssim_map;
-                                lfs::core::Tensor cs_map;
-                                if (used_masked_fused && raw_loss_input.is_valid()) {
-                                    ssim_map = photometric_loss_.arena().masked_decoupled().ssim_map;
-                                    cs_map = photometric_loss_.arena().masked_decoupled().cs_map;
-                                } else if (used_masked_fused) {
-                                    ssim_map = photometric_loss_.arena().masked_fused().ssim_map;
-                                    cs_map = photometric_loss_.arena().masked_fused().cs_map;
-                                } else if (raw_loss_input.is_valid()) {
-                                    ssim_map = photometric_loss_.arena().decoupled().ssim_map;
-                                    cs_map = photometric_loss_.arena().decoupled().cs_map;
-                                } else if (params_.optimization.lambda_dssim < 1.0f) {
-                                    ssim_map = photometric_loss_.fused_workspace().ssim_map;
-                                    cs_map = photometric_loss_.fused_workspace().cs_map;
-                                } else {
-                                    ssim_map = photometric_loss_.ssim_workspace().ssim_map;
-                                    cs_map = photometric_loss_.ssim_workspace().cs_map;
-                                }
+                                const lfs::core::Tensor& ssim_map = photo_saved_.ssim_map;
+                                const lfs::core::Tensor& cs_map = photo_saved_.cs_map;
                                 const bool use_cs =
                                     params_.optimization.densify_error_map ==
                                         lfs::core::param::DensifyErrorMap::SsimCs &&
@@ -7234,7 +7205,7 @@ namespace lfs::training {
                                     const size_t H = densify_src.shape()[2];
                                     const size_t W = densify_src.shape()[3];
                                     tile_error_map = densify_src.reshape({static_cast<int>(H), static_cast<int>(W)});
-                                    lfs::training::kernels::launch_ssim_to_error_map(densify_src, tile_error_map);
+                                    training_ops_->photometric->map_to_error(densify_src, tile_error_map);
                                 } else {
                                     const size_t H = densify_src.shape()[2];
                                     const size_t W = densify_src.shape()[3];
@@ -7245,7 +7216,7 @@ namespace lfs::training {
                                             {static_cast<size_t>(H), static_cast<size_t>(W)},
                                             core::Device::GPU);
                                     }
-                                    lfs::training::kernels::launch_ssim_to_error_map(
+                                    training_ops_->photometric->map_to_error(
                                         densify_src, densification_error_map_);
                                     tile_error_map = densification_error_map_;
                                 }
@@ -7260,9 +7231,8 @@ namespace lfs::training {
                                 }
                                 const bool use_cs = params_.optimization.densify_error_map ==
                                                     lfs::core::param::DensifyErrorMap::SsimCs;
-                                lfs::training::kernels::ssim_error_map_forward(
-                                    pred_chw, gt_chw, densification_ssim_workspace_,
-                                    densification_error_map_, use_cs);
+                                training_ops_->photometric->error_map(
+                                    photo_saved_, pred_chw, gt_chw, densification_error_map_, use_cs);
                                 tile_error_map = densification_error_map_;
                             } else {
                                 const auto gt_for_error = gt_tile.dtype() == lfs::core::DataType::UInt8
@@ -7334,7 +7304,7 @@ namespace lfs::training {
                             record_vram_tensor("train.losses", "densification_error_map.live", tile_error_map);
                             {
                                 const auto loss_ws =
-                                    photometric_workspace_bytes(photometric_loss_);
+                                    photo_workspace_bytes(photo_saved_);
                                 record_vram_current("train.losses", "loss_workspace_arena",
                                                     loss_ws.allocated);
                                 auto& profiler = lfs::diagnostics::VramProfiler::instance();
@@ -7348,7 +7318,7 @@ namespace lfs::training {
                                 }
                             }
                             record_vram_current("train.losses", "densification_ssim.workspace",
-                                                ssim_map_workspace_bytes(densification_ssim_workspace_));
+                                                photo_workspace_bytes(photo_saved_).error_map);
                             record_vram_tensor("train.losses", "densification_error_map.buffer", densification_error_map_);
                             record_vram_tensor("train.losses", "edge_map_buffer", edge_map_buffer_);
                         }
@@ -7916,7 +7886,7 @@ namespace lfs::training {
                             bilateral_grid_->log_eval_diagnostics();
                         }
                         // B2: retain only the current active shape after evaluation.
-                        photometric_loss_.arena().shrink_to_required();
+                        photo_shrink_to_required(photo_saved_);
                     }
 
                     current_phase = StepPhase::TerminalCleanup;
@@ -8636,7 +8606,7 @@ namespace lfs::training {
                                                     val_dataset_,
                                                     background_);
                 LOG_INFO("{}", metrics.to_string());
-                photometric_loss_.arena().shrink_to_required();
+                photo_shrink_to_required(photo_saved_);
             }
 
             clearActiveImageLoader();

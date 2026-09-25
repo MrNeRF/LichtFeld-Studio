@@ -19,6 +19,9 @@
 #include "core/path_utils.hpp"
 #include "core/project_path.hpp"
 #include "core/tensor_backend.hpp"
+#if LFS_BUILD_TRAINER
+#include "lfs/training/ops/registry.hpp"
+#endif
 #include "core/user_paths.hpp"
 #include "gui/error_event_bridge.hpp"
 #include "gui/error_surface_types.hpp"
@@ -696,6 +699,14 @@ namespace lfs::vis::project {
                 }
             }
 
+#if LFS_BUILD_TRAINER
+            if (const auto unavailable = lfs::training::unavailable_training_reason(
+                    ckpt_params, lfs::core::default_gpu_backend(),
+                    lfs::training::training_loader_dependencies(ckpt_params))) {
+                notifyTrainerRestoreFailure(viewer, *unavailable);
+                return;
+            }
+#endif
             const lfs::core::GpuBackendScope backend(lfs::core::GpuBackend::CUDA);
             auto tensor_allocator = makeViewerSplatTensorAllocator();
             auto& scene = scene_manager.getScene();

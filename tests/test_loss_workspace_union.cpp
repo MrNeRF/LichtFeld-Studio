@@ -14,7 +14,7 @@
 #include "core/tensor.hpp"
 #include "cuda_backend_test.hpp"
 #include "lfs/kernels/ssim.cuh"
-#include "training/losses/photometric_loss.hpp"
+#include "lfs/training/ops/photometric_cuda.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -242,31 +242,39 @@ TEST_F(LossWorkspaceUnionTest, ArenaFusedLossMatchesIndependent) {
     EXPECT_LT(max_abs, 1e-5) << "max |grad diff| = " << max_abs;
 }
 
-// PhotometricLoss (production owner of fused/pure-SSIM) should expose the shared arena.
-TEST_F(LossWorkspaceUnionTest, PhotometricLossExposesSharedArena) {
-    lfs::training::losses::PhotometricLoss loss;
+TEST_F(LossWorkspaceUnionTest, PhotometricOpsUsesSharedArena) {
     const std::vector<size_t> shape = {1, 3, 32, 48};
+    auto rendered = Tensor::randn({1, 3, 32, 48}, Device::GPU);
+    auto raw = Tensor::randn({1, 3, 32, 48}, Device::GPU);
+    auto gt = Tensor::randn({1, 3, 32, 48}, Device::GPU);
+    auto mask = Tensor::ones({32, 48}, Device::GPU);
 
-    // Drive fused via public forward, then request another mode on the same arena.
-    auto rendered = Tensor::randn({32, 48, 3}, Device::GPU);
-    auto gt = Tensor::randn({32, 48, 3}, Device::GPU);
-    lfs::training::losses::PhotometricLoss::Params params{.lambda_dssim = 0.2f};
-    auto result = loss.forward(rendered, gt, params);
-    ASSERT_TRUE(result.has_value()) << result.error();
+    const auto& ops = lfs::training::cuda_photometric_ops();
+    lfs::gpu_ops::PhotoSaved saved{.backend = ops.create()};
+    lfs::core::Tensor loss;
+    lfs::core::Tensor grad;
+    lfs::core::Tensor grad_raw;
 
-    auto& arena = loss.arena();
-    const size_t after_fused = arena.allocated_bytes();
-    ASSERT_GT(after_fused, 0u);
-    ASSERT_EQ(arena.active_kind(), LossWorkspaceArena::Kind::Fused);
-    expect_exact_active_allocation(
-        arena, LossWorkspaceArena::fused_layout_bytes(arena.active_shape()));
+    const auto run = [&](const lfs::gpu_ops::PhotoPath path, const lfs::core::Tensor& weight) {
+        ops.evaluate(
+            saved, rendered, raw, gt, weight,
+            {.path = path, .ssim_weight = 0.2f, .valid_padding = true},
+            loss, grad, grad_raw);
+    };
+    const auto expect_layout = [&](const size_t required) {
+        const auto bytes = lfs::training::photo_workspace_bytes(saved);
+        EXPECT_EQ(bytes.required, required);
+        EXPECT_EQ(bytes.allocated, align_arena_bytes(required));
+    };
 
-    arena.ensure_decoupled(shape);
-    expect_exact_active_allocation(arena, LossWorkspaceArena::decoupled_layout_bytes(shape));
-    arena.ensure_masked_fused(shape);
-    expect_exact_active_allocation(arena, LossWorkspaceArena::masked_fused_layout_bytes(shape));
-    arena.ensure_pure_ssim(shape);
-    expect_exact_active_allocation(arena, LossWorkspaceArena::pure_ssim_layout_bytes(shape));
+    run(lfs::gpu_ops::PhotoPath::Fused, {});
+    expect_layout(LossWorkspaceArena::fused_layout_bytes(shape));
+    run(lfs::gpu_ops::PhotoPath::Decoupled, {});
+    expect_layout(LossWorkspaceArena::decoupled_layout_bytes(shape));
+    run(lfs::gpu_ops::PhotoPath::MaskedFused, mask);
+    expect_layout(LossWorkspaceArena::masked_fused_layout_bytes(shape));
+    run(lfs::gpu_ops::PhotoPath::SSIM, {});
+    expect_layout(LossWorkspaceArena::pure_ssim_layout_bytes(shape));
 }
 
 // The appearance branch omits sigma partials while preserving gradient results.

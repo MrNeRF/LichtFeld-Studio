@@ -19,10 +19,10 @@
 #include "dataset.hpp"
 #include "io/project_recovery.hpp"
 #include "kernels/depth_loss.hpp"
-#include "lfs/kernels/ssim.cuh"
+#include "lfs/training/ops/photometric_cuda.hpp"
+#include "lfs/training/ops/registry.hpp"
 #include "lfs/training/refine_scratch.hpp"
 #include "losses/mask_loss.hpp"
-#include "losses/photometric_loss.hpp"
 #include "metrics/metrics.hpp"
 #include "optimizer/scheduler.hpp"
 #include "progress.hpp"
@@ -805,8 +805,10 @@ namespace lfs::training {
                 lfs::io::project::
                     TrainingFinishReason::None;
 
-        // Persistent photometric loss (workspace reuse across iterations)
-        lfs::training::losses::PhotometricLoss photometric_loss_;
+        // Resolved once at training start. Hot paths use this table.
+        const lfs::training::TrainingOps* training_ops_ = nullptr;
+        lfs::gpu_ops::PhotoSaved photo_saved_{};
+        void bind_training_ops();
 
         // Cached GPU scalar to avoid per-iteration allocation
         core::Tensor loss_accumulator_;
@@ -843,11 +845,6 @@ namespace lfs::training {
         bool depth_anchor_fit_attempted_ = false;
         lfs::training::kernels::DepthPriorType resolved_depth_prior_ =
             lfs::training::kernels::DepthPriorType::Auto;
-
-        // Pre-allocated SSIM-map workspace for densification error maps.
-        lfs::training::kernels::SSIMMapWorkspace densification_ssim_workspace_;
-        // masked / decoupled / fused / pure-SSIM workspaces live in
-        // photometric_loss_.arena() (mutually exclusive, single grow-only region).
 
         // Mask preprocess workspace: photometric weight / opacity penalty / alpha-consistent
         // (fused kernels; grow-only for allocation-free steady state when masks/ROI on).

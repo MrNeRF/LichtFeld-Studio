@@ -9,6 +9,7 @@
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "lfs/training/ops/loss.hpp"
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -42,11 +43,15 @@ namespace lfs::training {
     public:
         SSIM(bool apply_valid_padding = true);
 
+        void set_ops(const lfs::gpu_ops::PhotometricOps* ops) { ops_ = ops; }
+
         float compute(const lfs::core::Tensor& pred, const lfs::core::Tensor& target,
                       const lfs::core::Tensor& mask = {});
 
     private:
         bool apply_valid_padding_;
+        const lfs::gpu_ops::PhotometricOps* ops_ = nullptr;
+        lfs::gpu_ops::PhotoSaved saved_{};
     };
 
     struct ViewMetrics {
@@ -190,6 +195,12 @@ namespace lfs::training {
 
         using AppearanceFn =
             std::function<lfs::core::Tensor(const lfs::core::Tensor& rgb_chw, const lfs::core::Camera& cam)>;
+
+        void set_photometric(const lfs::gpu_ops::PhotometricOps* ops) {
+            if (_ssim_metric) {
+                _ssim_metric->set_ops(ops);
+            }
+        }
 
         void set_appearance(AppearanceFn fn) { appearance_ = std::move(fn); }
         [[nodiscard]] bool has_appearance() const { return static_cast<bool>(appearance_); }
