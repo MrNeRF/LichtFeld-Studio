@@ -274,12 +274,12 @@ TEST(VkSplatIndirectLayoutTest, SharedWordCountsAndOffsetsMatchEveryProducerCont
     EXPECT_EQ(indirect::DepthWave::rankCountWord(3u), 276u);
     EXPECT_EQ(indirect::DepthWave::instanceBaseWord(3u), 277u);
 
-    EXPECT_EQ(indirect::MacroWaveDispatch::kLayout.word_count, 96u);
+    EXPECT_EQ(indirect::MacroWaveDispatch::kLayout.word_count, 384u);
     EXPECT_EQ(indirect::MacroWaveDispatch::kWaveStrideWords, 3u);
     EXPECT_EQ(indirect::MacroWaveDispatch::kRasterBaseWordOffset, 0u);
-    EXPECT_EQ(indirect::MacroWaveDispatch::kComposeBaseWordOffset, 48u);
-    EXPECT_EQ(indirect::MacroWaveDispatch::rasterWordOffset(HIGS_RASTER_MAX_WAVES - 1u), 45u);
-    EXPECT_EQ(indirect::MacroWaveDispatch::composeWordOffset(HIGS_RASTER_MAX_WAVES - 1u), 93u);
+    EXPECT_EQ(indirect::MacroWaveDispatch::kComposeBaseWordOffset, 192u);
+    EXPECT_EQ(indirect::MacroWaveDispatch::rasterWordOffset(HIGS_RASTER_MAX_WAVES - 1u), 189u);
+    EXPECT_EQ(indirect::MacroWaveDispatch::composeWordOffset(HIGS_RASTER_MAX_WAVES - 1u), 381u);
 }
 
 TEST(VkSplatIndirectLayoutTest, ExportDepthWaveUpperBoundMatchesContract) {

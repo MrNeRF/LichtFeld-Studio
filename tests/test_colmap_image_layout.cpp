@@ -3,6 +3,8 @@
 
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/image_io.hpp"
+#include "core/image_loader.hpp"
+#include "io/cache_image_loader.hpp"
 #include "io/filesystem_utils.hpp"
 #include "io/formats/colmap.hpp"
 #include "io/loaders/blender_loader.hpp"
@@ -172,6 +174,23 @@ namespace {
     bool has_cuda_device() {
         int device_count = 0;
         return cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0;
+    }
+
+    void install_camera_image_loader() {
+        static const bool installed = [] {
+            lfs::io::CacheLoader::getInstance(false);
+            lfs::core::set_image_loader([](const lfs::core::ImageLoadParams& p) {
+                return lfs::io::CacheLoader::getInstance().load_cached_image(
+                    p.path,
+                    {.resize_factor = p.resize_factor,
+                     .max_width = p.max_width,
+                     .cuda_stream = p.stream,
+                     .output_uint8 = p.output_uint8,
+                     .skip_blob_cache = p.skip_blob_cache});
+            });
+            return true;
+        }();
+        (void)installed;
     }
 
     struct BicyclePixels {
@@ -513,6 +532,7 @@ TEST(SidecarDimensionsContract, OriginalSizePassesForSmallerTrainingImage) {
 TEST_F(ColmapImageLayoutTest, HalfResolutionDepthAndNormalReachTrainingSize) {
     if (!has_cuda_device())
         GTEST_SKIP() << "CUDA device required";
+    install_camera_image_loader();
     const auto source = read_bicycle_pixels();
     for (const bool blender : {false, true}) {
         for (const int bits : {8, 16}) {

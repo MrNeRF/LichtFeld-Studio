@@ -7,6 +7,7 @@
 #include "rendering/rasterizer/vulkan/src/barrier_planner.h"
 #include "rendering/rasterizer/vulkan/src/gs_pipeline.h"
 #include "rendering/rasterizer/vulkan/src/gs_renderer.h"
+#include "rendering/rasterizer/vulkan/src/indirect_layout.h"
 #include "rendering/rasterizer/vulkan/src/viewport_scratch_bucket.h"
 #include "rendering/vulkan_wait.hpp"
 
@@ -2421,8 +2422,8 @@ namespace {
         // Macro workspace (also used by macro path resizes).
         forge_owned_i32(buffers.tile_batch_counts, 0xF630, alloc_tiles);
         forge_owned_i32(buffers.tile_batch_offsets, 0xF631, alloc_tiles);
-        // macro_wave_args: 2 * HIGS_RASTER_MAX_WAVES * 3 = 96 words
-        forge_owned(buffers.macro_wave_args, 0xF632, 96);
+        forge_owned(buffers.macro_wave_args, 0xF632,
+                    lfs::rendering::vulkan::indirect_layout::MacroWaveDispatch::kLayout.word_count);
         // partials / active_mask sized like the production macro path:
         // ceil(K / RASTER_BATCH_SIZE) + macro tiles over the bucketed grid.
         const std::size_t alloc_grid_w = _CEIL_DIV(scratch_bucket.alloc_w,
