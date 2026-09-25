@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// Metal backend conformance: every ported operation runs on Metal and on the
-// CPU reference and must agree; operations not ported yet must say so.
+// Metal backend conformance: every operation runs on Metal and on the CPU
+// reference or the Vulkan backend, and they must agree.
 
 #include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
@@ -10,6 +10,7 @@
 #include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_environment.hpp"
+#include "core/tensor_export.hpp"
 #include "core/tensor_filters.hpp"
 #include "core/tensor_fused.hpp"
 #include "core/tensor_histogram.hpp"
@@ -1008,14 +1009,139 @@ namespace {
         }
     }
 
-    TEST_F(TensorMetal, UnportedOperationsSaySo) {
-        const Tensor sh = to_metal(random_tensor(16, 0.0f, 1.0f, 9)).reshape({1, 16});
-        try {
-            (void)internal::backend_ops(GpuBackend::Metal).kmeans_sh(sh, 1, 16, 1, 1, true, {});
-            ADD_FAILURE() << "kmeans_sh should not be ported yet";
-        } catch (const std::exception& error) {
-            EXPECT_NE(std::string(error.what()).find("Metal backend:"), std::string::npos) << error.what();
+    // Swizzled SH: 32-point blocks of float4 cell groups.
+    size_t swizzled_sh_index(const size_t point, const size_t dim, const size_t dims) {
+        const size_t slots = (dims + 3) / 4;
+        return ((point / 32) * (slots * 32) + (dim / 4) * 32 + point % 32) * 4 + dim % 4;
+    }
+
+    TEST_F(TensorMetal, MortonOrderMatchesCpu) {
+        constexpr size_t count = 20000;
+        const Tensor unique = random_tensor(count * 3, -5.0f, 5.0f, 88).reshape({count, 3});
+        // Repeated positions keep their source order.
+        const Tensor points = Tensor::cat({unique, unique.slice(0, 0, 1000)}, 0);
+        Tensor expected_keys;
+        const Tensor expected = morton_sort_indices(points, &expected_keys);
+        for (const GpuBackend backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            SCOPED_TRACE(gpu_backend_name(backend));
+            GpuBackendScope scope(backend);
+            Tensor keys;
+            const Tensor order = morton_sort_indices(points.to(Device::GPU), &keys);
+            EXPECT_EQ(order.to_vector_int(), expected.to_vector_int());
+            EXPECT_EQ(keys.to_vector_int64(), expected_keys.to_vector_int64());
         }
+    }
+
+    // The exact assignment is an ordered FP32 argmin that the CPU reproduces.
+    TEST_F(TensorMetal, Sh3AssignmentIsTheFp32Argmin) {
+        constexpr size_t points = 2000, palette = 300, dims = 45;
+        const Tensor sh = random_tensor((points + 31) / 32 * 12 * 32 * 4, -1.0f, 1.0f, 89);
+        const Tensor centroids = random_tensor(palette * dims, -1.0f, 1.0f, 90).reshape({palette, dims});
+        const Tensor norms = random_tensor(palette, 10.0f, 20.0f, 91);
+        const auto values = sh.to_vector(), centers = centroids.to_vector(), lengths = norms.to_vector();
+        std::vector<int> expected(points);
+        for (size_t i = 0; i < points; ++i) {
+            float best = 1e30f;
+            for (size_t c = 0; c < palette; ++c) {
+                float dot = 0;
+                for (size_t d = 0; d < dims; ++d)
+                    dot = std::fma(values[swizzled_sh_index(i, d, dims)], centers[c * dims + d], dot);
+                const float distance = std::fma(-2.0f, dot, lengths[c]);
+                if (distance < best) {
+                    best = distance;
+                    expected[i] = static_cast<int>(c);
+                }
+            }
+        }
+        for (const bool fast : {false, true}) {
+            SCOPED_TRACE(fast);
+            Tensor labels = to_metal(Tensor::zeros({points}, Device::CPU, DataType::Int32));
+            assign_sh3(to_metal(sh), to_metal(centroids), to_metal(norms), labels, fast);
+            EXPECT_EQ(labels.to_vector_int(), expected);
+        }
+    }
+
+    // Seeds are random, but the last update leaves every used centroid at the
+    // mean of the points labelled with it. Both backends run the same driver.
+    TEST_F(TensorMetal, PaletteCentroidsAreTheMeansOfTheirPoints) {
+        for (const auto [points, coefficients, palette] :
+             {std::tuple{3000, 3, 64}, std::tuple{3000, 15, 64}, std::tuple{8192, 15, 4096}}) {
+            const size_t dims = size_t(coefficients) * 3;
+            const Tensor sh = random_tensor((size_t(points) + 31) / 32 * ((dims + 3) / 4) * 32 * 4, -1.0f, 1.0f, 92);
+            const auto values = sh.to_vector();
+            for (const GpuBackend backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+                if (!gpu_backend_available(backend))
+                    continue;
+                SCOPED_TRACE(testing::Message() << gpu_backend_name(backend) << " palette " << palette << " dims " << dims);
+                GpuBackendScope scope(backend);
+                const auto [centroids, labels] = kmeans_sh(sh.to(Device::GPU), points, coefficients, palette, 4);
+                ASSERT_TRUE(centroids.is_valid() && labels.is_valid());
+                ASSERT_EQ(centroids.numel(), size_t(palette) * dims);
+                const auto means = centroids.to_vector();
+                const auto ids = labels.to_vector_int();
+                std::vector<double> sums(size_t(palette) * dims);
+                std::vector<int> counts(palette);
+                for (size_t i = 0; i < size_t(points); ++i) {
+                    ASSERT_TRUE(ids[i] >= 0 && ids[i] < palette) << i;
+                    ++counts[ids[i]];
+                    for (size_t d = 0; d < dims; ++d)
+                        sums[ids[i] * dims + d] += values[swizzled_sh_index(i, d, dims)];
+                }
+                for (size_t c = 0; c < size_t(palette); ++c) {
+                    for (size_t d = 0; counts[c] > 0 && d < dims; ++d)
+                        ASSERT_NEAR(means[c * dims + d], sums[c * dims + d] / counts[c], 1e-5) << c;
+                }
+            }
+        }
+    }
+
+    TEST_F(TensorMetal, DecimationMatchesVulkan) {
+        if (!gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP() << "No Vulkan device";
+        constexpr size_t count = 3000;
+        constexpr int rest = 3;
+        const Tensor position = random_tensor(count * 3, -2.0f, 2.0f, 93).reshape({count, 3});
+        const Tensor rotation = random_tensor(count * 4, -1.0f, 1.0f, 94).reshape({count, 4});
+        const Tensor scale = random_tensor(count * 3, -5.0f, -2.0f, 95).reshape({count, 3});
+        const Tensor opacity = random_tensor(count, -2.0f, 2.0f, 96).reshape({count, 1});
+        const Tensor dc = random_tensor(count * 3, -1.0f, 1.0f, 97).reshape({count, 3});
+        const Tensor sh = random_tensor(count * rest * 3, -0.5f, 0.5f, 98).reshape({count, size_t{rest}, 3});
+        // Groups of two to four splats, each kept at its first member.
+        std::vector<int> member_group(count, -1);
+        std::vector<uint32_t> minimum, members, offsets{0};
+        size_t removed = 0;
+        for (uint32_t group = 0; group < 100; ++group) {
+            const uint32_t size = 2 + group % 3;
+            minimum.push_back(10 * group);
+            for (uint32_t m = 0; m < size; ++m) {
+                members.push_back(10 * group + 2 * m);
+                member_group[10 * group + 2 * m] = static_cast<int>(group);
+            }
+            offsets.push_back(static_cast<uint32_t>(members.size()));
+            removed += size - 1;
+        }
+        const auto run = [&](const GpuBackend backend) {
+            GpuBackendScope scope(backend);
+            const Tensor p = position.to(Device::GPU), r = rotation.to(Device::GPU), s = scale.to(Device::GPU),
+                         o = opacity.to(Device::GPU), c = dc.to(Device::GPU), h = sh.to(Device::GPU);
+            std::vector<uint32_t> idx;
+            std::vector<float> cost;
+            decimate_candidates(p, r, s, o, c, h, rest, idx, cost);
+            const auto merged = decimate_merge(p, r, s, o, c, h, rest, member_group, minimum, members, offsets, removed);
+            const Tensor rows = Tensor::cat({merged.position.flatten(), merged.rotation.flatten(), merged.scale.flatten(),
+                                             merged.opacity.flatten(), merged.dc.flatten(), merged.sh.flatten()},
+                                            0)
+                                    .cpu();
+            return std::tuple{idx, cost, rows};
+        };
+        const auto [metal_idx, metal_cost, metal_rows] = run(GpuBackend::Metal);
+        const auto [vulkan_idx, vulkan_cost, vulkan_rows] = run(GpuBackend::Vulkan);
+        EXPECT_EQ(metal_idx, vulkan_idx);
+        expect_close(Tensor::from_vector(metal_cost, {metal_cost.size()}, Device::CPU),
+                     Tensor::from_vector(vulkan_cost, {vulkan_cost.size()}, Device::CPU), 1.0e-5f, 1.0e-5f);
+        expect_close(metal_rows, vulkan_rows, 1.0e-5f, 1.0e-5f);
     }
 
 } // namespace

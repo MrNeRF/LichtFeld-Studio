@@ -153,28 +153,36 @@ if(LFS_TENSOR_VULKAN)
     if(LFS_HAS_CUDA)
         list(APPEND TENSOR_SOURCES tensor/backend/vulkan/vk_cuda_bridge.cpp)
     endif()
-    # Host edge refinement uses the same independent double rounding as decimation.
-    set_source_files_properties(tensor/backend/vulkan/vk_ops_export.cpp PROPERTIES
+endif()
+
+# The GPU export driver, shared by the Vulkan and Metal backends. Its host edge
+# refinement uses the same independent double rounding as decimation.
+if(LFS_TENSOR_VULKAN OR APPLE)
+    list(APPEND TENSOR_SOURCES tensor/backend/export_pipeline.cpp)
+    set_source_files_properties(tensor/backend/export_pipeline.cpp PROPERTIES
         COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU,Clang>:-ffp-contract=off>")
 endif()
 
-# Metal tensor backend: kernels.metal is embedded and compiled at runtime, so
-# the build needs no Metal toolchain.
+# Metal tensor backend: the kernel sources are embedded and compiled at
+# runtime, so the build needs no Metal toolchain.
 if(APPLE)
     set(_lfs_metal_kernels_cpp ${CMAKE_CURRENT_BINARY_DIR}/lfs_metal_kernels.cpp)
+    set(_lfs_metal_sources tensor/backend/metal/kernels.metal tensor/backend/metal/export.metal)
+    list(TRANSFORM _lfs_metal_sources PREPEND ${CMAKE_CURRENT_SOURCE_DIR}/ OUTPUT_VARIABLE _lfs_metal_inputs)
+    string(REPLACE ";" "$<SEMICOLON>" _lfs_metal_inputs "${_lfs_metal_inputs}")
     add_custom_command(
         OUTPUT ${_lfs_metal_kernels_cpp}
         COMMAND ${CMAKE_COMMAND}
-            -DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/tensor/backend/metal/kernels.metal
+            "-DINPUTS=${_lfs_metal_inputs}"
             -DOUTPUT=${_lfs_metal_kernels_cpp}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tensor/backend/metal/embed_kernels.cmake
-        DEPENDS tensor/backend/metal/kernels.metal tensor/backend/metal/embed_kernels.cmake
-        COMMENT "Embedding Metal tensor kernels")
+        DEPENDS ${_lfs_metal_sources} tensor/backend/metal/embed_kernels.cmake
+        COMMENT "Embedding Metal tensor kernels"
+        VERBATIM)
     list(APPEND TENSOR_SOURCES
         tensor/backend/metal/expression_msl.cpp
         tensor/backend/metal/metal_context.mm
         tensor/backend/metal/metal_ops.mm
-        tensor/backend/metal/metal_ops_pending.cpp
         ${_lfs_metal_kernels_cpp}
     )
 endif()

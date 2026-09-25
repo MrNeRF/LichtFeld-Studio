@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "../../internal/point_filter.hpp"
+#include "../export_pipeline.hpp"
 #include "../facade_trace.hpp"
 #include "../readback_buffer.hpp"
 #include "../scalar_operand.hpp"
@@ -1335,6 +1336,32 @@ namespace lfs::core::internal {
 
         // A readback snapshots its source on the GPU timeline into a shared
         // staging block; poll() copies it out once that batch completed.
+        // Metal adds floats atomically; the SH3 assignment is not screened.
+        class API_AVAILABLE(macos(26.0)) MetalExportKernels final : public ExportKernels {
+        public:
+            GpuBackend backend() const override { return GpuBackend::Metal; }
+
+            bool float_atomics() const override { return true; }
+
+            bool screened_assignment() const override { return false; }
+
+            uint64_t address(const Tensor& tensor) const override { return address_of(*context_, storage_ref(tensor)); }
+
+            void launch(const char* const module, const uint32_t phase, const std::span<const std::byte> params,
+                        const std::span<const StorageRef> reads, const std::span<const StorageRef> writes,
+                        const size_t work) override {
+                std::vector<StorageRef> uses(reads.begin(), reads.end());
+                uses.insert(uses.end(), writes.begin(), writes.end());
+                context_->dispatch(uses, {.pipeline = context_->pipeline(module, {{0, phase}}),
+                                          .params = params,
+                                          .grid = thread_groups(work),
+                                          .group_size = MTLSizeMake(kThreadgroupWidth, 1, 1)});
+            }
+
+        private:
+            std::shared_ptr<Context> context_ = acquire_context();
+        };
+
         class API_AVAILABLE(macos(26.0)) MetalReadbackBuffer final : public ReadbackBuffer {
         public:
             MetalReadbackBuffer() : context_(acquire_context()) {}
@@ -2387,6 +2414,47 @@ namespace lfs::core::internal {
         // Tiles pad rows to 32 and cells to float4 groups.
         const size_t elements = (codec.count + 31) / 32 * 32 * ((codec.destination_rest * 3 + 3) / 4 * 4);
         dispatch_addressed(*context, uses, pipeline, params, std::min<size_t>(elements, size_t{4096} * kThreadgroupWidth));
+    }
+
+    Tensor MetalBackendOps::morton_sort(const Tensor& positions, Tensor* sorted_keys, ExecContext) {
+        LFS_FACADE_TRACE(morton_sort);
+        MetalExportKernels kernels;
+        return export_morton_sort(kernels, positions, sorted_keys);
+    }
+
+    std::tuple<Tensor, Tensor> MetalBackendOps::kmeans_sh(const Tensor& sh, const int n_points, const int sh_coeffs,
+                                                          const int k, const int iterations, bool, ExecContext) {
+        LFS_FACADE_TRACE(kmeans_sh);
+        MetalExportKernels kernels;
+        return export_kmeans_sh(kernels, sh, n_points, sh_coeffs, k, iterations);
+    }
+
+    void MetalBackendOps::assign_sh3(const Tensor& sh, const Tensor& centroids, const Tensor& norms, Tensor& labels,
+                                     const bool fast, const bool have_labels, ExecContext) {
+        LFS_FACADE_TRACE(assign_sh3);
+        MetalExportKernels kernels;
+        export_assign_sh3(kernels, sh, centroids, norms, labels, fast, have_labels);
+    }
+
+    void MetalBackendOps::decimate_candidates(const Tensor& position, const Tensor& rotation, const Tensor& scale,
+                                              const Tensor& opacity, const Tensor& dc, const Tensor& sh, const int rest,
+                                              std::vector<uint32_t>& idx, std::vector<float>& cost, ExecContext) {
+        LFS_FACADE_TRACE(decimate_candidates);
+        MetalExportKernels kernels;
+        export_decimate_candidates(kernels, position, rotation, scale, opacity, dc, sh, rest, idx, cost);
+    }
+
+    DecimateMerge MetalBackendOps::decimate_merge(const Tensor& position, const Tensor& rotation, const Tensor& scale,
+                                                  const Tensor& opacity, const Tensor& dc, const Tensor& sh,
+                                                  const int rest, const std::vector<int>& member_group,
+                                                  const std::vector<uint32_t>& minimum,
+                                                  const std::vector<uint32_t>& members,
+                                                  const std::vector<uint32_t>& offsets, const size_t removed,
+                                                  ExecContext) {
+        LFS_FACADE_TRACE(decimate_merge);
+        MetalExportKernels kernels;
+        return export_decimate_merge(kernels, position, rotation, scale, opacity, dc, sh, rest, member_group, minimum,
+                                     members, offsets, removed);
     }
 
     void MetalBackendOps::reduce(const StorageRef input, const StorageRef output, const StridedLayout& input_layout,

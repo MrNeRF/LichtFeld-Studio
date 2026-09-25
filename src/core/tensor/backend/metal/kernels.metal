@@ -2459,7 +2459,7 @@ static float exp_difference(float a, float b) {
     const float2 delta = two_sum(a, -b);
     if (delta.x < -104.0f)
         return 0;
-    const int k = int(rint(delta.x * 1.4426950408889634f));
+    const int k = int(round(delta.x * 1.4426950408889634f));
     const float r = fma(-float(k), 0.693147182464599609375f, delta.x) + (delta.y + float(k) * 1.904654323148236e-9f);
     // Range reduction bounds abs(r) by ln(2)/2.
     float poly = 1.0f / 40320.0f;
