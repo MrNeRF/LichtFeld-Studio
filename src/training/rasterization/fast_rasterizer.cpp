@@ -8,7 +8,6 @@
 #include "core/path_utils.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_exportable_storage.hpp"
-#include "core/tensor/internal/tensor_serialization.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "training/kernels/grad_alpha.hpp"
 #include "training/rasterization/fastgs/rasterization/include/forward.h"

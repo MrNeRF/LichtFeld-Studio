@@ -4,6 +4,7 @@
 #include "depth_anchor_cache.hpp"
 
 #include "core/camera.hpp"
+#include "core/gpu_device_runtime.hpp"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
 #include "io/atomic_output.hpp"
@@ -233,7 +234,7 @@ namespace lfs::training {
             // The prior's lazy ops materialize on their own stream; the collect
             // kernel reads raw pointers, so settle the device first (startup only).
             prior.ptr<float>();
-            cudaDeviceSynchronize();
+            lfs::core::gpu_device_barrier(lfs::core::GpuBackend::CUDA);
 
             auto samples = lfs::training::kernels::collect_depth_anchor_samples(
                 means.ptr<float>(),

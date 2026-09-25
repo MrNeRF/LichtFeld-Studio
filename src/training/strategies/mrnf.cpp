@@ -8,8 +8,11 @@
 #include "core/camera.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/cuda_error.hpp"
+#include "core/gpu_device_runtime.hpp"
 #include "core/logger.hpp"
 #include "core/sh_value_quant.hpp"
+#include "core/tensor_completion.hpp"
+#include "core/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "kernels/densification_kernels.hpp"
 #include "kernels/mrnf_kernels.hpp"
@@ -93,10 +96,7 @@ namespace lfs::training {
             auto value = to_float01_cuda(src).contiguous();
             ensure_cuda_float(dst, value.shape());
             if (dst.data_ptr() != value.data_ptr() && value.bytes() > 0) {
-                LFS_CUDA_CHECK_MSG(
-                    cudaMemcpy(dst.data_ptr(), value.data_ptr(), value.bytes(),
-                               cudaMemcpyDeviceToDevice),
-                    "MRNF cache seed view copy");
+                dst.copy_(value);
             }
         }
 
@@ -233,12 +233,10 @@ namespace lfs::training {
             auto grown = lfs::core::Tensor::zeros_direct(
                 source.shape(), desired_capacity, source.device(), source.dtype());
             if (source.numel() > 0) {
-                const cudaStream_t copy_stream = grown.stream();
-                source.sync_to_stream(copy_stream);
-                LFS_CUDA_CHECK(cudaMemcpyAsync(
-                    grown.data_ptr(), source.data_ptr(), source.bytes(),
-                    cudaMemcpyDeviceToDevice, copy_stream));
-                LFS_CUDA_CHECK(cudaStreamSynchronize(copy_stream));
+                grown.flatten().slice(0, 0, source.numel()).copy_(source);
+                lfs::core::TensorCompletion completion;
+                completion.include(grown);
+                completion.wait();
             }
             tensor = std::move(grown);
         }
@@ -387,15 +385,11 @@ namespace lfs::training {
             // Keep the source allocation alive until the asynchronous copy is
             // complete. Today zeros_direct uses the legacy stream, but this
             // remains correct if either tensor gains an explicit stream later.
-            const lfs::core::Tensor source_keepalive = source;
-            const cudaStream_t copy_stream = destination.stream();
-            LFS_CUDA_CHECK(cudaMemcpyAsync(
-                destination.ptr<uint8_t>(),
-                source_keepalive.ptr<uint8_t>(),
-                rows * sizeof(uint8_t),
-                cudaMemcpyDeviceToDevice,
-                copy_stream));
-            LFS_CUDA_CHECK(cudaStreamSynchronize(copy_stream));
+            const lfs::core::Tensor source_keepalive = source.slice(0, 0, rows);
+            destination.slice(0, 0, rows).copy_(source_keepalive);
+            lfs::core::TensorCompletion completion;
+            completion.include(destination);
+            completion.wait();
         }
 
         void ensure_deleted_mask_size(
@@ -628,8 +622,7 @@ namespace lfs::training {
                 if (is_interop_external(param))
                     return;
                 auto new_param = Tensor::zeros_direct(param.shape(), capacity);
-                cudaMemcpy(new_param.ptr<float>(), param.ptr<float>(),
-                           param.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
+                new_param.copy_(param);
                 param = std::move(new_param);
             };
 
@@ -655,8 +648,7 @@ namespace lfs::training {
                     return;
                 }
                 auto new_param = Tensor::zeros_direct(param.shape(), need_cap);
-                cudaMemcpy(new_param.ptr<float>(), param.ptr<float>(),
-                           param.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
+                new_param.copy_(param);
                 param = std::move(new_param);
             };
 
@@ -1290,8 +1282,7 @@ namespace lfs::training {
 
         if (_splat_data->_max_screen_share.is_valid() &&
             _splat_data->_max_screen_share.numel() > 0) {
-            LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(),
-                               "wait fused adam before screen-share mutate");
+            core::gpu_device_barrier(core::GpuBackend::CUDA);
         }
 
         if (_params && screen_share_shrink_active(iter) &&
@@ -1368,11 +1359,7 @@ namespace lfs::training {
             nullptr, 0,
             nullptr, 0,
             _refine_counts_dev.ptr<int64_t>());
-        int64_t host_counts[4] = {0, 0, 0, 0};
-        LFS_CUDA_CHECK_MSG(
-            cudaMemcpy(host_counts, _refine_counts_dev.ptr<int64_t>(),
-                       4 * sizeof(int64_t), cudaMemcpyDeviceToHost),
-            "MRNF refine prune-count D2H");
+        const auto host_counts = _refine_counts_dev.to_vector_int64();
         const int pruned_count = static_cast<int>(host_counts[0]);
 
         if (pruned_count > 0) {
@@ -1840,11 +1827,7 @@ namespace lfs::training {
             weights_out.ptr<float>(), n,
             weights_in.ptr<float>(), n,
             _refine_counts_dev.ptr<int64_t>());
-        int64_t host_counts[4] = {0, 0, 0, 0};
-        LFS_CUDA_CHECK_MSG(
-            cudaMemcpy(host_counts, _refine_counts_dev.ptr<int64_t>(),
-                       4 * sizeof(int64_t), cudaMemcpyDeviceToHost),
-            "MRNF far-guard pool nnz D2H");
+        const auto host_counts = _refine_counts_dev.to_vector_int64();
         const int selectable_out = static_cast<int>(host_counts[2]);
         const int selectable_in = static_cast<int>(host_counts[3]);
 
@@ -2022,11 +2005,7 @@ namespace lfs::training {
             (replace_weights.is_valid() ? n : 0),
             nullptr, 0,
             _refine_counts_dev.ptr<int64_t>());
-        int64_t host_counts[4] = {0, 0, 0, 0};
-        LFS_CUDA_CHECK_MSG(
-            cudaMemcpy(host_counts, _refine_counts_dev.ptr<int64_t>(),
-                       4 * sizeof(int64_t), cudaMemcpyDeviceToHost),
-            "MRNF grow packed counts D2H");
+        auto host_counts = _refine_counts_dev.to_vector_int64();
         int desired_total = static_cast<int>(
             std::round(static_cast<float>(host_counts[0]) * _params->grow_fraction));
         const int candidate_count = static_cast<int>(host_counts[0]);
@@ -2127,10 +2106,7 @@ namespace lfs::training {
                     oversize_weights.ptr<float>(), n,
                     nullptr, 0,
                     _refine_counts_dev.ptr<int64_t>());
-                LFS_CUDA_CHECK_MSG(
-                    cudaMemcpy(host_counts, _refine_counts_dev.ptr<int64_t>(),
-                               4 * sizeof(int64_t), cudaMemcpyDeviceToHost),
-                    "MRNF oversize nnz D2H");
+                host_counts = _refine_counts_dev.to_vector_int64();
                 const int selectable_oversize = static_cast<int>(host_counts[2]);
                 if (selectable_oversize > 0) {
                     const int oversize_budget = std::min(n_oversize, selectable_oversize);
@@ -2179,10 +2155,7 @@ namespace lfs::training {
                 growth_weights.ptr<float>(), n,
                 nullptr, 0,
                 _refine_counts_dev.ptr<int64_t>());
-            LFS_CUDA_CHECK_MSG(
-                cudaMemcpy(host_counts, _refine_counts_dev.ptr<int64_t>(),
-                           4 * sizeof(int64_t), cudaMemcpyDeviceToHost),
-                "MRNF growth nnz D2H");
+            host_counts = _refine_counts_dev.to_vector_int64();
             const int selectable_growth = static_cast<int>(host_counts[2]);
             if (selectable_growth > 0) {
                 const int growth_budget = std::min(n_grow, selectable_growth);
@@ -2236,10 +2209,7 @@ namespace lfs::training {
                             explore_weights.ptr<float>(), n,
                             nullptr, 0,
                             _refine_counts_dev.ptr<int64_t>());
-                        LFS_CUDA_CHECK_MSG(
-                            cudaMemcpy(host_counts, _refine_counts_dev.ptr<int64_t>(),
-                                       4 * sizeof(int64_t), cudaMemcpyDeviceToHost),
-                            "MRNF explore nnz D2H");
+                        host_counts = _refine_counts_dev.to_vector_int64();
                         const int selectable_explore = static_cast<int>(host_counts[2]);
                         n_explore = std::min(n_explore, selectable_explore);
                         if (n_explore > 0) {
@@ -2754,11 +2724,7 @@ namespace lfs::training {
                 opacities.ptr<float>(), n,
                 nullptr, 0,
                 _refine_counts_dev.ptr<int64_t>());
-            int64_t host_counts[4] = {0, 0, 0, 0};
-            LFS_CUDA_CHECK_MSG(
-                cudaMemcpy(host_counts, _refine_counts_dev.ptr<int64_t>(),
-                           4 * sizeof(int64_t), cudaMemcpyDeviceToHost),
-                "MRNF enforce_max_cap nnz D2H");
+            const auto host_counts = _refine_counts_dev.to_vector_int64();
             auto keep_indices = Tensor::empty({keep_budget}, Device::GPU, DataType::Int64);
             _gumbel_scratch.ensure_n(n, Device::GPU);
             mrnf_strategy::launch_gumbel_topk(
@@ -3126,11 +3092,7 @@ namespace lfs::training {
             seed_weights.ptr<float>(), hw,
             nullptr, 0,
             _refine_counts_dev.ptr<int64_t>());
-        int64_t host_counts[4] = {0, 0, 0, 0};
-        LFS_CUDA_CHECK_MSG(
-            cudaMemcpy(host_counts, _refine_counts_dev.ptr<int64_t>(),
-                       4 * sizeof(int64_t), cudaMemcpyDeviceToHost),
-            "MRNF seed nnz D2H");
+        const auto host_counts = _refine_counts_dev.to_vector_int64();
         n_seed = std::min(n_seed, static_cast<int>(host_counts[2]));
         if (n_seed <= 0) {
             return;

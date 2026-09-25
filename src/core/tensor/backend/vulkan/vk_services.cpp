@@ -185,6 +185,10 @@ namespace lfs::core::internal {
         synchronize_stream({});
     }
 
+    void VulkanBackendOps::device_barrier() {
+        synchronize_stream({});
+    }
+
     void VulkanBackendOps::wait_for(const SyncToken token) {
         LFS_ASSERT_MSG(token.backend == GpuBackend::Vulkan,
                        "Vulkan sync service received a non-Vulkan token");

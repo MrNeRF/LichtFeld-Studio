@@ -10,8 +10,6 @@
 #include "core/parameters.hpp"
 #include "core/uuid.hpp"
 
-#include <cuda_runtime_api.h>
-
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -116,7 +114,7 @@ namespace lfs::training {
         const PPISP* ppisp = nullptr;
         const PPISPControllerPool* ppisp_controller_pool = nullptr;
         const ADMMSparsityOptimizer* sparsity_optimizer = nullptr;
-        std::span<const cudaStream_t> mutating_streams;
+        std::span<void* const> mutating_streams;
         // Runs inside the measured safe-point clock after all mutation streams
         // are quiescent. The callback may only copy detached value state and
         // must stamp it with the supplied UUID. JSON/DOM/chapter assembly runs

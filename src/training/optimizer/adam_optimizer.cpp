@@ -7,13 +7,15 @@
 #include "core/alloc_counter.hpp"
 #include "core/assert.hpp"
 #include "core/checkpoint_format.hpp"
-#include "core/cuda/sh_layout.cuh"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
+#include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
+#include "core/tensor_completion.hpp"
+#include "core/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
@@ -24,6 +26,7 @@
 #include <cuda_runtime.h>
 #include <limits>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -83,17 +86,13 @@ namespace lfs::training {
             new_bounds = lfs::core::Tensor::zeros(shape, device);
         }
         if (!zero_all && joint_bounds.is_valid() && joint_bounds.numel() > 0) {
-            // Keep the source alive until the D2D copy finishes. Destroying
-            // joint_bounds immediately after cudaMemcpyAsync races the async read.
-            const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
-            lfs::core::waitForCUDAStream(stream, joint_bounds.stream());
-            lfs::core::waitForCUDAStream(stream, new_bounds.stream());
+            // Retain the prior bounds tensor until its copied prefix is complete.
             const size_t copy_n = std::min(joint_bounds.numel(), new_bounds.numel());
             auto old_bounds = std::move(joint_bounds);
-            LFS_CUDA_CHECK(cudaMemcpyAsync(
-                new_bounds.ptr<float>(), old_bounds.ptr<float>(),
-                copy_n * sizeof(float), cudaMemcpyDeviceToDevice, stream));
-            LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+            new_bounds.flatten().slice(0, 0, copy_n).copy_(old_bounds.flatten().slice(0, 0, copy_n));
+            lfs::core::TensorCompletion completion;
+            completion.include(new_bounds);
+            completion.wait();
             joint_bounds = std::move(new_bounds);
             // old_bounds destroyed after sync
         } else {
@@ -436,8 +435,10 @@ namespace lfs::training {
         }
         for (auto& [_, state] : states_) {
             if (state.grad.is_valid() && state.grad.numel() > 0) {
-                const size_t bytes = state.size * (state.grad.numel() / state.grad.shape()[0]) * sizeof(float);
-                LFS_CUDA_CHECK(cudaMemsetAsync(state.grad.ptr<float>(), 0, bytes, state.grad.stream()));
+                const size_t elements =
+                    state.size * (state.grad.numel() / state.grad.shape()[0]);
+                if (elements > 0)
+                    state.grad.flatten().slice(0, 0, elements).fill_(0.0f, state.grad.stream());
             }
         }
     }
@@ -998,16 +999,13 @@ namespace lfs::training {
                             auto new_bounds = lfs::core::Tensor::zeros_direct(
                                 lfs::core::TensorShape({nb, size_t{4}}), nb_cap, param.device());
                             if (state.joint_bounds.is_valid() && state.joint_bounds.numel() > 0) {
-                                const cudaStream_t bstream = lfs::core::getCurrentCUDAStream();
-                                lfs::core::waitForCUDAStream(bstream, state.joint_bounds.stream());
-                                lfs::core::waitForCUDAStream(bstream, new_bounds.stream());
                                 const size_t copy_n = std::min(state.joint_bounds.numel(),
                                                                new_bounds.numel());
                                 auto old_jb = std::move(state.joint_bounds);
-                                LFS_CUDA_CHECK(cudaMemcpyAsync(
-                                    new_bounds.ptr<float>(), old_jb.ptr<float>(),
-                                    copy_n * sizeof(float), cudaMemcpyDeviceToDevice, bstream));
-                                LFS_CUDA_CHECK(cudaStreamSynchronize(bstream));
+                                new_bounds.flatten().slice(0, 0, copy_n).copy_(old_jb.flatten().slice(0, 0, copy_n));
+                                lfs::core::TensorCompletion completion;
+                                completion.include(new_bounds);
+                                completion.wait();
                                 state.joint_bounds = std::move(new_bounds);
                             } else {
                                 state.joint_bounds = std::move(new_bounds);
@@ -1142,10 +1140,14 @@ namespace lfs::training {
         }
         // Encode true (m,v)=(0,0) under current block bounds (u=0,log_s=0).
         const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
-        const size_t idx_bytes = indices.size() * sizeof(int64_t);
-        int64_t* d_indices = nullptr;
-        LFS_CUDA_CHECK(cudaMallocAsync(&d_indices, idx_bytes, stream));
-        LFS_CUDA_CHECK(cudaMemcpyAsync(d_indices, indices.data(), idx_bytes, cudaMemcpyHostToDevice, stream));
+        if (reset_indices_upload_.pending() && !reset_indices_upload_.poll())
+            reset_indices_upload_.wait();
+        lfs::core::Tensor d_indices_tensor = lfs::core::Tensor::empty(
+            {indices.size()}, lfs::core::Device::GPU, lfs::core::DataType::Int64);
+        d_indices_tensor.set_stream(stream);
+        reset_indices_upload_.enqueue(
+            d_indices_tensor, std::as_bytes(std::span(indices)), reinterpret_cast<void*>(stream));
+        int64_t* const d_indices = d_indices_tensor.ptr<int64_t>();
         lfs::core::waitForCUDAStream(stream, state.exp_avg.stream());
         lfs::core::waitForCUDAStream(stream, state.joint_bounds.stream());
         if (type == ParamType::ShN) {
@@ -1179,7 +1181,6 @@ namespace lfs::training {
             }
         }
         state.exp_avg.set_stream(stream);
-        LFS_CUDA_CHECK(cudaFreeAsync(d_indices, stream));
     }
 
     void AdamOptimizer::extend_state_by_gather(ParamType type, const lfs::core::Tensor& indices) {
@@ -1374,14 +1375,11 @@ namespace lfs::training {
                     state.grad.reserve(moment_cap);
                 if (old_packed.is_valid() && old_packed.numel() > 0 &&
                     state.exp_avg.is_valid() && state.exp_avg.numel() > 0) {
-                    const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
-                    lfs::core::waitForCUDAStream(stream, old_packed.stream());
-                    lfs::core::waitForCUDAStream(stream, state.exp_avg.stream());
-                    const size_t copy_bytes = std::min(old_packed.bytes(), state.exp_avg.bytes());
-                    LFS_CUDA_CHECK(cudaMemcpyAsync(
-                        state.exp_avg.data_ptr(), old_packed.data_ptr(),
-                        copy_bytes, cudaMemcpyDeviceToDevice, stream));
-                    LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                    const size_t copy_n = std::min(old_packed.numel(), state.exp_avg.numel());
+                    state.exp_avg.flatten().slice(0, 0, copy_n).copy_(old_packed.flatten().slice(0, 0, copy_n));
+                    lfs::core::TensorCompletion completion;
+                    completion.include(state.exp_avg);
+                    completion.wait();
                 }
             }
             const size_t prim_n = static_cast<size_t>(splat_data_.size());
@@ -1403,11 +1401,15 @@ namespace lfs::training {
                 for (size_t i = 0; i < n_new; ++i)
                     new_idx[i] = static_cast<int64_t>(old_prims + i);
                 const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
-                int64_t* d_idx = nullptr;
-                const size_t idx_bytes = n_new * sizeof(int64_t);
-                LFS_CUDA_CHECK(cudaMallocAsync(&d_idx, idx_bytes, stream));
-                LFS_CUDA_CHECK(cudaMemcpyAsync(d_idx, new_idx.data(), idx_bytes,
-                                               cudaMemcpyHostToDevice, stream));
+                if (extend_indices_upload_.pending() && !extend_indices_upload_.poll())
+                    extend_indices_upload_.wait();
+                lfs::core::Tensor d_idx_tensor = lfs::core::Tensor::empty(
+                    {n_new}, lfs::core::Device::GPU, lfs::core::DataType::Int64);
+                d_idx_tensor.set_stream(stream);
+                extend_indices_upload_.enqueue(
+                    d_idx_tensor, std::as_bytes(std::span(new_idx)),
+                    reinterpret_cast<void*>(stream));
+                int64_t* const d_idx = d_idx_tensor.ptr<int64_t>();
                 lfs::core::waitForCUDAStream(stream, state.exp_avg.stream());
                 lfs::core::waitForCUDAStream(stream, state.joint_bounds.stream());
                 if (type == ParamType::ShN) {
@@ -1442,7 +1444,6 @@ namespace lfs::training {
                 }
                 state.exp_avg.set_stream(stream);
                 state.joint_bounds.set_stream(stream);
-                LFS_CUDA_CHECK(cudaFreeAsync(d_idx, stream));
             }
             return;
         }
@@ -1608,13 +1609,10 @@ namespace lfs::training {
                         lfs::core::TensorShape({old_floats}), target, param.device(),
                         param.dtype());
                     if (old_floats > 0 && param.is_valid() && param.numel() > 0) {
-                        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
-                        lfs::core::waitForCUDAStream(stream, param.stream());
-                        const size_t nbytes = old_floats * lfs::core::dtype_size(param.dtype());
-                        LFS_CUDA_CHECK(cudaMemcpyAsync(
-                            fresh.data_ptr(), param.data_ptr(), nbytes,
-                            cudaMemcpyDeviceToDevice, stream));
-                        LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                        fresh.flatten().slice(0, 0, old_floats).copy_(param.flatten().slice(0, 0, old_floats));
+                        lfs::core::TensorCompletion completion;
+                        completion.include(fresh);
+                        completion.wait();
                     }
                     param = std::move(fresh);
                 }
@@ -1693,14 +1691,14 @@ namespace lfs::training {
                         alloc_quantized_state(type, state, param_now, moment_cap, prim_cap);
                         if (old_packed.is_valid() && old_packed.numel() > 0 &&
                             state.exp_avg.is_valid()) {
-                            const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
-                            lfs::core::waitForCUDAStream(stream, old_packed.stream());
                             const size_t copy_n =
                                 std::min(old_packed.numel(), state.exp_avg.numel());
-                            LFS_CUDA_CHECK(cudaMemcpyAsync(
-                                state.exp_avg.ptr<uint8_t>(), old_packed.ptr<uint8_t>(),
-                                copy_n * sizeof(uint8_t), cudaMemcpyDeviceToDevice, stream));
-                            LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                            if (copy_n > 0) {
+                                state.exp_avg.flatten().slice(0, 0, copy_n).copy_(old_packed.flatten().slice(0, 0, copy_n));
+                                lfs::core::TensorCompletion completion;
+                                completion.include(state.exp_avg);
+                                completion.wait();
+                            }
                         }
                     }
                     ensure_joint_bounds_capacity(state.joint_bounds, new_N,
@@ -1714,11 +1712,15 @@ namespace lfs::training {
                         for (size_t i = 0; i < n_new; ++i)
                             new_idx[i] = static_cast<int64_t>(old_N + i);
                         const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
-                        int64_t* d_idx = nullptr;
-                        const size_t idx_bytes = n_new * sizeof(int64_t);
-                        LFS_CUDA_CHECK(cudaMallocAsync(&d_idx, idx_bytes, stream));
-                        LFS_CUDA_CHECK(cudaMemcpyAsync(d_idx, new_idx.data(), idx_bytes,
-                                                       cudaMemcpyHostToDevice, stream));
+                        if (add_indices_upload_.pending() && !add_indices_upload_.poll())
+                            add_indices_upload_.wait();
+                        lfs::core::Tensor d_idx_tensor = lfs::core::Tensor::empty(
+                            {n_new}, lfs::core::Device::GPU, lfs::core::DataType::Int64);
+                        d_idx_tensor.set_stream(stream);
+                        add_indices_upload_.enqueue(
+                            d_idx_tensor, std::as_bytes(std::span(new_idx)),
+                            reinterpret_cast<void*>(stream));
+                        int64_t* const d_idx = d_idx_tensor.ptr<int64_t>();
                         const int slots = static_cast<int>(
                             lfs::core::sh_float4_slots_for_rest(layout_rest));
                         if (slots > 0) {
@@ -1736,7 +1738,6 @@ namespace lfs::training {
                             state.exp_avg.set_stream(stream);
                             state.joint_bounds.set_stream(stream);
                         }
-                        LFS_CUDA_CHECK(cudaFreeAsync(d_idx, stream));
                     }
                     LFS_DEBUG_ASSERT_MSG(state.capacity >= state.size,
                                          "add_new_params_gather(shN,joint): capacity < size");
@@ -2088,7 +2089,15 @@ namespace lfs::training {
             upload(state.joint_bounds);
         }
         if (upload_stream != nullptr) {
-            LFS_CUDA_CHECK(cudaStreamSynchronize(upload_stream));
+            lfs::core::TensorCompletion completion;
+            for (const auto& [state_name, state] : loaded_states) {
+                (void)state_name;
+                if (state.exp_avg.is_valid())
+                    completion.include(state.exp_avg);
+                if (state.joint_bounds.is_valid())
+                    completion.include(state.joint_bounds);
+            }
+            completion.wait();
         }
         const auto gpu_upload_finished = std::chrono::steady_clock::now();
 
@@ -2130,12 +2139,10 @@ namespace lfs::training {
             const auto shape = t.shape();
             auto grown = lfs::core::Tensor::zeros_direct(shape, cap_rows, t.device(), t.dtype());
             if (t.numel() > 0 && t.data_ptr() && grown.data_ptr()) {
-                const size_t elem_bytes = lfs::core::dtype_size(t.dtype());
-                if (elem_bytes > 0) {
-                    LFS_CUDA_CHECK(cudaMemcpy(
-                        grown.data_ptr(), t.data_ptr(),
-                        t.numel() * elem_bytes, cudaMemcpyDeviceToDevice));
-                }
+                grown.copy_(t);
+                lfs::core::TensorCompletion completion;
+                completion.include(grown);
+                completion.wait();
             }
             if (!t.name().empty())
                 grown.set_name(t.name());

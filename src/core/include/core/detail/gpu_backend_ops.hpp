@@ -326,6 +326,7 @@ namespace lfs::core {
 
             virtual void synchronize_stream(ExecContext context) = 0;
             virtual void synchronize_device() = 0;
+            virtual void device_barrier() = 0;
             virtual void wait_for(SyncToken token) = 0;
             virtual SyncToken bridge(ExecContext producer, ExecContext consumer) = 0;
             virtual PointerClass classify_pointer(const void* pointer) = 0;
@@ -611,6 +612,7 @@ namespace lfs::core {
             std::unique_ptr<ReadbackBuffer> create_readback_buffer() override;
             void synchronize_stream(ExecContext context) override;
             void synchronize_device() override;
+            void device_barrier() override;
             void wait_for(SyncToken token) override;
             SyncToken bridge(ExecContext producer, ExecContext consumer) override;
             PointerClass classify_pointer(const void* pointer) override;

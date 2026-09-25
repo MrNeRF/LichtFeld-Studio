@@ -5,8 +5,10 @@
 #include "mcmc.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/cuda_error.hpp"
+#include "core/gpu_device_runtime.hpp"
 #include "core/logger.hpp"
 #include "core/sh_value_quant.hpp"
+#include "core/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "kernels/densification_kernels.hpp"
 #include "kernels/mcmc_kernels.hpp"
@@ -761,8 +763,7 @@ namespace lfs::training {
         if (is_refining(iter)) {
             if (_splat_data->_max_screen_share.is_valid() &&
                 _splat_data->_max_screen_share.numel() > 0) {
-                LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(),
-                                   "wait fused adam before screen-share mutate");
+                core::gpu_device_barrier(core::GpuBackend::CUDA);
             }
             const size_t n_clip = static_cast<size_t>(_splat_data->size());
             if (_params && screen_share_cap_active(_params->max_screen_share) &&
@@ -938,8 +939,7 @@ namespace lfs::training {
                     if (param.is_external_storage())
                         return;
                     auto new_param = Tensor::zeros_direct(param.shape(), capacity);
-                    cudaMemcpy(new_param.ptr<float>(), param.ptr<float>(),
-                               param.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
+                    new_param.copy_(param);
                     param = std::move(new_param);
                 };
 
@@ -959,9 +959,7 @@ namespace lfs::training {
                         return;
                     auto new_param = Tensor::zeros_direct(
                         param.shape(), required_capacity, Device::GPU, param.dtype());
-                    cudaMemcpy(new_param.data_ptr(), param.data_ptr(),
-                               param.numel() * dtype_size(param.dtype()),
-                               cudaMemcpyDeviceToDevice);
+                    new_param.copy_(param);
                     param = std::move(new_param);
                 };
 

@@ -1282,6 +1282,10 @@ namespace {
 
 TEST_F(MRNFStrategyTest, ExploreSplitsAreDisjointAndRespectMaxCap) {
     auto splat_data = create_mrnf_test_splat_data();
+    // Exploration gives zero-score rows a positive sampling floor. Restrict
+    // this disjointness test to its three intended parents instead of relying
+    // on random weighted selection to choose them on every run.
+    splat_data.set_frozen_ranges({{.start = 1, .count = 1}, {.start = 4, .count = 4}});
     MRNF strategy(splat_data);
 
     auto opt_params = vanilla_mrnf_params();
@@ -1321,7 +1325,7 @@ TEST_F(MRNFStrategyTest, ExploreSplitsAreDisjointAndRespectMaxCap) {
     strategy.grow_and_split(100, 2);
 
     EXPECT_LE(strategy.active_count(), static_cast<size_t>(opt_params.max_cap));
-    EXPECT_GE(strategy.active_count(), active_before);
+    EXPECT_EQ(strategy.active_count(), active_before + 3);
 
     const auto scales_after = splat_data.scaling_raw().cpu();
     const float* before = scales_before.ptr<float>();
@@ -1332,6 +1336,11 @@ TEST_F(MRNFStrategyTest, ExploreSplitsAreDisjointAndRespectMaxCap) {
     EXPECT_TRUE(row0_split);
     EXPECT_TRUE(row2_split);
     EXPECT_TRUE(row3_split);
+    for (const size_t row : {1u, 4u, 5u, 6u, 7u}) {
+        for (size_t axis = 0; axis < 3; ++axis) {
+            EXPECT_EQ(after[row * 3 + axis], before[row * 3 + axis]);
+        }
+    }
 }
 
 TEST_F(MRNFStrategyTest, FarGrowthCapConstrainsOutsideAllocations) {

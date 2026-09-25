@@ -34,7 +34,9 @@ namespace lfs::core {
     // True while the backend holds device state (a CUDA context, a Vulkan context); never creates it.
     LFS_CORE_API bool gpu_backend_live(GpuBackend backend);
 
-    LFS_CORE_API MemoryInfo gpu_backend_memory_info(GpuBackend backend);
+    // Pool counters are optional because collecting them costs extra runtime queries.
+    LFS_CORE_API MemoryInfo gpu_backend_memory_info(GpuBackend backend,
+                                                    bool include_pool_stats = false);
     LFS_CORE_API lfs::Status shutdown_gpu_backend(GpuBackend backend);
     LFS_CORE_API lfs::Status tensor_backend_selftest(GpuBackend backend);
 

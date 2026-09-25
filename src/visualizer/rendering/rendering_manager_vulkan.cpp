@@ -1984,7 +1984,7 @@ namespace lfs::vis {
 #if LFS_BUILD_TRAINER
                         if (trainer_manager) {
                             if (auto* trainer = trainer_manager->getTrainer()) {
-                                trainer->setViewerReleaseFence(nullptr);
+                                trainer->setViewerReleaseFence(nullptr, {});
                             }
                         }
 #endif
@@ -2294,7 +2294,8 @@ namespace lfs::vis {
             model_read_lock.emplace(std::move(candidate));
         }
         if (live_trainer) {
-            live_trainer->setViewerReleaseFence(vksplat_viewport_renderer_->renderCompleteFence());
+            live_trainer->setViewerReleaseFence(context.vulkan_context->device(),
+                                                {vksplat_viewport_renderer_->renderCompleteTimeline(), 0, {}});
             live_trainer->beginModelRead(lfs::core::getCurrentCUDAStream());
             lfs::training::Trainer* const trainer = live_trainer;
             vksplat_viewport_renderer_->setLiveSubmitCallback(

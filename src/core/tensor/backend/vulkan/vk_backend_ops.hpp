@@ -165,6 +165,7 @@ namespace lfs::core::internal {
         std::unique_ptr<ReadbackBuffer> create_readback_buffer() override;
         void synchronize_stream(ExecContext) override;
         void synchronize_device() override;
+        void device_barrier() override;
         void wait_for(SyncToken) override;
         SyncToken bridge(ExecContext, ExecContext) override;
         PointerClass classify_pointer(const void*) override;

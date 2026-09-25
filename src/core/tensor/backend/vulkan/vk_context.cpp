@@ -1182,6 +1182,30 @@ namespace lfs::core::internal {
         return slot->context;
     }
 
+    int vulkan_device_count() {
+        if (const auto live = try_live_vulkan_context()) {
+            uint32_t count = 0;
+            const VkResult status = vkEnumeratePhysicalDevices(live->instance(), &count, nullptr);
+            if (status != VK_SUCCESS)
+                throw TensorError(std::format("vkEnumeratePhysicalDevices failed: {}", static_cast<int>(status)));
+            return static_cast<int>(count);
+        }
+
+        VkApplicationInfo application{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+        application.pApplicationName = "LichtFeld device discovery";
+        application.apiVersion = VK_API_VERSION_1_3;
+        VkInstance instance = VK_NULL_HANDLE;
+        const VkResult created = create_vulkan_instance(application, {}, {}, nullptr, 0, &instance);
+        if (created != VK_SUCCESS)
+            throw TensorError(std::format("vkCreateInstance for device discovery failed: {}", static_cast<int>(created)));
+        uint32_t count = 0;
+        const VkResult status = vkEnumeratePhysicalDevices(instance, &count, nullptr);
+        vkDestroyInstance(instance, nullptr);
+        if (status != VK_SUCCESS)
+            throw TensorError(std::format("vkEnumeratePhysicalDevices failed: {}", static_cast<int>(status)));
+        return static_cast<int>(count);
+    }
+
     std::shared_ptr<VulkanContext> try_live_vulkan_context() noexcept {
         std::lock_guard lock(g_context_mutex);
         return g_context_slot->context;

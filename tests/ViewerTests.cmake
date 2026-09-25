@@ -7,6 +7,7 @@ add_executable(lichtfeld_viewer_tests
     test_training_disabled.cpp
     test_headless_vulkan_device_selection.cpp
     test_viewer_no_cuda.cpp
+    test_tensor_queue_readback.cpp
     test_tensor_completion.cpp
     test_tensor_point_ops.cpp
     test_tensor_expression.cpp

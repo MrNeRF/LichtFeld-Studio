@@ -3489,6 +3489,10 @@ namespace lfs::core {
         size_t total_bytes = 0;
         size_t allocated_bytes = 0;
         int device_id = -1;
+        size_t pool_used_current = 0;
+        size_t pool_reserved_current = 0;
+        size_t pool_used_high = 0;
+        size_t pool_reserved_high = 0;
 
         static MemoryInfo cuda();
         static MemoryInfo cpu();

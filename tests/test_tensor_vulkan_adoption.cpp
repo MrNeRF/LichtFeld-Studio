@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/error.hpp"
+#include "core/gpu_device_runtime.hpp"
 #include "core/headless_vulkan_device.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
@@ -60,6 +61,7 @@ TEST(TensorVulkanAdoption, BackendRunsOnAnAdoptedDevice) {
     }
     ASSERT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan));
     {
+        EXPECT_GT(gpu_device_count(GpuBackend::Vulkan), 0);
         auto adopted = HeadlessAdoptedDevice::try_create();
         if (!adopted.has_value()) {
             GTEST_SKIP() << "no Vulkan 1.3 device with the tensor backend features";

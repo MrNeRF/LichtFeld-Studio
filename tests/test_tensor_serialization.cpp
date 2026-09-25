@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "core/tensor_serialization.hpp"
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
@@ -322,4 +323,15 @@ TEST_F(TensorSerializationTest, ScalarMatchesLibTorch) {
     const auto lfs_scalar = Tensor::full({}, 42.0f, Device::CPU);
     EXPECT_EQ(lfs_scalar.ndim(), static_cast<size_t>(torch_scalar.dim()));
     EXPECT_EQ(lfs_scalar.numel(), static_cast<size_t>(torch_scalar.numel()));
+}
+
+TEST_F(TensorSerializationTest, PublicReadExactReadsFramedBytes) {
+    std::istringstream stream("frame");
+    char bytes[5]{};
+    serialization_detail::read_exact(stream, bytes, sizeof(bytes), "test frame");
+    EXPECT_EQ(std::string(bytes, sizeof(bytes)), "frame");
+
+    std::istringstream truncated("abc");
+    EXPECT_THROW(serialization_detail::read_exact(truncated, bytes, sizeof(bytes), "test frame"),
+                 std::runtime_error);
 }

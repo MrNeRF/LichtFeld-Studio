@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/cuda/sh_layout.cuh"
+#include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_data_transform.hpp"
@@ -14,6 +14,10 @@
 
 namespace {
     using namespace lfs::core;
+
+    static_assert(kShReorderSize == 32u);
+    static_assert(sh_float4_slots_for_rest(15) == 12u);
+    static_assert(sh_swizzled_byte_count(33, 15) == 2u * 12u * 32u * 4u * sizeof(float));
 
     void expect_equal(const Tensor& expected, const Tensor& actual) {
         const Tensor a = expected.cpu().contiguous();

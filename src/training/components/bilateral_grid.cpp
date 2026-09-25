@@ -11,6 +11,7 @@
 #include "core/logger.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "core/tensor_cuda_interop.hpp"
+#include "core/tensor_serialization.hpp"
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -342,8 +343,7 @@ namespace lfs::training {
         float* grad_grid_ptr = slice_grad_.ptr<float>();
         assert(static_cast<int>(grids_.shape()[1]) == channels_);
 
-        LFS_CUDA_CHECK(cudaMemsetAsync(
-            grad_grid_ptr, 0, slice_elements() * sizeof(float), nullptr));
+        slice_grad_.zero_();
 
         if (layout.chw) {
             auto grad_rgb = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::GPU);
@@ -393,8 +393,7 @@ namespace lfs::training {
         if (image_idx < 0 || image_idx >= num_images_) {
             throw std::out_of_range("BilateralGrid::tv_loss_gpu: image_idx out of range");
         }
-        LFS_CUDA_CHECK(cudaMemsetAsync(
-            tv_loss_scalar_.ptr<float>(), 0, sizeof(float), nullptr));
+        tv_loss_scalar_.zero_();
         kernels::launch_bilateral_grid_tv_forward(
             device_slice(resident_grids_, resident_slot(image_idx)), tv_loss_scalar_.ptr<float>(),
             tv_temp_buffer_.ptr<float>(),
@@ -405,8 +404,7 @@ namespace lfs::training {
 
     void BilateralGrid::tv_backward(float tv_weight) {
         for (int i = 0; i < num_images_; ++i) {
-            LFS_CUDA_CHECK(cudaMemsetAsync(
-                slice_grad_.ptr<float>(), 0, slice_elements() * sizeof(float), nullptr));
+            slice_grad_.zero_();
             tv_backward(tv_weight, i);
         }
     }
@@ -488,8 +486,7 @@ namespace lfs::training {
     }
 
     void BilateralGrid::zero_grad() {
-        LFS_CUDA_CHECK(cudaMemsetAsync(slice_grad_.ptr<float>(), 0,
-                                       slice_grad_.numel() * sizeof(float), nullptr));
+        slice_grad_.zero_();
     }
 
     void BilateralGrid::scheduler_step() {

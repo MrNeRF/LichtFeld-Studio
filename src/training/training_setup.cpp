@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "training_setup.hpp"
-#include "core/cuda/sh_layout.cuh"
 #include "core/error.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
@@ -12,6 +11,7 @@
 #include "core/point_cloud.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
+#include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/shareable_allocation_limit.hpp"
 #include "core/source_site.hpp"

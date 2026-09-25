@@ -8,6 +8,7 @@
 #include "core/error_reporter.hpp"
 #include "core/event_bridge/command_api.hpp"
 #include "core/events.hpp"
+#include "core/gpu_device_runtime.hpp"
 #include "core/guarded_task.hpp"
 #include "core/logger.hpp"
 #include "core/parameter_manager.hpp"
@@ -350,9 +351,9 @@ namespace lfs::vis {
             lfs::core::SplatExportableStorage::growthCapacity(live_estimate, configured_capacity);
         std::size_t reserve_capacity = configured_capacity;
         if (reserve_capacity == 0) {
-            std::size_t free_mem = 0;
-            std::size_t total_mem = 0;
-            if (cudaMemGetInfo(&free_mem, &total_mem) == cudaSuccess && total_mem > 0) {
+            const auto memory = lfs::core::gpu_backend_memory_info(lfs::core::GpuBackend::CUDA);
+            const std::size_t total_mem = memory.total_bytes;
+            if (total_mem > 0) {
                 const std::size_t per_splat =
                     lfs::core::SplatExportableStorage::layoutBytesPerSplat(sh_degree);
                 reserve_capacity = total_mem / std::max<std::size_t>(per_splat, 1);
@@ -484,10 +485,10 @@ namespace lfs::vis {
         // Full cuda-only↔Vulkan rebind is reserved for capacity grow (physical
         // remap). Generation-checked bind handles protect FastGS and Adam
         // readers from stale pointers during densification.
-        if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
-            LOG_ERROR("cudaDeviceSynchronize before densify exportable barrier failed: {} ({})",
-                      cudaGetErrorName(err),
-                      cudaGetErrorString(err));
+        try {
+            lfs::core::gpu_device_barrier(lfs::core::GpuBackend::CUDA);
+        } catch (const std::exception& error) {
+            LOG_ERROR("Device barrier before densify exportable barrier failed: {}", error.what());
             return false;
         }
         exportable_densify_barrier_depth_ = 1;
@@ -502,10 +503,10 @@ namespace lfs::vis {
         if (exportable_densify_barrier_depth_ > 0) {
             return true;
         }
-        if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
-            LOG_ERROR("cudaDeviceSynchronize after densify exportable barrier failed: {} ({})",
-                      cudaGetErrorName(err),
-                      cudaGetErrorString(err));
+        try {
+            lfs::core::gpu_device_barrier(lfs::core::GpuBackend::CUDA);
+        } catch (const std::exception& error) {
+            LOG_ERROR("Device barrier after densify exportable barrier failed: {}", error.what());
             return false;
         }
         return true;
@@ -530,10 +531,10 @@ namespace lfs::vis {
         const auto old_bytes = splat_storage_->region_bytes;
         const std::uint64_t old_generation = splat_storage_->generation();
 
-        if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
-            LOG_ERROR("cudaDeviceSynchronize before exportable grow failed: {} ({})",
-                      cudaGetErrorName(err),
-                      cudaGetErrorString(err));
+        try {
+            lfs::core::gpu_device_barrier(lfs::core::GpuBackend::CUDA);
+        } catch (const std::exception& error) {
+            LOG_ERROR("Device barrier before exportable grow failed: {}", error.what());
             return false;
         }
 

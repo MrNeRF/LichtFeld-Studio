@@ -432,6 +432,7 @@ endfunction()
 if(NOT LFS_HAS_CUDA)
     set(TEST_SOURCES
         test_main.cpp
+        test_tensor_queue_readback.cpp
         test_tensor_vulkan_runtime.cpp
         test_tensor_vulkan_allocation_padding.cpp
         test_tensor_vulkan_adoption.cpp
@@ -795,6 +796,7 @@ set(TEST_FILES
     test_rotated_sh_correctness.cpp
     test_splat_raw_payload.cpp
     test_tensor_stream.cpp
+    test_tensor_queue_readback.cpp
     test_tensor_completion.cpp
     test_tensor_d4_from_blob_stream.cpp
     tensor_hardening_cuda_utils.cu
@@ -869,6 +871,7 @@ list(APPEND TEST_FILES test_viewport_scratch_bucket.cpp)
 list(APPEND TEST_FILES test_lod_page_cache.cpp)
 list(APPEND TEST_FILES test_vulkan_lod_upload_engine.cpp)
 list(APPEND TEST_FILES test_splat_sh_tensor_layout.cpp)
+list(APPEND TEST_FILES test_tensor_device_runtime.cpp)
 list(APPEND TEST_FILES test_octree_lod.cpp)
 list(APPEND TEST_FILES test_ply_to_rad_lod.cpp)
 list(APPEND TEST_FILES test_rad_gpu_encode.cpp)
@@ -933,6 +936,9 @@ target_compile_definitions(lichtfeld_tests PRIVATE
     TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data"
     PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
 )
+if(LFS_TENSOR_VULKAN)
+    target_compile_definitions(lichtfeld_tests PRIVATE LFS_TEST_TENSOR_VULKAN=1)
+endif()
 
 # Large test assets are hosted in the public Cloudflare R2 bucket
 # 'lichtfeld-test-assets' and fetched at configure time. A failed download only

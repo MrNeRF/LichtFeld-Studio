@@ -7,6 +7,7 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
+#include "core/tensor_completion.hpp"
 #include "core/training_churn_metrics.hpp"
 #include "kernels/pruning_kernels.hpp"
 #include "lfs/training/sh_value_storage.hpp"
@@ -89,12 +90,10 @@ namespace lfs::training {
             auto grown = lfs::core::Tensor::zeros_direct(
                 source.shape(), desired_capacity, device, source.dtype());
             if (source.numel() > 0) {
-                const auto stream = grown.stream();
-                source.sync_to_stream(stream);
-                LFS_CUDA_CHECK(cudaMemcpyAsync(
-                    grown.data_ptr(), source.data_ptr(), source.bytes(),
-                    cudaMemcpyDeviceToDevice, stream));
-                LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                grown.flatten().slice(0, 0, source.numel()).copy_(source);
+                lfs::core::TensorCompletion completion;
+                completion.include(grown);
+                completion.wait();
             }
             scores = std::move(grown);
         }
@@ -605,8 +604,7 @@ namespace lfs::training {
                                      ? Tensor::zeros_direct(TensorShape({n}), desired_cap, device)
                                      : Tensor::zeros({n}, device);
                     if (cur > 0) {
-                        cudaMemcpy(fresh.ptr<float>(), scores.ptr<float>(),
-                                   cur * sizeof(float), cudaMemcpyDeviceToDevice);
+                        fresh.slice(0, 0, cur).copy_(scores);
                     }
                     scores = std::move(fresh);
                     return;

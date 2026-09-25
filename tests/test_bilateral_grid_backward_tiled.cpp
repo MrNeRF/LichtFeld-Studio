@@ -203,7 +203,10 @@ namespace {
             GTEST_SKIP() << "missing data/bicycle/images_4/_DSC8679.JPG";
         }
         const auto chw = hwc_to_chw(hwc);
-        const auto gout_hwc = random_grad(hwc.shape(), 11.0f);
+        // Use nonnegative cotangents for the large-image accumulation check so
+        // its relative error is well-conditioned. Signed, cancelling gradients
+        // remain covered by RandomImageMatchesReferenceBothLayouts.
+        const auto gout_hwc = random_grad(hwc.shape(), 11.0f).abs();
         const auto gout_chw = hwc_to_chw(gout_hwc);
 
         {

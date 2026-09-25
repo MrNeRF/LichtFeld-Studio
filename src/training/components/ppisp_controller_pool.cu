@@ -7,6 +7,7 @@
 #include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
+#include "core/tensor_serialization.hpp"
 #include "lfs/kernels/ppisp.cuh"
 #include "ppisp_controller_pool.hpp"
 #include <cassert>

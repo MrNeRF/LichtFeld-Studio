@@ -74,7 +74,10 @@ namespace lfs::training {
 
         static lfs::Status recover_with_sync_status(
             Trainer& trainer, const lfs::Error& cause, const cudaError_t sync_status) {
-            trainer.recovery_sync_for_testing_ = [sync_status] { return sync_status; };
+            trainer.recovery_sync_for_testing_ = [sync_status] {
+                if (sync_status != cudaSuccess)
+                    throw std::runtime_error("injected device barrier failure");
+            };
             auto result = trainer.recover_forward_oom(cause);
             trainer.recovery_sync_for_testing_ = {};
             return result;

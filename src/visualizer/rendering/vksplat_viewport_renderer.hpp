@@ -166,6 +166,7 @@ namespace lfs::vis {
             return static_cast<cudaExternalSemaphore_t>(training_completion_.get());
         }
 #endif
+        [[nodiscard]] void* renderCompleteTimeline() const { return render_complete_timeline_; }
         [[nodiscard]] std::uint64_t renderCompleteValue() const { return last_submitted_render_value_; }
 
         [[nodiscard]] std::expected<void, std::string> ensureHandshakeReady(VulkanContext& context);

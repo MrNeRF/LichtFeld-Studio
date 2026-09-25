@@ -46,6 +46,7 @@ set(TENSOR_SOURCES
         tensor/expression_cache.cpp
         tensor/tensor_fused.cpp
         tensor/tensor_backend.cpp
+        tensor/tensor_gpu_elapsed.cpp
         tensor/tensor_backend_selftest.cpp
         tensor/backend/backend_registry.cpp
         tensor/backend/facade_trace.cpp

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/splat_data.hpp"
+#include "core/tensor_upload.hpp"
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -225,6 +226,9 @@ namespace lfs::training {
         AdamConfig config_;
         lfs::core::SplatData& splat_data_;
         std::unordered_map<std::string, AdamParamState> states_;
+        lfs::core::TensorUpload reset_indices_upload_;
+        lfs::core::TensorUpload extend_indices_upload_;
+        lfs::core::TensorUpload add_indices_upload_;
         lfs::core::Tensor frozen_mask_;
         float frozen_lr_scale_ = 0.0f;
         lfs::core::Tensor crop_damping_mask_;

@@ -313,7 +313,7 @@ namespace lfs::python {
         EXPECT_EQ(after.num_deallocs, before.num_deallocs);
     }
 
-    TEST_F(TrainerConstructionTest, CreatesAndReleasesCudaResourcesForValidScene) {
+    TEST_F(TrainerConstructionTest, DefersLossReadbackAllocationForValidScene) {
         core::Scene scene;
         const core::NodeId cameras = scene.addGroup("Cameras");
         scene.addCamera("camera.png", cameras, make_test_camera());
@@ -322,12 +322,13 @@ namespace lfs::python {
         {
             training::Trainer trainer(scene);
             const auto active = core::PinnedMemoryAllocator::instance().get_stats();
-            EXPECT_GT(active.allocated_bytes, before.allocated_bytes);
+            EXPECT_EQ(active.allocated_bytes, before.allocated_bytes);
         }
 
         const auto after = core::PinnedMemoryAllocator::instance().get_stats();
         EXPECT_EQ(after.allocated_bytes, before.allocated_bytes);
-        EXPECT_GT(after.num_deallocs, before.num_deallocs);
+        EXPECT_EQ(after.num_allocs, before.num_allocs);
+        EXPECT_EQ(after.num_deallocs, before.num_deallocs);
     }
 
     TEST_F(TrainerConstructionTest, ParameterSnapshotsStayGenerationConsistent) {
@@ -488,7 +489,7 @@ namespace lfs::python {
         EXPECT_TRUE(trainer.has_stopped());
     }
 
-    TEST_F(TrainerConstructionTest, ManagerClearReleasesTrainerResourcesAndPoolCache) {
+    TEST_F(TrainerConstructionTest, ManagerClearPreservesDeferredLossReadbackAllocation) {
         core::Scene scene;
         const core::NodeId cameras = scene.addGroup("Cameras");
         scene.addCamera("camera.png", cameras, make_test_camera());
@@ -499,7 +500,7 @@ namespace lfs::python {
         manager.setTrainer(std::make_unique<training::Trainer>(scene));
         const auto active = core::PinnedMemoryAllocator::instance().get_stats();
         ASSERT_TRUE(manager.hasTrainer());
-        EXPECT_GT(active.allocated_bytes, before.allocated_bytes);
+        EXPECT_EQ(active.allocated_bytes, before.allocated_bytes);
 
         ASSERT_TRUE(manager.clearTrainer());
 

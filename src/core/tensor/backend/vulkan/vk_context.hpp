@@ -203,6 +203,7 @@ namespace lfs::core::internal {
     [[nodiscard]] lfs::Status adopt_vulkan_context(const AdoptedDevice& adopted);
     [[nodiscard]] bool vulkan_context_adopted() noexcept;
     [[nodiscard]] std::shared_ptr<VulkanContext> acquire_vulkan_context();
+    [[nodiscard]] int vulkan_device_count();
     [[nodiscard]] std::shared_ptr<VulkanContext> try_live_vulkan_context() noexcept;
     void shutdown_vulkan_context();
 

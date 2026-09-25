@@ -8,12 +8,12 @@
 #include "core/igs_failure_diagnostics.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
+#include "core/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "strategy_utils.hpp"
 
-#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "kernels/densification_kernels.hpp"
 #include "kernels/mcmc_kernels.hpp"
 #include "kernels/mrnf_kernels.hpp"
@@ -739,7 +739,7 @@ namespace lfs::training {
             _edge_sample_count = 0;
             _edge_median_scratch.release();
 
-            lfs::core::CudaMemoryPool::instance().trim_cached_memory();
+            lfs::core::Tensor::trim_device_memory_pool();
         }
     }
 

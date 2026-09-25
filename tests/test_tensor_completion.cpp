@@ -15,8 +15,11 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <atomic>
 #include <chrono>
+#include <cstring>
 #include <future>
+#include <span>
 #include <thread>
 #include <vector>
 
@@ -209,6 +212,44 @@ namespace {
         }
     }
 
+    TEST_P(TensorCompletionBackends, TensorUploadRetainsByteSpanOnExplicitQueue) {
+        if (!gpu_backend_available(GetParam()))
+            GTEST_SKIP() << "Backend unavailable";
+        const GpuBackendScope scope(GetParam());
+        Tensor destination = Tensor::empty({4}, Device::GPU, DataType::Int64);
+        TensorUpload upload;
+        std::array<int64_t, 4> source{};
+        constexpr std::array<std::size_t, 5> sizes{4, 2, 3, 1, 4};
+        cudaStream_t stream = nullptr;
+        void* queue = nullptr;
+        if (GetParam() == GpuBackend::CUDA) {
+            ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
+            queue = stream;
+        }
+        if (GetParam() == GpuBackend::Vulkan) {
+            EXPECT_THROW(upload.enqueue(destination, std::as_bytes(std::span(source)),
+                                        reinterpret_cast<void*>(1)),
+                         std::invalid_argument);
+        }
+        for (std::size_t iteration = 0; iteration < sizes.size(); ++iteration) {
+            const auto count = sizes[iteration];
+            const auto value = static_cast<int64_t>(iteration);
+            source = {3 + value, 5 + value, 7 + value, 11 + value};
+            auto output = destination.slice(0, 0, count);
+            upload.enqueue(output,
+                           std::as_bytes(std::span(source).first(count)),
+                           queue);
+            const std::vector<int64_t> expected(source.begin(), source.begin() + count);
+            source.fill(0);
+            upload.wait();
+            EXPECT_EQ(output.cpu().to_vector_int64(), expected);
+        }
+        if (stream != nullptr) {
+            CudaMemoryPool::instance().release_stream(stream);
+            EXPECT_EQ(cudaStreamDestroy(stream), cudaSuccess);
+        }
+    }
+
     TEST_P(TensorCompletionBackends, CompletionOutlivesItsQueue) {
         if (!gpu_backend_available(GetParam()))
             GTEST_SKIP() << "Backend unavailable";
@@ -254,6 +295,98 @@ namespace {
         }
         CudaMemoryPool::instance().release_stream(stream);
         EXPECT_EQ(cudaStreamDestroy(stream), cudaSuccess);
+    }
+
+    TEST(TensorQueue, ModesAndGpuFenceDoNotWaitOnHost) {
+        if (!gpu_backend_available(GpuBackend::CUDA))
+            GTEST_SKIP();
+        const GpuBackendScope backend(GpuBackend::CUDA);
+        TensorWorkQueue producer(GpuBackend::CUDA, TensorWorkQueue::Mode::LegacyOrdered);
+        TensorWorkQueue consumer(GpuBackend::CUDA);
+        unsigned flags = 0;
+        ASSERT_EQ(cudaStreamGetFlags(static_cast<cudaStream_t>(producer.native_handle()), &flags), cudaSuccess);
+        EXPECT_EQ(flags, cudaStreamDefault);
+        ASSERT_EQ(cudaStreamGetFlags(static_cast<cudaStream_t>(consumer.native_handle()), &flags), cudaSuccess);
+        EXPECT_EQ(flags, cudaStreamNonBlocking);
+        TensorFence fence(GpuBackend::CUDA);
+        lfs::test::CudaStreamGate gate;
+        ASSERT_EQ(gate.block(static_cast<cudaStream_t>(producer.native_handle())), cudaSuccess);
+        ASSERT_TRUE(gate.entered());
+        std::atomic<bool> callback_ran{false};
+        auto submitted = std::async(std::launch::async, [&] {
+            producer.record(fence);
+            consumer.wait_for(fence);
+            consumer.enqueue_host_callback([](void* value) {
+                static_cast<std::atomic<bool>*>(value)->store(true);
+            },
+                                           &callback_ran);
+        });
+        const auto status = submitted.wait_for(1s);
+        EXPECT_FALSE(callback_ran.load());
+        EXPECT_FALSE(fence.ready());
+        EXPECT_FALSE(consumer.ready());
+        gate.release();
+        EXPECT_EQ(status, std::future_status::ready);
+        submitted.get();
+        consumer.wait();
+        EXPECT_TRUE(callback_ran.load());
+        EXPECT_TRUE(fence.ready());
+        // Re-record the same event, then consume that generation on the GPU.
+        producer.record(fence);
+        consumer.wait_for(fence);
+        consumer.wait();
+    }
+
+    TEST(TensorQueue, UnsupportedVulkanOperationsAreExplicit) {
+        EXPECT_THROW(TensorWorkQueue(GpuBackend::Vulkan), std::runtime_error);
+        EXPECT_THROW(TensorFence(GpuBackend::Vulkan), std::runtime_error);
+    }
+
+    TEST(TensorQueue, PackedReadbackPreservesSourceAndDestinationOffsets) {
+        if (!gpu_backend_available(GpuBackend::CUDA))
+            GTEST_SKIP();
+        const GpuBackendScope backend(GpuBackend::CUDA);
+        TensorWorkQueue queue(GpuBackend::CUDA);
+        TensorWorkQueue::Scope scope(queue);
+        TensorReadbackRing ring(GpuBackend::CUDA, 2, 24, queue);
+        auto source = Tensor::from_vector(std::vector<float>{1, 3, 5, 7, 9, 11}, {6}, Device::GPU);
+        // Queue a blocked producer after upload; enqueue/seal/poll must return
+        // while that producer is still blocked, without exposing partial bytes.
+        queue.wait();
+        lfs::test::CudaStreamGate gate;
+        ASSERT_EQ(gate.block(static_cast<cudaStream_t>(queue.native_handle())), cudaSuccess);
+        ASSERT_TRUE(gate.entered());
+        ring.enqueue(source, sizeof(float), 2 * sizeof(float), 0, 4, true);
+        ring.enqueue(source, 4 * sizeof(float), sizeof(float), 0, 16);
+        ring.enqueue(source, 2 * sizeof(float), 2 * sizeof(float), 1, 0);
+        ring.seal(0);
+        ring.seal(1);
+        EXPECT_FALSE(gate.released());
+        EXPECT_FALSE(ring.poll(0));
+        EXPECT_THROW(ring.release(0), std::logic_error);
+        gate.release();
+        source = {};
+        EXPECT_THROW(ring.enqueue(Tensor{}, 0, 0, 0, 0), std::logic_error);
+        ring.wait(0);
+        ring.wait(1);
+        EXPECT_TRUE(ring.poll(0));
+        std::array<float, 6> values{};
+        std::memcpy(values.data(), ring.slot_bytes(0).data(), 24);
+        EXPECT_EQ(values, (std::array<float, 6>{0, 3, 5, 0, 9, 0}));
+        std::memcpy(values.data(), ring.slot_bytes(1).data(), 24);
+        EXPECT_EQ(values[0], 5);
+        EXPECT_EQ(values[1], 7);
+        ring.release(0);
+        ring.release(1);
+        auto next = Tensor::full({3}, 13.f, Device::GPU);
+        EXPECT_THROW(ring.enqueue(next, 12, 1, 0, 0), std::out_of_range);
+        EXPECT_THROW(ring.enqueue(next, 0, 4, 0, 22), std::out_of_range);
+        ring.enqueue(next, 0, 12, 0, 0, true);
+        ring.seal(0);
+        ring.wait(0);
+        std::memcpy(values.data(), ring.slot_bytes(0).data(), 12);
+        EXPECT_EQ(values[0], 13);
+        EXPECT_EQ(values[2], 13);
     }
 
 } // namespace

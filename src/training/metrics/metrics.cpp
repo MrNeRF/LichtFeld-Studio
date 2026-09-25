@@ -9,11 +9,14 @@
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/events.hpp"
+#include "core/gpu_device_runtime.hpp"
+#include "core/gpu_elapsed.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/splat_data.hpp"
+#include "core/tensor_backend.hpp"
 #include "eval_mask.hpp"
 #include "io/cuda/image_format_kernels.cuh"
 #include "lfs/kernels/ssim.cuh"
@@ -598,8 +601,6 @@ namespace lfs::training {
         size_t evaluated_images = 0;
         size_t saved_images = 0;
         std::optional<std::pair<int, int>> lpips_preflight_size;
-        cudaEvent_t lpips_start_event = nullptr;
-        cudaEvent_t lpips_stop_event = nullptr;
         double lpips_elapsed_ms = 0.0;
         std::size_t lpips_timed_images = 0;
 
@@ -621,19 +622,7 @@ namespace lfs::training {
                          lfs::core::path_to_utf8(weights_path), e.what());
             }
         }
-        if (_lpips_metric) {
-            const bool start_created = cudaEventCreate(&lpips_start_event) == cudaSuccess;
-            const bool stop_created = start_created && cudaEventCreate(&lpips_stop_event) == cudaSuccess;
-            if (!start_created || !stop_created) {
-                if (lpips_start_event != nullptr)
-                    cudaEventDestroy(lpips_start_event);
-                if (lpips_stop_event != nullptr)
-                    cudaEventDestroy(lpips_stop_event);
-                lpips_start_event = nullptr;
-                lpips_stop_event = nullptr;
-            }
-        }
-
+        lfs::core::GpuElapsed lpips_timer(lfs::core::GpuBackend::CUDA, 2);
         std::ofstream per_image_csv;
         if (_params.optimization.enable_save_eval_images) {
             if (lfs::core::open_file_for_write(eval_dir / "per_image_metrics.csv", per_image_csv)) {
@@ -743,10 +732,9 @@ namespace lfs::training {
                     const bool size_changed = !lpips_preflight_size || *lpips_preflight_size != image_size;
                     lpips_preflight_size = image_size;
                     const auto required = _lpips_metric->estimated_peak_bytes(image_height, image_width);
-                    std::size_t free_bytes = 0;
-                    std::size_t total_bytes = 0;
-                    const auto status = cudaMemGetInfo(&free_bytes, &total_bytes);
-                    const bool lpips_preflight_ok = status == cudaSuccess && free_bytes >= required;
+                    const std::size_t free_bytes =
+                        lfs::core::gpu_backend_memory_info(lfs::core::GpuBackend::CUDA).free_bytes;
+                    const bool lpips_preflight_ok = free_bytes >= required && free_bytes != 0;
                     if (!lpips_preflight_ok && size_changed) {
                         const auto shortfall = required > free_bytes ? required - free_bytes : 0;
                         LOG_WARN("Eval: LPIPS skipped for this image size; tile={} required={} free={} shortfall={} bytes",
@@ -758,21 +746,18 @@ namespace lfs::training {
                     }
                     if (lpips_preflight_ok) {
                         const cudaStream_t lpips_stream = pred_lpips.stream();
-                        const bool timed_lpips = lpips_start_event != nullptr &&
-                                                 cudaEventRecord(lpips_start_event, lpips_stream) == cudaSuccess;
+                        const bool timed_lpips = lpips_timer.mark(0, lpips_stream);
                         auto value = _lpips_metric->forward(
                             pred_lpips, target_lpips,
                             lfs::core::nn::models::InputScaling::Identity);
                         const bool lpips_event_complete =
-                            timed_lpips && cudaEventRecord(lpips_stop_event, lpips_stream) == cudaSuccess &&
-                            cudaEventSynchronize(lpips_stop_event) == cudaSuccess;
+                            timed_lpips && lpips_timer.mark(1, lpips_stream) &&
+                            lpips_timer.wait_event(1);
                         if (value && std::isfinite(*value)) {
                             if (lpips_event_complete) {
-                                float elapsed_ms = 0.0f;
-                                if (cudaEventElapsedTime(&elapsed_ms, lpips_start_event, lpips_stop_event) ==
-                                        cudaSuccess &&
-                                    std::isfinite(elapsed_ms)) {
-                                    lpips_elapsed_ms += elapsed_ms;
+                                const auto elapsed_ms = lpips_timer.milliseconds(0, 1);
+                                if (elapsed_ms && std::isfinite(*elapsed_ms)) {
+                                    lpips_elapsed_ms += *elapsed_ms;
                                     lpips_timed_images++;
                                 }
                             }
@@ -947,10 +932,6 @@ namespace lfs::training {
         if (per_image_csv)
             per_image_csv.close();
 
-        if (lpips_start_event != nullptr)
-            cudaEventDestroy(lpips_start_event);
-        if (lpips_stop_event != nullptr)
-            cudaEventDestroy(lpips_stop_event);
         if (lpips_timed_images > 0) {
             LOG_DEBUG("Eval: LPIPS-only {:.3f} ms/image over {} images",
                       lpips_elapsed_ms / static_cast<double>(lpips_timed_images), lpips_timed_images);

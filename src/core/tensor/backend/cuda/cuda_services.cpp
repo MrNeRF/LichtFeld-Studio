@@ -409,6 +409,10 @@ namespace lfs::core {
             device_fault_registry_consume_or_throw(LFS_SOURCE_SITE_CURRENT(), true);
         }
 
+        void CudaBackendOps::device_barrier() {
+            LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(), "tensor device barrier");
+        }
+
         void CudaBackendOps::wait_for(const SyncToken token) {
             LFS_ASSERT_MSG(token.backend == GpuBackend::CUDA,
                            "CUDA sync service received a non-CUDA token");

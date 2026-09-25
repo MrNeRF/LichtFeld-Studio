@@ -12,8 +12,13 @@
 #include "core/cuda_error.hpp"
 #include "core/device_fault.hpp"
 #include "core/gpu_device_info.hpp"
+#include "core/gpu_device_runtime.hpp"
 #include "core/logger.hpp"
+#include "core/pinned_allocator_stats.hpp"
 #include "internal/tensor_impl.hpp"
+#if LFS_HAS_CUDA
+#include "core/pinned_memory_allocator.hpp"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -61,6 +66,42 @@ namespace lfs::core::tensor_ops {
 } // namespace lfs::core::tensor_ops
 
 namespace lfs::core {
+    void gpu_device_barrier(const GpuBackend backend) {
+        internal::backend_ops(backend).device_barrier();
+    }
+
+    int gpu_device_count(const GpuBackend backend) {
+        if (backend == GpuBackend::CUDA) {
+#if LFS_HAS_CUDA
+            int count = 0;
+            LFS_CUDA_CHECK_MSG(cudaGetDeviceCount(&count), "tensor CUDA device count");
+            return count;
+#else
+            return 0;
+#endif
+        }
+#ifdef LFS_TENSOR_VULKAN
+        if (backend == GpuBackend::Vulkan) {
+            return internal::vulkan_device_count();
+        }
+#endif
+        return 0;
+    }
+
+    std::optional<size_t> reserved_allocation_bytes(const Tensor& tensor) {
+        (void)tensor;
+        return std::nullopt;
+    }
+
+    PinnedAllocatorStats pinned_allocator_stats() {
+#if LFS_HAS_CUDA
+        const auto stats = PinnedMemoryAllocator::instance().get_stats();
+        return {stats.allocated_bytes, stats.cached_bytes};
+#else
+        return {};
+#endif
+    }
+
     Tensor Tensor::empty_like(const Tensor& other, const TensorShape& shape, DataType dtype) {
         return internal::allocate_like(other, shape, dtype);
     }
@@ -408,10 +449,31 @@ namespace lfs::core {
         scoped_backend = previous_;
     }
 
-    MemoryInfo gpu_backend_memory_info(const GpuBackend backend) {
+    MemoryInfo gpu_backend_memory_info(const GpuBackend backend, const bool include_pool_stats) {
         if (backend == GpuBackend::CUDA) {
 #if LFS_HAS_CUDA
-            return MemoryInfo::cuda();
+            MemoryInfo result = MemoryInfo::cuda();
+#if CUDART_VERSION >= 12080
+            if (include_pool_stats) {
+                int device = 0;
+                cudaMemPool_t pool = nullptr;
+                if (cudaGetDevice(&device) == cudaSuccess &&
+                    cudaDeviceGetDefaultMemPool(&pool, device) == cudaSuccess && pool != nullptr) {
+                    uint64_t value = 0;
+                    if (cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemCurrent, &value) == cudaSuccess)
+                        result.pool_used_current = static_cast<size_t>(value);
+                    if (cudaMemPoolGetAttribute(pool, cudaMemPoolAttrReservedMemCurrent, &value) == cudaSuccess)
+                        result.pool_reserved_current = static_cast<size_t>(value);
+                    if (cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemHigh, &value) == cudaSuccess)
+                        result.pool_used_high = static_cast<size_t>(value);
+                    if (cudaMemPoolGetAttribute(pool, cudaMemPoolAttrReservedMemHigh, &value) == cudaSuccess)
+                        result.pool_reserved_high = static_cast<size_t>(value);
+                }
+            }
+#else
+            (void)include_pool_stats;
+#endif
+            return result;
 #else
             return {};
 #endif
