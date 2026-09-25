@@ -61,7 +61,8 @@ namespace lfs::training {
         lfs::core::Tensor shN;       // swizzled 1D SH-rest buffer
         lfs::core::Tensor bg_color;  // [3] or [C, 3]
 
-        // Camera pointers (kept alive by K_tensor)
+        // Retain camera storage until backward and its readers finish.
+        lfs::core::Tensor world_view_transform;
         const float* viewmat_ptr = nullptr; // [C, 4, 4]
         const float* K_ptr = nullptr;       // [C, 3, 3]
         lfs::core::Tensor K_tensor;         // Keeps K_ptr alive

@@ -1739,3 +1739,54 @@ TEST_F(GsplatRasterizerTest, BackwardJoinsAuxiliaryProducersAndOutputs) {
     forward.wait();
     release_gsplat_rasterizer_thread_local_caches();
 }
+
+TEST_F(GsplatRasterizerTest, ForwardJoinsCameraTransformAndRetainsItForBackward) {
+    TensorWorkQueue render(GpuBackend::CUDA), producer(GpuBackend::CUDA), backward(GpuBackend::CUDA);
+    TensorWorkQueue::Scope scope(render);
+    auto camera = std::make_unique<Camera>(make_camera(64, 64));
+    auto splat = make_visible_splat(32);
+    auto bg = Tensor::zeros({3}, Device::GPU);
+    AdamConfig config;
+    config.initial_capacity = 64;
+    AdamOptimizer optimizer(*splat, config);
+    optimizer.allocate_gradients(64);
+    auto reference = gsplat_rasterize_forward(*camera, *splat, bg);
+    ASSERT_TRUE(reference.has_value()) << reference.error();
+    auto expected = reference->first.image.cpu();
+    release_ctx_arena(reference->second);
+    auto transform = camera->world_view_transform();
+    auto saved = transform.clone();
+    auto* destination = transform.ptr<float>();
+    const auto* source = saved.ptr<float>();
+    ASSERT_EQ(cudaMemsetAsync(destination, 0, transform.bytes(),
+                              static_cast<cudaStream_t>(render.native_handle())),
+              cudaSuccess);
+    render.wait();
+    {
+        TensorWorkQueue::Scope producer_scope(producer);
+        transform.set_stream(static_cast<cudaStream_t>(producer.native_handle()));
+        ASSERT_EQ(tensor_hardening::launch_delay_kernel(
+                      static_cast<cudaStream_t>(producer.native_handle()), 150000000),
+                  cudaSuccess);
+        ASSERT_EQ(cudaMemcpyAsync(destination, source, transform.bytes(), cudaMemcpyDeviceToDevice,
+                                  static_cast<cudaStream_t>(producer.native_handle())),
+                  cudaSuccess);
+    }
+    auto result = gsplat_rasterize_forward(*camera, *splat, bg);
+    ASSERT_TRUE(result.has_value()) << result.error();
+    auto actual = result->first.image.cpu();
+    EXPECT_EQ(std::memcmp(expected.ptr<float>(), actual.ptr<float>(), expected.bytes()), 0);
+    camera.reset();
+    transform = {};
+    auto gradient = Tensor::ones_like(result->first.image);
+    auto alpha_gradient = Tensor::zeros_like(result->first.alpha);
+    {
+        TensorWorkQueue::Scope backward_scope(backward);
+        gsplat_rasterize_backward(result->second, gradient, alpha_gradient, *splat, optimizer);
+        EXPECT_TRUE(optimizer.get_grad(ParamType::Means).isfinite().all().item<bool>());
+    }
+    producer.wait();
+    backward.wait();
+    render.wait();
+    release_gsplat_rasterizer_thread_local_caches();
+}

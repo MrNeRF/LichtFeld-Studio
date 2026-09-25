@@ -128,7 +128,7 @@ namespace lfs::training {
             const uint32_t image_width = (tile_width > 0) ? static_cast<uint32_t>(tile_width) : full_image_width;
             const uint32_t image_height = (tile_height > 0) ? static_cast<uint32_t>(tile_height) : full_image_height;
 
-            const float* viewmat_ptr = viewpoint_camera.world_view_transform_ptr();
+            auto world_view_transform = viewpoint_camera.world_view_transform();
 
             // Prepared undistortion already supplies pinhole intrinsics and undistorted images.
             // Ignore the retained camera model and coefficients to avoid applying distortion twice.
@@ -179,12 +179,10 @@ namespace lfs::training {
 
             core::pin_operands({&means, &opacities, &scales, &quats, &sh0, &shN});
 
-            // Current-stream-first (the caller's guard), tensor stream as
-            // fallback — matches the lib-wide rule and the begin_frame stream,
-            // so a metrics-thread render lands its kernels and consumers on the
-            // same stream as the arena frame.
+            // Camera and model inputs share the forward execution queue.
             const cudaStream_t fwd_stream = core::getCurrentCUDAStream();
-            core::prepare_inputs_for_stream({&means, &opacities, &scales, &quats, &sh0, &shN}, fwd_stream);
+            core::prepare_inputs_for_stream({&means, &opacities, &scales, &quats, &sh0, &shN, &world_view_transform}, fwd_stream);
+            const float* viewmat_ptr = world_view_transform.ptr<float>();
 
             const std::array<float, 9> K_host = {
                 k00, 0.0f, k02,
@@ -581,6 +579,7 @@ namespace lfs::training {
             ctx.shN = shN_dequant_temp.is_valid() ? shN_dequant_temp : shN;
 
             // Store camera pointers
+            ctx.world_view_transform = std::move(world_view_transform);
             ctx.viewmat_ptr = viewmat_ptr;
             ctx.K_ptr = K_ptr;
             ctx.K_tensor = K_tensor;
@@ -655,7 +654,7 @@ namespace lfs::training {
         core::bridgeStreams(ctx.stream, stream);
         for (const auto* input : std::initializer_list<const core::Tensor*>{&grad_image, &grad_alpha, &ctx.means, &ctx.quats,
                                                                             &ctx.scales, &ctx.opacities, &ctx.sh0, &ctx.shN,
-                                                                            &ctx.bg_image, &ctx.bg_color, &pixel_error_map, &edge_weight_map}) {
+                                                                            &ctx.bg_image, &ctx.bg_color, &ctx.world_view_transform, &pixel_error_map, &edge_weight_map}) {
             if (input->is_valid())
                 input->sync_to_stream(stream);
         }
