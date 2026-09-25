@@ -7,6 +7,8 @@
 #include "core/image_loader.hpp"
 #include "core/parameters.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_cuda_interop.hpp"
+#include "core/tensor_upload.hpp"
 #include "cuda_backend_test.hpp"
 #include "io/cache_image_loader.hpp"
 #include "training/kernels/mask_preprocess.hpp"
@@ -472,4 +474,18 @@ TEST_F(MetricsEvalMask, MovedCameraPreservesMaskCacheProcessingKey) {
         expect_keep(destination->load_and_get_mask(0, 0, false, 0.5f, true),
                     {1, 0, 1, 0}, "non-inverted load after move");
     }
+}
+
+TEST_F(MetricsEvalMask, RgbaPreprocessingUsesExecutionQueue) {
+    lfs::core::TensorWorkQueue queue(lfs::core::GpuBackend::CUDA);
+    lfs::core::TensorWorkQueue::Scope scope(queue);
+    UniqueTempDir tmp("lfs_eval_mask_stream");
+    const auto path = tmp.path() / "rgba.png";
+    write_rgba_png(path, {kBandBytes.begin(), kBandBytes.end()}, kBandH, kBandW);
+    auto camera = make_camera(path, {}, kBandW, kBandH);
+    const auto loaded = load_alpha_masked_metrics_inputs(*camera, sai_config());
+    ASSERT_TRUE(loaded.has_value()) << loaded.error();
+    EXPECT_EQ(loaded->gt_image.stream(), queue.native_handle());
+    EXPECT_EQ(loaded->mask.stream(), queue.native_handle());
+    expect_keep(loaded->mask, {kExpectedKeep.begin(), kExpectedKeep.end()}, "scoped RGBA");
 }
