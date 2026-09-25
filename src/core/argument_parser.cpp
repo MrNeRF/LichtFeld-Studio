@@ -4,6 +4,7 @@
 
 #include "core/argument_parser.hpp"
 #include "core/environment.hpp"
+#include "core/error.hpp"
 #include "core/logger.hpp"
 #include "core/optimization_properties.hpp"
 #include "core/parameters.hpp"
@@ -184,7 +185,7 @@ namespace {
 
     // Each --eval-steps value may hold several comma-separated iterations; the
     // result is sorted and free of duplicates.
-    std::expected<std::vector<size_t>, std::string> parse_eval_steps(const std::vector<std::string>& values) {
+    lfs::Result<std::vector<size_t>> parse_eval_steps(const std::vector<std::string>& values) {
         std::vector<size_t> steps;
         for (const auto& value : values) {
             std::string_view rest = value;
@@ -198,8 +199,13 @@ namespace {
                 size_t step = 0;
                 const auto [end, error] = std::from_chars(token.data(), token.data() + token.size(), step);
                 if (token.empty() || error != std::errc{} || end != token.data() + token.size() || step == 0)
-                    return std::unexpected(std::format(
-                        "Invalid --eval-steps '{}'. Use positive iterations, e.g. 1000,7000,30000", value));
+                    return lfs::make_error(lfs::ErrorInit{
+                        .code = lfs::ErrorCode::InvalidArgument,
+                        .domain = lfs::ErrorDomain::Core,
+                        .user_message = std::format(
+                            "Invalid --eval-steps '{}'. Use positive iterations, e.g. 1000,7000,30000", value),
+                        .detection = LFS_SOURCE_SITE_CURRENT(),
+                    });
                 steps.push_back(step);
                 if (comma == std::string_view::npos)
                     break;
@@ -1269,7 +1275,7 @@ namespace {
             if (cli_option_present({"--eval-steps"})) {
                 auto steps = parse_eval_steps(::args::get(eval_steps));
                 if (!steps)
-                    return std::unexpected(steps.error());
+                    return std::unexpected(std::string(steps.error().user_message()));
                 eval_steps_val = std::move(*steps);
             }
 
