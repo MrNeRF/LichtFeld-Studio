@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
+#include <external/fast_float/include/fast_float/fast_float.h>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -36,6 +37,7 @@
 #include <system_error>
 #include <tbb/parallel_for.h>
 #include <tbb/task_group.h>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -300,7 +302,13 @@ namespace lfs::io {
                 return false;
             }
 
-            const auto parsed = std::from_chars(cur, end, value);
+            // Floating-point std::from_chars needs macOS 26; fast_float parses decimals identically.
+            const auto parsed = [&] {
+                if constexpr (std::is_floating_point_v<T>)
+                    return fast_float::from_chars(cur, end, value);
+                else
+                    return std::from_chars(cur, end, value);
+            }();
             if (parsed.ec != std::errc{}) {
                 return false;
             }

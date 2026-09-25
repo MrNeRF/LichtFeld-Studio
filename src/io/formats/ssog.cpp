@@ -17,6 +17,7 @@
 #include <chrono>
 #include <climits>
 #include <cmath>
+#include <external/fast_float/include/fast_float/fast_float.h>
 #include <fstream>
 #include <map>
 #include <mutex>
@@ -543,7 +544,7 @@ namespace lfs::io {
                 if (ec != std::errc{})
                     throw std::runtime_error("Cannot encode manifest number");
                 double rounded;
-                std::from_chars(buf, end, rounded);
+                fast_float::from_chars(buf, end, rounded);
                 if (std::trunc(rounded) == rounded && std::abs(rounded) < 9e18)
                     j = static_cast<int64_t>(rounded);
                 else
