@@ -105,6 +105,34 @@ namespace lfs::core::internal {
         };
         static_assert(sizeof(ChainOp) == 16 && sizeof(ChainParams) == 24 + 16 * 16);
 
+        // A fused chain specializes its kernel on the op kinds (function
+        // constants 8 to 11); tensor operands are read through their addresses.
+        struct FusedChain {
+            uint32_t length = 0;
+            std::array<uint32_t, 3> kinds{};
+            std::array<ChainOp, tensor_ops::FUSED_POINTWISE_MAX_OPS> ops{};
+            // Every tensor operand allows four-wide access.
+            bool aligned = true;
+        };
+
+        API_AVAILABLE(macos(26.0))
+        FusedChain fused_chain(Context& context, const tensor_ops::FusedPointwiseOpChain& chain) {
+            LFS_ASSERT_MSG(chain.num_ops > 0 && chain.num_ops <= tensor_ops::FUSED_POINTWISE_MAX_OPS,
+                           "Metal fused chains hold 1 to 16 operations");
+            FusedChain result{.length = static_cast<uint32_t>(chain.num_ops)};
+            for (int i = 0; i < chain.num_ops; ++i) {
+                const auto& op = chain.ops[i];
+                result.kinds[i / 6] |= static_cast<uint32_t>(op.kind & 31u) << (5 * (i % 6));
+                result.ops[i].scalar = op.scalar;
+                if (op.kind < 4 || op.kind > 7)
+                    continue;
+                const auto rhs_at = context.locate(op.rhs);
+                result.ops[i].rhs_address = rhs_at.address + rhs_at.offset;
+                result.aligned = result.aligned && result.ops[i].rhs_address % 16 == 0;
+            }
+            return result;
+        }
+
         struct FillParams {
             uint64_t output_offset;
             uint64_t pattern;
@@ -249,11 +277,212 @@ namespace lfs::core::internal {
             return dims;
         }
 
+        // Stages of the reduce kernel, as in vk_ops_reduce.cpp.
+        constexpr uint32_t kPartialMode = 0, kSegmentedMode = 2, kStridedMode = 3;
+        constexpr size_t kMaxPartials = 1024;
+        constexpr size_t kElementsPerPartial = kThreadgroupWidth * 8;
+        constexpr size_t kSingleGroupFullReduce = 4096;
+        constexpr size_t kSegmentedThreshold = 64;
+        constexpr size_t kSplitOutputLimit = 4096;
+        constexpr size_t kSplitReduceThreshold = 1024;
+        constexpr size_t kMaxSplits = 64;
+
         struct ReduceParams {
             uint64_t input_offset;
+            uint64_t output_offset;
+            uint32_t outer;
+            uint32_t reduce;
+            uint32_t inner;
             uint32_t count;
-            uint32_t padding;
+            uint32_t split_chunk;
+            float mean_scale;
+            std::array<ChainOp, tensor_ops::FUSED_POINTWISE_MAX_OPS> ops;
         };
+        static_assert(sizeof(ReduceParams) == 40 + 16 * 16);
+
+        bool logical_op(const ReduceOp op) {
+            return op == ReduceOp::Any || op == ReduceOp::All;
+        }
+
+        uint32_t element_code(const DataType dtype) {
+            LFS_ASSERT_MSG(dtype == DataType::Float32 || dtype == DataType::Int32 || dtype == DataType::Int64 ||
+                               dtype == DataType::UInt8 || dtype == DataType::Bool,
+                           "Metal reduction received an unsupported dtype");
+            return static_cast<uint32_t>(dtype);
+        }
+
+        // Partials keep the accumulator: (sum, compensation) pairs for float
+        // sums, floats for the other float ops, int64 for everything else.
+        uint32_t partial_code(const DataType input, const ReduceOp op) {
+            if (input != DataType::Float32 || logical_op(op))
+                return element_code(DataType::Int64);
+            return op == ReduceOp::Sum || op == ReduceOp::Mean ? metal::kPairDType : element_code(DataType::Float32);
+        }
+
+        float mean_scale_for(const ReduceOp op, const size_t reduce) {
+            return op == ReduceOp::Mean ? 1.0f / static_cast<float>(reduce) : 1.0f;
+        }
+
+        // Operands of a reduction: its input and, for a fused transform, the
+        // chain and the tensors the chain reads.
+        struct ReduceSource {
+            StorageRef input;
+            uint32_t code;
+            const FusedChain* chain = nullptr;
+            std::span<const StorageRef> operands;
+        };
+
+        struct ReduceStage {
+            ReduceOp op;
+            uint32_t mode;
+            uint32_t output_code;
+            StorageRef output;
+            MTLSize groups;
+            ReduceParams params{};
+        };
+
+        API_AVAILABLE(macos(26.0))
+        void encode_reduce_stage(Context& context, const ReduceSource& source, ReduceStage stage) {
+            LFS_ASSERT_MSG(static_cast<uint8_t>(stage.op) <= static_cast<uint8_t>(ReduceOp::All),
+                           "Metal reduction received an unsupported operation");
+            const auto input_at = context.locate(source.input);
+            const auto output_at = context.locate(stage.output);
+            stage.params.input_offset = input_at.offset;
+            stage.params.output_offset = output_at.offset;
+            const FusedChain none{};
+            const FusedChain& chain = source.chain != nullptr ? *source.chain : none;
+            stage.params.ops = chain.ops;
+            const auto pipeline = context.pipeline(
+                "reduce", {{1, source.code}, {2, stage.output_code}, {6, static_cast<uint32_t>(stage.op)},
+                           {8, chain.length}, {9, chain.kinds[0]}, {10, chain.kinds[1]}, {11, chain.kinds[2]},
+                           {16, stage.mode}});
+            std::vector<StorageRef> uses{source.input, stage.output};
+            uses.insert(uses.end(), source.operands.begin(), source.operands.end());
+            context.dispatch(uses, {.pipeline = pipeline,
+                                    .buffers = {input_at.address, output_at.address},
+                                    .params = param_bytes(stage.params),
+                                    .grid = stage.groups,
+                                    .group_size = MTLSizeMake(kThreadgroupWidth, 1, 1)});
+        }
+
+        // Reduces count contiguous elements into output[0]; large inputs go
+        // through per-threadgroup partials, so the result is order-deterministic.
+        API_AVAILABLE(macos(26.0))
+        void reduce_full(Context& context, const ReduceOp op, const ReduceSource& source, const size_t count,
+                         const StorageRef output, const DataType output_dtype) {
+            if (count == 0)
+                return;
+            const uint32_t count32 = checked_u32(count, "Metal reduction count exceeds uint32");
+            if (count <= kSingleGroupFullReduce) {
+                encode_reduce_stage(context, source,
+                                    {.op = op, .mode = kSegmentedMode, .output_code = element_code(output_dtype),
+                                     .output = output, .groups = MTLSizeMake(1, 1, 1),
+                                     .params = {.outer = 1, .reduce = count32, .inner = 1,
+                                                .mean_scale = mean_scale_for(op, count)}});
+                return;
+            }
+            const size_t groups = std::min(kMaxPartials, (count + kElementsPerPartial - 1) / kElementsPerPartial);
+            const uint32_t partial = partial_code(source.input.dtype, op);
+            const StorageRef partials = context.allocate(groups * sizeof(int64_t));
+            encode_reduce_stage(context, source,
+                                {.op = op, .mode = kPartialMode, .output_code = partial, .output = partials,
+                                 .groups = MTLSizeMake(groups, 1, 1), .params = {.count = count32, .mean_scale = 1.0f}});
+            encode_reduce_stage(context, {.input = partials, .code = partial},
+                                {.op = op, .mode = kSegmentedMode, .output_code = element_code(output_dtype),
+                                 .output = output, .groups = MTLSizeMake(1, 1, 1),
+                                 .params = {.outer = 1, .reduce = static_cast<uint32_t>(groups), .inner = 1,
+                                            .mean_scale = mean_scale_for(op, count)}});
+            context.release(partials);
+        }
+
+        // Reduces the middle extent of an (outer, reduce, inner) view into
+        // outer * inner outputs.
+        API_AVAILABLE(macos(26.0))
+        void reduce_axes(Context& context, const ReduceOp op, const ReduceSource& source, const StorageRef output,
+                         const DataType output_dtype, const size_t outer, const size_t reduce, const size_t inner) {
+            if (outer == 0 || reduce == 0 || inner == 0)
+                return;
+            if (outer == 1 && inner == 1) {
+                reduce_full(context, op, source, reduce, output, output_dtype);
+                return;
+            }
+            const uint32_t outer32 = checked_u32(outer, "Metal reduction outer size exceeds uint32");
+            const uint32_t reduce32 = checked_u32(reduce, "Metal reduction size exceeds uint32");
+            const uint32_t inner32 = checked_u32(inner, "Metal reduction inner size exceeds uint32");
+            const float mean_scale = mean_scale_for(op, reduce);
+            if (inner == 1 && reduce >= kSegmentedThreshold) {
+                encode_reduce_stage(context, source,
+                                    {.op = op, .mode = kSegmentedMode, .output_code = element_code(output_dtype),
+                                     .output = output, .groups = MTLSizeMake(outer, 1, 1),
+                                     .params = {.outer = outer32, .reduce = reduce32, .inner = 1, .mean_scale = mean_scale}});
+                return;
+            }
+            const size_t outputs = outer * inner;
+            const size_t output_groups = (checked_u32(outputs, "Metal reduction output count exceeds uint32") +
+                                          kThreadgroupWidth - 1) / kThreadgroupWidth;
+            // Few outputs over a long reduce extent starve the GPU of threads, so
+            // the range splits across grid rows into partials that a second
+            // strided pass folds.
+            const size_t splits = outputs < kSplitOutputLimit && reduce >= kSplitReduceThreshold
+                                      ? std::min(kMaxSplits, (reduce + kThreadgroupWidth - 1) / kThreadgroupWidth)
+                                      : 1;
+            if (splits == 1) {
+                encode_reduce_stage(context, source,
+                                    {.op = op, .mode = kStridedMode, .output_code = element_code(output_dtype),
+                                     .output = output, .groups = MTLSizeMake(output_groups, 1, 1),
+                                     .params = {.outer = outer32, .reduce = reduce32, .inner = inner32,
+                                                .split_chunk = reduce32, .mean_scale = mean_scale}});
+                return;
+            }
+            const uint32_t partial = partial_code(source.input.dtype, op);
+            const StorageRef partials = context.allocate(splits * outputs * sizeof(int64_t));
+            encode_reduce_stage(context, source,
+                                {.op = op, .mode = kStridedMode, .output_code = partial, .output = partials,
+                                 .groups = MTLSizeMake(output_groups, splits, 1),
+                                 .params = {.outer = outer32, .reduce = reduce32, .inner = inner32,
+                                            .split_chunk = static_cast<uint32_t>((reduce + splits - 1) / splits),
+                                            .mean_scale = 1.0f}});
+            encode_reduce_stage(context, {.input = partials, .code = partial},
+                                {.op = op, .mode = kStridedMode, .output_code = element_code(output_dtype),
+                                 .output = output, .groups = MTLSizeMake(output_groups, 1, 1),
+                                 .params = {.outer = 1, .reduce = static_cast<uint32_t>(splits),
+                                            .inner = static_cast<uint32_t>(outputs),
+                                            .split_chunk = static_cast<uint32_t>(splits), .mean_scale = mean_scale}});
+            context.release(partials);
+        }
+
+        // Axes that are not one contiguous run: the kept axes are permute-copied
+        // to the front, so the contiguous path, with its splits, does the work.
+        API_AVAILABLE(macos(26.0))
+        void reduce_general(Context& context, const ReduceOp op, const StorageRef input, const StorageRef output,
+                            const DataType output_dtype, const StridedLayout& layout, const uint32_t reduced_mask) {
+            size_t outputs = 1, reduce = 1, stride = 1;
+            std::array<size_t, MAX_TENSOR_RANK> strides{};
+            for (size_t axis = layout.rank; axis-- > 0;) {
+                strides[axis] = stride;
+                stride *= layout.dims[axis];
+                ((reduced_mask >> axis) & 1u ? reduce : outputs) *= layout.dims[axis];
+            }
+            if (outputs == 0 || reduce == 0)
+                return;
+            StridedLayout permuted{.rank = layout.rank, .element_count = layout.element_count};
+            size_t position = 0;
+            for (const bool reduced_pass : {false, true}) {
+                for (size_t axis = 0; axis < layout.rank; ++axis) {
+                    if ((((reduced_mask >> axis) & 1u) != 0u) == reduced_pass) {
+                        permuted.dims[position] = layout.dims[axis];
+                        permuted.strides[position] = strides[axis];
+                        ++position;
+                    }
+                }
+            }
+            StorageRef scratch = context.allocate(layout.element_count * dtype_size(input.dtype));
+            scratch.dtype = input.dtype;
+            encode_strided(input, scratch, permuted, false, input.dtype, input.dtype);
+            reduce_axes(context, op, {.input = scratch, .code = element_code(input.dtype)}, output, output_dtype,
+                        outputs, reduce, 1);
+            context.release(scratch);
+        }
 
         // The kernel's IEEE rules for folding the per-threadgroup partials on
         // the host: first NaN wins, and equal zeros follow the sign rule.
@@ -271,41 +500,31 @@ namespace lfs::core::internal {
         // One dispatch folds each threadgroup's share to a (value, compensation)
         // pair; the host folds the pairs, since it waits for the result anyway.
         API_AVAILABLE(macos(26.0))
-        float scalar_reduce(const uint32_t op, const StorageRef input, const size_t count) {
+        float scalar_reduce(const ReduceOp op, const StorageRef input, const size_t count) {
             LFS_ASSERT_MSG(input.dtype == DataType::Float32,
                            "Metal scalar reduction requires Float32 input");
-            const bool extreme = op == metal::kReduceMax || op == metal::kReduceMin;
+            const bool extreme = op == ReduceOp::Max || op == ReduceOp::Min;
             if (count == 0) {
-                return op == metal::kReduceMax   ? -std::numeric_limits<float>::infinity()
-                       : op == metal::kReduceMin ? std::numeric_limits<float>::infinity()
-                                                 : 0.0f;
+                return op == ReduceOp::Max   ? -std::numeric_limits<float>::infinity()
+                       : op == ReduceOp::Min ? std::numeric_limits<float>::infinity()
+                                             : 0.0f;
             }
             const auto context = acquire_context();
             constexpr size_t kElementsPerGroup = kThreadgroupWidth * 4;
-            const auto groups = static_cast<uint32_t>(
-                std::clamp<size_t>((count + kElementsPerGroup - 1) / kElementsPerGroup, 1, 1024));
+            const size_t groups = std::clamp<size_t>((count + kElementsPerGroup - 1) / kElementsPerGroup, 1, kMaxPartials);
             const StorageRef partials = context->allocate(groups * 2 * sizeof(float));
-            const auto input_at = context->locate(input);
-            const auto partials_at = context->locate(partials);
-            const auto pipeline = context->pipeline("reduce_partial", {{6, op}});
-            const ReduceParams params{
-                .input_offset = input_at.offset,
-                .count = checked_u32(count, "Metal reduction count exceeds uint32"),
-                .padding = 0,
-            };
-            const std::array uses{input, partials};
-            context->dispatch(uses, {.pipeline = pipeline,
-                                     .buffers = {input_at.address, partials_at.address + partials_at.offset},
-                                     .params = param_bytes(params),
-                                     .grid = MTLSizeMake(groups, 1, 1),
-                                     .group_size = MTLSizeMake(kThreadgroupWidth, 1, 1)});
+            encode_reduce_stage(*context, {.input = input, .code = element_code(DataType::Float32)},
+                                {.op = op, .mode = kPartialMode, .output_code = metal::kPairDType, .output = partials,
+                                 .groups = MTLSizeMake(groups, 1, 1),
+                                 .params = {.count = checked_u32(count, "Metal reduction count exceeds uint32"),
+                                            .mean_scale = 1.0f}});
             context->wait(context->pending(partials));
             const auto* const pairs = reinterpret_cast<const float*>(context->host(partials));
             float accumulator = pairs[0], compensation = extreme ? 0.0f : pairs[1];
-            for (uint32_t group = 1; group < groups; ++group) {
+            for (size_t group = 1; group < groups; ++group) {
                 const float value = pairs[2 * group];
                 if (extreme) {
-                    accumulator = ieee_extreme(accumulator, value, op == metal::kReduceMax);
+                    accumulator = ieee_extreme(accumulator, value, op == ReduceOp::Max);
                     continue;
                 }
                 const float total = accumulator + value;
@@ -317,7 +536,88 @@ namespace lfs::core::internal {
             if (extreme)
                 return accumulator;
             const float sum = std::isfinite(compensation) ? accumulator + compensation : accumulator;
-            return op == metal::kReduceMean ? sum * (1.0f / static_cast<float>(count)) : sum;
+            return op == ReduceOp::Mean ? sum * (1.0f / static_cast<float>(count)) : sum;
+        }
+
+        // count_matches kinds: 0 nonzero bytes, 1 nonzero floats, 2 NaN
+        // present, 3 infinity present.
+        API_AVAILABLE(macos(26.0))
+        uint32_t count_matches(const uint32_t kind, const StorageRef input, const size_t count) {
+            if (count == 0)
+                return 0;
+            struct CountParams {
+                uint64_t input_offset;
+                uint32_t count;
+                uint32_t padding;
+            };
+            const auto context = acquire_context();
+            const StorageRef result = context->allocate(sizeof(uint32_t));
+            encode_fill(*context, result, sizeof(uint32_t), 0, sizeof(uint32_t));
+            const auto input_at = context->locate(input);
+            const auto result_at = context->locate(result);
+            const CountParams params{.input_offset = input_at.offset,
+                                     .count = checked_u32(count, "Metal count exceeds uint32")};
+            const std::array uses{input, result};
+            context->dispatch(uses, {.pipeline = context->pipeline("count_matches", {{0, kind}}),
+                                     .buffers = {input_at.address, result_at.address + result_at.offset},
+                                     .params = param_bytes(params),
+                                     .grid = MTLSizeMake(std::min<size_t>(256, (count + kThreadgroupWidth - 1) / kThreadgroupWidth), 1, 1),
+                                     .group_size = MTLSizeMake(kThreadgroupWidth, 1, 1)});
+            context->wait(context->pending(result));
+            uint32_t value = 0;
+            std::memcpy(&value, context->host(result), sizeof(value));
+            context->release(result);
+            return value;
+        }
+
+        // In-place inclusive scan along the middle extent of an (outer, size,
+        // inner) view. Long lines scan their blocks independently, scan the
+        // block totals the same way, then add them back.
+        API_AVAILABLE(macos(26.0))
+        void encode_scan(Context& context, const StorageRef data, const size_t outer, const size_t size,
+                         const size_t inner) {
+            struct ScanParams {
+                uint64_t data_offset;
+                uint64_t totals_offset;
+                uint32_t outer;
+                uint32_t dim;
+                uint32_t inner;
+                uint32_t lines;
+            };
+            const size_t lines = outer * inner;
+            const size_t blocks = (size + kThreadgroupWidth - 1) / kThreadgroupWidth;
+            const uint32_t pass = size <= 32 ? 0 : blocks == 1 ? 1 : 2;
+            StorageRef totals = data;
+            if (pass == 2) {
+                totals = context.allocate(lines * blocks * sizeof(uint32_t));
+                totals.dtype = data.dtype;
+            }
+            const auto data_at = context.locate(data);
+            const auto totals_at = context.locate(totals);
+            const ScanParams params{
+                .data_offset = data_at.offset,
+                .totals_offset = totals_at.offset,
+                .outer = checked_u32(outer, "Metal cumsum outer size exceeds uint32"),
+                .dim = checked_u32(size, "Metal cumsum size exceeds uint32"),
+                .inner = checked_u32(inner, "Metal cumsum inner size exceeds uint32"),
+                .lines = checked_u32(lines, "Metal cumsum line count exceeds uint32"),
+            };
+            checked_u32(lines * size, "Metal cumsum element count exceeds uint32");
+            const auto dispatch = [&](const uint32_t scan_pass, const MTLSize groups) {
+                const std::array uses{data, totals};
+                context.dispatch(uses, {.pipeline = context.pipeline("scan", {{0, scan_pass}, {1, static_cast<uint32_t>(data.dtype)}}),
+                                        .buffers = {data_at.address, totals_at.address},
+                                        .params = param_bytes(params),
+                                        .grid = groups,
+                                        .group_size = MTLSizeMake(kThreadgroupWidth, 1, 1)});
+            };
+            dispatch(pass, pass == 0 ? MTLSizeMake((lines + kThreadgroupWidth - 1) / kThreadgroupWidth, 1, 1)
+                                     : MTLSizeMake(blocks, lines, 1));
+            if (pass == 2) {
+                encode_scan(context, totals, lines, blocks, 1);
+                dispatch(3, MTLSizeMake((lines * size + kThreadgroupWidth - 1) / kThreadgroupWidth, 1, 1));
+                context.release(totals);
+            }
         }
 
         // nn kernel kinds.
@@ -604,23 +904,12 @@ namespace lfs::core::internal {
             .padding = 0,
             .ops = {},
         };
-        // The op kinds specialize the kernel; tensor operands are read through
-        // their addresses.
-        std::array<uint32_t, 3> kinds{};
-        bool vectorized = input_at.offset % 16 == 0 && output_at.offset % 16 == 0;
-        for (int i = 0; i < chain.num_ops; ++i) {
-            const auto& op = chain.ops[i];
-            kinds[i / 6] |= static_cast<uint32_t>(op.kind & 31u) << (5 * (i % 6));
-            params.ops[i].scalar = op.scalar;
-            if (op.kind < 4 || op.kind > 7)
-                continue;
-            const auto rhs_at = context->locate(op.rhs);
-            params.ops[i].rhs_address = rhs_at.address + rhs_at.offset;
-            vectorized = vectorized && params.ops[i].rhs_address % 16 == 0;
-        }
+        const FusedChain fused = fused_chain(*context, chain);
+        params.ops = fused.ops;
+        const bool vectorized = fused.aligned && input_at.offset % 16 == 0 && output_at.offset % 16 == 0;
         const auto pipeline = context->pipeline(
-            "pointwise_chain", {{4, vectorized ? 1u : 0u}, {8, static_cast<uint32_t>(chain.num_ops)},
-                                {9, kinds[0]}, {10, kinds[1]}, {11, kinds[2]}});
+            "pointwise_chain", {{4, vectorized ? 1u : 0u}, {8, fused.length},
+                                {9, fused.kinds[0]}, {10, fused.kinds[1]}, {11, fused.kinds[2]}});
         std::vector<StorageRef> uses{input, output};
         uses.insert(uses.end(), rhs_storages.begin(), rhs_storages.end());
         context->dispatch(uses, {.pipeline = pipeline,
@@ -810,22 +1099,141 @@ namespace lfs::core::internal {
 
     float MetalBackendOps::sum_scalar(const StorageRef input, const size_t count, ExecContext) {
         LFS_FACADE_TRACE(sum_scalar);
-        return scalar_reduce(metal::kReduceSum, input, count);
+        return scalar_reduce(ReduceOp::Sum, input, count);
     }
 
     float MetalBackendOps::mean_scalar(const StorageRef input, const size_t count, ExecContext) {
         LFS_FACADE_TRACE(mean_scalar);
-        return scalar_reduce(metal::kReduceMean, input, count);
+        return scalar_reduce(ReduceOp::Mean, input, count);
     }
 
     float MetalBackendOps::max_scalar(const StorageRef input, const size_t count, ExecContext) {
         LFS_FACADE_TRACE(max_scalar);
-        return scalar_reduce(metal::kReduceMax, input, count);
+        return scalar_reduce(ReduceOp::Max, input, count);
     }
 
     float MetalBackendOps::min_scalar(const StorageRef input, const size_t count, ExecContext) {
         LFS_FACADE_TRACE(min_scalar);
-        return scalar_reduce(metal::kReduceMin, input, count);
+        return scalar_reduce(ReduceOp::Min, input, count);
+    }
+
+    void MetalBackendOps::reduce(const StorageRef input, const StorageRef output, const StridedLayout& input_layout,
+                                 const ReduceProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(reduce);
+        LFS_ASSERT_MSG(program.axis_count <= MAX_TENSOR_RANK && input_layout.rank <= MAX_TENSOR_RANK,
+                       "reduction axis count exceeds MAX_TENSOR_RANK");
+        LFS_ASSERT_MSG(output.dtype == program.result_dtype,
+                       "Metal reduction output storage dtype does not match the program");
+        if (input_layout.element_count == 0)
+            return;
+        const auto context = acquire_context();
+        const ReduceSource source{.input = input, .code = element_code(input.dtype)};
+        const size_t rank = input_layout.rank;
+        if (program.axis_count == 0 || program.axis_count == rank) {
+            reduce_full(*context, program.op, source, input_layout.element_count, output, program.result_dtype);
+            return;
+        }
+        std::array<int, MAX_TENSOR_RANK> axes{};
+        std::copy_n(program.axes.begin(), program.axis_count, axes.begin());
+        std::sort(axes.begin(), axes.begin() + program.axis_count);
+        uint32_t reduced_mask = 0;
+        bool contiguous_run = true;
+        for (size_t i = 0; i < program.axis_count; ++i) {
+            LFS_ASSERT_MSG(axes[i] >= 0 && axes[i] < static_cast<int>(rank), "reduction axis is out of range");
+            reduced_mask |= 1u << static_cast<unsigned>(axes[i]);
+            contiguous_run = contiguous_run && (i == 0 || axes[i] == axes[i - 1] + 1);
+        }
+        if (!contiguous_run) {
+            reduce_general(*context, program.op, input, output, program.result_dtype, input_layout, reduced_mask);
+            return;
+        }
+        const auto first = static_cast<size_t>(axes[0]);
+        const auto last = static_cast<size_t>(axes[program.axis_count - 1]);
+        size_t outer = 1, reduce = 1, inner = 1;
+        for (size_t axis = 0; axis < rank; ++axis)
+            (axis < first ? outer : axis <= last ? reduce : inner) *= input_layout.dims[axis];
+        reduce_axes(*context, program.op, source, output, program.result_dtype, outer, reduce, inner);
+    }
+
+    void MetalBackendOps::column_reduce(const StorageRef input, const StorageRef output, const size_t rows,
+                                        const size_t columns, const ReduceProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(column_reduce);
+        reduce_axes(*acquire_context(), program.op, {.input = input, .code = element_code(DataType::Float32)}, output,
+                    DataType::Float32, 1, rows, columns);
+    }
+
+    void MetalBackendOps::strided_reduce(const StorageRef input, const StorageRef output, const size_t outer_size,
+                                         const size_t reduce_size, const size_t inner_size,
+                                         const ReduceProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(strided_reduce);
+        reduce_axes(*acquire_context(), program.op, {.input = input, .code = element_code(DataType::Float32)}, output,
+                    DataType::Float32, outer_size, reduce_size, inner_size);
+    }
+
+    void MetalBackendOps::fused_transform_reduce(const StorageRef input, const StorageRef output, const size_t count,
+                                                 const tensor_ops::FusedPointwiseOpChain& chain,
+                                                 const ReduceProgram& program,
+                                                 const std::span<const StorageRef> rhs_storages, ExecContext) {
+        LFS_FACADE_TRACE(fused_transform_reduce);
+        if (count == 0)
+            return;
+        const auto context = acquire_context();
+        const FusedChain fused = fused_chain(*context, chain);
+        reduce_full(*context, program.op,
+                    {.input = input, .code = element_code(DataType::Float32), .chain = &fused, .operands = rhs_storages},
+                    count, output, DataType::Float32);
+    }
+
+    void MetalBackendOps::fused_segmented_transform_reduce(
+        const StorageRef input, const StorageRef output, const size_t segment_count, const size_t segment_size,
+        const tensor_ops::FusedPointwiseOpChain& chain, const ReduceProgram& program,
+        const std::span<const StorageRef> rhs_storages, ExecContext) {
+        LFS_FACADE_TRACE(fused_segmented_transform_reduce);
+        if (segment_count == 0 || segment_size == 0)
+            return;
+        const auto context = acquire_context();
+        const FusedChain fused = fused_chain(*context, chain);
+        reduce_axes(*context, program.op,
+                    {.input = input, .code = element_code(DataType::Float32), .chain = &fused, .operands = rhs_storages},
+                    output, DataType::Float32, segment_count, segment_size, 1);
+    }
+
+    size_t MetalBackendOps::count_nonzero_bool(const StorageRef input, const size_t count, ExecContext) {
+        LFS_FACADE_TRACE(count_nonzero_bool);
+        return count_matches(0, input, count);
+    }
+
+    size_t MetalBackendOps::count_nonzero_float(const StorageRef input, const size_t count, ExecContext) {
+        LFS_FACADE_TRACE(count_nonzero_float);
+        return count_matches(1, input, count);
+    }
+
+    bool MetalBackendOps::has_nan(const StorageRef input, const size_t count, ExecContext) {
+        LFS_FACADE_TRACE(has_nan);
+        return count_matches(2, input, count) != 0;
+    }
+
+    bool MetalBackendOps::has_inf(const StorageRef input, const size_t count, ExecContext) {
+        LFS_FACADE_TRACE(has_inf);
+        return count_matches(3, input, count) != 0;
+    }
+
+    void MetalBackendOps::cumsum(const StorageRef data, const StridedLayout& layout, const int dim, ExecContext) {
+        LFS_FACADE_TRACE(cumsum);
+        LFS_ASSERT_MSG(data.dtype == DataType::Float32 || data.dtype == DataType::Int32,
+                       "Metal cumsum supports Float32 and Int32");
+        LFS_ASSERT_MSG(dim >= 0 && static_cast<size_t>(dim) < layout.rank, "cumsum dimension is out of range");
+        size_t outer = 1, inner = 1;
+        for (size_t axis = 0; axis < layout.rank; ++axis) {
+            if (axis < static_cast<size_t>(dim))
+                outer *= layout.dims[axis];
+            else if (axis > static_cast<size_t>(dim))
+                inner *= layout.dims[axis];
+        }
+        const size_t size = layout.dims[static_cast<size_t>(dim)];
+        if (outer * inner == 0 || size == 0)
+            return;
+        encode_scan(*acquire_context(), data, outer, size, inner);
     }
 
     void MetalBackendOps::sgemm(const StorageRef lhs, const StorageRef rhs, const StorageRef output,
@@ -852,6 +1260,7 @@ namespace lfs::core::internal {
         encode_gemm(lhs, rhs, &bias, output, program, false);
     }
 
+    // A sum of lhs * rhs: the product is a one-op fused chain on the reduction.
     void MetalBackendOps::dot_product(const StorageRef lhs, const StorageRef rhs, const StorageRef output,
                                       const size_t count, ExecContext) {
         LFS_FACADE_TRACE(dot_product);
@@ -863,39 +1272,13 @@ namespace lfs::core::internal {
             encode_fill(*context, output, sizeof(float), 0, sizeof(float));
             return;
         }
-        struct DotParams {
-            uint64_t lhs_offset;
-            uint64_t rhs_offset;
-            uint64_t output_offset;
-            uint32_t count;
-            uint32_t padding;
-        };
-        constexpr size_t kElementsPerGroup = kThreadgroupWidth * 4;
-        const size_t groups = std::clamp<size_t>((count + kElementsPerGroup - 1) / kElementsPerGroup, 1, 1024);
-        const StorageRef partials = context->allocate(groups * 2 * sizeof(float));
-        const auto lhs_at = context->locate(lhs);
         const auto rhs_at = context->locate(rhs);
-        const auto partials_at = context->locate(partials);
-        const auto output_at = context->locate(output);
-        const DotParams partial_params{
-            .lhs_offset = lhs_at.offset,
-            .rhs_offset = rhs_at.offset,
-            .count = checked_u32(count, "Metal dot product count exceeds uint32"),
-        };
-        const std::array partial_uses{lhs, rhs, partials};
-        context->dispatch(partial_uses, {.pipeline = context->pipeline("dot_partial", {{6, metal::kReduceSum}}),
-                                         .buffers = {lhs_at.address, rhs_at.address, partials_at.address + partials_at.offset},
-                                         .params = param_bytes(partial_params),
-                                         .grid = MTLSizeMake(groups, 1, 1),
-                                         .group_size = MTLSizeMake(kThreadgroupWidth, 1, 1)});
-        const DotParams fold_params{.output_offset = output_at.offset, .count = static_cast<uint32_t>(groups)};
-        const std::array fold_uses{partials, output};
-        context->dispatch(fold_uses, {.pipeline = context->pipeline("fold_pairs", {{6, metal::kReduceSum}}),
-                                      .buffers = {partials_at.address + partials_at.offset, output_at.address},
-                                      .params = param_bytes(fold_params),
-                                      .grid = MTLSizeMake(1, 1, 1),
-                                      .group_size = MTLSizeMake(kThreadgroupWidth, 1, 1)});
-        context->release(partials);
+        FusedChain product{.length = 1, .kinds = {6}};
+        product.ops[0].rhs_address = rhs_at.address + rhs_at.offset;
+        const std::array operands{rhs};
+        reduce_full(*context, ReduceOp::Sum,
+                    {.input = lhs, .code = element_code(DataType::Float32), .chain = &product, .operands = operands},
+                    count, output, DataType::Float32);
     }
 
     void MetalBackendOps::diag(const StorageRef diagonal, const StorageRef output, const size_t count, ExecContext) {

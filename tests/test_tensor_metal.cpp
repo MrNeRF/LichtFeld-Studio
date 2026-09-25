@@ -287,11 +287,81 @@ namespace {
         }
     }
 
+    TEST_F(TensorMetal, AxisReductionsMatchCpu) {
+        // Every axis combination: segmented, strided and permuted paths.
+        const Tensor x_cpu = random_tensor(6 * 70 * 33, -2.0f, 2.0f, 25).reshape({6, 70, 33});
+        const Tensor x = to_metal(x_cpu);
+        for (const std::vector<int>& axes : std::vector<std::vector<int>>{{0}, {1}, {2}, {0, 1}, {1, 2}, {0, 2}}) {
+            SCOPED_TRACE(testing::PrintToString(axes));
+            expect_close(x.sum(axes), x_cpu.sum(axes), 1.0e-5f, 1.0e-5f);
+            expect_close(x.mean(axes), x_cpu.mean(axes), 1.0e-5f, 1.0e-5f);
+            expect_close(x.max(axes), x_cpu.max(axes), 0.0f, 0.0f);
+            expect_close(x.min(axes), x_cpu.min(axes), 0.0f, 0.0f);
+        }
+        expect_close(x.sum(), x_cpu.sum(), 1.0e-5f, 1.0e-4f);
+        expect_close(x.std(1), x_cpu.std(1), 1.0e-5f, 1.0e-5f);
+
+        // Few outputs over a long extent split across grid rows; few long segments.
+        const Tensor tall = random_tensor(5000 * 3, -1.0f, 1.0f, 26).reshape({5000, 3});
+        expect_close(to_metal(tall).sum(0), tall.sum(0), 1.0e-5f, 1.0e-4f);
+        expect_close(to_metal(tall).max(0), tall.max(0), 0.0f, 0.0f);
+        const Tensor wide = tall.reshape({3, 5000});
+        expect_close(to_metal(wide).mean(1), wide.mean(1), 1.0e-5f, 1.0e-5f);
+
+        const Tensor factors = random_tensor(4 * 9, 0.5f, 1.5f, 27).reshape({4, 9});
+        expect_close(to_metal(factors).prod(1), factors.prod(1), 1.0e-5f, 0.0f);
+        const Tensor integers = (x_cpu * 10.0f).to(DataType::Int32);
+        expect_close(to_metal(integers).sum(1), integers.sum(1), 0.0f, 0.0f);
+        expect_close(to_metal(integers).max(2), integers.max(2), 0.0f, 0.0f);
+        const Tensor mask = x_cpu > 1.5f;
+        expect_close(to_metal(mask).any(1), mask.any(1), 0.0f, 0.0f);
+        expect_close(to_metal(mask).all(2), mask.all(2), 0.0f, 0.0f);
+    }
+
+    TEST_F(TensorMetal, FusedReductionsMatchCpu) {
+        const Tensor a_cpu = random_tensor(size_t{1} << 16, -1.0f, 1.0f, 28);
+        const Tensor b_cpu = random_tensor(size_t{1} << 16, -1.0f, 1.0f, 29);
+        const Tensor a = to_metal(a_cpu), b = to_metal(b_cpu);
+        expect_close((a * b).sum(), (a_cpu * b_cpu).sum(), 1.0e-4f, 1.0e-4f);
+        expect_close(((a + 1.0f) * 2.0f).mean(), ((a_cpu + 1.0f) * 2.0f).mean(), 1.0e-5f, 1.0e-5f);
+        expect_close((a - b).abs().max(), (a_cpu - b_cpu).abs().max(), 0.0f, 0.0f);
+        expect_close((a * b).reshape({256, 256}).sum(1), (a_cpu * b_cpu).reshape({256, 256}).sum(1), 1.0e-5f, 1.0e-5f);
+    }
+
+    TEST_F(TensorMetal, CountsAndScansMatchCpu) {
+        const Tensor x_cpu = random_tensor(100000, -1.0f, 1.0f, 30);
+        const Tensor x = to_metal(x_cpu);
+        EXPECT_EQ((x > 0.5f).count_nonzero(), (x_cpu > 0.5f).count_nonzero());
+        EXPECT_EQ(x.relu().count_nonzero(), x_cpu.relu().count_nonzero());
+        EXPECT_FALSE(x.has_nan());
+        EXPECT_FALSE(x.has_inf());
+        std::vector<float> special(1000, 1.0f);
+        special[500] = std::numeric_limits<float>::quiet_NaN();
+        special[900] = -std::numeric_limits<float>::infinity();
+        const Tensor with_special = to_metal(Tensor::from_vector(special, {special.size()}, Device::CPU));
+        EXPECT_TRUE(with_special.has_nan());
+        EXPECT_TRUE(with_special.has_inf());
+
+        // Short lines, one block, and two levels of block totals.
+        for (const size_t length : {size_t{1}, size_t{17}, size_t{256}, size_t{257}, size_t{70000}}) {
+            SCOPED_TRACE(length);
+            const Tensor line = random_tensor(length, 0.0f, 1.0f, 31);
+            expect_close(to_metal(line).cumsum(0), line.cumsum(0), 2.0e-4f, 1.0e-3f);
+            const Tensor integers = (line * 10.0f).to(DataType::Int32);
+            expect_close(to_metal(integers).cumsum(0), integers.cumsum(0), 0.0f, 0.0f);
+        }
+        const Tensor volume = random_tensor(5 * 300 * 7, 0.0f, 1.0f, 32).reshape({5, 300, 7});
+        for (const int dim : {0, 1, 2}) {
+            SCOPED_TRACE(dim);
+            expect_close(to_metal(volume).cumsum(dim), volume.cumsum(dim), 2.0e-4f, 1.0e-3f);
+        }
+    }
+
     TEST_F(TensorMetal, UnportedOperationsSaySo) {
         const Tensor x = to_metal(random_tensor(16, 0.0f, 1.0f, 9));
         try {
-            (void)x.cumsum(0).cpu();
-            ADD_FAILURE() << "cumsum should not be ported yet";
+            (void)x.sort().first.cpu();
+            ADD_FAILURE() << "sort should not be ported yet";
         } catch (const std::exception& error) {
             EXPECT_NE(std::string(error.what()).find("Metal backend:"), std::string::npos) << error.what();
         }

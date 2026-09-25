@@ -790,20 +790,48 @@ kernel void transpose_2d(device const uchar* input_buffer [[buffer(0)]],
 }
 
 // ---------------------------------------------------------------------------
-// Scalar Float32 reductions, deterministic: each threadgroup folds its share
-// and the host folds the partials. Sums carry a Neumaier compensation through
-// every step, like reduce.slang; max and min propagate the first NaN.
+// Reductions, ported from reduce.slang. kReduce follows ReduceOp (Sum,
+// Mean, Max, Min, Prod, Any, All); element codes follow DataType, and
+// LFS_DT_Pair marks float2 (sum, compensation) partials. Sums carry a
+// Neumaier compensation through every step; max and min propagate the first
+// NaN. A fused chain (kChainLength > 0) transforms Float32 elements first.
+// Modes: 0 partial, each threadgroup folds a grid-stride slice of count
+// elements into output[group]; 2 segmented, one threadgroup per contiguous
+// segment of reduce elements; 3 strided, one thread per (outer, inner)
+// output over the reduce range of its split (grid y), writing
+// output[split][outer][inner].
+
+constant uint kReduceMode [[function_constant(16)]];
+
+constant bool kFloatInput = kInputDType == LFS_DT_Float32 || kInputDType == LFS_DT_Pair;
+constant bool kLogical = kReduce == LFS_REDUCE_ANY || kReduce == LFS_REDUCE_ALL;
+constant bool kFloatAccumulator = kFloatInput && !kLogical;
+constant bool kSumLike = kReduce == LFS_REDUCE_SUM || kReduce == LFS_REDUCE_MEAN;
 
 struct ReduceParams {
     ulong input_offset;
+    ulong output_offset;
+    uint outer;
+    uint reduce;
+    uint inner;
     uint count;
-    uint padding;
+    uint split_chunk;
+    float mean_scale;
+    ChainOp ops[16];
 };
 
 static float reduce_identity() {
     if (kReduce == LFS_REDUCE_MAX) return -INFINITY;
     if (kReduce == LFS_REDUCE_MIN) return INFINITY;
+    if (kReduce == LFS_REDUCE_PROD) return 1.0f;
     return 0.0f;
+}
+
+static long int_identity() {
+    if (kReduce == LFS_REDUCE_MAX) return -0x7fffffffffffffffl - 1;
+    if (kReduce == LFS_REDUCE_MIN) return 0x7fffffffffffffffl;
+    if (kReduce == LFS_REDUCE_PROD || kReduce == LFS_REDUCE_ALL) return 1;
+    return 0;
 }
 
 static void combine_value(thread float& accumulator, thread float& compensation, float value) {
@@ -811,6 +839,8 @@ static void combine_value(thread float& accumulator, thread float& compensation,
         accumulator = ieee_maximum(accumulator, value);
     } else if (kReduce == LFS_REDUCE_MIN) {
         accumulator = ieee_minimum(accumulator, value);
+    } else if (kReduce == LFS_REDUCE_PROD) {
+        accumulator *= value;
     } else {
         const float total = accumulator + value;
         compensation += abs(accumulator) >= abs(value) ? (accumulator - total) + value
@@ -819,18 +849,32 @@ static void combine_value(thread float& accumulator, thread float& compensation,
     }
 }
 
+// TwoSum keeps both compensations when pairs meet.
 static void combine_pair(thread float& accumulator, thread float& compensation, float2 pair) {
-    if (kReduce == LFS_REDUCE_MAX) {
-        accumulator = ieee_maximum(accumulator, pair.x);
-    } else if (kReduce == LFS_REDUCE_MIN) {
-        accumulator = ieee_minimum(accumulator, pair.x);
-    } else {
-        const float total = accumulator + pair.x;
-        const float carried = total - accumulator;
-        const float error = (accumulator - (total - carried)) + (pair.x - carried);
-        accumulator = total;
-        compensation += error + pair.y;
+    if (!kSumLike) {
+        combine_value(accumulator, compensation, pair.x);
+        return;
     }
+    const float total = accumulator + pair.x;
+    const float carried = total - accumulator;
+    const float error = (accumulator - (total - carried)) + (pair.x - carried);
+    accumulator = total;
+    compensation += error + pair.y;
+}
+
+static void combine_int(thread long& accumulator, long value) {
+    if (kSumLike)
+        accumulator += value;
+    else if (kReduce == LFS_REDUCE_MAX)
+        accumulator = max(accumulator, value);
+    else if (kReduce == LFS_REDUCE_MIN)
+        accumulator = min(accumulator, value);
+    else if (kReduce == LFS_REDUCE_PROD)
+        accumulator *= value;
+    else if (kReduce == LFS_REDUCE_ANY)
+        accumulator = accumulator != 0 || value != 0 ? 1 : 0;
+    else
+        accumulator = accumulator != 0 && value != 0 ? 1 : 0;
 }
 
 // Folds the (value, compensation) pairs of a SIMD group through shuffles.
@@ -843,81 +887,266 @@ static float2 reduce_simdgroup(float2 pair) {
     return pair;
 }
 
-// Folds a threadgroup's pairs; the result is valid in thread 0.
-static float2 reduce_threadgroup(float2 pair, threadgroup float2* shared, ushort lane, ushort simdgroup) {
-    const float2 folded = reduce_simdgroup(pair);
+static long reduce_simdgroup(long value) {
+    for (ushort offset = 16; offset > 0; offset /= 2) {
+        const uint2 halves = as_type<uint2>(value);
+        combine_int(value, as_type<long>(uint2(simd_shuffle_down(halves.x, offset), simd_shuffle_down(halves.y, offset))));
+    }
+    return value;
+}
+
+// Folds a threadgroup's values; the result is valid in thread 0.
+template <typename T>
+static T reduce_threadgroup(T value, T identity, threadgroup T* shared, ushort lane, ushort simdgroup) {
+    const T folded = reduce_simdgroup(value);
     if (lane == 0)
         shared[simdgroup] = folded;
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    return reduce_simdgroup(simdgroup == 0 && lane < kReduceThreads / 32 ? shared[lane]
-                                                                          : float2(reduce_identity(), 0.0f));
+    return reduce_simdgroup(simdgroup == 0 && lane < kReduceThreads / 32 ? shared[lane] : identity);
 }
 
-kernel void reduce_partial(device const uchar* input_buffer [[buffer(0)]],
-                           device float2* partials [[buffer(1)]],
-                           constant ReduceParams& params [[buffer(2)]],
-                           uint thread_index [[thread_position_in_threadgroup]],
-                           uint group [[threadgroup_position_in_grid]],
-                           uint groups [[threadgroups_per_grid]],
-                           ushort lane [[thread_index_in_simdgroup]],
-                           ushort simdgroup [[simdgroup_index_in_threadgroup]]) {
-    threadgroup float2 shared[kReduceThreads / 32];
-    device const float* input = (device const float*)(input_buffer + params.input_offset);
-    float accumulator = reduce_identity();
-    float compensation = 0.0f;
-    for (uint index = group * kReduceThreads + thread_index; index < params.count; index += groups * kReduceThreads)
-        combine_value(accumulator, compensation, input[index]);
-    const float2 result = reduce_threadgroup(float2(accumulator, compensation), shared, lane, simdgroup);
+static float load_reduce_float(device const uchar* input, ulong index, constant ReduceParams& params) {
+    float value = ((device const float*)input)[index];
+    for (uint op = 0; op < kChainLength; ++op) {
+        const uint kind = chain_kind(op);
+        const float rhs = chain_reads_tensor(kind) ? params.ops[op].rhs[index] : 0.0f;
+        value = chain_step(value, kind, params.ops[op].scalar, rhs);
+    }
+    return value;
+}
+
+static long load_reduce_int(device const uchar* input, ulong index) {
+    if (kInputDType == LFS_DT_Int32)
+        return long(((device const int*)input)[index]);
+    if (kInputDType == LFS_DT_Int64)
+        return ((device const long*)input)[index];
+    return long(input[index]);
+}
+
+struct Accumulator {
+    float value;
+    float compensation;
+    long integer;
+};
+
+static Accumulator start_accumulator() {
+    return Accumulator{reduce_identity(), 0.0f, int_identity()};
+}
+
+static void accumulate(thread Accumulator& accumulator, device const uchar* input, ulong index,
+                       constant ReduceParams& params) {
+    if (kFloatAccumulator) {
+        if (kInputDType == LFS_DT_Pair)
+            combine_pair(accumulator.value, accumulator.compensation, ((device const float2*)input)[index]);
+        else
+            combine_value(accumulator.value, accumulator.compensation, load_reduce_float(input, index, params));
+    } else if (kLogical) {
+        const bool nonzero = kFloatInput ? load_reduce_float(input, index, params) != 0.0f : load_reduce_int(input, index) != 0;
+        combine_int(accumulator.integer, nonzero ? 1 : 0);
+    } else {
+        combine_int(accumulator.integer, load_reduce_int(input, index));
+    }
+}
+
+// Only sums carry a compensation; adding a zero term to a max or min would
+// turn -0 into +0.
+static void store_reduction(device uchar* output, ulong index, Accumulator result, constant ReduceParams& params) {
+    if (kOutputDType == LFS_DT_Pair) {
+        ((device float2*)output)[index] = float2(result.value, result.compensation);
+    } else if (kOutputDType == LFS_DT_Float32) {
+        float value = float(result.integer);
+        if (kFloatAccumulator)
+            value = kSumLike && isfinite(result.compensation) ? result.value + result.compensation : result.value;
+        if (kReduce == LFS_REDUCE_MEAN)
+            value *= params.mean_scale;
+        ((device float*)output)[index] = value;
+    } else if (kOutputDType == LFS_DT_Int32) {
+        ((device int*)output)[index] = int(result.integer);
+    } else if (kOutputDType == LFS_DT_Int64) {
+        ((device long*)output)[index] = result.integer;
+    } else {
+        output[index] = result.integer != 0 ? 1 : 0;
+    }
+}
+
+kernel void reduce(device const uchar* input_buffer [[buffer(0)]],
+                   device uchar* output_buffer [[buffer(1)]],
+                   constant ReduceParams& params [[buffer(2)]],
+                   uint thread_index [[thread_index_in_threadgroup]],
+                   uint2 group [[threadgroup_position_in_grid]],
+                   uint2 groups [[threadgroups_per_grid]],
+                   ushort lane [[thread_index_in_simdgroup]],
+                   ushort simdgroup [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float2 shared_pairs[kReduceThreads / 32];
+    threadgroup long shared_integers[kReduceThreads / 32];
+    device const uchar* input = input_buffer + params.input_offset;
+    device uchar* output = output_buffer + params.output_offset;
+    if (kReduceMode == 3) {
+        const uint outputs = params.outer * params.inner;
+        const uint output_index = group.x * kReduceThreads + thread_index;
+        if (output_index >= outputs)
+            return;
+        const uint outer_index = output_index / params.inner;
+        const ulong base = ulong(outer_index) * params.reduce * params.inner + (output_index - outer_index * params.inner);
+        const uint end = min(params.reduce, (group.y + 1) * params.split_chunk);
+        Accumulator accumulator = start_accumulator();
+        for (uint element = group.y * params.split_chunk; element < end; ++element)
+            accumulate(accumulator, input, base + ulong(element) * params.inner, params);
+        store_reduction(output, ulong(group.y) * outputs + output_index, accumulator, params);
+        return;
+    }
+    Accumulator accumulator = start_accumulator();
+    if (kReduceMode == 0) {
+        for (ulong index = group.x * kReduceThreads + thread_index; index < params.count; index += groups.x * kReduceThreads)
+            accumulate(accumulator, input, index, params);
+    } else {
+        const ulong base = ulong(group.x) * params.reduce;
+        for (uint element = thread_index; element < params.reduce; element += kReduceThreads)
+            accumulate(accumulator, input, base + element, params);
+    }
+    if (kFloatAccumulator) {
+        const float2 total = reduce_threadgroup(float2(accumulator.value, accumulator.compensation),
+                                                float2(reduce_identity(), 0.0f), shared_pairs, lane, simdgroup);
+        accumulator.value = total.x;
+        accumulator.compensation = total.y;
+    } else {
+        accumulator.integer = reduce_threadgroup(accumulator.integer, int_identity(), shared_integers, lane, simdgroup);
+    }
     if (thread_index == 0)
-        partials[group] = result;
+        store_reduction(output, group.x, accumulator, params);
 }
 
-// Dot products stay on the GPU: per-threadgroup compensated sums of products,
-// then one threadgroup folds the partials into the output.
+// ---------------------------------------------------------------------------
+// Counts over a threadgroup grid-stride, ported from count.slang. kOp picks
+// the match: 0 nonzero bytes, 1 nonzero floats, 2 NaN (flag), 3 infinity
+// (flag). Threadgroups add their tallies to one zeroed counter.
 
-struct DotParams {
-    ulong lhs_offset;
-    ulong rhs_offset;
-    ulong output_offset;
+struct CountParams {
+    ulong input_offset;
     uint count;
     uint padding;
 };
 
-kernel void dot_partial(device const uchar* lhs_buffer [[buffer(0)]],
-                        device const uchar* rhs_buffer [[buffer(1)]],
-                        device float2* partials [[buffer(2)]],
-                        constant DotParams& params [[buffer(3)]],
-                        uint thread_index [[thread_position_in_threadgroup]],
-                        uint group [[threadgroup_position_in_grid]],
-                        uint groups [[threadgroups_per_grid]],
-                        ushort lane [[thread_index_in_simdgroup]],
-                        ushort simdgroup [[simdgroup_index_in_threadgroup]]) {
-    threadgroup float2 shared[kReduceThreads / 32];
-    device const float* lhs = (device const float*)(lhs_buffer + params.lhs_offset);
-    device const float* rhs = (device const float*)(rhs_buffer + params.rhs_offset);
-    float accumulator = 0.0f;
-    float compensation = 0.0f;
-    for (uint index = group * kReduceThreads + thread_index; index < params.count; index += groups * kReduceThreads)
-        combine_value(accumulator, compensation, lhs[index] * rhs[index]);
-    const float2 result = reduce_threadgroup(float2(accumulator, compensation), shared, lane, simdgroup);
-    if (thread_index == 0)
-        partials[group] = result;
+kernel void count_matches(device const uchar* input_buffer [[buffer(0)]],
+                          device atomic_uint* result [[buffer(1)]],
+                          constant CountParams& params [[buffer(2)]],
+                          uint thread_index [[thread_position_in_threadgroup]],
+                          uint group [[threadgroup_position_in_grid]],
+                          uint groups [[threadgroups_per_grid]],
+                          ushort lane [[thread_index_in_simdgroup]],
+                          ushort simdgroup [[simdgroup_index_in_threadgroup]]) {
+    threadgroup uint shared[kReduceThreads / 32];
+    device const uchar* input = input_buffer + params.input_offset;
+    uint matches = 0;
+    for (uint index = group * kReduceThreads + thread_index; index < params.count; index += groups * kReduceThreads) {
+        if (kOp == 0) {
+            matches += input[index] != 0 ? 1u : 0u;
+        } else {
+            const uint magnitude = as_type<uint>(((device const float*)input)[index]) & 0x7fffffffu;
+            matches += (kOp == 1 ? magnitude != 0u : kOp == 2 ? magnitude > 0x7f800000u : magnitude == 0x7f800000u) ? 1u : 0u;
+        }
+    }
+    const uint folded = simd_sum(matches);
+    if (lane == 0)
+        shared[simdgroup] = folded;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    const uint total = simd_sum(simdgroup == 0 && lane < kReduceThreads / 32 ? shared[lane] : 0u);
+    if (thread_index == 0 && total != 0) {
+        if (kOp <= 1)
+            atomic_fetch_add_explicit(result, total, memory_order_relaxed);
+        else
+            atomic_fetch_or_explicit(result, 1u, memory_order_relaxed);
+    }
 }
 
-kernel void fold_pairs(device const float2* partials [[buffer(0)]],
-                       device uchar* output_buffer [[buffer(1)]],
-                       constant DotParams& params [[buffer(2)]],
-                       uint thread_index [[thread_position_in_threadgroup]],
-                       ushort lane [[thread_index_in_simdgroup]],
-                       ushort simdgroup [[simdgroup_index_in_threadgroup]]) {
-    threadgroup float2 shared[kReduceThreads / 32];
-    float accumulator = 0.0f;
-    float compensation = 0.0f;
-    for (uint index = thread_index; index < params.count; index += kReduceThreads)
-        combine_pair(accumulator, compensation, partials[index]);
-    const float2 total = reduce_threadgroup(float2(accumulator, compensation), shared, lane, simdgroup);
-    if (thread_index == 0)
-        *(device float*)(output_buffer + params.output_offset) = isfinite(total.y) ? total.x + total.y : total.x;
+// ---------------------------------------------------------------------------
+// In-place inclusive prefix sums along one axis of an (outer, dim, inner)
+// view, ported from scan.slang for Float32 and Int32. kOp picks the pass:
+// 0 short lines, one thread per line; 1 single-block lines, one threadgroup
+// per line; 2 independent blocks, one threadgroup per (line, block), each
+// writing its total; 3 adds the scanned totals of preceding blocks.
+
+struct ScanParams {
+    ulong data_offset;
+    ulong totals_offset;
+    uint outer;
+    uint dim;
+    uint inner;
+    uint lines;
+};
+
+static ulong scan_line_base(uint line, constant ScanParams& params) {
+    const uint outer_index = line / params.inner;
+    return ulong(outer_index) * params.dim * params.inner + (line - outer_index * params.inner);
+}
+
+// Inclusive scan of a threadgroup's values in thread order.
+template <typename T>
+static T scan_block(T value, threadgroup T* totals, ushort lane, ushort simdgroup) {
+    const T inclusive = simd_prefix_inclusive_sum(value);
+    if (lane == 31)
+        totals[simdgroup] = inclusive;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (simdgroup == 0) {
+        const T preceding = simd_prefix_exclusive_sum(lane < kReduceThreads / 32 ? totals[lane] : T(0));
+        if (lane < kReduceThreads / 32)
+            totals[lane] = preceding;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    return inclusive + totals[simdgroup];
+}
+
+// Passes 1 and 2 run a threadgroup per (block x, line y).
+template <typename T>
+static void scan_lines(device T* data, device T* totals, constant ScanParams& params, uint thread_index,
+                       uint2 group, ushort lane, ushort simdgroup, threadgroup T* shared) {
+    const uint blocks = (params.dim + kReduceThreads - 1) / kReduceThreads;
+    if (kOp == 0) {
+        const uint line = group.x * kReduceThreads + thread_index;
+        if (line >= params.lines)
+            return;
+        const ulong base = scan_line_base(line, params);
+        T running = 0;
+        for (uint element = 0; element < params.dim; ++element) {
+            running += data[base + ulong(element) * params.inner];
+            data[base + ulong(element) * params.inner] = running;
+        }
+        return;
+    }
+    if (kOp == 3) {
+        const ulong index = ulong(group.x) * kReduceThreads + thread_index;
+        const uint element = uint(index / params.inner % params.dim);
+        if (index >= ulong(params.lines) * params.dim || element < kReduceThreads)
+            return;
+        const ulong line = index / (ulong(params.dim) * params.inner) * params.inner + index % params.inner;
+        data[index] += totals[line * blocks + element / kReduceThreads - 1];
+        return;
+    }
+    const uint element = group.x * kReduceThreads + thread_index;
+    const bool live = element < params.dim;
+    const ulong index = scan_line_base(group.y, params) + ulong(element) * params.inner;
+    const T scanned = scan_block(live ? data[index] : T(0), shared, lane, simdgroup);
+    if (live)
+        data[index] = scanned;
+    if (kOp == 2 && thread_index == kReduceThreads - 1)
+        totals[ulong(group.y) * blocks + group.x] = scanned;
+}
+
+kernel void scan(device uchar* data_buffer [[buffer(0)]],
+                 device uchar* totals_buffer [[buffer(1)]],
+                 constant ScanParams& params [[buffer(2)]],
+                 uint thread_index [[thread_index_in_threadgroup]],
+                 uint2 group [[threadgroup_position_in_grid]],
+                 ushort lane [[thread_index_in_simdgroup]],
+                 ushort simdgroup [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float shared_floats[kReduceThreads / 32];
+    threadgroup int shared_ints[kReduceThreads / 32];
+    if (kInputDType == LFS_DT_Float32)
+        scan_lines((device float*)(data_buffer + params.data_offset), (device float*)(totals_buffer + params.totals_offset),
+                   params, thread_index, group, lane, simdgroup, shared_floats);
+    else
+        scan_lines((device int*)(data_buffer + params.data_offset), (device int*)(totals_buffer + params.totals_offset),
+                   params, thread_index, group, lane, simdgroup, shared_ints);
 }
 
 // ---------------------------------------------------------------------------

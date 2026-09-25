@@ -35,9 +35,16 @@ namespace lfs::core::internal::metal {
                                               {"UInt32", DataType::UInt32}}) {
                 source += std::format("#define LFS_DT_{} {}\n", name, static_cast<unsigned>(dtype));
             }
-            source += std::format("#define LFS_REDUCE_SUM {}\n#define LFS_REDUCE_MEAN {}\n"
-                                  "#define LFS_REDUCE_MAX {}\n#define LFS_REDUCE_MIN {}\n",
-                                  kReduceSum, kReduceMean, kReduceMax, kReduceMin);
+            source += std::format("#define LFS_DT_Pair {}\n", kPairDType);
+            for (const auto& [name, op] : {std::pair{"SUM", ReduceOp::Sum},
+                                           {"MEAN", ReduceOp::Mean},
+                                           {"MAX", ReduceOp::Max},
+                                           {"MIN", ReduceOp::Min},
+                                           {"PROD", ReduceOp::Prod},
+                                           {"ANY", ReduceOp::Any},
+                                           {"ALL", ReduceOp::All}}) {
+                source += std::format("#define LFS_REDUCE_{} {}\n", name, static_cast<unsigned>(op));
+            }
             return source + kKernelSource;
         }
 

@@ -53,10 +53,10 @@ namespace lfs::core::internal::metal {
     // metal_backend_available() gates every path into it.
     API_AVAILABLE_BEGIN(macos(26.0))
 
-    // Scalar reduction ids, defined for kernels.metal as LFS_REDUCE_*.
-    inline constexpr uint32_t kReduceSum = 0, kReduceMean = 1, kReduceMax = 2, kReduceMin = 3;
-
     inline constexpr NSUInteger kThreadgroupWidth = 256;
+    // Element code of float2 (sum, compensation) reduction partials, next to
+    // the DataType codes; kernels.metal knows it as LFS_DT_Pair.
+    inline constexpr uint32_t kPairDType = 255;
 
     struct Located {
         id<MTLBuffer> buffer;
@@ -156,7 +156,7 @@ namespace lfs::core::internal::metal {
 
         struct PipelineKey {
             std::string_view function;
-            std::array<uint32_t, 16> values{};
+            std::array<uint32_t, 32> values{};
             uint32_t defined = 0;
             bool operator==(const PipelineKey&) const = default;
         };

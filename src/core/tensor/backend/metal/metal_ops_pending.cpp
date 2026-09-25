@@ -44,46 +44,6 @@ namespace lfs::core::internal {
         not_ported("index_cast");
     }
 
-    void MetalBackendOps::reduce(StorageRef, StorageRef, const StridedLayout&, const ReduceProgram&, ExecContext) {
-        not_ported("reduce");
-    }
-
-    void MetalBackendOps::column_reduce(StorageRef, StorageRef, size_t, size_t, const ReduceProgram&, ExecContext) {
-        not_ported("column_reduce");
-    }
-
-    void MetalBackendOps::strided_reduce(StorageRef, StorageRef, size_t, size_t, size_t, const ReduceProgram&, ExecContext) {
-        not_ported("strided_reduce");
-    }
-
-    void MetalBackendOps::fused_transform_reduce(StorageRef, StorageRef, size_t, const tensor_ops::FusedPointwiseOpChain&, const ReduceProgram&, std::span<const StorageRef>, ExecContext) {
-        not_ported("fused_transform_reduce");
-    }
-
-    void MetalBackendOps::fused_segmented_transform_reduce(StorageRef, StorageRef, size_t, size_t, const tensor_ops::FusedPointwiseOpChain&, const ReduceProgram&, std::span<const StorageRef>, ExecContext) {
-        not_ported("fused_segmented_transform_reduce");
-    }
-
-    size_t MetalBackendOps::count_nonzero_bool(StorageRef, size_t, ExecContext) {
-        not_ported("count_nonzero_bool");
-    }
-
-    size_t MetalBackendOps::count_nonzero_float(StorageRef, size_t, ExecContext) {
-        not_ported("count_nonzero_float");
-    }
-
-    bool MetalBackendOps::has_nan(StorageRef, size_t, ExecContext) {
-        not_ported("has_nan");
-    }
-
-    bool MetalBackendOps::has_inf(StorageRef, size_t, ExecContext) {
-        not_ported("has_inf");
-    }
-
-    void MetalBackendOps::cumsum(StorageRef, const StridedLayout&, int, ExecContext) {
-        not_ported("cumsum");
-    }
-
     void MetalBackendOps::sort_1d(StorageRef, StorageRef, size_t, const SortProgram&, ExecContext) {
         not_ported("sort_1d");
     }
