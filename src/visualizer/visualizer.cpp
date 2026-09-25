@@ -5,6 +5,7 @@
 #include "visualizer/visualizer.hpp"
 #include "visualizer_impl.hpp"
 
+#include "rendering/amd_fsr3_plugin.hpp"
 #include "rendering/nvidia_dlss_plugin.hpp"
 
 #include <atomic>
@@ -53,6 +54,7 @@ namespace lfs::vis {
     }
 
     std::unique_ptr<Visualizer> Visualizer::create(const ViewerOptions& options) {
+        configureAmdFsr3PluginLoading(!options.safe_mode);
         configureNvidiaDlssPluginLoading(!options.safe_mode);
         return std::make_unique<VisualizerImpl>(options);
     }

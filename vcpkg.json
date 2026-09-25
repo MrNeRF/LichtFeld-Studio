@@ -76,7 +76,8 @@
     {
       "name": "glslang",
       "features": [
-        "tools"
+        "tools",
+        "opt"
       ]
     },
     {

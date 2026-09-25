@@ -149,6 +149,16 @@ typedef struct LfsSceneUpscalerEvaluateV1 {
     float pre_exposure;
     float frame_time_milliseconds;
     uint32_t reset_flags;
+    /*
+     * Perspective camera parameters used by reconstruction backends that
+     * linearize raster depth internally. Appended to preserve the v1 prefix
+     * consumed by older plugins; readers must validate struct_size before
+     * accessing this tail.
+     */
+    float camera_near;
+    float camera_far;
+    float camera_vertical_fov_radians;
+    float view_space_to_meters;
 } LfsSceneUpscalerEvaluateV1;
 
 typedef struct LfsSceneUpscalerPluginApiV1 {

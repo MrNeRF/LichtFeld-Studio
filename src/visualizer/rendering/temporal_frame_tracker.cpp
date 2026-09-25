@@ -4,6 +4,7 @@
 
 #include "rendering/temporal_frame_tracker.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace lfs::vis {
@@ -128,8 +129,16 @@ namespace lfs::vis {
 
     void TemporalConvergenceController::prepare(const bool enabled,
                                                 const bool restart,
-                                                const bool allow_settle) {
+                                                const bool allow_settle,
+                                                const std::uint32_t settle_sample_count,
+                                                const std::uint32_t jitter_phase_count) {
+        const std::uint32_t clamped_sample_count = std::max(settle_sample_count, 1u);
+        const bool sampling_contract_changed =
+            settle_sample_count_ != clamped_sample_count ||
+            jitter_phase_count_ != jitter_phase_count;
         enabled_ = enabled;
+        settle_sample_count_ = clamped_sample_count;
+        jitter_phase_count_ = jitter_phase_count;
         if (!enabled_) {
             sequence_ = 0;
             remaining_ = 0;
@@ -139,13 +148,18 @@ namespace lfs::vis {
             // become useful. Keep the continuous jitter sequence, but do not
             // enqueue follow-up renders that would only contend for the GPU.
             remaining_ = 0;
-        } else if (restart) {
-            remaining_ = SAMPLE_COUNT;
+        } else if (restart || sampling_contract_changed) {
+            remaining_ = settle_sample_count_;
         }
     }
 
     glm::vec2 TemporalConvergenceController::jitter() const {
-        return enabled_ ? temporalJitterPixels(sequence_) : glm::vec2(0.0f);
+        if (!enabled_)
+            return glm::vec2(0.0f);
+        const std::uint64_t sample = jitter_phase_count_ > 0
+                                         ? sequence_ % jitter_phase_count_
+                                         : sequence_;
+        return temporalJitterPixels(sample);
     }
 
     bool TemporalConvergenceController::completeSuccessfulFrame() {

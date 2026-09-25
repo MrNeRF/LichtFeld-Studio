@@ -27,6 +27,21 @@ namespace lfs::vis {
         EXPECT_STREQ(LFS_SCENE_UPSCALER_PLUGIN_ENTRY_V1,
                      "lfs_scene_upscaler_plugin_get_api_v1");
         EXPECT_EQ(LFS_SCENE_UPSCALER_PLUGIN_VIEW_COUNT, 3);
+
+        constexpr std::size_t LEGACY_EVALUATION_PREFIX =
+            offsetof(LfsSceneUpscalerEvaluateV1, reset_flags) +
+            sizeof(std::uint32_t);
+        EXPECT_EQ(offsetof(LfsSceneUpscalerEvaluateV1, camera_near),
+                  LEGACY_EVALUATION_PREFIX);
+        EXPECT_EQ(offsetof(LfsSceneUpscalerEvaluateV1, camera_far),
+                  offsetof(LfsSceneUpscalerEvaluateV1, camera_near) + sizeof(float));
+        EXPECT_EQ(offsetof(LfsSceneUpscalerEvaluateV1,
+                           camera_vertical_fov_radians),
+                  offsetof(LfsSceneUpscalerEvaluateV1, camera_far) + sizeof(float));
+        EXPECT_EQ(offsetof(LfsSceneUpscalerEvaluateV1, view_space_to_meters),
+                  offsetof(LfsSceneUpscalerEvaluateV1,
+                           camera_vertical_fov_radians) +
+                      sizeof(float));
     }
 
     TEST(SceneUpscalerPluginApi, RejectsTruncatedWrongVersionAndIncompleteTables) {
