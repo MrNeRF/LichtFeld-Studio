@@ -27,30 +27,14 @@ groupshared uint scanOut[256];
 [numthreads(256, 1, 1)]
 void main(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uniform Parameters p) {
     const uint3 groups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
-    // Exclusive prefix of the digit-major block counts. Chunk totals sit past ncounts.
+    // Exclusive prefix of the digit-major block counts. One workgroup carries
+    // the total between chunks, matching the main Vulkan radix sort.
     if (kPhase == 2) {
         const uint ncounts = p.blocks * 16u;
-        const uint nchunks = (ncounts + 255u) / 256u;
-        Ptr<uint, Access.Read> counts = (Ptr<uint, Access.Read>)p.counts;
-        Ptr<uint, Access.ReadWrite> scratch = (Ptr<uint, Access.ReadWrite>)p.scratch;
-        if (p.padding == 1) {
-            if (gid.x == 0 && tid.x == 0) {
-                uint sum = 0;
-                for (uint c = 0; c < nchunks; ++c) {
-                    const uint value = scratch[ncounts + c];
-                    scratch[ncounts + c] = sum;
-                    sum += value;
-                }
-            }
-            return;
-        }
-        if (p.padding == 2) {
-            for (uint idx = gid.x * 256u + tid.x; idx < ncounts; idx += groups.x * 256u)
-                scratch[idx] += scratch[ncounts + idx / 256u];
-            return;
-        }
-        for (uint chunk = gid.x; chunk < nchunks; chunk += groups.x) {
-            const uint idx = chunk * 256u + tid.x;
+        Ptr<uint, Access.ReadWrite> counts = (Ptr<uint, Access.ReadWrite>)p.counts;
+        uint carry = 0;
+        for (uint chunk = 0; chunk < ncounts; chunk += 256u) {
+            const uint idx = chunk + tid.x;
             const uint value = idx < ncounts ? counts[idx] : 0u;
             scanIn[tid.x] = value;
             GroupMemoryBarrierWithGroupSync();
@@ -63,9 +47,8 @@ void main(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uniform Paramete
                 GroupMemoryBarrierWithGroupSync();
             }
             if (idx < ncounts)
-                scratch[idx] = scanIn[tid.x] - value;
-            if (tid.x == 255)
-                scratch[ncounts + chunk] = scanIn[255];
+                counts[idx] = carry + scanIn[tid.x] - value;
+            carry += scanIn[255];
             GroupMemoryBarrierWithGroupSync();
         }
         return;

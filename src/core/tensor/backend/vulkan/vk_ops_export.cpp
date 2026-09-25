@@ -171,7 +171,6 @@ namespace lfs::core::internal {
             const uint32_t radix_blocks = (n + 2047u) / 2048u;
             const uint32_t ncounts = radix_blocks * 16u;
             auto counts = Tensor::empty({ncounts}, Device::GPU, DataType::UInt32);
-            auto scratch = Tensor::empty({size_t(ncounts) + (size_t(ncounts) + 255u) / 256u}, Device::GPU, DataType::UInt32);
             auto keys_b = Tensor::empty({n}, Device::GPU, DataType::Int64);
             auto index_b = Tensor::empty({n}, Device::GPU, DataType::Int32);
             Tensor* src_k = &keys;
@@ -179,22 +178,15 @@ namespace lfs::core::internal {
             Tensor* src_i = &indices;
             Tensor* dst_i = &index_b;
             const uint64_t counts_addr = vk::address(storage_ref(counts));
-            const uint64_t scratch_addr = vk::address(storage_ref(scratch));
             for (uint32_t shift = 0; shift < bits; shift += 4) {
                 RadixPush radix{vk::address(storage_ref(*src_k)), vk::address(storage_ref(*dst_k)),
                                 vk::address(storage_ref(*src_i)), vk::address(storage_ref(*dst_i)),
-                                counts_addr, scratch_addr, n, radix_blocks, shift, 0};
+                                counts_addr, 0, n, radix_blocks, shift, 0};
                 launch("export_radix", 0, &radix, sizeof(radix), {{storage_ref(*src_k)}}, {{storage_ref(counts)}},
                        size_t(radix_blocks) * 256u);
-                radix.padding = 0;
-                launch("export_radix", 2, &radix, sizeof(radix), {{storage_ref(counts)}}, {{storage_ref(scratch)}}, ncounts);
-                radix.padding = 1;
-                launch("export_radix", 2, &radix, sizeof(radix), {{storage_ref(scratch)}}, {{storage_ref(scratch)}}, 256);
-                radix.padding = 2;
-                launch("export_radix", 2, &radix, sizeof(radix), {{storage_ref(scratch)}}, {{storage_ref(scratch)}}, ncounts);
-                radix.counts = scratch_addr;
+                launch("export_radix", 2, &radix, sizeof(radix), {{storage_ref(counts)}}, {{storage_ref(counts)}}, 256);
                 launch("export_radix", 1, &radix, sizeof(radix),
-                       {{storage_ref(*src_k), storage_ref(*src_i), storage_ref(scratch)}},
+                       {{storage_ref(*src_k), storage_ref(*src_i), storage_ref(counts)}},
                        {{storage_ref(*dst_k), storage_ref(*dst_i)}}, size_t(radix_blocks) * 256u);
                 std::swap(src_k, dst_k);
                 std::swap(src_i, dst_i);

@@ -306,14 +306,12 @@ add_library(lfs_io STATIC
         project/embedded_dataset.cpp
 
 )
+target_sources(lfs_io PRIVATE splat_decimate.cpp)
 if(LFS_HAS_CUDA)
     target_sources(lfs_io PRIVATE
-        splat_decimate.cpp
         nvcodec_image_loader.hpp
         nvcodec_image_loader.cpp
         pipelined_image_loader.cpp)
-else()
-    target_sources(lfs_io PRIVATE splat_decimate_no_cuda.cpp)
 endif()
 
 # Set include directories
