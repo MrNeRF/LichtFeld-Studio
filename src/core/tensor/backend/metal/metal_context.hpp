@@ -52,14 +52,14 @@ namespace lfs::core::internal {
 #ifdef __OBJC__
 namespace lfs::core::internal::metal {
 
-    // The backend is built on Metal 4, so everything below needs macOS 26;
-    // metal_backend_available() gates every path into it.
-    API_AVAILABLE_BEGIN(macos(26.0))
-
     inline constexpr NSUInteger kThreadgroupWidth = 256;
     // Element code of float2 (sum, compensation) reduction partials, next to
     // the DataType codes; kernels.metal knows it as LFS_DT_Pair.
     inline constexpr uint32_t kPairDType = 255;
+
+    // The backend is built on Metal 4, so everything below needs macOS 26;
+    // metal_backend_available() gates every path into it.
+    API_AVAILABLE_BEGIN(macos(26.0))
 
     struct Located {
         id<MTLBuffer> buffer;
