@@ -2487,15 +2487,6 @@ namespace lfs::vis {
         });
     }
 
-    std::shared_ptr<const lfs::core::Camera> TrainerManager::getCamById(int camId) const {
-        // Get camera from Scene (Scene owns all training data)
-        if (scene_) {
-            return scene_->getCameraByUid(camId);
-        }
-        LOG_ERROR("getCamById called but scene is not set");
-        return nullptr;
-    }
-
     std::vector<std::shared_ptr<lfs::core::Camera>> TrainerManager::getAllCamList() const {
         if (scene_) {
             return scene_->getAllCameras();

@@ -2531,13 +2531,8 @@ namespace lfs::vis {
         auto& target_viewport = activeKeyboardViewport();
 
         std::shared_ptr<const lfs::core::Camera> cam_data;
-        if (auto* trainer = services().trainerOrNull()) {
-            cam_data = trainer->getCamById(event.cam_id);
-        }
-        if (!cam_data) {
-            if (auto* scene_mgr = services().sceneOrNull()) {
-                cam_data = scene_mgr->getScene().getCameraByUid(event.cam_id);
-            }
+        if (auto* scene_mgr = services().sceneOrNull()) {
+            cam_data = scene_mgr->getScene().getCameraByUid(event.cam_id);
         }
         if (!cam_data) {
             LOG_ERROR("Camera ID {} not found", event.cam_id);
