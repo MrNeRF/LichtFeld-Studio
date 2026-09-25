@@ -6,6 +6,7 @@
 #include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_upload.hpp"
 #include "io/cache_image_loader.hpp"
 
 #include <algorithm>
@@ -501,7 +502,8 @@ namespace lfs::io {
         // Non-blocking stream for the hot GPU decode path, so image decode and
         // H2D work overlap training instead of serializing on the legacy stream.
         // Images are still stream-synced before handoff (materialized on arrival).
-        mutable std::mutex decode_stream_mutex_;
+        std::unique_ptr<lfs::core::TensorWorkQueue> decode_queue_;
+        std::vector<std::unique_ptr<lfs::core::TensorWorkQueue>> sidecar_queues_;
         mutable cudaStream_t decode_stream_ = nullptr;
         std::vector<cudaStream_t> sidecar_streams_;
 
