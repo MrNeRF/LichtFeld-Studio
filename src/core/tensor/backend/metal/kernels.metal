@@ -335,24 +335,50 @@ struct PointwiseParams {
 };
 
 static uchar evaluate_byte(device const uchar* lhs, device const uchar* rhs,
-                           constant PointwiseParams& params, uint index) {
+                           constant PointwiseParams& params, uint lhs_index, uint rhs_index) {
     if (kInputDType == LFS_DT_Float32 || kInputDType == LFS_DT_Float16) {
-        const float a = load_float(lhs, index);
-        const float b = kArity == 2 ? load_float(rhs, index) : params.scalar_float;
+        const float a = load_float(lhs, lhs_index);
+        const float b = kArity == 2 ? load_float(rhs, rhs_index) : params.scalar_float;
         return float_predicate(a, b) ? 1 : 0;
     }
     if (kInputDType == LFS_DT_Int64) {
-        const long a = ((device const long*)lhs)[index];
-        const long b = ((device const long*)rhs)[index];
+        const long a = ((device const long*)lhs)[lhs_index];
+        const long b = ((device const long*)rhs)[rhs_index];
         return int64_predicate(a, b) ? 1 : 0;
     }
     if (kInputDType == LFS_DT_UInt32)
-        return uint_predicate(((device const uint*)lhs)[index], ((device const uint*)rhs)[index]) ? 1 : 0;
-    const int a = kInputDType == LFS_DT_Int32 ? ((device const int*)lhs)[index] : int(lhs[index]);
+        return uint_predicate(((device const uint*)lhs)[lhs_index], ((device const uint*)rhs)[rhs_index]) ? 1 : 0;
+    const int a = kInputDType == LFS_DT_Int32 ? ((device const int*)lhs)[lhs_index] : int(lhs[lhs_index]);
     const int b = kArity != 2 ? int(params.scalar_int64)
-                  : kInputDType == LFS_DT_Int32 ? ((device const int*)rhs)[index]
-                                                : int(rhs[index]);
+                  : kInputDType == LFS_DT_Int32 ? ((device const int*)rhs)[rhs_index]
+                                                : int(rhs[rhs_index]);
     return kOutputDType == LFS_DT_Bool ? (int_predicate(a, b) ? 1 : 0) : uchar(uint(int_binary(a, b)) & 255u);
+}
+
+// output[index] = op(lhs[lhs_index], rhs[rhs_index]), or of the scalar when
+// kArity is 1.
+static void evaluate(device const uchar* lhs, device const uchar* rhs, device uchar* output,
+                     constant PointwiseParams& params, uint lhs_index, uint rhs_index, uint index) {
+    if (kOutputDType == LFS_DT_UInt8 || kOutputDType == LFS_DT_Bool) {
+        output[index] = evaluate_byte(lhs, rhs, params, lhs_index, rhs_index);
+        return;
+    }
+    const bool scalar_on_right = (params.flags & 1u) != 0u;
+    if (kInputDType == LFS_DT_Float32 || kInputDType == LFS_DT_Float16) {
+        const float a = load_float(lhs, lhs_index);
+        const float b = kArity == 2 ? load_float(rhs, rhs_index) : params.scalar_float;
+        store_float(output, index, kArity == 2 ? float_binary(a, b) : float_unary(a, b, scalar_on_right));
+    } else if (kInputDType == LFS_DT_Int32) {
+        const int a = ((device const int*)lhs)[lhs_index];
+        const int b = kArity == 2 ? ((device const int*)rhs)[rhs_index] : int(params.scalar_int64);
+        ((device int*)output)[index] = kArity == 2 ? int_binary(a, b) : int_unary(a, b, scalar_on_right);
+    } else if (kInputDType == LFS_DT_Int64) {
+        ((device long*)output)[index] =
+            int64_binary(((device const long*)lhs)[lhs_index], ((device const long*)rhs)[rhs_index]);
+    } else if (kInputDType == LFS_DT_UInt32) {
+        ((device uint*)output)[index] =
+            uint_binary(((device const uint*)lhs)[lhs_index], ((device const uint*)rhs)[rhs_index]);
+    }
 }
 
 kernel void pointwise(device const uchar* lhs_buffer [[buffer(0)]],
@@ -381,25 +407,36 @@ kernel void pointwise(device const uchar* lhs_buffer [[buffer(0)]],
         }
         return;
     }
+    if (index < params.count)
+        evaluate(lhs, rhs, output, params, index, index, index);
+}
+
+// Clamps Float32 (NaN passes through) or Int32 elements to [minimum, maximum].
+struct ClampParams {
+    ulong input_offset;
+    ulong output_offset;
+    float float_minimum;
+    float float_maximum;
+    int int_minimum;
+    int int_maximum;
+    uint count;
+    uint padding;
+};
+
+kernel void clamp_values(device const uchar* input_buffer [[buffer(0)]],
+                         device uchar* output_buffer [[buffer(1)]],
+                         constant ClampParams& params [[buffer(2)]],
+                         uint index [[thread_position_in_grid]]) {
     if (index >= params.count)
         return;
-    if (kOutputDType == LFS_DT_UInt8 || kOutputDType == LFS_DT_Bool) {
-        output[index] = evaluate_byte(lhs, rhs, params, index);
-        return;
-    }
-    const bool scalar_on_right = (params.flags & 1u) != 0u;
-    if (kInputDType == LFS_DT_Float32 || kInputDType == LFS_DT_Float16) {
-        const float a = load_float(lhs, index);
-        const float b = kArity == 2 ? load_float(rhs, index) : params.scalar_float;
-        store_float(output, index, kArity == 2 ? float_binary(a, b) : float_unary(a, b, scalar_on_right));
-    } else if (kInputDType == LFS_DT_Int32) {
-        const int a = ((device const int*)lhs)[index];
-        const int b = kArity == 2 ? ((device const int*)rhs)[index] : int(params.scalar_int64);
-        ((device int*)output)[index] = kArity == 2 ? int_binary(a, b) : int_unary(a, b, scalar_on_right);
-    } else if (kInputDType == LFS_DT_Int64) {
-        ((device long*)output)[index] = int64_binary(((device const long*)lhs)[index], ((device const long*)rhs)[index]);
-    } else if (kInputDType == LFS_DT_UInt32) {
-        ((device uint*)output)[index] = uint_binary(((device const uint*)lhs)[index], ((device const uint*)rhs)[index]);
+    if (kInputDType == LFS_DT_Float32) {
+        const float value = ((device const float*)(input_buffer + params.input_offset))[index];
+        ((device float*)(output_buffer + params.output_offset))[index] =
+            isnan(value) ? value : min(max(value, params.float_minimum), params.float_maximum);
+    } else {
+        const int value = ((device const int*)(input_buffer + params.input_offset))[index];
+        ((device int*)(output_buffer + params.output_offset))[index] =
+            min(max(value, params.int_minimum), params.int_maximum);
     }
 }
 
@@ -734,6 +771,78 @@ kernel void where_select(device const uchar* condition [[buffer(0)]],
         : broadcast_index(index, params.y_dims, params.y_rank, params.output_dims, params.output_rank);
     copy_element(selected ? x + params.x_offset : y + params.y_offset, source_index,
                  output + params.output_offset, index);
+}
+
+// Binary pointwise ops over right-aligned broadcast operands.
+struct BroadcastParams {
+    PointwiseParams pointwise;
+    uint lhs_dims[8];
+    uint rhs_dims[8];
+    uint output_dims[8];
+    uint lhs_rank;
+    uint rhs_rank;
+    uint output_rank;
+    uint padding;
+};
+
+kernel void broadcast_binary(device const uchar* lhs_buffer [[buffer(0)]],
+                             device const uchar* rhs_buffer [[buffer(1)]],
+                             device uchar* output_buffer [[buffer(2)]],
+                             constant BroadcastParams& params [[buffer(3)]],
+                             uint index [[thread_position_in_grid]]) {
+    if (index >= params.pointwise.count)
+        return;
+    evaluate(lhs_buffer + params.pointwise.lhs_offset, rhs_buffer + params.pointwise.rhs_offset,
+             output_buffer + params.pointwise.output_offset, params.pointwise,
+             uint(broadcast_index(index, params.lhs_dims, params.lhs_rank, params.output_dims, params.output_rank)),
+             uint(broadcast_index(index, params.rhs_dims, params.rhs_rank, params.output_dims, params.output_rank)),
+             index);
+}
+
+// ---------------------------------------------------------------------------
+// cat (kOp 0) copies a contiguous input into its column block of each output
+// row; pad (kOp 1) copies a strided input into the padded output. Elements
+// move as kElementSize bytes (with equal dtypes), as in cat_pad.slang.
+
+struct CatPadParams {
+    ulong input_offset;
+    ulong output_offset;
+    uint input_dims[8];
+    uint input_strides[8];
+    uint output_strides[8];
+    uint pad_before[8];
+    uint count;
+    uint rank;
+    uint input_block;
+    uint output_block;
+    uint output_column;
+    uint padding;
+};
+
+kernel void cat_pad(device const uchar* input_buffer [[buffer(0)]],
+                    device uchar* output_buffer [[buffer(1)]],
+                    constant CatPadParams& params [[buffer(2)]],
+                    uint index [[thread_position_in_grid]]) {
+    if (index >= params.count)
+        return;
+    device const uchar* input = input_buffer + params.input_offset;
+    device uchar* output = output_buffer + params.output_offset;
+    if (kOp == 0) {
+        const uint row = index / params.input_block;
+        copy_element(input, index, output,
+                     ulong(row) * params.output_block + params.output_column + (index - row * params.input_block));
+        return;
+    }
+    uint remaining = index;
+    ulong input_index = 0;
+    ulong output_index = 0;
+    for (int axis = int(params.rank) - 1; axis >= 0; --axis) {
+        const uint coordinate = remaining % params.input_dims[axis];
+        remaining /= params.input_dims[axis];
+        input_index += ulong(coordinate) * params.input_strides[axis];
+        output_index += ulong(coordinate + params.pad_before[axis]) * params.output_strides[axis];
+    }
+    copy_element(input, input_index, output, output_index);
 }
 
 // ---------------------------------------------------------------------------

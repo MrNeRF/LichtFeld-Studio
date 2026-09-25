@@ -24,22 +24,6 @@ namespace lfs::core::internal {
         not_ported("compiled_expression");
     }
 
-    void MetalBackendOps::broadcast_binary(const PointwiseProgram&, StorageRef, const StridedLayout&, StorageRef, const StridedLayout&, StorageRef, const StridedLayout&, ExecContext) {
-        not_ported("broadcast_binary");
-    }
-
-    void MetalBackendOps::clamp_scalar(StorageRef, ScalarOperand, ScalarOperand, size_t, ExecContext) {
-        not_ported("clamp_scalar");
-    }
-
-    void MetalBackendOps::clamp_fused(StorageRef, StorageRef, ScalarOperand, ScalarOperand, size_t, ExecContext) {
-        not_ported("clamp_fused");
-    }
-
-    void MetalBackendOps::clamp_scalar_int(StorageRef, ScalarOperand, ScalarOperand, size_t, ExecContext) {
-        not_ported("clamp_scalar_int");
-    }
-
     void MetalBackendOps::index_cast(StorageRef, StorageRef, size_t, size_t, ExecContext) {
         not_ported("index_cast");
     }
@@ -198,18 +182,6 @@ namespace lfs::core::internal {
 
     size_t MetalBackendOps::nonzero_bool(StorageRef, StorageRef, const MaskProgram&, ExecContext) {
         not_ported("nonzero_bool");
-    }
-
-    void MetalBackendOps::cat_last_dim(StorageRef, std::span<const StorageRef>, std::span<const StridedLayout>, size_t, size_t, size_t, ExecContext) {
-        not_ported("cat_last_dim");
-    }
-
-    void MetalBackendOps::cat_middle_dim(StorageRef, std::span<const StorageRef>, std::span<const StridedLayout>, size_t, size_t, int, size_t, ExecContext) {
-        not_ported("cat_middle_dim");
-    }
-
-    void MetalBackendOps::pad(StorageRef, StorageRef, const StridedLayout&, const StridedLayout&, const std::array<size_t, MAX_TENSOR_RANK>&, ExecContext) {
-        not_ported("pad");
     }
 
 } // namespace lfs::core::internal

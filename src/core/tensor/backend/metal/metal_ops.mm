@@ -270,11 +270,101 @@ namespace lfs::core::internal {
                                      .grid = threads(layout.element_count)});
         }
 
+        std::array<uint32_t, MAX_TENSOR_RANK> shader_values(const std::array<size_t, MAX_TENSOR_RANK>& values,
+                                                            const size_t rank, const char* const description) {
+            std::array<uint32_t, MAX_TENSOR_RANK> result{};
+            for (size_t axis = 0; axis < rank; ++axis)
+                result[axis] = checked_u32(values[axis], description);
+            return result;
+        }
+
         std::array<uint32_t, MAX_TENSOR_RANK> shader_dims(const StridedLayout& layout) {
-            std::array<uint32_t, MAX_TENSOR_RANK> dims{};
-            for (size_t axis = 0; axis < layout.rank; ++axis)
-                dims[axis] = checked_u32(layout.dims[axis], "Metal where dim exceeds uint32");
-            return dims;
+            return shader_values(layout.dims, layout.rank, "Metal layout dimension exceeds uint32");
+        }
+
+        struct CatPadParams {
+            uint64_t input_offset;
+            uint64_t output_offset;
+            std::array<uint32_t, MAX_TENSOR_RANK> input_dims;
+            std::array<uint32_t, MAX_TENSOR_RANK> input_strides;
+            std::array<uint32_t, MAX_TENSOR_RANK> output_strides;
+            std::array<uint32_t, MAX_TENSOR_RANK> pad_before;
+            uint32_t count;
+            uint32_t rank;
+            uint32_t input_block;
+            uint32_t output_block;
+            uint32_t output_column;
+            uint32_t padding;
+        };
+        static_assert(sizeof(CatPadParams) == 16 + 4 * 32 + 24);
+
+        // Copies a contiguous input of count elements, input_block per row, into
+        // columns [output_column, output_column + input_block) of output rows
+        // of output_block elements.
+        API_AVAILABLE(macos(26.0))
+        void encode_cat_input(const StorageRef input, const StorageRef output, const size_t input_block,
+                              const size_t output_block, const size_t output_column, const size_t count) {
+            if (count == 0)
+                return;
+            const auto context = acquire_context();
+            const auto input_at = context->locate(input);
+            const auto output_at = context->locate(output);
+            const CatPadParams params{
+                .input_offset = input_at.offset,
+                .output_offset = output_at.offset,
+                .count = checked_u32(count, "Metal cat count exceeds uint32"),
+                .input_block = checked_u32(input_block, "Metal cat input block exceeds uint32"),
+                .output_block = checked_u32(output_block, "Metal cat output block exceeds uint32"),
+                .output_column = checked_u32(output_column, "Metal cat output offset exceeds uint32"),
+            };
+            const std::array uses{input, output};
+            const uint32_t dtype = static_cast<uint32_t>(output.dtype);
+            context->dispatch(uses, {.pipeline = context->pipeline(
+                                         "cat_pad", {{0, 0}, {1, dtype}, {2, dtype},
+                                                     {5, static_cast<uint32_t>(dtype_size(output.dtype))}}),
+                                     .buffers = {input_at.address, output_at.address},
+                                     .params = param_bytes(params),
+                                     .grid = threads(count)});
+        }
+
+        API_AVAILABLE(macos(26.0))
+        void encode_clamp(const StorageRef input, const StorageRef output, const ScalarOperand minimum,
+                          const ScalarOperand maximum, const size_t count) {
+            if (count == 0)
+                return;
+            const bool integer = input.dtype == DataType::Int32;
+            LFS_ASSERT_MSG(input.dtype == output.dtype &&
+                               ((integer && minimum.kind == ScalarKind::Int32 && maximum.kind == ScalarKind::Int32) ||
+                                (input.dtype == DataType::Float32 && minimum.kind == ScalarKind::Float &&
+                                 maximum.kind == ScalarKind::Float)),
+                           "Metal clamp requires matching Float32 or Int32 operands");
+            struct ClampParams {
+                uint64_t input_offset;
+                uint64_t output_offset;
+                float float_minimum;
+                float float_maximum;
+                int32_t int_minimum;
+                int32_t int_maximum;
+                uint32_t count;
+                uint32_t padding;
+            };
+            const auto context = acquire_context();
+            const auto input_at = context->locate(input);
+            const auto output_at = context->locate(output);
+            const ClampParams params{
+                .input_offset = input_at.offset,
+                .output_offset = output_at.offset,
+                .float_minimum = integer ? 0.0f : minimum.value.float_value,
+                .float_maximum = integer ? 0.0f : maximum.value.float_value,
+                .int_minimum = integer ? minimum.value.int32_value : 0,
+                .int_maximum = integer ? maximum.value.int32_value : 0,
+                .count = checked_u32(count, "Metal clamp count exceeds uint32"),
+            };
+            const std::array uses{input, output};
+            context->dispatch(uses, {.pipeline = context->pipeline("clamp_values", {{1, static_cast<uint32_t>(input.dtype)}}),
+                                     .buffers = {input_at.address, output_at.address},
+                                     .params = param_bytes(params),
+                                     .grid = threads(count)});
         }
 
         // Stages of the reduce kernel, as in vk_ops_reduce.cpp.
@@ -1115,6 +1205,147 @@ namespace lfs::core::internal {
     float MetalBackendOps::min_scalar(const StorageRef input, const size_t count, ExecContext) {
         LFS_FACADE_TRACE(min_scalar);
         return scalar_reduce(ReduceOp::Min, input, count);
+    }
+
+    void MetalBackendOps::broadcast_binary(const PointwiseProgram& program, const StorageRef lhs,
+                                           const StridedLayout& lhs_layout, const StorageRef rhs,
+                                           const StridedLayout& rhs_layout, const StorageRef output,
+                                           const StridedLayout& output_layout, ExecContext) {
+        LFS_FACADE_TRACE(broadcast_binary);
+        if (output_layout.element_count == 0)
+            return;
+        LFS_ASSERT_MSG(lhs.dtype == program.in_dtype && rhs.dtype == program.in_dtype &&
+                           output.dtype == program.out_dtype,
+                       "Metal broadcast dtype does not match the pointwise program");
+        struct BroadcastParams {
+            PointwiseParams pointwise;
+            std::array<uint32_t, MAX_TENSOR_RANK> lhs_dims;
+            std::array<uint32_t, MAX_TENSOR_RANK> rhs_dims;
+            std::array<uint32_t, MAX_TENSOR_RANK> output_dims;
+            uint32_t lhs_rank;
+            uint32_t rhs_rank;
+            uint32_t output_rank;
+            uint32_t padding;
+        };
+        const auto context = acquire_context();
+        const auto lhs_at = context->locate(lhs);
+        const auto rhs_at = context->locate(rhs);
+        const auto output_at = context->locate(output);
+        const BroadcastParams params{
+            .pointwise = {.lhs_offset = lhs_at.offset,
+                          .rhs_offset = rhs_at.offset,
+                          .output_offset = output_at.offset,
+                          .count = checked_u32(output_layout.element_count, "Metal broadcast count exceeds uint32")},
+            .lhs_dims = shader_dims(lhs_layout),
+            .rhs_dims = shader_dims(rhs_layout),
+            .output_dims = shader_dims(output_layout),
+            .lhs_rank = static_cast<uint32_t>(lhs_layout.rank),
+            .rhs_rank = static_cast<uint32_t>(rhs_layout.rank),
+            .output_rank = static_cast<uint32_t>(output_layout.rank),
+        };
+        const auto pipeline = context->pipeline(
+            "broadcast_binary", {{0, static_cast<uint32_t>(program.op)},
+                                 {1, static_cast<uint32_t>(program.in_dtype)},
+                                 {2, static_cast<uint32_t>(program.out_dtype)},
+                                 {3, 2}});
+        const std::array uses{lhs, rhs, output};
+        context->dispatch(uses, {.pipeline = pipeline,
+                                 .buffers = {lhs_at.address, rhs_at.address, output_at.address},
+                                 .params = param_bytes(params),
+                                 .grid = threads(output_layout.element_count)});
+    }
+
+    void MetalBackendOps::clamp_scalar(const StorageRef data, const ScalarOperand minimum,
+                                       const ScalarOperand maximum, const size_t count, ExecContext) {
+        LFS_FACADE_TRACE(clamp_scalar);
+        encode_clamp(data, data, minimum, maximum, count);
+    }
+
+    void MetalBackendOps::clamp_fused(const StorageRef input, const StorageRef output, const ScalarOperand minimum,
+                                      const ScalarOperand maximum, const size_t count, ExecContext) {
+        LFS_FACADE_TRACE(clamp_fused);
+        encode_clamp(input, output, minimum, maximum, count);
+    }
+
+    void MetalBackendOps::clamp_scalar_int(const StorageRef data, const ScalarOperand minimum,
+                                           const ScalarOperand maximum, const size_t count, ExecContext) {
+        LFS_FACADE_TRACE(clamp_scalar_int);
+        encode_clamp(data, data, minimum, maximum, count);
+    }
+
+    void MetalBackendOps::cat_last_dim(const StorageRef output, const std::span<const StorageRef> inputs,
+                                       const std::span<const StridedLayout> layouts, const size_t num_rows,
+                                       const size_t row_size, const size_t element_size, ExecContext) {
+        LFS_FACADE_TRACE(cat_last_dim);
+        LFS_ASSERT_MSG(inputs.size() == layouts.size() && !inputs.empty(),
+                       "Metal cat requires matching non-empty input metadata");
+        LFS_ASSERT_MSG(element_size == dtype_size(output.dtype), "Metal cat element size does not match output dtype");
+        size_t column = 0;
+        for (size_t i = 0; i < inputs.size(); ++i) {
+            LFS_ASSERT_MSG(inputs[i].dtype == output.dtype && layouts[i].rank > 0,
+                           "Metal cat input dtype or rank is invalid");
+            const size_t width = layouts[i].dims[layouts[i].rank - 1];
+            encode_cat_input(inputs[i], output, width, row_size, column, num_rows * width);
+            column += width;
+        }
+        LFS_ASSERT_MSG(column == row_size, "Metal last-dimension cat widths do not sum to output width");
+    }
+
+    void MetalBackendOps::cat_middle_dim(const StorageRef output, const std::span<const StorageRef> inputs,
+                                         const std::span<const StridedLayout> layouts, const size_t outer_size,
+                                         const size_t inner_size, const int dim, const size_t element_size,
+                                         ExecContext) {
+        LFS_FACADE_TRACE(cat_middle_dim);
+        LFS_ASSERT_MSG(inputs.size() == layouts.size() && !inputs.empty(),
+                       "Metal cat requires matching non-empty input metadata");
+        LFS_ASSERT_MSG(dim >= 0 && element_size == dtype_size(output.dtype),
+                       "Metal middle-dimension cat metadata is invalid");
+        size_t total = 0;
+        for (const StridedLayout& layout : layouts) {
+            LFS_ASSERT_MSG(static_cast<size_t>(dim) < layout.rank, "Metal cat dimension is outside an input rank");
+            total += layout.dims[dim];
+        }
+        size_t offset = 0;
+        for (size_t i = 0; i < inputs.size(); ++i) {
+            LFS_ASSERT_MSG(inputs[i].dtype == output.dtype, "Metal cat inputs must match output dtype");
+            const size_t extent = layouts[i].dims[dim];
+            encode_cat_input(inputs[i], output, extent * inner_size, total * inner_size, offset * inner_size,
+                             outer_size * extent * inner_size);
+            offset += extent;
+        }
+    }
+
+    void MetalBackendOps::pad(const StorageRef input, const StorageRef output, const StridedLayout& input_layout,
+                              const StridedLayout& output_layout,
+                              const std::array<size_t, MAX_TENSOR_RANK>& pad_before, ExecContext) {
+        LFS_FACADE_TRACE(pad);
+        if (input_layout.element_count == 0)
+            return;
+        LFS_ASSERT_MSG(input.dtype == output.dtype && input_layout.rank == output_layout.rank &&
+                           input_layout.rank <= MAX_TENSOR_RANK,
+                       "Metal pad requires matching dtypes and ranks");
+        const auto context = acquire_context();
+        const auto input_at = context->locate(input);
+        const auto output_at = context->locate(output);
+        const size_t rank = input_layout.rank;
+        const CatPadParams params{
+            .input_offset = input_at.offset,
+            .output_offset = output_at.offset,
+            .input_dims = shader_dims(input_layout),
+            .input_strides = shader_values(input_layout.strides, rank, "Metal pad input stride exceeds uint32"),
+            .output_strides = shader_values(output_layout.strides, rank, "Metal pad output stride exceeds uint32"),
+            .pad_before = shader_values(pad_before, rank, "Metal pad width exceeds uint32"),
+            .count = checked_u32(input_layout.element_count, "Metal pad count exceeds uint32"),
+            .rank = static_cast<uint32_t>(rank),
+        };
+        const std::array uses{input, output};
+        const uint32_t dtype = static_cast<uint32_t>(input.dtype);
+        context->dispatch(uses, {.pipeline = context->pipeline(
+                                     "cat_pad", {{0, 1}, {1, dtype}, {2, dtype},
+                                                 {5, static_cast<uint32_t>(dtype_size(input.dtype))}}),
+                                 .buffers = {input_at.address, output_at.address},
+                                 .params = param_bytes(params),
+                                 .grid = threads(input_layout.element_count)});
     }
 
     void MetalBackendOps::reduce(const StorageRef input, const StorageRef output, const StridedLayout& input_layout,

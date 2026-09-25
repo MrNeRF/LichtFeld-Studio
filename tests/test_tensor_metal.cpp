@@ -357,6 +357,54 @@ namespace {
         }
     }
 
+    TEST_F(TensorMetal, BroadcastsMatchCpu) {
+        const Tensor a_cpu = random_tensor(4 * 1 * 3, -2.0f, 2.0f, 33).reshape({4, 1, 3});
+        const Tensor b_cpu = random_tensor(5 * 1, -2.0f, 2.0f, 34).reshape({5, 1});
+        const Tensor a = to_metal(a_cpu), b = to_metal(b_cpu);
+        expect_close(a + b, a_cpu + b_cpu);
+        expect_close(a * b, a_cpu * b_cpu);
+        expect_close(a.maximum(b), a_cpu.maximum(b_cpu), 0.0f, 0.0f);
+        expect_close(a.lt(b), a_cpu.lt(b_cpu), 0.0f, 0.0f);
+        const Tensor a_int = (a_cpu * 10.0f).to(DataType::Int32), b_int = (b_cpu * 10.0f).to(DataType::Int32);
+        expect_close(to_metal(a_int) - to_metal(b_int), a_int - b_int, 0.0f, 0.0f);
+        const Tensor matrix = random_tensor(300 * 7, 1.0f, 2.0f, 35).reshape({300, 7});
+        const Tensor row = random_tensor(7, 1.0f, 2.0f, 36);
+        expect_close(to_metal(matrix) / to_metal(row), matrix / row);
+    }
+
+    TEST_F(TensorMetal, ClampCatAndPadMatchCpu) {
+        std::vector<float> values = random_tensor(1000, -3.0f, 3.0f, 37).to_vector();
+        values[123] = std::numeric_limits<float>::quiet_NaN();
+        const Tensor x_cpu = Tensor::from_vector(values, {values.size()}, Device::CPU);
+        expect_close(to_metal(x_cpu).clamp(-1.0f, 2.0f), x_cpu.clamp(-1.0f, 2.0f), 0.0f, 0.0f);
+        Tensor in_place = to_metal(x_cpu);
+        in_place.clamp_(-0.5f, 0.5f);
+        expect_close(in_place, x_cpu.clamp(-0.5f, 0.5f), 0.0f, 0.0f);
+        const Tensor integers = (random_tensor(1000, -3.0f, 3.0f, 38) * 10.0f).to(DataType::Int32);
+        Tensor integers_metal = to_metal(integers);
+        integers_metal.clamp_(-5.0f, 7.0f);
+        expect_close(integers_metal, integers.clamp(-5.0f, 7.0f), 0.0f, 0.0f);
+
+        for (const DataType dtype : {DataType::Float32, DataType::Int64, DataType::UInt8, DataType::Float16}) {
+            SCOPED_TRACE(static_cast<int>(dtype));
+            const auto make = [&](const int rows, const int columns, const unsigned seed) {
+                return random_tensor(static_cast<size_t>(rows * columns), 0.0f, 100.0f, seed).to(dtype).reshape({rows, columns});
+            };
+            const Tensor p = make(3, 4, 39), q = make(3, 2, 40), r = make(3, 5, 41);
+            expect_close(Tensor::cat({to_metal(p), to_metal(q), to_metal(r)}, 1), Tensor::cat({p, q, r}, 1), 0.0f, 0.0f);
+            const Tensor u = make(2, 12, 42).reshape({2, 3, 4}), v = make(2, 8, 43).reshape({2, 2, 4});
+            expect_close(Tensor::cat({to_metal(u), to_metal(v)}, 1), Tensor::cat({u, v}, 1), 0.0f, 0.0f);
+        }
+
+        MovementArgs pad_args;
+        pad_args.args = std::vector<std::pair<int, int>>{{1, 1}, {2, 1}};
+        const Tensor base = random_tensor(3 * 4, -1.0f, 1.0f, 44).reshape({3, 4});
+        expect_close(to_metal(base).movement(MovementOp::Pad, pad_args), base.movement(MovementOp::Pad, pad_args), 0.0f, 0.0f);
+        const Tensor transposed = base.transpose(0, 1);
+        expect_close(to_metal(base).transpose(0, 1).movement(MovementOp::Pad, pad_args),
+                     transposed.movement(MovementOp::Pad, pad_args), 0.0f, 0.0f);
+    }
+
     TEST_F(TensorMetal, UnportedOperationsSaySo) {
         const Tensor x = to_metal(random_tensor(16, 0.0f, 1.0f, 9));
         try {
