@@ -2424,18 +2424,21 @@ namespace lfs::training {
             const size_t cap_floats = cap_rows > 0 ? lfs::core::sh_swizzled_float_count(cap_rows, layout_rest_u32)
                                                    : lfs::core::sh_swizzled_float_count(new_size, layout_rest_u32);
             const size_t logical_floats = lfs::core::sh_swizzled_float_count(new_size, layout_rest_u32);
+            const auto stream = getCurrentCUDAStream();
+            t.sync_to_stream(stream);
+            idx_i32.sync_to_stream(stream);
             auto fresh = Tensor::zeros_direct(TensorShape({logical_floats}), cap_floats, t.device(), t.dtype());
             if (t.dtype() == DataType::Float32) {
                 lfs::core::shN_swizzled_gather_self(
                     t.ptr<float>(), fresh.ptr<float>(),
-                    idx_i32.ptr<int>(), new_size, 0, layout_rest_u32);
+                    idx_i32.ptr<int>(), new_size, 0, layout_rest_u32, stream);
             } else if (t.dtype() == DataType::UInt8 || t.dtype() == DataType::Bool) {
                 if (uint8_fill >= 0 && cap_floats > 0) {
                     const cudaError_t err = cudaMemsetAsync(
                         fresh.ptr<uint8_t>(),
                         static_cast<unsigned char>(uint8_fill),
                         cap_floats * sizeof(uint8_t),
-                        fresh.stream());
+                        stream);
                     if (err != cudaSuccess) {
                         throw std::runtime_error(
                             std::string("MRNF::compact_splats: cudaMemsetAsync failed: ") +
@@ -2444,7 +2447,7 @@ namespace lfs::training {
                 }
                 lfs::core::shN_swizzled_gather_self_u8(
                     t.ptr<uint8_t>(), fresh.ptr<uint8_t>(),
-                    idx_i32.ptr<int>(), new_size, 0, layout_rest_u32);
+                    idx_i32.ptr<int>(), new_size, 0, layout_rest_u32, stream);
             } else {
                 throw std::runtime_error("MRNF::compact_splats: unsupported swizzled shN dtype");
             }
