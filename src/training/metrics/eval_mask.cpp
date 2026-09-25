@@ -7,7 +7,6 @@
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
 #include "core/tensor_cuda_interop.hpp"
-#include "core/tensor_upload.hpp"
 #include "io/cuda/image_format_kernels.cuh"
 #include "training/kernels/mask_preprocess.hpp"
 
@@ -46,8 +45,8 @@ namespace lfs::training {
                 auto cpu_tensor = lfs::core::Tensor::from_blob(
                     img_data, lfs::core::TensorShape({H, W, 4}),
                     lfs::core::Device::CPU, lfs::core::DataType::UInt8);
+                // The implicit transfer stream overload completes the upload before returning.
                 auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
-                lfs::core::TensorWorkQueue(lfs::core::GpuBackend::CUDA, stream).wait();
                 lfs::core::free_image(img_data);
 
                 auto rgb = lfs::core::Tensor::zeros(
