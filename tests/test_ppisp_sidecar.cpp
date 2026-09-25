@@ -36,12 +36,12 @@ namespace {
         return Tensor::from_vector(values, {3, 4, 4}, Device::CUDA);
     }
 
-    Tensor make_controller_input(float base) {
-        std::vector<float> values(3 * 48 * 48);
+    Tensor make_controller_input(float base, size_t height = 48, size_t width = 48) {
+        std::vector<float> values(3 * height * width);
         for (size_t i = 0; i < values.size(); ++i) {
             values[i] = base + 0.001f * static_cast<float>(i);
         }
-        return Tensor::from_vector(values, {1, 3, 48, 48}, Device::CUDA);
+        return Tensor::from_vector(values, {1, 3, height, width}, Device::CUDA);
     }
 
     Tensor make_controller_grad(float value) {
@@ -80,7 +80,8 @@ namespace {
             return false;
         }
         for (size_t i = 0; i < expected.size(); ++i) {
-            if (std::abs(expected[i] - actual[i]) > tol) {
+            if (!std::isfinite(expected[i]) || !std::isfinite(actual[i]) ||
+                std::abs(expected[i] - actual[i]) > tol) {
                 return false;
             }
         }
@@ -107,6 +108,24 @@ namespace {
     private:
         std::vector<std::filesystem::path> temp_paths_;
     };
+
+    TEST(PPISPControllerPoolTest, PredictPreservesOutputAcrossInputSizes) {
+        PPISPControllerPool controller(1, 64);
+        controller.allocate_buffers(48, 48);
+
+        const auto full_input = make_controller_input(0.2f);
+        const auto small_input = make_controller_input(0.35f, 24, 30);
+        const auto full_before = controller.predict(0, full_input).cpu().to_vector();
+        const auto small_output = controller.predict(0, small_input).cpu().to_vector();
+        const auto full_after = controller.predict(0, full_input).cpu().to_vector();
+
+        ASSERT_EQ(full_before.size(), 9u);
+        ASSERT_EQ(small_output.size(), 9u);
+        for (const float value : small_output) {
+            EXPECT_TRUE(std::isfinite(value));
+        }
+        EXPECT_TRUE(vectors_close(full_before, full_after));
+    }
 
     TEST_F(PPISPSidecarTest, SaveLoadWithMetadataSupportsRemappedImport) {
         PPISPConfig config;

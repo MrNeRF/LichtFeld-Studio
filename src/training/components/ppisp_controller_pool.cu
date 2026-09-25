@@ -278,22 +278,16 @@ namespace lfs::training {
         if (buf_h_ >= max_h && buf_w_ >= max_w)
             return;
 
-        const size_t pool_h = max_h / POOL_STRIDE;
-        const size_t pool_w = max_w / POOL_STRIDE;
-
-        buf_conv1_ = lfs::core::Tensor::empty({1, CNN_CH1, max_h, max_w}, lfs::core::Device::CUDA);
-        buf_pool_ = lfs::core::Tensor::empty({1, CNN_CH1, pool_h, pool_w}, lfs::core::Device::CUDA);
-        buf_conv2_ = lfs::core::Tensor::empty({1, CNN_CH2, pool_h, pool_w}, lfs::core::Device::CUDA);
-        buf_conv3_ = lfs::core::Tensor::empty({1, CNN_CH3, pool_h, pool_w}, lfs::core::Device::CUDA);
+        // predict() allocates exact-size convolution outputs for each image.
+        // Only the fixed-size pooled output is reused across predictions.
         buf_pool2_ = lfs::core::Tensor::empty({1, CNN_CH3, POOL2_SIZE, POOL2_SIZE}, lfs::core::Device::CUDA);
 
         buf_h_ = max_h;
         buf_w_ = max_w;
 
-        const size_t buf_bytes = (buf_conv1_.numel() + buf_pool_.numel() + buf_conv2_.numel() + buf_conv3_.numel() +
-                                  buf_pool2_.numel()) *
-                                 sizeof(float);
-        LOG_INFO("[PPISPControllerPool] CNN buffers %zux%zu: %.1f MB", max_h, max_w, buf_bytes / (1024.0 * 1024.0));
+        const size_t buf_bytes = buf_pool2_.numel() * sizeof(float);
+        LOG_INFO("[PPISPControllerPool] Pooled CNN buffer for max image %zux%zu: %.1f KiB",
+                 max_h, max_w, buf_bytes / 1024.0);
     }
 
     lfs::core::Tensor PPISPControllerPool::predict(const int camera_idx, const lfs::core::Tensor& rendered_rgb,
