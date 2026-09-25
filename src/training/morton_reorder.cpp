@@ -45,7 +45,7 @@ namespace lfs::training::morton {
             dims[0] = n;
             Tensor gathered = Tensor::zeros_direct(
                 TensorShape(dims), std::max(cap, n), tensor.device(), tensor.dtype());
-            gathered.set_stream(tensor.stream());
+            gathered.set_stream(core::getCurrentCUDAStream());
             if (old0 == n) {
                 tensor.index_select_into(gathered, 0, perm, BoundaryMode::Assert);
                 tensor = std::move(gathered);
@@ -59,7 +59,7 @@ namespace lfs::training::morton {
             dims[0] = old0;
             Tensor dest = Tensor::zeros_direct(
                 TensorShape(dims), cap, tensor.device(), tensor.dtype());
-            dest.set_stream(tensor.stream());
+            dest.set_stream(core::getCurrentCUDAStream());
             dest.slice(0, 0, n).copy_from(gathered);
             dest.slice(0, n, old0).copy_from(tensor.slice(0, n, old0));
             tensor = std::move(dest);
@@ -78,7 +78,7 @@ namespace lfs::training::morton {
                 return;
             }
             Tensor scratch = Tensor::zeros_direct(tensor.shape(), n, tensor.device(), tensor.dtype());
-            scratch.set_stream(tensor.stream());
+            scratch.set_stream(core::getCurrentCUDAStream());
             tensor.index_select_into(scratch, 0, perm, BoundaryMode::Assert);
             tensor.copy_from(scratch);
         }
@@ -349,7 +349,7 @@ namespace lfs::training::morton {
         const std::size_t n = perm.numel();
         if (tensor.ndim() == 2 && tensor.size(1) == n && tensor.size(0) != n) {
             Tensor dest = Tensor::zeros(tensor.shape(), tensor.device(), tensor.dtype());
-            dest.set_stream(tensor.stream());
+            dest.set_stream(core::getCurrentCUDAStream());
             tensor.index_select_into(dest, 1, perm, BoundaryMode::Assert);
             tensor = std::move(dest);
             return;
