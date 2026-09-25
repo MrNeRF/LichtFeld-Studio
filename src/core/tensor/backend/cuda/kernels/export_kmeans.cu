@@ -1540,6 +1540,7 @@ namespace lfs::core::export_cuda {
             auto* half_centroids = half_points + np * 48;
             prepare_half_sh_kernel<<<(std::max(np, kp) * 48 + 255) / 256, 256>>>(sh, centroids.ptr<float>(), half_points, half_centroids, n, k);
             LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.prepare_half_sh");
+            // LFS-CENSUS-OK(unpinned-multi-capture): every operand is freed stream-ordered on the legacy stream this launch uses.
             assign_sh3_screened_kernel<<<(n + 127) / 128, 512>>>(
                 sh, centroids.ptr<float>(), centroid_norms.ptr<float>(), labels.ptr<int>(), n, k, half_points, half_centroids, have_labels);
             LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_sh3_labels");
