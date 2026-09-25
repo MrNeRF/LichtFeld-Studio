@@ -386,6 +386,12 @@ progress fill {
     min-width: 0;
 }
 
+/* On a narrow panel the label truncates before a number loses its digits. */
+.setting-row > input.number-input {
+    flex: 1 1 72dp;
+    min-width: 48dp;
+}
+
 .setting-row > input[type="checkbox"] {
     margin: 0;
 }
@@ -393,13 +399,13 @@ progress fill {
 .prop-label,
 .setting-row__label-col {
     width: 120dp;
-    min-width: 120dp;
+    min-width: 64dp;
     color: #cdd6f4;
     font-size: 12dp;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    flex-shrink: 0;
+    flex-shrink: 3;
 }
 
 .prop-label {
