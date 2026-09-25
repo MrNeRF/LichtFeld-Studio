@@ -1051,7 +1051,7 @@ namespace lfs::io {
                 img_data, lfs::core::TensorShape({H, W, C}),
                 lfs::core::Device::CPU, lfs::core::DataType::UInt8);
             auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::GPU);
-            synchronize_async_upload_before_free(gpu_uint8.stream(), "image");
+
             gpu_uint8.set_name("io.image.gpu_staging");
             if (used_stbi)
                 stbi_image_free(img_data);
@@ -2671,7 +2671,7 @@ namespace lfs::io {
                         img_data, lfs::core::TensorShape({H, W, 4}),
                         lfs::core::Device::CPU, lfs::core::DataType::UInt8);
                     auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::GPU);
-                    synchronize_async_upload_before_free(gpu_uint8.stream(), "image");
+
                     lfs::core::free_image(img_data);
 
                     auto rgb = item.params.output_uint8
@@ -3069,7 +3069,7 @@ namespace lfs::io {
                             img_data, lfs::core::TensorShape({H, W, C}),
                             lfs::core::Device::CPU, lfs::core::DataType::UInt8);
                         auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::GPU);
-                        synchronize_async_upload_before_free(gpu_uint8.stream(), "image");
+
                         lfs::core::free_image(img_data);
 
                         auto decoded = item.params.output_uint8
