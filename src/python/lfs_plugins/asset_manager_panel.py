@@ -3535,7 +3535,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         path = str(asset.get("path") or "") if asset else ""
         if not asset_id or not path or not self._asset_index:
             return
-        label = tr("projects.action.move_to_trash")
+        label = tr("projects.dialog.trash_confirm")
 
         def confirmed(button: str) -> None:
             if button != label:
@@ -3553,9 +3553,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 self._request_model_update()
 
         lf.ui.confirm_dialog(
-            label,
-            f'{label}\n\n{path}',
-            [tr("common.cancel"), label],
+            tr("projects.dialog.trash_title"),
+            f'{tr("projects.dialog.trash_message")}\n\n{path}',
+            [label, tr("common.cancel")],
             confirmed,
             "error",
         )

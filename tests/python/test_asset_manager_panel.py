@@ -2170,18 +2170,21 @@ def test_move_to_trash_uses_platform_helper_before_catalog_removal(panel_module,
     panel = panel_module.AssetManagerPanel()
     panel._asset_index = _index(assets={asset["id"]: asset})
     actions = []
+    dialogs = []
     monkeypatch.setattr(panel_module, "_move_to_trash", lambda path: actions.append(("trash", path)))
     monkeypatch.setattr(panel, "_library_command", lambda name, *args, **_kwargs: actions.append((name, *args)) or True)
     monkeypatch.setattr(panel, "refresh_catalog", lambda **_kwargs: actions.append(("refresh",)))
     monkeypatch.setattr(
         panel_module.lf.ui,
         "confirm_dialog",
-        lambda _title, _message, buttons, callback, _tone: callback(buttons[-1]),
+        lambda _title, _message, buttons, callback, tone: dialogs.append(buttons) or callback(buttons[0]),
         raising=False,
     )
 
     panel.on_move_asset_to_trash(None, None, [asset["id"]])
 
+    # The error style marks the first button: it must be the destructive action, not Cancel.
+    assert dialogs[0][-1] == panel_module.tr("common.cancel")
     assert actions[:2] == [
         ("trash", "C:/projects/example.licht"),
         ("delete_asset", asset["id"]),
