@@ -5653,8 +5653,9 @@ namespace lfs::training {
             return edge_map_buffer_;
         }
         if (!map.is_valid()) {
-            map = lfs::core::Tensor::zeros_direct(
-                map_shape, height, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            // Pooled, not direct: evicting a map of another resolution would
+            // otherwise cudaFree, a device-wide sync that stalls every thread.
+            map = lfs::core::Tensor::empty(map_shape, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
         }
         map.set_stream(stream);
         map.copy_(edge_map_buffer_);
