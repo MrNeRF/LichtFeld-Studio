@@ -1208,6 +1208,68 @@ namespace lfs::core::internal {
             context->release(scratch);
         }
 
+        // random_op kinds.
+        constexpr uint32_t kUniform = 0, kBernoulli = 1, kRandint = 2, kNormal = 3, kMultinomialReplacement = 4,
+                           kGumbelKeys = 5, kRankSelect = 6, kWeightStatistics = 7;
+
+        struct RandomParams {
+            uint64_t output_offset;
+            uint64_t weights_offset;
+            uint64_t keys_offset;
+            uint64_t seed;
+            uint32_t count;
+            uint32_t sample_count;
+            int32_t low;
+            int32_t high;
+            float first;
+            float second;
+            float total;
+            uint32_t padding;
+        };
+        static_assert(sizeof(RandomParams) == 64);
+
+        API_AVAILABLE(macos(26.0))
+        void encode_random(Context& context, const uint32_t kind, const StorageRef output, const StorageRef weights,
+                           const StorageRef keys, RandomParams params, const MTLSize grid) {
+            std::vector<StorageRef> uses;
+            std::array<uint64_t, 3> addresses{};
+            const auto bind = [&](const StorageRef& storage, const size_t slot, uint64_t& offset) {
+                if (storage.data == nullptr)
+                    return;
+                const auto at = context.locate(storage);
+                addresses[slot] = at.address;
+                offset = at.offset;
+                uses.push_back(storage);
+            };
+            bind(output, 0, params.output_offset);
+            bind(weights, 1, params.weights_offset);
+            bind(keys, 2, params.keys_offset);
+            context.dispatch(uses, {.pipeline = context.pipeline("random_op", {{0, kind}}),
+                                    .buffers = {addresses[0], addresses[1], addresses[2]},
+                                    .params = param_bytes(params),
+                                    .grid = grid,
+                                    .group_size = MTLSizeMake(kThreadgroupWidth, 1, 1)});
+        }
+
+        MTLSize thread_groups(const size_t count) {
+            return MTLSizeMake((count + kThreadgroupWidth - 1) / kThreadgroupWidth, 1, 1);
+        }
+
+        // Elementwise draws: every element is one Philox block keyed by the seed.
+        API_AVAILABLE(macos(26.0))
+        void draw_elements(const uint32_t kind, const StorageRef output, const RandomProgram& program) {
+            if (program.count == 0)
+                return;
+            encode_random(*acquire_context(), kind, output, {}, {},
+                          {.seed = program.seed,
+                           .count = checked_u32(program.count, "Metal random count exceeds uint32"),
+                           .low = program.low,
+                           .high = program.high,
+                           .first = program.first,
+                           .second = program.second},
+                          thread_groups(program.count));
+        }
+
         bool is_contiguous(const StridedLayout& layout) {
             size_t expected = 1;
             for (size_t dimension = layout.rank; dimension-- > 0;) {
@@ -1844,6 +1906,72 @@ namespace lfs::core::internal {
         LFS_FACADE_TRACE(sort_2d);
         sort_lines(values, indices, program.outer_size * program.inner_size, program.dim_size, program.inner_size,
                    program.descending);
+    }
+
+    void MetalBackendOps::uniform(const StorageRef output, const RandomProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(uniform);
+        draw_elements(kUniform, output, program);
+    }
+
+    void MetalBackendOps::bernoulli(const StorageRef output, const RandomProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(bernoulli);
+        draw_elements(kBernoulli, output, program);
+    }
+
+    void MetalBackendOps::randint(const StorageRef output, const RandomProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(randint);
+        draw_elements(kRandint, output, program);
+    }
+
+    // Every element draws its own Philox block, so odd counts need no scratch.
+    void MetalBackendOps::normal(const StorageRef output, StorageRef, const RandomProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(normal);
+        draw_elements(kNormal, output, program);
+    }
+
+    void MetalBackendOps::multinomial(const StorageRef weights, const StorageRef output, const RandomProgram& program,
+                                      ExecContext) {
+        LFS_FACADE_TRACE(multinomial);
+        if (program.count == 0 || program.sample_count == 0)
+            return;
+        LFS_ASSERT_MSG(weights.dtype == DataType::Float32 && output.dtype == DataType::Int64,
+                       "Metal multinomial requires Float32 weights and Int64 samples");
+        const auto context = acquire_context();
+        const uint32_t categories = checked_u32(program.count, "Metal multinomial category count exceeds uint32");
+        const uint32_t samples = checked_u32(program.sample_count, "Metal multinomial sample count exceeds uint32");
+        // The weights are validated on the host, like the CUDA path.
+        struct WeightStatistics {
+            float sum;
+            uint32_t invalid;
+            float scale;
+        };
+        const StorageRef scratch = context->allocate(sizeof(WeightStatistics));
+        encode_random(*context, kWeightStatistics, scratch, weights, {}, {.count = categories}, MTLSizeMake(1, 1, 1));
+        context->wait(context->pending(scratch));
+        WeightStatistics statistics{};
+        std::memcpy(&statistics, context->host(scratch), sizeof(statistics));
+        context->release(scratch);
+        LFS_ASSERT_MSG(statistics.invalid == 0, "multinomial weights must be finite and non-negative");
+        LFS_ASSERT_MSG(std::isfinite(statistics.sum) && statistics.sum > 0.0f,
+                       "multinomial weights must have a positive finite sum");
+        if (program.replacement) {
+            encode_random(*context, kMultinomialReplacement, output, weights, {},
+                          {.seed = program.seed, .count = categories, .sample_count = samples,
+                           .first = statistics.scale, .total = statistics.sum},
+                          thread_groups(program.sample_count));
+            return;
+        }
+        LFS_ASSERT_MSG(program.sample_count <= program.count,
+                       "multinomial sample count exceeds weights without replacement");
+        // Gumbel-top-k: the sample_count largest perturbed log-weights, ranked
+        // by counting; ties fall back to the lower index.
+        const StorageRef keys = context->allocate(program.count * sizeof(float));
+        encode_random(*context, kGumbelKeys, {}, weights, keys,
+                      {.seed = program.seed, .count = categories, .sample_count = samples},
+                      thread_groups(program.count));
+        encode_random(*context, kRankSelect, output, {}, keys, {.count = categories, .sample_count = samples},
+                      thread_groups(program.count));
+        context->release(keys);
     }
 
     void MetalBackendOps::reduce(const StorageRef input, const StorageRef output, const StridedLayout& input_layout,

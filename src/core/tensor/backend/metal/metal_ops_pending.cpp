@@ -92,24 +92,4 @@ namespace lfs::core::internal {
         not_ported("decimate_merge");
     }
 
-    void MetalBackendOps::uniform(StorageRef, const RandomProgram&, ExecContext) {
-        not_ported("uniform");
-    }
-
-    void MetalBackendOps::bernoulli(StorageRef, const RandomProgram&, ExecContext) {
-        not_ported("bernoulli");
-    }
-
-    void MetalBackendOps::randint(StorageRef, const RandomProgram&, ExecContext) {
-        not_ported("randint");
-    }
-
-    void MetalBackendOps::multinomial(StorageRef, StorageRef, const RandomProgram&, ExecContext) {
-        not_ported("multinomial");
-    }
-
-    void MetalBackendOps::normal(StorageRef, StorageRef, const RandomProgram&, ExecContext) {
-        not_ported("normal");
-    }
-
 } // namespace lfs::core::internal

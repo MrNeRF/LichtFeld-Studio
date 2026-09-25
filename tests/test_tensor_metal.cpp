@@ -574,6 +574,38 @@ namespace {
         }
     }
 
+    // Metal and Vulkan draw the same Philox blocks, so a seed gives both the
+    // same numbers.
+    TEST_F(TensorMetal, RandomDrawsMatchVulkan) {
+        if (!gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP() << "No Vulkan device";
+        const auto draw = [](const GpuBackend backend, const auto& make) {
+            GpuBackendScope scope(backend);
+            Tensor::manual_seed(1234);
+            return make().cpu();
+        };
+        const auto compare = [&](const auto& make, const float tolerance) {
+            const Tensor metal = draw(GpuBackend::Metal, make);
+            const Tensor vulkan = draw(GpuBackend::Vulkan, make);
+            expect_close(metal, vulkan, tolerance, tolerance);
+        };
+        compare([] { return Tensor::rand({10007}, Device::GPU); }, 0.0f);
+        compare([] { return Tensor::randint({10007}, -7, 1000, Device::GPU); }, 0.0f);
+        compare([] { return Tensor::bernoulli({10007}, 0.3f, Device::GPU); }, 0.0f);
+        compare([] { return Tensor::randn({10007}, Device::GPU); }, 1.0e-5f);
+        const Tensor weights = random_tensor(50, 0.0f, 2.0f, 64);
+        compare([&] { return Tensor::multinomial(weights.to(Device::GPU), 200, true); }, 0.0f);
+        compare([&] { return Tensor::multinomial(weights.to(Device::GPU), 20, false); }, 0.0f);
+
+        const Tensor uniform = draw(GpuBackend::Metal, [] { return Tensor::rand({100000}, Device::GPU); });
+        EXPECT_NEAR(uniform.mean().item(), 0.5f, 0.01f);
+        EXPECT_GE(uniform.min().item(), 0.0f);
+        EXPECT_LT(uniform.max().item(), 1.0f);
+        const Tensor normal = draw(GpuBackend::Metal, [] { return Tensor::randn({100000}, Device::GPU); });
+        EXPECT_NEAR(normal.mean().item(), 0.0f, 0.02f);
+        EXPECT_NEAR(normal.std().item(), 1.0f, 0.02f);
+    }
+
     TEST_F(TensorMetal, UnportedOperationsSaySo) {
         const Tensor sh = to_metal(random_tensor(16, 0.0f, 1.0f, 9)).reshape({1, 16});
         try {

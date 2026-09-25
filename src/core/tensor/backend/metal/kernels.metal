@@ -1782,6 +1782,152 @@ kernel void radix_sort(device uchar* values_buffer [[buffer(0)]],
 }
 
 // ---------------------------------------------------------------------------
+// Random draws, ported from random.slang: element i takes Philox4x32-10 with
+// counter i and the seed as key, so every element draws an independent,
+// reproducible 128-bit block. kOp: 0 uniform [first, second), 1
+// bernoulli(first), 2 randint [low, high), 3 normal(first, second), 4
+// multinomial with replacement, 5 Gumbel keys for sampling without
+// replacement, 6 rank selection of the sample_count largest keys, 7 weight
+// statistics (scaled sum, invalid flag, scale) in one threadgroup.
+
+struct RandomParams {
+    ulong output_offset;
+    ulong weights_offset;
+    ulong keys_offset;
+    ulong seed;
+    uint count;
+    uint sample_count;
+    int low;
+    int high;
+    float first;
+    float second;
+    float total;
+    uint padding;
+};
+
+constant float kUnitScale = 1.0f / 16777216.0f;
+constant float kTwoPi = 6.28318530717958647692f;
+
+static uint4 philox_draw(ulong index, ulong seed) {
+    uint4 counter = uint4(uint(index), uint(index >> 32), 0u, 0u);
+    uint2 key = uint2(uint(seed), uint(seed >> 32));
+    for (uint round = 0; round < 10; ++round) {
+        const uint high0 = mulhi(0xD2511F53u, counter.x), low0 = 0xD2511F53u * counter.x;
+        const uint high1 = mulhi(0xCD9E8D57u, counter.z), low1 = 0xCD9E8D57u * counter.z;
+        counter = uint4(high1 ^ counter.y ^ key.x, low1, high0 ^ counter.w ^ key.y, low0);
+        key += uint2(0x9E3779B9u, 0xBB67AE85u);
+    }
+    return counter;
+}
+
+// A 24-bit mantissa draw in [0, 1), as the CUDA kernels build it.
+static float unit_interval(uint word) {
+    return float(word >> 8) * kUnitScale;
+}
+
+static float float_below(float value) {
+    const uint bits = as_type<uint>(value);
+    return value > 0.0f ? as_type<float>(bits - 1u) : value == 0.0f ? as_type<float>(0x80000001u) : as_type<float>(bits + 1u);
+}
+
+kernel void random_op(device uchar* output_buffer [[buffer(0)]],
+                      device const uchar* weights_buffer [[buffer(1)]],
+                      device uchar* keys_buffer [[buffer(2)]],
+                      constant RandomParams& params [[buffer(3)]],
+                      uint index [[thread_position_in_grid]],
+                      uint thread_index [[thread_index_in_threadgroup]],
+                      ushort lane [[thread_index_in_simdgroup]],
+                      ushort simdgroup [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float shared_values[kReduceThreads / 32];
+    threadgroup uint shared_flags[kReduceThreads / 32];
+    device uchar* output = output_buffer + params.output_offset;
+    device const float* weights = (device const float*)(weights_buffer + params.weights_offset);
+    device float* keys = (device float*)(keys_buffer + params.keys_offset);
+    if (kOp == 7) {
+        float maximum = 0.0f;
+        uint invalid = 0u;
+        for (uint i = thread_index; i < params.count; i += kReduceThreads) {
+            const float weight = weights[i];
+            invalid |= !(weight >= 0.0f) || isinf(weight) ? 1u : 0u;
+            maximum = max(maximum, weight);
+        }
+        maximum = simd_max(maximum);
+        invalid = simd_or(invalid);
+        if (lane == 0) {
+            shared_values[simdgroup] = maximum;
+            shared_flags[simdgroup] = invalid;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        maximum = simd_max(lane < kReduceThreads / 32 ? shared_values[lane] : 0.0f);
+        invalid = simd_or(lane < kReduceThreads / 32 ? shared_flags[lane] : 0u);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        // Scale the weights so their maximum sits near 2^0 before summing.
+        const uint exponent = min(max((as_type<uint>(maximum) >> 23) & 255u, 1u), 253u);
+        const float scale = as_type<float>((254u - exponent) << 23);
+        float sum = 0.0f;
+        for (uint i = thread_index; i < params.count; i += kReduceThreads)
+            sum += weights[i] * scale;
+        sum = simd_sum(sum);
+        if (lane == 0)
+            shared_values[simdgroup] = sum;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        sum = simd_sum(lane < kReduceThreads / 32 ? shared_values[lane] : 0.0f);
+        if (thread_index == 0) {
+            ((device float*)output)[0] = sum;
+            ((device uint*)output)[1] = invalid;
+            ((device float*)output)[2] = scale;
+        }
+        return;
+    }
+    if (index >= (kOp == 4 ? params.sample_count : params.count))
+        return;
+    if (kOp == 6) {
+        const float key = keys[index];
+        uint rank = 0;
+        for (uint other = 0; other < params.count; ++other) {
+            const float candidate = keys[other];
+            rank += candidate > key || (candidate == key && other < index) ? 1u : 0u;
+        }
+        if (rank < params.sample_count)
+            ((device long*)output)[rank] = long(index);
+        return;
+    }
+    const uint4 words = philox_draw(index, params.seed);
+    if (kOp == 0) {
+        float value = params.first;
+        if (params.first != params.second) {
+            value = fma(unit_interval(words.x), params.second - params.first, params.first);
+            if (!(value < params.second))
+                value = float_below(params.second);
+        }
+        ((device float*)output)[index] = value;
+    } else if (kOp == 1) {
+        ((device float*)output)[index] = unit_interval(words.x) < params.first ? 1.0f : 0.0f;
+    } else if (kOp == 2) {
+        const ulong range = ulong(long(params.high) - long(params.low));
+        ((device int*)output)[index] = int(long(params.low) + long((ulong(words.x) * range) >> 32));
+    } else if (kOp == 3) {
+        const float radius = sqrt(-2.0f * log(float((words.x >> 8) + 1u) * kUnitScale));
+        ((device float*)output)[index] = params.first + params.second * (radius * cos(kTwoPi * unit_interval(words.y)));
+    } else if (kOp == 4) {
+        const float u = unit_interval(words.x) * params.total;
+        float cumulative = 0.0f;
+        long sample = long(params.count - 1);
+        for (uint category = 0; category < params.count; ++category) {
+            cumulative += weights[category] * params.first;
+            if (u < cumulative) {
+                sample = long(category);
+                break;
+            }
+        }
+        ((device long*)output)[index] = sample;
+    } else {
+        const float u = min(max(unit_interval(words.x), 1e-10f), 1.0f - 1e-10f);
+        keys[index] = log(max(weights[index], 1e-10f)) - log(-log(u));
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Float32 GEMM on the matrix units through Metal Performance Primitives:
 // C[m][n] = A[m][k] * B, with B stored as [k][n] or, with kTransposeB, as
 // [n][k]; batches are packed. kBiasRelu applies max(value + bias[row], 0) to
