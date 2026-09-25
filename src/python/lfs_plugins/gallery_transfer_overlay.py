@@ -107,6 +107,9 @@ class GalleryTransferOverlay:
                 get_gallery_controller().command("pause" if identifier == "native" else action,
                                                  None if identifier == "native" else identifier)
                 self._message = ""
+            except ValueError as exc:
+                # The service refuses (busy, list changed) with messages meant for the user.
+                self._message = localize_message(str(exc))
             except Exception as exc:
                 log_failure("_action", exc, path=getattr(self, "_path", ""))
                 self._message = localize_message(str(exc))

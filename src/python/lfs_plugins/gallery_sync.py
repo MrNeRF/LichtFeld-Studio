@@ -1722,11 +1722,11 @@ class GallerySync:
 
     def clear_finished(self, job_ids):
         """Clear reviewed account-local history and owned files, retaining recovery."""
-        self._client()
-        bucket = self._bucket()
         identifiers = tuple(dict.fromkeys(job_ids))
 
         def action():
+            # Resolved here: a refresh this waits for may reload the journal.
+            bucket = self._bucket()
             guard = _locked_sidecar(self.root / "local-use.lock", blocking=False)
             try:
                 guard.__enter__()
@@ -1776,7 +1776,7 @@ class GallerySync:
                     self.message = "Finished transfers cleared. Project links and recovery copies kept."
             finally:
                 guard.__exit__(None, None, None)
-        self._launch(action)
+        self._launch_metadata(action)
 
     def _retire_export(self, job):
         # Never remove a user-supplied file; only snapshots created inside our spool.

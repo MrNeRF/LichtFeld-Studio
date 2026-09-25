@@ -953,6 +953,26 @@ def test_overlay_rows_track_processing_pause_completion_and_cleared_recovery(gal
     assert rows() == []
     assert state['jobs'][0]['retired']  # Recovery record remains in the journal.
 
+def test_overlay_shows_service_refusal_without_logging_a_failure(gallery, monkeypatch):
+    from lfs_plugins.gallery_transfer_overlay import GalleryTransferOverlay
+    from test_asset_manager_panel import _Handle
+    overlay_module = import_module('lfs_plugins.gallery_transfer_overlay')
+    controller_module = import_module('lfs_plugins.gallery_controller')
+
+    class Busy:
+        def command(self, *_args):
+            raise ValueError("Wait for the current operation or pause it first.")
+
+    failures = []
+    monkeypatch.setattr(controller_module, 'get_gallery_controller', Busy)
+    monkeypatch.setattr(overlay_module, 'log_failure', lambda *args, **kwargs: failures.append(args))
+    monkeypatch.setattr(overlay_module.lf.ui, 'request_redraw', lambda: None, raising=False)
+    overlay = GalleryTransferOverlay()
+    overlay._handle = _Handle()
+    overlay._action(None, None, ['clear_finished'])
+    assert overlay._message
+    assert failures == []
+
 @pytest.mark.parametrize('commit,remote_title,expected', [
     ('saved', 'My scene', 'equal'), ('new-save', 'My scene', 'local'),
     ('saved', 'Portal edit', 'remote'), ('new-save', 'Portal edit', 'diverged'), ('', 'My scene', 'unknown')])

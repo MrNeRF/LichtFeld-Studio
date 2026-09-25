@@ -952,6 +952,27 @@ def test_clear_download_preserves_backup_and_project_link(tmp_path, monkeypatch)
     finish(restarted)
     assert restarted.snapshot()["jobs"][0] == kept
 
+def test_clear_requested_during_refresh_runs_after_it(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    job, path, stage = cleanup_download(service)
+    listing, release = threading.Event(), threading.Event()
+
+    def slow_list(self):
+        listing.set()
+        assert release.wait(3)
+        return []
+
+    monkeypatch.setattr(Client, "list_scenes", slow_list)
+    service.refresh()
+    assert listing.wait(3)
+    try:
+        service.clear_finished([job["id"]])
+    finally:
+        release.set()
+    finish(service)
+    assert not path.exists() and not stage.exists()
+    assert service.snapshot()["jobs"] == []
+
 def test_clear_history_never_deletes_external_upload_source(tmp_path, monkeypatch):
     service = connected(tmp_path, monkeypatch)
     path = tmp_path / "my-original.licht"
