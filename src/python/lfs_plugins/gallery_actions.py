@@ -18,7 +18,7 @@ def gallery_quota(facts):
 
 
 def gallery_eligibility(entry, facts):
-    reasons = []
+    reasons = ["copy"] if entry.get("copy_of") else []
     if (facts.get("connection_state", "connected" if facts.get("signed_in", True) else "not_connected") != "connected"
             or facts.get("relink_required")):
         reasons.append("connect")

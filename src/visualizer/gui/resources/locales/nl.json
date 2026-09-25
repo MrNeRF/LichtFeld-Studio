@@ -2806,6 +2806,7 @@
   "projects.gallery.eligibility.external_payloads": "Externe splatgegevens zijn niet ingesloten in de weergavekopie",
   "projects.gallery.eligibility.space": "Onvoldoende vrije ruimte in de Galerie",
   "projects.gallery.eligibility.not_checked": "Geschiktheid wordt gecontroleerd bij het voorbereiden van de weergavekopie",
+  "projects.gallery.eligibility.copy": "Dit bestand is een kopie van een ander project. Gebruik Project opslaan als om het apart te publiceren.",
   "projects.gallery.state.presentation": "Omslag of verhaal gewijzigd",
   "projects.gallery.state.remote_content": "Wijzigingen in de galerie (scène-inhoud)",
   "projects.gallery.state.replaced": "Heeft een gepubliceerd project vervangen",

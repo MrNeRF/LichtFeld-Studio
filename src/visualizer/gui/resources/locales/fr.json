@@ -2806,6 +2806,7 @@
   "projects.gallery.eligibility.external_payloads": "Les données externes des splats ne sont pas intégrées à la copie de visualisation",
   "projects.gallery.eligibility.space": "Espace restant insuffisant dans la Galerie",
   "projects.gallery.eligibility.not_checked": "La compatibilité est vérifiée pendant la préparation de la copie",
+  "projects.gallery.eligibility.copy": "Ce fichier est une copie d’un autre projet. Utilisez Enregistrer le projet sous pour le publier séparément.",
   "projects.gallery.state.presentation": "Couverture ou récit modifié",
   "projects.gallery.state.remote_content": "Modifications dans la galerie (contenu de la scène)",
   "projects.gallery.state.replaced": "A remplacé un projet publié",

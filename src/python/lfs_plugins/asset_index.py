@@ -17,7 +17,7 @@ from copy import copy
 from dataclasses import dataclass, field
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar
 
 from .asset_storage import prune_previews
 from .project_identity import ProjectPathIdentity
@@ -74,10 +74,12 @@ def read_catalog_preview(library_path: Path) -> Dict[str, Any]:
         if not project_path.lower().endswith(SUPPORTED_ASSET_EXTENSION):
             continue
         status = str(value.get("status") or "READING")
+        project_uuid = str(value.get("project_uuid") or project_id)
         projects[project_id] = {
             **value,
             "id": project_id,
-            "project_uuid": project_id,
+            "project_uuid": project_uuid,
+            "copy_of": project_uuid if project_uuid != project_id else "",
             "name": str(value.get("name") or Path(project_path).stem),
             "path": project_path,
             "exists": status != "MISSING",
@@ -95,7 +97,6 @@ HEALTH_FIX_ACTIONS = {
     "UNREADABLE": "verify",
     "REPAIR_ONLY": "repair",
     "UNSUPPORTED_NEWER": "update",
-    "DIVERGED_COPIES": "review_copies",
 }
 
 _PROJECT_STORAGE_FIELDS = frozenset(
@@ -122,11 +123,13 @@ _PROJECT_STORAGE_FIELDS = frozenset(
         "iteration",
         "name_origin",
         "previous_project_uuid",
-        "aliases",
+        "project_uuid",
         "stat_identity",
         "inspection",
     }
 )
+_LEGACY_PROJECT_FIELDS = frozenset({"aliases", "gallery"})
+_COPY_ID_NAMESPACE = uuid.UUID("0c2e5d4a-7f3b-5e61-9a28-4d1b6c9e8f07")
 _INSPECTION_STORAGE_FIELDS = _PROJECT_STORAGE_FIELDS - {
     "name",
     "path",
@@ -136,7 +139,7 @@ _INSPECTION_STORAGE_FIELDS = _PROJECT_STORAGE_FIELDS - {
     "fallback_preview_path",
     "name_origin",
     "previous_project_uuid",
-    "aliases",
+    "project_uuid",
     "stat_identity",
     "inspection",
 }
@@ -233,8 +236,8 @@ def last_known_gallery_label(entry: Any, links_snapshot: Any) -> Optional[str]:
     links = _links_map(links_snapshot)
     if links is None:
         return None
-    project_uuid = str(_entry_value(entry, "project_uuid", _entry_value(entry, "id", "")))
-    link = links.get(project_uuid)
+    entry_id = str(_entry_value(entry, "id", _entry_value(entry, "project_uuid", "")))
+    link = links.get(entry_id)
     if not isinstance(link, dict):
         link = previous_scene_for(entry, links_snapshot)
     if not isinstance(link, dict):
@@ -431,18 +434,15 @@ class Project:
     inspection_restored: bool = False
     name_origin: str = "stem"
     previous_project_uuid: str = ""
-    aliases: List[Dict[str, Any]] = field(default_factory=list)
+    # Set for a second file carrying an already cataloged project UUID.
+    catalog_id: str = ""
     stat_identity: Dict[str, int] = field(default_factory=dict)
     inspection: Dict[str, Any] = field(default_factory=dict)
     extra: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def id(self) -> str:
-        return self.project_uuid
-
-    @property
-    def other_paths(self) -> List[str]:
-        return [str(alias.get("path", "")) for alias in self.aliases if alias.get("path")]
+        return self.catalog_id or self.project_uuid
 
     def to_storage_dict(self) -> Dict[str, Any]:
         record = {
@@ -454,10 +454,11 @@ class Project:
             "fallback_preview_path": self.fallback_preview_path,
             "name_origin": self.name_origin,
             "previous_project_uuid": self.previous_project_uuid,
-            "aliases": [dict(alias) for alias in self.aliases],
             "stat_identity": dict(self.stat_identity),
             "inspection": dict(self.inspection),
         }
+        if self.catalog_id:
+            record["project_uuid"] = self.project_uuid
         if self.pinned:
             record["pinned"] = True
         if self.name_origin == "user":
@@ -485,8 +486,9 @@ class Project:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "id": self.project_uuid,
+            "id": self.id,
             "project_uuid": self.project_uuid,
+            "copy_of": self.project_uuid if self.catalog_id else "",
             **self.to_storage_dict(),
             "file_uuid": self.file_uuid,
             "commit_uuid": self.commit_uuid,
@@ -506,8 +508,6 @@ class Project:
             "relocation_candidate": self.relocation_candidate,
             "name_origin": self.name_origin,
             "previous_project_uuid": self.previous_project_uuid,
-            "aliases": [dict(alias) for alias in self.aliases],
-            "other_paths": [str(alias.get("path", "")) for alias in self.aliases],
             "stat_identity": dict(self.stat_identity),
             "inspection": dict(self.inspection),
         }
@@ -597,8 +597,8 @@ class AssetIndex:
     def assets(self) -> Dict[str, Dict[str, Any]]:
         if self._assets_snapshot_epoch != self._catalog_epoch:
             self._assets_snapshot = {
-                project_uuid: project.to_dict()
-                for project_uuid, project in self._projects.items()
+                entry_id: project.to_dict()
+                for entry_id, project in self._projects.items()
             }
             self._assets_snapshot_epoch = self._catalog_epoch
         return self._assets_snapshot or {}
@@ -610,8 +610,8 @@ class AssetIndex:
                 folder_id: folder.to_dict() for folder_id, folder in self._folders.items()
             },
             "projects": {
-                project_uuid: project.to_dict()
-                for project_uuid, project in self._projects.items()
+                entry_id: project.to_dict()
+                for entry_id, project in self._projects.items()
             },
             "epoch": self._catalog_epoch,
         }
@@ -751,7 +751,7 @@ class AssetIndex:
         return False
 
     def _apply_inspection(self, project: Project, inspection: Any) -> None:
-        if self._projects.get(project.project_uuid) is project:
+        if self._projects.get(project.id) is project:
             self._remember_identity(project.path, project.project_uuid)
         project.file_uuid = str(inspection.file_uuid)
         project.commit_uuid = str(inspection.commit_uuid)
@@ -955,7 +955,7 @@ class AssetIndex:
         kind, payload = self._read_project_runtime(
             project.path, project.project_uuid, resolve_fallback=True
         )
-        if self._projects.get(project.project_uuid) is project:
+        if self._projects.get(project.id) is project:
             self._write_checks[project.path] = (identity, project.project_uuid if kind == "AVAILABLE" else None)
         self._apply_runtime_result(project, kind, payload)
 
@@ -998,8 +998,8 @@ class AssetIndex:
 
     def _rebuild_path_lookup(self) -> None:
         self._project_by_path = {
-            self._path_key(project.path): project_uuid
-            for project_uuid, project in self._projects.items()
+            self._path_key(project.path): entry_id
+            for entry_id, project in self._projects.items()
         }
 
     def _observation_from(self, value: Any, folder_id: str = "") -> AssetObservation:
@@ -1039,6 +1039,78 @@ class AssetIndex:
             path_identity=getattr(value, "path_identity", None),
         )
 
+    def _copy_catalog_id(self, project_uuid: str, path: str) -> str:
+        return str(uuid.uuid5(_COPY_ID_NAMESPACE, f"{project_uuid}\n{self._path_key(path)}"))
+
+    def _relocatable_entry(
+        self,
+        project_uuid: str,
+        observed_ids: Set[str],
+        detached: Dict[str, Project],
+    ) -> Optional[Project]:
+        """An unobserved entry of this project whose file vanished or now holds another project."""
+        candidates = sorted(
+            (
+                project
+                for project in self._projects.values()
+                if project.project_uuid == project_uuid and project.id not in observed_ids
+            ),
+            key=lambda project: (bool(project.catalog_id), self._path_key(project.path)),
+        )
+        return next(
+            (
+                project
+                for project in candidates
+                if project.id in detached or _stat_identity(project.path) is None
+            ),
+            None,
+        )
+
+    def _observe(self, project: Project, observation: AssetObservation) -> None:
+        if observation.folder_id and project.folder_id != observation.folder_id:
+            project.folder_id = observation.folder_id
+        self._apply_inspection(project, observation.inspection)
+        project.stat_identity = dict(
+            observation.stat_identity
+            or _stat_identity(project.path)
+            or project.stat_identity
+        )
+
+    def _settle_copies(self) -> bool:
+        """Give every project UUID a primary entry; a copy inherits it once the primary is gone."""
+        copies_by_uuid: Dict[str, List[Project]] = {}
+        for project in self._projects.values():
+            if project.catalog_id:
+                copies_by_uuid.setdefault(project.project_uuid, []).append(project)
+        changed = False
+        for project_uuid, copies in copies_by_uuid.items():
+            primary = self._projects.get(project_uuid)
+            if primary is not None and primary.status != "MISSING":
+                continue
+            present = [
+                copy_entry
+                for copy_entry in copies
+                if copy_entry.status != "MISSING" and _stat_identity(copy_entry.path) is not None
+            ]
+            if primary is not None and not present:
+                continue
+            heir = min(present or copies, key=lambda copy_entry: self._path_key(copy_entry.path))
+            del self._projects[heir.catalog_id]
+            heir.catalog_id = ""
+            if primary is not None:
+                heir.pinned = heir.pinned or primary.pinned
+                if primary.name_origin == "user":
+                    heir.name, heir.name_origin = primary.name, primary.name_origin
+                heir.previous_project_uuid = primary.previous_project_uuid
+                heir.extra = {**heir.extra, **primary.extra}
+            self._projects[project_uuid] = heir
+            self._remember_identity(heir.path, project_uuid)
+            changed = True
+        if changed:
+            self._rebuild_path_lookup()
+            self._touch_catalog()
+        return changed
+
     def reconcile_observations(
         self,
         observations: Iterable[Any],
@@ -1046,121 +1118,112 @@ class AssetIndex:
         folder_ids: Iterable[str] | None = None,
         save: bool = True,
     ) -> Dict[str, int]:
-        """Resolve all scan observations together, independent of traversal order."""
+        """Resolve all scan observations together, independent of traversal order.
+
+        Every master file is its own entry. A file carrying a project UUID that
+        is cataloged at another existing path is a copy; an entry whose file
+        vanished or now holds another project moves to the observed path.
+        """
         normalized = [self._observation_from(item) for item in observations]
         normalized = [item for item in normalized if item.path]
         with self._lock:
             previous_state = self._snapshot_state(project_ids=list(self._projects))
             before_ids = set(self._projects)
-            observed_by_uuid: Dict[str, List[AssetObservation]] = {}
-            observed_paths: Dict[str, AssetObservation] = {}
+            masters: List[AssetObservation] = []
             for item in normalized:
                 self._write_checks[item.path] = (item.path_identity, item.project_uuid or None)
-                if not item.inspection or not self._inspection_is_master(item.inspection):
-                    continue
-                project_uuid = item.project_uuid
-                if not project_uuid:
-                    continue
-                observed_by_uuid.setdefault(project_uuid, []).append(item)
-                observed_paths[self._path_key(item.path)] = item
+                if (
+                    item.inspection
+                    and self._inspection_is_master(item.inspection)
+                    and item.project_uuid
+                ):
+                    masters.append(item)
+            masters.sort(key=lambda item: self._path_key(item.path))
 
             changed = False
             added = 0
             replaced = 0
-            aliases = 0
-            for project_uuid, items in sorted(observed_by_uuid.items()):
-                items = sorted(items, key=lambda item: self._path_key(item.path))
-                project = self._projects.get(project_uuid)
-                if project is None:
-                    path_key = self._path_key(items[0].path)
-                    old_uuid = self._project_by_path.get(path_key)
-                    old_project = self._projects.get(old_uuid) if old_uuid else None
-                    old_is_observed_elsewhere = bool(
-                        old_uuid and len(observed_by_uuid.get(old_uuid, [])) > 0
+            copies = 0
+            observed_ids: Set[str] = set()
+            detached: Dict[str, Project] = {}
+            unplaced: List[AssetObservation] = []
+            for item in masters:
+                entry_id = self._project_by_path.get(self._path_key(item.path))
+                project = self._projects.get(entry_id) if entry_id else None
+                if project is not None and project.project_uuid == item.project_uuid:
+                    self._observe(project, item)
+                    observed_ids.add(project.id)
+                    changed = True
+                    continue
+                if project is not None:
+                    detached[project.id] = project
+                unplaced.append(item)
+
+            known_uuids = {project.project_uuid for project in self._projects.values()}
+            # Moves and copies first: a replaced entry that moved elsewhere
+            # must not lend its name to the project now at its old path. Among
+            # new files of one project the oldest inode change is the original.
+            unplaced.sort(
+                key=lambda item: (
+                    item.project_uuid not in known_uuids,
+                    item.stat_identity.get("st_ctime_ns", 0),
+                    self._path_key(item.path),
+                )
+            )
+            for item in unplaced:
+                path_key = self._path_key(item.path)
+                project = self._relocatable_entry(item.project_uuid, observed_ids, detached)
+                if project is not None:
+                    detached.pop(project.id, None)
+                    project.path = item.path
+                    project.relocation_candidate = ""
+                elif item.project_uuid in {entry.project_uuid for entry in self._projects.values()}:
+                    project = Project(
+                        project_uuid=item.project_uuid,
+                        catalog_id=self._copy_catalog_id(item.project_uuid, item.path),
+                        name=self._inspection_name(item.path),
+                        path=item.path,
+                        folder_id=item.folder_id or DEFAULT_FOLDER_ID,
+                        name_origin="stem",
                     )
-                    if old_project is not None and not old_is_observed_elsewhere:
-                        self._projects.pop(old_uuid, None)
-                        self._project_by_path.pop(path_key, None)
-                        project = Project(
-                            project_uuid=project_uuid,
-                            name=old_project.name,
-                            path=items[0].path,
-                            folder_id=items[0].folder_id or old_project.folder_id,
-                            name_origin=old_project.name_origin,
-                            previous_project_uuid=old_uuid,
-                        )
-                        added += 1
+                    self._projects[project.id] = project
+                    added += 1
+                    copies += 1
+                else:
+                    donor = next(
+                        (entry for entry in detached.values() if self._path_key(entry.path) == path_key),
+                        None,
+                    )
+                    project = Project(
+                        project_uuid=item.project_uuid,
+                        name=donor.name if donor else self._inspection_name(item.path),
+                        path=item.path,
+                        folder_id=item.folder_id or (donor.folder_id if donor else DEFAULT_FOLDER_ID),
+                        name_origin=donor.name_origin if donor else "stem",
+                        previous_project_uuid=(
+                            donor.project_uuid if donor is not None and not donor.catalog_id else ""
+                        ),
+                    )
+                    if donor is not None:
+                        detached.pop(donor.id)
+                        self._projects.pop(donor.id, None)
                         replaced += 1
-                    else:
-                        project = Project(
-                            project_uuid=project_uuid,
-                            name=self._inspection_name(items[0].path),
-                            path=items[0].path,
-                            folder_id=items[0].folder_id or DEFAULT_FOLDER_ID,
-                            name_origin="stem",
-                        )
-                        added += 1
-                    self._projects[project_uuid] = project
-                    changed = True
+                    self._projects[project.id] = project
+                    added += 1
+                self._project_by_path[path_key] = project.id
+                self._observe(project, item)
+                observed_ids.add(project.id)
+                changed = True
 
-                path_keys = {self._path_key(item.path) for item in items}
-                current_key = self._path_key(project.path)
-                current_observation = next(
-                    (item for item in items if self._path_key(item.path) == current_key),
-                    None,
-                )
-                if current_observation is None:
-                    # A missing old locator or an overwrite at that locator is
-                    # resolved only after the whole observation set is known.
-                    chosen = items[0]
-                    self._project_by_path.pop(current_key, None)
-                    project.path = chosen.path
-                    if chosen.folder_id:
-                        project.folder_id = chosen.folder_id
-                    current_observation = chosen
-                    changed = True
-                elif project.folder_id != current_observation.folder_id and current_observation.folder_id:
-                    project.folder_id = current_observation.folder_id
-                    changed = True
-
-                self._project_by_path[self._path_key(project.path)] = project_uuid
-                self._apply_inspection(project, current_observation.inspection)
-                project.stat_identity = dict(
-                    current_observation.stat_identity
-                    or _stat_identity(project.path)
-                    or project.stat_identity
-                )
-                prior_aliases = {
-                    self._path_key(str(alias.get("path", ""))): alias
-                    for alias in project.aliases
-                    if alias.get("path")
-                }
-                for item in items:
-                    item_key = self._path_key(item.path)
-                    if item_key == self._path_key(project.path):
-                        continue
-                    alias = {
-                        "path": _normalize_path(item.path),
-                        "file_uuid": item.file_uuid,
-                        "commit_uuid": item.commit_uuid,
-                        "stat_identity": dict(item.stat_identity),
-                    }
-                    prior_aliases[item_key] = alias
-                    self._project_by_path[item_key] = project_uuid
-                project.aliases = list(prior_aliases.values())
-                project.status = (
-                    "DIVERGED_COPIES"
-                    if len({str(item.commit_uuid) for item in items if item.commit_uuid}) > 1
-                    else project.status
-                )
-                aliases += max(0, len(items) - 1)
+            for project in detached.values():
+                self._projects.pop(project.id, None)
                 changed = True
 
             scope = set(str(folder_id) for folder_id in (folder_ids or []))
-            for project_uuid, project in list(self._projects.items()):
+            for entry_id, project in list(self._projects.items()):
                 if scope and project.folder_id not in scope:
                     continue
-                if project.project_uuid in observed_by_uuid:
+                if entry_id in observed_ids:
                     continue
                 folder = self._folders.get(project.folder_id)
                 if (
@@ -1174,8 +1237,7 @@ class AssetIndex:
                         project.project_uuid,
                         allow_missing=True,
                     )
-                    self._projects.pop(project_uuid, None)
-                    self._project_by_path.pop(self._path_key(project.path), None)
+                    self._projects.pop(entry_id, None)
                     changed = True
                     continue
                 if _stat_identity(project.path) is None:
@@ -1185,11 +1247,12 @@ class AssetIndex:
                     project.available = False
                     changed = True
             self._rebuild_path_lookup()
+            changed = self._settle_copies() or changed
             for item in normalized:
                 if not item.error or item.inspection is not None:
                     continue
-                project_uuid = self._project_by_path.get(self._path_key(item.path))
-                project = self._projects.get(project_uuid) if project_uuid else None
+                entry_id = self._project_by_path.get(self._path_key(item.path))
+                project = self._projects.get(entry_id) if entry_id else None
                 if project is not None:
                     self._clear_runtime(
                         project,
@@ -1201,11 +1264,11 @@ class AssetIndex:
                 self._touch_catalog()
                 if save and not self.save():
                     self._restore_state(previous_state)
-                    return {"added": 0, "replaced": 0, "aliases": 0, "failed": 1}
+                    return {"added": 0, "replaced": 0, "copies": 0, "failed": 1}
             return {
                 "added": added,
                 "replaced": replaced,
-                "aliases": aliases,
+                "copies": copies,
                 "failed": 0,
                 "already_cataloged": max(0, len(normalized) - added),
                 "removed": len(before_ids - set(self._projects)),
@@ -1371,6 +1434,15 @@ class AssetIndex:
                     f"Skipped catalog entry {project_uuid}: project UUID is not canonical"
                 )
                 continue
+            embedded_uuid = canonical_uuid
+            if value.get("project_uuid"):
+                try:
+                    embedded_uuid = str(uuid.UUID(str(value["project_uuid"])))
+                except ValueError:
+                    self.load_issues.append(
+                        f"Skipped catalog entry {project_uuid}: invalid embedded project UUID"
+                    )
+                    continue
 
             stored_path = str(value.get("path") or "")
             if not stored_path.strip():
@@ -1414,16 +1486,16 @@ class AssetIndex:
             if name_origin not in {"user", "stem", "folder"}:
                 name_origin = "stem" if raw_name == Path(path).stem else "user"
                 normalized = True
-            known_fields = _PROJECT_STORAGE_FIELDS | {"gallery"}
+            known_fields = _PROJECT_STORAGE_FIELDS | _LEGACY_PROJECT_FIELDS
             project = Project(
-                project_uuid=canonical_uuid,
+                project_uuid=embedded_uuid,
+                catalog_id=canonical_uuid if embedded_uuid != canonical_uuid else "",
                 name=raw_name,
                 path=path,
                 folder_id=folder_id,
                 pinned=pinned,
                 name_origin=name_origin,
                 previous_project_uuid=str(value.get("previous_project_uuid") or ""),
-                aliases=[dict(alias) for alias in value.get("aliases", []) if isinstance(alias, dict)],
                 stat_identity=dict(value.get("stat_identity") or _stat_identity(path) or {}),
                 inspection=dict(value.get("inspection") or {}),
                 extra={key: item for key, item in value.items() if key not in known_fields},
@@ -1433,12 +1505,13 @@ class AssetIndex:
                 path_mtime_ns=int(value.get("mtime_ns") or 0),
                 fallback_preview_path=str(value.get("fallback_preview_path") or ""),
             )
-            if "gallery" in value:
+            if _LEGACY_PROJECT_FIELDS.intersection(value):
                 normalized = True
             if self._has_persisted_inspection(value):
                 self._restore_inspection(project, value)
             self._projects[canonical_uuid] = project
             self._project_by_path[path_key] = canonical_uuid
+        normalized = self._settle_copies() or normalized
         if self._projects:
             self._touch_catalog()
         return normalized
@@ -1719,8 +1792,8 @@ class AssetIndex:
                     for folder_id, folder in self._folders.items()
                 },
                 "projects": {
-                    project_uuid: project.to_storage_dict()
-                    for project_uuid, project in self._projects.items()
+                    entry_id: project.to_storage_dict()
+                    for entry_id, project in self._projects.items()
                 },
             }
             with self._catalog_write_lock():
@@ -1803,7 +1876,7 @@ class AssetIndex:
             project_ids=list(self._projects), folder_ids=[DEFAULT_FOLDER_ID]
         )
         removed_ids = [
-            project.project_uuid
+            project.id
             for project in self._projects.values()
             if project.folder_id == folder_id and not project.pinned
         ]
@@ -1812,14 +1885,15 @@ class AssetIndex:
                 project.folder_id = DEFAULT_FOLDER_ID
         for identifier in removed_ids:
             project = self._projects[identifier]
-            self._remember_identity(project.path, identifier, allow_missing=True)
+            self._remember_identity(project.path, project.project_uuid, allow_missing=True)
         del self._folders[folder_id]
         self._projects = {
-            project_uuid: project
-            for project_uuid, project in self._projects.items()
+            entry_id: project
+            for entry_id, project in self._projects.items()
             if project.folder_id != folder_id
         }
         self._rebuild_path_lookup()
+        self._settle_copies()
         if self.save():
             prune_previews(removed_ids)
             return len(removed_ids)
@@ -1830,7 +1904,7 @@ class AssetIndex:
     def clean_missing_entries(self, folder_id: str) -> int:
         """Forget missing catalog rows in a folder; files and journal links stay untouched."""
         candidates = [
-            project.project_uuid
+            project.id
             for project in self._projects.values()
             if project.folder_id == str(folder_id)
             and (_stat_identity(project.path) is None or project.status == "MISSING")
@@ -1916,7 +1990,7 @@ class AssetIndex:
         previous_state = (
             self._snapshot_state(project_ids=[asset_id]) if save else None
         )
-        self._remember_identity(project.path, asset_id, allow_missing=True)
+        self._remember_identity(project.path, project.project_uuid, allow_missing=True)
         if "folder_id" in kwargs:
             target = self._folders.get(str(kwargs["folder_id"]))
             resolved_folder_id = self._folder_id_for_path(project.path)
@@ -1950,11 +2024,11 @@ class AssetIndex:
 
     @_synchronized
     def delete_assets(self, asset_ids: List[str]) -> int:
-        previous_state = self._snapshot_state()
+        previous_state = self._snapshot_state(project_ids=list(self._projects))
         for asset_id in dict.fromkeys(asset_ids):
             project = self._projects.get(asset_id)
             if project is not None:
-                self._remember_identity(project.path, asset_id, allow_missing=True)
+                self._remember_identity(project.path, project.project_uuid, allow_missing=True)
         removed: Dict[str, Project] = {}
         for asset_id in dict.fromkeys(asset_ids):
             project = self._projects.pop(asset_id, None)
@@ -1964,6 +2038,7 @@ class AssetIndex:
             removed[asset_id] = project
         if not removed:
             return 0
+        self._settle_copies()
         if not self.save():
             self._restore_state(previous_state)
             return 0
@@ -2002,8 +2077,14 @@ class AssetIndex:
         uuid.UUID(project_uuid)
 
         with self._lock:
+            path_key = self._path_key(path)
+            current_id = self._project_by_path.get(path_key)
             previous_state = (
-                self._snapshot_state(project_ids=[project_uuid]) if save else None
+                self._snapshot_state(
+                    project_ids=[entry_id for entry_id in (current_id, project_uuid) if entry_id]
+                )
+                if save
+                else None
             )
             target_folder_id = self._folder_id_for_path(path)
             if target_folder_id is None and not pin:
@@ -2011,31 +2092,41 @@ class AssetIndex:
             if target_folder_id is None:
                 target_folder_id = DEFAULT_FOLDER_ID
 
-            path_key = self._path_key(path)
-            stale_uuid = self._project_by_path.get(path_key)
-            stale_project = self._projects.get(stale_uuid) if stale_uuid else None
-            if stale_uuid is not None and stale_uuid != project_uuid:
-                self._projects.pop(stale_uuid, None)
+            project = self._projects.get(current_id) if current_id else None
+            stale_project = None
+            if project is not None and project.project_uuid != project_uuid:
+                stale_project = project
+                project = None
+                self._projects.pop(stale_project.id, None)
                 self._project_by_path.pop(path_key, None)
 
-            project = self._projects.get(project_uuid)
+            copy_of = None
+            if project is None:
+                project = self._projects.get(project_uuid)
+                if project is not None and Path(project.path).is_file():
+                    copy_of, project = project, None
             created = project is None
-            persisted_changed = created or stale_uuid is not None
+            persisted_changed = created or current_id is not None
             if project is None:
                 project = Project(
                     project_uuid=project_uuid,
+                    catalog_id=self._copy_catalog_id(project_uuid, path) if copy_of is not None else "",
                     name=name or self._inspection_name(path),
                     path=path,
                     folder_id=target_folder_id,
                     pinned=pin,
                     name_origin="user" if name is not None else "stem",
-                    previous_project_uuid=(stale_uuid or ""),
+                    previous_project_uuid=(
+                        stale_project.project_uuid
+                        if stale_project is not None and not stale_project.catalog_id and copy_of is None
+                        else ""
+                    ),
                 )
                 if stale_project is not None and name is None:
                     project.name = stale_project.name
                     project.name_origin = stale_project.name_origin
-                self._projects[project_uuid] = project
-                self._project_by_path[path_key] = project_uuid
+                self._projects[project.id] = project
+                self._project_by_path[path_key] = project.id
                 self._apply_inspection(project, inspection)
             else:
                 use_observed_path = adopt_existing or self._path_key(project.path) == path_key
@@ -2051,7 +2142,7 @@ class AssetIndex:
                     if old_path_key != path_key:
                         self._project_by_path.pop(old_path_key, None)
                         project.path = path
-                        self._project_by_path[path_key] = project_uuid
+                        self._project_by_path[path_key] = project.id
                         persisted_changed = True
                     self._apply_inspection(project, inspection)
                 else:
@@ -2119,10 +2210,16 @@ class AssetIndex:
             return False
 
         path_key = self._path_key(path)
-        conflicting_uuid = self._project_by_path.get(path_key)
-        if conflicting_uuid is not None and conflicting_uuid != asset_id:
+        conflicting_id = self._project_by_path.get(path_key)
+        conflicting = self._projects.get(conflicting_id) if conflicting_id else None
+        # A copy of this project at the chosen path is absorbed by the relinked entry.
+        if conflicting is not None and conflicting is not project and (
+            not conflicting.catalog_id or conflicting.project_uuid != project.project_uuid
+        ):
             return False
         previous_state = self._snapshot_state(project_ids=[asset_id])
+        if conflicting is not None and conflicting is not project:
+            self._projects.pop(conflicting.id, None)
         folder_id = self._folder_id_for_path(path)
         if folder_id is None:
             folder_id = (
@@ -2136,7 +2233,7 @@ class AssetIndex:
         project.relocation_candidate = ""
         self._project_by_path[path_key] = asset_id
         self._apply_inspection(project, inspection)
-        self._write_checks[path] = (planned_path, asset_id)
+        self._write_checks[path] = (planned_path, project.project_uuid)
         if self.save():
             return True
         self._restore_state(previous_state)
@@ -2253,8 +2350,8 @@ class AssetIndex:
         project_path: str,
         folder_id: Optional[str] = None,
     ) -> Optional[Project]:
-        project_uuid = self._project_by_path.get(self._path_key(project_path))
-        project = self._projects.get(project_uuid) if project_uuid else None
+        entry_id = self._project_by_path.get(self._path_key(project_path))
+        project = self._projects.get(entry_id) if entry_id else None
         if project is not None and (folder_id is None or project.folder_id == folder_id):
             return project
         return None

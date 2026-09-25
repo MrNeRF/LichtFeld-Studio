@@ -2806,6 +2806,7 @@
   "projects.gallery.eligibility.external_payloads": "外部スプラットデータが閲覧用コピーに埋め込まれていません",
   "projects.gallery.eligibility.space": "ギャラリーの空き容量が不足しています",
   "projects.gallery.eligibility.not_checked": "閲覧用コピーの準備中に公開条件を確認します",
+  "projects.gallery.eligibility.copy": "このファイルは別のプロジェクトのコピーです。個別に公開するには「プロジェクトを別名で保存」を使用してください。",
   "projects.gallery.state.presentation": "カバーまたはストーリーが変更されました",
   "projects.gallery.state.remote_content": "ギャラリーに変更あり（シーンの内容）",
   "projects.gallery.state.replaced": "公開済みプロジェクトを置き換えました",

@@ -2806,6 +2806,7 @@
   "projects.gallery.eligibility.external_payloads": "Zewnętrzne dane splatów nie są osadzone w kopii do przeglądania",
   "projects.gallery.eligibility.space": "Za mało wolnego miejsca w Galerii",
   "projects.gallery.eligibility.not_checked": "Możliwość publikacji jest sprawdzana podczas przygotowywania kopii",
+  "projects.gallery.eligibility.copy": "Ten plik jest kopią innego projektu. Użyj opcji Zapisz projekt jako, aby opublikować go osobno.",
   "projects.gallery.state.presentation": "Zmieniono okładkę lub historię",
   "projects.gallery.state.remote_content": "Zmiany w galerii (zawartość sceny)",
   "projects.gallery.state.replaced": "Zastąpił opublikowany projekt",

@@ -2806,6 +2806,7 @@
   "projects.gallery.eligibility.external_payloads": "查看副本中未嵌入外部高斯点数据",
   "projects.gallery.eligibility.space": "图库剩余空间不足",
   "projects.gallery.eligibility.not_checked": "准备查看副本时会检查发布条件",
+  "projects.gallery.eligibility.copy": "此文件是另一个项目的副本。请使用“项目另存为”单独发布。",
   "projects.gallery.state.presentation": "封面或故事已更改",
   "projects.gallery.state.remote_content": "图库中有更改（场景内容）",
   "projects.gallery.state.replaced": "替换了已发布的项目",

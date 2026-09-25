@@ -208,7 +208,7 @@ class GalleryAssetMixin:
         if failure and (not failure.get("commitUuid") or failure["commitUuid"] == asset.get("commit_uuid")):
             jobs.append(failure)
         gallery_asset = ({**asset, "project_uuid": project_id}
-                         if project_id != asset.get("id") else asset)
+                         if project_id != asset.get("id") or asset.get("copy_of") else asset)
         explicitly_unlinked = project_id in self._gallery_state.get("unlinkedProjects", ())
         facts = asset_sync_state(None if remote else gallery_asset, link, self._gallery_scene(asset),
             jobs, checked=bool(self._gallery_state.get("checkedAt")),

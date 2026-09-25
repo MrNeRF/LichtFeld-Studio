@@ -62,10 +62,11 @@ class ProjectOperations:
         if not backup:
             if asset.get("status") != "REPAIR_ONLY":
                 card = self.io.inspect_project_card(path)
-                if str(card.project_uuid) != asset["id"]:
+                if str(card.project_uuid) != asset.get("project_uuid", asset["id"]):
                     raise ValueError("The project identity changed. Refresh Projects and try again.")
             return operation(), {}
-        row = dict(id=identifier, asset_id=asset["id"], path=path, title=title,
+        row = dict(id=identifier, asset_id=asset["id"], project_uuid=asset.get("project_uuid", asset["id"]),
+                   path=path, title=title,
                    status="preparing", input_commit="", backup_path="")
         row.update(metadata or {})
         result = None
@@ -85,7 +86,7 @@ class ProjectOperations:
             self._put(row)
 
         try:
-            self.io.run_project_operation(path, asset["id"], str(asset.get("commit_uuid") or ""), guarded)
+            self.io.run_project_operation(path, row["project_uuid"], str(asset.get("commit_uuid") or ""), guarded)
         except Exception as exc:
             _log.exception("Project operation failed operation=%s path=%s", title, path)
             row["reason"] = str(exc)
@@ -105,7 +106,8 @@ class ProjectOperations:
                     raise ValueError("The Contents recovery copy is outside the app backup folder")
                 card = self.io.inspect_project_card(path)
                 if str(card.commit_uuid) != row["input_commit"]:
-                    self.io.restore_project_backup(path, backup_path, row["asset_id"], str(card.commit_uuid))
+                    self.io.restore_project_backup(path, backup_path, row.get("project_uuid", row["asset_id"]),
+                                                   str(card.commit_uuid))
                 row["reason"] = row.get("reason") or "The interrupted edit was rolled back."
             else:
                 row["reason"] = row.get("reason") or "The edit was interrupted before a change was saved."
@@ -113,7 +115,7 @@ class ProjectOperations:
 
         try:
             if row["status"] in ("preparing", "running") and row.get("input_commit"):
-                self.io.run_project_operation(path, row["asset_id"], "", guarded)
+                self.io.run_project_operation(path, row.get("project_uuid", row["asset_id"]), "", guarded)
             else:
                 row["status"] = "failed"
         except Exception as exc:

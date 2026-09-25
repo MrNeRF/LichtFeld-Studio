@@ -2806,6 +2806,7 @@
   "projects.gallery.eligibility.external_payloads": "Externe Splat-Daten sind nicht in der Ansichtskopie eingebettet",
   "projects.gallery.eligibility.space": "Nicht genügend freier Galeriespeicher",
   "projects.gallery.eligibility.not_checked": "Die Eignung wird beim Vorbereiten der Ansichtskopie geprüft",
+  "projects.gallery.eligibility.copy": "Diese Datei ist eine Kopie eines anderen Projekts. Mit „Projekt speichern unter“ separat veröffentlichen.",
   "projects.gallery.state.presentation": "Titelbild oder Story geändert",
   "projects.gallery.state.remote_content": "Änderungen in der Galerie (Szeneninhalt)",
   "projects.gallery.state.replaced": "Hat ein veröffentlichtes Projekt ersetzt",

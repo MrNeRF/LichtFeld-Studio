@@ -413,21 +413,26 @@ def test_catalog_uses_project_uuid_and_persists_inspection_fields(monkeypatch, t
     index.load()
 
     first, first_created = index.register_licht_asset(str(first_path), name="My project")
-    duplicate, duplicate_created = index.register_licht_asset(str(copied_path))
+    copy, copy_created = index.register_licht_asset(str(copied_path))
 
     assert first is not None
     assert first_created is True
-    assert duplicate_created is False
-    assert duplicate.id == first.id
-    assert len(index.list_projects()) == 1
-    assert duplicate.path == str(copied_path)
-    assert duplicate.name == "My project"
+    assert copy_created is True
+    assert first.id == project_uuid
+    assert copy.id != first.id
+    assert copy.project_uuid == project_uuid
+    assert copy.to_dict()["copy_of"] == project_uuid
+    assert len(index.list_projects()) == 2
+    assert (first.path, first.name) == (str(first_path), "My project")
+    assert (copy.path, copy.name) == (str(copied_path), "copy")
 
     catalog = json.loads((tmp_path / "library.json").read_text(encoding="utf-8"))
     assert set(catalog) == {"schema_version", "folders", "projects"}
     assert catalog["schema_version"] == 6
     assert catalog["folders"]["default"] == {"path": str(tmp_path)}
-    assert catalog["projects"][first.id] == duplicate.to_storage_dict()
+    assert catalog["projects"][first.id] == first.to_storage_dict()
+    assert "project_uuid" not in catalog["projects"][first.id]
+    assert catalog["projects"][copy.id]["project_uuid"] == project_uuid
     assert {
         "file_uuid",
         "commit_uuid",
@@ -693,12 +698,13 @@ def test_folder_scan_does_not_replace_a_live_explicit_locator(monkeypatch, tmp_p
     result = scan_asset_folder(index, "default", str(watched))
 
     assert result.discovered == 3
-    assert result.added == 2
-    assert result.already_cataloged == 1
+    assert result.added == 3
+    assert result.already_cataloged == 0
     assert result.failed == 0
-    assert len(index.list_projects()) == 2
+    assert len(index.list_projects()) == 3
     assert index.get_asset(first_uuid).path == str(first)
     assert index.get_asset(first_uuid).relocation_candidate == ""
+    assert index.find_asset_by_path(str(duplicate)).to_dict()["copy_of"] == first_uuid
     assert all(Path(asset.path).suffix.lower() == ".licht" for asset in index.list_projects())
 
 

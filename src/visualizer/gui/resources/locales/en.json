@@ -2806,6 +2806,7 @@
   "projects.gallery.eligibility.external_payloads": "External splat data is not embedded in the viewing copy",
   "projects.gallery.eligibility.space": "Not enough remaining Gallery space",
   "projects.gallery.eligibility.not_checked": "Eligibility is checked while preparing the viewing copy",
+  "projects.gallery.eligibility.copy": "This file is a copy of another project. Use Save Project As to publish it separately.",
   "projects.gallery.state.presentation": "Cover or story changed",
   "projects.gallery.state.remote_content": "Changes in gallery (scene content)",
   "projects.gallery.state.replaced": "Replaced a published project",

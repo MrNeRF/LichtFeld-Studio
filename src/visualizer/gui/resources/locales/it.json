@@ -2806,6 +2806,7 @@
   "projects.gallery.eligibility.external_payloads": "I dati splat esterni non sono incorporati nella copia di visualizzazione",
   "projects.gallery.eligibility.space": "Spazio disponibile nella Galleria insufficiente",
   "projects.gallery.eligibility.not_checked": "La compatibilità viene verificata durante la preparazione della copia",
+  "projects.gallery.eligibility.copy": "Questo file è una copia di un altro progetto. Usa Salva progetto con nome per pubblicarlo separatamente.",
   "projects.gallery.state.presentation": "Copertina o storia modificata",
   "projects.gallery.state.remote_content": "Modifiche nella galleria (contenuto della scena)",
   "projects.gallery.state.replaced": "Ha sostituito un progetto pubblicato",

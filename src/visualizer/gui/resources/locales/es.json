@@ -2806,6 +2806,7 @@
   "projects.gallery.eligibility.external_payloads": "Los datos externos de splats no están integrados en la copia de visualización",
   "projects.gallery.eligibility.space": "No queda suficiente espacio en la Galería",
   "projects.gallery.eligibility.not_checked": "La elegibilidad se comprueba al preparar la copia de visualización",
+  "projects.gallery.eligibility.copy": "Este archivo es una copia de otro proyecto. Usa Guardar proyecto como para publicarlo por separado.",
   "projects.gallery.state.presentation": "Portada o historia modificada",
   "projects.gallery.state.remote_content": "Cambios en la galería (contenido de la escena)",
   "projects.gallery.state.replaced": "Reemplazó un proyecto publicado",

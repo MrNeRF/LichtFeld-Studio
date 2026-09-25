@@ -2806,6 +2806,7 @@
   "projects.gallery.eligibility.external_payloads": "외부 스플랫 데이터가 보기용 사본에 포함되지 않았습니다",
   "projects.gallery.eligibility.space": "갤러리의 남은 공간이 부족합니다",
   "projects.gallery.eligibility.not_checked": "보기용 사본을 준비할 때 게시 가능 여부를 확인합니다",
+  "projects.gallery.eligibility.copy": "이 파일은 다른 프로젝트의 사본입니다. 따로 게시하려면 '다른 이름으로 프로젝트 저장'을 사용하세요.",
   "projects.gallery.state.presentation": "표지 또는 스토리 변경됨",
   "projects.gallery.state.remote_content": "갤러리 변경 사항 (장면 콘텐츠)",
   "projects.gallery.state.replaced": "게시된 프로젝트를 대체함",
