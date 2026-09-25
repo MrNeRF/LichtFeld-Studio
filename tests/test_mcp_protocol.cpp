@@ -1433,11 +1433,11 @@ namespace lfs::mcp {
             });
         auto& registry = ToolRegistry::instance();
 
-        const auto mistyped = registry.call_tool(tool_name, json{{"label", 5}});
+        const auto mistyped = registry.call_tool(tool_name, json{{"label", json::array({1})}});
         EXPECT_EQ(mistyped["error"]["code"], "InvalidArgument");
         EXPECT_EQ(mistyped["error"]["details"]["parameter"], "label");
-        const auto string_count = registry.call_tool(tool_name, json{{"label", "x"}, {"count", "7"}});
-        EXPECT_EQ(string_count["error"]["details"]["parameter"], "count");
+        const auto word_count = registry.call_tool(tool_name, json{{"label", "x"}, {"count", "seven"}});
+        EXPECT_EQ(word_count["error"]["details"]["parameter"], "count");
         const auto null_required = registry.call_tool(tool_name, json{{"label", nullptr}});
         EXPECT_EQ(null_required["error_message"], "Missing required parameter: label");
         const auto not_an_object = registry.call_tool(tool_name, json::array({1, 2}));
@@ -1449,6 +1449,11 @@ namespace lfs::mcp {
         EXPECT_EQ(handler_calls, 1);
         EXPECT_TRUE(last_arguments.contains("parent") && last_arguments["parent"].is_null())
             << "an explicit null lost its meaning before the handler";
+
+        EXPECT_EQ(registry.call_tool(tool_name, json{{"label", 5}, {"count", "7"}})["success"], true);
+        EXPECT_EQ(handler_calls, 2);
+        EXPECT_EQ(last_arguments["label"], "5") << "a number for a string parameter was not spelled as text";
+        EXPECT_EQ(last_arguments["count"], 7) << "a numeric string for an integer parameter was not converted";
     }
 
     TEST(McpProtocolTest, TypedEnvelopeHandlerResultIsPassedThroughWithMirror) {

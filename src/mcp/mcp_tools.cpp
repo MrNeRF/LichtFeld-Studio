@@ -12,7 +12,10 @@
 
 #include <algorithm>
 #include <cassert>
+#include <charconv>
+#include <cmath>
 #include <format>
+#include <optional>
 
 namespace lfs::mcp {
 
@@ -67,6 +70,40 @@ namespace lfs::mcp {
             if (type == "object")
                 return value.is_object();
             return true;
+        }
+
+        // Agents often spell scalars in another type: "7" for an integer, "true" for a
+        // boolean, 5 for a string. Unambiguous spellings become the declared type.
+        [[nodiscard]] std::optional<json> coerce_to_declared_type(const json& value, const std::string& type) {
+            if (matches_declared_type(value, type))
+                return std::make_optional<json>(value);
+            if ((type == "integer" || type == "number") && value.is_string()) {
+                const auto& text = value.get_ref<const std::string&>();
+                const char* const begin = text.data();
+                const char* const end = begin + text.size();
+                if (type == "integer") {
+                    std::int64_t parsed = 0;
+                    const auto [last, ec] = std::from_chars(begin, end, parsed);
+                    if (!text.empty() && ec == std::errc{} && last == end)
+                        return std::make_optional<json>(parsed);
+                } else {
+                    double parsed = 0.0;
+                    const auto [last, ec] = std::from_chars(begin, end, parsed);
+                    if (!text.empty() && ec == std::errc{} && last == end && std::isfinite(parsed))
+                        return std::make_optional<json>(parsed);
+                }
+                return std::nullopt;
+            }
+            if (type == "boolean" && value.is_string()) {
+                if (value == "true")
+                    return std::make_optional<json>(true);
+                if (value == "false")
+                    return std::make_optional<json>(false);
+                return std::nullopt;
+            }
+            if (type == "string" && (value.is_number() || value.is_boolean()))
+                return std::make_optional<json>(value.dump());
+            return std::nullopt;
         }
 
         json invoke_handler_guarded(const std::string& name, const ToolRegistry::ToolHandler& handler,
@@ -248,23 +285,27 @@ namespace lfs::mcp {
 
         // A mistyped argument is the caller's error and must not reach the handler, where
         // reading it would throw as an internal failure. Null keeps its per-tool meaning.
+        json checked_arguments = arguments;
         if (properties.is_object() && arguments.is_object()) {
             for (const auto& [key, value] : arguments.items()) {
                 const auto property = properties.find(key);
                 if (value.is_null() || property == properties.end() || !property->is_object())
                     continue;
                 const auto type = property->find("type");
-                if (type != property->end() && type->is_string() &&
-                    !matches_declared_type(value, type->get<std::string>())) {
+                if (type == property->end() || !type->is_string())
+                    continue;
+                auto coerced = coerce_to_declared_type(value, type->get<std::string>());
+                if (!coerced) {
                     return parameter_error_envelope(
                         lfs::ErrorCode::InvalidArgument,
                         std::format("Parameter '{}' must be of type {}", key, type->get<std::string>()), key,
                         operation_id);
                 }
+                checked_arguments[key] = std::move(*coerced);
             }
         }
 
-        return bridge_tool_result(invoke_handler_guarded(name, handler, arguments, operation_id),
+        return bridge_tool_result(invoke_handler_guarded(name, handler, checked_arguments, operation_id),
                                   name, operation_id);
     }
 
