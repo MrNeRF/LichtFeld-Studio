@@ -339,10 +339,14 @@ namespace lfs::core::internal::metal {
         return serial;
     }
 
-    void Context::queue_wait(id<MTLSharedEvent> const event, const uint64_t value) {
+    uint64_t Context::queue_wait(id<MTLSharedEvent> const event, const uint64_t value) {
         std::lock_guard lock(encode_mutex_);
         commit_locked();
         [queue_ waitForEvent:event value:value];
+        open_encoder_locked();
+        open_dispatches_ = 1; // commits the batch without a dispatch
+        commit_locked();
+        return submitted_.load(std::memory_order_relaxed);
     }
 
     void Context::wait(const uint64_t serial) {

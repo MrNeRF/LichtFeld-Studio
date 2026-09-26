@@ -80,6 +80,21 @@ namespace lfs::core::internal {
             return imported;
         }
 
+        // The event behind a timeline semaphore of the consumer device.
+        id<MTLSharedEvent> shared_event(const VkDevice device, const VkSemaphore semaphore) {
+            const auto export_objects = reinterpret_cast<PFN_vkExportMetalObjectsEXT>(
+                vkGetDeviceProcAddr(device, "vkExportMetalObjectsEXT"));
+            VkExportMetalSharedEventInfoEXT event{VK_STRUCTURE_TYPE_EXPORT_METAL_SHARED_EVENT_INFO_EXT};
+            event.semaphore = semaphore;
+            VkExportMetalObjectsInfoEXT info{VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECTS_INFO_EXT};
+            info.pNext = &event;
+            if (export_objects)
+                export_objects(device, &info);
+            if (!event.mtlSharedEvent)
+                throw TensorError("The consumer timeline has no Metal event to wait on");
+            return event.mtlSharedEvent;
+        }
+
         class API_AVAILABLE(macos(26.0)) MetalTensorVulkanInterop final : public TensorVulkanInteropBackend {
         public:
             explicit MetalTensorVulkanInterop(const VulkanInteropDevice target) : target_(target) {
@@ -158,18 +173,18 @@ namespace lfs::core::internal {
                                                         {timeline->semaphore, context->signal(timeline->event), timeline});
             }
 
-            // The consumer's queue is foreign to Metal, so its work completes on the host.
-            void wait(std::span<const Tensor* const>, const VulkanTimelinePoint point) override {
-                auto semaphore = static_cast<VkSemaphore>(point.semaphore);
-                VkSemaphoreWaitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
-                wait.semaphoreCount = 1;
-                wait.pSemaphores = &semaphore;
-                wait.pValues = &point.value;
-                VkResult status;
-                do {
-                    status = vkWaitSemaphores(static_cast<VkDevice>(target_.device), &wait, 1'000'000'000);
-                } while (status == VK_TIMEOUT);
-                check(status, "vkWaitSemaphores");
+            // Metal work waits on the GPU for the consumer's timeline, and host
+            // access to the tensors waits for the batch behind that wait.
+            void wait(const std::span<const Tensor* const> tensors, const VulkanTimelinePoint point) override {
+                const uint64_t serial = metal::acquire_context()->queue_wait(
+                    shared_event(static_cast<VkDevice>(target_.device), static_cast<VkSemaphore>(point.semaphore)),
+                    point.value);
+                for (const auto* tensor : tensors) {
+                    if (!tensor || !tensor->is_valid() || gpu_backend_of(*tensor) != GpuBackend::Metal)
+                        continue;
+                    if (const StorageMeta* const meta = storage_ref(*tensor).meta)
+                        const_cast<StorageMeta*>(meta)->pending_value.store(serial, std::memory_order_release);
+                }
             }
 
         private:
@@ -249,19 +264,8 @@ namespace lfs::core::internal {
                 if (!device)
                     return;
                 timeline_ = import_timeline(device, metal::acquire_context()->device());
-                if (!consumer)
-                    return;
-                const auto export_objects = reinterpret_cast<PFN_vkExportMetalObjectsEXT>(
-                    vkGetDeviceProcAddr(device, "vkExportMetalObjectsEXT"));
-                VkExportMetalSharedEventInfoEXT event{VK_STRUCTURE_TYPE_EXPORT_METAL_SHARED_EVENT_INFO_EXT};
-                event.semaphore = consumer;
-                VkExportMetalObjectsInfoEXT info{VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECTS_INFO_EXT};
-                info.pNext = &event;
-                if (export_objects)
-                    export_objects(device, &info);
-                if (!event.mtlSharedEvent)
-                    throw TensorError("The consumer timeline has no Metal event to wait on");
-                consumer_ = event.mtlSharedEvent;
+                if (consumer)
+                    consumer_ = shared_event(device, consumer);
             }
 
             void* timeline() const override { return timeline_ ? timeline_->semaphore : VK_NULL_HANDLE; }

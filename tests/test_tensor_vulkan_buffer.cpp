@@ -17,6 +17,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <future>
 #include <memory>
 #include <thread>
 #include <vector>
@@ -361,6 +362,97 @@ namespace {
                 EXPECT_FLOAT_EQ(value, 5.0f);
         }
         vkDestroySemaphore(device, consumer, nullptr);
+    }
+
+    // Metal waits for consumer work on the GPU instead of the host, yet a host
+    // read of a waited-for tensor still sees the consumer's writes.
+    TEST_F(TensorVulkanBufferQuery, MetalWaitOrdersHostReadsAfterConsumerWrites) {
+        if (!gpu_backend_available(GpuBackend::Metal))
+            GTEST_SKIP() << "Metal backend unavailable";
+        auto candidate = lfs::core::HeadlessAdoptedDevice::try_create(true);
+        if (!candidate || !candidate->handles().metal_objects)
+            GTEST_SKIP() << "No Vulkan device shares Metal objects";
+        adopted_.emplace(std::move(*candidate));
+        const auto handles = adopted_->handles();
+        const auto device = static_cast<VkDevice>(handles.device);
+        VkSemaphoreTypeCreateInfo type{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+        type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+        VkSemaphoreCreateInfo semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+        semaphore_info.pNext = &type;
+        VkSemaphore gate = VK_NULL_HANDLE, written = VK_NULL_HANDLE;
+        ASSERT_EQ(vkCreateSemaphore(device, &semaphore_info, nullptr, &gate), VK_SUCCESS);
+        ASSERT_EQ(vkCreateSemaphore(device, &semaphore_info, nullptr, &written), VK_SUCCESS);
+        VkCommandPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+        pool_info.queueFamilyIndex = handles.queue_family;
+        VkCommandPool pool = VK_NULL_HANDLE;
+        ASSERT_EQ(vkCreateCommandPool(device, &pool_info, nullptr, &pool), VK_SUCCESS);
+        VkCommandBufferAllocateInfo allocate{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        allocate.commandPool = pool;
+        allocate.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocate.commandBufferCount = 1;
+        VkCommandBuffer command = VK_NULL_HANDLE;
+        ASSERT_EQ(vkAllocateCommandBuffers(device, &allocate, &command), VK_SUCCESS);
+        {
+            TensorVulkanInterop interop(VulkanInteropDevice{
+                .physical_device = handles.physical_device,
+                .device = handles.device,
+                .queue_families = {handles.queue_family},
+                .queue_family_count = 1,
+                .metal_objects = true});
+            const GpuBackendScope scope(GpuBackend::Metal);
+            Tensor target = interop.empty({64}, DataType::Float32, GpuBackend::Metal);
+            target.fill_(1.0f);
+            const std::array<const Tensor*, 1> tensors{&target};
+            const auto ready = interop.ready(tensors).timeline();
+            const auto buffer = interop.buffer(target);
+            ASSERT_TRUE(buffer);
+            VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+            ASSERT_EQ(vkBeginCommandBuffer(command, &begin), VK_SUCCESS);
+            vkCmdFillBuffer(command, static_cast<VkBuffer>(buffer->buffer), buffer->offset, target.bytes(), 0x40E80000u);
+            ASSERT_EQ(vkEndCommandBuffer(command), VK_SUCCESS);
+            // The fill waits for the Metal writes and for the host to open the gate.
+            const std::array<VkSemaphore, 2> waits{static_cast<VkSemaphore>(ready.semaphore), gate};
+            const std::array<uint64_t, 2> wait_values{ready.value, 1};
+            const std::array<VkPipelineStageFlags, 2> stages{VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT};
+            const uint64_t signal_value = 1;
+            VkTimelineSemaphoreSubmitInfo timeline{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
+            timeline.waitSemaphoreValueCount = 2;
+            timeline.pWaitSemaphoreValues = wait_values.data();
+            timeline.signalSemaphoreValueCount = 1;
+            timeline.pSignalSemaphoreValues = &signal_value;
+            VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+            submit.pNext = &timeline;
+            submit.waitSemaphoreCount = 2;
+            submit.pWaitSemaphores = waits.data();
+            submit.pWaitDstStageMask = stages.data();
+            submit.commandBufferCount = 1;
+            submit.pCommandBuffers = &command;
+            submit.signalSemaphoreCount = 1;
+            submit.pSignalSemaphores = &written;
+            ASSERT_EQ(vkQueueSubmit(static_cast<VkQueue>(handles.queue), 1, &submit, VK_NULL_HANDLE), VK_SUCCESS);
+
+            auto waited = std::async(std::launch::async, [&] { interop.wait(tensors, {written, 1}); });
+            const bool queued = waited.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+            EXPECT_TRUE(queued) << "the wait blocked the host";
+            std::future<std::vector<float>> read;
+            if (queued) {
+                read = std::async(std::launch::async, [&] { return target.cpu().to_vector(); });
+                EXPECT_EQ(read.wait_for(std::chrono::milliseconds(50)), std::future_status::timeout);
+            }
+            VkSemaphoreSignalInfo open{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+            open.semaphore = gate;
+            open.value = 1;
+            ASSERT_EQ(vkSignalSemaphore(device, &open), VK_SUCCESS);
+            waited.get();
+            if (queued) {
+                for (const float value : read.get())
+                    EXPECT_FLOAT_EQ(value, 7.25f);
+            }
+            ASSERT_EQ(vkQueueWaitIdle(static_cast<VkQueue>(handles.queue)), VK_SUCCESS);
+        }
+        vkDestroyCommandPool(device, pool, nullptr);
+        vkDestroySemaphore(device, written, nullptr);
+        vkDestroySemaphore(device, gate, nullptr);
     }
 
     // Degree-zero splats carry an empty SH tensor, which has no storage, so
