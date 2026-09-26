@@ -17,9 +17,9 @@
 #include "core/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "kernels/densification_kernels.hpp"
-#include "kernels/mrnf_kernels.hpp"
 #include "lfs/training/mean_step_scale.cuh"
 #include "lfs/training/morton_reorder.hpp"
+#include "lfs/training/ops/registry.hpp"
 #include "lfs/training/perf_bench.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "strategy_utils.hpp"
@@ -139,6 +139,7 @@ namespace lfs::training {
         }
 
         [[nodiscard]] bool fill_mean_abs_error_hw(
+            const lfs::gpu_ops::MrnfOps& ops,
             const lfs::core::Tensor& image,
             const lfs::core::Tensor& target,
             lfs::core::Tensor& out_hw) {
@@ -161,16 +162,7 @@ namespace lfs::training {
                 gt = gt.slice(0, 0, channels).contiguous();
             }
             ensure_cuda_float(out_hw, lfs::core::TensorShape({height, width}));
-            const int channels_i = static_cast<int>(channels);
-            const int height_i = static_cast<int>(height);
-            const int width_i = static_cast<int>(width);
-            mrnf_strategy::launch_mean_abs_error_hw(
-                pred.ptr<float>(),
-                gt.ptr<float>(),
-                channels_i,
-                height_i,
-                width_i,
-                out_hw.ptr<float>());
+            ops.mean_abs_error(pred, gt, out_hw);
             return true;
         }
 
@@ -595,7 +587,18 @@ namespace lfs::training {
         }
     } // namespace
 
-    MRNF::MRNF(lfs::core::SplatData& splat_data) : _splat_data(&splat_data) {}
+    MRNF::MRNF(lfs::core::SplatData& splat_data) : _splat_data(&splat_data) {
+        mrnf_ops_ = training_ops(lfs::core::default_gpu_backend()).mrnf;
+    }
+
+    const lfs::gpu_ops::MrnfOps& MRNF::mrnf_ops() const {
+        if (mrnf_ops_ == nullptr) [[unlikely]] {
+            throw std::runtime_error(
+                unavailable_training_family(lfs::core::default_gpu_backend(), Family::Mrnf)
+                    .value_or("Mrnf training ops are unavailable"));
+        }
+        return *mrnf_ops_;
+    }
 
     void MRNF::initialize(const lfs::core::param::OptimizationParameters& optimParams) {
         using namespace lfs::core;
@@ -1015,7 +1018,7 @@ namespace lfs::training {
             return;
         }
 
-        if (!fill_mean_abs_error_hw(render_output.image, render_output.target_image, _explore_error_hw) ||
+        if (!fill_mean_abs_error_hw(mrnf_ops(), render_output.image, render_output.target_image, _explore_error_hw) ||
             !_explore_error_hw.is_valid() || _explore_error_hw.ndim() != 2 ||
             _explore_error_hw.device() != Device::GPU ||
             _explore_error_hw.dtype() != DataType::Float32) {
@@ -1068,19 +1071,14 @@ namespace lfs::training {
             ensure_cuda_float_exact(_explore_radii, TensorShape({n}));
             means2d = _explore_means2d;
             radii = _explore_radii;
-            mrnf_strategy::launch_project_visible_centers(
-                _splat_data->means().ptr<float>(),
-                w2c,
-                fx,
-                fy,
-                cx,
-                cy,
-                width,
-                height,
-                MRNF_PROJECT_NEAR,
-                means2d.ptr<float>(),
-                radii.ptr<float>(),
-                n);
+            mrnf_ops().project_centers(
+                _splat_data->means(),
+                render_output.camera->world_view_transform(),
+                means2d,
+                radii,
+                {.image = {.h = height, .w = width},
+                 .intrinsics = {.fx = fx, .fy = fy, .cx = cx, .cy = cy},
+                 .near_plane = MRNF_PROJECT_NEAR});
         }
 
         if (!_explore_score_sum.is_valid() ||
@@ -1098,14 +1096,7 @@ namespace lfs::training {
         assert(radii.is_valid());
         assert(radii.ndim() == 1);
         assert(radii.numel() == n);
-        mrnf_strategy::launch_gather_center_error(
-            means2d.ptr<float>(),
-            radii.ptr<float>(),
-            _explore_error_hw.ptr<float>(),
-            width,
-            height,
-            _explore_view_scores.ptr<float>(),
-            n);
+        mrnf_ops().gather_center_error(means2d, radii, _explore_error_hw, _explore_view_scores);
         normalize_by_positive_median_inplace(_explore_view_scores);
         zero_frozen_scores_inplace(*_splat_data, _explore_view_scores);
         _explore_score_sum.add_(_explore_view_scores);
@@ -1186,20 +1177,16 @@ namespace lfs::training {
                 ratio_max_ptr = _refine_ratio_max.ptr<float>();
             }
             if (has_separate_visibility_buffer()) {
-                mrnf_strategy::launch_fold_densification_and_zero(
-                    _vis_count.ptr<float>(),
-                    _refine_weight_max.ptr<float>(),
-                    _splat_data->_densification_info.ptr<float>(),
-                    n,
-                    nullptr,
-                    densification_row_count(),
-                    ratio_max_ptr,
+                lfs::core::Tensor absent_ratio;
+                auto& ratio = (ratio_max_ptr != nullptr) ? _refine_ratio_max : absent_ratio;
+                mrnf_ops().fold(
+                    _vis_count,
+                    _refine_weight_max,
+                    _splat_data->_densification_info,
+                    ratio,
                     cfg_ratio_pow());
             } else {
-                mrnf_strategy::launch_fold_densification_error_and_zero(
-                    _refine_weight_max.ptr<float>(),
-                    _splat_data->_densification_info.ptr<float>(),
-                    n);
+                mrnf_ops().fold_error(_refine_weight_max, _splat_data->_densification_info);
             }
             zero_frozen_scores_inplace(*_splat_data, _refine_weight_max);
             if (ratio_max_ptr != nullptr) {
@@ -1614,11 +1601,11 @@ namespace lfs::training {
                 if (!_far_field_mask.is_valid() || _far_field_mask.numel() != n_now) {
                     _far_field_mask = lfs::core::Tensor::zeros_bool({n_now}, lfs::core::Device::GPU);
                 }
-                mrnf_strategy::launch_far_field_mask(
-                    _splat_data->means().ptr<float>(),
-                    _cam_centroid[0], _cam_centroid[1], _cam_centroid[2],
-                    kDeepFarRadiusOrbits * _orbit_radius,
-                    _far_field_mask.ptr<bool>(), n_now);
+                mrnf_ops().far_mask(
+                    _splat_data->means(),
+                    _far_field_mask,
+                    {_cam_centroid[0], _cam_centroid[1], _cam_centroid[2]},
+                    kDeepFarRadiusOrbits * _orbit_radius);
                 const float far_frac =
                     static_cast<float>(_far_field_mask.to(lfs::core::DataType::Int32).sum().item<int>()) /
                     static_cast<float>(n_now);
@@ -1749,14 +1736,11 @@ namespace lfs::training {
             _far_field_mask.numel() != n) {
             _far_field_mask = Tensor::zeros_bool({n}, Device::GPU);
         }
-        mrnf_strategy::launch_far_field_mask(
-            _splat_data->means().ptr<float>(),
-            _cam_centroid[0],
-            _cam_centroid[1],
-            _cam_centroid[2],
-            kFarMaskOrbits * _orbit_radius,
-            _far_field_mask.ptr<bool>(),
-            n);
+        mrnf_ops().far_mask(
+            _splat_data->means(),
+            _far_field_mask,
+            {_cam_centroid[0], _cam_centroid[1], _cam_centroid[2]},
+            kFarMaskOrbits * _orbit_radius);
         publish_mean_step_far_mask();
     }
 
@@ -1819,9 +1803,9 @@ namespace lfs::training {
         if (!_far_growth.active || !_far_growth.outside_mask.is_valid() ||
             _far_growth.outside_mask.numel() != n) {
             auto indices = Tensor::empty({static_cast<size_t>(k)}, Device::GPU, DataType::Int64);
-            mrnf_strategy::launch_gumbel_topk(
-                weights.ptr<float>(), n, static_cast<size_t>(k), seed, indices.ptr<int64_t>(),
-                nullptr, true, &_gumbel_scratch, known_nnz);
+            mrnf_ops().gumbel(
+                &_gumbel_scratch, weights, indices,
+                {.seed = seed, .known_nnz = known_nnz, .compact_sparse = true});
             _far_growth.allocated += k;
             return indices;
         }
@@ -1859,17 +1843,15 @@ namespace lfs::training {
         Tensor in_inds;
         if (k_out > 0) {
             out_inds = Tensor::empty({static_cast<size_t>(k_out)}, Device::GPU, DataType::Int64);
-            mrnf_strategy::launch_gumbel_topk(
-                weights_out.ptr<float>(), n, static_cast<size_t>(k_out), seed,
-                out_inds.ptr<int64_t>(), nullptr, true, &_gumbel_scratch,
-                static_cast<size_t>(selectable_out));
+            mrnf_ops().gumbel(
+                &_gumbel_scratch, weights_out, out_inds,
+                {.seed = seed, .known_nnz = static_cast<size_t>(selectable_out), .compact_sparse = true});
         }
         if (k_in > 0) {
             in_inds = Tensor::empty({static_cast<size_t>(k_in)}, Device::GPU, DataType::Int64);
-            mrnf_strategy::launch_gumbel_topk(
-                weights_in.ptr<float>(), n, static_cast<size_t>(k_in), seed + 17,
-                in_inds.ptr<int64_t>(), nullptr, true, &_gumbel_scratch,
-                static_cast<size_t>(selectable_in));
+            mrnf_ops().gumbel(
+                &_gumbel_scratch, weights_in, in_inds,
+                {.seed = seed + 17, .known_nnz = static_cast<size_t>(selectable_in), .compact_sparse = true});
         }
 
         Tensor selected;
@@ -1903,10 +1885,9 @@ namespace lfs::training {
             live_vis = vis_count.masked_select(_free_mask.slice(0, 0, n).logical_not());
         }
         if (live_vis.is_valid() && live_vis.numel() > 0) {
-            median_vis = mrnf_strategy::launch_sorted_median(live_vis.ptr<float>(), live_vis.numel());
+            median_vis = mrnf_ops().sorted_median(live_vis);
         }
-        mrnf_strategy::launch_apply_explore_starvation_weights(
-            weights.ptr<float>(), vis_count.ptr<float>(), n, median_vis);
+        mrnf_ops().starvation_weights(weights, vis_count, median_vis);
     }
 
     lfs::core::Tensor MRNF::build_explore_split_weights(
@@ -2677,16 +2658,15 @@ namespace lfs::training {
             std::chrono::high_resolution_clock::now().time_since_epoch().count());
         const auto frozen_mask = make_frozen_mask(*_splat_data, n, _splat_data->means().device());
 
-        mrnf_strategy::launch_mrnf_noise_injection(
-            _splat_data->means().ptr<float>(),
-            _splat_data->opacity_raw().ptr<float>(),
-            visibility_accumulator().ptr<float>(),
-            frozen_mask.is_valid() ? frozen_mask.ptr<bool>() : nullptr,
-            frozen_mask.is_valid() ? frozen_mask.numel() : 0,
-            lr_mean,
-            _params->means_noise_weight,
-            _bounds.median_size,
-            n, seed);
+        mrnf_ops().noise(
+            _splat_data->means(),
+            _splat_data->opacity_raw(),
+            visibility_accumulator(),
+            frozen_mask,
+            {.seed = seed,
+             .lr_mean = lr_mean,
+             .noise_weight = _params->means_noise_weight,
+             .median_scale = _bounds.median_size});
     }
 
     void MRNF::apply_decay(int iter) {
@@ -2702,18 +2682,17 @@ namespace lfs::training {
             refresh_far_field_mask(n);
         }
 
-        mrnf_strategy::launch_mrnf_decay(
-            _splat_data->opacity_raw().ptr<float>(),
-            _splat_data->scaling_raw().ptr<float>(),
-            frozen_mask.is_valid() ? frozen_mask.ptr<bool>() : nullptr,
-            frozen_mask.is_valid() ? frozen_mask.numel() : 0,
-            scale_far && _far_field_mask.is_valid() ? _far_field_mask.ptr<bool>() : nullptr,
-            scale_far && _far_field_mask.is_valid() ? _far_field_mask.numel() : 0,
-            _params->opacity_decay,
-            _params->scale_decay,
-            scale_far ? effective_far_decay_scale() : 1.0f,
-            train_t,
-            n);
+        lfs::core::Tensor absent_far;
+        const auto& far = (scale_far && _far_field_mask.is_valid()) ? _far_field_mask : absent_far;
+        mrnf_ops().decay(
+            _splat_data->opacity_raw(),
+            _splat_data->scaling_raw(),
+            frozen_mask,
+            far,
+            {.opacity_decay = _params->opacity_decay,
+             .scale_decay = _params->scale_decay,
+             .far_decay_scale = scale_far ? effective_far_decay_scale() : 1.0f,
+             .train_t = train_t});
     }
 
     void MRNF::enforce_max_cap() {
@@ -2762,10 +2741,11 @@ namespace lfs::training {
                 _refine_counts_dev.ptr<int64_t>());
             const auto host_counts = _refine_counts_dev.to_vector_int64();
             auto keep_indices = Tensor::empty({keep_budget}, Device::GPU, DataType::Int64);
-            mrnf_strategy::launch_gumbel_topk(
-                opacities.ptr<float>(), n, keep_budget, seed,
-                keep_indices.ptr<int64_t>(), nullptr, true, &_gumbel_scratch,
-                static_cast<size_t>(host_counts[2]));
+            mrnf_ops().gumbel(
+                &_gumbel_scratch, opacities, keep_indices,
+                {.seed = seed,
+                 .known_nnz = static_cast<size_t>(host_counts[2]),
+                 .compact_sparse = true});
 
             auto true_vals = Tensor::ones_bool({keep_budget}, opacities.device());
             keep_mask.index_put_(keep_indices, true_vals);
@@ -3085,7 +3065,7 @@ namespace lfs::training {
             return;
         }
 
-        if (!fill_mean_abs_error_hw(image, target, _explore_error_hw)) {
+        if (!fill_mean_abs_error_hw(mrnf_ops(), image, target, _explore_error_hw)) {
             return;
         }
         auto alpha_flat = flatten_hw(alpha);
@@ -3095,11 +3075,7 @@ namespace lfs::training {
         }
         const size_t error_n = _explore_error_hw.numel();
         auto error_flat = _explore_error_hw.reshape(TensorShape({error_n}));
-        mrnf_strategy::launch_seed_weights_from_error_alpha(
-            error_flat.ptr<float>(),
-            alpha_flat.ptr<float>(),
-            error_flat.ptr<float>(),
-            error_n);
+        mrnf_ops().seed_weights(error_flat, alpha_flat, error_flat);
         auto seed_weights = error_flat;
 
         const size_t hw = seed_weights.numel();
@@ -3132,9 +3108,9 @@ namespace lfs::training {
         auto seed = static_cast<uint64_t>(
             std::chrono::high_resolution_clock::now().time_since_epoch().count());
         auto pixel_inds = Tensor::empty({static_cast<size_t>(n_seed)}, Device::GPU, DataType::Int64);
-        mrnf_strategy::launch_gumbel_topk(
-            seed_weights.ptr<float>(), hw, static_cast<size_t>(n_seed), seed,
-            pixel_inds.ptr<int64_t>(), nullptr, false, &_gumbel_scratch, hw);
+        mrnf_ops().gumbel(
+            &_gumbel_scratch, seed_weights, pixel_inds,
+            {.seed = seed, .known_nnz = hw, .compact_sparse = false});
 
         Tensor depth_flat;
         if (depth.is_valid() && depth.device() == Device::GPU && depth.numel() > 0) {
@@ -3148,18 +3124,8 @@ namespace lfs::training {
         auto rgb = Tensor::empty({static_cast<size_t>(n_seed), 3}, Device::GPU, DataType::Float32);
         auto seed_alpha = Tensor::empty({static_cast<size_t>(n_seed)}, Device::GPU, DataType::Float32);
         auto seed_depth = Tensor::empty({static_cast<size_t>(n_seed)}, Device::GPU, DataType::Float32);
-        const int channels = static_cast<int>(target.shape()[0]);
-        mrnf_strategy::launch_gather_seed_payloads(
-            pixel_inds.ptr<int64_t>(),
-            static_cast<size_t>(n_seed),
-            hw,
-            target.ptr<float>(),
-            channels,
-            alpha_flat.ptr<float>(),
-            depth_flat.ptr<float>(),
-            rgb.ptr<float>(),
-            seed_alpha.ptr<float>(),
-            seed_depth.ptr<float>());
+        mrnf_ops().gather_seeds(
+            pixel_inds, target, alpha_flat, depth_flat, rgb, seed_alpha, seed_depth);
 
         auto pix_cpu = pixel_inds.cpu();
         auto rgb_cpu = rgb.cpu();
@@ -3344,12 +3310,14 @@ namespace lfs::training {
             return;
         }
 
+        const auto sampled_bounds = mrnf_ops().percentile_bounds(active_means, _params->bounds_percentile);
         mrnf_strategy::MRNFBounds candidate{};
-        mrnf_strategy::launch_percentile_bounds(
-            active_means.ptr<float>(),
-            n,
-            _params->bounds_percentile,
-            &candidate);
+        for (int axis = 0; axis < 3; ++axis) {
+            candidate.center[axis] = sampled_bounds.center[axis];
+            candidate.extent[axis] = sampled_bounds.extent[axis];
+        }
+        candidate.median_size = sampled_bounds.median_size;
+        candidate.max_extent = sampled_bounds.max_extent;
 
         float coordinate_scale = 1.0f;
         bool finite_bounds = std::isfinite(candidate.max_extent) && candidate.max_extent >= 0.0f;
@@ -3392,11 +3360,9 @@ namespace lfs::training {
         bool median_ok = false;
         if (active_scales.is_valid() &&
             active_scales.numel() >= n * 3) {
-            mrnf_strategy::launch_median_geomean_extent(
-                active_scales.ptr<float>(),
-                n,
-                &median_extent,
-                &median_ok);
+            const auto extent = mrnf_ops().median_extent(active_scales);
+            median_extent = extent.value;
+            median_ok = extent.valid;
         }
         _median_splat_extent = median_extent;
         _median_splat_extent_valid =

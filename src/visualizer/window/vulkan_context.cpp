@@ -534,7 +534,7 @@ namespace lfs::vis {
     }
 
     bool VulkanContext::initHeadless() {
-        const bool interop = lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA;
+        const bool interop = lfs::core::tensor_backend_needs_vulkan_interop();
         const auto cuda_device = interop ? interopCudaDevice() : std::nullopt;
         if (interop && !cuda_device)
             return fail("Cannot identify CUDA device 0 for off-screen Vulkan interop");
@@ -570,7 +570,7 @@ namespace lfs::vis {
         compute_queue_ = graphics_queue_;
         transfer_queue_ = graphics_queue_;
         graphics_queue_family_ = present_queue_family_ = compute_queue_family_ = transfer_queue_family_ = handles.queue_family;
-        if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Vulkan) {
+        if (!interop && lfs::core::tensor_backend_shares_vulkan_device()) {
             if (auto result = lfs::core::adopt_vulkan_device(handles); !result)
                 return fail(std::string(result.error().user_message()));
         }

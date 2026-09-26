@@ -647,9 +647,6 @@ namespace {
                    internal::strided_layout(source), internal::strided_layout(indices),
                    internal::IndexProgram{.dim = 0, .boundary_mode = static_cast<int>(BoundaryMode::Assert), .total_elements = picks.size()}, {});
         EXPECT_EQ(output.to_vector_uint8(), expected);
-        ops.take(internal::storage_ref(source), internal::storage_ref(indices), internal::storage_ref(output),
-                 internal::IndexProgram{.input_size = source.numel(), .index_size = picks.size()}, {});
-        EXPECT_EQ(output.to_vector_uint8(), expected);
         EXPECT_EQ(source.index_select(0, indices).to_vector_uint8(), expected);
         for (size_t offset = 0; offset < 4; ++offset) {
             std::vector<uint8_t> guarded(19, 0xA5);

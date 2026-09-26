@@ -16,7 +16,6 @@
 #include "strategy_utils.hpp"
 
 #include "kernels/densification_kernels.hpp"
-#include "kernels/mrnf_kernels.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include "optimizer/adam_optimizer.hpp"
 
@@ -24,6 +23,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <stdexcept>
 #include <utility>
 
 namespace lfs::training {
@@ -189,6 +189,7 @@ namespace lfs::training {
     ImprovedGSPlus::ImprovedGSPlus(lfs::core::SplatData& splat_data)
         : _splat_data(&splat_data) {
         mcmc_ops_ = training_ops(lfs::core::default_gpu_backend()).mcmc;
+        mrnf_ops_ = training_ops(lfs::core::default_gpu_backend()).mrnf;
     }
 
     const lfs::gpu_ops::McmcOps& ImprovedGSPlus::mcmc_ops() const {
@@ -198,6 +199,15 @@ namespace lfs::training {
                     .value_or("Mcmc training ops are unavailable"));
         }
         return *mcmc_ops_;
+    }
+
+    const lfs::gpu_ops::MrnfOps& ImprovedGSPlus::mrnf_ops() const {
+        if (mrnf_ops_ == nullptr) [[unlikely]] {
+            throw std::runtime_error(
+                unavailable_training_family(lfs::core::default_gpu_backend(), Family::Mrnf)
+                    .value_or("Mrnf training ops are unavailable"));
+        }
+        return *mrnf_ops_;
     }
 
     std::vector<int64_t> ImprovedGSPlus::get_count_array() {
@@ -364,15 +374,12 @@ namespace lfs::training {
             *_splat_data, shN_expanded, "ImprovedGSPlus::LAS_densify");
 
         // Sample without replacement through the same Gumbel-top-k path as MCMC.
-        const size_t n_scores = scores.numel();
         const size_t k_sample = static_cast<size_t>(budget_for_alloc);
         auto sampled_idxs = lfs::core::Tensor::empty(
             {k_sample}, scores.device(), lfs::core::DataType::Int64);
         const auto seed = static_cast<uint64_t>(
             std::chrono::high_resolution_clock::now().time_since_epoch().count());
-        lfs::training::mrnf_strategy::launch_gumbel_topk(
-            scores.ptr<float>(), n_scores, k_sample, seed,
-            sampled_idxs.ptr<int64_t>());
+        mrnf_ops().gumbel(nullptr, scores, sampled_idxs, {.seed = seed});
         const auto sampled_scale_summary = summarize_sampled_scales(_splat_data->scaling_raw(), sampled_idxs);
         if (_pending_failure_snapshot.valid) {
             _pending_failure_snapshot.sampled_scale_p95 = sampled_scale_summary.p95;

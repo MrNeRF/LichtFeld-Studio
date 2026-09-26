@@ -166,6 +166,10 @@ namespace lfs::training {
 
         void reset() override;
 
+        [[nodiscard]] const lfs::core::Tensor& sparsity_sigmoid() const { return opa_sigmoid_; }
+        [[nodiscard]] const lfs::core::Tensor& sparsity_z() const { return z_; }
+        [[nodiscard]] const lfs::core::Tensor& sparsity_u() const { return u_; }
+
         /// Serialized ADMM state row count ([N, 1] tensors); 0 when uninitialized.
         [[nodiscard]] size_t state_size() const { return initialized_ ? z_.size(0) : 0; }
         [[nodiscard]] const Config& config() const { return config_; }

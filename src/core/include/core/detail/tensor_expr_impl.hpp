@@ -948,7 +948,6 @@ namespace lfs::core {
             throw std::runtime_error("PermutationExpr: indices must be Int32 dtype");
         }
 
-        // Use existing take() implementation (already optimized with thrust::gather)
         Tensor result = input_tensor.flatten().take(indices_tensor).reshape(shape_);
         if (internal::lazy_ir_active()) {
             internal::lazy_ir_record_permutation(input_tensor, indices_tensor, result, "permutation");

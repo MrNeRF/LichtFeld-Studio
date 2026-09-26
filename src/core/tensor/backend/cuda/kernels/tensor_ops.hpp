@@ -382,9 +382,6 @@ namespace lfs::core::tensor_ops {
                                     size_t rank, int dim, size_t total_elements,
                                     int boundary_mode, cudaStream_t stream);
 
-    LFS_CORE_API void launch_take(const float* input, const int* indices, float* output,
-                                  size_t input_size, size_t index_size, cudaStream_t stream);
-
     // Fused gather + unary operation using thrust::permutation_iterator for zero-copy
     template <typename UnaryOp>
     void launch_gather_fused_unary(const float* input, const int* indices, float* output,
@@ -433,6 +430,7 @@ namespace lfs::core::tensor_ops {
     extern template void launch_scatter<float>(float*, const int*, const float*, const size_t*, const size_t*, size_t, int, size_t, int, cudaStream_t);
     extern template void launch_scatter<int>(int*, const int*, const int*, const size_t*, const size_t*, size_t, int, size_t, int, cudaStream_t);
     extern template void launch_scatter<uint8_t>(uint8_t*, const int*, const uint8_t*, const size_t*, const size_t*, size_t, int, size_t, int, cudaStream_t);
+    extern template void launch_scatter<int64_t>(int64_t*, const int*, const int64_t*, const size_t*, const size_t*, size_t, int, size_t, int, cudaStream_t);
 
     extern template void launch_index_add<float>(float*, const int*, const float*, const size_t*, size_t, int, size_t, cudaStream_t);
     extern template void launch_index_add<int>(int*, const int*, const int*, const size_t*, size_t, int, size_t, cudaStream_t);
@@ -440,6 +438,7 @@ namespace lfs::core::tensor_ops {
     extern template void launch_index_copy<float>(float*, const int*, const float*, const size_t*, size_t, int, size_t, cudaStream_t);
     extern template void launch_index_copy<int>(int*, const int*, const int*, const size_t*, size_t, int, size_t, cudaStream_t);
     extern template void launch_index_copy<uint8_t>(uint8_t*, const int*, const uint8_t*, const size_t*, size_t, int, size_t, cudaStream_t);
+    extern template void launch_index_copy<int64_t>(int64_t*, const int*, const int64_t*, const size_t*, size_t, int, size_t, cudaStream_t);
 
     extern template void launch_index_fill<float>(float*, const int*, float, const size_t*, size_t, int, size_t, cudaStream_t);
     extern template void launch_index_fill<int>(int*, const int*, int, const size_t*, size_t, int, size_t, cudaStream_t);

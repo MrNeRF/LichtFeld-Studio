@@ -619,17 +619,6 @@ namespace lfs::core::tensor_ops {
         LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.gather_i64");
     }
 
-    void launch_take(const float* in, const int* idx, float* out,
-                     size_t in_size, size_t out_size, cudaStream_t stream) {
-        auto in_ptr = thrust::device_pointer_cast(in);
-        auto idx_ptr = thrust::device_pointer_cast(idx);
-        auto out_ptr = thrust::device_pointer_cast(out);
-        auto transform_idx = thrust::make_transform_iterator(idx_ptr,
-                                                             ops::index_clamp_op(in_size));
-        thrust::gather(thrust::cuda::par.on(stream), transform_idx, transform_idx + out_size,
-                       in_ptr, out_ptr);
-    }
-
     // ============= OPTIMIZED: Fused Gather + Unary Operation =============
     // This uses thrust::permutation_iterator for ZERO-COPY gather combined with
     // thrust::transform for fusion - inspired by NVIDIA's parrot library
@@ -658,6 +647,12 @@ namespace lfs::core::tensor_ops {
     template <typename T>
     __device__ inline void scatter_add(T* dst, T value) {
         atomicAdd(dst, value);
+    }
+
+    // CUDA has 64-bit atomicAdd only for unsigned; two's-complement addition matches.
+    template <>
+    __device__ inline void scatter_add<int64_t>(int64_t* dst, int64_t value) {
+        atomicAdd(reinterpret_cast<unsigned long long*>(dst), static_cast<unsigned long long>(value));
     }
 
     template <>
@@ -882,6 +877,7 @@ namespace lfs::core::tensor_ops {
     template LFS_CORE_API void launch_scatter<float>(float*, const int*, const float*, const size_t*, const size_t*, size_t, int, size_t, int, cudaStream_t);
     template LFS_CORE_API void launch_scatter<int>(int*, const int*, const int*, const size_t*, const size_t*, size_t, int, size_t, int, cudaStream_t);
     template LFS_CORE_API void launch_scatter<uint8_t>(uint8_t*, const int*, const uint8_t*, const size_t*, const size_t*, size_t, int, size_t, int, cudaStream_t);
+    template LFS_CORE_API void launch_scatter<int64_t>(int64_t*, const int*, const int64_t*, const size_t*, const size_t*, size_t, int, size_t, int, cudaStream_t);
 
     template LFS_CORE_API void launch_index_add<float>(float*, const int*, const float*, const size_t*, size_t, int, size_t, cudaStream_t);
     template LFS_CORE_API void launch_index_add<int>(int*, const int*, const int*, const size_t*, size_t, int, size_t, cudaStream_t);
@@ -889,6 +885,7 @@ namespace lfs::core::tensor_ops {
     template LFS_CORE_API void launch_index_copy<float>(float*, const int*, const float*, const size_t*, size_t, int, size_t, cudaStream_t);
     template LFS_CORE_API void launch_index_copy<int>(int*, const int*, const int*, const size_t*, size_t, int, size_t, cudaStream_t);
     template LFS_CORE_API void launch_index_copy<uint8_t>(uint8_t*, const int*, const uint8_t*, const size_t*, size_t, int, size_t, cudaStream_t);
+    template LFS_CORE_API void launch_index_copy<int64_t>(int64_t*, const int*, const int64_t*, const size_t*, size_t, int, size_t, cudaStream_t);
 
     template LFS_CORE_API void launch_index_fill<float>(float*, const int*, float, const size_t*, size_t, int, size_t, cudaStream_t);
     template LFS_CORE_API void launch_index_fill<int>(int*, const int*, int, const size_t*, size_t, int, size_t, cudaStream_t);

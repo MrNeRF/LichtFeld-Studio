@@ -14,7 +14,7 @@
 #include "core/tensor.hpp"
 #include "cuda_backend_test.hpp"
 #include "diagnostics/vram_profiler.hpp"
-#include "training/rasterization/fast_rasterizer.hpp"
+#include "fast_raster_test_helpers.hpp"
 
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
@@ -114,16 +114,17 @@ TEST_F(VramLeakRegressionTest, FixedSizeCyclesHostRssAndVramStable) {
     // Warm CUDA + host paths outside the measured window.
     for (int w = 0; w < 3; ++w) {
         auto splat = make_splat(kSplatN);
-        auto r = fast_rasterize_forward(camera, *splat, bg, 0, 0, 0, 0, false);
-        ASSERT_TRUE(r.has_value()) << lfs::format_for_developer(r.error());
-        r->second.release_forward_context();
+        {
+            auto r = fast_rasterize_forward(camera, *splat, bg, 0, 0, 0, 0, false);
+            ASSERT_TRUE(r.has_value()) << lfs::format_for_developer(r.error());
+            r->second.release_forward_context();
+        }
         {
             auto storage = SplatExportableStorage::create(256, /*sh=*/0, 0, 8192);
             ASSERT_TRUE(storage.has_value()) << storage.error();
             ASSERT_TRUE(storage->grow(512).has_value());
             ASSERT_TRUE(storage->grow(1024).has_value());
         }
-        release_fast_rasterizer_thread_local_caches();
         GlobalArenaManager::instance().get_arena().full_reset();
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     }
@@ -149,8 +150,6 @@ TEST_F(VramLeakRegressionTest, FixedSizeCyclesHostRssAndVramStable) {
             ASSERT_TRUE(storage->grow(2048).has_value());
         }
 
-        // End-of-step cleanup (training thread shutdown pattern).
-        release_fast_rasterizer_thread_local_caches();
         GlobalArenaManager::instance().get_arena().full_reset();
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 

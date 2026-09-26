@@ -3,10 +3,70 @@
 
 #include "lfs/training/vram_ledger.hpp"
 
+#include "core/cuda/memory_arena.hpp"
 #include "core/splat_data.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 
 namespace lfs::training {
+    /// Capacity-backed footprint (row capacity × trailing dims × dtype).
+    [[nodiscard]] std::size_t tensor_reserved_bytes(const lfs::core::Tensor& tensor) {
+        if (!tensor.is_valid()) {
+            return 0;
+        }
+        if (tensor.capacity() == 0 || tensor.ndim() == 0) {
+            return tensor.bytes();
+        }
+        std::size_t row_elems = 1;
+        if (tensor.ndim() > 1) {
+            for (std::size_t dim = 1; dim < tensor.ndim(); ++dim) {
+                row_elems *= tensor.shape()[dim];
+            }
+        }
+        return tensor.capacity() * row_elems * lfs::core::dtype_size(tensor.dtype());
+    }
+
+    void record_vram_current(std::string_view scope,
+                             std::string_view label,
+                             const size_t bytes,
+                             const bool publish_zero,
+                             const lfs::diagnostics::VramAllocationMethod method) {
+        if (bytes == 0 && !publish_zero) {
+            return;
+        }
+        lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(scope, label, bytes, method);
+    }
+
+    void record_vram_tensor(std::string_view scope,
+                            std::string_view label,
+                            const lfs::core::Tensor& tensor) {
+        // The zeros_direct storage total backs Direct tensor disclosures.
+        // Other external tensors retain their external provenance.
+        const auto method = tensor.external_storage_kind() == "cuda.direct"
+                                ? lfs::diagnostics::VramAllocationMethod::Direct
+                            : tensor.is_external_storage()
+                                ? lfs::diagnostics::VramAllocationMethod::External
+                                : lfs::diagnostics::VramAllocationMethod::Unknown;
+        record_vram_current(scope, label, tensor_reserved_bytes(tensor), false, method);
+    }
+
+    void record_rasterizer_arena_disclosure(std::string_view scope) {
+        auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena();
+        if (!arena) {
+            return;
+        }
+        const auto info = arena->get_memory_info();
+        record_vram_current(scope, "arena.capacity", info.arena_capacity);
+        record_vram_current(scope, "arena.current_usage", info.current_usage);
+        record_vram_current(scope, "arena.peak_usage", info.peak_usage);
+        auto& profiler = lfs::diagnostics::VramProfiler::instance();
+        profiler.setGauge("vram.audit.rasterizer_arena.required_bytes",
+                          static_cast<double>(info.required_bytes));
+        profiler.setGauge("vram.audit.rasterizer_arena.allocated_bytes",
+                          static_cast<double>(info.arena_capacity));
+        profiler.setGauge("vram.audit.rasterizer_arena.current_usage_bytes",
+                          static_cast<double>(info.current_usage));
+    }
+
     namespace {
 
         [[nodiscard]] std::size_t tensor_logical_bytes(const lfs::core::Tensor& tensor) {
@@ -14,23 +74,6 @@ namespace lfs::training {
                 return 0;
             }
             return tensor.bytes();
-        }
-
-        /// Capacity-backed footprint (row capacity × trailing dims × dtype).
-        [[nodiscard]] std::size_t tensor_reserved_bytes(const lfs::core::Tensor& tensor) {
-            if (!tensor.is_valid()) {
-                return 0;
-            }
-            if (tensor.capacity() == 0 || tensor.ndim() == 0) {
-                return tensor.bytes();
-            }
-            std::size_t row_elems = 1;
-            if (tensor.ndim() > 1) {
-                for (std::size_t dim = 1; dim < tensor.ndim(); ++dim) {
-                    row_elems *= tensor.shape()[dim];
-                }
-            }
-            return tensor.capacity() * row_elems * lfs::core::dtype_size(tensor.dtype());
         }
 
     } // namespace

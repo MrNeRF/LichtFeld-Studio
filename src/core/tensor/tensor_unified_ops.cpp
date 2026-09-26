@@ -1167,7 +1167,7 @@ namespace lfs::core {
                        "multinomial cannot sample more entries than weights without replacement");
 
         // The kernels scan weights densely. Force a contiguous logical copy at
-        // the API boundary so host validation and
+        // the API boundary so validation and
         // device sampling always see the same probability mass (strided column
         // views from densify LAS paths are training-reachable).
         Tensor weights_materialized;
@@ -1175,16 +1175,21 @@ namespace lfs::core {
         LFS_ASSERT_MSG(dense_weights.is_contiguous(),
                        "multinomial requires contiguous weights after materialize firewall");
 
-        const auto host_weights = dense_weights.to_vector();
-        double weight_sum = 0.0;
-        for (size_t index = 0; index < host_weights.size(); ++index) {
-            const float weight = host_weights[index];
-            LFS_ASSERT_MSG(std::isfinite(weight) && weight >= 0.0f,
-                           "multinomial weights must be finite and non-negative");
-            weight_sum += weight;
+        // Every GPU backend checks the weights on the device before sampling.
+        if (dense_weights.device() == Device::CPU) {
+            const float* const host_weights = dense_weights.ptr<float>();
+            double weight_sum = 0.0;
+            for (size_t index = 0; index < dense_weights.numel(); ++index) {
+                const float weight = host_weights[index];
+                LFS_ASSERT_MSG(std::isfinite(weight) && weight >= 0.0f,
+                               std::format("multinomial weight {} at index {} is not finite and non-negative",
+                                           weight, index));
+                weight_sum += weight;
+            }
+            LFS_ASSERT_MSG(std::isfinite(weight_sum) && weight_sum > 0.0,
+                           std::format("multinomial weights sum to {}, which is not positive and finite",
+                                       weight_sum));
         }
-        LFS_ASSERT_MSG(std::isfinite(weight_sum) && weight_sum > 0.0,
-                       "multinomial weights must have a positive finite sum");
 
         LoadArgs args;
         args.shape = TensorShape({static_cast<size_t>(num_samples)});
@@ -1279,15 +1284,36 @@ namespace lfs::core {
         if (dtype_ == DataType::Bool && device_ == Device::GPU &&
             !args.axes.empty() && args.axes.size() != shape_.rank()) {
             LFS_ASSERT_MSG(op == ReduceOp::Any || op == ReduceOp::All,
-                           "partial CUDA Bool reductions currently support only any and all");
+                           "partial GPU Bool reductions currently support only any and all");
             std::vector<int> sorted_axes = args.axes;
             for (int& axis : sorted_axes) {
                 axis = resolve_dim(axis);
             }
             std::sort(sorted_axes.begin(), sorted_axes.end());
+            bool adjacent = true;
             for (size_t i = 1; i < sorted_axes.size(); ++i) {
-                LFS_ASSERT_MSG(sorted_axes[i] == sorted_axes[i - 1] + 1,
-                               "multi-axis CUDA Bool reductions require contiguous axes");
+                adjacent = adjacent && sorted_axes[i] == sorted_axes[i - 1] + 1;
+            }
+            if (!adjacent) {
+                // The GPU kernels reduce one run of adjacent axes, so move the
+                // reduced axes to the end, keeping the others in order.
+                std::vector<int> order;
+                std::vector<size_t> kept_shape;
+                for (int axis = 0; axis < static_cast<int>(shape_.rank()); ++axis) {
+                    const bool reduced = std::binary_search(sorted_axes.begin(), sorted_axes.end(), axis);
+                    if (!reduced)
+                        order.push_back(axis);
+                    kept_shape.push_back(reduced ? 1 : shape_[axis]);
+                }
+                ReduceArgs trailing = args;
+                trailing.axes.clear();
+                trailing.keepdim = false;
+                for (const int axis : sorted_axes) {
+                    trailing.axes.push_back(static_cast<int>(order.size() + trailing.axes.size()));
+                }
+                order.insert(order.end(), sorted_axes.begin(), sorted_axes.end());
+                Tensor reduced = permute(order).contiguous().reduce(op, trailing);
+                return args.keepdim ? reduced.reshape(TensorShape(kept_shape)) : reduced;
             }
         }
 

@@ -73,7 +73,7 @@
 #include <mutex>
 #include <print>
 #if LFS_BUILD_TRAINER
-#include <rasterization_api.h>
+#include "lfs/training/ops/registry.hpp"
 #endif
 #include <string>
 #include <string_view>
@@ -1465,7 +1465,9 @@ namespace lfs::app {
                     after_curand > before_curand ? after_curand - before_curand : 0);
                 profiler.setCudaContextBaselineBytes(process_used_now());
 #if LFS_BUILD_TRAINER
-                fast_lfs::rasterization::warmup_kernels();
+                if (const auto* fast = lfs::training::training_ops(lfs::core::GpuBackend::CUDA).fast) {
+                    fast->warmup();
+                }
 #endif
                 profiler.captureCudaWarmupDelta();
             });

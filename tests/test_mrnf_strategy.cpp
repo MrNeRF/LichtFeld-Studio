@@ -291,6 +291,19 @@ TEST_F(MRNFStrategyTest, ShNBatchArenaMatchesCatFallbackOnRealScene) {
 
 namespace {
 
+    const lfs::gpu_ops::BackwardAdamParam& adam_group(
+        const lfs::gpu_ops::BackwardAdam& adam, const lfs::gpu_ops::AdamSlot slot) {
+        return adam.groups[static_cast<std::size_t>(slot)];
+    }
+
+    const bool* adam_far_mask(const lfs::gpu_ops::BackwardAdam& adam) {
+        return adam.far_mask.is_valid() && adam.far_mask.numel() > 0 ? adam.far_mask.ptr<bool>() : nullptr;
+    }
+
+    int adam_far_mask_n(const lfs::gpu_ops::BackwardAdam& adam) {
+        return adam.far_mask.is_valid() ? static_cast<int>(adam.far_mask.numel()) : 0;
+    }
+
     SplatData create_mrnf_test_splat_data(const int n_gaussians = 10, const int sh_degree = 3) {
         const size_t n = static_cast<size_t>(n_gaussians);
         std::vector<float> means_data(n_gaussians * 3, 0.0f);
@@ -865,8 +878,8 @@ TEST_F(MRNFStrategyTest, SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth) {
 
     EXPECT_NO_THROW({
         const auto fused = strategy.get_optimizer().prepare_fastgs_fused_adam(457);
-        EXPECT_TRUE(fused.means.enabled);
-        EXPECT_FALSE(fused.shN.enabled);
+        EXPECT_TRUE(adam_group(fused, lfs::gpu_ops::AdamSlot::Means).enabled);
+        EXPECT_FALSE(adam_group(fused, lfs::gpu_ops::AdamSlot::ShN).enabled);
     });
 
     strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::GPU);
@@ -884,8 +897,8 @@ TEST_F(MRNFStrategyTest, SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth) {
     EXPECT_EQ(shN_state->size, 0u);
     EXPECT_NO_THROW({
         const auto fused = strategy.get_optimizer().prepare_fastgs_fused_adam(457);
-        EXPECT_TRUE(fused.means.enabled);
-        EXPECT_FALSE(fused.shN.enabled);
+        EXPECT_TRUE(adam_group(fused, lfs::gpu_ops::AdamSlot::Means).enabled);
+        EXPECT_FALSE(adam_group(fused, lfs::gpu_ops::AdamSlot::ShN).enabled);
     });
 }
 
@@ -958,11 +971,13 @@ TEST_F(MRNFStrategyTest, ShNReservationTracksMaxDegreeAndMaxCap) {
 
     scheduled_strategy.initialize(make_params());
     expect_shN_capacity(scheduled_splat, scheduled_strategy.get_optimizer(), 1);
-    EXPECT_FALSE(scheduled_strategy.get_optimizer().prepare_fastgs_fused_adam(1001).shN.enabled);
+    EXPECT_FALSE(adam_group(scheduled_strategy.get_optimizer().prepare_fastgs_fused_adam(1001),
+                            lfs::gpu_ops::AdamSlot::ShN)
+                     .enabled);
 
     scheduled_splat.increment_sh_degree();
     const auto fused = scheduled_strategy.get_optimizer().prepare_fastgs_fused_adam(1001);
-    EXPECT_TRUE(fused.shN.enabled);
+    EXPECT_TRUE(adam_group(fused, lfs::gpu_ops::AdamSlot::ShN).enabled);
     expect_shN_capacity(scheduled_splat, scheduled_strategy.get_optimizer(), 1);
 }
 
@@ -2311,8 +2326,8 @@ TEST_F(MRNFStrategyTest, HardRemovalRepublishesFarMaskForDegenerateModel) {
     EXPECT_EQ(optimizer.mean_step_far_mask_n(), splat.means().shape()[0]);
     EXPECT_LT(splat.means().cpu().ptr<float>()[0], 3.0f);
     const auto fused = optimizer.prepare_fastgs_fused_adam(2, nullptr);
-    EXPECT_EQ(fused.mean_step_far_mask, optimizer.mean_step_far_mask());
-    EXPECT_EQ(fused.mean_step_far_mask_n, 1);
+    EXPECT_EQ(adam_far_mask(fused), optimizer.mean_step_far_mask());
+    EXPECT_EQ(adam_far_mask_n(fused), 1);
 }
 
 TEST_F(MRNFStrategyTest, DeserializeRepublishesFarMaskWithDegenerateBounds) {
@@ -2429,11 +2444,11 @@ TEST_F(MRNFStrategyTest, MeanStepFarMaskMismatchIsIgnoredByFusedAdam) {
         FarMaskWarningCapture warnings;
 
         const auto fused = optimizer.prepare_fastgs_fused_adam(1, nullptr);
-        EXPECT_TRUE(fused.enabled);
-        EXPECT_TRUE(fused.means.enabled);
+        EXPECT_TRUE(fastgs_adam_enabled(fused));
+        EXPECT_TRUE(adam_group(fused, lfs::gpu_ops::AdamSlot::Means).enabled);
         EXPECT_TRUE(fused.per_splat_mean_step);
-        EXPECT_EQ(fused.mean_step_far_mask, nullptr);
-        EXPECT_EQ(fused.mean_step_far_mask_n, 0);
+        EXPECT_EQ(adam_far_mask(fused), nullptr);
+        EXPECT_EQ(adam_far_mask_n(fused), 0);
         EXPECT_EQ(optimizer.mean_step_far_mask(), nullptr);
         EXPECT_EQ(optimizer.mean_step_far_mask_n(), 0);
         ASSERT_EQ(warnings.messages.size(), 1u);
@@ -2444,8 +2459,8 @@ TEST_F(MRNFStrategyTest, MeanStepFarMaskMismatchIsIgnoredByFusedAdam) {
         const auto current_mask = Tensor::zeros_bool({2}, Device::CUDA);
         optimizer.set_mean_step_far_mask(current_mask);
         const auto republished = optimizer.prepare_fastgs_fused_adam(3, nullptr);
-        EXPECT_EQ(republished.mean_step_far_mask, current_mask.ptr<bool>());
-        EXPECT_EQ(republished.mean_step_far_mask_n, 2);
+        EXPECT_EQ(adam_far_mask(republished), current_mask.ptr<bool>());
+        EXPECT_EQ(adam_far_mask_n(republished), 2);
         EXPECT_EQ(warnings.messages.size(), 1u);
         EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     }
@@ -2486,8 +2501,8 @@ TEST_F(MRNFStrategyTest, MeanStepFarMaskUploadsHostStorageBeforeAdam) {
         EXPECT_TRUE(values[0]);
         EXPECT_FALSE(values[1]);
         const auto fused = optimizer.prepare_fastgs_fused_adam(1, nullptr);
-        EXPECT_EQ(fused.mean_step_far_mask, optimizer.mean_step_far_mask());
-        EXPECT_EQ(fused.mean_step_far_mask_n, 2);
+        EXPECT_EQ(adam_far_mask(fused), optimizer.mean_step_far_mask());
+        EXPECT_EQ(adam_far_mask_n(fused), 2);
         optimizer.get_grad(ParamType::Means).fill_(0.2f);
         control_optimizer.get_grad(ParamType::Means).fill_(0.2f);
         optimizer.step(1);
@@ -2559,8 +2574,8 @@ TEST_F(MRNFStrategyTest, MeanStepFarMaskEmptyBindingsClearExplicitAndFusedAdam) 
         EXPECT_EQ(optimizer.mean_step_far_mask(), nullptr);
         EXPECT_EQ(optimizer.mean_step_far_mask_n(), 0);
         const auto fused = optimizer.prepare_fastgs_fused_adam(1, nullptr);
-        EXPECT_EQ(fused.mean_step_far_mask, nullptr);
-        EXPECT_EQ(fused.mean_step_far_mask_n, 0);
+        EXPECT_EQ(adam_far_mask(fused), nullptr);
+        EXPECT_EQ(adam_far_mask_n(fused), 0);
         optimizer.get_grad(ParamType::Means).fill_(0.2f);
         optimizer.step(1);
     }
@@ -2598,7 +2613,7 @@ TEST_F(MRNFStrategyTest, BackgroundToggleBuildsAndClearsFarMaskBeforeNextAdamSte
         EXPECT_FALSE(values[0]);
         EXPECT_TRUE(values[3]);
         const auto fused = optimizer.prepare_fastgs_fused_adam(iteration, nullptr);
-        EXPECT_EQ(fused.mean_step_far_mask, optimizer.mean_step_far_mask());
+        EXPECT_EQ(adam_far_mask(fused), optimizer.mean_step_far_mask());
         optimizer.get_grad(ParamType::Means).fill_(0.2f);
         optimizer.step(iteration);
 

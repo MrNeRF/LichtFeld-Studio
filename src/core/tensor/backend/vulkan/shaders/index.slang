@@ -259,7 +259,7 @@ void recordWideFault(uint64_t faultAddress, int64_t index, uint extent)
     }
 }
 
-bool gatherSource(uint64_t tid, uniform Parameters parameters, out uint64_t sourceIndex)
+bool gatherSource(uint tid, uniform Parameters parameters, out uint64_t sourceIndex)
 {
     Ptr<int, Access.Read> indices = (Ptr<int, Access.Read>)parameters.indexAddress;
     sourceIndex = 0;
@@ -324,10 +324,11 @@ bool gatherSource(uint64_t tid, uniform Parameters parameters, out uint64_t sour
         sourceIndex = clampFlat(indices[tid], parameters.inputSize);
         return true;
     }
-    const uint64_t segment = uint64_t(parameters.indexSize) * parameters.inner;
-    const uint outerIndex = uint(tid / segment);
-    const uint position = uint((tid / parameters.inner) % parameters.indexSize);
-    const uint innerIndex = uint(tid % parameters.inner);
+    // total = outer * indexSize * inner fits uint32, so every product does.
+    const uint segment = parameters.indexSize * parameters.inner;
+    const uint outerIndex = tid / segment;
+    const uint position = (tid / parameters.inner) % parameters.indexSize;
+    const uint innerIndex = tid % parameters.inner;
     int selected = indices[position];
     if (kBoundary == 1)
         selected = max(0, min(int(parameters.dimSize) - 1, selected));
@@ -386,7 +387,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters param
     const uint stride = numWorkgroups.x * LFS_LOCAL_SIZE_X;
     Ptr<int, Access.Read> indices = (Ptr<int, Access.Read>)parameters.indexAddress;
 
-    for (uint64_t tid = dispatchThreadId.x; tid < parameters.total; tid += stride)
+    for (uint tid = dispatchThreadId.x; tid < parameters.total; tid += stride)
     {
         if (kMode <= 2)
         {
@@ -412,10 +413,11 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters param
         }
         else if (kMode == 3 || kMode == 4 || kMode == 6)
         {
-            const uint64_t segment = uint64_t(parameters.indexSize) * parameters.inner;
-            const uint outerIndex = uint(tid / segment);
-            const uint position = uint((tid / parameters.inner) % parameters.indexSize);
-            const uint innerIndex = uint(tid % parameters.inner);
+            // total = outer * indexSize * inner fits uint32, so every product does.
+            const uint segment = parameters.indexSize * parameters.inner;
+            const uint outerIndex = tid / segment;
+            const uint position = (tid / parameters.inner) % parameters.indexSize;
+            const uint innerIndex = tid % parameters.inner;
             const int target = indices[position];
             if (target < 0 || target >= int(parameters.dimSize))
             {
@@ -446,9 +448,9 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters param
             // One thread per (sorted slot, outer, inner); only run starts work.
             Ptr<uint, Access.Read> keys = (Ptr<uint, Access.Read>)parameters.keysAddress;
             Ptr<uint, Access.Read> positions = (Ptr<uint, Access.Read>)parameters.positionsAddress;
-            const uint64_t lanes = uint64_t(parameters.outer) * parameters.inner;
-            const uint slot = uint(tid / lanes);
-            const uint lane = uint(tid - uint64_t(slot) * lanes);
+            const uint lanes = parameters.outer * parameters.inner;
+            const uint slot = tid / lanes;
+            const uint lane = tid - slot * lanes;
             const uint outerIndex = lane / parameters.inner;
             const uint innerIndex = lane - outerIndex * parameters.inner;
             const uint key = keys[slot];

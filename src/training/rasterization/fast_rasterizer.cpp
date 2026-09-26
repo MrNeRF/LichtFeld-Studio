@@ -3,13 +3,18 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "fast_rasterizer.hpp"
-#include "core/crash_handler.hpp"
+#include "core/cuda/memory_arena.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_exportable_storage.hpp"
+#include "core/tensor.hpp"
+#include "diagnostics/vram_profiler.hpp"
+#include "lfs/training/ops/fast_cuda.hpp"
+#include "lfs/training/perf_bench.hpp"
 #include "lfs/training/sh_value_storage.hpp"
-#include "training/kernels/grad_alpha.hpp"
+#include "lfs/training/vram_ledger.hpp"
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -19,78 +24,120 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace lfs::training {
 
-    fast_lfs::rasterization::FusedAdamSettings make_fastgs_fused_adam_settings(
-        const FastGSFusedAdamState& optimizer_fused,
-        const FastGSFusedExtraGradients& fused_extra_gradients) {
-        fast_lfs::rasterization::FusedAdamSettings fused_adam;
-        auto convert_param = [](const FastGSFusedAdamParam& src) {
-            fast_lfs::rasterization::FusedAdamParam dst;
-            dst.param = src.param;
-            dst.joint_packed = src.joint_packed;
-            dst.joint_bounds = src.joint_bounds;
-            dst.joint_bits = src.joint_bits;
-            dst.sh_value_bounds = src.sh_value_bounds;
-            dst.sh_value_bits = src.sh_value_bits;
-            dst.sh_value_n_cells = src.sh_value_n_cells;
-            dst.n_primitives = src.n_primitives;
-            dst.frozen_mask = src.frozen_mask;
-            dst.frozen_mask_size = src.frozen_mask_size;
-            dst.frozen_lr_scale = src.frozen_lr_scale;
-            dst.crop_damping_mask = src.crop_damping_mask;
-            dst.crop_damping_mask_size = src.crop_damping_mask_size;
-            dst.cropbox_lr_scale = src.cropbox_lr_scale;
-            dst.n_elements = src.n_elements;
-            dst.n_attributes = src.n_attributes;
-            dst.step_size = src.step_size;
-            dst.bias_correction2_sqrt_rcp = src.bias_correction2_sqrt_rcp;
-            dst.enabled = src.enabled;
-            dst.screen_share_max = src.screen_share_max;
-            dst.screen_share_n = src.screen_share_n;
-            dst.screen_share_limit = src.screen_share_limit;
-            dst.screen_share_penalty = src.screen_share_penalty;
-            return dst;
-        };
-        fused_adam.enabled = optimizer_fused.enabled;
-        fused_adam.beta1 = optimizer_fused.beta1;
-        fused_adam.beta2 = optimizer_fused.beta2;
-        fused_adam.eps = optimizer_fused.eps;
-        fused_adam.scale_reg_weight = fused_extra_gradients.scale_reg_weight;
-        fused_adam.flatten_reg_weight = fused_extra_gradients.flatten_reg_weight;
-        fused_adam.opacity_reg_weight = fused_extra_gradients.opacity_reg_weight;
-        fused_adam.scale_reg_loss_out = fused_extra_gradients.scale_reg_loss_out;
-        fused_adam.opacity_reg_loss_out = fused_extra_gradients.opacity_reg_loss_out;
-        fused_adam.sparsity_opa_sigmoid = fused_extra_gradients.sparsity_opa_sigmoid;
-        fused_adam.sparsity_z = fused_extra_gradients.sparsity_z;
-        fused_adam.sparsity_u = fused_extra_gradients.sparsity_u;
-        fused_adam.sparsity_n = fused_extra_gradients.sparsity_n;
-        fused_adam.sparsity_rho = fused_extra_gradients.sparsity_rho;
-        fused_adam.sparsity_grad_loss = fused_extra_gradients.sparsity_grad_loss;
-        fused_adam.means = convert_param(optimizer_fused.means);
-        fused_adam.scaling = convert_param(optimizer_fused.scaling);
-        fused_adam.rotation = convert_param(optimizer_fused.rotation);
-        fused_adam.opacity = convert_param(optimizer_fused.opacity);
-        fused_adam.sh0 = convert_param(optimizer_fused.sh0);
-        fused_adam.shN = convert_param(optimizer_fused.shN);
-        fused_adam.per_splat_mean_step = optimizer_fused.per_splat_mean_step;
-        fused_adam.mean_step_median_extent = optimizer_fused.mean_step_median_extent;
-        fused_adam.mean_step_r_min = optimizer_fused.mean_step_r_min;
-        fused_adam.mean_step_r_max = optimizer_fused.mean_step_r_max;
-        // The kernel compares an unsigned row index with this count. Reject
-        // nonpositive counts and limit the mask to live mean rows.
-        if (optimizer_fused.mean_step_far_mask != nullptr &&
-            optimizer_fused.mean_step_far_mask_n > 0 && optimizer_fused.means.n_primitives > 0) {
-            fused_adam.mean_step_far_mask = optimizer_fused.mean_step_far_mask;
-            fused_adam.mean_step_far_mask_n = std::min(
-                optimizer_fused.mean_step_far_mask_n, optimizer_fused.means.n_primitives);
+    // Forward pass context - holds intermediate buffers needed for backward
+    struct CudaFastFrame {
+        CudaFastFrame() = default;
+        ~CudaFastFrame() {
+            release_forward_context();
         }
-        return fused_adam;
-    }
+
+        CudaFastFrame(const CudaFastFrame&) = delete;
+        CudaFastFrame& operator=(const CudaFastFrame&) = delete;
+
+        CudaFastFrame(CudaFastFrame&& other) noexcept {
+            move_from(std::move(other));
+        }
+
+        CudaFastFrame& operator=(CudaFastFrame&& other) noexcept {
+            if (this != &other) {
+                release_forward_context();
+                move_from(std::move(other));
+            }
+            return *this;
+        }
+
+        lfs::core::Tensor image;
+        lfs::core::Tensor alpha;
+        lfs::core::Tensor bg_color; // Saved for alpha gradient computation
+
+        // Gaussian parameters (saved to avoid re-fetching in backward)
+        lfs::core::Tensor means;
+        lfs::core::Tensor raw_scales;
+        lfs::core::Tensor raw_rotations;
+        lfs::core::Tensor raw_opacities;
+        lfs::core::Tensor shN;
+
+        const float* w2c_ptr = nullptr;
+        const float* cam_position_ptr = nullptr;
+
+        // Forward context (contains buffer pointers, frame_id, etc.)
+        fast_lfs::rasterization::ForwardContext forward_ctx = {};
+        // Last queue using the frame, retained beyond execution-scope lifetime.
+        cudaStream_t completion_stream = nullptr;
+
+        int active_sh_bases = 0;
+        int width = 0;
+        int height = 0;
+        float focal_x = 0.0f;
+        float focal_y = 0.0f;
+        float center_x = 0.0f;
+        float center_y = 0.0f;
+        bool mip_filter = false;
+
+        // Background image for per-pixel blending (optional, empty = use bg_color)
+        lfs::core::Tensor bg_image;
+        // Q16 bounds handle captured with the forward. Empty unless that forward was Q16.
+        lfs::core::Tensor sh_value_bounds;
+
+        void set_forward_context(fast_lfs::rasterization::ForwardContext ctx) noexcept {
+            release_forward_context();
+            forward_ctx = ctx;
+            completion_stream = ctx.stream;
+            owns_forward_context_ = ctx.success;
+        }
+
+        void release_forward_context() noexcept {
+            if (!owns_forward_context_) {
+                return;
+            }
+            owns_forward_context_ = false;
+            fast_lfs::rasterization::release_forward_context(forward_ctx, completion_stream);
+            forward_ctx = {};
+            completion_stream = nullptr;
+        }
+
+        void mark_forward_context_released() noexcept {
+            owns_forward_context_ = false;
+            forward_ctx = {};
+            completion_stream = nullptr;
+        }
+
+    private:
+        bool owns_forward_context_ = false;
+
+        void move_from(CudaFastFrame&& other) noexcept {
+            image = std::move(other.image);
+            alpha = std::move(other.alpha);
+            bg_color = std::move(other.bg_color);
+            means = std::move(other.means);
+            raw_scales = std::move(other.raw_scales);
+            raw_rotations = std::move(other.raw_rotations);
+            raw_opacities = std::move(other.raw_opacities);
+            shN = std::move(other.shN);
+            w2c_ptr = std::exchange(other.w2c_ptr, nullptr);
+            cam_position_ptr = std::exchange(other.cam_position_ptr, nullptr);
+            forward_ctx = std::exchange(other.forward_ctx, {});
+            completion_stream = std::exchange(other.completion_stream, nullptr);
+            active_sh_bases = std::exchange(other.active_sh_bases, 0);
+            width = std::exchange(other.width, 0);
+            height = std::exchange(other.height, 0);
+            focal_x = std::exchange(other.focal_x, 0.0f);
+            focal_y = std::exchange(other.focal_y, 0.0f);
+            center_x = std::exchange(other.center_x, 0.0f);
+            center_y = std::exchange(other.center_y, 0.0f);
+            mip_filter = std::exchange(other.mip_filter, false);
+            bg_image = std::move(other.bg_image);
+            sh_value_bounds = std::move(other.sh_value_bounds);
+            owns_forward_context_ = std::exchange(other.owns_forward_context_, false);
+        }
+    };
 
     namespace {
-        struct FastRasterizerThreadLocalCaches {
+        struct FastCaches {
             core::Tensor image;
             core::Tensor alpha;
             core::Tensor depth;
@@ -99,7 +146,22 @@ namespace lfs::training {
             int height = -1;
         };
 
-        thread_local FastRasterizerThreadLocalCaches fast_rasterizer_thread_caches;
+        struct CudaFastState : lfs::gpu_ops::BackendState {
+            FastCaches caches;
+            CudaFastFrame frame;
+            std::string message;
+        };
+
+        [[nodiscard]] CudaFastState& state_of(lfs::gpu_ops::FastSaved& saved) {
+            if (!saved.backend) {
+                throw std::logic_error("fast raster op called without a created state");
+            }
+            return static_cast<CudaFastState&>(*saved.backend);
+        }
+
+        [[nodiscard]] const CudaFastState* state_of(const lfs::gpu_ops::FastSaved& saved) {
+            return static_cast<const CudaFastState*>(saved.backend.get());
+        }
 
         [[nodiscard]] int checked_dim_to_int(size_t value, const char* name) {
             if (value > static_cast<size_t>(std::numeric_limits<int>::max())) {
@@ -294,81 +356,83 @@ namespace lfs::training {
         }
     }
 
-    std::expected<std::pair<RenderOutput, FastRasterizeContext>, lfs::Error> fast_rasterize_forward(
-        core::Camera& viewpoint_camera,
-        core::SplatData& gaussian_model,
-        core::Tensor& bg_color,
-        int tile_x_offset,
-        int tile_y_offset,
-        int tile_width,
-        int tile_height,
-        bool mip_filter,
-        const core::Tensor& bg_image,
-        bool render_normal,
-        bool render_depth) {
-        // Get camera parameters
-        const int full_width = viewpoint_camera.image_width();
-        const int full_height = viewpoint_camera.image_height();
+    [[nodiscard]] int degree_from_layout_bases(const uint32_t layout_bases) {
+        if (layout_bases >= 16) {
+            return 3;
+        }
+        if (layout_bases >= 9) {
+            return 2;
+        }
+        if (layout_bases >= 4) {
+            return 1;
+        }
+        return 0;
+    }
 
-        // Determine tile dimensions (tile_width/height=0 means render full image)
-        const int width = (tile_width > 0) ? tile_width : full_width;
-        const int height = (tile_height > 0) ? tile_height : full_height;
+    [[nodiscard]] lfs::gpu_ops::RasterResult raster_fail(
+        std::string& slot, const lfs::gpu_ops::RasterResult::Code code, std::string text) {
+        slot = std::move(text);
+        return {.code = code, .has_work = false, .message = slot};
+    }
 
-        auto [fx, fy, cx, cy] = viewpoint_camera.get_intrinsics();
+    lfs::gpu_ops::RasterResult fast_ops_forward(
+        lfs::gpu_ops::FastSaved& saved,
+        const lfs::gpu_ops::SplatInputs& splats,
+        const lfs::gpu_ops::Tensor& view,
+        const lfs::gpu_ops::Tensor& camera_position,
+        const lfs::gpu_ops::Tensor& bg_color,
+        const lfs::gpu_ops::Tensor& bg_image,
+        const lfs::gpu_ops::FastParams& params,
+        const lfs::gpu_ops::RenderOutputs& outputs,
+        lfs::gpu_ops::Tensor& max_screen_share) {
+        auto& state = state_of(saved);
+        FastCaches& caches = state.caches;
+        const auto& means = splats.means;
+        const auto& raw_scales = splats.raw_scales;
+        const auto& raw_rotations = splats.raw_rotations;
+        const auto& raw_opacities = splats.raw_opacities;
+        const auto& sh0 = splats.sh0;
+        const auto& shN = splats.shN;
+        const auto& sh_bounds = splats.sh_value_bounds;
 
-        // Adjust camera center point for tile rendering
-        // When rendering a tile at offset, the principal point shifts
-        const float cx_adjusted = cx - static_cast<float>(tile_x_offset);
-        const float cy_adjusted = cy - static_cast<float>(tile_y_offset);
-
-        // Get Gaussian parameters
-        auto& means = gaussian_model.means();
-        auto& raw_opacities = gaussian_model.opacity_raw();
-        auto& raw_scales = gaussian_model.scaling_raw();
-        auto& raw_rotations = gaussian_model.rotation_raw();
-        auto& sh0 = gaussian_model.sh0();
-        auto& shN = gaussian_model.shN();
-
-        const int sh_degree = gaussian_model.get_active_sh_degree();
-        const int active_sh_bases = (sh_degree + 1) * (sh_degree + 1);
-        const int max_sh_degree = gaussian_model.get_max_sh_degree();
-        const int sh_layout_bases = (max_sh_degree + 1) * (max_sh_degree + 1);
-
+        const int full_width = params.full_image.w;
+        const int full_height = params.full_image.h;
+        const int width = (params.tile_w > 0) ? params.tile_w : full_width;
+        const int height = (params.tile_h > 0) ? params.tile_h : full_height;
+        const float fx = params.intrinsics.fx;
+        const float fy = params.intrinsics.fy;
+        const float cx_adjusted = params.intrinsics.cx - static_cast<float>(params.tile_x);
+        const float cy_adjusted = params.intrinsics.cy - static_cast<float>(params.tile_y);
+        const int active_sh_bases = static_cast<int>(params.sh.active_bases);
+        const int sh_layout_bases = static_cast<int>(params.sh.layout_bases);
+        const bool mip_filter = params.mip_filter;
+        const bool render_normal = params.render_normal;
+        const bool render_depth = params.render_depth;
         constexpr float near_plane = 0.01f;
         constexpr float far_plane = 1e10f;
 
-        // Get direct GPU pointers (tensors are already contiguous on GPU)
-        const float* w2c_ptr = viewpoint_camera.world_view_transform_ptr();
-        const float* cam_position_ptr = viewpoint_camera.cam_position_ptr();
-
         const int n_primitives = checked_dim_to_int(means.shape()[0], "n_primitives");
         if (n_primitives == 0) {
-            return std::unexpected(lfs::make_error(lfs::ErrorInit{
-                .code = lfs::ErrorCode::InvalidArgument,
-                .domain = lfs::ErrorDomain::Rendering,
-                .user_message = "FastGS cannot render an empty Gaussian model.",
-                .detail = "n_primitives is 0 - model has no gaussians",
-                .detection = LFS_SOURCE_SITE_CURRENT(),
-            }));
+            return raster_fail(state.message, lfs::gpu_ops::RasterResult::Code::Failed,
+                               "n_primitives is 0 - model has no gaussians");
         }
 
-        for (const auto* input : std::initializer_list<const core::Tensor*>{&means, &raw_scales, &raw_rotations, &raw_opacities, &sh0, &shN,
-                                                                            &bg_color, &bg_image, &viewpoint_camera.world_view_transform(),
-                                                                            &viewpoint_camera.cam_position()}) {
+        for (const auto* input : std::initializer_list<const core::Tensor*>{
+                 &means, &raw_scales, &raw_rotations, &raw_opacities, &sh0, &shN,
+                 &bg_color, &bg_image, &view, &camera_position}) {
             if (input->is_valid())
                 input->sync_to_stream(lfs::core::getCurrentCUDAStream());
         }
+        const float* w2c_ptr = view.ptr<float>();
+        const float* cam_position_ptr = camera_position.ptr<float>();
         // Pre-allocate output tensors (reused across iterations)
-        auto& image = fast_rasterizer_thread_caches.image;
-        auto& alpha = fast_rasterizer_thread_caches.alpha;
-        auto& depth = fast_rasterizer_thread_caches.depth;
-        auto& normal = fast_rasterizer_thread_caches.normal;
-        auto& last_width = fast_rasterizer_thread_caches.width;
-        auto& last_height = fast_rasterizer_thread_caches.height;
+        auto& image = caches.image;
+        auto& alpha = caches.alpha;
+        auto& depth = caches.depth;
+        auto& normal = caches.normal;
+        auto& last_width = caches.width;
+        auto& last_height = caches.height;
 
-        // Thread-local outputs can survive a Trainer. A same-sized render on the
-        // next Trainer must not reuse tensors whose stream handle was destroyed
-        // during the previous Trainer's shutdown.
         const cudaStream_t raster_stream = lfs::core::getCurrentCUDAStream();
 
         // Reallocate when either the shape or owning stream changes. Calling
@@ -404,8 +468,8 @@ namespace lfs::training {
                 normal.set_stream(raster_stream);
         }
 
-        if (gaussian_model._max_screen_share.is_valid())
-            gaussian_model._max_screen_share.set_stream(raster_stream);
+        if (max_screen_share.is_valid())
+            max_screen_share.set_stream(raster_stream);
 
         // Call forward_raw with raw pointers (no PyTorch wrappers)
         // Use adjusted cx/cy for tile rendering
@@ -421,21 +485,24 @@ namespace lfs::training {
             // bounds (exportable GUI). fp32: Float32 float4-swizzle.
             // Generation-checked fetch: never pass a baked exportable pointer that
             // survived a capacity grow.
-            const bool shN_q16 = gaussian_model.shN_value_quantized();
-            const bool shN_f16 = gaussian_model.shN_ieee_f16();
+            const bool shN_q16 = params.sh.storage == lfs::gpu_ops::ShStorage::Q16;
+            const bool shN_f16 = params.sh.storage == lfs::gpu_ops::ShStorage::IeeeFloat16;
             const float* shN_ptr = nullptr;
             const float* shN_bounds_ptr = nullptr;
             unsigned shN_n_cells = 0u;
             if (shN_q16) {
-                const auto q16 = lfs::core::resolve_q16_bind_ptrs(gaussian_model);
-                shN_ptr = q16.codes;
-                shN_bounds_ptr = q16.bounds;
-                shN_n_cells = q16.n_cells_per_prim;
+                shN_ptr = static_cast<const float*>(lfs::core::resolve_exportable_device_ptr(shN));
+                if (sh_bounds.is_valid() && sh_bounds.numel() > 0) {
+                    shN_bounds_ptr = static_cast<const float*>(
+                        lfs::core::resolve_exportable_device_ptr(sh_bounds));
+                }
+                shN_n_cells = lfs::core::sh_value_quant::n_value_cells_per_prim(
+                    lfs::core::sh_rest_coefficients_for_degree(
+                        degree_from_layout_bases(params.sh.layout_bases)));
             } else if (shN_f16) {
-                shN_ptr = static_cast<const float*>(
-                    lfs::core::resolve_exportable_device_ptr(gaussian_model.shN()));
+                shN_ptr = static_cast<const float*>(lfs::core::resolve_exportable_device_ptr(shN));
             } else {
-                shN_ptr = gaussian_model.shN().ptr<float>();
+                shN_ptr = shN.ptr<float>();
             }
             const unsigned shN_bits = (shN_q16 || shN_f16) ? 16u : 0u;
             forward_ctx = fast_lfs::rasterization::forward_raw(
@@ -469,10 +536,10 @@ namespace lfs::training {
                 shN_bounds_ptr,
                 shN_n_cells,
                 shN_bits,
-                (gaussian_model._max_screen_share.is_valid() &&
-                 gaussian_model._max_screen_share.ndim() == 1 &&
-                 gaussian_model._max_screen_share.numel() >= static_cast<size_t>(n_primitives))
-                    ? gaussian_model._max_screen_share.ptr<float>()
+                (max_screen_share.is_valid() &&
+                 max_screen_share.ndim() == 1 &&
+                 max_screen_share.numel() >= static_cast<size_t>(n_primitives))
+                    ? max_screen_share.ptr<float>()
                     : nullptr);
         } catch (const std::exception& e) {
             // Dump all input data for debugging
@@ -484,8 +551,8 @@ namespace lfs::training {
                 raw_opacities,
                 sh0,
                 shN,
-                viewpoint_camera.world_view_transform(),
-                viewpoint_camera.cam_position(),
+                view,
+                camera_position,
                 n_primitives,
                 active_sh_bases,
                 width,
@@ -507,8 +574,8 @@ namespace lfs::training {
                 raw_opacities,
                 sh0,
                 shN,
-                viewpoint_camera.world_view_transform(),
-                viewpoint_camera.cam_position(),
+                view,
+                camera_position,
                 n_primitives,
                 active_sh_bases,
                 width,
@@ -529,57 +596,24 @@ namespace lfs::training {
             // instance-count overflow is a bad frame, not a run-killer.
             // FailedPrecondition → trainer skips the step and continues.
             if (forward_ctx.instance_count_overflow) {
-                return std::unexpected(lfs::make_error(lfs::ErrorInit{
-                    .code = lfs::ErrorCode::FailedPrecondition,
-                    .domain = lfs::ErrorDomain::CUDA,
-                    .user_message =
-                        "Pathological splat extents produced more tile instances "
-                        "than the 32-bit FastGS path can represent; skipping step.",
-                    .detail = message,
-                    .detection = LFS_SOURCE_SITE_CURRENT(),
-                }));
+                return raster_fail(state.message, lfs::gpu_ops::RasterResult::Code::InstanceOverflow,
+                                   message);
             }
-            return std::unexpected(lfs::make_error(lfs::ErrorInit{
-                .code = forward_ctx.resource_exhausted
-                            ? lfs::ErrorCode::ResourceExhausted
-                            : lfs::ErrorCode::Internal,
-                .domain = lfs::ErrorDomain::CUDA,
-                .user_message = forward_ctx.resource_exhausted
-                                    ? "Ran out of GPU memory while rendering during training."
-                                    : "FastGS forward rasterization failed.",
-                .detail = message,
-                .detection = LFS_SOURCE_SITE_CURRENT(),
-            }));
+            return raster_fail(
+                state.message,
+                forward_ctx.resource_exhausted ? lfs::gpu_ops::RasterResult::Code::ResourceExhausted
+                                               : lfs::gpu_ops::RasterResult::Code::Failed,
+                message);
         }
 
         // Take ownership before any post-forward tensor work so exceptions cannot leave
         // the arena frame active.
-        FastRasterizeContext ctx;
+        CudaFastFrame ctx;
         ctx.set_forward_context(forward_ctx);
-
-        // Prepare render output
-        RenderOutput render_output;
-        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
-
-        // background is composed inside blend_cu (single write).
-        // No separate full-image compose pass.
-
-        render_output.image = image;
-        render_output.alpha = alpha;
-        render_output.depth = depth;
-        if (render_normal) {
-            render_output.normal = normal;
-        }
-        render_output.width = width;
-        render_output.height = height;
 
         // Prepare context for backward
         ctx.image = image;
         ctx.alpha = alpha;
-        ctx.depth = depth;
-        if (render_normal) {
-            ctx.normal = normal;
-        }
         ctx.bg_color = bg_color; // Save bg_color for alpha gradient
         ctx.bg_image = bg_image; // Save bg_image for alpha gradient
 
@@ -589,6 +623,7 @@ namespace lfs::training {
         ctx.raw_rotations = raw_rotations;
         ctx.raw_opacities = raw_opacities;
         ctx.shN = shN;
+        ctx.sh_value_bounds = sh_bounds;
 
         // Store camera pointers directly (tensors are managed by camera, already contiguous)
         ctx.w2c_ptr = w2c_ptr;
@@ -601,31 +636,39 @@ namespace lfs::training {
         ctx.focal_y = fy;
         ctx.center_x = cx_adjusted; // Store adjusted cx for backward
         ctx.center_y = cy_adjusted; // Store adjusted cy for backward
-        ctx.near_plane = near_plane;
-        ctx.far_plane = far_plane;
         ctx.mip_filter = mip_filter;
 
-        // Store tile information
-        ctx.tile_x_offset = tile_x_offset;
-        ctx.tile_y_offset = tile_y_offset;
-        ctx.tile_width = tile_width;
-        ctx.tile_height = tile_height;
-
-        return std::pair{std::move(render_output), std::move(ctx)};
+        outputs.image = image;
+        outputs.alpha = alpha;
+        outputs.depth = render_depth ? depth : core::Tensor{};
+        outputs.normal = render_normal ? normal : core::Tensor{};
+        state.frame = std::move(ctx);
+        return {
+            .code = lfs::gpu_ops::RasterResult::Code::Success,
+            .has_work = state.frame.forward_ctx.n_instances > 0,
+            .message = {},
+        };
     }
 
-    void fast_rasterize_backward(
-        FastRasterizeContext& ctx,
-        const core::Tensor& grad_image,
-        core::SplatData& gaussian_model,
-        AdamOptimizer& optimizer,
-        const core::Tensor& grad_alpha_extra,
-        const core::Tensor& pixel_error_map,
-        DensificationType densification_type,
-        int iteration,
-        const FastGSFusedExtraGradients& fused_extra_gradients,
-        const core::Tensor& grad_depth,
-        const core::Tensor& grad_normal) {
+    void fast_ops_backward(
+        lfs::gpu_ops::FastSaved& saved,
+        const lfs::gpu_ops::RenderGradients& gradients,
+        lfs::gpu_ops::Tensor& densification,
+        const lfs::gpu_ops::Tensor& error_map,
+        const lfs::gpu_ops::Tensor& edge_map,
+        lfs::gpu_ops::Tensor& edge_scores,
+        const lfs::gpu_ops::BackwardAdam& adam,
+        const DensificationType densification_type) {
+        auto& state = state_of(saved);
+        const auto fused_adam = fast_adam_settings(adam);
+        const float* edge_weight = edge_map.is_valid() && edge_map.numel() > 0 ? edge_map.ptr<float>() : nullptr;
+        float* edge_score = edge_scores.is_valid() && edge_scores.numel() > 0 ? edge_scores.ptr<float>() : nullptr;
+        auto& caches = state.caches;
+        auto& ctx = state.frame;
+        const auto& grad_image = gradients.image;
+        const auto& grad_alpha_extra = gradients.alpha;
+        const auto& grad_depth = gradients.depth;
+        const auto& grad_normal = gradients.normal;
 
         if (grad_image.ndim() != 3 || grad_image.shape()[0] != 3) {
             throw std::runtime_error("FastGS backward expects a [3, H, W] image gradient");
@@ -635,7 +678,7 @@ namespace lfs::training {
         const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
         ctx.completion_stream = stream;
         for (const auto* input : std::initializer_list<const core::Tensor*>{&grad_image, &grad_alpha_extra, &grad_depth, &grad_normal,
-                                                                            &ctx.bg_image, &ctx.bg_color, &ctx.image, &ctx.alpha, &pixel_error_map}) {
+                                                                            &ctx.bg_image, &ctx.bg_color, &ctx.image, &ctx.alpha, &error_map}) {
             if (input->is_valid())
                 input->sync_to_stream(stream);
         }
@@ -706,23 +749,23 @@ namespace lfs::training {
         }
 
         const int n_primitives = checked_dim_to_int(ctx.means.shape()[0], "n_primitives");
-        // densification_info has shape [2, N]
-        const bool update_densification_info = gaussian_model._densification_info.ndim() == 2 &&
-                                               gaussian_model._densification_info.shape()[1] >= static_cast<size_t>(n_primitives);
-        const bool use_pixel_error_densification = update_densification_info &&
-                                                   pixel_error_map.is_valid() &&
-                                                   pixel_error_map.numel() > 0;
+        // densification has shape [2, N]
+        const bool update_densification = densification.ndim() == 2 &&
+                                          densification.shape()[1] >= static_cast<size_t>(n_primitives);
+        const bool use_pixel_error_densification = update_densification &&
+                                                   error_map.is_valid() &&
+                                                   error_map.numel() > 0;
 
         core::Tensor error_map_2d;
         if (use_pixel_error_densification) {
-            error_map_2d = pixel_error_map;
+            error_map_2d = error_map;
             if (error_map_2d.ndim() == 3 && error_map_2d.shape()[0] == 1) {
                 error_map_2d = error_map_2d.squeeze(0);
             }
             assert(error_map_2d.ndim() == 2 &&
                    checked_dim_to_int(error_map_2d.shape()[0], "error_map height") == H &&
                    checked_dim_to_int(error_map_2d.shape()[1], "error_map width") == W &&
-                   "pixel_error_map must have shape [H, W] or [1, H, W]");
+                   "error_map must have shape [H, W] or [1, H, W]");
             if (error_map_2d.device() != core::Device::GPU) {
                 error_map_2d = error_map_2d.gpu();
             }
@@ -735,10 +778,7 @@ namespace lfs::training {
         // ((void)image in the kernel) — it reconstructs transmittance from
         // blended image in ctx (one-image VRAM already resident for the
         // loss path); do not allocate a separate pre-blend cache.
-        auto raw_image = ctx.image;
 
-        const auto fused_adam = make_fastgs_fused_adam_settings(
-            optimizer.prepare_fastgs_fused_adam(iteration, stream), fused_extra_gradients);
         if (!fused_adam.enabled) {
             throw std::runtime_error("FastGS fused Adam state is not available");
         }
@@ -756,29 +796,33 @@ namespace lfs::training {
         const float* bwd_shN_bounds_ptr = nullptr;
         unsigned bwd_shN_n_cells = 0u;
         unsigned bwd_shN_bits = 0u;
-        if (gaussian_model.shN_value_quantized()) {
-            const auto q16 = lfs::core::resolve_q16_bind_ptrs(gaussian_model);
-            bwd_shN_ptr = q16.codes;
-            bwd_shN_bounds_ptr = q16.bounds;
-            bwd_shN_n_cells = q16.n_cells_per_prim;
+        const bool shN_q16 = ctx.sh_value_bounds.is_valid() && ctx.sh_value_bounds.numel() > 0;
+        const bool shN_f16 = !shN_q16 && ctx.shN.is_valid() &&
+                             ctx.shN.dtype() == core::DataType::Float16;
+        if (shN_q16) {
+            bwd_shN_ptr = static_cast<const float*>(lfs::core::resolve_exportable_device_ptr(ctx.shN));
+            bwd_shN_bounds_ptr = static_cast<const float*>(
+                lfs::core::resolve_exportable_device_ptr(ctx.sh_value_bounds));
+            bwd_shN_n_cells = lfs::core::sh_value_quant::n_value_cells_per_prim(
+                lfs::core::sh_rest_coefficients_for_degree(
+                    degree_from_layout_bases(static_cast<uint32_t>(ctx.forward_ctx.sh_layout_bases))));
             bwd_shN_bits = 16u;
-        } else if (gaussian_model.shN_ieee_f16()) {
-            bwd_shN_ptr = static_cast<const float*>(
-                lfs::core::resolve_exportable_device_ptr(gaussian_model.shN()));
+        } else if (shN_f16) {
+            bwd_shN_ptr = static_cast<const float*>(lfs::core::resolve_exportable_device_ptr(ctx.shN));
             bwd_shN_bits = 16u;
         } else if (ctx.shN.is_valid()) {
             bwd_shN_ptr = ctx.shN.ptr<float>();
         }
-        if (update_densification_info)
-            gaussian_model._densification_info.set_stream(stream);
+        if (update_densification)
+            densification.set_stream(stream);
         auto backward_result = fast_lfs::rasterization::backward_raw(
-            update_densification_info ? gaussian_model._densification_info.ptr<float>() : nullptr,
+            update_densification ? densification.ptr<float>() : nullptr,
             use_pixel_error_densification ? error_map_2d.ptr<float>() : nullptr,
             grad_image.ptr<float>(),
             background_grad,
             grad_depth_ptr,
             grad_normal_ptr,
-            raw_image.ptr<float>(),
+            ctx.image.ptr<float>(),
             ctx.alpha.ptr<float>(),
             ctx.means.ptr<float>(),
             ctx.raw_scales.ptr<float>(),
@@ -807,42 +851,316 @@ namespace lfs::training {
             bwd_shN_bits,
             fused_adam.mean_step_far_mask,
             fused_adam.mean_step_far_mask_n,
-            fused_extra_gradients.edge_weight_map,
-            fused_extra_gradients.edge_score_out);
+            edge_weight,
+            edge_score);
 
         ctx.mark_forward_context_released();
+        state.frame = {};
 
         if (!backward_result.success) {
             throw std::runtime_error(std::string("Backward failed: ") + backward_result.error_message);
         }
-        if (fused_adam.enabled) {
-            optimizer.commit_fastgs_fused_adam(iteration);
-        }
     }
 
-    bool release_fast_rasterizer_thread_local_caches() noexcept {
-        fast_rasterizer_thread_caches.image = {};
-        fast_rasterizer_thread_caches.alpha = {};
-        fast_rasterizer_thread_caches.depth = {};
-        fast_rasterizer_thread_caches.normal = {};
-        fast_rasterizer_thread_caches.width = -1;
-        fast_rasterizer_thread_caches.height = -1;
-        return !fast_rasterizer_thread_caches.image.is_valid() &&
-               !fast_rasterizer_thread_caches.alpha.is_valid() &&
-               !fast_rasterizer_thread_caches.depth.is_valid() &&
-               !fast_rasterizer_thread_caches.normal.is_valid();
+    fast_lfs::rasterization::FusedAdamParam fast_adam_group(const lfs::gpu_ops::BackwardAdamParam& src) {
+        fast_lfs::rasterization::FusedAdamParam dst;
+        if (!src.enabled) {
+            return dst;
+        }
+        dst.param = static_cast<float*>(lfs::core::resolve_exportable_device_ptr(src.parameter));
+        if (src.value_bits == 16 && src.sh_value_bounds.is_valid() && src.sh_value_bounds.numel() > 0) {
+            dst.sh_value_bounds = static_cast<float*>(
+                lfs::core::resolve_exportable_device_ptr(src.sh_value_bounds));
+            dst.sh_value_bits = 16;
+            dst.sh_value_n_cells = src.value_cells;
+        } else if (src.value_bits == 16) {
+            dst.sh_value_bits = 16;
+        }
+        if (src.packed_moments.is_valid() && src.packed_moments.numel() > 0) {
+            dst.joint_packed = src.packed_moments.ptr<uint8_t>();
+        }
+        if (src.joint_bounds.is_valid() && src.joint_bounds.numel() > 0) {
+            dst.joint_bounds = src.joint_bounds.ptr<float>();
+        }
+        dst.joint_bits = src.joint_bits;
+        dst.n_primitives = src.primitives;
+        if (src.frozen_mask.is_valid() && src.frozen_mask.numel() > 0) {
+            dst.frozen_mask = src.frozen_mask.ptr<bool>();
+            dst.frozen_mask_size = static_cast<int>(src.frozen_mask.numel());
+        }
+        dst.frozen_lr_scale = src.frozen_lr_scale;
+        if (src.crop_damping_mask.is_valid() && src.crop_damping_mask.numel() > 0) {
+            dst.crop_damping_mask = src.crop_damping_mask.ptr<bool>();
+            dst.crop_damping_mask_size = static_cast<int>(src.crop_damping_mask.numel());
+        }
+        dst.cropbox_lr_scale = src.cropbox_lr_scale;
+        dst.n_elements = src.elements;
+        dst.n_attributes = src.attributes;
+        dst.step_size = src.step_size;
+        dst.bias_correction2_sqrt_rcp = src.bc2_sqrt_rcp;
+        dst.enabled = true;
+        if (src.screen_share.is_valid() && src.screen_share.numel() > 0 &&
+            src.screen_share_limit > 0.f && src.screen_share_limit < 1.f) {
+            dst.screen_share_max = src.screen_share.ptr<float>();
+            dst.screen_share_n = static_cast<int>(src.screen_share.numel());
+            dst.screen_share_limit = src.screen_share_limit;
+            dst.screen_share_penalty = src.screen_share_penalty;
+        }
+        return dst;
     }
 
-    namespace {
-        // Register the main-thread rasterizer cache release sequence as a
-        // process pre-shutdown hook.
-        void release_main_thread_fastgs_cuda_caches() noexcept {
-            (void)release_fast_rasterizer_thread_local_caches();
+    fast_lfs::rasterization::FusedAdamSettings fast_adam_settings(const lfs::gpu_ops::BackwardAdam& adam) {
+        fast_lfs::rasterization::FusedAdamSettings fused;
+        fused.beta1 = adam.beta1;
+        fused.beta2 = adam.beta2;
+        fused.eps = adam.eps;
+        fused.scale_reg_weight = adam.scale_reg_weight;
+        fused.flatten_reg_weight = adam.flatten_reg_weight;
+        fused.opacity_reg_weight = adam.opacity_reg_weight;
+        if (adam.scale_reg_weight > 0.f && adam.scale_reg_loss.is_valid() && adam.scale_reg_loss.numel() > 0) {
+            fused.scale_reg_loss_out = adam.scale_reg_loss.ptr<float>();
         }
+        if (adam.opacity_reg_weight > 0.f && adam.opacity_reg_loss.is_valid() &&
+            adam.opacity_reg_loss.numel() > 0) {
+            fused.opacity_reg_loss_out = adam.opacity_reg_loss.ptr<float>();
+        }
+        if (adam.sparsity_sigmoid.is_valid() && adam.sparsity_sigmoid.numel() > 0) {
+            fused.sparsity_opa_sigmoid = adam.sparsity_sigmoid.ptr<float>();
+            fused.sparsity_z = adam.sparsity_z.is_valid() ? adam.sparsity_z.ptr<float>() : nullptr;
+            fused.sparsity_u = adam.sparsity_u.is_valid() ? adam.sparsity_u.ptr<float>() : nullptr;
+            fused.sparsity_n = static_cast<int>(adam.sparsity_sigmoid.numel());
+            fused.sparsity_rho = adam.sparsity_rho;
+            fused.sparsity_grad_loss = adam.sparsity_grad_loss;
+        }
+        using lfs::gpu_ops::AdamSlot;
+        fused.means = fast_adam_group(adam.groups[static_cast<std::size_t>(AdamSlot::Means)]);
+        fused.scaling = fast_adam_group(adam.groups[static_cast<std::size_t>(AdamSlot::Scaling)]);
+        fused.rotation = fast_adam_group(adam.groups[static_cast<std::size_t>(AdamSlot::Rotation)]);
+        fused.opacity = fast_adam_group(adam.groups[static_cast<std::size_t>(AdamSlot::Opacity)]);
+        fused.sh0 = fast_adam_group(adam.groups[static_cast<std::size_t>(AdamSlot::Sh0)]);
+        fused.shN = fast_adam_group(adam.groups[static_cast<std::size_t>(AdamSlot::ShN)]);
+        fused.per_splat_mean_step = adam.per_splat_mean_step;
+        fused.mean_step_median_extent = adam.median_extent;
+        fused.mean_step_r_min = adam.r_min;
+        fused.mean_step_r_max = adam.r_max;
+        if (adam.far_mask.is_valid() && adam.far_mask.numel() > 0 && fused.means.n_primitives > 0) {
+            fused.mean_step_far_mask = adam.far_mask.ptr<bool>();
+            fused.mean_step_far_mask_n = std::min(
+                static_cast<int>(adam.far_mask.numel()), fused.means.n_primitives);
+        }
+        fused.enabled = fused.means.enabled || fused.scaling.enabled || fused.rotation.enabled ||
+                        fused.opacity.enabled || fused.sh0.enabled || fused.shN.enabled;
+        return fused;
+    }
 
-        const bool g_fastgs_tls_release_hook_registered = [] {
-            lfs::core::register_gpu_pre_shutdown_hook(release_main_thread_fastgs_cuda_caches);
-            return true;
-        }();
-    } // namespace
+    void fast_ops_release(lfs::gpu_ops::FastSaved& saved) noexcept {
+        if (!saved.backend) {
+            return;
+        }
+        state_of(saved).frame = {};
+    }
+
+    lfs::gpu_ops::State fast_ops_create() {
+        return std::make_unique<CudaFastState>();
+    }
+
+    [[nodiscard]] lfs::Error fast_raster_error(const lfs::gpu_ops::RasterResult& result) {
+        using Code = lfs::gpu_ops::RasterResult::Code;
+        const std::string detail{result.message};
+        if (detail.find("n_primitives is 0") != std::string::npos) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::Rendering,
+                .user_message = "FastGS cannot render an empty Gaussian model.",
+                .detail = detail,
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+        if (result.code == Code::InstanceOverflow) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::FailedPrecondition,
+                .domain = lfs::ErrorDomain::CUDA,
+                .user_message =
+                    "Pathological splat extents produced more tile instances "
+                    "than the 32-bit FastGS path can represent; skipping step.",
+                .detail = detail,
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+        const bool exhausted = result.code == Code::ResourceExhausted;
+        return lfs::make_error(lfs::ErrorInit{
+            .code = exhausted ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::Internal,
+            .domain = lfs::ErrorDomain::CUDA,
+            .user_message = exhausted ? "Ran out of GPU memory while rendering during training."
+                                      : "FastGS forward rasterization failed.",
+            .detail = detail,
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+        });
+    }
+
+    lfs::gpu_ops::ShStorage fast_sh_storage(const core::SplatData& model) {
+        if (model.shN_value_quantized()) {
+            return lfs::gpu_ops::ShStorage::Q16;
+        }
+        if (model.shN_ieee_f16()) {
+            return lfs::gpu_ops::ShStorage::IeeeFloat16;
+        }
+        return lfs::gpu_ops::ShStorage::Float32;
+    }
+
+    lfs::gpu_ops::RasterResult fast_render(
+        const lfs::gpu_ops::FastRasterOps& ops,
+        lfs::gpu_ops::FastSaved& saved,
+        core::Camera& camera,
+        core::SplatData& model,
+        core::Tensor& bg_color,
+        const int tile_x,
+        const int tile_y,
+        const int tile_width,
+        const int tile_height,
+        const bool mip_filter,
+        const core::Tensor& bg_image,
+        const bool render_normal,
+        const bool render_depth,
+        RenderOutput& output) {
+        const int sh_degree = model.get_active_sh_degree();
+        const int max_sh_degree = model.get_max_sh_degree();
+        auto [fx, fy, cx, cy] = camera.get_intrinsics();
+        core::Tensor no_bounds;
+        const bool q16 = model.shN_value_quantized();
+        const lfs::gpu_ops::FastParams params{
+            .full_image = {camera.image_height(), camera.image_width()},
+            .intrinsics = {fx, fy, cx, cy},
+            .tile_x = tile_x,
+            .tile_y = tile_y,
+            .tile_w = tile_width,
+            .tile_h = tile_height,
+            .sh = {
+                .storage = fast_sh_storage(model),
+                .active_bases = static_cast<uint32_t>((sh_degree + 1) * (sh_degree + 1)),
+                .layout_bases = static_cast<uint32_t>((max_sh_degree + 1) * (max_sh_degree + 1)),
+            },
+            .mip_filter = mip_filter,
+            .render_normal = render_normal,
+            .render_depth = render_depth,
+        };
+        const lfs::gpu_ops::SplatInputs splats{
+            .means = model.means(),
+            .raw_scales = model.scaling_raw(),
+            .raw_rotations = model.rotation_raw(),
+            .raw_opacities = model.opacity_raw(),
+            .sh0 = model.sh0(),
+            .shN = model.shN(),
+            .sh_value_bounds = q16 ? model.shN_value_bounds() : no_bounds,
+        };
+        const lfs::gpu_ops::RenderOutputs rendered{
+            .image = output.image,
+            .alpha = output.alpha,
+            .depth = output.depth,
+            .normal = output.normal,
+        };
+        const auto result = ops.forward(
+            saved, splats, camera.world_view_transform(), camera.cam_position(),
+            bg_color, bg_image, params, rendered, model._max_screen_share);
+        if (result.code == lfs::gpu_ops::RasterResult::Code::Success) {
+            output.width = tile_width > 0 ? tile_width : camera.image_width();
+            output.height = tile_height > 0 ? tile_height : camera.image_height();
+        }
+        return result;
+    }
+
+    RenderOutput fast_infer(
+        const lfs::gpu_ops::FastRasterOps& ops,
+        lfs::gpu_ops::FastSaved& saved,
+        core::Camera& camera,
+        core::SplatData& model,
+        core::Tensor& bg_color,
+        const bool mip_filter,
+        const core::Tensor& bg_image,
+        const bool render_normal) {
+        RenderOutput output;
+        const auto result = fast_render(
+            ops, saved, camera, model, bg_color, 0, 0, 0, 0, mip_filter, bg_image, render_normal, true, output);
+        if (result.code != lfs::gpu_ops::RasterResult::Code::Success) {
+            throw lfs::Exception(fast_raster_error(result));
+        }
+        ops.release(saved);
+        return output;
+    }
+
+    void fast_record_vram(
+        const lfs::gpu_ops::FastSaved& saved,
+        const core::Tensor& image,
+        const core::Tensor& alpha,
+        const bool run_gaussian_backward,
+        const size_t num_primitives) {
+        const auto* state = state_of(saved);
+        if (state == nullptr) {
+            return;
+        }
+        const auto& ctx = state->frame.forward_ctx;
+        constexpr std::string_view scope = "rasterizer.fastgs";
+        record_vram_current(scope, "forward.per_primitive_buffers", ctx.per_primitive_buffers_size);
+        record_vram_current(scope, "forward.per_tile_buffers", ctx.per_tile_buffers_size);
+        record_vram_current(scope, "forward.sorted_indices_live", ctx.sorted_primitive_indices_size);
+        record_vram_current(scope, "forward.sort_workspace_arena", ctx.per_instance_sort_total_size, false,
+                            lfs::diagnostics::VramAllocationMethod::Arena);
+        record_rasterizer_arena_disclosure(scope);
+        const size_t raster_arena_live = ctx.per_primitive_buffers_size + ctx.per_tile_buffers_size +
+                                         ctx.per_instance_sort_total_size;
+        auto& profiler = lfs::diagnostics::VramProfiler::instance();
+        profiler.setGauge("vram.audit.fastgs_raster_live.required_bytes", static_cast<double>(raster_arena_live));
+        profiler.setGauge("vram.audit.fastgs_raster_live.allocated_bytes", static_cast<double>(raster_arena_live));
+        if (PerfBenchCollector::enabled()) {
+            PerfBenchCollector::instance().set_fastgs_raster_live_bytes(raster_arena_live, 0);
+        }
+        record_vram_current(scope, "forward.sort_scratch_transient", 0, true);
+        record_vram_current(scope, "forward.sort_total_transient", 0, true);
+        record_vram_current(scope, "backward.grad_mean2d_helper", num_primitives * 2 * sizeof(float));
+        record_vram_current(scope, "backward.grad_conic_helper", num_primitives * 3 * sizeof(float));
+        record_vram_current(scope, "backward.fused_grad_opacity_helper",
+                            run_gaussian_backward && ctx.grad_opacity_helper ? num_primitives * sizeof(float) : 0,
+                            true);
+        record_vram_current(scope, "backward.fused_grad_color_helper",
+                            run_gaussian_backward && ctx.grad_color_helper ? num_primitives * 3 * sizeof(float) : 0,
+                            true);
+        record_vram_tensor(scope, "output.image", image);
+        record_vram_tensor(scope, "output.alpha", alpha);
+        record_vram_tensor(scope, "saved.bg_color", state->frame.bg_color);
+    }
+
+    void fast_release_caches(lfs::gpu_ops::FastSaved& saved) noexcept {
+        if (!saved.backend) {
+            return;
+        }
+        state_of(saved).caches = {};
+    }
+
+    const lfs::gpu_ops::FastRasterOps& cuda_fast_ops() {
+        static const lfs::gpu_ops::FastRasterOps ops{
+            .create = fast_ops_create,
+            .forward = fast_ops_forward,
+            .backward = fast_ops_backward,
+            .release = fast_ops_release,
+            .warmup = fast_lfs::rasterization::warmup_kernels,
+        };
+        return ops;
+    }
+
+    CudaFastFrameView cuda_fast_frame_view(const lfs::gpu_ops::FastSaved& saved) noexcept {
+        CudaFastFrameView view;
+        const auto* state = state_of(saved);
+        if (state == nullptr) {
+            return view;
+        }
+        const auto& frame = state->frame;
+        view.n_instances = frame.forward_ctx.n_instances;
+        view.n_visible = frame.forward_ctx.n_visible;
+        view.per_tile_buffers_size = frame.forward_ctx.per_tile_buffers_size;
+        view.per_instance_sort_total_size = frame.forward_ctx.per_instance_sort_total_size;
+        view.frame_id = frame.forward_ctx.frame_id;
+        view.completion_stream = frame.completion_stream;
+        return view;
+    }
+
 } // namespace lfs::training

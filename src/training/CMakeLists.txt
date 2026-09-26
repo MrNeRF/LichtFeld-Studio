@@ -26,6 +26,7 @@ set(LFS_TRAINING_KERNEL_SOURCES
     kernels/densification_kernels.cu
     kernels/morton_reorder_kernels.cu
     kernels/grad_alpha.cu
+    ops/geometry_cuda.cpp
     kernels/depth_loss.cu
     kernels/normal_loss.cu
     kernels/normal_consistency_loss.cu
@@ -92,6 +93,7 @@ set(TRAINING_NEW_SOURCES
     ops/photometric_cuda.cpp
     ops/adam_cuda.cpp
     ops/mcmc_cuda.cpp
+    ops/mrnf_cuda.cpp
     losses/mask_loss.cpp
     strategies/strategy_utils.cpp
     strategies/mcmc.cpp

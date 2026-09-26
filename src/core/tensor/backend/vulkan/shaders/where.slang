@@ -5,6 +5,11 @@ static const uint LFS_PUSH_CONSTANT_SIZE = 184;
 // Output element type as a DataType value; byte types store whole words.
 [SpecializationConstant]
 const uint kOutputDType = 0;
+// Bits 0, 1 and 2 mark the condition, x and y as matching the output shape,
+// so they read at the output index. The host merges axes first, so all four
+// dims arrays share the output's rank.
+[SpecializationConstant]
+const uint kDirect = 0;
 
 struct Parameters
 {
@@ -32,37 +37,36 @@ uint loadByte(uint64_t address, uint64_t index)
     return (((Ptr<uint, Access.Read>)wordAddress)[0] >> shift) & 255u;
 }
 
-// Right-aligned broadcast index, mirroring the CUDA compute_broadcast_index.
-uint64_t broadcastIndex(uint64_t index, uint sourceDims[8], uint sourceRank, uint outputDims[8], uint outputRank)
+// The broadcast source index of an output element, in 32 bits: the count
+// fits, and every source is no larger than the output.
+uint broadcastIndex(uint index, uint sourceDims[8], uint outputDims[8], uint rank, uint direct)
 {
-    uint64_t sourceIndex = 0;
-    uint64_t sourceStride = 1;
-    for (int axis = int(outputRank) - 1; axis >= 0; --axis)
+    if (direct != 0u)
+        return index;
+    uint sourceIndex = 0;
+    uint sourceStride = 1;
+    for (int axis = int(rank) - 1; axis >= 0; --axis)
     {
-        const uint64_t coordinate = axis == 0 ? index : index % outputDims[axis];
+        const uint coordinate = axis == 0 ? index : index % outputDims[axis];
         if (axis != 0)
             index /= outputDims[axis];
-        const int sourceAxis = axis - int(outputRank - sourceRank);
-        if (sourceAxis >= 0)
-        {
-            const uint extent = sourceDims[sourceAxis];
-            sourceIndex += (extent == 1u ? uint64_t(0) : coordinate) * sourceStride;
-            sourceStride *= extent;
-        }
+        const uint extent = sourceDims[axis];
+        sourceIndex += (extent == 1u ? 0u : coordinate) * sourceStride;
+        sourceStride *= extent;
     }
     return sourceIndex;
 }
 
 uint evaluateByte(uint index, uniform Parameters parameters)
 {
-    const uint64_t conditionIndex = broadcastIndex(index, parameters.conditionDims, parameters.conditionRank,
-                                                   parameters.outputDims, parameters.outputRank);
+    const uint conditionIndex = broadcastIndex(index, parameters.conditionDims, parameters.outputDims,
+                                               parameters.outputRank, kDirect & 1u);
     const bool selected = loadByte(parameters.conditionAddress, conditionIndex) != 0u;
     if (selected)
-        return loadByte(parameters.xAddress, broadcastIndex(index, parameters.xDims, parameters.xRank,
-                                                             parameters.outputDims, parameters.outputRank));
-    return loadByte(parameters.yAddress, broadcastIndex(index, parameters.yDims, parameters.yRank,
-                                                         parameters.outputDims, parameters.outputRank));
+        return loadByte(parameters.xAddress, broadcastIndex(index, parameters.xDims, parameters.outputDims,
+                                                            parameters.outputRank, kDirect & 2u));
+    return loadByte(parameters.yAddress, broadcastIndex(index, parameters.yDims, parameters.outputDims,
+                                                        parameters.outputRank, kDirect & 4u));
 }
 
 [numthreads(LFS_LOCAL_SIZE_X, 1, 1)]
@@ -97,14 +101,14 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters param
     }
     const uint3 numWorkgroups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
     const uint stride = numWorkgroups.x * LFS_LOCAL_SIZE_X;
-    for (uint64_t index = dispatchThreadId.x; index < parameters.count; index += stride)
+    for (uint index = dispatchThreadId.x; index < parameters.count; index += stride)
     {
-        const uint64_t conditionIndex = broadcastIndex(index, parameters.conditionDims, parameters.conditionRank,
-                                                       parameters.outputDims, parameters.outputRank);
-        const uint64_t xIndex = broadcastIndex(index, parameters.xDims, parameters.xRank,
-                                               parameters.outputDims, parameters.outputRank);
-        const uint64_t yIndex = broadcastIndex(index, parameters.yDims, parameters.yRank,
-                                               parameters.outputDims, parameters.outputRank);
+        const uint conditionIndex = broadcastIndex(index, parameters.conditionDims, parameters.outputDims,
+                                                   parameters.outputRank, kDirect & 1u);
+        const uint xIndex = broadcastIndex(index, parameters.xDims, parameters.outputDims, parameters.outputRank,
+                                           kDirect & 2u);
+        const uint yIndex = broadcastIndex(index, parameters.yDims, parameters.outputDims, parameters.outputRank,
+                                           kDirect & 4u);
         const bool selected = loadByte(parameters.conditionAddress, conditionIndex) != 0u;
         if (kOutputDType == 1)
             ((Ptr<uint16_t, Access.ReadWrite>)parameters.outputAddress)[index] =

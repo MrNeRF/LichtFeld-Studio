@@ -42,6 +42,12 @@ jobs:
           cmake --version
           ninja --version
 
+      - name: Check Metal device
+        run: |
+          device=$(osascript -l JavaScript -e 'ObjC.import("Metal"); var d = $.MTLCreateSystemDefaultDevice(); d ? ObjC.unwrap(d.name) : "NO_METAL_DEVICE";')
+          echo "Metal device: $device"
+          test "$device" != NO_METAL_DEVICE
+
       - name: Restore vcpkg binary cache
         uses: actions/cache@v6
         with:
@@ -59,7 +65,7 @@ jobs:
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
 
       - name: Configure
-        run: cmake --preset macos-release
+        run: cmake --preset macos-release -DBUILD_TESTS=ON
 
       - name: Remove vcpkg build intermediates
         run: |
@@ -67,5 +73,11 @@ jobs:
           rm -rf build-macos-release/vcpkg_installed/vcpkg/blds build-macos-release/vcpkg_installed/vcpkg/pkgs
           df -h .
 
-      - name: Build
+      - name: Build application and tests
         run: cmake --build --preset macos-release
+
+      - name: Run GPU and VideoToolbox tests
+        run: |
+          icd="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
+          test -f "$icd"
+          VK_DRIVER_FILES="$icd" ctest --test-dir build-macos-release -R '^lichtfeld_tests$' --no-tests=error --verbose

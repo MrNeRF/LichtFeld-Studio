@@ -11,6 +11,7 @@
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "optimizer/adam_optimizer.hpp"
+#include "training/rasterization/fast_rasterizer.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -212,11 +213,13 @@ TEST_F(GutShNJointAdam, StandaloneStepMatchesFusedKernelQ16Sh3) {
                          float_layout * sizeof(float), cudaMemcpyHostToDevice),
               cudaSuccess);
 
-    auto fused = opt_fused.prepare_fastgs_fused_adam(past_warmup);
-    ASSERT_TRUE(fused.enabled);
-    ASSERT_TRUE(fused.shN.enabled);
-    EXPECT_EQ(fused.shN.sh_value_bits, 16);
-    EXPECT_EQ(fused.shN.n_primitives, static_cast<int>(n));
+    auto adam = opt_fused.prepare_fastgs_fused_adam(past_warmup);
+    ASSERT_TRUE(fastgs_adam_enabled(adam));
+    const auto& shn = adam.groups[static_cast<std::size_t>(lfs::gpu_ops::AdamSlot::ShN)];
+    ASSERT_TRUE(shn.enabled);
+    EXPECT_EQ(shn.value_bits, 16);
+    EXPECT_EQ(shn.primitives, static_cast<int>(n));
+    const auto fused = fast_adam_settings(adam);
     const int sh_layout_slots = static_cast<int>(sh_float4_slots_for_rest(layout_rest));
     const int active_sh_bases =
         static_cast<int>(splat_fused.active_sh_coeffs_rest() + 1);

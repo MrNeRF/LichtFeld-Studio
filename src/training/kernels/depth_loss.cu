@@ -654,7 +654,7 @@ namespace lfs::training::kernels {
                2 * static_cast<size_t>(kPrimaryStatCount) * num_blocks;
     }
 
-    std::vector<float2> collect_depth_anchor_samples(
+    std::vector<lfs::gpu_ops::AnchorSample> collect_depth_anchor_samples(
         const float* points_xyz,
         const size_t num_points,
         const float* w2c,
@@ -725,7 +725,7 @@ namespace lfs::training::kernels {
 
         const auto pairs_ticket =
             ::lfs::core::cuda_record_range(stream, "training.depth.anchor_pairs_pipeline");
-        std::vector<float2> pairs(static_cast<size_t>(pair_count));
+        std::vector<lfs::gpu_ops::AnchorSample> pairs(static_cast<size_t>(pair_count));
         cudaMemcpyAsync(pairs.data(), pairs_dev, sizeof(float2) * pair_count,
                         cudaMemcpyDeviceToHost, stream);
         try {
@@ -741,7 +741,7 @@ namespace lfs::training::kernels {
         return pairs;
     }
 
-    DepthAnchor fit_depth_anchor_from_samples(const std::vector<float2>& pairs) {
+    DepthAnchor fit_depth_anchor_from_samples(const std::vector<lfs::gpu_ops::AnchorSample>& pairs) {
         DepthAnchor anchor;
         const size_t n = pairs.size();
         if (n < static_cast<size_t>(kMinAnchorSamples)) {

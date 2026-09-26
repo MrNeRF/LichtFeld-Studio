@@ -9,6 +9,7 @@
 #include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/backend/facade_trace.hpp"
 #include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_environment.hpp"
@@ -32,6 +33,7 @@
 #include <functional>
 #include <limits>
 #include <random>
+#include <set>
 #include <span>
 #include <string>
 #include <tuple>
@@ -377,6 +379,114 @@ namespace {
         }
     }
 
+    TEST_F(TensorMetal, TransposesAndPermutesMatchCpu) {
+        // Tiled transposes for every element size, at sizes that leave partial
+        // tiles, and permutes whose axes merge.
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            SCOPED_TRACE(static_cast<int>(backend));
+            GpuBackendScope scope(backend);
+            for (const auto dtype : {DataType::Float32, DataType::Float16, DataType::Int32, DataType::Int64,
+                                     DataType::UInt8}) {
+                SCOPED_TRACE(static_cast<int>(dtype));
+                for (const auto& [rows, columns] : std::vector<std::pair<size_t, size_t>>{{1, 7}, {33, 65}, {448, 1000}, {5, 2}}) {
+                    const Tensor cpu = (random_tensor(rows * columns, 0.0f, 100.0f, 102)).to(dtype).reshape(TensorShape({rows, columns}));
+                    const Tensor gpu = cpu.to(Device::GPU);
+                    expect_close(gpu.transpose(0, 1).contiguous().to(DataType::Float32),
+                                 cpu.transpose(0, 1).contiguous().to(DataType::Float32), 0.0f, 0.0f);
+                    // A column slice of the transpose keeps the tile path's stride.
+                    if (rows > 2)
+                        expect_close(gpu.transpose(0, 1).slice(1, 1, rows - 1).contiguous().to(DataType::Float32),
+                                     cpu.transpose(0, 1).slice(1, 1, rows - 1).contiguous().to(DataType::Float32), 0.0f,
+                                     0.0f);
+                }
+                const Tensor volume = random_tensor(6 * 5 * 4 * 3, 0.0f, 100.0f, 103).to(dtype).reshape({6, 5, 4, 3});
+                for (const auto& order : std::vector<std::vector<int>>{{0, 2, 1, 3}, {3, 2, 1, 0}, {1, 0, 2, 3}, {0, 1, 3, 2}}) {
+                    expect_close(volume.to(Device::GPU).permute(order).contiguous().to(DataType::Float32),
+                                 volume.permute(order).contiguous().to(DataType::Float32), 0.0f, 0.0f);
+                }
+                // Writing into a transposed view scatters through the strided side.
+                Tensor destination = Tensor::zeros({9, 40}, Device::GPU, dtype);
+                const Tensor source = random_tensor(40 * 9, 0.0f, 100.0f, 104).to(dtype).reshape({40, 9});
+                destination.transpose(0, 1).copy_(source.to(Device::GPU));
+                expect_close(destination.to(DataType::Float32), source.transpose(0, 1).contiguous().to(DataType::Float32),
+                             0.0f, 0.0f);
+            }
+        }
+    }
+
+    TEST_F(TensorMetal, WhereBroadcastsMatchCpu) {
+        // Conditions and values broadcast along leading, middle and trailing
+        // axes, including patterns whose neighbouring axes merge.
+        struct Case {
+            std::vector<size_t> condition, x, y;
+        };
+        const std::vector<Case> cases = {
+            {{64, 1}, {64, 30}, {64, 30}},
+            {{64, 30}, {64, 30}, {64, 30}},
+            {{1, 30}, {64, 30}, {1}},
+            {{4, 1, 5, 1}, {4, 3, 5, 2}, {3, 5, 2}},
+            {{2, 3, 1, 1}, {1, 1, 4, 5}, {2, 3, 4, 5}},
+            {{7}, {1}, {7}},
+            {{1}, {6, 7}, {6, 7}}};
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            SCOPED_TRACE(static_cast<int>(backend));
+            GpuBackendScope scope(backend);
+            unsigned seed = 105;
+            for (const auto& [condition_shape, x_shape, y_shape] : cases) {
+                const auto make = [&](const std::vector<size_t>& shape) {
+                    size_t count = 1;
+                    for (const size_t extent : shape)
+                        count *= extent;
+                    return random_tensor(count, -50.0f, 50.0f, seed++).reshape(TensorShape(shape));
+                };
+                const Tensor condition = make(condition_shape).gt(0.0f), x = make(x_shape), y = make(y_shape);
+                for (const auto dtype : {DataType::Float32, DataType::Float16, DataType::Int64, DataType::Bool}) {
+                    SCOPED_TRACE(static_cast<int>(dtype));
+                    const auto as = [&](const Tensor& t) { return dtype == DataType::Bool ? t.gt(0.0f) : t.to(dtype); };
+                    const Tensor expected = Tensor::where(condition, as(x), as(y));
+                    const Tensor found =
+                        Tensor::where(condition.to(Device::GPU), as(x).to(Device::GPU), as(y).to(Device::GPU));
+                    EXPECT_EQ(found.shape(), expected.shape());
+                    expect_close(found.to(DataType::Float32), expected.to(DataType::Float32), 0.0f, 0.0f);
+                }
+            }
+        }
+    }
+
+    TEST_F(TensorMetal, FillInPlaceMatchesCpu) {
+        // Contiguous tensors, offset views and strided views, for every
+        // filled dtype, including a signed zero.
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            SCOPED_TRACE(static_cast<int>(backend));
+            GpuBackendScope scope(backend);
+            for (const auto dtype : {DataType::Float32, DataType::Int32, DataType::Bool}) {
+                for (const float value : {0.0f, -0.0f, 1.0f, 7.0f}) {
+                    SCOPED_TRACE(std::to_string(static_cast<int>(dtype)) + " " + std::to_string(value));
+                    const Tensor source = random_tensor(6 * 10, 0.0f, 3.0f, 107).to(dtype).reshape({6, 10});
+                    Tensor expected = source.clone(), found = source.to(Device::GPU);
+                    expected.fill_(value);
+                    found.fill_(value);
+                    expect_close(found.to(DataType::Float32), expected.to(DataType::Float32), 0.0f, 0.0f);
+                    if (dtype == DataType::Float32)
+                        EXPECT_EQ(std::signbit(found.to_vector()[3]), std::signbit(value));
+                    expected = source.clone();
+                    found = source.to(Device::GPU);
+                    expected.slice(0, 2, 5).fill_(value);
+                    found.slice(0, 2, 5).fill_(value);
+                    expected.transpose(0, 1).slice(0, 7, 9).fill_(value);
+                    found.transpose(0, 1).slice(0, 7, 9).fill_(value);
+                    expect_close(found.to(DataType::Float32), expected.to(DataType::Float32), 0.0f, 0.0f);
+                }
+            }
+        }
+    }
+
     TEST_F(TensorMetal, BroadcastsMatchCpu) {
         const Tensor a_cpu = random_tensor(4 * 1 * 3, -2.0f, 2.0f, 33).reshape({4, 1, 3});
         const Tensor b_cpu = random_tensor(5 * 1, -2.0f, 2.0f, 34).reshape({5, 1});
@@ -390,6 +500,221 @@ namespace {
         const Tensor matrix = random_tensor(300 * 7, 1.0f, 2.0f, 35).reshape({300, 7});
         const Tensor row = random_tensor(7, 1.0f, 2.0f, 36);
         expect_close(to_metal(matrix) / to_metal(row), matrix / row);
+    }
+
+    TEST_F(TensorMetal, PadHandlesEveryDtype) {
+        // Non-Float32 pads copy the input into the interior of a zeroed result.
+        const auto pad = [](const Tensor& tensor, std::vector<std::pair<int, int>> widths) {
+            MovementArgs args;
+            args.args = std::move(widths);
+            return tensor.movement(MovementOp::Pad, args);
+        };
+        const Tensor base = random_tensor(3 * 4, -4.0f, 4.0f, 95).reshape({3, 4});
+        for (const auto dtype : {DataType::Int32, DataType::Bool, DataType::UInt8, DataType::Float16}) {
+            SCOPED_TRACE(static_cast<int>(dtype));
+            const Tensor source = dtype == DataType::Bool    ? base.gt(0.0f)
+                                  : dtype == DataType::UInt8 ? base.abs().to(DataType::Int32).to(DataType::UInt8)
+                                                             : base.to(dtype);
+            const Tensor expected = pad(source, {{1, 2}, {0, 3}});
+            ASSERT_EQ(expected.shape(), TensorShape({6, 7}));
+            const auto values = expected.to(DataType::Float32).to_vector();
+            const auto inside = source.to(DataType::Float32).to_vector();
+            for (size_t row = 0; row < 6; ++row) {
+                for (size_t column = 0; column < 7; ++column) {
+                    const bool interior = row >= 1 && row < 4 && column < 4;
+                    EXPECT_EQ(values[row * 7 + column], interior ? inside[(row - 1) * 4 + column] : 0.0f)
+                        << row << "," << column;
+                }
+            }
+            const Tensor volume = source.reshape({3, 2, 2});
+            for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+                if (!gpu_backend_available(backend))
+                    continue;
+                GpuBackendScope scope(backend);
+                expect_close(pad(source.to(Device::GPU), {{1, 2}, {0, 3}}).to(DataType::Float32),
+                             expected.to(DataType::Float32), 0.0f, 0.0f);
+                expect_close(pad(volume.to(Device::GPU), {{2, 0}, {1, 1}, {0, 1}}).to(DataType::Float32),
+                             pad(volume, {{2, 0}, {1, 1}, {0, 1}}).to(DataType::Float32), 0.0f, 0.0f);
+            }
+        }
+    }
+
+    TEST_F(TensorMetal, FlipHandlesEveryDtypeAndDevice) {
+        // The CPU Float32 flip is the reference for every dtype and backend.
+        const auto flip = [](const Tensor& tensor, std::vector<int> axes) {
+            MovementArgs args;
+            args.args = std::move(axes);
+            return tensor.movement(MovementOp::Flip, args);
+        };
+        const Tensor base = random_tensor(2 * 3 * 4, -4.0f, 4.0f, 96).reshape({2, 3, 4});
+        for (const auto dtype : {DataType::Float32, DataType::Int32, DataType::Bool, DataType::UInt8,
+                                 DataType::Float16, DataType::Int64}) {
+            SCOPED_TRACE(static_cast<int>(dtype));
+            const Tensor source = dtype == DataType::Bool    ? base.gt(0.0f)
+                                  : dtype == DataType::UInt8 ? base.abs().to(DataType::Int32).to(DataType::UInt8)
+                                                             : base.to(dtype);
+            const Tensor reference = source.to(DataType::Float32);
+            for (const auto& axes : std::vector<std::vector<int>>{{0}, {2}, {0, -1}, {1, 2, 0}}) {
+                const Tensor expected = flip(reference, axes);
+                expect_close(flip(source, axes).to(DataType::Float32), expected, 0.0f, 0.0f);
+                for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+                    if (!gpu_backend_available(backend))
+                        continue;
+                    GpuBackendScope scope(backend);
+                    const Tensor flipped = flip(source.to(Device::GPU), axes);
+                    EXPECT_EQ(flipped.dtype(), dtype);
+                    expect_close(flipped.to(DataType::Float32), expected, 0.0f, 0.0f);
+                }
+            }
+            for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+                if (!gpu_backend_available(backend))
+                    continue;
+                GpuBackendScope scope(backend);
+                expect_close(flip(source.to(Device::GPU).transpose(0, 2), {1}).to(DataType::Float32),
+                             flip(reference.transpose(0, 2).contiguous(), {1}), 0.0f, 0.0f);
+            }
+        }
+    }
+
+    TEST_F(TensorMetal, ToBoolStaysOnTheDevice) {
+        // Nonzero, including NaN and values that round to zero in narrower
+        // types, converts to true on every backend.
+        const std::vector<float> values = {0.0f, 1.0f, -2.0f, 0.0f, std::numeric_limits<float>::quiet_NaN(),
+                                           -0.0f, 3.5f, 0.0f, 7.0f, -1.0f, 0.0f, 65504.0f};
+        const Tensor floats = Tensor::from_vector(values, {3, 4}, Device::CPU);
+        std::vector<int> integers(values.size());
+        for (size_t i = 0; i < values.size(); ++i)
+            integers[i] = std::isnan(values[i]) ? 5 : static_cast<int>(values[i]);
+        const Tensor ints = Tensor::from_vector(integers, {3, 4}, Device::CPU);
+        // Int64 values whose low 32 bits are zero stay true.
+        Tensor wide = Tensor::empty({3, 4}, Device::CPU, DataType::Int64);
+        for (size_t i = 0; i < integers.size(); ++i)
+            wide.ptr<int64_t>()[i] = static_cast<int64_t>(integers[i]) << 40;
+        for (const Tensor& source : {floats, floats.to(DataType::Float16), ints, wide}) {
+            SCOPED_TRACE(static_cast<int>(source.dtype()));
+            const Tensor expected = source.to(DataType::Bool);
+            ASSERT_EQ(expected.dtype(), DataType::Bool);
+            for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+                if (!gpu_backend_available(backend))
+                    continue;
+                GpuBackendScope scope(backend);
+                const Tensor converted = source.to(Device::GPU).to(DataType::Bool);
+                EXPECT_EQ(converted.dtype(), DataType::Bool);
+                EXPECT_EQ(gpu_backend_of(converted), backend);
+                expect_close(converted, expected, 0.0f, 0.0f);
+                expect_close(source.to(Device::GPU).transpose(0, 1).to(DataType::Bool),
+                             expected.transpose(0, 1).contiguous(), 0.0f, 0.0f);
+            }
+        }
+    }
+
+    TEST_F(TensorMetal, NonzeroOfEveryRankStaysOnTheDevice) {
+        const Tensor values = random_tensor(3 * 5 * 7 * 2, -1.0f, 1.0f, 97);
+        for (const auto& shape : std::vector<std::vector<size_t>>{{210}, {15, 14}, {3, 5, 14}, {3, 5, 7, 2}}) {
+            const Tensor mask = values.gt(0.3f).reshape(TensorShape(shape));
+            for (const Tensor& source : {mask, values.reshape(TensorShape(shape)).mul(mask.to(DataType::Float32)),
+                                         mask.to(DataType::Int32)}) {
+                SCOPED_TRACE(std::to_string(shape.size()) + "-D dtype " + std::to_string(static_cast<int>(source.dtype())));
+                const Tensor expected = source.nonzero();
+                ASSERT_EQ(expected.shape(), TensorShape({expected.shape()[0], shape.size()}));
+                for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+                    if (!gpu_backend_available(backend))
+                        continue;
+                    GpuBackendScope scope(backend);
+                    const Tensor found = source.to(Device::GPU).nonzero();
+                    EXPECT_EQ(found.dtype(), DataType::Int64);
+                    EXPECT_EQ(gpu_backend_of(found), backend);
+                    expect_close(found, expected, 0.0f, 0.0f);
+                    if (shape.size() > 1) {
+                        expect_close(source.to(Device::GPU).transpose(0, 1).nonzero(),
+                                     source.transpose(0, 1).contiguous().nonzero(), 0.0f, 0.0f);
+                    }
+                }
+            }
+        }
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            GpuBackendScope scope(backend);
+            EXPECT_EQ(Tensor::zeros({4, 6}, Device::GPU, DataType::Bool).nonzero().shape(), TensorShape({0, 2}));
+        }
+    }
+
+    TEST_F(TensorMetal, GpuMatchesCpuForBoolAxesAndGatheredIntegers) {
+        const Tensor mask = random_tensor(3 * 4 * 5 * 2, -1.0f, 1.0f, 99).gt(0.6f).reshape({3, 4, 5, 2});
+        const std::vector<std::vector<int>> axis_sets = {{0, 2}, {1, 3}, {0, 3}, {-1, 1}, {0, 1, 3}};
+        std::vector<int32_t> rows(6 * 3);
+        for (size_t i = 0; i < rows.size(); ++i)
+            rows[i] = static_cast<int32_t>(i * 7919 % 1000) - 500;
+        Tensor wide = Tensor::empty({6, 3}, Device::CPU, DataType::Int64);
+        for (size_t i = 0; i < rows.size(); ++i)
+            wide.ptr<int64_t>()[i] = (static_cast<int64_t>(rows[i]) << 36) + rows[i];
+        const std::vector<int> picks = {5, 0, 3, 3};
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            SCOPED_TRACE(static_cast<int>(backend));
+            GpuBackendScope scope(backend);
+            const Tensor gpu_mask = mask.to(Device::GPU);
+            for (const auto& axes : axis_sets) {
+                for (const bool keepdim : {false, true}) {
+                    expect_close(gpu_mask.any(axes, keepdim), mask.any(axes, keepdim), 0.0f, 0.0f);
+                    expect_close(gpu_mask.all(axes, keepdim), mask.all(axes, keepdim), 0.0f, 0.0f);
+                }
+            }
+            for (const Tensor& source : {Tensor::from_vector(rows, {6, 3}, Device::CPU), wide}) {
+                SCOPED_TRACE(static_cast<int>(source.dtype()));
+                Tensor expected = source.clone();
+                expected.reserve(10);
+                expected.append_gather(Tensor::from_vector(picks, {picks.size()}, Device::CPU));
+                Tensor grown = source.to(Device::GPU);
+                grown.reserve(10);
+                grown.append_gather(Tensor::from_vector(picks, {picks.size()}, Device::CPU).to(Device::GPU));
+                ASSERT_EQ(grown.shape(), TensorShape({10, 3}));
+                EXPECT_EQ(grown.cpu().to(DataType::Int64).to_vector_int64(), expected.to(DataType::Int64).to_vector_int64());
+            }
+        }
+    }
+
+    TEST_F(TensorMetal, FiniteChecksAndAllCloseStayOnTheDevice) {
+        constexpr float inf = std::numeric_limits<float>::infinity();
+        constexpr float nan = std::numeric_limits<float>::quiet_NaN();
+        const auto tensor = [](std::vector<float> values) {
+            const size_t count = values.size();
+            return Tensor::from_vector(values, {count}, Device::CPU);
+        };
+        const std::vector<std::pair<std::vector<float>, std::vector<float>>> pairs = {
+            {{1.0f, 2.0f, 3.0f}, {1.0f, 2.0f + 1e-7f, 3.0f}},
+            {{1.0f, 2.0f, 3.0f}, {1.0f, 2.1f, 3.0f}},
+            {{1.0f, inf, -inf}, {1.0f, inf, -inf}},
+            {{1.0f, 5.0f}, {1.0f, inf}},
+            {{-inf, 5.0f}, {inf, 5.0f}},
+            {{1.0f, nan}, {1.0f, nan}},
+            {{3.0e38f, 0.0f}, {-3.0e38f, 0.0f}},
+            {{0.0f, 1.0e-9f}, {-0.0f, 0.0f}},
+        };
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            SCOPED_TRACE(static_cast<int>(backend));
+            GpuBackendScope scope(backend);
+            for (size_t i = 0; i < pairs.size(); ++i) {
+                SCOPED_TRACE(i);
+                const Tensor a = tensor(pairs[i].first), b = tensor(pairs[i].second);
+                EXPECT_EQ(a.to(Device::GPU).all_close(b.to(Device::GPU), 1e-5f, 1e-8f), a.all_close(b, 1e-5f, 1e-8f));
+            }
+            const Tensor special = tensor({1.0f, nan, 2.0f, inf});
+            for (const auto dtype : {DataType::Float32, DataType::Float16}) {
+                EXPECT_TRUE(special.to(dtype).to(Device::GPU).has_nan());
+                EXPECT_TRUE(special.to(dtype).to(Device::GPU).has_inf());
+                EXPECT_FALSE(tensor({1.0f, 2.0f}).to(dtype).to(Device::GPU).has_nan());
+                EXPECT_FALSE(tensor({1.0f, 2.0f}).to(dtype).to(Device::GPU).has_inf());
+            }
+            const Tensor integers = tensor({1.0f, -3.0f, 0.0f}).to(DataType::Int32).to(Device::GPU);
+            EXPECT_FALSE(integers.has_nan());
+            EXPECT_FALSE(integers.has_inf());
+            EXPECT_FALSE(integers.gt(0).has_nan());
+        }
     }
 
     TEST_F(TensorMetal, ClampCatAndPadMatchCpu) {
@@ -539,6 +864,143 @@ namespace {
         }
     }
 
+    TEST_F(TensorMetal, IndexValidationStaysOnTheDevice) {
+        const Tensor source = random_tensor(20, -5.0f, 5.0f, 98).reshape({4, 5});
+        const std::vector<int> positions = {0, -1, 7, -20, 19, 3};
+        const Tensor expected = source.take(Tensor::from_vector(positions, {2, 3}, Device::CPU));
+        std::vector<float> expected_rows_data = source.to_vector();
+        for (const int row : {2, 0, 3})
+            for (int column = 0; column < 5; ++column)
+                expected_rows_data.push_back(source.to_vector()[row * 5 + column]);
+        const Tensor expected_rows = Tensor::from_vector(expected_rows_data, {7, 5}, Device::CPU);
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            SCOPED_TRACE(static_cast<int>(backend));
+            GpuBackendScope scope(backend);
+            const Tensor gpu_source = source.to(Device::GPU);
+            for (const auto index_dtype : {DataType::Int32, DataType::Int64}) {
+                const Tensor indices = Tensor::from_vector(positions, {2, 3}, Device::CPU).to(index_dtype).to(Device::GPU);
+                const Tensor taken = gpu_source.take(indices);
+                EXPECT_EQ(taken.shape(), TensorShape({2, 3}));
+                expect_close(taken, expected, 0.0f, 0.0f);
+
+                Tensor grown = gpu_source.clone();
+                grown.reserve(8);
+                grown.append_gather(Tensor::from_vector(std::vector<int>{2, 0, 3}, {3}, Device::CPU)
+                                        .to(index_dtype)
+                                        .to(Device::GPU));
+                expect_close(grown, expected_rows, 0.0f, 0.0f);
+            }
+            // Out-of-range positions fault in the checked gather and surface
+            // when the result is read.
+            EXPECT_THROW((void)gpu_source.take(Tensor::from_vector(std::vector<int>{1, 20}, {2}, Device::CPU)
+                                                   .to(Device::GPU))
+                             .cpu(),
+                         std::exception);
+            EXPECT_THROW((void)gpu_source.take(Tensor::from_vector(std::vector<int>{-21}, {1}, Device::CPU)
+                                                   .to(Device::GPU))
+                             .cpu(),
+                         std::exception);
+
+            const Tensor numbers = Tensor::from_vector(std::vector<int>{7, -9, 12, 5}, {4}, Device::CPU);
+            const Tensor divisors = Tensor::from_vector(std::vector<int>{3, 4, 5, 2}, {4}, Device::CPU);
+            expect_close(numbers.to(Device::GPU).mod(divisors.to(Device::GPU)), numbers.mod(divisors), 0.0f, 0.0f);
+            EXPECT_THROW((void)numbers.to(Device::GPU).mod(Tensor::from_vector(std::vector<int>{3, 0, 5, 2}, {4}, Device::CPU).to(Device::GPU)),
+                         std::exception);
+            EXPECT_THROW((void)Tensor::multinomial(
+                             Tensor::from_vector({1.0f, -1.0f, 2.0f}, {3}, Device::CPU).to(Device::GPU), 2, true),
+                         std::exception);
+        }
+    }
+
+    TEST_F(TensorMetal, PairAndWideIndexPutsStayOnTheDevice) {
+        const Tensor base = random_tensor(5 * 4, -1.0f, 1.0f, 100).reshape({5, 4});
+        const std::vector<int> rows = {0, -1, 3, 2, -5}, columns = {1, 3, -4, 0, 2};
+        const Tensor values = Tensor::from_vector({10.0f, 20.0f, 30.0f, 40.0f, 50.0f}, {5}, Device::CPU);
+        const auto wide = [](const std::vector<int64_t>& data) {
+            Tensor tensor = Tensor::empty({data.size()}, Device::CPU, DataType::Int64);
+            std::copy(data.begin(), data.end(), tensor.ptr<int64_t>());
+            return tensor;
+        };
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            SCOPED_TRACE(static_cast<int>(backend));
+            GpuBackendScope scope(backend);
+            for (const auto index_dtype : {DataType::Int32, DataType::Int64}) {
+                const Tensor row_index = Tensor::from_vector(rows, {rows.size()}, Device::CPU).to(index_dtype);
+                const Tensor column_index = Tensor::from_vector(columns, {columns.size()}, Device::CPU).to(index_dtype);
+                Tensor expected = base.clone();
+                expected.index_put_({row_index, column_index}, values);
+                Tensor actual = base.to(Device::GPU);
+                actual.index_put_({row_index.to(Device::GPU), column_index.to(Device::GPU)}, values.to(Device::GPU));
+                expect_close(actual, expected, 0.0f, 0.0f);
+            }
+            // Int64 flat positions, negative ones included, narrow only after wrapping.
+            Tensor flat_expected = base.clone();
+            flat_expected.index_put_(wide({19, -20, 7}), Tensor::from_vector({1.0f, 2.0f, 3.0f}, {3}, Device::CPU));
+            Tensor flat_actual = base.to(Device::GPU);
+            flat_actual.index_put_(wide({19, -20, 7}).to(Device::GPU),
+                                   Tensor::from_vector({1.0f, 2.0f, 3.0f}, {3}, Device::CPU).to(Device::GPU));
+            expect_close(flat_actual, flat_expected, 0.0f, 0.0f);
+
+            // Int64 destinations keep values wider than 32 bits.
+            Tensor wide_destination = wide(std::vector<int64_t>(6, 0)).to(Device::GPU);
+            wide_destination.index_put_(Tensor::from_vector(std::vector<int>{4, -6}, {2}, Device::CPU).to(Device::GPU),
+                                        wide({int64_t{1} << 40, -(int64_t{3} << 35)}).to(Device::GPU));
+            EXPECT_EQ(wide_destination.cpu().to_vector_int64(),
+                      (std::vector<int64_t>{-(int64_t{3} << 35), 0, 0, 0, int64_t{1} << 40, 0}));
+
+            // A column past its axis must not land in the next row, and an
+            // Int64 position past Int32 must not truncate into range.
+            EXPECT_THROW(
+                {
+                    Tensor destination = base.to(Device::GPU);
+                    destination.index_put_({Tensor::from_vector(std::vector<int>{0}, {1}, Device::CPU).to(Device::GPU),
+                                            Tensor::from_vector(std::vector<int>{4}, {1}, Device::CPU).to(Device::GPU)},
+                                           Tensor::ones({1}, Device::GPU));
+                    (void)destination.cpu();
+                },
+                std::exception);
+            EXPECT_THROW(
+                {
+                    Tensor destination = base.to(Device::GPU);
+                    destination.index_put_(wide({(int64_t{1} << 33) + 2}).to(Device::GPU), Tensor::ones({1}, Device::GPU));
+                    (void)destination.cpu();
+                },
+                std::exception);
+        }
+    }
+
+    TEST_F(TensorMetal, IndexSelectRowsMatchCpuForEveryWidth) {
+        // Rows of 8-byte multiples move as 8-byte words; others, and views
+        // whose start breaks the alignment, element by element.
+        const std::vector<int> picks = {7, 0, 3, 3, 9, 1};
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            SCOPED_TRACE(static_cast<int>(backend));
+            GpuBackendScope scope(backend);
+            const Tensor indices = Tensor::from_vector(picks, {picks.size()}, Device::CPU).to(Device::GPU);
+            for (const auto dtype : {DataType::Bool, DataType::UInt8, DataType::Float16, DataType::Float32}) {
+                for (const size_t width : {size_t{1}, size_t{3}, size_t{8}, size_t{16}, size_t{24}}) {
+                    SCOPED_TRACE(std::to_string(static_cast<int>(dtype)) + " width " + std::to_string(width));
+                    const Tensor base = random_tensor(11 * width, -1.0f, 1.0f, 106);
+                    const Tensor rows = (dtype == DataType::Bool ? base.gt(0.0f) : base.mul(100.0f).abs().to(dtype))
+                                            .reshape(TensorShape({11, width}));
+                    const Tensor expected = rows.slice(0, 1, 11).index_select(0, Tensor::from_vector(picks, {picks.size()}, Device::CPU));
+                    expect_close(rows.to(Device::GPU).slice(0, 1, 11).index_select(0, indices).to(DataType::Float32),
+                                 expected.to(DataType::Float32), 0.0f, 0.0f);
+                    expect_close(rows.to(Device::GPU).index_select(0, indices).to(DataType::Float32),
+                                 rows.index_select(0, Tensor::from_vector(picks, {picks.size()}, Device::CPU))
+                                     .to(DataType::Float32),
+                                 0.0f, 0.0f);
+                }
+            }
+        }
+    }
+
     TEST_F(TensorMetal, ScattersMatchCpu) {
         constexpr size_t count = 4099;
         const Tensor base = random_tensor(count, -5.0f, 5.0f, 53);
@@ -663,47 +1125,108 @@ namespace {
         }
     }
 
-    TEST_F(TensorMetal, SortsMatchCpu) {
-        // Short lines sort in one threadgroup, longer ones through the radix sort.
-        for (const size_t count : {size_t{1}, size_t{7}, size_t{2048}, size_t{2049}, size_t{100000}}) {
-            SCOPED_TRACE(count);
-            std::vector<float> values = random_tensor(count, -3.0f, 3.0f, 62).to_vector();
-            for (size_t i = 0; i < count; i += 11)
-                values[i] = i % 2 == 0 ? 0.0f : -0.0f;
-            for (size_t i = 5; i < count; i += 97)
+    TEST_F(TensorMetal, ArgExtremeKernelsMatchCpuOnLongAndStridedLines) {
+        // Contiguous and strided lines, short and long enough to split into
+        // chunks, with ties of equal values and of -0 and +0, and NaNs at the
+        // start and later in some lines.
+        struct Case {
+            std::vector<size_t> shape;
+            int dim;
+        };
+        const std::vector<Case> cases = {
+            {{1, 1000003}, 1},
+            {{3000, 700}, 1},
+            {{5, 100000, 3}, 1},
+            {{200000, 5}, 1},
+            {{100000, 4}, 0},
+            {{37}, 0}};
+        internal::facade_trace_enable_for_testing(true);
+        for (const auto& [shape, dim] : cases) {
+            size_t count = 1;
+            for (const size_t extent : shape)
+                count *= extent;
+            std::vector<float> values = random_tensor(count, -3.0f, 3.0f, 101).to_vector();
+            for (size_t i = 0; i < count; i += 7)
+                values[i] = 2.5f;
+            for (size_t i = 1; i < count; i += 13)
+                values[i] = (i / 13) % 2 == 0 ? 0.0f : -0.0f;
+            for (size_t i = 0; i < count; i += 99991)
                 values[i] = std::numeric_limits<float>::quiet_NaN();
-            const Tensor x_cpu = Tensor::from_vector(values, {count}, Device::CPU);
-            for (const bool descending : {false, true}) {
-                SCOPED_TRACE(descending);
-                const auto [sorted, indices] = to_metal(x_cpu).sort(0, descending);
-                const auto [sorted_cpu, indices_cpu] = x_cpu.sort(0, descending);
+            for (size_t i = 0; i < count; i += 400009)
+                values[i] = std::numeric_limits<float>::infinity();
+            const Tensor cpu = Tensor::from_vector(values, TensorShape(shape), Device::CPU);
+            for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+                if (!gpu_backend_available(backend))
+                    continue;
+                SCOPED_TRACE(std::to_string(static_cast<int>(backend)) + " " + TensorShape(shape).str() + " dim " +
+                             std::to_string(dim));
+                GpuBackendScope scope(backend);
+                const Tensor gpu = cpu.to(Device::GPU);
+                const auto before = internal::facade_trace_snapshot_for_testing();
+                for (const bool maximum : {true, false}) {
+                    const auto [expected_values, expected_indices] =
+                        maximum ? cpu.max_with_indices(dim, false) : cpu.min_with_indices(dim, false);
+                    const auto [found_values, found_indices] =
+                        maximum ? gpu.max_with_indices(dim, false) : gpu.min_with_indices(dim, false);
+                    expect_close(found_indices, expected_indices, 0.0f, 0.0f);
+                    expect_close(found_values, expected_values, 0.0f, 0.0f);
+                }
+                const auto after = internal::facade_trace_snapshot_for_testing();
+                const auto entry = static_cast<size_t>(internal::FacadeEntry::arg_extreme);
+                EXPECT_EQ(after[entry] - before[entry], 2u);
+            }
+        }
+        internal::facade_trace_enable_for_testing(false);
+    }
+
+    TEST_F(TensorMetal, SortsMatchCpu) {
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            SCOPED_TRACE(static_cast<int>(backend));
+            GpuBackendScope scope(backend);
+            const auto on_gpu = [](const Tensor& cpu) { return cpu.to(Device::GPU); };
+            // Short lines sort in one threadgroup, longer ones through the radix sort.
+            for (const size_t count : {size_t{1}, size_t{7}, size_t{2048}, size_t{2049}, size_t{100000}}) {
+                SCOPED_TRACE(count);
+                std::vector<float> values = random_tensor(count, -3.0f, 3.0f, 62).to_vector();
+                for (size_t i = 0; i < count; i += 11)
+                    values[i] = i % 2 == 0 ? 0.0f : -0.0f;
+                for (size_t i = 5; i < count; i += 97)
+                    values[i] = std::numeric_limits<float>::quiet_NaN();
+                const Tensor x_cpu = Tensor::from_vector(values, {count}, Device::CPU);
+                for (const bool descending : {false, true}) {
+                    SCOPED_TRACE(descending);
+                    const auto [sorted, indices] = on_gpu(x_cpu).sort(0, descending);
+                    const auto [sorted_cpu, indices_cpu] = x_cpu.sort(0, descending);
+                    expect_close(sorted, sorted_cpu, 0.0f, 0.0f);
+                    expect_close(indices, indices_cpu, 0.0f, 0.0f);
+                }
+            }
+            // Many short rows share a threadgroup, each sorted in its own direction.
+            for (const size_t width : {size_t{1}, size_t{2}, size_t{5}, size_t{64}, size_t{1000}, size_t{2048}}) {
+                SCOPED_TRACE(width);
+                std::vector<float> values = random_tensor(300 * width, -3.0f, 3.0f, 64).to_vector();
+                for (size_t i = 3; i < values.size(); i += 13)
+                    values[i] = i % 2 == 0 ? std::numeric_limits<float>::quiet_NaN() : -0.0f;
+                const Tensor rows = Tensor::from_vector(values, {300, width}, Device::CPU);
+                for (const bool descending : {false, true}) {
+                    SCOPED_TRACE(descending);
+                    const auto [sorted, indices] = on_gpu(rows).sort(1, descending);
+                    const auto [sorted_cpu, indices_cpu] = rows.sort(1, descending);
+                    expect_close(sorted, sorted_cpu, 0.0f, 0.0f);
+                    expect_close(indices, indices_cpu, 0.0f, 0.0f);
+                }
+            }
+            // Along an inner axis of a 3D tensor, short and long lines.
+            for (const int length : {33, 3000}) {
+                SCOPED_TRACE(length);
+                const Tensor volume = random_tensor(static_cast<size_t>(4 * length * 3), -3.0f, 3.0f, 63).reshape({4, length, 3});
+                const auto [sorted, indices] = on_gpu(volume).sort(1);
+                const auto [sorted_cpu, indices_cpu] = volume.sort(1);
                 expect_close(sorted, sorted_cpu, 0.0f, 0.0f);
                 expect_close(indices, indices_cpu, 0.0f, 0.0f);
             }
-        }
-        // Many short rows share a threadgroup, each sorted in its own direction.
-        for (const size_t width : {size_t{5}, size_t{64}, size_t{1000}}) {
-            SCOPED_TRACE(width);
-            std::vector<float> values = random_tensor(300 * width, -3.0f, 3.0f, 64).to_vector();
-            for (size_t i = 3; i < values.size(); i += 13)
-                values[i] = i % 2 == 0 ? std::numeric_limits<float>::quiet_NaN() : -0.0f;
-            const Tensor rows = Tensor::from_vector(values, {300, width}, Device::CPU);
-            for (const bool descending : {false, true}) {
-                SCOPED_TRACE(descending);
-                const auto [sorted, indices] = to_metal(rows).sort(1, descending);
-                const auto [sorted_cpu, indices_cpu] = rows.sort(1, descending);
-                expect_close(sorted, sorted_cpu, 0.0f, 0.0f);
-                expect_close(indices, indices_cpu, 0.0f, 0.0f);
-            }
-        }
-        // Along an inner axis of a 3D tensor, short and long lines.
-        for (const int length : {33, 3000}) {
-            SCOPED_TRACE(length);
-            const Tensor volume = random_tensor(static_cast<size_t>(4 * length * 3), -3.0f, 3.0f, 63).reshape({4, length, 3});
-            const auto [sorted, indices] = to_metal(volume).sort(1);
-            const auto [sorted_cpu, indices_cpu] = volume.sort(1);
-            expect_close(sorted, sorted_cpu, 0.0f, 0.0f);
-            expect_close(indices, indices_cpu, 0.0f, 0.0f);
         }
     }
 
@@ -729,6 +1252,32 @@ namespace {
         const Tensor weights = random_tensor(50, 0.0f, 2.0f, 64);
         compare([&] { return Tensor::multinomial(weights.to(Device::GPU), 200, true); }, 0.0f);
         compare([&] { return Tensor::multinomial(weights.to(Device::GPU), 20, false); }, 0.0f);
+        // Many blocks of running sums, zero weights among them, and more draws
+        // than a single block of threads.
+        std::vector<float> wide = random_tensor(300007, 0.0f, 1.0f, 65).to_vector();
+        for (size_t i = 0; i < wide.size(); i += 3)
+            wide[i] = 0.0f;
+        const Tensor many = Tensor::from_vector(wide, {wide.size()}, Device::CPU);
+        compare([&] { return Tensor::multinomial(many.to(Device::GPU), 5000, true); }, 0.0f);
+        compare([&] { return Tensor::multinomial(many.to(Device::GPU), 3000, false); }, 0.0f);
+        // Draws follow the weights, and never pick a zero weight.
+        const Tensor skewed = Tensor::from_vector({1.0f, 0.0f, 3.0f, 6.0f}, {4}, Device::CPU);
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            const auto picks = draw(backend, [&] { return Tensor::multinomial(skewed.to(Device::GPU), 100000, true); })
+                                   .to_vector_int64();
+            std::array<size_t, 4> counts{};
+            for (const int64_t pick : picks)
+                ++counts[static_cast<size_t>(pick)];
+            EXPECT_EQ(counts[1], 0u);
+            EXPECT_NEAR(counts[0] / 100000.0, 0.1, 0.01);
+            EXPECT_NEAR(counts[2] / 100000.0, 0.3, 0.01);
+            EXPECT_NEAR(counts[3] / 100000.0, 0.6, 0.01);
+            const auto distinct = draw(backend, [&] { return Tensor::multinomial(many.to(Device::GPU), 3000, false); })
+                                      .to_vector_int64();
+            EXPECT_EQ(std::set<int64_t>(distinct.begin(), distinct.end()).size(), distinct.size());
+            for (const int64_t pick : distinct)
+                EXPECT_NE(pick % 3, 0) << pick;
+        }
 
         const Tensor uniform = draw(GpuBackend::Metal, [] { return Tensor::rand({100000}, Device::GPU); });
         EXPECT_NEAR(uniform.mean().item(), 0.5f, 0.01f);

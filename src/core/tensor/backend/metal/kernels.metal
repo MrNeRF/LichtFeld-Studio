@@ -1148,6 +1148,114 @@ kernel void reduce(device const uchar* input_buffer [[buffer(0)]],
 }
 
 // ---------------------------------------------------------------------------
+// Indexed extrema along the middle axis of an (outer, reduce, inner) view.
+// Each candidate becomes a 64-bit key whose largest value is the CPU loop's
+// choice: the high word orders values (inverted for the minimum), a NaN at
+// position 0 sits above every number and later NaNs above that; the low word
+// is the inverted position, so ties keep the first. kOp bit 0 picks the
+// maximum; kOp >> 1 picks the pass: 0 a thread folds a chunk of one output's
+// line, 1 a SIMD group folds a chunk of one contiguous line, 2 a SIMD group
+// folds one output's chunk keys. With one chunk the first passes finish the output themselves.
+
+struct ArgExtremeParams {
+    uint outer;
+    uint reduce;
+    uint inner;
+    uint chunk;
+    uint chunks;
+    uint padding[3];
+};
+
+static ulong arg_extreme_key(float value, uint position) {
+    uint bits = as_type<uint>(value);
+    uint order;
+    if ((bits & 0x7fffffffu) > 0x7f800000u) {
+        order = position == 0 ? 0xfffffffeu : 0xffffffffu;
+    } else {
+        if ((bits & 0x7fffffffu) == 0u)
+            bits = 0u; // -0 ties +0, as the CPU's strict comparison does.
+        order = (bits & 0x80000000u) != 0u ? ~bits : bits | 0x80000000u;
+        if ((kOp & 1u) == 0u)
+            order = ~order;
+    }
+    return (ulong(order) << 32) | ulong(~position);
+}
+
+static ulong arg_extreme_simdgroup(ulong key) {
+    for (ushort offset = 16; offset > 0; offset /= 2) {
+        const uint2 halves = as_type<uint2>(key);
+        key = max(key, as_type<ulong>(uint2(simd_shuffle_down(halves.x, offset), simd_shuffle_down(halves.y, offset))));
+    }
+    return key;
+}
+
+static void arg_extreme_finish(device const float* input, device float* values, device long* indices,
+                               constant ArgExtremeParams& params, uint output, ulong key) {
+    const uint position = ~uint(key);
+    const uint outer_index = output / params.inner;
+    const ulong base = ulong(outer_index) * params.reduce * params.inner + (output - outer_index * params.inner);
+    values[output] = input[base + ulong(position) * params.inner];
+    indices[output] = long(position);
+}
+
+kernel void arg_extreme(device const float* input [[buffer(0)]],
+                        device ulong* keys [[buffer(1)]],
+                        device float* values [[buffer(2)]],
+                        device long* indices [[buffer(3)]],
+                        constant ArgExtremeParams& params [[buffer(4)]],
+                        uint thread_index [[thread_index_in_threadgroup]],
+                        uint2 group [[threadgroup_position_in_grid]],
+                        ushort lane [[thread_index_in_simdgroup]],
+                        ushort simdgroup [[simdgroup_index_in_threadgroup]]) {
+    const uint pass = kOp >> 1;
+    const uint outputs = params.outer * params.inner;
+    if (pass == 1) {
+        const uint row = group.x * (kReduceThreads / 32) + simdgroup;
+        if (row >= params.outer)
+            return;
+        const ulong base = ulong(row) * params.reduce;
+        const uint end = min(params.reduce, (group.y + 1) * params.chunk);
+        ulong best = 0;
+        for (uint position = group.y * params.chunk + lane; position < end; position += 32)
+            best = max(best, arg_extreme_key(input[base + position], position));
+        best = arg_extreme_simdgroup(best);
+        if (lane != 0)
+            return;
+        if (params.chunks == 1)
+            arg_extreme_finish(input, values, indices, params, row, best);
+        else
+            keys[ulong(group.y) * outputs + row] = best;
+        return;
+    }
+    if (pass == 2) {
+        const uint output = group.x * (kReduceThreads / 32) + simdgroup;
+        if (output >= outputs)
+            return;
+        ulong best = 0;
+        for (uint chunk = lane; chunk < params.chunks; chunk += 32)
+            best = max(best, keys[ulong(chunk) * outputs + output]);
+        best = arg_extreme_simdgroup(best);
+        if (lane == 0)
+            arg_extreme_finish(input, values, indices, params, output, best);
+        return;
+    }
+    const uint output = group.x * kReduceThreads + thread_index;
+    if (output >= outputs)
+        return;
+    ulong best = 0;
+    const uint outer_index = output / params.inner;
+    const ulong base = ulong(outer_index) * params.reduce * params.inner + (output - outer_index * params.inner);
+    const uint end = min(params.reduce, (group.y + 1) * params.chunk);
+#pragma unroll(8)
+    for (uint position = group.y * params.chunk; position < end; ++position)
+        best = max(best, arg_extreme_key(input[base + ulong(position) * params.inner], position));
+    if (params.chunks == 1)
+        arg_extreme_finish(input, values, indices, params, output, best);
+    else
+        keys[ulong(group.y) * outputs + output] = best;
+}
+
+// ---------------------------------------------------------------------------
 // Counts over a threadgroup grid-stride, ported from count.slang. kOp picks
 // the match: 0 nonzero bytes, 1 nonzero floats, 2 NaN (flag), 3 infinity
 // (flag). Threadgroups add their tallies to one zeroed counter.
@@ -1820,9 +1928,12 @@ kernel void radix_sort(device uchar* values_buffer [[buffer(0)]],
 // counter i and the seed as key, so every element draws an independent,
 // reproducible 128-bit block. kOp: 0 uniform [first, second), 1
 // bernoulli(first), 2 randint [low, high), 3 normal(first, second), 4
-// multinomial with replacement over kOp 8's running sums, 5 Gumbel keys for
-// sampling without replacement (the host sorts them), 7 weight statistics
-// (scaled sum, invalid flag, scale) in one threadgroup, 8 the running sums.
+// multinomial with replacement over the running sums of kOp 8 and 9, 5 Gumbel
+// keys for sampling without replacement (the host sorts them), 7 weight
+// statistics (maximum, invalid flag) in one threadgroup, 8 running sums of the
+// scaled weights within blocks of kSumBlock, a thread per block, 9 the blocks'
+// offsets and the total, in one thread. Vulkan's random.slang adds the same
+// sums in the same order, so both draw the same samples.
 
 struct RandomParams {
     ulong output_offset;
@@ -1840,6 +1951,7 @@ struct RandomParams {
 };
 
 constant float kUnitScale = 1.0f / 16777216.0f;
+constant uint kSumBlock = 1024;
 constant float kTwoPi = 6.28318530717958647692f;
 
 static uint4 philox_draw(ulong index, ulong seed) {
@@ -1894,49 +2006,38 @@ kernel void random_op(device uchar* output_buffer [[buffer(0)]],
         threadgroup_barrier(mem_flags::mem_threadgroup);
         maximum = simd_max(lane < kReduceThreads / 32 ? shared_values[lane] : 0.0f);
         invalid = simd_or(lane < kReduceThreads / 32 ? shared_flags[lane] : 0u);
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-        // Scale the weights so their maximum sits near 2^0 before summing.
-        const uint exponent = min(max((as_type<uint>(maximum) >> 23) & 255u, 1u), 253u);
-        const float scale = as_type<float>((254u - exponent) << 23);
-        float sum = 0.0f;
-        for (uint i = thread_index; i < params.count; i += kReduceThreads)
-            sum += weights[i] * scale;
-        sum = simd_sum(sum);
-        if (lane == 0)
-            shared_values[simdgroup] = sum;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-        sum = simd_sum(lane < kReduceThreads / 32 ? shared_values[lane] : 0.0f);
         if (thread_index == 0) {
-            ((device float*)output)[0] = sum;
+            ((device float*)output)[0] = maximum;
             ((device uint*)output)[1] = invalid;
-            ((device float*)output)[2] = scale;
         }
         return;
     }
+    const uint blocks = (params.count + kSumBlock - 1) / kSumBlock;
     if (kOp == 8) {
-        // The scaled weights' running sum into keys, in category order, so
-        // each draw's search sees exactly the sums a linear scan adds up. One
-        // SIMD group loads 32 weights at a time, the next 32 in flight.
-        if (index >= 32)
+        // The weights, scaled by a power of two (exact), summed in order
+        // within the block.
+        if (index >= blocks)
             return;
-        float cumulative = 0.0f;
-        float next = lane < params.count ? weights[lane] * params.first : 0.0f;
-        for (uint base = 0; base < params.count; base += 32) {
-            const float scaled = next;
-            const uint ahead = base + 32 + lane;
-            next = ahead < params.count ? weights[ahead] * params.first : 0.0f;
-            // Each lane adds the chunk's weights in order up to its own;
-            // lanes past the end add zeros, which leave the sum unchanged.
-            float running = cumulative;
-#pragma unroll
-            for (ushort j = 0; j < 32; ++j) {
-                const float weight = simd_shuffle(scaled, j);
-                running = j <= lane ? running + weight : running;
-            }
-            if (base + lane < params.count)
-                keys[base + lane] = running;
-            cumulative = simd_shuffle(running, ushort(31));
+        const uint end = min(params.count, (index + 1) * kSumBlock);
+        float running = 0.0f;
+        for (uint i = index * kSumBlock; i < end; ++i) {
+            running += weights[i] * params.first;
+            keys[i] = running;
         }
+        return;
+    }
+    if (kOp == 9) {
+        // Each block's offset is the running sum of the block totals before
+        // it; the running sum of category i is its block's offset plus its
+        // sum within the block, which never decreases along the categories.
+        if (index != 0)
+            return;
+        float offset = 0.0f;
+        for (uint block = 0; block < blocks; ++block) {
+            keys[params.count + block] = offset;
+            offset += keys[min(params.count, (block + 1) * kSumBlock) - 1];
+        }
+        keys[params.count + blocks] = offset;
         return;
     }
     if (index >= (kOp == 4 ? params.sample_count : params.count))
@@ -1959,18 +2060,32 @@ kernel void random_op(device uchar* output_buffer [[buffer(0)]],
         const float radius = sqrt(-2.0f * log(float((words.x >> 8) + 1u) * kUnitScale));
         ((device float*)output)[index] = params.first + params.second * (radius * cos(kTwoPi * unit_interval(words.y)));
     } else if (kOp == 4) {
-        // The first category whose running sum (kOp 8) exceeds the draw; the
-        // sums never decrease, so a binary search finds it.
-        const float u = unit_interval(words.x) * params.total;
-        uint low = 0, high = params.count;
+        // The first category whose running sum exceeds the draw: a binary
+        // search over the blocks' last sums, then within the block.
+        device const float* offsets = keys + params.count;
+        const float u = unit_interval(words.x) * offsets[blocks];
+        uint low = 0, high = blocks;
         while (low < high) {
             const uint middle = (low + high) / 2;
-            if (u < keys[middle])
+            if (u < offsets[middle] + keys[min(params.count, (middle + 1) * kSumBlock) - 1])
                 high = middle;
             else
                 low = middle + 1;
         }
-        ((device long*)output)[index] = long(min(low, params.count - 1));
+        uint sample = params.count - 1;
+        if (low < blocks) {
+            const float offset = offsets[low];
+            uint first = low * kSumBlock, last = min(params.count, (low + 1) * kSumBlock);
+            while (first < last) {
+                const uint middle = (first + last) / 2;
+                if (u < offset + keys[middle])
+                    last = middle;
+                else
+                    first = middle + 1;
+            }
+            sample = min(first, params.count - 1);
+        }
+        ((device long*)output)[index] = long(sample);
     } else {
         const float u = min(max(unit_interval(words.x), 1e-10f), 1.0f - 1e-10f);
         keys[index] = log(max(weights[index], 1e-10f)) - log(-log(u));

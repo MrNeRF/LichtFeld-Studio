@@ -38,13 +38,15 @@ uint64_t logicalOffset(uint linear, uniform FillParameters parameters)
 {
     if (parameters.strided == 0u)
         return uint64_t(linear);
+    // Every extent divides the uint32 count, so the walk divides in 32 bits.
     uint64_t offset = 0;
     for (uint reverse = 0; reverse < parameters.rank; ++reverse)
     {
         const uint dimension = parameters.rank - reverse - 1;
-        const uint64_t coordinate = uint64_t(linear) % parameters.dims[dimension];
-        linear = uint(uint64_t(linear) / parameters.dims[dimension]);
-        offset += coordinate * parameters.strides[dimension];
+        const uint extent = uint(parameters.dims[dimension]);
+        const uint coordinate = linear % extent;
+        linear /= extent;
+        offset += uint64_t(coordinate) * parameters.strides[dimension];
     }
     return offset;
 }

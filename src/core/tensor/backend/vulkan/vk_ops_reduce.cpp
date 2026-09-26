@@ -578,6 +578,82 @@ namespace lfs::core::internal {
         return count_matches(3, input, count) != 0;
     }
 
+    // Long lines split into chunks whose keys a second pass folds, so a
+    // single argmax over a large tensor still fills the GPU. Long contiguous
+    // lines fold in a workgroup for coalesced loads; others a thread each.
+    bool VulkanBackendOps::arg_extreme(const StorageRef input, const StorageRef values,
+                                       const StorageRef indices, const ArgExtremeProgram& program,
+                                       ExecContext) {
+        LFS_FACADE_TRACE(arg_extreme);
+        LFS_ASSERT_MSG(input.dtype == DataType::Float32,
+                       std::format("Vulkan arg_extreme requires Float32 input, got {}", dtype_name(input.dtype)));
+        const size_t outputs = program.outer * program.inner;
+        if (outputs == 0)
+            return true;
+        LFS_ASSERT_MSG(program.reduce > 0, "arg_extreme cannot reduce an empty dimension");
+        struct ArgExtremePush {
+            uint64_t input_address;
+            uint64_t keys_address;
+            uint64_t values_address;
+            uint64_t indices_address;
+            uint32_t outer, reduce, inner, chunk, chunks, padding;
+        };
+        static_assert(sizeof(ArgExtremePush) == 56);
+        const auto context = acquire_vulkan_context();
+        const size_t max_groups = context->caps().max_workgroup_count[0];
+        const size_t output_groups = (outputs + kLocalSize - 1) / kLocalSize;
+        LFS_ASSERT_MSG(output_groups <= max_groups,
+                       std::format("Vulkan arg_extreme needs {} workgroups, the device allows {}", output_groups,
+                                   max_groups));
+        const bool rows = program.inner == 1 && program.reduce >= kLocalSize && program.outer <= max_groups;
+        constexpr size_t kTargetThreads = 65536, kMaxChunks = 1024;
+        const size_t lanes = rows ? kLocalSize : 1;
+        const size_t minimum_chunk = rows ? kLocalSize * 4 : 64;
+        const size_t chunks = std::clamp<size_t>(
+            std::min(kTargetThreads / (outputs * lanes), (program.reduce + minimum_chunk - 1) / minimum_chunk), 1,
+            std::min<size_t>(kMaxChunks, context->caps().max_workgroup_count[1]));
+        std::optional<vk::ScopedAllocation> keys;
+        if (chunks > 1)
+            keys.emplace(*context, chunks * outputs * sizeof(uint64_t));
+        const ArgExtremePush push{
+            .input_address = address(input),
+            .keys_address = keys ? address(keys->storage()) : 0,
+            .values_address = address(values),
+            .indices_address = address(indices),
+            .outer = checked_u32(program.outer, "Vulkan arg_extreme outer size exceeds uint32"),
+            .reduce = checked_u32(program.reduce, "Vulkan arg_extreme size exceeds uint32"),
+            .inner = checked_u32(program.inner, "Vulkan arg_extreme inner size exceeds uint32"),
+            .chunk = static_cast<uint32_t>((program.reduce + chunks - 1) / chunks),
+            .chunks = static_cast<uint32_t>(chunks),
+        };
+        checked_u32(outputs, "Vulkan arg_extreme output count exceeds uint32");
+        const auto dispatch = [&](const uint32_t pass, const size_t groups_x, const size_t groups_y) {
+            const std::array constants{program.maximum ? 1u : 0u, pass};
+            const VulkanPipeline& pipeline =
+                context->pipelines().specialized("arg_extreme", sizeof(ArgExtremePush), constants);
+            std::vector<StorageRef> reads{input}, writes{values, indices};
+            if (keys) {
+                (pass == 2 ? reads : writes).push_back(keys->storage());
+            }
+            context->recorders().record(reads, writes, [&](const VkCommandBuffer command) {
+                vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
+                vkCmdPushConstants(command, pipeline.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+                vkCmdDispatch(command, static_cast<uint32_t>(groups_x), static_cast<uint32_t>(groups_y), 1);
+            });
+        };
+        if (rows)
+            dispatch(1, program.outer, chunks);
+        else
+            dispatch(0, output_groups, chunks);
+        if (chunks > 1) {
+            LFS_ASSERT_MSG(outputs <= max_groups,
+                           std::format("Vulkan arg_extreme folds {} outputs, the device allows {} workgroups", outputs,
+                                       max_groups));
+            dispatch(2, outputs, 1);
+        }
+        return true;
+    }
+
     void VulkanBackendOps::cumsum(
         const StorageRef data, const StridedLayout& layout, const int dim, ExecContext) {
         LFS_FACADE_TRACE(cumsum);

@@ -18,14 +18,23 @@
 #include "diagnostics/vram_profiler.hpp"
 
 #include <cstddef>
+#include <string_view>
 
 namespace lfs::core {
     class SplatData;
-}
+    class Tensor;
+} // namespace lfs::core
 
 namespace lfs::training {
 
     class AdamOptimizer;
+
+    [[nodiscard]] std::size_t tensor_reserved_bytes(const core::Tensor& tensor);
+    void record_vram_current(std::string_view scope, std::string_view label, std::size_t bytes,
+                             bool publish_zero = false,
+                             diagnostics::VramAllocationMethod method = diagnostics::VramAllocationMethod::External);
+    void record_vram_tensor(std::string_view scope, std::string_view label, const core::Tensor& tensor);
+    void record_rasterizer_arena_disclosure(std::string_view scope);
 
     /// Sum logical device bytes for params / Adam / densify aux / live grads.
     [[nodiscard]] diagnostics::TrainingStateLedger

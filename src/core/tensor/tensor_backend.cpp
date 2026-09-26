@@ -981,6 +981,10 @@ namespace lfs::core {
         return default_gpu_backend() != GpuBackend::Metal;
     }
 
+    bool tensor_backend_needs_vulkan_interop() {
+        return default_gpu_backend() == GpuBackend::CUDA;
+    }
+
     bool vulkan_backend_adopted() {
 #ifdef LFS_TENSOR_VULKAN
         return internal::vulkan_context_adopted();

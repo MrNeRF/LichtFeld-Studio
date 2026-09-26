@@ -9,6 +9,7 @@
 #include "core/tensor.hpp"
 #include "core/tensor_cuda_interop.hpp"
 #include "cuda_backend_test.hpp"
+#include "fast_raster_test_helpers.hpp"
 #include "io/formats/ply.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/morton_reorder.hpp"
@@ -17,7 +18,6 @@
 #include "training/kernels/normal_consistency_loss.hpp"
 #include "training/kernels/normal_loss.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
-#include "training/rasterization/fast_rasterizer.hpp"
 #include "training/strategies/mrnf.hpp"
 #include <algorithm>
 #include <cmath>
@@ -2457,50 +2457,49 @@ TEST_F(NormalLossRegression, AxisTieAndGrazingBranchDiscontinuities) {
     EXPECT_GT(std::sqrt(grazing_jump), 1.5);
 }
 
-TEST(FastGSFusedAdamSettingsTest, CarriesPerSplatMeanStepAndFarMask) {
-    const bool mask[] = {false, true, false, true};
-    FastGSFusedAdamState settings;
-    settings.enabled = true;
-    settings.means.n_primitives = 4;
-    settings.per_splat_mean_step = true;
-    settings.mean_step_median_extent = 0.25f;
-    settings.mean_step_r_min = 1.5f;
-    settings.mean_step_r_max = 42.0f;
-    settings.mean_step_far_mask = mask;
-    settings.mean_step_far_mask_n = 4;
+class FastGSFusedAdamSettingsTest : public lfs::test::CudaBackendTest {};
 
-    const auto fused = make_fastgs_fused_adam_settings(settings);
-
-    EXPECT_TRUE(fused.enabled);
-    EXPECT_TRUE(fused.per_splat_mean_step);
-    EXPECT_EQ(fused.mean_step_far_mask, mask);
-    EXPECT_EQ(fused.mean_step_far_mask_n, 4);
-    EXPECT_FLOAT_EQ(fused.mean_step_median_extent, 0.25f);
-    EXPECT_FLOAT_EQ(fused.mean_step_r_min, 1.5f);
-    EXPECT_FLOAT_EQ(fused.mean_step_r_max, 42.0f);
-}
-
-TEST(FastGSFusedAdamSettingsTest, BoundsFarMaskCountToLiveRows) {
-    const bool mask[] = {false, true, false, true};
-    FastGSFusedAdamState settings;
-    settings.means.n_primitives = 4;
-    settings.per_splat_mean_step = true;
-    settings.mean_step_far_mask = mask;
-    for (const int count : {-1, 0, 2, 4, 8}) {
+TEST_F(FastGSFusedAdamSettingsTest, CarriesPerSplatMeanStepAndBoundsFarMask) {
+    auto parameter = Tensor::zeros({4, 3}, Device::GPU);
+    Tensor none;
+    lfs::gpu_ops::BackwardAdamParam group{
+        .parameter = parameter,
+        .packed_moments = none,
+        .joint_bounds = none,
+        .sh_value_bounds = none,
+        .frozen_mask = none,
+        .crop_damping_mask = none,
+        .screen_share = none,
+        .primitives = 4,
+        .enabled = true};
+    for (const size_t count : {0u, 2u, 4u, 8u}) {
         SCOPED_TRACE(count);
-        settings.mean_step_far_mask_n = count;
-        const auto fused = make_fastgs_fused_adam_settings(settings);
-        EXPECT_EQ(fused.mean_step_far_mask, count > 0 ? mask : nullptr);
-        EXPECT_EQ(fused.mean_step_far_mask_n, std::clamp(count, 0, 4));
+        auto mask = Tensor::zeros({count}, Device::GPU, DataType::Bool);
+        lfs::gpu_ops::BackwardAdam settings{
+            .groups = {group, group, group, group, group, group},
+            .scale_reg_loss = none,
+            .opacity_reg_loss = none,
+            .sparsity_sigmoid = none,
+            .sparsity_z = none,
+            .sparsity_u = none,
+            .far_mask = mask,
+            .median_extent = 0.25f,
+            .r_min = 1.5f,
+            .r_max = 42.0f,
+            .per_splat_mean_step = true};
+        const auto fused = fast_adam_settings(settings);
+        EXPECT_TRUE(fused.enabled);
+        EXPECT_TRUE(fused.per_splat_mean_step);
+        EXPECT_EQ(fused.mean_step_far_mask, count > 0 ? mask.ptr<bool>() : nullptr);
+        EXPECT_EQ(fused.mean_step_far_mask_n, std::min(count, size_t{4}));
+        EXPECT_FLOAT_EQ(fused.mean_step_median_extent, 0.25f);
+        EXPECT_FLOAT_EQ(fused.mean_step_r_min, 1.5f);
+        EXPECT_FLOAT_EQ(fused.mean_step_r_max, 42.0f);
+        settings.groups[0].primitives = 0;
+        EXPECT_EQ(fast_adam_settings(settings).mean_step_far_mask_n, 0);
+        settings.per_splat_mean_step = false;
+        EXPECT_FALSE(fast_adam_settings(settings).per_splat_mean_step);
     }
-    settings.means.n_primitives = 0;
-    EXPECT_EQ(make_fastgs_fused_adam_settings(settings).mean_step_far_mask, nullptr);
-    EXPECT_EQ(make_fastgs_fused_adam_settings(settings).mean_step_far_mask_n, 0);
-    settings.means.n_primitives = 4;
-    settings.mean_step_far_mask = nullptr;
-    EXPECT_EQ(make_fastgs_fused_adam_settings(settings).mean_step_far_mask_n, 0);
-    settings.per_splat_mean_step = false;
-    EXPECT_FALSE(make_fastgs_fused_adam_settings(settings).per_splat_mean_step);
 }
 
 class NormalLossHunt : public lfs::test::CudaBackendTest {};

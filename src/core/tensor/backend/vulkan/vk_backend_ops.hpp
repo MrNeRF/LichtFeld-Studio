@@ -52,6 +52,7 @@ namespace lfs::core::internal {
         size_t count_nonzero_float(StorageRef, size_t, ExecContext) override;
         bool has_nan(StorageRef, size_t, ExecContext) override;
         bool has_inf(StorageRef, size_t, ExecContext) override;
+        bool arg_extreme(StorageRef, StorageRef, StorageRef, const ArgExtremeProgram&, ExecContext) override;
         void cumsum(StorageRef, const StridedLayout&, int, ExecContext) override;
         void sort_1d(StorageRef, StorageRef, size_t, const SortProgram&, ExecContext) override;
         void sort_2d(StorageRef, StorageRef, const SortProgram&, ExecContext) override;
@@ -120,7 +121,6 @@ namespace lfs::core::internal {
                     const StridedLayout&, const IndexProgram&, ExecContext) override;
         void gather_fused_unary(StorageRef, StorageRef, StorageRef, PointwiseOp,
                                 const IndexProgram&, ExecContext) override;
-        void take(StorageRef, StorageRef, StorageRef, const IndexProgram&, ExecContext) override;
         void index_select(StorageRef, StorageRef, StorageRef, const StridedLayout&,
                           const IndexProgram&, ExecContext) override;
         void scatter(StorageRef, StorageRef, StorageRef, const StridedLayout&,

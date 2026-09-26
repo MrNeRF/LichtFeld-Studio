@@ -84,14 +84,83 @@ namespace lfs::core::internal {
             return static_cast<size_t>((last >> 2) - (start >> 2) + 1ull);
         }
 
+        // The same walk with size-1 axes dropped and each axis merged into the
+        // one outside it when the two are contiguous together.
+        StridedLayout merge_axes(const StridedLayout& layout) {
+            StridedLayout merged{.element_count = layout.element_count};
+            for (size_t axis = 0; axis < layout.rank; ++axis) {
+                if (layout.dims[axis] == 1)
+                    continue;
+                if (merged.rank > 0 &&
+                    merged.strides[merged.rank - 1] == layout.strides[axis] * layout.dims[axis]) {
+                    merged.dims[merged.rank - 1] *= layout.dims[axis];
+                    merged.strides[merged.rank - 1] = layout.strides[axis];
+                    continue;
+                }
+                merged.dims[merged.rank] = layout.dims[axis];
+                merged.strides[merged.rank++] = layout.strides[axis];
+            }
+            if (merged.rank == 0) {
+                merged.rank = 1;
+                merged.dims[0] = 1;
+                merged.strides[0] = 1;
+            }
+            return merged;
+        }
+
+        struct TransposePush {
+            uint64_t input_address;
+            uint64_t output_address;
+            uint32_t rows;
+            uint32_t columns;
+            uint32_t input_stride;
+            uint32_t padding;
+        };
+        static_assert(sizeof(TransposePush) == 32);
+
+        // A transposed 2D view (rows contiguous, columns strided) gathered
+        // through shared tiles; false when the layout is not one.
+        bool dispatch_transpose(const StorageRef input, const StorageRef output, const StridedLayout& layout,
+                                const bool scatter, const DataType input_dtype, const DataType output_dtype) {
+            const size_t element = dtype_size(output_dtype);
+            if (scatter || input_dtype != output_dtype || layout.rank != 2 || layout.strides[0] != 1 ||
+                layout.strides[1] == 1 || layout.dims[0] == 1 || (element != 2 && element != 4 && element != 8))
+                return false;
+            const auto context = acquire_vulkan_context();
+            const size_t groups_x = (layout.dims[0] + 31) / 32, groups_y = (layout.dims[1] + 31) / 32;
+            if (groups_x > context->caps().max_workgroup_count[0] || groups_y > context->caps().max_workgroup_count[1])
+                return false;
+            const TransposePush push{
+                .input_address = address(input),
+                .output_address = address(output),
+                .rows = checked_u32(layout.dims[0], "Vulkan transpose rows exceed uint32"),
+                .columns = checked_u32(layout.dims[1], "Vulkan transpose columns exceed uint32"),
+                .input_stride = checked_u32(layout.strides[1], "Vulkan transpose stride exceeds uint32"),
+            };
+            const std::array constants{static_cast<uint32_t>(element)};
+            const VulkanPipeline& pipeline =
+                context->pipelines().specialized("transpose_2d", sizeof(TransposePush), constants);
+            const std::array reads{input};
+            const std::array writes{output};
+            context->recorders().record(reads, writes, [&](const VkCommandBuffer command) {
+                vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
+                vkCmdPushConstants(command, pipeline.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+                vkCmdDispatch(command, static_cast<uint32_t>(groups_x), static_cast<uint32_t>(groups_y), 1);
+            });
+            return true;
+        }
+
         void dispatch_strided(const StorageRef input, const StorageRef output,
-                              const StridedLayout& layout, const bool scatter,
+                              const StridedLayout& source_layout, const bool scatter,
                               const DataType input_dtype,
                               const DataType output_dtype) {
-            if (layout.element_count == 0) {
+            if (source_layout.element_count == 0) {
                 return;
             }
-            validate_layout(layout);
+            validate_layout(source_layout);
+            const StridedLayout layout = merge_axes(source_layout);
+            if (dispatch_transpose(input, output, layout, scatter, input_dtype, output_dtype))
+                return;
             StridedPush push{
                 .input_address = address(input),
                 .output_address = address(output),

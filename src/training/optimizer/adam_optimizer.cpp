@@ -509,30 +509,6 @@ namespace lfs::training {
         return static_cast<size_t>(splat_data_.size());
     }
 
-    const bool* AdamOptimizer::frozen_mask_ptr() const {
-        return frozen_mask_.is_valid() && frozen_mask_.numel() > 0
-                   ? frozen_mask_.ptr<bool>()
-                   : nullptr;
-    }
-
-    int AdamOptimizer::frozen_mask_size() const {
-        return frozen_mask_.is_valid()
-                   ? static_cast<int>(frozen_mask_.numel())
-                   : 0;
-    }
-
-    const bool* AdamOptimizer::crop_damping_mask_ptr() const {
-        return crop_damping_mask_.is_valid() && crop_damping_mask_.numel() > 0
-                   ? crop_damping_mask_.ptr<bool>()
-                   : nullptr;
-    }
-
-    int AdamOptimizer::crop_damping_mask_size() const {
-        return crop_damping_mask_.is_valid()
-                   ? static_cast<int>(crop_damping_mask_.numel())
-                   : 0;
-    }
-
     void AdamOptimizer::alloc_quantized_state(ParamType type, AdamParamState& state,
                                               const lfs::core::Tensor& param,
                                               size_t moment_capacity, size_t prim_capacity) {
@@ -788,7 +764,7 @@ namespace lfs::training {
         state.grad.set_stream(execution_stream);
     }
 
-    FastGSFusedAdamState AdamOptimizer::prepare_fastgs_fused_adam(
+    lfs::gpu_ops::BackwardAdam AdamOptimizer::prepare_fastgs_fused_adam(
         const int iteration,
         const cudaStream_t execution_stream) {
         validate_mean_step_far_mask();
@@ -806,14 +782,31 @@ namespace lfs::training {
             splat_data_._max_screen_share.sync_to_stream(execution_stream);
         }
 
-        FastGSFusedAdamState fused;
-        fused.enabled = true;
-        fused.beta1 = static_cast<float>(config_.beta1);
-        fused.beta2 = static_cast<float>(config_.beta2);
-        fused.eps = static_cast<float>(config_.eps);
+        const float beta1 = static_cast<float>(config_.beta1);
+        const float beta2 = static_cast<float>(config_.beta2);
+        const float eps = static_cast<float>(config_.eps);
+
+        // Scalars only. Tensor references are bound after every group has finished
+        // growing, so a later init_state rehash cannot dangle them.
+        struct GroupFields {
+            int joint_bits = 0;
+            int value_bits = 0;
+            int value_cells = 0;
+            int primitives = 0;
+            int elements = 0;
+            int attributes = 0;
+            float step_size = 0.f;
+            float bc2_sqrt_rcp = 1.f;
+            float frozen_lr_scale = 0.f;
+            float cropbox_lr_scale = 1.f;
+            float screen_share_limit = 0.f;
+            float screen_share_penalty = 0.f;
+            bool enabled = false;
+            bool bind_sh_bounds = false;
+        };
 
         auto prepare_param = [&](ParamType type, const int n_attributes, const bool update_enabled) {
-            FastGSFusedAdamParam out;
+            GroupFields out;
             auto& param = get_param(type);
             if (!param.is_valid() || param.numel() == 0 || n_attributes <= 0) {
                 return out;
@@ -958,74 +951,98 @@ namespace lfs::training {
             const double bias_correction1_rcp = 1.0 / (1.0 - std::pow(config_.beta1, next_step));
             const double bias_correction2_sqrt_rcp = 1.0 / std::sqrt(1.0 - std::pow(config_.beta2, next_step));
 
-            // SH value quant stores u16 codes as Float16 bit-patterns; use data_ptr.
-            // Generation-checked when exportable-backed so a pre-grow raw pointer
-            // cannot survive into the fused step.
-            out.param = static_cast<float*>(
-                lfs::core::resolve_exportable_device_ptr(param));
-            out.n_primitives = static_cast<int>(splat_data_.size());
-            out.joint_packed = state.exp_avg.ptr<uint8_t>();
-            out.joint_bounds = state.joint_bounds.ptr<float>();
+            // Generation-checked when exportable-backed. Poisoned storage still
+            // throws here, before later groups allocate. The fused step re-resolves.
+            (void)lfs::core::resolve_exportable_device_ptr(param);
+            out.primitives = static_cast<int>(splat_data_.size());
             out.joint_bits = state.joint_bits;
-            out.frozen_mask = frozen_mask_ptr();
-            out.frozen_mask_size = frozen_mask_size();
             out.frozen_lr_scale = frozen_lr_scale_;
-            out.crop_damping_mask = crop_damping_mask_ptr();
-            out.crop_damping_mask_size = crop_damping_mask_size();
             out.cropbox_lr_scale = cropbox_lr_scale_;
-            out.n_elements = static_cast<int>(param.numel());
-            out.n_attributes = n_attributes;
+            out.elements = static_cast<int>(param.numel());
+            out.attributes = n_attributes;
             out.step_size = static_cast<float>(get_param_lr(type) * bias_correction1_rcp);
-            out.bias_correction2_sqrt_rcp = static_cast<float>(bias_correction2_sqrt_rcp);
+            out.bc2_sqrt_rcp = static_cast<float>(bias_correction2_sqrt_rcp);
             out.enabled = true;
             return out;
         };
 
-        fused.means = prepare_param(ParamType::Means, 3, true);
-        fused.sh0 = prepare_param(ParamType::Sh0, 3, true);
+        GroupFields means = prepare_param(ParamType::Means, 3, true);
+        GroupFields sh0 = prepare_param(ParamType::Sh0, 3, true);
         // shN is laid out in swizzled float4 order (vksplat shAt). The fused-backward kernel
         // indexes it via shAt(p, k) float4-slot reads/writes, not via
         // primitive_idx*n_attributes+offset, so n_attributes is informational only.
         const auto active_rest = static_cast<uint32_t>(splat_data_.active_sh_coeffs_rest());
         const auto layout_rest = static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest());
-        fused.shN = prepare_param(ParamType::ShN,
-                                  static_cast<int>(lfs::core::sh_float4_slots_for_rest(layout_rest) * 4u),
-                                  active_rest > 0 && iteration > SH_WARMUP_ITERATIONS);
-        // Generation-checked q16 fetch — never bake a pre-grow exportable pointer.
-        if (fused.shN.enabled && splat_data_.shN_value_quantized() &&
+        GroupFields shN = prepare_param(ParamType::ShN,
+                                        static_cast<int>(lfs::core::sh_float4_slots_for_rest(layout_rest) * 4u),
+                                        active_rest > 0 && iteration > SH_WARMUP_ITERATIONS);
+        // Generation-checked q16 fetch. The neutral group binds the live tensors;
+        // fast_adam_group re-resolves their pointers for the kernel.
+        if (shN.enabled && splat_data_.shN_value_quantized() &&
             splat_data_.shN_value_bounds().is_valid()) {
             splat_data_.shN_value_bounds().set_stream(execution_stream);
             const auto q16 = lfs::core::resolve_q16_bind_ptrs(splat_data_);
-            fused.shN.param = const_cast<float*>(q16.codes);
-            fused.shN.sh_value_bounds = const_cast<float*>(q16.bounds);
-            fused.shN.sh_value_bits = 16;
-            fused.shN.sh_value_n_cells = static_cast<int>(q16.n_cells_per_prim);
-        } else if (fused.shN.enabled && splat_data_.shN_ieee_f16()) {
+            shN.value_bits = 16;
+            shN.value_cells = static_cast<int>(q16.n_cells_per_prim);
+            shN.bind_sh_bounds = q16.bounds != nullptr;
+        } else if (shN.enabled && splat_data_.shN_ieee_f16()) {
             // IEEE f16 float4-swizzle (exportable GUI): half load/store, no bounds.
-            fused.shN.param = static_cast<float*>(
-                lfs::core::resolve_exportable_device_ptr(splat_data_.shN()));
-            fused.shN.sh_value_bits = 16;
-            fused.shN.sh_value_bounds = nullptr;
-            fused.shN.sh_value_n_cells = 0;
+            (void)lfs::core::resolve_exportable_device_ptr(splat_data_.shN());
+            shN.value_bits = 16;
+            shN.value_cells = 0;
+            shN.bind_sh_bounds = false;
         }
-        fused.scaling = prepare_param(ParamType::Scaling, 3, true);
+        GroupFields scaling = prepare_param(ParamType::Scaling, 3, true);
         refresh_screen_share_buffer();
-        fused.scaling.screen_share_max = screen_share_max_;
-        fused.scaling.screen_share_n = screen_share_n_;
-        fused.scaling.screen_share_limit = screen_share_limit_;
-        fused.scaling.screen_share_penalty = screen_share_penalty_;
-        fused.rotation = prepare_param(ParamType::Rotation, 4, true);
-        fused.opacity = prepare_param(ParamType::Opacity, 1, true);
-        fused.per_splat_mean_step = per_splat_mean_step_;
-        fused.mean_step_median_extent = mean_step_median_extent_;
-        fused.mean_step_r_min = mean_step_r_min_;
-        fused.mean_step_r_max = mean_step_r_max_;
-        fused.mean_step_far_mask = mean_step_far_mask_;
-        fused.mean_step_far_mask_n = mean_step_far_mask_n_;
+        scaling.screen_share_limit = screen_share_limit_;
+        scaling.screen_share_penalty = screen_share_penalty_;
+        GroupFields rotation = prepare_param(ParamType::Rotation, 4, true);
+        GroupFields opacity = prepare_param(ParamType::Opacity, 1, true);
 
-        fused.enabled = fused.means.enabled || fused.sh0.enabled || fused.shN.enabled ||
-                        fused.scaling.enabled || fused.rotation.enabled || fused.opacity.enabled;
-        return fused;
+        auto bind_group = [&](ParamType type, const GroupFields& src) {
+            auto* state = get_state_mutable(type);
+            return lfs::gpu_ops::BackwardAdamParam{
+                .parameter = get_param(type),
+                .packed_moments = state && state->exp_avg.is_valid() ? state->exp_avg : absent_,
+                .joint_bounds = state && state->joint_bounds.is_valid() ? state->joint_bounds : absent_,
+                .sh_value_bounds = src.bind_sh_bounds ? splat_data_.shN_value_bounds() : absent_,
+                .frozen_mask = frozen_mask_,
+                .crop_damping_mask = crop_damping_mask_,
+                .screen_share = type == ParamType::Scaling ? splat_data_._max_screen_share : absent_,
+                .joint_bits = src.joint_bits,
+                .value_bits = src.value_bits,
+                .value_cells = src.value_cells,
+                .primitives = src.primitives,
+                .elements = src.elements,
+                .attributes = src.attributes,
+                .step_size = src.step_size,
+                .bc2_sqrt_rcp = src.bc2_sqrt_rcp,
+                .frozen_lr_scale = src.frozen_lr_scale,
+                .cropbox_lr_scale = src.cropbox_lr_scale,
+                .screen_share_limit = src.screen_share_limit,
+                .screen_share_penalty = src.screen_share_penalty,
+                .enabled = src.enabled,
+            };
+        };
+
+        return {
+            .groups = {bind_group(ParamType::Means, means), bind_group(ParamType::Scaling, scaling),
+                       bind_group(ParamType::Rotation, rotation), bind_group(ParamType::Opacity, opacity),
+                       bind_group(ParamType::Sh0, sh0), bind_group(ParamType::ShN, shN)},
+            .scale_reg_loss = absent_,
+            .opacity_reg_loss = absent_,
+            .sparsity_sigmoid = absent_,
+            .sparsity_z = absent_,
+            .sparsity_u = absent_,
+            .far_mask = mean_step_far_mask_storage_,
+            .beta1 = beta1,
+            .beta2 = beta2,
+            .eps = eps,
+            .median_extent = mean_step_median_extent_,
+            .r_min = mean_step_r_min_,
+            .r_max = mean_step_r_max_,
+            .per_splat_mean_step = per_splat_mean_step_,
+        };
     }
 
     void AdamOptimizer::commit_fastgs_fused_adam(const int iteration) {

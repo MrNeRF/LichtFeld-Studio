@@ -76,6 +76,9 @@ namespace lfs::core {
     // device. Metal tensors reach the window through their own interop, so
     // adopting a device for them would only allocate an unused context.
     LFS_CORE_API bool tensor_backend_shares_vulkan_device();
+    // Whether this session's tensors live on another API's device, which the
+    // window's Vulkan device reaches through external memory and semaphores.
+    LFS_CORE_API bool tensor_backend_needs_vulkan_interop();
 
     // A Vulkan-backend tensor's storage for a consumer on the same device. The
     // buffer is valid while keep_alive is held; pending_timeline_value is the

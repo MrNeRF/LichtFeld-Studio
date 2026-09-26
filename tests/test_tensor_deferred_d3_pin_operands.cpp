@@ -13,8 +13,8 @@
 #include "core/tensor/internal/lazy_executor.hpp"
 #include "core/tensor/internal/lazy_ir.hpp"
 #include "cuda_backend_test.hpp"
+#include "fast_raster_test_helpers.hpp"
 #include "io/formats/colmap.hpp"
-#include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/gsplat/Ops.h"
 #include "training/rasterization/gsplat_rasterizer.hpp"
 
@@ -267,7 +267,6 @@ namespace {
     }
 
     TEST_F(DeferredD3PinTest, ThreadCacheReleaseLeavesNothingToFree) {
-        bool fast_released = false;
         bool gsplat_released = false;
         bool intersect_released = false;
         bool nan_check_released = false;
@@ -297,7 +296,6 @@ namespace {
                     throw std::runtime_error("worker render synchronization failed");
                 }
 
-                fast_released = lfs::training::release_fast_rasterizer_thread_local_caches();
                 gsplat_released = lfs::training::release_gsplat_rasterizer_thread_local_caches();
                 intersect_released = gsplat_lfs::release_intersect_thread_local_cache();
                 nan_check_released = lfs::core::tensor_ops::release_nan_check_thread_buffers();
@@ -310,7 +308,6 @@ namespace {
         if (worker_error) {
             std::rethrow_exception(worker_error);
         }
-        EXPECT_TRUE(fast_released);
         EXPECT_TRUE(gsplat_released);
         EXPECT_TRUE(intersect_released);
         EXPECT_TRUE(nan_check_released);

@@ -15,6 +15,7 @@
 #include "core/tensor_backend.hpp"
 #if LFS_BUILD_TRAINER
 #include "depth_anchor_cache.hpp"
+#include "lfs/training/ops/geometry_cuda.hpp"
 #endif
 
 #include "io/loader.hpp"
@@ -1016,7 +1017,7 @@ namespace {
                 };
             }
 
-            const auto anchors = lfs::training::computeRawDepthAnchors(means, scene->cameras, -1, 0, progress);
+            const auto anchors = lfs::training::computeRawDepthAnchors(lfs::training::cuda_geometry_ops(), means, scene->cameras, -1, 0, progress);
 
             if (anchor_bar && !anchor_bar->is_completed()) {
                 anchor_bar->set_progress(100);

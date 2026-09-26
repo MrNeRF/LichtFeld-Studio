@@ -9,7 +9,7 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "cuda_backend_test.hpp"
-#include "training/rasterization/fast_rasterizer.hpp"
+#include "fast_raster_test_helpers.hpp"
 #include "training/rasterization/fastgs/rasterization/include/rasterization_api.h"
 
 #include <algorithm>
@@ -180,10 +180,9 @@ TEST_F(FastGSSortBufferTest, ReleasePreflightPointerAttrsAreSkipped) {
 }
 
 // ---------------------------------------------------------------------------
-// VRAM audit — arena-owned sort storage + raster output buffers release on join.
-// Spawn N worker threads that each run a few FastGS forwards, explicitly
-// release the remaining renderer caches, then join.
-// cudaMemGetInfo free must return near the pre-spawn baseline.
+// VRAM audit — arena-owned sort storage plus raster output buffers.
+// Worker threads run a few FastGS forwards and drop the owned saved state
+// before joining. cudaMemGetInfo free must return near the pre-spawn baseline.
 // ---------------------------------------------------------------------------
 class FastGSThreadLocalCacheTest : public lfs::test::CudaBackendTest {};
 
@@ -194,10 +193,11 @@ TEST_F(FastGSThreadLocalCacheTest, SpawnRenderJoinReturnsVram) {
         auto cam = make_camera(64, 64);
         auto splat = make_splat(64);
         auto bg = Tensor::zeros({3}, Device::GPU);
-        auto r = fast_rasterize_forward(cam, *splat, bg, 0, 0, 0, 0, false);
-        ASSERT_TRUE(r.has_value()) << lfs::format_for_developer(r.error());
-        r->second.release_forward_context();
-        release_fast_rasterizer_thread_local_caches();
+        {
+            auto r = fast_rasterize_forward(cam, *splat, bg, 0, 0, 0, 0, false);
+            ASSERT_TRUE(r.has_value()) << lfs::format_for_developer(r.error());
+            r->second.release_forward_context();
+        }
         cleanup_arena();
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     }
@@ -227,9 +227,6 @@ TEST_F(FastGSThreadLocalCacheTest, SpawnRenderJoinReturnsVram) {
                 }
                 r->second.release_forward_context();
             }
-            // Explicit TLS release (mirrors training-thread shutdown). Without
-            // this, join relies solely on TLS destructors — which must also free.
-            release_fast_rasterizer_thread_local_caches();
             if (cudaDeviceSynchronize() != cudaSuccess) {
                 failures.fetch_add(1);
             }

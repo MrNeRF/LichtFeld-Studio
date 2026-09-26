@@ -4,7 +4,6 @@
 
 #include "metrics.hpp"
 #include "../kernels/normal_loss.hpp"
-#include "../rasterization/fast_rasterizer.hpp"
 #include "../rasterization/gsplat_rasterizer.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
@@ -19,6 +18,7 @@
 #include "core/tensor_backend.hpp"
 #include "eval_mask.hpp"
 #include "io/cuda/image_format_kernels.cuh"
+#include "lfs/training/ops/fast_cuda.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include <algorithm>
 #include <cassert>
@@ -825,8 +825,20 @@ namespace lfs::training {
                 r_output = gsplat_rasterize(*cam, splatData_mutable, background,
                                             1.0f, false, GsplatRenderMode::RGB, true);
             } else {
-                r_output = fast_rasterize(*cam, splatData_mutable, background,
-                                          _params.optimization.mip_filter, {}, render_normal);
+                if (_fast_ops == nullptr) {
+                    _fast_ops = lfs::training::training_ops(lfs::core::default_gpu_backend()).fast;
+                }
+                if (_fast_ops == nullptr) {
+                    throw std::runtime_error(*lfs::training::unavailable_training_family(
+                        lfs::core::default_gpu_backend(), lfs::training::Family::Fast));
+                }
+                lfs::gpu_ops::FastSaved& saved = _fast_saved != nullptr ? *_fast_saved : _fast_owned;
+                if (!saved.backend) {
+                    saved.backend = _fast_ops->create();
+                }
+                r_output = lfs::training::fast_infer(
+                    *_fast_ops, saved, *cam, splatData_mutable, background,
+                    _params.optimization.mip_filter, {}, render_normal);
             }
             const auto render_raw = r_output.image.is_valid()
                                         ? r_output.image.clamp(0.0f, 1.0f)
