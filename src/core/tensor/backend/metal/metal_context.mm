@@ -367,9 +367,12 @@ namespace lfs::core::internal::metal {
         std::array<uint32_t, 4> record{};
         {
             std::lock_guard lock(fault_mutex_);
+            // Oldest batch first, so the first fault in submission order wins,
+            // such as a failed index cast before the scatter that uses it.
             const uint64_t done = completed();
-            for (size_t slot = 0; slot < kMaxFrames; ++slot) {
-                if (fault_serials_[slot] != 0 && fault_serials_[slot] <= done)
+            for (uint64_t serial = done >= kMaxFrames ? done - kMaxFrames + 1 : 1; serial <= done; ++serial) {
+                const size_t slot = serial % kMaxFrames;
+                if (fault_serials_[slot] == serial)
                     consume_fault_locked(slot);
             }
             record = std::exchange(fault_record_, {});
