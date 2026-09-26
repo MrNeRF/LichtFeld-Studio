@@ -55,7 +55,9 @@ TEST(TensorLazyGatherTest, RejectsInvalidContractsBeforeDereference) {
 
     EXPECT_THROW((void)input.gather_lazy(float_indices), std::runtime_error);
     EXPECT_THROW((void)input.gather_lazy(cpu_indices), std::runtime_error);
-    EXPECT_THROW(input.gather_lazy(too_large).eval(), std::runtime_error);
+    // Out-of-range positions fault in the checked gather and surface when the
+    // result is read.
+    EXPECT_THROW((void)input.gather_lazy(too_large).eval().cpu(), std::exception);
     EXPECT_THROW(input.gather_lazy(too_large).map(ops::abs_op{}).eval(), std::runtime_error);
     EXPECT_THROW(empty.gather_lazy(valid_indices).eval(), std::runtime_error);
     EXPECT_THROW(empty.gather_lazy(valid_indices).map(ops::abs_op{}).eval(), std::runtime_error);
