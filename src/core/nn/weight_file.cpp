@@ -68,7 +68,7 @@ namespace lfs::core::nn {
             }
             return cpu;
         }
-        if (default_gpu_backend() == GpuBackend::Vulkan) {
+        if (default_gpu_backend() != GpuBackend::CUDA) {
             auto tensor = Tensor::empty(found->shape, device, found->dtype);
             if (found->length > 0) {
                 TensorUpload upload;

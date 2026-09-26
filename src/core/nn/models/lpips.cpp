@@ -78,7 +78,7 @@ namespace lfs::core::nn::models {
                 slot = src.clone();
                 return;
             }
-            if (gpu_backend_of(src) == GpuBackend::Vulkan) {
+            if (gpu_backend_of(src) != GpuBackend::CUDA) {
                 slot.copy_from(src);
                 return;
             }
@@ -201,7 +201,7 @@ namespace lfs::core::nn::models {
         const std::size_t tile_w = std::min<std::size_t>(static_cast<std::size_t>(width), tile);
         const std::size_t crop_h = std::min<std::size_t>(static_cast<std::size_t>(height), tile_h + 2 * kTileHalo);
         const std::size_t crop_w = std::min<std::size_t>(static_cast<std::size_t>(width), tile_w + 2 * kTileHalo);
-        if (compute_ == DataType::Float32 || gpu_backend_of(weights_.begin()->second) == GpuBackend::Vulkan)
+        if (compute_ == DataType::Float32 || gpu_backend_of(weights_.begin()->second) != GpuBackend::CUDA)
             return crop_h * crop_w * kExactBytesPerPixel;
 
 #if LFS_HAS_CUDA

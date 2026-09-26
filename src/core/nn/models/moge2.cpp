@@ -60,7 +60,7 @@ namespace lfs::core::nn::models {
                 slot = src.clone();
                 return;
             }
-            if (gpu_backend_of(src) == GpuBackend::Vulkan) {
+            if (gpu_backend_of(src) != GpuBackend::CUDA) {
                 slot.copy_from(src);
                 return;
             }
@@ -93,7 +93,7 @@ namespace lfs::core::nn::models {
                 out_dims.push_back(a.shape()[i] + b.shape()[i]);
             }
             LFS_ASSERT_MSG(dim >= 0, "concat tensors have identical shapes");
-            if (gpu_backend_of(a) == GpuBackend::Vulkan) {
+            if (gpu_backend_of(a) != GpuBackend::CUDA) {
                 return Tensor::cat({a, b}, dim);
             }
             auto a_c = a.contiguous();

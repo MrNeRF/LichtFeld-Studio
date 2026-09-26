@@ -60,7 +60,7 @@ namespace lfs::core::nn::models {
                 slot = src.clone();
                 return;
             }
-            if (gpu_backend_of(src) == GpuBackend::Vulkan) {
+            if (gpu_backend_of(src) != GpuBackend::CUDA) {
                 slot.copy_from(src);
                 return;
             }
@@ -100,7 +100,7 @@ namespace lfs::core::nn::models {
             }
             LFS_ASSERT_MSG(leading == 1,
                            "concat_contiguous requires unit leading dims (batch=1)");
-            if (gpu_backend_of(a) == GpuBackend::Vulkan) {
+            if (gpu_backend_of(a) != GpuBackend::CUDA) {
                 return Tensor::cat({a, b}, dim);
             }
             auto a_c = a.contiguous();
