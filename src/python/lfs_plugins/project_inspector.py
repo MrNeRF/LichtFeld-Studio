@@ -359,9 +359,7 @@ def dialog_model(
     """Return a stable model for each Inspector dialog kind."""
     kind = str(kind or "")
     base = {"kind": kind, "name": str(value(entry, "name", "") or ""), "path": str(value(entry, "path", "") or "")}
-    if kind == "export_as":
-        base.update({"format": "sog", "destination": "", "formats": ["ply", "sog", "ssog", "spz"]})
-    elif kind == "update_thumbnail":
+    if kind == "update_thumbnail":
         sources = thumbnail_source_options(
             entry,
             dataset_available=dataset_available,

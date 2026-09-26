@@ -5283,6 +5283,30 @@ def test_asset_menu_button_is_left_to_native_keyboard_activation(panel_module, k
     assert event.stopped is False
 
 
+@pytest.mark.parametrize("active", [True, False])
+def test_export_as_shows_the_file_export_panel(panel_module, monkeypatch, active):
+    from lfs_plugins import file_menu
+
+    panel = panel_module.AssetManagerPanel()
+    project = _project(path="/projects/scene.licht")
+    panel._asset_index = _index(assets={project["id"]: project})
+    panel._set_asset_selection({project["id"]}, cursor=project["id"], anchor=project["id"])
+    monkeypatch.setattr(panel_module.AssetManagerPanel, "_is_active_project_path", staticmethod(lambda _path: active))
+    opened = []
+
+    def open_project(path, *, then=None, **_kwargs):
+        opened.append(path)
+        then()
+
+    monkeypatch.setattr(file_menu, "open_project_with_confirmation", open_project)
+
+    panel.open_project_operation(None, None, ["export_as"])
+
+    assert opened == ([] if active else ["/projects/scene.licht"])
+    assert panel_module.lf._test_state.enabled[-1] == ("lfs.export", True)
+    assert panel._dialog_asset_id != project["id"]
+
+
 @pytest.mark.parametrize("action", ["gallery:publish", "project:export_as"])
 def test_removed_asset_context_action_does_not_reuse_previous_selection(
     panel_module, action

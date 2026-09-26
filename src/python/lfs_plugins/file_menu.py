@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """File menu implementation using Blender-style operators."""
 
+from collections.abc import Callable
 from pathlib import Path, PureWindowsPath
 import threading
 import uuid
@@ -127,8 +128,12 @@ def open_project_with_confirmation(
     path: str,
     *,
     keep_asset_manager_open: bool = False,
+    then: Callable[[], None] | None = None,
 ) -> None:
-    """Open a known project path through the standard project-switch flow."""
+    """Open a known project path through the standard project-switch flow.
+
+    then runs after the project opened; it does not run when the user cancels or the open fails.
+    """
     title = lf.ui.tr("menu.file.open_project")
 
     def _open_checked(stop_training: bool) -> None:
@@ -142,6 +147,9 @@ def open_project_with_confirmation(
         except Exception as exc:
             message = str(exc).strip() or title
             lf.ui.message_dialog(title, message, "error")
+            return
+        if then is not None:
+            then()
 
     confirm_discard_work_then(title, _open_checked)
 
