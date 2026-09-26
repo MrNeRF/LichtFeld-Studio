@@ -181,6 +181,7 @@ namespace lfs::core::internal {
         switch (output.dtype) {
         case DataType::Float32: launch.template operator()<float>(); break;
         case DataType::Int32: launch.template operator()<int32_t>(); break;
+        case DataType::Int64: launch.template operator()<int64_t>(); break;
         case DataType::UInt8:
         case DataType::Bool: launch.template operator()<uint8_t>(); break;
         default: LFS_ASSERT_MSG(false, "unsupported CUDA index_copy dtype");

@@ -143,6 +143,24 @@ namespace lfs::core {
             return result;
         }
 
+        // A one-element tensor of `indices`' dtype on its backend, for
+        // comparisons and arithmetic that scalar overloads reject for Int64.
+        Tensor index_constant_like(const Tensor& indices, const size_t value) {
+            LFS_ASSERT_MSG(value <= static_cast<size_t>(std::numeric_limits<int>::max()),
+                           std::format("index constant {} exceeds the Int32 kernel range", value));
+            return internal::copy_to_backend(
+                       Tensor::from_vector(std::vector<int>{static_cast<int>(value)}, {1}, Device::CPU),
+                       gpu_backend_of(indices).value())
+                .to(indices.dtype());
+        }
+
+        // Negative GPU positions counted from the end of `extent`, in the
+        // index's own dtype so Int64 values are not truncated first.
+        Tensor wrap_negative_indices(const Tensor& indices, const size_t extent) {
+            return Tensor::where(indices.lt(index_constant_like(indices, 0)),
+                                 indices.add(index_constant_like(indices, extent)), indices);
+        }
+
         // §1.9 host entry: reject graph capture before checked index_select launch.
         void reject_index_select_graph_capture(const Tensor& tensor, const cudaStream_t stream) {
             if (internal::backend_ops_for(tensor).stream_is_capturing(internal::ExecContext{stream})) {
@@ -1465,8 +1483,7 @@ namespace lfs::core {
         const bool is_row_assignment = (idx_same_device.ndim() == 1 && vals_same_device.ndim() >= 2 && ndim() >= 2);
         // GPU scatters check their targets in the index kernels, as
         // index_copy_ does; the host path validates the indices up front.
-        const bool gpu_scatter = device_ == Device::GPU && (dtype_ == DataType::Float32 ||
-                                                           dtype_ == DataType::Int32 || dtype_ == DataType::Bool);
+        const bool gpu_scatter = device_ == Device::GPU;
         if (is_row_assignment) {
             std::vector<size_t> expected_shape = shape_.dims();
             expected_shape[0] = idx.numel();
@@ -1489,22 +1506,22 @@ namespace lfs::core {
 
         // The backends' index_copy scatters rows, and single elements of a
         // flat view. Duplicate targets keep the last value on Vulkan and
-        // Metal; CUDA keeps any one of them. Int64 destinations, which CUDA's
-        // index_copy lacks, stay on the host path below.
+        // Metal; CUDA keeps any one of them.
         if (gpu_scatter) {
             LFS_ASSERT_MSG(numel() <= static_cast<size_t>(std::numeric_limits<int32_t>::max()),
                            std::format("index_put_ addresses its destination in int32 (numel={})", numel()));
-            Tensor idx_int32 = (idx_same_device.dtype() == DataType::Int32)
-                                   ? idx_same_device
-                                   : idx_same_device.to(DataType::Int32);
+            Tensor idx_int32 = idx_same_device;
             Tensor destination = *this;
             Tensor source = vals_same_device;
             if (!is_row_assignment) {
                 // Flat positions, negative ones counted from the end.
-                const int wrap = static_cast<int>(numel());
-                idx_int32 = Tensor::where(idx_int32.lt(0), idx_int32.add(wrap), idx_int32).reshape({-1});
+                idx_int32 = wrap_negative_indices(idx_int32, numel()).reshape({-1});
                 destination = reshape({-1});
                 source = vals_same_device.reshape({-1});
+            }
+            if (idx_int32.dtype() == DataType::Int64) {
+                // Checked narrowing: a truncated index could land in range.
+                idx_int32 = index_cast(idx_int32, destination, destination.shape()[0]);
             }
             pin_operands({&destination, &idx_int32, &source});
             const cudaStream_t execution_stream =
@@ -1520,105 +1537,46 @@ namespace lfs::core {
             return *this;
         }
 
-        // Helper lambda for index_put_ implementation (fallback path)
+        // CPU destinations.
         auto index_put_impl = [&]<typename DataT, typename IndexT>() {
-            if (device_ == Device::GPU) {
-                // Fallback: CPU roundtrip for complex cases
-                auto cpu_tensor = to(Device::CPU);
-                auto cpu_idx = idx_same_device.to(Device::CPU);
-                auto cpu_vals = vals_same_device.to(Device::CPU);
+            pin_operands({this, &idx_same_device, &vals_same_device});
+            DataT* data = ptr<DataT>();
+            const IndexT* indices = idx_same_device.ptr<IndexT>();
+            const DataT* values = vals_same_device.ptr<DataT>();
 
-                pin_operands({&cpu_tensor, &cpu_idx, &cpu_vals});
-                DataT* data = cpu_tensor.ptr<DataT>();
-                const IndexT* indices = cpu_idx.ptr<IndexT>();
-                const DataT* values = cpu_vals.ptr<DataT>();
+            if (is_row_assignment) {
+                // Row-wise assignment
+                size_t row_size = 1;
+                for (size_t i = 1; i < ndim(); ++i) {
+                    row_size *= shape()[i];
+                }
+                size_t num_rows = shape()[0];
 
-                if (is_row_assignment) {
-                    size_t row_size = 1;
-                    for (size_t i = 1; i < cpu_tensor.ndim(); ++i) {
-                        row_size *= cpu_tensor.shape()[i];
+                for (size_t i = 0; i < idx_same_device.numel(); ++i) {
+                    IndexT row_idx = indices[i];
+                    if (row_idx < 0)
+                        row_idx += num_rows;
+                    if (row_idx >= 0 && row_idx < static_cast<IndexT>(num_rows)) {
+                        // Copy entire row
+                        std::memcpy(data + row_idx * row_size,
+                                    values + i * row_size,
+                                    row_size * sizeof(DataT));
                     }
-                    const size_t num_rows = cpu_tensor.shape()[0];
-
-                    for (size_t i = 0; i < cpu_idx.numel(); ++i) {
-                        IndexT row_idx = indices[i];
-                        if (row_idx < 0)
-                            row_idx += num_rows;
-                        if (row_idx >= 0 && row_idx < static_cast<IndexT>(num_rows)) {
-                            std::memcpy(data + row_idx * row_size,
-                                        values + i * row_size,
-                                        row_size * sizeof(DataT));
-                        }
-                    }
-                } else {
-                    const size_t num_elements = cpu_tensor.numel();
-                    for (size_t i = 0; i < cpu_idx.numel(); ++i) {
+                }
+            } else {
+                // Element-wise assignment
+                size_t num_elements = numel();
+                std::for_each(
+                    std::views::iota(size_t(0), idx.numel()).begin(),
+                    std::views::iota(size_t(0), idx.numel()).end(),
+                    [data, indices, values, num_elements](size_t i) {
                         IndexT pos = indices[i];
                         if (pos < 0)
                             pos += num_elements;
                         if (pos >= 0 && pos < static_cast<IndexT>(num_elements)) {
                             data[pos] = values[i];
                         }
-                    }
-                }
-
-                // Copy back preserving capacity
-                auto result = internal::copy_to_backend(
-                    cpu_tensor, gpu_backend_of(*this).value());
-                const size_t bytes = numel() * dtype_size(dtype_);
-                const cudaStream_t execution_stream =
-                    prepare_inputs_for_stream({this, &result}, stream());
-                internal::backend_ops_for(*this).copy_device_to_device(
-                    internal::CopyRequest{
-                        .src = internal::storage_ref(result),
-                        .dst = internal::storage_ref(*this),
-                        .bytes = bytes,
-                        .synchronous = false,
-                        .context = internal::ExecContext{execution_stream},
                     });
-                internal::backend_ops_for(*this).synchronize_stream(
-                    internal::ExecContext{stream()});
-            } else {
-                // CPU implementation
-                pin_operands({this, &idx_same_device, &vals_same_device});
-                DataT* data = ptr<DataT>();
-                const IndexT* indices = idx_same_device.ptr<IndexT>();
-                const DataT* values = vals_same_device.ptr<DataT>();
-
-                if (is_row_assignment) {
-                    // Row-wise assignment
-                    size_t row_size = 1;
-                    for (size_t i = 1; i < ndim(); ++i) {
-                        row_size *= shape()[i];
-                    }
-                    size_t num_rows = shape()[0];
-
-                    for (size_t i = 0; i < idx_same_device.numel(); ++i) {
-                        IndexT row_idx = indices[i];
-                        if (row_idx < 0)
-                            row_idx += num_rows;
-                        if (row_idx >= 0 && row_idx < static_cast<IndexT>(num_rows)) {
-                            // Copy entire row
-                            std::memcpy(data + row_idx * row_size,
-                                        values + i * row_size,
-                                        row_size * sizeof(DataT));
-                        }
-                    }
-                } else {
-                    // Element-wise assignment
-                    size_t num_elements = numel();
-                    std::for_each(
-                        std::views::iota(size_t(0), idx.numel()).begin(),
-                        std::views::iota(size_t(0), idx.numel()).end(),
-                        [data, indices, values, num_elements](size_t i) {
-                            IndexT pos = indices[i];
-                            if (pos < 0)
-                                pos += num_elements;
-                            if (pos >= 0 && pos < static_cast<IndexT>(num_elements)) {
-                                data[pos] = values[i];
-                            }
-                        });
-                }
             }
         };
 
@@ -1696,6 +1654,33 @@ namespace lfs::core {
                     });
             }
 
+            if (device_ == Device::GPU) {
+                LFS_ASSERT_MSG(indices[0].numel() == indices[1].numel() && indices[0].numel() == vals.numel(),
+                               std::format("multi-index index_put_ needs equal lengths (rows={}, columns={}, values={})",
+                                           indices[0].numel(), indices[1].numel(), vals.numel()));
+                assert_index_tensor_host_only(indices[0], shape_[0], "index_put_ row index");
+                assert_index_tensor_host_only(indices[1], shape_[1], "index_put_ column index");
+                // Each pair becomes a flat position. Pairs outside their own
+                // axis point past the end, so the checked flat scatter faults
+                // on them instead of writing into a neighbouring row.
+                const auto in_range = [](const Tensor& index, const size_t extent) {
+                    const Tensor wrapped = wrap_negative_indices(index.reshape({-1}), extent);
+                    const Tensor valid = wrapped.ge(index_constant_like(wrapped, 0))
+                                             .logical_and(wrapped.lt(index_constant_like(wrapped, extent)));
+                    return std::pair{wrapped, valid};
+                };
+                const auto [rows, rows_valid] = in_range(indices[0], shape_[0]);
+                const auto [columns, columns_valid] = in_range(indices[1], shape_[1]);
+                const Tensor valid = rows_valid.logical_and(columns_valid);
+                // Narrowing is safe once invalid pairs are replaced by zero.
+                const Tensor row32 = Tensor::where(valid, rows, index_constant_like(rows, 0)).to(DataType::Int32);
+                const Tensor column32 =
+                    Tensor::where(valid, columns, index_constant_like(columns, 0)).to(DataType::Int32);
+                const Tensor flat = Tensor::where(valid, row32.mul(static_cast<int>(shape_[1])).add(column32),
+                                                  index_constant_like(row32, numel()));
+                return index_put_(flat, vals.reshape({-1}));
+            }
+
             assert_index_tensor(indices[0], shape_[0], "index_put_ row index", true, true);
             assert_index_tensor(indices[1], shape_[1], "index_put_ column index", true, true);
 
@@ -1736,62 +1721,24 @@ namespace lfs::core {
             const int64_t row_bound = static_cast<int64_t>(shape_[0]);
             const int64_t col_bound = static_cast<int64_t>(shape_[1]);
 
-            if (device_ == Device::GPU) {
-                Tensor row_idx_cpu = row_idx.to(Device::CPU);
-                Tensor col_idx_cpu = col_idx.to(Device::CPU);
-                pin_operands({this, &row_idx_cpu, &col_idx_cpu, &vals_same_device});
-                const int64_t* row_ptr = row_idx_cpu.ptr<int64_t>();
-                const int64_t* col_ptr = col_idx_cpu.ptr<int64_t>();
-                const internal::StorageRef values_storage =
-                    internal::storage_ref(vals_same_device);
-                const internal::StorageRef destination_storage =
-                    internal::storage_ref(*this);
+            pin_operands({this, &row_idx, &col_idx, &vals_same_device});
+            const int64_t* row_ptr = row_idx.ptr<int64_t>();
+            const int64_t* col_ptr = col_idx.ptr<int64_t>();
+            const float* val_ptr = vals_same_device.ptr<float>();
+            float* data_ptr = ptr<float>();
 
-                for (size_t i = 0; i < row_idx.numel(); ++i) {
-                    int64_t r = row_ptr[i];
-                    int64_t c = col_ptr[i];
-
-                    if (r < 0)
-                        r += row_bound;
-                    if (c < 0)
-                        c += col_bound;
-
-                    if (r >= 0 && r < row_bound &&
-                        c >= 0 && c < col_bound) {
-                        const size_t offset = static_cast<size_t>(r) * strides_[0] +
-                                              static_cast<size_t>(c) * strides_[1];
-                        internal::backend_ops_for(*this).copy_device_to_device(
-                            internal::CopyRequest{
-                                .src = internal::offset_storage_ref(
-                                    values_storage, i * sizeof(float)),
-                                .dst = internal::offset_storage_ref(
-                                    destination_storage, offset * sizeof(float)),
-                                .bytes = sizeof(float),
-                                .synchronous = false,
-                                .context = internal::ExecContext{stream()},
-                            });
-                    }
-                }
-            } else {
-                pin_operands({this, &row_idx, &col_idx, &vals_same_device});
-                const int64_t* row_ptr = row_idx.ptr<int64_t>();
-                const int64_t* col_ptr = col_idx.ptr<int64_t>();
-                const float* val_ptr = vals_same_device.ptr<float>();
-                float* data_ptr = ptr<float>();
-
-                for (size_t i = 0; i < row_idx.numel(); ++i) {
-                    int64_t r = row_ptr[i];
-                    int64_t c = col_ptr[i];
-                    if (r < 0)
-                        r += row_bound;
-                    if (c < 0)
-                        c += col_bound;
-                    if (r >= 0 && r < row_bound &&
-                        c >= 0 && c < col_bound) {
-                        const size_t offset = static_cast<size_t>(r) * strides_[0] +
-                                              static_cast<size_t>(c) * strides_[1];
-                        data_ptr[offset] = val_ptr[i];
-                    }
+            for (size_t i = 0; i < row_idx.numel(); ++i) {
+                int64_t r = row_ptr[i];
+                int64_t c = col_ptr[i];
+                if (r < 0)
+                    r += row_bound;
+                if (c < 0)
+                    c += col_bound;
+                if (r >= 0 && r < row_bound &&
+                    c >= 0 && c < col_bound) {
+                    const size_t offset = static_cast<size_t>(r) * strides_[0] +
+                                          static_cast<size_t>(c) * strides_[1];
+                    data_ptr[offset] = val_ptr[i];
                 }
             }
             return *this;

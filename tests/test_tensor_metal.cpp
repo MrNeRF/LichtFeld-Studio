@@ -500,7 +500,7 @@ namespace {
         const Tensor base = random_tensor(4 * 3, -5.0f, 5.0f, 90).reshape({4, 3});
         const Tensor flat_values = random_tensor(6, -5.0f, 5.0f, 91);
         const Tensor row_values = random_tensor(3 * 3, -5.0f, 5.0f, 92).reshape({3, 3});
-        for (const auto dtype : {DataType::Float32, DataType::Int32, DataType::Bool}) {
+        for (const auto dtype : {DataType::Float32, DataType::Int32, DataType::Bool, DataType::Int64}) {
             SCOPED_TRACE(static_cast<int>(dtype));
             const auto as = [&](const Tensor& t) { return dtype == DataType::Bool ? t.gt(0.0f) : t.to(dtype); };
             for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
@@ -533,6 +533,65 @@ namespace {
             EXPECT_THROW(
                 {
                     destination.index_put_(outside, Tensor::ones({2}, Device::GPU));
+                    (void)destination.cpu();
+                },
+                std::exception);
+        }
+    }
+
+    TEST_F(TensorMetal, PairAndWideIndexPutsStayOnTheDevice) {
+        const Tensor base = random_tensor(5 * 4, -1.0f, 1.0f, 100).reshape({5, 4});
+        const std::vector<int> rows = {0, -1, 3, 2, -5}, columns = {1, 3, -4, 0, 2};
+        const Tensor values = Tensor::from_vector({10.0f, 20.0f, 30.0f, 40.0f, 50.0f}, {5}, Device::CPU);
+        const auto wide = [](const std::vector<int64_t>& data) {
+            Tensor tensor = Tensor::empty({data.size()}, Device::CPU, DataType::Int64);
+            std::copy(data.begin(), data.end(), tensor.ptr<int64_t>());
+            return tensor;
+        };
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            SCOPED_TRACE(static_cast<int>(backend));
+            GpuBackendScope scope(backend);
+            for (const auto index_dtype : {DataType::Int32, DataType::Int64}) {
+                const Tensor row_index = Tensor::from_vector(rows, {rows.size()}, Device::CPU).to(index_dtype);
+                const Tensor column_index = Tensor::from_vector(columns, {columns.size()}, Device::CPU).to(index_dtype);
+                Tensor expected = base.clone();
+                expected.index_put_({row_index, column_index}, values);
+                Tensor actual = base.to(Device::GPU);
+                actual.index_put_({row_index.to(Device::GPU), column_index.to(Device::GPU)}, values.to(Device::GPU));
+                expect_close(actual, expected, 0.0f, 0.0f);
+            }
+            // Int64 flat positions, negative ones included, narrow only after wrapping.
+            Tensor flat_expected = base.clone();
+            flat_expected.index_put_(wide({19, -20, 7}), Tensor::from_vector({1.0f, 2.0f, 3.0f}, {3}, Device::CPU));
+            Tensor flat_actual = base.to(Device::GPU);
+            flat_actual.index_put_(wide({19, -20, 7}).to(Device::GPU),
+                                   Tensor::from_vector({1.0f, 2.0f, 3.0f}, {3}, Device::CPU).to(Device::GPU));
+            expect_close(flat_actual, flat_expected, 0.0f, 0.0f);
+
+            // Int64 destinations keep values wider than 32 bits.
+            Tensor wide_destination = wide(std::vector<int64_t>(6, 0)).to(Device::GPU);
+            wide_destination.index_put_(Tensor::from_vector(std::vector<int>{4, -6}, {2}, Device::CPU).to(Device::GPU),
+                                        wide({int64_t{1} << 40, -(int64_t{3} << 35)}).to(Device::GPU));
+            EXPECT_EQ(wide_destination.cpu().to_vector_int64(),
+                      (std::vector<int64_t>{-(int64_t{3} << 35), 0, 0, 0, int64_t{1} << 40, 0}));
+
+            // A column past its axis must not land in the next row, and an
+            // Int64 position past Int32 must not truncate into range.
+            EXPECT_THROW(
+                {
+                    Tensor destination = base.to(Device::GPU);
+                    destination.index_put_({Tensor::from_vector(std::vector<int>{0}, {1}, Device::CPU).to(Device::GPU),
+                                            Tensor::from_vector(std::vector<int>{4}, {1}, Device::CPU).to(Device::GPU)},
+                                           Tensor::ones({1}, Device::GPU));
+                    (void)destination.cpu();
+                },
+                std::exception);
+            EXPECT_THROW(
+                {
+                    Tensor destination = base.to(Device::GPU);
+                    destination.index_put_(wide({(int64_t{1} << 33) + 2}).to(Device::GPU), Tensor::ones({1}, Device::GPU));
                     (void)destination.cpu();
                 },
                 std::exception);

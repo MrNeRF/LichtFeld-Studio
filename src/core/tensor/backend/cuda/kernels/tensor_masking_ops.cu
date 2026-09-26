@@ -660,6 +660,12 @@ namespace lfs::core::tensor_ops {
         atomicAdd(dst, value);
     }
 
+    // CUDA has 64-bit atomicAdd only for unsigned; two's-complement addition matches.
+    template <>
+    __device__ inline void scatter_add<int64_t>(int64_t* dst, int64_t value) {
+        atomicAdd(reinterpret_cast<unsigned long long*>(dst), static_cast<unsigned long long>(value));
+    }
+
     template <>
     __device__ inline void scatter_add<uint8_t>(uint8_t* dst, uint8_t value) {
         const size_t address = reinterpret_cast<size_t>(dst);
@@ -882,6 +888,7 @@ namespace lfs::core::tensor_ops {
     template LFS_CORE_API void launch_scatter<float>(float*, const int*, const float*, const size_t*, const size_t*, size_t, int, size_t, int, cudaStream_t);
     template LFS_CORE_API void launch_scatter<int>(int*, const int*, const int*, const size_t*, const size_t*, size_t, int, size_t, int, cudaStream_t);
     template LFS_CORE_API void launch_scatter<uint8_t>(uint8_t*, const int*, const uint8_t*, const size_t*, const size_t*, size_t, int, size_t, int, cudaStream_t);
+    template LFS_CORE_API void launch_scatter<int64_t>(int64_t*, const int*, const int64_t*, const size_t*, const size_t*, size_t, int, size_t, int, cudaStream_t);
 
     template LFS_CORE_API void launch_index_add<float>(float*, const int*, const float*, const size_t*, size_t, int, size_t, cudaStream_t);
     template LFS_CORE_API void launch_index_add<int>(int*, const int*, const int*, const size_t*, size_t, int, size_t, cudaStream_t);
@@ -889,6 +896,7 @@ namespace lfs::core::tensor_ops {
     template LFS_CORE_API void launch_index_copy<float>(float*, const int*, const float*, const size_t*, size_t, int, size_t, cudaStream_t);
     template LFS_CORE_API void launch_index_copy<int>(int*, const int*, const int*, const size_t*, size_t, int, size_t, cudaStream_t);
     template LFS_CORE_API void launch_index_copy<uint8_t>(uint8_t*, const int*, const uint8_t*, const size_t*, size_t, int, size_t, cudaStream_t);
+    template LFS_CORE_API void launch_index_copy<int64_t>(int64_t*, const int*, const int64_t*, const size_t*, size_t, int, size_t, cudaStream_t);
 
     template LFS_CORE_API void launch_index_fill<float>(float*, const int*, float, const size_t*, size_t, int, size_t, cudaStream_t);
     template LFS_CORE_API void launch_index_fill<int>(int*, const int*, int, const size_t*, size_t, int, size_t, cudaStream_t);
