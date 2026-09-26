@@ -3,15 +3,18 @@
 
 #include "core/alloc_counter.hpp"
 #include "core/parameters.hpp"
+#include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "cuda_backend_test.hpp"
 #include "lfs/kernels/l1_loss.cuh"
 #include "lfs/kernels/ssim.cuh"
 #include "lfs/training/ops/photometric_cuda.hpp"
 #include "lfs/training/ops/registry.hpp"
+#include "training/metrics/metrics.hpp"
 
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
 #include <gtest/gtest.h>
 #include <vector>
 
@@ -102,6 +105,62 @@ TEST(TrainingOpsCapability, VulkanConfigurationIsRejectedBeforeAllocation) {
         params, lfs::core::GpuBackend::Metal, dependencies);
     ASSERT_TRUE(metal.has_value());
     EXPECT_EQ(metal->rfind("Metal training is unavailable for this configuration.", 0), 0u);
+    EXPECT_EQ(lfs::core::alloc_counter::delta_since(before), 0u);
+}
+
+TEST(TrainingOpsCapability, EvaluationWithoutPhotometricFamilyFailsBeforeAllocation) {
+    const auto metal = lfs::training::unavailable_training_family(
+        lfs::core::GpuBackend::Metal, lfs::training::Family::Photometric);
+    ASSERT_TRUE(metal.has_value());
+    EXPECT_EQ(
+        *metal,
+        "Metal training is unavailable for this configuration.\nMissing families: Photometric.");
+    const auto vulkan = lfs::training::unavailable_training_family(
+        lfs::core::GpuBackend::Vulkan, lfs::training::Family::Photometric);
+    ASSERT_TRUE(vulkan.has_value());
+    EXPECT_EQ(
+        *vulkan,
+        "Vulkan training is unavailable for this configuration.\nMissing families: Photometric.");
+    EXPECT_FALSE(lfs::training::unavailable_training_family(
+        lfs::core::GpuBackend::CUDA, lfs::training::Family::Photometric));
+
+    const auto backend = lfs::core::default_gpu_backend();
+    if (lfs::training::training_ops(backend).photometric != nullptr) {
+        return;
+    }
+    const auto expected = lfs::training::unavailable_training_family(
+        backend, lfs::training::Family::Photometric);
+    ASSERT_TRUE(expected.has_value());
+
+    const auto before = lfs::core::alloc_counter::snapshot();
+    {
+        lfs::training::SSIM ssim(true);
+        const Tensor predicted = Tensor::zeros({1, 3, 4, 4}, Device::CPU);
+        const Tensor target = Tensor::zeros({1, 3, 4, 4}, Device::CPU);
+        try {
+            (void)ssim.compute(predicted, target);
+            FAIL() << "SSIM compute should reject a backend without Photometric";
+        } catch (const std::runtime_error& error) {
+            EXPECT_EQ(std::string(error.what()), *expected);
+        }
+    }
+    {
+        const auto output = std::filesystem::temp_directory_path() / "lfs-tbo7-missing-photometric";
+        std::filesystem::remove_all(output);
+        lfs::core::param::TrainingParameters params;
+        params.optimization.enable_eval = true;
+        params.dataset.output_path = output;
+        lfs::training::MetricsEvaluator evaluator(params);
+        lfs::core::SplatData splat;
+        lfs::core::Tensor background;
+        try {
+            (void)evaluator.evaluate(1, splat, nullptr, background);
+            FAIL() << "evaluation should reject a backend without Photometric";
+        } catch (const std::runtime_error& error) {
+            EXPECT_EQ(std::string(error.what()), *expected);
+        }
+        std::filesystem::remove_all(output);
+    }
     EXPECT_EQ(lfs::core::alloc_counter::delta_since(before), 0u);
 }
 

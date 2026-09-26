@@ -19,7 +19,6 @@
 #include "core/tensor_backend.hpp"
 #include "eval_mask.hpp"
 #include "io/cuda/image_format_kernels.cuh"
-#include "lfs/kernels/ssim.cuh"
 #include "lfs/training/ops/registry.hpp"
 #include <algorithm>
 #include <cassert>
@@ -220,9 +219,13 @@ namespace lfs::training {
         }
 
         if (ops_ == nullptr) {
-            ops_ = training_ops(lfs::core::default_gpu_backend()).photometric;
+            const auto backend = lfs::core::default_gpu_backend();
+            if (const auto reason = unavailable_training_family(backend, Family::Photometric)) {
+                throw std::runtime_error(*reason);
+            }
+            ops_ = training_ops(backend).photometric;
         }
-        if (ops_ == nullptr || ops_->metric == nullptr) {
+        if (ops_ == nullptr || ops_->metric == nullptr || ops_->create == nullptr) {
             throw std::runtime_error("SSIM: photometric ops are unavailable");
         }
         if (!saved_.backend) {
@@ -716,6 +719,10 @@ namespace lfs::training {
                                            lfs::core::Tensor& background) {
         if (!_params.optimization.enable_eval) {
             throw std::runtime_error("Evaluation is not enabled");
+        }
+        if (const auto reason = unavailable_training_family(
+                lfs::core::default_gpu_backend(), Family::Photometric)) {
+            throw std::runtime_error(*reason);
         }
 
         EvalMetrics result;
