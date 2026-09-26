@@ -12,10 +12,6 @@
 
 namespace lfs::gpu_ops {
 
-    enum class ShStorage { Float32,
-                           IeeeFloat16,
-                           Q16 };
-
     struct ShParams {
         ShStorage storage = ShStorage::Float32;
         uint32_t active_bases = 1;

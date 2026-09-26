@@ -8,15 +8,13 @@
 #include "core/logger.hpp"
 #include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
-#include "core/sh_value_quant_kernels.hpp"
-#include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor_completion.hpp"
 #include "core/tensor_sh.hpp"
-#include "lfs/cuda_scratch.hpp"
 #include "lfs/training/idle_arena_scratch.hpp"
 #include "lfs/training/live_model_mutation_guard.hpp"
+#include "lfs/training/ops/registry.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 
 #include <algorithm>
@@ -39,9 +37,9 @@ namespace lfs::training::sh_value {
         using core::Tensor;
         using core::TensorShape;
 
-        [[nodiscard]] cuda_scratch::Q16BlockRunWorkspace& q16_block_run_workspace() {
-            static cuda_scratch::Q16BlockRunWorkspace workspace;
-            return workspace;
+        [[nodiscard]] lfs::gpu_ops::BackendState& q16_run_state() {
+            static const lfs::gpu_ops::State state = training_sh_ops().create_run_scratch();
+            return *state;
         }
 
         [[nodiscard]] std::uint32_t layout_rest(const core::SplatData& splat) {
@@ -230,19 +228,15 @@ namespace lfs::training::sh_value {
             Tensor& live_bounds,
             std::size_t block_start,
             std::size_t n_in_block,
-            std::uint32_t rest,
-            cudaStream_t stream) {
-            auto* dest_codes = reinterpret_cast<std::uint16_t*>(
-                lfs::core::resolve_exportable_device_ptr(live_u16));
-            auto* dest_mm = static_cast<float*>(
-                lfs::core::resolve_exportable_device_ptr(live_bounds));
-            core::sh_value_quant::encode_shN_float4_to_u16(
-                fp32_chunk.ptr<float>(),
-                dest_codes + core::sh_value_quant::sh_value_u16_count(block_start, rest),
-                dest_mm + core::sh_value_quant::n_bounds_for_prims(block_start) * 2,
+            std::uint32_t rest) {
+            training_sh_ops().encode_q16(
+                fp32_chunk,
+                live_u16,
+                live_bounds,
                 n_in_block,
                 rest,
-                stream);
+                core::sh_value_quant::sh_value_u16_count(block_start, rest),
+                core::sh_value_quant::n_bounds_for_prims(block_start) * 2);
         }
 
         void decode_block_to_chunk(
@@ -344,8 +338,7 @@ namespace lfs::training::sh_value {
 
             Tensor block_ids = Tensor::zeros(TensorShape({K}), Device::GPU, DataType::Float32);
             block_ids.set_stream(stream);
-            core::sh_value_quant::fill_quant_block_ids_f32(
-                dest_indices_i64.ptr<std::int64_t>(), block_ids.ptr<float>(), K, stream);
+            training_sh_ops().block_ids(dest_indices_i64, block_ids);
             auto sorted = block_ids.sort(0, false);
             Tensor order = std::move(sorted.second);
             assert(order.dtype() == DataType::Int64 && order.numel() == K);
@@ -363,45 +356,21 @@ namespace lfs::training::sh_value {
             run_offsets.set_stream(stream);
             n_runs.set_stream(stream);
 
-            auto& run_workspace = q16_block_run_workspace();
-            run_workspace.ensure(
-                K,
-                core::sh_value_quant::sorted_block_runs_scan_workspace_bytes(K, stream),
-                stream);
-            const core::sh_value_quant::SortedBlockRunScratch run_scratch{
-                .flags = run_workspace.flags.ptr<std::int32_t>(),
-                .compact = run_workspace.compact.ptr<std::int32_t>(),
-                .scan = run_workspace.scan.data_ptr(),
-                .scan_bytes = run_workspace.scan_bytes,
-            };
-
-            core::sh_value_quant::build_sorted_block_runs(
-                sorted.first.ptr<float>(),
-                unique_blocks.ptr<int>(),
-                run_offsets.ptr<int>(),
-                n_runs.ptr<int>(),
-                K,
-                stream,
-                &run_scratch);
-
-            auto* codes = reinterpret_cast<std::uint16_t*>(
-                lfs::core::resolve_exportable_device_ptr(live));
-            auto* mm = static_cast<float*>(
-                lfs::core::resolve_exportable_device_ptr(bounds));
-            core::sh_value_quant::reencode_touched_q16_blocks(
-                codes,
-                mm,
-                src_canonical.ptr<float>(),
-                sorted_dest.ptr<std::int64_t>(),
-                unique_blocks.ptr<int>(),
-                run_offsets.ptr<int>(),
-                n_runs.ptr<int>(),
-                K,
-                n_prims,
-                n_decode_src,
-                rest,
-                stream,
-                order.ptr<std::int64_t>());
+            training_sh_ops().block_runs(
+                q16_run_state(), sorted.first, unique_blocks, run_offsets, n_runs);
+            training_sh_ops().reencode_touched(
+                live,
+                bounds,
+                src_canonical,
+                sorted_dest,
+                unique_blocks,
+                run_offsets,
+                n_runs,
+                order,
+                {.sorted_count = K,
+                 .primitives = n_prims,
+                 .decode_source_rows = n_decode_src,
+                 .rest = rest});
         }
     } // namespace
 
@@ -555,7 +524,7 @@ namespace lfs::training::sh_value {
         }
         dest.set_stream(stream);
 
-        auto write_dest = [&](float* ptr) {
+        auto write_dest = [&] {
             if (splat.shN_value_quantized()) {
                 auto& live = splat.shN();
                 auto& bounds = splat.shN_value_bounds();
@@ -590,16 +559,16 @@ namespace lfs::training::sh_value {
                     "gather_shN_to_canonical: expected q16 or fp32 swizzled shN");
             }
             splat.shN().sync_to_stream(stream);
-            core::shN_swizzled_gather_to_linear_i64(
-                splat.shN().ptr<float>(),
-                indices.ptr<std::int64_t>(),
-                ptr,
-                K,
-                rest,
-                rest,
-                stream);
+            training_sh_ops().gather_canonical(
+                splat.shN(),
+                indices,
+                dest,
+                {.source_rows = n_src,
+                 .count = K,
+                 .source_rest = rest,
+                 .destination_rest = rest});
         };
-        write_dest(dest.ptr<float>());
+        write_dest();
         if (!in_place) {
             dest_canonical = std::move(dest);
         } else if (dest.data_ptr() != dest_canonical.data_ptr()) {
@@ -634,14 +603,14 @@ namespace lfs::training::sh_value {
         Tensor dest_i32 = indices.dtype() == DataType::Int32 ? indices : indices.to(DataType::Int32);
         dest_i32.sync_to_stream(stream);
         splat.shN().set_stream(stream);
-        core::shN_swizzled_scatter_linear(
-            splat.shN().ptr<float>(),
-            dest_i32.ptr<int>(),
-            canonical.ptr<float>(),
-            indices.numel(),
-            rest,
-            rest,
-            stream);
+        training_sh_ops().scatter_canonical(
+            canonical,
+            dest_i32,
+            splat.shN(),
+            {.source_rows = n,
+             .count = indices.numel(),
+             .source_rest = rest,
+             .destination_rest = rest});
     }
 
     void append_canonical_to_shN(core::SplatData& splat,
@@ -686,16 +655,16 @@ namespace lfs::training::sh_value {
                     if (!rows.is_contiguous()) {
                         rows = rows.contiguous();
                     }
-                    core::shN_swizzled_gather_from_linear(
-                        fp32_chunk.ptr<float>(),
-                        ov_lo - block_start,
-                        rows.ptr<float>(),
-                        n_ov,
-                        rest,
-                        rest,
-                        stream);
+                    training_sh_ops().append_canonical(
+                        rows,
+                        fp32_chunk,
+                        {.source_rows = n_ov,
+                         .count = n_ov,
+                         .destination_offset = ov_lo - block_start,
+                         .source_rest = rest,
+                         .destination_rest = rest});
                 }
-                encode_chunk_into_q16(fp32_chunk, live, bounds, block_start, n_in, rest, stream);
+                encode_chunk_into_q16(fp32_chunk, live, bounds, block_start, n_in, rest);
             }
             sync_codec_stream(stream);
             return;
@@ -725,8 +694,14 @@ namespace lfs::training::sh_value {
         if (shN_buf.numel() < needed_floats) {
             shN_buf.append_zeros(needed_floats - shN_buf.numel());
         }
-        core::shN_swizzled_gather_from_linear(
-            shN_buf.ptr<float>(), dest_offset, canonical.ptr<float>(), K, rest, rest, stream);
+        training_sh_ops().append_canonical(
+            canonical,
+            shN_buf,
+            {.source_rows = K,
+             .count = K,
+             .destination_offset = dest_offset,
+             .source_rest = rest,
+             .destination_rest = rest});
     }
 
     void zero_shN_at_indices(core::SplatData& splat, const Tensor& dest_indices) {
@@ -1008,14 +983,15 @@ namespace lfs::training::sh_value {
             TensorShape({logical_floats}), cap_floats, Device::GPU, DataType::Float32);
         splat.shN().sync_to_stream(stream);
         idx_i32.sync_to_stream(stream);
-        core::shN_swizzled_gather_self(
-            splat.shN().ptr<float>(),
-            fresh.ptr<float>(),
-            idx_i32.ptr<int>(),
-            n_dst,
-            0,
-            rest,
-            stream);
+        training_sh_ops().gather_swizzled(
+            splat.shN(),
+            idx_i32,
+            fresh,
+            {.source_rows = n_src,
+             .count = n_dst,
+             .destination_offset = 0,
+             .source_rest = rest,
+             .destination_rest = rest});
         fresh.set_name("splat.shN");
         splat.shN() = std::move(fresh);
     }

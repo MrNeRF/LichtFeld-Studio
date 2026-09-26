@@ -173,24 +173,6 @@ namespace lfs::core {
             }
         }
 
-        __global__ void copy_contiguous_kernel(
-            const float4* __restrict__ src,
-            float4* __restrict__ dst,
-            std::uint32_t n_src,
-            std::uint32_t dst_offset,
-            std::uint32_t src_slots_per_primitive,
-            std::uint32_t dst_slots_per_primitive) {
-            const std::uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
-            if (i >= n_src)
-                return;
-            const std::uint32_t dst_p = dst_offset + i;
-            const float4 zero = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-            for (std::uint32_t k = 0; k < dst_slots_per_primitive; ++k) {
-                dst[shAt_device(dst_p, k, dst_slots_per_primitive)] =
-                    k < src_slots_per_primitive ? src[shAt_device(i, k, src_slots_per_primitive)] : zero;
-            }
-        }
-
         __global__ void copy_range_kernel(
             const float4* __restrict__ src,
             float4* __restrict__ dst,
@@ -469,21 +451,6 @@ namespace lfs::core {
         LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.zero_at_indices_i32");
     }
 
-    void shN_swizzled_zero_at_indices_i64(
-        float* buffer_swizzled,
-        const std::int64_t* indices,
-        std::size_t n_indices,
-        std::uint32_t active_coeffs_rest,
-        cudaStream_t stream) {
-        const auto slots = sh_float4_slots_for_rest(active_coeffs_rest);
-        if (n_indices == 0 || slots == 0)
-            return;
-        const int grid = static_cast<int>((n_indices + BLOCK - 1) / BLOCK);
-        zero_at_indices_kernel<std::int64_t><<<grid, BLOCK, 0, stream>>>(
-            reinterpret_cast<float4*>(buffer_swizzled), indices, static_cast<std::uint32_t>(n_indices), slots);
-        LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.zero_at_indices_i64");
-    }
-
     void shN_swizzled_gather_self(
         const float* src_swizzled,
         float* dst_swizzled,
@@ -542,29 +509,6 @@ namespace lfs::core {
             static_cast<std::uint32_t>(n_dst),
             static_cast<std::uint32_t>(dst_offset), slots);
         LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.gather_self_i64");
-    }
-
-    void shN_swizzled_copy_contiguous(
-        const float* src_swizzled,
-        float* dst_swizzled,
-        std::size_t n_src,
-        std::size_t dst_offset,
-        std::uint32_t src_active_coeffs_rest,
-        std::uint32_t dst_active_coeffs_rest,
-        cudaStream_t stream) {
-        const auto src_slots = sh_float4_slots_for_rest(src_active_coeffs_rest);
-        const auto dst_slots = sh_float4_slots_for_rest(dst_active_coeffs_rest);
-        if (n_src == 0 || dst_slots == 0)
-            return;
-        const int grid = static_cast<int>((n_src + BLOCK - 1) / BLOCK);
-        copy_contiguous_kernel<<<grid, BLOCK, 0, stream>>>(
-            reinterpret_cast<const float4*>(src_swizzled),
-            reinterpret_cast<float4*>(dst_swizzled),
-            static_cast<std::uint32_t>(n_src),
-            static_cast<std::uint32_t>(dst_offset),
-            src_slots,
-            dst_slots);
-        LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.copy_contiguous");
     }
 
     void shN_swizzled_copy_range(

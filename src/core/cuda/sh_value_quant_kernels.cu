@@ -346,40 +346,6 @@ namespace lfs::core::sh_value_quant {
             }
         }
 
-        __global__ void overlay_canonical_into_float4_kernel(
-            const float* __restrict__ src_canonical,
-            const std::int64_t* __restrict__ dest_indices,
-            float* __restrict__ dst_f4_as_float,
-            std::uint32_t group_offset,
-            std::uint32_t n_group,
-            std::uint32_t block_start,
-            std::uint32_t n_chunk,
-            std::uint32_t slots_per_prim,
-            std::uint32_t n_cells_per_prim) {
-            const std::uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
-            if (i >= n_group)
-                return;
-
-            const std::int64_t dest = dest_indices[group_offset + i];
-            const std::int64_t local64 = dest - static_cast<std::int64_t>(block_start);
-            if (local64 < 0 || local64 >= static_cast<std::int64_t>(n_chunk))
-                return;
-            const auto local = static_cast<std::uint32_t>(local64);
-
-            const float* row = src_canonical +
-                               static_cast<std::size_t>(group_offset + i) *
-                                   static_cast<std::size_t>(n_cells_per_prim);
-            float4* dst = reinterpret_cast<float4*>(dst_f4_as_float);
-            for (std::uint32_t k = 0; k < slots_per_prim; ++k) {
-                const std::uint32_t base = k * 4u;
-                const float x = base < n_cells_per_prim ? row[base] : 0.0f;
-                const float y = base + 1u < n_cells_per_prim ? row[base + 1u] : 0.0f;
-                const float z = base + 2u < n_cells_per_prim ? row[base + 2u] : 0.0f;
-                const float w = base + 3u < n_cells_per_prim ? row[base + 3u] : 0.0f;
-                dst[shAtF4(local, k, slots_per_prim)] = make_float4(x, y, z, w);
-            }
-        }
-
         __global__ void fill_quant_block_ids_f32_kernel(
             const std::int64_t* __restrict__ dest_indices,
             float* __restrict__ block_ids,
@@ -812,38 +778,6 @@ namespace lfs::core::sh_value_quant {
             static_cast<std::uint32_t>(n_src_primitives),
             n_cells);
         LFS_CUDA_CHECK_MSG(cudaGetLastError(), "decode_shN_u16_gathered_to_canonical");
-    }
-
-    void overlay_canonical_into_float4_chunk(
-        const float* src_canonical,
-        const std::int64_t* dest_indices,
-        float* dst_float4_swizzled,
-        std::size_t group_offset,
-        std::size_t n_group,
-        std::size_t block_start,
-        std::size_t n_chunk,
-        std::uint32_t coeffs_rest,
-        cudaStream_t stream) {
-        if (n_group == 0 || n_chunk == 0 || coeffs_rest == 0)
-            return;
-        if (!src_canonical || !dest_indices || !dst_float4_swizzled) {
-            throw std::invalid_argument("Invalid q16 SH overlay arguments");
-        }
-        const auto slots = lfs::core::sh_float4_slots_for_rest(coeffs_rest);
-        const auto n_cells = lfs::core::sh_value_quant::n_value_cells_per_prim(coeffs_rest);
-        const unsigned blocks =
-            static_cast<unsigned>((n_group + kThreads - 1) / kThreads);
-        overlay_canonical_into_float4_kernel<<<blocks, kThreads, 0, stream>>>(
-            src_canonical,
-            dest_indices,
-            dst_float4_swizzled,
-            static_cast<std::uint32_t>(group_offset),
-            static_cast<std::uint32_t>(n_group),
-            static_cast<std::uint32_t>(block_start),
-            static_cast<std::uint32_t>(n_chunk),
-            slots,
-            n_cells);
-        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "overlay_canonical_into_float4_chunk");
     }
 
     void fill_quant_block_ids_f32(

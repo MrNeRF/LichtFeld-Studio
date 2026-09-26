@@ -4,13 +4,13 @@
 
 #include "strategy_utils.hpp"
 #include "core/assert.hpp"
-#include "core/cuda/sh_layout.cuh"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor_completion.hpp"
 #include "core/tensor_cuda_interop.hpp"
 #include "core/training_churn_metrics.hpp"
 #include "kernels/pruning_kernels.hpp"
+#include "lfs/training/ops/registry.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include <algorithm>
 #include <atomic>
@@ -653,9 +653,7 @@ namespace lfs::training {
                     const auto stream = lfs::core::getCurrentCUDAStream();
                     idx_i32.sync_to_stream(stream);
                     state->grad.set_stream(stream);
-                    shN_swizzled_zero_at_indices(
-                        state->grad.ptr<float>(), idx_i32.ptr<int>(),
-                        idx_i32.numel(), shN_layout_rest, stream);
+                    training_sh_ops().zero_rows(state->grad, idx_i32, shN_layout_rest);
                 }
                 continue;
             }

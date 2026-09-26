@@ -11,13 +11,14 @@
 #include "core/resource_messages.hpp"
 #include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
-#include "core/sh_value_quant_kernels.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "core/tensor_readback.hpp"
 #include "core/tensor_serialization_sink.hpp"
 #include "core/tensor_upload.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "lfs/training/ops/registry.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "strategies/istrategy.hpp"
 
@@ -918,6 +919,8 @@ namespace lfs::training {
             const std::size_t slot_index,
             const std::size_t pinned_offset,
             const TensorLayoutWitness& witness,
+            const lfs::core::Tensor& source,
+            const lfs::core::Tensor* auxiliary,
             const std::uint64_t tensor_byte_offset,
             const std::size_t bytes) {
             validate_slot_range(
@@ -930,66 +933,38 @@ namespace lfs::training {
             }
             const auto encoding =
                 witness.descriptor.encoding;
+            lfs::gpu_ops::ShStorage storage = lfs::gpu_ops::ShStorage::Float32;
             if (encoding ==
                 lfs::core::TensorPayloadEncoding::
                     QuantizedShToCanonical) {
-                lfs::core::sh_value_quant::
-                    decode_shN_u16_range_to_canonical(
-                        static_cast<const std::uint16_t*>(
-                            witness.source_pointer),
-                        static_cast<const float*>(
-                            witness
-                                .auxiliary_source_pointer),
-                        static_cast<float*>(device_scratch.data_ptr()),
-                        tensor_byte_offset /
-                            sizeof(float),
-                        bytes / sizeof(float),
-                        witness.descriptor.sh_primitives,
-                        witness.descriptor
-                            .sh_coefficients_rest,
-                        witness.descriptor
-                            .sh_layout_coefficients_rest,
-                        static_cast<cudaStream_t>(d2h_queue->native_handle()));
+                storage = lfs::gpu_ops::ShStorage::Q16;
             } else if (encoding ==
                            lfs::core::
                                TensorPayloadEncoding::
                                    SwizzledShToCanonical &&
                        witness.source_dtype ==
                            lfs::core::DataType::Float16) {
-                lfs::core::sh_value_quant::
-                    decode_shN_f16_range_to_canonical(
-                        static_cast<const std::uint16_t*>(
-                            witness.source_pointer),
-                        static_cast<float*>(device_scratch.data_ptr()),
-                        tensor_byte_offset /
-                            sizeof(float),
-                        bytes / sizeof(float),
-                        witness.descriptor.sh_primitives,
-                        witness.descriptor
-                            .sh_coefficients_rest,
-                        witness.descriptor
-                            .sh_layout_coefficients_rest,
-                        static_cast<cudaStream_t>(d2h_queue->native_handle()));
-            } else if (encoding ==
+                storage = lfs::gpu_ops::ShStorage::IeeeFloat16;
+            } else if (encoding !=
                        lfs::core::TensorPayloadEncoding::
                            SwizzledShToCanonical) {
-                lfs::core::
-                    undo_reorder_sh_range_from_swizzled(
-                        static_cast<const float*>(
-                            witness.source_pointer),
-                        static_cast<float*>(device_scratch.data_ptr()),
-                        tensor_byte_offset /
-                            sizeof(float),
-                        bytes / sizeof(float),
-                        witness.descriptor.sh_primitives,
-                        witness.descriptor
-                            .sh_coefficients_rest,
-                        witness.descriptor
-                            .sh_layout_coefficients_rest,
-                        static_cast<cudaStream_t>(d2h_queue->native_handle()));
-            } else {
                 throw std::runtime_error(
                     "Unsupported SH snapshot encoding");
+            }
+            const lfs::core::Tensor absent;
+            {
+                const lfs::core::CUDAStreamGuard execution_scope(
+                    static_cast<cudaStream_t>(d2h_queue->native_handle()));
+                training_sh_ops().decode_range(
+                    source,
+                    auxiliary != nullptr ? *auxiliary : absent,
+                    device_scratch,
+                    {.canonical_float_offset = tensor_byte_offset / sizeof(float),
+                     .float_count = bytes / sizeof(float),
+                     .primitives = witness.descriptor.sh_primitives,
+                     .destination_rest = witness.descriptor.sh_coefficients_rest,
+                     .layout_rest = witness.descriptor.sh_layout_coefficients_rest,
+                     .storage = storage});
             }
             ring->enqueue(device_scratch, 0, bytes, slot_index, pinned_offset);
         }
@@ -1516,7 +1491,7 @@ namespace lfs::training {
                 } else {
                     append_device_tensor(
                         descriptor, expected, source,
-                        offset, bytes);
+                        auxiliary_source, offset, bytes);
                     destination.seekp(
                         static_cast<std::streamoff>(
                             bytes),
@@ -1553,6 +1528,7 @@ namespace lfs::training {
                         descriptor,
                 const TensorLayoutWitness& witness,
                 const lfs::core::Tensor& source,
+                const lfs::core::Tensor* auxiliary,
                 const std::uint64_t destination_offset,
                 const std::uint64_t bytes) {
                 std::uint64_t tensor_offset = 0;
@@ -1621,8 +1597,8 @@ namespace lfs::training {
                         service_.issue_sh_to_slot(
                             *active_slot_,
                             active_slot_bytes_,
-                            witness, tensor_offset,
-                            count);
+                            witness, source, auxiliary,
+                            tensor_offset, count);
                     }
                     active_segments_.push_back(
                         TrainingSnapshotService::Impl::

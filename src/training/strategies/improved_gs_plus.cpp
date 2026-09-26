@@ -4,7 +4,6 @@
 
 #include "improved_gs_plus.hpp"
 
-#include "core/cuda/sh_layout.cuh"
 #include "core/igs_failure_diagnostics.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
@@ -12,6 +11,7 @@
 #include "core/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "lfs/training/morton_reorder.hpp"
+#include "lfs/training/ops/registry.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "strategy_utils.hpp"
 
@@ -451,9 +451,7 @@ namespace lfs::training {
                                 const auto stream = lfs::core::getCurrentCUDAStream();
                                 idx_i32.sync_to_stream(stream);
                                 state->grad.set_stream(stream);
-                                lfs::core::shN_swizzled_zero_at_indices(
-                                    state->grad.ptr<float>(), idx_i32.ptr<int>(),
-                                    idx_i32.numel(), layout_rest_u32, stream);
+                                training_sh_ops().zero_rows(state->grad, idx_i32, layout_rest_u32);
                             }
                             return;
                         }
@@ -904,9 +902,7 @@ namespace lfs::training {
                         const auto stream = lfs::core::getCurrentCUDAStream();
                         idx_i32.sync_to_stream(stream);
                         state->grad.set_stream(stream);
-                        lfs::core::shN_swizzled_zero_at_indices(
-                            state->grad.ptr<float>(), idx_i32.ptr<int>(),
-                            idx_i32.numel(), layout_rest, stream);
+                        training_sh_ops().zero_rows(state->grad, idx_i32, layout_rest);
                     }
                     return;
                 }
@@ -1036,9 +1032,7 @@ namespace lfs::training {
                                 const auto stream = lfs::core::getCurrentCUDAStream();
                                 idx_i32.sync_to_stream(stream);
                                 state->grad.set_stream(stream);
-                                lfs::core::shN_swizzled_zero_at_indices(
-                                    state->grad.ptr<float>(), idx_i32.ptr<int>(),
-                                    idx_i32.numel(), layout_rest, stream);
+                                training_sh_ops().zero_rows(state->grad, idx_i32, layout_rest);
                             }
                             return;
                         }
