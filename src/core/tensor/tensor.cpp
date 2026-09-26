@@ -1992,34 +1992,17 @@ namespace lfs::core {
         }
         preserve_lazy_snapshots_before_write();
 
+        // GPU tensors fill on their own stream: a memset for zeros, the fill
+        // kernel otherwise, without staging the values on the host.
+        if (device_ == Device::GPU) {
+            return fill_(value, stream());
+        }
+
         // CRITICAL FIX: For non-contiguous tensors (from slice/view operations),
         // we must respect strides and fill only the elements in the view
         if (!is_contiguous()) {
             // For non-contiguous tensors, iterate and use operator[] which respects strides
             const size_t n = numel();
-
-            // For GPU non-contiguous tensors: use CUDA kernel that respects strides
-            if (device_ == Device::GPU) {
-                // Use CUDA kernel for strided fill (much faster than element-by-element cudaMemcpy)
-                if (dtype_ == DataType::Float32) {
-                    internal::backend_ops_for(*this).fill_strided(
-                        internal::storage_ref(*this), internal::strided_layout(*this),
-                        internal::scalar_operand(value), internal::ExecContext{stream()});
-                } else if (dtype_ == DataType::Int32) {
-                    int int_val = static_cast<int>(value);
-                    internal::backend_ops_for(*this).fill_strided(
-                        internal::storage_ref(*this), internal::strided_layout(*this),
-                        internal::scalar_operand(int_val), internal::ExecContext{stream()});
-                } else if (dtype_ == DataType::Bool) {
-                    const bool bool_val = value != 0.0f;
-                    internal::backend_ops_for(*this).fill_strided(
-                        internal::storage_ref(*this), internal::strided_layout(*this),
-                        internal::scalar_operand(bool_val), internal::ExecContext{stream()});
-                }
-                // Sync for the no-stream overload (maintains original behavior)
-                internal::backend_ops_for(*this).synchronize_device();
-                return *this;
-            }
 
             // CPU non-contiguous: manually compute offsets using strides
             std::vector<size_t> indices(ndim(), 0);
@@ -2055,58 +2038,22 @@ namespace lfs::core {
         // Handle Bool dtype
         if (dtype_ == DataType::Bool) {
             unsigned char bool_val = (value != 0.0f) ? 1 : 0;
-            if (device_ == Device::GPU) {
-                std::vector<unsigned char> temp(numel(), bool_val);
-                internal::backend_ops_for(*this).copy_host_to_device(internal::CopyRequest{
-                    .src = internal::raw_storage_ref(temp.data(), dtype_),
-                    .dst = internal::storage_ref(*this),
-                    .bytes = bytes(),
-                    .synchronous = true,
-                    .context = internal::ExecContext{},
-                });
-                internal::order_home_after_legacy(*this);
-            } else {
-                unsigned char* data = static_cast<unsigned char*>(dest);
-                std::fill(data, data + numel(), bool_val);
-            }
+            unsigned char* data = static_cast<unsigned char*>(dest);
+            std::fill(data, data + numel(), bool_val);
             return *this;
         }
 
         // Handle Int32 dtype
         if (dtype_ == DataType::Int32) {
             int int_val = static_cast<int>(value);
-            if (device_ == Device::GPU) {
-                std::vector<int> temp(numel(), int_val);
-                internal::backend_ops_for(*this).copy_host_to_device(internal::CopyRequest{
-                    .src = internal::raw_storage_ref(temp.data(), dtype_),
-                    .dst = internal::storage_ref(*this),
-                    .bytes = bytes(),
-                    .synchronous = true,
-                    .context = internal::ExecContext{},
-                });
-                internal::order_home_after_legacy(*this);
-            } else {
-                int* data = static_cast<int*>(dest);
-                std::fill(data, data + numel(), int_val);
-            }
+            int* data = static_cast<int*>(dest);
+            std::fill(data, data + numel(), int_val);
             return *this;
         }
 
         // Handle Float32 dtype (original code)
-        if (device_ == Device::GPU) {
-            std::vector<float> temp(numel(), value);
-            internal::backend_ops_for(*this).copy_host_to_device(internal::CopyRequest{
-                .src = internal::raw_storage_ref(temp.data(), dtype_),
-                .dst = internal::storage_ref(*this),
-                .bytes = bytes(),
-                .synchronous = true,
-                .context = internal::ExecContext{},
-            });
-            internal::order_home_after_legacy(*this);
-        } else {
-            float* data = static_cast<float*>(dest);
-            std::fill(data, data + numel(), value);
-        }
+        float* data = static_cast<float*>(dest);
+        std::fill(data, data + numel(), value);
 
         return *this;
     }
@@ -2153,8 +2100,8 @@ namespace lfs::core {
         // Contiguous tensors: use cudaMemsetAsync for zeros, or strided kernel for non-zero
         void* dest = static_cast<char*>(data_) + storage_offset_ * dtype_size(dtype_);
 
-        if (value == 0.0f) {
-            // Fast path: use cudaMemsetAsync for zeros
+        if (value == 0.0f && !std::signbit(value)) {
+            // Fast path: use cudaMemsetAsync for zeros; -0 keeps its sign bit
             internal::backend_ops_for(*this).memset(internal::FillRequest{
                 .dst = internal::storage_ref(*this),
                 .bytes = bytes(),
