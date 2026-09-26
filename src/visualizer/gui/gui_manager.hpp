@@ -158,7 +158,7 @@ namespace lfs::vis {
             [[nodiscard]] GlobalContextMenu& globalContextMenu() { return *global_context_menu_; }
 
             // State queries
-            bool needsAnimationFrame() const;
+            bool needsAnimationFrame(bool include_export_progress = true) const;
             [[nodiscard]] std::string describeAnimationDemand() const;
             [[nodiscard]] bool needsImmediateAnimationFrame() const;
             // Min finite scheduled GUI animation/update delay (seconds). Used by the
@@ -476,6 +476,7 @@ namespace lfs::vis {
             std::optional<ViewId> area_pointer_owner_;
             RmlMenuBar rml_menu_bar_;
             bool menu_pointer_capture_active_ = false;
+            bool startup_overlay_pointer_capture_active_ = false;
             RmlStatusBar rml_status_bar_;
             std::unique_ptr<GlobalContextMenu> global_context_menu_;
             bool deferred_startup_work_pending_ = false;

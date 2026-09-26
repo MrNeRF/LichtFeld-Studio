@@ -5,6 +5,8 @@
 #pragma once
 
 #include "core/splat_data.hpp"
+#include "core/tensor_upload.hpp"
+#include "lfs/training/ops/adam.hpp"
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -148,6 +150,10 @@ namespace lfs::training {
         void set_mean_step_far_mask(lfs::core::Tensor mask);
         void set_screen_share_cap(const float* max_share, int n, float limit, float penalty);
         void refresh_screen_share_buffer();
+        // Collection is independent of the hinge: refinement can still consume
+        // projected sizes while the strategy defers scale shrinkage.
+        void set_collect_projected_screen_share(bool enabled) noexcept { collect_projected_screen_share_ = enabled; }
+        [[nodiscard]] bool collect_projected_screen_share() const noexcept { return collect_projected_screen_share_; }
         [[nodiscard]] bool per_splat_mean_step() const noexcept { return per_splat_mean_step_; }
         [[nodiscard]] const bool* mean_step_far_mask() const noexcept {
             return mean_step_far_mask_;
@@ -189,12 +195,14 @@ namespace lfs::training {
         /// `n_new` rows BEFORE any free_mask / param mutation. Returns false when
         /// capacity-ensure fails so callers can abort with zero torn state.
         [[nodiscard]] bool preflight_grow_capacity(size_t n_new);
-        void relocate_params_at_indices_gpu(ParamType type, const int64_t* indices_device, size_t n_indices);
+        // indices are int64 device rows.
+        void relocate_params_at_indices_gpu(ParamType type, const lfs::core::Tensor& indices);
 
         // Low-level state manipulation
         void reset_state_at_indices(ParamType type, const std::vector<int64_t>& indices);
+        // Keeps CUDA-resident indices on device; accepts int32 or int64 tensors.
+        void reset_state_at_indices(ParamType type, const lfs::core::Tensor& indices);
         void extend_state_for_new_params(ParamType type, size_t n_new);
-        void extend_state_by_gather(ParamType type, const lfs::core::Tensor& indices);
 
         // State access
         const AdamParamState* get_state(ParamType type) const;
@@ -220,7 +228,13 @@ namespace lfs::training {
         static void note_slow_path_grow(const char* site, const std::string& name);
         AdamConfig config_;
         lfs::core::SplatData& splat_data_;
+        const lfs::gpu_ops::AdamOps* ops_ = nullptr;
+        // Binds absent optional op arguments.
+        lfs::core::Tensor absent_;
         std::unordered_map<std::string, AdamParamState> states_;
+        lfs::core::TensorUpload reset_indices_upload_;
+        lfs::core::TensorUpload extend_indices_upload_;
+        lfs::core::TensorUpload add_indices_upload_;
         lfs::core::Tensor frozen_mask_;
         float frozen_lr_scale_ = 0.0f;
         lfs::core::Tensor crop_damping_mask_;
@@ -236,6 +250,7 @@ namespace lfs::training {
         int screen_share_n_ = 0;
         float screen_share_limit_ = 0.0f;
         float screen_share_penalty_ = 0.0f;
+        bool collect_projected_screen_share_ = false;
         int64_t fused_step_iteration_ = -1;
         bool last_step_zeroed_gradients_ = false;
 
@@ -243,7 +258,10 @@ namespace lfs::training {
         std::string param_name(ParamType type) const;
         void init_state(ParamType type, bool allocate_grad = false);
         void ensure_grad(ParamType type);
-        void step_param(ParamType type, int iteration);
+        void step_shN(int iteration);
+        [[nodiscard]] const lfs::gpu_ops::AdamOps& adam_ops() const;
+        [[nodiscard]] lfs::gpu_ops::AdamHyper adam_hyper() const;
+        [[nodiscard]] lfs::gpu_ops::AdamModifiers adam_modifiers() const;
         void validate_mean_step_far_mask();
         size_t compute_new_capacity(size_t current_capacity, size_t required_size) const;
 

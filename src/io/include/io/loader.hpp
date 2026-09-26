@@ -10,6 +10,7 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -136,6 +137,7 @@ namespace lfs::io {
         std::chrono::milliseconds load_time{0};
         std::vector<std::string> warnings;
         std::optional<ImportGeoreference> georeference;
+        std::optional<std::vector<std::uint8_t>> license_bytes;
     };
 
     /**

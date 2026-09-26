@@ -8,9 +8,11 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
+#include "core/tensor/backend/cuda/runtime/gpu_slab_allocator.hpp"
 #include "core/tensor/internal/lazy_config.hpp"
 #include "core/tensor/internal/lazy_executor.hpp"
 #include "core/tensor/internal/lazy_ir.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/formats/colmap.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/gsplat/Ops.h"
@@ -32,9 +34,10 @@
 
 namespace {
 
-    class DeferredD3PinTest : public ::testing::Test {
+    class DeferredD3PinTest : public lfs::test::CudaBackendTest {
     protected:
         void SetUp() override {
+            LFS_CUDA_BACKEND_OR_RETURN();
             using namespace lfs::core;
 
             reset_cuda_diagnostics_for_testing();
@@ -68,6 +71,11 @@ namespace {
         }
 
         void TearDown() override {
+            if (IsSkipped()) {
+                return;
+            }
+            lfs::core::tensor_ops::set_nan_check_host_allocation_failure_for_testing(false);
+            (void)lfs::core::tensor_ops::release_nan_check_thread_buffers();
             lfs::core::reset_cuda_diagnostics_for_testing();
             lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
             lfs::core::internal::clear_lazy_ir_for_testing();
@@ -266,6 +274,7 @@ namespace {
         std::exception_ptr worker_error;
 
         std::thread worker([&] {
+            const lfs::core::GpuBackendScope backend_scope(lfs::core::GpuBackend::CUDA);
             try {
                 {
                     auto output = lfs::training::gsplat_rasterize(
@@ -305,6 +314,26 @@ namespace {
         EXPECT_TRUE(gsplat_released);
         EXPECT_TRUE(intersect_released);
         EXPECT_TRUE(nan_check_released);
+    }
+
+    TEST_F(DeferredD3PinTest, NaNCheckPinnedAllocationFailureRollsBackDeviceBuffer) {
+        using lfs::core::GPUSlabAllocator;
+        using namespace lfs::core::tensor_ops;
+
+        ASSERT_TRUE(release_nan_check_thread_buffers());
+        const auto& stats = GPUSlabAllocator::instance().stats();
+        const auto allocations_before = stats.alloc_count.load(std::memory_order_relaxed);
+        const auto frees_before = stats.free_count.load(std::memory_order_relaxed);
+
+        set_nan_check_host_allocation_failure_for_testing(true);
+        EXPECT_THROW(
+            (void)has_nan_gpu(means_.ptr<float>(), means_.numel(), means_.stream()),
+            std::runtime_error);
+        set_nan_check_host_allocation_failure_for_testing(false);
+
+        EXPECT_EQ(stats.alloc_count.load(std::memory_order_relaxed), allocations_before + 1);
+        EXPECT_EQ(stats.free_count.load(std::memory_order_relaxed), frees_before + 1);
+        EXPECT_FALSE(has_nan_gpu(means_.ptr<float>(), means_.numel(), means_.stream()));
     }
 
 } // namespace

@@ -11,6 +11,9 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <vector>
 #else
 #include <limits.h>
 #include <unistd.h>
@@ -41,6 +44,13 @@ namespace lfs::core {
 
         path.resize(size);
         return std::filesystem::path(path);
+#elif defined(__APPLE__)
+        std::uint32_t size = 0;
+        _NSGetExecutablePath(nullptr, &size);
+        std::vector<char> path(size);
+        if (_NSGetExecutablePath(path.data(), &size) != 0)
+            throw std::runtime_error("_NSGetExecutablePath failed");
+        return std::filesystem::path(path.data());
 #else
         char path[PATH_MAX];
         const ssize_t count = readlink("/proc/self/exe", path, PATH_MAX - 1);
@@ -172,6 +182,10 @@ namespace lfs::core {
     inline bool tripletLooksLikeCurrentPlatform(const std::string& name) {
 #ifdef _WIN32
         if (name.find("windows") == std::string::npos) {
+            return false;
+        }
+#elif defined(__APPLE__)
+        if (name.find("osx") == std::string::npos) {
             return false;
         }
 #else

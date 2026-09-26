@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "select_ops.hpp"
-#include "core/cuda/selection_ops.hpp"
 #include "core/logger.hpp"
 #include "core/scene.hpp"
+#include "core/selection_ops.hpp"
 #include "core/tensor.hpp"
 #include "scene/scene_manager.hpp"
 
@@ -98,7 +98,7 @@ namespace lfs::vis::op {
 
         auto current = *mask;
         for (int i = 0; i < iterations; ++i) {
-            current = core::cuda::selection_grow(current, model->means(), radius, group_id);
+            current = core::selection_grow(current, model->means(), radius, group_id);
         }
 
         scene.getScene().setSelectionMask(std::make_shared<core::Tensor>(std::move(current)));
@@ -129,7 +129,7 @@ namespace lfs::vis::op {
 
         auto current = *mask;
         for (int i = 0; i < iterations; ++i) {
-            current = core::cuda::selection_shrink(current, model->means(), radius);
+            current = core::selection_shrink(current, model->means(), radius);
         }
 
         scene.getScene().setSelectionMask(std::make_shared<core::Tensor>(std::move(current)));
@@ -152,7 +152,7 @@ namespace lfs::vis::op {
         const float max_opacity = props.get_or<float>("max_opacity", 1.0f);
         const auto group_id = scene.getScene().getActiveSelectionGroup();
 
-        auto new_mask = core::cuda::select_by_opacity(model->opacity_raw(), min_opacity, max_opacity, group_id);
+        auto new_mask = core::select_by_opacity(model->opacity_raw(), min_opacity, max_opacity, group_id);
         scene.getScene().setSelectionMask(std::make_shared<core::Tensor>(std::move(new_mask)));
 
         return OperationResult::success();
@@ -173,7 +173,7 @@ namespace lfs::vis::op {
         const float max_scale = props.get_or<float>("max_scale", 1.0f);
         const auto group_id = scene.getScene().getActiveSelectionGroup();
 
-        auto new_mask = core::cuda::select_by_scale(model->scaling_raw(), max_scale, group_id);
+        auto new_mask = core::select_by_scale(model->scaling_raw(), max_scale, group_id);
         scene.getScene().setSelectionMask(std::make_shared<core::Tensor>(std::move(new_mask)));
 
         return OperationResult::success();

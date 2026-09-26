@@ -12,6 +12,7 @@
 #include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 
@@ -28,13 +29,6 @@ using namespace lfs::training;
 using namespace lfs::core;
 
 namespace {
-
-    void require_cuda() {
-        int device_count = 0;
-        if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
-    }
 
     // Resident set size in bytes from /proc/self/status (Linux).
     std::size_t host_rss_bytes() {
@@ -99,8 +93,9 @@ namespace {
 
 // Training-like cycle: exportable grow steps + FastGS forwards + TLS release.
 // Steady-state RSS and VRAM between cycle 10 and N must not drift.
-TEST(VramLeakRegressionTest, FixedSizeCyclesHostRssAndVramStable) {
-    require_cuda();
+class VramLeakRegressionTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(VramLeakRegressionTest, FixedSizeCyclesHostRssAndVramStable) {
 
     constexpr int kWarmCycles = 10;
     constexpr int kTotalCycles = 40;
@@ -129,7 +124,6 @@ TEST(VramLeakRegressionTest, FixedSizeCyclesHostRssAndVramStable) {
             ASSERT_TRUE(storage->grow(1024).has_value());
         }
         release_fast_rasterizer_thread_local_caches();
-        release_fastgs_sort_workspace_buffers();
         GlobalArenaManager::instance().get_arena().full_reset();
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     }
@@ -157,7 +151,6 @@ TEST(VramLeakRegressionTest, FixedSizeCyclesHostRssAndVramStable) {
 
         // End-of-step cleanup (training thread shutdown pattern).
         release_fast_rasterizer_thread_local_caches();
-        release_fastgs_sort_workspace_buffers();
         GlobalArenaManager::instance().get_arena().full_reset();
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 

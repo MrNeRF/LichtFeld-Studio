@@ -60,16 +60,26 @@ try:
 
     class _LfLogHandler(logging.Handler):
         def emit(self, record):
-            msg = self.format(record)
-            if record.levelno >= logging.ERROR:
-                _lf.log.error(msg)
-            elif record.levelno >= logging.WARNING:
-                _lf.log.warn(msg)
-            else:
-                _lf.log.info(msg)
+            try:
+                msg = self.format(record)
+                if record.levelno >= logging.ERROR:
+                    _lf.log.error(msg)
+                elif record.levelno >= logging.WARNING:
+                    _lf.log.warn(msg)
+                elif record.levelno >= logging.INFO:
+                    _lf.log.info(msg)
+                else:
+                    _lf.log.debug(msg)
+            except Exception:
+                # Logging must not turn a worker failure into a second failure.
+                pass
 
-    _log.addHandler(_LfLogHandler())
-    _log.setLevel(logging.DEBUG)
+    _root_log = logging.getLogger()
+    if not any(getattr(handler, "_lichtfeld_bridge", False) for handler in _root_log.handlers):
+        _bridge = _LfLogHandler()
+        _bridge._lichtfeld_bridge = True
+        _root_log.addHandler(_bridge)
+    _root_log.setLevel(logging.DEBUG)
 except Exception:
     pass
 

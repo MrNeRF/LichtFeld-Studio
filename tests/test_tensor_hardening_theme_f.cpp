@@ -147,6 +147,8 @@ TEST_F(CudaTest, F5_NegativeScatterIndicesMatchAcrossCPUCUDAAndTorch) {
         bool ours_threw = false;
         try {
             ours.scatter_(0, index, source);
+            if (device == Device::GPU)
+                (void)ours.cpu();
         } catch (const std::exception&) {
             ours_threw = true;
         }

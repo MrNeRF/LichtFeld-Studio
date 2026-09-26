@@ -1,10 +1,12 @@
 static const uint LFS_LOCAL_SIZE_X = 256;
 static const uint LFS_PUSH_CONSTANT_SIZE = 160;
+#include "byte_word.slangh"
 
 // 0 gather (output shaped like the index tensor), 1 take (flat clamped),
 // 2 index_select, 3 scatter assign, 4 scatter add, 5 index_put (flat clamped),
 // 6 index_fill (scatter a constant), 7 deterministic scatter over runs of
-// indices sorted by target (keys and positions from radix.slang).
+// indices sorted by target (keys and positions from radix.slang),
+// 8 checked Int64-to-Int32 index conversion.
 [SpecializationConstant]
 const uint kMode = 0;
 // Element codes follow DataType: 0 Float32, 1 Float16, 2 Int32, 3 Int64, 4 UInt8, 5 Bool.
@@ -243,104 +245,170 @@ void recordFault(uint64_t faultAddress, int index, uint extent, uint opId)
     }
 }
 
+// Code 2 stores the signed index in words 1-2 and the extent in word 3.
+void recordWideFault(uint64_t faultAddress, int64_t index, uint extent)
+{
+    Ptr<uint, Access.ReadWrite> words = (Ptr<uint, Access.ReadWrite>)faultAddress;
+    uint observed;
+    InterlockedCompareExchange(words[0], 0u, 2u, observed);
+    if (observed == 0u)
+    {
+        words[1] = uint(index);
+        words[2] = uint(uint64_t(index) >> 32);
+        words[3] = extent;
+    }
+}
+
+bool gatherSource(uint64_t tid, uniform Parameters parameters, out uint64_t sourceIndex)
+{
+    Ptr<int, Access.Read> indices = (Ptr<int, Access.Read>)parameters.indexAddress;
+    sourceIndex = 0;
+    if (kMode == 0)
+    {
+        uint inputStrides[8];
+        uint outputStrides[8];
+        uint strideAccumulator = 1;
+        for (int axis = int(parameters.rank) - 1; axis >= 0; --axis)
+        {
+            inputStrides[axis] = strideAccumulator;
+            strideAccumulator *= parameters.inputDims[axis];
+        }
+        strideAccumulator = 1;
+        for (int axis = int(parameters.indexRank) - 1; axis >= 0; --axis)
+        {
+            outputStrides[axis] = strideAccumulator;
+            strideAccumulator *= parameters.indexDims[axis];
+        }
+        uint outputCoordinates[8];
+        uint remaining = uint(tid);
+        for (uint axis = 0; axis < parameters.indexRank; ++axis)
+        {
+            outputCoordinates[axis] = remaining / outputStrides[axis];
+            remaining -= outputCoordinates[axis] * outputStrides[axis];
+        }
+        int gatherIndex = indices[tid];
+        const uint extent = parameters.inputDims[parameters.dim];
+        if (kBoundary == 1)
+            gatherIndex = max(0, min(int(extent) - 1, gatherIndex));
+        else if (kBoundary == 2)
+            gatherIndex = wrapIndex(gatherIndex, extent);
+        else if (gatherIndex < 0 || gatherIndex >= int(extent))
+        {
+            if (parameters.faultAddress != 0)
+                recordFault(parameters.faultAddress, gatherIndex, extent, parameters.opId);
+            return false;
+        }
+        sourceIndex = 0;
+        bool inRange = true;
+        for (uint axis = 0; axis < parameters.rank; ++axis)
+        {
+            uint coordinate;
+            if (axis == parameters.dim)
+                coordinate = uint(gatherIndex);
+            else if (axis < parameters.indexRank)
+                coordinate = outputCoordinates[axis];
+            else
+                coordinate = 0;
+            if (coordinate >= parameters.inputDims[axis])
+                inRange = false;
+            sourceIndex += uint64_t(coordinate) * inputStrides[axis];
+        }
+        if (!inRange)
+        {
+            return false;
+        }
+        return true;
+    }
+    if (kMode == 1)
+    {
+        sourceIndex = clampFlat(indices[tid], parameters.inputSize);
+        return true;
+    }
+    const uint64_t segment = uint64_t(parameters.indexSize) * parameters.inner;
+    const uint outerIndex = uint(tid / segment);
+    const uint position = uint((tid / parameters.inner) % parameters.indexSize);
+    const uint innerIndex = uint(tid % parameters.inner);
+    int selected = indices[position];
+    if (kBoundary == 1)
+        selected = max(0, min(int(parameters.dimSize) - 1, selected));
+    else if (kBoundary == 2)
+        selected = wrapIndex(selected, parameters.dimSize);
+    else if (selected < 0 || selected >= int(parameters.dimSize))
+    {
+        if (parameters.faultAddress != 0)
+            recordFault(parameters.faultAddress, selected, parameters.dimSize, parameters.opId);
+        return false;
+    }
+    sourceIndex =
+        uint64_t(outerIndex) * parameters.dimSize * parameters.inner +
+        uint64_t(selected) * parameters.inner + innerIndex;
+    return true;
+}
+
+uint evaluateByte(uint index, uniform Parameters parameters)
+{
+    uint64_t sourceIndex;
+    if (!gatherSource(index, parameters, sourceIndex)) return 0u;
+    return loadByte(parameters.inputAddress, sourceIndex);
+}
+
 [numthreads(LFS_LOCAL_SIZE_X, 1, 1)]
 void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters parameters)
 {
+    if (kByte && kMode <= 2)
+    {
+        const uint64_t start = parameters.valueAddress;
+        const uint64_t end = start + uint64_t(parameters.total);
+        const uint64_t firstWord = start & ~uint64_t(3);
+        const uint wordCount = uint((end - firstWord + uint64_t(3)) / uint64_t(4));
+        const uint3 groups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
+        for (uint wordIndex = dispatchThreadId.x; wordIndex < wordCount;
+             wordIndex += groups.x * LFS_LOCAL_SIZE_X)
+        {
+            const uint64_t wordAddress = firstWord + uint64_t(wordIndex) * uint64_t(4);
+            uint packed = 0;
+            uint mask = 0;
+            [unroll]
+            for (uint lane = 0; lane < 4u; ++lane)
+            {
+                const uint64_t byteAddress = wordAddress + uint64_t(lane);
+                if (byteAddress >= start && byteAddress < end)
+                {
+                    packed |= evaluateByte(uint(byteAddress - start), parameters) << (lane * 8u);
+                    mask |= 255u << (lane * 8u);
+                }
+            }
+            storeByteWord(wordAddress, packed, mask);
+        }
+        return;
+    }
     const uint3 numWorkgroups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
     const uint stride = numWorkgroups.x * LFS_LOCAL_SIZE_X;
     Ptr<int, Access.Read> indices = (Ptr<int, Access.Read>)parameters.indexAddress;
 
     for (uint64_t tid = dispatchThreadId.x; tid < parameters.total; tid += stride)
     {
-        if (kMode == 0)
+        if (kMode <= 2)
         {
-            uint inputStrides[8];
-            uint outputStrides[8];
-            uint strideAccumulator = 1;
-            for (int axis = int(parameters.rank) - 1; axis >= 0; --axis)
-            {
-                inputStrides[axis] = strideAccumulator;
-                strideAccumulator *= parameters.inputDims[axis];
-            }
-            strideAccumulator = 1;
-            for (int axis = int(parameters.indexRank) - 1; axis >= 0; --axis)
-            {
-                outputStrides[axis] = strideAccumulator;
-                strideAccumulator *= parameters.indexDims[axis];
-            }
-            uint outputCoordinates[8];
-            uint remaining = uint(tid);
-            for (uint axis = 0; axis < parameters.indexRank; ++axis)
-            {
-                outputCoordinates[axis] = remaining / outputStrides[axis];
-                remaining -= outputCoordinates[axis] * outputStrides[axis];
-            }
-            int gatherIndex = indices[tid];
-            const uint extent = parameters.inputDims[parameters.dim];
-            if (kBoundary == 1)
-                gatherIndex = max(0, min(int(extent) - 1, gatherIndex));
-            else if (kBoundary == 2)
-                gatherIndex = wrapIndex(gatherIndex, extent);
-            else if (gatherIndex < 0 || gatherIndex >= int(extent))
-            {
-                if (parameters.faultAddress != 0)
-                    recordFault(parameters.faultAddress, gatherIndex, extent, parameters.opId);
+            uint64_t sourceIndex;
+            if (!gatherSource(tid, parameters, sourceIndex))
                 storeZero(parameters.valueAddress, tid);
-                continue;
-            }
-            uint64_t sourceIndex = 0;
-            bool inRange = true;
-            for (uint axis = 0; axis < parameters.rank; ++axis)
-            {
-                uint coordinate;
-                if (axis == parameters.dim)
-                    coordinate = uint(gatherIndex);
-                else if (axis < parameters.indexRank)
-                    coordinate = outputCoordinates[axis];
-                else
-                    coordinate = 0;
-                if (coordinate >= parameters.inputDims[axis])
-                    inRange = false;
-                sourceIndex += uint64_t(coordinate) * inputStrides[axis];
-            }
-            if (!inRange)
-            {
-                storeZero(parameters.valueAddress, tid);
-                continue;
-            }
-            copyElement(parameters.inputAddress, sourceIndex, parameters.valueAddress, tid);
-        }
-        else if (kMode == 1)
-        {
-            const uint sourceIndex = clampFlat(indices[tid], parameters.inputSize);
-            if (kUnary == 0)
+            else if (kMode != 1 || kUnary == 0)
                 copyElement(parameters.inputAddress, sourceIndex, parameters.valueAddress, tid);
             else
                 ((Ptr<float, Access.ReadWrite>)parameters.valueAddress)[tid] =
                     applyUnary(((Ptr<float, Access.Read>)parameters.inputAddress)[sourceIndex]);
         }
-        else if (kMode == 2)
+        else if (kMode == 8)
         {
-            const uint64_t segment = uint64_t(parameters.indexSize) * parameters.inner;
-            const uint outerIndex = uint(tid / segment);
-            const uint position = uint((tid / parameters.inner) % parameters.indexSize);
-            const uint innerIndex = uint(tid % parameters.inner);
-            int selected = indices[position];
-            if (kBoundary == 1)
-                selected = max(0, min(int(parameters.dimSize) - 1, selected));
-            else if (kBoundary == 2)
-                selected = wrapIndex(selected, parameters.dimSize);
-            else if (selected < 0 || selected >= int(parameters.dimSize))
+            const int64_t index = ((Ptr<int64_t, Access.Read>)parameters.inputAddress)[tid];
+            if (index < 0 || index >= int64_t(parameters.dimSize))
             {
-                if (parameters.faultAddress != 0)
-                    recordFault(parameters.faultAddress, selected, parameters.dimSize, parameters.opId);
-                storeZero(parameters.valueAddress, tid);
-                continue;
+                recordWideFault(parameters.faultAddress, index, parameters.dimSize);
+                ((Ptr<int, Access.ReadWrite>)parameters.valueAddress)[tid] = -1;
             }
-            const uint64_t sourceIndex =
-                uint64_t(outerIndex) * parameters.dimSize * parameters.inner +
-                uint64_t(selected) * parameters.inner + innerIndex;
-            copyElement(parameters.inputAddress, sourceIndex, parameters.valueAddress, tid);
+            else
+                ((Ptr<int, Access.ReadWrite>)parameters.valueAddress)[tid] = int(index);
         }
         else if (kMode == 3 || kMode == 4 || kMode == 6)
         {
@@ -350,7 +418,10 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters param
             const uint innerIndex = uint(tid % parameters.inner);
             const int target = indices[position];
             if (target < 0 || target >= int(parameters.dimSize))
+            {
+                recordFault(parameters.faultAddress, target, parameters.dimSize, parameters.opId);
                 continue;
+            }
             const uint64_t destinationIndex =
                 uint64_t(outerIndex) * parameters.dimSize * parameters.inner +
                 uint64_t(target) * parameters.inner + innerIndex;
@@ -384,7 +455,10 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters param
             if (slot > 0 && keys[slot - 1] == key)
                 continue;
             if (key >= parameters.dimSize)
+            {
+                recordFault(parameters.faultAddress, int(key), parameters.dimSize, parameters.opId);
                 continue;
+            }
             const uint64_t destinationIndex =
                 uint64_t(outerIndex) * parameters.dimSize * parameters.inner +
                 uint64_t(key) * parameters.inner + innerIndex;

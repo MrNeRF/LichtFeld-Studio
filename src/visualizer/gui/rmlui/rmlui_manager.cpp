@@ -6,6 +6,7 @@
 #include "config.h"
 #include "core/environment.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "gui/rmlui/elements/chromaticity_element.hpp"
 #include "gui/rmlui/elements/color_picker_element.hpp"
 #include "gui/rmlui/elements/crf_curve_element.hpp"
@@ -13,6 +14,7 @@
 #include "gui/rmlui/elements/python_editor_element.hpp"
 #include "gui/rmlui/elements/scene_graph_element.hpp"
 #include "gui/rmlui/elements/terminal_element.hpp"
+#include "gui/rmlui/elements/vram_timeline_element.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_text_input_handler.hpp"
@@ -27,6 +29,8 @@
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/ElementInstancer.h>
+#include <RmlUi/Core/Elements/ElementFormControlInput.h>
+#include <RmlUi/Core/Elements/ElementFormControlTextArea.h>
 #include <RmlUi/Core/Factory.h>
 #include <RmlUi/Core/Matrix4.h>
 #include <RmlUi/Debugger.h>
@@ -36,6 +40,7 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -47,6 +52,24 @@
 namespace lfs::vis::gui {
 
     namespace {
+        // Text field values never pass through TranslateString, so typed, pasted
+        // and bound values report emoji here for the fallback font.
+        template <typename FormControl>
+        class TextFieldNotingEmoji final : public FormControl {
+        public:
+            using FormControl::FormControl;
+
+        protected:
+            void OnAttributeChange(const Rml::ElementAttributes& changed_attributes) override {
+                FormControl::OnAttributeChange(changed_attributes);
+                const auto value = changed_attributes.find("value");
+                if (value == changed_attributes.end())
+                    return;
+                if (auto* const system_interface = dynamic_cast<RmlSystemInterface*>(Rml::GetSystemInterface()))
+                    system_interface->noteShownText(value->second.Get<Rml::String>());
+            }
+        };
+
         bool pointInRect(const RmlRect& rect, const float x, const float y) {
             return x >= rect.x1 && y >= rect.y1 && x < rect.x2 && y < rect.y2;
         }
@@ -186,10 +209,15 @@ namespace lfs::vis::gui {
             return false;
         }
 
+        static Rml::ElementInstancerGeneric<TextFieldNotingEmoji<Rml::ElementFormControlInput>> input_instancer;
+        static Rml::ElementInstancerGeneric<TextFieldNotingEmoji<Rml::ElementFormControlTextArea>> textarea_instancer;
+        Rml::Factory::RegisterElementInstancer("input", &input_instancer);
+        Rml::Factory::RegisterElementInstancer("textarea", &textarea_instancer);
         static Rml::ElementInstancerGeneric<ChromaticityElement> chromaticity_instancer;
         static Rml::ElementInstancerGeneric<ColorPickerElement> color_picker_instancer;
         static Rml::ElementInstancerGeneric<CRFCurveElement> crf_curve_instancer;
         static Rml::ElementInstancerGeneric<LossGraphElement> loss_graph_instancer;
+        static Rml::ElementInstancerGeneric<VramTimelineElement> vram_timeline_instancer;
         static Rml::ElementInstancerGeneric<PythonEditorElement> python_editor_instancer;
         static Rml::ElementInstancerGeneric<SceneGraphElement> scene_graph_instancer;
         static Rml::ElementInstancerGeneric<TerminalElement> terminal_instancer;
@@ -197,6 +225,7 @@ namespace lfs::vis::gui {
         Rml::Factory::RegisterElementInstancer("color-picker", &color_picker_instancer);
         Rml::Factory::RegisterElementInstancer("crf-curve", &crf_curve_instancer);
         Rml::Factory::RegisterElementInstancer("loss-graph", &loss_graph_instancer);
+        Rml::Factory::RegisterElementInstancer("vram-timeline", &vram_timeline_instancer);
         Rml::Factory::RegisterElementInstancer("python-editor-view", &python_editor_instancer);
         Rml::Factory::RegisterElementInstancer("scene-graph", &scene_graph_instancer);
         Rml::Factory::RegisterElementInstancer("terminal-view", &terminal_instancer);
@@ -329,6 +358,87 @@ namespace lfs::vis::gui {
         cjk_fonts_loaded_ = any_loaded;
         if (any_loaded)
             Rml::ReleaseFontResources();
+    }
+
+    namespace {
+        std::string systemEmojiFontPath() {
+#ifdef _WIN32
+            const char* const windir = std::getenv("WINDIR");
+            const std::filesystem::path candidate =
+                std::filesystem::path(windir ? windir : "C:\\Windows") / "Fonts" / "seguiemj.ttf";
+            std::error_code ec;
+            return std::filesystem::is_regular_file(candidate, ec) ? lfs::core::path_to_utf8(candidate) : std::string{};
+#elif defined(__APPLE__)
+            // Apple Color Emoji is a collection of roughly 180 MB; holding it in memory is not worth a fallback.
+            return {};
+#else
+            constexpr std::array<const char*, 7> candidates = {
+                "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+                "/usr/share/fonts/noto/NotoColorEmoji.ttf",
+                "/usr/share/fonts/google-noto-emoji/NotoColorEmoji.ttf",
+                "/usr/share/fonts/google-noto-color-emoji-fonts/NotoColorEmoji.ttf",
+                "/usr/share/fonts/noto-emoji/NotoColorEmoji.ttf",
+                "/usr/share/fonts/TTF/NotoColorEmoji.ttf",
+                "/usr/local/share/fonts/NotoColorEmoji.ttf",
+            };
+            for (const char* const candidate : candidates) {
+                std::error_code ec;
+                if (std::filesystem::is_regular_file(candidate, ec))
+                    return candidate;
+            }
+            return {};
+#endif
+        }
+
+        std::vector<std::byte> readFontFile(const std::string& path) {
+            std::vector<std::byte> bytes;
+            std::ifstream f(lfs::core::utf8_to_path(path), std::ios::binary | std::ios::ate);
+            if (!f)
+                return bytes;
+            const auto size = f.tellg();
+            if (size <= 0)
+                return bytes;
+            f.seekg(0, std::ios::beg);
+            bytes.resize(static_cast<std::size_t>(size));
+            if (!f.read(reinterpret_cast<char*>(bytes.data()), size))
+                bytes.clear();
+            return bytes;
+        }
+    } // namespace
+
+    void RmlUIManager::serviceEmojiFont() {
+        if (emoji_font_settled_ || !initialized_)
+            return;
+        if (!emoji_font_read_.valid()) {
+            if (!system_interface_ || !system_interface_->sawAstralText())
+                return;
+            emoji_font_path_ = systemEmojiFontPath();
+            if (emoji_font_path_.empty()) {
+                LOG_INFO("RmlUI: no system color emoji font found; emoji show as missing glyphs");
+                emoji_font_settled_ = true;
+                return;
+            }
+            emoji_font_read_ = std::async(std::launch::async, readFontFile, emoji_font_path_);
+            return;
+        }
+        if (emoji_font_read_.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+            return;
+        emoji_font_settled_ = true;
+        auto bytes = emoji_font_read_.get();
+        if (bytes.empty()) {
+            LOG_WARN("RmlUI: failed to read emoji font {}", emoji_font_path_);
+            return;
+        }
+        font_blobs_.push_back(std::move(bytes));
+        const auto& blob = font_blobs_.back();
+        const Rml::Span<const Rml::byte> data{reinterpret_cast<const Rml::byte*>(blob.data()), blob.size()};
+        if (!Rml::LoadFontFace(data, "Emoji", Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Normal, true)) {
+            LOG_WARN("RmlUI: failed to register emoji font {}", emoji_font_path_);
+            font_blobs_.pop_back();
+            return;
+        }
+        LOG_INFO("RmlUI: loaded emoji font {}", emoji_font_path_);
+        Rml::ReleaseFontResources();
     }
 
     void RmlUIManager::shutdown() {
@@ -538,12 +648,14 @@ namespace lfs::vis::gui {
         const TrackedContextFrame* top_overlay_context = nullptr;
         const TrackedContextFrame* top_context = nullptr;
         bool any_active_context = false;
+        bool any_tooltip_context = false;
         for (const auto& [_, frame] : tracked_context_frames_) {
             auto* const context = frame.context;
             if (!context)
                 continue;
 
             auto* const hover = context->GetHoverElement();
+            any_tooltip_context |= frame.needs_passive_mouse_move_frames;
             if (frame.needs_passive_mouse_move_frames ||
                 (hover && hover->GetTagName() != "body")) {
                 any_active_context = true;
@@ -573,6 +685,10 @@ namespace lfs::vis::gui {
         if (top_overlay_context)
             top_context = top_overlay_context;
 
+        // A tooltip anywhere must see the pointer leave so it can hide, even
+        // when another context is under the pointer.
+        if (any_tooltip_context)
+            return true;
         if (!top_context)
             return any_active_context;
 

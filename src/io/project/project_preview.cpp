@@ -109,7 +109,8 @@ namespace lfs::io::project {
             if (!lfs::io::is_image_file(path)) {
                 continue;
             }
-            auto key = path.filename().generic_string();
+            auto key = lfs::core::path_to_generic_utf8(
+                path.filename());
             if (!first || key < first_key) {
                 first = std::move(path);
                 first_key = std::move(key);

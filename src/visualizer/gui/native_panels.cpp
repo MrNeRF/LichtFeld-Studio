@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/native_panels.hpp"
+#include "core/logger.hpp"
 #include "gui/gizmo_manager.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/line_renderer.hpp"
@@ -11,7 +12,6 @@
 #include "gui/panel_registry.hpp"
 #include "gui/rml_status_bar.hpp"
 #include "gui/sequencer_ui_manager.hpp"
-#include "gui/startup_overlay.hpp"
 #include "internal/viewport.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
@@ -138,20 +138,6 @@ namespace lfs::vis::gui::native_panels {
     void VideoExtractorPanel::reloadRmlResources() {
         if (widget_)
             widget_->reloadRmlResources();
-    }
-
-    StartupOverlayPanel::StartupOverlayPanel(StartupOverlay* overlay, const bool* drag_hovering)
-        : overlay_(overlay),
-          drag_hovering_(drag_hovering) {}
-
-    void StartupOverlayPanel::draw(const PanelDrawContext& ctx) {
-        if (ctx.viewport)
-            overlay_->render(*ctx.viewport, drag_hovering_ ? *drag_hovering_ : false);
-    }
-
-    bool StartupOverlayPanel::poll(const PanelDrawContext& ctx) {
-        (void)ctx;
-        return overlay_->isVisible();
     }
 
     SelectionOverlayPanel::SelectionOverlayPanel(GuiManager* gui)

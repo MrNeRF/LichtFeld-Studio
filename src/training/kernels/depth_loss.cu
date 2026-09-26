@@ -823,26 +823,6 @@ namespace lfs::training::kernels {
         return anchor;
     }
 
-    DepthAnchor fit_depth_anchor(
-        const float* points_xyz,
-        const size_t num_points,
-        const float* w2c,
-        const float fx,
-        const float fy,
-        const float cx,
-        const float cy,
-        const float* prior,
-        const int width,
-        const int height,
-        const float near_plane,
-        const float aabb_lo[3],
-        const float aabb_hi[3],
-        cudaStream_t stream) {
-        return fit_depth_anchor_from_samples(collect_depth_anchor_samples(
-            points_xyz, num_points, w2c, fx, fy, cx, cy,
-            prior, width, height, near_plane, aabb_lo, aabb_hi, stream));
-    }
-
     namespace {
         template <bool Weighted>
         void launch_depth_loss_impl(

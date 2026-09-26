@@ -20,6 +20,7 @@
   "enable_eval": false,
   "enable_save_eval_images": true,
   "enable_sparsity": false,
+  "eval_all": false,
   "eval_steps": [
     7000,
     30000

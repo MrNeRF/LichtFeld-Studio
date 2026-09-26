@@ -30,6 +30,8 @@
 
 #histogram-shell.is-floating {
     padding-top: 10dp;
+    margin-right: 6dp;
+    margin-bottom: 6dp;
 }
 
 #histogram-floating-header {

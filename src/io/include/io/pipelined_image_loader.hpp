@@ -6,6 +6,7 @@
 #include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_upload.hpp"
 #include "io/cache_image_loader.hpp"
 
 #include <algorithm>
@@ -70,6 +71,10 @@ namespace lfs::io {
     constexpr size_t DECODE_FRAME_RING_CAPACITY = 14;
 
     struct PipelinedLoaderConfig {
+        // Tensor backend of the run, fixed for the loader's lifetime. Only CUDA
+        // uses nvImageCodec and CUDA queues; other backends decode on the host
+        // and convert with general tensor operations.
+        lfs::core::GpuBackend backend = lfs::core::GpuBackend::CUDA;
         size_t jpeg_batch_size = config::DEFAULT_BATCH_SIZE;
         size_t prefetch_count = config::DEFAULT_PREFETCH_COUNT;
         size_t output_queue_size = config::DEFAULT_OUTPUT_QUEUE_SIZE;
@@ -133,6 +138,8 @@ namespace lfs::io {
         lfs::core::Tensor tensor;              // Image tensor [C,H,W], float32
         std::optional<lfs::core::Tensor> mask; // Optional mask [H,W], float32
         cudaStream_t stream = nullptr;
+        std::optional<lfs::core::TensorFence> image_ready = {};
+        std::optional<lfs::core::TensorFence> mask_ready = {};
         std::optional<lfs::core::Tensor> depth;  // Optional depth [H,W], float32
         std::optional<lfs::core::Tensor> normal; // Optional normals [3,H,W], float32 in [-1,1]
         // Depth and normal record readiness on different worker streams, so
@@ -245,6 +252,9 @@ namespace lfs::io {
         [[nodiscard]] size_t adaptive_prefetch_target() const;
         void clear();
         void reclaim_idle_decoded_frames();
+        // Moves least recently used cached images from RAM to the run spill until at
+        // least `bytes` are released or none remain; returns the bytes released.
+        size_t release_host_cache(size_t bytes);
         void shutdown();
         bool is_running() const { return running_.load(); }
         CacheStats get_stats() const;
@@ -252,6 +262,8 @@ namespace lfs::io {
         [[nodiscard]] std::filesystem::path run_spill_directory() const;
 
     private:
+        friend struct PipelinedImageLoaderTestAccess;
+
         struct PrefetchedImage {
             size_t sequence_id;
             std::uint64_t loader_generation = 0;
@@ -288,6 +300,8 @@ namespace lfs::io {
             std::optional<lfs::core::Tensor> depth;
             std::optional<lfs::core::Tensor> normal;
             cudaStream_t stream = nullptr;
+            std::optional<lfs::core::TensorFence> image_ready = {};
+            std::optional<lfs::core::TensorFence> mask_ready = {};
             CUevent_st* depth_ready_event = nullptr;
             CUevent_st* normal_ready_event = nullptr;
             bool mask_expected = false; // True if a mask was requested for this sequence_id
@@ -410,6 +424,10 @@ namespace lfs::io {
         void prefetch_thread_func();
         void gpu_batch_decode_thread_func();
         void cold_process_thread_func(size_t worker_index);
+        void portable_process_thread_func();
+        lfs::core::Tensor decode_portable_rgb(const std::filesystem::path& path,
+                                              const LoadParams& params,
+                                              lfs::core::TensorUpload& upload) const;
 
         std::string make_cache_key(const std::filesystem::path& path, const LoadParams& params) const;
         bool is_jpeg_data(const std::vector<uint8_t>& data) const;
@@ -444,6 +462,8 @@ namespace lfs::io {
         void put_in_jpeg_cache(const std::string& cache_key, std::vector<uint8_t>&& data);
         void invalidate_cache_entry(const std::string& cache_key);
         void evict_jpeg_cache_if_needed(size_t required_bytes);
+        size_t spill_least_recent_until_locked(size_t cached_bytes_target);
+        void relieve_host_memory_pressure();
         void spill_cache_entry_locked(const std::string& cache_key,
                                       const std::shared_ptr<std::vector<uint8_t>>& data);
         void cleanup_run_spill_directory();
@@ -501,7 +521,8 @@ namespace lfs::io {
         // Non-blocking stream for the hot GPU decode path, so image decode and
         // H2D work overlap training instead of serializing on the legacy stream.
         // Images are still stream-synced before handoff (materialized on arrival).
-        mutable std::mutex decode_stream_mutex_;
+        std::unique_ptr<lfs::core::TensorWorkQueue> decode_queue_;
+        std::vector<std::unique_ptr<lfs::core::TensorWorkQueue>> sidecar_queues_;
         mutable cudaStream_t decode_stream_ = nullptr;
         std::vector<cudaStream_t> sidecar_streams_;
 
@@ -518,6 +539,7 @@ namespace lfs::io {
         std::unordered_map<std::string, JpegCacheEntry> jpeg_cache_;
         mutable std::mutex jpeg_cache_mutex_;
         std::atomic<size_t> jpeg_cache_bytes_{0};
+        std::atomic<std::int64_t> next_host_memory_check_ns_{0};
 
         struct SpillCacheEntry {
             std::filesystem::path path;

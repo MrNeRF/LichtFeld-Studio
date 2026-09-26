@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "cuda_backend_test.hpp"
 #include <cmath>
 #include <core/tensor.hpp>
 #include <gtest/gtest.h>
@@ -9,14 +10,18 @@
 
 using namespace lfs::core;
 
-class TensorReductionAlignmentTest : public ::testing::Test {
+class TensorReductionAlignmentTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         cudaDeviceSynchronize();
         cudaGetLastError();
     }
 
     void TearDown() override {
+        if (IsSkipped()) {
+            return;
+        }
         cudaDeviceSynchronize();
         const cudaError_t err = cudaGetLastError();
         ASSERT_EQ(err, cudaSuccess) << "CUDA error: " << cudaGetErrorString(err);

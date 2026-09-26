@@ -51,6 +51,7 @@ and RmlUI imports are controlled by `LFS_DEV_IMPORT_SOURCE_PYTHON` and
 | `LFS_CUDA_SYNC_DEBUG` | unset (no modes) | The single runtime diagnostics control. Comma-separated mode list: `cuda-sync`, `device-trap`, `vk-fatal`. See below. |
 | `LFS_NO_CRASH_HANDLER` | `OFF` | Leaves fatal signals and unhandled exceptions to an attached debugger or sanitizer. |
 | `LFS_VK_VALIDATION` | CMake default | Requests Vulkan validation at startup. Set `0` to override a validation-enabled developer build. |
+| `LFS_GSPLAT_PAIR_BUDGET` | automatic | Lowers the gsplat pair budget for tile-batching validation; see below. |
 | `LFS_VRAM_RESERVE_MB` | `512` | Memory-pressure headroom, clamped to 128 MiB through one quarter of device VRAM. |
 | `LFS_PINNED_CACHE_LIMIT_MB` | `1024` | Pinned-host cache byte budget. |
 | `LFS_NVCODEC_DIAGNOSTICS` | `OFF` | Logs nvImageCodec and dependent-library discovery details. |
@@ -100,6 +101,7 @@ The standalone `scripts/lichtfeld_mcp_bridge.py` process uses the same prefix:
 | --- | --- | --- |
 | `LFS_EXECUTABLE` | Repo build directories | Explicit app executable. |
 | `LFS_MCP_ENDPOINT` | `http://127.0.0.1:45677/mcp` | HTTP endpoint proxied over stdio. |
+| `LFS_MCP_TOKEN` | Unset | Access token for an exposed MCP endpoint. |
 | `LFS_MCP_START_TIMEOUT_S` | `90` | App startup timeout in seconds. |
 | `LFS_MCP_BRIDGE_LOG` | `~/.codex/log/lichtfeld-mcp-bridge.log` | Bridge and launched-app log. |
 | `LFS_MCP_BRIDGE_LOCK` | `~/.codex/log/lichtfeld-mcp-bridge.lock` | Cross-process startup lock. |
@@ -144,3 +146,23 @@ The packaged `1.4.313.0~rc2` validation layer is not accepted as proof for this
 codebase: its GPU-assisted push-descriptor behavior is stale and it has missed
 violations detected by current upstream builds. Do not suppress either class of
 message.
+
+## gsplat tile-batching validation
+
+`LFS_GSPLAT_PAIR_BUDGET=<positive integer>` lowers the target intersection count
+per batch. The automatic target is the smaller of `INT32_MAX` pairs and free CUDA
+bytes / 64, sampled on first use of the thread-local intersection cache. Invalid
+or zero values retain the automatic target. A whole tile is indivisible, so the
+target can be exceeded by a single-tile batch (at most `C*N` pairs).
+Releasing the intersection cache also resets the budget.
+
+Only frames above that budget are split. Batches contain disjoint whole tiles,
+use the original full-image camera, and replay the same partition in backward.
+The override is useful for comparing RGB/alpha exactly and gradients within the
+existing atomic-accumulation tolerance on small fixtures. It does not cap splat
+footprints or discard intersections.
+
+```sh
+LFS_GSPLAT_PAIR_BUDGET=1 build/tests/gsplat_tests --gtest_filter='GsplatRasterizerTest.GutFromWorld*'
+GUT_LARGE_FRAME=1 build/tests/gsplat_tests --gtest_filter=GsplatRasterizerTest.AggregateOverflowTrainingStep
+```

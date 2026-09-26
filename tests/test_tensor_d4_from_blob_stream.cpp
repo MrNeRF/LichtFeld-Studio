@@ -9,6 +9,7 @@
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "core/tensor/internal/lazy_executor.hpp"
 #include "core/tensor/internal/lazy_ir.hpp"
+#include "cuda_backend_test.hpp"
 #include "tensor_hardening_test_utils.hpp"
 
 #include <array>
@@ -134,12 +135,9 @@ namespace {
 
 } // namespace
 
-class TensorD4FromBlobHomeStreamTest : public ::testing::Test {};
+class TensorD4FromBlobHomeStreamTest : public lfs::test::CudaBackendTest {};
 
 TEST_F(TensorD4FromBlobHomeStreamTest, FromBlobCuda_DefaultHomeIsNull) {
-    if (!tensor_hardening::has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
     requireCudaDevice();
 
     DeviceBuffer buffer(kValueBytes);
@@ -153,9 +151,6 @@ TEST_F(TensorD4FromBlobHomeStreamTest, FromBlobCuda_DefaultHomeIsNull) {
 }
 
 TEST_F(TensorD4FromBlobHomeStreamTest, FromBlobCuda_WithHome_StreamMetadata) {
-    if (!tensor_hardening::has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
     requireCudaDevice();
 
     DeviceBuffer buffer(kValueBytes);
@@ -180,9 +175,6 @@ TEST_F(TensorD4FromBlobHomeStreamTest, FromBlobCuda_WithHome_StreamMetadata) {
 }
 
 TEST_F(TensorD4FromBlobHomeStreamTest, FromBlobCuda_WithHome_ViewInheritsStream) {
-    if (!tensor_hardening::has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
     requireCudaDevice();
 
     DeviceBuffer buffer(kValueBytes);
@@ -202,9 +194,6 @@ TEST_F(TensorD4FromBlobHomeStreamTest, FromBlobCuda_WithHome_ViewInheritsStream)
 }
 
 TEST_F(TensorD4FromBlobHomeStreamTest, FromBlobCuda_WithHome_SyncToStreamOrdersReader) {
-    if (!tensor_hardening::has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
     requireCudaDevice();
 
     DeviceBuffer buffer(kValueBytes);
@@ -227,9 +216,6 @@ TEST_F(TensorD4FromBlobHomeStreamTest, FromBlobCuda_WithHome_SyncToStreamOrdersR
 }
 
 TEST_F(TensorD4FromBlobHomeStreamTest, FromBlobCuda_NullHome_RecordStreamIsStillNoop) {
-    if (!tensor_hardening::has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
     requireCudaDevice();
 
     DeviceBuffer buffer(kValueBytes);
@@ -246,9 +232,6 @@ TEST_F(TensorD4FromBlobHomeStreamTest, FromBlobCuda_NullHome_RecordStreamIsStill
 
 TEST_F(TensorD4FromBlobHomeStreamTest,
        FromBlobCuda_WithHome_RecordStreamRemainsNoopForFreeTracking) {
-    if (!tensor_hardening::has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
     requireCudaDevice();
 
     DeviceBuffer buffer(kValueBytes);
@@ -275,9 +258,6 @@ TEST_F(TensorD4FromBlobHomeStreamTest, FromBlobHost_HomeDefaultIgnored) {
 }
 
 TEST_F(TensorD4FromBlobHomeStreamTest, GsplatContract_ArenaViewStamp_Unit) {
-    if (!tensor_hardening::has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
     requireCudaDevice();
 
     DeviceBuffer buffer(kValueBytes);
@@ -303,9 +283,6 @@ TEST_F(TensorD4FromBlobHomeStreamTest, GsplatContract_ArenaViewStamp_Unit) {
 }
 
 TEST_F(TensorD4FromBlobHomeStreamTest, CpuOfStampedBlobOrdersAfterProducer) {
-    if (!tensor_hardening::has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
     requireCudaDevice();
 
     DeviceBuffer buffer(kValueBytes);
@@ -321,9 +298,6 @@ TEST_F(TensorD4FromBlobHomeStreamTest, CpuOfStampedBlobOrdersAfterProducer) {
 }
 
 TEST_F(TensorD4FromBlobHomeStreamTest, ItemTypedDrainsStampedHome) {
-    if (!tensor_hardening::has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
     requireCudaDevice();
 
     DeviceBuffer buffer(sizeof(int));
@@ -341,9 +315,6 @@ TEST_F(TensorD4FromBlobHomeStreamTest, ItemTypedDrainsStampedHome) {
 }
 
 TEST_F(TensorD4FromBlobHomeStreamTest, FloatItemSynchronizesRegardlessOfHome) {
-    if (!tensor_hardening::has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
     requireCudaDevice();
 
     DeviceBuffer buffer(sizeof(float));
@@ -361,9 +332,6 @@ TEST_F(TensorD4FromBlobHomeStreamTest, FloatItemSynchronizesRegardlessOfHome) {
 }
 
 TEST_F(TensorD4FromBlobHomeStreamTest, PinOperandsOnNonOwningIsNoop) {
-    if (!tensor_hardening::has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
     requireCudaDevice();
 
     DeviceBuffer buffer(kValueBytes);
@@ -383,9 +351,6 @@ TEST_F(TensorD4FromBlobHomeStreamTest, PinOperandsOnNonOwningIsNoop) {
 }
 
 TEST_F(TensorD4FromBlobHomeStreamTest, StampedBlobThroughPinnedOpCrossStream) {
-    if (!tensor_hardening::has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
     requireCudaDevice();
 
     DeviceBuffer buffer(kValueBytes);
@@ -411,9 +376,6 @@ TEST_F(TensorD4FromBlobHomeStreamTest, StampedBlobThroughPinnedOpCrossStream) {
 
 TEST_F(TensorD4FromBlobHomeStreamTest,
        DeferredSetStreamKeepsMetadataAndStaysDeferred) {
-    if (!tensor_hardening::has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
     requireCudaDevice();
 
     LazyStateReset lazy_state;

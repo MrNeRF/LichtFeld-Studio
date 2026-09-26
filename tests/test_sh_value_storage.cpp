@@ -3,11 +3,15 @@
 
 #include "core/camera.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/logger.hpp"
 #include "core/scene.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_cuda_interop.hpp"
+#include "core/tensor_upload.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/ply.hpp"
 #include "io/loader.hpp"
@@ -18,6 +22,8 @@
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/fastgs/rasterization/include/rasterization_config.h"
+#include "training/strategies/mcmc.hpp"
+#include "training/strategies/strategy_utils.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -174,7 +180,10 @@ namespace {
 
 } // namespace
 
-TEST(ShValueStorageTest, GpuEncodeDecodeRoundtripLowMse) {
+class ShValueStorageTest : public lfs::test::CudaBackendTest {};
+class ShDegreeCollisionTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(ShValueStorageTest, GpuEncodeDecodeRoundtripLowMse) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
     auto splat = make_random_sh3(kN);
     const auto before = splat.shN_canonical().cpu().contiguous();
@@ -195,7 +204,55 @@ TEST(ShValueStorageTest, GpuEncodeDecodeRoundtripLowMse) {
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-TEST(ShValueStorageTest, CanonicalExportIsFp32BitCompat) {
+// Catches the q16 block-run workspace keeping buffers bound to the stream that first
+// grew it: growing it after that stream is destroyed freed on a dead handle, which
+// segfaults or reports cudaErrorContextIsDestroyed after switching projects.
+TEST_F(ShValueStorageTest, Q16WorkspaceGrowthAfterReleasedStreamDoesNotReportCudaFailure) {
+    auto loaded = lfs::io::load_ply(
+        std::filesystem::path(TEST_DATA_DIR) / "kerstbol-isolated-rotated_137502.ply");
+    ASSERT_TRUE(loaded.has_value()) << lfs::format_for_developer(loaded.error());
+    SplatData& splat = loaded->value;
+    const auto rows = static_cast<size_t>(splat.size());
+    const Tensor canonical = splat.shN_canonical();
+    ASSERT_EQ(canonical.ndim(), 3u);
+    ASSERT_EQ(canonical.shape()[0], rows);
+
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+
+    cudaStream_t stream_a = nullptr;
+    cudaStream_t stream_b = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&stream_a, cudaStreamNonBlocking), cudaSuccess);
+    ASSERT_EQ(cudaStreamCreateWithFlags(&stream_b, cudaStreamNonBlocking), cudaSuccess);
+
+    const auto scatter_rows = [&](const cudaStream_t stream, const size_t count) {
+        CUDAStreamGuard stream_guard(stream);
+        const Tensor indices = Tensor::arange(static_cast<float>(count)).to(DataType::Int64);
+        LiveModelMutationGuard mutation_guard("q16_workspace_stream_lifetime_test");
+        sh_value::scatter_canonical_into_shN(
+            splat, indices, canonical.slice(0, 0, count).contiguous());
+    };
+
+    scatter_rows(stream_a, rows / 2);
+    release_cuda_stream(stream_a);
+    ASSERT_EQ(cudaStreamDestroy(stream_a), cudaSuccess);
+
+    const auto log_generation = Logger::get().buffered_log_generation();
+    scatter_rows(stream_b, rows);
+
+    const auto logs = Logger::get().buffered_logs_since(log_generation, 64);
+    const bool stale_stream_free = std::any_of(
+        logs.begin(), logs.end(), [](const LogEntrySnapshot& entry) {
+            return entry.message.find("stream-ordered CUDA allocation free") != std::string::npos;
+        });
+    EXPECT_FALSE(stale_stream_free);
+
+    release_cuda_stream(stream_b);
+    EXPECT_EQ(cudaStreamDestroy(stream_b), cudaSuccess);
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST_F(ShValueStorageTest, CanonicalExportIsFp32BitCompat) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
     auto splat = make_random_sh3(64);
     const auto ref = splat.shN_canonical().cpu().contiguous();
@@ -219,7 +276,7 @@ TEST(ShValueStorageTest, CanonicalExportIsFp32BitCompat) {
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-TEST(ShValueStorageTest, Q16CanonicalCpuMatchesDevicePath) {
+TEST_F(ShValueStorageTest, Q16CanonicalCpuMatchesDevicePath) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
     auto splat = make_random_sh3(kN);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
@@ -234,7 +291,20 @@ TEST(ShValueStorageTest, Q16CanonicalCpuMatchesDevicePath) {
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-TEST(ShValueStorageTest, IeeeF16CanonicalCpuMatchesDevicePath) {
+TEST_F(ShValueStorageTest, PlyRestMatchesCanonicalAcrossDecodeChunks) {
+    constexpr size_t n = (size_t{1} << 20) + 777;
+    for (const bool quantize : {false, true}) {
+        sh_value::set_sh_value_quant_enabled_for_testing(quantize);
+        auto splat = make_random_sh3(n);
+        if (quantize)
+            ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+        const auto expected = splat.shN_canonical_cpu().permute({0, 2, 1}).contiguous().reshape({static_cast<int>(n), 45});
+        expect_tensors_bitwise_equal(splat.shN_ply_rest_cpu(), expected, quantize ? "q16 ply rest" : "float ply rest");
+    }
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST_F(ShValueStorageTest, IeeeF16CanonicalCpuMatchesDevicePath) {
     auto splat = make_random_sh3(64);
     splat.shN() = splat.shN().to(DataType::Float16);
     ASSERT_TRUE(splat.shN_ieee_f16());
@@ -247,7 +317,7 @@ TEST(ShValueStorageTest, IeeeF16CanonicalCpuMatchesDevicePath) {
     expect_tensors_bitwise_equal(cpu, device_cpu, "ieee-f16 canonical cpu vs device");
 }
 
-TEST(ShValueStorageTest, Q16CloneCarriesBoundsAndDecodesIdentically) {
+TEST_F(ShValueStorageTest, Q16CloneCarriesBoundsAndDecodesIdentically) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
     auto source = make_random_sh3(kN);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(source));
@@ -277,7 +347,7 @@ TEST(ShValueStorageTest, Q16CloneCarriesBoundsAndDecodesIdentically) {
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-TEST(ShValueStorageTest, ViewerExternalBindAcceptsCompleteQ16PairWithoutRehome) {
+TEST_F(ShValueStorageTest, ViewerExternalBindAcceptsCompleteQ16PairWithoutRehome) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
     auto splat = make_random_sh3(64);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
@@ -295,7 +365,7 @@ TEST(ShValueStorageTest, ViewerExternalBindAcceptsCompleteQ16PairWithoutRehome) 
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-TEST(ShValueStorageTest, ViewerExternalBindRehomesDegradedQ16BoundsAsPair) {
+TEST_F(ShValueStorageTest, ViewerExternalBindRehomesDegradedQ16BoundsAsPair) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
     auto splat = make_random_sh3(64);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
@@ -315,7 +385,7 @@ TEST(ShValueStorageTest, ViewerExternalBindRehomesDegradedQ16BoundsAsPair) {
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-TEST(ShValueStorageTest, ViewerExternalBindRehomesDegradedQ16CodesAsPair) {
+TEST_F(ShValueStorageTest, ViewerExternalBindRehomesDegradedQ16CodesAsPair) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
     auto splat = make_random_sh3(64);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
@@ -335,7 +405,7 @@ TEST(ShValueStorageTest, ViewerExternalBindRehomesDegradedQ16CodesAsPair) {
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-TEST(ShValueStorageTest, Q16DeletedMaskSceneMergeAndPlyExport) {
+TEST_F(ShValueStorageTest, Q16DeletedMaskSceneMergeAndPlyExport) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
     auto splat = make_random_sh3(64);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
@@ -367,7 +437,7 @@ TEST(ShValueStorageTest, Q16DeletedMaskSceneMergeAndPlyExport) {
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-TEST(ShValueStorageTest, Q16BorrowSingleIdentityMergePreservesQuantAndPly) {
+TEST_F(ShValueStorageTest, Q16BorrowSingleIdentityMergePreservesQuantAndPly) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
     auto splat = make_random_sh3(64);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
@@ -418,7 +488,7 @@ TEST(ShValueStorageTest, Q16BorrowSingleIdentityMergePreservesQuantAndPly) {
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-TEST(ShValueStorageTest, Q16MultiSourceIdentityMergeDecodesFloat) {
+TEST_F(ShValueStorageTest, Q16MultiSourceIdentityMergeDecodesFloat) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
     auto a = make_random_sh3(64, /*seed=*/0xA101);
     auto b = make_random_sh3(64, /*seed=*/0xB202);
@@ -471,7 +541,7 @@ TEST(ShValueStorageTest, Q16MultiSourceIdentityMergeDecodesFloat) {
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-TEST(ShValueStorageTest, Q16MultiSourceTranslationMergeDecodesFloat) {
+TEST_F(ShValueStorageTest, Q16MultiSourceTranslationMergeDecodesFloat) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
     auto a = make_random_sh3(64, /*seed=*/0xA301);
     auto b = make_random_sh3(64, /*seed=*/0xB302);
@@ -507,7 +577,7 @@ TEST(ShValueStorageTest, Q16MultiSourceTranslationMergeDecodesFloat) {
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-TEST(ShValueStorageTest, DensifyExpandCommitPreservesValues) {
+TEST_F(ShValueStorageTest, DensifyExpandCommitPreservesValues) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
     auto splat = make_random_sh3(kN);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
@@ -526,7 +596,7 @@ TEST(ShValueStorageTest, DensifyExpandCommitPreservesValues) {
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-TEST(ShValueStorageTest, ScopeExitCommitContainsAllocatorFailure) {
+TEST_F(ShValueStorageTest, ScopeExitCommitContainsAllocatorFailure) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
     auto splat = make_random_sh3(16);
     int allocation_attempts = 0;
@@ -548,7 +618,7 @@ TEST(ShValueStorageTest, ScopeExitCommitContainsAllocatorFailure) {
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-TEST(ShValueStorageTest, KernelEncodeDecodeMatchesHost) {
+TEST_F(ShValueStorageTest, KernelEncodeDecodeMatchesHost) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
     constexpr size_t n = 64;
     constexpr uint32_t rest = 15;
@@ -605,7 +675,7 @@ TEST(ShValueStorageTest, KernelEncodeDecodeMatchesHost) {
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-TEST(ShValueStorageTest, LedgerBpsUnder307WithJoint) {
+TEST_F(ShValueStorageTest, LedgerBpsUnder307WithJoint) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
 
     // Large-N asymptotic: use N=1024 so bounds amortize.
@@ -626,7 +696,7 @@ TEST(ShValueStorageTest, LedgerBpsUnder307WithJoint) {
 }
 
 // Grow N across a 256-row block boundary, re-encode, then run FastGS forward.
-TEST(ShValueStorageTest, PostDensifyReencodeThenFastGSForward) {
+TEST_F(ShValueStorageTest, PostDensifyReencodeThenFastGSForward) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
 
     constexpr size_t kCap = 2048;
@@ -756,7 +826,7 @@ TEST(ShValueStorageTest, PostDensifyReencodeThenFastGSForward) {
 // FastGS forward/backward must not illegal-address. Headless pool q16 already
 // has PostDensifyReencodeThenFastGSForward; this is the packed SoA path the
 // viewport zero-copy gate missed (gate ran -i 800 without a full densify).
-TEST(ShValueStorageTest, ExportableQ16DensifyThenFastGSForward) {
+TEST_F(ShValueStorageTest, ExportableQ16DensifyThenFastGSForward) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
 
     constexpr size_t kN0 = 512;
@@ -902,7 +972,7 @@ namespace {
     }
 } // namespace
 
-TEST(ShDegreeCollisionTest, Q16DegreeUpIsStorageNoOpAllDegrees) {
+TEST_F(ShDegreeCollisionTest, Q16DegreeUpIsStorageNoOpAllDegrees) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
     auto splat = make_random_sh3(kN);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
@@ -922,7 +992,7 @@ TEST(ShDegreeCollisionTest, Q16DegreeUpIsStorageNoOpAllDegrees) {
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-TEST(ShDegreeCollisionTest, DegreeUpInsideOpenMutationWindowBothOrders) {
+TEST_F(ShDegreeCollisionTest, DegreeUpInsideOpenMutationWindowBothOrders) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
     for (const bool increment_before_commit : {true, false}) {
         auto splat = make_random_sh3(kN);
@@ -946,7 +1016,7 @@ TEST(ShDegreeCollisionTest, DegreeUpInsideOpenMutationWindowBothOrders) {
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-TEST(ShDegreeCollisionTest, DegreeUpWithGrownMeansCapacitySameBoundary) {
+TEST_F(ShDegreeCollisionTest, DegreeUpWithGrownMeansCapacitySameBoundary) {
     // Densify grow raises means.capacity before/while codes grow. A degree-up on
     // the same boundary must either no-op (consistent q16) or fail loud — never
     // silently rewrite codes using float-topology sizing.
@@ -971,7 +1041,7 @@ TEST(ShDegreeCollisionTest, DegreeUpWithGrownMeansCapacitySameBoundary) {
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-TEST(ShDegreeCollisionTest, InconsistentQ16StorageFailsLoudNotSilentRepair) {
+TEST_F(ShDegreeCollisionTest, InconsistentQ16StorageFailsLoudNotSilentRepair) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
     auto splat = make_random_sh3(kN);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
@@ -981,7 +1051,7 @@ TEST(ShDegreeCollisionTest, InconsistentQ16StorageFailsLoudNotSilentRepair) {
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
-TEST(ShDegreeCollisionTest, MaxDegreeChangeOnQ16RelayoutsViaCanonical) {
+TEST_F(ShDegreeCollisionTest, MaxDegreeChangeOnQ16RelayoutsViaCanonical) {
     // A max-degree change on resident q16 runs the safe sequence internally:
     // decode -> fp32 relayout at the new topology -> leave unquantized for the
     // codec to requantize. Values of the kept coefficients survive exactly
@@ -1009,7 +1079,7 @@ TEST(ShDegreeCollisionTest, MaxDegreeChangeOnQ16RelayoutsViaCanonical) {
 // Force densification and degree growth at the same exportable q16 boundary,
 // across SH degrees 0..3, with capacity growth mid-window. The model must leave q16
 // resident after commit (no multi-iter float densify window) and survive FastGS.
-TEST(ShDegreeCollisionTest, ExportableDegreeUpGrowSameBoundaryAllDegrees) {
+TEST_F(ShDegreeCollisionTest, ExportableDegreeUpGrowSameBoundaryAllDegrees) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
 
     constexpr size_t kN0 = 512;
@@ -1143,7 +1213,7 @@ TEST(ShDegreeCollisionTest, ExportableDegreeUpGrowSameBoundaryAllDegrees) {
 
 // Cadence-misalign proxy: repeated densify windows with degree flips at every
 // boundary (interval-style). Storage remains q16 after each commit.
-TEST(ShDegreeCollisionTest, MisalignedCadenceDensifyDegreeSweep) {
+TEST_F(ShDegreeCollisionTest, MisalignedCadenceDensifyDegreeSweep) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
     auto splat = make_random_sh3(kN, /*seed=*/0xCAD3);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
@@ -1186,7 +1256,7 @@ TEST(ShDegreeCollisionTest, MisalignedCadenceDensifyDegreeSweep) {
 
 // Crossing stop_refine must keep q16 resident on both sides of the refinement
 // freeze.
-TEST(ShDegreeCollisionTest, StopRefineCrossingAlwaysCommitQ16Throughout) {
+TEST_F(ShDegreeCollisionTest, StopRefineCrossingAlwaysCommitQ16Throughout) {
     sh_value::set_sh_value_quant_enabled_for_testing(true);
     auto splat = make_random_sh3(kN, /*seed=*/0x57A8);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
@@ -1311,7 +1381,7 @@ namespace {
 
 } // namespace
 
-TEST(ShValueStorageTest, ChunkedRefineMutationTouchedBlocksMatchOldUntouchedStayPristine) {
+TEST_F(ShValueStorageTest, ChunkedRefineMutationTouchedBlocksMatchOldUntouchedStayPristine) {
     // Old full-expand commit_shN_after_mutation re-encodes every block from already
     // quantized values, so untouched blocks are not idempotent. The chunked path
     // must leave those blocks bit-identical to the pre-mutation snapshot and match
@@ -1469,4 +1539,71 @@ TEST(ShValueStorageTest, ChunkedRefineMutationTouchedBlocksMatchOldUntouchedStay
     expect_tensors_bitwise_equal(decoded_old, decoded_new, "decoded mutated shN rows");
 
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+}
+
+TEST_F(ShValueStorageTest, GradientZeroJoinsProducerAndPublishesOnExecutionQueue) {
+    TensorWorkQueue producer(GpuBackend::CUDA);
+    TensorWorkQueue consumer(GpuBackend::CUDA);
+    TensorWorkQueue::Scope producer_scope(producer);
+    auto splat = make_random_sh3(257);
+    MCMC strategy(splat);
+    param::OptimizationParameters options;
+    options.iterations = 100;
+    options.max_cap = 512;
+    strategy.initialize(options);
+    auto& gradient = strategy.get_optimizer().get_grad(ParamType::ShN);
+    gradient.fill_(0.5f);
+    auto indices = Tensor::from_vector(std::vector<int>{0, 17, 128, 256}, {4}, Device::GPU);
+    {
+        TensorWorkQueue::Scope consumer_scope(consumer);
+        zero_adam_grads_at_indices(strategy.get_optimizer(), indices, 15);
+        EXPECT_EQ(gradient.stream(), getCurrentCUDAStream());
+    }
+    consumer.wait();
+    auto host = gradient.cpu().to_vector();
+    std::vector<float> expected(host.size(), 0.5f);
+    for (const size_t row : {0, 17, 128, 256}) {
+        for (size_t slot = 0; slot < 12; ++slot) {
+            const size_t offset = ((row / 32) * 12 * 32 + slot * 32 + row % 32) * 4;
+            std::fill_n(expected.begin() + offset, 4, 0.0f);
+        }
+    }
+    ASSERT_EQ(host, expected);
+}
+
+TEST_F(ShValueStorageTest, CanonicalMutationsFollowExecutionQueue) {
+    TensorWorkQueue producer(GpuBackend::CUDA);
+    TensorWorkQueue consumer(GpuBackend::CUDA);
+    TensorWorkQueue::Scope producer_scope(producer);
+    auto splat = make_random_sh3(257);
+    const auto original = splat.shN_canonical().cpu().to_vector();
+    auto indices = Tensor::from_vector(std::vector<int>{256, 0, 128, 17}, {4}, Device::GPU);
+    auto destinations = Tensor::from_vector(std::vector<int>{3, 64, 129, 255}, {4}, Device::GPU);
+    Tensor gathered;
+    TensorWorkQueue::Scope consumer_scope(consumer);
+    sh_value::gather_shN_to_canonical(splat, indices, gathered);
+    std::vector<float> expected;
+    for (const size_t row : {256, 0, 128, 17}) {
+        expected.insert(expected.end(), original.begin() + row * 45, original.begin() + (row + 1) * 45);
+    }
+    EXPECT_EQ(gathered.cpu().to_vector(), expected);
+    sh_value::scatter_canonical_into_shN(splat, destinations, gathered);
+    EXPECT_EQ(splat.shN().stream(), getCurrentCUDAStream());
+    auto scattered = original;
+    size_t source = 0;
+    for (const size_t row : {3, 64, 129, 255}) {
+        std::copy_n(expected.begin() + source++ * 45, 45, scattered.begin() + row * 45);
+    }
+    EXPECT_EQ(splat.shN_canonical().cpu().to_vector(), scattered);
+    sh_value::append_canonical_to_shN(splat, gathered, 257);
+    auto tail = Tensor::from_vector(std::vector<int>{257, 258, 259, 260}, {4}, Device::GPU);
+    Tensor appended;
+    sh_value::gather_shN_to_canonical(splat, tail, appended, 261);
+    EXPECT_EQ(appended.cpu().to_vector(), expected);
+    sh_value::compact_shN_gather(splat, tail, 261, 300);
+    auto first = Tensor::from_vector(std::vector<int>{0, 1, 2, 3}, {4}, Device::GPU);
+    Tensor compacted;
+    sh_value::gather_shN_to_canonical(splat, first, compacted, 4);
+    EXPECT_EQ(compacted.cpu().to_vector(), expected);
+    consumer.wait();
 }

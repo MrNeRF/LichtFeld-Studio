@@ -121,7 +121,11 @@ namespace lfs::core {
     };
 
     template <class T>
+#if defined(__cpp_lib_move_only_function)
     using TaskBody = std::move_only_function<Result<T>()>;
+#else
+    using TaskBody = std::function<Result<T>()>;
+#endif
 
     // NOT noexcept-qualified — spec Section 0.3 records this as an
     // owner-approved amendment to 7.3's original noexcept-qualified alias,
@@ -130,7 +134,11 @@ namespace lfs::core {
     // try/catch could run, making "route to the fixed fallback" and
     // "process does not terminate" both false at once).
     template <class T>
+#if defined(__cpp_lib_move_only_function)
     using TaskCompletion = std::move_only_function<void(Result<T>&&)>;
+#else
+    using TaskCompletion = std::function<void(Result<T>&&)>;
+#endif
 
     // Wraps error in Result<T>'s failure state, dispatching on whether T is
     // void (Result<void>::failure(...)) or a value type (Result<T>(Error)) —

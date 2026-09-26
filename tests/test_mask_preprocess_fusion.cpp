@@ -3,6 +3,7 @@
 
 #include "core/alloc_counter.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "mask_loss_reference.hpp"
 #include "training/losses/mask_loss.hpp"
 
@@ -113,7 +114,9 @@ namespace {
 
 } // namespace
 
-TEST(MaskPreprocessFusionTest, SegmentAndIgnorePhotometricMatchesReference) {
+class MaskPreprocessFusionTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(MaskPreprocessFusionTest, SegmentAndIgnorePhotometricMatchesReference) {
     // Bands: 0 ignore-low, 100 ignore, 180 segment-BG, 255 keep
     const auto mask = u8_mask_from({0, 100, 180, 255, 200, 40, 255, 128}, 2, 4);
     const auto roi = f32_from({1.f, 0.5f, 0.25f, 0.f, 1.f, 1.f, 0.1f, 0.75f}, 2, 4);
@@ -127,7 +130,7 @@ TEST(MaskPreprocessFusionTest, SegmentAndIgnorePhotometricMatchesReference) {
     expect_near_vec(fused, ref, 1e-6f, "photo_sai");
 }
 
-TEST(MaskPreprocessFusionTest, SegmentAndIgnorePhotometricMatchesReferenceForNormalizedMask) {
+TEST_F(MaskPreprocessFusionTest, SegmentAndIgnorePhotometricMatchesReferenceForNormalizedMask) {
     // Same bands as above, but handed over the way the pipelined loader does:
     // Float32 in [0,1]. Must classify identically to the raw eight-bit mask.
     const std::vector<uint8_t> bands{0, 100, 180, 255, 200, 40, 255, 128};
@@ -143,7 +146,7 @@ TEST(MaskPreprocessFusionTest, SegmentAndIgnorePhotometricMatchesReferenceForNor
     expect_near_vec(fused, ref, 1e-6f, "photo_sai_normalized");
 }
 
-TEST(MaskPreprocessFusionTest, SegmentAndIgnoreBandLevelsMatchForBothMaskTypes) {
+TEST_F(MaskPreprocessFusionTest, SegmentAndIgnoreBandLevelsMatchForBothMaskTypes) {
     // Cover all eight-bit levels, including 127/128 and 250/251 band edges.
     constexpr size_t n = 256;
     std::vector<uint8_t> bands(n);
@@ -174,7 +177,7 @@ TEST(MaskPreprocessFusionTest, SegmentAndIgnoreBandLevelsMatchForBothMaskTypes) 
     }
 }
 
-TEST(MaskPreprocessFusionTest, SegmentOpacityPenaltyMatchesReference) {
+TEST_F(MaskPreprocessFusionTest, SegmentOpacityPenaltyMatchesReference) {
     const auto alpha = f32_from({0.2f, 0.4f, 0.6f, 0.8f}, 2, 2);
     // UInt8 binary-ish mask (object=1, bg=0)
     const auto mask = u8_mask_from({1, 0, 1, 0}, 2, 2);
@@ -193,7 +196,7 @@ TEST(MaskPreprocessFusionTest, SegmentOpacityPenaltyMatchesReference) {
     expect_near_vec(fused.grad_alpha, ref.grad_alpha, 1e-5f, "opacity_seg");
 }
 
-TEST(MaskPreprocessFusionTest, SegmentAndIgnoreOpacityPenaltyMatchesReference) {
+TEST_F(MaskPreprocessFusionTest, SegmentAndIgnoreOpacityPenaltyMatchesReference) {
     const auto alpha = f32_from({0.1f, 0.3f, 0.5f, 0.7f, 0.9f, 0.2f}, 2, 3);
     // 40 ignore, 180 segment-BG, 255 keep
     const auto mask = u8_mask_from({40, 180, 255, 128, 200, 10}, 2, 3);
@@ -212,7 +215,7 @@ TEST(MaskPreprocessFusionTest, SegmentAndIgnoreOpacityPenaltyMatchesReference) {
     expect_near_vec(fused.grad_alpha, ref.grad_alpha, 1e-5f, "opacity_sai");
 }
 
-TEST(MaskPreprocessFusionTest, SegmentAndIgnoreOpacityPenaltyMatchesReferenceForNormalizedMask) {
+TEST_F(MaskPreprocessFusionTest, SegmentAndIgnoreOpacityPenaltyMatchesReferenceForNormalizedMask) {
     const auto alpha = f32_from({0.1f, 0.3f, 0.5f, 0.7f, 0.9f, 0.2f}, 2, 3);
     const std::vector<uint8_t> bands{40, 180, 255, 128, 200, 10};
     const auto roi = f32_from({1.f, 1.f, 0.5f, 0.f, 0.25f, 1.f}, 2, 3);
@@ -231,7 +234,7 @@ TEST(MaskPreprocessFusionTest, SegmentAndIgnoreOpacityPenaltyMatchesReferenceFor
     expect_near_vec(fused.grad_alpha, ref.grad_alpha, 1e-5f, "opacity_sai_normalized");
 }
 
-TEST(MaskPreprocessFusionTest, SoftFloatOpacityPenaltyMatchesReference) {
+TEST_F(MaskPreprocessFusionTest, SoftFloatOpacityPenaltyMatchesReference) {
     // Soft float masks: bg = 1-m, pow(bg, p) is continuous.
     const auto alpha = f32_from({0.5f, 0.5f, 0.5f, 0.5f}, 2, 2);
     const auto mask = f32_from({0.0f, 0.25f, 0.75f, 1.0f}, 2, 2);
@@ -250,7 +253,7 @@ TEST(MaskPreprocessFusionTest, SoftFloatOpacityPenaltyMatchesReference) {
     expect_near_vec(fused.grad_alpha, ref.grad_alpha, 1e-5f, "opacity_soft");
 }
 
-TEST(MaskPreprocessFusionTest, AlphaConsistentMatchesReference) {
+TEST_F(MaskPreprocessFusionTest, AlphaConsistentMatchesReference) {
     const auto alpha = f32_from({0.1f, 0.9f, 0.5f, 0.0f}, 2, 2);
     const auto mask = f32_from({0.0f, 1.0f, 0.25f, 0.5f}, 2, 2);
     const auto roi = f32_from({1.f, 0.5f, 0.f, 1.f}, 2, 2);
@@ -266,7 +269,7 @@ TEST(MaskPreprocessFusionTest, AlphaConsistentMatchesReference) {
     expect_near_vec(fused.grad_alpha, ref.grad_alpha, 1e-5f, "alpha_cons");
 }
 
-TEST(MaskPreprocessFusionTest, SteadyStateRoiSegmentPathIsAllocationFree) {
+TEST_F(MaskPreprocessFusionTest, SteadyStateRoiSegmentPathIsAllocationFree) {
     constexpr size_t H = 128;
     constexpr size_t W = 192;
     std::vector<uint8_t> mask_h(H * W);
@@ -297,7 +300,7 @@ TEST(MaskPreprocessFusionTest, SteadyStateRoiSegmentPathIsAllocationFree) {
         << "steady ROI/segment mask preprocess must be allocation-free after warm";
 }
 
-TEST(MaskPreprocessFusionTest, BinaryGt0PhotoWithRoiMatchesCompose) {
+TEST_F(MaskPreprocessFusionTest, BinaryGt0PhotoWithRoiMatchesCompose) {
     const auto mask = u8_mask_from({0, 1, 1, 0}, 2, 2);
     const auto roi = f32_from({1.f, 0.5f, 0.25f, 0.0f}, 2, 2);
     const auto ref = test_reference::compose_pixel_loss_weights_reference(mask, roi);

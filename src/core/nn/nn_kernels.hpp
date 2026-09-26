@@ -2,10 +2,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 
+#include "core/cuda_types.hpp"
 #include "core/tensor_fwd.hpp"
 
 #include <cstddef>
-#include <cuda_runtime.h>
 
 namespace lfs::core::nn::kernels {
 
@@ -161,5 +161,87 @@ namespace lfs::core::nn::kernels {
     // y = x + hidden * gamma, gamma has `cols` elements.
     void residual_scale(const void* x, const void* hidden, const void* gamma, void* y, int rows,
                         int cols, DataType dtype, cudaStream_t stream);
+
+    // ---- Dense matching (RoMa v1 and v2) ------------------------------------
+
+    void grid_sample_bhwc(const void* input, const float* grid, void* output, int channels,
+                          int h_in, int w_in, int h_out, int w_out, DataType dtype,
+                          cudaStream_t stream);
+
+    // Correlation of f_a against a (2r+1)^2 window of f_b around warp, all
+    // channel-last. Output is [h * w, (2r+1)^2].
+    void local_correlation(const void* f_a_nhwc, const void* f_b_nhwc, const float* warp, void* out,
+                           int channels, int h, int w, int radius, DataType dtype,
+                           cudaStream_t stream);
+
+    // [h*w, 2] float32 grid of pixel centres in [-1, 1], (x, y) order.
+    void normalized_grid(float* out, int h, int w, cudaStream_t stream);
+
+    // NCHW [1, 2, h, w] of (warp - grid) scaled per axis.
+    void displacement_input(const float* warp, void* out, int h, int w, float sx, float sy,
+                            DataType dtype, cudaStream_t stream);
+
+    // Depthwise channel-last convolution, stride 1, same padding, kernel 3 or
+    // 5. Weights are tap-major [kernel * kernel, channels].
+    void depthwise_conv2d_nhwc(const void* input, const void* weight, const void* bias,
+                               void* output, int channels, int h, int w, int kernel, int activation,
+                               DataType dtype, cudaStream_t stream);
+
+    // Separable antialiased bicubic resize (float32 NCHW) matching
+    // torch.nn.functional.interpolate(..., mode="bicubic", antialias=True,
+    // align_corners=False). workspace holds n * c * in_h * out_w floats.
+    void resize_bicubic_aa(const float* input, float* output, float* workspace, int n, int c,
+                           int in_h, int in_w, int out_h, int out_w, cudaStream_t stream);
+
+    // dst[c * rows + r] = src[r * cols + c].
+    // Same resize reading an interleaved [in_h, in_w, C] image (uint8 or
+    // float32) and writing planar [C, out_h, out_w] float32 in [0, 1].
+    // workspace holds channels * in_h * out_w floats.
+    void resize_bicubic_aa_hwc(const void* input, float* output, float* workspace, int in_h,
+                               int in_w, int channels, int out_h, int out_w, DataType src_dtype,
+                               cudaStream_t stream);
+
+    void transpose2d(const void* src, void* dst, int rows, int cols, DataType dtype,
+                     cudaStream_t stream);
+
+    // (x - mean) / stddev per channel on NCHW with 3 channels.
+    void normalize_image(const void* src, void* dst, int pixels, const float* mean,
+                         const float* stddev, DataType src_dtype, DataType dst_dtype,
+                         cudaStream_t stream);
+
+    // ---- RoMa v1 -----------------------------------------------------------
+
+    // L2-normalises each row into a float32 destination.
+    void l2_normalize_rows(const void* src, float* dst, int rows, int cols, DataType dtype,
+                           cudaStream_t stream);
+
+    // In place: exp((x - 1) / temperature) over a Gram matrix of normalised rows.
+    void cosine_kernel_inplace(float* gram, long long count, float temperature,
+                               cudaStream_t stream);
+
+    void add_diagonal(float* matrix, int n, float sigma, cudaStream_t stream);
+
+    // Conjugate gradients on [rows, cols] with independent right-hand sides.
+    void column_dot(const float* a, const float* b, float* out, int rows, int cols,
+                    cudaStream_t stream);
+    void cg_step(float* x, float* r, const float* p, const float* ap, const float* rs,
+                 const float* pap, int rows, int cols, cudaStream_t stream);
+    void cg_direction(float* p, const float* r, const float* rs_new, const float* rs_old, int rows,
+                      int cols, cudaStream_t stream);
+
+    void fourier_cos(const float* src, float* dst, long long count, cudaStream_t stream);
+
+    // Soft-argmax over a `side` x `side` class grid; writes [pixels, 2].
+    // `row_stride` is the width of one logit row, which is wider than the class
+    // count when the row carries a trailing certainty column.
+    void cls_to_flow(const void* logits, float* flow, int pixels, int classes, int row_stride,
+                     int side, DataType dtype, cudaStream_t stream);
+
+    void v1_refiner_update(const float* prev_flow, const float* prev_cert, const void* delta,
+                           float* flow, float* cert, int pixels, float step, DataType dtype,
+                           cudaStream_t stream);
+
+    void attenuate_certainty(const float* cert, const float* low, float* out, int pixels,
+                             cudaStream_t stream);
 
 } // namespace lfs::core::nn::kernels

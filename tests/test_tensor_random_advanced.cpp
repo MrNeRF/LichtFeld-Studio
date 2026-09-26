@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include <gtest/gtest.h>
 #include <map>
 #include <set>
@@ -84,7 +85,15 @@ namespace {
 class TensorRandomAdvancedTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        ASSERT_TRUE(torch::cuda::is_available()) << "CUDA is not available for testing";
+        torch::manual_seed(42);
+        Tensor::manual_seed(42);
+    }
+};
+
+class TensorRandomAdvancedCudaTest : public lfs::test::CudaBackendTest {
+protected:
+    void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         torch::manual_seed(42);
         Tensor::manual_seed(42);
     }
@@ -124,7 +133,7 @@ TEST_F(TensorRandomAdvancedTest, MultinomialBasicCPU) {
     }
 }
 
-TEST_F(TensorRandomAdvancedTest, MultinomialBasicCUDA) {
+TEST_F(TensorRandomAdvancedCudaTest, MultinomialBasicCUDA) {
     Tensor::manual_seed(456);
     torch::manual_seed(456);
 
@@ -349,7 +358,7 @@ TEST_F(TensorRandomAdvancedTest, MultinomialReproducibilityCPU) {
     EXPECT_EQ(values1, values2) << "Same seed should produce same results";
 }
 
-TEST_F(TensorRandomAdvancedTest, MultinomialReproducibilityCUDA) {
+TEST_F(TensorRandomAdvancedCudaTest, MultinomialReproducibilityCUDA) {
     std::vector<float> weights_data = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f,
                                        6.0f, 7.0f, 8.0f, 9.0f, 10.0f};
     auto weights = Tensor::from_vector(weights_data, {10}, Device::GPU);
@@ -435,7 +444,7 @@ TEST_F(TensorRandomAdvancedTest, MultinomialSkewedDistribution) {
 
 // ============= Performance Test =============
 
-TEST_F(TensorRandomAdvancedTest, MultinomialLargeScaleCUDA) {
+TEST_F(TensorRandomAdvancedCudaTest, MultinomialLargeScaleCUDA) {
     Tensor::manual_seed(888);
 
     auto weights = Tensor::ones({1000}, Device::GPU);

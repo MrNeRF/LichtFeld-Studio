@@ -44,9 +44,10 @@ namespace lfs::vis {
         size_t split_view_offset,
         SplitViewPanelId panel);
 
-    // Scope crop/ellipsoid/selection overlay state to one visible splat node so
+    // Scope scene/crop/ellipsoid/selection overlay state to one visible splat node so
     // a per-node comparison render can use identity transform indices.
     LFS_VIS_API void applyPlyComparisonNodeScope(
+        lfs::rendering::GaussianSceneState& scene,
         lfs::rendering::GaussianFilterState& filters,
         lfs::rendering::GaussianOverlayState& overlay,
         const FrameContext& ctx,

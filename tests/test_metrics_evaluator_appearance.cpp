@@ -7,6 +7,7 @@
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "training/dataset.hpp"
 #include "training/metrics/metrics.hpp"
 
@@ -106,9 +107,10 @@ namespace {
 
 } // namespace
 
-class MetricsEvaluatorAppearanceTest : public ::testing::Test {
+class MetricsEvaluatorAppearanceTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         // Drop leftover EvaluationCompleted handlers (TrainerManager never unsubscribes).
         lfs::event::EventBridge::instance().clear_all();
     }

@@ -83,8 +83,7 @@ namespace lfs::vis {
         void beginFrame();
 
         // Re-requests any pinned root chunk that is not resident or in
-        // flight; runs every beginFrame so failed bootstrap streams
-        // (sink installed late, transient decode error) self-heal.
+        // flight; runs every beginFrame so transient decode errors recover.
         void ensureRootResidency();
 
         // Legacy overload: chunks in caller-priority order, per-call protection

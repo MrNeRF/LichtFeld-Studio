@@ -1,0 +1,43 @@
+// SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// Keep intermediate arithmetic rounded independently at geometric boundaries.
+float roundedAdd(float a, float b) {
+    return spirv_asm {
+        % value : $$float = OpFAdd $a $b;
+        OpDecorate % value NoContraction;
+result:
+        $$float = OpCopyObject % value;
+    };
+}
+
+float roundedSub(float a, float b) {
+    return spirv_asm {
+        % value : $$float = OpFSub $a $b;
+        OpDecorate % value NoContraction;
+result:
+        $$float = OpCopyObject % value;
+    };
+}
+
+float roundedMul(float a, float b) {
+    return spirv_asm {
+        % value : $$float = OpFMul $a $b;
+        OpDecorate % value NoContraction;
+result:
+        $$float = OpCopyObject % value;
+    };
+}
+
+float roundedDiv(float a, float b) {
+    return spirv_asm {
+        % value : $$float = OpFDiv $a $b;
+        OpDecorate % value NoContraction;
+result:
+        $$float = OpCopyObject % value;
+    };
+}
+
+float dotRounded(float3 a, float3 b) {
+    return roundedAdd(roundedAdd(roundedMul(a.x, b.x), roundedMul(a.y, b.y)), roundedMul(a.z, b.z));
+}

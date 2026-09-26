@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "cuda_backend_test.hpp"
+
 #include "core/tensor.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_memory_guard.hpp"
 
@@ -13,11 +15,6 @@
 namespace {
 
     using namespace lfs::core;
-
-    bool has_cuda_device() {
-        int device_count = 0;
-        return cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0;
-    }
 
     void expect_values(const Tensor& tensor, const std::vector<float>& expected) {
         EXPECT_EQ(tensor.device(), Device::GPU);
@@ -33,8 +30,6 @@ namespace {
     }
 
     TEST(TensorBackendFacadeC, IndexAdaptersPreserveValuesAndDuplicateAccumulation) {
-        if (!has_cuda_device())
-            GTEST_SKIP() << "CUDA device required";
         const Tensor matrix = Tensor::from_vector(
             std::vector<float>{1, 2, 3, 4, 5, 6}, {3, 2}, Device::GPU);
 
@@ -64,8 +59,6 @@ namespace {
     }
 
     TEST(TensorBackendFacadeC, MaskAdaptersPreserveCountsValuesAndBackend) {
-        if (!has_cuda_device())
-            GTEST_SKIP() << "CUDA device required";
         const Tensor mask = Tensor::from_vector(
             std::vector<bool>{true, false, true, false}, {4}, Device::GPU);
 
@@ -103,8 +96,6 @@ namespace {
     }
 
     TEST(TensorBackendFacadeC, StridedMovementAdaptersKeepLogicalLayouts) {
-        if (!has_cuda_device())
-            GTEST_SKIP() << "CUDA device required";
         const Tensor base = Tensor::from_vector(
             std::vector<float>{1, 2, 3, 4, 5, 6}, {2, 3}, Device::GPU);
 
@@ -132,8 +123,6 @@ namespace {
     }
 
     TEST(TensorBackendFacadeC, CatPadAndGrowthAdaptersPreserveStorageRules) {
-        if (!has_cuda_device())
-            GTEST_SKIP() << "CUDA device required";
         const Tensor lhs = Tensor::from_vector(
             std::vector<float>{1, 2, 3, 4}, {2, 2}, Device::GPU);
         const Tensor rhs = Tensor::from_vector(
@@ -172,9 +161,9 @@ namespace {
         expect_values(cat, {1, 2, 3, 4, 5, 6});
     }
 
-    TEST(TensorBackendFacadeC, CopyScalarAndScratchServicesPreserveBoundaries) {
-        if (!has_cuda_device())
-            GTEST_SKIP() << "CUDA device required";
+    class TensorBackendFacadeCudaScratch : public lfs::test::CudaBackendTest {};
+
+    TEST_F(TensorBackendFacadeCudaScratch, CopyScalarAndScratchServicesPreserveBoundaries) {
         const Tensor scalar = Tensor::from_vector(
             std::vector<int>{42}, {1}, Device::GPU);
 

@@ -1,0 +1,33 @@
+// SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+LANGUAGE 0x09, 0x01 // US English
+
+1 VERSIONINFO
+ FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,@LFS_WINDOWS_VERSION_TWEAK@
+ PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,@LFS_WINDOWS_VERSION_TWEAK@
+ FILEFLAGSMASK 0x3fL // VS_FFI_FILEFLAGSMASK
+ FILEFLAGS $<IF:$<CONFIG:Debug>,0x1L,0x0L> // VS_FF_DEBUG
+ FILEOS 0x40004L // VOS_NT_WINDOWS32
+ FILETYPE @LFS_WINDOWS_FILE_TYPE@
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "LichtFeld Studio Authors\0"
+            VALUE "FileDescription", "@LFS_WINDOWS_FILE_DESCRIPTION@\0"
+            VALUE "FileVersion", "@PROJECT_VERSION@\0"
+            VALUE "InternalName", "@LFS_WINDOWS_INTERNAL_NAME@\0"
+            VALUE "LegalCopyright", "Copyright (c) LichtFeld Studio Authors\0"
+            VALUE "OriginalFilename", "@LFS_WINDOWS_ORIGINAL_FILENAME@\0"
+            VALUE "ProductName", "LichtFeld Studio\0"
+            VALUE "ProductVersion", "@PROJECT_VERSION@\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

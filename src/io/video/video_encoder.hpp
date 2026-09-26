@@ -36,11 +36,8 @@ namespace lfs::io::video {
             int width,
             int height);
 
-        [[nodiscard]] std::expected<void, std::string> writeFrameGpu(
-            const void* rgba_gpu_ptr,
-            int width,
-            int height,
-            void* cuda_stream = nullptr) override;
+        [[nodiscard]] std::expected<void, std::string> writeFrame(
+            const core::Tensor& rgb_hwc) override;
 
         [[nodiscard]] std::expected<void, std::string> close() override;
 

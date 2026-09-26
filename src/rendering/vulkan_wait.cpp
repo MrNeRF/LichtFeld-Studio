@@ -158,17 +158,19 @@ namespace lfs::rendering {
         std::mutex* g_graphics_queue_mu = nullptr;
         VkQueue g_graphics_queue = VK_NULL_HANDLE;
         VkQueue g_present_queue = VK_NULL_HANDLE;
+        VkQueue g_compute_queue = VK_NULL_HANDLE;
 
         [[nodiscard]] bool queue_needs_external_lock(const VkQueue queue) noexcept {
             return g_graphics_queue_mu != nullptr && queue != VK_NULL_HANDLE &&
-                   (queue == g_graphics_queue || queue == g_present_queue);
+                   (queue == g_graphics_queue || queue == g_present_queue || queue == g_compute_queue);
         }
     } // namespace
 
-    void set_graphics_queue_external_sync(std::mutex* mutex, VkQueue graphics, VkQueue present) noexcept {
+    void set_graphics_queue_external_sync(std::mutex* mutex, VkQueue graphics, VkQueue present, VkQueue compute) noexcept {
         g_graphics_queue_mu = mutex;
         g_graphics_queue = graphics;
         g_present_queue = present;
+        g_compute_queue = compute;
     }
 
     VkResult vk_queue_submit_synced(VkQueue queue,

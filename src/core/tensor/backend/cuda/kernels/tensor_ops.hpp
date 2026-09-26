@@ -2,7 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include "core/tensor/internal/private_access.hpp"
 
+#include "core/detail/fused_pointwise.hpp"
 #include "core/export.hpp"
 #include "core/tensor/internal/tensor_functors.hpp"
 #include <cuda_fp16.h>
@@ -46,24 +48,7 @@ namespace lfs::core::tensor_ops {
 #define CUDA_INFINITY INFINITY
 #endif
 
-// ============= CPU Helpers (Generic, Header-Only) =============
-namespace lfs::core {
-    // CPU helper for unary operations
-    template <typename T, typename OutT, typename Op>
-    void apply_unary_cpu(const T* input, OutT* output, size_t n, Op op) {
-        for (size_t i = 0; i < n; ++i) {
-            output[i] = op(input[i]);
-        }
-    }
-
-    // CPU helper for binary operations
-    template <typename T, typename OutputT, typename Op>
-    void apply_binary_cpu(const T* a, const T* b, OutputT* c, size_t n, Op op) {
-        for (size_t i = 0; i < n; ++i) {
-            c[i] = op(a[i], b[i]);
-        }
-    }
-} // namespace lfs::core
+#include "core/detail/tensor_cpu_apply.hpp"
 
 namespace lfs::core::tensor_ops {
 
@@ -73,10 +58,10 @@ namespace lfs::core::tensor_ops {
     LFS_CORE_API void launch_clamp_scalar_int(int* data, int min_val, int max_val, size_t n, cudaStream_t stream);
     // Float16 clamp kernels exist, but host dispatch must reject them until its
     // dtype gate is wired.
-    LFS_CORE_API void launch_clamp_scalar_half(__half* data, float min_val, float max_val, size_t n,
-                                               cudaStream_t stream);
-    LFS_CORE_API void launch_clamp_fused_half(const __half* src, __half* dst, float min_val, float max_val,
-                                              size_t n, cudaStream_t stream);
+    LFS_LOCAL_SYMBOL void launch_clamp_scalar_half(__half* data, float min_val, float max_val, size_t n,
+                                                   cudaStream_t stream);
+    LFS_LOCAL_SYMBOL void launch_clamp_fused_half(const __half* src, __half* dst, float min_val, float max_val,
+                                                  size_t n, cudaStream_t stream);
 
     LFS_CORE_API void launch_reduce_op(const void* input, void* output,
                                        const size_t* shape, size_t rank,
@@ -87,23 +72,23 @@ namespace lfs::core::tensor_ops {
 
     // ============= WARP-LEVEL REDUCTIONS (OPTIMIZED) =============
     // Fast reductions using warp shuffle instructions (5-10x faster than CUB for small-medium tensors)
-    LFS_CORE_API void launch_warp_reduce_full(const float* input, float* output, size_t n,
-                                              ReduceOp op, cudaStream_t stream);
+    LFS_LOCAL_SYMBOL void launch_warp_reduce_full(const float* input, float* output, size_t n,
+                                                  ReduceOp op, cudaStream_t stream);
 
-    LFS_CORE_API void launch_warp_segmented_reduce(const float* input, float* output,
-                                                   size_t num_segments, size_t segment_size,
-                                                   ReduceOp op, cudaStream_t stream);
+    LFS_LOCAL_SYMBOL void launch_warp_segmented_reduce(const float* input, float* output,
+                                                       size_t num_segments, size_t segment_size,
+                                                       ReduceOp op, cudaStream_t stream);
 
-    LFS_CORE_API void launch_warp_strided_reduce(const float* input, float* output,
-                                                 size_t outer_size, size_t reduce_size, size_t inner_size,
-                                                 ReduceOp op, cudaStream_t stream);
+    LFS_LOCAL_SYMBOL void launch_warp_strided_reduce(const float* input, float* output,
+                                                     size_t outer_size, size_t reduce_size, size_t inner_size,
+                                                     ReduceOp op, cudaStream_t stream);
 
-    LFS_CORE_API void launch_warp_multi_axis_reduce(const float* input, float* output,
-                                                    size_t outer_size, size_t reduce_count,
-                                                    size_t inner_size,
-                                                    ReduceOp op, cudaStream_t stream);
+    LFS_LOCAL_SYMBOL void launch_warp_multi_axis_reduce(const float* input, float* output,
+                                                        size_t outer_size, size_t reduce_count,
+                                                        size_t inner_size,
+                                                        ReduceOp op, cudaStream_t stream);
 
-    LFS_CORE_API bool should_use_warp_reduce(size_t n, size_t num_segments);
+    LFS_LOCAL_SYMBOL bool should_use_warp_reduce(size_t n, size_t num_segments);
 
     // ============= Column Reduction (dim=0 for 2D matrices) =============
     // Faster than transpose+contiguous+reduce for column sums
@@ -119,7 +104,7 @@ namespace lfs::core::tensor_ops {
                                                  cudaStream_t stream);
 
     // Host heuristic: true → prefer strided_fast over permute+contiguous.
-    [[nodiscard]] LFS_CORE_API bool should_prefer_strided_over_transpose(
+    [[nodiscard]] LFS_LOCAL_SYMBOL bool should_prefer_strided_over_transpose(
         size_t outer_size, size_t reduce_size, size_t inner_size) noexcept;
 
     // Test/debug hooks for path selection
@@ -131,7 +116,7 @@ namespace lfs::core::tensor_ops {
         Default,
     };
     LFS_CORE_API void set_reduce_path_override_for_testing(ReducePathForTesting path) noexcept;
-    [[nodiscard]] LFS_CORE_API ReducePathForTesting reduce_path_override_for_testing() noexcept;
+    [[nodiscard]] LFS_LOCAL_SYMBOL ReducePathForTesting reduce_path_override_for_testing() noexcept;
     [[nodiscard]] LFS_CORE_API ReducePathForTesting reduce_last_path_for_testing() noexcept;
     LFS_CORE_API void set_reduce_last_path_for_testing(ReducePathForTesting path) noexcept;
 
@@ -145,35 +130,35 @@ namespace lfs::core::tensor_ops {
     LFS_CORE_API void launch_load_op(void* output, const size_t* shape, size_t rank,
                                      LoadOp op, const void* args,
                                      DataType dtype, cudaStream_t stream);
-    LFS_CORE_API void launch_load_arange(void* output, size_t count, float start,
-                                         float step, DataType dtype, cudaStream_t stream);
+    LFS_LOCAL_SYMBOL void launch_load_arange(void* output, size_t count, float start,
+                                             float step, DataType dtype, cudaStream_t stream);
 
     // Unified Type Conversion Template
     template <typename SrcT, typename DstT>
     void launch_convert_type(const SrcT* src, DstT* dst, size_t n, cudaStream_t stream);
 
     // ============= Broadcasting =============
-    LFS_CORE_API void launch_broadcast(const float* src, float* dst,
-                                       const size_t* src_shape, const size_t* dst_shape,
-                                       size_t src_rank, size_t dst_rank,
-                                       size_t dst_elements, cudaStream_t stream);
+    LFS_LOCAL_SYMBOL void launch_broadcast(const float* src, float* dst,
+                                           const size_t* src_shape, const size_t* dst_shape,
+                                           size_t src_rank, size_t dst_rank,
+                                           size_t dst_elements, cudaStream_t stream);
 
-    LFS_CORE_API void launch_broadcast_bool(const unsigned char* src, unsigned char* dst,
-                                            const size_t* src_shape, const size_t* dst_shape,
-                                            size_t src_rank, size_t dst_rank,
-                                            size_t dst_elements, cudaStream_t stream);
+    LFS_LOCAL_SYMBOL void launch_broadcast_bool(const unsigned char* src, unsigned char* dst,
+                                                const size_t* src_shape, const size_t* dst_shape,
+                                                size_t src_rank, size_t dst_rank,
+                                                size_t dst_elements, cudaStream_t stream);
 
-    LFS_CORE_API void launch_broadcast_strided(const float* src, float* dst,
-                                               const size_t* src_shape, const size_t* src_strides,
-                                               const size_t* dst_shape,
-                                               size_t src_rank, size_t dst_rank,
-                                               size_t dst_elements, cudaStream_t stream);
+    LFS_LOCAL_SYMBOL void launch_broadcast_strided(const float* src, float* dst,
+                                                   const size_t* src_shape, const size_t* src_strides,
+                                                   const size_t* dst_shape,
+                                                   size_t src_rank, size_t dst_rank,
+                                                   size_t dst_elements, cudaStream_t stream);
 
-    LFS_CORE_API void launch_broadcast_strided_bool(const unsigned char* src, unsigned char* dst,
-                                                    const size_t* src_shape, const size_t* src_strides,
-                                                    const size_t* dst_shape,
-                                                    size_t src_rank, size_t dst_rank,
-                                                    size_t dst_elements, cudaStream_t stream);
+    LFS_LOCAL_SYMBOL void launch_broadcast_strided_bool(const unsigned char* src, unsigned char* dst,
+                                                        const size_t* src_shape, const size_t* src_strides,
+                                                        const size_t* dst_shape,
+                                                        size_t src_rank, size_t dst_rank,
+                                                        size_t dst_elements, cudaStream_t stream);
 
     LFS_CORE_API void launch_pad(const float* src, float* dst,
                                  const size_t* src_shape, const size_t* src_strides,
@@ -279,8 +264,8 @@ namespace lfs::core::tensor_ops {
     LFS_CORE_API void launch_uniform(float* data, size_t n, float low, float high,
                                      unsigned long long seed, cudaStream_t stream);
 
-    LFS_CORE_API void launch_normal(float* data, size_t n, float mean, float std,
-                                    unsigned long long seed, cudaStream_t stream);
+    LFS_LOCAL_SYMBOL void launch_normal(float* data, size_t n, float mean, float std,
+                                        unsigned long long seed, cudaStream_t stream);
 
     LFS_CORE_API void launch_bernoulli(float* data, size_t n, float p,
                                        unsigned long long seed, cudaStream_t stream);
@@ -295,7 +280,7 @@ namespace lfs::core::tensor_ops {
     // ============= Matrix Creation Operations =============
     LFS_CORE_API void launch_eye(float* data, size_t m, size_t n, cudaStream_t stream);
     LFS_CORE_API void launch_diag(const float* diagonal, float* matrix, size_t n, cudaStream_t stream);
-    LFS_CORE_API void launch_extract_diag(const float* matrix, float* diagonal, size_t n, cudaStream_t stream);
+    LFS_LOCAL_SYMBOL void launch_extract_diag(const float* matrix, float* diagonal, size_t n, cudaStream_t stream);
 
     LFS_CORE_API void launch_sgemm(const float* a, const float* b, float* c,
                                    size_t m, size_t n, size_t k, cudaStream_t stream);
@@ -348,7 +333,7 @@ namespace lfs::core::tensor_ops {
                                             const uint8_t* src, size_t n, size_t src_size, cudaStream_t stream);
 
     LFS_CORE_API void launch_where(const unsigned char* condition,
-                                   const float* x, const float* y, float* result,
+                                   const void* x, const void* y, void* result, size_t element_bytes,
                                    const size_t* cond_shape, const size_t* x_shape,
                                    const size_t* y_shape, const size_t* result_shape,
                                    size_t cond_rank, size_t x_rank, size_t y_rank, size_t result_rank,
@@ -362,10 +347,10 @@ namespace lfs::core::tensor_ops {
 
     // Multi-block device-side count (no host round-trip). Used by Tensor::count_nonzero
     // and the masking wrappers above.
-    LFS_CORE_API void launch_count_nonzero_scalar_float(const float* data, size_t* result,
-                                                        size_t n, cudaStream_t stream);
-    LFS_CORE_API void launch_count_nonzero_scalar_bool(const unsigned char* data, size_t* result,
-                                                       size_t n, cudaStream_t stream);
+    LFS_LOCAL_SYMBOL void launch_count_nonzero_scalar_float(const float* data, size_t* result,
+                                                            size_t n, cudaStream_t stream);
+    LFS_LOCAL_SYMBOL void launch_count_nonzero_scalar_bool(const unsigned char* data, size_t* result,
+                                                           size_t n, cudaStream_t stream);
 
     // ============= Indexing Operations =============
     LFS_CORE_API void launch_index_select(const float* input, const int* indices, float* output,
@@ -384,6 +369,9 @@ namespace lfs::core::tensor_ops {
                                           const size_t* shape, size_t rank, int dim,
                                           size_t index_size, int boundary_mode, cudaStream_t stream);
 
+    void launch_index_cast(const int64_t* input, int* output, size_t count, size_t extent,
+                           cudaStream_t stream);
+
     LFS_CORE_API void launch_gather(const float* input, const int* indices, float* output,
                                     const size_t* input_shape, const size_t* index_shape,
                                     size_t rank, int dim, size_t total_elements,
@@ -393,9 +381,6 @@ namespace lfs::core::tensor_ops {
                                     const size_t* input_shape, const size_t* index_shape,
                                     size_t rank, int dim, size_t total_elements,
                                     int boundary_mode, cudaStream_t stream);
-
-    LFS_CORE_API void launch_take(const float* input, const int* indices, float* output,
-                                  size_t input_size, size_t index_size, cudaStream_t stream);
 
     // Fused gather + unary operation using thrust::permutation_iterator for zero-copy
     template <typename UnaryOp>
@@ -445,6 +430,7 @@ namespace lfs::core::tensor_ops {
     extern template void launch_scatter<float>(float*, const int*, const float*, const size_t*, const size_t*, size_t, int, size_t, int, cudaStream_t);
     extern template void launch_scatter<int>(int*, const int*, const int*, const size_t*, const size_t*, size_t, int, size_t, int, cudaStream_t);
     extern template void launch_scatter<uint8_t>(uint8_t*, const int*, const uint8_t*, const size_t*, const size_t*, size_t, int, size_t, int, cudaStream_t);
+    extern template void launch_scatter<int64_t>(int64_t*, const int*, const int64_t*, const size_t*, const size_t*, size_t, int, size_t, int, cudaStream_t);
 
     extern template void launch_index_add<float>(float*, const int*, const float*, const size_t*, size_t, int, size_t, cudaStream_t);
     extern template void launch_index_add<int>(int*, const int*, const int*, const size_t*, size_t, int, size_t, cudaStream_t);
@@ -452,13 +438,14 @@ namespace lfs::core::tensor_ops {
     extern template void launch_index_copy<float>(float*, const int*, const float*, const size_t*, size_t, int, size_t, cudaStream_t);
     extern template void launch_index_copy<int>(int*, const int*, const int*, const size_t*, size_t, int, size_t, cudaStream_t);
     extern template void launch_index_copy<uint8_t>(uint8_t*, const int*, const uint8_t*, const size_t*, size_t, int, size_t, cudaStream_t);
+    extern template void launch_index_copy<int64_t>(int64_t*, const int*, const int64_t*, const size_t*, size_t, int, size_t, cudaStream_t);
 
     extern template void launch_index_fill<float>(float*, const int*, float, const size_t*, size_t, int, size_t, cudaStream_t);
     extern template void launch_index_fill<int>(int*, const int*, int, const size_t*, size_t, int, size_t, cudaStream_t);
     extern template void launch_index_fill<uint8_t>(uint8_t*, const int*, uint8_t, const size_t*, size_t, int, size_t, cudaStream_t);
 
-    LFS_CORE_API void launch_index_put(float* data, const int* indices, const float* values,
-                                       size_t data_size, size_t index_size, cudaStream_t stream);
+    LFS_LOCAL_SYMBOL void launch_index_put(float* data, const int* indices, const float* values,
+                                           size_t data_size, size_t index_size, cudaStream_t stream);
 
     LFS_CORE_API size_t launch_nonzero(const float* data, int64_t* indices,
                                        size_t n, size_t output_size, cudaStream_t stream);
@@ -545,27 +532,14 @@ namespace lfs::core::tensor_ops {
     LFS_CORE_API bool has_nan_gpu(const float* data, size_t n, cudaStream_t stream = nullptr);
     LFS_CORE_API bool has_inf_gpu(const float* data, size_t n, cudaStream_t stream = nullptr);
     LFS_CORE_API bool release_nan_check_thread_buffers() noexcept;
+    LFS_CORE_API void set_nan_check_host_allocation_failure_for_testing(bool fail);
 
     // ============= Fused Affine Transform =============
-    LFS_CORE_API void launch_fused_affine_transform(const float* input, float* output,
-                                                    size_t n, float a, float b,
-                                                    cudaStream_t stream = nullptr);
+    LFS_LOCAL_SYMBOL void launch_fused_affine_transform(const float* input, float* output,
+                                                        size_t n, float a, float b,
+                                                        cudaStream_t stream = nullptr);
 
     // ============= Fused Pointwise Chain =============
-    static constexpr int FUSED_POINTWISE_MAX_OPS = 16;
-
-    struct FusedPointwiseOp {
-        uint8_t kind = 0;
-        float scalar = 0.0f;
-        // Device pointer for tensor-binary stages (kinds 4-7). Null for scalar/unary.
-        const float* rhs = nullptr;
-    };
-
-    struct FusedPointwiseOpChain {
-        FusedPointwiseOp ops[FUSED_POINTWISE_MAX_OPS];
-        int num_ops = 0;
-    };
-
     // Optional test/diagnostic counter of tensor-lib kernel launches (fused + binary).
     LFS_CORE_API void reset_tensor_kernel_launch_count() noexcept;
     LFS_CORE_API uint64_t tensor_kernel_launch_count() noexcept;

@@ -28,8 +28,7 @@ body {
     display: flex;
     flex-direction: row;
     align-items: center;
-    flex: 1;
-    min-width: 0;
+    flex: 1 0 auto;
     height: 30dp;
     overflow: hidden;
 }
@@ -38,9 +37,49 @@ body {
     display: flex;
     flex-direction: row;
     align-items: center;
-    flex: none;
+    flex: 0 1 auto;
+    min-width: 0;
     height: 30dp;
     margin-right: 0;
+}
+
+#project-title {
+    position: absolute;
+    top: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 30dp;
+    overflow: hidden;
+}
+
+#project-title-content {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 30dp;
+    max-width: 100%;
+    min-width: 0;
+    padding: 0 8dp;
+    box-sizing: border-box;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#project-title-content span:first-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#project-title.hidden,
+#project-title.no-room {
+    display: none;
+}
+
+.project-dirty {
+    flex: none;
 }
 
 #brand-logo {
@@ -56,7 +95,8 @@ body {
     display: flex;
     flex-direction: row;
     align-items: center;
-    flex: none;
+    flex: 0 1 auto;
+    min-width: 0;
     height: 30dp;
     margin-left: 2dp;
 }
@@ -74,8 +114,17 @@ body {
     margin: 0 3dp;
     border-radius: 5dp;
     white-space: nowrap;
-    flex-shrink: 0;
+    flex-shrink: 1;
+    min-width: 34dp;
+    overflow: hidden;
     cursor: pointer;
+}
+
+/* The menus keep their space; the connection label gives way down to its icon. */
+.menu-portal-connection span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .menu-portal-connection img {

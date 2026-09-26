@@ -3,7 +3,8 @@
 #include "core/splat_data.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
-#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "core/tensor_cuda_interop.hpp"
+#include "cuda_backend_test.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <gtest/gtest.h>
@@ -110,7 +111,9 @@ TEST_P(SplatAffineTransform, ZeroExtentDoesNotProduceNaN) {
 
 INSTANTIATE_TEST_SUITE_P(CpuAndCuda, SplatAffineTransform, ::testing::Values(Device::CPU, Device::CUDA));
 
-TEST(SplatAffineTransformCuda, NonblockingProducerPreservesGeometry) {
+class SplatAffineTransformCuda : public lfs::test::CudaBackendTest {};
+
+TEST_F(SplatAffineTransformCuda, NonblockingProducerPreservesGeometry) {
     const auto reference = fixture(Device::CPU);
     const auto source = fixture(Device::CUDA);
     cudaStream_t stream;
@@ -120,6 +123,6 @@ TEST(SplatAffineTransformCuda, NonblockingProducerPreservesGeometry) {
     // before transform consumes its buffers.
     check_transform(std::move(data), glm::scale(glm::mat4(1), glm::vec3(2, 0.6f, 1.4f)), &reference);
     EXPECT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
-    CudaMemoryPool::instance().release_stream(stream);
+    release_cuda_stream(stream);
     EXPECT_EQ(cudaStreamDestroy(stream), cudaSuccess);
 }

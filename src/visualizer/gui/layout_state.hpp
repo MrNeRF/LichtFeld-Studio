@@ -30,6 +30,14 @@ namespace lfs::vis::gui {
         float vram_hud_height = -1.0f;
         std::string vram_hud_active_tab;
         std::vector<std::string> vram_hud_collapsed_paths;
+        float vram_hud_opacity = 1.0f;
+        int vram_hud_snap_corner = 0;
+        int vram_hud_window_seconds = 300;
+        bool vram_hud_iteration_axis = false;
+        bool vram_hud_device_scale = false;
+        unsigned int vram_hud_visible_categories = 1023;
+        bool vram_hud_movers_collapsed = false;
+        bool vram_hud_peak_collapsed = false;
         bool perf_hud_visible = false;
         bool perf_hud_expanded = true;
 

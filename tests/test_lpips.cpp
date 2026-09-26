@@ -3,6 +3,7 @@
 
 #include "core/image_io.hpp"
 #include "core/nn.hpp"
+#include "cuda_backend_test.hpp"
 #include "metrics/metrics.hpp"
 
 #include <cuda_runtime.h>
@@ -121,12 +122,20 @@ namespace {
         return std::move(*loaded);
     }
 
-    class LpipsTest : public ::testing::Test {
+    template <class Base>
+    class LpipsFixture : public Base {
         void SetUp() override {
+            Base::SetUp();
+            if (this->IsSkipped()) {
+                return;
+            }
             if (!fs::is_regular_file(weights_path()))
                 GTEST_SKIP() << "LPIPS weights absent: " << weights_path();
         }
     };
+
+    using LpipsTest = LpipsFixture<::testing::Test>;
+    using LpipsCudaTest = LpipsFixture<lfs::test::CudaBackendTest>;
 
     class ScopedConvPath {
     public:
@@ -266,7 +275,7 @@ TEST_F(LpipsTest, FastTilingCoversOddSyntheticImage) {
     }
 }
 
-TEST_F(LpipsTest, WideImageEstimateCoversNewDeviceAllocations) {
+TEST_F(LpipsCudaTest, WideImageEstimateCoversNewDeviceAllocations) {
     auto model = load_model(DataType::Float16);
     ASSERT_TRUE(model);
     auto [a, b] = synthetic_pair(512, 6000);

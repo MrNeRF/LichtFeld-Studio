@@ -71,6 +71,7 @@ namespace {
            DirectRangeOddByteBufferCoversLastWordAndKeepsLogicalSize) {
         GpuBackendScope scope(GpuBackend::Vulkan);
         auto& ops = internal::backend_ops(GpuBackend::Vulkan);
+        ops.synchronize_device();
         ops.trim();
         const uint64_t live_before = internal::vulkan_live_vma_objects_for_testing();
 
@@ -79,6 +80,7 @@ namespace {
             expect_logical_bytes_unchanged(slab, 255);
         }
         EXPECT_GT(internal::vulkan_live_vma_objects_for_testing(), live_before);
+        ops.synchronize_device();
         ops.trim();
         const uint64_t live_baseline = internal::vulkan_live_vma_objects_for_testing();
 
@@ -92,6 +94,9 @@ namespace {
             }
             ops.synchronize_device();
             tensor = Tensor();
+            EXPECT_LE(internal::vulkan_live_vma_objects_for_testing(),
+                      live_baseline + 256ull * 1024ull * 1024ull / kDirectLimitBytes);
+            ops.trim();
             EXPECT_EQ(internal::vulkan_live_vma_objects_for_testing(), live_baseline);
         }
     }
@@ -118,6 +123,22 @@ namespace {
             EXPECT_EQ(roundtrip_head.to_vector_uint8(), std::vector<uint8_t>(8, 1));
             EXPECT_EQ(roundtrip_tail.to_vector_uint8(), std::vector<uint8_t>(8, 1));
         }
+    }
+
+    // MoltenVK makes all device memory resident for every command buffer it
+    // submits, so freeing a buffer also waits for unrelated work submitted
+    // while the buffer existed.
+    TEST_F(TensorVulkanAllocationPadding, DirectFreeWaitsForWorkSubmittedWhileItLived) {
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        // Large enough for dedicated memory, which returns to the driver when freed.
+        Tensor direct = Tensor::full({size_t{40} << 20}, 1.0f, Device::GPU);
+        EXPECT_FLOAT_EQ(direct.slice(0, 0, 4).sum().item<float>(), 4.0f);
+        const Tensor lhs = Tensor::ones({2048, 2048}, Device::GPU);
+        const Tensor product = lhs.mm(lhs);
+        // Submits the product without waiting for it.
+        ASSERT_TRUE(tensor_vulkan_buffer(product).has_value());
+        direct = Tensor();
+        EXPECT_FLOAT_EQ(product.slice(0, 0, 1).slice(1, 0, 1).cpu().item<float>(), 2048.0f);
     }
 
     TEST_F(TensorVulkanAllocationPadding,

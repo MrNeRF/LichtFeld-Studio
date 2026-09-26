@@ -2,9 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// Screen-position projection as a tensor program. CPU reference copies
-// projectScreenPositionsKernel: pinhole/ortho reject view_z >= -1e-6, equirect
-// does not, hidden nodes and non-finite views write the invalid marker.
+// Pinhole and ortho reject view_z >= -1e-6. Equirect does not. Hidden nodes
+// and non-finite views write the invalid marker.
 
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
@@ -20,14 +19,17 @@
 
 namespace {
     using namespace lfs::core;
-    using lfs::rendering::ScreenWindowCameraModel;
+    using lfs::core::PointProjectionModel;
 
     constexpr float kInvalidFill = -1.0e8f;
     constexpr float kInvalidThreshold = -1000.0f;
     constexpr float kPi = 3.14159265358979323846f;
 
     std::vector<GpuBackend> backends_under_test() {
-        std::vector<GpuBackend> backends{GpuBackend::CUDA};
+        std::vector<GpuBackend> backends;
+        if (gpu_backend_available(GpuBackend::CUDA)) {
+            backends.push_back(GpuBackend::CUDA);
+        }
         if (gpu_backend_available(GpuBackend::Vulkan)) {
             backends.push_back(GpuBackend::Vulkan);
         }
@@ -61,7 +63,7 @@ namespace {
                     const float fy,
                     const float cx,
                     const float cy,
-                    const ScreenWindowCameraModel model,
+                    const lfs::core::PointProjectionModel model,
                     const float ortho_scale,
                     const std::vector<float>* const transforms,
                     const std::vector<int>* const indices,
@@ -101,7 +103,7 @@ namespace {
             if (!std::isfinite(view_x) || !std::isfinite(view_y) || !std::isfinite(view_z)) {
                 continue;
             }
-            const bool equirect = model == ScreenWindowCameraModel::Equirectangular;
+            const bool equirect = model == lfs::core::PointProjectionModel::Equirectangular;
             if (!equirect && view_z >= -1.0e-6f) {
                 continue;
             }
@@ -121,7 +123,7 @@ namespace {
                     (std::asin(std::clamp(dir_y, -1.0f, 1.0f)) / kPi + 0.5f) * static_cast<float>(height);
                 continue;
             }
-            if (model == ScreenWindowCameraModel::Orthographic) {
+            if (model == lfs::core::PointProjectionModel::Orthographic) {
                 if (!std::isfinite(ortho_scale) || ortho_scale <= 0.0f) {
                     continue;
                 }
@@ -173,7 +175,7 @@ TEST(SelectionTensorProjection, EmptyMeans) {
         const Tensor means = Tensor::empty({0, 3}, Device::GPU, DataType::Float32);
         const auto projected = lfs::rendering::project_screen_positions_tensor(
             means, 64, 64, kRotation, kTranslation, 50.0f, 50.0f, 32.0f, 32.0f,
-            ScreenWindowCameraModel::Pinhole, 1.0f, nullptr, nullptr, {});
+            lfs::core::PointProjectionModel::Pinhole, 1.0f, nullptr, nullptr, {});
         EXPECT_FALSE(projected.is_valid() && projected.numel() > 0);
     }
 }
@@ -205,16 +207,16 @@ TEST(SelectionTensorProjection, PinholeOrthoEquirectMatchCpu) {
     constexpr float fy = 480.0f;
     constexpr float cx = 320.0f;
     constexpr float cy = 240.0f;
-    const ScreenWindowCameraModel models[] = {
-        ScreenWindowCameraModel::Pinhole,
-        ScreenWindowCameraModel::Orthographic,
-        ScreenWindowCameraModel::Equirectangular,
+    const lfs::core::PointProjectionModel models[] = {
+        lfs::core::PointProjectionModel::Pinhole,
+        lfs::core::PointProjectionModel::Orthographic,
+        lfs::core::PointProjectionModel::Equirectangular,
     };
     for (const auto model : models) {
         std::vector<float> expected;
         cpuProject(means, width, height, kRotation, kTranslation, fx, fy, cx, cy, model, 42.0f,
                    nullptr, nullptr, {}, expected);
-        const float tol = model == ScreenWindowCameraModel::Equirectangular ? 2.0e-3f * width : 1.0e-3f;
+        const float tol = model == lfs::core::PointProjectionModel::Equirectangular ? 2.0e-3f * width : 1.0e-3f;
         for (const GpuBackend backend : backends_under_test()) {
             SCOPED_TRACE(label(backend) + std::string(" model=") + std::to_string(static_cast<int>(model)));
             const Tensor gpu_means = upload(means, TensorShape{6, 3}, backend);
@@ -223,10 +225,6 @@ TEST(SelectionTensorProjection, PinholeOrthoEquirectMatchCpu) {
                 nullptr, nullptr, {});
             ASSERT_TRUE(projected.is_valid());
             expectProjectedNear(projected.cpu().to_vector(), expected, tol, "dispatch");
-            const auto program = lfs::rendering::project_screen_positions_tensor_program(
-                gpu_means, width, height, kRotation, kTranslation, fx, fy, cx, cy, model, 42.0f,
-                nullptr, nullptr, {});
-            expectProjectedNear(program.cpu().to_vector(), expected, tol, "program");
         }
     }
 }
@@ -284,7 +282,7 @@ TEST(SelectionTensorProjection, HiddenNodesAndClampedTransforms) {
     const std::vector<bool> visibility{true, false};
     std::vector<float> expected;
     cpuProject(means, 320, 240, kRotation, kTranslation, 200.0f, 200.0f, 160.0f, 120.0f,
-               ScreenWindowCameraModel::Pinhole, 1.0f, &transforms, &indices, visibility, expected);
+               lfs::core::PointProjectionModel::Pinhole, 1.0f, &transforms, &indices, visibility, expected);
     for (const GpuBackend backend : backends_under_test()) {
         SCOPED_TRACE(label(backend));
         const Tensor gpu_means = upload(means, TensorShape{4, 3}, backend);
@@ -292,7 +290,7 @@ TEST(SelectionTensorProjection, HiddenNodesAndClampedTransforms) {
         const Tensor gpu_indices = uploadI32(indices, backend);
         const auto projected = lfs::rendering::project_screen_positions_tensor(
             gpu_means, 320, 240, kRotation, kTranslation, 200.0f, 200.0f, 160.0f, 120.0f,
-            ScreenWindowCameraModel::Pinhole, 1.0f, &gpu_transforms, &gpu_indices, visibility);
+            lfs::core::PointProjectionModel::Pinhole, 1.0f, &gpu_transforms, &gpu_indices, visibility);
         expectProjectedNear(projected.cpu().to_vector(), expected, 1.0e-3f, "hidden");
         EXPECT_TRUE(isInvalid(expected[2], expected[3]));
         EXPECT_TRUE(isInvalid(expected[4], expected[5]));
@@ -309,7 +307,7 @@ TEST(SelectionTensorProjection, NegativeOrthoScaleIsInvalid) {
             const Tensor gpu_means = upload(means, TensorShape{1, 3}, backend);
             const auto projected = lfs::rendering::project_screen_positions_tensor(
                 gpu_means, 64, 64, kRotation, kTranslation, 10.0f, 10.0f, 32.0f, 32.0f,
-                ScreenWindowCameraModel::Orthographic, scale, nullptr, nullptr, {});
+                lfs::core::PointProjectionModel::Orthographic, scale, nullptr, nullptr, {});
             const auto xy = projected.cpu().to_vector();
             ASSERT_EQ(xy.size(), 2u);
             EXPECT_TRUE(isInvalid(xy[0], xy[1]));
@@ -323,41 +321,16 @@ TEST(SelectionTensorProjection, EquirectProjectsBehindCamera) {
     constexpr std::array<float, 3> origin{0.0f, 0.0f, 0.0f};
     std::vector<float> expected;
     cpuProject(means, 256, 128, identity, origin, 1.0f, 1.0f, 128.0f, 64.0f,
-               ScreenWindowCameraModel::Equirectangular, 1.0f, nullptr, nullptr, {}, expected);
+               lfs::core::PointProjectionModel::Equirectangular, 1.0f, nullptr, nullptr, {}, expected);
     ASSERT_FALSE(isInvalid(expected[0], expected[1]));
     for (const GpuBackend backend : backends_under_test()) {
         SCOPED_TRACE(label(backend));
         const Tensor gpu_means = upload(means, TensorShape{1, 3}, backend);
         const auto projected = lfs::rendering::project_screen_positions_tensor(
             gpu_means, 256, 128, identity, origin, 1.0f, 1.0f, 128.0f, 64.0f,
-            ScreenWindowCameraModel::Equirectangular, 1.0f, nullptr, nullptr, {});
+            lfs::core::PointProjectionModel::Equirectangular, 1.0f, nullptr, nullptr, {});
         expectProjectedNear(projected.cpu().to_vector(), expected, 1.0f, "equirect-behind");
     }
-}
-
-TEST(SelectionTensorProjection, CudaKernelMatchesProgramOnPinhole) {
-    if (!gpu_backend_available(GpuBackend::CUDA)) {
-        GTEST_SKIP() << "CUDA backend required for kernel vs program parity";
-    }
-    const std::vector<float> means{
-        0.3f,
-        -0.1f,
-        -1.5f,
-        -0.4f,
-        0.2f,
-        -4.0f,
-        1.0f,
-        0.0f,
-        3.0f,
-    };
-    const Tensor gpu_means = upload(means, TensorShape{3, 3}, GpuBackend::CUDA);
-    const auto kernel = lfs::rendering::project_screen_positions_tensor(
-        gpu_means, 800, 600, kRotation, kTranslation, 600.0f, 600.0f, 400.0f, 300.0f,
-        ScreenWindowCameraModel::Pinhole, 1.0f, nullptr, nullptr, {});
-    const auto program = lfs::rendering::project_screen_positions_tensor_program(
-        gpu_means, 800, 600, kRotation, kTranslation, 600.0f, 600.0f, 400.0f, 300.0f,
-        ScreenWindowCameraModel::Pinhole, 1.0f, nullptr, nullptr, {});
-    expectProjectedNear(kernel.cpu().to_vector(), program.cpu().to_vector(), 1.0e-4f, "cuda-vs-program");
 }
 
 TEST(SelectionTensorProjection, SingleModelTransformBroadcastsWithoutGather) {
@@ -383,7 +356,7 @@ TEST(SelectionTensorProjection, SingleModelTransformBroadcastsWithoutGather) {
     const std::vector<int> indices{0, 0};
     std::vector<float> expected;
     cpuProject(means, 320, 240, kRotation, kTranslation, 200.0f, 200.0f, 160.0f, 120.0f,
-               ScreenWindowCameraModel::Pinhole, 1.0f, &transforms, &indices, {}, expected);
+               lfs::core::PointProjectionModel::Pinhole, 1.0f, &transforms, &indices, {}, expected);
     for (const GpuBackend backend : backends_under_test()) {
         SCOPED_TRACE(label(backend));
         const Tensor gpu_means = upload(means, TensorShape{2, 3}, backend);
@@ -391,12 +364,8 @@ TEST(SelectionTensorProjection, SingleModelTransformBroadcastsWithoutGather) {
         const Tensor gpu_indices = uploadI32(indices, backend);
         const auto projected = lfs::rendering::project_screen_positions_tensor(
             gpu_means, 320, 240, kRotation, kTranslation, 200.0f, 200.0f, 160.0f, 120.0f,
-            ScreenWindowCameraModel::Pinhole, 1.0f, &gpu_transforms, &gpu_indices, {});
+            lfs::core::PointProjectionModel::Pinhole, 1.0f, &gpu_transforms, &gpu_indices, {});
         expectProjectedNear(projected.cpu().to_vector(), expected, 1.0e-3f, "broadcast");
-        const auto program = lfs::rendering::project_screen_positions_tensor_program(
-            gpu_means, 320, 240, kRotation, kTranslation, 200.0f, 200.0f, 160.0f, 120.0f,
-            ScreenWindowCameraModel::Pinhole, 1.0f, &gpu_transforms, &gpu_indices, {});
-        expectProjectedNear(program.cpu().to_vector(), expected, 1.0e-3f, "broadcast-program");
     }
 }
 
@@ -450,7 +419,7 @@ TEST(SelectionTensorProjection, VisibleModelTransformsApplyPerIndex) {
     const std::vector<bool> visibility{true, true};
     std::vector<float> expected;
     cpuProject(means, 320, 240, kRotation, kTranslation, 200.0f, 200.0f, 160.0f, 120.0f,
-               ScreenWindowCameraModel::Pinhole, 1.0f, &transforms, &indices, visibility, expected);
+               lfs::core::PointProjectionModel::Pinhole, 1.0f, &transforms, &indices, visibility, expected);
     ASSERT_FALSE(isInvalid(expected[0], expected[1]));
     ASSERT_FALSE(isInvalid(expected[2], expected[3]));
     EXPECT_GT(std::abs(expected[2] - expected[0]), 1.0f);
@@ -461,12 +430,8 @@ TEST(SelectionTensorProjection, VisibleModelTransformsApplyPerIndex) {
         const Tensor gpu_indices = uploadI32(indices, backend);
         const auto projected = lfs::rendering::project_screen_positions_tensor(
             gpu_means, 320, 240, kRotation, kTranslation, 200.0f, 200.0f, 160.0f, 120.0f,
-            ScreenWindowCameraModel::Pinhole, 1.0f, &gpu_transforms, &gpu_indices, visibility);
+            lfs::core::PointProjectionModel::Pinhole, 1.0f, &gpu_transforms, &gpu_indices, visibility);
         expectProjectedNear(projected.cpu().to_vector(), expected, 1.0e-3f, "per-index");
-        const auto program = lfs::rendering::project_screen_positions_tensor_program(
-            gpu_means, 320, 240, kRotation, kTranslation, 200.0f, 200.0f, 160.0f, 120.0f,
-            ScreenWindowCameraModel::Pinhole, 1.0f, &gpu_transforms, &gpu_indices, visibility);
-        expectProjectedNear(program.cpu().to_vector(), expected, 1.0e-3f, "per-index-program");
     }
 }
 
@@ -487,7 +452,7 @@ TEST(SelectionTensorProjection, NonFiniteMeansAreInvalid) {
     };
     std::vector<float> expected;
     cpuProject(means, 64, 64, kRotation, kTranslation, 10.0f, 10.0f, 32.0f, 32.0f,
-               ScreenWindowCameraModel::Pinhole, 1.0f, nullptr, nullptr, {}, expected);
+               lfs::core::PointProjectionModel::Pinhole, 1.0f, nullptr, nullptr, {}, expected);
     for (size_t i = 0; i < expected.size(); i += 2) {
         EXPECT_TRUE(isInvalid(expected[i], expected[i + 1])) << "cpu index=" << (i / 2);
     }
@@ -496,7 +461,7 @@ TEST(SelectionTensorProjection, NonFiniteMeansAreInvalid) {
         const Tensor gpu_means = upload(means, TensorShape{4, 3}, backend);
         const auto projected = lfs::rendering::project_screen_positions_tensor(
             gpu_means, 64, 64, kRotation, kTranslation, 10.0f, 10.0f, 32.0f, 32.0f,
-            ScreenWindowCameraModel::Pinhole, 1.0f, nullptr, nullptr, {});
+            lfs::core::PointProjectionModel::Pinhole, 1.0f, nullptr, nullptr, {});
         expectProjectedNear(projected.cpu().to_vector(), expected, 1.0e-3f, "nonfinite");
     }
 }
@@ -508,7 +473,7 @@ TEST(SelectionTensorProjection, EquirectViewZZeroMatchesAtan2Seam) {
     constexpr int width = 256;
     std::vector<float> expected;
     cpuProject(means, width, 128, identity, origin, 1.0f, 1.0f, 128.0f, 64.0f,
-               ScreenWindowCameraModel::Equirectangular, 1.0f, nullptr, nullptr, {}, expected);
+               lfs::core::PointProjectionModel::Equirectangular, 1.0f, nullptr, nullptr, {}, expected);
     ASSERT_FALSE(isInvalid(expected[0], expected[1]));
     // A direction along +X maps to three quarters of the panorama width.
     EXPECT_NEAR(expected[0], static_cast<float>(width) * 0.75f, 1.0e-3f);
@@ -517,23 +482,15 @@ TEST(SelectionTensorProjection, EquirectViewZZeroMatchesAtan2Seam) {
         const Tensor gpu_means = upload(means, TensorShape{1, 3}, backend);
         const auto projected = lfs::rendering::project_screen_positions_tensor(
             gpu_means, width, 128, identity, origin, 1.0f, 1.0f, 128.0f, 64.0f,
-            ScreenWindowCameraModel::Equirectangular, 1.0f, nullptr, nullptr, {});
+            lfs::core::PointProjectionModel::Equirectangular, 1.0f, nullptr, nullptr, {});
         expectProjectedNear(projected.cpu().to_vector(), expected, 1.0f, "equirect-seam");
-        const auto program = lfs::rendering::project_screen_positions_tensor_program(
-            gpu_means, width, 128, identity, origin, 1.0f, 1.0f, 128.0f, 64.0f,
-            ScreenWindowCameraModel::Equirectangular, 1.0f, nullptr, nullptr, {});
-        expectProjectedNear(program.cpu().to_vector(), expected, 1.0f, "equirect-seam-program");
     }
 }
 
-TEST(SelectionTensorProjection, MoreThanOneMillionExceedsOldCudaGridCap) {
-    // Old projectScreenPositionsKernel launch was
-    // min(ceil(n / 256), 4096) → 1,048,576 threads. n=1,100,003 leaves
-    // [1,048,576, n) unwritten under that cap; Tensor::empty tail would not
-    // match the CPU / program / Vulkan values.
+TEST(SelectionTensorProjection, ProjectsBeyondOneMillionPoints) {
     constexpr int n = 1'100'003;
-    constexpr int kOldCudaThreadCap = 4096 * 256;
-    static_assert(n > kOldCudaThreadCap);
+    constexpr int kProbeBoundary = 4096 * 256;
+    static_assert(n > kProbeBoundary);
     constexpr int width = 640;
     constexpr int height = 480;
     constexpr float fx = 500.0f;
@@ -551,9 +508,9 @@ TEST(SelectionTensorProjection, MoreThanOneMillionExceedsOldCudaGridCap) {
     }
     std::vector<float> expected;
     cpuProject(means, width, height, identity, origin, fx, fy, cx, cy,
-               ScreenWindowCameraModel::Pinhole, 1.0f, nullptr, nullptr, {}, expected);
+               lfs::core::PointProjectionModel::Pinhole, 1.0f, nullptr, nullptr, {}, expected);
 
-    const int probes[] = {0, kOldCudaThreadCap - 1, kOldCudaThreadCap, kOldCudaThreadCap + 1, n - 1};
+    const int probes[] = {0, kProbeBoundary - 1, kProbeBoundary, kProbeBoundary + 1, n - 1};
     auto tailMismatches = [&](const std::vector<float>& got, const char* tag) {
         EXPECT_EQ(got.size(), expected.size()) << tag;
         if (got.size() != expected.size()) {
@@ -566,7 +523,7 @@ TEST(SelectionTensorProjection, MoreThanOneMillionExceedsOldCudaGridCap) {
         }
         size_t mismatches = 0;
         size_t first = static_cast<size_t>(n);
-        for (int i = kOldCudaThreadCap; i < n; ++i) {
+        for (int i = kProbeBoundary; i < n; ++i) {
             const size_t x = static_cast<size_t>(i) * 2;
             if (std::abs(got[x] - expected[x]) > 1.0e-3f ||
                 std::abs(got[x + 1] - expected[x + 1]) > 1.0e-3f) {
@@ -585,14 +542,11 @@ TEST(SelectionTensorProjection, MoreThanOneMillionExceedsOldCudaGridCap) {
         const Tensor gpu_means = upload(means, TensorShape{static_cast<size_t>(n), 3}, backend);
         const auto projected = lfs::rendering::project_screen_positions_tensor(
             gpu_means, width, height, identity, origin, fx, fy, cx, cy,
-            ScreenWindowCameraModel::Pinhole, 1.0f, nullptr, nullptr, {});
+            lfs::core::PointProjectionModel::Pinhole, 1.0f, nullptr, nullptr, {});
         ASSERT_TRUE(projected.is_valid());
         const auto got = projected.cpu().to_vector();
         tailMismatches(got, "dispatch");
-        const auto program = lfs::rendering::project_screen_positions_tensor_program(
-            gpu_means, width, height, identity, origin, fx, fy, cx, cy,
-            ScreenWindowCameraModel::Pinhole, 1.0f, nullptr, nullptr, {});
-        tailMismatches(program.cpu().to_vector(), "program");
+
         if (backend == GpuBackend::CUDA) {
             cuda_tail = got;
         } else if (!cuda_tail.empty()) {
@@ -600,7 +554,7 @@ TEST(SelectionTensorProjection, MoreThanOneMillionExceedsOldCudaGridCap) {
             ASSERT_EQ(got.size(), cuda_tail.size());
             size_t mismatches = 0;
             size_t first = static_cast<size_t>(n);
-            for (int i = kOldCudaThreadCap; i < n; ++i) {
+            for (int i = kProbeBoundary; i < n; ++i) {
                 const size_t x = static_cast<size_t>(i) * 2;
                 if (std::abs(got[x] - cuda_tail[x]) > 1.0e-3f ||
                     std::abs(got[x + 1] - cuda_tail[x + 1]) > 1.0e-3f) {

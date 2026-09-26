@@ -4,12 +4,12 @@
 
 #include "gui/video_export_utils.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/training_manager.hpp"
 #include "gui/string_keys.hpp"
 #include "io/loader.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
 #include "scene/scene_manager.hpp"
-#include "training/training_manager.hpp"
 #include <optional>
 #include <shared_mutex>
 
@@ -56,11 +56,13 @@ namespace lfs::vis::gui {
         [[nodiscard]] std::optional<std::shared_lock<std::shared_mutex>> acquireLiveModelRenderLock(
             const lfs::vis::SceneManager& scene_manager) {
             std::optional<std::shared_lock<std::shared_mutex>> lock;
+#if LFS_BUILD_TRAINER
             if (const auto* tm = scene_manager.getTrainerManager()) {
                 if (const auto* trainer = tm->getTrainer()) {
                     lock.emplace(trainer->getRenderMutex());
                 }
             }
+#endif
             return lock;
         }
 

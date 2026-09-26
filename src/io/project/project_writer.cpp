@@ -5,6 +5,7 @@
 #include "io/project_container.hpp"
 
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "crc32c.hpp"
 #include "project_container_internal.hpp"
 #include "project_framing.hpp"
@@ -996,7 +997,9 @@ namespace lfs::io::project {
         Mode mode = Mode::Append;
         std::filesystem::path destination_path;
         std::filesystem::path active_path;
+        std::optional<detail::ProjectPathIdentity> destination_identity;
         std::optional<detail::WriterLock> lock;
+        std::optional<detail::WriterLock> active_path_lock;
         std::optional<WriterLockLease> lock_lease;
         std::shared_ptr<detail::NativeFile> file;
         std::optional<ProjectReader> prior_reader;
@@ -1088,6 +1091,12 @@ namespace lfs::io::project {
         }
 
         [[nodiscard]] lfs::Result<void> require_ready() const {
+            if (auto identity = detail::validate_project_operation_identity(); !identity)
+                return identity;
+            if (destination_identity) {
+                if (auto identity = destination_identity->validate(); !identity)
+                    return identity;
+            }
             if (committed) {
                 return status_failure(writer_error(
                     lfs::ErrorCode::FailedPrecondition, destination_path,
@@ -1515,6 +1524,11 @@ namespace lfs::io::project {
     lfs::Result<ProjectWriter>
     ProjectWriter::create(const std::filesystem::path& path,
                           const CreateOptions& options) {
+        if (auto checked = detail::validate_project_operation_identity(); !checked)
+            return std::move(checked).error();
+        auto identity = detail::ProjectPathIdentity::capture(path);
+        if (!identity)
+            return std::move(identity).error();
         if (path.empty()) {
             return writer_error(lfs::ErrorCode::InvalidArgument, path,
                                 "The project path is empty.",
@@ -1690,9 +1704,17 @@ namespace lfs::io::project {
 
         auto impl = std::make_unique<Impl>();
         impl->mode = Impl::Mode::Create;
-        impl->destination_path = path;
+        impl->destination_path = identity->canonical_path;
+        impl->destination_identity = std::move(*identity);
         impl->active_path =
-            detail::make_sibling_temp_path(path, "project-write");
+            detail::make_sibling_temp_path(impl->destination_path, "project-write");
+        auto active_path_lock =
+            detail::WriterLock::acquire(impl->active_path);
+        if (!active_path_lock) {
+            return std::move(active_path_lock).error();
+        }
+        impl->active_path_lock.emplace(
+            std::move(*active_path_lock));
         impl->lock = std::move(held_lock);
         impl->lock_lease =
             std::move(held_lease);
@@ -1747,6 +1769,11 @@ namespace lfs::io::project {
     lfs::Result<ProjectWriter>
     ProjectWriter::append(const std::filesystem::path& path,
                           const AppendOptions& options) {
+        if (auto checked = detail::validate_project_operation_identity(); !checked)
+            return std::move(checked).error();
+        auto identity = detail::ProjectPathIdentity::capture(path);
+        if (!identity)
+            return std::move(identity).error();
         if (path.empty()) {
             return writer_error(lfs::ErrorCode::InvalidArgument, path,
                                 "The project path is empty.",
@@ -1782,6 +1809,18 @@ namespace lfs::io::project {
         if (!reader_result) {
             return std::move(reader_result).error();
         }
+        if (!options.expected_project_uuid.is_nil() &&
+            reader_result->superblock().project_uuid != options.expected_project_uuid)
+            return writer_error(lfs::ErrorCode::FailedPrecondition, path,
+                                "The project identity changed before writing. Refresh Projects and try again.",
+                                "the opened document no longer owns this destination", "project.identity");
+        if (!options.expected_commit_uuid.is_nil() &&
+            reader_result->commit().commit_uuid != options.expected_commit_uuid)
+            return writer_error(
+                lfs::ErrorCode::FailedPrecondition, path,
+                "The project changed before the thumbnail could be written.",
+                "the opened document's commit is no longer the destination head",
+                "project.commit");
         if (reader_result->open_state() != OpenState::Open) {
             return writer_error(
                 lfs::ErrorCode::Unsupported, path,
@@ -1838,6 +1877,7 @@ namespace lfs::io::project {
         auto impl = std::make_unique<Impl>();
         impl->mode = Impl::Mode::Append;
         impl->destination_path = path;
+        impl->destination_identity = std::move(*identity);
         impl->active_path = path;
         impl->lock = std::move(held_lock);
         impl->lock_lease =
@@ -2002,6 +2042,12 @@ namespace lfs::io::project {
                 detail::preflight_disk_space(impl_->active_path, *required);
             !space) {
             return space;
+        }
+        if (auto identity = detail::validate_project_operation_identity(); !identity)
+            return identity;
+        if (impl_->destination_identity) {
+            if (auto identity = impl_->destination_identity->validate(); !identity)
+                return identity;
         }
         if (impl_->mode == Impl::Mode::Append &&
             impl_->original_physical_size > impl_->cursor) {
@@ -2569,8 +2615,13 @@ namespace lfs::io::project {
                 "tombstones and base references have no stored payload",
                 "chunk.row_kind"));
         }
-        if (impl_->rows.contains(chunk.key) ||
-            impl_->touched.contains(chunk.key)) {
+        // An append carries forward old tombstones. Restoring an older save
+        // may replace one with its historical payload, just like write_chunk.
+        // A resolution made by this writer must still never be overwritten.
+        const auto existing = impl_->rows.find(chunk.key);
+        if (impl_->touched.contains(chunk.key) ||
+            (existing != impl_->rows.end() &&
+             existing->second.row_kind != RowKind::Tombstone)) {
             return status_failure(writer_error(
                 lfs::ErrorCode::AlreadyExists,
                 impl_->destination_path,
@@ -3015,7 +3066,7 @@ namespace lfs::io::project {
             }
             LOG_DEBUG(
                 "Project commit validation stage: path={} crc_only={:.3f} ms",
-                candidate.string(),
+                lfs::core::path_to_utf8(candidate),
                 std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - validation_started)
                     .count());
@@ -3059,6 +3110,10 @@ namespace lfs::io::project {
                 !boundary) {
                 return boundary;
             }
+            if (impl_->destination_identity) {
+                if (auto identity = impl_->destination_identity->validate(); !identity)
+                    return identity;
+            }
             auto replacement =
                 detail::atomic_replace(impl_->active_path,
                                        impl_->destination_path);
@@ -3075,18 +3130,18 @@ namespace lfs::io::project {
                     std::move(boundary).error(),
                     "replacement-published observer");
             }
-            if (auto validation =
+            if (auto published_validation =
                     validate_authority(impl_->destination_path);
-                !validation) {
+                !published_validation) {
                 auto rollback = detail::rollback_atomic_replace(
                     *replacement, impl_->destination_path);
                 if (!rollback) {
-                    lfs::Error error = std::move(validation).error();
+                    lfs::Error error = std::move(published_validation).error();
                     error = std::move(error).with_suppressed(
                         std::move(rollback).error());
                     return status_failure(std::move(error));
                 }
-                return validation;
+                return published_validation;
             }
             impl_->committed = true;
             impl_->cursor = *committed_end;
@@ -3142,12 +3197,17 @@ namespace lfs::io::project {
                 "project.path"));
         }
         const auto& path = source_path;
+        auto identity = detail::ProjectPathIdentity::capture(destination_path);
+        if (!identity)
+            return status_failure(std::move(identity).error());
         std::optional<detail::WriterLock> source_lock;
         std::optional<detail::WriterLock> destination_lock;
         const auto acquire_lock =
-            [](const std::filesystem::path& lock_path,
-               std::optional<detail::WriterLock>& target)
+            [&options](const std::filesystem::path& lock_path,
+                       std::optional<detail::WriterLock>& target)
             -> lfs::Result<void> {
+            if (options.writer_lock_lease && options.writer_lock_lease->owns(lock_path))
+                return {};
             auto lock_result = detail::WriterLock::acquire(lock_path);
             if (!lock_result) {
                 return lfs::Result<void>::failure(
@@ -3192,6 +3252,13 @@ namespace lfs::io::project {
                 "semantic open did not select a supported generation",
                 "commit.read_compatibility"));
         }
+        if (!options.expected_source_commit_uuid.is_nil() &&
+            source_result->commit().commit_uuid != options.expected_source_commit_uuid) {
+            return status_failure(writer_error(
+                lfs::ErrorCode::FailedPrecondition, path,
+                "The project changed. Review the cleanup again.",
+                "the cleanup plan no longer matches the locked head", "clean.commit"));
+        }
         const WriteCompatibility compatibility =
             source_result->write_compatibility();
         if (!compatibility.safe) {
@@ -3210,6 +3277,13 @@ namespace lfs::io::project {
                 "Autosave sidecars are replaced, not compacted.",
                 "compaction creates a master COMPACTION root",
                 "superblock.container_role"));
+        }
+        if (options.cancel && options.cancel()) {
+            return status_failure(writer_error(
+                lfs::ErrorCode::Cancelled, path,
+                "Project compaction was canceled.",
+                "the caller requested cancellation before copying payloads",
+                "compaction.cancel"));
         }
         auto bound_autosaves =
             detail::valid_bound_autosaves_locked(
@@ -3247,10 +3321,14 @@ namespace lfs::io::project {
 
         auto impl = std::make_unique<Impl>();
         impl->mode = Impl::Mode::Create;
-        impl->destination_path = destination_path;
+        impl->destination_path = identity->canonical_path;
+        impl->destination_identity = std::move(*identity);
         impl->active_path =
-            detail::make_sibling_temp_path(destination_path, "compact");
-        impl->lock.emplace(std::move(*destination_lock));
+            detail::make_sibling_temp_path(impl->destination_path, "compact");
+        if (destination_lock)
+            impl->lock.emplace(std::move(*destination_lock));
+        else
+            impl->lock_lease = options.writer_lock_lease;
         impl->superblock = SuperblockInfo{
             .format = CURRENT_CONTAINER_VERSION,
             .role = ContainerRole::Master,
@@ -3319,12 +3397,17 @@ namespace lfs::io::project {
             return plan;
         }
         std::uint64_t planned_bytes = 0;
+        const auto keep_row = [&options](const ChunkInfo& row) {
+            return row.row_kind == RowKind::Live &&
+                   !(row.key.fourcc == FOURCC_CKPT &&
+                     std::ranges::find(options.excluded_checkpoints, row.key.instance_uuid) != options.excluded_checkpoints.end());
+        };
         for (const ChunkInfo& row : source_result->chunks()) {
-            if (row.row_kind != RowKind::Live) {
+            if (!keep_row(row)) {
                 continue;
             }
             auto next = detail::checked_add(
-                planned_bytes, row.stored_bytes, path, row.payload_offset,
+                planned_bytes, row.key.fourcc == FOURCC_PROJ && !options.project_chapter_override.empty() ? options.project_chapter_override.size() : row.stored_bytes, path, row.payload_offset,
                 "compaction.planned_payload_bytes");
             if (!next) {
                 return status_failure(std::move(next).error());
@@ -3335,8 +3418,32 @@ namespace lfs::io::project {
             return preflight;
         }
 
+        const auto live_rows = std::ranges::count_if(
+            source_result->chunks(),
+            keep_row);
+        std::size_t copied_rows = 0;
+        if (options.progress) {
+            options.progress(0.0F, "Compacting project");
+        }
         for (const ChunkInfo& source_row : source_result->chunks()) {
-            if (source_row.row_kind == RowKind::Live) {
+            if (keep_row(source_row)) {
+                if (options.cancel && options.cancel()) {
+                    return status_failure(writer_error(
+                        lfs::ErrorCode::Cancelled,
+                        path,
+                        "Project compaction was canceled.",
+                        "the caller requested cancellation while copying payloads",
+                        "compaction.cancel"));
+                }
+                if (source_row.key.fourcc == FOURCC_PROJ && !options.project_chapter_override.empty()) {
+                    if (auto written = writer.write_chunk(source_row.key, options.project_chapter_override,
+                                                          ChunkWriteOptions{.chunk_version = source_row.chunk_version,
+                                                                            .compression = source_row.compression});
+                        !written)
+                        return written;
+                    ++copied_rows;
+                    continue;
+                }
                 auto copied =
                     writer.impl_->copy_stored_chunk(*source_result, source_row);
                 if (!copied) {
@@ -3359,6 +3466,15 @@ namespace lfs::io::project {
                 }
                 writer.impl_->rows[copied->key] = std::move(*copied);
                 writer.impl_->touched.insert(source_row.key);
+                ++copied_rows;
+                if (options.progress) {
+                    options.progress(
+                        live_rows == 0
+                            ? 1.0F
+                            : static_cast<float>(copied_rows) /
+                                  static_cast<float>(live_rows),
+                        "Compacting project");
+                }
             }
             // Tombstones are discarded on compaction (spec MAY; no keep_tombstones producer).
         }
@@ -3367,6 +3483,9 @@ namespace lfs::io::project {
         const auto commit_started = copy_finished;
         auto committed = writer.commit();
         if (committed) {
+            if (options.progress) {
+                options.progress(1.0F, "Compacting project");
+            }
             const auto finished = std::chrono::steady_clock::now();
             const auto milliseconds = [](const auto begin, const auto end) {
                 return std::chrono::duration<double, std::milli>(end - begin)
@@ -3374,7 +3493,8 @@ namespace lfs::io::project {
             };
             LOG_DEBUG(
                 "Project compaction stages: source={} destination={} source_open_metadata={:.3f} ms copy_crc_write={:.3f} ms commit={:.3f} ms total={:.3f} ms",
-                source_path.string(), destination_path.string(),
+                lfs::core::path_to_utf8(source_path),
+                lfs::core::path_to_utf8(destination_path),
                 milliseconds(compact_started, source_ready),
                 milliseconds(source_ready, copy_finished),
                 milliseconds(commit_started, finished),

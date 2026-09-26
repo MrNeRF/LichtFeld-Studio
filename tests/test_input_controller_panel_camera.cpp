@@ -19,6 +19,7 @@
 #include "scene/scene_manager.hpp"
 #include "tools/selection_tool.hpp"
 #include "tools/tool_base.hpp"
+#include "workspace/viewport_workspace.hpp"
 
 #include <gtest/gtest.h>
 #include <memory>
@@ -244,6 +245,31 @@ namespace lfs::vis {
         seedCamera(primary_viewport, glm::vec3(4.0f, 5.0f, 6.0f), glm::vec3(-8.0f, -8.0f, -8.0f));
         controller.resetCameraForPanel(SplitViewPanelId::Left);
         EXPECT_EQ(primary_viewport.camera.t, glm::vec3(4.0f, 5.0f, 6.0f));
+    }
+
+    TEST_F(InputControllerPanelCameraTest, WorkspaceResetTargetsOnlyTheFocusedView) {
+        Viewport legacy_viewport(400, 200);
+        ViewportWorkspace workspace({400, 200});
+        const auto first = workspace.primaryView();
+        const auto second = workspace.split(first, SplitAxis::Vertical);
+        ASSERT_TRUE(second);
+        ASSERT_TRUE(workspace.focus(*second));
+        auto* first_camera = workspace.findCamera(first);
+        auto* second_camera = workspace.findCamera(*second);
+        ASSERT_NE(first_camera, nullptr);
+        ASSERT_NE(second_camera, nullptr);
+        seedCamera(legacy_viewport, glm::vec3(1.0f), glm::vec3(-7.0f));
+        seedCamera(*first_camera, glm::vec3(2.0f), glm::vec3(-4.0f));
+        seedCamera(*second_camera, glm::vec3(9.0f, 8.0f, 7.0f), glm::vec3(-6.0f));
+
+        InputController controller(nullptr, legacy_viewport);
+        controller.bindWorkspace(&workspace);
+        controller.setWorkspaceFrameSnapshot(workspace.snapshot({0, 0, 400, 200}));
+        core::events::cmd::ResetCamera{}.emit();
+
+        EXPECT_EQ(legacy_viewport.camera.t, glm::vec3(-7.0f));
+        EXPECT_EQ(first_camera->camera.t, glm::vec3(-4.0f));
+        EXPECT_EQ(second_camera->camera.t, glm::vec3(9.0f, 8.0f, 7.0f));
     }
 
     // Preserve legacy panel-less reset_camera()/MCP routing to primary, even in

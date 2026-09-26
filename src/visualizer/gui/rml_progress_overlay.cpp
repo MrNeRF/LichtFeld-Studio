@@ -5,6 +5,7 @@
 
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
+#include "core/number_format.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
@@ -79,8 +80,8 @@ namespace lfs::vis::gui {
                                                         : Progress::IMPORT_FAILED_TITLE);
                 if (import_state.num_images > 0 || import_state.num_points > 0) {
                     result.detail = LOCF(Progress::IMPORT_COUNTS,
-                                         import_state.num_images,
-                                         import_state.num_points);
+                                         lfs::core::format_count(import_state.num_images),
+                                         lfs::core::format_count(import_state.num_points));
                 }
                 if (!import_state.success) {
                     result.action = ProgressOverlayPresentation::Action::DismissImport;
@@ -96,8 +97,8 @@ namespace lfs::vis::gui {
             result.title = LOC(Progress::EXPORTING_VIDEO);
             result.stage = video_state.stage;
             result.detail = LOCF(Progress::VIDEO_FRAME,
-                                 video_state.current_frame,
-                                 video_state.total_frames);
+                                 lfs::core::format_count(video_state.current_frame),
+                                 lfs::core::format_count(video_state.total_frames));
             result.action_label = LOC(Common::CANCEL);
             result.progress = clampProgress(video_state.progress);
             result.show_progress = true;

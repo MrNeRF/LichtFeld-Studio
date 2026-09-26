@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "cuda_backend_test.hpp"
+
 #include "core/alloc_counter.hpp"
 #include "core/nn.hpp"
 
@@ -193,7 +195,9 @@ namespace {
 
 } // namespace
 
-TEST(Sam2Test, FullModelParityIsOptIn) {
+class Sam2CudaTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(Sam2CudaTest, FullModelParityIsOptIn) {
     const char* weights = std::getenv("LFS_SAM2_WEIGHTS");
     if (weights == nullptr || weights[0] == '\0') {
         GTEST_SKIP() << "set LFS_SAM2_WEIGHTS to run full-model parity";
@@ -569,7 +573,7 @@ TEST(Sam2Test, FullModelParityIsOptIn) {
     cudaEventDestroy(ev1);
 }
 
-TEST(Sam2Test, DeviceFootprintStaysUnderBudget) {
+TEST_F(Sam2CudaTest, DeviceFootprintStaysUnderBudget) {
     const char* weights = std::getenv("LFS_SAM2_WEIGHTS");
     if (weights == nullptr || weights[0] == '\0') {
         GTEST_SKIP() << "set LFS_SAM2_WEIGHTS to run the VRAM budget check";

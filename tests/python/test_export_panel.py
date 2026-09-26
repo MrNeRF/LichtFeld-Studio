@@ -172,6 +172,7 @@ def test_export_panel_builds_format_and_model_records(export_panel_module):
         {"index": "1", "label": "export.format.sog_supersplat", "selected": False},
         {"index": "8", "label": "export.format.ssog", "selected": False},
         {"index": "2", "label": "export.format.spz_niantic", "selected": True},
+        {"index": "13", "label": "export.format.glb_gltf", "selected": False},
         {"index": "6", "label": "export.format.rad_random_access", "selected": False},
         {"index": "4", "label": "export.format.usd_openusd", "selected": False},
         {"index": "5", "label": "export.format.usdz_nurec", "selected": False},

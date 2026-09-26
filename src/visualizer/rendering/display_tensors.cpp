@@ -92,9 +92,11 @@ namespace lfs::vis {
             std::vector<Tensor> planes;
             planes.reserve(3);
             for (const Tensor& channel : channels) {
-                planes.push_back(channel.reshape({1, height, width}));
+                // Each plane can finish on a non-default image-worker stream.
+                // Download through its tensor before assembling the CPU image.
+                planes.push_back(channel.cpu().reshape({1, height, width}));
             }
-            return std::make_shared<Tensor>(Tensor::cat(planes, 0).cpu().contiguous());
+            return std::make_shared<Tensor>(Tensor::cat(planes, 0).contiguous());
         }
     } // namespace
 

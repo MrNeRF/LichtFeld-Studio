@@ -58,6 +58,38 @@ namespace {
         EXPECT_EQ(rejected.error().code(), lfs::ErrorCode::InvalidArgument);
     }
 
+    TEST(SogLicenseTest, NormativeVectors) {
+        const std::string v1 =
+            "Title: Example scene.\n"
+            "Author: Example Author (https://example.invalid/user/example)\n"
+            "Source: https://example.invalid/scene/0001\n"
+            "License: CC Attribution (Creative Commons Attribution)\n"
+            "License URL: http://creativecommons.org/licenses/by/4.0/\n"
+            "Requirements: Author must be credited. Commercial use is allowed.";
+        const auto map = [](std::string_view input) {
+            return map_sog_license(std::span<const std::uint8_t>(
+                reinterpret_cast<const std::uint8_t*>(input.data()), input.size()));
+        };
+        EXPECT_EQ(map(v1), (ProjectLicense{
+                               "CC-BY-4.0",
+                               v1 + "\nCredit: Example Author (https://example.invalid/user/example)"}));
+        EXPECT_EQ(map("License: CC BY-NC-SA\r\nLicense URL: https://CreativeCommons.org/licenses/by-nc-sa/3.0/\r\n"),
+                  (ProjectLicense{"CC-BY-NC-SA-3.0",
+                                  "License: CC BY-NC-SA\nLicense URL: https://CreativeCommons.org/licenses/by-nc-sa/3.0/"}));
+        const std::string v3 = "Author: Someone\nLicense URL: https://creativecommons.org/publicdomain/zero/1.0/";
+        EXPECT_EQ(map(v3), (ProjectLicense{"CC0-1.0", v3}));
+        EXPECT_EQ(map("Author: Someone\nLicense: All Rights Reserved"),
+                  (ProjectLicense{"LicenseRef-AllRightsReserved",
+                                  "Author: Someone\nLicense: All Rights Reserved\nCredit: Someone"}));
+        EXPECT_EQ(map("\xef\xbb\xbfSome custom terms.\r\nNo reuse.\n\n"),
+                  (ProjectLicense{"LicenseRef-Custom", "Some custom terms.\nNo reuse."}));
+        EXPECT_FALSE(map(""));
+        EXPECT_FALSE(map("  \n\t "));
+        EXPECT_FALSE(map(std::string_view("\xff\xfe\x00", 3)));
+        const std::string v7 = "License URL: https://creativecommons.org/licenses/by/1.0/\nLicense: Old CC";
+        EXPECT_EQ(map(v7), (ProjectLicense{"LicenseRef-OldCC", v7}));
+    }
+
     ParameterManagerSnapshot parameter_snapshot() {
         ParameterManagerSnapshot result;
         result.active_strategy = "mrnf";

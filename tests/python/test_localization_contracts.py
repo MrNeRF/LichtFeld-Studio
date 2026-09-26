@@ -55,6 +55,20 @@ def _fields(text):
     ))
 
 
+def test_locale_markup_contract():
+    sys.path.insert(0, str(ROOT / "tools"))
+    try:
+        import check_locale_completeness as audit
+    finally:
+        sys.path.pop(0)
+
+    assert audit.markup_findings("test.json", {"hint": "Use <path>"}, {"hint": "Use <path>"})
+    assert audit.markup_findings("test.json", {"hint": "<b>bold"}, {"hint": "<b>{}</b>"})
+    assert not audit.markup_findings("test.json", {"hint": "<b>{}</b>"}, {"hint": "<b>{}</b>"})
+    assert not audit.markup_findings("test.json", {"hint": "&lt;path&gt;"}, {"hint": "&lt;path&gt;"})
+    assert audit.markup_findings("test.json", {"hint": "plain"}, {"hint": "<b>bold</b>"})
+
+
 def test_shipped_locales_match_english_keys_and_placeholders():
     english = dict(_flatten(_load("en")))
     for path in sorted(LOCALES.glob("*.json")):
@@ -137,6 +151,28 @@ def test_literal_localization_calls_resolve():
                             assert value.value in keys, f"{path}: missing {value.value}"
 
 
+def test_input_action_name_keys_resolve_in_every_locale():
+    source = (ROOT / "src" / "visualizer" / "input" / "input_bindings.cpp").read_text(
+        encoding="utf-8"
+    )
+    start = source.index("std::string_view actionNameKey")
+    end = source.index("namespace {", start)
+    action_name_key = source[start:end]
+    suffixes = set(
+        re.findall(r'case Action::[A-Z0-9_]+:\s*return "([a-z0-9_]+)";', action_name_key)
+    )
+    assert suffixes, "actionNameKey() must expose localization suffixes"
+
+    for locale_path in sorted(LOCALES.glob("*.json")):
+        localized = dict(_flatten(json.loads(locale_path.read_text(encoding="utf-8"))))
+        missing = sorted(
+            f"input_settings.action.{suffix}"
+            for suffix in suffixes
+            if f"input_settings.action.{suffix}" not in localized
+        )
+        assert not missing, f"{locale_path.name}: missing action labels: {missing}"
+
+
 def test_hardcoded_ui_audit_has_no_candidates():
     result = subprocess.run([sys.executable, str(ROOT / "tools" / "check_ui_hardcoded.py")],
                             cwd=ROOT, capture_output=True, text=True, check=True)
@@ -179,6 +215,20 @@ def test_hardcoded_ui_audit_detects_common_bypasses():
         assert {"Cancel", "Export"} <= rml_texts
 
 
+def test_formatted_counts_group_their_digits():
+    spec = importlib.util.spec_from_file_location(
+        "localization_helpers", ROOT / "src" / "python" / "lfs_plugins" / "localization.py"
+    )
+    helpers = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(helpers)
+
+    assert helpers.safe_format("{count} images", count=1234567) == "1,234,567 images"
+    assert helpers.safe_format("{0} of {1}", 999, 30000) == "999 of 30,000"
+    assert helpers.safe_format("{size} left", size="1.5 GB") == "1.5 GB left"
+    assert helpers.safe_format("{flag}", flag=True) == "True"
+
+
 def test_counted_messages_use_supported_plural_forms():
     spec = importlib.util.spec_from_file_location(
         "localization_helpers", ROOT / "src" / "python" / "lfs_plugins" / "localization.py"
@@ -197,7 +247,7 @@ def test_counted_messages_use_supported_plural_forms():
 
     keys = dict(_flatten(_load("en")))
     for key in (
-        "asset_manager.status.showing_projects",
+        "projects.status.showing_projects",
         "plugin_marketplace.registry_loaded",
         "plugin_marketplace.registry_unavailable",
     ):
@@ -438,7 +488,7 @@ def test_localized_toolbar_and_hud_labels_are_cached():
 
     hud = (ROOT / "src" / "visualizer" / "gui" / "vram_hud_overlay.cpp").read_text(encoding="utf-8")
     assert "cached_iteration_label_ = LOC(" in hud
-    assert 'std::format("{} {}", cached_iteration_label_, s.iteration)' in hud
+    assert 'std::format("{} {}", cached_iteration_label_, lfs::core::format_count(s.iteration))' in hud
 
     for path in sorted(LOCALES.glob("*.json")):
         assert not str(_load(path.stem)["status"]["iteration"]).endswith((":", "：")), path.name
@@ -458,6 +508,19 @@ def test_cached_python_panels_request_a_frame_on_language_change():
     assert "return true;" in needs_frame.split("if (!dirty_driven_updates_)", 1)[0]
 
 
+def test_immediate_python_controls_request_one_followup_frame_without_polling():
+    layout_source = (ROOT / "src" / "python" / "lfs" / "rml_im_mode_layout.cpp").read_text(encoding="utf-8")
+    adapter_source = (ROOT / "src" / "python" / "lfs" / "rml_python_panel_adapter.cpp").read_text(encoding="utf-8")
+
+    marker = "data-immediate-input-pending"
+    assert marker in layout_source
+    assert marker in adapter_source
+    assert "request_immediate_input_frame(el);" in layout_source
+    assert "doc->HasAttribute(IMMEDIATE_INPUT_PENDING_ATTRIBUTE)" in adapter_source
+    assert "doc->RemoveAttribute(IMMEDIATE_INPUT_PENDING_ATTRIBUTE)" in adapter_source
+    assert 'append_reason("immediate_input")' in adapter_source
+
+
 if __name__ == "__main__":
     contracts = [
         test_locale_loader_rejects_nested_duplicates,
@@ -467,6 +530,7 @@ if __name__ == "__main__":
         test_shipped_locale_files_are_strict_utf8_without_bom_or_replacement_characters,
         test_rml_translation_directives_resolve,
         test_literal_localization_calls_resolve,
+        test_input_action_name_keys_resolve_in_every_locale,
         test_hardcoded_ui_audit_has_no_candidates,
         test_hardcoded_ui_audit_detects_common_bypasses,
         test_counted_messages_use_supported_plural_forms,

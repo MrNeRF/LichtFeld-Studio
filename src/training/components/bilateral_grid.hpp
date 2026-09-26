@@ -4,9 +4,11 @@
 #pragma once
 #include "core/tensor.hpp"
 #include "lfs/kernels/bilateral_grid.cuh"
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <istream>
+#include <optional>
 #include <ostream>
 #include <vector>
 
@@ -97,8 +99,10 @@ namespace lfs::training {
         double get_lr() const { return current_lr_; }
         int64_t get_step() const { return step_; }
         const Config& get_config() const { return config_; }
-        lfs::core::Tensor& grids() { return grids_; }
-        const lfs::core::Tensor& grids() const { return grids_; }
+        /// Host-resident grids [N, C, L, H, W]. The mutable overload drops the device
+        /// copies so edits through the returned tensor are seen by the next apply.
+        lfs::core::Tensor& grids();
+        const lfs::core::Tensor& grids() const;
         lfs::core::Tensor& grad_slice() { return slice_grad_; }
         const lfs::core::Tensor& grad_slice() const { return slice_grad_; }
         const lfs::core::Tensor& shared_offset() const { return shared_offset_; }
@@ -120,14 +124,36 @@ namespace lfs::training {
         void rebuild_identity_mean();
         void rebuild_projection_state();
         [[nodiscard]] size_t slice_elements() const;
-        [[nodiscard]] float* slice_ptr(lfs::core::Tensor& tensor, int image_idx);
-        [[nodiscard]] const float* slice_ptr(const lfs::core::Tensor& tensor, int image_idx) const;
-        lfs::core::Tensor channel_mean_of_image(int image_idx) const;
+        void allocate_resident_slots();
+        // Device slot holding image_idx, uploading its grid and Adam moments on a miss.
+        [[nodiscard]] int resident_slot(int image_idx);
+        [[nodiscard]] float* device_slice(lfs::core::Tensor& resident, int slot) const;
+        void write_back(int slot) const;
+        // Makes the host tensors current (waits for pending write-backs).
+        void flush_resident() const;
+        // Forgets device copies after the host tensors were changed directly.
+        void drop_resident();
+        lfs::core::Tensor channel_mean_of_image(int image_idx);
 
-        // Grid parameters [N, C, L, H, W]
+        // Per-image grids and Adam moments [N, C, L, H, W] live in pinned host
+        // memory; only the images being trained are staged on the device. Each
+        // step touches one image, so VRAM stays independent of the image count.
+        static constexpr int kResidentSlots = 2;
+        struct ResidentSlot {
+            int image = -1;
+            bool dirty = false;
+            uint64_t last_use = 0;
+        };
         lfs::core::Tensor grids_;
         lfs::core::Tensor exp_avg_;
         lfs::core::Tensor exp_avg_sq_;
+        lfs::core::Tensor resident_grids_; // [kResidentSlots, C, L, H, W]
+        lfs::core::Tensor resident_exp_avg_;
+        lfs::core::Tensor resident_exp_avg_sq_;
+        mutable std::array<ResidentSlot, kResidentSlots> slots_{};
+        uint64_t slot_clock_ = 0;
+        // Stream of the latest slice copy; the legacy default stream is a null handle.
+        mutable std::optional<cudaStream_t> copy_stream_;
         lfs::core::Tensor slice_grad_; // [C, L, H, W]
         lfs::core::Tensor tv_temp_buffer_;
         lfs::core::Tensor tv_loss_scalar_; // persistent [1], reused by tv_loss_gpu

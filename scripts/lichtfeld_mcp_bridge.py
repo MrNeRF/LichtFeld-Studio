@@ -64,10 +64,13 @@ def log(message: str) -> None:
 
 
 def post_json(payload: Any, timeout_s: float = 5.0) -> Any:
+    headers = {"content-type": "application/json"}
+    if token := os.environ.get("LFS_MCP_TOKEN"):
+        headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(
         DEFAULT_ENDPOINT,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"content-type": "application/json"},
+        headers=headers,
     )
     with urllib.request.urlopen(request, timeout=timeout_s) as response:
         return json.loads(response.read().decode("utf-8"))

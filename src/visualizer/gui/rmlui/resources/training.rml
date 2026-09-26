@@ -56,6 +56,7 @@
     </div>
     <div class="training-actions-group" data-if="show_ctrl_completed">
       <div class="training-action-row">
+        <button class="btn btn--success training-toolbar-action" data-attrif-disabled="start_blocked" data-attr-aria-label="label_start_training" data-tooltip="training.tooltip.btn_start" data-event-click="action('start')"><img src="../icon/sequencer/play.png" /><span>{{label_start_training}}</span></button>
         <button class="btn btn--success training-toolbar-action training-toolbar-action--primary" data-attr-aria-label="label_toolbar_edit" data-tooltip="training.tooltip.btn_switch_edit" data-event-click="action('switch_edit')"><img src="../icon/adjustments.png" /><span>{{label_toolbar_edit}}</span></button>
         <button class="btn btn--secondary training-toolbar-action" data-tooltip="training.tooltip.btn_reset" data-attr-aria-label="label_reset" data-attr-title="label_reset" data-event-click="action('reset')"><img src="../icon/reset.png" /><span>{{label_toolbar_reset}}</span></button>
         <button class="btn btn--secondary training-toolbar-action" data-tooltip="training.tooltip.btn_clear" data-attr-aria-label="label_clear" data-attr-title="label_clear" data-event-click="action('clear')"><img src="../icon/scene/trash.png" /><span>{{label_clear}}</span></button>
@@ -638,7 +639,14 @@
 <div class="training-panel-block" data-if="pv_section_evaluation_visible &amp;&amp; (dep_eval)">
 <div class="section-header text-accent" id="hdr-evaluation" data-event-click="toggle_section('evaluation')"><span class="section-arrow" id="arrow-evaluation">&#x25BC;</span><span>{{pv_header_evaluation}}</span></div>
 <div class="section-content" id="sec-evaluation"><div data-class-disabled-overlay="live_disabled">
-<div data-class-disabled-overlay="dataset_disabled">          <div class="setting-row" data-if="dep_eval &amp;&amp; pv_show_evaluation_fields" data-tooltip="training.tooltip.test_every">
+<div data-class-disabled-overlay="dataset_disabled">
+          <div class="setting-row" data-for="row : pv_dataset_eval_train_rows" data-if="dep_eval"
+               data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="checkbox" data-checked="row.checked"
+                   data-event-click="pv_value_change(row.id, !row.checked)" />
+          </div>
+          <div class="setting-row" data-if="dep_eval_holdout &amp;&amp; pv_show_evaluation_fields" data-tooltip="training.tooltip.test_every">
             <span class="prop-label">{{label_test_every}}</span>
             <input type="text" class="number-input" data-value="test_every_str" />
             <button class="num-step-btn" data-event-mousedown="num_step('test_every', -1)">-</button>

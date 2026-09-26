@@ -5,7 +5,10 @@
 #include "gui/gallery_scene_publication.hpp"
 
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/provenance.hpp"
+#include "core/tensor_backend.hpp"
+#include "core/tensor_completion.hpp"
 #include "core/uuid.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
@@ -16,6 +19,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -25,6 +29,7 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace lfs::vis::gui {
     namespace {
@@ -198,6 +203,10 @@ namespace lfs::vis::gui {
             throw std::runtime_error("gallery_project_not_supported: " + std::string(records.error().user_message()));
         publication.path = source.destination;
         publication.format = source.payload_format;
+        const auto source_license = document->project().license();
+        if (!source_license)
+            throw std::runtime_error(std::string(source_license.error().user_message()));
+        publication.published_license = *source_license;
         std::unordered_map<core::Uuid, const pj::SceneNodeRecord*> by_id;
         for (const auto& record : *records)
             by_id.emplace(record.uuid, &record);
@@ -257,7 +266,7 @@ namespace lfs::vis::gui {
                     throw std::runtime_error(std::string(retained.error().user_message()));
                 node.encoded = GalleryEncodedAsset{binding.source_kind, std::move(*retained)};
             }
-            node.load_payload = [document, binding, canceled]() -> std::shared_ptr<core::SplatData> {
+            node.load_payload = [document, binding, canceled](core::TensorCompletion& completion) -> std::shared_ptr<core::SplatData> {
                 throwIfCanceled(canceled, "Scene preparation canceled.");
                 if (binding.fourcc == "SPLT") {
                     const auto* chunk = document->source_reader()->find(pj::FOURCC_SPLT, binding.instance_uuid);
@@ -268,6 +277,7 @@ namespace lfs::vis::gui {
                     auto payload = pj::SplatChapterPayload::from_lfsp(std::move(*bytes));
                     if (!payload)
                         throw std::runtime_error(std::string(payload.error().user_message()));
+                    completion.include_current_gpu();
                     auto data = payload->hydrate();
                     if (!data)
                         throw std::runtime_error(std::string(data.error().user_message()));
@@ -276,6 +286,7 @@ namespace lfs::vis::gui {
                 if (binding.fourcc == "CKPT") {
                     std::shared_ptr<core::SplatData> data;
                     const auto result = document->find_checkpoint(binding.instance_uuid)->visit_materialized([&](std::istream& stream, const uint64_t bytes) -> lfs::Result<void> {
+                        completion.include_current_gpu();
                         auto loaded = core::load_checkpoint_splat_data(stream, bytes);
                         if (!loaded)
                             throw std::runtime_error(loaded.error());
@@ -292,6 +303,7 @@ namespace lfs::vis::gui {
                 auto loader = io::Loader::create();
                 io::LoadOptions options;
                 options.cancel_requested = canceled;
+                completion.include_current_gpu();
                 auto loaded = loader->load(*path, options);
                 if (!loaded)
                     throw std::runtime_error(loaded.error().message);
@@ -347,7 +359,7 @@ namespace lfs::vis::gui {
         std::ofstream output(destination, std::ios::binary | std::ios::trunc);
         output.exceptions(std::ios::badbit | std::ios::failbit);
         const auto copied = source.visit_stream([&](std::istream& input, const std::uint64_t size) -> lfs::Result<void> {
-            std::array<char, 1024 * 1024> buffer{};
+            std::vector<char> buffer(1024 * 1024);
             std::uint64_t offset = 0;
             while (offset < size) {
                 throwIfCanceled(canceled, "Scene preparation canceled.");
@@ -369,6 +381,12 @@ namespace lfs::vis::gui {
     void writeGalleryScenePublication(GalleryScenePublishRequest& request,
                                       const std::function<bool(float, const std::string&)>& report,
                                       const std::function<bool()>& canceled) {
+        // This also settles partial extraction work during cancellation/failure.
+        core::TensorCompletion completion;
+        const auto preparation_started = std::chrono::steady_clock::now();
+        LOG_INFO("gallery stage=preparation_start node_count={} staging_path={} format={}",
+                 request.nodes.size(), lfs::core::path_to_utf8(request.path),
+                 static_cast<int>(request.format));
         throwIfCanceled(canceled, "Scene preparation canceled.");
         if (!std::filesystem::create_directory(request.path))
             throw std::runtime_error("The gallery preparation directory already exists.");
@@ -387,6 +405,8 @@ namespace lfs::vis::gui {
             if (!result)
                 throw std::runtime_error(std::string(result.error().user_message()));
         };
+        if (request.published_license)
+            checked(document.set_license(*request.published_license));
         if (!request.published_timeline.is_null())
             checked(document.edit_sequencer().dom().set_json("timeline", request.published_timeline));
         checked(document.edit_sequencer().dom().set_json("loop_mode", request.published_loop_mode));
@@ -425,11 +445,16 @@ namespace lfs::vis::gui {
             std::shared_ptr<core::SplatData> loaded_payload;
             const auto materialize = [&] {
                 request.materialized_payload = true;
+                if (published.snapshot.data)
+                    if (const auto backend = core::gpu_backend_of(published.snapshot.data->means_raw()))
+                        completion.include(*backend);
                 if (published.load_payload) {
                     if (!loaded_payload)
-                        loaded_payload = published.load_payload();
+                        loaded_payload = published.load_payload(completion);
                     if (!loaded_payload)
                         throw std::runtime_error("Embedded asset is not splat data.");
+                    if (const auto backend = core::gpu_backend_of(loaded_payload->means_raw()))
+                        completion.include(*backend);
                     published.snapshot.row_count = loaded_payload->size();
                     if (published.metadata_known)
                         loaded_payload->set_active_sh_degree(published.snapshot.active_sh_degree);
@@ -602,7 +627,7 @@ namespace lfs::vis::gui {
                 throw std::runtime_error(std::string(target.error().user_message()));
             std::ifstream input(file, std::ios::binary);
             input.exceptions(std::ios::badbit);
-            std::array<char, 1024 * 1024> buffer{};
+            std::vector<char> buffer(1024 * 1024);
             uint64_t copied = 0;
             while (input) {
                 throwIfCanceled(canceled, "Project preparation canceled.");
@@ -618,11 +643,18 @@ namespace lfs::vis::gui {
         auto verified_project = pj::ProjectDocument::open(request.path / "project.licht");
         if (!verified_project)
             throw std::runtime_error(std::string(verified_project.error().user_message()));
+        completion.wait();
         std::ofstream manifest(request.path / "manifest.json.tmp", std::ios::binary | std::ios::trunc);
         manifest.exceptions(std::ios::badbit | std::ios::failbit);
         manifest << metadata.dump();
         manifest.close();
         std::filesystem::rename(request.path / "manifest.json.tmp", request.path / "manifest.json");
+        const auto elapsed = std::chrono::duration<double, std::milli>(
+                                 std::chrono::steady_clock::now() - preparation_started)
+                                 .count();
+        LOG_INFO("gallery stage=preparation_end node_count={} payload_bytes={} staging_path={} elapsed_ms={:.1f}",
+                 nodes.size(), std::filesystem::file_size(request.path / "project.licht"),
+                 lfs::core::path_to_utf8(request.path), elapsed);
     }
 
 } // namespace lfs::vis::gui

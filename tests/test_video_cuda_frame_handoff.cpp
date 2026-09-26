@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include "cuda_backend_test.hpp"
+
 #include "io/video/cuda_frame_handoff.hpp"
 
 #include <gtest/gtest.h>
@@ -61,10 +63,9 @@ namespace {
 
 } // namespace
 
-TEST(VideoCudaFrameHandoff, WaitsForProducerAndConsumerStreams) {
-    int device_count = 0;
-    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0)
-        GTEST_SKIP() << "CUDA device required";
+class VideoCudaFrameHandoff : public lfs::test::CudaBackendTest {};
+
+TEST_F(VideoCudaFrameHandoff, WaitsForProducerAndConsumerStreams) {
 
     constexpr std::size_t bytes = 1U << 20;
     CudaStream producer;
@@ -133,10 +134,7 @@ TEST(VideoCudaFrameHandoff, WaitsForProducerAndConsumerStreams) {
     EXPECT_EQ(result.back(), 0x5a);
 }
 
-TEST(VideoCudaFrameHandoff, UnwindWaitsForConsumerStream) {
-    int device_count = 0;
-    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0)
-        GTEST_SKIP() << "CUDA device required";
+TEST_F(VideoCudaFrameHandoff, UnwindWaitsForConsumerStream) {
 
     CudaStream producer;
     CudaStream consumer;

@@ -2,13 +2,14 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/event_bridge/command_api.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/events.hpp"
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "mcp/mcp_tools.hpp"
-#include "training/control/command_api.hpp"
 #include "training/trainer.hpp"
 
 #include <gtest/gtest.h>
@@ -30,9 +31,10 @@ namespace {
             64, 64, 0);
     }
 
-    class McpTrainingStateTest : public testing::Test {
+    class McpTrainingStateTest : public lfs::test::CudaBackendTest {
     protected:
         void SetUp() override {
+            LFS_CUDA_BACKEND_OR_RETURN();
             lfs::event::EventBridge::instance().clear_all();
 
             const auto cameras = scene_.addGroup("Cameras");

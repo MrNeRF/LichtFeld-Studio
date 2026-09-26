@@ -2,6 +2,7 @@
 
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/cache_image_loader.hpp"
 #include <algorithm>
 #include <atomic>
@@ -15,7 +16,9 @@
 using namespace lfs::core;
 using namespace lfs::io;
 
-TEST(ImageResizeParallelTest, LoadImagesWithResize) {
+class ImageResizeParallelTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(ImageResizeParallelTest, LoadImagesWithResize) {
     // Test configuration
     const int RESIZE_FACTOR = 4;
     const int NUM_IMAGES = 4;
@@ -129,7 +132,7 @@ TEST(ImageResizeParallelTest, LoadImagesWithResize) {
     ASSERT_EQ(err, cudaSuccess) << "CUDA error after operations: " << cudaGetErrorString(err);
 }
 
-TEST(ImageResizeParallelTest, CompareWithNoResize) {
+TEST_F(ImageResizeParallelTest, CompareWithNoResize) {
     auto& loader = CacheLoader::getInstance(true);
 
     const std::filesystem::path data_dir =

@@ -5,7 +5,10 @@
 #include "strategy_utils.hpp"
 #include "core/assert.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
+#include "core/tensor_completion.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "core/training_churn_metrics.hpp"
 #include "kernels/pruning_kernels.hpp"
 #include "lfs/training/sh_value_storage.hpp"
@@ -88,12 +91,10 @@ namespace lfs::training {
             auto grown = lfs::core::Tensor::zeros_direct(
                 source.shape(), desired_capacity, device, source.dtype());
             if (source.numel() > 0) {
-                const auto stream = grown.stream();
-                source.sync_to_stream(stream);
-                LFS_CUDA_CHECK(cudaMemcpyAsync(
-                    grown.data_ptr(), source.data_ptr(), source.bytes(),
-                    cudaMemcpyDeviceToDevice, stream));
-                LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+                grown.flatten().slice(0, 0, source.numel()).copy_(source);
+                lfs::core::TensorCompletion completion;
+                completion.include(grown);
+                completion.wait();
             }
             scores = std::move(grown);
         }
@@ -416,8 +417,11 @@ namespace lfs::training {
                                    ? n
                                    : std::max(
                                          n, static_cast<size_t>(static_cast<double>(std::max(n_capacity, n)) * 1.2) + 1);
-        f32_a = Tensor::zeros_direct(TensorShape({new_cap}), new_cap, device, DataType::Float32);
-        bool_a = Tensor::zeros_direct(TensorShape({new_cap}), new_cap, device, DataType::Bool);
+        LFS_ASSERT_MSG(device == Device::CUDA, "DensifyNScratch requires CUDA storage");
+        f32_a = Tensor::empty_exact({new_cap}, DataType::Float32);
+        bool_a = Tensor::empty_exact({new_cap}, DataType::Bool);
+        f32_a.zero_();
+        bool_a.zero_();
         n_capacity = new_cap;
     }
 
@@ -450,9 +454,11 @@ namespace lfs::training {
 
         if (capacity < need || layout_changed) {
             const auto alloc_start = std::chrono::steady_clock::now();
-            const size_t new_cap = std::max(
-                need,
-                static_cast<size_t>(static_cast<double>(std::max(capacity, need)) * 1.2) + 1);
+            const size_t new_cap = capacity == 0
+                                       ? need
+                                       : std::max(
+                                             need,
+                                             static_cast<size_t>(static_cast<double>(std::max(capacity, need)) * 1.2) + 1);
             means = Tensor::empty({new_cap, 3}, device);
             rotations = Tensor::empty({new_cap, 4}, device);
             scales = Tensor::empty({new_cap, 3}, device);
@@ -604,8 +610,7 @@ namespace lfs::training {
                                      ? Tensor::zeros_direct(TensorShape({n}), desired_cap, device)
                                      : Tensor::zeros({n}, device);
                     if (cur > 0) {
-                        cudaMemcpy(fresh.ptr<float>(), scores.ptr<float>(),
-                                   cur * sizeof(float), cudaMemcpyDeviceToDevice);
+                        fresh.slice(0, 0, cur).copy_(scores);
                     }
                     scores = std::move(fresh);
                     return;
@@ -621,10 +626,6 @@ namespace lfs::training {
         } else {
             scores = Tensor::zeros({n}, device);
         }
-    }
-
-    int collect_adam_scale_ptrs(AdamOptimizer& /*optimizer*/, float* /*out_ptrs*/[12]) {
-        return 0;
     }
 
     void zero_adam_grads_at_indices(
@@ -649,9 +650,12 @@ namespace lfs::training {
                     auto idx_i32 = indices.dtype() == DataType::Int32
                                        ? indices
                                        : indices.to(DataType::Int32);
+                    const auto stream = lfs::core::getCurrentCUDAStream();
+                    idx_i32.sync_to_stream(stream);
+                    state->grad.set_stream(stream);
                     shN_swizzled_zero_at_indices(
                         state->grad.ptr<float>(), idx_i32.ptr<int>(),
-                        idx_i32.numel(), shN_layout_rest);
+                        idx_i32.numel(), shN_layout_rest, stream);
                 }
                 continue;
             }

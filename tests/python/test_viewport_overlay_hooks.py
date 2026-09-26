@@ -104,6 +104,11 @@ def _install_stub_modules(monkeypatch):
     video_state = {}
     document = _DocumentStub()
 
+    translations = {
+        "menu.file": "File",
+        "menu.file.import": "Import",
+        "startup.drop_files_hint": "Or use {path}",
+    }
     ui_stub = SimpleNamespace(
         add_hook=lambda panel, section, callback, position="append": hook_calls.append(
             (panel, section, callback, position)
@@ -127,7 +132,7 @@ def _install_stub_modules(monkeypatch):
             NoFocusOnAppearing=64,
             NoBringToFrontOnFocus=128,
         )),
-        tr=lambda key: key,
+        tr=lambda key: translations.get(key, key),
         get_import_state=lambda: dict(import_state),
         get_video_export_state=lambda: dict(video_state),
         dismiss_import=lambda: dismiss_calls.append(True),
@@ -136,6 +141,7 @@ def _install_stub_modules(monkeypatch):
         is_drag_hovering=lambda: False,
         is_startup_visible=lambda: False,
         is_sequencer_visible=lambda: False,
+        is_panel_enabled=lambda _panel_id: False,
         get_sequencer_state=lambda: None,
         get_time=lambda: 0.0,
     )
@@ -247,3 +253,62 @@ def test_multiple_documents_keep_independent_controllers_and_unload_one(overlays
     assert len(module._document_controllers) == 1
     assert second.body.get_attribute("data-viewport-overlay-status-bound", "") == "1"
     assert module._document_controller._handle is not None
+
+
+def test_empty_state_hint_follows_the_scene_and_dirties_only_on_change(overlays_module, monkeypatch):
+    module, *_rest, document = overlays_module
+    scene_empty = [True]
+    drag_hovering = [False]
+    monkeypatch.setattr(module.lf.ui, "is_scene_empty", lambda: scene_empty[0])
+    monkeypatch.setattr(module.lf.ui, "is_drag_hovering", lambda: drag_hovering[0])
+
+    module._sync_viewport_overlay_document(document)
+    funcs = document.model.bound_funcs
+    handle = document.model.handle
+    assert funcs["show_empty_state"]() is True
+    assert funcs["empty_state_title"]() == "startup.drop_files_title"
+    assert funcs["empty_state_import_hint"]() == "Or use File > Import"
+
+    dirty_after_first_sync = handle.dirty_all_calls
+    module._sync_viewport_overlay_document(document)
+    assert handle.dirty_all_calls == dirty_after_first_sync, "an idle frame dirtied the overlay model"
+
+    drag_hovering[0] = True
+    module._sync_viewport_overlay_document(document)
+    assert funcs["show_empty_state"]() is False
+    assert handle.dirty_all_calls == dirty_after_first_sync + 1
+
+    drag_hovering[0] = False
+    scene_empty[0] = False
+    module._sync_viewport_overlay_document(document)
+    assert funcs["show_empty_state"]() is False
+
+
+@pytest.mark.parametrize("import_overlay", [
+    {"active": True},
+    {"active": False, "show_completion": True},
+])
+def test_empty_state_hint_stays_hidden_while_import_overlay_is_visible(
+    overlays_module, monkeypatch, import_overlay
+):
+    (
+        module,
+        _hook_calls,
+        _remove_calls,
+        _dismiss_calls,
+        _cancel_calls,
+        import_state,
+        _video_state,
+        document,
+    ) = overlays_module
+    monkeypatch.setattr(module.lf.ui, "is_scene_empty", lambda: True)
+    import_state.update(import_overlay)
+
+    module._sync_viewport_overlay_document(document)
+
+    assert document.model.bound_funcs["show_empty_state"]() is False
+
+    import_state.clear()
+    module._sync_viewport_overlay_document(document)
+
+    assert document.model.bound_funcs["show_empty_state"]() is True

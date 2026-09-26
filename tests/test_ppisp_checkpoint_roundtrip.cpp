@@ -4,7 +4,7 @@
 #include "components/bilateral_grid.hpp"
 #include "components/ppisp.hpp"
 #include "core/tensor.hpp"
-#include "tensor_hardening_test_utils.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <cmath>
 #include <gtest/gtest.h>
@@ -66,7 +66,7 @@ namespace {
         return loss.cpu().item<float>();
     }
 
-    class PPISPCheckpointRoundtripTest : public tensor_hardening::CudaTest {};
+    class PPISPCheckpointRoundtripTest : public lfs::test::CudaBackendTest {};
 
     TEST_F(PPISPCheckpointRoundtripTest, AdoptCheckpointStatePreservesColorMeanRegularizer) {
         PPISPConfig config;

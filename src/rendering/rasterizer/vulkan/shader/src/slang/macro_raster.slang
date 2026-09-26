@@ -16,7 +16,6 @@
 // used for validation and for the spark-rad opacity path (host-routed).
 // Overlay data stages in separate uint arrays, so LFS_RASTER_OVERLAYS works
 // with either staging format; the fp16 overlay variant keeps the drain queue.
-
 #include "config.slang"
 
 import utils;
@@ -27,6 +26,10 @@ import utils;
 
 #ifndef LFS_RASTER_OVERLAYS
 #define LFS_RASTER_OVERLAYS 0
+#endif
+
+#ifndef LFS_HIGS_LEAN_STAGING
+#define LFS_HIGS_LEAN_STAGING 0
 #endif
 
 #define RASTER_THREAD_COUNT 320u
@@ -44,11 +47,15 @@ groupshared float4 shared_inv_cov_opac[RASTER_BATCH_SIZE];
 groupshared half2 shared_xy[RASTER_BATCH_SIZE];          // tile units, macro-relative
 groupshared half4 shared_chol_thr[RASTER_BATCH_SIZE];    // {l00', l01', l11', thr'}
 #endif
+#if !LFS_HIGS_LEAN_STAGING || !LFS_HIGS_FP32
 groupshared half4 shared_rgb_opac[RASTER_BATCH_SIZE];    // {r, g, b, opacity}
+#endif
 #if LFS_RASTER_OVERLAYS
 // Packed flags | selection_byte | preview_byte (selection id uses orig_ids).
+#if !LFS_HIGS_LEAN_STAGING
 groupshared uint32_t shared_overlay_pack[RASTER_BATCH_SIZE];
 groupshared uint32_t shared_sel_id[RASTER_BATCH_SIZE];
+#endif
 // Compact projection slot for rare ring inv_cov reloads (fp16 path only).
 #if !LFS_HIGS_FP32
 groupshared uint32_t shared_slot[RASTER_BATCH_SIZE];
@@ -152,6 +159,17 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
 
     const uint macro_tile_x = macro_tile_idx % mgw;
     const uint macro_tile_y = macro_tile_idx / mgw;
+    const uint2 render_origin = full_frame_binning(uniforms)
+        ? uint2(uniforms.render_origin_x, uniforms.render_origin_y) : uint2(0u);
+    // Binning and depth-wave boundaries stay calibrated to the full image;
+    // only rasterize the macro tiles in this output band.
+    const uint macro_y = macro_tile_y * HIGS_MACRO_TILE_HEIGHT_TILES * HIGS_TILE_HEIGHT;
+    if (full_frame_binning(uniforms) &&
+        (macro_y < render_origin.y || macro_y >= render_origin.y + uniforms.image_height)) {
+        if (thread_rank == 0u)
+            macro_batch_active_mask[macro_batch_idx] = 0u;
+        return;
+    }
     const float2 macro_origin = float2(float(macro_tile_x * HIGS_MACRO_TILE_WIDTH_TILES * HIGS_TILE_WIDTH),
                                        float(macro_tile_y * HIGS_MACRO_TILE_HEIGHT_TILES * HIGS_TILE_HEIGHT));
 
@@ -183,7 +201,6 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
             const uint32_t slot = uint32_t(macro_sorted_ids[range_start + i]);
             const float2 g_xy = xy_vs[slot];
             const float4 g_ico = inv_cov_vs_opacity[slot];
-            const float3 g_rgb = clamp(read_t3_float3(int32_t(slot), rgb), float3(0.0f), float3(MAX_BLEND_COLOR));
             tile_mask = splat_macro_tile_mask(g_xy, g_ico, macro_origin);
 
           #if LFS_HIGS_FP32
@@ -204,8 +221,12 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                                               l11 * float(HIGS_TILE_HEIGHT) * INV_SQRT_2LN2,
                                               thr * INV_LN2));
           #endif
+          #if !LFS_HIGS_LEAN_STAGING || !LFS_HIGS_FP32
+            const float3 g_rgb = clamp(read_t3_float3(int32_t(slot), rgb), float3(0.0f), float3(MAX_BLEND_COLOR));
             shared_rgb_opac[i] = half4(float4(g_rgb, g_ico.w));
+          #endif
           #if LFS_RASTER_OVERLAYS
+            #if !LFS_HIGS_LEAN_STAGING
             // Selection masks are indexed by original gaussian id, not the
             // macro-sorted slot (LOD may rematerialize).
             const uint sel_splat_id = uint(orig_ids[slot]);
@@ -216,6 +237,7 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                 ? read_byte(preview_mask, sel_splat_id) : 0u;
             shared_overlay_pack[i] = pack_overlay_per_splat(flags, selection_byte, preview_byte);
             shared_sel_id[i] = sel_splat_id;
+            #endif
             #if !LFS_HIGS_FP32
             shared_slot[i] = slot;
             #endif
@@ -241,8 +263,8 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
             any |= shared_tile_masks[mini_batch * HIGS_MACRO_TILE_SIZE_TILES + thread_rank];
         const uint tile_x = macro_tile_x * HIGS_MACRO_TILE_WIDTH_TILES + (thread_rank % HIGS_MACRO_TILE_WIDTH_TILES);
         const uint tile_y = macro_tile_y * HIGS_MACRO_TILE_HEIGHT_TILES + (thread_rank / HIGS_MACRO_TILE_WIDTH_TILES);
-        const bool tile_in_image = tile_x * HIGS_TILE_WIDTH < uniforms.image_width &&
-                                   tile_y * HIGS_TILE_HEIGHT < uniforms.image_height;
+        const bool tile_in_image = tile_x * HIGS_TILE_WIDTH - render_origin.x < uniforms.image_width &&
+                                   tile_y * HIGS_TILE_HEIGHT - render_origin.y < uniforms.image_height;
         if (any != 0u && tile_in_image) {
             uint q;
             InterlockedAdd(shared_tile_queue_count, 1u, q);
@@ -282,7 +304,8 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
             const uint pixel_linear = lane_id + p * SUBGROUP_SIZE;
             const uint2 pix = tile_origin + uint2(pixel_linear % HIGS_TILE_WIDTH, pixel_linear / HIGS_TILE_WIDTH);
             pixel_state[p] = float4(0.0f, 0.0f, 0.0f, 1.0f);
-            pixel_active[p] = pix.x < uniforms.image_width && pix.y < uniforms.image_height;
+            pixel_active[p] = pix.x - render_origin.x < uniforms.image_width &&
+                              pix.y - render_origin.y < uniforms.image_height;
             pixel_coord[p] = float2(pix);
         }
 
@@ -296,14 +319,30 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                 if (i >= splats_to_process)
                     continue;
 
+              #if LFS_HIGS_LEAN_STAGING
+                const uint slot = uint(macro_sorted_ids[range_start + i]);
+                const float4 g_rgbo = float4(half4(float4(
+                    clamp(read_t3_float3(int32_t(slot), rgb), float3(0.0f), float3(MAX_BLEND_COLOR)),
+                    inv_cov_vs_opacity[slot].w)));
+              #else
                 const float4 g_rgbo = float4(shared_rgb_opac[i]);
+              #endif
                 const float2 g_xy = shared_xy[i];
                 const float4 g_ico = shared_inv_cov_opac[i];
 
               #if LFS_RASTER_OVERLAYS
+                #if LFS_HIGS_LEAN_STAGING
+                const uint sel_splat_id = uint(orig_ids[slot]);
+                const uint flags = read_byte(gaussian_overlay_flags, slot);
+                const uint overlay_pack = pack_overlay_per_splat(
+                    flags,
+                    overlay_state.selection_mask_enabled ? read_byte(selection_mask, sel_splat_id) : 0u,
+                    overlay_state.preview_mask_enabled ? read_byte(preview_mask, sel_splat_id) : 0u);
+                #else
                 const uint overlay_pack = shared_overlay_pack[i];
                 const uint flags = unpack_overlay_flags(overlay_pack);
                 const uint sel_splat_id = shared_sel_id[i];
+                #endif
                 const uint sel_status = selection_status(g_xy,
                                                          sel_splat_id,
                                                          flags,
@@ -418,7 +457,7 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
         const float fx_t = (float(tile_origin.x + (lane_id % HIGS_TILE_WIDTH)) - macro_origin.x) * (1.0f / HIGS_TILE_WIDTH);
         const float fy0_t = (float(tile_origin.y + (lane_id / HIGS_TILE_WIDTH)) - macro_origin.y) * (1.0f / HIGS_TILE_HEIGHT);
         const half px_x = half(fx_t);
-        const bool col_inside = (tile_origin.x + (lane_id % HIGS_TILE_WIDTH)) < uniforms.image_width;
+        const bool col_inside = (tile_origin.x + (lane_id % HIGS_TILE_WIDTH) - render_origin.x) < uniforms.image_width;
 
         half2 pix_y2[PIXEL_PAIRS];
         half2 acc_r[PIXEL_PAIRS];
@@ -430,8 +469,8 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
             pix_y2[k] = half2(half(fy0_t + float(2u * k) * PIX_STEP_T),
                               half(fy0_t + float(2u * k + 1u) * PIX_STEP_T));
             const uint y0 = tile_origin.y + (lane_id / HIGS_TILE_WIDTH) + 2u * ROWS_PER_P * k;
-            const bool in0 = col_inside && y0 < uniforms.image_height;
-            const bool in1 = col_inside && (y0 + ROWS_PER_P) < uniforms.image_height;
+            const bool in0 = col_inside && y0 - render_origin.y < uniforms.image_height;
+            const bool in1 = col_inside && (y0 + ROWS_PER_P) - render_origin.y < uniforms.image_height;
             acc_r[k] = half2(0.0h, 0.0h);
             acc_g[k] = half2(0.0h, 0.0h);
             acc_b[k] = half2(0.0h, 0.0h);
@@ -482,9 +521,19 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                     const float2 g_xy_abs =
                         float2(g_xy) * float2(float(HIGS_TILE_WIDTH), float(HIGS_TILE_HEIGHT)) +
                         macro_origin;
+                  #if LFS_HIGS_LEAN_STAGING
+                    const uint slot = uint(macro_sorted_ids[range_start + i]);
+                    const uint sel_splat_id = uint(orig_ids[slot]);
+                    const uint flags = read_byte(gaussian_overlay_flags, slot);
+                    const uint overlay_pack = pack_overlay_per_splat(
+                        flags,
+                        overlay_state.selection_mask_enabled ? read_byte(selection_mask, sel_splat_id) : 0u,
+                        overlay_state.preview_mask_enabled ? read_byte(preview_mask, sel_splat_id) : 0u);
+                  #else
                     const uint overlay_pack = shared_overlay_pack[i];
                     const uint flags = unpack_overlay_flags(overlay_pack);
                     const uint sel_splat_id = shared_sel_id[i];
+                  #endif
                     const uint sel_status = selection_status(g_xy_abs,
                                                              sel_splat_id,
                                                              flags,

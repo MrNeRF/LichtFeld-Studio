@@ -9,6 +9,7 @@
 #include "formats/spz.hpp"
 #include "io/error.hpp"
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -54,7 +55,8 @@ namespace lfs::io {
             const bool is_ngsp = bytes_read >= 4 &&
                                  header[0] == 'N' && header[1] == 'G' &&
                                  header[2] == 'S' && header[3] == 'P';
-            if (!is_gzip && !is_ngsp) {
+            const bool is_glb = bytes_read >= 4 && std::memcmp(header, "glTF", 4) == 0;
+            if (!is_gzip && !is_ngsp && !is_glb) {
                 return make_error(
                     ErrorCode::INVALID_HEADER,
                     "Invalid SPZ format (expected gzip (v1-v3) or NGSP (v4) container)",
@@ -84,7 +86,7 @@ namespace lfs::io {
         auto splat_result = load_spz(path);
         if (!splat_result) {
             return make_error(ErrorCode::CORRUPTED_DATA,
-                              std::format("Failed to load SPZ: {}", splat_result.error()), path);
+                              splat_result.error(), path);
         }
 
         if (options.progress) {
@@ -119,7 +121,7 @@ namespace lfs::io {
 
         auto ext = path.extension().string();
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-        return ext == ".spz";
+        return ext == ".spz" || (ext == ".glb" && is_spz_glb(path));
     }
 
     std::string SpzLoader::name() const {

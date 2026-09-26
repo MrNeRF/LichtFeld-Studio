@@ -40,6 +40,7 @@ namespace lfs::python {
                 result["vram_mb"] = static_cast<std::uint64_t>(gpu.total) / bytes_per_mb;
                 result["vram_used_mb"] =
                     static_cast<std::uint64_t>(gpu.total_used) / bytes_per_mb;
+                result["vram_used_available"] = !gpu.uses_process_budget && gpu.total > 0;
                 result["gpu_driver"] = driver.query_failed
                                            ? std::string{}
                                            : std::to_string(driver.major) + "." +

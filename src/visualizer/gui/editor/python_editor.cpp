@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "python_editor.hpp"
+#include "input/sdl_coordinate_utils.hpp"
 
 #include "python_lsp_client.hpp"
 
@@ -2883,16 +2884,20 @@ namespace lfs::vis::editor {
             Zep::ZepWindow* window,
             const std::string_view text,
             const PythonEditorSessionState& state) {
+            constexpr auto max_long =
+                static_cast<std::size_t>(
+                    std::numeric_limits<long>::max());
+            const auto max_offset = std::min(text.size(), max_long);
             const auto cursor_byte =
-                std::min(
+                static_cast<unsigned long>(std::min(
                     state.cursor_byte,
-                    text.size());
+                    max_offset));
             buffer.ClearSelection();
             if (state.selection_anchor_byte) {
                 const auto anchor =
-                    std::min(
+                    static_cast<unsigned long>(std::min(
                         *state.selection_anchor_byte,
-                        text.size());
+                        max_offset));
                 if (anchor != cursor_byte) {
                     buffer.SetSelection(
                         Zep::GlyphRange{
@@ -2906,10 +2911,6 @@ namespace lfs::vis::editor {
                 }
             }
 
-            constexpr auto max_long =
-                static_cast<std::size_t>(
-                    std::numeric_limits<
-                        long>::max());
             std::vector<Zep::FoldRange> folds;
             folds.reserve(state.folds.size());
             for (const auto& fold :
@@ -3121,7 +3122,7 @@ namespace lfs::vis::editor {
             if (button == 1) {
                 float screen_x = event.GetParameter("mouse_x", 0.0f);
                 float screen_y = event.GetParameter("mouse_y", 0.0f);
-                SDL_GetMouseState(&screen_x, &screen_y);
+                input::mouseStateInPixels(SDL_GetMouseFocus(), &screen_x, &screen_y);
                 if (impl_->handleContextMenuMouseDown(mouse, screen_x, screen_y)) {
                     event.StopPropagation();
                     return;

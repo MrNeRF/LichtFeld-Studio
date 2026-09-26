@@ -5,6 +5,8 @@
 add_library(lfs_diagnostics SHARED
     vram_profiler.cpp
     vram_ledger_model.cpp
+    vram_owner_model.cpp
+    vram_timeline.cpp
 )
 
 target_compile_definitions(lfs_diagnostics PRIVATE LFS_DIAGNOSTICS_EXPORTS)
@@ -14,11 +16,12 @@ target_include_directories(lfs_diagnostics
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
         ${CUDAToolkit_INCLUDE_DIRS}
+        ${CMAKE_SOURCE_DIR}/src/core/include
 )
 
 target_link_libraries(lfs_diagnostics
     PUBLIC
-        CUDA::cudart
+        $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::cudart>
 )
 
 target_compile_features(lfs_diagnostics PUBLIC cxx_std_23)

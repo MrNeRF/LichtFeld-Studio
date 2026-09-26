@@ -23,7 +23,9 @@
 // clang-format on
 #elif defined(__linux__)
 #include <sys/random.h>
-#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+#elif defined(__APPLE__)
+#include <sys/random.h>
+#elif defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 #include <unistd.h>
 #endif
 

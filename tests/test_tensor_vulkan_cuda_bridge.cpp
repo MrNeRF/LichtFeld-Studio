@@ -6,6 +6,8 @@
 #include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor/backend/vulkan/vk_context.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/vulkan_helpers.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <gtest/gtest.h>
 
@@ -20,13 +22,20 @@
 namespace {
     using namespace lfs::core;
 
-    class TensorVulkanCudaBridge : public testing::Test {
+    class TensorVulkanCudaBridge : public lfs::test::CudaDeviceTest {
     protected:
         void SetUp() override {
+            CudaDeviceTest::SetUp();
+            if (IsSkipped()) {
+                return;
+            }
             ASSERT_TRUE(gpu_backend_available(GpuBackend::Vulkan));
         }
 
         void TearDown() override {
+            if (IsSkipped()) {
+                return;
+            }
             const auto status = shutdown_gpu_backend(GpuBackend::Vulkan);
             EXPECT_TRUE(status.has_value());
             EXPECT_EQ(internal::vulkan_live_vma_objects_for_testing(), 0u);
@@ -153,9 +162,8 @@ namespace {
             application.applicationVersion = VK_MAKE_API_VERSION(0, 1, 0, 0);
             application.pEngineName = "LichtFeld";
             application.apiVersion = VK_API_VERSION_1_3;
-            VkInstanceCreateInfo instance_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
-            instance_info.pApplicationInfo = &application;
-            if (vkCreateInstance(&instance_info, nullptr, &device.instance_) != VK_SUCCESS) {
+            if (create_vulkan_instance(
+                    application, {}, {}, nullptr, 0, &device.instance_) != VK_SUCCESS) {
                 return std::nullopt;
             }
 
@@ -223,6 +231,7 @@ namespace {
             }
             extensions.push_back(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
             extensions.push_back(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
+            enable_vulkan_device_portability(physical, extensions);
             const float priority = 1.0f;
             VkDeviceQueueCreateInfo queue_info{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
             queue_info.queueFamilyIndex = queue_family;
@@ -464,6 +473,7 @@ namespace {
             ASSERT_FLOAT_EQ(warm.sum_scalar(), 8.0f);
         }
         if (!vulkan_backend_exports_memory()) {
+            ASSERT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan));
             GTEST_SKIP() << "adopted device did not export memory for CUDA";
         }
         cudaStream_t stream = nullptr;
@@ -488,6 +498,7 @@ namespace {
 } // namespace
 
 TEST_F(TensorVulkanCudaBridge, DirectLargeAllocationsAreNotExportableButStayUsable) {
+    force_vulkan_context();
     if (!vulkan_backend_exports_memory()) {
         GTEST_SKIP() << "Vulkan tensor backend does not export memory";
     }

@@ -8,6 +8,7 @@
 
 #include "core/camera.hpp"
 #include "core/error_bus.hpp"
+#include "core/event_bridge/command_api.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/control_boundary.hpp"
 #include "core/event_bridge/event_bridge.hpp"
@@ -15,6 +16,8 @@
 #include "core/logger.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
+#include "core/tensor_backend.hpp"
+#include "core/tensor_completion.hpp"
 #include "io/loader.hpp"
 #include "operation/undo_history.hpp"
 #include "python/gil.hpp"
@@ -22,7 +25,7 @@
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
-#include "training/control/command_api.hpp"
+#include "tensor_test_support.hpp"
 #include "visualizer/ipc/render_settings_convert.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/rendering/depth_window_state.hpp"
@@ -48,6 +51,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -218,6 +222,22 @@ namespace {
         lfs::Result<void> projectClearLicense() override {
             project_license_.reset();
             return {};
+        }
+
+        lfs::Result<lfs::vis::ProjectWritePoll> projectPollWrite() override {
+            poll_thread = std::this_thread::get_id();
+            ++poll_calls;
+            return lfs::vis::ProjectWritePoll{.generation = 42};
+        }
+        void projectWaitWrite() override {
+            wait_thread = std::this_thread::get_id();
+        }
+        std::thread::id poll_thread;
+        std::thread::id wait_thread;
+        int poll_calls = 0;
+        bool project_save_started = false;
+        bool consumeProjectSaveStarted() override {
+            return std::exchange(project_save_started, false);
         }
 
         [[nodiscard]] bool waitForQueuedWork(const std::chrono::milliseconds timeout) {
@@ -976,6 +996,125 @@ result_values = [1.0 if outcome is lf.ProjectOpenOutcome.RECOVERY_PROMPT_PENDING
     EXPECT_EQ(viewer.post_work_calls, 1);
 }
 
+TEST_F(PythonIntegrationTest, ProjectWritePollRunsOnViewerThread) {
+    using namespace std::chrono_literals;
+    TestVisualizer viewer;
+    viewer.queue_posted_work = true;
+    const ScopedVisualizer scoped_viewer(&viewer);
+    std::jthread viewer_worker([&]() {
+        if (viewer.waitForQueuedWork(1s)) {
+            // Acquiring the GIL here also checks that the caller releases it
+            // while waiting for the viewer to settle the write.
+            const lfs::python::GilAcquire gil;
+            viewer.runNextQueuedWork();
+        }
+    });
+    const auto viewer_thread = viewer_worker.get_id();
+    const auto result = runPythonTensorSnippet(R"PY(
+import lichtfeld as lf
+state = lf.project_poll_write()
+result_shape = (1,)
+result_values = [float(state['generation'])]
+)PY");
+    viewer_worker.join();
+    ASSERT_EQ(result.values.size(), 1u);
+    EXPECT_FLOAT_EQ(result.values[0], 42.0F);
+    EXPECT_EQ(viewer.poll_calls, 1);
+    EXPECT_EQ(viewer.poll_thread, viewer_thread);
+    EXPECT_EQ(viewer.wait_thread, std::thread::id{});
+}
+
+TEST_F(PythonIntegrationTest, ProjectPreviewWaitPollsOnViewerThread) {
+    using namespace std::chrono_literals;
+    TestVisualizer viewer;
+    viewer.queue_posted_work = true;
+    const ScopedVisualizer scoped_viewer(&viewer);
+    std::jthread viewer_worker([&](std::stop_token stop) {
+        while (!stop.stop_requested()) {
+            if (viewer.waitForQueuedWork(100ms)) {
+                const lfs::python::GilAcquire gil;
+                viewer.runNextQueuedWork();
+            }
+        }
+    });
+    const auto viewer_thread = viewer_worker.get_id();
+    const auto result = runPythonTensorSnippet(R"PY(
+import lichtfeld as lf
+result_shape = (1,)
+result_values = [float(lf.project_set_preview(b'preview', wait=True))]
+)PY");
+    viewer_worker.request_stop();
+    viewer_worker.join();
+    ASSERT_EQ(result.values.size(), 1u);
+    EXPECT_FLOAT_EQ(result.values[0], 1.0F);
+    EXPECT_EQ(viewer.poll_calls, 1);
+    EXPECT_EQ(viewer.poll_thread, viewer_thread);
+    EXPECT_EQ(viewer.wait_thread, viewer_thread);
+}
+
+TEST_F(PythonIntegrationTest, ProjectSaveWaitPollsOnViewerThread) {
+    using namespace std::chrono_literals;
+    TestVisualizer viewer;
+    viewer.queue_posted_work = true;
+    viewer.project_save_started = true;
+    const ScopedVisualizer scoped_viewer(&viewer);
+    std::jthread viewer_worker([&](std::stop_token stop) {
+        while (!stop.stop_requested()) {
+            if (viewer.waitForQueuedWork(100ms)) {
+                const lfs::python::GilAcquire gil;
+                viewer.runNextQueuedWork();
+            }
+        }
+    });
+    const auto viewer_thread = viewer_worker.get_id();
+    const auto result = runPythonTensorSnippet(R"PY(
+import lichtfeld as lf
+result_shape = (1,)
+result_values = [float(lf.project_save(wait=True))]
+)PY");
+    viewer_worker.request_stop();
+    viewer_worker.join();
+    ASSERT_EQ(result.values.size(), 1u);
+    EXPECT_FLOAT_EQ(result.values[0], 1.0F);
+    EXPECT_EQ(viewer.poll_calls, 1);
+    EXPECT_EQ(viewer.poll_thread, viewer_thread);
+    EXPECT_EQ(viewer.wait_thread, viewer_thread);
+}
+
+TEST_F(PythonIntegrationTest, ProjectWritePollRunsInlineOnViewerThread) {
+    TestVisualizer viewer;
+    viewer.on_viewer_thread = true;
+    const ScopedVisualizer scoped_viewer(&viewer);
+    const auto result = runPythonTensorSnippet(R"PY(
+import lichtfeld as lf
+result_shape = (1,)
+result_values = [float(lf.project_poll_write()['generation'])]
+)PY");
+    ASSERT_EQ(result.values.size(), 1u);
+    EXPECT_FLOAT_EQ(result.values[0], 42.0F);
+    EXPECT_EQ(viewer.poll_thread, std::this_thread::get_id());
+    EXPECT_EQ(viewer.post_work_calls, 0);
+    EXPECT_EQ(viewer.wait_thread, std::thread::id{});
+}
+
+TEST_F(PythonIntegrationTest, ProjectWritePollRejectsViewerShutdown) {
+    TestVisualizer viewer;
+    viewer.accepts_posted_work = false;
+    const ScopedVisualizer scoped_viewer(&viewer);
+    const auto result = runPythonTensorSnippet(R"PY(
+import lichtfeld as lf
+result_shape = (1,)
+try:
+    lf.project_poll_write()
+    result_values = [0.0]
+except RuntimeError:
+    result_values = [1.0]
+)PY");
+    ASSERT_EQ(result.values.size(), 1u);
+    EXPECT_FLOAT_EQ(result.values[0], 1.0F);
+    EXPECT_EQ(viewer.poll_calls, 0);
+}
+
 TEST_F(PythonIntegrationTest, ProjectLicenseRoundTripsThroughBinding) {
     TestVisualizer viewer;
     const ScopedVisualizer scoped_viewer(&viewer);
@@ -1157,6 +1296,40 @@ result_values = (
     EXPECT_FLOAT_EQ(result.values[index++], 4.0f);
     EXPECT_FLOAT_EQ(result.values[index++], 1.0f);
     EXPECT_FLOAT_EQ(result.values[index++], 1.0f);
+}
+
+TEST_F(PythonIntegrationTest, PyTensorSyncWaitsForItsVulkanBackendWithCudaDefault) {
+    using namespace lfs::core;
+    if (!gpu_backend_available(GpuBackend::Vulkan))
+        GTEST_SKIP();
+    GpuBackendScope vulkan(GpuBackend::Vulkan);
+    const lfs::python::GilAcquire gil;
+    const auto decref = [](PyObject* object) { Py_XDECREF(object); };
+    std::unique_ptr<PyObject, decltype(decref)> globals(PyDict_New(), decref);
+    ASSERT_NE(globals.get(), nullptr);
+    PyDict_SetItemString(globals.get(), "__builtins__", PyEval_GetBuiltins());
+    execPythonInGlobals(globals.get(), R"PY(
+import lichtfeld as lf
+t = lf.Tensor.ones([257], device="gpu")
+assert t.backend == "vulkan", t.backend
+)PY");
+    auto sentinel = Tensor::zeros({257}, Device::GPU);
+    sentinel.fill_(7.f, nullptr);
+    const auto pending = lfs::test::vulkan_pending_value(sentinel);
+    ASSERT_GT(pending, lfs::test::vulkan_completed_value());
+    {
+        GpuBackendScope opposite(GpuBackend::CUDA);
+        execPythonInGlobals(globals.get(), "t.sync()\n");
+    }
+    EXPECT_GE(lfs::test::vulkan_completed_value(), pending);
+    // Drain even on a failed expectation, so the test leaves no queued work.
+    TensorCompletion completion;
+    completion.include(GpuBackend::Vulkan);
+    completion.wait();
+    EXPECT_EQ(sentinel.cpu().to_vector(), std::vector<float>(257, 7.f));
+    for (const auto& message : lfs::test::vulkan_validation_messages()) {
+        ADD_FAILURE() << message;
+    }
 }
 
 TEST_F(PythonIntegrationTest, PyTensorBooleanRowMaskIndexingMatchesTorch) {

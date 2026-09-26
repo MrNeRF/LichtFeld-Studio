@@ -42,8 +42,9 @@ namespace lfs::io::project {
         normalized_lock_anchor(
             const std::filesystem::path& path) noexcept {
             std::error_code error;
-            auto absolute =
-                std::filesystem::absolute(path, error);
+            auto absolute = std::filesystem::absolute(path, error);
+            if (!error)
+                absolute = std::filesystem::weakly_canonical(absolute, error);
             return (error ? path : absolute)
                 .lexically_normal();
         }
@@ -133,6 +134,60 @@ namespace lfs::io::project {
 } // namespace lfs::io::project
 
 namespace lfs::io::project::detail {
+
+    lfs::Result<ProjectPathIdentity> ProjectPathIdentity::capture(const std::filesystem::path& path) {
+        std::error_code error;
+        const auto absolute = std::filesystem::absolute(path, error);
+        auto canonical = error ? absolute : std::filesystem::weakly_canonical(absolute, error);
+        if (error)
+            return project_error(lfs::ErrorCode::FailedPrecondition,
+                                 "The project path could not be checked.", error.message(), path);
+        ProjectPathIdentity identity{absolute, std::move(canonical), std::nullopt};
+        const bool exists = std::filesystem::exists(path, error);
+        if (error)
+            return project_error(lfs::ErrorCode::FailedPrecondition,
+                                 "The project identity could not be checked.", error.message(), path);
+        if (exists) {
+            auto file = NativeFile::open_read(path);
+            if (!file)
+                return std::move(file).error();
+            auto size = (*file)->size();
+            if (!size)
+                return std::move(size).error();
+            identity.superblock.emplace(static_cast<std::size_t>(std::min<std::uint64_t>(*size, 256)));
+            if (auto read = (*file)->read_exact(0, *identity.superblock); !read)
+                return std::move(read).error();
+        }
+        return identity;
+    }
+
+    lfs::Result<void> ProjectPathIdentity::validate() const {
+        auto current = capture(path);
+        if (!current)
+            return lfs::Result<void>::failure(std::move(current).error());
+        if (current->canonical_path != canonical_path || current->superblock != superblock)
+            return lfs::Result<void>::failure(project_error(
+                lfs::ErrorCode::FailedPrecondition,
+                "The project identity or path changed before writing. Refresh Projects and try again.",
+                "the destination no longer has the planned path and superblock", path));
+        return {};
+    }
+
+    namespace {
+        thread_local const ProjectPathIdentity* active_identity = nullptr;
+    }
+
+    const ProjectPathIdentity* active_operation_identity() noexcept {
+        return active_identity;
+    }
+
+    const ProjectPathIdentity* set_active_operation_identity(const ProjectPathIdentity* identity) noexcept {
+        return std::exchange(active_identity, identity);
+    }
+
+    lfs::Result<void> validate_project_operation_identity() {
+        return active_identity ? active_identity->validate() : lfs::Result<void>{};
+    }
 
     namespace {
 
@@ -480,7 +535,7 @@ namespace lfs::io::project::detail {
         }
         return static_cast<std::uint64_t>(size.QuadPart);
 #else
-        struct stat status {};
+        struct stat status{};
         if (::fstat(fd_, &status) != 0 || status.st_size < 0) {
             const int error = errno;
             return project_error(native_error_code(error, false),
@@ -680,12 +735,21 @@ namespace lfs::io::project::detail {
 #ifdef _WIN32
         return sync_all();
 #else
+#ifdef __APPLE__
+        if (::fsync(fd_) != 0) {
+#else
         if (::fdatasync(fd_) != 0) {
+#endif
             const int error = errno;
             return status_failure(project_error(
                 native_error_code(error, true), "The project data could not be made durable.",
+#ifdef __APPLE__
+                std::format("fsync failed: {}", std::strerror(error)), path_, std::nullopt,
+                "fsync", error, std::strerror(error)));
+#else
                 std::format("fdatasync failed: {}", std::strerror(error)), path_, std::nullopt,
                 "fdatasync", error, std::strerror(error)));
+#endif
         }
         return {};
 #endif
@@ -771,7 +835,7 @@ namespace lfs::io::project::detail {
 #ifndef _WIN32
     lfs::Result<bool> writer_lock_fd_matches_path(
         const int fd, const std::filesystem::path& lock_path) {
-        struct stat fd_status {};
+        struct stat fd_status{};
         if (::fstat(fd, &fd_status) != 0) {
             const int error = errno;
             return project_error(
@@ -780,7 +844,7 @@ namespace lfs::io::project::detail {
                 std::format("lockfile fstat failed: {}", std::strerror(error)), lock_path,
                 std::nullopt, "writer_lock", error, std::strerror(error));
         }
-        struct stat path_status {};
+        struct stat path_status{};
         if (::stat(lock_path.c_str(), &path_status) != 0 ||
             fd_status.st_dev != path_status.st_dev ||
             fd_status.st_ino != path_status.st_ino) {
@@ -791,7 +855,13 @@ namespace lfs::io::project::detail {
 #endif
 
     lfs::Result<WriterLock> WriterLock::acquire(const std::filesystem::path& project_path) {
-        auto lock_path = project_path;
+        std::error_code error;
+        auto lock_path = std::filesystem::absolute(project_path, error);
+        if (!error)
+            lock_path = std::filesystem::weakly_canonical(lock_path, error);
+        if (error)
+            return project_error(lfs::ErrorCode::FailedPrecondition,
+                                 "The project path could not be locked.", error.message(), project_path);
         lock_path += ".lock";
         if (auto parent = ensure_parent_directory(lock_path); !parent) {
             return std::move(parent).error();
@@ -829,12 +899,12 @@ namespace lfs::io::project::detail {
             OVERLAPPED operation{};
             const DWORD flags = LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY;
             if (!LockFileEx(handle, flags, 0, 1, 0, &operation)) {
-                const DWORD error = GetLastError();
+                const DWORD lock_error = GetLastError();
                 CloseHandle(handle);
                 return project_error(
                     lfs::ErrorCode::Unavailable, "The project is already open for writing.",
-                    std::format("LockFileEx denied the held lock with Windows error {}", error),
-                    lock_path, std::nullopt, "writer_lock", static_cast<std::int64_t>(error),
+                    std::format("LockFileEx denied the held lock with Windows error {}", lock_error),
+                    lock_path, std::nullopt, "writer_lock", static_cast<std::int64_t>(lock_error),
                     "Win32");
             }
             WriterLock result(lock_path, handle);

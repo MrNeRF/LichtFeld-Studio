@@ -10,9 +10,11 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/number_format.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/tensor.hpp"
+#include "core/training_manager.hpp"
 #include "gui/global_context_menu.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
@@ -23,7 +25,6 @@
 #include "io/formats/colmap.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
-#include "training/training_manager.hpp"
 #include "visualizer/core/parameter_manager.hpp"
 #include "visualizer/core/services.hpp"
 #include "visualizer/gui_capabilities.hpp"
@@ -63,16 +64,9 @@ namespace lfs::vis::gui {
             return value.empty() ? std::string(key) : value;
         }
 
-        [[nodiscard]] std::string formatWithThousands(const uint64_t value) {
-            std::string result = std::to_string(value);
-            for (int i = static_cast<int>(result.length()) - 3; i > 0; i -= 3)
-                result.insert(i, ",");
-            return result;
-        }
-
         [[nodiscard]] std::string formatSplatLabel(const std::string& name, const size_t count) {
             if (count > 0)
-                return std::format("{}  ({})", name, formatWithThousands(count));
+                return std::format("{}  ({})", name, lfs::core::format_count(count));
             return name;
         }
 
@@ -80,11 +74,11 @@ namespace lfs::vis::gui {
             const std::string& name,
             const core::Scene::CameraTrainingCounts counts) {
             if (counts.enabled == counts.total)
-                return std::format("{}  ({})", name, formatWithThousands(counts.total));
+                return std::format("{}  ({})", name, lfs::core::format_count(counts.total));
             return std::format("{}  ({} / {})",
                                name,
-                               formatWithThousands(counts.enabled),
-                               formatWithThousands(counts.total));
+                               lfs::core::format_count(counts.enabled),
+                               lfs::core::format_count(counts.total));
         }
 
         [[nodiscard]] std::string lowerCopy(std::string value) {
@@ -482,7 +476,7 @@ namespace lfs::vis::gui {
     } // namespace
 
     SceneGraphElement::SceneGraphElement(const Rml::String& tag) : Rml::Element(tag) {
-        SetAttribute("tab-index", "0");
+        SetAttribute("tabindex", "0");
     }
 
     bool SceneGraphElement::ownsContextMenuAction(const std::string_view action) {
@@ -936,21 +930,21 @@ namespace lfs::vis::gui {
                 break;
             case core::NodeType::POINTCLOUD:
                 snapshot.label = (node->point_cloud && node->point_cloud->size() > 0)
-                                     ? std::format("{}  ({})", node->name, formatWithThousands(node->point_cloud->size()))
+                                     ? std::format("{}  ({})", node->name, lfs::core::format_count(node->point_cloud->size()))
                                      : node->name;
                 break;
             case core::NodeType::MESH:
                 snapshot.label = (node->mesh)
                                      ? std::format("{}  ({}V / {}F)", node->name,
-                                                   formatWithThousands(node->mesh->vertex_count()),
-                                                   formatWithThousands(node->mesh->face_count()))
+                                                   lfs::core::format_count(node->mesh->vertex_count()),
+                                                   lfs::core::format_count(node->mesh->face_count()))
                                      : node->name;
                 break;
             case core::NodeType::PLY_SEQUENCE: {
                 const size_t frame_count = node->gaussian_count.load(std::memory_order_acquire);
                 snapshot.label = LOCF(string_keys::Scene::PLY_SEQUENCE_LABEL,
                                       node->name,
-                                      formatWithThousands(frame_count > 0 ? frame_count : node->children.size()));
+                                      lfs::core::format_count(frame_count > 0 ? frame_count : node->children.size()));
                 break;
             }
             case core::NodeType::CAMERA_GROUP: {
@@ -1200,6 +1194,7 @@ namespace lfs::vis::gui {
                                                      const bool update_cached_rows) {
         std::unordered_map<core::NodeId, std::string> camera_icon_colors;
 
+#if LFS_BUILD_TRAINER
         const auto* trainer_manager = services().trainerOrNull();
         const auto* trainer = trainer_manager ? trainer_manager->getTrainer() : nullptr;
         if (trainer) {
@@ -1234,6 +1229,7 @@ namespace lfs::vis::gui {
                 }
             }
         }
+#endif
 
         bool changed = false;
         for (auto& [id, snapshot] : node_snapshots_) {
@@ -1463,8 +1459,8 @@ namespace lfs::vis::gui {
                            row.training_enabled ? "icon-unlocked" : "icon-locked");
         const std::string training_title = row.training_mixed
                                                ? std::format("{} / {}",
-                                                             row.training_enabled_count,
-                                                             row.training_total_count)
+                                                             lfs::core::format_count(row.training_enabled_count),
+                                                             lfs::core::format_count(row.training_total_count))
                                            : row.training_enabled
                                                ? tr(string_keys::Scene::DISABLE_FOR_TRAINING)
                                                : tr(string_keys::Scene::ENABLE_FOR_TRAINING);
@@ -1691,7 +1687,7 @@ namespace lfs::vis::gui {
 
     void SceneGraphElement::focusTree() {
         if (rename_node_id_ == core::NULL_NODE) {
-            SetProperty("tab-index", "0");
+            SetAttribute("tabindex", "0");
             Focus();
         }
     }
@@ -2715,7 +2711,7 @@ namespace lfs::vis::gui {
         request.width_dp = 440;
         const std::string message = node_uuids.size() == 1
                                         ? LOCF(string_keys::Scene::DELETE_CONFIRMATION_SINGLE, single_name)
-                                        : LOCF(string_keys::Scene::DELETE_CONFIRMATION_MULTIPLE, node_uuids.size());
+                                        : LOCF(string_keys::Scene::DELETE_CONFIRMATION_MULTIPLE, lfs::core::format_count(node_uuids.size()));
         request.body_rml = encode(message);
         request.buttons = {
             {tr(string_keys::Common::CANCEL), "secondary"},

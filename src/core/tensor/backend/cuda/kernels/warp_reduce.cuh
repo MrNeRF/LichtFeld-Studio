@@ -6,6 +6,7 @@
  */
 
 #pragma once
+#include "core/tensor/internal/private_access.hpp"
 
 #include "core/tensor/internal/tensor_functors.hpp"
 

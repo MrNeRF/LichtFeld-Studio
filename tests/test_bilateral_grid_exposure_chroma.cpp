@@ -3,7 +3,7 @@
 
 #include "components/bilateral_grid.hpp"
 #include "core/tensor.hpp"
-#include "tensor_hardening_test_utils.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -17,7 +17,7 @@ namespace {
     using lfs::training::BilateralGrid;
     using lfs::training::BilateralGridParameterization;
 
-    class BilateralGridExposureChromaTest : public tensor_hardening::CudaTest {};
+    class BilateralGridExposureChromaTest : public lfs::test::CudaBackendTest {};
 
     std::vector<float> cpu_copy(const Tensor& tensor) {
         return tensor.cpu().contiguous().to_vector();
@@ -137,6 +137,22 @@ namespace {
         BilateralGrid grid(1, 2, 2, 2, 10, {}, BilateralGridParameterization::ExposureChroma);
         fill_nonzero_grid(grid);
         check_finite_difference(grid, random_image({3, 6, 6}, 4.0f));
+    }
+
+    TEST_F(BilateralGridExposureChromaTest, NegativeRadianceStaysDarkAndMatchesFiniteDifference) {
+        BilateralGrid grid(1, 2, 2, 2, 10, {}, BilateralGridParameterization::ExposureChroma);
+        std::vector<float> rgb(3 * 4 * 4, 0.05f);
+        std::fill_n(rgb.begin(), 4 * 4, -0.2f);
+        const auto image = Tensor::from_vector(rgb, {3, 4, 4}, Device::CUDA);
+        const auto out = cpu_copy(grid.apply(image, 0));
+        for (size_t i = 0; i < out.size(); ++i) {
+            EXPECT_TRUE(std::isfinite(out[i]));
+            EXPECT_NEAR(out[i], i < 16 ? 0.0f : 0.05f, 1e-5f);
+        }
+        // The grid shares PPISP's color math, but also differentiates its RGB
+        // lookup coordinate. Check the complete VJP with spatially varying latents.
+        fill_nonzero_grid(grid);
+        check_finite_difference(grid, image);
     }
 
     TEST_F(BilateralGridExposureChromaTest, NegativeNeutralLatentStaysFiniteAndMatchesFD) {

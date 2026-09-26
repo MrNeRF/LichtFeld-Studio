@@ -8,9 +8,8 @@
 // graph-capture Unsupported helpers are gated by !__CUDACC__ (phase-6c P2).
 // Frozen layout and protocol: .codex_tmp/phase-6c-device-fault-spec.md §0.1 / §1 / §9.
 
+#include "core/cuda_types.hpp"
 #include "core/export.hpp"
-
-#include <cuda_runtime_api.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -106,55 +105,16 @@ namespace lfs::core {
         return true;
     }
 
-    // Allocation-free device-side clear of a fault record. Host protocol prefers
-    // enqueuing reset via device_fault_slot_enqueue_reset on the same stream
-    // before a checked range; this helper exists for in-kernel test fixtures.
-    __device__ inline void device_fault_clear(DeviceFaultRecord* record) {
-        if (record == nullptr) {
-            return;
-        }
-        record->code = 0;
-        record->op_id = 0;
-        record->value = 0;
-        record->bound = 0;
-        record->thread_id = 0;
-    }
 #endif // defined(__CUDACC__)
 
-    // ---------------------------------------------------------------------------
-    // Host-only per-stream registry (defined in device_fault.cpp).
-    //
-    // Storage (phase-6c §9 Ruling 2): each slot owns a dedicated cudaMalloc'd
-    // DeviceFaultRecord plus pinned host staging. NEVER CudaMemoryPool memory.
-    // Teardown frees via LFS_CUDA_LOG_TEARDOWN and is hooked into
-    // teardown_gpu_before_exit() BEFORE Tensor::shutdown_memory_pool().
-    //
-    // Thread contract (spec §2.3): map create/free is mutex-protected. Reset /
-    // harvest enqueue on a live stream assumes single-owner-per-stream — tensor
-    // ops must not share a stream across host threads without external sync.
-    // Concurrent acquire/reset/harvest for the *same* stream from multiple host
-    // threads without external synchronization is a precondition violation.
-    // ---------------------------------------------------------------------------
-
-    // Lazy-allocate the per-stream slot if needed. On success writes the device
-    // pointer suitable for kernel launch (stable until free/teardown).
-    [[nodiscard]] LFS_CORE_API cudaError_t device_fault_slot_acquire(
+    // Each stream owns a mapped record outside the tensor memory pool. Host callers
+    // sharing a stream must synchronize access; the pointer stays valid until teardown.
+    // Arming preserves faults from earlier launches until a synchronized consumer clears them.
+    [[nodiscard]] LFS_CORE_API cudaError_t device_fault_slot_arm(
         cudaStream_t stream,
         DeviceFaultRecord** out_device_record) noexcept;
 
-    // Enqueue zeroing of the device record on `stream` (FIFO before the checked
-    // kernel range). Acquires the slot if missing.
-    [[nodiscard]] LFS_CORE_API cudaError_t device_fault_slot_enqueue_reset(
-        cudaStream_t stream) noexcept;
-
-    // Enqueue async D2H of the device record into the slot's host staging.
-    // Does NOT synchronize (spec §1.5: no success-path D2H sync).
-    [[nodiscard]] LFS_CORE_API cudaError_t device_fault_slot_enqueue_harvest(
-        cudaStream_t stream) noexcept;
-
-    // Host-side read of pinned staging AFTER an existing semantic safe-point wait
-    // that already orders the harvest copy. Does not wait or synchronize.
-    // Returns a zeroed NoFault record if no slot exists for `stream`.
+    // Read and clear the mapped record only after the stream is synchronized.
     [[nodiscard]] LFS_CORE_API DeviceFaultRecord device_fault_slot_consume(
         cudaStream_t stream) noexcept;
 
@@ -292,6 +252,9 @@ namespace lfs::core {
     // wait (or tests that need a deterministic BoundsViolation surface) use
     // this after their existing wait expression. Internally: cudaStreamSynchronize
     // then device_fault_slot_consume_or_throw.
+    // Only completed streams may have their mapped fault record consumed.
+    LFS_CORE_API void device_fault_registry_consume_or_throw(SourceSite location, bool device_synchronized);
+
     LFS_CORE_API void device_fault_await_and_consume_or_throw(
         cudaStream_t stream,
         std::string_view operation_tag,

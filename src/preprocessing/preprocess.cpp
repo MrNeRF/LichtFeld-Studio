@@ -13,10 +13,14 @@
 #include "core/point_cloud.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
+#if LFS_BUILD_TRAINER
 #include "depth_anchor_cache.hpp"
+#endif
 
 #include "io/loader.hpp"
+#if LFS_HAS_CUDA
 #include <cuda_runtime.h>
+#endif
 
 #include "indicators.hpp"
 #include <curl/curl.h>
@@ -98,6 +102,22 @@ namespace {
         kSam2ModelSha256,
         kSam2ModelDownloadMessage,
     };
+    constexpr std::string_view kRomaV1ModelFile = "romav1.lfw";
+    constexpr std::string_view kRomaV1ModelUrl =
+        "https://github.com/MrNeRF/LichtFeld-Studio/releases/download/model-romav1-v1/romav1.lfw";
+    constexpr std::string_view kRomaV1ModelSha256 =
+        "9405046ae904c84345d6926d66187abbd3a8728ecc50921f4c430220623d54fc";
+    constexpr std::string_view kRomaV1ModelDownloadMessage =
+        "Downloading RoMa v1 dense matcher weights (MIT, (c) Johan Edstedt et al.; DINOv2 "
+        "backbone Apache-2.0, (c) Meta)";
+
+    constexpr CachedWeightSpec kRomaV1Weights{
+        kRomaV1ModelFile,
+        kRomaV1ModelUrl,
+        kRomaV1ModelSha256,
+        kRomaV1ModelDownloadMessage,
+    };
+
     constexpr std::string_view kLpipsModelFile = "lpips-vgg16-v0.1.lfw";
     constexpr std::string_view kLpipsModelUrl =
         "https://github.com/MrNeRF/LichtFeld-Studio/releases/download/model-lpips-v1/lpips-vgg16-v0.1.lfw";
@@ -784,6 +804,7 @@ namespace {
                                          path_to_string(lfw_path) + ": " +
                                          std::string(loaded.error().detail()));
             model_ = std::move(*loaded);
+#if LFS_HAS_CUDA
             int device = 0;
             cudaDeviceProp properties{};
             if (cudaGetDevice(&device) != cudaSuccess ||
@@ -791,6 +812,10 @@ namespace {
                 throw std::runtime_error("Failed to query native MoGe CUDA device");
             }
             LOG_INFO("Normal estimation: native engine on CUDA device {} ({})", device, properties.name);
+#else
+            LOG_INFO("Normal estimation: native engine on {}",
+                     lfs::core::gpu_backend_name(lfs::core::default_gpu_backend()));
+#endif
         }
 
         HeadMaps run(const Image& image, int64_t num_tokens) {
@@ -804,12 +829,15 @@ namespace {
                 input_ = lfs::core::Tensor::empty(shape, lfs::core::Device::GPU,
                                                   lfs::core::DataType::Float32);
             }
-            if (lfs::core::gpu_backend_of(input_) == lfs::core::GpuBackend::Vulkan) {
+            if (lfs::core::gpu_backend_of(input_) != lfs::core::GpuBackend::CUDA) {
                 input_.copy_from(lfs::core::Tensor::from_vector(chw, shape, lfs::core::Device::CPU));
-            } else {
+            }
+#if LFS_HAS_CUDA
+            else {
                 LFS_CUDA_CHECK(cudaMemcpyAsync(input_.data_ptr(), chw.data(), input_.bytes(),
                                                cudaMemcpyHostToDevice, input_.stream()));
             }
+#endif
             auto result = model_.forward(input_, num_tokens);
             if (!result)
                 throw std::runtime_error("Native MoGe-2 forward failed: " +
@@ -933,6 +961,7 @@ namespace {
     // writes a sidecar next to the depth maps, so depth-loss training skips the
     // per-camera anchor fit at startup. Requires a COLMAP scene; a bare image
     // folder is skipped (the trainer fits and caches it on first run instead).
+#if LFS_BUILD_TRAINER
     void precompute_depth_anchors(const lfs::core::param::PreprocessParameters& params) {
         if (!needs_depth(params.mode)) {
             return;
@@ -1005,6 +1034,8 @@ namespace {
             LOG_WARN("Depth anchors: precompute failed: {}", e.what());
         }
     }
+
+#endif
 
     bool should_write_output(bool output_requested,
                              bool overwrite,
@@ -1190,12 +1221,13 @@ namespace {
             auto outputs = std::make_shared<const HeadMaps>(run_inference(loaded.inference, params.num_tokens));
             const double inference_ms =
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - inference_start).count();
+            const std::string image_filename = path_to_string(job.image_path.filename());
             if (bar)
-                bar->report(i + 1, job.image_path.filename().string(), inference_ms);
+                bar->report(i + 1, image_filename, inference_ms);
             else if (!progress)
                 std::cout << "  inference " << inference_ms << " ms\n";
             if (progress)
-                progress(i + 1, plan.jobs.size(), job.image_path.filename().string());
+                progress(i + 1, plan.jobs.size(), image_filename);
 
             while (!writes.empty() && writes.front().wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
                 writes.front().get();
@@ -1264,7 +1296,9 @@ namespace {
                     print_plan_summary(params, plan, nullptr);
                     std::cout << "No outputs need preprocessing; model inference skipped.\n";
                 }
+#if LFS_BUILD_TRAINER
                 precompute_depth_anchors(params);
+#endif
                 if (!progress)
                     std::cout << "Done. processed=0 skipped=" << plan.skipped << "\n";
                 return result;
@@ -1279,7 +1313,9 @@ namespace {
 
             process_dataset(params, model_path, plan, progress);
             result.processed = plan.jobs.size();
+#if LFS_BUILD_TRAINER
             precompute_depth_anchors(params);
+#endif
             return result;
         } catch (const std::exception& e) {
             result.ok = false;
@@ -1312,6 +1348,14 @@ namespace lfs::preprocessing {
             return 1;
         }
         return 0;
+    }
+
+    std::filesystem::path ensure_romav1_weights(bool no_download) {
+        return ensure_cached_weights(kRomaV1Weights, no_download);
+    }
+
+    std::filesystem::path romav1_weights_cache_path() {
+        return cached_weight_path(kRomaV1ModelFile);
     }
 
     std::filesystem::path ensure_sam2_weights(bool no_download) {

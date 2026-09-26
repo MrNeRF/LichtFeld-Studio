@@ -14,7 +14,6 @@
 #include "core/export.hpp"
 #include "core/source_site.hpp"
 
-#include <cuda_runtime_api.h>
 #include <string_view>
 
 // lfs::core::{throw_cuda_error, log_cuda_teardown_failure} — Phase 6A typed direct-call/teardown

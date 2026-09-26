@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "io/formats/colmap.hpp"
-#include <cuda_runtime.h>
 #include <filesystem>
 #include <gtest/gtest.h>
 #include <stdexcept>
@@ -15,27 +14,15 @@ namespace {
         return fs::path(PROJECT_ROOT_PATH) / "tests" / "fixtures" / "colmap_points3d_text" / name;
     }
 
-    bool has_cuda_device() {
-        int device_count = 0;
-        return cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0;
-    }
 } // namespace
 
 TEST(ColmapPoints3DText, LoadsTextPointCloudThroughPublicApi) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required for COLMAP point cloud load";
-    }
-
     const auto result = lfs::io::read_colmap_point_cloud_text(fixture_dir("basic"));
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->value.size(), 3u);
 }
 
 TEST(ColmapPoints3DText, ReportsStatsAndFiltersByMinimumTrackLength) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required for COLMAP point cloud load";
-    }
-
     const auto result = lfs::io::read_colmap_point_cloud_text_with_stats(
         fixture_dir("filter"),
         lfs::io::LoadOptions{.min_track_length = 3});
@@ -48,10 +35,6 @@ TEST(ColmapPoints3DText, ReportsStatsAndFiltersByMinimumTrackLength) {
 }
 
 TEST(ColmapPoints3DText, AcceptsUnknownNegativePointError) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required for COLMAP point cloud load";
-    }
-
     const auto result = lfs::io::read_colmap_point_cloud_text(fixture_dir("unknown_error"));
 
     ASSERT_TRUE(result.has_value());
@@ -60,10 +43,6 @@ TEST(ColmapPoints3DText, AcceptsUnknownNegativePointError) {
 }
 
 TEST(ColmapPoints3DText, FiltersUnknownNegativeErrorPointsByMinimumTrackLength) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required for COLMAP point cloud load";
-    }
-
     const auto result = lfs::io::read_colmap_point_cloud_text_with_stats(
         fixture_dir("unknown_error"),
         lfs::io::LoadOptions{.min_track_length = 3});
@@ -89,10 +68,6 @@ TEST(ColmapPoints3DText, SkipsDanglingOddTrackTokenWhenFiltering) {
 }
 
 TEST(ColmapPoints3DText, LoadsSinglePointStatsThroughPublicApi) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required for COLMAP point cloud load";
-    }
-
     const auto result = lfs::io::read_colmap_point_cloud_text_with_stats(fixture_dir("single_point"));
 
     ASSERT_TRUE(result.has_value());

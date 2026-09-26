@@ -198,7 +198,8 @@ namespace lfs::core {
             return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::Unavailable,
                 .domain = backend == GpuBackend::Vulkan ? lfs::ErrorDomain::Vulkan
-                                                        : lfs::ErrorDomain::CUDA,
+                          : backend == GpuBackend::CUDA ? lfs::ErrorDomain::CUDA
+                                                        : lfs::ErrorDomain::Tensor,
                 .user_message = "backend unavailable",
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             }));

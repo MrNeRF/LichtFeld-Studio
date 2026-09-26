@@ -1,9 +1,10 @@
 static const uint LFS_LOCAL_SIZE_X = 256;
 static const uint LFS_PUSH_CONSTANT_SIZE = 48;
+#include "byte_word.slangh"
 
-// 0 masked_fill, 1 and_live, 2 compact select (output[scan[i]] = data[i]),
-// 3 compact scatter (data[i] = source[scan[i]]), 4 nonzero (output[scan[i]] = i),
-// 5 exclusive scan of the predicate in one workgroup (scan[i] and the total).
+// 0 masked_fill, 1 and_live, 2 compact select, 3 compact scatter, 4 nonzero,
+// 5 predicate values for an inclusive scan. Selected offsets are scan[i] - 1.
+// 6 scalar where (data[i] = mask[i] ? fill : source[i]).
 [SpecializationConstant]
 const uint kMode = 0;
 // Element codes follow DataType: 0 Float32, 1 Float16, 2 Int32, 3 Int64, 4 UInt8, 5 Bool.
@@ -28,8 +29,6 @@ struct Parameters
     uint fillHigh;
     uint pad0;
 };
-
-groupshared uint sharedCount[LFS_LOCAL_SIZE_X];
 
 uint loadByte(uint64_t address, uint64_t index)
 {
@@ -93,39 +92,53 @@ bool predicate(uint64_t maskAddress, uint64_t index)
     return ((Ptr<float, Access.Read>)maskAddress)[index] != 0.0f;
 }
 
+uint evaluateByte(uint index, uniform Parameters parameters)
+{
+    const bool selected = loadByte(parameters.maskAddress, index) != 0u;
+    if (kMode == 0 && selected) return parameters.fillLow & 255u;
+    if (kMode == 1 && !selected) return 0u;
+    return loadByte(parameters.dataAddress, index);
+}
+
 [numthreads(LFS_LOCAL_SIZE_X, 1, 1)]
-void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupThreadId : SV_GroupThreadID,
+void main(uint3 dispatchThreadId : SV_DispatchThreadID,
           uniform Parameters parameters)
 {
+    if (kByte && kMode <= 1)
+    {
+        const uint64_t start = parameters.dataAddress;
+        const uint64_t end = start + uint64_t(parameters.count);
+        const uint64_t firstWord = start & ~uint64_t(3);
+        const uint wordCount = uint((end - firstWord + uint64_t(3)) / uint64_t(4));
+        const uint3 groups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
+        for (uint wordIndex = dispatchThreadId.x; wordIndex < wordCount;
+             wordIndex += groups.x * LFS_LOCAL_SIZE_X)
+        {
+            const uint64_t wordAddress = firstWord + uint64_t(wordIndex) * uint64_t(4);
+            uint packed = 0;
+            uint mask = 0;
+            [unroll]
+            for (uint lane = 0; lane < 4u; ++lane)
+            {
+                const uint64_t byteAddress = wordAddress + uint64_t(lane);
+                if (byteAddress >= start && byteAddress < end)
+                {
+                    packed |= evaluateByte(uint(byteAddress - start), parameters) << (lane * 8u);
+                    mask |= 255u << (lane * 8u);
+                }
+            }
+            storeByteWord(wordAddress, packed, mask);
+        }
+        return;
+    }
     const uint3 numWorkgroups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
     const uint stride = numWorkgroups.x * LFS_LOCAL_SIZE_X;
-    const uint thread = groupThreadId.x;
     Ptr<uint, Access.ReadWrite> scan = (Ptr<uint, Access.ReadWrite>)parameters.scanAddress;
 
     if (kMode == 5)
     {
-        uint carry = 0;
-        for (uint chunk = 0; chunk < parameters.count; chunk += LFS_LOCAL_SIZE_X)
-        {
-            const uint element = chunk + thread;
-            const bool live = element < parameters.count;
-            const uint flag = live && predicate(parameters.maskAddress, element) ? 1u : 0u;
-            sharedCount[thread] = flag;
-            GroupMemoryBarrierWithGroupSync();
-            for (uint offset = 1; offset < LFS_LOCAL_SIZE_X; offset <<= 1)
-            {
-                const uint partial = thread >= offset ? sharedCount[thread - offset] : 0u;
-                GroupMemoryBarrierWithGroupSync();
-                sharedCount[thread] += partial;
-                GroupMemoryBarrierWithGroupSync();
-            }
-            if (live)
-                scan[element] = carry + sharedCount[thread] - flag;
-            carry += sharedCount[LFS_LOCAL_SIZE_X - 1];
-            GroupMemoryBarrierWithGroupSync();
-        }
-        if (thread == 0)
-            ((Ptr<uint, Access.ReadWrite>)parameters.sourceAddress)[0] = carry;
+        for (uint64_t index = dispatchThreadId.x; index < parameters.count; index += stride)
+            scan[index] = predicate(parameters.maskAddress, index) ? 1u : 0u;
         return;
     }
 
@@ -136,25 +149,27 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupThreadId : SV
             if (loadByte(parameters.maskAddress, index) != 0u)
                 storeFill(parameters.dataAddress, index, parameters.fillLow, parameters.fillHigh);
         }
-        else if (kMode == 1)
-        {
-            if (loadByte(parameters.maskAddress, index) == 0u)
-                storeByte(parameters.dataAddress, index, 0u);
-        }
         else if (kMode == 2)
         {
             if (predicate(parameters.maskAddress, index))
-                copyElement(parameters.dataAddress, index, parameters.sourceAddress, scan[index]);
+                copyElement(parameters.dataAddress, index, parameters.sourceAddress, scan[index] - 1u);
         }
         else if (kMode == 3)
         {
             if (predicate(parameters.maskAddress, index))
-                copyElement(parameters.sourceAddress, scan[index], parameters.dataAddress, index);
+                copyElement(parameters.sourceAddress, scan[index] - 1u, parameters.dataAddress, index);
+        }
+        else if (kMode == 6)
+        {
+            if (predicate(parameters.maskAddress, index))
+                storeFill(parameters.dataAddress, index, parameters.fillLow, parameters.fillHigh);
+            else
+                copyElement(parameters.sourceAddress, index, parameters.dataAddress, index);
         }
         else
         {
             if (predicate(parameters.maskAddress, index))
-                ((Ptr<int64_t, Access.ReadWrite>)parameters.sourceAddress)[scan[index]] = int64_t(index);
+                ((Ptr<int64_t, Access.ReadWrite>)parameters.sourceAddress)[scan[index] - 1u] = int64_t(index);
         }
     }
 }

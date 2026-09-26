@@ -442,7 +442,9 @@ namespace lfs::io::project {
                     camera->adopt_undistortion(cached->second);
                 } else {
                     camera->precompute_undistortion(0.0f);
-                    undistort_cache.emplace(std::move(key), camera->undistort_params());
+                    // Share only parameters that were actually computed.
+                    if (camera->is_undistort_precomputed())
+                        undistort_cache.emplace(std::move(key), camera->undistort_params());
                 }
             }
             camera->set_image_dimensions(value.image_width, value.image_height);

@@ -96,6 +96,14 @@ class CoreAbiStampTests(unittest.TestCase):
         self.initialize()
         self.assertNotEqual(before, header.read_bytes())
 
+    def test_trainer_build_modes_have_distinct_stamps(self):
+        self.metadata["LFS_BUILD_TRAINER"] = "ON"
+        self.initialize()
+        full = self.header("Release").read_bytes()
+        self.metadata["LFS_BUILD_TRAINER"] = "OFF"
+        self.initialize()
+        self.assertNotEqual(full, self.header("Release").read_bytes())
+
     def test_build_refresh_matches_configure_seed(self):
         self.initialize()
         header = self.header("Release")

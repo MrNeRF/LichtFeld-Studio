@@ -10,6 +10,14 @@
     color: @{text};
 }
 
+.context-menu-icon {
+    image-color: @{text};
+}
+
+.context-menu-item:hover .context-menu-icon {
+    image-color: #ffffff;
+}
+
 .context-menu-label {
     color: @{text_dim};
 }

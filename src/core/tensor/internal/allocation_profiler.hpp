@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include "core/tensor/internal/private_access.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -106,7 +107,7 @@ namespace lfs::core {
         }
 
         // Capture stack trace and record allocation
-        void record_allocation(size_t bytes, int skip_frames = 2) {
+        void record_allocation([[maybe_unused]] size_t bytes, [[maybe_unused]] int skip_frames = 2) {
             if constexpr (!LFS_ALLOCATION_PROFILING_ENABLED) {
                 return;
             }
@@ -131,8 +132,9 @@ namespace lfs::core {
         }
 
         // Record tensor allocation with shape and dtype (with pointer tracking for lifetime analysis)
-        void record_tensor_allocation(void* ptr, const std::vector<size_t>& shape, size_t bytes,
-                                      const std::string& dtype, int skip_frames = 2) {
+        void record_tensor_allocation([[maybe_unused]] void* ptr, [[maybe_unused]] const std::vector<size_t>& shape,
+                                      [[maybe_unused]] size_t bytes, [[maybe_unused]] const std::string& dtype,
+                                      [[maybe_unused]] int skip_frames = 2) {
             if constexpr (!LFS_ALLOCATION_PROFILING_ENABLED) {
                 return;
             }
@@ -168,7 +170,7 @@ namespace lfs::core {
         }
 
         // Record tensor deallocation (for lifetime tracking)
-        void record_deallocation(void* ptr) {
+        void record_deallocation([[maybe_unused]] void* ptr) {
             if constexpr (!LFS_ALLOCATION_PROFILING_ENABLED) {
                 return;
             }
@@ -202,7 +204,7 @@ namespace lfs::core {
         }
 
     private:
-        std::string capture_stack_trace(int skip_frames) {
+        std::string capture_stack_trace([[maybe_unused]] int skip_frames) {
 #ifdef __linux__
             // Capture stack trace
             constexpr int MAX_FRAMES = 20;
@@ -361,9 +363,9 @@ namespace lfs::core {
                     }
 
                     // Print tensor details
-                    for (const auto& entry : shape_groups) {
-                        const auto& shape_dtype = entry.first;
-                        const auto& tensors = entry.second;
+                    for (const auto& shape_entry : shape_groups) {
+                        const auto& shape_dtype = shape_entry.first;
+                        const auto& tensors = shape_entry.second;
                         double total_tensor_mb = 0;
                         for (const auto* t : tensors) {
                             total_tensor_mb += t->mb();

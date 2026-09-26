@@ -6,6 +6,7 @@
 #include "core/assert.hpp"
 #include "core/cuda_safe_format.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_cuda_interop.hpp"
 
 #include <climits>
 #include <cmath>
@@ -56,6 +57,7 @@ namespace lfs::training::kernels {
                 indexed_elements *= extent;
             }
 
+            input.sync_to_stream(lfs::core::getCurrentCUDAStream());
             auto prepared = input.contiguous();
             if (prepared.ndim() == 3)
                 prepared = prepared.unsqueeze(0);
@@ -105,6 +107,7 @@ namespace lfs::training::kernels {
                        lfs::core::detail::format_cuda_safe("Loss mask must have shape [H,W] or [1,H,W] (shape={})",
                                                            input.shape().str()));
 
+        input.sync_to_stream(lfs::core::getCurrentCUDAStream());
         auto mask = input.contiguous();
         if (mask.ndim() == 3)
             mask = mask.squeeze(0);

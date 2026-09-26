@@ -529,6 +529,11 @@ namespace lfs::vis::op {
             };
         }
 
+        // Discard the temporary alignment before replaying committed transforms.
+        if (operators().activeModalId() == to_string(BuiltinOp::AlignPickPoint)) {
+            operators().cancelModalOperator();
+        }
+
         if (auto* const scene_manager = services().sceneOrNull()) {
             try {
                 scene_manager->completePendingSelectionCounts();

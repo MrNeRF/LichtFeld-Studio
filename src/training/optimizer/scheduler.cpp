@@ -6,6 +6,7 @@
 #include "adam_optimizer.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
+#include "core/tensor_serialization.hpp"
 #include <array>
 #include <cmath>
 #include <string>

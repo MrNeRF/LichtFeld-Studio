@@ -9,6 +9,7 @@
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "lfs/training/ops/loss.hpp"
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -16,6 +17,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -41,11 +43,27 @@ namespace lfs::training {
     public:
         SSIM(bool apply_valid_padding = true);
 
+        void set_ops(const lfs::gpu_ops::PhotometricOps* ops) { ops_ = ops; }
+
         float compute(const lfs::core::Tensor& pred, const lfs::core::Tensor& target,
                       const lfs::core::Tensor& mask = {});
 
     private:
         bool apply_valid_padding_;
+        const lfs::gpu_ops::PhotometricOps* ops_ = nullptr;
+        lfs::gpu_ops::PhotoSaved saved_{};
+    };
+
+    struct ViewMetrics {
+        int index = 0;
+        std::string image_name;
+        int width = 0;
+        int height = 0;
+        std::optional<float> psnr;
+        std::optional<float> ssim;
+        std::optional<float> lpips;
+        bool masked = false;
+        std::string skipped_reason;
     };
 
     struct EvalMetrics {
@@ -64,6 +82,7 @@ namespace lfs::training {
         float bias_corr_r = 0.0f;
         float bias_corr_g = 0.0f;
         float bias_corr_b = 0.0f;
+        std::vector<ViewMetrics> views;
 
         [[nodiscard]] std::string to_string() const {
             if (!valid) {
@@ -135,6 +154,16 @@ namespace lfs::training {
         const lfs::core::Tensor& rendered_depth,
         const std::vector<DepthAbsRelSample>& samples);
 
+    // Configured evaluation steps a run with this last iteration never reaches.
+    [[nodiscard]] std::vector<size_t> unreachable_eval_steps(const std::vector<size_t>& eval_steps,
+                                                             size_t last_iteration);
+
+    // Adds this step's result for one image to the per-image document, which maps
+    // image names to their size and evaluations. An earlier entry for the same
+    // step and split is replaced; entries stay sorted by step.
+    [[nodiscard]] nlohmann::json add_view_evaluation(nlohmann::json document, const ViewMetrics& view, int step,
+                                                     std::string_view split);
+
     // Metrics reporter class
     class MetricsReporter {
     public:
@@ -142,13 +171,21 @@ namespace lfs::training {
 
         void add_metrics(const EvalMetrics& metrics);
 
+        // Adds every evaluated image to <output>/per_image_metrics.json.
+        void write_view_evaluations(const EvalMetrics& metrics, std::string_view split) const;
+
+        void write_training_config(const lfs::core::param::TrainingParameters& params) const;
+
         void save_report() const;
+
+        [[nodiscard]] const std::filesystem::path& per_image_path() const { return per_image_path_; }
 
     private:
         const std::filesystem::path output_dir_;
         std::vector<EvalMetrics> all_metrics_;
         const std::filesystem::path csv_path_;
         const std::filesystem::path txt_path_;
+        const std::filesystem::path per_image_path_;
     };
 
     // Main evaluator class that handles all metrics computation and visualization
@@ -158,6 +195,12 @@ namespace lfs::training {
 
         using AppearanceFn =
             std::function<lfs::core::Tensor(const lfs::core::Tensor& rgb_chw, const lfs::core::Camera& cam)>;
+
+        void set_photometric(const lfs::gpu_ops::PhotometricOps* ops) {
+            if (_ssim_metric) {
+                _ssim_metric->set_ops(ops);
+            }
+        }
 
         void set_appearance(AppearanceFn fn) { appearance_ = std::move(fn); }
         [[nodiscard]] bool has_appearance() const { return static_cast<bool>(appearance_); }
@@ -175,8 +218,11 @@ namespace lfs::training {
         // Check if evaluation is enabled
         bool is_enabled() const { return _params.optimization.enable_eval; }
 
-        // Check if we should evaluate at this iteration
-        bool should_evaluate(const int iteration) const;
+        // Configured eval steps plus the final iteration
+        bool should_evaluate(int iteration, int final_iteration) const;
+
+        // Records the configuration the run trains with next to the per-image results
+        void write_training_config(const lfs::core::param::TrainingParameters& params) const;
 
         // Main evaluation method
         EvalMetrics evaluate(const int iteration,
@@ -197,6 +243,10 @@ namespace lfs::training {
         }
 
     private:
+        [[nodiscard]] std::string_view evaluated_split() const {
+            return _params.optimization.eval_all ? "train" : "test";
+        }
+
         // Configuration
         const lfs::core::param::TrainingParameters _params;
         lfs::core::Camera::NormalPriorDecode _normal_prior_decode{};

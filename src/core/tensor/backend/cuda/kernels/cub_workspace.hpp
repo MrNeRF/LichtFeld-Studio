@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include "core/tensor/internal/private_access.hpp"
 
 #include "core/cuda_allocation.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"

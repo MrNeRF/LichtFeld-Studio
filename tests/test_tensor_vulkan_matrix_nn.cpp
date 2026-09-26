@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/nn/ops.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/backend/vulkan/vk_context.hpp"
 #include "core/tensor_backend.hpp"
@@ -402,6 +403,35 @@ namespace {
         for (size_t i = 0; i < values.size(); ++i) {
             const float expected = values[i] > 0.0f ? values[i] : 0.0f;
             ASSERT_EQ(result[i], expected) << "index=" << i;
+        }
+    }
+
+    TEST_F(TensorVulkanMatrixNn, FullyMaskedRowsAttendToNothingLikeCuda) {
+        // Rows masked out entirely come back zero, as from the CUDA kernels,
+        // instead of NaN; the other rows stay normalized.
+        constexpr float kMasked = -std::numeric_limits<float>::infinity();
+        std::vector<float> mask(5 * 40, 0.0f);
+        std::fill(mask.begin() + 2 * 40, mask.begin() + 3 * 40, kMasked);
+        const Tensor gpu_mask = upload(mask, {1, 1, 5, 40});
+        const Tensor q = upload(signed_pattern(5 * 16, 1), {1, 1, 5, 16});
+        const Tensor k = upload(signed_pattern(40 * 16, 2), {1, 1, 40, 16});
+        const Tensor v = upload(positive_pattern(40 * 16, 3), {1, 1, 40, 16});
+        const std::vector<float> attended = lfs::core::nn::attention(q, k, v, &gpu_mask).cpu().to_vector();
+        for (size_t i = 0; i < attended.size(); ++i) {
+            if (i / 16 == 2)
+                ASSERT_EQ(attended[i], 0.0f) << "index=" << i;
+            else
+                ASSERT_GT(attended[i], 0.0f) << "index=" << i;
+        }
+
+        const Tensor logits = upload(signed_pattern(5 * 40, 4), {5, 40});
+        const Tensor row_mask = upload(mask, {5, 40});
+        const std::vector<float> weights = lfs::core::nn::softmax(logits, &row_mask).cpu().to_vector();
+        for (size_t row = 0; row < 5; ++row) {
+            double sum = 0.0;
+            for (size_t column = 0; column < 40; ++column)
+                sum += weights[row * 40 + column];
+            ASSERT_NEAR(sum, row == 2 ? 0.0 : 1.0, 1.0e-5) << "row=" << row;
         }
     }
 

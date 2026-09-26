@@ -6,6 +6,7 @@
 #include "geometry/euclidean_transform.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
+#include "input/sdl_coordinate_utils.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -120,7 +121,7 @@ namespace lfs::vis::tools {
         }
 
         float mx, my;
-        const SDL_MouseButtonFlags mouse_buttons = SDL_GetMouseState(&mx, &my);
+        const SDL_MouseButtonFlags mouse_buttons = input::mouseStateInPixels(ctx.getWindow(), &mx, &my);
         last_mouse_pos_ = glm::vec2(mx, my);
 
         if ((depth_filter_enabled_ || crop_filter_enabled_) &&
@@ -429,7 +430,7 @@ namespace lfs::vis::tools {
 
         float mouse_x = 0.0f;
         float mouse_y = 0.0f;
-        SDL_GetMouseState(&mouse_x, &mouse_y);
+        input::mouseStateInPixels(tool_context_->getWindow(), &mouse_x, &mouse_y);
         const glm::vec2 mp{mouse_x, mouse_y};
         const auto& t = theme();
 

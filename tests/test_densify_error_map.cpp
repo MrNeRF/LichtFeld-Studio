@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "cuda_backend_test.hpp"
 #include "lfs/kernels/ssim.cuh"
 
 #include <cmath>
@@ -50,16 +51,7 @@ namespace {
 
 } // namespace
 
-class DensifyErrorMapTest : public ::testing::Test {
-protected:
-    void SetUp() override {
-        int device_count = 0;
-        cudaGetDeviceCount(&device_count);
-        if (device_count == 0) {
-            GTEST_SKIP() << "No CUDA device available";
-        }
-    }
-};
+class DensifyErrorMapTest : public lfs::test::CudaBackendTest {};
 
 TEST_F(DensifyErrorMapTest, ContrastStructureIgnoresUniformLuminanceMismatch) {
     Tensor pred, gt;

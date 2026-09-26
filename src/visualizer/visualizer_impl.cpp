@@ -1,8 +1,10 @@
+#if LFS_BUILD_TRAINER
+#include "training/trainer.hpp"
+#endif
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "visualizer_impl.hpp"
 #include "core/animatable_property.hpp"
 #include "core/crash_handler.hpp"
 #include "core/cuda_error.hpp"
@@ -18,6 +20,7 @@
 #include "core/memory_pressure.hpp"
 #include "core/path_utils.hpp"
 #include "core/services.hpp"
+#include "core/tensor_backend.hpp"
 #include "gui/error_event_bridge.hpp"
 #include "gui/native_panels.hpp"
 #include "gui/panel_registry.hpp"
@@ -52,6 +55,7 @@
 #include "tools/selection_tool.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "visualizer/app_store.hpp"
+#include "visualizer_impl.hpp"
 #include "window/vulkan_context.hpp"
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_messagebox.h>
@@ -149,6 +153,7 @@ namespace lfs::vis {
         }
 
         constexpr double kResizeSettleMinWaitSeconds = 0.001;
+        constexpr double kArenaRetryPollSeconds = 0.004;
         constexpr double kTooltipRevealMinWaitSeconds = 0.001;
         constexpr double kScheduledRedrawMinWaitSeconds = 0.001;
         constexpr double kGuiScheduledUpdateMinWaitSeconds = 0.001;
@@ -323,6 +328,11 @@ namespace lfs::vis {
             std::make_unique<project::ProjectLifecycle>(
                 *this,
                 options_.project_lifecycle_settings_path);
+        scene_manager_->setImportLicenseCallback([this](const auto& bytes) {
+            if (auto adopted = project_lifecycle_->adoptImportLicense(bytes); !adopted)
+                LOG_WARN("Cannot set project license during splat import: {}",
+                         lfs::format_for_developer(adopted.error()));
+        });
 
         // Create main loop
         main_loop_ = std::make_unique<MainLoop>();
@@ -588,6 +598,7 @@ namespace lfs::vis {
                                : fmt == core::ExportFormat::SSOG                                                                                                                                           ? "SSOG"
                                : fmt == core::ExportFormat::SOG                                                                                                                                            ? "SOG"
                                : fmt == core::ExportFormat::SPZ                                                                                                                                            ? "SPZ"
+                               : fmt == core::ExportFormat::GLB                                                                                                                                            ? "GLB"
                                : fmt == core::ExportFormat::HTML_VIEWER                                                                                                                                    ? "HTML"
                                : fmt == core::ExportFormat::USD                                                                                                                                            ? "USD"
                                : fmt == core::ExportFormat::NUREC_USDZ                                                                                                                                     ? "USDZ"
@@ -1625,7 +1636,7 @@ namespace lfs::vis {
                     if (auto info = projectGetInfo();
                         info && info->path) {
                         default_name =
-                            info->path->filename().string();
+                            lfs::core::path_to_utf8(info->path->filename());
                         default_directory =
                             info->path->parent_path();
                     }
@@ -1675,10 +1686,27 @@ namespace lfs::vis {
 
         cmd::ProjectCompact::when(
             [this, publish_project_error](
-                const auto&) {
-                if (auto compacted =
-                        projectCompact();
-                    !compacted) {
+                const auto& command) {
+                if (command.cancel_clean) {
+                    if (project_lifecycle_)
+                        project_lifecycle_->cancelCleanup();
+                    return;
+                }
+                auto expected_commit = lfs::core::Uuid{};
+                if (!command.expected_commit.empty()) {
+                    auto parsed = lfs::core::Uuid::from_string(command.expected_commit);
+                    if (!parsed)
+                        return;
+                    expected_commit = *parsed;
+                }
+                auto compacted = command.clean && project_lifecycle_
+                                     ? project_lifecycle_->clean(command.destination, expected_commit)
+                                     : projectCompact();
+                if (command.on_started) {
+                    command.on_started(compacted ? std::string{} : std::string(compacted.error().user_message()));
+                    return;
+                }
+                if (!compacted) {
                     publish_project_error(
                         "Compact Project",
                         compacted.error(),
@@ -1969,6 +1997,7 @@ namespace lfs::vis {
         });
 
         const auto sync_viewer_mip_filter_with_training = [this] {
+#if LFS_BUILD_TRAINER
             if (!rendering_manager_ || !trainer_manager_)
                 return;
             const auto* trainer = trainer_manager_->getTrainer();
@@ -1983,6 +2012,7 @@ namespace lfs::vis {
             settings.mip_filter = training_mip_filter;
             rendering_manager_->updateSettings(settings);
             LOG_INFO("Synced viewer mip filter with training: {}", training_mip_filter ? "enabled" : "disabled");
+#endif
         };
 
         // Trainer ready signal
@@ -2020,12 +2050,12 @@ namespace lfs::vis {
         });
 
         // Signal bridge event handlers
-        state::TrainingProgress::when([](const auto& event) {
-            auto& store = app_store();
-            lfs::core::reactive::BatchUpdate batch(store.store());
-            store.iteration.set(event.iteration);
-            store.loss.set(event.loss);
-            store.num_gaussians.set(static_cast<std::int64_t>(event.num_gaussians));
+        state::TrainingProgress::when([this](const auto& event) {
+            training_progress_publisher_.offer(
+                {.iteration = event.iteration,
+                 .loss = event.loss,
+                 .num_gaussians = static_cast<std::int64_t>(event.num_gaussians)},
+                std::chrono::steady_clock::now());
         });
 
         state::TrainingStarted::when([this](const auto& event) {
@@ -2165,6 +2195,7 @@ namespace lfs::vis {
                 window_manager_->getWindow(), viewport_);
             input_controller_->setViewer(this);
             input_controller_->initialize();
+            input_controller_->setTrackpadPreferences(loadTrackpadPreferences());
             window_manager_->setInputController(input_controller_.get());
             python::set_keymap_bindings(&input_controller_->getBindings());
             callback_cleanup_.add([] { python::set_keymap_bindings(nullptr); });
@@ -2548,6 +2579,16 @@ namespace lfs::vis {
             const double settle_wait = rendering_manager_->secondsUntilViewportResizeSettleReady();
             consider_timeout(std::max(kResizeSettleMinWaitSeconds, settle_wait), "resize_settle");
         }
+        if (rendering_manager_ && rendering_manager_->hasParkedArenaRetry())
+            consider_timeout(kArenaRetryPollSeconds, "arena_retry");
+        if (rendering_manager_ && trainer_manager_ && trainer_manager_->isRunning())
+            consider_timeout(std::max(kScheduledRedrawMinWaitSeconds,
+                                      rendering_manager_->secondsUntilTrainingRefresh()),
+                             "training_refresh");
+        if (const auto progress_wait =
+                training_progress_publisher_.secondsUntilDue(std::chrono::steady_clock::now()))
+            consider_timeout(std::max(kScheduledRedrawMinWaitSeconds, *progress_wait),
+                             "training_progress");
 
         // Wake exactly when a pending tooltip is due so the reveal costs a single
         // frame instead of rendering continuously through the hover delay.
@@ -2785,7 +2826,7 @@ namespace lfs::vis {
         RenderingManager::RenderContext context{
             .viewport = viewport_,
             .settings = rendering_manager_->getSettings(),
-            .logical_screen_size = window_manager_->getWindowSize(),
+            .logical_screen_size = window_manager_->getFramebufferSize(),
             .viewport_region = has_viewport_region ? &viewport_region : nullptr,
             .scene_manager = scene_manager_.get(),
             .vulkan_context = window_manager_->getVulkanContext()};
@@ -2798,6 +2839,7 @@ namespace lfs::vis {
         bool store_dirty = false;
         {
             LOG_TIMER_THRESHOLD("gui_render.reactive_store_drain", 0.05);
+            training_progress_publisher_.flushDue(std::chrono::steady_clock::now());
             store_dirty = app_store().store().drain_dirty_into_frame();
         }
 
@@ -2805,6 +2847,10 @@ namespace lfs::vis {
             gui_manager_->sequencerUI().tickPlaybackBeforeSceneRender();
 
         const bool is_training = trainer_manager_ && trainer_manager_->isTrainingActive();
+        if (rendering_manager_) {
+            rendering_manager_->pollTrainingRefresh(trainer_manager_ && trainer_manager_->isRunning());
+            rendering_manager_->pollParkedArenaRetry();
+        }
         const FrameDemand frame_demand = collectFrameDemand(viewport_export_locked, store_dirty);
         if (gui_frame_rendered_ && !frame_demand.shouldRenderFrame()) {
             LOG_PERF("loop_idle skip_gui_render=true needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={} swapchain_resize_pending={} swapchain_resize_ready={} window_resize_paint_pending={} viewport_resize_deferring={} viewport_resize_settle_ready={} wake_reason={} wake_timeout_source={}",
@@ -2844,12 +2890,20 @@ namespace lfs::vis {
 
             project_frame_started =
                 std::chrono::steady_clock::now();
+            const bool preview_refresh_only =
+                gui_frame_rendered_ && frame_demand.onlySceneDirty() &&
+                rendering_manager_->pendingDirtyMask() == DirtyFlag::SPLATS;
             if (workspace_snapshot) {
                 const auto& pointer = window_manager_->frameInput();
                 const auto interaction_view = input_controller_->workspaceInteractionView(
                     pointer.mouse_x, pointer.mouse_y);
                 const auto frames = rendering_manager_->renderWorkspaceVulkanFrames(
                     context, *workspace_snapshot, interaction_view);
+                if (preview_refresh_only && rendering_manager_->hasParkedArenaRetry() &&
+                    std::ranges::none_of(frames, [](const auto& frame) { return frame.fresh; })) {
+                    waitForNextEvent(is_training);
+                    return;
+                }
                 if (gui_manager_) {
                     gui_manager_->commitUiVisibilityTransitionIfFrameReady(
                         !frames.empty() && std::ranges::all_of(frames, [](const auto& frame) {
@@ -2860,6 +2914,10 @@ namespace lfs::vis {
                 if (gui_manager_)
                     gui_manager_->clearWorkspacePresentation();
                 const auto vulkan_frame = rendering_manager_->renderVulkanFrame(context);
+                if (preview_refresh_only && rendering_manager_->hasParkedArenaRetry()) {
+                    waitForNextEvent(is_training);
+                    return;
+                }
                 if (gui_manager_) {
                     gui_manager_->commitUiVisibilityTransitionIfFrameReady(
                         vulkan_frame.matches_viewport_extent);
@@ -2974,19 +3032,22 @@ namespace lfs::vis {
         last_frame_demand_ = next_demand;
         has_last_frame_demand_ = true;
 
-        // Continuous demand that is only python_redraw and/or gui_animation — pace it
-        // so GUI-only animation does not free-run against a MAILBOX swapchain.
+        // Pace GUI-only animation, including progress frames while an export
+        // holds scene changes pending instead of rendering the viewport.
+        const bool export_progress_only = next_demand.viewport_export_locked &&
+                                          gui_manager_ && !gui_manager_->needsAnimationFrame(false);
         const bool gui_only_animation =
             next_demand.needsContinuousLoop() &&
             !(gui_manager_ && gui_manager_->needsImmediateAnimationFrame()) &&
             !python::is_plugin_preload_running() &&
-            !next_demand.scene_dirty && !next_demand.continuous_input &&
+            (export_progress_only || !next_demand.scene_dirty) &&
+            !next_demand.continuous_input &&
             !next_demand.python_animation && !next_demand.python_overlay &&
             !next_demand.input_event && !next_demand.posted_work &&
             !next_demand.render_work && !next_demand.store_dirty &&
             !next_demand.swapchain_resize_pending && !next_demand.swapchain_resize_ready &&
             !next_demand.window_resize_paint_pending && !next_demand.viewport_resize_deferring &&
-            !next_demand.viewport_resize_settle_ready && !next_demand.viewport_export_locked;
+            !next_demand.viewport_resize_settle_ready;
 
         const auto py_redraw_due = python::seconds_until_scheduled_redraw();
         const double py_redraw_due_in = py_redraw_due ? *py_redraw_due : -1.0;
@@ -3023,9 +3084,11 @@ namespace lfs::vis {
 
         if (next_demand.needsContinuousLoop()) {
             if (gui_only_animation) {
-                // GUI-only animation must not free-run against a MAILBOX swapchain.
-                // Cap at the display interval; waitEvents still wakes instantly on input.
-                const double gui_animation_frame_interval = guiAnimationFrameInterval();
+                // Refresh export progress at 10 Hz to leave GPU time for the export.
+                // The event wait still wakes immediately for input and posted work.
+                const double gui_animation_frame_interval = export_progress_only
+                                                                ? 0.1
+                                                                : guiAnimationFrameInterval();
                 if (presented_gui_frame) {
                     if (auto* const vulkan_context = window_manager_->getVulkanContext())
                         static_cast<void>(vulkan_context->waitForNextFrameSlot());
@@ -3970,7 +4033,7 @@ namespace lfs::vis {
             keep_asset_manager_open && gui_manager_
                 ? std::make_optional(
                       gui_manager_->panelLayout()
-                          .getLeftDockWidth())
+                          .getLeftDockPreferredWidth())
                 : std::nullopt;
         project::applyGuiSession(
             *this, *prepared, camera_bookmarks_);
@@ -4145,6 +4208,7 @@ namespace lfs::vis {
     }
 
     std::expected<void, std::string> VisualizerImpl::startTraining() {
+#if LFS_BUILD_TRAINER
         if (!trainer_manager_)
             return std::unexpected("Trainer manager not initialized");
         const auto reject = [this](std::string message) {
@@ -4152,6 +4216,9 @@ namespace lfs::vis {
                 message, lfs::ErrorCode::FailedPrecondition));
             return std::unexpected(std::move(message));
         };
+        if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
+            return reject("Training requires an available CUDA device");
+        }
         if (project_lifecycle_) {
             if (project_lifecycle_->isHydrating()) {
                 return reject("Project is still loading. Retry Start after loading completes.");
@@ -4194,14 +4261,25 @@ namespace lfs::vis {
             return {};
         }
         if (!trainer_manager_->canStart()) {
-            if (trainer_manager_->isFinished()) {
-                return reject(std::format(
-                    "Training already completed at iteration {}; starting a new training run requires overwrite consent.",
-                    trainer_manager_->getCurrentIteration()));
-            }
-            return reject(std::string(
-                trainer_manager_->getActionBlockedReason(
-                    TrainingAction::Start)));
+            const std::string message =
+                trainer_manager_->isFinished()
+                    ? std::format(
+                          "Training already completed at iteration {}; starting a new training run requires overwrite consent.",
+                          trainer_manager_->getCurrentIteration())
+                    : std::string(
+                          trainer_manager_->getActionBlockedReason(
+                              TrainingAction::Start));
+            lfs::ErrorBus::instance().publish(makeFrameNotification(
+                lfs::ErrorCode::FailedPrecondition,
+                lfs::ErrorDomain::Training,
+                lfs::Severity::Error,
+                lfs::ErrorSurface::Modal,
+                message,
+                message,
+                {},
+                LFS_SOURCE_SITE_CURRENT(),
+                "training.start"));
+            return reject(message);
         }
         if (auto preflight =
                 trainer_manager_->preflightStartParameters();
@@ -4226,6 +4304,12 @@ namespace lfs::vis {
             return std::unexpected("The training manager rejected the start request");
         }
         return {};
+
+#else
+        if (trainer_manager_)
+            (void)trainer_manager_->rejectStart("Training is not included in this build", lfs::ErrorCode::Unavailable);
+        return std::unexpected("Training is not included in this build");
+#endif
     }
 
     std::optional<int>
@@ -4460,6 +4544,11 @@ namespace lfs::vis {
         return project_lifecycle_->info();
     }
 
+    ProjectDisplayInfo VisualizerImpl::projectGetDisplayInfo() {
+        return project_lifecycle_ ? project_lifecycle_->displayInfo()
+                                  : ProjectDisplayInfo{};
+    }
+
     lfs::Result<std::optional<lfs::io::project::ProjectLicense>>
     VisualizerImpl::projectGetLicense() {
         if (!project_lifecycle_) {
@@ -4493,6 +4582,22 @@ namespace lfs::vis {
                 "project.lifecycle");
         }
         return project_lifecycle_->clearLicense();
+    }
+
+    lfs::Result<void> VisualizerImpl::projectSetPreview(
+        const std::span<const std::byte> png_bytes,
+        const std::filesystem::path& expected_path,
+        std::string expected_project_uuid) {
+        if (!project_lifecycle_) {
+            return visualizerFailure<void>(
+                lfs::ErrorCode::Unavailable,
+                "Project lifecycle is unavailable.",
+                "The visualizer did not initialize its project lifecycle service",
+                "project.lifecycle");
+        }
+        return project_lifecycle_->setPreview(
+            png_bytes, expected_path,
+            std::move(expected_project_uuid));
     }
 
     lfs::Result<ProjectWritePoll>

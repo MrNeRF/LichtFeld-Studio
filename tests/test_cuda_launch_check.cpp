@@ -1,7 +1,11 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
+#include "cuda_backend_test.hpp"
+
 #include "core/cuda_error_typed.hpp"
+#include "core/tensor_backend.hpp"
 
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
@@ -26,6 +30,19 @@ namespace {
     };
 
     class CudaLaunchCheckDeathTest : public CudaLaunchCheckTest {};
+
+    class CudaLaunchCheckDeviceTest : public lfs::test::CudaBackendTest {
+    protected:
+        void SetUp() override {
+            LFS_CUDA_BACKEND_OR_RETURN();
+            lfs::core::reset_cuda_diagnostics_for_testing();
+        }
+        void TearDown() override {
+            lfs::core::reset_cuda_diagnostics_for_testing();
+        }
+    };
+
+    class CudaLaunchCheckDeviceDeathTest : public CudaLaunchCheckDeviceTest {};
 
     [[nodiscard]] const lfs::SmallFields::Entry* find_field(
         const lfs::Error& error, const std::string_view key) {
@@ -111,13 +128,8 @@ namespace {
         EXPECT_STREQ(ticket.operation_tag, "submitted operation");
     }
 
-    TEST_F(CudaLaunchCheckTest, AwaitSuccessPathWithRealCudaCallDoesNotThrow) {
+    TEST_F(CudaLaunchCheckDeviceTest, AwaitSuccessPathWithRealCudaCallDoesNotThrow) {
         int device = -1;
-        if (cudaGetDevice(&device) != cudaSuccess) {
-            (void)cudaGetLastError();
-            GTEST_SKIP() << "a live CUDA device is required";
-        }
-
         const auto ticket = lfs::core::cuda_record_range(nullptr, "query current device");
         EXPECT_NO_THROW(LFS_CUDA_AWAIT(ticket, cudaGetDevice(&device), "query current device"));
     }
@@ -186,7 +198,7 @@ namespace {
             ::testing::ExitedWithCode(0), "");
     }
 
-    TEST_F(CudaLaunchCheckDeathTest, CudaSyncModeCleanSlowPathReturnsNormally) {
+    TEST_F(CudaLaunchCheckDeviceDeathTest, CudaSyncModeCleanSlowPathReturnsNormally) {
         GTEST_FLAG_SET(death_test_style, "threadsafe");
         EXPECT_EXIT(
             {

@@ -30,6 +30,8 @@
 
 namespace lfs::core {
 
+    class TensorCompletion;
+
     using NodeId = int32_t;
     constexpr NodeId NULL_NODE = -1;
 
@@ -433,10 +435,9 @@ namespace lfs::core {
             std::shared_ptr<lfs::core::SplatData> model;
             std::shared_ptr<lfs::core::Tensor> transform_indices;
             std::shared_ptr<lfs::core::Tensor> visible_selection_indices;
-            // The worker records this after all output tensors have been ordered
-            // onto worker_stream. The consumer synchronizes it before install.
-            std::shared_ptr<void> ready_event;
-            cudaStream_t worker_stream = nullptr;
+            // Own completion on the output tensors' storage backends. Results
+            // must settle before installation or destruction, including stale ones.
+            std::shared_ptr<TensorCompletion> completion;
             uint64_t generation = 0;
             bool includes_hidden_splats = false;
         };
@@ -599,6 +600,10 @@ namespace lfs::core {
 
         void setInitialPointCloud(std::shared_ptr<lfs::core::PointCloud> point_cloud);
         void setSceneCenter(lfs::core::Tensor scene_center);
+        // Original dataset origin removed by centralization. External training
+        // initialization files must receive this same translation.
+        void setTrainingDataOrigin(const glm::vec3& origin) { training_data_origin_ = origin; }
+        [[nodiscard]] glm::vec3 getTrainingDataOrigin() const { return training_data_origin_; }
         void setImagesHaveAlpha(bool have_alpha) { images_have_alpha_ = have_alpha; }
 
         void setPointCloudModified(bool modified) { point_cloud_modified_ = modified; }
@@ -855,6 +860,7 @@ namespace lfs::core {
         void clearSelectionGroupCounts();
 
         std::shared_ptr<lfs::core::PointCloud> initial_point_cloud_;
+        glm::vec3 training_data_origin_{0.0f};
         lfs::core::Tensor scene_center_;
         bool images_have_alpha_ = false;
         bool point_cloud_modified_ = false;

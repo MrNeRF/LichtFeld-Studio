@@ -114,7 +114,7 @@ else()
 endif()
 
 # nvImageCodec - GPU-accelerated image codec library
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/nvImageCodec/CMakeLists.txt")
+if(LFS_HAS_CUDA AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/nvImageCodec/CMakeLists.txt")
     message(STATUS "Adding nvImageCodec")
     # Keep the codec's architectures consistent with the floor the app advertises at startup
     # (LFS_MIN_SM). A portable PTX-only build must not ship a codec built only for the
@@ -144,6 +144,6 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/nvImageCodec/CMakeLists.txt")
         endif()
     endforeach()
     unset(_lfs_nvimg_tgt)
-else()
+elseif(LFS_HAS_CUDA)
     message(WARNING "nvImageCodec not found - GPU image loading unavailable")
 endif()

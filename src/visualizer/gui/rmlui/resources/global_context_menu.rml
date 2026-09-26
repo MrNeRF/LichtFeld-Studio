@@ -13,7 +13,8 @@
               data-if="!item.is_label"
               data-class-submenu-item="item.is_submenu_item"
               data-class-active="item.is_active"
-              data-attr-data-ctx-action="item.action">{{ item.label }}</button>
+              data-class-has-icon="item.icon != ''"
+              data-attr-data-ctx-action="item.action"><img class="context-menu-icon" data-if="item.icon != ''" data-attr-src="item.icon"/><span>{{ item.label }}</span></button>
     </div>
   </div>
 </body>

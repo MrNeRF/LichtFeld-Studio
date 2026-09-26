@@ -307,6 +307,9 @@ def project_set_license(identifier: str, notice: str = '') -> None:
 def project_clear_license() -> None:
     """Clear the license metadata for the active project"""
 
+def project_set_preview(png_bytes: bytes, wait: bool = False, path: str = '', project_uuid: str = '') -> bool:
+    """Write a thumbnail onto the active project without saving unsaved edits"""
+
 def project_poll_write() -> dict:
     """Return the active .licht project write state"""
 
@@ -315,6 +318,13 @@ def project_open(path: str = '', discard_changes: bool = False, stop_training: b
 
 def project_compact() -> None:
     """Compact the active .licht project in the background"""
+
+def project_cancel_cleanup() -> None: ...
+
+def project_clean(destination: str = '', expected_commit: str = '') -> bool:
+    """
+    Clean the active saved project in the background, preserving its current resume point
+    """
 
 def project_is_dirty() -> bool:
     """Return whether the active project has unsaved chapters"""
@@ -418,7 +428,7 @@ def prepare_gallery_project(source_path: str, destination: str, payload_format: 
 
 def export_scene(format: int, path: str, node_names: Sequence[str], sh_degree: int, rad_flip_y: bool = False, rad_streamable: bool = True, spz_version: int = 4, include_provenance: bool = True, *, lod_levels: int = 4, lod_ratio: float = 0.5, chunk_count_k: int = 512, chunk_extent: float = 16.0, chunk_min_k: int = 8, kmeans_iterations: int = 10) -> None:
     """
-    Export scene nodes to file or directory. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP, 8=SSOG. For SSOG, path names a .ssog bundle or directory; lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k and kmeans_iterations control its LODs and chunks. spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. Ignored for COLMAP and SPZ v3.
+    Export scene nodes to file or directory. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP, 8=SSOG, 13=GLB. For SSOG, path names a .ssog bundle or directory; lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k and kmeans_iterations control its LODs and chunks. spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. Ignored for COLMAP and SPZ v3.
     """
 
 def save_config_file(path: str) -> None:
@@ -471,6 +481,9 @@ def set_vram_profiler_enabled(enabled: bool) -> None:
 
 def get_vram_profiler_enabled() -> bool:
     """Return whether the live VRAM diagnostics profiler is enabled"""
+
+def vram_owner_breakdown() -> dict:
+    """Return a sampled process VRAM breakdown by owner category"""
 
 def set_node_visibility(name: str, visible: bool) -> None:
     """Set visibility of a scene node by name"""
@@ -650,6 +663,9 @@ def toggle_vram_hud() -> None:
     Toggle the VRAM diagnostics HUD overlay (requires vram profiler enabled)
     """
 
+def toggle_perf_hud_expanded() -> None:
+    """Toggle the performance HUD between its full and compact views"""
+
 def is_perf_hud_visible() -> bool:
     """True when the performance HUD is currently shown"""
 
@@ -726,12 +742,14 @@ class Tensor:
     @property
     def device(self) -> str:
         """
-        Device: 'cpu' or 'cuda'; 'cuda' is the GPU device whichever backend drives it, see backend
+        Device: 'cpu', 'cuda', 'vulkan' or 'metal' according to the tensor backend
         """
 
     @property
     def backend(self) -> str:
-        """Backend: 'cpu' for CPU tensors, 'cuda' or 'vulkan' for GPU tensors"""
+        """
+        Backend: 'cpu' for CPU tensors, 'cuda', 'vulkan' or 'metal' for GPU tensors
+        """
 
     @property
     def dtype(self) -> str:
@@ -761,7 +779,7 @@ class Tensor:
         """Make tensor contiguous"""
 
     def sync(self) -> None:
-        """Synchronize CUDA stream"""
+        """Wait for GPU work on this tensor's backend"""
 
     def size(self, dim: int) -> int:
         """Size of dimension"""
@@ -2173,6 +2191,13 @@ class OptimizationParams:
 
     @enable_eval.setter
     def enable_eval(self, arg: bool, /) -> None: ...
+
+    @property
+    def eval_all(self) -> bool:
+        """Train on every image and evaluate all of them; no image is held out"""
+
+    @eval_all.setter
+    def eval_all(self, arg: bool, /) -> None: ...
 
     @property
     def background_improvements(self) -> bool:

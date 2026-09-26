@@ -25,12 +25,11 @@ def convenience(panel_module, monkeypatch):
 
 def test_gallery_preferences_preserve_each_other_and_old_format(tmp_path):
     from lfs_plugins.gallery_preferences import read_preferences, set_preference
-    (tmp_path / 'preferences.json').write_text('{"uploadFormat":"spz"}')
-    assert read_preferences(tmp_path) == dict(uploadFormat='spz', askBeforePublic=True, posterCacheMiB=64)
+    (tmp_path / 'preferences.json').write_text('{"uploadFormat":"spz","askBeforePublic":true}')
+    assert read_preferences(tmp_path) == dict(uploadFormat='spz', posterCacheMiB=64)
     set_preference('posterCacheMiB', 128, tmp_path)
-    set_preference('askBeforePublic', False, tmp_path)
     set_preference('uploadFormat', 'ssog', tmp_path)
-    assert read_preferences(tmp_path) == dict(uploadFormat='ssog', askBeforePublic=False, posterCacheMiB=128)
+    assert read_preferences(tmp_path) == dict(uploadFormat='ssog', posterCacheMiB=128)
 
 @pytest.mark.parametrize('key,value', [('posterCacheMiB', 0), ('posterCacheMiB', 4097),
      ('askBeforePublic', 'false'), ('uploadFormat', 'bad')])
@@ -45,7 +44,7 @@ def test_gallery_quota_requires_server_usage(convenience):
     panel._gallery_state.update(quotaBytes=50_000_000_000, usedBytes=12_300_000_000)
     assert panel._gallery_quota() == '12.3 GB of 50 GB used'
     panel._gallery_state.update(quotaBytes=100, usedBytes=None)
-    assert panel._gallery_quota_values() == (None, 0)
+    assert panel._gallery_quota() == ''
     panel._gallery_state["usedBytes"] = 84
     local['file_size_bytes'] = 20
     assert 'may not fit' in panel._gallery_quota_warning()
@@ -64,7 +63,7 @@ def test_completion_actions_pin_scene_and_expire_without_focus(convenience, monk
     panel._select_asset_id('remote:remote-only')
     panel._gallery_command('toast_copy')
     assert calls == [(remote, 'copy')]
-    assert panel._gallery_toast_timer.interval == 8
+    assert panel._gallery_toast_timer.interval == 6
     panel._gallery_toast_timer.function()
     assert panel._gallery_toast is None
 
@@ -92,21 +91,20 @@ def test_update_all_candidates_exclude_equal_remote_and_conflicts(convenience):
     remote['metadataRevision'] = 'metadata-edited'
     assert panel._gallery_update_candidates() == []
 
-def test_local_drop_reuses_primary_validation_and_equal_hint(convenience, monkeypatch):
+def test_gallery_drop_does_not_publish_local_projects(convenience, monkeypatch):
     panel, local, _ = convenience
     calls = []
     monkeypatch.setattr(panel, '_gallery_command', lambda action: calls.append(action))
     panel._gallery_drop_asset(local['id'], '__gallery__', 'account')
-    assert panel._gallery_toast['text'] == 'Already up to date'
     assert calls == []
     local['commit_uuid'] = 'changed'
     panel._gallery_drop_asset(local['id'], '__gallery__', 'account')
-    assert calls == ['update']
+    assert calls == []
     panel._gallery_state['links'] = {}
     panel._gallery_drop_asset(local['id'], '__gallery__', 'account')
-    assert calls == ['update', 'publish']
+    assert calls == []
     panel._gallery_drop_asset(local['id'], '__gallery__', 'other')
-    assert calls == ['update', 'publish']
+    assert calls == []
 
 def test_remote_drag_has_only_origin_owner_scene_id(convenience):
     panel, _, _ = convenience
@@ -148,7 +146,7 @@ def _batch_assets(state):
         assets.append(dict(id=identifier, path=f'/tmp/{identifier}.licht', commit_uuid='new', exists=True))
     return assets
 
-def test_update_all_one_public_confirmation_continues_after_item_failure(gallery, monkeypatch, tmp_path):
+def test_update_all_without_visibility_confirmation_continues_after_item_failure(gallery, monkeypatch, tmp_path):
     controller, state, _ = gallery
     controller.service.root = tmp_path
     assets = _batch_assets(state)
@@ -156,22 +154,19 @@ def test_update_all_one_public_confirmation_continues_after_item_failure(gallery
     monkeypatch.setattr(controller, 'confirm_action', lambda key, titles, callback: confirmations.append((key, titles, callback)))
     def publish(asset, details, format, *, update):
         scene = next(s for s in state['scenes'] if s['title'] == details['title'])
-        assert controller._batch_public_approved(scene, details)
+        assert "visibility" not in details
         started.append(asset['id'])
         if len(started) == 1:
             raise ValueError('Missing source payload')
     monkeypatch.setattr(controller, 'publish_asset', publish)
     controller.update_all(assets)
-    assert len(confirmations) == 1
-    assert confirmations[0][:2] == ('confirm.update_all', 'Public 0\nPublic 1')
-    assert started == []
-    confirmations[0][2]()
+    assert confirmations == []
     controller._advance_update_all()
     assert started == ['project0', 'project1']
     failures = [j for j in controller.snapshot()['jobs'] if j.get('batchFailure')]
     assert len(failures) == 1 and failures[0]['project'] == 'project0'
     assert failures[0]['message'] == 'Missing source payload'
-    from lfs_plugins.gallery_transfer_panel import transfer_rows
+    from lfs_plugins.gallery_transfer_ui import transfer_rows
     row = next(r for r in transfer_rows(controller.snapshot()) if r['id'] == failures[0]['id'])
     assert row['can_resume'] and row['can_cancel']
 
@@ -182,9 +177,12 @@ def test_update_all_revalidates_account_and_reviewed_revision(gallery, monkeypat
     confirmations, started = [], []
     monkeypatch.setattr(controller, 'confirm_action', lambda key, title, callback: confirmations.append(callback))
     monkeypatch.setattr(controller, 'publish_asset', lambda *args, **kwargs: started.append(args[0]['id']))
+    advance = controller._advance_update_all
+    monkeypatch.setattr(controller, '_advance_update_all', lambda: None)
     controller.update_all(assets)
     state['scenes'][0]['metadataRevision'] = 'changed'
-    confirmations[0]()
+    monkeypatch.setattr(controller, '_advance_update_all', advance)
+    advance()
     assert started == [] and controller._batch_rows[0]['project'] == 'project0'
     state['identity'] = ('other', 'account')
     controller._advance_update_all()
@@ -268,14 +266,14 @@ def test_viewport_drop_handoff_validates_identity_before_shared_pull_open(conven
         assert not panel.gallery_viewport_drop(json.dumps(bad))
     assert calls == ['pull_open']
 
-def test_sidebar_drag_hover_drop_consumes_payload_before_drag_end(convenience, panel_module, monkeypatch):
-    panel, local, _ = convenience
+def test_folder_drag_hover_drop_consumes_payload_before_drag_end(convenience, panel_module, monkeypatch):
+    panel, _local, _remote = convenience
     calls = []
     shell = _Element()
-    target = _Element({'data-folder-id':'__gallery__'}, shell)
+    target = _Element({'data-gallery-drop-target':'default'}, shell)
     child = _Element({}, target)
     event = _Event(shell, child)
-    panel._gallery_drag = (local['id'], 'account')
+    panel._gallery_drag = ('remote:remote-only', 'account')
     panel._drag_payload_token = 42
     monkeypatch.setattr(panel, '_gallery_drop_asset', lambda *args: calls.append(args))
     panel._on_gallery_drag_over(event)
@@ -283,7 +281,7 @@ def test_sidebar_drag_hover_drop_consumes_payload_before_drag_end(convenience, p
     panel._on_gallery_drop(event)
     panel._on_asset_drag_end(event)
     assert not target.is_class_set('is-drag-over')
-    assert calls == [(local['id'], '__gallery__', 'account')]
+    assert calls == [('remote:remote-only', 'default', 'account')]
     assert panel_module.lf._test_state.drag_cancels == [42]
     assert panel_module.lf._test_state.drag_ends == []
     rcss = (Path(__file__).parents[2] / 'src/visualizer/gui/rmlui/resources/asset_manager.rcss').read_text()
@@ -293,7 +291,7 @@ def test_preferences_group_binds_all_gallery_defaults(panel_module, monkeypatch,
     # Exercise the same preference helper used by the Preferences setters without
     # coupling this suite to a second native-module fixture.
     from lfs_plugins.gallery_preferences import set_preference, read_preferences
-    for key, value in [('uploadFormat','studio'), ('askBeforePublic',False), ('posterCacheMiB',32)]:
+    for key, value in [('uploadFormat','studio'), ('posterCacheMiB',32)]:
         set_preference(key, value, tmp_path)
     assert read_preferences(tmp_path)['posterCacheMiB'] == 32
     import xml.etree.ElementTree as ET
@@ -301,7 +299,8 @@ def test_preferences_group_binds_all_gallery_defaults(panel_module, monkeypatch,
     group = rml.find('.//*[@data-if="gallery_expanded"]')
     assert group is not None
     bindings = {e.get('data-value') or e.get('data-checked') for e in group.iter()}
-    assert {'gallery_uploadFormat','gallery_askBeforePublic','gallery_posterCacheMiB'} <= bindings
+    assert {'gallery_uploadFormat','gallery_posterCacheMiB'} <= bindings
+    assert 'gallery_askBeforePublic' not in bindings
 
 def test_batch_preparation_failure_retry_uses_normal_publish_path(gallery, monkeypatch, tmp_path):
     controller, state, _ = gallery
@@ -320,6 +319,7 @@ def test_batch_preparation_failure_retry_uses_normal_publish_path(gallery, monke
 def test_publish_opens_dialog_with_current_format_and_selected_file(convenience, monkeypatch):
     from lfs_plugins import gallery_file_panel
     panel, asset, _ = convenience
+    panel._gallery_state['links'] = {}
     opened = []
     panel._gallery_controller = SimpleNamespace(upload_format='spz')
     monkeypatch.setattr(gallery_file_panel, 'open_gallery_file_panel', lambda **kw: opened.append(kw))
@@ -343,3 +343,21 @@ def test_remote_card_starts_typed_native_drag(convenience, panel_module):
     assert label == 'Remote only' and event.stopped
     panel._on_asset_drag_end(event)
     assert panel_module.lf._test_state.drag_ends == [token]
+
+
+def test_published_scene_offers_copy_share_link_in_inspector(convenience, monkeypatch):
+    import xml.etree.ElementTree as ET
+    panel, asset, _ = convenience
+    model = _BindingModel()
+    events = {}
+    model.bind_event = lambda name, handler: events.update({name: handler})
+    panel.on_bind_model(_BindingContext(model))
+    rml = ET.fromstring((Path(__file__).parents[2] / 'src/visualizer/gui/rmlui/resources/asset_manager.rml').read_text())
+    button = rml.find('.//*[@data-event-click="gallery_copy"]')
+    assert button is not None
+    assert model.func_bindings[button.get('data-if')]() is True
+    assert model.func_bindings['g_action_copy']() == 'Copy link'
+    calls = []
+    monkeypatch.setattr(panel, '_controller', lambda: SimpleNamespace(open_portal=lambda *args: calls.append(args)))
+    events['gallery_copy'](None, None, [])
+    assert calls == [(panel._gallery_scene(asset), 'copy')]

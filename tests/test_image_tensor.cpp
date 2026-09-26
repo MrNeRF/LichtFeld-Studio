@@ -41,11 +41,6 @@ namespace {
         return Tensor::from_vector(values, shape, Device::CPU);
     }
 
-    Tensor to_backend(const Tensor& host, const GpuBackend backend) {
-        GpuBackendScope scope(backend);
-        return host.to(Device::GPU);
-    }
-
     std::vector<GpuBackend> gpu_backends() {
         std::vector<GpuBackend> backends;
         if (gpu_backend_available(GpuBackend::CUDA)) {
@@ -305,7 +300,7 @@ TEST(ImageTensorPrepare, GpuBackendsMatchCpuReference) {
         {1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f}, {3, 2, 2});
     for (const GpuBackend backend : backends) {
         SCOPED_TRACE(backend_name(backend));
-        const Tensor rgb = to_backend(cpu_rgb, backend);
+        const Tensor rgb = cpu_rgb.to(backend);
         const Tensor out_rgb = prepareImageRgba8(rgb, false);
         EXPECT_EQ(out_rgb.device(), Device::GPU);
         EXPECT_EQ(gpu_backend_of(out_rgb), backend);
@@ -315,13 +310,13 @@ TEST(ImageTensorPrepare, GpuBackendsMatchCpuReference) {
         EXPECT_EQ(gpu_backend_of(flipped), backend);
         expect_bytes(flipped, kRgbHwcRgbaFlipped);
 
-        const Tensor gray = to_backend(cpu_gray, backend);
+        const Tensor gray = cpu_gray.to(backend);
         expect_bytes(prepareImageRgba8(gray, false), kGrayHwcRgba);
 
-        const Tensor rgba = to_backend(cpu_rgba, backend);
+        const Tensor rgba = cpu_rgba.to(backend);
         expect_bytes(prepareImageRgba8(rgba, false), kRgbaHwcU8);
 
-        const Tensor chw = to_backend(cpu_chw, backend);
+        const Tensor chw = cpu_chw.to(backend);
         expect_bytes(prepareImageRgba8(chw, false), kRgbHwcRgba);
 
         const Tensor view = chw.permute({1, 2, 0});
@@ -342,7 +337,7 @@ TEST(ImageTensorPrepare, OppositeActiveBackendKeepsSource) {
             continue;
         }
         SCOPED_TRACE(std::string(backend_name(source)) + "_under_" + backend_name(active));
-        const Tensor gpu = to_backend(host, source);
+        const Tensor gpu = host.to(source);
         GpuBackendScope scope(active);
         const Tensor out = prepareImageRgba8(gpu, true);
         EXPECT_EQ(gpu_backend_of(out), source);
@@ -362,7 +357,7 @@ TEST(ImageLayoutFlip, OppositeActiveBackendKeepsSource) {
             continue;
         }
         SCOPED_TRACE(std::string(backend_name(source)) + "_under_" + backend_name(active));
-        const Tensor gpu = to_backend(host, source);
+        const Tensor gpu = host.to(source);
         GpuBackendScope scope(active);
         const Tensor flipped = flipImageVertical(gpu, ImageLayout::HWC);
         EXPECT_EQ(gpu_backend_of(flipped), source);
@@ -413,7 +408,7 @@ TEST(ImageTensorPrepare, GpuNearestMatchesCpuReference) {
     const auto expected = cpu_out.to_vector_uint8();
     for (const GpuBackend backend : backends) {
         SCOPED_TRACE(backend_name(backend));
-        const Tensor gpu = to_backend(cpu_input, backend);
+        const Tensor gpu = cpu_input.to(backend);
         const Tensor out = prepareImageRgba8(gpu, false);
         EXPECT_EQ(gpu_backend_of(out), backend);
         expect_bytes(out, expected);
@@ -438,7 +433,7 @@ TEST(ImageTensorPrepare, GpuNanInfMatchCpuReference) {
     EXPECT_EQ(expected[3], 128);
     for (const GpuBackend backend : backends) {
         SCOPED_TRACE(backend_name(backend));
-        const Tensor gpu = to_backend(cpu_input, backend);
+        const Tensor gpu = cpu_input.to(backend);
         const Tensor out = prepareImageRgba8(gpu, false);
         EXPECT_EQ(gpu_backend_of(out), backend);
         expect_bytes(out, expected);
@@ -477,6 +472,6 @@ TEST(ImageTensorPrepare, ChwByteFlipDoesNotModifySource) {
     check(host);
     for (const auto backend : gpu_backends()) {
         SCOPED_TRACE(backend_name(backend));
-        check(to_backend(host, backend));
+        check(host.to(backend));
     }
 }

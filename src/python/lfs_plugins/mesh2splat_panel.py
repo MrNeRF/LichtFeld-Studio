@@ -220,7 +220,7 @@ class Mesh2SplatPanel(Panel):
     def _mesh_stats_text(self, mesh_info) -> str:
         vertex_count = int(getattr(mesh_info, "vertex_count", 0))
         face_count = int(getattr(mesh_info, "face_count", 0))
-        return f"{vertex_count}v / {face_count}f"
+        return f"{vertex_count:,}v / {face_count:,}f"
 
     def _rebuild_mesh_records(self, mesh_nodes):
         if not self._handle:

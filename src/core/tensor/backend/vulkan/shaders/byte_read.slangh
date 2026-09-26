@@ -1,0 +1,8 @@
+// SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
+uint loadByte(uint64_t address, uint64_t index)
+{
+    const uint64_t byteAddress = address + index;
+    const uint shift = uint(byteAddress & uint64_t(3)) * 8u;
+    return (((Ptr<uint, Access.Read>)(byteAddress & ~uint64_t(3)))[0] >> shift) & 255u;
+}

@@ -82,7 +82,7 @@ namespace {
     LFS_FREEZE(default_gpu_backend, GpuBackend (*)());
     LFS_FREEZE(set_default_gpu_backend, lfs::Status (*)(GpuBackend));
     LFS_FREEZE(gpu_backend_available, bool (*)(GpuBackend));
-    LFS_FREEZE(gpu_backend_memory_info, MemoryInfo (*)(GpuBackend));
+    LFS_FREEZE(gpu_backend_memory_info, MemoryInfo (*)(GpuBackend, bool));
     LFS_FREEZE(shutdown_gpu_backend, lfs::Status (*)(GpuBackend));
     LFS_FREEZE(gpu_backend_of, std::optional<GpuBackend> (*)(const T&));
 #undef LFS_FREEZE
@@ -96,6 +96,8 @@ namespace {
     // unevaluated context while freezing their parameter and result contracts.
     [[maybe_unused]] constexpr auto kFactoryOverloads = std::tuple{
         static_cast<T (*)(float)>(&T::arange),
+        static_cast<T (*)(const T&)>(&T::empty_like),
+        static_cast<T (*)(const T&, const S&, DataType)>(&T::empty_like),
         static_cast<T (*)(float, float, float)>(&T::arange),
         static_cast<T (*)(size_t, Device)>(&T::eye),
         static_cast<T (*)(size_t, size_t, Device)>(&T::eye),
@@ -327,7 +329,6 @@ namespace {
     LFS_FREEZE(T::diag, T (*)(const T&));
     LFS_FREEZE(T::from_blob, T (*)(void*, S, Device, DataType, cudaStream_t));
     LFS_FREEZE(T::zeros_like, T (*)(const T&));
-    LFS_FREEZE(T::empty_like, T (*)(const T&));
     LFS_FREEZE(T::full_like, T (*)(const T&, float));
     LFS_FREEZE(T::stack, T (*)(const std::vector<T>&, int));
     LFS_FREEZE(T::rand, T (*)(S, Device, DataType));
@@ -786,7 +787,7 @@ namespace {
         t.div_(1.0f);
         ct + ct;
         ct - ct;
-        ct* ct;
+        ct * ct;
         ct / ct;
         ct % ct;
         ct == ct;
@@ -795,7 +796,7 @@ namespace {
         ct <= ct;
         ct > ct;
         ct >= ct;
-        ct&& ct;
+        ct && ct;
         ct || ct;
         ct | ct;
     };
@@ -1143,9 +1144,9 @@ namespace {
         TensorLeaf(t).stream_hint();
         TensorLeaf(t).snapshot();
         TensorLeaf(t).map(operation);
-        ct.template apply([](const X& value) { return value; });
+        ct.template apply([](const X & value) { return value; });
         t.template inplace([](X&) {});
-        ct.template timed("", [](const X& value) { return value; });
+        ct.template timed("", [](const X & value) { return value; });
     };
 
     using LeafExpr = TensorLeaf;
@@ -1248,7 +1249,7 @@ namespace {
         row = 1.0f;
         const_row - const_row;
         const_row + const_row;
-        const_row* const_row;
+        const_row * const_row;
         const_row / const_row;
         const_row - 1.0f;
         const_row + 1.0f;

@@ -1,0 +1,23 @@
+// Shared by the export k-means modules; optional capabilities live in separate modules.
+struct Parameters {
+    uint64_t sh;
+    uint64_t centroids;
+    uint64_t indices;
+    uint64_t labels;
+    uint64_t sums;
+    uint64_t counts;
+    uint64_t norms;
+    uint n;
+    uint k;
+    uint dims;
+    uint slots;
+    uint seed;
+    uint padding;
+};
+
+uint sh_at(uint p, uint slot, uint slots) {
+    return (p / 32u) * (slots * 32u) + slot * 32u + (p % 32u);
+}
+float sh_dim(Ptr<float, Access.Read> sh, uint p, uint dim, uint slots) {
+    return sh[sh_at(p, dim / 4u, slots) * 4u + (dim % 4u)];
+}

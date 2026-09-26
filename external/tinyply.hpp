@@ -900,9 +900,19 @@ namespace tinyply {
         size_t property_idx = 0;
         ParsingHelper* helper{nullptr};
 
+        // Reads past the end fail silently; without these checks a truncated body parses as
+        // zeros and a huge declared row count keeps looping on the failed stream.
+        const auto truncated = [](const PlyElement& element, const size_t complete_rows) {
+            return std::runtime_error("PLY file is truncated: element '" + element.name + "' holds " +
+                                      std::to_string(complete_rows) + " of " + std::to_string(element.size) +
+                                      " rows");
+        };
+
         // This is the inner import loop
         for (auto& element : elements) {
             for (size_t count = 0; count < element.size; ++count) {
+                if (!is)
+                    throw truncated(element, count == 0 ? 0 : count - 1);
                 property_idx = 0;
                 for (auto& property : element.properties) {
                     PropertyLookup& lookup = element_property_lookup[element_idx][property_idx];
@@ -929,6 +939,8 @@ namespace tinyply {
                     property_idx++;
                 }
             }
+            if (!is)
+                throw truncated(element, element.size == 0 ? 0 : element.size - 1);
             element_idx++;
         }
 

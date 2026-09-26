@@ -123,7 +123,7 @@ namespace lfs::io {
                 }
                 data.lod_tree->meta_view = *view;
             }
-            LOG_INFO("RAD paged LOD active: deferring full CUDA tensor migration (chunks={})",
+            LOG_INFO("RAD paged LOD active: deferring full GPU tensor migration (chunks={})",
                      data.lod_tree->chunk_count());
         } else {
             // Move tensors to GPU for Vulkan renderer compatibility.

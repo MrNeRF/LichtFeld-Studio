@@ -58,6 +58,7 @@ namespace lfs::vis::gui {
         void blurFocus();
 
         bool wantsInput() const { return wants_input_; }
+        bool isResizeInteractionActive() const { return resize_dragging_ || splitter_dragging_; }
         bool wantsKeyboard() const { return wants_keyboard_; }
         bool needsAnimationFrame() const;
         [[nodiscard]] std::string animationDemandDescription() const;
@@ -67,9 +68,9 @@ namespace lfs::vis::gui {
 
         std::function<void(const std::string&)> on_tab_changed;
         std::function<void(const std::string&)> on_tab_closed;
-        std::function<void(float)> on_splitter_delta;
+        std::function<void(float, float)> on_splitter_height;
         std::function<void()> on_splitter_end;
-        std::function<void(float)> on_resize_delta;
+        std::function<void(float)> on_resize_width;
         std::function<void()> on_resize_end;
 
     private:
@@ -105,8 +106,12 @@ namespace lfs::vis::gui {
         bool wants_keyboard_ = false;
 
         bool splitter_dragging_ = false;
+        float splitter_start_mouse_y_ = 0.0f;
+        float splitter_start_scene_h_ = 0.0f;
 
         bool resize_dragging_ = false;
+        float resize_start_mouse_x_ = 0.0f;
+        float resize_start_width_ = 0.0f;
         bool last_over_resize_handle_ = false;
         Rml::Element* last_blurred_focus_ = nullptr;
         Rml::Element* last_hover_element_ = nullptr;

@@ -7,6 +7,9 @@
 #include "core/image_loader.hpp"
 #include "core/parameters.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_cuda_interop.hpp"
+#include "core/tensor_upload.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/cache_image_loader.hpp"
 #include "training/kernels/mask_preprocess.hpp"
 #include "training/metrics/eval_mask.hpp"
@@ -70,11 +73,6 @@ namespace {
     private:
         std::filesystem::path path_;
     };
-
-    bool cuda_available() {
-        int count = 0;
-        return cudaGetDeviceCount(&count) == cudaSuccess && count > 0;
-    }
 
     void ensure_image_loader() {
         static bool initialized = false;
@@ -179,9 +177,9 @@ namespace {
 
 } // namespace
 
-TEST(MetricsEvalMask, ClassifyKeepBandMatchesTrainingContract) {
-    if (!cuda_available())
-        GTEST_SKIP() << "CUDA not available";
+class MetricsEvalMask : public lfs::test::CudaBackendTest {};
+
+TEST_F(MetricsEvalMask, ClassifyKeepBandMatchesTrainingContract) {
     auto u8 = uint8_hw({kBandBytes.begin(), kBandBytes.end()}, kBandH, kBandW).to(Device::CUDA);
     auto f32 = u8.to(DataType::Float32) / 255.0f;
     expect_keep(classify_keep_mask_for_metrics(u8), {kExpectedKeep.begin(), kExpectedKeep.end()}, "u8");
@@ -190,9 +188,7 @@ TEST(MetricsEvalMask, ClassifyKeepBandMatchesTrainingContract) {
     EXPECT_LT(lfs::training::kernels::kMaskKeepMin, 251.0f / 255.0f);
 }
 
-TEST(MetricsEvalMask, PngSidecarThroughEvalAndInteractiveLoaders) {
-    if (!cuda_available())
-        GTEST_SKIP() << "CUDA not available";
+TEST_F(MetricsEvalMask, PngSidecarThroughEvalAndInteractiveLoaders) {
     ensure_image_loader();
     UniqueTempDir tmp("lfs_eval_mask_sidecar");
     const auto image_path = tmp.path() / "gt.png";
@@ -214,9 +210,7 @@ TEST(MetricsEvalMask, PngSidecarThroughEvalAndInteractiveLoaders) {
                 "load_external_mask_for_metrics");
 }
 
-TEST(MetricsEvalMask, RgbaAlphaThroughEvalAndInteractiveLoaders) {
-    if (!cuda_available())
-        GTEST_SKIP() << "CUDA not available";
+TEST_F(MetricsEvalMask, RgbaAlphaThroughEvalAndInteractiveLoaders) {
     UniqueTempDir tmp("lfs_eval_mask_alpha");
     const auto image_path = tmp.path() / "rgba.png";
     write_rgba_png(image_path, {kBandBytes.begin(), kBandBytes.end()}, kBandH, kBandW);
@@ -238,9 +232,7 @@ TEST(MetricsEvalMask, RgbaAlphaThroughEvalAndInteractiveLoaders) {
                 "load_alpha_masked_metrics_inputs");
 }
 
-TEST(MetricsEvalMask, DefaultThresholdDoesNotPromoteSegmentBand) {
-    if (!cuda_available())
-        GTEST_SKIP() << "CUDA not available";
+TEST_F(MetricsEvalMask, DefaultThresholdDoesNotPromoteSegmentBand) {
     ensure_image_loader();
     UniqueTempDir tmp("lfs_eval_mask_threshold");
     const auto image_path = tmp.path() / "gt.png";
@@ -262,9 +254,7 @@ TEST(MetricsEvalMask, DefaultThresholdDoesNotPromoteSegmentBand) {
     EXPECT_EQ(got[4], 1) << "byte 251 must be keep";
 }
 
-TEST(MetricsEvalMask, InvertHappensBeforeKeepClassification) {
-    if (!cuda_available())
-        GTEST_SKIP() << "CUDA not available";
+TEST_F(MetricsEvalMask, InvertHappensBeforeKeepClassification) {
     ensure_image_loader();
     UniqueTempDir tmp("lfs_eval_mask_invert");
     const auto image_path = tmp.path() / "gt.png";
@@ -294,9 +284,7 @@ TEST(MetricsEvalMask, InvertHappensBeforeKeepClassification) {
     expect_keep(alpha->mask, {0, 0, 0, 0, 0, 0}, "inverted alpha");
 }
 
-TEST(MetricsEvalMask, SidecarWinsOverAlpha) {
-    if (!cuda_available())
-        GTEST_SKIP() << "CUDA not available";
+TEST_F(MetricsEvalMask, SidecarWinsOverAlpha) {
     ensure_image_loader();
     UniqueTempDir tmp("lfs_eval_mask_precedence");
     const auto image_path = tmp.path() / "rgba.png";
@@ -313,9 +301,7 @@ TEST(MetricsEvalMask, SidecarWinsOverAlpha) {
     expect_keep(mask, {kExpectedKeep.begin(), kExpectedKeep.end()}, "sidecar precedence");
 }
 
-TEST(MetricsEvalMask, InMemoryMaskAndCacheKeying) {
-    if (!cuda_available())
-        GTEST_SKIP() << "CUDA not available";
+TEST_F(MetricsEvalMask, InMemoryMaskAndCacheKeying) {
     UniqueTempDir tmp("lfs_eval_mask_inmemory");
     const auto image_path = tmp.path() / "gt.png";
     write_rgb_png(image_path, kBandH, kBandW);
@@ -344,9 +330,7 @@ TEST(MetricsEvalMask, InMemoryMaskAndCacheKeying) {
                 "in-memory load_external_mask_for_metrics after binary cache");
 }
 
-TEST(MetricsEvalMask, UndistortClassifiesFloatKeepBand) {
-    if (!cuda_available())
-        GTEST_SKIP() << "CUDA not available";
+TEST_F(MetricsEvalMask, UndistortClassifiesFloatKeepBand) {
     ensure_image_loader();
     UniqueTempDir tmp("lfs_eval_mask_undistort");
     constexpr int kW = 32;
@@ -396,9 +380,7 @@ TEST(MetricsEvalMask, UndistortClassifiesFloatKeepBand) {
         << "alpha 200 must stay not-keep after undistort";
 }
 
-TEST(MetricsEvalMask, SegmentModeStillUsesBinaryThreshold) {
-    if (!cuda_available())
-        GTEST_SKIP() << "CUDA not available";
+TEST_F(MetricsEvalMask, SegmentModeStillUsesBinaryThreshold) {
     ensure_image_loader();
     UniqueTempDir tmp("lfs_eval_mask_segment");
     const auto image_path = tmp.path() / "gt.png";
@@ -417,9 +399,7 @@ TEST(MetricsEvalMask, SegmentModeStillUsesBinaryThreshold) {
     EXPECT_EQ(got[2], 1) << "byte 200 is keep in binary Segment mode";
 }
 
-TEST(MetricsEvalMask, BatchEvaluatorIgnoresPhotometricErrorInSegmentBand) {
-    if (!cuda_available())
-        GTEST_SKIP() << "CUDA not available";
+TEST_F(MetricsEvalMask, BatchEvaluatorIgnoresPhotometricErrorInSegmentBand) {
     ensure_image_loader();
     UniqueTempDir tmp("lfs_eval_mask_evaluator");
     constexpr size_t size = 32;
@@ -478,9 +458,7 @@ TEST(MetricsEvalMask, BatchEvaluatorIgnoresPhotometricErrorInSegmentBand) {
     }
 }
 
-TEST(MetricsEvalMask, MovedCameraPreservesMaskCacheProcessingKey) {
-    if (!cuda_available())
-        GTEST_SKIP() << "CUDA not available";
+TEST_F(MetricsEvalMask, MovedCameraPreservesMaskCacheProcessingKey) {
     for (const bool assignment : {false, true}) {
         SCOPED_TRACE(assignment);
         auto source = make_camera({}, {}, 2, 2);
@@ -496,4 +474,18 @@ TEST(MetricsEvalMask, MovedCameraPreservesMaskCacheProcessingKey) {
         expect_keep(destination->load_and_get_mask(0, 0, false, 0.5f, true),
                     {1, 0, 1, 0}, "non-inverted load after move");
     }
+}
+
+TEST_F(MetricsEvalMask, RgbaPreprocessingUsesExecutionQueue) {
+    lfs::core::TensorWorkQueue queue(lfs::core::GpuBackend::CUDA);
+    lfs::core::TensorWorkQueue::Scope scope(queue);
+    UniqueTempDir tmp("lfs_eval_mask_stream");
+    const auto path = tmp.path() / "rgba.png";
+    write_rgba_png(path, {kBandBytes.begin(), kBandBytes.end()}, kBandH, kBandW);
+    auto camera = make_camera(path, {}, kBandW, kBandH);
+    const auto loaded = load_alpha_masked_metrics_inputs(*camera, sai_config());
+    ASSERT_TRUE(loaded.has_value()) << loaded.error();
+    EXPECT_EQ(loaded->gt_image.stream(), queue.native_handle());
+    EXPECT_EQ(loaded->mask.stream(), queue.native_handle());
+    expect_keep(loaded->mask, {kExpectedKeep.begin(), kExpectedKeep.end()}, "scoped RGBA");
 }

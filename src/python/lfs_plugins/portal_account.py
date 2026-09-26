@@ -18,6 +18,7 @@ from typing import Callable, Iterator, Mapping, Optional
 from .http import urlopen
 from .credential_storage import CredentialStorage
 from .portal_security import redact, remember_secrets
+from .gallery_logging import safe_text
 from .portal_retry import retry_call, retry_after
 
 _log = logging.getLogger(__name__)
@@ -54,11 +55,13 @@ class PortalHTTPError(PortalAccountError):
         error: str,
         retry_after: Optional[float] = None,
         detail: Optional[Mapping[str, object]] = None,
+        response_body: Optional[str] = None,
     ) -> None:
         self.status = status
         self.error = error
         self.retry_after = retry_after
         self.detail = dict(detail) if detail is not None else None
+        self.response_body = response_body
         super().__init__(redact(f"Portal request failed with HTTP {status}: {error or 'unknown_error'}"))
 
 
@@ -71,6 +74,7 @@ class AccountSnapshot:
     """Token-free account state consumed by the UI."""
 
     signed_in: bool = False
+    authorized: bool = False
     linking: bool = False
     disconnecting: bool = False
     membership_required: bool = False
@@ -322,6 +326,7 @@ class PortalAccountService:
         self._sign_out_thread: Optional[threading.Thread] = None
         self._initialized = False
         self._resuming = False
+        self._connection_actions = []
         self._snapshot = AccountSnapshot(
             portal_host=self.portal_host,
             custom_portal=self.is_custom_portal,
@@ -346,6 +351,32 @@ class PortalAccountService:
         with self._lock:
             return self._snapshot
 
+    def run_after_connection(self, callback: Callable[[], None]) -> bool:
+        """Run one user action after linking succeeds; cancellation drops it."""
+        with self._lock:
+            if self._snapshot.signed_in:
+                run_now = True
+            else:
+                self._connection_actions.append(callback)
+                run_now = False
+        if run_now:
+            self._run_connection_action(callback)
+            return True
+        if not self.start_device_flow():
+            with self._lock:
+                if callback in self._connection_actions:
+                    self._connection_actions.remove(callback)
+            return False
+        return True
+
+    @staticmethod
+    def _run_connection_action(callback):
+        try:
+            import lichtfeld as lf
+            lf.ui.schedule_on_ui_thread(callback)
+        except ImportError:
+            callback()
+
     @property
     def credentials_file(self) -> Path:
         return self.credentials_path
@@ -363,10 +394,10 @@ class PortalAccountService:
         return self._authenticated_request(method, path, body, timeout=timeout, expected_session=expected_session)
 
     def request_response_authenticated(self, method, path, *, body=None, headers=None, max_bytes=4 * 1024 * 1024,
-                                       expected_session=None):
+                                       expected_session=None, allow_redirect=False):
         """Bounded bytes and headers, using the same account/session refresh ladder."""
         return self._authenticated_request(method, path, body, expected_session=expected_session,
-            response_options={"headers": headers or {}, "max_bytes": max_bytes})
+            response_options={"headers": headers or {}, "max_bytes": max_bytes, "allow_redirect": allow_redirect})
 
     def _redaction_tokens(self) -> tuple[str, ...]:
         credentials = self._current_credentials()
@@ -453,6 +484,9 @@ class PortalAccountService:
                 return
             if self._current_credentials() is not None:
                 self.sync_profile()
+                credentials = self._current_credentials()
+                if credentials is not None and credentials.connection_enabled:
+                    self._run_pending_connection_actions()
             if self._current_credentials() is None and not self._cancel_event.is_set():
                 # A revoked or expired saved session needs a fresh browser approval.
                 self._resuming = False
@@ -513,6 +547,8 @@ class PortalAccountService:
         # A canceled or failed access upgrade must not discard a working login.
         credentials = self._current_credentials()
         if credentials is None:
+            with self._lock:
+                self._connection_actions.clear()
             self._set_signed_out(error)
         else:
             self._apply_credentials_state(credentials)
@@ -567,6 +603,12 @@ class PortalAccountService:
                 _log.warning("Could not fully remove local portal credentials")
             self._clear_current_credentials()
             self._set_signed_out("local_credentials_removal_failed" if removal_failed else "")
+
+    @property
+    def busy(self) -> bool:
+        """Whether an account operation is in flight."""
+        return any(thread is not None and thread.is_alive()
+                   for thread in (self._flow_thread, self._sync_thread, self._sign_out_thread))
 
     def wait_for_idle(self, timeout: float = 5.0) -> None:
         """Join current workers; intended for deterministic shutdown and tests."""
@@ -810,6 +852,8 @@ class PortalAccountService:
             raise PortalHTTPError(401, "invalid_token")
         if expected_session is not None and (credentials.email, credentials.connected_since) != expected_session:
             raise PortalProtocolError("The signed-in account changed. Refresh the gallery before continuing.")
+        if method != "GET":
+            raise PortalHTTPError(401, "access_refreshed")
         try:
             return self._request_with_bearer(
                 method,
@@ -847,7 +891,7 @@ class PortalAccountService:
         )
 
     def _request_json(self, method, path, body=None, headers=None, *, timeout=None, response_options=None):
-        idempotent = method in ("GET", "HEAD") or (method == "POST" and path.endswith("/complete")
+        idempotent = method == "GET" or (method == "POST" and path.endswith("/complete")
             and bool((body or {}).get("idempotencyKey")))
         original = self._current_credentials()
         def request():
@@ -902,13 +946,17 @@ class PortalAccountService:
                 if response_options is not None and len(raw) > response_options["max_bytes"]:
                     raise PortalProtocolError("Portal response exceeds its size limit")
         except urllib.error.HTTPError as exc:
+            if response_options is not None and response_options.get("allow_redirect") and exc.code in (301, 302, 303, 307, 308):
+                exc.close()
+                return exc.code, dict(exc.headers), b""
             if response_options is not None and exc.code == 304:
                 exc.close()
                 return 304, dict(exc.headers), b""
             raw = exc.read(65536)
             retry_after = _retry_after_seconds(getattr(exc, "headers", None))
             error, detail = _error_response(raw)
-            raise PortalHTTPError(int(exc.code), error, retry_after, detail) from None
+            body = safe_text(raw.decode("utf-8", errors="replace")[:65536])
+            raise PortalHTTPError(int(exc.code), error, retry_after, detail, body) from None
 
         if response_options is not None and (200 <= status < 300 or status == 304):
             return status, dict(response_headers or {}), raw
@@ -921,6 +969,7 @@ class PortalAccountService:
                 error,
                 _retry_after_seconds(response_headers),
                 detail,
+                safe_text(raw.decode("utf-8", errors="replace")[:65536]),
             )
         try:
             payload = json.loads(raw.decode("utf-8"))
@@ -1076,17 +1125,20 @@ class PortalAccountService:
         with self._lock:
             self._snapshot = AccountSnapshot(
                 signed_in=True,
+                authorized=True,
                 disconnecting=self._snapshot.disconnecting,
                 label=_initials(credentials.display_name, credentials.email),
                 tier=_tier_name(credentials.customer_tier),
                 tooltip=self._with_portal_host(tooltip),
-                display_name=credentials.display_name,
+                display_name=credentials.display_name or credentials.email,
                 email=credentials.email,
                 connected_since=credentials.connected_since,
                 portal_host=self.portal_host,
                 custom_portal=self.is_custom_portal,
             )
         self._publish_account_state()
+        if not self._resuming and credentials.email and credentials.connected_since:
+            self._run_pending_connection_actions()
 
     def _set_membership_required(self, credentials: _Credentials) -> None:
         name = credentials.display_name or credentials.email
@@ -1096,11 +1148,12 @@ class PortalAccountService:
                 return
             self._snapshot = AccountSnapshot(
                 signed_in=True,
+                authorized=True,
                 membership_required=True,
                 label=_initials(credentials.display_name, credentials.email),
                 tier=_tier_name(credentials.customer_tier),
                 tooltip=self._with_portal_host(name),
-                display_name=credentials.display_name,
+                display_name=credentials.display_name or credentials.email,
                 email=credentials.email,
                 connected_since=credentials.connected_since,
                 error="membership_required",
@@ -1152,8 +1205,10 @@ class PortalAccountService:
         self._publish_account_state()
 
     def _set_signed_out(self, error: str) -> None:
+        credentials = self._current_credentials()
         with self._lock:
             self._snapshot = AccountSnapshot(
+                authorized=credentials is not None,
                 label="",
                 tooltip=self._with_portal_host(""),
                 error=error,
@@ -1162,6 +1217,14 @@ class PortalAccountService:
             )
         self._publish_account_state()
 
+    def _run_pending_connection_actions(self):
+        with self._lock:
+            if not self._snapshot.signed_in or not self._connection_actions:
+                return
+            actions, self._connection_actions = self._connection_actions, []
+        for callback in actions:
+            self._run_connection_action(callback)
+
     def _publish_account_state(self) -> None:
         snapshot = self.snapshot()
         try:
@@ -1169,11 +1232,15 @@ class PortalAccountService:
 
             RuntimeState.account_state.value = {
                 "signed_in": snapshot.signed_in,
+                "authorized": snapshot.authorized,
                 "linking": snapshot.linking,
                 "disconnecting": snapshot.disconnecting,
                 "error": snapshot.error,
                 "membership_required": snapshot.membership_required,
                 "label": snapshot.label,
+                "email": snapshot.email,
+                "connected_since": snapshot.connected_since,
+                "display_name": snapshot.display_name,
                 "tier": snapshot.tier,
                 "tooltip": snapshot.tooltip,
             }

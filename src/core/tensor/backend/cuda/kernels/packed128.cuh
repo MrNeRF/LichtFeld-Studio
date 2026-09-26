@@ -11,6 +11,7 @@
  */
 
 #pragma once
+#include "core/tensor/internal/private_access.hpp"
 
 #include <cstring>
 #include <cuda_bf16.h>

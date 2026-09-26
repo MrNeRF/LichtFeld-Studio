@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "lfs/training/screen_share.cuh"
 #include "training/kernels/densification_kernels.hpp"
 
@@ -20,16 +21,7 @@ using lfs::training::screen_share_cap_active;
 using lfs::training::kernels::launch_clip_log_scale_by_screen_share;
 using lfs::training::kernels::launch_oversize_split_scores;
 
-class ScreenShareTest : public ::testing::Test {
-protected:
-    void SetUp() override {
-        int device_count = 0;
-        cudaGetDeviceCount(&device_count);
-        if (device_count == 0) {
-            GTEST_SKIP() << "No CUDA device available";
-        }
-    }
-};
+class ScreenShareTest : public lfs::test::CudaBackendTest {};
 
 TEST_F(ScreenShareTest, NearCameraBlobApproachesOne) {
     const float share = gaussian_screen_share(

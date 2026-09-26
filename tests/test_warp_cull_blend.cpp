@@ -5,6 +5,7 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/fastgs/rasterization/include/forward.h"
 
@@ -138,9 +139,10 @@ namespace {
 
 } // namespace
 
-class WarpCullBlendTest : public ::testing::Test {
+class WarpCullBlendTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         bg_ = Tensor::zeros({3}, Device::GPU);
         camera_ = std::make_unique<Camera>(make_camera(64, 64));
         synthetic_ = make_synthetic_splat(48);
@@ -151,6 +153,9 @@ protected:
     }
 
     void TearDown() override {
+        if (IsSkipped()) {
+            return;
+        }
         set_warp_cull_mode_for_testing(0);
         set_blend_batch_size_for_testing(0);
         synthetic_.reset();

@@ -6,6 +6,7 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "training/losses/regularization.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
@@ -80,15 +81,19 @@ namespace {
 
 } // namespace
 
-class FusedRegLossTest : public ::testing::Test {
+class FusedRegLossTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         bg_ = Tensor::zeros({3}, Device::GPU);
         camera_ = std::make_unique<Camera>(make_camera(64, 64));
         splat_ = make_splat(64);
     }
 
     void TearDown() override {
+        if (IsSkipped()) {
+            return;
+        }
         splat_.reset();
         camera_.reset();
         cleanup_arena();

@@ -9,6 +9,8 @@
 
 namespace fast_lfs::optimizer {
 
+    inline constexpr int kMaxContiguousBatch = 6;
+
     struct JointContiguousBatchEntry {
         float* param = nullptr;
         std::uint8_t* packed = nullptr;
@@ -27,44 +29,8 @@ namespace fast_lfs::optimizer {
 
     // Pure CUDA interface - no torch dependencies
 
-    // Non-fused joint (u,log_s) Adam step for contiguous [n_prims, n_attr] parameters.
-    // Launches one 256-thread block per joint-bounds block (blockIdx.x is the bounds row).
-    // bits is the joint codec cell width (8 or 16). Swizzled shN uses
-    // adam_step_shN_joint_from_grad instead of this contiguous step.
-    void adam_step_joint_contiguous_raw(
-        float* param,
-        std::uint8_t* packed,
-        float* bounds,
-        const float* param_grad,
-        const bool* frozen_mask,
-        int frozen_mask_size,
-        float frozen_lr_scale,
-        const bool* crop_damping_mask,
-        int crop_damping_mask_size,
-        float cropbox_lr_scale,
-        int n_prims,
-        int n_attr,
-        int bits,
-        float lr,
-        float beta1,
-        float beta2,
-        float eps,
-        float bias_correction1_rcp,
-        float bias_correction2_sqrt_rcp,
-        cudaStream_t stream = nullptr,
-        const float* mean_step_scale_raw = nullptr,
-        int mean_step_scale_n = 0,
-        float mean_step_median_extent = 0.0f,
-        float mean_step_r_min = 1.0f,
-        float mean_step_r_max = 300.0f,
-        const bool* mean_step_far_mask = nullptr,
-        int mean_step_far_mask_n = 0,
-        const float* screen_share_max = nullptr,
-        int screen_share_n = 0,
-        float screen_share_limit = 0.0f,
-        float screen_share_penalty = 0.0f);
-
-    // One launch over a device table of contiguous joint params (means/sh0/scale/rot/opa).
+    // One launch over a fixed-size value batch of contiguous joint params
+    // (means/sh0/scale/rot/opa).
     void adam_step_joint_contiguous_batched(
         const JointContiguousBatchEntry* host_entries,
         int n_entries,
@@ -141,17 +107,6 @@ namespace fast_lfs::optimizer {
         const int slots_per_primitive,
         const int bits,
         const int n_prims,
-        cudaStream_t stream = nullptr);
-
-    // re-encode gathered joint rows under destination block bounds.
-    void joint_transcode_gathered_rows_at_indices(
-        std::uint8_t* packed,
-        const float* bounds,
-        const int64_t* indices_device,
-        const int n_new,
-        const int old_N,
-        const int n_attr,
-        const int bits,
         cudaStream_t stream = nullptr);
 
 } // namespace fast_lfs::optimizer

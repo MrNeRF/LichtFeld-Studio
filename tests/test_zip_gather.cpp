@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
+#include "cuda_backend_test.hpp"
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <vector>
@@ -18,15 +20,7 @@ namespace {
         }
     }
 
-    class ZipGatherTest : public ::testing::Test {
-    protected:
-        void SetUp() override {
-            int device_count = 0;
-            if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-                GTEST_SKIP() << "CUDA device required";
-            }
-        }
-    };
+    class ZipGatherTest : public lfs::test::CudaBackendTest {};
 
 } // namespace
 

@@ -8,7 +8,9 @@
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
 #include "vk_context.hpp"
+#if LFS_HAS_CUDA
 #include "vk_cuda_bridge.hpp"
+#endif
 #include "vk_recorder.hpp"
 
 #include <algorithm>
@@ -16,6 +18,7 @@
 #include <bit>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <type_traits>
 
 namespace lfs::core::internal {
@@ -23,6 +26,8 @@ namespace lfs::core::internal {
         constexpr VkDeviceSize kMib = 1024ull * 1024ull;
         constexpr VkDeviceSize kPoolBlockSize = 64ull * kMib;
         constexpr VkDeviceSize kInitialStagingSize = 64ull * kMib;
+        constexpr size_t kTransferChunk = 8 * 1024 * 1024;
+        static_assert(kInitialStagingSize >= 2 * kTransferChunk);
         constexpr VkDeviceSize kSlabLimit = 1ull * kMib;
         constexpr VkDeviceSize kDirectLimit = 16ull * kMib;
         // loadByte/storeByte and packed convert/gather RMW an aligned uint32.
@@ -82,6 +87,7 @@ namespace lfs::core::internal {
             });
         }
 
+#if LFS_HAS_CUDA
         bool storage_buffer_exportable(const VkPhysicalDevice physical) {
             VkPhysicalDeviceExternalBufferInfo info{
                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_BUFFER_INFO};
@@ -95,16 +101,27 @@ namespace lfs::core::internal {
                        0 &&
                    (external.compatibleHandleTypes & kVulkanExportMemoryHandleType) != 0;
         }
+#endif
     } // namespace
 
     struct VulkanMemory::AllocationRecord {
+        struct Access {
+            VkPipelineStageFlags2 writer = 0;
+            VkPipelineStageFlags2 readers = 0;
+            VkPipelineStageFlags2 visible_to = 0;
+
+            bool operator==(const Access&) const = default;
+        };
+
         VkBuffer buffer = VK_NULL_HANDLE;
         VmaAllocation allocation = VK_NULL_HANDLE;
         VkDeviceSize requested_size = 0;
         VkDeviceSize allocated_size = 0;
         VkDeviceAddress address = 0;
         uint64_t last_use = 0;
-        bool direct = false;
+        // Each key starts a byte range; state survives cache reuse of the VkBuffer.
+        std::map<VkDeviceSize, Access> accesses{{0, {}}};
+        bool cacheable = false;
         bool host_visible = false;
         std::byte* mapped = nullptr;
         StorageMeta descriptor_owner;
@@ -143,9 +160,11 @@ namespace lfs::core::internal {
     }
 
     void VulkanMemory::create_pool() {
+#if LFS_HAS_CUDA
         VkExternalMemoryBufferCreateInfo external_buffer{
             VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
         external_buffer.handleTypes = kVulkanExportMemoryHandleType;
+#endif
         VkBufferCreateInfo buffer_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         buffer_info.size = 256;
         buffer_info.usage = kStorageUsage;
@@ -153,10 +172,16 @@ namespace lfs::core::internal {
         VmaAllocationCreateInfo allocation_info{};
         allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
         allocation_info.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+#if LFS_HAS_CUDA
         const bool want_export = context_.external_memory_enabled() &&
                                  storage_buffer_exportable(context_.physical_device());
+#else
+        constexpr bool want_export = false;
+#endif
         if (want_export) {
+#if LFS_HAS_CUDA
             buffer_info.pNext = &external_buffer;
+#endif
         }
         uint32_t memory_type = 0;
         VkResult find_result = vmaFindMemoryTypeIndexForBufferInfo(
@@ -171,11 +196,13 @@ namespace lfs::core::internal {
         pool_info.memoryTypeIndex = memory_type;
         pool_info.blockSize = kPoolBlockSize;
         if (want_export && buffer_info.pNext != nullptr) {
+#if LFS_HAS_CUDA
             export_alloc_info_.sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO;
             export_alloc_info_.pNext = nullptr;
             export_alloc_info_.handleTypes = kVulkanExportMemoryHandleType;
             pool_info.pMemoryAllocateNext = &export_alloc_info_;
             exports_memory_ = true;
+#endif
         }
         VkResult pool_result = vmaCreatePool(context_.allocator(), &pool_info, &device_pool_);
         if (exports_memory_ && pool_result != VK_SUCCESS) {
@@ -290,6 +317,10 @@ namespace lfs::core::internal {
         context_.recorders().flush_current();
         context_.wait(value);
         context_.check_fault_buffer();
+        copy_mapped(storage, destination, bytes);
+    }
+
+    void VulkanMemory::copy_mapped(StorageRef storage, void* destination, size_t bytes) {
         const std::byte* source = nullptr;
         {
             std::lock_guard lock(allocations_mutex_);
@@ -318,8 +349,11 @@ namespace lfs::core::internal {
         }
         const VkDeviceSize bucket_size = allocation_size(bytes);
         const bool direct = bucket_size >= kDirectLimit && !host_visible;
+        // Freed buffers of kDirectLimit and above go back to the driver: a cached
+        // one pins its whole pool block while it waits for a same-size request.
+        const bool cacheable = host_visible || (!direct_class && !direct);
         std::unique_ptr<AllocationRecord> record;
-        if (!direct) {
+        if (cacheable) {
             std::lock_guard lock(allocations_mutex_);
             collect_retired_locked(context_.completed_timeline());
             auto& free_lists = host_visible ? readback_free_lists_ : free_lists_;
@@ -332,20 +366,27 @@ namespace lfs::core::internal {
         if (!record) {
             record = std::make_unique<AllocationRecord>();
             record->allocated_size = bucket_size;
-            record->direct = direct;
+            record->cacheable = cacheable;
             record->host_visible = host_visible;
 
+#if LFS_HAS_CUDA
             VkExternalMemoryBufferCreateInfo external_buffer{
                 VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
             external_buffer.handleTypes = kVulkanExportMemoryHandleType;
+#endif
             VkBufferCreateInfo buffer_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
             buffer_info.size = record->allocated_size;
             buffer_info.usage = kStorageUsage;
-            buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            const auto& families = context_.sharing_queue_families();
+            buffer_info.sharingMode = families.size() > 1 ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE;
+            buffer_info.queueFamilyIndexCount = families.size() > 1 ? families.size() : 0;
+            buffer_info.pQueueFamilyIndices = families.data();
             const bool pooled_export =
                 exports_memory_ && !host_visible && record->allocated_size <= kPoolBlockSize;
             if (pooled_export) {
+#if LFS_HAS_CUDA
                 buffer_info.pNext = &external_buffer;
+#endif
             }
             VmaAllocationCreateInfo allocation_info{};
             VmaAllocationInfo mapping_info{};
@@ -480,19 +521,115 @@ namespace lfs::core::internal {
         };
     }
 
-    void VulkanMemory::mark_used(const std::span<const StorageRef> reads,
-                                 const std::span<const StorageRef> writes,
-                                 const uint64_t timeline_value) {
+    uint64_t VulkanMemory::foreign_use(const std::span<const StorageRef> reads,
+                                       const std::span<const StorageRef> writes,
+                                       const uint64_t current_value) const {
         std::lock_guard lock(allocations_mutex_);
-        const auto mark = [&](const StorageRef storage) {
+        uint64_t value = 0;
+        const auto inspect = [&](const StorageRef storage) {
             if (storage.meta == nullptr || storage.backend != GpuBackend::Vulkan) {
                 return;
             }
-            AllocationRecord& allocation = allocation_for(storage);
-            allocation.last_use = std::max(allocation.last_use, timeline_value);
+            const auto last_use = allocation_for(storage).last_use;
+            if (last_use != current_value)
+                value = std::max(value, last_use);
         };
-        std::ranges::for_each(reads, mark);
-        std::ranges::for_each(writes, mark);
+        std::ranges::for_each(reads, inspect);
+        std::ranges::for_each(writes, inspect);
+        return value;
+    }
+
+    void VulkanMemory::prepare_accesses(const VkCommandBuffer command,
+                                        const std::span<const StorageRef> reads,
+                                        const std::span<const StorageRef> writes,
+                                        const uint64_t timeline_value,
+                                        const VkPipelineStageFlags2 stage,
+                                        const VkDeviceSize bytes) {
+        std::lock_guard lock(allocations_mutex_);
+        std::vector<VkBufferMemoryBarrier2> barriers;
+        const auto visit = [&](const StorageRef storage, const auto& operation) {
+            if (storage.meta == nullptr || storage.backend != GpuBackend::Vulkan)
+                return;
+            auto& allocation = allocation_for(storage);
+            const VkDeviceSize start = bytes == VK_WHOLE_SIZE ? 0 : storage.byte_offset;
+            const VkDeviceSize end = bytes == VK_WHOLE_SIZE ? allocation.allocated_size : start + bytes;
+            LFS_ASSERT_MSG(start < end && end <= allocation.allocated_size,
+                           "Vulkan access exceeds its buffer");
+            operation(allocation, start, end);
+        };
+        const auto dependency = [&](const StorageRef storage, const bool write) {
+            visit(storage, [&](AllocationRecord& allocation, const VkDeviceSize start,
+                               const VkDeviceSize end) {
+                const auto& ranges = allocation.accesses;
+                for (auto it = std::prev(ranges.upper_bound(start)); it != ranges.end() && it->first < end; ++it) {
+                    const auto& access = it->second;
+                    const bool raw = access.writer != 0 && (access.visible_to & stage) != stage;
+                    if (!write && !raw)
+                        continue;
+                    const auto source = access.writer | (write ? access.readers : 0);
+                    if (source == 0)
+                        continue;
+                    const auto next = std::next(it);
+                    const VkDeviceSize range_start = std::max(start, it->first);
+                    const VkDeviceSize range_end = next == ranges.end() ? end : std::min(end, next->first);
+                    barriers.push_back(VkBufferMemoryBarrier2{
+                        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                        .srcStageMask = source,
+                        .srcAccessMask = access.writer != 0 ? VK_ACCESS_2_MEMORY_WRITE_BIT : 0,
+                        .dstStageMask = stage,
+                        .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | (write ? VK_ACCESS_2_MEMORY_WRITE_BIT : 0),
+                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .buffer = allocation.buffer,
+                        .offset = range_start,
+                        .size = range_end - range_start,
+                    });
+                }
+            });
+        };
+        for (const auto storage : reads)
+            dependency(storage, false);
+        for (const auto storage : writes)
+            dependency(storage, true);
+        if (!barriers.empty()) {
+            const VkDependencyInfo info{
+                .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                .bufferMemoryBarrierCount = static_cast<uint32_t>(barriers.size()),
+                .pBufferMemoryBarriers = barriers.data(),
+            };
+            vkCmdPipelineBarrier2(command, &info);
+        }
+        const auto update = [&](const StorageRef storage, const bool write) {
+            visit(storage, [&](AllocationRecord& allocation, const VkDeviceSize start,
+                               const VkDeviceSize end) {
+                auto& ranges = allocation.accesses;
+                const auto split = [&](const VkDeviceSize offset) {
+                    return ranges.try_emplace(offset, std::prev(ranges.upper_bound(offset))->second).first;
+                };
+                const auto first = split(start);
+                const auto last = end == allocation.allocated_size ? ranges.end() : split(end);
+                for (auto it = first; it != last; ++it) {
+                    if (write) {
+                        it->second = AllocationRecord::Access{.writer = stage};
+                    } else {
+                        it->second.readers |= stage;
+                        it->second.visible_to |= stage;
+                    }
+                }
+                for (auto it = ranges.begin(); it != ranges.end();) {
+                    const auto next = std::next(it);
+                    if (next != ranges.end() && next->second == it->second)
+                        ranges.erase(next);
+                    else
+                        it = next;
+                }
+                allocation.last_use = std::max(allocation.last_use, timeline_value);
+            });
+        };
+        for (const auto storage : reads)
+            update(storage, false);
+        for (const auto storage : writes)
+            update(storage, true);
     }
 
     void VulkanMemory::copy_host_to_device(const CopyRequest& request) {
@@ -500,68 +637,35 @@ namespace lfs::core::internal {
             return;
         }
         std::lock_guard staging_lock(staging_mutex_);
-        const StagingSlice slice = acquire_staging(request.bytes, 16);
         const auto* source = static_cast<const std::byte*>(request.src.data) +
                              request.src.byte_offset;
-        std::memcpy(slice.mapped, source, request.bytes);
-        const std::array writes{request.dst};
-        const uint64_t value = context_.recorders().record(
-            {}, writes, [&](const VkCommandBuffer command) {
-                const VkBufferCopy region{
-                    .srcOffset = slice.offset,
-                    .dstOffset = offset_for(request.dst),
-                    .size = request.bytes,
-                };
-                vkCmdCopyBuffer(command, slice.buffer, buffer_for(request.dst), 1,
-                                &region);
-            });
-        staging_retire_value_ = std::max(staging_retire_value_, value);
+        uint64_t value = 0;
+        for (size_t offset = 0; offset < request.bytes; offset += kTransferChunk) {
+            const StagingSlice slice = acquire_staging(std::min(kTransferChunk, request.bytes - offset), 16);
+            std::memcpy(slice.mapped, source + offset, slice.size);
+            auto destination = request.dst;
+            destination.byte_offset += offset;
+            const std::array writes{destination};
+            value = context_.recorders().record(
+                {}, writes, [&](const VkCommandBuffer command) {
+                    const VkBufferCopy region{
+                        .srcOffset = slice.offset,
+                        .dstOffset = offset_for(request.dst) + offset,
+                        .size = slice.size,
+                    };
+                    vkCmdCopyBuffer(command, slice.buffer, buffer_for(request.dst), 1,
+                                    &region);
+                },
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT, slice.size);
+            staging_retire_value_ = std::max(staging_retire_value_, value);
+            if (request.bytes > kTransferChunk)
+                context_.recorders().flush_current();
+        }
         if (request.synchronous) {
             context_.recorders().flush_storage(request.dst);
             context_.wait(value);
             context_.check_fault_buffer();
         }
-    }
-
-    void VulkanMemory::copy_device_to_host(const CopyRequest& request) {
-        if (request.bytes == 0) {
-            return;
-        }
-        std::lock_guard staging_lock(staging_mutex_);
-        const StagingSlice slice = acquire_staging(request.bytes, 16);
-        const std::array reads{request.src};
-        const uint64_t value = context_.recorders().record(
-            reads, {}, [&](const VkCommandBuffer command) {
-                const VkBufferCopy region{
-                    .srcOffset = offset_for(request.src),
-                    .dstOffset = slice.offset,
-                    .size = request.bytes,
-                };
-                vkCmdCopyBuffer(command, buffer_for(request.src), slice.buffer, 1,
-                                &region);
-                // Makes the transfer write visible to the host domain; the timeline
-                // signal alone only guarantees device visibility.
-                const VkMemoryBarrier2 host_read{
-                    .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
-                    .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    .dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
-                    .dstAccessMask = VK_ACCESS_2_HOST_READ_BIT,
-                };
-                const VkDependencyInfo dependency{
-                    .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-                    .memoryBarrierCount = 1,
-                    .pMemoryBarriers = &host_read,
-                };
-                vkCmdPipelineBarrier2(command, &dependency);
-            });
-        staging_retire_value_ = std::max(staging_retire_value_, value);
-        context_.recorders().flush_current();
-        context_.wait(value);
-        context_.check_fault_buffer();
-        auto* destination = static_cast<std::byte*>(request.dst.data) +
-                            request.dst.byte_offset;
-        std::memcpy(destination, slice.mapped, request.bytes);
     }
 
     void VulkanMemory::copy_device_to_device(const CopyRequest& request) {
@@ -572,14 +676,25 @@ namespace lfs::core::internal {
         const std::array writes{request.dst};
         const uint64_t value = context_.recorders().record(
             reads, writes, [&](const VkCommandBuffer command) {
-                const VkBufferCopy region{
-                    .srcOffset = offset_for(request.src),
-                    .dstOffset = offset_for(request.dst),
-                    .size = request.bytes,
-                };
+                const VkDeviceSize source = offset_for(request.src);
+                const VkDeviceSize destination = offset_for(request.dst);
+                const size_t head = ((source ^ destination) & 15u) == 0
+                                        ? std::min<size_t>(request.bytes, (16u - (source & 15u)) & 15u)
+                                        : request.bytes;
+                const size_t bulk = (request.bytes - head) & ~size_t{15};
+                std::array<VkBufferCopy, 3> regions{};
+                uint32_t count = 0;
+                size_t offset = 0;
+                for (const size_t bytes : {head, bulk, request.bytes - head - bulk}) {
+                    if (bytes != 0) {
+                        regions[count++] = VkBufferCopy{source + offset, destination + offset, bytes};
+                        offset += bytes;
+                    }
+                }
                 vkCmdCopyBuffer(command, buffer_for(request.src),
-                                buffer_for(request.dst), 1, &region);
-            });
+                                buffer_for(request.dst), count, regions.data());
+            },
+            VK_PIPELINE_STAGE_2_TRANSFER_BIT, request.bytes);
         if (request.synchronous) {
             context_.recorders().flush_storage(request.dst);
             context_.wait(value);
@@ -637,7 +752,8 @@ namespace lfs::core::internal {
                     vkCmdCopyBuffer(command, edge.buffer, buffer_for(request.dst),
                                     region_count, regions.data());
                 }
-            });
+            },
+            VK_PIPELINE_STAGE_2_TRANSFER_BIT, request.bytes);
         if (edge_bytes != 0) {
             staging_retire_value_ = std::max(staging_retire_value_, value);
         }
@@ -674,11 +790,19 @@ namespace lfs::core::internal {
     }
 
     void VulkanMemory::collect_retired_locked(const uint64_t completed) {
+#ifdef __APPLE__
+        // MoltenVK makes all device memory resident for every command buffer
+        // it submits without keeping that memory alive, so freeing memory also
+        // waits for work that never used it.
+        const bool idle = completed >= context_.submitted_timeline();
+#else
+        constexpr bool idle = true;
+#endif
         std::erase_if(retired_, [&](auto& record) {
-            if (record->last_use > completed) {
+            if (record->last_use > completed || (!record->cacheable && !idle)) {
                 return false;
             }
-            if (record->direct) {
+            if (!record->cacheable) {
                 vmaDestroyBuffer(context_.allocator(), record->buffer,
                                  record->allocation);
             } else if (record->host_visible) {
@@ -703,15 +827,7 @@ namespace lfs::core::internal {
         }
     }
 
-    ReadbackTicket VulkanMemory::enqueue_readback(const StorageRef src,
-                                                  const size_t bytes) {
-        ReadbackTicket ticket;
-        ticket.backend = GpuBackend::Vulkan;
-        ticket.bytes = bytes;
-        if (bytes == 0) {
-            return ticket;
-        }
-        const StorageRef dst = allocate_readback(bytes);
+    uint64_t VulkanMemory::copy_to_readback(StorageRef src, StorageRef dst, size_t bytes) {
         const std::array reads{src};
         const std::array writes{dst};
         const uint64_t value = context_.recorders().record(
@@ -736,50 +852,17 @@ namespace lfs::core::internal {
                     .pMemoryBarriers = &host_read,
                 };
                 vkCmdPipelineBarrier2(command, &dependency);
-            });
+            },
+            VK_PIPELINE_STAGE_2_TRANSFER_BIT, bytes);
         context_.recorders().flush_current();
-        std::lock_guard lock(readback_mutex_);
-        ticket.id = next_readback_id_++;
-        ticket.timeline_value = value;
-        pending_readbacks_.emplace(
-            ticket.id, PendingReadback{dst, value, bytes});
-        return ticket;
-    }
-
-    bool VulkanMemory::readback_poll(const ReadbackTicket& ticket, void* const dst) {
-        if (ticket.id == 0) {
-            return true;
-        }
-        PendingReadback pending;
-        {
-            std::lock_guard lock(readback_mutex_);
-            const auto it = pending_readbacks_.find(ticket.id);
-            if (it == pending_readbacks_.end()) {
-                return false;
-            }
-            if (context_.completed_timeline() < it->second.timeline_value) {
-                return false;
-            }
-            pending = it->second;
-            pending_readbacks_.erase(it);
-        }
-        const std::byte* source = nullptr;
-        {
-            std::lock_guard lock(allocations_mutex_);
-            const AllocationRecord& record = allocation_for(pending.storage);
-            LFS_ASSERT_MSG(record.host_visible && record.mapped != nullptr,
-                           "enqueue_readback requires host-visible Vulkan storage");
-            source = record.mapped + pending.storage.byte_offset;
-        }
-        if (dst != nullptr && source != nullptr) {
-            std::memcpy(dst, source, pending.bytes);
-        }
-        deallocate(pending.storage);
-        return true;
+        return value;
     }
 
     void VulkanMemory::trim() {
         context_.recorders().flush_all();
+#ifdef __APPLE__
+        context_.wait(context_.submitted_timeline()); // see collect_retired_locked
+#endif
         std::lock_guard lock(allocations_mutex_);
         collect_retired_locked(context_.completed_timeline());
         destroy_free_locked();

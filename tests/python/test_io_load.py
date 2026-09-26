@@ -28,9 +28,10 @@ class TestIOBasics:
 class TestDatasetDetection:
     """Tests for dataset path detection."""
 
-    def test_is_dataset_path_colmap(self, lf, bicycle_dataset):
+    def test_is_dataset_path_colmap(self, lf, tmp_path):
         """Test COLMAP dataset detection."""
-        assert lf.io.is_dataset_path(str(bicycle_dataset))
+        (tmp_path / "cameras.txt").touch()
+        assert lf.io.is_dataset_path(str(tmp_path))
 
     def test_is_dataset_path_false_for_file(self, lf, tmp_output):
         """Test that regular file is not detected as dataset."""
@@ -83,6 +84,38 @@ class TestLoadResult:
             str(bicycle_dataset), resize_factor=8, images_folder="images_8"
         )
         assert result.load_time_ms >= 0
+
+    @pytest.mark.slow
+    def test_dataset_point_cloud_setters_keep_one_device(self, lf, test_data_dir):
+        """Setting one field from a CUDA tensor must follow the cloud's device.
+
+        The COLMAP loader returns a CPU cloud. Setters that always moved to
+        CUDA left means and colors on different devices, and the next filter
+        failed its device check.
+        """
+        datasets = sorted(
+            d for d in test_data_dir.iterdir()
+            if (d / "sparse").is_dir() and (d / "images_8").is_dir()
+        )
+        if not datasets:
+            pytest.skip("no COLMAP dataset with images_8 in the test data")
+        result = lf.io.load(str(datasets[0]), resize_factor=8, images_folder="images_8")
+        cloud = result.point_cloud
+        assert cloud is not None
+        count = cloud.size
+        assert count > 1
+
+        assert cloud.means.device == "cpu"
+        cloud.set_colors(cloud.colors.cuda())
+        assert cloud.colors.device == cloud.means.device
+        cloud.set_means(cloud.means.cuda())
+        assert cloud.means.device == cloud.colors.device
+
+        keep = lf.Tensor.arange(0, count, 1.0, device="cpu") < float(count // 2)
+        removed = cloud.filter(keep)
+        assert removed == count - count // 2
+        assert cloud.size == count // 2
+        assert cloud.colors.shape[0] == cloud.size
 
 
 class TestLoadPLY:
@@ -182,6 +215,7 @@ _ONE_PIXEL_PNG = bytes(
 class TestMissingDatasetImages:
     """Python-visible load warnings for missing dataset images."""
 
+    @pytest.mark.gpu
     def test_transforms_load_warns_and_keeps_missing_camera(self, lf, tmp_path):
         dataset = tmp_path / "missing_images"
         dataset.mkdir()

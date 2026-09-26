@@ -10,6 +10,7 @@
 #include <torch/torch.h>
 #include <vector>
 
+#include "cuda_backend_test.hpp"
 #include "lfs/kernels/ppisp.cuh"
 
 namespace {
@@ -48,9 +49,9 @@ namespace {
         const int height = static_cast<int>(rgb_in.size(1));
         const int width = static_cast<int>(rgb_in.size(2));
         auto rgb_out = torch::empty_like(rgb_in);
-        lfs::training::kernels::launch_ppisp_forward_chw(
+        lfs::training::kernels::launch_ppisp_forward_chw_region(
             p.exposure.data_ptr<float>(), p.vignetting.data_ptr<float>(), p.color.data_ptr<float>(),
-            p.crf.data_ptr<float>(), rgb_in.data_ptr<float>(), rgb_out.data_ptr<float>(), height, width,
+            p.crf.data_ptr<float>(), rgb_in.data_ptr<float>(), rgb_out.data_ptr<float>(), height, width, 0, height,
             NUM_CAMERAS, NUM_FRAMES, CAMERA_IDX, FRAME_IDX, nullptr);
         cudaDeviceSynchronize();
         return rgb_out;
@@ -74,7 +75,7 @@ namespace {
         return rgb_out;
     }
 
-    class PPISPBandedRegionTest : public ::testing::Test {};
+    class PPISPBandedRegionTest : public lfs::test::CudaBackendTest {};
 
     TEST_F(PPISPBandedRegionTest, EvenBandsMatchFullImageBitExact) {
         const auto params = createParams(DEFAULT_SEED);

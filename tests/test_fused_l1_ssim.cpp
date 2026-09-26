@@ -13,27 +13,96 @@
 #include <gtest/gtest.h>
 
 #include "core/tensor.hpp"
+#include "core/tensor_upload.hpp"
+#include "cuda_backend_test.hpp"
 #include "lfs/kernels/l1_loss.cuh"
 #include "lfs/kernels/ssim.cuh"
-#include "training/losses/photometric_loss.hpp"
+#include "lfs/training/ops/photometric_cuda.hpp"
+#include <array>
+#include <chrono>
 #include <cmath>
+#include <cstring>
 #include <cuda_runtime.h>
 #include <limits>
+#include <thread>
+#include <vector>
 
 using namespace lfs::core;
 using namespace lfs::training::kernels;
 
-class FusedL1SSIMTest : public ::testing::Test {
-protected:
-    void SetUp() override {
-        // Ensure CUDA is available
-        int device_count = 0;
-        cudaGetDeviceCount(&device_count);
-        if (device_count == 0) {
-            GTEST_SKIP() << "No CUDA device available";
+namespace {
+
+    Tensor reference_ssim_gradient(const Tensor& image, const Tensor& target, const Tensor& map_gradient) {
+        const auto x = image.cpu().contiguous().to_vector();
+        const auto y = target.cpu().contiguous().to_vector();
+        const auto upstream = map_gradient.cpu().contiguous().to_vector();
+        const int h = static_cast<int>(image.shape()[2]);
+        const int w = static_cast<int>(image.shape()[3]);
+        const size_t plane_size = static_cast<size_t>(h) * w;
+        std::vector<double> gradient(x.size(), 0.0);
+        std::array<double, 11> gaussian;
+        double total = 0.0;
+        for (int i = -5; i <= 5; ++i) {
+            gaussian[i + 5] = std::exp(-i * i / (2.0 * 1.5 * 1.5));
+            total += gaussian[i + 5];
         }
+        for (auto& weight : gaussian) {
+            weight /= total;
+        }
+
+        // Differentiate the Gaussian-window SSIM formula on the host, with zero padding.
+        for (size_t base = 0; base < x.size(); base += plane_size) {
+            for (int row = 0; row < h; ++row) {
+                for (int col = 0; col < w; ++col) {
+                    const double scale = upstream[base + row * w + col];
+                    if (scale == 0.0) {
+                        continue;
+                    }
+                    double mx = 0.0, my = 0.0, xx = 0.0, yy = 0.0, xy = 0.0;
+                    for (int dy = -5; dy <= 5; ++dy) {
+                        for (int dx = -5; dx <= 5; ++dx) {
+                            const int r = row + dy, c = col + dx;
+                            if (r < 0 || r >= h || c < 0 || c >= w) {
+                                continue;
+                            }
+                            const size_t i = base + r * w + c;
+                            const double weight = gaussian[dy + 5] * gaussian[dx + 5];
+                            mx += weight * x[i];
+                            my += weight * y[i];
+                            xx += weight * x[i] * x[i];
+                            yy += weight * y[i] * y[i];
+                            xy += weight * x[i] * y[i];
+                        }
+                    }
+                    const double a = 2.0 * mx * my + 0.0001;
+                    const double b = 2.0 * (xy - mx * my) + 0.0009;
+                    const double c = mx * mx + my * my + 0.0001;
+                    const double d = xx - mx * mx + yy - my * my + 0.0009;
+                    const double value = a * b / (c * d);
+                    const double d_mean = 2.0 * my * (b - a) / (c * d) + 2.0 * mx * value * (1.0 / d - 1.0 / c);
+                    const double d_square = -value / d;
+                    const double d_product = 2.0 * a / (c * d);
+                    for (int dy = -5; dy <= 5; ++dy) {
+                        for (int dx = -5; dx <= 5; ++dx) {
+                            const int r = row + dy, c = col + dx;
+                            if (r < 0 || r >= h || c < 0 || c >= w) {
+                                continue;
+                            }
+                            const size_t i = base + r * w + c;
+                            const double weight = gaussian[dy + 5] * gaussian[dx + 5];
+                            gradient[i] += scale * weight * (d_mean + 2.0 * x[i] * d_square + y[i] * d_product);
+                        }
+                    }
+                }
+            }
+        }
+        return Tensor::from_vector(std::vector<float>(gradient.begin(), gradient.end()), image.shape(), image.device());
     }
 
+} // namespace
+
+class FusedL1SSIMTest : public lfs::test::CudaBackendTest {
+protected:
     // Reference implementation: compute L1 + SSIM loss correctly
     // IMPORTANT: The fused kernel computes PER-PIXEL combined loss for ALL pixels,
     // then crops to valid region (5 pixels from each edge) before taking mean.
@@ -98,7 +167,7 @@ protected:
 
         // SSIM gradient: need to backprop with -ssim_weight (since loss = 1 - ssim)
         auto ssim_dL_dmap = dL_dmap * (-ssim_weight);
-        auto ssim_grad = ssim_backward_with_grad_map(ssim_result.ctx, ssim_dL_dmap);
+        auto ssim_grad = reference_ssim_gradient(img1_4d, img2_4d, ssim_dL_dmap);
 
         auto combined_grad = l1_grad + ssim_grad;
 
@@ -326,21 +395,24 @@ TEST_F(FusedL1SSIMTest, WorkspaceReuse) {
     EXPECT_NE(grad1_norm, grad2_norm);
 }
 
-// Test PhotometricLoss uses fused kernel
-TEST_F(FusedL1SSIMTest, PhotometricLossUsesFusedKernel) {
+TEST_F(FusedL1SSIMTest, PhotometricOpsUsesFusedKernel) {
     const int C = 3, H = 64, W = 64;
     auto rendered = Tensor::randn({C, H, W}, Device::GPU);
     auto gt = Tensor::randn({C, H, W}, Device::GPU);
 
-    lfs::training::losses::PhotometricLoss loss_fn;
-    lfs::training::losses::PhotometricLoss::Params params{.lambda_dssim = 0.2f};
-
-    auto result = loss_fn.forward(rendered, gt, params);
-    ASSERT_TRUE(result.has_value());
-
-    auto [loss, ctx] = *result;
+    const auto& ops = lfs::training::cuda_photometric_ops();
+    lfs::gpu_ops::PhotoSaved saved{.backend = ops.create()};
+    lfs::core::Tensor loss;
+    lfs::core::Tensor grad;
+    lfs::core::Tensor grad_raw;
+    const lfs::gpu_ops::PhotoParams params{
+        .path = lfs::gpu_ops::PhotoPath::Fused,
+        .ssim_weight = 0.2f,
+        .valid_padding = true,
+    };
+    ops.evaluate(saved, rendered, {}, gt, {}, params, loss, grad, grad_raw);
     EXPECT_FALSE(std::isnan(loss.item<float>()));
-    EXPECT_FALSE(std::isnan(ctx.grad_image.abs().max().item<float>()));
+    EXPECT_FALSE(std::isnan(grad.abs().max().item<float>()));
 }
 
 TEST_F(FusedL1SSIMTest, RejectsInvalidImageContractsBeforeKernelLaunch) {
@@ -370,13 +442,26 @@ TEST_F(FusedL1SSIMTest, RejectsInvalidImageContractsBeforeKernelLaunch) {
             0.2f, workspace, true),
         std::exception);
 
-    lfs::training::losses::PhotometricLoss photometric;
-    auto result = photometric.forward(
-        valid, valid.cpu(), {.lambda_dssim = 0.2f});
-    EXPECT_FALSE(result.has_value());
-    result = photometric.forward(
-        valid, valid, {.lambda_dssim = std::numeric_limits<float>::infinity()});
-    EXPECT_FALSE(result.has_value());
+    const auto& ops = lfs::training::cuda_photometric_ops();
+    lfs::gpu_ops::PhotoSaved saved{.backend = ops.create()};
+    lfs::core::Tensor loss;
+    lfs::core::Tensor grad;
+    lfs::core::Tensor grad_raw;
+    EXPECT_THROW(
+        ops.evaluate(
+            saved, valid, {}, valid.cpu(), {},
+            {.path = lfs::gpu_ops::PhotoPath::Fused, .ssim_weight = 0.2f, .valid_padding = true},
+            loss, grad, grad_raw),
+        std::exception);
+    EXPECT_THROW(
+        ops.evaluate(
+            saved, valid, {}, valid,
+            {},
+            {.path = lfs::gpu_ops::PhotoPath::Fused,
+             .ssim_weight = std::numeric_limits<float>::infinity(),
+             .valid_padding = true},
+            loss, grad, grad_raw),
+        std::exception);
 }
 
 TEST_F(FusedL1SSIMTest, UInt8TargetMatchesFloatReference) {
@@ -403,16 +488,8 @@ TEST_F(FusedL1SSIMTest, UInt8TargetMatchesFloatReference) {
 // Masked Fused L1+SSIM Tests
 // ============================================================================
 
-class MaskedFusedL1SSIMTest : public ::testing::Test {
+class MaskedFusedL1SSIMTest : public lfs::test::CudaBackendTest {
 protected:
-    void SetUp() override {
-        int device_count = 0;
-        cudaGetDeviceCount(&device_count);
-        if (device_count == 0) {
-            GTEST_SKIP() << "No CUDA device available";
-        }
-    }
-
     // Reference implementation for masked loss
     std::pair<float, Tensor> compute_reference_masked_loss(
         const Tensor& img1, const Tensor& img2, const Tensor& mask, float ssim_weight) {
@@ -453,7 +530,7 @@ protected:
 
         // SSIM gradient
         auto dL_dmap = mask_expanded * (-1.0f) / mask_sum;
-        auto ssim_grad = ssim_backward_with_grad_map(ssim_result.ctx, dL_dmap);
+        auto ssim_grad = reference_ssim_gradient(img1_4d, img2_4d, dL_dmap);
 
         // Combined
         float combined_loss = l1_weight * masked_l1_loss + ssim_weight * ssim_loss;
@@ -842,4 +919,71 @@ TEST_F(FusedL1SSIMTest, DecoupledRoutesContrastStructureGradientToRawBranch) {
     EXPECT_GT(loss.item<float>(), 0.0f);
     EXPECT_LT(grads.grad_corrected.abs().max().item<float>(), 1e-4f);
     EXPECT_GT(grads.grad_raw.abs().max().item<float>(), 1e-4f);
+}
+
+TEST_F(FusedL1SSIMTest, BackwardFillFollowsIndependentQueue) {
+    constexpr size_t h = 24, w = 28;
+    std::vector<float> pixels(3 * h * w), target(pixels.size());
+    for (size_t i = 0; i < pixels.size(); ++i) {
+        pixels[i] = static_cast<float>(i % 251) / 256.0f;
+        target[i] = static_cast<float>((i * 13) % 251) / 256.0f;
+    }
+    for (const bool crop : {false, true}) {
+        Tensor reference;
+        for (const bool independent : {false, true}) {
+            TensorWorkQueue queue(GpuBackend::CUDA, independent ? TensorWorkQueue::Mode::Independent
+                                                                : TensorWorkQueue::Mode::LegacyOrdered);
+            TensorWorkQueue::Scope scope(queue);
+            auto image = Tensor::from_vector(pixels, {1, 3, h, w}, Device::GPU);
+            auto truth = Tensor::from_vector(target, {1, 3, h, w}, Device::GPU);
+            SSIMWorkspace workspace;
+            auto [loss, context] = ssim_forward(image, truth, workspace, crop);
+            queue.wait();
+            if (independent) {
+                // Legacy clears and fills can overtake a pending workspace write.
+                queue.enqueue_host_callback([](void*) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+                },
+                                            nullptr);
+            }
+            workspace.dL_dmap.fill_(-0.5f, getCurrentCUDAStream());
+            auto gradient = ssim_backward(context, workspace, 0.75f);
+            queue.wait();
+            const auto map = workspace.dL_dmap.cpu().to_vector();
+            const float expected = 0.75f / static_cast<float>(3 * (crop ? (h - 10) * (w - 10) : h * w));
+            for (size_t i = 0; i < map.size(); ++i) {
+                const size_t row = (i / w) % h, col = i % w;
+                const bool valid = !crop || (row >= 5 && row < h - 5 && col >= 5 && col < w - 5);
+                ASSERT_EQ(map[i], valid ? expected : 0.0f) << "crop=" << crop << " index=" << i;
+            }
+            auto host = gradient.cpu().contiguous();
+            if (independent) {
+                ASSERT_EQ(host.bytes(), reference.bytes());
+                EXPECT_EQ(std::memcmp(host.data_ptr(), reference.data_ptr(), host.bytes()), 0);
+            } else {
+                reference = std::move(host);
+            }
+        }
+    }
+}
+
+TEST_F(FusedL1SSIMTest, ReusedWorkspaceFollowsExecutionQueue) {
+    TensorWorkQueue producer(GpuBackend::CUDA);
+    TensorWorkQueue consumer(GpuBackend::CUDA);
+    TensorWorkQueue::Scope scope(producer);
+    auto image = Tensor::full({1, 3, 24, 28}, 0.25f, Device::GPU);
+    auto target = Tensor::full({1, 3, 24, 28}, 0.75f, Device::GPU);
+    FusedL1SSIMWorkspace workspace;
+    const auto first = fused_l1_ssim_forward(image, target, 0.2f, workspace);
+    const float reference = first.first.item<float>();
+    {
+        TensorWorkQueue::Scope next(consumer);
+        const auto result = fused_l1_ssim_forward(image, target, 0.2f, workspace);
+        EXPECT_EQ(workspace.ssim_map.stream(), consumer.native_handle());
+        EXPECT_EQ(workspace.reduction_result.stream(), consumer.native_handle());
+        EXPECT_EQ(result.first.item<float>(), reference);
+        const auto gradient = fused_l1_ssim_backward(result.second, workspace);
+        EXPECT_EQ(gradient.stream(), consumer.native_handle());
+        consumer.wait();
+    }
 }

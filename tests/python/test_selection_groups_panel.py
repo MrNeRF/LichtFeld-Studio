@@ -153,6 +153,16 @@ def test_selection_groups_uses_dirty_update_policy(selection_groups_module):
     assert "update_interval_ms" not in selection_groups_module.SelectionGroupsPanel.__dict__
 
 
+def test_selection_groups_stays_closed_after_layout_reset(selection_groups_module):
+    panel = selection_groups_module.SelectionGroupsPanel
+    assert panel.parent == "lfs.rendering"
+    # The native registrar rejects a child panel that also overrides space.
+    assert "space" not in panel.__dict__
+    assert panel.options == {
+        selection_groups_module.lf.ui.PanelOption.DEFAULT_CLOSED
+    }
+
+
 def test_selection_groups_marks_empty_state_dirty(selection_groups_module):
     panel = selection_groups_module.SelectionGroupsPanel()
     panel._handle = _HandleStub()

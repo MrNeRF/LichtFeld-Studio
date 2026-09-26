@@ -4,6 +4,7 @@
 #include "sparsity_optimizer.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
+#include "core/tensor_serialization.hpp"
 #include <cuda_runtime.h>
 #include <format>
 #include <limits>

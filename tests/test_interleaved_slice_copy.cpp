@@ -44,6 +44,9 @@ TEST_F(InterleavedSliceCopyTest, ColumnSliceShape) {
 
 // Compare with LibTorch behavior
 TEST_F(InterleavedSliceCopyTest, ColumnSliceShapeVsTorch) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "Torch CUDA reference unavailable";
+    }
     const size_t N = 10;
 
     auto torch_t = torch::zeros({N, 7}, torch::kCUDA);

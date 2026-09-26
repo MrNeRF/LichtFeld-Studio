@@ -1,6 +1,7 @@
 static const uint LFS_LOCAL_SIZE_X = 256;
 static const uint LFS_PUSH_CONSTANT_SIZE = 24;
 #include "half_bits.slangh"
+#include "byte_word.slangh"
 
 [SpecializationConstant]
 const uint kInputDType = 0;
@@ -15,12 +16,7 @@ struct Parameters
     uint padding;
 };
 
-uint loadByte(uint64_t address, uint64_t index)
-{
-    const uint64_t byteAddress = address + index;
-    const uint shift = uint(byteAddress & uint64_t(3)) * 8u;
-    return (((Ptr<uint, Access.Read>)(byteAddress & ~uint64_t(3)))[0] >> shift) & 255u;
-}
+#include "byte_read.slangh"
 
 float loadAsFloat(uint64_t address, uint index)
 {
@@ -70,21 +66,6 @@ uint convertToByte(uint64_t inputAddress, uint index)
     return loadAsFloat(inputAddress, index) != 0.0f ? 1u : 0u;
 }
 
-void storeMaskedWord(uint64_t wordAddress, uint packed, uint mask)
-{
-    Ptr<uint, Access.ReadWrite> word =
-        (Ptr<uint, Access.ReadWrite>)wordAddress;
-    uint assumed = word[0];
-    uint observed;
-    do
-    {
-        const uint replacement = (assumed & ~mask) | packed;
-        InterlockedCompareExchange(word[0], assumed, replacement, observed);
-        if (observed == assumed) return;
-        assumed = observed;
-    } while (true);
-}
-
 [numthreads(LFS_LOCAL_SIZE_X, 1, 1)]
 void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters parameters)
 {
@@ -120,12 +101,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters param
                     mask |= 255u << (lane * 8u);
                 }
             }
-            if (mask == 0u)
-                continue;
-            if (mask == 0xffffffffu)
-                ((Ptr<uint, Access.ReadWrite>)wordAddress)[0] = packed;
-            else
-                storeMaskedWord(wordAddress, packed, mask);
+            storeByteWord(wordAddress, packed, mask);
         }
         return;
     }

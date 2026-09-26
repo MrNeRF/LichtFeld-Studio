@@ -5,6 +5,7 @@
 #pragma once
 
 #include "istrategy.hpp"
+#include "lfs/training/ops/mcmc.hpp"
 
 #include "lfs/training/refine_scratch.hpp"
 #include "optimizer/adam_optimizer.hpp"
@@ -96,6 +97,8 @@ namespace lfs::training {
         }
 
     private:
+        const lfs::gpu_ops::McmcOps& mcmc_ops() const;
+        const lfs::gpu_ops::McmcOps* mcmc_ops_ = nullptr;
         friend class ::CropDampingStrategyTest_IgsPlusRejectedRowsAreNeverSampledAtZeroScale_Test;
 
         // Helper Functions
@@ -161,7 +164,6 @@ namespace lfs::training {
         lfs::core::Tensor _edge_score_sum;
         lfs::core::Tensor _edge_view_scores;
         int _edge_sample_count = 0;
-        PositiveMedianScratch _edge_median_scratch;
         lfs::core::Tensor _error_score_max;
         bool _precompute_valid = false;
 

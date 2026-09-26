@@ -34,7 +34,7 @@ namespace lfs::python {
 
     } // anonymous namespace
 
-    int run_plugin_command(const lfs::core::args::PluginMode& mode) {
+    int run_plugin_command(const lfs::io::args::PluginMode& mode) {
         if (!ensure_initialized()) {
             return 1;
         }
@@ -44,7 +44,7 @@ namespace lfs::python {
             const GilAcquire gil;
 
             switch (mode.command) {
-            case lfs::core::args::PluginMode::Command::CREATE: {
+            case lfs::io::args::PluginMode::Command::CREATE: {
                 PyObjectGuard setup(PyImport_ImportModule("lfs_plugins.dev_setup"));
                 if (!setup) {
                     print_python_error();
@@ -100,7 +100,7 @@ namespace lfs::python {
                 break;
             }
 
-            case lfs::core::args::PluginMode::Command::CHECK: {
+            case lfs::io::args::PluginMode::Command::CHECK: {
                 PyObjectGuard validator(PyImport_ImportModule("lfs_plugins.validator"));
                 if (!validator) {
                     print_python_error();
@@ -143,7 +143,7 @@ namespace lfs::python {
                 break;
             }
 
-            case lfs::core::args::PluginMode::Command::LIST: {
+            case lfs::io::args::PluginMode::Command::LIST: {
                 PyObjectGuard manager_mod(PyImport_ImportModule("lfs_plugins.manager"));
                 if (!manager_mod) {
                     print_python_error();

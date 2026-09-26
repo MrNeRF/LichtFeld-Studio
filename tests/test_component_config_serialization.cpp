@@ -12,6 +12,7 @@
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "training/checkpoint.hpp"
 #include "training/strategies/mcmc.hpp"
 
@@ -347,7 +348,9 @@ namespace {
         std::filesystem::path path_;
     };
 
-    TEST(BilateralGridConfigSerializationTest, NewFormatRoundTripPreservesEveryField) {
+    class BilateralGridConfigSerializationTest : public lfs::test::CudaBackendTest {};
+
+    TEST_F(BilateralGridConfigSerializationTest, NewFormatRoundTripPreservesEveryField) {
         const auto config = bilateral_config();
         lfs::training::BilateralGrid source(1, 2, 3, 4, 100, config);
         std::stringstream stream;
@@ -382,7 +385,7 @@ namespace {
         expect_optimizer_config_eq(config, loaded.get_config());
     }
 
-    TEST(BilateralGridConfigSerializationTest, VersionTwoOmitsLastStepAndDefaultsToZero) {
+    TEST_F(BilateralGridConfigSerializationTest, VersionTwoOmitsLastStepAndDefaultsToZero) {
         const auto config = bilateral_config();
         lfs::training::BilateralGrid source(1, 2, 3, 4, 100, config);
         std::stringstream current;
@@ -398,7 +401,7 @@ namespace {
         EXPECT_EQ(loaded.get_step(), source.get_step());
     }
 
-    TEST(BilateralGridConfigSerializationTest, LegacyVersionOneRawConfigLoads) {
+    TEST_F(BilateralGridConfigSerializationTest, LegacyVersionOneRawConfigLoads) {
         const auto config = bilateral_config();
         lfs::training::BilateralGrid source(1, 2, 3, 4, 100, config);
         std::stringstream current;
@@ -424,7 +427,9 @@ namespace {
         expect_optimizer_config_eq(config, loaded.get_config());
     }
 
-    TEST(PPISPConfigSerializationTest, NewFormatRoundTripPreservesEveryField) {
+    class PPISPConfigSerializationTest : public lfs::test::CudaBackendTest {};
+
+    TEST_F(PPISPConfigSerializationTest, NewFormatRoundTripPreservesEveryField) {
         const auto config = ppisp_config();
         lfs::training::PPISP source(100, config);
         source.register_frame(7, 11);
@@ -441,7 +446,7 @@ namespace {
         expect_ppisp_config_eq(config, loaded.get_config());
     }
 
-    TEST(PPISPConfigSerializationTest, LegacyVersionTwoRawConfigLoads) {
+    TEST_F(PPISPConfigSerializationTest, LegacyVersionTwoRawConfigLoads) {
         const auto config = ppisp_config();
         lfs::training::PPISP source(100, config);
         source.register_frame(7, 11);
@@ -477,7 +482,9 @@ namespace {
         expect_ppisp_config_eq(expected, loaded.get_config());
     }
 
-    TEST(PPISPControllerPoolConfigSerializationTest, NewFormatRoundTripPreservesEveryField) {
+    class PPISPControllerPoolConfigSerializationTest : public lfs::test::CudaBackendTest {};
+
+    TEST_F(PPISPControllerPoolConfigSerializationTest, NewFormatRoundTripPreservesEveryField) {
         const auto config = controller_pool_config();
         lfs::training::PPISPControllerPool source(1, 100, config);
         std::stringstream stream;
@@ -492,7 +499,7 @@ namespace {
         expect_optimizer_config_eq(config, loaded.get_config());
     }
 
-    TEST(PPISPControllerPoolConfigSerializationTest, LegacyVersionOneRawConfigLoads) {
+    TEST_F(PPISPControllerPoolConfigSerializationTest, LegacyVersionOneRawConfigLoads) {
         const auto config = controller_pool_config();
         lfs::training::PPISPControllerPool source(1, 100, config);
         std::stringstream current;
@@ -518,7 +525,9 @@ namespace {
         expect_optimizer_config_eq(config, loaded.get_config());
     }
 
-    TEST(ComponentConfigSerializationTest, FutureComponentVersionsReturnTypedUnsupported) {
+    class ComponentConfigSerializationTest : public lfs::test::CudaBackendTest {};
+
+    TEST_F(ComponentConfigSerializationTest, FutureComponentVersionsReturnTypedUnsupported) {
         {
             SCOPED_TRACE("BilateralGrid");
             lfs::training::BilateralGrid loaded(1, 1, 1, 1, 1);
@@ -542,7 +551,9 @@ namespace {
         }
     }
 
-    TEST(CheckpointComponentConfigRoundTripTest, AllConfigsRoundTripInsideLfkp) {
+    class CheckpointComponentConfigRoundTripTest : public lfs::test::CudaBackendTest {};
+
+    TEST_F(CheckpointComponentConfigRoundTripTest, AllConfigsRoundTripInsideLfkp) {
         const ScopedTestDirectory temp_dir("lfs_checkpoint_component_config_roundtrip");
 
         lfs::core::param::TrainingParameters params;
@@ -600,7 +611,7 @@ namespace {
         expect_optimizer_config_eq(controller, target_controller.get_config());
     }
 
-    TEST(BilateralGridConfigSerializationTest, ExposureChromaRoundTripPreservesParameterization) {
+    TEST_F(BilateralGridConfigSerializationTest, ExposureChromaRoundTripPreservesParameterization) {
         const auto config = bilateral_config();
         lfs::training::BilateralGrid source(
             2, 2, 2, 2, 50, config, lfs::training::BilateralGridParameterization::ExposureChroma);
@@ -622,7 +633,7 @@ namespace {
         EXPECT_EQ(live.channels(), 9);
     }
 
-    TEST(BilateralGridConfigSerializationTest, AdoptRejectsParameterizationMismatch) {
+    TEST_F(BilateralGridConfigSerializationTest, AdoptRejectsParameterizationMismatch) {
         const auto config = bilateral_config();
         lfs::training::BilateralGrid affine(2, 2, 2, 2, 50, config);
         std::stringstream stream;
@@ -636,7 +647,7 @@ namespace {
         EXPECT_THROW(chroma.adopt_checkpoint_state(loaded), std::runtime_error);
     }
 
-    TEST(CheckpointComponentConfigRoundTripTest, ExposureChromaMismatchFailsToLoad) {
+    TEST_F(CheckpointComponentConfigRoundTripTest, ExposureChromaMismatchFailsToLoad) {
         const ScopedTestDirectory temp_dir("lfs_checkpoint_exposure_chroma_mismatch");
 
         lfs::core::param::TrainingParameters params;

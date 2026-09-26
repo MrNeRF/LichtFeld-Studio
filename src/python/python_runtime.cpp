@@ -840,6 +840,22 @@ namespace lfs::python {
             g_rml_doc_unregister_cb(name);
     }
 
+    namespace {
+        RmlDocPendingCallback rml_doc_pending_callback = nullptr;
+    }
+
+    void set_rml_doc_pending_callback(RmlDocPendingCallback callback) {
+        rml_doc_pending_callback = callback;
+    }
+
+    bool has_pending_rml_document_updates(void* doc) {
+        return doc && rml_doc_pending_callback && rml_doc_pending_callback(doc, false);
+    }
+
+    bool consume_pending_rml_document_updates(void* doc) {
+        return doc && rml_doc_pending_callback && rml_doc_pending_callback(doc, true);
+    }
+
     void set_ensure_initialized_callback(EnsureInitializedCallback cb) {
         g_ensure_initialized_callback = cb;
     }

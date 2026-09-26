@@ -218,6 +218,8 @@ namespace lfs::training {
         std::optional<lfs::core::Tensor> mask = {};   // Optional mask [H,W], float32
         std::optional<lfs::core::Tensor> depth = {};  // Optional depth [H,W], float32
         std::optional<lfs::core::Tensor> normal = {}; // Optional normals [3,H,W], float32 in [-1,1]
+        std::optional<lfs::core::TensorFence> image_ready = {};
+        std::optional<lfs::core::TensorFence> mask_ready = {};
         CUevent_st* depth_ready_event = nullptr;
         CUevent_st* normal_ready_event = nullptr;
         // Ring-backed tensors must never outlive this keepalive handle.
@@ -412,30 +414,9 @@ namespace lfs::training {
               loader_(std::make_shared<lfs::io::PipelinedImageLoader>(config)),
               shutdown_(false) {
 
-            // Canonicalize every source once for this training run. The loader
-            // retains only final encoded blobs in its run-local RAM/spill tier;
-            // normal iteration is decode-only consumption of those blobs.
-            if (dataset_->size() > 0) {
-                std::vector<lfs::io::ImageRequest> run_requests;
-                run_requests.reserve(dataset_->size());
-                const size_t sequence_base =
-                    std::numeric_limits<size_t>::max() - dataset_->size();
-                for (size_t local_idx = 0; local_idx < dataset_->size(); ++local_idx) {
-                    run_requests.push_back(make_request(
-                        dataset_->local_to_source(local_idx), sequence_base + local_idx));
-                }
-                loader_->canonicalize(run_requests);
-
-                // Canonicalization is a named pre-training boundary.  All
-                // decode leases are dead here, so release their ring storage
-                // and trim every transient allocator before the first training
-                // frame can overlap this import phase.
-                loader_->reclaim_idle_decoded_frames();
-                lfs::core::Tensor::trim_memory_pool();
-                LOG_INFO("[PipelinedDataLoader] canonicalization boundary trim complete");
-            }
-
-            // Prefetch initial batch from the now-canonical run cache.
+            // Start with the bounded prefetch window. The loader prepares and
+            // caches each image on first use; scanning the entire dataset here
+            // delays the first training step in proportion to dataset size.
             prefetch_next_batch();
         }
 
@@ -468,6 +449,8 @@ namespace lfs::training {
                 CameraExample example{
                     .data = {cam.get(), std::move(ready.tensor)},
                     .target = lfs::core::Tensor(),
+                    .image_ready = std::move(ready.image_ready),
+                    .mask_ready = std::move(ready.mask_ready),
                     .depth_ready_event = ready.depth_ready_event,
                     .normal_ready_event = ready.normal_ready_event,
                 };

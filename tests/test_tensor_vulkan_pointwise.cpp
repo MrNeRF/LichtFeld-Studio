@@ -239,6 +239,8 @@ namespace {
             -std::numeric_limits<float>::infinity(),
             std::numeric_limits<float>::quiet_NaN()};
         const Tensor input = upload_float(values, {values.size()});
+        const Tensor cpu = Tensor::from_vector(values, {values.size()}, Device::CPU);
+        EXPECT_EQ(input.to(DataType::Bool).to_vector_bool(), cpu.to(DataType::Bool).to_vector_bool());
         EXPECT_EQ(input.to(DataType::UInt8).to_vector_uint8(),
                   std::vector<uint8_t>({0, 1, 255, 255, 0, 0, 1, 0, 0, 0}));
 
@@ -582,4 +584,138 @@ namespace {
         EXPECT_EQ(bool_tensor.cpu().to_vector_uint8(),
                   (std::vector<uint8_t>{0xA5, 0xA5, 0, 1, 1, 1, 0, 1, 0xA5, 0xA5}));
     }
+    class TensorBytePointwise : public TensorVulkanPointwise,
+                                public testing::WithParamInterface<DataType> {};
+
+    TEST_P(TensorBytePointwise, OffsetOutputsPreserveNeighbors) {
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        const DataType dtype = GetParam();
+        for (const size_t count : {size_t{1}, size_t{3}, size_t{4}, size_t{7}, size_t{257}}) {
+            std::vector<float> values(count + 1);
+            for (size_t i = 0; i < values.size(); ++i)
+                values[i] = static_cast<float>(i % 5);
+            const Tensor cpu = Tensor::from_vector(values, {values.size()}, Device::CPU).to(dtype);
+            const Tensor lhs = upload_vulkan(cpu).slice(0, 1, count + 1);
+            const Tensor rhs_cpu = Tensor::full({count}, 1.0f, Device::CPU).to(dtype);
+            const Tensor rhs = upload_vulkan(rhs_cpu);
+            const auto expected = (cpu.slice(0, 1, count + 1) > rhs_cpu).to_vector_uint8();
+            for (size_t offset = 0; offset < 4; ++offset) {
+                SCOPED_TRACE(count);
+                SCOPED_TRACE(offset);
+                Tensor dest = cpu_bytes(std::vector<uint8_t>(count + 12, 0xA5), DataType::UInt8).gpu();
+                auto out = internal::offset_storage_ref(internal::storage_ref(dest), offset + 4);
+                out.dtype = DataType::Bool;
+                const auto program = internal::pointwise_program(dtype, DataType::Bool, ops::greater_op{});
+                internal::backend_ops(GpuBackend::Vulkan).binary(program, internal::storage_ref(lhs), internal::storage_ref(rhs), out, count, {});
+                EXPECT_EQ(dest.cpu().to_vector_uint8(), guarded_payload(expected, offset + 4, 8 - offset));
+                const Tensor one = rhs.slice(0, 0, 1);
+                internal::backend_ops(GpuBackend::Vulkan).broadcast_binary(program, internal::storage_ref(lhs), internal::strided_layout(lhs), internal::storage_ref(one), internal::strided_layout(one), out, internal::strided_layout(rhs), {});
+                EXPECT_EQ(dest.cpu().to_vector_uint8(), guarded_payload(expected, offset + 4, 8 - offset));
+                if (dtype == DataType::Bool) {
+                    const auto inverted = cpu.slice(0, 1, count + 1).logical_not().to_vector_uint8();
+                    internal::backend_ops(GpuBackend::Vulkan).unary(internal::pointwise_program(dtype, dtype, ops::logical_not_op{}), internal::storage_ref(lhs), out, count, {});
+                    EXPECT_EQ(dest.cpu().to_vector_uint8(), guarded_payload(inverted, offset + 4, 8 - offset));
+                }
+                if (dtype == DataType::UInt8) {
+                    out.dtype = dtype;
+                    const auto added = (cpu.slice(0, 1, count + 1) + rhs_cpu).to_vector_uint8();
+                    internal::backend_ops(GpuBackend::Vulkan).binary(internal::pointwise_program(dtype, dtype, ops::add_op{}), internal::storage_ref(lhs), internal::storage_ref(rhs), out, count, {});
+                    EXPECT_EQ(dest.cpu().to_vector_uint8(), guarded_payload(added, offset + 4, 8 - offset));
+                    internal::backend_ops(GpuBackend::Vulkan).load_fill(out, count, internal::scalar_operand(int32_t{3}), {});
+                    EXPECT_EQ(dest.cpu().to_vector_uint8(), guarded_payload(std::vector<uint8_t>(count, 3), offset + 4, 8 - offset));
+                    auto view = dest.slice(0, offset + 4, offset + count + 4);
+                    const Tensor mask = lhs > rhs;
+                    view.masked_fill_(mask, 9.0f);
+                    std::vector<uint8_t> filled(count);
+                    for (size_t i = 0; i < count; ++i)
+                        filled[i] = expected[i] ? 9 : 3;
+                    EXPECT_EQ(dest.cpu().to_vector_uint8(), guarded_payload(filled, offset + 4, 8 - offset));
+                    view.and_live_(mask);
+                    for (size_t i = 0; i < count; ++i)
+                        filled[i] = expected[i] ? 9 : 0;
+                    EXPECT_EQ(dest.cpu().to_vector_uint8(), guarded_payload(filled, offset + 4, 8 - offset));
+                }
+            }
+        }
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Dtypes, TensorBytePointwise,
+                             testing::Values(DataType::Float32, DataType::Float16, DataType::Int32,
+                                             DataType::Int64, DataType::UInt8, DataType::Bool));
+
+    class TensorWhereDType : public TensorVulkanPointwise,
+                             public testing::WithParamInterface<DataType> {};
+
+    TEST_P(TensorWhereDType, BroadcastValuesMatchCpu) {
+        const Tensor condition = Tensor::from_vector(std::vector<float>{0, 1, 0, 1, 1}, {5, 1}, Device::CPU).to(DataType::Bool);
+        std::vector<float> values(35);
+        for (size_t i = 0; i < values.size(); ++i)
+            values[i] = static_cast<float>(i);
+        const Tensor lhs = Tensor::from_vector(values, {5, 7}, Device::CPU).to(GetParam());
+        const Tensor rhs = Tensor::full({1, 7}, 2.0f, Device::CPU, GetParam());
+        const Tensor expected = Tensor::where(condition, lhs, rhs);
+        for (const auto backend : kGpuBackends) {
+            if (!gpu_backend_available(backend))
+                continue;
+            GpuBackendScope scope(backend);
+            const Tensor actual = Tensor::where(condition.gpu(), lhs.gpu(), rhs.gpu()).cpu();
+            ASSERT_EQ(actual.dtype(), expected.dtype());
+            ASSERT_EQ(actual.bytes(), expected.bytes());
+            EXPECT_EQ(std::memcmp(actual.data_ptr(), expected.data_ptr(), actual.bytes()), 0);
+        }
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Dtypes, TensorWhereDType,
+                             testing::Values(DataType::Float32, DataType::Float16, DataType::Int32,
+                                             DataType::Int64, DataType::UInt32, DataType::UInt8, DataType::Bool));
+
+    class TensorStridedCopy : public TensorVulkanPointwise,
+                              public testing::WithParamInterface<DataType> {};
+
+    TEST_P(TensorStridedCopy, RowViewsGatherAndScatterExactValues) {
+        std::vector<float> values(96);
+        for (size_t i = 0; i < values.size(); ++i)
+            values[i] = static_cast<float>(i);
+        const Tensor cpu = Tensor::from_vector(values, {3, 32}, Device::CPU).to(GetParam());
+        for (const auto backend : kGpuBackends) {
+            if (!gpu_backend_available(backend))
+                continue;
+            GpuBackendScope scope(backend);
+            SCOPED_TRACE(static_cast<int>(backend));
+            const Tensor gpu = cpu.gpu();
+            for (const int offset : {0, 1}) {
+                const Tensor flat_source = gpu.reshape({96}).slice(0, offset, offset + 65);
+                const Tensor flat_expected = cpu.reshape({96}).slice(0, offset, offset + 65);
+                const Tensor cloned = flat_source.clone().cpu();
+                EXPECT_EQ(std::memcmp(cloned.data_ptr(), flat_expected.data_ptr(), cloned.bytes()), 0);
+                for (const int destination_offset : {offset, offset + 1}) {
+                    Tensor destination = Tensor::zeros({96}, Device::GPU, GetParam());
+                    destination.slice(0, destination_offset, destination_offset + 65).copy_from(flat_source);
+                    Tensor reference = Tensor::zeros({96}, Device::CPU, GetParam());
+                    reference.slice(0, destination_offset, destination_offset + 65).copy_from(flat_expected);
+                    const Tensor result = destination.cpu();
+                    EXPECT_EQ(std::memcmp(result.data_ptr(), reference.data_ptr(), result.bytes()), 0);
+                }
+                for (const int width : {15, 16}) {
+                    SCOPED_TRACE(offset);
+                    SCOPED_TRACE(width);
+                    const Tensor expected = cpu.slice(1, offset, offset + width).contiguous();
+                    const Tensor copied = gpu.slice(1, offset, offset + width).contiguous();
+                    const Tensor actual = copied.cpu();
+                    EXPECT_EQ(std::memcmp(actual.data_ptr(), expected.data_ptr(), actual.bytes()), 0);
+                    Tensor destination = Tensor::zeros({3, 32}, Device::GPU, GetParam());
+                    destination.slice(1, offset, offset + width).copy_from(copied);
+                    Tensor reference = Tensor::zeros({3, 32}, Device::CPU, GetParam());
+                    reference.slice(1, offset, offset + width).copy_from(expected);
+                    const Tensor result = destination.cpu();
+                    EXPECT_EQ(std::memcmp(result.data_ptr(), reference.data_ptr(), result.bytes()), 0);
+                }
+            }
+        }
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Dtypes, TensorStridedCopy,
+                             testing::Values(DataType::Float32, DataType::Float16, DataType::Int32,
+                                             DataType::Int64, DataType::UInt32, DataType::UInt8, DataType::Bool));
+
 } // namespace

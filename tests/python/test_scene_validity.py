@@ -7,6 +7,8 @@ GUI mode where SceneManager calls set_application_scene(). See the C++ test
 test_scene_validity.cpp for comprehensive testing of the underlying mechanism.
 """
 
+import pytest
+
 class TestSceneValidityAPI:
     """Tests for scene validity API existence and basic behavior."""
 
@@ -23,6 +25,7 @@ class TestSceneValidityAPI:
 class TestSceneLoadHeadless:
     """Tests for scene loading in headless mode."""
 
+    @pytest.mark.integration
     def test_no_scene_context_after_headless_load(self, lf, test_sog):
         """Test no scene context available after headless load.
 

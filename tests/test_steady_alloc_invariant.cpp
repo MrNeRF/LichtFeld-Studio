@@ -4,6 +4,7 @@
 #include "core/alloc_counter.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "lfs/training/perf_bench.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
@@ -41,7 +42,9 @@ TEST(PerfBenchPeakCover, UsesOneSnapshotAndLiveIoBytes) {
         << "historical per-row peaks are not a concurrent I/O cover";
 }
 
-TEST(SteadyAllocInvariant, JointDensifySteadyLoopWithinBudget) {
+class SteadyAllocInvariant : public lfs::test::CudaBackendTest {};
+
+TEST_F(SteadyAllocInvariant, JointDensifySteadyLoopWithinBudget) {
     alloc_counter::reset_site_counts();
 
     // Fifteen refinements across six bounds tables must remain within the

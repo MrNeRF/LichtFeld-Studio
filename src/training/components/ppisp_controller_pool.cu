@@ -7,6 +7,7 @@
 #include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
+#include "core/tensor_serialization.hpp"
 #include "lfs/kernels/ppisp.cuh"
 #include "ppisp_controller_pool.hpp"
 #include <cassert>
@@ -252,7 +253,10 @@ namespace lfs::training {
         buf_output_ = lfs::core::Tensor::empty({1, FC_OUTPUT_DIM}, lfs::core::Device::GPU);
         fc_input_buffer_ = lfs::core::Tensor::zeros({1, FC1_INPUT_DIM}, lfs::core::Device::GPU);
         constexpr float DEFAULT_PRIOR = 1.0f;
-        cudaMemcpy(fc_input_buffer_.ptr<float>() + CNN_FLAT_DIM, &DEFAULT_PRIOR, sizeof(float), cudaMemcpyHostToDevice);
+        const auto stream = lfs::core::getCurrentCUDAStream();
+        LFS_CUDA_CHECK(cudaMemcpyAsync(fc_input_buffer_.ptr<float>() + CNN_FLAT_DIM,
+                                       &DEFAULT_PRIOR, sizeof(float), cudaMemcpyHostToDevice, stream));
+        LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
 
         grad_fc3_out_ = lfs::core::Tensor::empty({1, FC_HIDDEN_DIM}, lfs::core::Device::GPU);
         grad_fc2_out_ = lfs::core::Tensor::empty({1, FC_HIDDEN_DIM}, lfs::core::Device::GPU);
@@ -278,22 +282,16 @@ namespace lfs::training {
         if (buf_h_ >= max_h && buf_w_ >= max_w)
             return;
 
-        const size_t pool_h = max_h / POOL_STRIDE;
-        const size_t pool_w = max_w / POOL_STRIDE;
-
-        buf_conv1_ = lfs::core::Tensor::empty({1, CNN_CH1, max_h, max_w}, lfs::core::Device::GPU);
-        buf_pool_ = lfs::core::Tensor::empty({1, CNN_CH1, pool_h, pool_w}, lfs::core::Device::GPU);
-        buf_conv2_ = lfs::core::Tensor::empty({1, CNN_CH2, pool_h, pool_w}, lfs::core::Device::GPU);
-        buf_conv3_ = lfs::core::Tensor::empty({1, CNN_CH3, pool_h, pool_w}, lfs::core::Device::GPU);
+        // predict() allocates exact-size convolution outputs for each image.
+        // Only the fixed-size pooled output is reused across predictions.
         buf_pool2_ = lfs::core::Tensor::empty({1, CNN_CH3, POOL2_SIZE, POOL2_SIZE}, lfs::core::Device::GPU);
 
         buf_h_ = max_h;
         buf_w_ = max_w;
 
-        const size_t buf_bytes = (buf_conv1_.numel() + buf_pool_.numel() + buf_conv2_.numel() + buf_conv3_.numel() +
-                                  buf_pool2_.numel()) *
-                                 sizeof(float);
-        LOG_INFO("[PPISPControllerPool] CNN buffers %zux%zu: %.1f MB", max_h, max_w, buf_bytes / (1024.0 * 1024.0));
+        const size_t buf_bytes = buf_pool2_.numel() * sizeof(float);
+        LOG_INFO("[PPISPControllerPool] Fixed pooled CNN buffer 1x%dx%dx%d: %.1f KiB; max image bounds %zux%zu",
+                 CNN_CH3, POOL2_SIZE, POOL2_SIZE, buf_bytes / 1024.0, max_h, max_w);
     }
 
     lfs::core::Tensor PPISPControllerPool::predict(const int camera_idx, const lfs::core::Tensor& rendered_rgb,

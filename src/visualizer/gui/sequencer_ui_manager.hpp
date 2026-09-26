@@ -66,6 +66,7 @@ namespace lfs::vis {
             // manager before this value object is destructed.
             void shutdown();
             void tickPlaybackBeforeSceneRender();
+            [[nodiscard]] bool scrubToTime(float time, bool update_camera);
 
             [[nodiscard]] SequencerController& controller() { return controller_; }
             [[nodiscard]] const SequencerController& controller() const { return controller_; }
@@ -132,6 +133,7 @@ namespace lfs::vis {
             float advancePlaybackClock();
             [[nodiscard]] float playbackDelta(float delta_time) const;
             void advancePlayback(float delta_time);
+            [[nodiscard]] bool applyCurrentTimelineCamera();
             void applyPlaybackCameraFollow();
             void renderKeyframeEditOverlay(const ViewportLayout& viewport);
             void initPipPreview();

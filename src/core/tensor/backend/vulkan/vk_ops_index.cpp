@@ -23,7 +23,6 @@ namespace lfs::core::internal {
         using vk::checked_u32;
         using vk::dispatch_groups;
         using vk::kLocalSize;
-        using vk_index::fill_bits;
         using vk_index::shader_dims;
         using vk_index::shader_dtype;
 
@@ -36,6 +35,7 @@ namespace lfs::core::internal {
         constexpr uint32_t kIndexPutMode = 5;
         constexpr uint32_t kIndexFillMode = 6;
         constexpr uint32_t kSortedRunMode = 7;
+        constexpr uint32_t kIndexCastMode = 8;
 
         constexpr uint32_t kUnaryNone = 0;
         constexpr uint32_t kUnaryAbs = 1;
@@ -148,7 +148,12 @@ namespace lfs::core::internal {
             const VulkanPipeline& pipeline = context.pipelines().specialized(
                 launch.atomic_float ? "index_atomic" : "index", sizeof(IndexPush), constants);
             IndexPush push = launch.push;
+            if (launch.mode >= kScatterAssignMode && launch.mode != kIndexPutMode)
+                push.fault_address = context.fault_address();
             push.total = checked_u32(launch.total, "Vulkan index operation count exceeds uint32");
+            const size_t work = launch.mode <= 2 && dtype_size(launch.dtype) == 1
+                                    ? (launch.total + (push.value_address & 3u) + 3u) / 4u
+                                    : launch.total;
             context.recorders().record(
                 reads, writes, [&](const VkCommandBuffer command) {
                     vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -156,7 +161,7 @@ namespace lfs::core::internal {
                     vkCmdPushConstants(command, pipeline.layout,
                                        VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                        sizeof(push), &push);
-                    vkCmdDispatch(command, dispatch_groups(context, launch.total), 1, 1);
+                    vkCmdDispatch(command, dispatch_groups(context, work), 1, 1);
                 });
         }
 
@@ -303,6 +308,20 @@ namespace lfs::core::internal {
         }
     } // namespace
 
+    void VulkanBackendOps::index_cast(const StorageRef input, const StorageRef output,
+                                      size_t count, size_t extent, ExecContext) {
+        LFS_FACADE_TRACE(index_cast);
+        const auto context = acquire_vulkan_context();
+        Launch launch{.mode = kIndexCastMode, .dtype = DataType::Int32};
+        launch.total = count;
+        launch.push.input_address = address(input);
+        launch.push.value_address = address(output);
+        launch.push.dim_size = checked_u32(extent, "Vulkan index extent exceeds uint32");
+        const std::array reads{input};
+        const std::array writes{output};
+        record_index(*context, launch, reads, writes);
+    }
+
     void VulkanBackendOps::gather(
         const StorageRef input, const StorageRef indices, const StorageRef output,
         const StridedLayout& input_layout, const StridedLayout& index_layout,
@@ -350,22 +369,6 @@ namespace lfs::core::internal {
         launch.push.index_address = address(indices);
         launch.push.value_address = address(output);
         launch.push.input_size = checked_u32(program.input_size, "Vulkan gather input size exceeds uint32");
-        const std::array reads{input, indices};
-        const std::array writes{output};
-        record_index(*context, launch, reads, writes);
-    }
-
-    void VulkanBackendOps::take(
-        const StorageRef input, const StorageRef indices, const StorageRef output,
-        const IndexProgram& program, ExecContext) {
-        LFS_FACADE_TRACE(take);
-        const auto context = acquire_vulkan_context();
-        Launch launch{.mode = kTakeMode, .dtype = input.dtype};
-        launch.total = program.index_size;
-        launch.push.input_address = address(input);
-        launch.push.index_address = address(indices);
-        launch.push.value_address = address(output);
-        launch.push.input_size = checked_u32(program.input_size, "Vulkan take input size exceeds uint32");
         const std::array reads{input, indices};
         const std::array writes{output};
         record_index(*context, launch, reads, writes);

@@ -30,7 +30,10 @@ namespace {
     constexpr float kNaN = std::numeric_limits<float>::quiet_NaN();
 
     std::vector<GpuBackend> backends_under_test() {
-        std::vector<GpuBackend> backends{GpuBackend::CUDA};
+        std::vector<GpuBackend> backends;
+        if (gpu_backend_available(GpuBackend::CUDA)) {
+            backends.push_back(GpuBackend::CUDA);
+        }
         if (gpu_backend_available(GpuBackend::Vulkan)) {
             backends.push_back(GpuBackend::Vulkan);
         }

@@ -413,6 +413,7 @@ namespace lfs::python {
         // Thread-safe validity checking
         bool is_valid() const;
         uint64_t generation() const;
+        uint64_t render_generation() const;
 
         // Node CRUD
         int32_t add_group(const std::string& name, int32_t parent = core::NULL_NODE);

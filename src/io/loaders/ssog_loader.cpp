@@ -12,11 +12,12 @@ namespace lfs::io {
         if (options.progress)
             options.progress(0, "Loading SSOG");
         std::shared_ptr<SplatData> data;
+        std::optional<std::vector<uint8_t>> license_bytes;
         if (options.validate_only) {
             if (auto result = validate_ssog(path); !result)
                 return std::unexpected(result.error());
         } else {
-            auto result = load_ssog(path);
+            auto result = load_ssog(path, {}, &license_bytes);
             if (!result)
                 return std::unexpected(result.error());
             data = std::make_shared<SplatData>(std::move(*result));
@@ -28,6 +29,7 @@ namespace lfs::io {
         result.scene_center = core::Tensor::zeros({3}, core::Device::CPU);
         result.loader_used = name();
         result.load_time = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+        result.license_bytes = std::move(license_bytes);
         return result;
     }
 } // namespace lfs::io

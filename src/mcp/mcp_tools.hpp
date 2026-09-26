@@ -4,9 +4,9 @@
 #pragma once
 
 #include "core/error.hpp"
+#include "core/event_bridge/command_api.hpp"
 #include "core/export.hpp"
 #include "mcp_protocol.hpp"
-#include "training/control/command_api.hpp"
 
 #include <expected>
 #include <functional>

@@ -89,10 +89,13 @@ namespace lfs::vis {
                     std::optional<float> progress,
                     std::optional<std::string> stage = std::nullopt,
                     std::optional<std::string> error = std::nullopt);
+        // published records an irreversible successful write; late Cancel must
+        // not suppress the corresponding main-thread document refresh.
         void finishWork(JobHandle handle, bool canceled,
                         std::string error = {},
                         std::optional<lfs::ErrorCode> error_code = std::nullopt,
-                        std::optional<lfs::Error> typed_error = std::nullopt);
+                        std::optional<lfs::Error> typed_error = std::nullopt,
+                        bool published = false);
 
         // Main thread: observes and performs lifecycle transitions.
         [[nodiscard]] std::optional<JobSnapshot>
@@ -120,8 +123,8 @@ namespace lfs::vis {
             float progress = 0.0F;
             std::string stage;
             std::string error;
-            std::optional<lfs::ErrorCode> error_code;
-            std::optional<lfs::Error> typed_error;
+            std::optional<lfs::ErrorCode> error_code = std::nullopt;
+            std::optional<lfs::Error> typed_error = std::nullopt;
             bool cancel_requested = false;
             bool worker_canceled = false;
         };

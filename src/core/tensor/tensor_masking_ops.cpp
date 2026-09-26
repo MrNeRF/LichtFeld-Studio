@@ -1,16 +1,15 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
+#include "core/detail/tensor_half.hpp"
 #include "core/device_fault.hpp"
 #include "core/logger.hpp"
-#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
-#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "internal/tensor_impl.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <execution>
 #include <format>
 #include <limits>
 #include <numeric>
@@ -25,8 +24,8 @@ namespace lfs::core {
         }
 
         template <>
-        __half masked_fill_cast<__half>(float value) {
-            return __float2half(value);
+        detail::tensor_half_t masked_fill_cast<detail::tensor_half_t>(float value) {
+            return detail::tensor_float_to_half(value);
         }
 
         template <typename T>
@@ -62,8 +61,6 @@ namespace lfs::core {
             return dtype == DataType::Int32 || dtype == DataType::Int64;
         }
 
-        // Host-only dtype/empty/upper-bound checks (tensor_masking_ops.cpp:68-78
-        // region per phase-6c §9 sign-off 4). No D2H value scan.
         void assert_index_tensor_host_only(const Tensor& indices,
                                            const size_t upper_bound,
                                            const std::string_view operation) {
@@ -90,10 +87,6 @@ namespace lfs::core {
                 return;
             }
 
-            // D2H value scan — retained for gather/scatter/etc. Removed ONLY on
-            // the converted index_select Assert CUDA path (sign-off 4); that path
-            // calls assert_index_tensor_host_only and relies on the device fault
-            // record for release safety.
             const Tensor cpu_indices = indices.device() == Device::CPU
                                            ? indices.contiguous()
                                            : indices.cpu().contiguous();
@@ -124,10 +117,56 @@ namespace lfs::core {
             }
         }
 
+        void assert_async_index_tensor(const Tensor& indices, size_t upper_bound,
+                                       std::string_view operation, bool check_bounds,
+                                       const bool allow_negative = false) {
+#ifdef NDEBUG
+            if (indices.device() == Device::GPU) {
+                assert_index_tensor_host_only(indices, upper_bound, operation);
+                return;
+            }
+#endif
+            assert_index_tensor(indices, upper_bound, operation, check_bounds, allow_negative);
+        }
+
+        Tensor index_cast(const Tensor& indices, const Tensor& consumer, size_t extent, BoundaryMode mode = BoundaryMode::Assert) {
+            if (indices.dtype() != DataType::Int64)
+                return indices;
+            if (indices.device() != Device::GPU || mode != BoundaryMode::Assert)
+                return indices.to(DataType::Int32);
+            const CUDAStreamGuard guard(consumer.stream());
+            auto result = internal::allocate_like(consumer, indices.shape(), DataType::Int32);
+            pin_operands({&indices, &result});
+            const auto stream = prepare_inputs_for_stream({&indices, &result}, result.stream());
+            internal::backend_ops_for(indices).index_cast(internal::storage_ref(indices),
+                                                          internal::storage_ref(result), indices.numel(), extent, internal::ExecContext{stream});
+            return result;
+        }
+
+        // A one-element tensor of `indices`' dtype on its backend, for
+        // comparisons and arithmetic that scalar overloads reject for Int64.
+        Tensor index_constant_like(const Tensor& indices, const size_t value) {
+            LFS_ASSERT_MSG(value <= static_cast<size_t>(std::numeric_limits<int>::max()),
+                           std::format("index constant {} exceeds the Int32 kernel range", value));
+            return internal::copy_to_backend(
+                       Tensor::from_vector(std::vector<int>{static_cast<int>(value)}, {1}, Device::CPU),
+                       gpu_backend_of(indices).value())
+                .to(indices.dtype());
+        }
+
+        // Negative GPU positions counted from the end of `extent`, in the
+        // index's own dtype so Int64 values are not truncated first.
+        Tensor wrap_negative_indices(const Tensor& indices, const size_t extent) {
+            return Tensor::where(indices.lt(index_constant_like(indices, 0)),
+                                 indices.add(index_constant_like(indices, extent)), indices);
+        }
+
         // §1.9 host entry: reject graph capture before checked index_select launch.
         void reject_index_select_graph_capture(const Tensor& tensor, const cudaStream_t stream) {
             if (internal::backend_ops_for(tensor).stream_is_capturing(internal::ExecContext{stream})) {
+#if LFS_HAS_CUDA
                 throw_device_fault_graph_capture_error(stream, LFS_SOURCE_SITE_CURRENT());
+#endif
             }
         }
     } // namespace
@@ -250,7 +289,7 @@ namespace lfs::core {
                 masked_select_cpu(ptr<float>(), mask.ptr<unsigned char>(), result.ptr<float>(), numel());
                 break;
             case DataType::Float16:
-                masked_select_cpu(ptr<__half>(), mask.ptr<unsigned char>(), result.ptr<__half>(), numel());
+                masked_select_cpu(ptr<detail::tensor_half_t>(), mask.ptr<unsigned char>(), result.ptr<detail::tensor_half_t>(), numel());
                 break;
             case DataType::Int32:
                 masked_select_cpu(ptr<int32_t>(), mask.ptr<unsigned char>(), result.ptr<int32_t>(), numel());
@@ -323,7 +362,7 @@ namespace lfs::core {
                 masked_fill_cpu(ptr<float>(), mask_data, numel(), stored_value);
                 break;
             case DataType::Float16:
-                masked_fill_cpu(ptr<__half>(), mask_data, numel(), stored_value);
+                masked_fill_cpu(ptr<detail::tensor_half_t>(), mask_data, numel(), stored_value);
                 break;
             case DataType::Int32:
                 masked_fill_cpu(ptr<int32_t>(), mask_data, numel(), stored_value);
@@ -463,17 +502,13 @@ namespace lfs::core {
             input.index_select_into(out, dim, dense_indices, mode);
             return;
         }
-        // Phase 6C-P3 sign-off 4: on the converted index_select Assert CUDA path,
-        // keep host-only dtype/empty/upper-bound checks and drop the D2H value
-        // scan. Release safety transfers to the device fault record. All other
-        // modes/devices retain the full assert_index_tensor scan.
         const bool device_fault_assert_path =
             device_ == Device::GPU && mode == BoundaryMode::Assert;
         if (device_fault_assert_path) {
             assert_index_tensor_host_only(indices, shape_[dim], "index_select_into");
         } else {
-            assert_index_tensor(indices, shape_[dim], "index_select_into",
-                                mode == BoundaryMode::Assert);
+            assert_async_index_tensor(indices, shape_[dim], "index_select_into",
+                                      mode == BoundaryMode::Assert);
         }
 
         auto indices_same_device = ensure_same_device(indices);
@@ -483,7 +518,7 @@ namespace lfs::core {
         Tensor indices_int32;
         if (is_int64) {
             // Only convert for the kernel call, not in-place
-            indices_int32 = indices_same_device.to(DataType::Int32);
+            indices_int32 = index_cast(indices_same_device, out, shape_[dim], mode);
         }
         const Tensor& kernel_index = is_int64 ? indices_int32 : indices_same_device;
 
@@ -513,14 +548,9 @@ namespace lfs::core {
                     .index_size = indices.numel(),
                 },
                 internal::ExecContext{execution_stream});
-            // Assert mode drains inline: the pre-6C Assert path was already
-            // synchronous (full index D2H + host scan), so a 32-byte record
-            // readback here REPLACES a sync rather than adding one, and keeps
-            // Assert's throw guarantee — enqueue_reset would otherwise drop an
-            // unconsumed fault at the next op. Clamp/Wrap stay sync-free.
+#ifndef NDEBUG
             if (device_fault_assert_path) {
-                if (internal::gpu_backend_tag(*this) == GpuBackend::Vulkan) {
-                    // The Vulkan fault record is read at the next synchronization.
+                if (internal::gpu_backend_tag(*this) != GpuBackend::CUDA) {
                     internal::backend_ops_for(*this).synchronize_stream(
                         internal::ExecContext{execution_stream});
                 } else {
@@ -529,6 +559,7 @@ namespace lfs::core {
                         LFS_SOURCE_SITE_CURRENT());
                 }
             }
+#endif
         } else {
             // CPU implementation
             pin_operands({this, &kernel_index});
@@ -608,7 +639,7 @@ namespace lfs::core {
         dim = resolve_dim(dim);
         LFS_ASSERT_MSG(dim >= 0 && dim < static_cast<int>(shape_.rank()),
                        "gather dimension is out of range");
-        assert_index_tensor(indices, shape_[dim], "gather", mode == BoundaryMode::Assert);
+        assert_async_index_tensor(indices, shape_[dim], "gather", mode == BoundaryMode::Assert);
 
         if (indices.ndim() == 1) {
             return index_select(dim, indices, mode);
@@ -638,7 +669,7 @@ namespace lfs::core {
         const bool is_int64 = indices_same_device.dtype() == DataType::Int64;
         Tensor indices_int32;
         if (is_int64) {
-            indices_int32 = indices_same_device.to(DataType::Int32);
+            indices_int32 = index_cast(indices_same_device, result, shape_[dim], mode);
         }
         const Tensor& kernel_index = is_int64 ? indices_int32 : indices_same_device;
 
@@ -716,6 +747,18 @@ namespace lfs::core {
         LFS_ASSERT_MSG(indices.device() == device_,
                        "take indices must be on the input device");
         internal::require_same_gpu_backend(*this, indices, "take");
+        if (device_ == Device::GPU) {
+            // Negative indices count from the end. The checked gather then
+            // records a device fault for anything still out of range, so the
+            // indices never come back to the host.
+            assert_index_tensor_host_only(indices, numel(), "take");
+            const Tensor zero = internal::allocate_zeros_like(indices, TensorShape({1}), indices.dtype());
+            const Tensor extent = ensure_same_device(Tensor::from_vector(
+                                                         std::vector<int>{static_cast<int>(numel())}, {1}, Device::CPU))
+                                      .to(indices.dtype());
+            const Tensor wrapped = Tensor::where(indices.lt(zero), indices.add(extent), indices);
+            return flatten().index_select(0, wrapped.reshape({-1}), BoundaryMode::Assert).reshape(indices.shape());
+        }
         assert_index_tensor(indices, numel(), "take", true, true);
 
         auto indices_same_device = ensure_same_device(indices);
@@ -725,40 +768,22 @@ namespace lfs::core {
         auto flat = flatten();
         Tensor result;
 
-        // DEBUG: Log device and GPU state
-        if (device_ == Device::GPU) {
-            pin_operands({&flat, &indices_int32});
-            const cudaStream_t execution_stream =
-                prepare_inputs_for_stream({this, &indices_int32});
-            CUDAStreamGuard guard(execution_stream);
-            result = internal::allocate_like(*this, indices.shape(), dtype_);
-            internal::backend_ops_for(*this).take(
-                internal::storage_ref(flat), internal::storage_ref(indices_int32),
-                internal::storage_ref(result),
-                internal::IndexProgram{
-                    .input_size = flat.numel(),
-                    .index_size = indices_int32.numel(),
-                },
-                internal::ExecContext{result.stream()});
-            // No sync - tensor operation
-        } else {
-            pin_operands({&flat, &indices_int32});
-            result = internal::allocate_like(*this, indices.shape(), dtype_);
-            const float* src = flat.ptr<float>();
-            float* dst = result.ptr<float>();
-            const int* idx = indices_int32.ptr<int>();
-            size_t total = flat.numel();
+        pin_operands({&flat, &indices_int32});
+        result = internal::allocate_like(*this, indices.shape(), dtype_);
+        const float* src = flat.ptr<float>();
+        float* dst = result.ptr<float>();
+        const int* idx = indices_int32.ptr<int>();
+        size_t total = flat.numel();
 
-            // IMPORTANT: Use sequential execution to avoid TBB threading issues with CUDA
-            // TBB worker threads don't have CUDA device context, causing cudaErrorInvalidDevice
-            std::transform(std::execution::seq,
-                           idx, idx + indices_int32.numel(), dst,
-                           [src, total](int pos) {
-                               if (pos < 0)
-                                   pos += total;
-                               return (pos >= 0 && pos < static_cast<int>(total)) ? src[pos] : 0.0f;
-                           });
-        }
+        // IMPORTANT: Use sequential execution to avoid TBB threading issues with CUDA
+        // TBB worker threads don't have CUDA device context, causing cudaErrorInvalidDevice
+        std::transform(
+            idx, idx + indices_int32.numel(), dst,
+            [src, total](int pos) {
+                if (pos < 0)
+                    pos += total;
+                return (pos >= 0 && pos < static_cast<int>(total)) ? src[pos] : 0.0f;
+            });
         return result;
     }
 
@@ -774,7 +799,7 @@ namespace lfs::core {
             const int resolved_dim = resolve_dim(dim);
             LFS_ASSERT_MSG(resolved_dim >= 0 && resolved_dim < static_cast<int>(shape_.rank()),
                            "scatter_ dimension is out of range");
-            assert_index_tensor(idx, shape_[resolved_dim], "scatter_", true);
+            assert_async_index_tensor(idx, shape_[resolved_dim], "scatter_", true);
             return index_add_(dim, idx, src);
         }
 
@@ -790,7 +815,8 @@ namespace lfs::core {
                            dtype_ == DataType::Bool || dtype_ == DataType::UInt8,
                        "scatter_ encountered an unsupported dtype");
         LFS_ASSERT_MSG(device_ != Device::GPU || mode == ScatterMode::None,
-                       "CUDA scatter_ supports assignment only; use index_add_ for addition");
+                       std::format("GPU scatter_ supports assignment and addition, not mode {}",
+                                   static_cast<int>(mode)));
 
         if (!is_contiguous()) {
             return mutate_logical_view(
@@ -811,7 +837,7 @@ namespace lfs::core {
         dim = resolve_dim(dim);
         LFS_ASSERT_MSG(dim >= 0 && dim < static_cast<int>(shape_.rank()),
                        "scatter_ dimension is out of range");
-        assert_index_tensor(idx, shape_[dim], "scatter_", true);
+        assert_async_index_tensor(idx, shape_[dim], "scatter_", true);
 
         if (shape_.rank() == 1 && dim == 0) {
             LFS_ASSERT_MSG(src.ndim() == 1,
@@ -824,7 +850,7 @@ namespace lfs::core {
             const bool is_int64 = indices_same_device.dtype() == DataType::Int64;
             Tensor indices_int32;
             if (is_int64) {
-                indices_int32 = indices_same_device.to(DataType::Int32);
+                indices_int32 = index_cast(indices_same_device, *this, shape_[dim]);
             }
             const Tensor& kernel_index = is_int64 ? indices_int32 : indices_same_device;
 
@@ -897,7 +923,7 @@ namespace lfs::core {
         const bool is_int64 = idx_same_device.dtype() == DataType::Int64;
         Tensor idx_int32;
         if (is_int64) {
-            idx_int32 = idx_same_device.to(DataType::Int32);
+            idx_int32 = index_cast(idx_same_device, *this, shape_[dim]);
         }
         const Tensor& kernel_index = is_int64 ? idx_int32 : idx_same_device;
 
@@ -1054,7 +1080,7 @@ namespace lfs::core {
         dim = resolve_dim(dim);
         LFS_ASSERT_MSG(dim >= 0 && dim < static_cast<int>(shape_.rank()),
                        "index_copy_ dimension is out of range");
-        assert_index_tensor(idx, shape_[dim], "index_copy_", true);
+        assert_async_index_tensor(idx, shape_[dim], "index_copy_", true);
 
         std::vector<size_t> expected_src_shape = shape_.dims();
         expected_src_shape[dim] = idx.numel();
@@ -1068,7 +1094,7 @@ namespace lfs::core {
         const bool is_int64 = idx_same_device.dtype() == DataType::Int64;
         Tensor idx_int32;
         if (is_int64) {
-            idx_int32 = idx_same_device.to(DataType::Int32);
+            idx_int32 = index_cast(idx_same_device, *this, shape_[dim]);
         }
         const Tensor& kernel_index = is_int64 ? idx_int32 : idx_same_device;
 
@@ -1166,7 +1192,7 @@ namespace lfs::core {
         dim = resolve_dim(dim);
         LFS_ASSERT_MSG(dim >= 0 && dim < static_cast<int>(shape_.rank()),
                        "index_add_ dimension is out of range");
-        assert_index_tensor(idx, shape_[dim], "index_add_", true);
+        assert_async_index_tensor(idx, shape_[dim], "index_add_", true);
 
         if (shape_.rank() == 1 && dim == 0) {
             LFS_ASSERT_MSG(src.ndim() == 1 && src.numel() == idx.numel(),
@@ -1178,7 +1204,7 @@ namespace lfs::core {
             if (device_ == Device::GPU) {
                 // Convert int64 indices to int32 for kernel (kernel expects int* not int64_t*)
                 auto idx_int32 = (idx_same_device.dtype() == DataType::Int64)
-                                     ? idx_same_device.to(DataType::Int32)
+                                     ? index_cast(idx_same_device, *this, shape_[dim])
                                      : idx_same_device;
                 pin_operands({this, &idx_int32, &src_same_device});
                 const cudaStream_t execution_stream =
@@ -1269,7 +1295,7 @@ namespace lfs::core {
         if (device_ == Device::GPU) {
             // Convert int64 indices to int32 for kernel (kernel expects int* not int64_t*)
             auto idx_int32 = (idx_same_device.dtype() == DataType::Int64)
-                                 ? idx_same_device.to(DataType::Int32)
+                                 ? index_cast(idx_same_device, *this, shape_[dim])
                                  : idx_same_device;
             pin_operands({this, &idx_int32, &src_same_device});
             const cudaStream_t execution_stream =
@@ -1450,143 +1476,102 @@ namespace lfs::core {
         // Check if this is row-wise assignment (idx is 1D, vals is multi-dimensional)
         // Example: tensor[indices] = values where tensor:[N,M], indices:[K], values:[K,M]
         const bool is_row_assignment = (idx_same_device.ndim() == 1 && vals_same_device.ndim() >= 2 && ndim() >= 2);
+        // GPU scatters check their targets in the index kernels, as
+        // index_copy_ does; the host path validates the indices up front.
+        const bool gpu_scatter = device_ == Device::GPU;
         if (is_row_assignment) {
             std::vector<size_t> expected_shape = shape_.dims();
             expected_shape[0] = idx.numel();
             LFS_ASSERT_MSG(vals.shape() == TensorShape(expected_shape),
-                           "index_put_ row values do not match the indexed destination rows");
-            assert_index_tensor(idx, shape_[0], "index_put_", true);
+                           std::format("index_put_ row values must be {} (values={})",
+                                       TensorShape(expected_shape).str(), vals.shape().str()));
+            if (gpu_scatter)
+                assert_async_index_tensor(idx, shape_[0], "index_put_", true);
+            else
+                assert_index_tensor(idx, shape_[0], "index_put_", true);
         } else {
             LFS_ASSERT_MSG(vals.numel() == idx.numel(),
-                           "index_put_ requires one value per flat index");
-            assert_index_tensor(idx, numel(), "index_put_", true, true);
+                           std::format("index_put_ requires one value per flat index (indices={}, values={})",
+                                       idx.numel(), vals.numel()));
+            if (gpu_scatter)
+                assert_async_index_tensor(idx, numel(), "index_put_", true, true);
+            else
+                assert_index_tensor(idx, numel(), "index_put_", true, true);
         }
 
-        // Fast path: use GPU kernel for row assignment on GPU (avoids CPU roundtrip)
-        if (device_ == Device::GPU && is_row_assignment && dtype_ == DataType::Float32) {
-            // Verify shape compatibility: vals should be [K, d1, d2, ...]
-            std::vector<size_t> expected_shape = shape_.dims();
-            expected_shape[0] = idx_same_device.numel();
-            if (vals_same_device.shape() == TensorShape(expected_shape)) {
-                // Convert indices to Int32 if needed (index_copy_ requires Int32)
-                Tensor idx_int32 = (idx_same_device.dtype() == DataType::Int32)
-                                       ? idx_same_device
-                                       : idx_same_device.to(DataType::Int32);
-                pin_operands({this, &idx_int32, &vals_same_device});
-                const cudaStream_t execution_stream =
-                    prepare_inputs_for_stream(
-                        {this, &idx_int32, &vals_same_device}, stream());
-                internal::backend_ops_for(*this).index_copy(
-                    internal::storage_ref(*this), internal::storage_ref(idx_int32),
-                    internal::storage_ref(vals_same_device), internal::strided_layout(*this),
-                    internal::IndexProgram{
-                        .dim = 0,
-                        .index_size = idx_int32.numel(),
-                    },
-                    internal::ExecContext{execution_stream});
-                return *this;
+        // The backends' index_copy scatters rows, and single elements of a
+        // flat view. Duplicate targets keep the last value on Vulkan and
+        // Metal; CUDA keeps any one of them.
+        if (gpu_scatter) {
+            LFS_ASSERT_MSG(numel() <= static_cast<size_t>(std::numeric_limits<int32_t>::max()),
+                           std::format("index_put_ addresses its destination in int32 (numel={})", numel()));
+            Tensor idx_int32 = idx_same_device;
+            Tensor destination = *this;
+            Tensor source = vals_same_device;
+            if (!is_row_assignment) {
+                // Flat positions, negative ones counted from the end.
+                idx_int32 = wrap_negative_indices(idx_int32, numel()).reshape({-1});
+                destination = reshape({-1});
+                source = vals_same_device.reshape({-1});
             }
+            if (idx_int32.dtype() == DataType::Int64) {
+                // Checked narrowing: a truncated index could land in range.
+                idx_int32 = index_cast(idx_int32, destination, destination.shape()[0]);
+            }
+            pin_operands({&destination, &idx_int32, &source});
+            const cudaStream_t execution_stream =
+                prepare_inputs_for_stream({&destination, &idx_int32, &source}, stream());
+            internal::backend_ops_for(*this).index_copy(
+                internal::storage_ref(destination), internal::storage_ref(idx_int32),
+                internal::storage_ref(source), internal::strided_layout(destination),
+                internal::IndexProgram{
+                    .dim = 0,
+                    .index_size = idx_int32.numel(),
+                },
+                internal::ExecContext{execution_stream});
+            return *this;
         }
 
-        // Helper lambda for index_put_ implementation (fallback path)
+        // CPU destinations.
         auto index_put_impl = [&]<typename DataT, typename IndexT>() {
-            if (device_ == Device::GPU) {
-                // Fallback: CPU roundtrip for complex cases
-                auto cpu_tensor = to(Device::CPU);
-                auto cpu_idx = idx_same_device.to(Device::CPU);
-                auto cpu_vals = vals_same_device.to(Device::CPU);
+            pin_operands({this, &idx_same_device, &vals_same_device});
+            DataT* data = ptr<DataT>();
+            const IndexT* indices = idx_same_device.ptr<IndexT>();
+            const DataT* values = vals_same_device.ptr<DataT>();
 
-                pin_operands({&cpu_tensor, &cpu_idx, &cpu_vals});
-                DataT* data = cpu_tensor.ptr<DataT>();
-                const IndexT* indices = cpu_idx.ptr<IndexT>();
-                const DataT* values = cpu_vals.ptr<DataT>();
+            if (is_row_assignment) {
+                // Row-wise assignment
+                size_t row_size = 1;
+                for (size_t i = 1; i < ndim(); ++i) {
+                    row_size *= shape()[i];
+                }
+                size_t num_rows = shape()[0];
 
-                if (is_row_assignment) {
-                    size_t row_size = 1;
-                    for (size_t i = 1; i < cpu_tensor.ndim(); ++i) {
-                        row_size *= cpu_tensor.shape()[i];
+                for (size_t i = 0; i < idx_same_device.numel(); ++i) {
+                    IndexT row_idx = indices[i];
+                    if (row_idx < 0)
+                        row_idx += num_rows;
+                    if (row_idx >= 0 && row_idx < static_cast<IndexT>(num_rows)) {
+                        // Copy entire row
+                        std::memcpy(data + row_idx * row_size,
+                                    values + i * row_size,
+                                    row_size * sizeof(DataT));
                     }
-                    const size_t num_rows = cpu_tensor.shape()[0];
-
-                    for (size_t i = 0; i < cpu_idx.numel(); ++i) {
-                        IndexT row_idx = indices[i];
-                        if (row_idx < 0)
-                            row_idx += num_rows;
-                        if (row_idx >= 0 && row_idx < static_cast<IndexT>(num_rows)) {
-                            std::memcpy(data + row_idx * row_size,
-                                        values + i * row_size,
-                                        row_size * sizeof(DataT));
-                        }
-                    }
-                } else {
-                    const size_t num_elements = cpu_tensor.numel();
-                    for (size_t i = 0; i < cpu_idx.numel(); ++i) {
+                }
+            } else {
+                // Element-wise assignment
+                size_t num_elements = numel();
+                std::for_each(
+                    std::views::iota(size_t(0), idx.numel()).begin(),
+                    std::views::iota(size_t(0), idx.numel()).end(),
+                    [data, indices, values, num_elements](size_t i) {
                         IndexT pos = indices[i];
                         if (pos < 0)
                             pos += num_elements;
                         if (pos >= 0 && pos < static_cast<IndexT>(num_elements)) {
                             data[pos] = values[i];
                         }
-                    }
-                }
-
-                // Copy back preserving capacity
-                auto result = internal::copy_to_backend(
-                    cpu_tensor, gpu_backend_of(*this).value());
-                const size_t bytes = numel() * dtype_size(dtype_);
-                const cudaStream_t execution_stream =
-                    prepare_inputs_for_stream({this, &result}, stream());
-                internal::backend_ops_for(*this).copy_device_to_device(
-                    internal::CopyRequest{
-                        .src = internal::storage_ref(result),
-                        .dst = internal::storage_ref(*this),
-                        .bytes = bytes,
-                        .synchronous = false,
-                        .context = internal::ExecContext{execution_stream},
                     });
-                internal::backend_ops_for(*this).synchronize_stream(
-                    internal::ExecContext{stream()});
-            } else {
-                // CPU implementation
-                pin_operands({this, &idx_same_device, &vals_same_device});
-                DataT* data = ptr<DataT>();
-                const IndexT* indices = idx_same_device.ptr<IndexT>();
-                const DataT* values = vals_same_device.ptr<DataT>();
-
-                if (is_row_assignment) {
-                    // Row-wise assignment
-                    size_t row_size = 1;
-                    for (size_t i = 1; i < ndim(); ++i) {
-                        row_size *= shape()[i];
-                    }
-                    size_t num_rows = shape()[0];
-
-                    for (size_t i = 0; i < idx_same_device.numel(); ++i) {
-                        IndexT row_idx = indices[i];
-                        if (row_idx < 0)
-                            row_idx += num_rows;
-                        if (row_idx >= 0 && row_idx < static_cast<IndexT>(num_rows)) {
-                            // Copy entire row
-                            std::memcpy(data + row_idx * row_size,
-                                        values + i * row_size,
-                                        row_size * sizeof(DataT));
-                        }
-                    }
-                } else {
-                    // Element-wise assignment
-                    size_t num_elements = numel();
-                    std::for_each(std::execution::seq,
-                                  std::views::iota(size_t(0), idx.numel()).begin(),
-                                  std::views::iota(size_t(0), idx.numel()).end(),
-                                  [data, indices, values, num_elements](size_t i) {
-                                      IndexT pos = indices[i];
-                                      if (pos < 0)
-                                          pos += num_elements;
-                                      if (pos >= 0 && pos < static_cast<IndexT>(num_elements)) {
-                                          data[pos] = values[i];
-                                      }
-                                  });
-                }
             }
         };
 
@@ -1664,6 +1649,33 @@ namespace lfs::core {
                     });
             }
 
+            if (device_ == Device::GPU) {
+                LFS_ASSERT_MSG(indices[0].numel() == indices[1].numel() && indices[0].numel() == vals.numel(),
+                               std::format("multi-index index_put_ needs equal lengths (rows={}, columns={}, values={})",
+                                           indices[0].numel(), indices[1].numel(), vals.numel()));
+                assert_index_tensor_host_only(indices[0], shape_[0], "index_put_ row index");
+                assert_index_tensor_host_only(indices[1], shape_[1], "index_put_ column index");
+                // Each pair becomes a flat position. Pairs outside their own
+                // axis point past the end, so the checked flat scatter faults
+                // on them instead of writing into a neighbouring row.
+                const auto in_range = [](const Tensor& index, const size_t extent) {
+                    const Tensor wrapped = wrap_negative_indices(index.reshape({-1}), extent);
+                    const Tensor valid = wrapped.ge(index_constant_like(wrapped, 0))
+                                             .logical_and(wrapped.lt(index_constant_like(wrapped, extent)));
+                    return std::pair{wrapped, valid};
+                };
+                const auto [rows, rows_valid] = in_range(indices[0], shape_[0]);
+                const auto [columns, columns_valid] = in_range(indices[1], shape_[1]);
+                const Tensor valid = rows_valid.logical_and(columns_valid);
+                // Narrowing is safe once invalid pairs are replaced by zero.
+                const Tensor row32 = Tensor::where(valid, rows, index_constant_like(rows, 0)).to(DataType::Int32);
+                const Tensor column32 =
+                    Tensor::where(valid, columns, index_constant_like(columns, 0)).to(DataType::Int32);
+                const Tensor flat = Tensor::where(valid, row32.mul(static_cast<int>(shape_[1])).add(column32),
+                                                  index_constant_like(row32, numel()));
+                return index_put_(flat, vals.reshape({-1}));
+            }
+
             assert_index_tensor(indices[0], shape_[0], "index_put_ row index", true, true);
             assert_index_tensor(indices[1], shape_[1], "index_put_ column index", true, true);
 
@@ -1704,62 +1716,24 @@ namespace lfs::core {
             const int64_t row_bound = static_cast<int64_t>(shape_[0]);
             const int64_t col_bound = static_cast<int64_t>(shape_[1]);
 
-            if (device_ == Device::GPU) {
-                Tensor row_idx_cpu = row_idx.to(Device::CPU);
-                Tensor col_idx_cpu = col_idx.to(Device::CPU);
-                pin_operands({this, &row_idx_cpu, &col_idx_cpu, &vals_same_device});
-                const int64_t* row_ptr = row_idx_cpu.ptr<int64_t>();
-                const int64_t* col_ptr = col_idx_cpu.ptr<int64_t>();
-                const internal::StorageRef values_storage =
-                    internal::storage_ref(vals_same_device);
-                const internal::StorageRef destination_storage =
-                    internal::storage_ref(*this);
+            pin_operands({this, &row_idx, &col_idx, &vals_same_device});
+            const int64_t* row_ptr = row_idx.ptr<int64_t>();
+            const int64_t* col_ptr = col_idx.ptr<int64_t>();
+            const float* val_ptr = vals_same_device.ptr<float>();
+            float* data_ptr = ptr<float>();
 
-                for (size_t i = 0; i < row_idx.numel(); ++i) {
-                    int64_t r = row_ptr[i];
-                    int64_t c = col_ptr[i];
-
-                    if (r < 0)
-                        r += row_bound;
-                    if (c < 0)
-                        c += col_bound;
-
-                    if (r >= 0 && r < row_bound &&
-                        c >= 0 && c < col_bound) {
-                        const size_t offset = static_cast<size_t>(r) * strides_[0] +
-                                              static_cast<size_t>(c) * strides_[1];
-                        internal::backend_ops_for(*this).copy_device_to_device(
-                            internal::CopyRequest{
-                                .src = internal::offset_storage_ref(
-                                    values_storage, i * sizeof(float)),
-                                .dst = internal::offset_storage_ref(
-                                    destination_storage, offset * sizeof(float)),
-                                .bytes = sizeof(float),
-                                .synchronous = false,
-                                .context = internal::ExecContext{stream()},
-                            });
-                    }
-                }
-            } else {
-                pin_operands({this, &row_idx, &col_idx, &vals_same_device});
-                const int64_t* row_ptr = row_idx.ptr<int64_t>();
-                const int64_t* col_ptr = col_idx.ptr<int64_t>();
-                const float* val_ptr = vals_same_device.ptr<float>();
-                float* data_ptr = ptr<float>();
-
-                for (size_t i = 0; i < row_idx.numel(); ++i) {
-                    int64_t r = row_ptr[i];
-                    int64_t c = col_ptr[i];
-                    if (r < 0)
-                        r += row_bound;
-                    if (c < 0)
-                        c += col_bound;
-                    if (r >= 0 && r < row_bound &&
-                        c >= 0 && c < col_bound) {
-                        const size_t offset = static_cast<size_t>(r) * strides_[0] +
-                                              static_cast<size_t>(c) * strides_[1];
-                        data_ptr[offset] = val_ptr[i];
-                    }
+            for (size_t i = 0; i < row_idx.numel(); ++i) {
+                int64_t r = row_ptr[i];
+                int64_t c = col_ptr[i];
+                if (r < 0)
+                    r += row_bound;
+                if (c < 0)
+                    c += col_bound;
+                if (r >= 0 && r < row_bound &&
+                    c >= 0 && c < col_bound) {
+                    const size_t offset = static_cast<size_t>(r) * strides_[0] +
+                                          static_cast<size_t>(c) * strides_[1];
+                    data_ptr[offset] = val_ptr[i];
                 }
             }
             return *this;
@@ -1843,6 +1817,31 @@ namespace lfs::core {
         if (numel() == 0) {
             return internal::allocate_like(
                 *this, TensorShape{0, ndim()}, DataType::Int64);
+        }
+
+        if (device_ == Device::GPU && ndim() > 1) {
+            // Flat positions from the 1-D path, then each coordinate is
+            // gathered from a grid holding that axis's index at every element.
+            const Tensor flat = reshape({-1}).nonzero().squeeze(1);
+            const size_t found = flat.numel();
+            if (found == 0) {
+                return internal::allocate_like(*this, TensorShape{0, ndim()}, DataType::Int64);
+            }
+            std::vector<Tensor> coordinates;
+            coordinates.reserve(ndim());
+            for (size_t axis = 0; axis < ndim(); ++axis) {
+                std::vector<int> positions(shape_[axis]);
+                std::iota(positions.begin(), positions.end(), 0);
+                std::vector<size_t> axis_shape(ndim(), 1);
+                axis_shape[axis] = shape_[axis];
+                const Tensor grid = ensure_same_device(Tensor::from_vector(positions, {shape_[axis]}, Device::CPU))
+                                        .reshape(TensorShape(axis_shape))
+                                        .expand(shape_)
+                                        .contiguous()
+                                        .reshape({-1});
+                coordinates.push_back(grid.index_select(0, flat, BoundaryMode::Clamp).to(DataType::Int64));
+            }
+            return Tensor::stack(coordinates, 1);
         }
 
         size_t count = count_nonzero();
@@ -1946,52 +1945,45 @@ namespace lfs::core {
             TensorShape{static_cast<size_t>(count), static_cast<size_t>(n_dims)},
             DataType::Int64);
 
-        if (device_ == Device::GPU) {
-            auto cpu_tensor = to(Device::CPU);
-            auto cpu_result = cpu_tensor.nonzero();
-            result = internal::copy_to_backend(
-                cpu_result, gpu_backend_of(*this).value());
-        } else {
-            int64_t* indices = reinterpret_cast<int64_t*>(result.data_ptr());
-            size_t write_idx = 0;
+        int64_t* indices = reinterpret_cast<int64_t*>(result.data_ptr());
+        size_t write_idx = 0;
 
-            const auto write_coordinates = [&]<typename T>(const T* data) {
-                if (n_dims == 2) {
-                    const size_t rows = shape_[0];
-                    const size_t columns = shape_[1];
-                    for (size_t row = 0; row < rows; ++row) {
-                        for (size_t column = 0; column < columns; ++column) {
-                            if (data[row * columns + column] != T{}) {
-                                indices[write_idx * 2] = static_cast<int64_t>(row);
-                                indices[write_idx * 2 + 1] = static_cast<int64_t>(column);
-                                ++write_idx;
-                            }
+        const auto write_coordinates = [&]<typename T>(const T* data) {
+            if (n_dims == 2) {
+                const size_t rows = shape_[0];
+                const size_t columns = shape_[1];
+                for (size_t row = 0; row < rows; ++row) {
+                    for (size_t column = 0; column < columns; ++column) {
+                        if (data[row * columns + column] != T{}) {
+                            indices[write_idx * 2] = static_cast<int64_t>(row);
+                            indices[write_idx * 2 + 1] = static_cast<int64_t>(column);
+                            ++write_idx;
                         }
                     }
-                    return;
                 }
-
-                const auto strides = shape_.strides();
-                for (size_t i = 0; i < numel(); ++i) {
-                    if (data[i] != T{}) {
-                        size_t temp = i;
-                        for (size_t dim = 0; dim < n_dims; ++dim) {
-                            const size_t coord = temp / strides[dim];
-                            temp %= strides[dim];
-                            indices[write_idx * n_dims + dim] = static_cast<int64_t>(coord);
-                        }
-                        ++write_idx;
-                    }
-                }
-            };
-
-            if (is_bool_like(dtype_)) {
-                write_coordinates(ptr<unsigned char>());
-            } else if (dtype_ == DataType::Float32) {
-                write_coordinates(ptr<float>());
-            } else if (dtype_ == DataType::Int32) {
-                write_coordinates(ptr<int>());
+                return;
             }
+
+            const auto strides = shape_.strides();
+            for (size_t i = 0; i < numel(); ++i) {
+                if (data[i] != T{}) {
+                    size_t temp = i;
+                    for (size_t dim = 0; dim < n_dims; ++dim) {
+                        const size_t coord = temp / strides[dim];
+                        temp %= strides[dim];
+                        indices[write_idx * n_dims + dim] = static_cast<int64_t>(coord);
+                    }
+                    ++write_idx;
+                }
+            }
+        };
+
+        if (is_bool_like(dtype_)) {
+            write_coordinates(ptr<unsigned char>());
+        } else if (dtype_ == DataType::Float32) {
+            write_coordinates(ptr<float>());
+        } else if (dtype_ == DataType::Int32) {
+            write_coordinates(ptr<int>());
         }
 
         return result;
@@ -2307,8 +2299,8 @@ namespace lfs::core {
                                    other.ptr<float>(), tensor_->numel());
                 break;
             case DataType::Float16:
-                masked_scatter_cpu(const_cast<Tensor*>(tensor_)->ptr<__half>(), mask,
-                                   other.ptr<__half>(), tensor_->numel());
+                masked_scatter_cpu(const_cast<Tensor*>(tensor_)->ptr<detail::tensor_half_t>(), mask,
+                                   other.ptr<detail::tensor_half_t>(), tensor_->numel());
                 break;
             case DataType::Int32:
                 masked_scatter_cpu(const_cast<Tensor*>(tensor_)->ptr<int32_t>(), mask,
@@ -2396,13 +2388,15 @@ namespace lfs::core {
                        "append_gather requires reserved capacity");
         LFS_ASSERT_MSG(ndim() > 0,
                        "append_gather requires a tensor with at least one dimension");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::UInt8 || dtype_ == DataType::Bool ||
-                           device_ == Device::CPU,
-                       "CUDA append_gather encountered an unsupported dtype");
-        assert_index_tensor(indices,
-                            state_->logical_size > 0 ? state_->logical_size : shape_[0],
-                            "append_gather",
-                            true);
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32 || dtype_ == DataType::Int64 ||
+                           dtype_ == DataType::UInt8 || dtype_ == DataType::Bool || device_ == Device::CPU,
+                       std::format("GPU append_gather does not support dtype {}", dtype_name(dtype_)));
+        // On the GPU the gather below runs in Assert mode and records a device
+        // fault for an out-of-range index, so release builds skip the download.
+        assert_async_index_tensor(indices,
+                                  state_->logical_size > 0 ? state_->logical_size : shape_[0],
+                                  "append_gather",
+                                  true);
 
         size_t n_gather = indices.numel();
 
@@ -2439,7 +2433,9 @@ namespace lfs::core {
         bool is_int64 = indices_same_device.dtype() == DataType::Int64;
         Tensor indices_int32;
         if (is_int64) {
-            indices_int32 = indices_same_device.to(DataType::Int32);
+            // Checked narrowing: a truncated index could land in range.
+            indices_int32 = index_cast(indices_same_device, *this,
+                                       state_->logical_size > 0 ? state_->logical_size : shape_[0]);
         }
         const Tensor& kernel_index = is_int64 ? indices_int32 : indices_same_device;
         pin_operands({this, &kernel_index});
@@ -2454,11 +2450,6 @@ namespace lfs::core {
 
             // IMPORTANT: Pass the INPUT shape to the kernel, not the output shape!
             // The kernel needs to know the source tensor dimensions to validate indices
-            if (dtype_ != DataType::Float32 && dtype_ != DataType::UInt8 &&
-                dtype_ != DataType::Bool) {
-                LFS_ASSERT_MSG(false,
-                               "append_gather encountered an unsupported CUDA dtype");
-            }
             internal::StorageRef output = internal::storage_ref(*this);
             output.byte_offset += write_offset_elements * dtype_size(dtype_);
             internal::backend_ops_for(*this).index_select(

@@ -1,1 +1,5 @@
 src/python/stubs/**/*.pyi text eol=lf
+
+# vcpkg applies these patches to sources extracted with LF line endings.
+.github/overlays/**/*.patch text eol=lf
+.github/overlays/**/*.diff text eol=lf

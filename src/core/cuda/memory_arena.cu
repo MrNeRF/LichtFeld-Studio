@@ -95,6 +95,7 @@ namespace lfs::core {
         render_handoff_token_ = other.render_handoff_token_;
         next_render_handoff_token_ = other.next_render_handoff_token_;
         render_handoff_deadline_ = other.render_handoff_deadline_;
+        render_handoff_training_frames_ = other.render_handoff_training_frames_;
         other.render_handoff_token_ = 0;
         last_frame_event_ = other.last_frame_event_;
         last_frame_event_valid_ = other.last_frame_event_valid_;
@@ -136,6 +137,7 @@ namespace lfs::core {
             render_handoff_token_ = other.render_handoff_token_;
             next_render_handoff_token_ = other.next_render_handoff_token_;
             render_handoff_deadline_ = other.render_handoff_deadline_;
+            render_handoff_training_frames_ = other.render_handoff_training_frames_;
             other.render_handoff_token_ = 0;
             if (last_frame_event_) {
                 const cudaError_t destroy_status = cudaEventDestroy(last_frame_event_);
@@ -250,7 +252,8 @@ namespace lfs::core {
     }
 
     RasterizerMemoryArena::RenderHandoffToken
-    RasterizerMemoryArena::request_render_handoff(const RenderHandoffToken current_token) {
+    RasterizerMemoryArena::request_render_handoff(const RenderHandoffToken current_token,
+                                                  const uint32_t training_frames_first) {
         std::lock_guard<std::mutex> lock(sync_mutex_);
         const auto now = std::chrono::steady_clock::now();
         if (render_handoff_token_ != 0 && render_handoff_deadline_ <= now) {
@@ -270,6 +273,7 @@ namespace lfs::core {
         }
         render_handoff_token_ = token;
         render_handoff_deadline_ = now + std::chrono::milliseconds(kRenderHandoffLeaseMs);
+        render_handoff_training_frames_ = training_frames_first;
         sync_cv_.notify_all();
         return token;
     }
@@ -300,9 +304,56 @@ namespace lfs::core {
                render_handoff_deadline_ > std::chrono::steady_clock::now();
     }
 
+    bool RasterizerMemoryArena::render_handoff_owes_training(const RenderHandoffToken token) const {
+        if (token == 0) {
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(sync_mutex_);
+        return render_handoff_token_ == token &&
+               render_handoff_deadline_ > std::chrono::steady_clock::now() &&
+               render_handoff_training_frames_ != 0;
+    }
+
+    void RasterizerMemoryArena::withdraw_render_handoff_training_frames(const RenderHandoffToken token) {
+        if (token == 0) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(sync_mutex_);
+        if (render_handoff_token_ == token) {
+            render_handoff_training_frames_ = 0;
+        }
+    }
+
     std::optional<uint64_t> RasterizerMemoryArena::try_begin_render_frame_for(
         const uint32_t timeout_ms, const RenderHandoffToken token) {
-        return begin_frame_impl(nullptr, true, timeout_ms, token);
+        return begin_frame_impl(nullptr, true, timeout_ms, token, true);
+    }
+
+    bool RasterizerMemoryArena::render_frame_ready(const RenderHandoffToken token) const {
+        std::lock_guard<std::mutex> sync_lock(sync_mutex_);
+        if (active_frames_ != 0) {
+            return false;
+        }
+        const bool other_reservation =
+            render_handoff_token_ != 0 && render_handoff_token_ != token &&
+            render_handoff_deadline_ > std::chrono::steady_clock::now();
+        return !other_reservation && !previous_frame_still_running();
+    }
+
+    bool RasterizerMemoryArena::previous_frame_still_running() const {
+        std::lock_guard<std::mutex> event_lock(last_frame_event_mutex_);
+        if (external_release_semaphore_ != nullptr || !last_frame_event_valid_ || !last_frame_event_) {
+            return false;
+        }
+        const cudaError_t status = cudaEventQuery(last_frame_event_);
+        if (status == cudaErrorNotReady) {
+            return true;
+        }
+        if (status != cudaSuccess) {
+            ensure_cuda_success(status, "cudaEventQuery(arena frame completion)", "fallback=event wait",
+                                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+        }
+        return false;
     }
 
     void RasterizerMemoryArena::note_external_release(cudaExternalSemaphore_t semaphore, uint64_t value) {
@@ -359,19 +410,24 @@ namespace lfs::core {
 
     // Orders the new frame's work after the previous frame before the arena
     // offset resets and memory gets overwritten. Stream-aware frames chain via
-    // the completion event; streamless frames or a broken chain fall back to a
-    // device-wide sync. A pending Vulkan release is waited explicitly because
-    // neither the chain event nor a device sync can see in-flight Vulkan work.
+    // the completion event and streamless frames host-wait on it; only a broken
+    // chain falls back to a device-wide sync. A pending Vulkan release is waited
+    // explicitly because neither the chain event nor a device sync can see
+    // in-flight Vulkan work.
     cudaError_t RasterizerMemoryArena::wait_for_previous_frame(cudaStream_t stream) {
         cudaExternalSemaphore_t release_semaphore = nullptr;
         uint64_t release_value = 0;
         bool chain_ok = false;
+        cudaEvent_t previous_frame_event = nullptr;
         {
             std::lock_guard<std::mutex> lock(last_frame_event_mutex_);
             release_semaphore = external_release_semaphore_;
             release_value = external_release_value_;
             external_release_semaphore_ = nullptr;
             external_release_value_ = 0;
+            if (!stream && last_frame_event_valid_) {
+                previous_frame_event = last_frame_event_;
+            }
             if (stream) {
                 if (last_frame_event_valid_) {
                     const cudaError_t chain_status =
@@ -415,9 +471,9 @@ namespace lfs::core {
                 }
                 chain_ok = false;
             } else if (wait_stream != nullptr) {
-                // The Vulkan tenant device-synced all prior CUDA work at its own
-                // streamless begin, and its arena work is Vulkan-only — this
-                // wait alone re-establishes the chain GPU-side.
+                // The Vulkan tenant waited for all prior CUDA arena work at its
+                // own streamless begin, and its arena work is Vulkan-only, so
+                // this wait alone re-establishes the chain GPU-side.
                 chain_ok = true;
             }
         }
@@ -425,13 +481,19 @@ namespace lfs::core {
         if (chain_ok) {
             return cudaSuccess;
         }
+        // The chain event covers every access of the previous stream-ordered
+        // frame; unrelated work queued after it need not drain first.
+        if (previous_frame_event != nullptr && release_semaphore == nullptr) {
+            return cudaEventSynchronize(previous_frame_event);
+        }
         return cudaDeviceSynchronize();
     }
 
     std::optional<uint64_t> RasterizerMemoryArena::begin_frame_impl(
         cudaStream_t stream, const bool from_rendering,
         const std::optional<uint32_t> wait_timeout_ms,
-        const RenderHandoffToken render_handoff_token) {
+        const RenderHandoffToken render_handoff_token,
+        const bool decline_while_previous_frame_runs) {
         LFS_CUDA_BREADCRUMB_STREAM("arena.begin_frame", stream);
         {
             std::unique_lock<std::mutex> sync_lock(sync_mutex_);
@@ -451,13 +513,17 @@ namespace lfs::core {
                     return false;
                 }
                 if (!from_rendering) {
-                    return pending_render_frames_ == 0 && !handoff_active();
+                    return pending_render_frames_ == 0 &&
+                           (!handoff_active() || render_handoff_training_frames_ != 0);
                 }
                 return !handoff_active() || render_handoff_token_ == render_handoff_token;
             };
+            const auto previous_frame_blocks = [this, decline_while_previous_frame_runs]() {
+                return decline_while_previous_frame_runs && previous_frame_still_running();
+            };
             if (!wait_timeout_ms.has_value()) {
                 expire_handoff();
-                if (!can_begin()) {
+                if (!can_begin() || previous_frame_blocks()) {
                     return std::nullopt;
                 }
             } else {
@@ -468,7 +534,8 @@ namespace lfs::core {
                               std::chrono::milliseconds(*wait_timeout_ms);
                 while (true) {
                     expire_handoff();
-                    if (can_begin()) {
+                    const bool arena_free = can_begin();
+                    if (arena_free && !previous_frame_blocks()) {
                         break;
                     }
                     const auto now = std::chrono::steady_clock::now();
@@ -476,7 +543,11 @@ namespace lfs::core {
                         return std::nullopt;
                     }
                     auto wake_deadline = acquire_deadline;
-                    if (handoff_active()) {
+                    if (arena_free) {
+                        // Only the previous frame's GPU work is left; nothing
+                        // signals its completion, so poll the event.
+                        wake_deadline = std::min(wake_deadline, now + std::chrono::microseconds(200));
+                    } else if (handoff_active()) {
                         wake_deadline = std::min(wake_deadline, render_handoff_deadline_);
                     }
                     if (wake_deadline == std::chrono::steady_clock::time_point::max()) {
@@ -489,6 +560,9 @@ namespace lfs::core {
             ++active_frames_;
             if (!from_rendering) {
                 ++active_training_frames_;
+                if (handoff_active()) {
+                    --render_handoff_training_frames_;
+                }
             }
             if (from_rendering && render_handoff_token != 0 &&
                 render_handoff_token_ == render_handoff_token) {

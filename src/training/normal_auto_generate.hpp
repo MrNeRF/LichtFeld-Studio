@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include "core/training_normal_priors.hpp"
 
 #include "core/camera.hpp"
 #include "core/error.hpp"
@@ -30,10 +31,6 @@ namespace lfs::training {
     using NormalEstimator = std::function<std::expected<void, lfs::Error>(
         std::span<const NormalAutoGenerateJob> jobs,
         const NormalGenerateProgress& progress)>;
-
-    // Prior loading and generation require a backend with a normal channel.
-    [[nodiscard]] bool training_normal_priors_enabled(
-        const lfs::core::param::OptimizationParameters& opt);
 
     [[nodiscard]] bool normal_auto_generate_needed(
         bool use_normal_loss,

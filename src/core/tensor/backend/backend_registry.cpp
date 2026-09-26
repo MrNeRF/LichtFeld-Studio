@@ -8,6 +8,9 @@
 #ifdef LFS_TENSOR_VULKAN
 #include "vulkan/vk_backend_ops.hpp"
 #endif
+#ifdef LFS_TENSOR_METAL
+#include "metal/metal_backend_ops.hpp"
+#endif
 
 #include <utility>
 
@@ -17,8 +20,26 @@ namespace lfs::core::internal {
 
     GpuBackendOps& backend_ops(const GpuBackend backend) {
         if (backend == GpuBackend::CUDA) {
+#if LFS_HAS_CUDA
             static CudaBackendOps* const cuda_ops = new CudaBackendOps();
             return *cuda_ops;
+#else
+            LFS_ASSERT_MSG(false, "GPU backend 'CUDA' is not compiled into this build");
+            std::unreachable();
+#endif
+        }
+
+        if (backend == GpuBackend::Metal) {
+#ifdef LFS_TENSOR_METAL
+            if (__builtin_available(macOS 26.0, *)) {
+                static MetalBackendOps* const metal_ops = new MetalBackendOps();
+                return *metal_ops;
+            }
+            LFS_ASSERT_MSG(false, "GPU backend 'Metal' needs macOS 26");
+#else
+            LFS_ASSERT_MSG(false, "GPU backend 'Metal' is not compiled into this build");
+#endif
+            std::unreachable();
         }
 
 #ifdef LFS_TENSOR_VULKAN

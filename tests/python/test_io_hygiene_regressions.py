@@ -12,7 +12,7 @@ def _read(relative: str) -> str:
     return (PROJECT_ROOT / relative).read_text(encoding="utf-8")
 
 
-def test_mask_cache_and_eight_bit_staging_assumptions_fail_loudly():
+def test_mask_cache_and_eight_bit_staging_contracts():
     pipeline = _read("src/io/pipelined_image_loader.cpp")
     nvcodec = _read("src/io/nvcodec_image_loader.cpp")
 
@@ -25,5 +25,7 @@ def test_mask_cache_and_eight_bit_staging_assumptions_fail_loudly():
     encode_start = nvcodec.index("NvCodecImageLoader::encode_grayscale_to_jpeg2k")
     encode_end = nvcodec.index("NvCodecImageLoader::decode_jpeg2k_16bit_from_memory_gpu")
     encode_body = nvcodec[encode_start:encode_end]
-    assert "!eight_bit || cuda_stream == nullptr" in encode_body
-    assert "eight-bit JPEG2000 staging currently requires" in encode_body
+    # Staging runs on the resolved execution stream and completes before the encoder reads it.
+    assert "cuda_stream = image_execution_stream(cuda_stream);" in encode_body
+    assert "cudaStreamSynchronize(static_cast<cudaStream_t>(cuda_stream))" in encode_body
+    assert "cuda_stream == nullptr" not in encode_body

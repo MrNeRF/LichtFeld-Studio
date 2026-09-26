@@ -41,10 +41,13 @@
                     data-tooltip="scene.clear_selection"><img id="selection-clear-icon" /></button>
             <span class="selection-action-spacer"></span>
             <button id="selection-training" class="selection-action-button" type="button"
+                    data-keymap-action="toggle_scene_selection_training"
                     data-tooltip="scene.disable_for_training"><img id="selection-training-icon" /></button>
             <button id="selection-visibility" class="selection-action-button" type="button"
+                    data-keymap-action="toggle_scene_selection_visibility"
                     data-tooltip="scene.hide_selected"><img id="selection-visibility-icon" /></button>
             <button id="selection-delete" class="selection-action-button selection-action-delete" type="button"
+                    data-keymap-action="delete_node"
                     data-tooltip="scene.delete"><img id="selection-delete-icon" /></button>
         </div>
     </div>
@@ -60,9 +63,11 @@
         <div class="history-actions">
             <button id="history-undo-btn"
                     class="btn btn--primary history-action"
+                    data-tooltip="common.undo" data-action="undo"
                     type="button"></button>
             <button id="history-redo-btn"
                     class="btn btn--secondary history-action"
+                    data-tooltip="common.redo" data-action="redo"
                     type="button"></button>
             <button id="history-clear-btn"
                     class="btn btn--ghost history-action history-action--clear"

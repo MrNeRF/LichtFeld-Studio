@@ -6,7 +6,7 @@
 // they run on every GPU backend; each is checked against a CPU reference away
 // from the threshold boundary.
 
-#include "core/cuda/selection_ops.hpp"
+#include "core/selection_ops.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include <gtest/gtest.h>
@@ -24,7 +24,9 @@ namespace {
     constexpr float kBoundaryBand = 1.0e-4f;
 
     std::vector<GpuBackend> backends_under_test() {
-        std::vector<GpuBackend> backends{GpuBackend::CUDA};
+        std::vector<GpuBackend> backends;
+        if (gpu_backend_available(GpuBackend::CUDA))
+            backends.push_back(GpuBackend::CUDA);
         if (gpu_backend_available(GpuBackend::Vulkan)) {
             backends.push_back(GpuBackend::Vulkan);
         }
@@ -56,7 +58,7 @@ TEST(SelectionAttributeOps, OpacityThresholdMatchesTheSigmoidReference) {
     for (const GpuBackend backend : backends_under_test()) {
         SCOPED_TRACE(label(backend));
         for (const TensorShape& shape : {TensorShape{n}, TensorShape{n, 1}}) {
-            const auto mask = cuda::select_by_opacity(upload(raw, shape, backend), lo, hi, kGroup).to_vector_uint8();
+            const auto mask = select_by_opacity(upload(raw, shape, backend), lo, hi, kGroup).to_vector_uint8();
             ASSERT_EQ(mask.size(), n);
             size_t checked = 0;
             for (size_t i = 0; i < n; ++i) {
@@ -80,7 +82,7 @@ TEST(SelectionAttributeOps, ScaleThresholdUsesTheLargestAxis) {
         raw[i] = pattern(i, -3.0f, 1.5f);
     for (const GpuBackend backend : backends_under_test()) {
         SCOPED_TRACE(label(backend));
-        const auto mask = cuda::select_by_scale(upload(raw, TensorShape{n, 3}, backend), max_scale, kGroup).to_vector_uint8();
+        const auto mask = select_by_scale(upload(raw, TensorShape{n, 3}, backend), max_scale, kGroup).to_vector_uint8();
         ASSERT_EQ(mask.size(), n);
         size_t checked = 0;
         for (size_t i = 0; i < n; ++i) {
@@ -105,7 +107,7 @@ TEST(SelectionAttributeOps, ColorThresholdMatchesTheDecodedReferenceOnBothLayout
     for (const GpuBackend backend : backends_under_test()) {
         SCOPED_TRACE(label(backend));
         for (const TensorShape& shape : {TensorShape{n, 3}, TensorShape{n, 1, 3}}) {
-            const auto mask = cuda::select_by_color(upload(sh0, shape, backend), ref[0], ref[1], ref[2], threshold, kGroup).to_vector_uint8();
+            const auto mask = select_by_color(upload(sh0, shape, backend), ref[0], ref[1], ref[2], threshold, kGroup).to_vector_uint8();
             ASSERT_EQ(mask.size(), n);
             size_t checked = 0;
             for (size_t i = 0; i < n; ++i) {
@@ -129,7 +131,7 @@ TEST(SelectionAttributeOps, ColorThresholdMatchesTheDecodedReferenceOnBothLayout
 
 TEST(SelectionAttributeOps, EmptyInputsProduceEmptyMasks) {
     const Tensor none = Tensor::empty({0}, Device::GPU, DataType::Float32);
-    EXPECT_EQ(cuda::select_by_opacity(none, 0.0f, 1.0f, kGroup).numel(), 0u);
-    EXPECT_EQ(cuda::select_by_scale(Tensor::empty({0, 3}, Device::GPU, DataType::Float32), 1.0f, kGroup).numel(), 0u);
-    EXPECT_EQ(cuda::select_by_color(Tensor::empty({0, 3}, Device::GPU, DataType::Float32), 0.0f, 0.0f, 0.0f, 0.1f, kGroup).numel(), 0u);
+    EXPECT_EQ(select_by_opacity(none, 0.0f, 1.0f, kGroup).numel(), 0u);
+    EXPECT_EQ(select_by_scale(Tensor::empty({0, 3}, Device::GPU, DataType::Float32), 1.0f, kGroup).numel(), 0u);
+    EXPECT_EQ(select_by_color(Tensor::empty({0, 3}, Device::GPU, DataType::Float32), 0.0f, 0.0f, 0.0f, 0.1f, kGroup).numel(), 0u);
 }

@@ -197,29 +197,6 @@ namespace lfs::training::mcmc {
         means[idx_3d + 2] += noise_factor * transformed_noise.z;
     }
 
-    __global__ void add_noise_kernel(
-        const float* raw_opacities,
-        const float* raw_scales,
-        const float* raw_quats,
-        const float* noise,
-        float* means,
-        const bool* frozen_mask,
-        size_t frozen_mask_size,
-        float current_lr,
-        size_t N) {
-
-        size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
-        if (idx >= N)
-            return;
-        if (frozen_mask != nullptr && idx < frozen_mask_size && frozen_mask[idx])
-            return;
-
-        size_t idx_3d = 3 * idx;
-        apply_noise_to_mean(
-            raw_opacities, raw_scales, raw_quats, means, idx, current_lr,
-            noise[idx_3d], noise[idx_3d + 1], noise[idx_3d + 2]);
-    }
-
     __global__ void inject_noise_kernel(
         const float* raw_opacities,
         const float* raw_scales,
@@ -245,40 +222,6 @@ namespace lfs::training::mcmc {
         apply_noise_to_mean(
             raw_opacities, raw_scales, raw_quats, means, idx, current_lr,
             n.x, n.y, n.z);
-    }
-
-    void launch_add_noise_kernel(
-        const float* raw_opacities,
-        const float* raw_scales,
-        const float* raw_quats,
-        const float* noise,
-        float* means,
-        const bool* frozen_mask,
-        size_t frozen_mask_size,
-        float current_lr,
-        size_t N,
-        void* stream) {
-
-        if (N == 0) {
-            return;
-        }
-
-        dim3 threads(256);
-        dim3 grid((N + threads.x - 1) / threads.x);
-
-        cudaStream_t cuda_stream = resolve_stream(stream);
-
-        add_noise_kernel<<<grid, threads, 0, cuda_stream>>>(
-            raw_opacities,
-            raw_scales,
-            raw_quats,
-            noise,
-            means,
-            frozen_mask,
-            frozen_mask_size,
-            current_lr,
-            N);
-        LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.add_noise");
     }
 
     void launch_inject_noise_kernel(
@@ -720,36 +663,6 @@ namespace lfs::training::mcmc {
             sampled_opacities,
             sampled_scales);
         LFS_CUDA_CHECK_MSG(cudaGetLastError(), "MCMC multinomial kernel launch");
-    }
-
-    __global__ void elementwise_max_inplace_kernel(
-        float* __restrict__ a,
-        const float* __restrict__ b,
-        size_t N) {
-
-        size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
-        if (idx >= N)
-            return;
-
-        a[idx] = fmaxf(a[idx], b[idx]);
-    }
-
-    void launch_elementwise_max_inplace(
-        float* a,
-        const float* b,
-        size_t N,
-        void* stream) {
-
-        if (N == 0)
-            return;
-
-        dim3 threads(256);
-        dim3 grid((N + threads.x - 1) / threads.x);
-
-        cudaStream_t cuda_stream = resolve_stream(stream);
-
-        elementwise_max_inplace_kernel<<<grid, threads, 0, cuda_stream>>>(a, b, N);
-        LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.elementwise_max");
     }
 
     __global__ void max_error_and_zero_densification_kernel(

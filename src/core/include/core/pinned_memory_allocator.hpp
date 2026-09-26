@@ -5,10 +5,10 @@
 
 #include "core/export.hpp"
 
+#include "core/cuda_types.hpp"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <cuda_runtime.h>
 #include <list>
 #include <mutex>
 #include <unordered_map>

@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "py_ui.hpp"
-#include "control/command_api.hpp"
 #include "core/environment.hpp"
+#include "core/event_bridge/command_api.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
@@ -48,19 +48,22 @@
 #include "rml_python_panel_adapter.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/editor_context.hpp"
+#include "visualizer/core/services.hpp"
+#include "visualizer/core/training_manager.hpp"
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/gui/sequencer_ui_state.hpp"
+#include "visualizer/input/sdl_coordinate_utils.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/operator/operator_context.hpp"
 #include "visualizer/operator/operator_registry.hpp"
+#include "visualizer/operator/ops/align_ops.hpp"
 #include "visualizer/post_work_utils.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/theme/theme.hpp"
 #include "visualizer/tools/unified_tool_registry.hpp"
-#include "visualizer/training/training_manager.hpp"
 #include "visualizer/visualizer.hpp"
 #include <RmlUi/Core/Core.h>
 #include <typeinfo>
@@ -2378,7 +2381,7 @@ namespace lfs::python {
     std::tuple<float, float> PyUILayout::get_mouse_pos() const {
         float x = 0.0f;
         float y = 0.0f;
-        SDL_GetMouseState(&x, &y);
+        lfs::vis::input::mouseStateInPixels(SDL_GetMouseFocus(), &x, &y);
         return {x, y};
     }
     std::tuple<float, float> PyUILayout::get_window_pos() const {
@@ -2736,6 +2739,8 @@ namespace lfs::python {
                         ci.is_submenu_item = nb::cast<bool>(d["is_submenu_item"]);
                     if (d.contains("is_active"))
                         ci.is_active = nb::cast<bool>(d["is_active"]);
+                    if (d.contains("icon"))
+                        ci.icon = nb::cast<std::string>(d["icon"]);
                     vec.push_back(std::move(ci));
                 }
 
@@ -2753,7 +2758,7 @@ namespace lfs::python {
         m.def("get_mouse_screen_pos", []() -> nb::tuple {
             float x = 0.0f;
             float y = 0.0f;
-            SDL_GetMouseState(&x, &y);
+            lfs::vis::input::mouseStateInPixels(SDL_GetMouseFocus(), &x, &y);
             return nb::make_tuple(x, y);
         });
 
@@ -3351,6 +3356,16 @@ namespace lfs::python {
             "Open a file dialog to select a LichtFeld project (.licht). Returns empty string if cancelled.");
 
         m.def(
+            "save_project_file_dialog",
+            [](const std::string& default_name, const std::string& start_dir) -> std::string {
+                const auto result = lfs::vis::gui::SaveProjectFileDialog(
+                    default_name, lfs::core::utf8_to_path(start_dir));
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("default_name") = "project.licht", nb::arg("start_dir") = "",
+            "Choose a destination for a new LichtFeld project. Returns empty string if cancelled.");
+
+        m.def(
             "open_ply_file_dialog",
             [](const std::string& start_dir) -> std::string {
                 std::filesystem::path start_path;
@@ -3509,6 +3524,15 @@ namespace lfs::python {
             },
             nb::arg("default_name") = "export",
             "Open a save file dialog for SPZ files. Returns empty string if cancelled.");
+
+        m.def(
+            "save_glb_file_dialog",
+            [](const std::string& default_name) -> std::string {
+                auto result = lfs::vis::gui::SaveGlbFileDialog(default_name);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("default_name") = "export",
+            "Open a save file dialog for GLB (SPZ glTF) files. Returns empty string if cancelled.");
 
         m.def(
             "save_usd_file_dialog",
@@ -4410,6 +4434,97 @@ namespace lfs::python {
             "Apply the active crop tool primitive through the node-backed crop command path");
 
         m.def(
+            "can_apply_align",
+            []() -> bool {
+                const auto* scene = lfs::vis::services().sceneOrNull();
+                return scene &&
+                       lfs::vis::op::pointsAreNonDegenerate(lfs::vis::services().getAlignPickedPoints()) &&
+                       lfs::vis::op::resolveAlignSnapTargetWorld(*scene).has_value();
+            },
+            "True when the align tool has 3 non-degenerate points ready to apply");
+
+        m.def(
+            "apply_align",
+            []() -> bool {
+                if (lfs::vis::op::operators().activeModalId() !=
+                    lfs::vis::op::to_string(lfs::vis::op::BuiltinOp::AlignPickPoint)) {
+                    return false;
+                }
+                lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::Apply);
+                lfs::vis::op::ModalEvent evt{};
+                evt.type = lfs::vis::op::ModalEvent::Type::NONE;
+                lfs::vis::op::operators().dispatchModalEvent(evt);
+                return true;
+            },
+            "Request the running align modal to apply the current triangle");
+
+        m.def(
+            "clear_align_points",
+            []() {
+                if (lfs::vis::op::operators().activeModalId() !=
+                    lfs::vis::op::to_string(lfs::vis::op::BuiltinOp::AlignPickPoint)) {
+                    return;
+                }
+                lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::Clear);
+                lfs::vis::op::ModalEvent evt{};
+                evt.type = lfs::vis::op::ModalEvent::Type::NONE;
+                lfs::vis::op::operators().dispatchModalEvent(evt);
+            },
+            "Request the running align modal to clear all picked points");
+
+        m.def("get_align_preview", [] { return lfs::vis::services().getAlignPreviewEnabled(); }, "Whether the alignment result is being previewed");
+        m.def("toggle_align_preview", [] {
+            if (lfs::vis::op::operators().activeModalId() !=
+                lfs::vis::op::to_string(lfs::vis::op::BuiltinOp::AlignPickPoint)) {
+                return;
+            }
+            lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::TogglePreview);
+            lfs::vis::op::ModalEvent event{};
+            lfs::vis::op::operators().dispatchModalEvent(event); }, "Switch between the original scene and the alignment preview");
+
+        m.def(
+            "get_align_axis_snap",
+            []() -> bool { return lfs::vis::services().getAlignAxisSnapEnabled(); },
+            "Whether align plane-normal axis snap is enabled");
+
+        m.def(
+            "set_align_axis_snap",
+            [](const bool enabled) {
+                lfs::vis::services().setAlignAxisSnapEnabled(enabled);
+                if (lfs::vis::services().getAlignPreviewEnabled()) {
+                    lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::RefreshPreview);
+                    lfs::vis::op::ModalEvent event{};
+                    lfs::vis::op::operators().dispatchModalEvent(event);
+                }
+                if (auto* const rm = lfs::vis::services().renderingOrNull()) {
+                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY);
+                }
+            },
+            nb::arg("enabled"),
+            "Enable or disable align plane-normal axis snap (session lifetime)");
+
+        m.def(
+            "get_align_edge_to_axis",
+            []() -> bool { return lfs::vis::services().getAlignEdgeToAxisEnabled(); },
+            "Whether align edge-to-+X in-plane yaw is enabled");
+
+        m.def(
+            "set_align_edge_to_axis",
+            [](const bool enabled) {
+                lfs::vis::services().setAlignEdgeToAxisEnabled(enabled);
+                if (lfs::vis::services().getAlignPreviewEnabled()) {
+                    lfs::vis::services().requestAlignUiAction(lfs::vis::Services::AlignUiAction::RefreshPreview);
+                    lfs::vis::op::ModalEvent event{};
+                    lfs::vis::op::operators().dispatchModalEvent(event);
+                }
+                if (auto* const rm = lfs::vis::services().renderingOrNull()) {
+                    rm->markDirty(lfs::vis::DirtyFlag::OVERLAY);
+                }
+            },
+            nb::arg("enabled"),
+            "Enable or disable align edge-to-+X in-plane yaw (session lifetime)");
+
+        m.def(
             "fit_crop_tool",
             [](bool use_percentile) {
                 if (auto* const gui = lfs::python::get_gui_manager()) {
@@ -5228,6 +5343,90 @@ namespace lfs::python {
             "Get the default WASD navigation speed");
 
         m.def(
+            "get_trackpad_preferences",
+            [] {
+                const auto state = vis::loadTrackpadPreferences();
+                nb::dict result;
+                result["device"] = std::string(vis::navigationDeviceName(state.device));
+                result["swipe_pans"] = state.swipe_pans;
+                result["swipe_speed"] = state.swipe_speed;
+                result["zoom_speed"] = state.zoom_speed;
+                return result;
+            },
+            "Get trackpad navigation preferences");
+
+        m.def(
+            "set_trackpad_preferences",
+            [](const std::string& device, const bool swipe_pans, const float swipe_speed, const float zoom_speed) {
+                const auto parsed = vis::parseNavigationDevice(device);
+                if (!parsed)
+                    throw nb::value_error("device must be 'mouse', 'trackpad' or 'automatic'");
+                vis::saveTrackpadPreferences({
+                    .device = *parsed,
+                    .swipe_pans = swipe_pans,
+                    .swipe_speed = swipe_speed,
+                    .zoom_speed = zoom_speed,
+                });
+                const auto state = vis::loadTrackpadPreferences();
+                invoke_on_viewer([state] {
+                    if (auto* const controller = vis::InputController::instance())
+                        controller->setTrackpadPreferences(state);
+                });
+            },
+            nb::arg("device"), nb::arg("swipe_pans"), nb::arg("swipe_speed"), nb::arg("zoom_speed"),
+            "Persist and apply trackpad navigation preferences (device 'mouse', 'trackpad' or 'automatic'; speeds 1-100, 50 is the default)");
+
+        m.def(
+            "get_project_manager_preferences",
+            [] {
+                auto& preferences = vis::UserPreferences::instance();
+                nb::dict result;
+                result["defaultView"] = preferences.projectManagerDefaultView();
+                result["openAtStartup"] = preferences.openProjectManagerAtStartup();
+                result["rememberState"] = preferences.rememberProjectManagerState();
+                return result;
+            },
+            "Get Project Manager preferences from the canonical user preferences store");
+
+        m.def(
+            "set_project_manager_default_view",
+            [](const std::string& view) {
+                vis::UserPreferences::instance().setProjectManagerDefaultView(view);
+            },
+            nb::arg("view"), "Set the default Project Manager view");
+
+        m.def(
+            "set_project_manager_open_at_startup",
+            [](const bool enabled) {
+                vis::UserPreferences::instance().setOpenProjectManagerAtStartup(enabled);
+            },
+            nb::arg("enabled"), "Set whether Project Manager opens at application startup");
+
+        m.def(
+            "set_project_manager_remember_state",
+            [](const bool enabled) {
+                vis::UserPreferences::instance().setRememberProjectManagerState(enabled);
+            },
+            nb::arg("enabled"), "Set whether Project Manager layout state is remembered");
+
+        m.def(
+            "get_project_manager_state",
+            [] { return vis::UserPreferences::instance().projectManagerState(); },
+            "Get remembered Project Manager layout state as JSON");
+
+        m.def(
+            "set_project_manager_state",
+            [](const std::string& state) {
+                vis::UserPreferences::instance().setProjectManagerState(state);
+            },
+            nb::arg("state"), "Set remembered Project Manager layout state from JSON");
+
+        m.def(
+            "reset_project_manager_preferences",
+            [] { vis::UserPreferences::instance().resetProjectManagerPreferences(); },
+            "Reset Project Manager preferences and remembered layout state");
+
+        m.def(
             "get_scene_reconstruction_options",
             [] {
                 nb::list backends;
@@ -5292,26 +5491,38 @@ namespace lfs::python {
         m.def("get_tensor_backend_preferences", [] {
             const auto state = vis::UserPreferences::instance().tensorBackend();
             nb::dict result;
-            result["backend"] = state.backend == core::GpuBackend::Vulkan ? "vulkan" : "cuda";
+            std::string backend = state.backend ? core::gpu_backend_name(*state.backend) : "auto";
+            std::transform(backend.begin(), backend.end(), backend.begin(),
+                           [](const unsigned char c) { return std::tolower(c); });
+            result["backend"] = backend;
             result["vulkan_device"] = state.options.vulkan_device;
             result["vulkan_validation"] = state.options.vulkan_validation;
             result["force_fp32_half"] = state.options.force_fp32_half;
             result["force_no_atomic_float"] = state.options.force_no_atomic_float;
-            result["viewer_vulkan_inputs"] = state.options.viewer_vulkan_inputs;
+            result["cuda_available"] = static_cast<bool>(LFS_HAS_CUDA);
+            result["metal_available"] = core::gpu_backend_available(core::GpuBackend::Metal);
             return result; }, "Get saved tensor backend preferences; changes apply after restart");
 
-        m.def("set_tensor_backend_preferences", [](const std::string& backend, const std::string& device, int validation, bool fp32_half, bool no_atomic_float, bool viewer_inputs) {
-                  if (backend != "cuda" && backend != "vulkan")
-                      throw nb::value_error("Backend must be cuda or vulkan");
+        m.def("set_tensor_backend_preferences", [](const std::string& backend, const std::string& device, int validation, bool fp32_half, bool no_atomic_float) {
+                  if (backend != "auto" && backend != "cuda" && backend != "vulkan" && backend != "metal")
+                      throw nb::value_error("Backend must be auto, cuda, vulkan or metal");
+                  if constexpr (!LFS_HAS_CUDA) {
+                    if (backend == "cuda")
+                      throw nb::value_error("CUDA is not compiled into this build");
+                  }
+                  if (backend == "metal" && !core::gpu_backend_available(core::GpuBackend::Metal))
+                      throw nb::value_error("Metal needs macOS 26 and a Metal 4 GPU");
                   if (validation < 0 || validation > 2)
                       throw nb::value_error("Validation must be 0, 1, or 2");
                   const vis::TensorPreferenceState state{
-                      .backend = backend == "vulkan" ? core::GpuBackend::Vulkan : core::GpuBackend::CUDA,
+                      .backend = backend == "auto"     ? std::nullopt
+                                 : backend == "vulkan" ? std::optional(core::GpuBackend::Vulkan)
+                                 : backend == "metal"  ? std::optional(core::GpuBackend::Metal)
+                                                       : std::optional(core::GpuBackend::CUDA),
                       .options = {.vulkan_device = device, .vulkan_validation = validation,
-                                  .force_fp32_half = fp32_half, .force_no_atomic_float = no_atomic_float,
-                                  .viewer_vulkan_inputs = viewer_inputs},
+                                  .force_fp32_half = fp32_half, .force_no_atomic_float = no_atomic_float},
                   };
-                  vis::UserPreferences::instance().setTensorBackend(state); }, nb::arg("backend") = "cuda", nb::arg("vulkan_device") = "", nb::arg("vulkan_validation") = 0, nb::arg("force_fp32_half") = false, nb::arg("force_no_atomic_float") = false, nb::arg("viewer_vulkan_inputs") = false, "Save tensor backend preferences for the next application start");
+                  vis::UserPreferences::instance().setTensorBackend(state); }, nb::arg("backend") = "auto", nb::arg("vulkan_device") = "", nb::arg("vulkan_validation") = 0, nb::arg("force_fp32_half") = false, nb::arg("force_no_atomic_float") = false, "Save tensor backend preferences for the next application start");
 
         m.def(
             "get_mcp_preferences",
@@ -5332,6 +5543,10 @@ namespace lfs::python {
                 return result;
             },
             "Get effective MCP HTTP server preferences");
+
+        m.def("get_mcp_access_token", []() {
+            nb::gil_scoped_release release;
+            return mcp::mcpBearerToken(); }, "Get the local MCP network access token");
 
         m.def(
             "set_mcp_preferences",
@@ -5393,6 +5608,8 @@ namespace lfs::python {
                 }
                 if (!result)
                     return std::string(result.error().user_message());
+                if (auto panel = vis::gui::PanelRegistry::instance().get_panel_instance("lfs.asset_manager"))
+                    panel->on_content_changed();
                 return {};
             },
             nb::arg("path"),
@@ -5403,6 +5620,8 @@ namespace lfs::python {
             [] {
                 nb::gil_scoped_release release;
                 vis::clearProjectLocationPreference();
+                if (auto panel = vis::gui::PanelRegistry::instance().get_panel_instance("lfs.asset_manager"))
+                    panel->on_content_changed();
             },
             "Clear the project location preference so the default is used.");
 
@@ -5470,6 +5689,9 @@ namespace lfs::python {
                     break;
                 case mcp::McpHttpErrorKind::ListenerFailed:
                     result["error_kind"] = "listener_failed";
+                    break;
+                case mcp::McpHttpErrorKind::CredentialFailed:
+                    result["error_kind"] = "credential_failed";
                     break;
                 }
                 result["error_address"] = status.error_address;
@@ -5561,6 +5783,8 @@ namespace lfs::python {
                 }
             },
             nb::arg("lang_code"), "Set language by code (e.g., 'en', 'de')");
+
+        m.def("resource_directory", []() { return lfs::core::path_to_utf8(lfs::core::getResourceBaseDir()); }, "Directory containing the bundled UI resources");
 
         m.def(
             "get_current_language",

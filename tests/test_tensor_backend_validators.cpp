@@ -5,6 +5,7 @@
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/backend/vulkan/vk_context.hpp"
 #include "core/tensor_backend.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
@@ -22,9 +23,13 @@ namespace {
     // One negative case per mixed-backend validator family listed in plan D1.
     // Each catches a validator that lets storage of two GPU backends reach a
     // kernel, which would hand a Vulkan device address to CUDA or the reverse.
-    class TensorBackendValidators : public testing::Test {
+    class TensorBackendValidators : public lfs::test::CudaDeviceTest {
     protected:
         void SetUp() override {
+            CudaDeviceTest::SetUp();
+            if (IsSkipped()) {
+                return;
+            }
             if (!gpu_backend_available(GpuBackend::Vulkan)) {
                 GTEST_SKIP() << "Vulkan backend unavailable";
             }
@@ -41,6 +46,9 @@ namespace {
         }
 
         void TearDown() override {
+            if (IsSkipped()) {
+                return;
+            }
             EXPECT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan).has_value());
         }
 
@@ -86,6 +94,25 @@ namespace {
         expect_mixed_backend_error("cat", [&] {
             static_cast<void>(Tensor::cat({cuda_, vulkan_}, 0).to_vector());
         });
+    }
+
+    TEST_F(TensorBackendValidators, ExplicitTransferPreservesValuesAndScopedBackend) {
+        const auto process_backend = default_gpu_backend();
+        const GpuBackendScope scope(GpuBackend::Vulkan);
+        EXPECT_EQ(gpu_backend_of(Tensor::zeros({1}, Device::GPU)), GpuBackend::Vulkan);
+        const auto values = Tensor::from_vector(
+                                std::vector<float>{1.25f, -2.5f, 3.75f, 4.0f, 5.5f, -6.25f},
+                                {2, 3}, Device::GPU)
+                                .transpose(0, 1);
+        const auto cuda = values.to(GpuBackend::CUDA);
+        EXPECT_EQ(gpu_backend_of(cuda), GpuBackend::CUDA);
+        EXPECT_EQ(cuda.shape(), values.shape());
+        EXPECT_EQ(cuda.to_vector(), values.to_vector());
+        const auto restored = cuda.to(GpuBackend::Vulkan);
+        EXPECT_EQ(gpu_backend_of(restored), GpuBackend::Vulkan);
+        EXPECT_EQ(restored.to_vector(), values.to_vector());
+        EXPECT_EQ(gpu_backend_of(Tensor::zeros({1}, Device::GPU)), GpuBackend::Vulkan);
+        EXPECT_EQ(default_gpu_backend(), process_backend);
     }
 
     TEST_F(TensorBackendValidators, CopyFromRejectsMixedBackends) {
@@ -206,22 +233,23 @@ namespace {
     TEST_F(TensorBackendValidators, DeferredTensorsMaterializeOnTheirLeafBackendOnAnyThread) {
         // Catches a materializer that allocates on the calling thread's default
         // backend instead of the leaf backend the tag promised.
+        const GpuBackend leaf = default_gpu_backend() == GpuBackend::CUDA ? GpuBackend::Vulkan : GpuBackend::CUDA;
         Tensor deferred;
         {
-            GpuBackendScope scope(GpuBackend::Vulkan);
+            GpuBackendScope scope(leaf);
             deferred = Tensor::ones({512, 512}, Device::GPU).add(0.5f).mul(2.0f);
         }
         ASSERT_TRUE(deferred.is_deferred());
-        EXPECT_EQ(gpu_backend_of(deferred), GpuBackend::Vulkan);
+        EXPECT_EQ(gpu_backend_of(deferred), leaf);
         std::vector<float> values;
         std::thread worker([&] {
-            EXPECT_EQ(default_gpu_backend(), GpuBackend::CUDA);
+            EXPECT_NE(default_gpu_backend(), leaf);
             values = deferred.to_vector();
         });
         worker.join();
         ASSERT_EQ(values.size(), 262144u);
         EXPECT_FLOAT_EQ(values[7], 3.0f);
-        EXPECT_EQ(gpu_backend_of(deferred), GpuBackend::Vulkan);
+        EXPECT_EQ(gpu_backend_of(deferred), leaf);
     }
 
     TEST_F(TensorBackendValidators, InPlaceWriteOnALeafPreservesTheDeferredSnapshotBackend) {

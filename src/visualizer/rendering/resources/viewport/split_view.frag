@@ -106,10 +106,13 @@ void main() {
         return;
     }
 
-    // UV inside the content rect (0..1).
+    // Pixel-center UV inside the content rect. Normalized texture coordinates
+    // place the first and last pixel centers at 0.5 / extent and
+    // (extent - 0.5) / extent; dividing by extent - 1 stretches clipped PLY
+    // panels differently after their cached widths are refreshed.
     vec2 content_uv = vec2(
-        pc.rect.z > 1.0 ? (px.x - pc.rect.x) / (pc.rect.z - 1.0) : 0.0,
-        pc.rect.w > 1.0 ? (px.y - pc.rect.y) / (pc.rect.w - 1.0) : 0.0);
+        (px.x - pc.rect.x) / max(pc.rect.z, 1.0),
+        (px.y - pc.rect.y) / max(pc.rect.w, 1.0));
 
     if (pc.split.w > 0.5) {
         vec3 ground_truth = sample_panel(

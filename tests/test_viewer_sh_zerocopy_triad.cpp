@@ -8,6 +8,7 @@
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 
@@ -96,7 +97,9 @@ namespace {
 
 } // namespace
 
-TEST(ViewerShZerocopyTriad, Fp32VsF16VsQ16MeanAbs) {
+class ViewerShZerocopyTriad : public lfs::test::CudaBackendTest {};
+
+TEST_F(ViewerShZerocopyTriad, Fp32VsF16VsQ16MeanAbs) {
     auto splat_fp32 = make_random_sh3(kN, 0xF16A016u);
     const auto ref = splat_fp32.shN_canonical().cpu().contiguous();
 

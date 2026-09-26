@@ -2,9 +2,11 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/environment.hpp"
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
 #include "gui/gallery_scene_publication.hpp"
+#include "io/formats/sogs.hpp"
 #include "io/formats/spz.hpp"
 #include "io/project_document.hpp"
 #include "licht_test_support.hpp"
@@ -15,14 +17,24 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <glm/gtc/matrix_transform.hpp>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <stdexcept>
 #include <string>
 #include <vector>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
 
 namespace {
 
@@ -90,12 +102,70 @@ namespace {
         return bytes;
     }
 
+    // Windows export workers have a small stack. Exercise that constraint on
+    // every platform, including Linux where the default stack hides regressions.
+    void on_small_stack(const std::function<void()>& operation) {
+        struct Work {
+            const std::function<void()>& operation;
+            std::exception_ptr error;
+            void run() noexcept {
+                try {
+                    operation();
+                } catch (...) {
+                    error = std::current_exception();
+                }
+            }
+        } work{operation, {}};
+        constexpr std::size_t stack_bytes = 512 * 1024;
+#ifdef _WIN32
+        const auto thread = CreateThread(
+            nullptr, stack_bytes,
+            [](void* data) -> DWORD {
+                static_cast<Work*>(data)->run();
+                return 0;
+            },
+            &work, STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
+        if (!thread)
+            throw std::runtime_error("Could not create publication test worker");
+        const auto waited = WaitForSingleObject(thread, INFINITE);
+        CloseHandle(thread);
+        if (waited != WAIT_OBJECT_0)
+            std::terminate(); // Do not unwind while the worker may still reference this stack.
+#else
+        pthread_attr_t attributes;
+        if (pthread_attr_init(&attributes) != 0)
+            throw std::runtime_error("Could not initialize publication test worker");
+        const auto configured = pthread_attr_setstacksize(&attributes, stack_bytes);
+        pthread_t thread;
+        const auto created = configured == 0
+                                 ? pthread_create(&thread, &attributes, [](void* data) -> void* {
+                                       static_cast<Work*>(data)->run();
+                                       return nullptr; }, &work)
+                                 : configured;
+        pthread_attr_destroy(&attributes);
+        if (created != 0)
+            throw std::runtime_error("Could not create publication test worker");
+        if (pthread_join(thread, nullptr) != 0)
+            std::terminate(); // Do not unwind while the worker may still reference this stack.
+#endif
+        if (work.error)
+            std::rethrow_exception(work.error);
+    }
+
+    std::vector<std::byte> multi_buffer_asset() {
+        std::vector<std::byte> bytes(2 * 1024 * 1024 + 37);
+        for (std::size_t i = 0; i < bytes.size(); ++i)
+            bytes[i] = static_cast<std::byte>((i * 17 + i / 1024) % 251);
+        return bytes;
+    }
+
     struct PublishedNode {
         Uuid uuid;
         std::string source_kind;
         std::array<float, 16> local_transform{};
         std::vector<std::byte> dsrc;
         std::string sidecar;
+        std::uint64_t publication_count = 0;
     };
 
     PublishedNode read_published_node(const std::filesystem::path& directory) {
@@ -106,6 +176,10 @@ namespace {
         EXPECT_TRUE(record.payload.has_value());
         const auto* source = document->find_dataset_source(record.uuid);
         EXPECT_NE(source, nullptr);
+        const auto element = document->scene_graph().dom().array_find("nodes", record.uuid.to_string());
+        EXPECT_TRUE(element.has_value());
+        const auto publication = element ? element->get_json("publication") : std::nullopt;
+        EXPECT_TRUE(publication.has_value());
         std::ifstream manifest_file(directory / "manifest.json");
         const auto manifest = nlohmann::json::parse(manifest_file);
         PublishedNode published{
@@ -114,6 +188,7 @@ namespace {
             .local_transform = record.local_transform,
             .dsrc = read_lazy_bytes(*source),
             .sidecar = manifest.at("nodes").at(0).at("path").get<std::string>(),
+            .publication_count = publication ? publication->at("count").get<std::uint64_t>() : 0,
         };
         return published;
     }
@@ -187,6 +262,75 @@ TEST(GalleryScenePublicationTest, UnchangedEncodedAssetIsByteIdenticalAfterPubli
     EXPECT_EQ(published.sidecar, "0.sog");
     EXPECT_EQ(published.dsrc, original);
     EXPECT_EQ(read_file_bytes(request.path / "0.sog"), original);
+}
+
+TEST(GalleryScenePublicationStackTest, EncodedCopyFitsWorkerStackAndPreservesEveryByte) {
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    ASSERT_EXIT(
+        ([] {
+            TemporaryDirectory temporary;
+            const auto bytes = multi_buffer_asset();
+            const auto source = owned_asset("sog", bytes, fixed_uuid(111));
+            const auto destination = temporary.path / "copied.sog";
+            on_small_stack([&] { copyLazyChunkToFile(source.bytes, destination); });
+            EXPECT_EQ(read_file_bytes(destination), bytes);
+        }(),
+         std::_Exit(::testing::Test::HasFailure() ? EXIT_FAILURE : EXIT_SUCCESS)),
+        ::testing::ExitedWithCode(EXIT_SUCCESS), "");
+}
+
+TEST(GalleryScenePublicationStackTest, PublicationFitsWorkerStackAndPreservesEmbeddedSource) {
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    ASSERT_EXIT(
+        ([] {
+            TemporaryDirectory temporary;
+            const auto bytes = multi_buffer_asset();
+            auto request = base_request(temporary.path / "worker.scene", ExportFormat::GALLERY_SOG);
+            GalleryScenePublishNode node;
+            node.snapshot.row_count = 8;
+            node.snapshot.active_sh_degree = 0;
+            node.snapshot.world_transform = glm::mat4{1.0f};
+            node.name = "encoded";
+            node.encoded = owned_asset("sog", bytes, fixed_uuid(112));
+            request.nodes.push_back(std::move(node));
+            on_small_stack([&] { writeGalleryScenePublication(request, {}, {}); });
+            const auto published = read_published_node(request.path);
+            EXPECT_EQ(published.dsrc, bytes);
+            EXPECT_EQ(read_file_bytes(request.path / "0.sog"), bytes);
+            EXPECT_FALSE(request.materialized_payload);
+        }(),
+         std::_Exit(::testing::Test::HasFailure() ? EXIT_FAILURE : EXIT_SUCCESS)),
+        ::testing::ExitedWithCode(EXIT_SUCCESS), "");
+}
+
+// Opening a downloaded project materializes its embedded scene on the hydration worker. A copy buffer on the
+// stack overflows that worker (Windows threads default to 1 MiB) and ends the process without a log line.
+TEST(GalleryScenePublicationStackTest, EmbeddedAssetMaterializesOnWorkerStack) {
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    ASSERT_EXIT(
+        ([] {
+            TemporaryDirectory temporary;
+            const auto home = temporary.path / "home";
+            std::filesystem::create_directories(home);
+            ASSERT_TRUE(lfs::core::environment::set_value("LFS_HOME", home.string()));
+            const auto bytes = multi_buffer_asset();
+            auto request = base_request(temporary.path / "download.scene", ExportFormat::GALLERY_SOG);
+            GalleryScenePublishNode node;
+            node.snapshot.row_count = 8;
+            node.snapshot.active_sh_degree = 0;
+            node.snapshot.world_transform = glm::mat4{1.0f};
+            node.name = "encoded";
+            node.encoded = owned_asset("sog", bytes, fixed_uuid(113));
+            request.nodes.push_back(std::move(node));
+            writeGalleryScenePublication(request, {}, {});
+            const auto published = read_published_node(request.path);
+            auto document = require_result_ptr(ProjectDocument::open(request.path / "project.licht"));
+            std::filesystem::path materialized;
+            on_small_stack([&] { materialized = require_result(document->materialize_embedded_asset(published.uuid, "sog")); });
+            EXPECT_EQ(read_file_bytes(materialized), bytes);
+        }(),
+         std::_Exit(::testing::Test::HasFailure() ? EXIT_FAILURE : EXIT_SUCCESS)),
+        ::testing::ExitedWithCode(EXIT_SUCCESS), "");
 }
 
 TEST(GalleryScenePublicationTest, StudioDefaultKeepsCleanSogInsteadOfExpandingToPly) {
@@ -420,6 +564,33 @@ TEST(GalleryScenePublicationTest, GallerySpzPublicationCountMatchesVisibleAfterS
     EXPECT_EQ(loaded->visible_count(), 5u);
 }
 
+TEST(GalleryScenePublicationTest, GallerySogPublicationCountMatchesVisibleAfterSoftDelete) {
+    TemporaryDirectory temporary;
+    auto snapshot = cpu_snapshot();
+    ASSERT_EQ(snapshot.row_count, 8u);
+    lfs::core::Tensor del = lfs::core::Tensor::zeros_bool({8}, snapshot.data->means().device());
+    del.slice(0, 2, 5) = lfs::core::Tensor::ones_bool({3}, snapshot.data->means().device());
+    snapshot.data->soft_delete(del);
+    ASSERT_EQ(snapshot.data->visible_count(), 5u);
+
+    auto request = base_request(temporary.path / "deleted-sog.scene", ExportFormat::GALLERY_SOG);
+    request.nodes.push_back(GalleryScenePublishNode{
+        .snapshot = std::move(snapshot),
+        .name = "cropped",
+        .encoded = std::nullopt,
+    });
+    writeGalleryScenePublication(request, {}, {});
+    const auto published = read_published_node(request.path);
+    EXPECT_EQ(published.source_kind, "sog");
+    EXPECT_EQ(published.sidecar, "0.sog");
+    EXPECT_EQ(published.publication_count, 5u);
+
+    const auto loaded = lfs::io::load_sog(request.path / "0.sog");
+    ASSERT_TRUE(loaded.has_value()) << loaded.error().message;
+    EXPECT_EQ(loaded->size(), 5u);
+    EXPECT_EQ(loaded->visible_count(), 5u);
+}
+
 TEST(GalleryScenePublicationTest, GallerySpzWritesGenuineV4WhenEncodingFromSplat) {
     TemporaryDirectory temporary;
     auto request = base_request(temporary.path / "encode-spz.scene", ExportFormat::GALLERY_SPZ);
@@ -455,7 +626,8 @@ namespace {
     using lfs::vis::gui::verifyGalleryProjectCommit;
 
     std::filesystem::path portable_fixture(const std::string& kind) {
-        return std::filesystem::path(__FILE__).parent_path() / "data" / ("portable-" + kind + ".licht");
+        return std::filesystem::path(PROJECT_ROOT_PATH) / "tests" / "data" /
+               ("portable-" + kind + ".licht");
     }
 
     // Deliberately invalid bindings cannot pass ProjectDocument::save validation.
@@ -500,7 +672,7 @@ TEST(GalleryProjectExportTest, EncodedPortableAssetsAndSessionAreRetainedWithout
         ASSERT_TRUE(publication.nodes[0].encoded.has_value());
         EXPECT_FALSE(publication.nodes[0].snapshot.data);
         // Prove writer does not invoke the document decoder for a reusable asset.
-        publication.nodes[0].load_payload = []() -> std::shared_ptr<SplatData> {
+        publication.nodes[0].load_payload = [](lfs::core::TensorCompletion&) -> std::shared_ptr<SplatData> {
             throw std::runtime_error("Unexpected tensor hydration on encoded copy path");
         };
         EXPECT_EQ(publication.published_render, *source.view().dom().get_json("render_settings"));
@@ -581,12 +753,40 @@ TEST(GalleryProjectExportTest, SavedSpzV4IsByteIdentical) {
                                       ExportFormat::GALLERY_SPZ, ""},
                                      publication, commit);
     ASSERT_TRUE(publication.nodes.front().encoded.has_value());
-    publication.nodes.front().load_payload = []() -> std::shared_ptr<SplatData> {
+    publication.nodes.front().load_payload = [](lfs::core::TensorCompletion&) -> std::shared_ptr<SplatData> {
         throw std::runtime_error("SPZ copy must not hydrate");
     };
     writeGalleryScenePublication(publication, {}, {});
     EXPECT_EQ(read_file_bytes(original.path / "0.spz"), read_file_bytes(publication.path / "0.spz"));
     EXPECT_FALSE(publication.materialized_payload);
+}
+
+TEST(GalleryProjectExportTest, PublicationCarriesProjectLicenseAndItsAbsence) {
+    TemporaryDirectory temporary;
+    auto source_request = base_request(temporary.path / "source.scene", ExportFormat::GALLERY_SCENE);
+    source_request.nodes.push_back({.snapshot = cpu_snapshot(), .name = "splat"});
+    writeGalleryScenePublication(source_request, {}, {});
+    const auto source_path = source_request.path / "project.licht";
+
+    auto publish = [&](const std::string& name) {
+        GalleryScenePublishRequest request;
+        std::string commit;
+        prepareGalleryProjectPublication({source_path, temporary.path / name,
+                                          ExportFormat::GALLERY_SCENE, ""},
+                                         request, commit);
+        writeGalleryScenePublication(request, {}, {});
+        return require_result_ptr(ProjectDocument::open(request.path / "project.licht"));
+    };
+
+    auto without = publish("without.scene");
+    EXPECT_FALSE(require_result(without->project().license()).has_value());
+
+    auto source = require_result_ptr(ProjectDocument::open(source_path));
+    const lfs::io::project::ProjectLicense expected{"LicenseRef-Custom", "Use with attribution"};
+    require_status(source->set_license(expected));
+    static_cast<void>(require_result(source->save(source_path)));
+    auto with = publish("with.scene");
+    EXPECT_EQ(require_result(with->project().license()), expected);
 }
 
 TEST(GalleryProjectExportTest, PlyPayloadReencodesToRequestedSog) {

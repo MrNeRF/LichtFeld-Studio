@@ -9,6 +9,7 @@
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/strategies/strategy_utils.hpp"
 #include "training/trainer.hpp"
@@ -56,7 +57,9 @@ namespace {
 
 } // namespace
 
-TEST(PersistentMasksTest, FrozenMaskRebuiltOnceAcrossUnchangedCalls) {
+class PersistentMasksTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(PersistentMasksTest, FrozenMaskRebuiltOnceAcrossUnchangedCalls) {
     auto splat = make_splat(32);
     splat->set_frozen_ranges({{.start = 0, .count = 8}});
 
@@ -86,7 +89,7 @@ TEST(PersistentMasksTest, FrozenMaskRebuiltOnceAcrossUnchangedCalls) {
 
 // Cropbox damping: rebuild exactly once across N unchanged installs; again on
 // topology (N) change. Geometry fingerprint also invalidates (cropbox move).
-TEST(PersistentMasksTest, CropboxDampingRebuiltOnceAcrossUnchangedSteps) {
+TEST_F(PersistentMasksTest, CropboxDampingRebuiltOnceAcrossUnchangedSteps) {
     Scene scene;
     // Trainer(scene) requires cameras (hasTrainingData).
     const auto cameras = scene.addGroup("Cameras");

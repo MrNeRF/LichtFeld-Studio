@@ -39,7 +39,7 @@ jobs:
           apt-get install -y git
 
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           submodules: recursive
@@ -93,9 +93,12 @@ jobs:
           update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100 \
                               --slave /usr/bin/g++ g++ /usr/bin/g++-14
 
+      - name: Normalize vcpkg path
+        run: echo "VCPKG_ROOT=$(realpath -m "$VCPKG_ROOT")" >> "$GITHUB_ENV"
+
       - name: Cache vcpkg tool
         id: cache-vcpkg-tool
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.VCPKG_ROOT }}
           key: vcpkg-tool-${{ runner.os }}-2026-02-21
@@ -115,15 +118,20 @@ jobs:
           set(VCPKG_MAX_CONCURRENCY 2)
           EOF
 
+      # Release objects are built with -march=native; ccache keys the flag, not the CPU.
+      - name: Identify CPU for the compiler cache
+        id: cpu
+        run: echo "model=$(grep -m1 'model name' /proc/cpuinfo | md5sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+
       - name: Cache ccache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /github/home/.cache/ccache
-          key: ccache-${{ runner.os }}-${{ matrix.build_type }}-${{ github.run_id }}
-          restore-keys: ccache-${{ runner.os }}-${{ matrix.build_type }}-
+          key: ccache-${{ runner.os }}-${{ matrix.build_type }}-${{ steps.cpu.outputs.model }}-${{ github.run_id }}
+          restore-keys: ccache-${{ runner.os }}-${{ matrix.build_type }}-${{ steps.cpu.outputs.model }}-
 
       - name: Cache vcpkg packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /github/home/.cache/vcpkg/archives
           key: vcpkg-pkgs-${{ runner.os }}-linux-gui-prebuilt-ort-v1-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', '.github/overlays/**') }}
@@ -170,6 +178,25 @@ jobs:
         run: |
           uv run --python 3.12 --no-project --with numpy --with pillow --with pytest python -m pytest -q tests/python/test_scene_reconstruction_benchmark.py
 
+      - name: Install Python test dependencies
+        run: |
+          build/vcpkg_installed/x64-linux/tools/python3/python3.12 -m ensurepip --user
+          build/vcpkg_installed/x64-linux/tools/python3/python3.12 -m pip install --user -r tests/python/requirements-test.txt
+
+      - name: Run CPU Python tests
+        env:
+          CUDA_VISIBLE_DEVICES: ''
+          NVIDIA_VISIBLE_DEVICES: void
+          DISPLAY: ''
+          LFS_TEST_BUILD_DIR: ${{ github.workspace }}/build
+        # The runner has no NVIDIA driver; the toolkit's stub libcuda lets the extension load without a GPU.
+        run: |
+          grep -m1 'model name' /proc/cpuinfo || true
+          mkdir -p "$RUNNER_TEMP/cuda-driver-stub"
+          ln -sf /usr/local/cuda/lib64/stubs/libcuda.so "$RUNNER_TEMP/cuda-driver-stub/libcuda.so.1"
+          LD_LIBRARY_PATH="$RUNNER_TEMP/cuda-driver-stub${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+            build/vcpkg_installed/x64-linux/tools/python3/python3.12 -X faulthandler -m pytest tests/python -m 'not gpu and not slow and not integration' -q
+
   # .clang-tidy is for local/IDE use only here; CI needs compile_commands.json in a later phase.
   error-debt-gate:
     if: github.repository == 'MrNeRF/LichtFeld-Studio' || github.event.pull_request.base.repo.full_name == 'MrNeRF/LichtFeld-Studio'
@@ -177,7 +204,7 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Generate error-debt census
         run: python3 tools/error_debt_census.py > error-debt-census.json
@@ -188,9 +215,12 @@ jobs:
       - name: Enforce I/O discipline
         run: python3 tools/check_io_discipline.py
 
+      - name: Enforce backend neutrality
+        run: python3 tools/check_backend_neutrality.py
+
       - name: Upload error-debt census
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: error-debt-census
           path: error-debt-census.json

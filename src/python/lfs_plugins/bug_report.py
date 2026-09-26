@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import getpass
 import hashlib
+import json
 import logging
 import os
 import re
@@ -30,6 +31,8 @@ _log = logging.getLogger(__name__)
 BUG_REPORT_PATH = "/api/v1/bugs/"
 CLIENT_NAME = "LichtFeld Studio"
 LOG_MAX_BYTES = 1_048_576
+# Control characters expand sixfold inside a JSON string. Two full logs must still fit.
+BUG_REPORT_JSON_MAX_BYTES = 8 * 1024 * 1024
 CATEGORY_DETAIL_MAX_LENGTH = 120
 
 CATEGORIES = ("crash", "training", "ui", "performance", "export", "other")
@@ -128,6 +131,8 @@ def collect_diagnostics() -> dict[str, object]:
                 for key, value in native.items()
                 if str(key) in _DIAGNOSTIC_KEYS
             )
+            if native.get("vram_used_available") is False:
+                diagnostics.pop("vram_used_mb", None)
     except Exception:
         _log.debug("Native diagnostic collection was unavailable")
 
@@ -347,10 +352,20 @@ def build_payload(
     if consent_to_logs:
         current_text = truncate_utf8_tail(redact(current_log_text))
         if current_text:
+            try:
+                log_path = redact(str(lf.log.log_file_path()))
+            except Exception:
+                log_path = "lichtfeld.log"
             payload["log"] = {
                 "file_name": "lichtfeld-session.log",
+                "path": log_path,
                 "text": current_text,
             }
+        else:
+            try:
+                payload["log_file"] = redact(str(lf.log.log_file_path()))
+            except Exception:
+                payload["log_file"] = "lichtfeld.log"
         if include_previous_log:
             source = previous_session_log() if previous_log_text is None else previous_log_text
             prior_text = truncate_utf8_tail(redact(source))
@@ -404,6 +419,44 @@ def _redacted_detail(detail: object) -> dict[str, object]:
     return result
 
 
+def _json_bytes(payload: Mapping[str, object]) -> bytes:
+    return json.dumps(dict(payload), separators=(",", ":")).encode("utf-8")
+
+
+def _fit_bug_report(payload: Mapping[str, object]) -> dict[str, object]:
+    """Keep the newest log tail that still fits the gallery JSON ceiling."""
+    fitted = {key: (dict(value) if isinstance(value, Mapping) else value) for key, value in payload.items()}
+    if len(_json_bytes(fitted)) <= BUG_REPORT_JSON_MAX_BYTES:
+        return fitted
+    while len(_json_bytes(fitted)) > BUG_REPORT_JSON_MAX_BYTES:
+        shrunk = False
+        for key in ("previous_log", "log"):
+            entry = fitted.get(key)
+            if not isinstance(entry, dict):
+                continue
+            text = entry.get("text")
+            if not isinstance(text, str) or not text:
+                continue
+            entry = dict(entry)
+            keep = len(text) - max(1, len(text) // 8)
+            shortened = text[max(0, keep):]
+            if keep > 0:
+                newline = shortened.find("\n")
+                if 0 <= newline < len(shortened) - 1:
+                    shortened = shortened[newline + 1 :]
+            if shortened == text:
+                shortened = ""
+            entry["text"] = shortened
+            fitted[key] = entry
+            shrunk = True
+        if not shrunk:
+            break
+    if len(_json_bytes(fitted)) > BUG_REPORT_JSON_MAX_BYTES:
+        fitted.pop("log", None)
+        fitted.pop("previous_log", None)
+    return fitted
+
+
 def submit_report(
     payload: Mapping[str, object],
     *,
@@ -416,6 +469,7 @@ def submit_report(
     loss window in exchange for keeping shutdown non-blocking.
     """
     account = service if service is not None else get_portal_account_service()
+    payload = _fit_bug_report(payload)
     try:
         response = account.request_json_authenticated("POST", BUG_REPORT_PATH, payload)
     except PortalHTTPError as exc:

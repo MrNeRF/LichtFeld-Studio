@@ -5,7 +5,7 @@ import json
 import threading
 from pathlib import Path
 
-DEFAULTS = dict(uploadFormat="sog", askBeforePublic=True, posterCacheMiB=64)
+DEFAULTS = dict(uploadFormat="sog", posterCacheMiB=64)
 _lock = threading.RLock()
 
 
@@ -35,10 +35,6 @@ def _validate(key, value):
     if key == "uploadFormat":
         if value not in ("studio", "sog", "ssog", "spz"):
             raise ValueError("Unsupported upload format")
-        return value
-    if key == "askBeforePublic":
-        if type(value) is not bool:
-            raise ValueError("Expected a checkbox value")
         return value
     if key != "posterCacheMiB" or isinstance(value, bool):
         raise ValueError("Unknown gallery preference")

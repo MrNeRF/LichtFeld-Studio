@@ -158,24 +158,29 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
           uint3 groupID : SV_GroupID,
           uniform Uniforms uniforms)
 {
-    const uint2 pix_coord = groupID.xy * uint2(HIGS_TILE_WIDTH, HIGS_TILE_HEIGHT) + groupThreadID.xy;
-    const bool is_inside = pix_coord.x < uniforms.image_width && pix_coord.y < uniforms.image_height;
+    const uint2 output_pixel = groupID.xy * uint2(HIGS_TILE_WIDTH, HIGS_TILE_HEIGHT) + groupThreadID.xy;
+    const bool is_inside = output_pixel.x < uniforms.image_width && output_pixel.y < uniforms.image_height;
     if (!is_inside)
         return;
 
+    const uint2 render_origin = full_frame_binning(uniforms)
+        ? uint2(uniforms.render_origin_x, uniforms.render_origin_y) : uint2(0u);
+    const uint2 pix_coord = output_pixel + render_origin;
+    const uint2 tile_coord = groupID.xy + render_origin / uint2(HIGS_TILE_WIDTH, HIGS_TILE_HEIGHT);
+
     const uint macro_tile_idx =
-        (groupID.y / HIGS_MACRO_TILE_HEIGHT_TILES) * higs_macro_grid_width(uniforms.grid_width) +
-        (groupID.x / HIGS_MACRO_TILE_WIDTH_TILES);
+        (tile_coord.y / HIGS_MACRO_TILE_HEIGHT_TILES) * higs_macro_grid_width(uniforms.grid_width) +
+        (tile_coord.x / HIGS_MACRO_TILE_WIDTH_TILES);
     const uint local_tile_idx =
-        (groupID.y % HIGS_MACRO_TILE_HEIGHT_TILES) * HIGS_MACRO_TILE_WIDTH_TILES +
-        (groupID.x % HIGS_MACRO_TILE_WIDTH_TILES);
+        (tile_coord.y % HIGS_MACRO_TILE_HEIGHT_TILES) * HIGS_MACRO_TILE_WIDTH_TILES +
+        (tile_coord.x % HIGS_MACRO_TILE_WIDTH_TILES);
     const uint thread_rank = groupThreadID.y * HIGS_TILE_WIDTH + groupThreadID.x;
-    const uint2 tile_origin = groupID.xy * uint2(HIGS_TILE_WIDTH, HIGS_TILE_HEIGHT);
+    const uint2 tile_origin = tile_coord * uint2(HIGS_TILE_WIDTH, HIGS_TILE_HEIGHT);
 
     const uint batch_begin = uint(max(macro_tile_idx == 0u ? 0 : macro_batch_offsets[macro_tile_idx - 1u], 0));
     const uint batch_end = uint(max(macro_batch_offsets[macro_tile_idx], int32_t(batch_begin)));
 
-    const uint pix_id = pix_coord.y * uniforms.image_width + pix_coord.x;
+    const uint pix_id = output_pixel.y * uniforms.image_width + output_pixel.x;
     const float2 center_pix_coord = float2(pix_coord);
     const bool spark_rad_opacity_path = (uniforms.lod_enabled & 4u) != 0u;
   #if LFS_RASTER_OVERLAYS

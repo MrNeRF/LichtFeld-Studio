@@ -130,7 +130,7 @@ SpherHarmCoeffs read_spherical_harmonics_coeffs_split_q16(
                     decode_shn_q16_cell(load_shn_q16_u16(shN_address, shAtU16(g_idx, base + 1u, n_cells)), lo, hi), \
                     decode_shn_q16_cell(load_shn_q16_u16(shN_address, shAtU16(g_idx, base + 2u, n_cells)), lo, hi)); \
             } \
-        } while (0)
+        } while (false)
 
     // Band 1 (rest 0..2) → coeff1..3
     _SHN_Q16_REST(0, coeff1);
@@ -376,7 +376,7 @@ float3 compute_color_from_sh_coeffs(SpherHarmCoeffs sh, float3 dir, uint32_t act
 // future rewrite.
 
 // ---------------------------------------------------------------------------
-// Canonical quantized LOD pool reads (lod_pool_quant.hpp): sh0 is f16x3
+// Canonical quantized LOD pool reads (core/rad_pool_quant.hpp): sh0 is f16x3
 // packed in a uint2; each shN float4 slot is four s8 components in one uint,
 // scaled by the page's per-band |max| from the dequant frame. The s8 formula
 // (q/127)*max matches the CPU/CUDA dequantS8 exactly.

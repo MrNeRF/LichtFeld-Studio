@@ -3,19 +3,20 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#if LFS_BUILD_TRAINER
 #include "core/cuda/memory_arena.hpp"
-#include "core/cuda/undistort/undistort.hpp"
-#include "core/image_loader.hpp"
+#endif
+#include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
-#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_image.hpp"
+#include "core/tensor_readback.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "display_tensors.hpp"
 #include "gt_comparison_cache_utils.hpp"
-#include "io/pipelined_image_loader.hpp"
 #include "model_renderability.hpp"
 #include "nvidia_dlss_plugin.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
@@ -24,8 +25,10 @@
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "scene_upscaler_registry.hpp"
+#if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
-#include "training/training_manager.hpp"
+#endif
+#include "core/training_manager.hpp"
 #include "viewport_appearance_correction.hpp"
 #include "viewport_region_utils.hpp"
 #include "viewport_request_builder.hpp"
@@ -171,6 +174,7 @@ namespace lfs::vis {
         [[nodiscard]] std::optional<LiveModelLockBundle> acquireLiveModelRenderLock(
             const SceneManager* const scene_manager,
             const bool try_lock = false) {
+#if LFS_BUILD_TRAINER
             if (const auto* tm = scene_manager ? scene_manager->getTrainerManager() : nullptr) {
                 if (const auto* trainer = tm->getTrainer()) {
                     const lfs::core::Scene* scene = trainer->getScene();
@@ -186,6 +190,7 @@ namespace lfs::vis {
                         std::shared_lock<std::shared_mutex>(trainer->getRenderMutex()), scene);
                 }
             }
+#endif
             return std::nullopt;
         }
 
@@ -678,29 +683,9 @@ namespace lfs::vis {
             };
 
             for (int y = rect_y; y < rect_y + rect_h; ++y) {
-                const float v = rect_h > 1
-                                    ? (static_cast<float>(y) + 0.5f - static_cast<float>(rect_y)) /
-                                          static_cast<float>(rect_h - 1)
-                                    : 0.0f;
+                const float v = splitViewPixelCenterUv(y, rect_y, rect_h);
                 for (int x = rect_x; x < rect_x + rect_w; ++x) {
-                    const float u = rect_w > 1
-                                        ? (static_cast<float>(x) + 0.5f - static_cast<float>(rect_x)) /
-                                              static_cast<float>(rect_w - 1)
-                                        : 0.0f;
-                    const bool use_left = x < divider;
-                    const auto& panel = use_left ? left_panel : right_panel;
-                    float panel_u = u;
-                    if (panel.normalize_x_to_panel) {
-                        const float span = std::max(panel.end_position - panel.start_position, 1e-6f);
-                        panel_u = (u - panel.start_position) / span;
-                    }
-                    const float panel_v = panel.flip_y ? 1.0f - v : v;
-                    const glm::vec2 clamp_max = glm::clamp(panel.uv_clamp_max,
-                                                           glm::vec2(0.0f), glm::vec2(1.0f));
-                    const glm::vec2 texture_uv = glm::min(
-                        (glm::vec2(panel_u, panel_v) * panel.texcoord_scale + panel.texcoord_offset) *
-                            panel.uv_scale,
-                        clamp_max);
+                    const float u = splitViewPixelCenterUv(x, rect_x, rect_w);
                     const std::size_t idx = static_cast<std::size_t>(y) * width + x;
                     glm::vec3 color;
                     if (params.loss_visualization) {
@@ -716,7 +701,7 @@ namespace lfs::vis {
 
                     const float dist_from_split = std::abs(static_cast<float>(x) + 0.5f - split_x);
                     if (!params.loss_visualization && dist_from_split < kMinBarWidthPx * 0.5f) {
-                        glm::vec3 color = kDividerColor;
+                        glm::vec3 divider_color = kDividerColor;
                         const float dist_from_center =
                             std::abs(static_cast<float>(y) + 0.5f - center_y);
                         const float handle_h = std::min(kHandleHeightPx, static_cast<float>(rect_h));
@@ -730,19 +715,19 @@ namespace lfs::vis {
                                 (glm::vec2(handle_w, handle_h) * 0.5f - glm::vec2(corner_radius));
                             if (corner_dist.x <= 0.0f || corner_dist.y <= 0.0f ||
                                 glm::length(corner_dist) <= corner_radius) {
-                                color = kDividerColor * 0.8f;
+                                divider_color = kDividerColor * 0.8f;
                                 const float local_y = static_cast<float>(y) + 0.5f - center_y;
                                 for (int i = -kGripLineCount; i <= kGripLineCount; ++i) {
                                     const float line_y = static_cast<float>(i) * kGripSpacingPx;
                                     if (std::abs(local_y - line_y) < kGripWidthPx &&
                                         dist_from_split < kGripLengthPx * 0.5f) {
-                                        color = glm::vec3(0.9f);
+                                        divider_color = glm::vec3(0.9f);
                                         break;
                                     }
                                 }
                             }
                         }
-                        write(idx, color);
+                        write(idx, divider_color);
                     }
                 }
             }
@@ -1261,29 +1246,6 @@ namespace lfs::vis {
     }
 
     void RenderingManager::gtComparisonImageWorkerLoop(const std::stop_token stop_token) {
-        if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
-            return;
-        }
-        if (const cudaError_t err = cudaStreamCreateWithFlags(
-                &gt_comparison_worker_stream_, cudaStreamNonBlocking);
-            err != cudaSuccess) {
-            LOG_ERROR("GT comparison worker stream creation failed ({}); GT image worker disabled",
-                      cudaGetErrorString(err));
-            return;
-        }
-        const cudaStream_t worker_stream = gt_comparison_worker_stream_;
-        std::optional<lfs::core::CUDAStreamGuard> worker_stream_guard;
-        if (worker_stream) {
-            worker_stream_guard.emplace(worker_stream);
-        }
-        const auto release_worker_stream = [this]() {
-            if (gt_comparison_worker_stream_) {
-                (void)cudaStreamSynchronize(gt_comparison_worker_stream_);
-                lfs::core::CudaMemoryPool::instance().release_stream(gt_comparison_worker_stream_);
-                (void)cudaStreamDestroy(gt_comparison_worker_stream_);
-                gt_comparison_worker_stream_ = nullptr;
-            }
-        };
         while (true) {
             GTComparisonImageJobRequest request;
             bool is_prefetch = false;
@@ -1298,8 +1260,6 @@ namespace lfs::vis {
                     prefetch_gt_comparison_image_requests_.clear();
                     active_gt_comparison_image_request_.reset();
                     active_gt_comparison_image_is_prefetch_ = false;
-                    worker_stream_guard.reset();
-                    release_worker_stream();
                     return;
                 }
 
@@ -1320,24 +1280,18 @@ namespace lfs::vis {
             try {
                 lfs::core::Tensor gt_tensor;
                 if (request.mode == GTComparisonMode::RGB) {
-                    if (request.image_loader) {
-                        // The training loader's byte cache is bounded and keyed by plain
-                        // path (original bytes training reuses), so writing it is fine;
-                        // skip_blob_cache below guards only CacheLoader's unbounded
-                        // per-preview-size re-encode caches.
-                        lfs::io::LoadParams params;
-                        params.resize_factor = -1;
-                        params.max_width = request.preview_max_dimension;
-                        params.cuda_stream = worker_stream;
-                        params.output_uint8 = true;
-                        gt_tensor = request.image_loader->load_image_immediate(request.image_path, params);
-                    } else {
-                        gt_tensor = lfs::core::load_image_cached({.path = request.image_path,
-                                                                  .resize_factor = -1,
-                                                                  .max_width = request.preview_max_dimension,
-                                                                  .stream = worker_stream,
-                                                                  .output_uint8 = true,
-                                                                  .skip_blob_cache = true});
+                    auto [pixels, width, height, channels] = lfs::core::load_image(
+                        request.image_path, -1, request.preview_max_dimension);
+                    const std::unique_ptr<unsigned char, decltype(&lfs::core::free_image)> owner(
+                        pixels, &lfs::core::free_image);
+                    if (pixels && width > 0 && height > 0 && channels > 0) {
+                        gt_tensor = lfs::core::Tensor::from_blob(
+                                        pixels,
+                                        {static_cast<size_t>(height), static_cast<size_t>(width),
+                                         static_cast<size_t>(channels)},
+                                        lfs::core::Device::CPU, lfs::core::DataType::UInt8)
+                                        .permute({2, 0, 1})
+                                        .clone();
                     }
                 }
                 if (request.mode == GTComparisonMode::RGB) {
@@ -1349,19 +1303,17 @@ namespace lfs::vis {
                                 request.undistort_requested;
                             if (undistort_gt) {
                                 if (gt_tensor.device() != lfs::core::Device::GPU) {
-                                    gt_tensor = gt_tensor.to(lfs::core::Device::GPU, worker_stream);
+                                    gt_tensor = gt_tensor.to(lfs::core::Device::GPU);
                                 }
                                 if (gt_tensor.dtype() == lfs::core::DataType::UInt8) {
                                     gt_tensor = gt_tensor.to(lfs::core::DataType::Float32) / 255.0f;
-                                    if (worker_stream) {
-                                        gt_tensor.set_stream(worker_stream);
-                                    }
                                 }
                                 const auto scaled = lfs::core::scale_undistort_params(
                                     request.undistort_params,
                                     lfs::rendering::imageWidth(gt_tensor, gt_layout),
-                                    lfs::rendering::imageHeight(gt_tensor, gt_layout));
-                                gt_tensor = lfs::core::undistort_image(gt_tensor, scaled, worker_stream);
+                                    lfs::rendering::imageHeight(gt_tensor, gt_layout),
+                                    request.preview_max_dimension);
+                                gt_tensor = lfs::core::internal::undistort_image_tensor(gt_tensor, scaled, false);
                             }
                             gt_tensor = lfs::rendering::flipImageVertical(gt_tensor, gt_layout);
                             // Static GT display images must be decoupled from the CUDA pool
@@ -1380,8 +1332,9 @@ namespace lfs::vis {
                                 const auto scaled = lfs::core::scale_undistort_params(
                                     request.undistort_params,
                                     static_cast<int>(depth.shape()[1]),
-                                    static_cast<int>(depth.shape()[0]));
-                                depth = lfs::core::undistort_mask(depth, scaled, worker_stream);
+                                    static_cast<int>(depth.shape()[0]),
+                                    request.preview_max_dimension);
+                                depth = lfs::core::internal::undistort_image_tensor(depth, scaled, true);
                             }
                             image = makeDepthDisplayTensor(
                                 depth, request.depth_visualization_mode, request.background_color);
@@ -1402,8 +1355,9 @@ namespace lfs::vis {
                                 const auto scaled = lfs::core::scale_undistort_params(
                                     request.undistort_params,
                                     lfs::rendering::imageWidth(normal, normal_layout),
-                                    lfs::rendering::imageHeight(normal, normal_layout));
-                                normal = lfs::core::undistort_image(normal, scaled, worker_stream);
+                                    lfs::rendering::imageHeight(normal, normal_layout),
+                                    request.preview_max_dimension);
+                                normal = lfs::core::internal::undistort_image_tensor(normal, scaled, false);
                             }
                             image = makeNormalDisplayTensor(normal);
                             image = resizeChwDisplayTensor(image, request.image_size);
@@ -1413,14 +1367,6 @@ namespace lfs::vis {
                                 image = std::make_shared<lfs::core::Tensor>(std::move(flipped));
                             }
                         }
-                    }
-                }
-                if (worker_stream) {
-                    if (const cudaError_t err = cudaStreamSynchronize(worker_stream);
-                        err != cudaSuccess) {
-                        throw std::runtime_error(
-                            std::string("GT comparison worker CUDA sync failed: ") +
-                            cudaGetErrorString(err));
                     }
                 }
                 image = gt_comparison_detail::convertDisplayTensorToUInt8(image);
@@ -1497,10 +1443,6 @@ namespace lfs::vis {
         if (!last_vulkan_context_) {
             return std::unexpected("VkSplat selection query requires an active Vulkan context");
         }
-        if (lfs::core::default_gpu_backend() != lfs::core::GpuBackend::Vulkan &&
-            !last_vulkan_context_->externalMemoryInteropEnabled()) {
-            return std::unexpected("VkSplat selection query requires CUDA/Vulkan external-memory interop");
-        }
         // Point-cloud mode renders with a separate graphics pipeline, but selection
         // still needs the same projected-center mask. Let it use the GPU query
         // instead of falling back to SelectionService's CPU screen-position pass.
@@ -1560,6 +1502,38 @@ namespace lfs::vis {
             *last_vulkan_context_, *model, request, force_input_upload);
     }
 
+    // Camera and edit changes retry on the next frame. A passive training refresh
+    // parks instead, so the idle preview draws only once its render can proceed.
+    void RenderingManager::queueSharedScratchRetry(const DirtyMask retry_dirty) {
+        if ((retry_dirty & ~DirtyFlag::SPLATS) == 0) {
+            parked_arena_retry_ |= retry_dirty;
+            return;
+        }
+        dirty_mask_.fetch_or(retry_dirty, std::memory_order_relaxed);
+    }
+
+    void RenderingManager::pollTrainingRefresh(const bool is_training) {
+        if (const DirtyMask training_dirty = frame_lifecycle_service_.handleTrainingRefresh(
+                is_training, framerate_controller_.getSettings().training_frame_refresh_time_sec);
+            training_dirty) {
+            training_refresh_dirty_.fetch_or(training_dirty, std::memory_order_relaxed);
+            markDirty(training_dirty);
+        }
+    }
+
+    double RenderingManager::secondsUntilTrainingRefresh() const {
+        return frame_lifecycle_service_.secondsUntilTrainingRefresh(
+            framerate_controller_.getSettings().training_frame_refresh_time_sec);
+    }
+
+    void RenderingManager::pollParkedArenaRetry() {
+        if (parked_arena_retry_ == 0 ||
+            (vksplat_viewport_renderer_ && !vksplat_viewport_renderer_->pollArenaHandoff())) {
+            return;
+        }
+        dirty_mask_.fetch_or(std::exchange(parked_arena_retry_, 0), std::memory_order_relaxed);
+    }
+
     RenderingManager::VulkanFrameResult RenderingManager::renderVulkanFrame(const RenderContext& context) {
         LOG_TIMER("renderVulkanFrame");
         if (vksplat_stale_frame_guard_.takeRecoveryRequest() && vksplat_viewport_renderer_) {
@@ -1569,7 +1543,9 @@ namespace lfs::vis {
             // first, outside releaseScratchOnIdle's readback mutex: the arena's
             // shrink callback takes that mutex while holding the arena gate.
             vksplat_viewport_renderer_->cancelArenaHandoff();
+#if LFS_BUILD_TRAINER
             lfs::core::GlobalArenaManager::instance().clear_external_backing();
+#endif
             vksplat_viewport_renderer_->releaseScratchOnIdle(true);
         }
         const auto [frame_settings, frame_depth_window_drag_preview, frame_panel_depth_windows] = [this] {
@@ -1649,7 +1625,7 @@ namespace lfs::vis {
         }
         initialized_ = true;
 
-        std::optional<lfs::core::CUDAStreamGuard> frame_stream_guard;
+        std::shared_ptr<void> frame_tensor_scope;
         const auto cached_frame_result = [this, current_size]() -> VulkanFrameResult {
             if (!vksplat_stale_frame_guard_.canUseCachedFrame()) {
                 return {};
@@ -1908,6 +1884,11 @@ namespace lfs::vis {
         // layout only after matches_viewport_extent reports a fresh output.
         // First frame / no cache still falls back to one blocking acquire below.
         const bool training_try_lock = is_training;
+        if (is_training && vksplat_viewport_renderer_ &&
+            (dirty_mask_.load(std::memory_order_relaxed) & DirtyFlag::CAMERA) != 0) {
+            // No lock is held yet, so a refining trainer can still take the exclusive one.
+            (void)vksplat_viewport_renderer_->waitForArenaHandoff(kNavigationArenaWait);
+        }
         auto render_lock = acquireLiveModelRenderLock(scene_manager, training_try_lock);
         bool render_lock_contended = training_try_lock && !render_lock.has_value() &&
                                      scene_manager && scene_manager->getTrainerManager() &&
@@ -2017,15 +1998,17 @@ namespace lfs::vis {
                     } else {
                         // The trainer must drop the fence handle before reset destroys
                         // the CUDA import it points at.
+#if LFS_BUILD_TRAINER
                         if (trainer_manager) {
                             if (auto* trainer = trainer_manager->getTrainer()) {
-                                trainer->setViewerReleaseFence(nullptr);
+                                trainer->setViewerReleaseFence(nullptr, {});
                             }
                         }
+#endif
                         // reset() destroys render_stream_; drop it from the TLS current
                         // stream first so the rest of the frame doesn't enqueue work on a
                         // stale handle. Re-installed after the handshake re-init below.
-                        frame_stream_guard.reset();
+                        frame_tensor_scope.reset();
                         vksplat_viewport_renderer_->reset();
                         // Clear GT async ticket host state after ring teardown.
                         gt_async_depth_ticket_ = 0;
@@ -2047,12 +2030,9 @@ namespace lfs::vis {
         } // !render_lock_contended model-change tracking
 
         const bool synchronize_vksplat_input_upload = is_training;
-        // Keep this cadence dirty separate until the frame consumes the atomic
-        // dirty mask. Its provenance determines whether a temporal settle burst
-        // can produce useful history or would only race the next training tick.
-        const DirtyMask training_refresh_dirty = frame_lifecycle_service_.handleTrainingRefresh(
-            is_training,
-            framerate_controller_.getSettings().training_frame_refresh_time_sec);
+        // Training refresh marks the scene dirty from the main loop; its provenance decides whether a
+        // temporal settle burst can produce useful history or would only race the next training tick.
+        const DirtyMask training_refresh_dirty = training_refresh_dirty_.exchange(0, std::memory_order_relaxed);
 
         const bool has_cached_gpu_only_frame = [&]() {
             if (vulkan_viewport_image_size_.x <= 0 || vulkan_viewport_image_size_.y <= 0) {
@@ -2087,11 +2067,15 @@ namespace lfs::vis {
         }
 
         DirtyMask frame_dirty = dirty_mask_.exchange(0);
+        if (vksplat_viewport_renderer_) {
+            vksplat_viewport_renderer_->setCameraNavigating(
+                is_training && (frame_dirty & DirtyFlag::CAMERA) != 0);
+        }
         constexpr DirtyMask temporal_source_dirty =
             DirtyFlag::CAMERA | DirtyFlag::SPLATS | DirtyFlag::MESH |
             DirtyFlag::VIEWPORT | DirtyFlag::BACKGROUND | DirtyFlag::SPLIT_VIEW;
-        const DirtyMask independently_dirty_temporal_sources = frame_dirty & temporal_source_dirty;
-        frame_dirty |= training_refresh_dirty;
+        const DirtyMask independently_dirty_temporal_sources =
+            frame_dirty & ~training_refresh_dirty & temporal_source_dirty;
         const bool lod_results_ready = lod_controller_ && lod_controller_->hasReadyResults();
         const bool lod_transition_active = lod_controller_ && lod_controller_->transitionActive();
         if (lod_results_ready) {
@@ -2261,17 +2245,9 @@ namespace lfs::vis {
                 render_lock.reset();
                 return cached_frame_result();
             }
-            // Drain in-flight viewer CUDA work before output-ring recreate so
-            // the trainer's waitForModelReaders has at most one residual frame.
-            if (vksplat_viewport_renderer_ && vksplat_viewport_renderer_->renderStream()) {
-                const cudaError_t drain =
-                    cudaStreamSynchronize(vksplat_viewport_renderer_->renderStream());
-                if (drain != cudaSuccess) {
-                    LOG_WARN("Viewer resize quiesce: render-stream sync failed: {} ({})",
-                             cudaGetErrorName(drain),
-                             cudaGetErrorString(drain));
-                }
-            }
+            if (context.vulkan_context)
+                context.vulkan_context->tensorInterop().drain(
+                    is_training ? lfs::core::GpuBackend::CUDA : lfs::core::default_gpu_backend());
             LOG_DEBUG("VkSplat output resize to {}x{} (viewer-side quiesce; training continues)",
                       render_size.x,
                       render_size.y);
@@ -2300,15 +2276,13 @@ namespace lfs::vis {
                 LOG_WARN("VkSplat handshake pre-init skipped: {}", ok.error());
             }
         }
-        // ensureHandshakeReady() may recreate render_stream_. Install the current
-        // stream before any frame preparation can enqueue CUDA work.
-        frame_stream_guard.reset();
-        if (vksplat_viewport_renderer_ && vksplat_viewport_renderer_->renderStream()) {
-            frame_stream_guard.emplace(vksplat_viewport_renderer_->renderStream());
-        }
+        frame_tensor_scope.reset();
+        if (context.vulkan_context)
+            frame_tensor_scope = context.vulkan_context->tensorInterop().execution_scope(
+                is_training ? lfs::core::GpuBackend::CUDA : lfs::core::default_gpu_backend());
+#if LFS_BUILD_TRAINER
         lfs::training::Trainer* live_trainer = nullptr;
         if (is_training && trainer_manager && vksplat_viewport_renderer_ &&
-            vksplat_viewport_renderer_->renderStream() &&
             vksplat_viewport_renderer_->renderCompleteFence()) {
             // A live stream without its release fence is a partial initialization;
             // render() will fail too, so never install a handshake missing the
@@ -2337,8 +2311,9 @@ namespace lfs::vis {
             model_read_lock.emplace(std::move(candidate));
         }
         if (live_trainer) {
-            live_trainer->setViewerReleaseFence(vksplat_viewport_renderer_->renderCompleteFence());
-            live_trainer->beginModelRead(vksplat_viewport_renderer_->renderStream());
+            live_trainer->setViewerReleaseFence(context.vulkan_context->device(),
+                                                {vksplat_viewport_renderer_->renderCompleteTimeline(), 0, {}});
+            live_trainer->beginModelRead(lfs::core::getCurrentCUDAStream());
             lfs::training::Trainer* const trainer = live_trainer;
             vksplat_viewport_renderer_->setLiveSubmitCallback(
                 [trainer](const std::uint64_t value) { trainer->publishViewerBorrow(value); });
@@ -2353,7 +2328,7 @@ namespace lfs::vis {
             ~ViewerBorrowPublisher() {
                 if (trainer && renderer) {
                     try {
-                        trainer->endModelRead(renderer->renderStream());
+                        trainer->endModelRead(lfs::core::getCurrentCUDAStream());
                         trainer->publishViewerBorrow(renderer->renderCompleteValue());
                     } catch (const std::exception& e) {
                         LOG_ERROR("ViewerBorrowPublisher: endModelRead/publishViewerBorrow failed "
@@ -2366,6 +2341,10 @@ namespace lfs::vis {
                 }
             }
         } viewer_borrow_publisher{live_trainer, vksplat_viewport_renderer_.get()};
+#else
+        if (vksplat_viewport_renderer_)
+            vksplat_viewport_renderer_->setLiveSubmitCallback({});
+#endif
 
         framerate_controller_.beginFrame();
 
@@ -2465,7 +2444,141 @@ namespace lfs::vis {
             glm::ivec2 alloc_size{0, 0};
         };
 
-        const auto ensure_cuda_viewport_image =
+        const auto render_native_point_cloud =
+            [&](const lfs::rendering::PointCloudRenderRequest& pc_request,
+                const PointCloudVulkanRenderer::OutputSlot slot)
+            -> lfs::Result<PointCloudVulkanRenderer::RenderResult> {
+            const auto fail = [](std::string message) -> lfs::Result<PointCloudVulkanRenderer::RenderResult> {
+                return lfs::make_error({
+                    .code = lfs::ErrorCode::Internal,
+                    .domain = lfs::ErrorDomain::Rendering,
+                    .detail = std::move(message),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                });
+            };
+            if (!context.vulkan_context) {
+                return fail("Point-cloud viewing requires an active Vulkan context");
+            }
+            if ((frame_dirty & DirtyFlag::SELECTION) != 0) {
+                ++point_cloud_preview_selection_revision_;
+            }
+            if (!point_cloud_vulkan_renderer_) {
+                point_cloud_vulkan_renderer_ = std::make_unique<PointCloudVulkanRenderer>();
+            }
+            point_cloud_last_frame_serial_ = context.vulkan_context->lastFrameSubmitSerial() + 1;
+
+            lfs::core::Tensor splat_positions;
+            const lfs::core::Tensor* positions_ptr = nullptr;
+            const lfs::core::Tensor* colors_ptr = nullptr;
+            if (frame_settings.point_cloud_mode && has_visible_gaussian_model) {
+                constexpr float SH_C0 = 0.28209479177387814f;
+                const auto& sh0 = model->sh0_raw();
+                const void* sh0_key = sh0.is_valid() ? sh0.ptr<float>() : nullptr;
+                const std::size_t sh0_count =
+                    sh0.is_valid() ? static_cast<std::size_t>(sh0.size(0)) : 0;
+                if (sh0_key != point_cloud_colors_cache_key_ ||
+                    sh0_count != point_cloud_colors_cache_size_ ||
+                    !point_cloud_colors_cache_.is_valid()) {
+                    try {
+                        point_cloud_colors_cache_ =
+                            (sh0.slice(1, 0, 1).squeeze(1) * SH_C0 + 0.5f).clamp(0.0f, 1.0f);
+                    } catch (const std::exception& e) {
+                        LOG_ERROR("Point cloud color derivation failed: {}", e.what());
+                        return fail(e.what());
+                    }
+                    point_cloud_colors_cache_key_ = sh0_key;
+                    point_cloud_colors_cache_size_ = sh0_count;
+                }
+                splat_positions = model->get_means();
+                positions_ptr = &splat_positions;
+                colors_ptr = &point_cloud_colors_cache_;
+            } else {
+                positions_ptr = &frame_ctx.scene_state.point_cloud->means;
+                colors_ptr = &frame_ctx.scene_state.point_cloud->colors;
+            }
+
+            const glm::mat4 view = pc_request.frame_view.getViewMatrix();
+            const glm::mat4 projection = lfs::rendering::createProjectionMatrix(
+                pc_request.frame_view.size,
+                lfs::rendering::focalLengthToVFov(pc_request.frame_view.focal_length_mm),
+                pc_request.frame_view.orthographic,
+                pc_request.frame_view.ortho_scale,
+                pc_request.frame_view.near_plane,
+                pc_request.frame_view.far_plane);
+            // glm::perspective/ortho emit OpenGL-NDC (Y up); Vulkan NDC has
+            // Y down. Apply the same clip-space flip the mesh pass does so
+            // the rendered image isn't upside-down vs. the screen quad's
+            // top-left UV origin.
+            glm::mat4 clip_y_flip(1.0f);
+            clip_y_flip[1][1] = -1.0f;
+            const glm::mat4 view_proj = clip_y_flip * projection * view;
+            const float focal_y = lfs::core::fov2focal(
+                lfs::rendering::focalLengthToVFovRad(pc_request.frame_view.focal_length_mm),
+                pc_request.frame_view.size.y);
+
+            PointCloudVulkanRenderer::RenderRequest vk_req{};
+            vk_req.positions = positions_ptr;
+            vk_req.colors = colors_ptr;
+            vk_req.positions_revision = point_cloud_data_revision_;
+            vk_req.colors_revision = point_cloud_data_revision_;
+            vk_req.model_transforms = pc_request.scene.model_transforms;
+            vk_req.transform_indices = pc_request.scene.transform_indices.get();
+            vk_req.node_visibility_mask = &pc_request.scene.node_visibility_mask;
+            if (frame_settings.point_cloud_mode && has_visible_gaussian_model &&
+                model->has_deleted_mask() && model->deleted_mask_matches_size()) {
+                vk_req.deleted_mask = &model->deleted();
+                // Content revision for the soft-delete mask itself (not the
+                // point-cloud positions revision). Stale wiring here caused
+                // silent cache reuse after densify/compact.
+                vk_req.deleted_mask_revision = model->deleted_mask_version();
+            }
+            vk_req.selection_mask = pc_request.overlay.selection_mask.get();
+            vk_req.preview_selection_mask = pc_request.overlay.transient_mask.mask;
+            vk_req.selection_colors = &pc_request.overlay.selection_colors;
+            vk_req.preview_selection_additive = pc_request.overlay.transient_mask.additive;
+            vk_req.selection_revision = point_cloud_preview_selection_revision_;
+            vk_req.preview_selection_revision = point_cloud_preview_selection_revision_;
+            if (pc_request.filters.crop_box.has_value()) {
+                PointCloudVulkanRenderer::CropBox crop{};
+                crop.to_local = pc_request.filters.crop_box->transform;
+                crop.min = pc_request.filters.crop_box->min;
+                crop.max = pc_request.filters.crop_box->max;
+                crop.inverse = pc_request.filters.crop_inverse;
+                crop.desaturate = pc_request.filters.crop_desaturate;
+                vk_req.crop = crop;
+            } else if (pc_request.filters.crop_ellipsoid.has_value()) {
+                PointCloudVulkanRenderer::CropEllipsoid crop{};
+                crop.to_local = pc_request.filters.crop_ellipsoid->transform;
+                crop.radii = pc_request.filters.crop_ellipsoid->radii;
+                crop.inverse = pc_request.filters.crop_inverse;
+                crop.desaturate = pc_request.filters.crop_desaturate;
+                vk_req.crop_ellipsoid = crop;
+            }
+            vk_req.view = view;
+            vk_req.view_projection = view_proj;
+            vk_req.size = pc_request.frame_view.size;
+            vk_req.background_color = pc_request.frame_view.background_color;
+            vk_req.transparent_background = pc_request.transparent_background;
+            vk_req.orthographic = pc_request.frame_view.orthographic;
+            vk_req.ortho_scale = pc_request.frame_view.ortho_scale;
+            vk_req.focal_y = focal_y;
+            vk_req.voxel_size = pc_request.render.voxel_size;
+            vk_req.scaling_modifier = pc_request.render.scaling_modifier;
+            vk_req.depth_view = frame_settings.depth_view;
+            vk_req.depth_view_min = frame_settings.depth_view_min;
+            vk_req.depth_view_max = frame_settings.depth_view_max;
+            vk_req.depth_visualization_mode = frame_settings.depth_visualization_mode;
+
+            LOG_TIMER("renderVulkanFrame.point_cloud_vulkan");
+            auto rendered = point_cloud_vulkan_renderer_->render(*context.vulkan_context, vk_req, slot);
+            if (!rendered) {
+                return fail(rendered.error());
+            }
+            return *rendered;
+        };
+        bool gt_native_point_cloud_panel = false;
+
+        const auto ensure_viewport_image =
             [](std::shared_ptr<lfs::core::Tensor> image,
                const std::string_view label) -> std::shared_ptr<lfs::core::Tensor> {
             if (!image || !image->is_valid()) {
@@ -2474,14 +2587,14 @@ namespace lfs::vis {
             if (image->device() == lfs::core::Device::GPU) {
                 return image;
             }
-            auto cuda_image = image->cuda();
+            auto cuda_image = image->to(lfs::core::Device::GPU);
             if (!cuda_image.is_valid() || cuda_image.device() != lfs::core::Device::GPU) {
-                LOG_WARN("{} produced a non-CUDA tensor; falling back to the external image path", label);
+                LOG_WARN("{} produced a non-GPU tensor; using the external image path", label);
                 return {};
             }
             return std::make_shared<lfs::core::Tensor>(std::move(cuda_image));
         };
-        const auto ensure_cuda_gt_viewport_image =
+        const auto ensure_gt_viewport_image =
             [this](std::shared_ptr<lfs::core::Tensor> image,
                    const int camera_uid,
                    const glm::ivec2 size,
@@ -2513,9 +2626,9 @@ namespace lfs::vis {
                 gt_comparison_cuda_undistorted_ == undistorted) {
                 return gt_comparison_cuda_image_;
             }
-            auto cuda_image = image->cuda();
+            auto cuda_image = image->to(lfs::core::Device::GPU);
             if (!cuda_image.is_valid() || cuda_image.device() != lfs::core::Device::GPU) {
-                LOG_WARN("{} produced a non-CUDA tensor; falling back to the external image path", label);
+                LOG_WARN("{} produced a non-GPU tensor; using the external image path", label);
                 return {};
             }
             gt_comparison_cuda_source_ = image.get();
@@ -2616,6 +2729,9 @@ namespace lfs::vis {
                 std::vector<glm::mat4> transforms_storage;
                 auto scene = state.scene;
                 if (model_transforms_override) {
+                    if (model_override && !node_visibility_override) {
+                        scene = {};
+                    }
                     scene.model_transforms = model_transforms_override;
                 } else if (!scene.model_transforms) {
                     transforms_storage = {glm::mat4(1.0f)};
@@ -2674,6 +2790,7 @@ namespace lfs::vis {
                 for (const auto& slot : visible_nodes) {
                     if (slot.node && slot.node->model.get() == model_override) {
                         applyPlyComparisonNodeScope(
+                            request.scene,
                             request.filters,
                             request.overlay,
                             frame_ctx,
@@ -2918,12 +3035,6 @@ namespace lfs::vis {
                             const bool undistort_requested =
                                 camera->camera_model_type() != lfs::core::CameraModelType::EQUIRECTANGULAR &&
                                 camera->is_undistort_precomputed();
-                            std::shared_ptr<lfs::io::PipelinedImageLoader> image_loader;
-                            if (trainer_manager) {
-                                if (const auto* trainer = trainer_manager->getTrainer()) {
-                                    image_loader = trainer->getActiveImageLoader();
-                                }
-                            }
                             // GT comparison loads a viewport-scaled preview. Do not publish that
                             // transient size on the shared camera; training uses image dimensions
                             // as its raster target and may be running concurrently.
@@ -2938,8 +3049,7 @@ namespace lfs::vis {
                                                                                                      : lfs::core::UndistortParams{},
                                                                              .depth_visualization_mode = frame_settings.depth_visualization_mode,
                                                                              .background_color = frame_settings.background_color,
-                                                                             .camera = camera,
-                                                                             .image_loader = image_loader});
+                                                                             .camera = camera});
                             gt_image = lookup.image;
                             if (lookup.status == GTComparisonImageStatus::Loading) {
                                 markDirty(DirtyFlag::SPLIT_VIEW);
@@ -2990,8 +3100,7 @@ namespace lfs::vis {
                                                                                                 : lfs::core::UndistortParams{},
                                                                         .depth_visualization_mode = frame_settings.depth_visualization_mode,
                                                                         .background_color = frame_settings.background_color,
-                                                                        .camera = neighbor,
-                                                                        .image_loader = image_loader});
+                                                                        .camera = neighbor});
                                         break;
                                     }
                                 };
@@ -3017,8 +3126,7 @@ namespace lfs::vis {
                                                                                                      : lfs::core::UndistortParams{},
                                                                              .depth_visualization_mode = frame_settings.depth_visualization_mode,
                                                                              .background_color = frame_settings.background_color,
-                                                                             .camera = camera,
-                                                                             .image_loader = {}});
+                                                                             .camera = camera});
                             gt_image = lookup.image;
                             if (lookup.status == GTComparisonImageStatus::Loading) {
                                 markDirty(DirtyFlag::SPLIT_VIEW);
@@ -3049,8 +3157,7 @@ namespace lfs::vis {
                                                                              .undistort_params = undistort_requested
                                                                                                      ? camera->undistort_params()
                                                                                                      : lfs::core::UndistortParams{},
-                                                                             .camera = camera,
-                                                                             .image_loader = {}});
+                                                                             .camera = camera});
                             gt_image = lookup.image;
                             if (lookup.status == GTComparisonImageStatus::Loading) {
                                 markDirty(DirtyFlag::SPLIT_VIEW);
@@ -3333,45 +3440,31 @@ namespace lfs::vis {
                                 gt_async_held_view_.reset();
                                 const bool use_point_cloud_compare =
                                     frame_settings.point_cloud_mode || !has_visible_gaussian_model;
-                                if (use_point_cloud_compare && has_visible_gaussian_model) {
-                                    auto point_request = buildPointCloudRenderRequest(
-                                        frame_ctx, render_gt_size, frame_ctx.scene_state.model_transforms);
-                                    point_request.frame_view = request.frame_view;
-                                    if (auto auxiliary_engine = ensure_auxiliary_rendering_engine(); auxiliary_engine) {
-                                        auto rendered = (*auxiliary_engine)->renderPointCloudImage(*model, point_request);
-                                        if (rendered && rendered->image) {
-                                            const bool flip_y = rendered->metadata.flip_y;
-                                            compare_panel = RenderedPanel{.image = std::move(rendered->image),
-                                                                          .metadata = std::move(rendered->metadata),
-                                                                          .flip_y = flip_y};
-                                        } else {
-                                            compare_error = rendered ? "Point-cloud GT comparison render returned no image"
-                                                                     : rendered.error();
-                                        }
-                                    } else {
-                                        compare_error = auxiliary_engine.error();
-                                    }
-                                } else if (use_point_cloud_compare && has_point_cloud) {
-                                    const std::vector<glm::mat4> point_cloud_transforms = {
+                                if (use_point_cloud_compare) {
+                                    const std::vector<glm::mat4> raw_transforms = {
                                         frame_ctx.scene_state.point_cloud_transform};
+                                    const auto& transforms = has_visible_gaussian_model
+                                                                 ? frame_ctx.scene_state.model_transforms
+                                                                 : raw_transforms;
                                     auto point_request = buildPointCloudRenderRequest(
-                                        frame_ctx, render_gt_size, point_cloud_transforms);
+                                        frame_ctx, render_gt_size, transforms);
                                     point_request.frame_view = request.frame_view;
-                                    if (auto auxiliary_engine = ensure_auxiliary_rendering_engine(); auxiliary_engine) {
-                                        auto rendered = (*auxiliary_engine)->renderPointCloudImage(*frame_ctx.scene_state.point_cloud, point_request);
-                                        if (rendered && rendered->image) {
-                                            const bool flip_y = rendered->metadata.flip_y;
-                                            compare_panel = RenderedPanel{.image = std::move(rendered->image),
-                                                                          .metadata = std::move(rendered->metadata),
-                                                                          .flip_y = flip_y};
-                                        } else {
-                                            compare_error = rendered ? "Raw point-cloud GT comparison render returned no image"
-                                                                     : rendered.error();
-                                        }
+                                    auto rendered = render_native_point_cloud(
+                                        point_request, PointCloudVulkanRenderer::OutputSlot::SplitRight);
+                                    if (rendered) {
+                                        compare_panel.metadata.valid = true;
+                                        compare_panel.metadata.flip_y = rendered->flip_y;
+                                        compare_panel.external_image = rendered->image;
+                                        compare_panel.external_image_view = rendered->image_view;
+                                        compare_panel.external_image_layout = rendered->image_layout;
+                                        compare_panel.external_image_generation = rendered->generation;
+                                        compare_panel.flip_y = rendered->flip_y;
+                                        compare_panel.size = rendered->size;
+                                        gt_native_point_cloud_panel = true;
                                     } else {
-                                        compare_error = auxiliary_engine.error();
+                                        compare_error = lfs::format_for_developer(rendered.error());
                                     }
-                                } else if (has_visible_gaussian_model) {
+                                } else {
                                     auto rendered = render_panel_image(
                                         context.viewport,
                                         render_gt_size,
@@ -3386,8 +3479,6 @@ namespace lfs::vis {
                                     } else {
                                         compare_error = rendered.error();
                                     }
-                                } else {
-                                    compare_error = "GT comparison requires a renderable Gaussian model or point cloud";
                                 }
                             }
 
@@ -3417,7 +3508,7 @@ namespace lfs::vis {
                                                 scene_manager,
                                                 frame_settings,
                                                 camera->uid());
-                                            compare_panel.image = ensure_cuda_viewport_image(
+                                            compare_panel.image = ensure_viewport_image(
                                                 std::move(compare_panel.image),
                                                 "VkSplat GT comparison PPISP correction");
                                             if (compare_panel.image && compare_panel.image->is_valid()) {
@@ -3444,7 +3535,7 @@ namespace lfs::vis {
                                     const bool gt_undistorted =
                                         camera->camera_model_type() != lfs::core::CameraModelType::EQUIRECTANGULAR &&
                                         camera->is_undistort_precomputed();
-                                    if (auto cuda_gt = ensure_cuda_gt_viewport_image(
+                                    if (auto cuda_gt = ensure_gt_viewport_image(
                                             gt_image,
                                             camera->uid(),
                                             preview_gt_size,
@@ -3454,7 +3545,7 @@ namespace lfs::vis {
                                     }
                                 }
                                 if (compare_panel.image) {
-                                    if (auto cuda_compare = ensure_cuda_viewport_image(
+                                    if (auto cuda_compare = ensure_viewport_image(
                                             compare_panel.image,
                                             "GT comparison rendered display")) {
                                         compare_panel.image = std::move(cuda_compare);
@@ -3688,9 +3779,14 @@ namespace lfs::vis {
                             .left_name = left_node.node->name,
                             .right_name = right_node.node->name};
                     } else {
-                        render_error = left ? right.error() : left.error();
+                        render_error = std::format(
+                            "PLY comparison panel rendering failed (left: {}; right: {})",
+                            left ? "ok" : left.error(),
+                            right ? "ok" : right.error());
                     }
                 }
+            } else {
+                render_error = "PLY comparison requires at least two visible Gaussian models";
             }
         }
 
@@ -3724,12 +3820,26 @@ namespace lfs::vis {
         }
 
         const bool render_point_cloud = frame_settings.point_cloud_mode || !has_visible_gaussian_model;
+        const auto release_inactive_point_cloud = [this]() {
+            if (!point_cloud_vulkan_renderer_ && !point_cloud_colors_cache_.is_valid()) {
+                return;
+            }
+            if (last_vulkan_context_ &&
+                last_vulkan_context_->retiredFrameSubmitSerial() < point_cloud_last_frame_serial_) {
+                return;
+            }
+            point_cloud_colors_cache_ = {};
+            point_cloud_colors_cache_key_ = nullptr;
+            point_cloud_colors_cache_size_ = 0;
+            point_cloud_vulkan_renderer_.reset();
+        };
 
         if (rendered_image || pending_split_view.enabled) {
             // Split-view paths populate pending_split_view directly; skip the
             // full-viewport fallback that would set rendered_image to a wrong-
             // sized tensor and squash the left panel through the scene interop.
         } else if (render_point_cloud &&
+                   (!has_visible_gaussian_model || hasRenderableGaussians(model)) &&
                    ((frame_settings.point_cloud_mode && has_visible_gaussian_model) || has_point_cloud)) {
             // Brush edits mutate sh0 in place â€” same tensor pointer but new
             // contents. Invalidate the derived-colors cache so the next frame
@@ -3750,128 +3860,16 @@ namespace lfs::vis {
             }
             auto pc_request = buildPointCloudRenderRequest(
                 frame_ctx, render_size, *transforms_for_request);
-            if ((frame_dirty & DirtyFlag::SELECTION) != 0) {
-                ++point_cloud_preview_selection_revision_;
-            }
-
             // Vulkan-native path: skip CUDA staging, drive an external VkImage
             // straight through the same plumbing the VkSplat backend uses.
             auto try_vulkan = [&]() -> std::optional<VulkanFrameResult> {
                 if (!context.vulkan_context) {
                     return std::nullopt;
                 }
-                if (!point_cloud_vulkan_renderer_) {
-                    point_cloud_vulkan_renderer_ = std::make_unique<PointCloudVulkanRenderer>();
-                }
-
-                lfs::core::Tensor splat_positions;
-                const lfs::core::Tensor* positions_ptr = nullptr;
-                const lfs::core::Tensor* colors_ptr = nullptr;
-                if (frame_settings.point_cloud_mode && has_visible_gaussian_model) {
-                    constexpr float SH_C0 = 0.28209479177387814f;
-                    const auto& sh0 = model->sh0_raw();
-                    const void* sh0_key = sh0.is_valid() ? sh0.ptr<float>() : nullptr;
-                    const std::size_t sh0_count =
-                        sh0.is_valid() ? static_cast<std::size_t>(sh0.size(0)) : 0;
-                    if (sh0_key != point_cloud_colors_cache_key_ ||
-                        sh0_count != point_cloud_colors_cache_size_ ||
-                        !point_cloud_colors_cache_.is_valid()) {
-                        try {
-                            point_cloud_colors_cache_ =
-                                (sh0.slice(1, 0, 1).squeeze(1) * SH_C0 + 0.5f).clamp(0.0f, 1.0f);
-                        } catch (const std::exception& e) {
-                            LOG_ERROR("Point cloud color derivation failed: {}", e.what());
-                            return std::nullopt;
-                        }
-                        point_cloud_colors_cache_key_ = sh0_key;
-                        point_cloud_colors_cache_size_ = sh0_count;
-                    }
-                    splat_positions = model->get_means();
-                    positions_ptr = &splat_positions;
-                    colors_ptr = &point_cloud_colors_cache_;
-                } else {
-                    positions_ptr = &frame_ctx.scene_state.point_cloud->means;
-                    colors_ptr = &frame_ctx.scene_state.point_cloud->colors;
-                }
-
-                const auto vp_data = frame_ctx.makeViewportData();
-                const glm::mat4 view = vp_data.getViewMatrix();
-                const glm::mat4 projection = lfs::rendering::createProjectionMatrix(
-                    pc_request.frame_view.size,
-                    lfs::rendering::focalLengthToVFov(pc_request.frame_view.focal_length_mm),
-                    pc_request.frame_view.orthographic,
-                    pc_request.frame_view.ortho_scale,
-                    pc_request.frame_view.near_plane,
-                    pc_request.frame_view.far_plane);
-                // glm::perspective/ortho emit OpenGL-NDC (Y up); Vulkan NDC has
-                // Y down. Apply the same clip-space flip the mesh pass does so
-                // the rendered image isn't upside-down vs. the screen quad's
-                // top-left UV origin.
-                glm::mat4 clip_y_flip(1.0f);
-                clip_y_flip[1][1] = -1.0f;
-                const glm::mat4 view_proj = clip_y_flip * projection * view;
-                const float focal_y = lfs::core::fov2focal(
-                    lfs::rendering::focalLengthToVFovRad(pc_request.frame_view.focal_length_mm),
-                    pc_request.frame_view.size.y);
-
-                PointCloudVulkanRenderer::RenderRequest vk_req{};
-                vk_req.positions = positions_ptr;
-                vk_req.colors = colors_ptr;
-                vk_req.positions_revision = point_cloud_data_revision_;
-                vk_req.colors_revision = point_cloud_data_revision_;
-                vk_req.model_transforms = pc_request.scene.model_transforms;
-                vk_req.transform_indices = pc_request.scene.transform_indices.get();
-                vk_req.node_visibility_mask = &pc_request.scene.node_visibility_mask;
-                if (frame_settings.point_cloud_mode && has_visible_gaussian_model &&
-                    model->has_deleted_mask() && model->deleted_mask_matches_size()) {
-                    vk_req.deleted_mask = &model->deleted();
-                    // Content revision for the soft-delete mask itself (not the
-                    // point-cloud positions revision). Stale wiring here caused
-                    // silent cache reuse after densify/compact.
-                    vk_req.deleted_mask_revision = model->deleted_mask_version();
-                }
-                vk_req.selection_mask = pc_request.overlay.selection_mask.get();
-                vk_req.preview_selection_mask = pc_request.overlay.transient_mask.mask;
-                vk_req.selection_colors = &pc_request.overlay.selection_colors;
-                vk_req.preview_selection_additive = pc_request.overlay.transient_mask.additive;
-                vk_req.selection_revision = point_cloud_preview_selection_revision_;
-                vk_req.preview_selection_revision = point_cloud_preview_selection_revision_;
-                if (pc_request.filters.crop_box.has_value()) {
-                    PointCloudVulkanRenderer::CropBox crop{};
-                    crop.to_local = pc_request.filters.crop_box->transform;
-                    crop.min = pc_request.filters.crop_box->min;
-                    crop.max = pc_request.filters.crop_box->max;
-                    crop.inverse = pc_request.filters.crop_inverse;
-                    crop.desaturate = pc_request.filters.crop_desaturate;
-                    vk_req.crop = crop;
-                } else if (pc_request.filters.crop_ellipsoid.has_value()) {
-                    PointCloudVulkanRenderer::CropEllipsoid crop{};
-                    crop.to_local = pc_request.filters.crop_ellipsoid->transform;
-                    crop.radii = pc_request.filters.crop_ellipsoid->radii;
-                    crop.inverse = pc_request.filters.crop_inverse;
-                    crop.desaturate = pc_request.filters.crop_desaturate;
-                    vk_req.crop_ellipsoid = crop;
-                }
-                vk_req.view = view;
-                vk_req.view_projection = view_proj;
-                vk_req.size = pc_request.frame_view.size;
-                vk_req.background_color = pc_request.frame_view.background_color;
-                vk_req.transparent_background = pc_request.transparent_background;
-                vk_req.orthographic = pc_request.frame_view.orthographic;
-                vk_req.ortho_scale = pc_request.frame_view.ortho_scale;
-                vk_req.focal_y = focal_y;
-                vk_req.voxel_size = pc_request.render.voxel_size;
-                vk_req.scaling_modifier = pc_request.render.scaling_modifier;
-                vk_req.depth_view = frame_settings.depth_view;
-                vk_req.depth_view_min = frame_settings.depth_view_min;
-                vk_req.depth_view_max = frame_settings.depth_view_max;
-                vk_req.depth_visualization_mode = frame_settings.depth_visualization_mode;
-
-                LOG_TIMER("renderVulkanFrame.point_cloud_vulkan");
-                auto render_result = point_cloud_vulkan_renderer_->render(
-                    *context.vulkan_context, vk_req);
+                auto render_result = render_native_point_cloud(
+                    pc_request, PointCloudVulkanRenderer::OutputSlot::Main);
                 if (!render_result) {
-                    LOG_ERROR("Point cloud Vulkan render failed: {}", render_result.error());
+                    LOG_ERROR("Point cloud Vulkan render failed: {}", lfs::format_for_developer(render_result.error()));
                     return std::nullopt;
                 }
 
@@ -3955,7 +3953,7 @@ namespace lfs::vis {
             } else {
                 render_error = "Point-cloud Vulkan render failed";
             }
-        } else if (has_visible_gaussian_model) {
+        } else if (has_visible_gaussian_model && hasRenderableGaussians(model)) {
             // The main render is Left in independent-dual mode. Tag it explicitly
             // so the builder cannot substitute Right's window when Right has focus.
             const std::optional<SplitViewPanelId> main_render_panel =
@@ -4313,7 +4311,7 @@ namespace lfs::vis {
                                     scene_manager,
                                     frame_settings,
                                     frame_ctx.current_camera_id);
-                                corrected_image = ensure_cuda_viewport_image(
+                                corrected_image = ensure_viewport_image(
                                     std::move(corrected_image),
                                     "VkSplat viewport PPISP correction");
                                 if (corrected_image && corrected_image->is_valid()) {
@@ -4382,6 +4380,7 @@ namespace lfs::vis {
                                         complete_temporal_convergence_frame();
                                     else if (temporal_convergence_.enabled())
                                         temporal_convergence_.cancelSettle();
+                                    release_inactive_point_cloud();
 
                                     vulkan_viewport_coordinate_size_ = current_size;
                                     return {.image = vulkan_viewport_image_,
@@ -4466,6 +4465,7 @@ namespace lfs::vis {
                             complete_temporal_convergence_frame();
                         else if (temporal_convergence_.enabled())
                             temporal_convergence_.cancelSettle();
+                        release_inactive_point_cloud();
 
                         vulkan_viewport_coordinate_size_ = current_size;
                         return {.image = {},
@@ -4546,7 +4546,7 @@ namespace lfs::vis {
                         has_cached_viewport_output &&
                         shared_scratch_retryable) {
                         const DirtyMask retry_dirty = vksplatSharedScratchRetryDirty(frame_dirty);
-                        dirty_mask_.fetch_or(retry_dirty, std::memory_order_relaxed);
+                        queueSharedScratchRetry(retry_dirty);
                         const bool cached_size_matches = vulkan_viewport_image_size_ == render_size;
                         if (vksplat_viewport_resize || !cached_size_matches) {
                             LOG_DEBUG("{} ({}); skipping cached viewport image, retry_dirty=0x{:x}, vksplat_resize={}, cached_size={}x{}, render_size={}x{}",
@@ -4574,6 +4574,12 @@ namespace lfs::vis {
             } else {
                 render_error = "Gaussian viewer rendering requires a VkSplat backend";
             }
+        } else if (has_visible_gaussian_model && render_error.empty()) {
+            // PLY comparison intentionally leaves FrameContext.model empty and
+            // renders the two owned node models into dedicated output slots.
+            // If panel preparation fails, never fall through to the full-frame
+            // renderer and dereference that absent aggregate model.
+            render_error = "No full-frame Gaussian model is available for rendering";
         }
 
         if (rendered_image && !rendered_image_contains_ground_truth) {
@@ -4650,7 +4656,7 @@ namespace lfs::vis {
 
             if (pending_split_view.enabled) {
                 viewport_artifact_service_.setLazyCapture(
-                    [this, params = pending_split_view, current_size]()
+                    [this, params = pending_split_view, current_size, gt_native_point_cloud_panel]()
                         -> std::shared_ptr<lfs::core::Tensor> {
                         VulkanSplitViewParams capture_params = params;
                         {
@@ -4680,8 +4686,16 @@ namespace lfs::vis {
                         }
                         if (!capture_params.right.image &&
                             capture_params.right.external_image_view != VK_NULL_HANDLE) {
-                            capture_params.right.image =
-                                read_panel(VksplatViewportRenderer::OutputSlot::SplitRight);
+                            if (gt_native_point_cloud_panel && point_cloud_vulkan_renderer_ && last_vulkan_context_) {
+                                auto image = point_cloud_vulkan_renderer_->readOutputImage(
+                                    *last_vulkan_context_, PointCloudVulkanRenderer::OutputSlot::SplitRight);
+                                if (image) {
+                                    capture_params.right.image = std::move(*image);
+                                }
+                            } else {
+                                capture_params.right.image =
+                                    read_panel(VksplatViewportRenderer::OutputSlot::SplitRight);
+                            }
                         }
                         if (!capture_params.left.image || !capture_params.right.image) {
                             return {};
@@ -4801,8 +4815,7 @@ namespace lfs::vis {
                 isRetryableSharedScratchUnavailable(render_error);
             if (shared_scratch_retryable) {
                 const DirtyMask retry_dirty = vksplatSharedScratchRetryDirty(frame_dirty);
-                dirty_mask_.fetch_or(retry_dirty,
-                                     std::memory_order_relaxed);
+                queueSharedScratchRetry(retry_dirty);
                 render_lock.reset();
                 const bool cached_size_matches = vulkan_viewport_image_size_ == render_size;
                 if (has_cached_viewport_output && !vksplat_viewport_resize && cached_size_matches) {
@@ -4860,6 +4873,9 @@ namespace lfs::vis {
             LOG_ERROR("Failed to render Vulkan viewport image: {}",
                       render_error.empty() ? "missing image payload" : render_error);
             clearVulkanViewportImageState();
+            if (!has_point_cloud) {
+                release_inactive_point_cloud();
+            }
             return {};
         }
 
@@ -4887,6 +4903,9 @@ namespace lfs::vis {
         viewport_artifact_service_.updateFromImageOutput(
             std::move(viewport_image), rendered_metadata, render_size, true);
         release_inactive_split_outputs();
+        if (has_visible_gaussian_model && !frame_settings.point_cloud_mode) {
+            release_inactive_point_cloud();
+        }
 
         if (resize_result.completed) {
             lfs::core::Tensor::trim_memory_pool();
@@ -4935,41 +4954,8 @@ namespace lfs::vis {
     }
 
     lfs::io::SplatTensorAllocator RenderingManager::makeSplatTensorAllocator() const {
-        if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Vulkan) {
-            return [](lfs::core::TensorShape shape,
-                      const size_t capacity,
-                      const lfs::core::DataType dtype,
-                      const std::string_view name) -> lfs::core::Tensor {
-                (void)capacity;
-                lfs::core::Tensor tensor =
-                    lfs::core::Tensor::empty(std::move(shape), lfs::core::Device::GPU, dtype);
-                tensor.set_name(std::string{name});
-                return tensor;
-            };
-        }
-        if (!last_vulkan_context_ || !last_vulkan_context_->externalMemoryInteropEnabled()) {
-            return {};
-        }
-        return [context = last_vulkan_context_](lfs::core::TensorShape shape,
-                                                const size_t capacity,
-                                                const lfs::core::DataType dtype,
-                                                const std::string_view name) -> lfs::core::Tensor {
-            const std::string debug_name{name};
-            auto tensor = makeVulkanExternalTensor(
-                *context,
-                std::move(shape),
-                dtype,
-                capacity,
-                debug_name.c_str());
-            if (!tensor) {
-                throw lfs::core::TensorError(std::format(
-                    "Vulkan-external thumbnail splat tensor allocation failed for '{}': {}",
-                    debug_name,
-                    tensor.error()));
-            }
-            tensor->set_name(debug_name);
-            return std::move(*tensor);
-        };
+        return last_vulkan_context_ ? last_vulkan_context_->tensorInterop().splat_allocator(true)
+                                    : lfs::io::SplatTensorAllocator{};
     }
 
 } // namespace lfs::vis

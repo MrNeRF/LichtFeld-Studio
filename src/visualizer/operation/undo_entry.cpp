@@ -15,7 +15,6 @@
 #include "undo_history.hpp"
 #include <algorithm>
 #include <array>
-#include <cuda_runtime.h>
 #include <limits>
 #include <set>
 #include <stdexcept>

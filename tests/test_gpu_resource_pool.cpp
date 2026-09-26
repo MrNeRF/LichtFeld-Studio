@@ -5,7 +5,6 @@
 // #1566 — host-only GpuResourcePool lifecycle with a fake payload
 // (payload-aware producer pred, evict, trim, force, timeline bookkeeping).
 
-#include "rendering/cuda_vulkan_interop.hpp"
 #include "rendering/output_image_pool.hpp"
 
 #include <gtest/gtest.h>
@@ -234,15 +233,4 @@ TEST(GpuResourcePool, TimelineMonotonicBookkeepingAcrossReuse) {
     // Never reset on reuse.
     b->payload->timeline_value = 6;
     EXPECT_GT(b->payload->timeline_value, 5u);
-}
-
-TEST(CudaVulkanTensorFitsImport, SubrectAndExactAndReject) {
-    using lfs::rendering::cudaVulkanTensorFitsImport;
-    EXPECT_TRUE(cudaVulkanTensorFitsImport(100, 50, 128, 64));
-    EXPECT_TRUE(cudaVulkanTensorFitsImport(128, 64, 128, 64));
-    EXPECT_TRUE(cudaVulkanTensorFitsImport(1, 1, 64, 64));
-    EXPECT_FALSE(cudaVulkanTensorFitsImport(129, 64, 128, 64));
-    EXPECT_FALSE(cudaVulkanTensorFitsImport(128, 65, 128, 64));
-    EXPECT_FALSE(cudaVulkanTensorFitsImport(0, 50, 128, 64));
-    EXPECT_FALSE(cudaVulkanTensorFitsImport(100, 0, 128, 64));
 }

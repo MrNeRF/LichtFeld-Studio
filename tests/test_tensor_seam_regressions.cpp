@@ -3,7 +3,6 @@
 
 #include "core/tensor.hpp"
 
-#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
 #include <vector>
@@ -12,17 +11,10 @@ namespace {
 
     using namespace lfs::core;
 
-    bool has_cuda_device() {
-        int device_count = 0;
-        return cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0;
-    }
-
     // Catches read_scalar bounding a storage-linear index by numel(): a column
     // slice of a 4x4 matrix has numel 8 but its last element sits at linear
     // storage index 13.
     TEST(TensorSeamRegressions, ScalarReadsOnStridedViewsUseStorageExtent) {
-        if (!has_cuda_device())
-            GTEST_SKIP() << "CUDA device required";
         std::vector<float> values(16);
         for (size_t i = 0; i < values.size(); ++i)
             values[i] = static_cast<float>(i);
@@ -38,8 +30,6 @@ namespace {
     // Catches in-place facade writes that skip lazy snapshot preservation: a
     // deferred expression must see the operand as it was when it was built.
     TEST(TensorSeamRegressions, InPlaceWritesPreserveLazySnapshots) {
-        if (!has_cuda_device())
-            GTEST_SKIP() << "CUDA device required";
         const std::vector<float> initial{1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f};
         Tensor x = Tensor::from_vector(initial, {8}, Device::GPU);
         Tensor deferred = x.exp().mul(2.0f);
@@ -68,8 +58,6 @@ namespace {
     // Catches storage_ref dropping the stale-view check: a view taken before
     // reserve() must throw on a facade operation instead of reading the old storage.
     TEST(TensorSeamRegressions, StaleViewsAreRejectedByFacadeOperations) {
-        if (!has_cuda_device())
-            GTEST_SKIP() << "CUDA device required";
         Tensor base = Tensor::zeros({16}, Device::GPU);
         const Tensor view = base.slice(0, 0, 8);
         base.reserve(1024);

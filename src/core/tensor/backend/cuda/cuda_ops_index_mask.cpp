@@ -53,6 +53,13 @@ namespace lfs::core::internal {
         }
     } // namespace
 
+    void CudaBackendOps::index_cast(const StorageRef input, const StorageRef output,
+                                    size_t count, size_t extent, const ExecContext context) {
+        LFS_FACADE_TRACE(index_cast);
+        tensor_ops::launch_index_cast(cuda_const_pointer<int64_t>(input), cuda_pointer<int>(output),
+                                      count, extent, context.cuda_stream);
+    }
+
     void CudaBackendOps::gather(
         const StorageRef input, const StorageRef indices, const StorageRef output,
         const StridedLayout& input_layout, const StridedLayout& index_layout,
@@ -103,16 +110,6 @@ namespace lfs::core::internal {
         default:
             LFS_ASSERT_MSG(false, "unsupported fused gather unary operation");
         }
-    }
-
-    void CudaBackendOps::take(
-        const StorageRef input, const StorageRef indices, const StorageRef output,
-        const IndexProgram& program, const ExecContext context) {
-        LFS_FACADE_TRACE(take);
-        tensor_ops::launch_take(
-            cuda_const_pointer<float>(input), cuda_const_pointer<int>(indices),
-            cuda_pointer<float>(output), program.input_size, program.index_size,
-            context.cuda_stream);
     }
 
     void CudaBackendOps::index_select(
@@ -174,6 +171,7 @@ namespace lfs::core::internal {
         switch (output.dtype) {
         case DataType::Float32: launch.template operator()<float>(); break;
         case DataType::Int32: launch.template operator()<int32_t>(); break;
+        case DataType::Int64: launch.template operator()<int64_t>(); break;
         case DataType::UInt8:
         case DataType::Bool: launch.template operator()<uint8_t>(); break;
         default: LFS_ASSERT_MSG(false, "unsupported CUDA index_copy dtype");
@@ -322,9 +320,11 @@ namespace lfs::core::internal {
         const StridedLayout& x_layout, const StridedLayout& y_layout,
         const StridedLayout& output_layout, const ExecContext context) {
         LFS_FACADE_TRACE(where);
+        LFS_ASSERT_MSG(condition.dtype == DataType::Bool && x.dtype == y.dtype && x.dtype == output.dtype,
+                       "CUDA where requires a Bool condition and matching value dtypes");
         tensor_ops::launch_where(
-            cuda_const_pointer<unsigned char>(condition), cuda_const_pointer<float>(x),
-            cuda_const_pointer<float>(y), cuda_pointer<float>(output),
+            cuda_const_pointer<unsigned char>(condition), cuda_const_pointer<void>(x),
+            cuda_const_pointer<void>(y), cuda_pointer<void>(output), dtype_size(output.dtype),
             condition_layout.dims.data(), x_layout.dims.data(), y_layout.dims.data(),
             output_layout.dims.data(), condition_layout.rank, x_layout.rank,
             y_layout.rank, output_layout.rank, output_layout.element_count,

@@ -8,6 +8,7 @@ import ctypes.util
 import pytest
 
 
+@pytest.mark.integration
 def test_draw_hook_receives_overlay_capable_layout(lf):
     observed = {}
 
@@ -40,6 +41,7 @@ def test_draw_hook_receives_overlay_capable_layout(lf):
     assert observed["draw_result"] is None
 
 
+@pytest.mark.integration
 def test_is_key_down_matches_live_sdl_state_when_a_mapped_key_is_held(lf):
     library_name = ctypes.util.find_library("SDL3")
     if not library_name:

@@ -8,10 +8,10 @@
 #include "core/mapped_file.hpp"
 #include "core/octree_lod.hpp"
 #include "core/path_utils.hpp"
+#include "core/rad_dequant_math.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "formats/rad.hpp"
-#include "formats/rad_dequant_math.hpp"
 
 #include <tbb/blocked_range.h>
 #include <tbb/enumerable_thread_specific.h>
@@ -55,6 +55,7 @@
 #endif
 
 namespace lfs::io {
+    namespace radmath = lfs::core::radmath;
 
     using lfs::core::Device;
     using lfs::core::SplatData;

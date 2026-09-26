@@ -1,4 +1,5 @@
 #include <core/logger.hpp>
+#include <core/path_utils.hpp>
 #include <gtest/gtest.h>
 
 #include <atomic>
@@ -296,6 +297,18 @@ TEST(LoggerTest, DefaultLogFilePathHonorsExplicitOverride) {
         lfs::core::Logger::default_log_file_path(override_dir.string()));
 
     EXPECT_EQ(resolved, override_dir / "logs" / "lichtfeld.log");
+}
+
+TEST(LoggerTest, DefaultLogFilePathPreservesUnicodeOverride) {
+    const auto override_dir = std::filesystem::temp_directory_path() /
+                              lfs::core::utf8_to_path("\u30ed\u30b0_\u6d4b\u8bd5_\u00e8");
+    const auto expected = override_dir / "logs" / "lichtfeld.log";
+
+    const std::string resolved = lfs::core::Logger::default_log_file_path(
+        lfs::core::path_to_utf8(override_dir));
+
+    EXPECT_EQ(resolved, lfs::core::path_to_utf8(expected));
+    EXPECT_EQ(lfs::core::utf8_to_path(resolved), expected);
 }
 
 TEST(LoggerTest, InitOnFreshTempDirCreatesDurableLogFile) {

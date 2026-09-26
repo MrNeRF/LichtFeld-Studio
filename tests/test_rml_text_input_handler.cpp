@@ -71,3 +71,15 @@ TEST(RmlTextInputHandlerTest, IgnoresPlainAWithoutModifier) {
     EXPECT_EQ(context.selection_start, -1);
     EXPECT_EQ(context.selection_end, -1);
 }
+
+TEST(RmlTextInputHandlerTest, LeavesDeletionToTheOwningRmlContext) {
+    lfs::vis::gui::RmlTextInputHandler handler;
+    StubTextInputContext context;
+    handler.OnActivate(&context);
+
+    EXPECT_FALSE(handler.handleKeyDown(Rml::Input::KI_BACK, 0));
+    EXPECT_FALSE(handler.handleKeyDown(Rml::Input::KI_DELETE, 0));
+    EXPECT_EQ(context.cursor_position, -1);
+    EXPECT_EQ(context.selection_start, -1);
+    EXPECT_EQ(context.selection_end, -1);
+}

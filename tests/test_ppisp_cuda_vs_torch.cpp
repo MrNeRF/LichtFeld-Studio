@@ -7,6 +7,7 @@
 #include <random>
 #include <torch/torch.h>
 
+#include "cuda_backend_test.hpp"
 #include "lfs/kernels/ppisp.cuh"
 
 namespace {
@@ -127,13 +128,14 @@ const torch::Tensor COLOR_PINV_BLOCK_DIAG = torch::tensor({
 
         if (frame_idx >= 0) {
             const auto H = computeHomography(color_params, frame_idx);
+            rgb = rgb.clamp_min(0.0f);
             const auto r = rgb[0], g = rgb[1], b = rgb[2];
             const auto intensity = r + g + b;
 
             auto rgi = torch::stack({r, g, intensity}, 0).reshape({3, -1});
             rgi = torch::matmul(H, rgi).reshape({3, height, width});
 
-            const auto scale = intensity / (rgi[2] + 1e-5f);
+            const auto scale = intensity / (rgi[2].clamp_min(0.0f) + 1e-5f);
             rgi = rgi * scale.unsqueeze(0);
 
             const auto r_out = rgi[0], g_out = rgi[1];
@@ -142,7 +144,13 @@ const torch::Tensor COLOR_PINV_BLOCK_DIAG = torch::tensor({
 
         if (camera_idx >= 0) {
             rgb = rgb.clamp(0.0f, 1.0f);
-            const auto eps = torch::tensor(1e-6f, opts);
+            // Keep exact black and the native zero derivative at zero, without
+            // evaluating pow/log at zero in the unused autograd branch.
+            const auto positive_power = [](const torch::Tensor& base, const torch::Tensor& exponent) {
+                const auto positive = base.gt(0.0f);
+                const auto safe_base = torch::where(positive, base, torch::ones_like(base));
+                return torch::where(positive, torch::pow(safe_base, exponent), torch::zeros_like(base));
+            };
 
             std::vector<torch::Tensor> channels;
             channels.reserve(3);
@@ -158,10 +166,10 @@ const torch::Tensor COLOR_PINV_BLOCK_DIAG = torch::tensor({
                 const auto b_coef = 1.0f - a;
 
                 const auto x = rgb[ch];
-                const auto y_low = a * torch::pow((x / center).clamp_min(eps), toe);
-                const auto y_high = 1.0f - b_coef * torch::pow(((1.0f - x) / (1.0f - center)).clamp_min(eps), shoulder);
+                const auto y_low = a * positive_power(x / center, toe);
+                const auto y_high = 1.0f - b_coef * positive_power((1.0f - x) / (1.0f - center), shoulder);
                 const auto y = torch::where(x <= center, y_low, y_high);
-                channels.push_back(torch::pow(y.clamp_min(eps), gamma));
+                channels.push_back(positive_power(y, gamma));
             }
             rgb = torch::stack(channels, 0);
         }
@@ -194,9 +202,9 @@ const torch::Tensor COLOR_PINV_BLOCK_DIAG = torch::tensor({
     torch::Tensor runCudaForward(const TestParams& p, const torch::Tensor& rgb_in, const int height, const int width,
                                  const int camera_idx, const int frame_idx) {
         auto rgb_out = torch::empty_like(rgb_in);
-        lfs::training::kernels::launch_ppisp_forward_chw(
+        lfs::training::kernels::launch_ppisp_forward_chw_region(
             p.exposure.data_ptr<float>(), p.vignetting.data_ptr<float>(), p.color.data_ptr<float>(),
-            p.crf.data_ptr<float>(), rgb_in.data_ptr<float>(), rgb_out.data_ptr<float>(), height, width,
+            p.crf.data_ptr<float>(), rgb_in.data_ptr<float>(), rgb_out.data_ptr<float>(), height, width, 0, height,
             static_cast<int>(p.vignetting.size(0)), static_cast<int>(p.exposure.size(0)), camera_idx, frame_idx, nullptr);
         cudaDeviceSynchronize();
         return rgb_out;
@@ -230,7 +238,62 @@ const torch::Tensor COLOR_PINV_BLOCK_DIAG = torch::tensor({
         return g;
     }
 
-    class PPISPCudaVsTorchTest : public ::testing::Test {};
+    class PPISPCudaVsTorchTest : public lfs::test::CudaBackendTest {};
+
+    TEST_F(PPISPCudaVsTorchTest, NegativeRadianceDoesNotBecomeBrightRedOrYellow) {
+        auto params = createParams(1, 1, DEFAULT_SEED);
+        lfs::training::kernels::launch_ppisp_init_identity(
+            params.exposure.data_ptr<float>(), params.vignetting.data_ptr<float>(),
+            params.color.data_ptr<float>(), params.crf.data_ptr<float>(), 1, 1);
+        // Issue #2127: the first two pixels used to become red and yellow.
+        // Also exercise zero/positive sums with negative channels, black, and HDR.
+        const auto rgb = torch::tensor({{-0.20f, -0.10f, -0.10f, -0.10f, -0.2f, 0.0f, 0.2f, 2.0f},
+                                        {0.05f, -0.10f, 0.05f, 0.30f, -0.1f, 0.0f, 0.3f, 0.3f},
+                                        {0.05f, 0.05f, 0.05f, 0.40f, -0.3f, 0.0f, 0.4f, 0.4f}},
+                                       GPU_F32)
+                             .reshape({3, 1, 8});
+        for (const int camera : {-1, 0}) {
+            const auto actual = runCudaForward(params, rgb, 1, 8, camera, 0);
+            const auto expected = runCudaForward(params, rgb.clamp_min(0.0f), 1, 8, camera, 0);
+            EXPECT_TRUE(torch::isfinite(actual).all().item<bool>());
+            EXPECT_LT((actual - expected).abs().max().item<float>(), FORWARD_ATOL);
+            EXPECT_LT(actual[0][0][0].item<float>(), 1e-5f);
+            EXPECT_LT(actual[0][0][1].item<float>(), 1e-5f);
+            EXPECT_LT(actual[1][0][1].item<float>(), 1e-5f);
+            if (camera == -1)
+                EXPECT_GT(actual[0][0][7].item<float>(), 1.9f);
+        }
+    }
+
+    TEST_F(PPISPCudaVsTorchTest, NegativeRadianceGradientsMatchAutograd) {
+        for (const int camera : {-1, 0}) {
+            SCOPED_TRACE(camera);
+            auto params = createParams(1, 1, DEFAULT_SEED);
+            params.exposure.set_requires_grad(true);
+            params.vignetting.set_requires_grad(true);
+            params.color.set_requires_grad(true);
+            params.crf.set_requires_grad(true);
+            auto rgb = torch::tensor({{-0.20f, -0.10f, 0.20f, -0.3f, 1e-9f},
+                                      {0.05f, -0.10f, -0.10f, -0.2f, 2e-9f},
+                                      {0.05f, 0.05f, 0.40f, -0.1f, 3e-9f}},
+                                     GPU_F32)
+                           .reshape({3, 1, 5})
+                           .set_requires_grad(true);
+            const auto weights = torch::linspace(0.2f, 1.4f, 15, GPU_F32).reshape_as(rgb);
+            const auto expected = ppispApplyTorch(params.exposure, params.vignetting, params.color,
+                                                  params.crf, rgb, camera, 0);
+            (expected * weights).sum().backward();
+            const auto actual = runCudaBackward(params, rgb, weights, 1, 5, camera, 0);
+            EXPECT_LT((actual.rgb_in - rgb.grad()).abs().max().item<float>(), BACKWARD_ATOL);
+            EXPECT_LT((actual.exposure - params.exposure.grad()).abs().max().item<float>(), BACKWARD_ATOL);
+            EXPECT_LT((actual.color - params.color.grad()).abs().max().item<float>(), BACKWARD_ATOL);
+            if (camera >= 0) {
+                EXPECT_LT((actual.vignetting - params.vignetting.grad()).abs().max().item<float>(), BACKWARD_ATOL);
+                EXPECT_LT((actual.crf - params.crf.grad()).abs().max().item<float>(), BACKWARD_ATOL);
+            }
+            EXPECT_EQ(actual.rgb_in.masked_select(rgb.lt(0)).abs().max().item<float>(), 0.0f);
+        }
+    }
 
     TEST_F(PPISPCudaVsTorchTest, ForwardBasic) {
         const auto params = createParams(2, 5, DEFAULT_SEED);

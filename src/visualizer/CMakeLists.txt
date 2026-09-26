@@ -6,8 +6,8 @@
 include(${CMAKE_SOURCE_DIR}/cmake/FetchLibvterm.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/CompileShaders.cmake)
 
-# SHARED on Windows to avoid singleton duplication across .exe/.pyd boundary
-if(WIN32)
+# SHARED on Windows and macOS to avoid singleton duplication across module boundaries
+if(WIN32 OR APPLE)
     set(LFS_VIS_LIB_TYPE SHARED)
 else()
     set(LFS_VIS_LIB_TYPE STATIC)
@@ -70,6 +70,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/viewport_frame_lifecycle_service.cpp
         rendering/viewport_interop_service.cpp
         rendering/viewport_appearance_correction.cpp
+        rendering/appearance_tensor_model.cpp
         rendering/viewport_request_builder.cpp
         rendering/workspace_render_request.cpp
         rendering/passes/vulkan_scene_image_uploader.cpp
@@ -168,8 +169,10 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         input/sdl_key_mapping.cpp
 
         # Training integration
-        training/training_state.cpp
-        training/training_manager.cpp
+        core/training_state.cpp
+        project/training_session_state.cpp
+        $<$<BOOL:${LFS_BUILD_TRAINER}>:training/training_manager.cpp>
+        $<$<NOT:$<BOOL:${LFS_BUILD_TRAINER}>>:project/training_session_presenter.cpp>
 
         # Tools
         tools/selection_tool.cpp
@@ -234,28 +237,32 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rmlui/elements/color_picker_element.cpp
         gui/rmlui/elements/crf_curve_element.cpp
         gui/rmlui/elements/loss_graph_element.cpp
+        gui/rmlui/elements/vram_timeline_element.cpp
         gui/rmlui/elements/python_editor_element.cpp
         gui/rmlui/elements/scene_graph_element.cpp
         gui/rmlui/elements/terminal_element.cpp
 )
 
-# MSVC 14.44 ICEs (C1001 in msc1.cpp:1589) on the sequencer panel TUs under
-# /std:c++latest in both Debug (/Od /RTC1) and Release (/O2 /Ob2). Pin them to
-# /std:c++23 (not "latest") and add /bigobj for the heavy tensor + RmlUI + fmt instantiations.
-# These large visualizer TUs exceed the COFF section limit in Debug and need /bigobj.
+# These large visualizer TUs exceed the COFF section limit in Debug and need
+# /bigobj. Let CMake select the supported spelling of the C++23 language flag.
 if(MSVC)
     set_source_files_properties(
             ${CMAKE_CURRENT_SOURCE_DIR}/sequencer/rml_sequencer_panel.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/sequencer/rml_sequencer_panel_timeline.cpp
-            PROPERTIES COMPILE_OPTIONS "/std:c++23;/bigobj"
+            PROPERTIES COMPILE_OPTIONS "/bigobj"
     )
     set_source_files_properties(
             ${CMAKE_CURRENT_SOURCE_DIR}/visualizer_impl.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/project/project_lifecycle.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/gui/gui_manager.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/scene/scene_manager.cpp
             PROPERTIES COMPILE_OPTIONS "/bigobj"
     )
 endif()
+
+# Trainer seam only: the rest of the visualizer cannot include private tensor headers.
+set_property(SOURCE training/training_manager.cpp
+    APPEND PROPERTY COMPILE_DEFINITIONS LFS_TENSOR_PRIVATE_ACCESS)
 
 # Set include directories
 target_include_directories(lfs_visualizer
@@ -277,7 +284,7 @@ target_link_libraries(lfs_visualizer
         lfs_geometry
         lfs_io
         lfs_rendering_tensor
-        lfs_training
+        $<$<BOOL:${LFS_BUILD_TRAINER}>:lfs_training>
         lfs_python_runtime
         lfs_python_utils
         lfs_sequencer
@@ -289,7 +296,7 @@ target_link_libraries(lfs_visualizer
         nlohmann_json::nlohmann_json
         OpenSSL::SSL
         OpenSSL::Crypto
-        CUDA::cudart
+        $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::cudart>
         Freetype::Freetype
         nfd::nfd
         vterm
@@ -311,17 +318,11 @@ endif()
 target_sources(lfs_visualizer
         PRIVATE
         gui/rmlui/rmlui_vk_backend.cpp
-        rendering/lod_page_dequant_cuda.cu
         rendering/vksplat_input_packer.cpp
-        rendering/vksplat_input_packer_cuda.cu
         rendering/vksplat_viewport_renderer.cpp
         rendering/vulkan_external_tensor.cpp
         rendering/point_cloud_vulkan_renderer.cpp)
 
-# The CPU chunk decoders round multiplies and adds separately; FMA contraction
-# in the dequant kernel would break CPU/GPU bit-parity (guarded by gtest).
-set_source_files_properties(rendering/lod_page_dequant_cuda.cu PROPERTIES
-        COMPILE_OPTIONS "$<$<COMPILE_LANGUAGE:CUDA>:--fmad=false>")
 set(glslang_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/share/glslang"
     CACHE PATH "Path to vcpkg-installed glslang config" FORCE)
 find_package(glslang CONFIG REQUIRED)
@@ -395,14 +396,20 @@ if(NOT WIN32)
     add_library(lfs_rmlui SHARED "${CMAKE_CURRENT_BINARY_DIR}/lfs_rmlui_stub.cpp")
 
     find_package(lunasvg CONFIG REQUIRED)
-    target_link_libraries(lfs_rmlui PRIVATE
-        -Wl,--whole-archive
-        $<TARGET_FILE:RmlUi::Core>
-        $<TARGET_FILE:RmlUi::Debugger>
-        -Wl,--no-whole-archive
-        Freetype::Freetype
-        lunasvg::lunasvg
-    )
+    if(APPLE)
+        target_link_libraries(lfs_rmlui PRIVATE
+            "$<LINK_LIBRARY:WHOLE_ARCHIVE,RmlUi::Core,RmlUi::Debugger>"
+            Freetype::Freetype
+            lunasvg::lunasvg)
+    else()
+        target_link_libraries(lfs_rmlui PRIVATE
+            -Wl,--whole-archive
+            $<TARGET_FILE:RmlUi::Core>
+            $<TARGET_FILE:RmlUi::Debugger>
+            -Wl,--no-whole-archive
+            Freetype::Freetype
+            lunasvg::lunasvg)
+    endif()
 
     get_target_property(_rmlui_includes RmlUi::Core INTERFACE_INCLUDE_DIRECTORIES)
     if(_rmlui_includes)
@@ -436,6 +443,9 @@ set_target_properties(lfs_visualizer PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
+if(APPLE)
+    target_link_options(lfs_visualizer PRIVATE "LINKER:-undefined,dynamic_lookup")
+endif()
 if(WIN32)
     set_target_properties(lfs_visualizer PROPERTIES
         POSITION_INDEPENDENT_CODE ON

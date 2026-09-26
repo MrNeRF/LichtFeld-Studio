@@ -8,12 +8,14 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/number_format.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
+#include "core/training_manager.hpp"
 #include "gui/error_event_bridge.hpp"
 #include "gui/gallery_scene_publication.hpp"
 #include "gui/gui_manager.hpp"
@@ -22,9 +24,9 @@
 #include "gui/utils/native_file_dialog.hpp"
 #include "gui/video_export_utils.hpp"
 #include "internal/resource_paths.hpp"
+#include "io/dataset_scene_import.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
-#include "io/project_document.hpp"
 #include "project/session_state.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
@@ -38,7 +40,6 @@
 #include "scene/scene_render_state.hpp"
 #include "sequencer/keyframe.hpp"
 #include "sequencer/sequencer_controller.hpp"
-#include "training/training_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
@@ -51,7 +52,6 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
-#include <cuda_runtime.h>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -63,6 +63,7 @@
 #include <shared_mutex>
 #include <string_view>
 #include <type_traits>
+#include <typeinfo>
 
 namespace lfs::vis::gui {
 
@@ -98,12 +99,14 @@ namespace lfs::vis::gui {
             }
 
             const auto* const trainer = trainer_manager ? trainer_manager->getTrainer() : nullptr;
+#if LFS_BUILD_TRAINER
             if (trainer) {
                 const auto strategy = lfs::core::param::canonical_strategy_name(
                     trainer->getParams().optimization.strategy);
                 if (!strategy.empty())
                     stamp.strategy = std::string(strategy);
             }
+#endif
             return stamp;
         }
 
@@ -123,6 +126,7 @@ namespace lfs::vis::gui {
         case ExportFormat::SOG: return "SOG";
         case ExportFormat::SSOG: return "SSOG";
         case ExportFormat::SPZ: return "SPZ";
+        case ExportFormat::GLB: return "GLB";
         case ExportFormat::HTML_VIEWER: return "HTML";
         case ExportFormat::USD: return "USD";
         case ExportFormat::NUREC_USDZ: return "USDZ";
@@ -164,6 +168,7 @@ namespace lfs::vis::gui {
         if (node->model->has_deleted_mask())
             return plan;
 
+#if LFS_BUILD_TRAINER
         if (node->uuid == scene.getTrainingModelNodeUuid()) {
             const auto* const trainer_manager = scene_manager.getTrainerManager();
             const auto* const trainer = trainer_manager ? trainer_manager->getTrainer() : nullptr;
@@ -172,6 +177,7 @@ namespace lfs::vis::gui {
             if (trainer)
                 plan.model_mutex = &trainer->getRenderMutex();
         }
+#endif
 
         plan.storage_mode = core::Scene::MergeStorageMode::BorrowSingleIdentity;
         return plan;
@@ -1141,7 +1147,8 @@ namespace lfs::vis::gui {
                         completion.request.path,
                         completion.request.name_hint,
                         splat_load_state_.gallery ? false : completion.request.is_visible,
-                        std::move(*completion.result), splat_load_state_.gallery.has_value(), gallery_group);
+                        std::move(*completion.result), splat_load_state_.gallery.has_value(), gallery_group,
+                        splat_load_state_.gallery.has_value());
                     if (splat_load_state_.gallery) {
                         scene_manager->getScene().setNodeTransform(node_name, completion.request.transform);
                         scene_manager->getScene().setNodeVisibility(node_name, true);
@@ -1679,6 +1686,10 @@ namespace lfs::vis::gui {
                 throw std::runtime_error("The scene changed while it was being prepared.");
             const auto document =
                 viewer_->project_lifecycle_ ? viewer_->project_lifecycle_->boundDocument() : nullptr;
+            auto current_license = viewer_->projectGetLicense();
+            if (!current_license)
+                throw std::runtime_error(std::string(current_license.error().user_message()));
+            publication.published_license = *current_license;
             publication.nodes.reserve(snapshots.size());
             for (size_t i = 0; i < snapshots.size(); ++i) {
                 publication.nodes.push_back(GalleryScenePublishNode{
@@ -1762,18 +1773,15 @@ namespace lfs::vis::gui {
                     // LFS-CENSUS-OK(empty-catch): report the captured error through the job after cleanup.
                     owns_directory = publication.created_directory;
                     error = e.what();
+                    LOG_ERROR("gallery failure stage=preparation exception_class={} message={}",
+                              typeid(e).name(), e.what());
                     if (source && error == "There are no visible splats to upload.")
                         error = "gallery_project_no_splats: " + error;
                 } catch (...) {
                     // LFS-CENSUS-OK(empty-catch): report an unknown failure through the job after cleanup.
                     owns_directory = publication.created_directory;
                     error = "Scene preparation failed.";
-                }
-                // Settle extraction kernels before releasing owned GPU storage,
-                // including cancellation and partial-allocation failures.
-                if (!source || publication.materialized_payload) {
-                    if (const auto status = cudaDeviceSynchronize(); status != cudaSuccess && error.empty())
-                        error = "Could not finish preparing the scene on the graphics device.";
+                    LOG_ERROR("gallery failure stage=preparation exception_class=<unknown> message={}", error);
                 }
                 publication.nodes.clear();
                 cancelled = canceled();
@@ -1987,12 +1995,14 @@ namespace lfs::vis::gui {
                             }
                             break;
                         }
+                        case ExportFormat::GLB:
                         case ExportFormat::SPZ: {
                             const lfs::io::SpzSaveOptions options{
                                 .output_path = path,
                                 .version = spz_version,
                                 .progress_callback = update_progress,
-                                .provenance = provenance};
+                                .provenance = provenance,
+                                .glb = format == ExportFormat::GLB};
                             if (auto result = lfs::io::save_spz(*splat_data, options); result) {
                                 success = true;
                             } else {
@@ -2496,15 +2506,6 @@ namespace lfs::vis::gui {
                         local_params = import_state_.params;
                     }
 
-                    const auto parse_centralize = [](const std::string& s) {
-                        if (s == "off")
-                            return lfs::io::CentralizeDataset::Off;
-                        if (s == "by_pointcloud")
-                            return lfs::io::CentralizeDataset::ByPointCloud;
-                        if (s == "by_cameras")
-                            return lfs::io::CentralizeDataset::ByCameras;
-                        return lfs::io::CentralizeDataset::Off;
-                    };
                     int effective_min_track_length = local_params.dataset.min_track_length;
                     if (effective_min_track_length > 0 &&
                         local_params.init_path.has_value() &&
@@ -2519,7 +2520,7 @@ namespace lfs::vis::gui {
                         .images_folder = local_params.dataset.images,
                         .min_track_length = effective_min_track_length,
                         .validate_only = false,
-                        .centralize = parse_centralize(local_params.dataset.centralize_dataset),
+                        .centralize = lfs::training::parse_centralize(local_params.dataset.centralize_dataset),
                         .progress = [this, job, &stop_token](const float pct, const std::string& msg) {
                         if (stop_token.stop_requested())
                             return;
@@ -2989,8 +2990,7 @@ namespace lfs::vis::gui {
                                  image_hwc.shape()[0], image_hwc.shape()[1], image_hwc.shape()[2]);
                     }
 
-                    const auto* const gpu_ptr = image_hwc.data_ptr();
-                    auto write_result = encoder->writeFrameGpu(gpu_ptr, width, height, nullptr);
+                    auto write_result = encoder->writeFrame(image_hwc);
                     if (!write_result) {
                         error_msg =
                             write_result.error();
@@ -3009,7 +3009,7 @@ namespace lfs::vis::gui {
                         static_cast<float>(frame + 1) /
                             static_cast<float>(
                                 total_frames),
-                        LOCF(lichtfeld::Strings::Runtime::VIDEO_ENCODING_FRAME, frame + 1, total_frames));
+                        LOCF(lichtfeld::Strings::Runtime::VIDEO_ENCODING_FRAME, lfs::core::format_count(frame + 1), lfs::core::format_count(total_frames)));
                     publishVideoExportOverlayState();
                 }
 

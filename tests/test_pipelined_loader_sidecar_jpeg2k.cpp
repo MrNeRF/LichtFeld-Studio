@@ -7,6 +7,7 @@
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
 #include "core/path_utils.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/nvcodec_image_loader.hpp"
 #include "io/pipelined_image_loader.hpp"
 
@@ -97,10 +98,9 @@ namespace {
 
 } // namespace
 
-TEST(PipelinedImageLoaderSidecarJpeg2k, DepthFirstTouchTranscodesThenHotDecodes) {
-    int device_count = 0;
-    ASSERT_EQ(cudaGetDeviceCount(&device_count), cudaSuccess);
-    ASSERT_GT(device_count, 0);
+class PipelinedImageLoaderSidecarJpeg2k : public lfs::test::CudaBackendTest {};
+
+TEST_F(PipelinedImageLoaderSidecarJpeg2k, DepthFirstTouchTranscodesThenHotDecodes) {
     ASSERT_TRUE(lfs::io::NvCodecImageLoader::is_available());
     const TempFileGuard depth_file{write_depth_png_from_bicycle_content()};
     const fs::path& depth_path = depth_file.path;
@@ -152,10 +152,7 @@ TEST(PipelinedImageLoaderSidecarJpeg2k, DepthFirstTouchTranscodesThenHotDecodes)
     }
 }
 
-TEST(PipelinedImageLoaderSidecarJpeg2k, SmallRamBudgetSpillsAndCleansOnExit) {
-    int device_count = 0;
-    ASSERT_EQ(cudaGetDeviceCount(&device_count), cudaSuccess);
-    ASSERT_GT(device_count, 0);
+TEST_F(PipelinedImageLoaderSidecarJpeg2k, SmallRamBudgetSpillsAndCleansOnExit) {
     ASSERT_TRUE(lfs::io::NvCodecImageLoader::is_available());
     const TempFileGuard depth_file{
         write_depth_png_from_bicycle_content("lfs_pipelined_sidecar_jpeg2k_spill_depth16.png", 0u)};
@@ -210,7 +207,7 @@ TEST(PipelinedImageLoaderSidecarJpeg2k, SmallRamBudgetSpillsAndCleansOnExit) {
     EXPECT_FALSE(fs::exists(spill_dir));
 }
 
-TEST(PipelinedImageLoaderSidecarJpeg2k, ParameterChangesCanonicalizeFreshPerRun) {
+TEST_F(PipelinedImageLoaderSidecarJpeg2k, ParameterChangesCanonicalizeFreshPerRun) {
     const auto path = bicycle_image_path();
     if (!fs::is_regular_file(path))
         GTEST_SKIP() << "bicycle dataset is absent: " << path;

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "training/kernels/depth_loss.hpp"
 #include "training/kernels/normal_consistency_loss.hpp"
 #include "training/kernels/normal_loss.hpp"
@@ -231,16 +232,7 @@ namespace {
         EXPECT_LE((actual - expected).abs().max().item<float>(), tolerance);
     }
 
-    class RoiWeightedLossTest : public ::testing::Test {
-    protected:
-        void SetUp() override {
-            int device_count = 0;
-            ASSERT_EQ(cudaGetDeviceCount(&device_count), cudaSuccess);
-            if (device_count == 0) {
-                GTEST_SKIP() << "No CUDA device available";
-            }
-        }
-    };
+    class RoiWeightedLossTest : public lfs::test::CudaBackendTest {};
 
 } // namespace
 

@@ -6,12 +6,6 @@
 
 namespace lfs::training::kernels {
 
-    // Forward pass (CHW layout, matches rasterizer output)
-    void launch_ppisp_forward_chw(const float* exposure_params, const float* vignetting_params,
-                                  const float* color_params, const float* crf_params, const float* rgb_in,
-                                  float* rgb_out, int height, int width, int num_cameras, int num_frames,
-                                  int camera_idx, int frame_idx, cudaStream_t stream = nullptr);
-
     // Forward pass on a full-width row band [y_offset, y_offset + band_height) of an
     // image with full_height rows; vignetting uses full-image coordinates so banded
     // output is bit-identical to the full-image pass.

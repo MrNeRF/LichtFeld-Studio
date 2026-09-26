@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include <gtest/gtest.h>
 #include <torch/torch.h>
 
@@ -91,12 +92,12 @@ namespace {
 
 } // namespace
 
-class TensorUInt8MaskingTest : public ::testing::Test {
+class TensorUInt8MaskingTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         Tensor::manual_seed(42);
         torch::manual_seed(42);
-        ASSERT_TRUE(Tensor::zeros({1}, Device::GPU).is_valid());
     }
 };
 

@@ -57,8 +57,9 @@ namespace lfs::vis {
           depth_window_draw_commit(store_, Field::DepthWindowDrawCommitValue, "depth_window_draw_commit", AppStore::DepthWindowDrawCommit{}) {}
 
     AppStore& app_store() {
-        static AppStore instance;
-        return instance;
+        // Subscription tokens can outlive static destruction across module boundaries.
+        static AppStore* const instance = new AppStore;
+        return *instance;
     }
 
     void publish_language_generation() {

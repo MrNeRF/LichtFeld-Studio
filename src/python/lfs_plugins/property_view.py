@@ -89,6 +89,7 @@ BOOL_PROPS = (
     "ppisp_freeze_gaussians",
     "random",
     "enable_eval",
+    "eval_all",
     "background_improvements",
 )
 
@@ -212,6 +213,7 @@ BASIC_RUNS = (
 
 DATASET_RUNS = (
     _run("dataset_eval", "enable_eval", visibility_condition_id="has_dataset"),
+    _run("dataset_eval_train", "eval_all", visibility_condition_id="dep_eval"),
 )
 
 OPTIMIZATION_RUNS = (
@@ -304,8 +306,8 @@ APPEARANCE_RUNS = _basic_runs(
     _run("appearance_tuning", "ppisp_lr", "ppisp_reg_weight", "ppisp_warmup_steps",
          visibility_condition_id="dep_ppisp_params"),
 )
-EVALUATION_RUNS = (next(run for run in DATASET_RUNS if run.id == "dataset_eval"),)
-DATASET_RUNS = tuple(run for run in DATASET_RUNS if run.id != "dataset_eval")
+EVALUATION_RUNS = tuple(run for run in DATASET_RUNS if run.id in {"dataset_eval", "dataset_eval_train"})
+DATASET_RUNS = tuple(run for run in DATASET_RUNS if run.id not in {"dataset_eval", "dataset_eval_train"})
 
 SECTIONS = (
     SectionSpec("basic_params", "training.section.method", METHOD_RUNS),

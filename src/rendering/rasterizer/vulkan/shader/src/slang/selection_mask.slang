@@ -22,7 +22,7 @@ struct SelectionUniforms
     uint image_height;
     uint image_width;
     uint camera_model;
-    uint pad0;
+    uint deleted_mask_enabled;
     uint pad1;
     float fx;
     float fy;
@@ -51,12 +51,15 @@ layout(binding=7) RWByteAddressBuffer selection_out;
 layout(binding=8) ByteAddressBuffer polygon_mask;
 layout(binding=9) StructuredBuffer<float> opacity_raw;
 layout(binding=10) RWByteAddressBuffer ring_pick_out;
+layout(binding=11) ByteAddressBuffer deleted_mask;
 
 static const uint RING_PICK_NO_HIT = 0xFFFFFFFFu;
 
 [ForceInline]
 bool node_visible(uint splat_idx, SelectionUniforms uniforms)
 {
+    if (uniforms.deleted_mask_enabled != 0u && read_byte(deleted_mask, splat_idx) != 0u)
+        return false;
     if (uniforms.transform_indices_enabled == 0 || uniforms.node_visibility_enabled == 0)
         return true;
 

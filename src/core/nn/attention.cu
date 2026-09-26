@@ -11,6 +11,8 @@
 #include <float.h>
 #include <mma.h>
 
+#include <atomic>
+
 namespace lfs::core::nn::kernels {
     namespace {
 
@@ -336,7 +338,7 @@ namespace lfs::core::nn::kernels {
                             load_matrix_sync(v_frag, Vs + ns * D + ds, D);
                             mma_sync(o_frag, p_frag, v_frag, o_frag);
                         }
-                        store_matrix_sync(Ss + warp_row * Bc + ds, o_frag, Bc, mem_row_major);
+                        store_matrix_sync(Ss + warp_row * D + ds, o_frag, D, mem_row_major);
                     }
                 }
 #else
@@ -349,7 +351,7 @@ namespace lfs::core::nn::kernels {
                             sum += __half2float(Ps[r * Bc + j]) * __half2float(Vs[j * D + c]);
                         }
                     }
-                    Ss[r * Bc + c] = sum;
+                    Ss[r * D + c] = sum;
                 }
 #endif
                 __syncthreads();
@@ -358,7 +360,7 @@ namespace lfs::core::nn::kernels {
 #pragma unroll
                     for (int dd = 0; dd < D; ++dd) {
                         if (dd < d) {
-                            acc[dd] += Ss[row * Bc + dd];
+                            acc[dd] += Ss[row * D + dd];
                         }
                     }
                 }
@@ -399,21 +401,26 @@ namespace lfs::core::nn::kernels {
                 }
                 local_max = fmaxf(local_max, v);
             }
-            __shared__ float red[32];
+            // The max and the sum get their own shared slots: reusing one buffer
+            // would let a warp that has finished the exponential loop overwrite
+            // the row max before a slower warp has read it.
+            __shared__ float red_max[32];
+            __shared__ float red_sum[32];
+            const int warps = (nthreads + 31) / 32;
             float wmax = warp_max(local_max);
             if ((tid & 31) == 0) {
-                red[tid / 32] = wmax;
+                red_max[tid / 32] = wmax;
             }
             __syncthreads();
             if (tid < 32) {
-                const float v = (tid < (nthreads + 31) / 32) ? red[tid] : -FLT_MAX;
+                const float v = (tid < warps) ? red_max[tid] : -FLT_MAX;
                 wmax = warp_max(v);
                 if (tid == 0) {
-                    red[0] = wmax;
+                    red_max[0] = wmax;
                 }
             }
             __syncthreads();
-            const float row_max = red[0];
+            const float row_max = red_max[0];
 
             float local_sum = 0.0f;
             for (int c = tid; c < cols; c += nthreads) {
@@ -426,18 +433,18 @@ namespace lfs::core::nn::kernels {
             }
             float wsum = warp_sum(local_sum);
             if ((tid & 31) == 0) {
-                red[tid / 32] = wsum;
+                red_sum[tid / 32] = wsum;
             }
             __syncthreads();
             if (tid < 32) {
-                const float v = (tid < (nthreads + 31) / 32) ? red[tid] : 0.0f;
+                const float v = (tid < warps) ? red_sum[tid] : 0.0f;
                 wsum = warp_sum(v);
                 if (tid == 0) {
-                    red[0] = wsum;
+                    red_sum[0] = wsum;
                 }
             }
             __syncthreads();
-            const float inv = red[0] > 0.0f ? 1.0f / red[0] : 0.0f;
+            const float inv = red_sum[0] > 0.0f ? 1.0f / red_sum[0] : 0.0f;
 
             for (int c = tid; c < cols; c += nthreads) {
                 float v = device::ld_strided(x, base + c, is_half);
@@ -453,10 +460,28 @@ namespace lfs::core::nn::kernels {
             return (br + bc + bc) * dpad * static_cast<int>(sizeof(float));
         }
 
+        // Largest dynamic shared-memory block this device will opt into. Turing
+        // caps it at 64 KiB, which the 128-wide WMMA tile does not fit.
+        int max_optin_smem() {
+            static std::atomic<int> cached{-1};
+            int bytes = cached.load(std::memory_order_relaxed);
+            if (bytes < 0) {
+                int device = 0;
+                LFS_CUDA_CHECK(cudaGetDevice(&device));
+                LFS_CUDA_CHECK(cudaDeviceGetAttribute(
+                    &bytes, cudaDevAttrMaxSharedMemoryPerBlockOptin, device));
+                cached.store(bytes, std::memory_order_relaxed);
+            }
+            return bytes;
+        }
+
         int wmma_smem_bytes(int br, int bc, int dpad) {
             const int qkv = (br + bc + bc) * dpad * static_cast<int>(sizeof(__half));
             const int p = br * bc * static_cast<int>(sizeof(__half));
-            const int s = br * bc * static_cast<int>(sizeof(float));
+            // The float scratch holds the scores [br, bc] and then the
+            // probability-weighted values [br, dpad]; it has to fit the wider of
+            // the two.
+            const int s = br * (bc > dpad ? bc : dpad) * static_cast<int>(sizeof(float));
             return qkv + p + s;
         }
 
@@ -889,7 +914,7 @@ namespace lfs::core::nn::kernels {
 
         dim3 grid((n_q + kBr - 1) / kBr, batch * heads);
 
-        if (is_half && d <= kFlashD && n_k > 0) {
+        if (is_half && d <= kFlashD && n_k > 0 && wmma_smem_bytes(64, 64, 64) <= max_optin_smem()) {
             constexpr int Br = 64;
             constexpr int Bc = 64;
             constexpr int D = 64;
@@ -903,6 +928,27 @@ namespace lfs::core::nn::kernels {
                 static_cast<const __half*>(v), mask, static_cast<__half*>(o), batch, heads, n_q,
                 n_k, d, scale, mask_sb, mask_sh, mask_sq, mask_sk, has_mask, is_half);
             LFS_CUDA_LAUNCH_CHECK(stream, "nn.attention.wmma");
+            return;
+        }
+
+        // Head dim 128 (the RoMa v1 coarse decoder) would otherwise fall to the
+        // 32-thread scalar path; the WMMA kernel is dimension-generic, so run it
+        // there too. Its tile wants 88 KiB, so devices that cap opt-in shared
+        // memory below that keep the tiled path.
+        if (is_half && d <= 128 && n_k > 0 && wmma_smem_bytes(64, 64, 128) <= max_optin_smem()) {
+            constexpr int Br = 64;
+            constexpr int Bc = 64;
+            constexpr int D = 128;
+            const int smem = wmma_smem_bytes(Br, Bc, D);
+            auto* fn = flash_attn_wmma_kernel<Br, Bc, D>;
+            LFS_CUDA_CHECK(cudaFuncSetAttribute(reinterpret_cast<const void*>(fn),
+                                                cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                                smem));
+            fn<<<grid, 128, smem, stream>>>(
+                static_cast<const __half*>(q), static_cast<const __half*>(k),
+                static_cast<const __half*>(v), mask, static_cast<__half*>(o), batch, heads, n_q,
+                n_k, d, scale, mask_sb, mask_sh, mask_sq, mask_sk, has_mask, is_half);
+            LFS_CUDA_LAUNCH_CHECK(stream, "nn.attention.wmma128");
             return;
         }
 

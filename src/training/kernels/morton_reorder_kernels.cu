@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "kernel_stream.hpp"
 #include "lfs/training/joint_adam_codec.cuh"
+#include "lfs/training/joint_adam_codec.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -242,7 +243,9 @@ namespace lfs::training::kernels {
             const float* __restrict__ dst_bounds,
             const std::int64_t* __restrict__ perm,
             int n_prims,
-            int slots_per_primitive) {
+            int slots_per_primitive,
+            int slot_begin,
+            int slot_end) {
             using C = lfs::training::joint_adam::DeviceCodec<BITS>;
             const int prim = static_cast<int>(blockIdx.x) * kThreads + static_cast<int>(threadIdx.x);
             if (prim >= n_prims || slots_per_primitive <= 0) {
@@ -257,7 +260,9 @@ namespace lfs::training::kernels {
             const float4 dst_mm =
                 *reinterpret_cast<const float4*>(dst_bounds + 4 * static_cast<int>(prim / kThreads));
             const auto slots = static_cast<std::uint32_t>(slots_per_primitive);
-            for (std::uint32_t k = 0; k < slots; ++k) {
+            const auto first = static_cast<std::uint32_t>(slot_begin);
+            const auto group_slots = static_cast<std::uint32_t>(slot_end - slot_begin);
+            for (std::uint32_t k = first; k < static_cast<std::uint32_t>(slot_end); ++k) {
                 for (int c = 0; c < 4; ++c) {
                     const float2 us = C::decode_us(
                         src_packed,
@@ -265,7 +270,7 @@ namespace lfs::training::kernels {
                         src_mm);
                     C::encode_us(
                         dst_packed,
-                        sh_moment_cell(static_cast<std::uint32_t>(prim), k, c, slots),
+                        sh_moment_cell(static_cast<std::uint32_t>(prim), k - first, c, group_slots),
                         us.x, us.y, dst_mm);
                 }
             }
@@ -324,8 +329,8 @@ namespace lfs::training::kernels {
         const float ymul = (ylen == 0.0f) ? 0.0f : 1024.0f / ylen;
         const float zmul = (zlen == 0.0f) ? 0.0f : 1024.0f / zlen;
 
-        auto codes = Tensor::empty({static_cast<std::size_t>(n)}, Device::GPU, DataType::Int32);
-        auto indices = Tensor::empty({static_cast<std::size_t>(n)}, Device::GPU, DataType::Int64);
+        auto codes = Tensor::empty_exact({static_cast<std::size_t>(n)}, DataType::Int32);
+        auto indices = Tensor::empty_exact({static_cast<std::size_t>(n)}, DataType::Int64);
         codes.set_stream(stream);
         indices.set_stream(stream);
 
@@ -406,7 +411,7 @@ namespace lfs::training::kernels {
             LFS_CUDA_LAUNCH_CHECK(stream, "training.morton.joint_shN_bounds8");
             joint_permute_shN_encode_cu<8><<<grid, kThreads, 0, stream>>>(
                 src_packed, src_bounds, dst_packed, dst_bounds, perm, n_prims,
-                slots_per_primitive);
+                slots_per_primitive, 0, slots_per_primitive);
             LFS_CUDA_LAUNCH_CHECK(stream, "training.morton.joint_shN_encode8");
         } else if (bits == 16) {
             joint_permute_shN_bounds_cu<16><<<grid, kThreads, 0, stream>>>(
@@ -414,10 +419,74 @@ namespace lfs::training::kernels {
             LFS_CUDA_LAUNCH_CHECK(stream, "training.morton.joint_shN_bounds16");
             joint_permute_shN_encode_cu<16><<<grid, kThreads, 0, stream>>>(
                 src_packed, src_bounds, dst_packed, dst_bounds, perm, n_prims,
-                slots_per_primitive);
+                slots_per_primitive, 0, slots_per_primitive);
             LFS_CUDA_LAUNCH_CHECK(stream, "training.morton.joint_shN_encode16");
         } else {
             throw std::runtime_error("joint permute shN: bits must be 8 or 16");
+        }
+    }
+
+    void launch_joint_permute_shN_grouped(
+        std::uint8_t* packed,
+        const float* src_bounds,
+        float* dst_bounds,
+        const std::int64_t* perm,
+        int n_prims,
+        int slots_per_primitive,
+        int bits,
+        std::uint8_t* group_scratch,
+        std::size_t group_scratch_bytes,
+        cudaStream_t stream) {
+        if (n_prims <= 0 || slots_per_primitive <= 0 || packed == nullptr || src_bounds == nullptr ||
+            dst_bounds == nullptr || perm == nullptr || group_scratch == nullptr) {
+            return;
+        }
+        if (bits != 8 && bits != 16) {
+            throw std::runtime_error("joint permute shN: bits must be 8 or 16");
+        }
+        stream = resolve_stream(stream);
+        const int grid = grid_for_prims(n_prims);
+        constexpr std::size_t R = lfs::core::kShReorderSize;
+        const std::size_t tiles = (static_cast<std::size_t>(n_prims) + R - 1) / R;
+        const std::size_t slot_tile_bytes =
+            R * 4 * static_cast<std::size_t>(lfs::training::joint_adam::bytes_per_cell(bits));
+        const std::size_t slots_per_group =
+            std::clamp<std::size_t>(group_scratch_bytes / (tiles * slot_tile_bytes), 1,
+                                    static_cast<std::size_t>(slots_per_primitive));
+        if (group_scratch_bytes < tiles * slot_tile_bytes) {
+            throw std::invalid_argument("joint permute shN: group scratch smaller than one slot");
+        }
+
+        if (bits == 8) {
+            joint_permute_shN_bounds_cu<8><<<grid, kThreads, 0, stream>>>(
+                packed, src_bounds, dst_bounds, perm, n_prims, slots_per_primitive);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.morton.joint_shN_bounds_grouped8");
+        } else {
+            joint_permute_shN_bounds_cu<16><<<grid, kThreads, 0, stream>>>(
+                packed, src_bounds, dst_bounds, perm, n_prims, slots_per_primitive);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.morton.joint_shN_bounds_grouped16");
+        }
+
+        const std::size_t dst_pitch = static_cast<std::size_t>(slots_per_primitive) * slot_tile_bytes;
+        for (std::size_t first = 0; first < static_cast<std::size_t>(slots_per_primitive);
+             first += slots_per_group) {
+            const std::size_t last =
+                std::min(first + slots_per_group, static_cast<std::size_t>(slots_per_primitive));
+            const std::size_t width = (last - first) * slot_tile_bytes;
+            LFS_CUDA_CHECK(cudaMemsetAsync(group_scratch, 0, width * tiles, stream));
+            if (bits == 8) {
+                joint_permute_shN_encode_cu<8><<<grid, kThreads, 0, stream>>>(
+                    packed, src_bounds, group_scratch, dst_bounds, perm, n_prims,
+                    slots_per_primitive, static_cast<int>(first), static_cast<int>(last));
+                LFS_CUDA_LAUNCH_CHECK(stream, "training.morton.joint_shN_encode_grouped8");
+            } else {
+                joint_permute_shN_encode_cu<16><<<grid, kThreads, 0, stream>>>(
+                    packed, src_bounds, group_scratch, dst_bounds, perm, n_prims,
+                    slots_per_primitive, static_cast<int>(first), static_cast<int>(last));
+                LFS_CUDA_LAUNCH_CHECK(stream, "training.morton.joint_shN_encode_grouped16");
+            }
+            LFS_CUDA_CHECK(cudaMemcpy2DAsync(packed + first * slot_tile_bytes, dst_pitch, group_scratch,
+                                             width, width, tiles, cudaMemcpyDeviceToDevice, stream));
         }
     }
 

@@ -2,6 +2,12 @@
 
 This tree is vendored under `external/OpenMesh`. Record LichtFeld-only deltas here so upstream syncs do not silently drop them.
 
+## VCICompiler.cmake — valid cache type for compiler warnings
+
+- **File:** `cmake-library/VCI/VCICompiler.cmake`
+- **Delta:** Replace the invalid `CACHE STRINGLIST` type with `CACHE STRING`. CMake stores semicolon-separated lists as strings; the compiler flags are unchanged.
+- **Why:** Avoid CMake's warning about implicitly converting `STRINGLIST` to `STRING` on fresh configurations.
+
 ## Timer.cc — buffer size + snprintf for float formats
 
 - **File:** `src/OpenMesh/Tools/Utils/Timer.cc`

@@ -4,21 +4,19 @@
 
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <gtest/gtest.h>
 
 #include <cstdint>
 #include <cstring>
-#include <optional>
 #include <vector>
 
 namespace {
     using lfs::core::DataType;
     using lfs::core::Device;
-    using lfs::core::gpu_backend_available;
     using lfs::core::gpu_backend_of;
     using lfs::core::GpuBackend;
-    using lfs::core::GpuBackendScope;
     using lfs::core::Tensor;
     using lfs::core::TensorShape;
 
@@ -130,18 +128,7 @@ namespace {
     };
 } // namespace
 
-class TensorCudaByteImage : public ::testing::Test {
-protected:
-    void SetUp() override {
-        if (!gpu_backend_available(GpuBackend::CUDA)) {
-            GTEST_SKIP() << "CUDA tensor backend required";
-            return;
-        }
-        cuda_scope_.emplace(GpuBackend::CUDA);
-    }
-
-    std::optional<GpuBackendScope> cuda_scope_;
-};
+class TensorCudaByteImage : public lfs::test::CudaBackendTest {};
 
 TEST_F(TensorCudaByteImage, UInt8CatLastDimRgbPlusOpaqueAlpha) {
     const Tensor rgb = to_cuda(cpu_u8(kRgbHwc, {2, 2, 3}));

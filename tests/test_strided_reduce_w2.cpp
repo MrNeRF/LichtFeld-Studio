@@ -10,6 +10,7 @@
 #include "core/alloc_counter.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <cmath>
 #include <cuda_runtime.h>
@@ -86,7 +87,9 @@ namespace {
 // Correctness across shape classes
 // ---------------------------------------------------------------------------
 
-TEST(StridedReduceW2, SumDim0Rank3MatchesReference) {
+class StridedReduceW2 : public lfs::test::CudaBackendTest {};
+
+TEST_F(StridedReduceW2, SumDim0Rank3MatchesReference) {
     PathGuard g;
     // [32, 64, 512] reduce dim0 — inner = 64*512 = 32768 >= 256
     auto t = sequential_cuda({32, 64, 512});
@@ -96,7 +99,7 @@ TEST(StridedReduceW2, SumDim0Rank3MatchesReference) {
     expect_close(got, ref, 1e-3f, 5e-2f, "rank3 dim0");
 }
 
-TEST(StridedReduceW2, SumDim1Rank3MatchesReference) {
+TEST_F(StridedReduceW2, SumDim1Rank3MatchesReference) {
     PathGuard g;
     auto t = sequential_cuda({16, 128, 512});
     auto got = t.sum({1}, /*keepdim=*/false);
@@ -105,7 +108,7 @@ TEST(StridedReduceW2, SumDim1Rank3MatchesReference) {
     expect_close(got, ref, 1e-3f, 5e-2f, "rank3 dim1");
 }
 
-TEST(StridedReduceW2, ForceStridedMatchesForceTranspose) {
+TEST_F(StridedReduceW2, ForceStridedMatchesForceTranspose) {
     PathGuard g;
     auto t = sequential_cuda({8, 64, 1024});
 
@@ -129,7 +132,7 @@ TEST(StridedReduceW2, ForceStridedMatchesForceTranspose) {
     expect_close(strided, transposed, 1e-3f, 5e-2f, "strided vs transpose");
 }
 
-TEST(StridedReduceW2, MeanMaxMinDim0) {
+TEST_F(StridedReduceW2, MeanMaxMinDim0) {
     PathGuard g;
     auto t = sequential_cuda({64, 8, 256});
     expect_close(t.mean({0}, false),
@@ -142,7 +145,7 @@ TEST(StridedReduceW2, MeanMaxMinDim0) {
     cuda_ok();
 }
 
-TEST(StridedReduceW2, KeepdimShape) {
+TEST_F(StridedReduceW2, KeepdimShape) {
     PathGuard g;
     auto t = sequential_cuda({8, 16, 256});
     auto got = t.sum({1}, /*keepdim=*/true);
@@ -152,7 +155,7 @@ TEST(StridedReduceW2, KeepdimShape) {
     cuda_ok();
 }
 
-TEST(StridedReduceW2, Float16SumMatchesFloat32) {
+TEST_F(StridedReduceW2, Float16SumMatchesFloat32) {
     PathGuard g;
     auto f32 = sequential_cuda({16, 32, 256});
     auto f16 = f32.to(DataType::Float16);
@@ -162,7 +165,7 @@ TEST(StridedReduceW2, Float16SumMatchesFloat32) {
     expect_close(r16, r32, 1e-2f, 1e-1f, "f16 sum");
 }
 
-TEST(StridedReduceW2, LargeInnerFullCoverage) {
+TEST_F(StridedReduceW2, LargeInnerFullCoverage) {
     // Guards against SM-capping grid_x without a grid-stride loop.
     PathGuard g;
     tensor_ops::set_reduce_path_override_for_testing(
@@ -182,7 +185,7 @@ TEST(StridedReduceW2, LargeInnerFullCoverage) {
 // Path / alloc: shapes where strided_fast wins must not take transpose path
 // ---------------------------------------------------------------------------
 
-TEST(StridedReduceW2, NoFullTransposeCopyWhenStridedWins) {
+TEST_F(StridedReduceW2, NoFullTransposeCopyWhenStridedWins) {
     PathGuard g;
     // large inner, moderate reduce → heuristic prefers strided
     constexpr size_t outer = 4, reduce = 256, inner = 1024;
@@ -206,7 +209,7 @@ TEST(StridedReduceW2, NoFullTransposeCopyWhenStridedWins) {
     (void)delta;
 }
 
-TEST(StridedReduceW2, HeuristicPrefersTransposeOnShortReduceWideOutput) {
+TEST_F(StridedReduceW2, HeuristicPrefersTransposeOnShortReduceWideOutput) {
     PathGuard g;
     // Measured edge: reduce<=64, output>=8192, numel<=1M → transpose
     // [8,64,1024] dim1: outer=8 reduce=64 inner=1024
@@ -223,7 +226,7 @@ TEST(StridedReduceW2, HeuristicPrefersTransposeOnShortReduceWideOutput) {
     expect_close(result, ref, 1e-3f, 5e-2f, "transpose-class correctness");
 }
 
-TEST(StridedReduceW2, HeuristicPrefersStridedOnHugeReduce) {
+TEST_F(StridedReduceW2, HeuristicPrefersStridedOnHugeReduce) {
     PathGuard g;
     // Huge reduce: strided avoids full-tensor copy (measured 18µs vs 38–52µs transpose)
     auto t = sequential_cuda({4, 2048, 256});

@@ -20,6 +20,8 @@ namespace lfs::core::internal {
         bool capability_provided(const VkDeviceCaps& caps, const std::string_view capability) {
             if (capability == "Shader" || capability == "Int64" || capability == "Int16" ||
                 capability == "PhysicalStorageBufferAddresses" ||
+                capability == "GroupNonUniform" || capability == "GroupNonUniformShuffle" ||
+                capability == "GroupNonUniformArithmetic" ||
                 capability == "StorageBuffer16BitAccess" ||
                 capability == "StorageBuffer8BitAccess") {
                 return true;
@@ -27,12 +29,20 @@ namespace lfs::core::internal {
             if (capability == "SignedZeroInfNanPreserve") {
                 return true;
             }
+            if (capability == "Float64")
+                return caps.shader_float64;
             if (capability == "Float16") {
                 return caps.shader_float16;
             }
             if (capability == "AtomicFloat32AddEXT") {
                 return caps.shader_atomic_float;
             }
+            if (capability == "CooperativeMatrixKHR")
+                return caps.cooperative_matrix;
+            if (capability == "VulkanMemoryModel")
+                return caps.vulkan_memory_model;
+            if (capability == "VulkanMemoryModelDeviceScope")
+                return caps.vulkan_memory_model_device_scope;
             return false;
         }
     } // namespace
@@ -57,7 +67,7 @@ namespace lfs::core::internal {
         auto iterator = pipelines_.find(key);
         if (iterator == pipelines_.end()) {
             iterator = pipelines_
-                           .emplace(key, load(module, 256,
+                           .emplace(key, load(module, module == "export_kmeans_screen" ? 32 : 256,
                                               expected_push_constant_size,
                                               constants))
                            .first;
@@ -150,6 +160,7 @@ namespace lfs::core::internal {
             return;
         }
         shutting_down_ = true;
+        expressions_.clear();
         for (auto& [name, pipeline] : pipelines_) {
             (void)name;
             if (pipeline.pipeline != VK_NULL_HANDLE) {

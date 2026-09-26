@@ -16,6 +16,7 @@
 #include "core/tensor/backend/cuda/runtime/gpu_slab_allocator.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "core/tensor/backend/cuda/runtime/size_bucketed_pool.hpp"
+#include "cuda_backend_test.hpp"
 
 using namespace lfs::core;
 
@@ -86,9 +87,10 @@ namespace {
 
 } // namespace
 
-class TensorMultiStreamTest : public ::testing::Test {
+class TensorMultiStreamTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
         auto& pinned = PinnedMemoryAllocator::instance();
         original_cache_limit_ = pinned.cache_limit_bytes();
@@ -97,6 +99,9 @@ protected:
     }
 
     void TearDown() override {
+        if (IsSkipped()) {
+            return;
+        }
         auto& pinned = PinnedMemoryAllocator::instance();
         pinned.set_force_fallback_for_testing(false);
         pinned.set_enabled(true);

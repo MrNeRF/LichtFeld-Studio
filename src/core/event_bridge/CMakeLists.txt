@@ -16,13 +16,16 @@ add_library(lfs_event_bridge SHARED
 target_include_directories(lfs_event_bridge
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/src/core/include
+    PRIVATE
+        # Private tensor headers live under src/. Keep that path off the public
+        # interface lfs_core re-exports through this target.
+        ${CMAKE_SOURCE_DIR}/src
 )
 
 target_link_libraries(lfs_event_bridge
     PUBLIC
-        CUDA::cudart
+        $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::cudart>
     PRIVATE
         lfs_logger
         lfs_geometry

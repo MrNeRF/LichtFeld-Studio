@@ -447,6 +447,68 @@ def test_plugin_marketplace_lifecycle_callback_invalidates_discovery_cache(
     assert panel._discover_cache is None
 
 
+def test_plugin_marketplace_resubscribes_manager_callbacks_after_unmount(
+    plugin_marketplace_module,
+):
+    module, _state = plugin_marketplace_module
+    panel = module.PluginMarketplacePanel()
+
+    class ManagerStub:
+        def __init__(self):
+            self.loaded = []
+            self.unloaded = []
+            self.changed = []
+
+        def on_plugin_loaded(self, callback):
+            self.loaded.append(callback)
+
+        def on_plugin_unloaded(self, callback):
+            self.unloaded.append(callback)
+
+        def on_plugin_changed(self, callback):
+            self.changed.append(callback)
+
+        def remove_plugin_loaded_callback(self, callback):
+            self.loaded.remove(callback)
+
+        def remove_plugin_unloaded_callback(self, callback):
+            self.unloaded.remove(callback)
+
+        def remove_plugin_changed_callback(self, callback):
+            self.changed.remove(callback)
+
+    manager = ManagerStub()
+    panel._plugin_manager = manager
+
+    panel._subscribe_manager_callbacks()
+    panel._subscribe_manager_callbacks()
+    assert [len(manager.loaded), len(manager.unloaded), len(manager.changed)] == [1, 1, 1]
+
+    panel._unsubscribe_manager_callbacks()
+    assert [manager.loaded, manager.unloaded, manager.changed] == [[], [], []]
+
+    panel._subscribe_manager_callbacks()
+    assert [len(manager.loaded), len(manager.unloaded), len(manager.changed)] == [1, 1, 1]
+
+
+def test_plugin_marketplace_rediscovers_plugins_when_reopened(plugin_marketplace_module, monkeypatch):
+    module, _state = plugin_marketplace_module
+    monkeypatch.setattr(module.lf.ui, "get_current_language", lambda: "en", raising=False)
+    panel = module.PluginMarketplacePanel()
+    for name in ("_subscribe_manager_callbacks", "_sync_view_mode_controls", "_subscribe_reactive_state",
+                 "_ensure_loaded", "_request_model_update"):
+        setattr(panel, name, lambda *_args: None)
+    doc = _DocStub({})
+    doc.add_event_listener = lambda *_args: None
+    panel._discover_cache = [object()]
+    panel._installed_state_dirty = False
+
+    panel.on_mount(doc)
+
+    assert panel._discover_cache is None
+    assert panel._installed_state_dirty is True
+
+
 def test_plugin_marketplace_refresh_is_cached_across_catalog_instances(
     plugin_marketplace_module,
     monkeypatch,

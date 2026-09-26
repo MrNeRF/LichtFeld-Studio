@@ -2,15 +2,20 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include <cmath>
 #include <gtest/gtest.h>
 #include <torch/torch.h>
 
 using namespace lfs::core;
 
-class ExtendedUnaryOpsVsTorchTest : public ::testing::Test {
+class ExtendedUnaryOpsVsTorchTest : public lfs::test::CudaDeviceTest {
 protected:
     void SetUp() override {
+        CudaDeviceTest::SetUp();
+        if (IsSkipped()) {
+            return;
+        }
         cudaSetDevice(0);
     }
 

@@ -10,6 +10,7 @@
 #include "core/tensor.hpp"
 #include "core/tensor/backend/cuda/runtime/gpu_slab_allocator.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <atomic>
 #include <cuda_runtime.h>
@@ -48,7 +49,9 @@ namespace {
 // 3.7 — empty CUDA tensor must not touch the slab allocator
 // ---------------------------------------------------------------------------
 
-TEST(AllocatorHygiene, EmptyCudaTensorDoesNotAllocateSlabBlock) {
+class AllocatorHygiene : public lfs::test::CudaBackendTest {};
+
+TEST_F(AllocatorHygiene, EmptyCudaTensorDoesNotAllocateSlabBlock) {
     // Warm the pool so later zeros/empty of real sizes do not confound counts.
     {
         auto warm = Tensor::zeros({256}, Device::GPU, DataType::Float32);
@@ -90,7 +93,7 @@ TEST(AllocatorHygiene, EmptyCudaTensorDoesNotAllocateSlabBlock) {
 // 3.4 — fully-empty slabs return to the driver on trim_cached_memory
 // ---------------------------------------------------------------------------
 
-TEST(AllocatorHygiene, TrimCachedMemoryFreesFullyEmptySlabs) {
+TEST_F(AllocatorHygiene, TrimCachedMemoryFreesFullyEmptySlabs) {
     auto& pool = CudaMemoryPool::instance();
     auto& slab = GPUSlabAllocator::instance();
 
@@ -129,7 +132,7 @@ TEST(AllocatorHygiene, TrimCachedMemoryFreesFullyEmptySlabs) {
         << reserved_peak << " after=" << reserved_after << ")";
 }
 
-TEST(AllocatorHygiene, FailedSlabReclaimRestoresOwnershipAndAccounting) {
+TEST_F(AllocatorHygiene, FailedSlabReclaimRestoresOwnershipAndAccounting) {
     auto& pool = CudaMemoryPool::instance();
     auto& slab = GPUSlabAllocator::instance();
 
@@ -164,7 +167,7 @@ TEST(AllocatorHygiene, FailedSlabReclaimRestoresOwnershipAndAccounting) {
 // 3.3 — op temps route through the pool (count_nonzero correctness + hygiene)
 // ---------------------------------------------------------------------------
 
-TEST(AllocatorHygiene, CountNonzeroPoolPathCorrectAndReusable) {
+TEST_F(AllocatorHygiene, CountNonzeroPoolPathCorrectAndReusable) {
     // Correctness after routing d_count through CudaMemoryPool instead of bare
     // cudaMalloc/cudaFree.
     auto zeros = Tensor::zeros({128}, Device::GPU, DataType::Float32);
@@ -195,7 +198,7 @@ TEST(AllocatorHygiene, CountNonzeroPoolPathCorrectAndReusable) {
     }
 }
 
-TEST(AllocatorHygiene, EmptyAndCountNonzeroCompose) {
+TEST_F(AllocatorHygiene, EmptyAndCountNonzeroCompose) {
     auto empty = Tensor::empty({0}, Device::GPU, DataType::Float32);
     EXPECT_EQ(empty.count_nonzero(), 0u);
 }

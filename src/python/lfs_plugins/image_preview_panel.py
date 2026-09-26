@@ -157,7 +157,7 @@ class ImagePreviewPanel(Panel):
     def _get_title(self) -> str:
         if self._image_paths:
             dirname = self._image_paths[0].parent.name
-            return f"{dirname} \u00b7 {self._current_index + 1} / {len(self._image_paths)}"
+            return f"{dirname} \u00b7 {self._current_index + 1:,} / {len(self._image_paths):,}"
         return lf.ui.tr("image_preview.title")
 
     def on_bind_model(self, ctx):
@@ -297,6 +297,13 @@ class ImagePreviewPanel(Panel):
 
         self._image_paths = [Path(p) for p in image_paths]
         self._mask_paths = [Path(p) if p else None for p in mask_paths] if mask_paths else [None] * len(image_paths)
+        live_paths = {
+            str(path)
+            for path in self._image_paths + [p for p in self._mask_paths if p is not None]
+        }
+        self._image_info_cache = {
+            path: info for path, info in self._image_info_cache.items() if path in live_paths
+        }
         self._path_stat_cache = {}
         for path in self._image_paths + [p for p in self._mask_paths if p is not None]:
             try:
@@ -1011,7 +1018,7 @@ class ImagePreviewPanel(Panel):
                     button.set_attribute("disabled", "")
 
     def _update_status(self, doc, has_images: bool):
-        ids = ("st-w", "st-h", "st-ch", "st-zoom", "st-counter")
+        ids = ("st-w", "st-h", "st-ch", "st-zoom", "st-position")
         if not has_images:
             for sid in ids:
                 _set_text(doc, sid, "")
@@ -1024,7 +1031,7 @@ class ImagePreviewPanel(Panel):
         _set_text(doc, "st-h", f"H {h}" if h > 0 else "")
         _set_text(doc, "st-ch", f"CH {c}")
         _set_text(doc, "st-zoom", f"{lf.ui.tr('image_preview.zoom')} {self._get_zoom_display()}")
-        _set_text(doc, "st-counter", f"{self._current_index + 1} / {len(self._image_paths)}")
+        _set_text(doc, "st-position", f"{self._current_index + 1:,} / {len(self._image_paths):,}")
 
     # -- Color Picker --
 

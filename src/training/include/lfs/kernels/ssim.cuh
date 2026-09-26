@@ -108,21 +108,11 @@ namespace lfs::training::kernels {
         lfs::core::Tensor& error_map,
         bool contrast_structure_only = false);
 
-    // Manual SSIM backward (no autograd) - computes gradient w.r.t. img1
-    lfs::core::Tensor ssim_backward(
-        const SSIMContext& ctx,
-        float grad_loss); // Gradient of loss w.r.t. SSIM value (scalar)
-
     // Optimized version with pre-allocated workspace
     lfs::core::Tensor ssim_backward(
         const SSIMContext& ctx,
         SSIMWorkspace& workspace,
         float grad_loss);
-
-    // Per-pixel gradient version for masked SSIM (d(loss)/d(ssim_map) per pixel)
-    lfs::core::Tensor ssim_backward_with_grad_map(
-        const SSIMContext& ctx,
-        const lfs::core::Tensor& dL_dmap); // [N, C, H, W] per-pixel gradient
 
     // ============================================================================
     // Fused L1+SSIM Loss

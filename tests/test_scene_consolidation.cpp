@@ -12,7 +12,6 @@
 #include "io/formats/ply.hpp"
 #include "io/splat_chapter.hpp"
 
-#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -125,10 +124,6 @@ namespace {
 class SceneConsolidationExtractTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        int device_count = 0;
-        if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
         const auto path = bike_ply_path();
         if (!std::filesystem::exists(path)) {
             GTEST_SKIP() << "tests/data/bike.ply is not available";
@@ -233,8 +228,14 @@ TEST_F(SceneConsolidationExtractTest, SingleVisibleNodeAliasesWithoutAllocatorUs
 }
 
 TEST_F(SceneConsolidationExtractTest, WorkerBuildMatchesSynchronousCombinedModel) {
-    auto first = std::make_shared<SplatData>(bike_.clone());
-    auto second = std::make_shared<SplatData>(bike_.clone());
+    // Scene hands multi-node models above one million visible splats to its
+    // worker, so the synchronous reference must stay below that.
+    const size_t bike_size = static_cast<size_t>(bike_.size());
+    const size_t input_size = std::min(bike_size, size_t{500'000});
+    const auto input = lfs::core::extract_by_mask(
+        bike_, range_mask(bike_size, 0, input_size, bike_.means_raw().device()));
+    auto first = std::make_shared<SplatData>(input.clone());
+    auto second = std::make_shared<SplatData>(input.clone());
     const size_t first_size = static_cast<size_t>(first->size());
 
     std::vector<size_t> allocation_shape_rows;
@@ -571,9 +572,6 @@ TEST_F(SceneConsolidationExtractTest, ReturnsNullWhenNotConsolidatedOrUnknown) {
 }
 
 TEST(SceneActiveShTest, SourceRetentionPreservesEditableModelsAndResetsForNewScene) {
-    int device_count = 0;
-    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0)
-        GTEST_SKIP() << "CUDA device unavailable";
     auto model = SplatData(1,
                            Tensor::zeros({2, 3}, Device::CUDA),
                            Tensor::zeros({2, 1, 3}, Device::CUDA),
@@ -597,10 +595,6 @@ TEST(SceneActiveShTest, SourceRetentionPreservesEditableModelsAndResetsForNewSce
 }
 
 TEST(SceneActiveShTest, PreservesInactiveDataAndNodeLimitsThroughConsolidationAndCompaction) {
-    int device_count = 0;
-    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-        GTEST_SKIP() << "CUDA device unavailable";
-    }
     Scene scene;
     std::vector<Uuid> uuids;
     std::vector<CpuAttrs> attributes;

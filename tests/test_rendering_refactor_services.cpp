@@ -12,6 +12,7 @@
 #include "core/scene.hpp"
 #include "core/services.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 #include "input/key_codes.hpp"
 #include "io/cache_image_loader.hpp"
 #include "operation/undo_history.hpp"
@@ -42,7 +43,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <cuda_runtime.h>
 #include <filesystem>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
@@ -195,10 +195,6 @@ namespace lfs::vis {
             initialized = true;
         }
 
-        bool has_cuda_device() {
-            int device_count = 0;
-            return cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0;
-        }
     } // namespace
 
     class RenderingManagerEventsTest : public ::testing::Test {
@@ -329,10 +325,6 @@ namespace lfs::vis {
     }
 
     TEST(GTComparisonCache, DisplayConversionCopiesCudaUInt8ChwToCpu) {
-        if (!has_cuda_device()) {
-            GTEST_SKIP() << "CUDA device required";
-        }
-
         using lfs::core::DataType;
         using lfs::core::Device;
         using lfs::core::Tensor;
@@ -1062,6 +1054,25 @@ namespace lfs::vis {
 
             auto scoped_state = scene_state;
             const auto& node = i == 0 ? *left_node : *right_node;
+            // The Vulkan path starts with the full scene request, then replaces
+            // its transform array with the owned node's single world transform.
+            // Aggregate SH limits must not survive that replacement.
+            auto request = buildViewportRenderRequest(
+                ctx, {320, 480}, &viewport,
+                i == 0 ? SplitViewPanelId::Left : SplitViewPanelId::Right,
+                {static_cast<int>(i) * 320, 0}, ctx.render_size);
+            ASSERT_EQ(request.scene.node_active_sh_degrees, (std::vector<int>{1, 2}));
+            ASSERT_EQ(request.scene.model_transforms->size(), 2u);
+            applyPlyComparisonNodeScope(
+                request.scene, request.filters, request.overlay, ctx, node, static_cast<int>(i));
+            const std::vector<glm::mat4> transforms{panel.content.model_transform};
+            request.scene.model_transforms = &transforms;
+            EXPECT_EQ(request.scene.model_transforms->size(), 1u);
+            EXPECT_EQ(request.scene.transform_indices, nullptr);
+            EXPECT_TRUE(request.scene.node_visibility_mask.empty());
+            EXPECT_TRUE(request.scene.node_active_sh_degrees.empty());
+            EXPECT_EQ(node.model->get_active_sh_degree(), static_cast<int>(i) + 1);
+            EXPECT_EQ(scene_state.node_active_sh_degrees, (std::vector<int>{1, 2}));
             scopeSceneRenderStateToVisibleSplatNode(
                 scoped_state, scene, node, static_cast<int>(i), panel.content.model_transform);
             EXPECT_EQ(scoped_state.node_active_sh_degrees,
@@ -2445,6 +2456,25 @@ namespace lfs::vis {
         EXPECT_EQ(request.render.voxel_size, settings.voxel_size);
     }
 
+    // Catches a preview timer that never reports the next refresh (the idle loop
+    // then refreshes only on unrelated redraws), reports it as due right away
+    // (the loop spins), or leaves the last training state unshown after a pause.
+    TEST(ViewportFrameLifecycleServiceTest, TrainingRefreshRunsOnItsOwnIntervalAndOnceAfterStopping) {
+        ViewportFrameLifecycleService service;
+        constexpr float interval = 0.05f;
+        EXPECT_EQ(service.handleTrainingRefresh(true, interval), DirtyFlag::SPLATS);
+        EXPECT_EQ(service.handleTrainingRefresh(true, interval), 0u);
+        const double wait = service.secondsUntilTrainingRefresh(interval);
+        EXPECT_GT(wait, 0.0);
+        EXPECT_LE(wait, static_cast<double>(interval));
+        std::this_thread::sleep_for(std::chrono::duration<double>(wait + 0.005));
+        EXPECT_EQ(service.secondsUntilTrainingRefresh(interval), 0.0);
+        EXPECT_EQ(service.handleTrainingRefresh(true, interval), DirtyFlag::SPLATS);
+
+        EXPECT_EQ(service.handleTrainingRefresh(false, interval), DirtyFlag::SPLATS);
+        EXPECT_EQ(service.handleTrainingRefresh(false, interval), 0u);
+    }
+
     TEST(ViewportFrameLifecycleServiceTest, ResizeActiveDefersFullRefreshUntilDebounceCompletes) {
         ViewportFrameLifecycleService service;
 
@@ -2583,6 +2613,49 @@ namespace lfs::vis {
         service.resetModelTracking();
         EXPECT_TRUE(service.handleModelChange(0x1234, artifacts, Source::Training).changed);
     }
+
+    enum class DepthStorage { CPU,
+                              CUDA,
+                              Vulkan };
+    class ViewportDepthBackendTest : public ::testing::TestWithParam<DepthStorage> {};
+
+    TEST_P(ViewportDepthBackendTest, SamplesStridedDepthOnTheStorageBackend) {
+        const bool on_cpu = GetParam() == DepthStorage::CPU;
+        const auto backend = GetParam() == DepthStorage::Vulkan ? core::GpuBackend::Vulkan
+                                                                : core::GpuBackend::CUDA;
+        if (!on_cpu && !core::gpu_backend_available(backend)) {
+            GTEST_SKIP() << "Requested GPU backend unavailable";
+        }
+        core::GpuBackendScope scope(backend);
+        auto depth = core::Tensor::from_vector(
+            {99.0f, 2.0f, 3.0f, 99.0f, 99.0f, 4.0f, 5.0f, 99.0f},
+            {1, 2, 4}, core::Device::CPU);
+        if (!on_cpu) {
+            depth = depth.gpu();
+        }
+        depth = depth.slice(2, 1, 3);
+        ASSERT_FALSE(depth.is_contiguous());
+        const auto original_backend = core::gpu_backend_of(depth);
+
+        lfs::rendering::FrameMetadata metadata{};
+        metadata.valid = true;
+        metadata.depth_panel_count = 1;
+        metadata.depth_panels[0].depth = std::make_shared<core::Tensor>(std::move(depth));
+        ViewportArtifactService artifacts;
+        artifacts.updateFromImageOutput({}, metadata, {4, 4}, true);
+
+        // The selected default is independent of the storage being sampled.
+        core::GpuBackendScope other(backend == core::GpuBackend::CUDA ? core::GpuBackend::Vulkan
+                                                                      : core::GpuBackend::CUDA);
+        EXPECT_FLOAT_EQ(artifacts.sampleLinearDepthAt(0, 0, {4, 4}), 2.0f);
+        EXPECT_FLOAT_EQ(artifacts.sampleLinearDepthAt(3, 0, {4, 4}), 3.0f);
+        EXPECT_FLOAT_EQ(artifacts.sampleLinearDepthAt(0, 3, {4, 4}), 4.0f);
+        EXPECT_FLOAT_EQ(artifacts.sampleLinearDepthAt(3, 3, {4, 4}), 5.0f);
+        EXPECT_EQ(core::gpu_backend_of(*metadata.depth_panels[0].depth), original_backend);
+    }
+
+    INSTANTIATE_TEST_SUITE_P(StorageBackends, ViewportDepthBackendTest,
+                             ::testing::Values(DepthStorage::CPU, DepthStorage::CUDA, DepthStorage::Vulkan));
 
     TEST(ViewportArtifactServiceTest, ExplicitSplitPanelSamplingUsesPanelLocalCoordinates) {
         ViewportArtifactService artifacts;

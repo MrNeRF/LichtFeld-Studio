@@ -4,6 +4,7 @@
 
 #include "gui/global_context_menu.hpp"
 #include "core/logger.hpp"
+#include "gui/context_menu_placement.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
@@ -59,6 +60,7 @@ namespace lfs::vis::gui {
             handle.RegisterMember("is_label", &ContextMenuItem::is_label);
             handle.RegisterMember("is_submenu_item", &ContextMenuItem::is_submenu_item);
             handle.RegisterMember("is_active", &ContextMenuItem::is_active);
+            handle.RegisterMember("icon", &ContextMenuItem::icon);
         }
         ctor.RegisterArray<std::vector<ContextMenuItem>>();
         ctor.Bind("items", &items_);
@@ -110,6 +112,10 @@ namespace lfs::vis::gui {
         has_theme_signature_ = false;
         width_ = 0;
         height_ = 0;
+        last_menu_left_dp_ = -1.0f;
+        last_menu_top_dp_ = -1.0f;
+        last_menu_min_width_dp_ = -1.0f;
+        last_menu_max_width_dp_ = -1.0f;
         render_needed_ = true;
         last_mouse_valid_ = false;
         if (mgr_)
@@ -176,6 +182,8 @@ namespace lfs::vis::gui {
         focus_first_item_ = true;
         render_needed_ = true;
         last_mouse_valid_ = false;
+        last_menu_left_dp_ = -1.0f;
+        last_menu_top_dp_ = -1.0f;
     }
 
     std::string GlobalContextMenu::pollResult() {
@@ -240,6 +248,12 @@ namespace lfs::vis::gui {
             render_needed_ = true;
         }
 
+        if (input.mouse_wheel != 0.0f || input.mouse_wheel_x != 0.0f) {
+            ctx_->ProcessMouseWheel(
+                Rml::Vector2f(-input.mouse_wheel_x, -input.mouse_wheel), mods);
+            render_needed_ = true;
+        }
+
         if (input.mouse_clicked[1]) {
             hide();
             return;
@@ -290,6 +304,9 @@ namespace lfs::vis::gui {
                 items_ = pending_items_;
                 menu_model_.DirtyVariable("items");
                 const float dp = std::max(mgr_ ? mgr_->getDpRatio() : 1.0f, 1.0f);
+                // Keep the initial layout near the pointer. Once RmlUi has
+                // measured the menu, the final position is clamped to the
+                // viewport using the actual menu bounds.
                 el_ctx_menu_->SetProperty("left", std::format("{:.0f}dp", (pending_x_ - screen_x) / dp));
                 el_ctx_menu_->SetProperty("top", std::format("{:.0f}dp", (pending_y_ - screen_y) / dp));
                 el_ctx_menu_->SetClass("visible", true);
@@ -314,6 +331,18 @@ namespace lfs::vis::gui {
         if (!mgr_ || !mgr_->getVulkanRenderInterface())
             return;
 
+        const float dp = std::max(mgr_->getDpRatio(), 1.0f);
+        const float available_width_dp = std::max(1.0f, static_cast<float>(w) / dp - 8.0f);
+        const float minimum_width_dp = std::min(150.0f, available_width_dp);
+        if (minimum_width_dp != last_menu_min_width_dp_ ||
+            available_width_dp != last_menu_max_width_dp_) {
+            el_ctx_menu_->SetProperty("min-width", std::format("{:.2f}dp", minimum_width_dp));
+            el_ctx_menu_->SetProperty("max-width", std::format("{:.2f}dp", available_width_dp));
+            last_menu_min_width_dp_ = minimum_width_dp;
+            last_menu_max_width_dp_ = available_width_dp;
+            render_needed_ = true;
+        }
+
         if (w != width_ || h != height_) {
             width_ = w;
             height_ = h;
@@ -329,6 +358,27 @@ namespace lfs::vis::gui {
             focus_first_item_ = false;
             ctx_->Update();
             refresh_cache = true;
+        }
+
+        // Position only after layout, so flipping and clamping use the real
+        // dimensions of the localized menu and its current font/theme.
+        if (open_ && el_ctx_menu_) {
+            const float menu_dp = std::max(mgr_->getDpRatio(), 1.0f);
+            const auto menu_size = el_ctx_menu_->GetBox().GetSize(Rml::BoxArea::Border);
+            const auto placement = placeContextMenu(
+                pending_x_, pending_y_, screen_x, screen_y,
+                static_cast<float>(w), static_cast<float>(h),
+                menu_size.x, menu_size.y, 4.0f * menu_dp);
+            const float left_dp = placement.left / menu_dp;
+            const float top_dp = placement.top / menu_dp;
+            if (left_dp != last_menu_left_dp_ || top_dp != last_menu_top_dp_) {
+                el_ctx_menu_->SetProperty("left", std::format("{:.2f}dp", left_dp));
+                el_ctx_menu_->SetProperty("top", std::format("{:.2f}dp", top_dp));
+                last_menu_left_dp_ = left_dp;
+                last_menu_top_dp_ = top_dp;
+                ctx_->Update();
+                refresh_cache = true;
+            }
         }
 
         render_needed_ = false;
@@ -355,6 +405,9 @@ namespace lfs::vis::gui {
     void GlobalContextMenu::EventListener::ProcessEvent(Rml::Event& event) {
         assert(owner);
         auto* target = event.GetTargetElement();
+        while (target && target != owner->el_ctx_menu_ && target->GetId() != "backdrop" &&
+               !target->HasAttribute("data-ctx-action"))
+            target = target->GetParentNode();
         if (!target)
             return;
 

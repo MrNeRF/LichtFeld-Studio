@@ -3,7 +3,7 @@
 
 #include "components/bilateral_grid.hpp"
 #include "core/tensor.hpp"
-#include "tensor_hardening_test_utils.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -20,7 +20,7 @@ namespace {
     using lfs::training::BilateralGrid;
     using lfs::training::BilateralGridParameterization;
 
-    class BilateralGridProjectionTest : public tensor_hardening::CudaTest {};
+    class BilateralGridProjectionTest : public lfs::test::CudaBackendTest {};
 
     std::vector<float> cpu_copy(const Tensor& tensor) {
         return tensor.cpu().contiguous().to_vector();
@@ -503,6 +503,53 @@ namespace {
         const std::vector<float> adopted_off = cpu_copy(live.shared_offset());
         for (size_t i = 0; i < rebuild_off.size(); ++i) {
             EXPECT_NEAR(adopted_off[i], scratch_off[i], 1e-5f) << "adopt offset " << i;
+        }
+    }
+
+    // Catches host-resident slices that lose state on the way through host
+    // memory: a slice evicted to the host (or dropped after a host edit) must
+    // come back with its grid values and both Adam moments, so a step after
+    // the round trip matches a step on a slice that stayed on the device.
+    TEST_F(BilateralGridProjectionTest, HostRoundTripKeepsGridAndAdamMoments) {
+        constexpr int kN = 3, kW = 4, kH = 4, kL = 2;
+        const auto make_grid = [&] {
+            BilateralGrid grid(kN, kW, kH, kL, 50);
+            auto& grids = grid.grids();
+            EXPECT_EQ(grids.device(), Device::CPU) << "grids are host resident";
+            std::vector<float> values = cpu_copy(grids);
+            for (size_t i = 0; i < values.size(); ++i) {
+                values[i] += 0.05f * std::sin(0.37f * static_cast<float>(i));
+            }
+            grids.copy_from(Tensor::from_vector(values, grids.shape(), Device::CPU));
+            return grid;
+        };
+        BilateralGrid resident = make_grid();
+        BilateralGrid round_trip = make_grid();
+
+        for (const int image : {0, 1}) {
+            resident.step_image(image, 1.0f);
+            round_trip.step_image(image, 1.0f);
+        }
+        (void)round_trip.grids(); // writes every slice back and forgets the device copies
+        resident.step_image(0, 1.0f);
+        round_trip.step_image(0, 1.0f);
+
+        const std::vector<float> expected = cpu_copy(resident.grids());
+        const std::vector<float> actual = cpu_copy(round_trip.grids());
+        ASSERT_EQ(expected.size(), actual.size());
+        for (size_t i = 0; i < expected.size(); ++i) {
+            ASSERT_FLOAT_EQ(actual[i], expected[i]) << "element " << i;
+        }
+
+        // Eviction: a third image pushes image 0 out of the device slots.
+        resident.step_image(1, 1.0f);
+        resident.step_image(2, 1.0f);
+        const std::vector<float> before_eviction_reload = cpu_copy(resident.grids());
+        resident.step_image(2, 1.0f);
+        const std::vector<float> after = cpu_copy(resident.grids());
+        const size_t slice = expected.size() / kN;
+        for (size_t i = 0; i < slice; ++i) {
+            ASSERT_FLOAT_EQ(after[i], before_eviction_reload[i]) << "image 0 changed while evicted, element " << i;
         }
     }
 

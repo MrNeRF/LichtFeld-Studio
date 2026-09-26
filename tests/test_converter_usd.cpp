@@ -7,13 +7,13 @@
 #include <gtest/gtest.h>
 
 #include "app/include/app/converter.hpp"
-#include "core/argument_parser.hpp"
 #include "core/splat_data.hpp"
+#include "io/argument_parser.hpp"
 #include "io/exporter.hpp"
 
 namespace fs = std::filesystem;
 using namespace lfs::core;
-using namespace lfs::core::args;
+using namespace lfs::io::args;
 using namespace lfs::core::param;
 using namespace lfs::io;
 
@@ -84,7 +84,7 @@ namespace {
         const std::string input_str = input.string();
         const char* argv[] = {"LichtFeld-Studio", "convert", input_str.c_str(), "-f", "usda"};
 
-        auto parsed = lfs::core::args::parse_args(5, argv);
+        auto parsed = lfs::io::args::parse_args(5, argv);
         ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
         auto* mode = std::get_if<ConvertMode>(&*parsed);
@@ -101,7 +101,7 @@ namespace {
         const std::string output_str = output.string();
         const char* argv[] = {"LichtFeld-Studio", "convert", input_str.c_str(), output_str.c_str()};
 
-        auto parsed = lfs::core::args::parse_args(4, argv);
+        auto parsed = lfs::io::args::parse_args(4, argv);
         ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
         auto* mode = std::get_if<ConvertMode>(&*parsed);

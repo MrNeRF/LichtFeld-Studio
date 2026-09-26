@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
+#include "core/cuda_types.hpp"
+#include "core/tensor/internal/private_access.hpp"
 
 #include "core/error.hpp"
 #include "core/export.hpp"
@@ -37,8 +39,12 @@ namespace lfs::core::internal {
         uint32_t max_workgroup_invocations = 0;
         uint32_t shared_memory_size = 0;
         float timestamp_period = 0.0f;
+        bool shader_float64 = false;
         bool shader_float16 = false;
         bool shader_atomic_float = false;
+        bool cooperative_matrix = false;
+        bool vulkan_memory_model = false;
+        bool vulkan_memory_model_device_scope = false;
         bool float_controls_fp16 = false;
         bool memory_budget = false;
         bool host_visible_device_local = false;
@@ -55,9 +61,15 @@ namespace lfs::core::internal {
         VkDevice device = VK_NULL_HANDLE;
         VkQueue queue = VK_NULL_HANDLE;
         uint32_t queue_family = 0;
+        std::array<uint32_t, 3> sharing_queue_families{};
+        uint32_t sharing_queue_family_count = 0;
         bool shader_atomic_float = false;
         bool memory_budget = false;
+        bool shader_float64 = false;
         bool shader_float16 = false;
+        bool vulkan_memory_model = false;
+        bool vulkan_memory_model_device_scope = false;
+        bool cooperative_matrix = false;
         bool external_memory = false;
         bool external_semaphore = false;
     };
@@ -78,6 +90,7 @@ namespace lfs::core::internal {
         [[nodiscard]] VkDevice device() const noexcept { return device_; }
         [[nodiscard]] VkQueue queue() const noexcept { return queue_; }
         [[nodiscard]] uint32_t queue_family() const noexcept { return queue_family_; }
+        [[nodiscard]] const std::vector<uint32_t>& sharing_queue_families() const noexcept { return sharing_queue_families_; }
         [[nodiscard]] VkSemaphore timeline() const noexcept { return timeline_; }
         [[nodiscard]] bool timeline_exportable() const noexcept { return timeline_exportable_; }
         [[nodiscard]] VkPipelineCache pipeline_cache() const noexcept {
@@ -103,17 +116,24 @@ namespace lfs::core::internal {
         [[nodiscard]] bool external_semaphore_enabled() const noexcept {
             return caps_.external_semaphore;
         }
+#if LFS_HAS_CUDA
         [[nodiscard]] VulkanCudaImportRegistry* cuda_imports() noexcept {
             return cuda_imports_.get();
         }
         [[nodiscard]] const VulkanCudaImportRegistry* cuda_imports() const noexcept {
             return cuda_imports_.get();
         }
+#endif
 
         [[nodiscard]] uint64_t reserve_timeline_value();
         void submit(VkCommandBuffer command, uint64_t signal_value);
+        void submit_external_wait(VkSemaphore semaphore, uint64_t value, uint64_t signal_value);
         void wait(uint64_t value);
         [[nodiscard]] uint64_t completed_timeline() const;
+        // The newest timeline value submitted to the queue.
+        [[nodiscard]] uint64_t submitted_timeline() const noexcept {
+            return submitted_timeline_.load(std::memory_order_acquire);
+        }
         void check_fault_buffer();
         // Shaders record an out-of-range index as {code, index, extent, op}; the
         // adapter that owns the launch reads and clears the record after its wait.
@@ -146,6 +166,7 @@ namespace lfs::core::internal {
         VkDevice device_ = VK_NULL_HANDLE;
         VkQueue queue_ = VK_NULL_HANDLE;
         uint32_t queue_family_ = 0;
+        std::vector<uint32_t> sharing_queue_families_;
         uint32_t device_index_ = 0;
         uint64_t context_id_ = 0;
         VkSemaphore timeline_ = VK_NULL_HANDLE;
@@ -160,12 +181,15 @@ namespace lfs::core::internal {
         VkPhysicalDeviceMemoryProperties memory_properties_{};
         VkDeviceCaps caps_{};
         std::atomic<uint64_t> next_timeline_{0};
+        std::atomic<uint64_t> submitted_timeline_{0};
         std::atomic<bool> accepting_work_{true};
         std::atomic<bool> dead_{false};
         std::atomic<bool> device_loss_reported_{false};
         std::mutex queue_mutex_;
         std::mutex shutdown_mutex_;
+#if LFS_HAS_CUDA
         std::unique_ptr<VulkanCudaImportRegistry> cuda_imports_;
+#endif
         std::unique_ptr<VulkanMemory> memory_;
         std::unique_ptr<VulkanRecorderRegistry> recorders_;
         std::unique_ptr<VulkanPipelines> pipelines_;
@@ -184,6 +208,7 @@ namespace lfs::core::internal {
     [[nodiscard]] lfs::Status adopt_vulkan_context(const AdoptedDevice& adopted);
     [[nodiscard]] bool vulkan_context_adopted() noexcept;
     [[nodiscard]] std::shared_ptr<VulkanContext> acquire_vulkan_context();
+    [[nodiscard]] int vulkan_device_count();
     [[nodiscard]] std::shared_ptr<VulkanContext> try_live_vulkan_context() noexcept;
     void shutdown_vulkan_context();
 

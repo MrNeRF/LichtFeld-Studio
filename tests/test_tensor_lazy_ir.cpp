@@ -8,6 +8,7 @@
 #include "core/tensor/internal/lazy_config.hpp"
 #include "core/tensor/internal/lazy_executor.hpp"
 #include "core/tensor/internal/lazy_ir.hpp"
+#include "cuda_backend_test.hpp"
 #include <algorithm>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
@@ -1698,10 +1699,9 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceMeanGPU) {
     }
 }
 
-TEST(TensorLazyRuntimeTest, ErankExpressionMatchesTorchOnInheritedStream) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
+class TensorLazyRuntimeCudaTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(TensorLazyRuntimeCudaTest, ErankExpressionMatchesTorchOnInheritedStream) {
 
     LazyTestGuard guard;
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
@@ -1744,10 +1744,7 @@ TEST(TensorLazyRuntimeTest, ErankExpressionMatchesTorchOnInheritedStream) {
     destroyStreamSafely(stream);
 }
 
-TEST(TensorLazyRuntimeTest, FusedSegmentedSquareSumMatchesTorchOnInheritedStream) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
+TEST_F(TensorLazyRuntimeCudaTest, FusedSegmentedSquareSumMatchesTorchOnInheritedStream) {
 
     LazyTestGuard guard;
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
@@ -1784,10 +1781,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedSquareSumMatchesTorchOnInheritedStream
     destroyStreamSafely(stream);
 }
 
-TEST(TensorLazyRuntimeTest, DeferredMaterializationKeepsActualExecutionStream) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
+TEST_F(TensorLazyRuntimeCudaTest, DeferredMaterializationKeepsActualExecutionStream) {
 
     LazyTestGuard guard;
     internal::lazy_executor_set_size_heuristic_override_for_testing(false);
@@ -1824,10 +1818,7 @@ TEST(TensorLazyRuntimeTest, DeferredMaterializationKeepsActualExecutionStream) {
     destroyStreamSafely(producer);
 }
 
-TEST(TensorLazyRuntimeTest, DeferredViewChainPreservesSourceStreamHint) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
+TEST_F(TensorLazyRuntimeCudaTest, DeferredViewChainPreservesSourceStreamHint) {
 
     LazyTestGuard guard;
     internal::lazy_executor_set_size_heuristic_override_for_testing(false);
@@ -1861,10 +1852,7 @@ TEST(TensorLazyRuntimeTest, DeferredViewChainPreservesSourceStreamHint) {
     destroyStreamSafely(stream);
 }
 
-TEST(TensorLazyRuntimeTest, DeferredHintedChainWaitsForProducerWhenConsumedWithoutGuard) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
+TEST_F(TensorLazyRuntimeCudaTest, DeferredHintedChainWaitsForProducerWhenConsumedWithoutGuard) {
 
     LazyTestGuard guard;
     internal::lazy_executor_set_size_heuristic_override_for_testing(false);

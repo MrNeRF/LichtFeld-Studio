@@ -2,10 +2,11 @@
 
 ## Requirements
 
-- CUDA Toolkit 12.8+
+- CUDA Toolkit 12.8+ for Windows and Linux training builds
 - CMake 3.30+
 - vcpkg (`VCPKG_ROOT` environment variable set)
-- GCC 14+ (Linux) or Visual Studio 2022 v17.10+ (Windows)
+- Ninja for preset builds
+- Apple Clang from Xcode 26+ (macOS), GCC 14+ (Linux) or Visual Studio 2022 v17.10+ (Windows)
 
 Windows builds require the **C++ Clang Compiler for Windows** Visual Studio
 Installer individual component in addition to the regular C++ desktop workload.
@@ -52,6 +53,43 @@ Without it configure fails with `pkg-config could not locate `gtk+-3.0``.
 The configure step now fails early if neither a usable X11 stack nor a usable Wayland stack is present.
 If you intentionally want a headless or experimental build, pass `-DLFS_ENFORCE_LINUX_GUI_BACKENDS=OFF`.
 
+## macOS Apple Silicon viewer build
+
+Install Xcode 26 or newer (older Xcode versions lack `std::jthread`), then the host tools and Vulkan driver with Homebrew:
+
+```bash
+xcode-select --install
+brew install cmake ninja autoconf autoconf-archive automake libtool vulkan-loader molten-vk
+```
+
+Clone the source with its submodule and use a vcpkg tool checkout that includes
+the versions required by the project's overlay ports. `vcpkg.json` separately
+pins the dependency baseline. Skip these clone steps when both checkouts
+already exist:
+
+```bash
+git clone --recurse-submodules https://github.com/MrNeRF/LichtFeld-Studio.git
+cd LichtFeld-Studio
+git clone https://github.com/microsoft/vcpkg.git ../vcpkg
+git -C ../vcpkg checkout dc1232a6e05dcc49703091e83743e3b4df9b9b7c
+../vcpkg/bootstrap-vcpkg.sh -disableMetrics
+export VCPKG_ROOT="$(cd ../vcpkg && pwd)"
+```
+
+From the repository root, configure, compile and launch the viewer:
+
+```bash
+cmake --preset macos-release
+cmake --build --preset macos-release
+./build-macos-release/LichtFeld-Studio
+```
+
+The preset builds Release dependencies only, leaves tests disabled and limits
+vcpkg and Ninja to two concurrent jobs for machines with limited memory. On
+macOS, the application looks for Homebrew's MoltenVK driver manifest at startup
+when no Vulkan driver has been selected explicitly. `VK_DRIVER_FILES`,
+`VK_ICD_FILENAMES` and `VK_ADD_DRIVER_FILES` still take precedence.
+
 ## Build Options
 
 ### 1. Native Build (Development)
@@ -69,13 +107,14 @@ cmake --build build -j 16
 
 #### Release-only dependencies (optional)
 
-Native x64 Windows and Linux builds can use these presets to build only the
+Native Windows, Linux and Apple Silicon builds can use these presets to build only the
 Release variants of vcpkg dependencies, including host tools:
 
 | Platform | Release application | Optimized application with debug information |
 | --- | --- | --- |
 | Windows x64 | `windows-release` | `windows-relwithdebinfo` |
 | Linux x64 | `linux-release` | `linux-relwithdebinfo` |
+| macOS arm64 | `macos-release` | — |
 
 For example, from an initialized Windows x64 MSVC/CUDA development shell:
 
@@ -89,10 +128,10 @@ same platform share the dependency recipe and can reuse compatible binary
 cache entries; the first Release-only install may rebuild packages. The
 standard `build` and `debug` presets remain available, with tests opt-in.
 
-See the [developer build guide](docs/development/build.md#release-only-dependency-profiles)
+See the [developer build guide](docs/docs/development/build.md#release-only-dependency-profiles)
 for all commands, cache behavior and dependency-symbol coverage. To keep an
 existing `cmake --build build ...` command, follow the
-[existing Ninja directory migration](docs/development/build.md#keeping-an-existing-ninja-build-directory),
+[existing Ninja directory migration](docs/docs/development/build.md#keeping-an-existing-ninja-build-directory),
 including `-B build` and `-DBUILD_TESTS=ON` when building `lichtfeld_tests`.
 The [test prerequisites](#tests) still apply.
 

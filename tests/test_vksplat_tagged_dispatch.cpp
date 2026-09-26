@@ -7,6 +7,7 @@
 #include "rendering/rasterizer/vulkan/src/barrier_planner.h"
 #include "rendering/rasterizer/vulkan/src/gs_pipeline.h"
 #include "rendering/rasterizer/vulkan/src/gs_renderer.h"
+#include "rendering/rasterizer/vulkan/src/indirect_layout.h"
 #include "rendering/rasterizer/vulkan/src/viewport_scratch_bucket.h"
 #include "rendering/vulkan_wait.hpp"
 
@@ -112,6 +113,7 @@ namespace {
 
     struct CapturedBarrier2 {
         std::vector<VkBufferMemoryBarrier2> buffer_barriers;
+        std::vector<VkMemoryBarrier2> memory_barriers;
         std::uint32_t memory_barrier_count = 0;
     };
 
@@ -209,6 +211,10 @@ namespace {
             CapturedBarrier2 cap;
             if (info != nullptr) {
                 cap.memory_barrier_count = info->memoryBarrierCount;
+                if (info->memoryBarrierCount > 0) {
+                    cap.memory_barriers.assign(info->pMemoryBarriers,
+                                               info->pMemoryBarriers + info->memoryBarrierCount);
+                }
                 if (info->pBufferMemoryBarriers != nullptr && info->bufferMemoryBarrierCount > 0) {
                     cap.buffer_barriers.assign(
                         info->pBufferMemoryBarriers,
@@ -908,7 +914,8 @@ namespace {
     };
 
     [[nodiscard]] bool edge_covered(const std::vector<VkBufferMemoryBarrier2>& derived,
-                                    const HazardEdge& edge) {
+                                    const HazardEdge& edge,
+                                    const DispatchScript* script = nullptr) {
         const Scope want_src{toStageMask(edge.src), toAccessMask(edge.src)};
         const Scope want_dst{toStageMask(edge.dst), toAccessMask(edge.dst)};
         for (const auto& b : derived) {
@@ -921,6 +928,18 @@ namespace {
                 (want_dst.stage & ~b.dstStageMask) == 0 &&
                 (want_dst.access & ~b.dstAccessMask) == 0) {
                 return true;
+            }
+        }
+        if (script) {
+            for (const auto& captured : script->barriers) {
+                for (const auto& barrier : captured.memory_barriers) {
+                    if ((want_src.stage & ~barrier.srcStageMask) == 0 &&
+                        (want_src.access & ~barrier.srcAccessMask) == 0 &&
+                        (want_dst.stage & ~barrier.dstStageMask) == 0 &&
+                        (want_dst.access & ~barrier.dstAccessMask) == 0) {
+                        return true;
+                    }
+                }
             }
         }
         return false;
@@ -2421,8 +2440,8 @@ namespace {
         // Macro workspace (also used by macro path resizes).
         forge_owned_i32(buffers.tile_batch_counts, 0xF630, alloc_tiles);
         forge_owned_i32(buffers.tile_batch_offsets, 0xF631, alloc_tiles);
-        // macro_wave_args: 2 * HIGS_RASTER_MAX_WAVES * 3 = 96 words
-        forge_owned(buffers.macro_wave_args, 0xF632, 96);
+        forge_owned(buffers.macro_wave_args, 0xF632,
+                    lfs::rendering::vulkan::indirect_layout::MacroWaveDispatch::kLayout.word_count);
         // partials / active_mask sized like the production macro path:
         // ceil(K / RASTER_BATCH_SIZE) + macro tiles over the bucketed grid.
         const std::size_t alloc_grid_w = _CEIL_DIV(scratch_bucket.alloc_w,
@@ -2699,7 +2718,7 @@ TEST(VkSplatTaggedDispatch, MacroDepthWavesAuditW1AndW3) {
              "L2988 histogram"},
         };
         for (const auto& edge : hoist_edges) {
-            EXPECT_TRUE(edge_covered(derived, edge))
+            EXPECT_TRUE(edge_covered(derived, edge, &script))
                 << "missing macro hoist edge W=" << armed << " " << edge.name;
         }
 

@@ -24,7 +24,7 @@ import spherical_harmonics;
 #define LFS_PROJECTION_SURVIVORS 0
 #endif
 
-// Canonical quantized LOD pool inputs (lod_pool_quant.hpp): xyz stays f32;
+// Canonical quantized LOD pool inputs (core/rad_pool_quant.hpp): xyz stays f32;
 // sh0/rotation/log-scale are packed f16, opacity f16 two-per-uint, shN s8
 // per swizzled-slot component with per-page band scales from page_frames.
 #ifndef LFS_QUANT_POOL
@@ -318,7 +318,7 @@ SplatActiveState compute_splat_active_state(
     float4 view_window = overlay_params[OVERLAY_PARAM_VIEW_WINDOW];
     if (active && overlay_enabled(view_flags.x)) {
         // KEEP IN SYNC: the screen-window formula lives in four places —
-        // this block, filterSelectionByScreenWindowKernel (selection_ops.cu),
+        // this block, core::filter_points,
         // the CPU reference in tests/test_selection_screen_window.cpp, and
         // (rect only, no depth test) the 2D overlay in gui_manager.cpp
         // appendScreenWindowOverlay.
@@ -717,8 +717,8 @@ layout(binding=27) RWStructuredBuffer<uint32_t> out_emit_count;
 layout(binding=28) RWStructuredBuffer<int32_t> out_orig_ids;
 #endif
 #if LFS_QUANT_POOL
-// Per-page dequant frames (lod_pool_quant.hpp PageFrame), bound after every
-// variant-specific binding so the C++ buffer list just appends it last.
+// Per-page dequant frames (core/rad_pool_quant.hpp PageFrame), bound after every
+// variant-specific binding except the deleted mask that follows it.
 #if LFS_PROJECTION_SURVIVORS
 layout(binding=29) StructuredBuffer<float4> page_frames;
 #else
@@ -727,12 +727,26 @@ layout(binding=24) StructuredBuffer<float4> page_frames;
 #endif
 #if LFS_SHN_Q16
 // Per-256-splat float2 (min,max) bounds for pad-dropped q16 SH rest.
-// Appended last like page_frames so the C++ buffer list just appends it.
+// Appended before the deleted-mask binding like page_frames.
 #if LFS_PROJECTION_SURVIVORS
 layout(binding=29) StructuredBuffer<float2> shN_bounds;
 #else
 layout(binding=24) StructuredBuffer<float2> shN_bounds;
 #endif
+#endif
+
+#if LFS_PROJECTION_SURVIVORS
+  #if LFS_QUANT_POOL || LFS_SHN_Q16
+layout(binding=30) ByteAddressBuffer deleted_mask;
+  #else
+layout(binding=29) ByteAddressBuffer deleted_mask;
+  #endif
+#else
+  #if LFS_QUANT_POOL || LFS_SHN_Q16
+layout(binding=25) ByteAddressBuffer deleted_mask;
+  #else
+layout(binding=24) ByteAddressBuffer deleted_mask;
+  #endif
 #endif
 
 #if !LFS_PROJECTION_SURVIVORS
@@ -819,6 +833,14 @@ void main(
             : g_idx;
     }
 
+  #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
+    if ((uniforms.lod_enabled & 128u) != 0u && read_byte(deleted_mask, g_idx) != 0u) {
+      #if !LFS_PROJECTION_SURVIVORS
+        clear_forward_projection_output(out_idx, 0u, uniforms.lod_enabled);
+      #endif
+        return;
+    }
+  #endif
 
     // load stuff
     Camera cam = no_diff load_camera(world_view_transform,
@@ -901,10 +923,24 @@ void main(
 
     // projection (differentiable)
     // forward
+    // Project in the source viewport's pixel units so fixed dilation and the
+    // 512-pixel covariance cap do not shrink splats in high-resolution exports.
+    // Rescale the footprint before binning into the full-resolution tile grid.
+    const float rasterization_scale = uniforms.rasterization_scale > 0.0f
+        ? uniforms.rasterization_scale : 1.0f;
+    Camera projection_cam = cam;
+    if (rasterization_scale != 1.0f) {
+        projection_cam.fx /= rasterization_scale;
+        projection_cam.fy /= rasterization_scale;
+        projection_cam.cx /= rasterization_scale;
+        projection_cam.cy /= rasterization_scale;
+        projection_cam.W = max(1, int(round(float(cam.W) / rasterization_scale)));
+        projection_cam.H = max(1, int(round(float(cam.H) / rasterization_scale)));
+    }
   #if LFS_3DGUT_PROJECTION
     Splat_2D_Vertex splat = project_gaussian_to_camera_gut(
         gauss,
-        cam,
+        projection_cam,
         active_sh,
         mean_ws,
         model_transforms,
@@ -916,7 +952,7 @@ void main(
   #else
     Splat_2D_Vertex splat = project_gaussian_to_camera_model(
         gauss,
-        cam,
+        projection_cam,
         active_sh,
         mean_ws,
         model_transforms,
@@ -926,9 +962,17 @@ void main(
         spark_rad_opacity_path,
         uniforms.splat_render_profile == 1u && !spark_rad_opacity_path);
   #endif
-
+    if (rasterization_scale != 1.0f) {
+        const float variance_scale = rasterization_scale * rasterization_scale;
+        splat.xyz_vs.xy = (splat.xyz_vs.xy + 0.5f) * rasterization_scale - 0.5f;
+        splat.cov_vs *= variance_scale;
+        splat.inv_cov_vs_opac.xyz /= variance_scale;
+        splat.det *= variance_scale * variance_scale;
+    }
     // radii, bounds, number of tiles
-    splat.xyz_vs.xy -= float2(uniforms.render_origin_x, uniforms.render_origin_y);
+    if (!full_frame_binning(uniforms)) {
+        splat.xyz_vs.xy -= float2(uniforms.render_origin_x, uniforms.render_origin_y);
+    }
 
     float opacity_threshold = ALPHA_THRESHOLD;
 #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
@@ -970,11 +1014,17 @@ void main(
         radii.y = min(radii.y, 0.49f * float(image_height));
     }
 
+    // GUT keeps a local tile grid, but crops the full-image rectangle only
+    // after choosing its ellipse scan axis. Both count and emission use it.
+    const bool banded_gut = full_frame_binning(uniforms) && is_gut_projection_mode(uniforms.camera_model);
+    const uint bin_grid_width = banded_gut ? (camera_width + TILE_WIDTH - 1u) / TILE_WIDTH : grid_width;
+    const uint bin_grid_height = banded_gut ? (camera_height + TILE_HEIGHT - 1u) / TILE_HEIGHT : grid_height;
     rectangle rect_tile_space = equirectangular_camera
         ? get_wrapped_rectangle_tile_space(splat_dist.xyz_vs.xy, radii, grid_height, grid_width)
-        : get_rectangle_tile_space(splat_dist.xyz_vs.xy, radii, grid_height, grid_width);
+        : get_rectangle_tile_space(splat_dist.xyz_vs.xy, radii, bin_grid_height, bin_grid_width);
+    const rectangle render_rect = banded_gut ? clip_to_render_grid(rect_tile_space, uniforms) : rect_tile_space;
 
-    int32_t n_tiles = int32_t(rect_tile_space.max_x - rect_tile_space.min_x) * int32_t(rect_tile_space.max_y - rect_tile_space.min_y);
+    int32_t n_tiles = int32_t(render_rect.max_x - render_rect.min_x) * int32_t(render_rect.max_y - render_rect.min_y);
     if (n_tiles == 0) {
         #if !LFS_PROJECTION_SURVIVORS
             clear_forward_projection_output(out_idx, overlay_flags, uniforms.lod_enabled);
@@ -986,7 +1036,8 @@ void main(
     if (!equirectangular_camera) {
         n_tiles = no_diff count_ellipse_grid_overlaps(
             splat_dist.xyz_vs.xy, splat_dist.inv_cov_vs_opac.xyz/(extend*extend),
-            rect_tile_space
+            render_rect,
+            rect_tile_space.max_y - rect_tile_space.min_y <= rect_tile_space.max_x - rect_tile_space.min_x
         );
     }
   #endif

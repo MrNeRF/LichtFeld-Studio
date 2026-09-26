@@ -39,11 +39,13 @@ int main(int argc, char** argv) {
         const std::string arg(argv[i]);
         if (arg.starts_with("--tensor-backend=")) {
             const auto value = arg.substr(17);
-            if (value != "cuda" && value != "vulkan") {
-                std::cerr << "Tensor backend must be cuda or vulkan\n";
+            if (value != "cuda" && value != "vulkan" && value != "metal") {
+                std::cerr << "Tensor backend must be cuda, vulkan or metal\n";
                 return 2;
             }
-            backend = value == "vulkan" ? lfs::core::GpuBackend::Vulkan : lfs::core::GpuBackend::CUDA;
+            backend = value == "vulkan"  ? lfs::core::GpuBackend::Vulkan
+                      : value == "metal" ? lfs::core::GpuBackend::Metal
+                                         : lfs::core::GpuBackend::CUDA;
         } else if (arg.starts_with("--tensor-validation=")) {
             const auto value = arg.substr(20);
             if (value != "off" && value != "api" && value != "sync") {

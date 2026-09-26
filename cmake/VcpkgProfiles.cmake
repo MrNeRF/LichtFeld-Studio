@@ -32,11 +32,11 @@ function(lfs_validate_vcpkg_profile)
             "Active generator: '${CMAKE_GENERATOR}', build type: '${CMAKE_BUILD_TYPE}'.")
     endif()
 
-    if(NOT VCPKG_TARGET_TRIPLET MATCHES "^x64-(windows|linux)$" OR
+    if(NOT VCPKG_TARGET_TRIPLET MATCHES "^(x64-(windows|linux)|arm64-osx)$" OR
        NOT VCPKG_HOST_TRIPLET STREQUAL VCPKG_TARGET_TRIPLET)
         message(FATAL_ERROR
             "The LichtFeld Release-only vcpkg profile requires matching native "
-            "x64-windows or x64-linux target and host triplets. Use the standard "
+            "x64-windows, x64-linux or arm64-osx target and host triplets. Use the standard "
             "presets for other architectures or custom triplets.")
     endif()
 

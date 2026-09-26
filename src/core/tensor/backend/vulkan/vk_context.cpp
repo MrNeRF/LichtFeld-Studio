@@ -8,13 +8,17 @@
 #include "core/logger.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/user_paths.hpp"
+#include "core/vulkan_helpers.hpp"
+#if LFS_HAS_CUDA
 #include "vk_cuda_bridge.hpp"
+#endif
 #include "vk_memory.hpp"
 #include "vk_pipelines.hpp"
 #include "vk_recorder.hpp"
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cctype>
 #include <charconv>
 #include <chrono>
@@ -205,22 +209,11 @@ namespace lfs::core::internal {
                 VK_SUBGROUP_FEATURE_ARITHMETIC_BIT |
                 VK_SUBGROUP_FEATURE_BALLOT_BIT |
                 VK_SUBGROUP_FEATURE_SHUFFLE_BIT;
-            const bool subgroup_supported =
-                (subgroup.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
-                (subgroup.supportedOperations & subgroup_required) == subgroup_required;
-            const bool available =
-                VK_API_VERSION_MAJOR(properties.properties.apiVersion) > 1 ||
-                (VK_API_VERSION_MAJOR(properties.properties.apiVersion) == 1 &&
-                 VK_API_VERSION_MINOR(properties.properties.apiVersion) >= 3);
+            const auto feature_check = check_vulkan_feature_requirements(device);
             // Every module declares SignedZeroInfNanPreserve for fp32 (plan D12);
             // a device that cannot honor it would run the shaders with
             // undefined NaN and signed-zero behaviour.
-            const bool required =
-                available && features.features.shaderInt64 &&
-                features.features.shaderInt16 && features11.storageBuffer16BitAccess &&
-                features12.storageBuffer8BitAccess && features12.timelineSemaphore &&
-                features12.bufferDeviceAddress && features13.synchronization2 &&
-                subgroup_supported && float_controls.shaderSignedZeroInfNanPreserveFloat32;
+            const bool required = feature_check.supported();
             if (required && caps != nullptr) {
                 std::copy_n(ids.deviceUUID, VK_UUID_SIZE, caps->device_uuid.begin());
                 std::copy_n(ids.driverUUID, VK_UUID_SIZE, caps->driver_uuid.begin());
@@ -234,6 +227,7 @@ namespace lfs::core::internal {
                 caps->shared_memory_size =
                     properties.properties.limits.maxComputeSharedMemorySize;
                 caps->timestamp_period = properties.properties.limits.timestampPeriod;
+                caps->shader_float64 = features.features.shaderFloat64;
                 caps->shader_float16 = features12.shaderFloat16 &&
                                        float_controls.shaderSignedZeroInfNanPreserveFloat16;
                 caps->float_controls_fp16 = float_controls.shaderSignedZeroInfNanPreserveFloat16;
@@ -252,6 +246,7 @@ namespace lfs::core::internal {
             return false;
         }
 
+#if LFS_HAS_CUDA
         bool timeline_semaphore_exportable(const VkPhysicalDevice device) {
             VkSemaphoreTypeCreateInfo type_info{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
             type_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
@@ -266,6 +261,7 @@ namespace lfs::core::internal {
                     VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT) != 0 &&
                    (properties.compatibleHandleTypes & kVulkanExportSemaphoreHandleType) != 0;
         }
+#endif
 
         bool has_compute_queue(VkPhysicalDevice device) {
             uint32_t count = 0;
@@ -349,20 +345,28 @@ namespace lfs::core::internal {
     }
 
     void VulkanContext::initialize_runtime() {
+#if LFS_HAS_CUDA
         if (gpu_backend_available(GpuBackend::CUDA)) {
             cuda_imports_ = std::make_unique<VulkanCudaImportRegistry>(*this);
         }
+#endif
         create_allocator();
         VkExportSemaphoreCreateInfo export_info{
             VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO};
         VkSemaphoreTypeCreateInfo type_info{
             VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
         type_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+#if LFS_HAS_CUDA
         const bool export_timeline =
             caps_.external_semaphore && timeline_semaphore_exportable(physical_device_);
+#else
+        constexpr bool export_timeline = false;
+#endif
         if (export_timeline) {
+#if LFS_HAS_CUDA
             export_info.handleTypes = kVulkanExportSemaphoreHandleType;
             type_info.pNext = &export_info;
+#endif
         }
         VkSemaphoreCreateInfo semaphore_info{
             VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
@@ -406,12 +410,18 @@ namespace lfs::core::internal {
         device_ = adopted.device;
         queue_ = adopted.queue;
         queue_family_ = adopted.queue_family;
-        uint32_t count = 0;
-        vk_check(this, vkEnumeratePhysicalDevices(instance_, &count, nullptr),
-                 "vkEnumeratePhysicalDevices(count)");
-        std::vector<VkPhysicalDevice> devices(count);
-        vk_check(this, vkEnumeratePhysicalDevices(instance_, &count, devices.data()),
-                 "vkEnumeratePhysicalDevices(data)");
+        if (adopted.sharing_queue_family_count > adopted.sharing_queue_families.size())
+            throw std::invalid_argument("Too many Vulkan tensor sharing queue families");
+        sharing_queue_families_ = {queue_family_};
+        for (uint32_t i = 0; i < adopted.sharing_queue_family_count; ++i) {
+            const auto family = adopted.sharing_queue_families[i];
+            if (std::find(sharing_queue_families_.begin(), sharing_queue_families_.end(), family) == sharing_queue_families_.end())
+                sharing_queue_families_.push_back(family);
+        }
+        const auto enumeration = enumerate_vulkan_physical_devices(instance_);
+        vk_check(this, enumeration.count_result, "vkEnumeratePhysicalDevices(count)");
+        vk_check(this, enumeration.devices_result, "vkEnumeratePhysicalDevices(data)");
+        const auto& devices = enumeration.devices;
         const auto position = std::ranges::find(devices, physical_device_);
         if (position == devices.end()) {
             reject("Vulkan device adoption received a physical device that does not belong to the instance");
@@ -433,7 +443,11 @@ namespace lfs::core::internal {
         caps_.device_index = device_index_;
         caps_.memory_budget = adopted.memory_budget;
         caps_.shader_atomic_float = adopted.shader_atomic_float && !force_no_atomic_float();
+        caps_.shader_float64 = caps_.shader_float64 && adopted.shader_float64;
         caps_.shader_float16 = caps_.shader_float16 && adopted.shader_float16;
+        caps_.vulkan_memory_model = adopted.vulkan_memory_model;
+        caps_.vulkan_memory_model_device_scope = adopted.vulkan_memory_model_device_scope;
+        caps_.cooperative_matrix = adopted.cooperative_matrix && caps_.subgroup_size == 32;
         caps_.host_visible_device_local = has_host_visible_device_local(memory_properties_);
         caps_.direct_host_uploads = false;
         caps_.external_memory = adopted.external_memory;
@@ -479,16 +493,8 @@ namespace lfs::core::internal {
         application.applicationVersion = VK_MAKE_API_VERSION(0, 1, 0, 0);
         application.pEngineName = "LichtFeld";
         application.apiVersion = VK_API_VERSION_1_3;
-        VkInstanceCreateInfo create_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
-        create_info.pApplicationInfo = &application;
-        if (sync_validation && !layers.empty()) {
-            create_info.pNext = &validation_features;
-        }
-        create_info.enabledLayerCount = static_cast<uint32_t>(layers.size());
-        create_info.ppEnabledLayerNames = layers.data();
-        create_info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
-        create_info.ppEnabledExtensionNames = extensions.data();
-        vk_check(this, vkCreateInstance(&create_info, nullptr, &instance_),
+        const void* next = sync_validation && !layers.empty() ? &validation_features : nullptr;
+        vk_check(this, create_vulkan_instance(application, extensions, layers, next, 0, &instance_),
                  "vkCreateInstance");
         if (!extensions.empty()) {
             VkDebugUtilsMessengerCreateInfoEXT debug_info{
@@ -510,13 +516,11 @@ namespace lfs::core::internal {
     }
 
     void VulkanContext::select_physical_device() {
-        uint32_t count = 0;
-        vk_check(this, vkEnumeratePhysicalDevices(instance_, &count, nullptr),
-                 "vkEnumeratePhysicalDevices(count)");
-        LFS_ASSERT_MSG(count != 0, "Vulkan backend: no physical devices available");
-        std::vector<VkPhysicalDevice> devices(count);
-        vk_check(this, vkEnumeratePhysicalDevices(instance_, &count, devices.data()),
-                 "vkEnumeratePhysicalDevices(data)");
+        const auto enumeration = enumerate_vulkan_physical_devices(instance_);
+        vk_check(this, enumeration.count_result, "vkEnumeratePhysicalDevices(count)");
+        LFS_ASSERT_MSG(!enumeration.devices.empty(), "Vulkan backend: no physical devices available");
+        vk_check(this, enumeration.devices_result, "vkEnumeratePhysicalDevices(data)");
+        const auto& devices = enumeration.devices;
 
         std::optional<uint32_t> selected;
         const auto options = tensor_backend_options();
@@ -622,36 +626,50 @@ namespace lfs::core::internal {
         query12.pNext = &query13;
         query13.pNext = &atomic_float;
         vkGetPhysicalDeviceFeatures2(physical_device_, &query);
+        caps_.shader_float64 = query.features.shaderFloat64;
         caps_.shader_float16 = query12.shaderFloat16 && caps_.float_controls_fp16;
+        caps_.vulkan_memory_model = query12.vulkanMemoryModel;
+        caps_.vulkan_memory_model_device_scope = query12.vulkanMemoryModelDeviceScope;
         caps_.shader_atomic_float =
             extensions_available.contains(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME) &&
             atomic_float.shaderBufferFloat32AtomicAdd &&
             !force_no_atomic_float();
+        VkPhysicalDeviceCooperativeMatrixFeaturesKHR coop_query{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
+        const bool coop_ext = extensions_available.contains(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+        if (coop_ext) {
+            query13.pNext = &coop_query;
+            vkGetPhysicalDeviceFeatures2(physical_device_, &query);
+            caps_.cooperative_matrix = coop_query.cooperativeMatrix != 0 && caps_.subgroup_size == 32 &&
+                                       supports_sh3_cooperative_matrix(instance_, physical_device_);
+            query13.pNext = &atomic_float;
+        }
         caps_.host_visible_device_local = has_host_visible_device_local(memory_properties_);
         caps_.direct_host_uploads = false;
 
-        VkPhysicalDeviceVulkan13Features features13{
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
-        VkPhysicalDeviceVulkan12Features features12{
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
-        VkPhysicalDeviceVulkan11Features features11{
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
-        VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
-        features.features.shaderInt64 = VK_TRUE;
-        features.features.shaderInt16 = VK_TRUE;
-        features.pNext = &features11;
-        features11.storageBuffer16BitAccess = VK_TRUE;
-        features11.pNext = &features12;
-        features12.storageBuffer8BitAccess = VK_TRUE;
-        features12.timelineSemaphore = VK_TRUE;
-        features12.bufferDeviceAddress = VK_TRUE;
+        VulkanDeviceFeatureEnableChain required_features;
+        auto& features = required_features.features;
+        auto& features11 = required_features.features11;
+        auto& features12 = required_features.features12;
+        auto& features13 = required_features.features13;
+        features.features.shaderFloat64 = caps_.shader_float64;
         features12.shaderFloat16 = caps_.shader_float16;
-        features12.pNext = &features13;
-        features13.synchronization2 = VK_TRUE;
+        features12.vulkanMemoryModel = caps_.vulkan_memory_model ? VK_TRUE : VK_FALSE;
+        features12.vulkanMemoryModelDeviceScope =
+            caps_.vulkan_memory_model && caps_.vulkan_memory_model_device_scope ? VK_TRUE : VK_FALSE;
         features13.pNext = caps_.shader_atomic_float ? &atomic_float : nullptr;
         atomic_float = {
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT};
         atomic_float.shaderBufferFloat32AtomicAdd = caps_.shader_atomic_float;
+        VkPhysicalDeviceCooperativeMatrixFeaturesKHR coop_enable{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
+        coop_enable.cooperativeMatrix = caps_.cooperative_matrix ? VK_TRUE : VK_FALSE;
+        if (caps_.cooperative_matrix) {
+            if (caps_.shader_atomic_float)
+                atomic_float.pNext = &coop_enable;
+            else
+                features13.pNext = &coop_enable;
+        }
 
         std::vector<const char*> enabled_extensions;
         if (caps_.memory_budget) {
@@ -660,16 +678,19 @@ namespace lfs::core::internal {
         if (caps_.shader_atomic_float) {
             enabled_extensions.push_back(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
         }
-#ifdef _WIN32
+        if (caps_.cooperative_matrix)
+            enabled_extensions.push_back(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+#if LFS_HAS_CUDA && defined(_WIN32)
         constexpr const char* kExternalMemoryExtension =
             VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME;
         constexpr const char* kExternalSemaphoreExtension =
             VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME;
-#else
+#elif LFS_HAS_CUDA && defined(__linux__)
         constexpr const char* kExternalMemoryExtension = VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME;
         constexpr const char* kExternalSemaphoreExtension =
             VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME;
 #endif
+#if LFS_HAS_CUDA && (defined(_WIN32) || defined(__linux__))
         caps_.external_memory = extensions_available.contains(kExternalMemoryExtension);
         caps_.external_semaphore = extensions_available.contains(kExternalSemaphoreExtension);
         if (caps_.external_memory) {
@@ -678,29 +699,28 @@ namespace lfs::core::internal {
         if (caps_.external_semaphore) {
             enabled_extensions.push_back(kExternalSemaphoreExtension);
         }
+#else
+        caps_.external_memory = false;
+        caps_.external_semaphore = false;
+#endif
         const float priority = 1.0f;
         VkDeviceQueueCreateInfo queue_info{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
         queue_info.queueFamilyIndex = queue_family_;
         queue_info.queueCount = 1;
         queue_info.pQueuePriorities = &priority;
-        VkDeviceCreateInfo create_info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
-        create_info.pNext = &features;
-        create_info.queueCreateInfoCount = 1;
-        create_info.pQueueCreateInfos = &queue_info;
-        create_info.enabledExtensionCount =
-            static_cast<uint32_t>(enabled_extensions.size());
-        create_info.ppEnabledExtensionNames = enabled_extensions.data();
-        vk_check(this, vkCreateDevice(physical_device_, &create_info, nullptr, &device_),
+        vk_check(this, create_vulkan_device(physical_device_, {queue_info}, enabled_extensions, &features, nullptr, &device_),
                  "vkCreateDevice");
         vkGetDeviceQueue(device_, queue_family_, 0, &queue_);
     }
 
     void VulkanContext::create_allocator() {
         VmaDeviceMemoryCallbacks memory_callbacks{};
+#if LFS_HAS_CUDA
         if (cuda_imports_) {
             memory_callbacks.pfnFree = &VulkanCudaImportRegistry::vma_free_callback;
             memory_callbacks.pUserData = cuda_imports_.get();
         }
+#endif
         VmaAllocatorCreateInfo create_info{};
         create_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
         if (caps_.memory_budget) {
@@ -710,8 +730,11 @@ namespace lfs::core::internal {
         create_info.physicalDevice = physical_device_;
         create_info.device = device_;
         create_info.vulkanApiVersion = VK_API_VERSION_1_3;
-        create_info.pDeviceMemoryCallbacks =
-            cuda_imports_ != nullptr ? &memory_callbacks : nullptr;
+#if LFS_HAS_CUDA
+        create_info.pDeviceMemoryCallbacks = cuda_imports_ != nullptr ? &memory_callbacks : nullptr;
+#else
+        create_info.pDeviceMemoryCallbacks = nullptr;
+#endif
         vk_check(this, vmaCreateAllocator(&create_info, &allocator_),
                  "vmaCreateAllocator");
     }
@@ -720,8 +743,9 @@ namespace lfs::core::internal {
         std::vector<char> initial_data;
         if (const auto paths = UserPaths::resolve()) {
             const std::string feature_key = std::format(
-                "f16{}_atomic{}_budget{}", caps_.shader_float16,
-                caps_.shader_atomic_float, caps_.memory_budget);
+                "f16{}_atomic{}_budget{}_coop{}_vmm{}", caps_.shader_float16,
+                caps_.shader_atomic_float, caps_.memory_budget, caps_.cooperative_matrix,
+                caps_.vulkan_memory_model && caps_.vulkan_memory_model_device_scope);
             const std::filesystem::path directory =
                 paths->cacheDir() / "tensor_vulkan";
             std::error_code error;
@@ -851,6 +875,26 @@ namespace lfs::core::internal {
         std::lock_guard lock(queue_mutex_);
         vk_check(this, vkQueueSubmit2(queue_, 1, &submit_info, VK_NULL_HANDLE),
                  "vkQueueSubmit2");
+        submitted_timeline_.store(signal_value, std::memory_order_release);
+    }
+
+    void VulkanContext::submit_external_wait(VkSemaphore semaphore, uint64_t value, uint64_t signal_value) {
+        VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+        wait.semaphore = semaphore;
+        wait.value = value;
+        wait.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        VkSemaphoreSubmitInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+        signal.semaphore = timeline_;
+        signal.value = signal_value;
+        signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+        submit.waitSemaphoreInfoCount = 1;
+        submit.pWaitSemaphoreInfos = &wait;
+        submit.signalSemaphoreInfoCount = 1;
+        submit.pSignalSemaphoreInfos = &signal;
+        std::lock_guard lock(queue_mutex_);
+        vk_check(this, vkQueueSubmit2(queue_, 1, &submit, VK_NULL_HANDLE), "vkQueueSubmit2(external tensor wait)");
+        submitted_timeline_.store(signal_value, std::memory_order_release);
     }
 
     void VulkanContext::wait(const uint64_t value) {
@@ -914,20 +958,24 @@ namespace lfs::core::internal {
         if (record[0] == 0) {
             return;
         }
-        // Field names match the CUDA device-fault error so consumers read both.
+        // Code 2 stores the signed index in words 1-2 and the extent in word 3.
+        const bool wide = record[0] == 2;
+        const int64_t value = wide ? std::bit_cast<int64_t>((uint64_t(record[2]) << 32) | record[1])
+                                   : int64_t(static_cast<int32_t>(record[1]));
+        const uint32_t bound = wide ? record[3] : record[2];
+        const uint32_t op_id = wide ? 0 : record[3];
         throw lfs::Exception(lfs::make_error(lfs::ErrorInit{
             .code = ErrorCode::BoundsViolation,
             .domain = lfs::ErrorDomain::Vulkan,
             .user_message = "A tensor index was out of range on the Vulkan backend",
             .detail = std::format("device fault code {}: index {} is outside the extent {} "
                                   "(operation {})",
-                                  record[0], static_cast<int32_t>(record[1]), record[2],
-                                  record[3]),
+                                  record[0], value, bound, op_id),
             .detection = LFS_SOURCE_SITE_CURRENT(),
             .fields = lfs::SmallFields{}
-                          .add("op_id", static_cast<std::int64_t>(record[3]))
-                          .add("value", static_cast<std::int64_t>(static_cast<int32_t>(record[1])))
-                          .add("bound", static_cast<std::int64_t>(record[2]))
+                          .add("op_id", static_cast<std::int64_t>(op_id))
+                          .add("value", value)
+                          .add("bound", static_cast<std::int64_t>(bound))
                           .add("fault_code", static_cast<std::int64_t>(record[0])),
         }));
     }
@@ -938,7 +986,8 @@ namespace lfs::core::internal {
             return record;
         }
         std::memcpy(record.data(), fault_mapped_, sizeof(record));
-        std::memset(fault_mapped_, 0, sizeof(record));
+        if (record[0] != 0)
+            std::memset(fault_mapped_, 0, sizeof(record));
         return record;
     }
 
@@ -997,10 +1046,12 @@ namespace lfs::core::internal {
             vmaDestroyAllocator(allocator_);
             allocator_ = nullptr;
         }
+#if LFS_HAS_CUDA
         if (cuda_imports_) {
             cuda_imports_->shutdown();
             cuda_imports_.reset();
         }
+#endif
         if (timeline_ != VK_NULL_HANDLE) {
             vkDestroySemaphore(device_, timeline_, nullptr);
             timeline_ = VK_NULL_HANDLE;
@@ -1133,6 +1184,30 @@ namespace lfs::core::internal {
         return slot->context;
     }
 
+    int vulkan_device_count() {
+        if (const auto live = try_live_vulkan_context()) {
+            uint32_t count = 0;
+            const VkResult status = vkEnumeratePhysicalDevices(live->instance(), &count, nullptr);
+            if (status != VK_SUCCESS)
+                throw TensorError(std::format("vkEnumeratePhysicalDevices failed: {}", static_cast<int>(status)));
+            return static_cast<int>(count);
+        }
+
+        VkApplicationInfo application{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+        application.pApplicationName = "LichtFeld device discovery";
+        application.apiVersion = VK_API_VERSION_1_3;
+        VkInstance instance = VK_NULL_HANDLE;
+        const VkResult created = create_vulkan_instance(application, {}, {}, nullptr, 0, &instance);
+        if (created != VK_SUCCESS)
+            throw TensorError(std::format("vkCreateInstance for device discovery failed: {}", static_cast<int>(created)));
+        uint32_t count = 0;
+        const VkResult status = vkEnumeratePhysicalDevices(instance, &count, nullptr);
+        vkDestroyInstance(instance, nullptr);
+        if (status != VK_SUCCESS)
+            throw TensorError(std::format("vkEnumeratePhysicalDevices failed: {}", static_cast<int>(status)));
+        return static_cast<int>(count);
+    }
+
     std::shared_ptr<VulkanContext> try_live_vulkan_context() noexcept {
         std::lock_guard lock(g_context_mutex);
         return g_context_slot->context;
@@ -1168,6 +1243,7 @@ namespace lfs::core::internal {
     }
 
     uint64_t vulkan_cuda_import_count_for_testing() noexcept {
+#if LFS_HAS_CUDA
         try {
             if (const auto context = try_live_vulkan_context();
                 context != nullptr && context->cuda_imports() != nullptr) {
@@ -1177,6 +1253,7 @@ namespace lfs::core::internal {
             // LFS-CENSUS-OK(empty-catch): test accessor; a context that cannot
             // answer counts as no live imports.
         }
+#endif
         return 0;
     }
 

@@ -8,6 +8,9 @@
 #include "core/image_io.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_cuda_interop.hpp"
+#include "core/tensor_upload.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/cuda/image_format_kernels.cuh"
 #include "io/nvcodec_image_loader.hpp"
 
@@ -320,10 +323,9 @@ namespace {
 
 } // namespace
 
-TEST(NvCodecImageLoaderJpeg2k16Bit, RoundTrips2160pGrayAndRgbLossless) {
-    int device_count = 0;
-    ASSERT_EQ(cudaGetDeviceCount(&device_count), cudaSuccess);
-    ASSERT_GT(device_count, 0);
+class NvCodecImageLoaderJpeg2k16Bit : public lfs::test::CudaBackendTest {};
+
+TEST_F(NvCodecImageLoaderJpeg2k16Bit, RoundTrips2160pGrayAndRgbLossless) {
 
     std::vector<uint16_t> gray_u16;
     std::vector<uint16_t> rgb_u16;
@@ -397,10 +399,9 @@ TEST(NvCodecImageLoaderJpeg2k16Bit, RoundTrips2160pGrayAndRgbLossless) {
     std::cout << "round_trip_bit_exact,yes\n";
 }
 
-TEST(NvCodecImageLoaderJpeg2k8Bit, MaskRoundTripIsLossless) {
-    int device_count = 0;
-    ASSERT_EQ(cudaGetDeviceCount(&device_count), cudaSuccess);
-    ASSERT_GT(device_count, 0);
+class NvCodecImageLoaderJpeg2k8Bit : public lfs::test::CudaBackendTest {};
+
+TEST_F(NvCodecImageLoaderJpeg2k8Bit, MaskRoundTripIsLossless) {
 
     constexpr size_t height = 64;
     constexpr size_t width = 96;
@@ -435,10 +436,7 @@ TEST(NvCodecImageLoaderJpeg2k8Bit, MaskRoundTripIsLossless) {
     }
 }
 
-TEST(NvCodecImageLoaderJpeg2k8Bit, RejectsNonLegacyStagingStream) {
-    int device_count = 0;
-    ASSERT_EQ(cudaGetDeviceCount(&device_count), cudaSuccess);
-    ASSERT_GT(device_count, 0);
+TEST_F(NvCodecImageLoaderJpeg2k8Bit, MaskEncodingJoinsProducerOnExecutionStream) {
 
     auto input = lfs::core::Tensor::zeros(
         {size_t{8}, size_t{8}}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
@@ -451,15 +449,24 @@ TEST(NvCodecImageLoaderJpeg2k8Bit, RejectsNonLegacyStagingStream) {
         GTEST_SKIP() << "nvImageCodec unavailable: " << e.what();
     }
 
-    cudaStream_t stream = nullptr;
-    ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
-    EXPECT_THROW(
-        (void)loader->encode_grayscale_to_jpeg2k(input, stream, true, true),
-        std::runtime_error);
-    EXPECT_EQ(cudaStreamDestroy(stream), cudaSuccess);
+    lfs::core::TensorWorkQueue producer(lfs::core::GpuBackend::CUDA);
+    lfs::core::TensorWorkQueue consumer(lfs::core::GpuBackend::CUDA);
+    {
+        lfs::core::TensorWorkQueue::Scope scope(producer);
+        input.set_stream(static_cast<cudaStream_t>(producer.native_handle()));
+        input.fill_(0.75f);
+    }
+    const auto encoded = loader->encode_grayscale_to_jpeg2k(input, consumer.native_handle(), true, true);
+    ASSERT_FALSE(encoded.empty());
+    const auto decoded = loader->decode_jpeg2k_16bit_from_memory_gpu(encoded, consumer.native_handle(), true, true);
+    EXPECT_EQ(decoded.stream(), consumer.native_handle());
+    for (const auto sample : decoded.cpu().to_vector())
+        EXPECT_FLOAT_EQ(sample, 191.0f);
 }
 
-TEST(NvCodecImageLoaderJpeg, CanonicalJpegMeetsBicyclePsnrGate) {
+class NvCodecImageLoaderJpeg : public lfs::test::CudaBackendTest {};
+
+TEST_F(NvCodecImageLoaderJpeg, CanonicalJpegMeetsBicyclePsnrGate) {
     const auto path = fs::path(PROJECT_ROOT_PATH) / "data/bicycle/images_4/_DSC8739.JPG";
     if (!fs::is_regular_file(path)) {
         GTEST_SKIP() << "bicycle dataset is absent: " << path;
@@ -511,7 +518,47 @@ TEST(NvCodecImageLoaderJpeg, CanonicalJpegMeetsBicyclePsnrGate) {
     EXPECT_GE(psnr, 45.0);
 }
 
-TEST(NvCodecImageLoaderJpeg, BatchedDecodeMatchesReferenceWithinTolerance) {
+TEST_F(NvCodecImageLoaderJpeg, RepeatedEncodesMatchAFreshEncoder) {
+    const auto path = fs::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/assets/lichtfeld-icon.png";
+    auto [pixels, width, height, channels] = lfs::core::load_image(path);
+    ASSERT_NE(pixels, nullptr) << path;
+    ASSERT_GE(channels, 3);
+    const size_t plane = static_cast<size_t>(width) * static_cast<size_t>(height);
+    std::vector<float> chw(3 * plane);
+    for (size_t i = 0; i < plane; ++i) {
+        for (size_t c = 0; c < 3; ++c) {
+            chw[c * plane + i] = pixels[i * static_cast<size_t>(channels) + c] / 255.0f;
+        }
+    }
+    lfs::core::free_image(pixels);
+    const auto source = lfs::core::Tensor::from_blob(
+                            chw.data(),
+                            lfs::core::TensorShape({size_t{3}, static_cast<size_t>(height), static_cast<size_t>(width)}),
+                            lfs::core::Device::CPU, lfs::core::DataType::Float32)
+                            .to(lfs::core::Device::CUDA);
+
+    lfs::io::NvCodecImageLoader::Options options;
+    options.decoder_pool_size = 1;
+    std::unique_ptr<lfs::io::NvCodecImageLoader> loader;
+    std::unique_ptr<lfs::io::NvCodecImageLoader> fresh_loader;
+    try {
+        loader = std::make_unique<lfs::io::NvCodecImageLoader>(options);
+        fresh_loader = std::make_unique<lfs::io::NvCodecImageLoader>(options);
+    } catch (const std::exception& e) {
+        GTEST_SKIP() << "nvImageCodec unavailable: " << e.what();
+    }
+
+    const auto high = loader->encode_to_jpeg(source, 95, nullptr);
+    const auto low = loader->encode_to_jpeg(source, 60, nullptr);
+    const auto high_again = loader->encode_to_jpeg(source, 95, nullptr);
+    ASSERT_FALSE(high.empty());
+    ASSERT_FALSE(low.empty());
+    EXPECT_NE(high, low);
+    EXPECT_EQ(high, high_again);
+    EXPECT_EQ(low, fresh_loader->encode_to_jpeg(source, 60, nullptr));
+}
+
+TEST_F(NvCodecImageLoaderJpeg, BatchedDecodeMatchesReferenceWithinTolerance) {
     const auto path = fs::path(PROJECT_ROOT_PATH) / "data/bicycle/images_4/_DSC8739.JPG";
     if (!fs::is_regular_file(path)) {
         GTEST_SKIP() << "bicycle dataset is absent: " << path;

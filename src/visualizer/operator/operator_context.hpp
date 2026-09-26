@@ -36,6 +36,7 @@ namespace lfs::vis::op {
         };
 
         Type type = Type::NONE;
+        bool over_gui = false;
         std::variant<std::monostate, MouseButtonEvent, MouseMoveEvent, MouseScrollEvent, KeyEvent, ActionEvent> data;
 
         template <typename T>

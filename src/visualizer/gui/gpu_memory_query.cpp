@@ -3,13 +3,24 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/gpu_memory_query.hpp"
+#include "core/gpu_device_info.hpp"
+#include "core/tensor_backend.hpp"
 
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <format>
+#include <limits>
+#include <mutex>
+#if LFS_HAS_CUDA
 #include <cuda_runtime.h>
+#include <nvml.h>
+#endif
 
 #ifdef _WIN32
 #include <dxgi1_4.h>
 #include <windows.h>
-#else
+#elif defined(__linux__)
 #include <dlfcn.h>
 #include <unistd.h>
 #endif
@@ -24,7 +35,7 @@ namespace lfs::vis::gui {
             return name;
         }
 
-#ifdef _WIN32
+#if LFS_HAS_CUDA && defined(_WIN32)
         // Windows: DXGI QueryVideoMemoryInfo for per-process GPU memory.
         // NVML process memory returns NVML_VALUE_NOT_AVAILABLE under WDDM, but
         // device utilization rates work and are used for the GPU% meter.
@@ -147,21 +158,16 @@ namespace lfs::vis::gui {
         }
 #endif
 
+#if LFS_HAS_CUDA
         // NVML: process memory on Linux; utilization on Linux and Windows.
         using NvmlDevice = void*;
         enum { NVML_SUCCESS = 0 };
         constexpr int NVML_PCI_BUS_ID_LEN = 32;
 
-        struct NvmlProcessInfo {
-            unsigned int pid;
-            unsigned long long usedGpuMemory;
-            unsigned int gpuInstanceId;
-            unsigned int computeInstanceId;
-        };
-
         using FnNvmlInit = int (*)();
         using FnNvmlDeviceGetHandleByPciBusId = int (*)(const char*, NvmlDevice*);
-        using FnNvmlDeviceGetComputeRunningProcesses = int (*)(NvmlDevice, unsigned int*, NvmlProcessInfo*);
+        using FnNvmlDeviceGetProcesses = int (*)(NvmlDevice, unsigned int*, nvmlProcessInfo_t*);
+        using FnNvmlDeviceGetMemoryInfo = int (*)(NvmlDevice, nvmlMemory_v2_t*);
         struct NvmlUtilization {
             unsigned int gpu;
             unsigned int memory;
@@ -177,7 +183,9 @@ namespace lfs::vis::gui {
 #else
             void* lib = nullptr;
 #endif
-            FnNvmlDeviceGetComputeRunningProcesses fn_get_procs = nullptr;
+            FnNvmlDeviceGetProcesses fn_get_compute = nullptr;
+            FnNvmlDeviceGetProcesses fn_get_graphics = nullptr;
+            FnNvmlDeviceGetMemoryInfo fn_get_memory = nullptr;
             FnNvmlDeviceGetUtilizationRates fn_get_utilization = nullptr;
 
             NvmlState() {
@@ -202,14 +210,18 @@ namespace lfs::vis::gui {
                 auto fn_init = reinterpret_cast<FnNvmlInit>(load("nvmlInit_v2"));
                 auto fn_get_handle = reinterpret_cast<FnNvmlDeviceGetHandleByPciBusId>(
                     load("nvmlDeviceGetHandleByPciBusId_v2"));
-                fn_get_procs = reinterpret_cast<FnNvmlDeviceGetComputeRunningProcesses>(
+                fn_get_compute = reinterpret_cast<FnNvmlDeviceGetProcesses>(
                     load("nvmlDeviceGetComputeRunningProcesses_v3"));
+                fn_get_graphics = reinterpret_cast<FnNvmlDeviceGetProcesses>(
+                    load("nvmlDeviceGetGraphicsRunningProcesses_v3"));
+                fn_get_memory = reinterpret_cast<FnNvmlDeviceGetMemoryInfo>(
+                    load("nvmlDeviceGetMemoryInfo_v2"));
                 fn_get_utilization = reinterpret_cast<FnNvmlDeviceGetUtilizationRates>(
                     load("nvmlDeviceGetUtilizationRates"));
 
                 // Utilization only needs init + handle + getUtilizationRates.
                 // Process memory also needs get_procs (Linux path).
-                if (!fn_init || !fn_get_handle || !fn_get_utilization)
+                if (!fn_init || !fn_get_handle)
                     return;
                 if (fn_init() != NVML_SUCCESS)
                     return;
@@ -222,27 +234,40 @@ namespace lfs::vis::gui {
                 if (fn_get_handle(pci_bus_id, &device) != NVML_SUCCESS)
                     return;
 
-#ifndef _WIN32
+#ifdef _WIN32
+                pid = GetCurrentProcessId();
+#else
                 pid = static_cast<unsigned int>(getpid());
 #endif
                 initialized = true;
             }
 
-#ifndef _WIN32
-            size_t getProcessMemory() const {
-                if (!initialized || !fn_get_procs)
+            size_t getProcessMemory(FnNvmlDeviceGetProcesses fn) const {
+                if (!initialized)
                     return 0;
-                unsigned int count = 64;
-                NvmlProcessInfo procs[64];
-                if (fn_get_procs(device, &count, procs) != NVML_SUCCESS)
+                if (!fn)
                     return 0;
-                for (unsigned int i = 0; i < count; ++i) {
-                    if (procs[i].pid == pid)
-                        return static_cast<size_t>(procs[i].usedGpuMemory);
-                }
-                return 0;
+                std::array<nvmlProcessInfo_t, 256> procs{};
+                auto count = static_cast<unsigned int>(procs.size());
+                if (fn(device, &count, procs.data()) != NVML_SUCCESS)
+                    return 0;
+                std::array<GpuProcessUsage, 256> usage{};
+                for (unsigned int i = 0; i < count; ++i)
+                    usage[i] = {procs[i].pid, procs[i].usedGpuMemory};
+                return parseGpuProcessBytes(pid, std::span(usage.data(), count));
             }
-#endif
+
+            bool getDeviceMemory(size_t& used, size_t& total) const {
+                if (!initialized || !fn_get_memory)
+                    return false;
+                nvmlMemory_v2_t memory{};
+                memory.version = nvmlMemory_v2;
+                if (fn_get_memory(device, &memory) != NVML_SUCCESS)
+                    return false;
+                used = static_cast<size_t>(memory.used);
+                total = static_cast<size_t>(memory.total);
+                return total >= used && total > 0;
+            }
 
             float getUtilization() const {
                 if (!initialized || !fn_get_utilization)
@@ -258,40 +283,113 @@ namespace lfs::vis::gui {
             static NvmlState s;
             return s;
         }
+#endif
 
     } // namespace
 
-    GpuMemoryInfo queryGpuMemory() {
-        GpuMemoryInfo info;
-
-        int cuda_device = 0;
-        if (cudaGetDevice(&cuda_device) == cudaSuccess) {
-            cudaDeviceProp prop{};
-            if (cudaGetDeviceProperties(&prop, cuda_device) == cudaSuccess)
-                info.device_name = shortenGpuDeviceName(prop.name);
+    size_t parseGpuProcessBytes(unsigned int pid,
+                                std::span<const GpuProcessUsage> processes) {
+        size_t result = 0;
+        for (const auto& process : processes) {
+            if (process.pid == pid &&
+                process.bytes != std::numeric_limits<unsigned long long>::max())
+                result = std::max(result, static_cast<size_t>(process.bytes));
         }
+        return result;
+    }
 
-        size_t free_mem = 0;
-        size_t total_mem = 0;
-        cudaMemGetInfo(&free_mem, &total_mem);
-
-        info.total = total_mem;
-        info.total_used = total_mem - free_mem;
-#ifdef _WIN32
-        info.process_used = dxgiState().getProcessMemory();
-#else
-        info.process_used = nvmlState().getProcessMemory();
-#endif
-        info.gpu_utilization_percent = nvmlState().getUtilization();
-        info.gpu_utilization_valid = info.gpu_utilization_percent >= 0.f;
-        if (info.process_used > info.total)
-            info.process_used = 0;
-
+    GpuMemoryInfo selectGpuMemory(size_t compute_bytes, size_t graphics_bytes,
+                                  size_t dxgi_bytes, size_t cuda_used, size_t cuda_total,
+                                  size_t nvml_used, size_t nvml_total) {
+        GpuMemoryInfo info;
+        info.process_used = std::max(compute_bytes, graphics_bytes);
+        if (info.process_used == 0)
+            info.process_used = dxgi_bytes;
+        if (info.process_used == 0) {
+            info.process_used = cuda_used;
+            info.process_estimated = true;
+        }
+        if (nvml_total > 0 && nvml_total >= nvml_used) {
+            info.total_used = nvml_used;
+            info.total = nvml_total;
+        } else if (cuda_total > 0 && cuda_total >= cuda_used) {
+            info.total_used = cuda_used;
+            info.total = cuda_total;
+            info.device_estimated = true;
+        }
         return info;
     }
 
+    std::string formatGpuGiB(size_t bytes) {
+        constexpr double gib = 1024.0 * 1024.0 * 1024.0;
+        return std::format("{:.2f}", static_cast<double>(bytes) / gib);
+    }
+
+    GpuMemoryInfo queryGpuMemory(const lfs::core::GpuBackend backend) {
+        const auto device = lfs::core::gpu_backend_device_info(backend);
+        if (backend == lfs::core::GpuBackend::Vulkan || backend == lfs::core::GpuBackend::Metal) {
+            GpuMemoryInfo info;
+            if (device) {
+                info.device_name = shortenGpuDeviceName(device->name);
+                info.total = device->total_memory_bytes;
+            }
+            info.uses_process_budget = true;
+            if (device && device->supports_process_memory_budget) {
+                info.process_budget = device->process_memory_budget_bytes;
+                info.process_budget_used = device->process_memory_used_bytes;
+            }
+            return info;
+        }
+        if (!device) {
+            return {};
+        }
+#if !LFS_HAS_CUDA
+        GpuMemoryInfo info;
+        info.device_name = shortenGpuDeviceName(device->name);
+        info.total = device->total_memory_bytes;
+        return info;
+#else
+        // NVML and the driver are sampled at most every 500 ms.
+        static std::mutex cache_mutex;
+        static GpuMemoryInfo cached;
+        static auto last_sample = std::chrono::steady_clock::time_point{};
+        std::lock_guard lock(cache_mutex);
+        const auto now = std::chrono::steady_clock::now();
+        if (last_sample != std::chrono::steady_clock::time_point{} &&
+            now - last_sample < std::chrono::milliseconds(500))
+            return cached;
+
+        const auto memory = lfs::core::gpu_backend_memory_info(backend);
+        const bool cuda_valid = memory.total_bytes > 0 && memory.total_bytes >= memory.free_bytes;
+        size_t nvml_used = 0;
+        size_t nvml_total = 0;
+        nvmlState().getDeviceMemory(nvml_used, nvml_total);
+        size_t dxgi_bytes = 0;
+#ifdef _WIN32
+        dxgi_bytes = dxgiState().getProcessMemory();
+#endif
+        auto info = selectGpuMemory(nvmlState().getProcessMemory(nvmlState().fn_get_compute),
+                                    nvmlState().getProcessMemory(nvmlState().fn_get_graphics),
+                                    dxgi_bytes, cuda_valid ? memory.total_bytes - memory.free_bytes : 0,
+                                    cuda_valid ? memory.total_bytes : 0, nvml_used, nvml_total);
+        info.device_name = shortenGpuDeviceName(device->name);
+        info.gpu_utilization_percent = nvmlState().getUtilization();
+        info.gpu_utilization_valid = info.gpu_utilization_percent >= 0.f;
+        cached = info;
+        last_sample = now;
+        return info;
+#endif
+    }
+
     float queryGpuUtilization() {
+        if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Vulkan) {
+            return -1.f;
+        }
+#if LFS_HAS_CUDA
         return nvmlState().getUtilization();
+#else
+        return -1.f;
+#endif
     }
 
 } // namespace lfs::vis::gui

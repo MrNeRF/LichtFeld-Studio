@@ -4,8 +4,10 @@
 
 #include "core/environment.hpp"
 #include "core/splat_data.hpp"
+#include "core/tensor_backend.hpp"
 #include "io/formats/rad.hpp"
 #include "io/ply_to_rad_lod.hpp"
+#include "rendering/vksplat_viewport_renderer.hpp"
 
 #include <gtest/gtest.h>
 
@@ -575,4 +577,65 @@ TEST(PlyToRadLod, ProbeReportsHeader) {
     EXPECT_EQ(info->vertex_count, 1000u);
     EXPECT_EQ(info->sh_degree, 0);
     std::filesystem::remove_all(temp_dir);
+}
+
+TEST(PlyToRadLod, VulkanViewportRadUsesInputBackend) {
+    using namespace lfs::core;
+    if (default_gpu_backend() != GpuBackend::Vulkan)
+        GTEST_SKIP() << "Requires the Vulkan process backend";
+    if (!gpu_backend_available(GpuBackend::Vulkan))
+        GTEST_SKIP() << "Vulkan backend unavailable";
+    ASSERT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan));
+    lfs::vis::VulkanContext context;
+    struct ShutdownBackend {
+        ~ShutdownBackend() { EXPECT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan)); }
+    } shutdown_backend;
+    ASSERT_TRUE(context.initHeadless()) << context.lastError();
+    GpuBackendScope backend(GpuBackend::Vulkan);
+    const auto temp_dir = std::filesystem::temp_directory_path() / "rad_vulkan_viewport_test";
+    std::filesystem::create_directories(temp_dir);
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() { std::filesystem::remove_all(path); }
+    } cleanup{temp_dir};
+    const auto ply = temp_dir / "scene.ply";
+    const auto rad = temp_dir / "scene.rad";
+    write_synthetic_ply(ply, make_synthetic_splats(128));
+    lfs::io::PlyToRadLodOptions options;
+    options.temp_dir = temp_dir / "scratch";
+    options.builder = lfs::io::LodBuilder::kOctree;
+    const auto converted = lfs::io::convert_ply_to_rad_lod(ply, rad, options);
+    ASSERT_TRUE(converted) << converted.error().message;
+    for (const bool upload : {false, true}) {
+        SCOPED_TRACE(upload ? "Vulkan-resident RAD" : "CPU-resident RAD");
+        auto model = lfs::io::load_rad(rad);
+        ASSERT_TRUE(model) << model.error();
+        if (upload) {
+            for (auto* tensor : {&model->means_raw(), &model->sh0_raw(), &model->shN_raw(),
+                                 &model->scaling_raw(), &model->rotation_raw(), &model->opacity_raw()}) {
+                if (tensor->is_valid())
+                    *tensor = tensor->to(Device::GPU);
+            }
+            ASSERT_EQ(gpu_backend_of(model->means_raw()), GpuBackend::Vulkan);
+        } else {
+            ASSERT_EQ(model->means_raw().device(), Device::CPU);
+        }
+        ASSERT_TRUE(model->lod_tree && model->lod_tree->rad_source.valid());
+
+        lfs::vis::VksplatViewportRenderer renderer;
+        lfs::rendering::ViewportRenderRequest request;
+        request.frame_view.size = {64, 64};
+        request.frame_view.translation = {0.0f, 0.0f, -200.0f};
+        request.sh_degree = 0;
+        request.lod_gpu_traversal.enabled = true;
+        request.lod_gpu_traversal.node_count = model->lod_tree->total_nodes();
+        request.lod_gpu_traversal.output_capacity = model->size();
+        request.lod_gpu_traversal.pixel_scale_limit = 1.0f;
+        const auto rendered = renderer.render(context, *model, request, true);
+        EXPECT_TRUE(rendered) << rendered.error();
+        if (!rendered)
+            continue;
+        EXPECT_NE(rendered->image, VK_NULL_HANDLE);
+        EXPECT_GT(rendered->completion_value, 0u);
+    }
 }

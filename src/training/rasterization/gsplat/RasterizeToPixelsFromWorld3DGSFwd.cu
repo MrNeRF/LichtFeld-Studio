@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include <cooperative_groups.h>
 #include <cuda_runtime.h>
 
@@ -19,7 +20,7 @@ namespace gsplat_lfs {
     // Forward Kernel
     ////////////////////////////////////////////////////////////////
 
-    template <uint32_t CDIM, typename scalar_t, bool kPerfectPinhole>
+    template <uint32_t CDIM, typename scalar_t, bool kPerfectPinhole, bool kBatched>
     __global__ void rasterize_to_pixels_from_world_3dgs_fwd_kernel(
         const uint32_t C,
         const uint32_t N,
@@ -54,8 +55,8 @@ namespace gsplat_lfs {
         const int32_t* __restrict__ flatten_ids,  // [n_isects]
         scalar_t* __restrict__ render_colors,     // [C, CDIM, image_height, image_width]
         scalar_t* __restrict__ render_alphas,     // [C, image_height, image_width, 1]
-        int32_t* __restrict__ last_ids            // [C, image_height, image_width]
-    ) {
+        int32_t* __restrict__ last_ids,           // [C, image_height, image_width]
+        const TileRange tiles) {
         // each thread draws one pixel, but also timeshares caching gaussians in a
         // shared tile
 
@@ -63,6 +64,10 @@ namespace gsplat_lfs {
         int32_t cid = block.group_index().x;
         int32_t tile_id =
             block.group_index().y * tile_width + block.group_index().z;
+        if constexpr (kBatched) {
+            if (tile_id < tiles.begin || tile_id >= tiles.end)
+                return;
+        }
         uint32_t i = block.group_index().y * tile_size + block.thread_index().y;
         uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
 
@@ -304,7 +309,7 @@ namespace gsplat_lfs {
         float* renders,
         float* alphas,
         int32_t* last_ids,
-        cudaStream_t stream) {
+        cudaStream_t stream, TileRange tiles) {
         const bool packed = false; // Only support non-packed for now
         const uint32_t tile_width = (image_width + tile_size - 1) / tile_size;
         const uint32_t tile_height = (image_height + tile_size - 1) / tile_size;
@@ -324,7 +329,7 @@ namespace gsplat_lfs {
             n_stage *
             (sizeof(vec4) + sizeof(mat3) + sizeof(float) * CDIM);
 
-        if (n_isects == 0) {
+        if (n_isects == 0 && tiles.end == UINT32_MAX) {
             // Skip kernel launch if no intersections
             // Still need to clear output buffers
             LFS_CUDA_CHECK_MSG(
@@ -376,17 +381,23 @@ namespace gsplat_lfs {
                 flatten_ids,
                 renders,
                 alphas,
-                last_ids);
+                last_ids, tiles);
             LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.rasterize_to_pixels_fwd");
         };
 
-        if constexpr (CDIM == 3) {
-            if (global_shutter && perfect_pinhole) {
-                launch(rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float, true>);
-                return;
+        auto dispatch = [&]<bool kBatched>() {
+            if constexpr (CDIM == 3) {
+                if (global_shutter && perfect_pinhole) {
+                    launch(rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float, true, kBatched>);
+                    return;
+                }
             }
-        }
-        launch(rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float, false>);
+            launch(rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM, float, false, kBatched>);
+        };
+        if (tiles.end == UINT32_MAX)
+            dispatch.template operator()<false>();
+        else
+            dispatch.template operator()<true>();
     }
 
     ////////////////////////////////////////////////////////////////
@@ -423,7 +434,7 @@ namespace gsplat_lfs {
         float* renders,                                                        \
         float* alphas,                                                         \
         int32_t* last_ids,                                                     \
-        cudaStream_t stream);
+        cudaStream_t stream, TileRange tiles);
 
     __INS__(1)
     __INS__(2)

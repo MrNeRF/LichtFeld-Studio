@@ -2,10 +2,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
-#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "internal/tensor_impl.hpp"
 #include <algorithm>
 #include <cmath>
+#include <format>
 #include <numeric>
 
 namespace lfs::core {
@@ -112,6 +113,51 @@ namespace lfs::core {
     }
 
     namespace {
+        // The CPU loop's choice along `dim`, from tensor ops on the input's
+        // backend: the first NaN after the first element, else the first
+        // element if it is NaN, else the first strict extreme.
+        std::pair<Tensor, Tensor> gpu_extreme_with_indices(
+            const Tensor& input, const int dim, const bool keepdim, const bool find_maximum) {
+            const size_t size = input.size(static_cast<size_t>(dim));
+            LFS_ASSERT_MSG(size <= static_cast<size_t>(std::numeric_limits<int32_t>::max()),
+                           std::format("indexed extrema index their dimension in int32 (dim={}, size={})", dim,
+                                       size));
+            const Tensor x = input.contiguous();
+            std::vector<int32_t> positions(size);
+            for (size_t i = 0; i < size; ++i)
+                positions[i] = static_cast<int32_t>(i);
+            std::vector<size_t> position_shape(x.ndim(), 1);
+            position_shape[static_cast<size_t>(dim)] = size;
+            const Tensor position = internal::copy_to_backend(
+                                        Tensor::from_vector(positions, {size}, Device::CPU), *gpu_backend_of(x))
+                                        .reshape(TensorShape(position_shape))
+                                        .expand(x.shape())
+                                        .contiguous();
+            const float past_end = static_cast<float>(size);
+            // The first position where `mask` holds, or size where it never does.
+            const auto first = [&](const Tensor& mask) {
+                return position.masked_fill(mask.logical_not(), past_end).min(dim, true);
+            };
+            const Tensor nan = x.isnan();
+            const Tensor later_nan = first(nan.logical_and(position.ne(0)));
+            const float excluded = find_maximum ? -std::numeric_limits<float>::infinity()
+                                                : std::numeric_limits<float>::infinity();
+            const Tensor finite = x.masked_fill(nan, excluded);
+            const Tensor extreme = find_maximum ? finite.max(dim, true) : finite.min(dim, true);
+            const Tensor first_extreme = first(finite.eq(extreme));
+            const Tensor leading_nan = nan.slice(dim, 0, 1);
+            const Tensor chosen = Tensor::where(
+                later_nan.lt(past_end), later_nan,
+                Tensor::where(leading_nan, Tensor::zeros_like(first_extreme), first_extreme));
+            Tensor indices = chosen.to(DataType::Int64);
+            Tensor values = x.gather(dim, indices);
+            if (!keepdim) {
+                indices = indices.squeeze(dim);
+                values = values.squeeze(dim);
+            }
+            return {values.contiguous(), indices.contiguous()};
+        }
+
         std::pair<Tensor, Tensor> indexed_extreme_with_indices(
             const Tensor& input, int dim, const bool keepdim, const bool find_maximum) {
             LFS_ASSERT_MSG(input.is_valid(),
@@ -130,6 +176,9 @@ namespace lfs::core {
                 LFS_ASSERT_MSG(dim >= 0 && dim < static_cast<int>(rank),
                                "indexed-extrema dimension is out of range");
             }
+
+            if (input.device() == Device::GPU && rank > 0 && input.numel() > 0)
+                return gpu_extreme_with_indices(input, dim, keepdim, find_maximum);
 
             Tensor cpu = input.device() == Device::CPU
                              ? input.contiguous()
@@ -245,10 +294,13 @@ namespace lfs::core {
         // 1D case - optimized path
         if (ndim() == 1 && dim == 0) {
             if (device_ == Device::GPU) {
+                const auto stream = internal::gpu_backend_tag(source) == GpuBackend::CUDA
+                                        ? prepare_inputs_for_stream({&sorted, &indices}, sorted.stream())
+                                        : nullptr;
                 internal::backend_ops_for(source).sort_1d(
                     internal::storage_ref(sorted), internal::storage_ref(indices), numel(),
                     internal::SortProgram{.dim_size = numel(), .descending = descending},
-                    internal::ExecContext{nullptr});
+                    internal::ExecContext{stream});
                 // No sync - returns tensors
             } else {
                 // CPU fallback
@@ -293,6 +345,9 @@ namespace lfs::core {
         }
 
         if (device_ == Device::GPU) {
+            const auto stream = internal::gpu_backend_tag(source) == GpuBackend::CUDA
+                                    ? prepare_inputs_for_stream({&sorted, &indices}, sorted.stream())
+                                    : nullptr;
             internal::backend_ops_for(source).sort_2d(
                 internal::storage_ref(sorted), internal::storage_ref(indices),
                 internal::SortProgram{
@@ -302,7 +357,7 @@ namespace lfs::core {
                     .dim = dim,
                     .descending = descending,
                 },
-                internal::ExecContext{nullptr});
+                internal::ExecContext{stream});
             // No sync - returns tensors
         } else {
             // CPU implementation

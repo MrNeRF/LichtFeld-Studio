@@ -67,35 +67,6 @@ namespace lfs::training::kernels {
         cudaStream_t stream = nullptr,
         bool warp_aggregate = true);
 
-    // Pre-privatisation scatter kernels, compiled for equivalence tests only.
-    void launch_bilateral_grid_slice_backward_reference(
-        const float* grid, const float* rgb, const float* grad_output,
-        float* grad_grid, float* grad_rgb,
-        int L, int H, int W, int h, int w,
-        const float* shared_offset,
-        cudaStream_t stream = nullptr);
-
-    void launch_bilateral_grid_slice_backward_chw_reference(
-        const float* grid, const float* rgb, const float* grad_output,
-        float* grad_grid, float* grad_rgb,
-        int L, int H, int W, int h, int w,
-        const float* shared_offset,
-        cudaStream_t stream = nullptr);
-
-    void launch_bilateral_grid_slice_backward_exposure_chroma_reference(
-        const float* grid, const float* rgb, const float* grad_output,
-        float* grad_grid, float* grad_rgb,
-        int L, int H, int W, int h, int w,
-        const float* shared_offset,
-        cudaStream_t stream = nullptr);
-
-    void launch_bilateral_grid_slice_backward_exposure_chroma_chw_reference(
-        const float* grid, const float* rgb, const float* grad_output,
-        float* grad_grid, float* grad_rgb,
-        int L, int H, int W, int h, int w,
-        const float* shared_offset,
-        cudaStream_t stream = nullptr);
-
     // TV loss kernels. norm_n is the divisor for the (C * N) normalisation;
     // pass 0 to use N (the number of images in this launch).
 
@@ -111,10 +82,6 @@ namespace lfs::training::kernels {
 
     // Utility kernels
 
-    void launch_bilateral_grid_init_identity(
-        float* grids, int N, int L, int H, int W,
-        cudaStream_t stream = nullptr);
-
     void launch_bilateral_grid_project_mean(
         float* grids, const float* mean, const float* identity,
         int N, int C, int L, int H, int W, int per_image,
@@ -124,10 +91,6 @@ namespace lfs::training::kernels {
         float* channel_sum, float* shared_offset,
         const float* identity, const float* mean_old, const float* mean_new,
         int C, float spatial, float inv_n_spatial,
-        cudaStream_t stream = nullptr);
-
-    void launch_bilateral_grid_accumulate_grad(
-        float* dst, const float* src, int num_elements,
         cudaStream_t stream = nullptr);
 
     void launch_bilateral_grid_adam_update(

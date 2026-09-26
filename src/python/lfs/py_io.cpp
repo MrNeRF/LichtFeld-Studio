@@ -10,6 +10,7 @@
 #include "py_tensor.hpp"
 
 #include <nanobind/stl/filesystem.h>
+#include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
@@ -27,12 +28,17 @@
 #include "io/project_chapters.hpp"
 #include "io/project_container.hpp"
 #include "io/project_document.hpp"
+#include "io/project_inspector.hpp"
+#include "io/project_operations.hpp"
+#include "io/project_recovery.hpp"
 #include "io/splat_path.hpp"
 #include "training/dataset.hpp"
 
 #include <filesystem>
 #include <format>
+#include <memory>
 #include <optional>
+#include <span>
 
 namespace lfs::python {
 
@@ -117,30 +123,63 @@ namespace lfs::python {
             }));
         }
 
+        // Native operations copy these callbacks while the GIL is released.
+        // Share the Python handle so those copies only change C++ reference counts.
         struct PyProgressCallback {
-            nb::object callback;
+            std::shared_ptr<nb::object> callback;
+            bool present;
+
+            explicit PyProgressCallback(nb::object value)
+                : callback(std::make_shared<nb::object>(std::move(value))),
+                  present(*callback && !callback->is_none()) {}
 
             void operator()(float progress, const std::string& message) const {
                 nb::gil_scoped_acquire gil;
-                if (!callback)
+                if (!present)
                     return;
                 try {
-                    callback(progress, message);
+                    (*callback)(progress, message);
                 } catch (const std::exception& e) {
                     LOG_ERROR("Python progress callback error: {}", e.what());
                 }
             }
         };
 
+        struct PyCancelCallback {
+            std::shared_ptr<nb::object> callback;
+            bool present;
+
+            explicit PyCancelCallback(nb::object value)
+                : callback(std::make_shared<nb::object>(std::move(value))),
+                  present(*callback && !callback->is_none()) {}
+
+            bool operator()() const {
+                nb::gil_scoped_acquire gil;
+                if (!present)
+                    return false;
+                try {
+                    return nb::cast<bool>((*callback)());
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Python cancellation callback error: {}", e.what());
+                    return true;
+                }
+            }
+        };
+
         struct PyExportProgressCallback {
-            nb::object callback;
+            std::shared_ptr<nb::object> callback;
+            bool present;
+
+            explicit PyExportProgressCallback(nb::object value)
+                : callback(std::make_shared<nb::object>(std::move(value))),
+                  present(static_cast<bool>(*callback)) {}
 
             bool operator()(float progress, const std::string& stage) const {
                 nb::gil_scoped_acquire gil;
-                if (!callback)
+                if (!present)
                     return true;
                 try {
-                    nb::object result = callback(progress, stage);
+                    nb::object result = (*callback)(progress, stage);
                     if (nb::isinstance<nb::bool_>(result))
                         return nb::cast<bool>(result);
                     return true;
@@ -195,6 +234,10 @@ namespace lfs::python {
             io::project::ContainerRole role = io::project::ContainerRole::Master;
             io::project::OpenState open_state = io::project::OpenState::HardFail;
             bool has_preview = false;
+            bool has_checkpoint = false;
+            bool has_dataset = false;
+            std::uint32_t preview_width = 0;
+            std::uint32_t preview_height = 0;
             std::string fallback_preview_path;
         };
 
@@ -444,6 +487,28 @@ namespace lfs::python {
             .value("REPAIR_ONLY", project::OpenState::RepairOnly)
             .value("HARD_FAIL", project::OpenState::HardFail);
 
+        nb::enum_<project::CommitKind>(m, "ProjectCommitKind")
+            .value("EXPLICIT", project::CommitKind::Explicit)
+            .value("AUTOSAVE", project::CommitKind::Autosave)
+            .value("RECOVERED", project::CommitKind::Recovered)
+            .value("COMPACTION", project::CommitKind::Compaction)
+            .value("CONTENTS", project::CommitKind::Contents);
+
+        nb::enum_<project::RowKind>(m, "ProjectRowKind")
+            .value("LIVE", project::RowKind::Live)
+            .value("TOMBSTONE", project::RowKind::Tombstone)
+            .value("SIDECAR_BASE_REFERENCE", project::RowKind::SidecarBaseReference);
+
+        nb::enum_<project::Compression>(m, "ProjectCompression")
+            .value("STORED", project::Compression::Stored)
+            .value("ZSTD_FRAMED", project::Compression::ZstdFramed)
+            .value("BYTE_SHUFFLE_ZSTD_FRAMED", project::Compression::ByteShuffleZstdFramed);
+
+        nb::class_<project::Version>(m, "ProjectVersion")
+            .def(nb::init<>())
+            .def_ro("major", &project::Version::major)
+            .def_ro("minor", &project::Version::minor);
+
         nb::class_<PyProjectInspection>(m, "ProjectInspection")
             .def_ro("project_uuid", &PyProjectInspection::project_uuid)
             .def_ro("file_uuid", &PyProjectInspection::file_uuid)
@@ -455,7 +520,560 @@ namespace lfs::python {
             .def_ro("role", &PyProjectInspection::role)
             .def_ro("open_state", &PyProjectInspection::open_state)
             .def_ro("has_preview", &PyProjectInspection::has_preview)
+            .def_ro("has_checkpoint", &PyProjectInspection::has_checkpoint)
+            .def_ro("has_dataset", &PyProjectInspection::has_dataset)
+            .def_ro("preview_width", &PyProjectInspection::preview_width)
+            .def_ro("preview_height", &PyProjectInspection::preview_height)
             .def_ro("fallback_preview_path", &PyProjectInspection::fallback_preview_path);
+
+        nb::class_<project::OpenClassification>(m, "ProjectOpenClassification")
+            .def_ro("state", &project::OpenClassification::state)
+            .def_ro("generation", &project::OpenClassification::generation)
+            .def_ro("diagnostic", &project::OpenClassification::diagnostic);
+
+        nb::class_<project::ProjectStorageStats>(m, "ProjectStorageStats")
+            .def_ro("physical_bytes", &project::ProjectStorageStats::physical_bytes)
+            .def_ro("estimated_live_bytes", &project::ProjectStorageStats::estimated_live_bytes)
+            .def_ro("dead_bytes", &project::ProjectStorageStats::dead_bytes)
+            .def_ro("dead_ratio", &project::ProjectStorageStats::dead_ratio);
+
+        nb::class_<project::ProjectLicense>(m, "ProjectLicense")
+            .def(nb::init<>())
+            .def_rw("identifier", &project::ProjectLicense::identifier)
+            .def_rw("notice", &project::ProjectLicense::notice);
+
+        nb::class_<project::ProjectInspectorCard>(m, "ProjectInspectorCard")
+            .def_ro("path", &project::ProjectInspectorCard::path)
+            .def_prop_ro("project_uuid", [](const project::ProjectInspectorCard& value) {
+                return value.project_uuid.to_string();
+            })
+            .def_prop_ro("file_uuid", [](const project::ProjectInspectorCard& value) {
+                return value.file_uuid.to_string();
+            })
+            .def_prop_ro("commit_uuid", [](const project::ProjectInspectorCard& value) {
+                return value.commit_uuid.to_string();
+            })
+            .def_ro("generation", &project::ProjectInspectorCard::generation)
+            .def_ro("created_at_unix_ns", &project::ProjectInspectorCard::created_at_unix_ns)
+            .def_ro("saved_at_unix_ns", &project::ProjectInspectorCard::saved_at_unix_ns)
+            .def_ro("physical_file_size", &project::ProjectInspectorCard::physical_file_size)
+            .def_ro("role", &project::ProjectInspectorCard::role)
+            .def_ro("open_state", &project::ProjectInspectorCard::open_state)
+            .def_ro("validation_scope", &project::ProjectInspectorCard::validation_scope)
+            .def_ro("has_preview", &project::ProjectInspectorCard::has_preview)
+            .def_ro("preview_bytes", &project::ProjectInspectorCard::preview_bytes)
+            .def_ro("preview_width", &project::ProjectInspectorCard::preview_width)
+            .def_ro("preview_height", &project::ProjectInspectorCard::preview_height)
+            .def_ro("title", &project::ProjectInspectorCard::title)
+            .def_ro("min_reader_version", &project::ProjectInspectorCard::min_reader_version)
+            .def_ro("min_safe_writer_version", &project::ProjectInspectorCard::min_safe_writer_version)
+            .def_ro("commit_kind", &project::ProjectInspectorCard::commit_kind)
+            .def_ro("diagnostic", &project::ProjectInspectorCard::diagnostic);
+
+        nb::class_<project::ProjectThumbnailSourceAvailability>(
+            m, "ProjectThumbnailSourceAvailability")
+            .def_ro("first_dataset_image",
+                    &project::ProjectThumbnailSourceAvailability::first_dataset_image)
+            .def_ro("first_embedded_image",
+                    &project::ProjectThumbnailSourceAvailability::first_embedded_image);
+
+        nb::class_<project::ProjectInspectorSave>(m, "ProjectInspectorSave")
+            .def_ro("sequence", &project::ProjectInspectorSave::sequence)
+            .def_ro("generation", &project::ProjectInspectorSave::generation)
+            .def_ro("kind", &project::ProjectInspectorSave::kind)
+            .def_ro("saved_at_unix_ns", &project::ProjectInspectorSave::saved_at_unix_ns)
+            .def_ro("bytes_added", &project::ProjectInspectorSave::bytes_added)
+            .def_ro("holds_checkpoint", &project::ProjectInspectorSave::holds_checkpoint)
+            .def_ro("checkpoint_iteration", &project::ProjectInspectorSave::checkpoint_iteration)
+            .def_ro("planned_iterations", &project::ProjectInspectorSave::planned_iterations)
+            .def_ro("strategy", &project::ProjectInspectorSave::strategy)
+            .def_ro("gaussians", &project::ProjectInspectorSave::gaussians)
+            .def_ro("operation", &project::ProjectInspectorSave::operation)
+            .def_ro("source_save_generation", &project::ProjectInspectorSave::source_save_generation)
+            .def_ro("source_saved_at_unix_ns", &project::ProjectInspectorSave::source_saved_at_unix_ns)
+            .def_ro("source_save_kind", &project::ProjectInspectorSave::source_save_kind);
+
+        nb::class_<project::ProjectInspectorChapter>(m, "ProjectInspectorChapter")
+            .def_prop_ro("fourcc", [](const project::ProjectInspectorChapter& value) {
+                return value.fourcc.to_string();
+            })
+            .def_prop_ro("instance_uuid", [](const project::ProjectInspectorChapter& value) {
+                return value.instance_uuid.to_string();
+            })
+            .def_ro("row_kind", &project::ProjectInspectorChapter::row_kind)
+            .def_ro("compression", &project::ProjectInspectorChapter::compression)
+            .def_ro("stored_bytes", &project::ProjectInspectorChapter::stored_bytes)
+            .def_ro("uncompressed_bytes", &project::ProjectInspectorChapter::uncompressed_bytes)
+            .def_ro("source_generation", &project::ProjectInspectorChapter::source_generation);
+
+        nb::class_<project::ProjectInspectorCheckpoint>(m, "ProjectInspectorCheckpoint")
+            .def_prop_ro("instance_uuid", [](const project::ProjectInspectorCheckpoint& value) {
+                return value.instance_uuid.to_string();
+            })
+            .def_ro("source_generation", &project::ProjectInspectorCheckpoint::source_generation)
+            .def_ro("iteration", &project::ProjectInspectorCheckpoint::iteration)
+            .def_ro("gaussians", &project::ProjectInspectorCheckpoint::gaussians)
+            .def_ro("sh_degree", &project::ProjectInspectorCheckpoint::sh_degree)
+            .def_ro("binds_scene_graph", &project::ProjectInspectorCheckpoint::binds_scene_graph)
+            .def_ro("header_reachable", &project::ProjectInspectorCheckpoint::header_reachable)
+            .def_ro("retained", &project::ProjectInspectorCheckpoint::retained);
+
+        nb::class_<project::ProjectInspectorSceneGraph>(m, "ProjectInspectorSceneGraph")
+            .def_ro("node_counts_by_type", &project::ProjectInspectorSceneGraph::node_counts_by_type)
+            .def_ro("dataset_node_name", &project::ProjectInspectorSceneGraph::dataset_node_name)
+            .def_prop_ro("training_node_id", [](const project::ProjectInspectorSceneGraph& value) -> std::optional<std::string> {
+                if (!value.training_node_id) {
+                    return std::nullopt;
+                }
+                return value.training_node_id->to_string();
+            });
+
+        nb::class_<project::ProjectInspectorParameters>(m, "ProjectInspectorParameters")
+            .def_ro("active_strategy", &project::ProjectInspectorParameters::active_strategy)
+            .def_ro("planned_iterations", &project::ProjectInspectorParameters::planned_iterations)
+            .def_ro("embedded_dataset_present", &project::ProjectInspectorParameters::embedded_dataset_present)
+            .def_ro("embedded_dataset_complete", &project::ProjectInspectorParameters::embedded_dataset_complete)
+            .def_ro("embedded_images", &project::ProjectInspectorParameters::embedded_images)
+            .def_ro("embedded_normals", &project::ProjectInspectorParameters::embedded_normals)
+            .def_ro("embedded_sparse", &project::ProjectInspectorParameters::embedded_sparse);
+
+        nb::class_<project::ProjectInspectorReference>(m, "ProjectInspectorReference")
+            .def_ro("key", &project::ProjectInspectorReference::key)
+            .def_ro("kind", &project::ProjectInspectorReference::kind)
+            .def_ro("path", &project::ProjectInspectorReference::path)
+            .def_ro("reachable", &project::ProjectInspectorReference::reachable);
+
+        nb::class_<project::MetricHistorySample>(m, "ProjectMetricHistorySample")
+            .def_ro("iteration", &project::MetricHistorySample::iteration)
+            .def_ro("value", &project::MetricHistorySample::value);
+        nb::class_<project::LastEvaluationMetrics>(m, "ProjectLastEvaluationMetrics")
+            .def_ro("iteration", &project::LastEvaluationMetrics::iteration)
+            .def_ro("psnr", &project::LastEvaluationMetrics::psnr)
+            .def_ro("ssim", &project::LastEvaluationMetrics::ssim);
+        nb::class_<project::ProjectInspectorMetrics>(m, "ProjectInspectorMetrics")
+            .def_ro("loss_samples", &project::ProjectInspectorMetrics::loss_samples)
+            .def_ro("psnr_samples", &project::ProjectInspectorMetrics::psnr_samples)
+            .def_ro("last_loss", &project::ProjectInspectorMetrics::last_loss)
+            .def_ro("last_psnr", &project::ProjectInspectorMetrics::last_psnr)
+            .def_ro("last_evaluation", &project::ProjectInspectorMetrics::last_evaluation);
+
+        nb::class_<project::ProjectInspectorDetails>(m, "ProjectInspectorDetails")
+            .def_ro("card", &project::ProjectInspectorDetails::card)
+            .def_ro("storage", &project::ProjectInspectorDetails::storage)
+            .def_ro("save_history", &project::ProjectInspectorDetails::save_history)
+            .def_ro("chapters", &project::ProjectInspectorDetails::chapters)
+            .def_ro("manifest", &project::ProjectInspectorDetails::manifest)
+            .def_ro("license", &project::ProjectInspectorDetails::license)
+            .def_ro("scene_graph", &project::ProjectInspectorDetails::scene_graph)
+            .def_ro("parameters", &project::ProjectInspectorDetails::parameters)
+            .def_ro("retained_checkpoints", &project::ProjectInspectorDetails::retained_checkpoints)
+            .def_ro("references", &project::ProjectInspectorDetails::references)
+            .def_ro("metrics", &project::ProjectInspectorDetails::metrics)
+            .def_ro("autosave_sidecar_present", &project::ProjectInspectorDetails::autosave_sidecar_present)
+            .def_ro("chapters_requiring_full_read", &project::ProjectInspectorDetails::chapters_requiring_full_read);
+
+        nb::enum_<project::ProjectVerificationStatus>(m, "ProjectVerificationStatus")
+            .value("VERIFIED", project::ProjectVerificationStatus::Verified)
+            .value("CANCELED", project::ProjectVerificationStatus::Canceled)
+            .value("FAILED", project::ProjectVerificationStatus::Failed);
+
+        nb::class_<project::ProjectVerificationResult>(m, "ProjectVerificationResult")
+            .def_ro("status", &project::ProjectVerificationResult::status)
+            .def_ro("verified_chunks", &project::ProjectVerificationResult::verified_chunks)
+            .def_ro("first_mismatch", &project::ProjectVerificationResult::first_mismatch);
+
+        nb::class_<project::ProjectReduceCheckpoint>(m, "ProjectReduceCheckpoint")
+            .def_prop_ro("instance_uuid", [](const project::ProjectReduceCheckpoint& value) {
+                return value.instance_uuid.to_string();
+            })
+            .def_ro("iteration", &project::ProjectReduceCheckpoint::iteration)
+            .def_ro("bytes", &project::ProjectReduceCheckpoint::bytes)
+            .def_ro("scng_bound", &project::ProjectReduceCheckpoint::scng_bound);
+
+        nb::class_<project::ProjectReduceDatasetPayload>(m, "ProjectReduceDatasetPayload")
+            .def_prop_ro("chunk_uuid", [](const project::ProjectReduceDatasetPayload& value) {
+                return value.chunk_uuid.to_string();
+            })
+            .def_ro("rel_path", &project::ProjectReduceDatasetPayload::rel_path)
+            .def_ro("kind", &project::ProjectReduceDatasetPayload::kind)
+            .def_ro("bytes", &project::ProjectReduceDatasetPayload::bytes)
+            .def_ro("external_replacement_validated", &project::ProjectReduceDatasetPayload::external_replacement_validated);
+
+        nb::class_<project::ProjectReduceProjection>(m, "ProjectReduceProjection")
+            .def_ro("enabled", &project::ProjectReduceProjection::enabled)
+            .def_ro("allowed", &project::ProjectReduceProjection::allowed)
+            .def_ro("reclaimable_bytes", &project::ProjectReduceProjection::reclaimable_bytes)
+            .def_ro("projected_size", &project::ProjectReduceProjection::projected_size);
+
+        nb::class_<project::ProjectReducePlan>(m, "ProjectReducePlan")
+            .def_ro("path", &project::ProjectReducePlan::path)
+            .def_prop_ro("input_commit_uuid", [](const project::ProjectReducePlan& value) {
+                return value.input_commit_uuid.to_string();
+            })
+            .def_ro("physical_size", &project::ProjectReducePlan::physical_size)
+            .def_ro("tombstone_bytes", &project::ProjectReducePlan::tombstone_bytes)
+            .def_ro("superseded_rows", &project::ProjectReducePlan::superseded_rows)
+            .def_ro("retained_checkpoints", &project::ProjectReducePlan::retained_checkpoints)
+            .def_ro("embedded_dataset", &project::ProjectReducePlan::embedded_dataset)
+            .def_ro("drop_checkpoints", &project::ProjectReducePlan::drop_checkpoints)
+            .def_ro("drop_embedded_dataset", &project::ProjectReducePlan::drop_embedded_dataset)
+            .def_ro("compact", &project::ProjectReducePlan::compact);
+
+        nb::class_<project::ProjectReduceResult>(m, "ProjectReduceResult")
+            .def_ro("card", &project::ProjectReduceResult::card)
+            .def_ro("checkpoints_removed", &project::ProjectReduceResult::checkpoints_removed)
+            .def_ro("dataset_images_removed", &project::ProjectReduceResult::dataset_images_removed)
+            .def_ro("dataset_normals_removed", &project::ProjectReduceResult::dataset_normals_removed)
+            .def_ro("dataset_sparse_removed", &project::ProjectReduceResult::dataset_sparse_removed)
+            .def_ro("bytes_reclaimed", &project::ProjectReduceResult::bytes_reclaimed)
+            .def_ro("recovery_copy", &project::ProjectReduceResult::recovery_copy);
+
+        nb::class_<project::DatasetEmbedResult>(m, "DatasetEmbedResult")
+            .def_ro("card", &project::DatasetEmbedResult::card)
+            .def_ro("images_embedded", &project::DatasetEmbedResult::images_embedded)
+            .def_ro("normals_embedded", &project::DatasetEmbedResult::normals_embedded)
+            .def_ro("sparse_embedded", &project::DatasetEmbedResult::sparse_embedded)
+            .def_ro("bytes_embedded", &project::DatasetEmbedResult::bytes_embedded);
+
+        nb::class_<project::DatasetReferenceResult>(m, "DatasetReferenceResult")
+            .def_ro("card", &project::DatasetReferenceResult::card)
+            .def_prop_ro("reference_uuid", [](const project::DatasetReferenceResult& value) {
+                return value.reference_uuid.to_string();
+            })
+            .def_ro("content_replaced", &project::DatasetReferenceResult::content_replaced);
+
+        nb::enum_<project::ProjectExportFormat>(m, "ProjectExportFormat")
+            .value("PLY", project::ProjectExportFormat::Ply)
+            .value("SOG", project::ProjectExportFormat::Sog)
+            .value("SSOG", project::ProjectExportFormat::Ssog)
+            .value("SPZ", project::ProjectExportFormat::Spz);
+
+        nb::class_<project::ProjectExportResult>(m, "ProjectExportResult")
+            .def_ro("destination", &project::ProjectExportResult::destination)
+            .def_ro("format", &project::ProjectExportResult::format)
+            .def_ro("gaussian_count", &project::ProjectExportResult::gaussian_count)
+            .def_ro("bytes_written", &project::ProjectExportResult::bytes_written);
+
+        nb::class_<project::ProjectRepairResult>(m, "ProjectRepairResult")
+            .def_ro("card", &project::ProjectRepairResult::card)
+            .def_ro("saves_recovered", &project::ProjectRepairResult::saves_recovered);
+
+        m.def("classify_project", [](const std::filesystem::path& path) {
+            std::optional<project::OpenClassification> result;
+            {
+                nb::gil_scoped_release release;
+                project::ReaderOptions options;
+                options.allow_unsupported_inspection = true;
+                result = project::ProjectReader::classify(path, options);
+            }
+            return *result; }, nb::arg("path"), "Classify a .licht path without throwing for damaged heads.");
+
+        m.def("project_storage_stats", [](const std::filesystem::path& path) {
+            std::optional<lfs::Result<project::ProjectStorageStats>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::project_storage_stats(path);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"));
+
+        m.def("run_project_operation", [](const std::filesystem::path& path, const std::string& project_uuid, const std::string& commit_uuid, nb::callable operation) {
+            const auto expected_project = parse_reference_uuid(project_uuid);
+            const auto expected_commit = commit_uuid.empty() ? lfs::core::Uuid{} : parse_reference_uuid(commit_uuid);
+            unwrap(project::run_project_operation(path, expected_project, expected_commit, [&operation] { operation(); })); }, nb::arg("path"), nb::arg("project_uuid"), nb::arg("commit_uuid"), nb::arg("operation"));
+
+        m.def("backup_project_file", [](const std::filesystem::path& path) {
+            nb::gil_scoped_release release;
+            return unwrap(project::backup_project_file(path)); }, nb::arg("path"));
+
+        m.def("restore_project_backup", [](const std::filesystem::path& path, const std::filesystem::path& backup, const std::string& project_uuid, const std::string& commit_uuid) {
+            const auto project = parse_reference_uuid(project_uuid);
+            const auto commit = parse_reference_uuid(commit_uuid);
+            nb::gil_scoped_release release;
+            unwrap(project::restore_project_backup(path, backup, project, commit)); }, nb::arg("path"), nb::arg("backup"), nb::arg("project_uuid"), nb::arg("commit_uuid"));
+
+        m.def("inspect_project_card", [](const std::filesystem::path& path) {
+            std::optional<lfs::Result<project::ProjectInspectorCard>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::inspect_project_card(path);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"));
+
+        m.def("project_content_stamp", [](const std::filesystem::path& path) {
+            nb::gil_scoped_release release;
+            return project::project_content_stamp(path); }, nb::arg("path"));
+
+        m.def("inspect_project_details", [](const std::filesystem::path& path, const std::uint64_t checkpoint_byte_budget) {
+            std::optional<lfs::Result<project::ProjectInspectorDetails>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::inspect_project_details(path, checkpoint_byte_budget);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("checkpoint_byte_budget") = 8ull * 1024 * 1024);
+
+        m.def("read_preview", [](const std::filesystem::path& path) {
+            std::optional<lfs::Result<std::vector<std::byte>>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::read_project_preview(path);
+            }
+            const auto bytes = unwrap(std::move(*result));
+            return nb::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size()); }, nb::arg("path"));
+
+        m.def("restore_save", [](const std::filesystem::path& path, const std::uint64_t generation, const std::filesystem::path& destination) {
+            std::optional<lfs::Result<project::ProjectInspectorCard>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::restore_save(path, generation, destination);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("generation"), nb::arg("destination"));
+
+        m.def("rebind_checkpoint", [](const std::filesystem::path& path, const std::string& checkpoint_instance_uuid) {
+            const auto uuid = parse_reference_uuid(checkpoint_instance_uuid);
+            std::optional<lfs::Result<project::ProjectInspectorCard>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::rebind_checkpoint(path, uuid);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("checkpoint_instance_uuid"));
+
+        m.def("compact_project_file", [](const std::filesystem::path& path, nb::object progress, nb::object cancel) {
+            PyProgressCallback progress_callback{std::move(progress)};
+            PyCancelCallback cancel_callback{std::move(cancel)};
+            std::optional<lfs::Result<project::ProjectInspectorCard>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::compact_project_file(
+                    path,
+                    progress_callback.present
+                        ? project::ProjectOperationProgress(progress_callback)
+                        : project::ProjectOperationProgress{},
+                    cancel_callback.present
+                        ? project::ProjectOperationCancel(cancel_callback)
+                        : project::ProjectOperationCancel{});
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
+
+        m.def("clean_project_file", [](const std::filesystem::path& path, const std::filesystem::path& destination, const std::string& expected_commit, nb::object progress, nb::object cancel) {
+            const auto expected = expected_commit.empty() ? lfs::core::Uuid{} : parse_reference_uuid(expected_commit);
+            PyProgressCallback progress_callback{std::move(progress)};
+            PyCancelCallback cancel_callback{std::move(cancel)};
+            nb::gil_scoped_release release;
+            return unwrap(project::clean_project_file(path, destination, expected,
+                progress_callback.present ? project::ProjectOperationProgress(progress_callback) : project::ProjectOperationProgress{},
+                cancel_callback.present ? project::ProjectOperationCancel(cancel_callback) : project::ProjectOperationCancel{})); }, nb::arg("path"), nb::arg("destination") = "", nb::arg("expected_commit") = "", nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
+
+        m.def("plan_reduce_size", [](const std::filesystem::path& path) {
+            std::optional<lfs::Result<project::ProjectReducePlan>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::plan_reduce_size(path);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"));
+
+        m.def("undo_contents_removal", [](const std::filesystem::path& path, const std::string& id) {
+            std::optional<lfs::Result<project::ProjectInspectorCard>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::undo_contents_removal(path, id);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("id"));
+
+        m.def("reduce_size", [](const std::filesystem::path& path, const nb::dict& options, nb::object progress, nb::object cancel) {
+            const auto read_option = [&](const char* name, const bool fallback) {
+                return options.contains(name) ? nb::cast<bool>(options[name]) : fallback;
+            };
+            const bool drop_unbound_checkpoints = read_option("drop_unbound_checkpoints", true);
+            const bool drop_embedded_dataset = read_option("drop_embedded_dataset", false);
+            project::ProjectReduceSelection selection;
+            selection.compact = read_option("compact", true);
+            selection.thumbnail = read_option("drop_thumbnail", false);
+            selection.metrics = read_option("drop_metrics", false);
+            if (options.contains("save_generation")) selection.save_generation = nb::cast<std::uint64_t>(options["save_generation"]);
+            if (options.contains("checkpoint_uuid")) selection.checkpoint = parse_reference_uuid(nb::cast<std::string>(options["checkpoint_uuid"]));
+            PyProgressCallback progress_callback{std::move(progress)};
+            PyCancelCallback cancel_callback{std::move(cancel)};
+            std::optional<lfs::Result<project::ProjectReduceResult>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::reduce_size(
+                    path, drop_unbound_checkpoints, drop_embedded_dataset,
+                    progress_callback.present
+                        ? project::ProjectOperationProgress(progress_callback)
+                        : project::ProjectOperationProgress{},
+                    cancel_callback.present
+                        ? project::ProjectOperationCancel(cancel_callback)
+                        : project::ProjectOperationCancel{}, selection);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("options") = nb::dict(), nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
+
+        m.def("embed_dataset_file", [](const std::filesystem::path& path, nb::object progress, nb::object cancel) {
+            PyProgressCallback progress_callback{std::move(progress)};
+            PyCancelCallback cancel_callback{std::move(cancel)};
+            std::optional<lfs::Result<project::DatasetEmbedResult>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::embed_dataset_file(
+                    path,
+                    progress_callback.present
+                        ? project::ProjectOperationProgress(progress_callback)
+                        : project::ProjectOperationProgress{},
+                    cancel_callback.present
+                        ? project::ProjectOperationCancel(cancel_callback)
+                        : project::ProjectOperationCancel{});
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
+
+        m.def("set_dataset_reference", [](const std::filesystem::path& path, const std::filesystem::path& dataset_dir, const bool accept_content_change) {
+            std::optional<lfs::Result<project::DatasetReferenceResult>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::set_dataset_reference(path, dataset_dir, accept_content_change);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("dataset_dir"), nb::arg("accept_content_change") = false);
+
+        m.def("export_project_as", [](const std::filesystem::path& path, const std::string& format, const std::filesystem::path& destination, nb::object progress, nb::object cancel) {
+            project::ProjectExportFormat export_format;
+            if (format == "ply" || format == "PLY") export_format = project::ProjectExportFormat::Ply;
+            else if (format == "sog" || format == "SOG") export_format = project::ProjectExportFormat::Sog;
+            else if (format == "ssog" || format == "SSOG") export_format = project::ProjectExportFormat::Ssog;
+            else if (format == "spz" || format == "SPZ") export_format = project::ProjectExportFormat::Spz;
+            else throw nb::value_error("format must be PLY, SOG, SSOG, or SPZ");
+            PyProgressCallback progress_callback{std::move(progress)};
+            PyCancelCallback cancel_callback{std::move(cancel)};
+            std::optional<lfs::Result<project::ProjectExportResult>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::export_project_as(
+                    path, export_format, destination,
+                    progress_callback.present
+                        ? project::ProjectOperationProgress(progress_callback)
+                        : project::ProjectOperationProgress{},
+                    cancel_callback.present
+                        ? project::ProjectOperationCancel(cancel_callback)
+                        : project::ProjectOperationCancel{});
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("format"), nb::arg("destination"), nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
+
+        m.def("repair_project", [](const std::filesystem::path& path, const std::filesystem::path& destination, const std::string& expected_project) {
+            const auto expected = expected_project.empty() ? lfs::core::Uuid{} : parse_reference_uuid(expected_project);
+            std::optional<lfs::Result<project::ProjectRepairResult>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::repair_project(path, destination, expected);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("destination"), nb::arg("expected_project") = "");
+
+        m.def("verify_project_file", [](const std::filesystem::path& path, nb::object progress, nb::object cancel) {
+            PyProgressCallback progress_callback{std::move(progress)};
+            PyCancelCallback cancel_callback{std::move(cancel)};
+            std::optional<lfs::Result<project::ProjectVerificationResult>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::verify_project_file(
+                    path,
+                    progress_callback.present
+                        ? project::ProjectOperationProgress(progress_callback)
+                        : project::ProjectOperationProgress{},
+                    cancel_callback.present
+                        ? project::ProjectOperationCancel(cancel_callback)
+                        : project::ProjectOperationCancel{});
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("progress") = nb::none(), nb::arg("cancel") = nb::none());
+
+        m.def("set_project_preview", [](const std::filesystem::path& path, const nb::bytes& png) {
+            std::optional<lfs::Result<project::ProjectInspectorCard>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::set_project_preview(
+                    path,
+                    std::span<const std::byte>(
+                        static_cast<const std::byte*>(png.data()), png.size()));
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("png_bytes"));
+
+        m.def("encode_preview_from_image_file", [](const std::filesystem::path& image_path) {
+            std::optional<lfs::Result<std::vector<std::byte>>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::encode_preview_from_image_file(image_path);
+            }
+            const auto bytes = unwrap(std::move(*result));
+            return nb::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size()); }, nb::arg("image_path"));
+
+        m.def("encode_preview_from_first_dataset_image", [](const std::filesystem::path& path) {
+            std::optional<lfs::Result<std::vector<std::byte>>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::encode_preview_from_first_dataset_image(path);
+            }
+            const auto bytes = unwrap(std::move(*result));
+            return nb::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size()); }, nb::arg("path"));
+
+        m.def("encode_preview_from_first_embedded_image", [](const std::filesystem::path& path) {
+            std::optional<lfs::Result<std::vector<std::byte>>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::encode_preview_from_first_embedded_image(path);
+            }
+            const auto bytes = unwrap(std::move(*result));
+            return nb::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size()); }, nb::arg("path"));
+
+        m.def("inspect_project_thumbnail_sources", [](const std::filesystem::path& path) {
+            std::optional<lfs::Result<project::ProjectThumbnailSourceAvailability>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::inspect_project_thumbnail_sources(path);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"));
+
+        m.def("preview_from_first_dataset_image", [](const std::filesystem::path& path) {
+            std::optional<lfs::Result<project::ProjectInspectorCard>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::preview_from_first_dataset_image(path);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"));
+
+        m.def("preview_from_first_embedded_image", [](const std::filesystem::path& path) {
+            std::optional<lfs::Result<project::ProjectInspectorCard>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::preview_from_first_embedded_image(path);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"));
+
+        m.def("preview_from_image_file", [](const std::filesystem::path& project_path, const std::filesystem::path& image_path) {
+            std::optional<lfs::Result<project::ProjectInspectorCard>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::preview_from_image_file(project_path, image_path);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("project_path"), nb::arg("image_path"));
+
+        m.def("set_project_license", [](const std::filesystem::path& path, const std::string& identifier, const std::string& notice) {
+            std::optional<lfs::Result<project::ProjectInspectorCard>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::set_project_license(path, identifier, notice);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("identifier"), nb::arg("notice") = "");
+
+        m.def("clear_project_license", [](const std::filesystem::path& path) {
+            std::optional<lfs::Result<project::ProjectInspectorCard>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::clear_project_license(path);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"));
+
+        m.def("set_project_title", [](const std::filesystem::path& path, const std::string& title) {
+            std::optional<lfs::Result<project::ProjectInspectorCard>> result;
+            {
+                nb::gil_scoped_release release;
+                result = project::set_project_title(path, title);
+            }
+            return unwrap(std::move(*result)); }, nb::arg("path"), nb::arg("title"));
 
         m.def(
             "inspect_project",
@@ -464,9 +1082,14 @@ namespace lfs::python {
                 options.allow_unsupported_inspection = true;
                 std::optional<lfs::Result<project::ProjectReader>> opened;
                 std::string fallback_preview_path;
+                std::uint32_t preview_width = 0;
+                std::uint32_t preview_height = 0;
+                project::ProjectFilterFacts facts;
                 {
                     nb::gil_scoped_release release;
                     opened = project::ProjectReader::open(path, options);
+                    if (opened && opened->has_value())
+                        facts = project::inspect_project_filter_facts(**opened);
                     if (resolve_preview_fallback && opened && opened->has_value() &&
                         !(**opened).preview().has_value()) {
                         const auto& reader = **opened;
@@ -503,6 +1126,29 @@ namespace lfs::python {
                             }
                         }
                     }
+                    if (opened && opened->has_value()) {
+                        std::tie(preview_width, preview_height) =
+                            project::project_preview_dimensions(**opened);
+                        if ((preview_width == 0 || preview_height == 0) &&
+                            !fallback_preview_path.empty()) {
+                            try {
+                                const auto info = lfs::core::get_image_info(
+                                    lfs::core::utf8_to_path(fallback_preview_path));
+                                const int width = std::get<0>(info);
+                                const int height = std::get<1>(info);
+                                preview_width = width > 0
+                                                    ? static_cast<std::uint32_t>(width)
+                                                    : 0;
+                                preview_height = height > 0
+                                                     ? static_cast<std::uint32_t>(height)
+                                                     : 0;
+                            } catch (...) {
+                                // LFS-CENSUS-OK(empty-catch): optional preview metadata must not make project inspection fail.
+                                preview_width = 0;
+                                preview_height = 0;
+                            }
+                        }
+                    }
                 }
                 auto reader = unwrap(std::move(*opened));
                 return PyProjectInspection{
@@ -516,12 +1162,16 @@ namespace lfs::python {
                     .role = reader.superblock().role,
                     .open_state = reader.open_state(),
                     .has_preview = reader.preview().has_value(),
+                    .has_checkpoint = facts.has_checkpoint,
+                    .has_dataset = facts.has_dataset,
+                    .preview_width = preview_width,
+                    .preview_height = preview_height,
                     .fallback_preview_path = std::move(fallback_preview_path),
                 };
             },
             nb::arg("path"),
             nb::arg("resolve_preview_fallback") = true,
-            "Inspect validated .licht container metadata without reading project payloads.");
+            "Inspect validated .licht metadata and lightweight project contents.");
 
         nb::class_<PyLoadResult>(m, "LoadResult")
             .def_prop_ro("splat_data", &PyLoadResult::get_splat_data, "Loaded splat data, or None")

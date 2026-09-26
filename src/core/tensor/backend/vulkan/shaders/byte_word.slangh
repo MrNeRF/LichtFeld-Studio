@@ -1,0 +1,18 @@
+// Each invocation owns one aligned word; partial words preserve bytes outside the output view.
+void storeByteWord(uint64_t address, uint packed, uint mask)
+{
+    Ptr<uint, Access.ReadWrite> word = (Ptr<uint, Access.ReadWrite>)address;
+    if (mask == 0xffffffffu)
+    {
+        word[0] = packed;
+        return;
+    }
+    uint assumed = word[0];
+    uint observed;
+    do
+    {
+        InterlockedCompareExchange(word[0], assumed, (assumed & ~mask) | packed, observed);
+        if (observed == assumed) return;
+        assumed = observed;
+    } while (true);
+}

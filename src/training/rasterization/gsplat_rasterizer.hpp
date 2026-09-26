@@ -8,12 +8,14 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/splat_data.hpp"
 #include "gsplat/Common.h"
+#include "gsplat/TileBatch.h"
 #include "optimizer/adam_optimizer.hpp"
 #include "optimizer/render_output.hpp"
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <expected>
 #include <string>
+#include <vector>
 
 namespace lfs::training {
 
@@ -45,7 +47,9 @@ namespace lfs::training {
         // cache release hook or at thread shutdown.
         int64_t* isect_ids_ptr = nullptr;
         int32_t* flatten_ids_ptr = nullptr;
-        int32_t n_isects = 0;
+        int64_t n_isects = 0;
+        std::vector<gsplat_lfs::TileBatch> batches;
+        int32_t* tiles_per_gauss_ptr = nullptr;
         int32_t n_sort = 0;
 
         // Saved input tensors (references, not copies)
@@ -57,7 +61,8 @@ namespace lfs::training {
         lfs::core::Tensor shN;       // swizzled 1D SH-rest buffer
         lfs::core::Tensor bg_color;  // [3] or [C, 3]
 
-        // Camera pointers (kept alive by K_tensor)
+        // Retain camera storage until backward and its readers finish.
+        lfs::core::Tensor world_view_transform;
         const float* viewmat_ptr = nullptr; // [C, 4, 4]
         const float* K_ptr = nullptr;       // [C, 3, 3]
         lfs::core::Tensor K_tensor;         // Keeps K_ptr alive
@@ -93,7 +98,7 @@ namespace lfs::training {
 
         // Memory arena frame ID (for releasing arena memory in backward)
         uint64_t frame_id = 0;
-        // Stream the forward chained the arena frame on; release/backward match.
+        // Forward producer queue; backward joins it before consuming retained storage.
         cudaStream_t stream = nullptr;
 
         // Tile-based training (0 = full image)
@@ -155,7 +160,8 @@ namespace lfs::training {
         // Stream-ordered arena end_frame keeps the frame chain intact (a
         // streamless end_frame would force a device sync on the calling — often
         // UI — thread every inference render).
-        const cudaStream_t stream = result->second.stream;
+        const cudaStream_t stream = core::getCurrentCUDAStream();
+        core::bridgeStreams(result->second.stream, stream);
         auto& arena = core::GlobalArenaManager::instance().get_arena();
         arena.end_frame(result->second.frame_id, stream);
         return result->first;

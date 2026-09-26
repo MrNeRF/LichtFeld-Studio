@@ -247,7 +247,7 @@ def test_histogram_async_result_waits_for_ui_scheduler(histogram_panel_module, m
     panel._ui_scheduler = scheduled.append
     monkeypatch.setattr(module.lf, "get_scene_generation", lambda: 3)
     monkeypatch.setattr(module.RuntimeState, "selection_generation", SimpleNamespace(value=11))
-    cache_key = panel._histogram_cache_key(3, 11)
+    cache_key = panel._histogram_cache_key(3, ())
 
     panel._schedule_histogram_result(7, cache_key, {"kind": "empty", "scope_active": False})
 
@@ -258,16 +258,16 @@ def test_histogram_async_result_waits_for_ui_scheduler(histogram_panel_module, m
     assert panel._handle.dirty_all_count > 0
 
 
-def test_histogram_cache_key_tracks_scene_attribute_bins_and_selection(histogram_panel_module):
+def test_histogram_cache_key_tracks_scene_attribute_bins_and_node_scope(histogram_panel_module):
     panel = histogram_panel_module.HistogramPanel()
     panel._metric_id = "scale_x"
     panel._histogram_bin_count = 64
 
-    key = panel._histogram_cache_key(19, 23)
+    key = panel._histogram_cache_key(19, (23,))
 
-    assert key[:4] == (19, "scale_x", 64, 23)
+    assert key[:4] == (19, "scale_x", 64, (23,))
     panel._histogram_bin_count = 65
-    assert panel._histogram_cache_key(19, 23) != key
+    assert panel._histogram_cache_key(19, (23,)) != key
 
 
 def test_worker_histogram_matches_numpy_for_random_tensor(histogram_panel_module, lf, numpy):
@@ -1217,6 +1217,8 @@ def test_histogram_owned_modifier_selection_survives_two_follow_up_updates(histo
     panel._metric_id = "opacity"
     panel._chart_el = SimpleNamespace(absolute_left=0.0, absolute_width=160.0)
     panel._scene_generation = 0
+    panel._scene_data_generation = 0
+    monkeypatch.setattr(panel, "_scene_data_generation_value", lambda: 0)
     panel._history_generation = 0
     panel._last_lang = "en"
     panel._trainer_state = ""
@@ -1424,3 +1426,64 @@ def test_histogram_worker_runs_without_numpy(lf):
     """).replace('PATHS', repr(sys.path))
     result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_selection_change_updates_highlights_without_recomputing(histogram_panel_module, monkeypatch):
+    module = histogram_panel_module
+    panel = module.HistogramPanel()
+    panel._handle = _UpdateHandleStub()
+    panel._scene_generation = 3
+    panel._scene_data_generation = 8
+    panel._history_generation = 4
+    panel._selection_generation = 2
+    panel._last_lang = 'en'
+    panel._trainer_state = module.RuntimeState.trainer_state.value
+    panel._selected_nodes_signature = ()
+    monkeypatch.setattr(module.lf, 'get_scene_generation', lambda: 5)
+    monkeypatch.setattr(module.lf.ui, 'get_current_language', lambda: 'en')
+    monkeypatch.setattr(panel, '_scene_data_generation_value', lambda: 8, raising=False)
+    monkeypatch.setattr(panel, '_history_generation_value', lambda: 5)
+    monkeypatch.setattr(panel, '_selection_generation_value', lambda: 3)
+    monkeypatch.setattr(panel, '_scene_node_selection_signature', lambda: ())
+    monkeypatch.setattr(panel, '_sync_panel_space_state', lambda: False)
+    calls = []
+    monkeypatch.setattr(panel, '_refresh', lambda: calls.append('recompute'))
+    monkeypatch.setattr(panel, '_sync_panel_selection_from_scene', lambda: calls.append('highlight'))
+    panel.on_scene_changed(None)
+    panel.on_update(None)
+    assert calls == ['highlight']
+
+
+@pytest.mark.parametrize('setter', ['_set_histogram_bin_count', '_set_compare_x_bin_count', '_set_compare_y_bin_count'])
+def test_last_bin_slider_value_is_computed_while_worker_is_pending(histogram_panel_module, setter):
+    panel = histogram_panel_module.HistogramPanel()
+    panel._handle = _UpdateHandleStub()
+    panel._show_chart = False
+    panel._show_compare_card = False
+    panel._computing = True
+    requested = []
+    panel._refresh = lambda: requested.append((panel._histogram_bin_count, panel._compare_x_bin_count, panel._compare_y_bin_count))
+    getattr(panel, setter)(32)
+    getattr(panel, setter)(48)
+    assert len(requested) == 2
+    assert 48 in requested[-1]
+
+
+def test_retained_chart_cannot_delete_using_a_pending_result(histogram_panel_module):
+    panel = histogram_panel_module.HistogramPanel()
+    panel._show_chart = True
+    panel._computing = True
+    panel._marked_count = 10
+    panel._panel_selection_mask = object()
+    panel._has_any_mark = lambda: True
+    panel._apply_scene_selection_mask = lambda *_: pytest.fail("Stale selection must not be applied")
+    panel._on_delete_marked(None, None, None)
+
+
+def test_retained_chart_ignores_selection_shortcuts_while_computing(histogram_panel_module):
+    panel = histogram_panel_module.HistogramPanel()
+    panel._computing = True
+    panel._select_all_current_mode = lambda: pytest.fail("Cannot select stale histogram data")
+    panel._invert_current_mode_selection = lambda: pytest.fail("Cannot invert stale histogram data")
+    panel._on_keydown(_KeyEventStub(KI_A, ctrl=True))
+    panel._on_keydown(_KeyEventStub(KI_I, ctrl=True))

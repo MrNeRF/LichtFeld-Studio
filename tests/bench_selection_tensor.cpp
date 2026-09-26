@@ -8,8 +8,8 @@
 // Uses three warmups and eleven measured samples. Not registered with ctest.
 
 #include "core/tensor.hpp"
-#include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_completion.hpp"
 #include "rendering/selection_ops.hpp"
 #define TINYPLY_IMPLEMENTATION
 #include "tinyply.hpp"
@@ -34,9 +34,9 @@ using lfs::core::DataType;
 using lfs::core::Device;
 using lfs::core::GpuBackend;
 using lfs::core::GpuBackendScope;
+using lfs::core::PointProjectionModel;
 using lfs::core::Tensor;
 using lfs::core::TensorShape;
-using lfs::rendering::ScreenWindowCameraModel;
 
 namespace {
 
@@ -84,7 +84,9 @@ namespace {
     }
 
     void wait_complete(const GpuBackend backend) {
-        lfs::core::internal::backend_ops(backend).synchronize_device();
+        lfs::core::TensorCompletion completion;
+        completion.include(backend);
+        completion.wait();
     }
 
     void materialize(const Tensor& tensor) {
@@ -177,7 +179,7 @@ namespace {
         return dx * dx + dy * dy <= radius * radius;
     }
 
-    // Even-odd, same as polygonSelectKernel / polygon_select_tensor_program.
+    // Even-odd polygon inclusion.
     // Horizontal edges (yi == yj) never cross; no N×vertex matrix.
     [[nodiscard]] bool cpu_even_odd(const float px, const float py, const std::vector<float>& poly) {
         if (is_invalid(px, py) || !std::isfinite(px) || !std::isfinite(py)) {
@@ -376,15 +378,7 @@ namespace {
     Tensor project_dispatch(const Tensor& means) {
         Tensor out = lfs::rendering::project_screen_positions_tensor(
             means, kWidth, kHeight, kIdentity, kOrigin, kFx, kFy, kCx, kCy,
-            ScreenWindowCameraModel::Pinhole, 1.0f, nullptr, nullptr, {});
-        materialize(out);
-        return out;
-    }
-
-    Tensor project_program(const Tensor& means) {
-        Tensor out = lfs::rendering::project_screen_positions_tensor_program(
-            means, kWidth, kHeight, kIdentity, kOrigin, kFx, kFy, kCx, kCy,
-            ScreenWindowCameraModel::Pinhole, 1.0f, nullptr, nullptr, {});
+            lfs::core::PointProjectionModel::Pinhole, 1.0f, nullptr, nullptr, {});
         materialize(out);
         return out;
     }
@@ -439,23 +433,6 @@ namespace {
         });
         print_gpu_metric(backend, "project_with_download", project_fallback_ms,
                          " includes=download note=not_equivalent_to_project_gpu");
-
-        if (backend == GpuBackend::CUDA) {
-            Tensor program_screen = project_program(means);
-            wait_complete(backend);
-            assert_projected(program_screen.to_vector(), cpu_xy,
-                             (std::string(backend_name(backend)) + ".project_program").c_str());
-            const double program_gpu_ms =
-                time_median_gpu(backend, [&] { program_screen = project_program(means); });
-            print_gpu_metric(backend, "project_program_gpu", program_gpu_ms,
-                             " includes=device_sync_materialize note=no_download");
-            const double program_fallback_ms = time_median_gpu(backend, [&] {
-                program_screen = project_program(means);
-                downloaded = program_screen.to_vector();
-            });
-            print_gpu_metric(backend, "project_program_with_download", program_fallback_ms,
-                             " includes=download note=not_equivalent_to_project_program_gpu");
-        }
 
         screen = project_dispatch(means);
         wait_complete(backend);

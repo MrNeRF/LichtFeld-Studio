@@ -23,6 +23,7 @@ body {
 
 #panel.is-floating {
     padding-top: 10dp;
+    padding-bottom: 6dp;
 }
 
 #floating-header {

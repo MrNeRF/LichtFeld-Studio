@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include <cmath>
 #include <gtest/gtest.h>
 #include <torch/torch.h>
@@ -24,9 +25,13 @@ using namespace lfs::core;
  * 6. Unsqueeze for dimension matching
  * 7. Log for scaling conversion
  */
-class AddNewGsTensorOpsTest : public ::testing::Test {
+class AddNewGsTensorOpsTest : public lfs::test::CudaDeviceTest {
 protected:
     void SetUp() override {
+        CudaDeviceTest::SetUp();
+        if (IsSkipped()) {
+            return;
+        }
         // Initialize CUDA if needed
     }
 };

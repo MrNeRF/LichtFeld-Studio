@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/tensor_label.hpp"
 #include "diagnostics/vram_profiler.hpp"
 
@@ -262,6 +263,9 @@ namespace {
     }
 
     TEST_F(VramProfilerMetricsTest, TensorLabelFlowsToMetricRow) {
+        if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA))
+            GTEST_SKIP() << "CUDA allocation tracking unavailable";
+        const lfs::core::GpuBackendScope scope(lfs::core::GpuBackend::CUDA);
         auto& p = VramProfiler::instance();
         lfs::core::Tensor labeled;
         {

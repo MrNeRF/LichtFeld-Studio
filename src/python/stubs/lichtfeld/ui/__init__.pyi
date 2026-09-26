@@ -413,6 +413,14 @@ def reset_window_state() -> str:
 def is_panel_enabled(panel_id: str) -> bool:
     """Check if a panel is enabled"""
 
+def get_left_dock_width() -> float:
+    """
+    Get the left dock width the user chose, in logical pixels. The dock is narrower while the window is too small to fit it.
+    """
+
+def set_left_dock_width(width: float) -> None:
+    """Set the left dock width in logical pixels"""
+
 def get_main_panel_tabs() -> list[PanelSummary]:
     """Get all main panel tabs as typed panel summaries"""
 
@@ -957,7 +965,17 @@ def poll_operator(id: str) -> bool:
 def get_operator_ids() -> list[str]:
     """Get list of registered operator ids"""
 
-def confirm_dialog(title: str, message: str, buttons: Sequence[str] = ['OK', 'Cancel'], callback: object | None = None) -> None:
+def form_dialog(key: str, title: str, body_rml: str, buttons: list, callback: object, on_change: object | None = None, width: int = 640) -> bool:
+    """
+    Show a form in the shared modal overlay. Escape user text in body_rml; callbacks receive native form values.
+    """
+
+def form_dialog_update(key: str, buttons: list, body_rml: str | None = None) -> bool:
+    """
+    Update a matching live or queued form. Omit body_rml to preserve input focus and values.
+    """
+
+def confirm_dialog(title: str, message: str, buttons: Sequence[str] = ['OK', 'Cancel'], callback: object | None = None, style: str = 'info') -> None:
     """Show a confirmation dialog with custom buttons"""
 
 def input_dialog(title: str, message: str, default_value: str = '', callback: object | None = None) -> None:
@@ -1933,6 +1951,11 @@ def open_project_file_dialog(start_dir: str = '') -> str:
     Open a file dialog to select a LichtFeld project (.licht). Returns empty string if cancelled.
     """
 
+def save_project_file_dialog(default_name: str = 'project.licht', start_dir: str = '') -> str:
+    """
+    Choose a destination for a new LichtFeld project. Returns empty string if cancelled.
+    """
+
 def open_ply_file_dialog(start_dir: str = '') -> str:
     """
     Open a file dialog to select a splat file (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz). Returns empty string if cancelled.
@@ -2016,6 +2039,11 @@ def save_ssog_file_dialog(default_name: str = 'export') -> str:
 def save_spz_file_dialog(default_name: str = 'export') -> str:
     """
     Open a save file dialog for SPZ files. Returns empty string if cancelled.
+    """
+
+def save_glb_file_dialog(default_name: str = 'export') -> str:
+    """
+    Open a save file dialog for GLB (SPZ glTF) files. Returns empty string if cancelled.
     """
 
 def save_usd_file_dialog(default_name: str = 'export') -> str:
@@ -2289,6 +2317,33 @@ def apply_crop_tool() -> None:
     """
     Apply the active crop tool primitive through the node-backed crop command path
     """
+
+def can_apply_align() -> bool:
+    """True when the align tool has 3 non-degenerate points ready to apply"""
+
+def apply_align() -> bool:
+    """Request the running align modal to apply the current triangle"""
+
+def clear_align_points() -> None:
+    """Request the running align modal to clear all picked points"""
+
+def get_align_preview() -> bool:
+    """Whether the alignment result is being previewed"""
+
+def toggle_align_preview() -> None:
+    """Switch between the original scene and the alignment preview"""
+
+def get_align_axis_snap() -> bool:
+    """Whether align plane-normal axis snap is enabled"""
+
+def set_align_axis_snap(enabled: bool) -> None:
+    """Enable or disable align plane-normal axis snap (session lifetime)"""
+
+def get_align_edge_to_axis() -> bool:
+    """Whether align edge-to-+X in-plane yaw is enabled"""
+
+def set_align_edge_to_axis(enabled: bool) -> None:
+    """Enable or disable align edge-to-+X in-plane yaw (session lifetime)"""
 
 def fit_crop_tool(use_percentile: bool = False) -> None:
     """
@@ -2710,6 +2765,37 @@ def set_navigation_speed_preference(speed: float) -> None:
 def get_navigation_speed_preference() -> float:
     """Get the default WASD navigation speed"""
 
+def get_trackpad_preferences() -> dict:
+    """Get trackpad navigation preferences"""
+
+def set_trackpad_preferences(device: str, swipe_pans: bool, swipe_speed: float, zoom_speed: float) -> None:
+    """
+    Persist and apply trackpad navigation preferences (device 'mouse', 'trackpad' or 'automatic'; speeds 1-100, 50 is the default)
+    """
+
+def get_project_manager_preferences() -> dict:
+    """
+    Get Project Manager preferences from the canonical user preferences store
+    """
+
+def set_project_manager_default_view(view: str) -> None:
+    """Set the default Project Manager view"""
+
+def set_project_manager_open_at_startup(enabled: bool) -> None:
+    """Set whether Project Manager opens at application startup"""
+
+def set_project_manager_remember_state(enabled: bool) -> None:
+    """Set whether Project Manager layout state is remembered"""
+
+def get_project_manager_state() -> str:
+    """Get remembered Project Manager layout state as JSON"""
+
+def set_project_manager_state(state: str) -> None:
+    """Set remembered Project Manager layout state from JSON"""
+
+def reset_project_manager_preferences() -> None:
+    """Reset Project Manager preferences and remembered layout state"""
+
 def get_scene_reconstruction_options() -> list:
     """Get registered scene reconstruction backends and their presets"""
 
@@ -2725,11 +2811,14 @@ def reset_scene_reconstruction_preferences() -> None:
 def get_tensor_backend_preferences() -> dict:
     """Get saved tensor backend preferences; changes apply after restart"""
 
-def set_tensor_backend_preferences(backend: str = 'cuda', vulkan_device: str = '', vulkan_validation: int = 0, force_fp32_half: bool = False, force_no_atomic_float: bool = False, viewer_vulkan_inputs: bool = False) -> None:
+def set_tensor_backend_preferences(backend: str = 'auto', vulkan_device: str = '', vulkan_validation: int = 0, force_fp32_half: bool = False, force_no_atomic_float: bool = False) -> None:
     """Save tensor backend preferences for the next application start"""
 
 def get_mcp_preferences() -> dict:
     """Get effective MCP HTTP server preferences"""
+
+def get_mcp_access_token() -> str:
+    """Get the local MCP network access token"""
 
 def set_mcp_preferences(enabled: bool, expose_network: bool, port: int, request_logging: bool = False) -> bool:
     """Persist and immediately apply MCP HTTP server preferences"""
@@ -2785,6 +2874,9 @@ def set_mouse_cursor_hand() -> None:
 
 def set_language(lang_code: str) -> None:
     """Set language by code (e.g., 'en', 'de')"""
+
+def resource_directory() -> str:
+    """Directory containing the bundled UI resources"""
 
 def get_current_language() -> str:
     """Get current language code"""

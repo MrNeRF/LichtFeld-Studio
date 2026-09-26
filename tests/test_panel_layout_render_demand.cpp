@@ -8,12 +8,61 @@
 #include <visualizer/app_store.hpp>
 #include <visualizer/gui/panel_layout.hpp>
 #include <visualizer/gui/panel_registry.hpp>
+#include <visualizer/gui/resize_geometry.hpp>
 
 #include <memory>
 #include <string>
 #include <unordered_map>
 
 namespace {
+
+    TEST(ResizeGeometryTest, HitZoneStraddlesEdgeAtEveryUiScale) {
+        using namespace lfs::vis::gui;
+        for (float scale : {1.0f, 1.25f, 1.5f, 2.0f}) {
+            const auto zone = resizeHitZone(400.0f, scale);
+            EXPECT_FLOAT_EQ(zone.min, 400.0f - RESIZE_GRAB_HALF_WIDTH_DP * scale);
+            EXPECT_FLOAT_EQ(zone.max, 400.0f + RESIZE_GRAB_HALF_WIDTH_DP * scale);
+            EXPECT_TRUE(zone.contains(400.0f - 2.0f * scale));
+            EXPECT_TRUE(zone.contains(400.0f + 2.0f * scale));
+            EXPECT_FALSE(zone.contains(400.0f - 5.0f * scale));
+            EXPECT_FALSE(zone.contains(400.0f + 5.0f * scale));
+            EXPECT_FLOAT_EQ(resizeContentWidth(400.0f, scale), zone.min);
+            EXPECT_FALSE(zone.contains(resizeContentWidth(400.0f, scale) - 0.5f));
+            const auto floating_zone = resizeHitZone(400.0f, scale, 6.0f);
+            EXPECT_FLOAT_EQ(floating_zone.min, 400.0f - 6.0f * scale);
+            EXPECT_FLOAT_EQ(floating_zone.max, 400.0f + 6.0f * scale);
+            EXPECT_TRUE(floating_zone.contains(400.0f - 5.0f * scale));
+            EXPECT_TRUE(floating_zone.contains(400.0f + 5.0f * scale));
+        }
+    }
+
+    TEST(ResizeGeometryTest, AbsoluteDragClampsAndResumesAfterReturning) {
+        using namespace lfs::vis::gui;
+        const ResizeDrag drag{400.0f, 402.0f};
+        EXPECT_FLOAT_EQ(drag.edgeAt(602.0f, 250.0f, 500.0f), 500.0f);
+        EXPECT_FLOAT_EQ(drag.edgeAt(302.0f, 250.0f, 500.0f), 300.0f);
+        EXPECT_FLOAT_EQ(drag.edgeAt(102.0f, 250.0f, 500.0f), 250.0f);
+        EXPECT_FLOAT_EQ(drag.edgeAt(352.0f, 250.0f, 500.0f), 350.0f);
+    }
+
+    TEST(ResizeGeometryTest, RightPanelSettersResumeImmediatelyAfterClamp) {
+        using namespace lfs::vis::gui;
+        const float previous_dpi = lfs::python::get_shared_dpi_scale();
+        for (float scale : {1.0f, 1.25f, 1.5f, 2.0f}) {
+            lfs::python::set_shared_dpi_scale(scale);
+            PanelLayoutManager layout;
+            const ScreenState screen{.work_size = {3200.0f, 1600.0f}};
+            layout.setRightPanelWidth(100000.0f, screen);
+            EXPECT_LT(layout.getRightPanelWidth(), 3200.0f);
+            layout.setRightPanelWidth(600.0f, screen);
+            EXPECT_FLOAT_EQ(layout.getRightPanelWidth(), 600.0f);
+            layout.setScenePanelHeight(500.0f, 1600.0f);
+            const float scene_top = 8.0f + (1600.0f - 16.0f) * layout.getScenePanelRatio() -
+                                    PanelLayoutManager::SPLITTER_H * scale * 0.5f;
+            EXPECT_NEAR(scene_top, 500.0f, 0.001f);
+        }
+        lfs::python::set_shared_dpi_scale(previous_dpi);
+    }
 
     class CountingDirectPanel final : public lfs::vis::gui::IPanel {
     public:
@@ -185,6 +234,44 @@ TEST_F(PanelLayoutRenderDemandTest, BottomDockDrawsOnlyActivePanelAtFullContentH
                         (PanelLayoutManager::DOCK_GRIP_H + PanelLayoutManager::TAB_BAR_H + 1.0f) * dpi);
     EXPECT_FLOAT_EQ(first->last_draw_height,
                     layout.getBottomDockHeight() - bar.height - PanelLayoutManager::DOCK_GRIP_H * dpi);
+}
+
+TEST_F(PanelLayoutRenderDemandTest, BottomDockGripStripStartsResizeAndReleaseOutsideEndsIt) {
+    using namespace lfs::vis::gui;
+
+    registerPanel("test.bottom.grip", PanelSpace::BottomDock, 20.0f);
+    UIContext ui;
+    PanelDrawContext draw_ctx{.ui = &ui};
+    const float previous_dpi = lfs::python::get_shared_dpi_scale();
+    for (float scale : {1.0f, 1.25f, 1.5f, 2.0f}) {
+        lfs::python::set_shared_dpi_scale(scale);
+        PanelLayoutManager layout;
+        ScreenState s = screen();
+        s.work_size = {2400.0f, 2000.0f};
+        PanelInputState input;
+        layout.renderBottomDock(draw_ctx, true, false, input, s);
+
+        const float start_height = layout.getBottomDockHeight();
+        input.mouse_x = 800.0f;
+        input.mouse_y = layout.bottomDockTopY() + (PanelLayoutManager::DOCK_GRIP_H - 2.0f) * scale;
+        input.mouse_down[0] = true;
+        input.mouse_clicked[0] = true;
+        layout.renderBottomDock(draw_ctx, true, false, input, s);
+        EXPECT_TRUE(layout.isResizeInteractionActive());
+
+        input.mouse_clicked[0] = false;
+        input.mouse_y -= 40.0f;
+        layout.renderBottomDock(draw_ctx, true, false, input, s);
+        EXPECT_FLOAT_EQ(layout.getBottomDockHeight(), start_height + 40.0f);
+
+        input.mouse_down[0] = false;
+        input.mouse_x = 2000.0f;
+        input.mouse_y = -100.0f;
+        layout.renderBottomDock(draw_ctx, true, false, input, s);
+        EXPECT_FALSE(layout.isResizeInteractionActive());
+        EXPECT_FLOAT_EQ(layout.getBottomDockHeight(), start_height + 40.0f);
+    }
+    lfs::python::set_shared_dpi_scale(previous_dpi);
 }
 
 TEST_F(PanelLayoutRenderDemandTest, BottomDockEnablingPanelActivatesIt) {
@@ -394,6 +481,7 @@ TEST_F(PanelLayoutRenderDemandTest, LeftDockReservationAppliesOnTheFramePanelBec
     const auto disabled = layout.computeBottomDockHorizontalLayout(true, false, s);
     EXPECT_FLOAT_EQ(disabled.x, closed.x);
     EXPECT_FLOAT_EQ(disabled.width, closed.width);
+    PanelRegistry::instance().set_panel_enabled("test.left", true);
 }
 
 TEST_F(PanelLayoutRenderDemandTest, FloatingViewportAnchorStaysInViewportHole) {
@@ -541,4 +629,169 @@ TEST_F(PanelLayoutRenderDemandTest, BottomDockAndSequencerChangesPublishToolbarG
     EXPECT_EQ(generation.get(), initial + 3);
     layout.setShowSequencer(false);
     EXPECT_EQ(generation.get(), initial + 4);
+}
+
+TEST_F(PanelLayoutRenderDemandTest, ToolbarFloatsAtViewportEdgeAtBothScales) {
+    using namespace lfs::vis::gui;
+
+    auto projects = registerPanel("lfs.asset_manager", PanelSpace::LeftDock, 100.0f);
+    auto& reg = PanelRegistry::instance();
+    const float previous_dpi = lfs::python::get_shared_dpi_scale();
+    for (const float dpi : {1.0f, 1.5f}) {
+        SCOPED_TRACE(dpi);
+        lfs::python::set_shared_dpi_scale(dpi);
+        PanelLayoutManager layout;
+        UIContext ui;
+        PanelDrawContext ctx;
+        ctx.ui = &ui;
+        PanelInputState input;
+        const ScreenState s{.work_pos = {23.0f, 31.0f}, .work_size = {3000.0f, 1800.0f}};
+        for (const float width : {320.0f, 500.0f, 760.0f, 1100.0f}) {
+            SCOPED_TRACE(width);
+            layout.setLeftDockWidth(width * dpi);
+            reg.set_panel_enabled("lfs.asset_manager", true);
+            EXPECT_TRUE(reg.set_panel_space("lfs.asset_manager", PanelSpace::LeftDock));
+            layout.renderLeftDock(ctx, true, false, input, s);
+            const auto docked = layout.computeLeftDockLayout(true, false, s);
+            EXPECT_FLOAT_EQ(docked.panel_x, s.work_pos.x);
+            EXPECT_FLOAT_EQ(docked.panel_width, width * dpi);
+            EXPECT_FLOAT_EQ(docked.toolbar_x, s.work_pos.x + (width + 8.0f) * dpi);
+            EXPECT_FLOAT_EQ(projects->last_draw_x, docked.panel_x);
+            EXPECT_FLOAT_EQ(layout.computeViewportLayout(true, false, false, s).pos.x,
+                            docked.panel_x + docked.panel_width);
+            layout.renderLeftDockCached(ctx, true, false, input, s);
+            EXPECT_FLOAT_EQ(projects->last_cached_x, docked.panel_x);
+            EXPECT_FLOAT_EQ(projects->last_cached_width,
+                            resizeContentWidth(docked.panel_width, dpi));
+
+            reg.set_panel_enabled("lfs.asset_manager", false);
+            layout.renderLeftDock(ctx, true, false, input, s);
+            const auto closed = layout.computeLeftDockLayout(true, false, s);
+            EXPECT_FLOAT_EQ(closed.panel_width, 0.0f);
+            EXPECT_FLOAT_EQ(closed.toolbar_x, s.work_pos.x + 8.0f * dpi);
+
+            reg.set_panel_enabled("lfs.asset_manager", true);
+            EXPECT_TRUE(reg.set_panel_space("lfs.asset_manager", PanelSpace::Floating));
+            layout.renderLeftDock(ctx, true, false, input, s);
+            const auto floating = layout.computeLeftDockLayout(true, false, s);
+            EXPECT_FLOAT_EQ(floating.panel_width, 0.0f);
+            EXPECT_FLOAT_EQ(floating.toolbar_x, s.work_pos.x + 8.0f * dpi);
+        }
+
+        registerPanel("test.other.left", PanelSpace::LeftDock, 100.0f);
+        layout.renderLeftDock(ctx, true, false, input, s);
+        const auto other = layout.computeLeftDockLayout(true, false, s);
+        EXPECT_FLOAT_EQ(other.panel_x, s.work_pos.x);
+        EXPECT_FLOAT_EQ(other.toolbar_x, s.work_pos.x + other.panel_width + 8.0f * dpi);
+        EXPECT_GT(other.panel_width, 0.0f);
+        reg.unregister_panel("test.other.left");
+
+        reg.set_panel_space("lfs.asset_manager", PanelSpace::LeftDock);
+        for (const auto [show_main, hidden] : {std::pair{false, false}, std::pair{true, true}}) {
+            const auto hidden_dock = layout.computeLeftDockLayout(show_main, hidden, s);
+            EXPECT_FLOAT_EQ(hidden_dock.panel_width, 0.0f);
+            EXPECT_FLOAT_EQ(hidden_dock.toolbar_x, s.work_pos.x + 8.0f * dpi);
+        }
+    }
+    lfs::python::set_shared_dpi_scale(previous_dpi);
+}
+
+TEST_F(PanelLayoutRenderDemandTest, PanelsGrowBackWhenTheWindowGrowsAgain) {
+    using namespace lfs::vis::gui;
+
+    registerPanel("lfs.asset_manager", PanelSpace::LeftDock, 100.0f);
+    auto& reg = PanelRegistry::instance();
+    reg.set_panel_enabled("lfs.asset_manager", true);
+    ASSERT_TRUE(reg.set_panel_space("lfs.asset_manager", PanelSpace::LeftDock));
+    const float previous_dpi = lfs::python::get_shared_dpi_scale();
+    lfs::python::set_shared_dpi_scale(1.0f);
+    PanelLayoutManager layout;
+    UIContext ui;
+    PanelDrawContext ctx;
+    ctx.ui = &ui;
+    PanelInputState input;
+    const ScreenState wide{.work_size = {1920.0f, 1200.0f}};
+    const ScreenState narrow{.work_size = {640.0f, 480.0f}};
+    const auto show = [&](const ScreenState& s) {
+        layout.enforceWidthConstraints(true, false, s);
+        layout.renderLeftDock(ctx, true, false, input, s);
+    };
+    layout.setLeftDockWidth(320.0f);
+    layout.setRightPanelWidth(360.0f, wide);
+    show(wide);
+
+    show(narrow);
+    EXPECT_LT(layout.getLeftDockWidth() + layout.getRightPanelWidth(), 640.0f);
+    EXPECT_FLOAT_EQ(layout.captureProjectState().left_dock_width, 320.0f);
+    EXPECT_FLOAT_EQ(layout.captureProjectState().right_panel_width, 360.0f);
+
+    show(wide);
+    EXPECT_FLOAT_EQ(layout.getLeftDockWidth(), 320.0f);
+    EXPECT_FLOAT_EQ(layout.getRightPanelWidth(), 360.0f);
+    lfs::python::set_shared_dpi_scale(previous_dpi);
+}
+
+TEST_F(PanelLayoutRenderDemandTest, SceneTreeKeepsRowsOnShortWindowsAtHighUiScale) {
+    using lfs::vis::gui::PanelLayoutManager;
+    PanelLayoutManager layout;
+    constexpr float dpi = 2.0f;
+    constexpr float avail_h = 684.0f;
+    EXPECT_GE(layout.scenePanelHeight(avail_h, dpi), avail_h * 0.5f)
+        << "the default split left the scene tree without rows";
+    EXPECT_LE(layout.scenePanelHeight(300.0f, dpi), 150.0f) << "the scene took more than half a tiny panel";
+    EXPECT_FLOAT_EQ(layout.scenePanelHeight(1100.0f, 1.0f),
+                    1100.0f * layout.getScenePanelRatio() - PanelLayoutManager::SPLITTER_H * 0.5f)
+        << "the minimum overrode the user's split on a tall panel";
+}
+
+TEST_F(PanelLayoutRenderDemandTest, FloatingToolbarStaysOutsideTheDockResizeBand) {
+    using namespace lfs::vis::gui;
+
+    auto projects = registerPanel("lfs.asset_manager", PanelSpace::LeftDock, 100.0f);
+    PanelLayoutManager layout;
+    UIContext ui;
+    PanelDrawContext ctx;
+    ctx.ui = &ui;
+    PanelInputState input;
+    const auto s = screen();
+    layout.renderLeftDock(ctx, true, false, input, s);
+    const auto before = layout.computeLeftDockLayout(true, false, s);
+    input.mouse_x = before.toolbar_x + 1.0f;
+    input.mouse_y = 200.0f;
+    input.mouse_clicked[0] = true;
+    input.mouse_down[0] = true;
+    layout.renderLeftDock(ctx, true, false, input, s);
+    EXPECT_FALSE(layout.isResizeInteractionActive());
+    EXPECT_FLOAT_EQ(layout.getLeftDockWidth(), before.panel_width);
+
+    // The dock content stops before the inner half of the resize zone.
+    input.mouse_x = before.panel_x + before.panel_width - 2.0f;
+    layout.renderLeftDock(ctx, true, false, input, s);
+    EXPECT_TRUE(layout.isResizeInteractionActive());
+    EXPECT_FLOAT_EQ(projects->last_draw_width,
+                    resizeContentWidth(before.panel_width, lfs::python::get_shared_dpi_scale()));
+    input.mouse_down[0] = false;
+    input.mouse_clicked[0] = false;
+    layout.renderLeftDock(ctx, true, false, input, s);
+    EXPECT_FALSE(layout.isResizeInteractionActive());
+
+    // The outer half starts a drag as well.
+    input.mouse_x = before.panel_x + before.panel_width + 2.0f;
+    input.mouse_down[0] = true;
+    input.mouse_clicked[0] = true;
+    layout.renderLeftDock(ctx, true, false, input, s);
+    EXPECT_TRUE(layout.isResizeInteractionActive());
+    input.mouse_clicked[0] = false;
+    input.mouse_x += 180.0f;
+    layout.renderLeftDock(ctx, true, false, input, s);
+    const auto after = layout.computeLeftDockLayout(true, false, s);
+    EXPECT_FLOAT_EQ(after.panel_width, before.panel_width + 180.0f);
+    EXPECT_FLOAT_EQ(after.toolbar_x, after.panel_x + after.panel_width +
+                                         8.0f * lfs::python::get_shared_dpi_scale());
+    EXPECT_LE(after.edge_max_x, after.toolbar_x);
+    input.mouse_down[0] = false;
+    input.mouse_x = s.work_pos.x + s.work_size.x + 200.0f;
+    layout.renderLeftDock(ctx, true, false, input, s);
+    EXPECT_FALSE(layout.isResizeInteractionActive());
+    EXPECT_FLOAT_EQ(layout.getLeftDockWidth(), after.panel_width);
 }

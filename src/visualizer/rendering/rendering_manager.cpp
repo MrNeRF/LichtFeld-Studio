@@ -3,7 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "rendering_manager.hpp"
+#include "core/camera_metrics.hpp"
+#if LFS_BUILD_TRAINER
 #include "core/cuda/memory_arena.hpp"
+#endif
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/tensor_backend.hpp"
@@ -12,14 +15,15 @@
 #include "point_cloud_vulkan_renderer.hpp"
 #include "preferences.hpp"
 #include "rendering/export_post_process.hpp"
-#include "rendering/ppisp_overrides_utils.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/scene_upscaler_registry.hpp"
 #include "rendering/selection_ops.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
+#if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
-#include "training/training_manager.hpp"
+#endif
+#include "core/training_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "vksplat_viewport_renderer.hpp"
 
@@ -153,7 +157,7 @@ namespace lfs::vis {
             return old_settings.camera_metrics_mode != new_settings.camera_metrics_mode ||
                    old_settings.apply_appearance_correction != new_settings.apply_appearance_correction ||
                    old_settings.ppisp_mode != new_settings.ppisp_mode ||
-                   !ppispOverridesEqual(old_settings.ppisp_overrides, new_settings.ppisp_overrides);
+                   old_settings.ppisp_overrides != new_settings.ppisp_overrides;
         }
 
         constexpr std::uint32_t kVksplatIdleScratchReleaseFrames = 30;
@@ -189,11 +193,11 @@ namespace lfs::vis {
                                            const RenderSettings& settings) {
             const bool include_ssim =
                 settings.camera_metrics_mode == RenderSettings::CameraMetricsMode::PSNRSSIM;
-            lfs::training::Trainer::CameraMetricsAppearanceConfig appearance{};
+            lfs::training::CameraMetricsAppearanceConfig appearance{};
             appearance.enabled = settings.apply_appearance_correction;
             appearance.use_controller =
                 settings.ppisp_mode == RenderSettings::PPISPMode::AUTO;
-            appearance.overrides = toTrainerPPISPOverrides(settings.ppisp_overrides);
+            appearance.overrides = settings.ppisp_overrides;
 
             auto metrics =
                 trainer_mgr.computeCameraMetricsForCameraId(camera_id, include_ssim, appearance);
@@ -562,9 +566,18 @@ namespace lfs::vis {
             vksplat_idle_frame_count_ = 0;
             return;
         }
+        // A parked refresh polls for its turn on the training arena; releasing
+        // here would cancel the reservation it is waiting on.
+        if (parked_arena_retry_ != 0) {
+            return;
+        }
 
+#if LFS_BUILD_TRAINER
         auto* const arena = lfs::core::GlobalArenaManager::instance().try_get_arena();
         const bool under_pressure = arena != nullptr && arena->is_under_memory_pressure();
+#else
+        constexpr bool under_pressure = false;
+#endif
 
         if (!training_active) {
             vksplat_idle_frame_count_ = 0;
@@ -675,18 +688,6 @@ namespace lfs::vis {
                 settings_.lod_cone_foveation != sanitized_settings.lod_cone_foveation ||
                 settings_.lod_cone_inner_degrees != sanitized_settings.lod_cone_inner_degrees ||
                 settings_.lod_cone_outer_degrees != sanitized_settings.lod_cone_outer_degrees;
-
-            // Update preview color if changed
-            if (settings_.selection_color_preview != sanitized_settings.selection_color_preview) {
-                const auto& p = sanitized_settings.selection_color_preview;
-                lfs::rendering::config::setSelectionPreviewColor(make_float3(p.x, p.y, p.z));
-            }
-
-            // Update center marker color (group 0) if changed
-            if (settings_.selection_color_center_marker != sanitized_settings.selection_color_center_marker) {
-                const auto& m = sanitized_settings.selection_color_center_marker;
-                lfs::rendering::config::setSelectionGroupColor(0, make_float3(m.x, m.y, m.z));
-            }
 
             if (sanitized_settings.camera_metrics_mode == RenderSettings::CameraMetricsMode::Off) {
                 clear_metrics = true;
@@ -1613,7 +1614,7 @@ namespace lfs::vis {
                    lhs.settings.camera_metrics_mode == rhs.settings.camera_metrics_mode &&
                    lhs.settings.apply_appearance_correction == rhs.settings.apply_appearance_correction &&
                    lhs.settings.ppisp_mode == rhs.settings.ppisp_mode &&
-                   ppispOverridesEqual(lhs.settings.ppisp_overrides, rhs.settings.ppisp_overrides);
+                   lhs.settings.ppisp_overrides == rhs.settings.ppisp_overrides;
         };
 
         std::optional<AppStore::CameraMetrics> cached_app_metrics;
@@ -1726,8 +1727,8 @@ namespace lfs::vis {
                                    entry.request.settings.camera_metrics_mode == request.settings.camera_metrics_mode &&
                                    entry.request.settings.apply_appearance_correction == request.settings.apply_appearance_correction &&
                                    entry.request.settings.ppisp_mode == request.settings.ppisp_mode &&
-                                   ppispOverridesEqual(entry.request.settings.ppisp_overrides,
-                                                       request.settings.ppisp_overrides);
+                                   entry.request.settings.ppisp_overrides ==
+                                       request.settings.ppisp_overrides;
                         };
                         auto cached = std::find_if(
                             camera_metrics_cache_.begin(), camera_metrics_cache_.end(),

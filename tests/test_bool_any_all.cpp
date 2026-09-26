@@ -7,6 +7,7 @@
  */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include <array>
 #include <gtest/gtest.h>
 #include <random>
@@ -16,9 +17,13 @@
 
 using namespace lfs::core;
 
-class BoolAnyAllTest : public ::testing::Test {
+class BoolAnyAllTest : public lfs::test::CudaDeviceTest {
 protected:
     void SetUp() override {
+        CudaDeviceTest::SetUp();
+        if (IsSkipped()) {
+            return;
+        }
         // Seed for reproducibility
         gen_.seed(42);
     }

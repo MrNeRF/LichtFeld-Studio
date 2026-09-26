@@ -18,14 +18,20 @@
  * without synchronizing; elapsed times are read only at finalize().
  */
 
+#include "core/gpu_elapsed.hpp"
 #include "diagnostics/vram_profiler.hpp"
 
 #include <cuda_runtime_api.h>
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
+
+namespace lfs::core {
+    class MemoryInfo;
+}
 
 namespace lfs::training {
 
@@ -133,7 +139,8 @@ namespace lfs::training {
         PerfBenchCollector(PerfBenchCollector&&) = delete;
         PerfBenchCollector& operator=(PerfBenchCollector&&) = delete;
 
-        void capture_peak_snapshot(int iter, std::size_t used, std::size_t total);
+        void capture_peak_snapshot(int iter, std::size_t used, std::size_t total,
+                                   const lfs::core::MemoryInfo& memory);
         void record_phase_mark(PhaseBoundary b);
         [[nodiscard]] bool ensure_phase_event_pool();
         void destroy_phase_event_pool();
@@ -147,7 +154,7 @@ namespace lfs::training {
         int phase_current_index_ = -1;
         int phase_last_primary_iter_ = 0;
         std::vector<PhaseSample> phase_samples_;
-        std::vector<cudaEvent_t> phase_events_;
+        std::unique_ptr<lfs::core::GpuElapsed> phase_timer_;
 
         bool started_ = false;
         int total_iters_ = 0;

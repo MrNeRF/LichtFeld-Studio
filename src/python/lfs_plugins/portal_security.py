@@ -74,7 +74,7 @@ def checked_portal_url(account, value):
         return portal_url(account.base_url, value)
     except ValueError:
         import lichtfeld as lf
-        raise ValueError(lf.ui.tr('asset_manager.gallery.error.unsafe_url')) from None
+        raise ValueError(lf.ui.tr('projects.gallery.error.unsafe_url')) from None
 
 
 def storage_url(base_url, value, allowed_hosts=None):

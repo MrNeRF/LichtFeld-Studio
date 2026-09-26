@@ -3,8 +3,8 @@
 
 #include "components/ppisp.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "lfs/kernels/ppisp.cuh"
-#include "tensor_hardening_test_utils.hpp"
 
 #include <cmath>
 #include <cuda_runtime.h>
@@ -17,7 +17,7 @@ namespace {
     using lfs::core::Tensor;
     using lfs::training::PPISP;
 
-    class PPISPProjectionTest : public tensor_hardening::CudaTest {};
+    class PPISPProjectionTest : public lfs::test::CudaBackendTest {};
 
     std::vector<float> cpu_copy(const Tensor& tensor) {
         return tensor.cpu().contiguous().to_vector();

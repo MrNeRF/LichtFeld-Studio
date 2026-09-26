@@ -27,6 +27,13 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             set(UV_ARCHIVE_SHA256 "4998f545234d52fc6f1280827d392f00a9278295050d59c53a776546dbf0124d")
         endif()
     endif()
+elseif(APPLE AND CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
+    set(UV_BINARY_NAME "uv")
+    set(UV_ARCHIVE_EXT ".tar.gz")
+    set(UV_PLATFORM "aarch64-apple-darwin")
+    if(UV_VERSION STREQUAL "0.10.2")
+        set(UV_ARCHIVE_SHA256 "3828b2de196687f60e9d199aea8b504299629300831eea0935ff3fe339903d0a")
+    endif()
 else()
     message(WARNING "FetchUV: Unsupported platform, uv will not be bundled")
     return()
@@ -69,22 +76,36 @@ function(fetch_uv)
         message(STATUS "FetchUV: Downloading uv ${UV_VERSION} for ${UV_PLATFORM}")
         message(STATUS "FetchUV: URL: ${UV_DOWNLOAD_URL}")
         set(_partial_archive "${UV_ARCHIVE_PATH}.part")
-        file(REMOVE "${_partial_archive}")
-        set(_hash_arguments)
-        if(DEFINED UV_ARCHIVE_SHA256)
-            list(APPEND _hash_arguments EXPECTED_HASH "SHA256=${UV_ARCHIVE_SHA256}")
-        endif()
-        file(DOWNLOAD
-            "${UV_DOWNLOAD_URL}"
-            "${_partial_archive}"
-            SHOW_PROGRESS
-            STATUS _download_status
-            TLS_VERIFY ON
-            ${_hash_arguments}
-        )
-
-        list(GET _download_status 0 _status_code)
-        list(GET _download_status 1 _status_string)
+        foreach(_attempt RANGE 1 3)
+            file(REMOVE "${_partial_archive}")
+            # EXPECTED_HASH makes transport failures a CMake error before we
+            # can handle STATUS. Verify the checksum after a successful fetch.
+            file(DOWNLOAD
+                "${UV_DOWNLOAD_URL}"
+                "${_partial_archive}"
+                SHOW_PROGRESS
+                STATUS _download_status
+                TLS_VERIFY ON
+                TIMEOUT 120
+                INACTIVITY_TIMEOUT 30
+            )
+            list(GET _download_status 0 _status_code)
+            list(GET _download_status 1 _status_string)
+            if(_status_code EQUAL 0)
+                if(DEFINED UV_ARCHIVE_SHA256)
+                    file(SHA256 "${_partial_archive}" _download_sha256)
+                    if(NOT "${_download_sha256}" STREQUAL "${UV_ARCHIVE_SHA256}")
+                        file(REMOVE "${_partial_archive}")
+                        message(FATAL_ERROR "FetchUV: Download checksum mismatch for ${UV_DOWNLOAD_URL}")
+                    endif()
+                endif()
+                break()
+            endif()
+            if(_attempt LESS 3)
+                message(STATUS "FetchUV: Download attempt ${_attempt} failed: ${_status_string}; retrying")
+                execute_process(COMMAND "${CMAKE_COMMAND}" -E sleep ${_attempt})
+            endif()
+        endforeach()
 
         if(NOT _status_code EQUAL 0)
             file(REMOVE "${_partial_archive}")

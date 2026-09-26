@@ -30,7 +30,8 @@
 // Raster/compose run in waves of this many 1024-splat batches so the half4
 // partials pool stays bounded (16384 batches x 32 tiles x 256 px x 8 B = 1 GiB).
 #define HIGS_RASTER_WAVE_BATCHES 16384
-#define HIGS_RASTER_MAX_WAVES    16
+// A full 32K square macro grid needs 33 waves; pixel storage may be banded.
+#define HIGS_RASTER_MAX_WAVES 64
 
 // Fixed per-depth-wave tile-instance budget. Interactive recording arms the
 // capability-selected number of slots; exports record an exact upper bound.

@@ -209,6 +209,32 @@ class TestOptimizationParams:
         finally:
             params.set_strategy("mrnf")
 
+    def test_switching_to_igs_clears_stale_gut_from_its_preset(self, lf):
+        """A hidden GUT value must not survive re-entering the IGS+ preset."""
+        params = lf.optimization_params()
+        original_strategy = params.strategy
+        params.set_strategy("igs+")
+        original_igs_gut = params.gut
+        params.set_strategy("mrnf")
+        original_mrnf_gut = params.gut
+
+        try:
+            params.set_strategy("igs+")
+            params.gut = True
+            params.set_strategy("mrnf")
+            params.gut = False
+
+            params.set_strategy("igs+")
+
+            assert params.strategy == "igs+"
+            assert params.gut is False
+            assert params.validate() == ""
+        finally:
+            params.gut = original_igs_gut
+            params.set_strategy("mrnf")
+            params.gut = original_mrnf_gut
+            params.set_strategy(original_strategy)
+
     def test_properties_list(self, lf):
         """properties() should return list of property info dicts."""
         params = lf.optimization_params()

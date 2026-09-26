@@ -30,12 +30,15 @@ target_link_libraries(lfs_mcp
     lfs_core
     lfs_event_bridge
     lfs_io
-    lfs_training
+    $<$<BOOL:${LFS_BUILD_TRAINER}>:lfs_training>
     lfs_rendering_tensor
     lfs_python_utils
     OpenSSL::SSL
     OpenSSL::Crypto
 )
+if(APPLE)
+    target_link_options(lfs_mcp PRIVATE "LINKER:-undefined,dynamic_lookup")
+endif()
 
 target_compile_features(lfs_mcp PUBLIC cxx_std_23)
 

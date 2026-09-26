@@ -3,11 +3,13 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#if LFS_BUILD_TRAINER
 #include "core/cuda/memory_arena.hpp"
+#include "core/tensor_cuda_interop.hpp"
+#endif
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
 #include "core/splat_data.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "model_renderability.hpp"
 #include "nvidia_dlss_plugin.hpp"
 #include "output_image_pool.hpp"
@@ -17,8 +19,10 @@
 #include "scene/scene_manager.hpp"
 #include "scene_temporal_resolve.hpp"
 #include "scene_upscaler_registry.hpp"
+#if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
-#include "training/training_manager.hpp"
+#endif
+#include "core/training_manager.hpp"
 #include "view_output_key.hpp"
 #include "viewport_error.hpp"
 #include "viewport_request_builder.hpp"
@@ -178,6 +182,7 @@ namespace lfs::vis {
         [[nodiscard]] std::optional<LiveModelLockBundle> acquireLiveModelRenderLock(
             const SceneManager* const scene_manager,
             const bool try_lock = false) {
+#if LFS_BUILD_TRAINER
             if (const auto* tm = scene_manager ? scene_manager->getTrainerManager() : nullptr) {
                 if (const auto* trainer = tm->getTrainer()) {
                     const lfs::core::Scene* scene = trainer->getScene();
@@ -193,6 +198,7 @@ namespace lfs::vis {
                         std::shared_lock<std::shared_mutex>(trainer->getRenderMutex()), scene);
                 }
             }
+#endif
             return std::nullopt;
         }
 
@@ -485,7 +491,7 @@ namespace lfs::vis {
             return vk_req;
         }
 
-        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> ensureCudaViewportImage(
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> ensureGpuViewportImage(
             std::shared_ptr<lfs::core::Tensor> image,
             const std::string_view label) {
             if (!image || !image->is_valid()) {
@@ -494,13 +500,13 @@ namespace lfs::vis {
             if (image->device() == lfs::core::Device::GPU) {
                 return image;
             }
-            auto cuda_image = image->cuda();
-            if (!cuda_image.is_valid() || cuda_image.device() != lfs::core::Device::GPU) {
-                LOG_WARN("{} produced a non-CUDA tensor; keeping the uncorrected external image",
+            auto gpu_image = image->to(lfs::core::Device::GPU);
+            if (!gpu_image.is_valid() || gpu_image.device() != lfs::core::Device::GPU) {
+                LOG_WARN("{} produced a non-GPU tensor; keeping the uncorrected external image",
                          label);
                 return {};
             }
-            return std::make_shared<lfs::core::Tensor>(std::move(cuda_image));
+            return std::make_shared<lfs::core::Tensor>(std::move(gpu_image));
         }
     } // namespace
 
@@ -632,7 +638,9 @@ namespace lfs::vis {
         LOG_TIMER("renderWorkspaceVulkanFrames");
         if (vksplat_stale_frame_guard_.takeRecoveryRequest() && vksplat_viewport_renderer_) {
             vksplat_viewport_renderer_->cancelArenaHandoff();
+#if LFS_BUILD_TRAINER
             lfs::core::GlobalArenaManager::instance().clear_external_backing();
+#endif
             vksplat_viewport_renderer_->releaseScratchOnIdle(true);
         }
 
@@ -683,6 +691,10 @@ namespace lfs::vis {
         initialized_ = true;
 
         const bool training_try_lock = is_training;
+        if (is_training && vksplat_viewport_renderer_ &&
+            (dirty_mask_.load(std::memory_order_relaxed) & DirtyFlag::CAMERA) != 0) {
+            (void)vksplat_viewport_renderer_->waitForArenaHandoff(kNavigationArenaWait);
+        }
         auto render_lock = acquireLiveModelRenderLock(scene_manager, training_try_lock);
         bool render_lock_contended = training_try_lock && !render_lock.has_value() &&
                                      scene_manager && scene_manager->getTrainerManager() &&
@@ -755,6 +767,7 @@ namespace lfs::vis {
         std::optional<std::shared_lock<std::shared_mutex>> model_read_lock;
         // Take both read locks before SceneManager can rebuild or inspect the model.
         // Non-refining optimizer steps only exclude readers through this mutex.
+#if LFS_BUILD_TRAINER
         if (is_training && trainer_manager && trainer_manager->getTrainer()) {
             auto* const model_trainer = trainer_manager->getTrainer();
             std::shared_lock<std::shared_mutex> candidate(
@@ -778,7 +791,25 @@ namespace lfs::vis {
             }
             model_read_lock.emplace(std::move(candidate));
         }
+#endif
         sample_model_and_content();
+        if (!point_cloud_path && point_cloud_vulkan_renderer_ && last_vulkan_context_ &&
+            last_vulkan_context_->retiredFrameSubmitSerial() >= point_cloud_last_frame_serial_) {
+            bool published_point_cloud = false;
+            {
+                std::lock_guard lock(workspace_frames_mutex_);
+                published_point_cloud = std::ranges::any_of(workspace_views_, [](const auto& entry) {
+                    return entry.second.has_published &&
+                           entry.second.published.source == WorkspaceVulkanFrame::Source::PointCloud;
+                });
+            }
+            if (!published_point_cloud) {
+                point_cloud_vulkan_renderer_.reset();
+                point_cloud_colors_cache_ = {};
+                point_cloud_colors_cache_key_ = nullptr;
+                point_cloud_colors_cache_size_ = 0;
+            }
+        }
 
         const std::size_t model_ptr = reinterpret_cast<std::size_t>(model);
         const auto model_source = scene_manager && scene_manager->hasDataset()
@@ -795,11 +826,13 @@ namespace lfs::vis {
                 last_logged_vksplat_render_error_.clear();
                 if (vksplat_viewport_renderer_ &&
                     !(is_training && lfs::rendering::isVkSplatBackend(frame_settings.raster_backend))) {
+#if LFS_BUILD_TRAINER
                     if (trainer_manager) {
                         if (auto* trainer = trainer_manager->getTrainer()) {
-                            trainer->setViewerReleaseFence(nullptr);
+                            trainer->setViewerReleaseFence(nullptr, {});
                         }
                     }
+#endif
                     vksplat_viewport_renderer_->reset();
                 }
                 if (++workspace_scene_revision_ == 0) {
@@ -827,10 +860,13 @@ namespace lfs::vis {
             return results;
         }
 
-        const DirtyMask training_refresh_dirty = frame_lifecycle_service_.handleTrainingRefresh(
-            is_training,
-            framerate_controller_.getSettings().training_frame_refresh_time_sec);
+        const DirtyMask training_refresh_dirty =
+            training_refresh_dirty_.exchange(0, std::memory_order_relaxed);
         const DirtyMask consumed_dirty = dirty_mask_.exchange(0) | training_refresh_dirty;
+        if (vksplat_viewport_renderer_) {
+            vksplat_viewport_renderer_->setCameraNavigating(
+                is_training && (consumed_dirty & DirtyFlag::CAMERA) != 0);
+        }
         constexpr DirtyMask kSharedSceneDirty =
             DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::BACKGROUND | DirtyFlag::PPISP;
         if ((consumed_dirty & kSharedSceneDirty) != 0) {
@@ -1012,7 +1048,7 @@ namespace lfs::vis {
 
         const bool vksplat_backend = lfs::rendering::isVkSplatBackend(frame_settings.raster_backend);
         const bool raster_gaussians = has_visible_gaussian_model && vksplat_backend && !point_cloud_path;
-        std::optional<lfs::core::CUDAStreamGuard> frame_stream_guard;
+        std::shared_ptr<void> frame_tensor_scope;
         if (raster_gaussians && context.vulkan_context) {
             if (!vksplat_viewport_renderer_) {
                 vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
@@ -1028,20 +1064,21 @@ namespace lfs::vis {
                     return return_previous_all("deferred: training handshake unavailable");
                 }
             }
-            if (vksplat_viewport_renderer_->renderStream()) {
-                frame_stream_guard.emplace(vksplat_viewport_renderer_->renderStream());
-            }
         }
 
+        if (context.vulkan_context)
+            frame_tensor_scope = context.vulkan_context->tensorInterop().execution_scope(
+                is_training ? lfs::core::GpuBackend::CUDA : lfs::core::default_gpu_backend());
+#if LFS_BUILD_TRAINER
         lfs::training::Trainer* live_trainer = nullptr;
         if (is_training && trainer_manager && vksplat_viewport_renderer_ &&
-            vksplat_viewport_renderer_->renderStream() &&
             vksplat_viewport_renderer_->renderCompleteFence()) {
             live_trainer = trainer_manager->getTrainer();
         }
         if (live_trainer) {
-            live_trainer->setViewerReleaseFence(vksplat_viewport_renderer_->renderCompleteFence());
-            live_trainer->beginModelRead(vksplat_viewport_renderer_->renderStream());
+            live_trainer->setViewerReleaseFence(context.vulkan_context->device(),
+                                                {vksplat_viewport_renderer_->renderCompleteTimeline(), 0, {}});
+            live_trainer->beginModelRead(lfs::core::getCurrentCUDAStream());
             lfs::training::Trainer* const trainer = live_trainer;
             vksplat_viewport_renderer_->setLiveSubmitCallback(
                 [trainer](const std::uint64_t value) { trainer->publishViewerBorrow(value); });
@@ -1054,7 +1091,7 @@ namespace lfs::vis {
             ~ViewerBorrowPublisher() {
                 if (trainer && renderer) {
                     try {
-                        trainer->endModelRead(renderer->renderStream());
+                        trainer->endModelRead(lfs::core::getCurrentCUDAStream());
                         trainer->publishViewerBorrow(renderer->renderCompleteValue());
                     } catch (const std::exception& e) {
                         LOG_ERROR("ViewerBorrowPublisher: endModelRead/publishViewerBorrow failed "
@@ -1067,6 +1104,10 @@ namespace lfs::vis {
                 }
             }
         } viewer_borrow_publisher{live_trainer, vksplat_viewport_renderer_.get()};
+#else
+        if (vksplat_viewport_renderer_)
+            vksplat_viewport_renderer_->setLiveSubmitCallback({});
+#endif
 
         framerate_controller_.beginFrame();
 
@@ -1366,6 +1407,7 @@ namespace lfs::vis {
                     results.push_back(previousWorkspaceFrame(pane.id, pane, viewportErrorText(render_result.error())));
                     continue;
                 }
+                point_cloud_last_frame_serial_ = context.vulkan_context->lastFrameSubmitSerial() + 1;
 
                 WorkspaceVulkanFrame frame;
                 frame.pane = pane;
@@ -1427,13 +1469,21 @@ namespace lfs::vis {
                 continue;
             }
 
+            if (raster_gaussians && is_training && context.vulkan_context &&
+                vksplat_viewport_renderer_->nextOutputImagesNeedResize(plan.render_size, sceneOutputKey(pane.id))) {
+                context.vulkan_context->tensorInterop().drain(lfs::core::GpuBackend::CUDA);
+            }
+
             glm::vec2 jitter_pixels{0.0f};
             {
                 std::lock_guard lock(workspace_frames_mutex_);
                 auto& runtime = workspace_views_[pane.id];
-                const bool allow_temporal_settle =
-                    (consumed_dirty & (DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::BACKGROUND)) == 0 &&
-                    !lod_follow;
+                constexpr DirtyMask temporal_sources =
+                    DirtyFlag::CAMERA | DirtyFlag::SPLATS | DirtyFlag::MESH |
+                    DirtyFlag::VIEWPORT | DirtyFlag::BACKGROUND | DirtyFlag::SPLIT_VIEW;
+                const bool training_refresh_only = training_refresh_dirty != 0 &&
+                                                   (consumed_dirty & ~training_refresh_dirty & temporal_sources) == 0;
+                const bool allow_temporal_settle = !training_refresh_only && !lod_follow;
                 runtime.convergence.prepare(
                     plan.temporal_eligible,
                     plan.camera_cut || paneCameraOrProjectionChanged(runtime.last_pane, pane) ||
@@ -1626,13 +1676,21 @@ namespace lfs::vis {
                         vksplat_viewport_renderer_->requestArenaHandoff();
                     }
                     workspace_retry_raster_ = true;
-                    dirty_mask_.fetch_or(DirtyFlag::SPLATS, std::memory_order_relaxed);
+                    queueSharedScratchRetry(consumed_dirty != 0 ? consumed_dirty : DirtyFlag::SPLATS);
                     results.push_back(previousWorkspaceFrame(
                         pane.id, pane,
                         std::format("deferred: {}", viewportErrorText(render_result.error()))));
                     continue;
                 }
-                results.push_back(previousWorkspaceFrame(pane.id, pane, viewportErrorText(render_result.error())));
+                const auto error = viewportErrorText(render_result.error());
+                if (last_logged_vksplat_render_error_ != error) {
+                    last_logged_vksplat_render_error_ = error;
+                    LOG_ERROR("Workspace view {} retained its last frame after render failure: {}", pane.id, error);
+                }
+                workspace_retry_raster_ = true;
+                dirty_mask_.fetch_or(consumed_dirty != 0 ? consumed_dirty : DirtyFlag::SPLATS,
+                                     std::memory_order_relaxed);
+                results.push_back(previousWorkspaceFrame(pane.id, pane, error));
                 continue;
             }
 
@@ -1682,7 +1740,7 @@ namespace lfs::vis {
                         scene_manager,
                         frame_settings,
                         correction_camera_uid);
-                    corrected = ensureCudaViewportImage(
+                    corrected = ensureGpuViewportImage(
                         std::move(corrected), "VkSplat workspace PPISP correction");
                     if (corrected && corrected->is_valid()) {
                         frame.color.image = std::move(corrected);

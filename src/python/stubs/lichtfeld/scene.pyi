@@ -473,6 +473,10 @@ class Scene:
     def generation(self) -> int:
         """Generation counter when scene was acquired"""
 
+    @property
+    def render_generation(self) -> int:
+        """Scene content revision, excluding Gaussian selection changes"""
+
     def add_group(self, name: str, parent: int = -1) -> int:
         """Add an empty group node, returns node ID"""
 

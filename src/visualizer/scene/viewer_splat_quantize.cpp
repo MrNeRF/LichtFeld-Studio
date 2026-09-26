@@ -10,7 +10,6 @@
 #include "core/shareable_allocation_limit.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor_backend.hpp"
-#include "lfs/training/sh_value_storage.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -32,7 +31,7 @@ namespace lfs::vis {
             if (!tensor.is_valid() || tensor.numel() == 0) {
                 return true;
             }
-            if (lfs::core::gpu_backend_of(tensor) == lfs::core::GpuBackend::Vulkan) {
+            if (lfs::core::tensor_vulkan_buffer(tensor).has_value()) {
                 return true;
             }
             return tensor.is_external_storage() &&
@@ -132,7 +131,7 @@ namespace lfs::vis {
             }
 
             const std::size_t shN_before_bytes = model.shN_raw().bytes();
-            const bool converted = lfs::training::sh_value::apply_shN_value_quant(model);
+            const bool converted = model.apply_shN_value_quant();
             if (converted) {
                 const std::size_t shN_after_bytes =
                     model.shN_raw().bytes() + model.shN_value_bounds().bytes();

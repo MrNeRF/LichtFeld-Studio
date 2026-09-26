@@ -103,6 +103,9 @@ namespace lfs::io::project {
         friend bool operator==(const ProjectLicense&, const ProjectLicense&) = default;
     };
 
+    [[nodiscard]] LFS_IO_API std::optional<ProjectLicense>
+    map_sog_license(std::span<const std::uint8_t> bytes);
+
     enum class WorldOriginProvenance : std::uint8_t {
         None,
         CentralizeByPointCloud,
@@ -130,7 +133,7 @@ namespace lfs::io::project {
     struct ReferenceLocator {
         std::string preferred;
         LocatorBase base = LocatorBase::Project;
-        std::optional<std::string> absolute_fallback;
+        std::optional<std::string> absolute_fallback = std::nullopt;
 
         friend bool operator==(const ReferenceLocator&, const ReferenceLocator&) = default;
     };
@@ -333,7 +336,7 @@ namespace lfs::io::project {
     struct PayloadBinding {
         std::string fourcc;
         lfs::core::Uuid instance_uuid;
-        std::optional<lfs::core::Uuid> reference_uuid;
+        std::optional<lfs::core::Uuid> reference_uuid = std::nullopt;
         std::string source_kind;
 
         friend bool operator==(const PayloadBinding&, const PayloadBinding&) = default;
@@ -397,7 +400,7 @@ namespace lfs::io::project {
         lfs::core::Uuid uuid;
         std::string type;
         std::string name;
-        std::optional<lfs::core::Uuid> parent_uuid;
+        std::optional<lfs::core::Uuid> parent_uuid = std::nullopt;
         std::uint32_t child_order = 0;
         // Column-major, matching glm::mat4 storage.
         std::array<float, 16> local_transform{
@@ -409,11 +412,11 @@ namespace lfs::io::project {
         bool locked = false;
         bool training_enabled = true;
         bool payload_diverged = false;
-        std::optional<GeorefPose> georef_pose;
+        std::optional<GeorefPose> georef_pose = std::nullopt;
         std::optional<PayloadBinding> payload;
-        std::optional<CropBoxRecord> cropbox;
-        std::optional<EllipsoidRecord> ellipsoid;
-        std::optional<CameraRecord> camera;
+        std::optional<CropBoxRecord> cropbox = std::nullopt;
+        std::optional<EllipsoidRecord> ellipsoid = std::nullopt;
+        std::optional<CameraRecord> camera = std::nullopt;
 
         friend bool operator==(const SceneNodeRecord&, const SceneNodeRecord&) = default;
     };

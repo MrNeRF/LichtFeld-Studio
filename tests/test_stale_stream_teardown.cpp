@@ -8,9 +8,10 @@
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "core/tensor/backend/cuda/runtime/stream_lifetime.hpp"
+#include "core/tensor_cuda_interop.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <cstdint>
 #include <cuda_runtime.h>
@@ -20,13 +21,10 @@ using namespace lfs::core;
 
 namespace {
 
-    class StaleStreamTeardownTest : public ::testing::Test {
+    class StaleStreamTeardownTest : public lfs::test::CudaBackendTest {
     protected:
         void SetUp() override {
-            int device_count = 0;
-            if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-                GTEST_SKIP() << "No CUDA device";
-            }
+            LFS_CUDA_BACKEND_OR_RETURN();
             ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
         }
     };

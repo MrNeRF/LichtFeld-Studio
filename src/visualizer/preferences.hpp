@@ -9,13 +9,15 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
 namespace lfs::vis {
 
     struct TensorPreferenceState {
-        core::GpuBackend backend = core::GpuBackend::CUDA;
+        // Unset picks the backend automatically at startup; see default_gpu_backend().
+        std::optional<core::GpuBackend> backend;
         core::TensorBackendOptions options;
     };
 
@@ -24,6 +26,42 @@ namespace lfs::vis {
         bool expose_network = false;
         int port = 45677;
         bool request_logging = false;
+    };
+
+    // Automatic reads scrolling as trackpad swipes only while two fingers rest
+    // on the trackpad, which needs the trackpad touches only macOS reports.
+    enum class NavigationDevice {
+        Mouse,
+        Trackpad,
+        Automatic,
+    };
+
+    [[nodiscard]] constexpr std::string_view navigationDeviceName(const NavigationDevice device) {
+        switch (device) {
+        case NavigationDevice::Trackpad:
+            return "trackpad";
+        case NavigationDevice::Automatic:
+            return "automatic";
+        case NavigationDevice::Mouse:
+            break;
+        }
+        return "mouse";
+    }
+
+    [[nodiscard]] constexpr std::optional<NavigationDevice> parseNavigationDevice(const std::string_view name) {
+        for (const auto device : {NavigationDevice::Mouse, NavigationDevice::Trackpad, NavigationDevice::Automatic})
+            if (navigationDeviceName(device) == name)
+                return device;
+        return std::nullopt;
+    }
+
+    // Trackpad navigation reads two-finger swipes over the viewport as orbit,
+    // pan and zoom. Speeds are 1..100 levels; 50 is the default speed.
+    struct TrackpadPreferenceState {
+        NavigationDevice device = NavigationDevice::Mouse;
+        bool swipe_pans = false; // Swipe pans and Shift+swipe orbits.
+        float swipe_speed = 50.0f;
+        float zoom_speed = 50.0f; // Pinch and Ctrl+swipe.
     };
 
     /** Process-local, atomically persisted user preferences. */
@@ -58,6 +96,8 @@ namespace lfs::vis {
         [[nodiscard]] bool rememberCameraViewSnap();
         void setSceneGraphSelectionMarkers(bool enabled);
         [[nodiscard]] bool sceneGraphSelectionMarkers();
+        void setTrackpad(const TrackpadPreferenceState& state);
+        [[nodiscard]] TrackpadPreferenceState trackpad();
         void setProgressBarStyle(std::string_view value);
         [[nodiscard]] std::string progressBarStyle();
         void setViewportChromeStyle(std::string_view value);
@@ -69,6 +109,16 @@ namespace lfs::vis {
 
         void setTensorBackend(const TensorPreferenceState& state);
         [[nodiscard]] TensorPreferenceState tensorBackend();
+
+        void setProjectManagerDefaultView(std::string_view value);
+        [[nodiscard]] std::string projectManagerDefaultView();
+        void setOpenProjectManagerAtStartup(bool enabled);
+        [[nodiscard]] bool openProjectManagerAtStartup();
+        void setRememberProjectManagerState(bool enabled);
+        [[nodiscard]] bool rememberProjectManagerState();
+        void setProjectManagerState(std::string_view serialized_state);
+        [[nodiscard]] std::string projectManagerState();
+        void resetProjectManagerPreferences();
 
         void setMcp(const McpPreferenceState& state);
         [[nodiscard]] McpPreferenceState mcp();
@@ -108,6 +158,8 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API bool rememberCameraViewSnapPreference();
     LFS_VIS_API void saveSceneGraphSelectionMarkersPreference(bool enabled);
     [[nodiscard]] LFS_VIS_API bool loadSceneGraphSelectionMarkersPreference();
+    LFS_VIS_API void saveTrackpadPreferences(const TrackpadPreferenceState& state);
+    [[nodiscard]] LFS_VIS_API TrackpadPreferenceState loadTrackpadPreferences();
     LFS_VIS_API void saveProgressBarStylePreference(std::string_view style);
     [[nodiscard]] LFS_VIS_API std::string loadProgressBarStylePreference();
     LFS_VIS_API void saveViewportChromeStylePreference(std::string_view style);

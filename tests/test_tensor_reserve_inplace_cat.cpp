@@ -2,6 +2,7 @@
  * Test for tensor reserve() + in-place cat() functionality
  */
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include <algorithm>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
@@ -167,7 +168,9 @@ TEST(TensorReserveInplaceCat, MultipleInplaceCats) {
     EXPECT_EQ(cpu_result.shape()[0], 35);
 }
 
-TEST(TensorReserveInplaceCat, AllocationFailurePreservesInstalledStorage) {
+class TensorReserveInplaceCatCuda : public lfs::test::CudaBackendTest {};
+
+TEST_F(TensorReserveInplaceCatCuda, AllocationFailurePreservesInstalledStorage) {
     auto tensor = Tensor::from_vector(
         std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f}, {4}, Device::GPU);
     void* const original_ptr = tensor.data_ptr();

@@ -43,35 +43,6 @@ namespace lfs::training::mcmc {
         void* stream = nullptr);
 
     /**
-     * Add noise kernel - Injects position noise scaled by covariance
-     *
-     * Adds Gaussian noise to mean positions, scaled by the Gaussian covariance
-     * and learning rate. Used for MCMC exploration.
-     *
-     * @param raw_opacities [N] - Raw (pre-sigmoid) opacity values
-     * @param raw_scales [N, 3] - Raw (pre-exp) scale values
-     * @param raw_quats [N, 4] - Raw quaternion rotation values
-     * @param noise [N, 3] - Random noise from N(0,1)
-     * @param means [N, 3] - Mean positions (modified in-place)
-     * @param frozen_mask [N] - Optional mask of rows that must not be modified
-     * @param frozen_mask_size - Number of entries in frozen_mask
-     * @param current_lr - Current learning rate for noise scaling
-     * @param N - Number of Gaussians
-     * @param stream - CUDA stream for async execution
-     */
-    void launch_add_noise_kernel(
-        const float* raw_opacities,
-        const float* raw_scales,
-        const float* raw_quats,
-        const float* noise,
-        float* means,
-        const bool* frozen_mask,
-        size_t frozen_mask_size,
-        float current_lr,
-        size_t N,
-        void* stream = nullptr);
-
-    /**
      * Fused RNG, covariance transform, and means update.
      * Honors frozen_mask. The seed controls the curand sequence.
      */
@@ -214,22 +185,6 @@ namespace lfs::training::mcmc {
         int64_t* sampled_indices,
         float* sampled_opacities,
         float* sampled_scales,
-        void* stream = nullptr);
-
-    /**
-     * In-place element-wise maximum: a[i] = max(a[i], b[i])
-     *
-     * Replaces allocating maximum() call that creates a new tensor every iteration.
-     *
-     * @param a [N] - First tensor, modified in-place
-     * @param b [N] - Second tensor
-     * @param N - Number of elements
-     * @param stream - CUDA stream
-     */
-    void launch_elementwise_max_inplace(
-        float* a,
-        const float* b,
-        size_t N,
         void* stream = nullptr);
 
     /**

@@ -8,6 +8,7 @@
  */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "training/kernels/mcmc_kernels.hpp"
 #include "training/kernels/mrnf_kernels.hpp"
 
@@ -64,7 +65,9 @@ namespace {
 
 } // namespace
 
-TEST(FusedNoiseInjectionTest, MeanAndVarMatchIdentityCovariance) {
+class FusedNoiseInjectionTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(FusedNoiseInjectionTest, MeanAndVarMatchIdentityCovariance) {
     constexpr size_t N = 50000;
     constexpr float lr = 1.0f;
     constexpr uint64_t seed = 0xC0FFEEu;
@@ -103,7 +106,7 @@ TEST(FusedNoiseInjectionTest, MeanAndVarMatchIdentityCovariance) {
 }
 
 // Philox must keep Gaussian moments (not just mean/var).
-TEST(FusedNoiseInjectionTest, NormalityMomentsUnchanged) {
+TEST_F(FusedNoiseInjectionTest, NormalityMomentsUnchanged) {
     constexpr size_t N = 100000;
     constexpr float lr = 1.0f;
     constexpr uint64_t seed = 0xA11CEu;
@@ -134,7 +137,7 @@ TEST(FusedNoiseInjectionTest, NormalityMomentsUnchanged) {
 
 // MRNF path: weight = (1-σ(raw_op))^150 * lr * noise_weight with vis>0.
 // raw_op→−∞ ⇒ σ→0 ⇒ weight→lr*noise_weight; clamp disabled via large median_scale.
-TEST(FusedNoiseInjectionTest, MrnfNoiseMeanVarNormal) {
+TEST_F(FusedNoiseInjectionTest, MrnfNoiseMeanVarNormal) {
     constexpr size_t N = 80000;
     constexpr float lr = 1.0f;
     constexpr float noise_weight = 0.5f;
@@ -166,7 +169,7 @@ TEST(FusedNoiseInjectionTest, MrnfNoiseMeanVarNormal) {
     EXPECT_NEAR(m.excess_kurtosis, 0.0, 0.2) << "mrnf ex_kurt=" << m.excess_kurtosis;
 }
 
-TEST(FusedNoiseInjectionTest, FrozenMaskBlocksNoise) {
+TEST_F(FusedNoiseInjectionTest, FrozenMaskBlocksNoise) {
     constexpr size_t N = 256;
     constexpr uint64_t seed = 42;
 

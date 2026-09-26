@@ -28,6 +28,7 @@
 
 namespace lfs::vis {
     class VisualizerImpl;
+    class VisualizerImplResetTest_ActiveProjectPreviewWritePreservesEditsAndQueuesSave_Test;
     class VisualizerImplResetTest_AsyncCaptureKeepsNewerSceneDirty_Test;
     class VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
     class VisualizerImplResetTest_AutosaveSkipsWhileManualProjectWriteJobIsRunning_Test;
@@ -212,6 +213,9 @@ namespace lfs::vis::project {
                bool allow_existing_destination_replacement = false);
         [[nodiscard]] lfs::Result<void>
         compact();
+        void cancelCleanup();
+        [[nodiscard]] lfs::Result<void> clean(
+            const std::filesystem::path& destination, const lfs::core::Uuid& expected_commit);
         [[nodiscard]] lfs::Result<void>
         newProject(
             ProjectSwitchDisposition disposition =
@@ -239,11 +243,18 @@ namespace lfs::vis::project {
         [[nodiscard]] bool isHydrating() const;
         [[nodiscard]] bool isBlankUntitledSession() const;
         [[nodiscard]] lfs::Result<ProjectInfo> info();
+        [[nodiscard]] ProjectDisplayInfo displayInfo();
         [[nodiscard]] lfs::Result<std::optional<lfs::io::project::ProjectLicense>>
         license();
         [[nodiscard]] lfs::Result<void>
         setLicense(const lfs::io::project::ProjectLicense& license);
+        [[nodiscard]] lfs::Result<void> adoptImportLicense(
+            const std::optional<std::vector<uint8_t>>& license_bytes);
         [[nodiscard]] lfs::Result<void> clearLicense();
+        [[nodiscard]] lfs::Result<void>
+        setPreview(std::span<const std::byte> png_bytes,
+                   const std::filesystem::path& expected_path = {},
+                   std::string expected_project_uuid = {});
         [[nodiscard]] ProjectWritePoll pollWrite();
         void joinPendingWrite();
         [[nodiscard]] ProjectMenuInfo menuInfo() const;
@@ -327,6 +338,7 @@ namespace lfs::vis::project {
             std::string* error_message = nullptr);
 
     private:
+        friend class lfs::vis::VisualizerImplResetTest_ActiveProjectPreviewWritePreservesEditsAndQueuesSave_Test;
         friend class lfs::vis::VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
         friend class lfs::vis::VisualizerImplResetTest_AsyncCaptureKeepsNewerSceneDirty_Test;
         friend class lfs::vis::VisualizerImplResetTest_AutosaveSkipsWhileManualProjectWriteJobIsRunning_Test;
@@ -455,6 +467,7 @@ namespace lfs::vis::project {
             TrainingExplicitSave,
             TrainingCloseSave,
             DatasetEmbed,
+            Thumbnail,
         };
 
         using DeclinedRecoveryIdentity = DismissedRecoveryEntry;
@@ -558,7 +571,9 @@ namespace lfs::vis::project {
                     ProjectDocumentAutosaveOptions>
                 autosave = std::nullopt);
         [[nodiscard]] lfs::Result<void>
-        startCompaction(bool automatic);
+        startCompaction(bool automatic, bool clean = false,
+                        const std::filesystem::path& destination = {},
+                        const lfs::core::Uuid& expected_commit = {});
         [[nodiscard]] lfs::Result<void>
         startTrainingWrite(
             ProjectWritePurpose purpose,
@@ -574,6 +589,11 @@ namespace lfs::vis::project {
         isTrainingCheckpointStale() const;
         [[nodiscard]] bool
         canFlushFinishedTrainerSnapshot() const;
+        // Keep these guards before snapshot adoption, without duplicating them
+        // in the display reader. nullopt means the document needs further checks.
+        [[nodiscard]] std::optional<bool> dirtyProjectPreflight() const;
+        [[nodiscard]] bool hasDirtyProjectAfterPreflight() const;
+        [[nodiscard]] bool hasDirtyProjectForDisplay() const;
         void queueProjectWriteSettlement(
             JobHandle handle);
         void settleProjectWrite();
@@ -592,7 +612,17 @@ namespace lfs::vis::project {
         waitOutTrainerPublishForExplicitSave();
         [[nodiscard]] bool
         queueExplicitSaveIfTrainerWriterInFlight(bool regenerate_preview);
+        [[nodiscard]] bool
+        queueExplicitSaveIfNonWaitableProjectWriteInFlight(
+            bool regenerate_preview);
         void processPendingExplicitSave();
+        void processPendingThumbnailWrite();
+        [[nodiscard]] lfs::Result<std::vector<std::byte>>
+        explicitSavePreviewPng(bool regenerate_preview);
+        void clearPendingExplicitPreview();
+        [[nodiscard]] lfs::Result<void>
+        startThumbnailWrite();
+        [[nodiscard]] lfs::Result<void> thumbnailWriteAllowed() const;
         [[nodiscard]] lfs::Result<void>
         ensureDocumentMatchesBoundMaster();
         [[nodiscard]] lfs::Result<void>
@@ -750,6 +780,7 @@ namespace lfs::vis::project {
         std::optional<lfs::Error> last_project_write_typed_error_;
         lfs::io::project::ProjectStorageStats
             storage_stats_;
+        bool cleanup_in_progress_ = false;
         bool compaction_suggested_ = false;
         bool compaction_suggestion_reported_ =
             false;
@@ -781,6 +812,10 @@ namespace lfs::vis::project {
             document_access_mutex_;
         std::optional<ProjectInfo>
             cached_project_info_;
+        std::optional<ProjectDisplayInfo>
+            cached_project_display_info_;
+        const lfs::io::project::ProjectDocument*
+            cached_project_display_document_ = nullptr;
         std::uint64_t
             adopted_training_snapshot_count_ = 0;
         std::string
@@ -812,6 +847,11 @@ namespace lfs::vis::project {
         std::atomic<CloseSaveState>
             close_save_state_{CloseSaveState::Idle};
         std::optional<bool> pending_explicit_save_regenerate_preview_;
+        std::vector<std::byte> pending_preview_png_;
+        std::filesystem::path pending_preview_path_;
+        std::string pending_preview_project_uuid_;
+        std::uint64_t pending_preview_generation_ = 0;
+        std::uint64_t in_flight_preview_generation_ = 0;
         mutable std::mutex close_save_mutex_;
         std::string close_save_error_;
         std::string hydration_error_;

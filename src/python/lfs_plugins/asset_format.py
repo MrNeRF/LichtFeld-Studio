@@ -14,4 +14,4 @@ def format_size(value):
             amount = size / divisor
             # Round before selecting precision, so 9.99 KB becomes 10 KB.
             digits = 1 if round(amount, 1) < 10 else 0
-            return f"{amount:.{digits}f} {lf.ui.tr('asset_manager.unit.' + unit)}"
+            return f"{amount:.{digits}f} {lf.ui.tr('projects.unit.' + unit)}"

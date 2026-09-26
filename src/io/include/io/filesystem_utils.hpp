@@ -184,8 +184,11 @@ namespace lfs::io {
     // fallback when that basename is unique under the indexed root.
     class RecursiveFileCache {
     public:
+        // Optional observer receives each regular file's path relative to root_path
+        // during the existing filesystem walk.
         explicit RecursiveFileCache(const fs::path& root_path,
-                                    const CancelCallback& cancel_requested = nullptr) {
+                                    const CancelCallback& cancel_requested = nullptr,
+                                    const std::function<void(const fs::path&)>& on_file = nullptr) {
             if (!safe_is_directory(root_path))
                 return;
 
@@ -212,6 +215,9 @@ namespace lfs::io {
                 const fs::path rel = entry.path().lexically_relative(root_path);
                 if (rel.empty())
                     continue;
+
+                if (on_file)
+                    on_file(rel);
 
                 raw_entries_.emplace(detail::raw_lookup_key(rel), entry.path());
 

@@ -6,8 +6,10 @@
 #include "core/cuda_error.hpp"
 #include "core/environment.hpp"
 #include "core/logger.hpp"
+#if LFS_HAS_CUDA
 #include "core/tensor/backend/cuda/runtime/cuda_event_pool.hpp"
 #include "core/tensor/backend/cuda/runtime/stream_lifetime.hpp"
+#endif
 #include "core/tensor_backend.hpp"
 #include "diagnostics/vram_profiler.hpp"
 
@@ -22,9 +24,11 @@ namespace lfs::core {
         constexpr size_t MIB = 1024ULL * 1024ULL;
         constexpr size_t DEFAULT_CACHE_LIMIT = 1024ULL * MIB;
 
+#if LFS_HAS_CUDA
         bool is_cuda_shutdown(const cudaError_t status) {
             return status == cudaErrorCudartUnloading || is_cuda_unavailable_error(status);
         }
+#endif
 
         size_t configured_cache_limit() {
             const auto value = environment::value("LFS_PINNED_CACHE_LIMIT_MB");
@@ -44,9 +48,21 @@ namespace lfs::core {
             return static_cast<size_t>(*megabytes) * MIB;
         }
 
+        // Page-locking needs a CUDA context and only speeds up CUDA copies, so a
+        // session on another tensor backend stays context-free until CUDA work starts.
+        bool cuda_host_staging_wanted() {
+#if LFS_HAS_CUDA
+            return gpu_backend_available(GpuBackend::CUDA) && !cuda_is_unavailable() &&
+                   (default_gpu_backend() == GpuBackend::CUDA || gpu_backend_live(GpuBackend::CUDA));
+#else
+            return false;
+#endif
+        }
+
     } // namespace
 
     PinnedMemoryAllocator::Block::~Block() {
+#if LFS_HAS_CUDA
         // Explicit allocator shutdown returns events through the pool. This is
         // only the static-destruction fallback, where the later-constructed
         // event-pool singleton may already be gone.
@@ -59,6 +75,7 @@ namespace lfs::core {
                 cudaGetLastError();
             }
         }
+#endif
     }
 
     PinnedMemoryAllocator::Block::Block(Block&& other) noexcept
@@ -90,6 +107,7 @@ namespace lfs::core {
     }
 
     bool PinnedMemoryAllocator::Block::all_uses_complete() const {
+#if LFS_HAS_CUDA
         for (const cudaEvent_t event : ready_events) {
             const cudaError_t status = cudaEventQuery(event);
             if (status == cudaErrorNotReady) {
@@ -107,13 +125,16 @@ namespace lfs::core {
                 return false;
             }
         }
+#endif
         return true;
     }
 
     void PinnedMemoryAllocator::Block::release_events() {
+#if LFS_HAS_CUDA
         for (const cudaEvent_t event : ready_events) {
             CudaEventPool::instance().release(event);
         }
+#endif
         ready_events.clear();
     }
 
@@ -189,10 +210,9 @@ namespace lfs::core {
         }
 
         const bool use_pinned =
-            gpu_backend_available(GpuBackend::CUDA) &&
             enabled_.load(std::memory_order_acquire) &&
             !force_fallback_for_testing_.load(std::memory_order_acquire) &&
-            !cuda_is_unavailable();
+            cuda_host_staging_wanted();
         const size_t allocation_size = use_pinned ? round_size(bytes) : bytes;
 
         std::unique_lock lock(mutex_);
@@ -239,6 +259,7 @@ namespace lfs::core {
 
         void* ptr = nullptr;
         Backend backend = Backend::MallocFallback;
+#if LFS_HAS_CUDA
         if (use_pinned) {
             const auto pre_call_state = sample_cuda_pre_call_state();
             const cudaError_t status = cudaHostAlloc(&ptr, allocation_size, cudaHostAllocDefault);
@@ -252,6 +273,7 @@ namespace lfs::core {
                 cudaGetLastError();
             }
         }
+#endif
 
         if (!ptr) {
             ptr = std::malloc(allocation_size);
@@ -291,6 +313,7 @@ namespace lfs::core {
 
     bool PinnedMemoryAllocator::record_uses(Block& block,
                                             const std::vector<cudaStream_t>& streams) {
+#if LFS_HAS_CUDA
         LFS_CUDA_BREADCRUMB("tensor.pinned.record_stream");
         bool all_streams_safe = true;
         for (const cudaStream_t stream : streams) {
@@ -336,6 +359,9 @@ namespace lfs::core {
                             CudaFailureDisposition::LogOnly);
         cudaGetLastError();
         return false;
+#else
+        return true;
+#endif
     }
 
     std::vector<PinnedMemoryAllocator::Block> PinnedMemoryAllocator::take_evictions_locked() {
@@ -373,6 +399,7 @@ namespace lfs::core {
 
         for (Block& block : blocks) {
             bool safe_to_release = true;
+#if LFS_HAS_CUDA
             for (const cudaEvent_t event : block.ready_events) {
                 const cudaError_t status = cudaEventSynchronize(event);
                 if (status != cudaSuccess && !is_cuda_shutdown(status)) {
@@ -383,6 +410,7 @@ namespace lfs::core {
                     safe_to_release = false;
                 }
             }
+#endif
             block.release_events();
 
             if (count_as_evictions) {
@@ -398,6 +426,7 @@ namespace lfs::core {
             LFS_CUDA_BREADCRUMB_ARGS(
                 "tensor.pinned.free",
                 0, reinterpret_cast<uintptr_t>(block.ptr), block.size);
+#if LFS_HAS_CUDA
             if (block.backend == Backend::CudaHost) {
                 const cudaError_t status = cudaFreeHost(block.ptr);
                 if (status == cudaSuccess || is_cuda_shutdown(status)) {
@@ -420,6 +449,12 @@ namespace lfs::core {
                 ++fallback_frees;
                 released_bytes += block.size;
             }
+#else
+            std::free(block.ptr);
+            unregister_cuda_address_range(block.ptr);
+            ++fallback_frees;
+            released_bytes += block.size;
+#endif
             block.ptr = nullptr;
         }
 
@@ -440,7 +475,9 @@ namespace lfs::core {
     }
 
     void PinnedMemoryAllocator::deallocate(void* ptr, const cudaStream_t stream) {
+#if LFS_HAS_CUDA
         unretire_stream(stream);
+#endif
         if (!ptr) {
             return;
         }
@@ -476,7 +513,9 @@ namespace lfs::core {
         }
 
         Block block{ptr, allocation.size, allocation.backend};
-        if (!record_uses(block, allocation.extra_streams)) {
+        // Without a CUDA context, a pageable block cannot have pending CUDA uses.
+        if ((allocation.backend == Backend::CudaHost || gpu_backend_live(GpuBackend::CUDA)) &&
+            !record_uses(block, allocation.extra_streams)) {
             // The CUDA runtime could not establish that all users are finished.
             // Keep the storage out of both the cache and the backend free path.
             block.release_events();
@@ -526,7 +565,9 @@ namespace lfs::core {
     }
 
     void PinnedMemoryAllocator::record_stream(void* ptr, const cudaStream_t stream) {
+#if LFS_HAS_CUDA
         unretire_stream(stream);
+#endif
         if (!ptr) {
             return;
         }
@@ -557,6 +598,7 @@ namespace lfs::core {
         if (!stream) {
             return;
         }
+#if LFS_HAS_CUDA
         // Best-effort drain. Even when the sync fails the caller is about to
         // destroy the handle, so the sever below must happen unconditionally —
         // a later cudaEventRecord on the destroyed handle is a driver-side
@@ -571,6 +613,7 @@ namespace lfs::core {
             }
             cudaGetLastError();
         }
+#endif
 
         std::lock_guard lock(mutex_);
         for (auto& [ptr, info] : allocated_blocks_) {

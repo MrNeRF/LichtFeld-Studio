@@ -12,6 +12,7 @@
  * 4. Compare CUDA kernel gradients against verified analytical gradients
  */
 
+#include "cuda_backend_test.hpp"
 #include <gtest/gtest.h>
 #include <torch/torch.h>
 
@@ -308,9 +309,10 @@ namespace {
 
 } // namespace
 
-class AnalyticalGradientTest : public ::testing::Test {
+class AnalyticalGradientTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         if (!torch::cuda::is_available()) {
             GTEST_SKIP() << "CUDA not available";
         }
@@ -968,7 +970,7 @@ TEST_F(AnalyticalGradientTest, DepthAnchorFitRecoversAffineDisparityAlignment) {
 
     const float aabb_lo[3] = {-1e30f, -1e30f, -1e30f};
     const float aabb_hi[3] = {1e30f, 1e30f, 1e30f};
-    const auto anchor = lfs::training::kernels::fit_depth_anchor(
+    const auto samples = lfs::training::kernels::collect_depth_anchor_samples(
         points.data_ptr<float>(),
         static_cast<size_t>(points.size(0)),
         w2c.data_ptr<float>(),
@@ -978,6 +980,7 @@ TEST_F(AnalyticalGradientTest, DepthAnchorFitRecoversAffineDisparityAlignment) {
         0.01f,
         aabb_lo,
         aabb_hi);
+    const auto anchor = lfs::training::kernels::fit_depth_anchor_from_samples(samples);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
     ASSERT_TRUE(anchor.valid);
@@ -1169,9 +1172,10 @@ TEST_F(AnalyticalGradientTest, FullForwardChain) {
 // These tests compare actual CUDA backward kernel outputs against LibTorch autograd
 // =============================================================================
 
-class CUDAKernelGradientTest : public ::testing::Test {
+class CUDAKernelGradientTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         if (!torch::cuda::is_available()) {
             GTEST_SKIP() << "CUDA not available";
         }

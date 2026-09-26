@@ -51,32 +51,6 @@ namespace lfs::training::kernels {
                                         : slots);
         }
 
-        template <bool kUseImage, bool kSubtract>
-        __global__ void fused_background_compose_kernel(
-            const float* __restrict__ image,
-            const float* __restrict__ alpha,
-            const float* __restrict__ background,
-            float* __restrict__ output,
-            int H, int W) {
-            const int idx = static_cast<int>(blockIdx.x) * blockDim.x + threadIdx.x;
-            const int total = H * W;
-            if (idx >= total)
-                return;
-
-            const int HW = total;
-            const float alpha_complement = 1.0f - alpha[idx];
-            const float sign = kSubtract ? -1.0f : 1.0f;
-
-            if constexpr (kUseImage) {
-                output[0 * HW + idx] = image[0 * HW + idx] + sign * alpha_complement * background[0 * HW + idx];
-                output[1 * HW + idx] = image[1 * HW + idx] + sign * alpha_complement * background[1 * HW + idx];
-                output[2 * HW + idx] = image[2 * HW + idx] + sign * alpha_complement * background[2 * HW + idx];
-            } else {
-                output[0 * HW + idx] = image[0 * HW + idx] + sign * alpha_complement * background[0];
-                output[1 * HW + idx] = image[1 * HW + idx] + sign * alpha_complement * background[1];
-                output[2 * HW + idx] = image[2 * HW + idx] + sign * alpha_complement * background[2];
-            }
-        }
     } // namespace
 
     __global__ void fused_grad_alpha_chw_kernel(
@@ -206,64 +180,6 @@ namespace lfs::training::kernels {
         fused_grad_alpha_with_image_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
             grad_image, bg_image, grad_alpha, H, W);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.grad_alpha.fused_with_image");
-    }
-
-    void launch_fused_background_blend(
-        const float* image,
-        const float* alpha,
-        const float* bg_color,
-        float* output,
-        int H, int W,
-        cudaStream_t stream) {
-        stream = resolve_stream(stream);
-        const int total = H * W;
-        const unsigned int blocks = num_blocks_1d(total);
-        fused_background_compose_kernel<false, false><<<blocks, kThreadsPerBlock, 0, stream>>>(
-            image, alpha, bg_color, output, H, W);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.grad_alpha.bg_blend");
-    }
-
-    void launch_fused_background_blend_with_image(
-        const float* image,
-        const float* alpha,
-        const float* bg_image,
-        float* output,
-        int H, int W,
-        cudaStream_t stream) {
-        stream = resolve_stream(stream);
-        const int total = H * W;
-        const unsigned int blocks = num_blocks_1d(total);
-        fused_background_compose_kernel<true, false><<<blocks, kThreadsPerBlock, 0, stream>>>(
-            image, alpha, bg_image, output, H, W);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.grad_alpha.bg_blend_image");
-    }
-
-    void launch_fused_background_unblend(
-        float* image,
-        const float* alpha,
-        const float* bg_color,
-        int H, int W,
-        cudaStream_t stream) {
-        stream = resolve_stream(stream);
-        const int total = H * W;
-        const unsigned int blocks = num_blocks_1d(total);
-        fused_background_compose_kernel<false, true><<<blocks, kThreadsPerBlock, 0, stream>>>(
-            image, alpha, bg_color, image, H, W);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.grad_alpha.bg_unblend");
-    }
-
-    void launch_fused_background_unblend_with_image(
-        float* image,
-        const float* alpha,
-        const float* bg_image,
-        int H, int W,
-        cudaStream_t stream) {
-        stream = resolve_stream(stream);
-        const int total = H * W;
-        const unsigned int blocks = num_blocks_1d(total);
-        fused_background_compose_kernel<true, true><<<blocks, kThreadsPerBlock, 0, stream>>>(
-            image, alpha, bg_image, image, H, W);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.grad_alpha.bg_unblend_image");
     }
 
     // ==================== Gradient Accumulation ====================

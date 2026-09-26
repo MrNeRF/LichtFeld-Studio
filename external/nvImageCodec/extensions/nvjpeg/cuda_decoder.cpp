@@ -16,11 +16,14 @@
  */
 #define NOMINMAX
 #include "cuda_decoder.h"
+#include <algorithm>
 #include <cassert>
+#include <condition_variable>
 #include <cstring>
 #include <iostream>
 #include <library_types.h>
 #include <memory>
+#include <mutex>
 #include <numeric>
 #include <nvimgcodec.h>
 #include <nvtx3/nvtx3.hpp>
@@ -136,7 +139,6 @@ namespace nvjpeg {
             std::array<Page, 2> pages_;
             int current_page_idx = 0;
             cudaEvent_t event_ = nullptr;
-            nvjpegBufferDevice_t device_buffer_ = nullptr;
             // helper buffer is currently used for I_YCC/I_YUV decode format.
             nvimgcodec::DeviceBuffer helper_device_buffer_;
 
@@ -144,6 +146,34 @@ namespace nvjpeg {
                 : helper_device_buffer_(exec_params ? exec_params->device_allocator : nullptr) {}
         };
         std::vector<PerThreadResources> per_thread_;
+
+        // nvJPEG device buffers grow to the largest image they decode and keep
+        // that size. They are only needed while a sample's GPU stage is enqueued,
+        // so a small shared set replaces one buffer per CPU thread, which held
+        // thread-count times the image size once a burst spread over the pool.
+        struct SharedDeviceBuffer {
+            nvjpegBufferDevice_t buffer = nullptr;
+            cudaEvent_t last_use = nullptr;
+        };
+        static constexpr size_t kNumDeviceBuffers = 2;
+        std::vector<SharedDeviceBuffer> device_buffers_;
+        std::vector<size_t> free_device_buffers_;
+        std::mutex device_buffers_mutex_;
+        std::condition_variable device_buffer_released_;
+
+        class DeviceBufferLease {
+        public:
+            DeviceBufferLease(Decoder& decoder, cudaStream_t stream);
+            ~DeviceBufferLease();
+            DeviceBufferLease(const DeviceBufferLease&) = delete;
+            DeviceBufferLease& operator=(const DeviceBufferLease&) = delete;
+            [[nodiscard]] nvjpegBufferDevice_t get() const { return decoder_.device_buffers_[index_].buffer; }
+
+        private:
+            Decoder& decoder_;
+            cudaStream_t stream_;
+            size_t index_;
+        };
 
         const nvimgcodecExecutionParams_t* exec_params_;
         NvjpegVersion nvjpeg_version_;
@@ -302,23 +332,59 @@ namespace nvjpeg {
                 }
                 XM_CHECK_NVJPEG(nvjpegJpegStreamCreate(handle_, &p.parse_state_.nvjpeg_stream_));
             }
+        }
+
+        device_buffers_.resize(std::min<size_t>(kNumDeviceBuffers, static_cast<size_t>(num_threads)));
+        for (size_t i = 0; i < device_buffers_.size(); i++) {
+            auto& shared = device_buffers_[i];
+            XM_CHECK_CUDA(cudaEventCreateWithFlags(&shared.last_use, cudaEventDisableTiming));
             if (device_allocator_.dev_malloc && device_allocator_.dev_free) {
-                XM_CHECK_NVJPEG(nvjpegBufferDeviceCreateV2(handle_, &device_allocator_, &res.device_buffer_));
+                XM_CHECK_NVJPEG(nvjpegBufferDeviceCreateV2(handle_, &device_allocator_, &shared.buffer));
 #if NVJPEG_BUFFER_RESIZE_API
                 if (preallocate_buffers_ && pinned_mem_padding_ > 0) {
                     if (nvjpegIsSymbolAvailable("nvjpegBufferDeviceResize")) {
                         NVIMGCODEC_LOG_DEBUG(
-                            framework_, plugin_id_, "Preallocating device buffer (thread#" << i << ") size=" << device_mem_padding_.value());
-                        XM_CHECK_NVJPEG(nvjpegBufferDeviceResize(res.device_buffer_, device_mem_padding_.value(), res.stream_));
+                            framework_, plugin_id_, "Preallocating device buffer #" << i << " size=" << device_mem_padding_.value());
+                        XM_CHECK_NVJPEG(nvjpegBufferDeviceResize(shared.buffer, device_mem_padding_.value(), nullptr));
                     } else {
                         NVIMGCODEC_LOG_WARNING(framework_, plugin_id_, "nvjpegBufferDeviceResize not available. Skip preallocation");
                     }
                 }
 #endif
             } else {
-                XM_CHECK_NVJPEG(nvjpegBufferDeviceCreate(handle_, nullptr, &res.device_buffer_));
+                XM_CHECK_NVJPEG(nvjpegBufferDeviceCreate(handle_, nullptr, &shared.buffer));
             }
+            free_device_buffers_.push_back(i);
         }
+    }
+
+    Decoder::DeviceBufferLease::DeviceBufferLease(Decoder& decoder, cudaStream_t stream)
+        : decoder_(decoder), stream_(stream) {
+        std::unique_lock lock(decoder_.device_buffers_mutex_);
+        decoder_.device_buffer_released_.wait(lock, [this] { return !decoder_.free_device_buffers_.empty(); });
+        index_ = decoder_.free_device_buffers_.back();
+        decoder_.free_device_buffers_.pop_back();
+        lock.unlock();
+        // The previous holder's GPU work may still read the buffer; order after it on the device.
+        if (const cudaError_t status = cudaStreamWaitEvent(stream_, decoder_.device_buffers_[index_].last_use, 0);
+            status != cudaSuccess) {
+            {
+                std::lock_guard relock(decoder_.device_buffers_mutex_);
+                decoder_.free_device_buffers_.push_back(index_);
+            }
+            decoder_.device_buffer_released_.notify_one();
+            XM_CHECK_CUDA(status);
+        }
+    }
+
+    Decoder::DeviceBufferLease::~DeviceBufferLease() {
+        if (cudaEventRecord(decoder_.device_buffers_[index_].last_use, stream_) != cudaSuccess)
+            cudaStreamSynchronize(stream_);
+        {
+            std::lock_guard lock(decoder_.device_buffers_mutex_);
+            decoder_.free_device_buffers_.push_back(index_);
+        }
+        decoder_.device_buffer_released_.notify_one();
     }
 
     nvimgcodecStatus_t NvJpegCudaDecoderPlugin::create(
@@ -371,14 +437,21 @@ namespace nvjpeg {
                         }
                     }
                 }
-                if (res.device_buffer_) {
-                    XM_NVJPEG_LOG_DESTROY(nvjpegBufferDeviceDestroy(res.device_buffer_));
-                }
                 if (res.event_) {
                     XM_CUDA_LOG_DESTROY(cudaEventDestroy(res.event_));
                 }
             }
             per_thread_.clear();
+            for (auto& shared : device_buffers_) {
+                if (shared.buffer) {
+                    XM_NVJPEG_LOG_DESTROY(nvjpegBufferDeviceDestroy(shared.buffer));
+                }
+                if (shared.last_use) {
+                    XM_CUDA_LOG_DESTROY(cudaEventDestroy(shared.last_use));
+                }
+            }
+            device_buffers_.clear();
+            free_device_buffers_.clear();
 
             if (handle_)
                 XM_NVJPEG_LOG_DESTROY(nvjpegDestroy(handle_));
@@ -746,11 +819,12 @@ namespace nvjpeg {
             // Waits for GPU stage from previous iteration (on this thread)
             XM_CHECK_CUDA(cudaEventSynchronize(t.event_));
 
-            XM_CHECK_NVJPEG(nvjpegStateAttachDeviceBuffer(state, t.device_buffer_));
-
-            XM_CHECK_NVJPEG(nvjpegDecodeJpegTransferToDevice(handle_, decoder, state, p.parse_state_.nvjpeg_stream_, image_info.cuda_stream));
-
             {
+                const DeviceBufferLease device_buffer(*this, image_info.cuda_stream);
+                XM_CHECK_NVJPEG(nvjpegStateAttachDeviceBuffer(state, device_buffer.get()));
+
+                XM_CHECK_NVJPEG(nvjpegDecodeJpegTransferToDevice(handle_, decoder, state, p.parse_state_.nvjpeg_stream_, image_info.cuda_stream));
+
                 nvtx3::scoped_range marker{"nvjpegDecodeJpegDevice"};
                 XM_CHECK_NVJPEG(nvjpegDecodeJpegDevice(handle_, decoder, state, &nvjpeg_image, image_info.cuda_stream));
             }

@@ -97,6 +97,32 @@ TEST(ViewportTest, PlyComparisonPanelLayoutKeepsMarginWithinCachedRects) {
     EXPECT_EQ(layouts[1].panel.width, 625);
 }
 
+TEST(ViewportTest, SplitViewPixelCentersDoNotStretchWithPanelWidth) {
+    EXPECT_FLOAT_EQ(lfs::vis::splitViewPixelCenterUv(0, 0, 1000), 0.0005f);
+    EXPECT_FLOAT_EQ(lfs::vis::splitViewPixelCenterUv(999, 0, 1000), 0.9995f);
+    EXPECT_FLOAT_EQ(lfs::vis::splitViewPixelCenterUv(7, 7, 1), 0.5f);
+
+    constexpr int full_width = 1000;
+    constexpr int screen_pixel = 550;
+    for (const float cached_split : {0.5f, 0.7f}) {
+        const auto layouts = lfs::vis::makePlyComparisonPanelLayouts(full_width, cached_split);
+        for (const auto& layout : layouts) {
+            if (screen_pixel < layout.panel.x ||
+                screen_pixel >= layout.panel.x + layout.panel.width)
+                continue;
+            const float full_uv =
+                lfs::vis::splitViewPixelCenterUv(screen_pixel, 0, full_width);
+            const float panel_uv =
+                full_uv * layout.texcoord_scale.x + layout.texcoord_offset.x;
+            const float sampled_texel =
+                panel_uv * static_cast<float>(layout.panel.width) - 0.5f;
+            EXPECT_NEAR(sampled_texel,
+                        static_cast<float>(screen_pixel - layout.panel.x),
+                        1e-4f);
+        }
+    }
+}
+
 TEST(ViewportTest, PlyComparisonClippedRequestKeepsFullViewportCamera) {
     constexpr glm::ivec2 full_size{1000, 600};
     constexpr float split_position = 0.5f;
