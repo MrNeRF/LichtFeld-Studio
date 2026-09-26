@@ -8,6 +8,7 @@
 #include "core/tensor.hpp"
 #include "istrategy.hpp"
 #include "kernels/mrnf_kernels.hpp"
+#include "lfs/training/ops/mrnf.hpp"
 #include "lfs/training/refine_scratch.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "optimizer/scheduler.hpp"
@@ -118,6 +119,9 @@ namespace lfs::training {
         bool reads_render_depth(int iter) const override;
 
     private:
+        const lfs::gpu_ops::MrnfOps& mrnf_ops() const;
+        const lfs::gpu_ops::MrnfOps* mrnf_ops_ = nullptr;
+
         friend class ::MRNFStrategyTest_PermutationRepublishesFarMask_Test;
         friend class ::MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Test;
         friend class ::MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
