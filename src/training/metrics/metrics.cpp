@@ -20,6 +20,7 @@
 #include "eval_mask.hpp"
 #include "io/cuda/image_format_kernels.cuh"
 #include "lfs/kernels/ssim.cuh"
+#include "lfs/training/ops/registry.hpp"
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -218,6 +219,9 @@ namespace lfs::training {
             throw std::runtime_error("SSIM: prediction and target must have the same shape");
         }
 
+        if (ops_ == nullptr) {
+            ops_ = training_ops(lfs::core::default_gpu_backend()).photometric;
+        }
         if (ops_ == nullptr || ops_->metric == nullptr) {
             throw std::runtime_error("SSIM: photometric ops are unavailable");
         }
