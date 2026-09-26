@@ -1867,6 +1867,9 @@ namespace lfs::vis {
     }
 
     void WindowManager::adoptTensorBackendDevice() {
+        // Metal tensors reach the window device through their own interop.
+        if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Metal)
+            return;
         const auto& device = vulkan_context_->tensorBackendDevice();
         if (!device.complete) {
             LOG_INFO("Tensor Vulkan backend keeps its own device: the window device has no spare compute queue or lacks a required feature");
