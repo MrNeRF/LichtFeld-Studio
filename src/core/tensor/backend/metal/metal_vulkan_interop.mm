@@ -137,20 +137,20 @@ namespace lfs::core::internal {
                     .offset = storage.byte_offset,
                     .device_address = imported->address + storage.byte_offset,
                     .bytes = tensor.bytes(),
-                    .pending_timeline_value = storage.meta->pending_value.load(std::memory_order_acquire),
+                    .pending_timeline_value = metal::acquire_context()->last_use(storage),
                     .keep_alive = std::make_shared<Lease>(Lease{tensor, imported}),
                     .device = target_.device,
                 };
             }
 
             TensorCompletion ready(const std::span<const Tensor* const> tensors) override {
+                // A fresh tensor may reuse a block that earlier Metal work still uses.
+                const auto context = metal::acquire_context();
                 uint64_t serial = 0;
                 for (const auto* tensor : tensors) {
-                    if (!tensor || !tensor->is_valid() || gpu_backend_of(*tensor) != GpuBackend::Metal)
-                        continue;
-                    serial = std::max(serial, storage_ref(*tensor).meta->pending_value.load(std::memory_order_acquire));
+                    if (tensor && tensor->is_valid() && gpu_backend_of(*tensor) == GpuBackend::Metal)
+                        serial = std::max(serial, context->last_use(storage_ref(*tensor)));
                 }
-                const auto context = metal::acquire_context();
                 if (serial <= context->completed())
                     return {};
                 const auto timeline = this->timeline(*context);
