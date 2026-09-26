@@ -112,16 +112,6 @@ namespace lfs::core::internal {
         }
     }
 
-    void CudaBackendOps::take(
-        const StorageRef input, const StorageRef indices, const StorageRef output,
-        const IndexProgram& program, const ExecContext context) {
-        LFS_FACADE_TRACE(take);
-        tensor_ops::launch_take(
-            cuda_const_pointer<float>(input), cuda_const_pointer<int>(indices),
-            cuda_pointer<float>(output), program.input_size, program.index_size,
-            context.cuda_stream);
-    }
-
     void CudaBackendOps::index_select(
         const StorageRef input, const StorageRef indices, const StorageRef output,
         const StridedLayout& input_layout, const IndexProgram& program,

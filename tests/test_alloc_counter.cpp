@@ -44,6 +44,7 @@ class AllocCounterCudaTest : public lfs::test::CudaBackendTest {};
 
 TEST_F(AllocCounterCudaTest, FreshLargeTensorIncrementsCounter) {
     cuda_warmup();
+    // Earlier tests can leave a cached block of this bucket in the pool.
     internal::backend_ops(GpuBackend::CUDA).trim();
 
     const auto snap = alloc_counter::snapshot();

@@ -166,7 +166,9 @@ namespace fast_lfs::rasterization {
             checked_device_pointer_on_current_device(cam_position_ptr, "cam_position_ptr", current_device);
             checked_device_pointer_on_current_device(image_ptr, "image_ptr", current_device);
             checked_device_pointer_on_current_device(alpha_ptr, "alpha_ptr", current_device);
-            checked_device_pointer_on_current_device(depth_ptr, "depth_ptr", current_device);
+            if (depth_ptr != nullptr) {
+                checked_device_pointer_on_current_device(depth_ptr, "depth_ptr", current_device);
+            }
 #else
             (void)means_ptr;
             (void)scales_raw_ptr;
@@ -441,7 +443,7 @@ namespace fast_lfs::rasterization {
         float* densification_info_ptr,
         const float* densification_error_map_ptr,
         const float* grad_image_ptr,
-        const float* grad_alpha_ptr,
+        const BackgroundAlphaGradient& background_grad,
         const float* grad_depth_ptr,
         const float* grad_normal_ptr,
         const float* image_ptr,
@@ -513,7 +515,10 @@ namespace fast_lfs::rasterization {
         try {
             // Validate required inputs using pure CUDA validation
             LFS_VALIDATE_CUDA_DEVICE_POINTER(grad_image_ptr, "grad_image_ptr");
-            LFS_VALIDATE_CUDA_DEVICE_POINTER(grad_alpha_ptr, "grad_alpha_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(background_grad.grad_alpha_map, "grad_alpha_map");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(background_grad.bg_color, "bg_color");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(background_grad.bg_image, "bg_image");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(background_grad.grad_alpha_extra, "grad_alpha_extra");
             LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(grad_depth_ptr, "grad_depth_ptr");
             LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(grad_normal_ptr, "grad_normal_ptr");
             LFS_VALIDATE_CUDA_DEVICE_POINTER(image_ptr, "image_ptr");
@@ -620,7 +625,7 @@ namespace fast_lfs::rasterization {
             backward(
                 densification_error_map_ptr,
                 grad_image_ptr,
-                grad_alpha_ptr,
+                background_grad,
                 grad_depth_ptr,
                 grad_normal_ptr,
                 image_ptr,
@@ -787,7 +792,7 @@ namespace fast_lfs::rasterization {
 
             // Backward pass compiles backward kernels (also releases arena)
             backward_raw(
-                nullptr, nullptr, grad_image, grad_alpha, nullptr, nullptr, image, alpha,
+                nullptr, nullptr, grad_image, BackgroundAlphaGradient{.grad_alpha_map = grad_alpha}, nullptr, nullptr, image, alpha,
                 means, scales, rotations, opacities, nullptr, w2c, cam_pos, ctx,
                 nullptr,
                 NUM_GAUSSIANS, NUM_GAUSSIANS, 1, 1,

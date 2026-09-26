@@ -85,6 +85,38 @@ class TestLoadResult:
         )
         assert result.load_time_ms >= 0
 
+    @pytest.mark.slow
+    def test_dataset_point_cloud_setters_keep_one_device(self, lf, test_data_dir):
+        """Setting one field from a CUDA tensor must follow the cloud's device.
+
+        The COLMAP loader returns a CPU cloud. Setters that always moved to
+        CUDA left means and colors on different devices, and the next filter
+        failed its device check.
+        """
+        datasets = sorted(
+            d for d in test_data_dir.iterdir()
+            if (d / "sparse").is_dir() and (d / "images_8").is_dir()
+        )
+        if not datasets:
+            pytest.skip("no COLMAP dataset with images_8 in the test data")
+        result = lf.io.load(str(datasets[0]), resize_factor=8, images_folder="images_8")
+        cloud = result.point_cloud
+        assert cloud is not None
+        count = cloud.size
+        assert count > 1
+
+        assert cloud.means.device == "cpu"
+        cloud.set_colors(cloud.colors.cuda())
+        assert cloud.colors.device == cloud.means.device
+        cloud.set_means(cloud.means.cuda())
+        assert cloud.means.device == cloud.colors.device
+
+        keep = lf.Tensor.arange(0, count, 1.0, device="cpu") < float(count // 2)
+        removed = cloud.filter(keep)
+        assert removed == count - count // 2
+        assert cloud.size == count // 2
+        assert cloud.colors.shape[0] == cloud.size
+
 
 class TestLoadPLY:
     """Tests for loading PLY files."""

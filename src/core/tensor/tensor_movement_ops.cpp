@@ -5,6 +5,7 @@
 #include "core/logger.hpp"
 #include "internal/tensor_broadcast.hpp"
 #include "internal/tensor_impl.hpp"
+#include <format>
 #include <algorithm>
 #include <limits>
 #include <numeric>
@@ -387,16 +388,16 @@ namespace lfs::core {
         case MovementOp::Pad: {
             if (auto* padding = std::get_if<std::vector<std::pair<int, int>>>(&args.args)) {
                 LFS_ASSERT_MSG(padding->size() <= shape_.rank(),
-                               "pad has more entries than tensor dimensions");
-                LFS_ASSERT_MSG(dtype_ == DataType::Float32,
-                               "pad currently supports only Float32");
+                               std::format("pad has more entries than tensor dimensions (entries={}, rank={})",
+                                           padding->size(), shape_.rank()));
                 std::vector<size_t> new_shape = shape_.dims();
                 std::vector<size_t> pad_before(shape_.rank(), 0);
                 std::vector<size_t> pad_after(shape_.rank(), 0);
 
                 for (size_t i = 0; i < padding->size() && i < shape_.rank(); ++i) {
                     LFS_ASSERT_MSG((*padding)[i].first >= 0 && (*padding)[i].second >= 0,
-                                   "pad widths must be non-negative");
+                                   std::format("pad widths must be non-negative (dim={}, before={}, after={})", i,
+                                               (*padding)[i].first, (*padding)[i].second));
                     pad_before[i] = (*padding)[i].first;
                     pad_after[i] = (*padding)[i].second;
                     new_shape[i] += pad_before[i] + pad_after[i];
@@ -438,7 +439,13 @@ namespace lfs::core {
                         dst[dst_idx] = src[i];
                     }
                 } else {
-                    LOG_WARN("Pad: unsupported dtype/device");
+                    // Other dtypes copy the input into the interior of the
+                    // zeroed result, through the strided copy every backend has.
+                    Tensor interior = result;
+                    for (size_t d = 0; d < shape_.rank(); ++d) {
+                        interior = interior.slice(d, pad_before[d], pad_before[d] + shape_[d]);
+                    }
+                    interior.copy_from(*this);
                 }
 
                 return result;
@@ -449,18 +456,18 @@ namespace lfs::core {
 
         case MovementOp::Flip: {
             if (auto* vec = std::get_if<std::vector<int>>(&args.args)) {
-                LFS_ASSERT_MSG(device_ == Device::CPU && dtype_ == DataType::Float32,
-                               "flip currently supports only CPU Float32 tensors");
-                auto result = clone();
+                for (const int axis : *vec) {
+                    const int resolved = resolve_dim(axis);
+                    LFS_ASSERT_MSG(resolved >= 0 && resolved < static_cast<int>(shape_.rank()),
+                                   std::format("flip axis {} is out of range for rank {}", axis, shape_.rank()));
+                }
 
                 if (device_ == Device::CPU && dtype_ == DataType::Float32) {
+                    auto result = clone();
                     float* data = result.ptr<float>();
 
                     for (int axis : *vec) {
-                        const int requested_axis = axis;
                         axis = resolve_dim(axis);
-                        LFS_ASSERT_MSG(axis >= 0 && axis < static_cast<int>(shape_.rank()),
-                                       "flip axis is out of range");
 
                         size_t stride = 1;
                         for (size_t i = axis + 1; i < shape_.rank(); ++i) {
@@ -484,11 +491,27 @@ namespace lfs::core {
                             }
                         }
                     }
-                } else {
-                    LOG_WARN("Flip not fully implemented for CUDA");
+                    return result;
                 }
 
-                return result;
+                // Other dtypes and devices gather each axis in reverse. The
+                // indices are in range by construction, so Clamp skips the
+                // validation download.
+                Tensor result = *this;
+                bool flipped = false;
+                for (const int axis : *vec) {
+                    const int resolved = resolve_dim(axis);
+                    const size_t extent = shape_[resolved];
+                    std::vector<int> reversed(extent);
+                    for (size_t i = 0; i < extent; ++i) {
+                        reversed[i] = static_cast<int>(extent - 1 - i);
+                    }
+                    const Tensor indices = ensure_same_device(
+                        Tensor::from_vector(reversed, {extent}, Device::CPU));
+                    result = result.index_select(resolved, indices, BoundaryMode::Clamp);
+                    flipped = true;
+                }
+                return flipped ? result : clone();
             }
             LFS_ASSERT_MSG(false,
                            "flip requires axis arguments");

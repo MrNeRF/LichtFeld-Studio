@@ -976,6 +976,10 @@ namespace lfs::core {
                             DataType dtype = DataType::Float32);
         static Tensor zeros_direct(TensorShape shape, size_t capacity, Device device = Device::GPU,
                                    DataType dtype = DataType::Float32);
+        // Uninitialized CUDA storage of exactly the requested size, stream-ordered
+        // and outside the size buckets. For large buffers retained across steps,
+        // where bucket rounding would be permanent waste.
+        static Tensor empty_exact(TensorShape shape, DataType dtype = DataType::Float32);
         static Tensor ones(TensorShape shape, Device device = Device::GPU,
                            DataType dtype = DataType::Float32);
         static Tensor full(TensorShape shape, float value, Device device = Device::GPU,
@@ -1362,6 +1366,7 @@ namespace lfs::core {
             return storage_meta_ ? storage_meta_->exportable_bound_generation : 0u;
         }
         static std::string storage_memory_summary();
+        static std::size_t cuda_direct_storage_live_bytes();
         static void log_storage_memory();
         static void log_storage_memory(std::string_view label);
 

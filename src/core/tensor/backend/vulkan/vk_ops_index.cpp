@@ -374,22 +374,6 @@ namespace lfs::core::internal {
         record_index(*context, launch, reads, writes);
     }
 
-    void VulkanBackendOps::take(
-        const StorageRef input, const StorageRef indices, const StorageRef output,
-        const IndexProgram& program, ExecContext) {
-        LFS_FACADE_TRACE(take);
-        const auto context = acquire_vulkan_context();
-        Launch launch{.mode = kTakeMode, .dtype = input.dtype};
-        launch.total = program.index_size;
-        launch.push.input_address = address(input);
-        launch.push.index_address = address(indices);
-        launch.push.value_address = address(output);
-        launch.push.input_size = checked_u32(program.input_size, "Vulkan take input size exceeds uint32");
-        const std::array reads{input, indices};
-        const std::array writes{output};
-        record_index(*context, launch, reads, writes);
-    }
-
     void VulkanBackendOps::index_select(
         const StorageRef input, const StorageRef indices, const StorageRef output,
         const StridedLayout& input_layout, const IndexProgram& program, ExecContext) {
