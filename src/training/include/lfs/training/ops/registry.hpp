@@ -7,6 +7,7 @@
 #include "lfs/training/ops/adam.hpp"
 #include "lfs/training/ops/loss.hpp"
 #include "lfs/training/ops/mcmc.hpp"
+#include "lfs/training/ops/mrnf.hpp"
 
 #include <bitset>
 #include <optional>
@@ -27,6 +28,7 @@ namespace lfs::training {
         const ops::PhotometricOps* photometric = nullptr;
         const ops::AdamOps* adam = nullptr;
         const ops::McmcOps* mcmc = nullptr;
+        const ops::MrnfOps* mrnf = nullptr;
     };
 
     enum class Family {

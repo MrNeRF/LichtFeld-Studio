@@ -5,6 +5,7 @@
 
 #include "lfs/training/ops/adam_cuda.hpp"
 #include "lfs/training/ops/mcmc_cuda.hpp"
+#include "lfs/training/ops/mrnf_cuda.hpp"
 #include "lfs/training/ops/photometric_cuda.hpp"
 
 #include <format>
@@ -21,6 +22,8 @@ namespace lfs::training {
                 return ops.adam != nullptr;
             case Family::Mcmc:
                 return ops.mcmc != nullptr;
+            case Family::Mrnf:
+                return ops.mrnf != nullptr;
             case Family::Count:
                 return false;
             default:
@@ -36,16 +39,19 @@ namespace lfs::training {
             .photometric = &cuda_photometric_ops(),
             .adam = &cuda_adam_ops(),
             .mcmc = &cuda_mcmc_ops(),
+            .mrnf = &cuda_mrnf_ops(),
         };
         static const TrainingOps kVulkan{
             .backend = core::GpuBackend::Vulkan,
             .photometric = nullptr,
             .adam = nullptr,
+            .mrnf = nullptr,
         };
         static const TrainingOps kMetal{
             .backend = core::GpuBackend::Metal,
             .photometric = nullptr,
             .adam = nullptr,
+            .mrnf = nullptr,
         };
         switch (backend) {
         case core::GpuBackend::CUDA:
