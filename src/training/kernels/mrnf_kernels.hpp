@@ -9,7 +9,6 @@
 
 namespace lfs::training {
     struct GumbelTopKScratch;
-    struct PositiveMedianScratch;
 } // namespace lfs::training
 
 namespace lfs::training::mrnf_strategy {
@@ -20,6 +19,26 @@ namespace lfs::training::mrnf_strategy {
         float median_size;
         float max_extent;
     };
+
+    void launch_prune_bounds_or(
+        const float* means,
+        const float* max_log_scales,
+        bool* prune_mask,
+        size_t N,
+        const float* center,
+        float max_allowed,
+        float log_max_allowed,
+        void* stream = nullptr);
+
+    void launch_replace_parent_weights(
+        const float* opacities,
+        const float* visibility,
+        const bool* active_mask,
+        const bool* trainable_mask,
+        const float* edge_guidance,
+        float* output,
+        size_t N,
+        void* stream = nullptr);
 
     /**
      * Per-iteration exploration noise for low-opacity splats.
@@ -233,14 +252,9 @@ namespace lfs::training::mrnf_strategy {
         float* out_depth,
         void* stream = nullptr);
 
-    // Median of all `n` values via one CUB radix-sort (sorted[n/2]).
-    // Does not compact to positives. out_median is host-side.
-    void launch_sorted_median(
-        const float* values,
-        size_t n,
-        float* out_median,
-        lfs::training::PositiveMedianScratch* scratch,
-        void* stream = nullptr);
+    // Median of all `n` values, sorted[n/2] in radix-sort float order;
+    // non-finite results become 0. Synchronizes the stream.
+    [[nodiscard]] float launch_sorted_median(const float* values, size_t n, void* stream = nullptr);
 
     // weights[i] *= 0 if vis[i]==0, else (kStarvEps + starved^kStarvGamma)
     // where starved = clamp(1 - vis[i]/max(median, tiny), 0, 1).

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/tensor.hpp"
 #include "core/tensor/backend/cuda/runtime/gpu_slab_allocator.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "core/tensor/backend/cuda/runtime/size_bucketed_pool.hpp"
@@ -160,4 +161,33 @@ TEST_F(AllocatorPolicyCudaTest, ExactAsyncBypassesBucketCache) {
     EXPECT_EQ(
         bucket_pool.stats().live_rounding_waste.load(std::memory_order_relaxed),
         waste_before);
+}
+
+// A bucketed Tensor::empty of this size rounds up and would raise the live
+// rounding waste; empty_exact must not touch the buckets at all.
+TEST_F(AllocatorPolicyCudaTest, EmptyExactTensorSkipsBucketRounding) {
+    constexpr size_t MiB = 1024 * 1024;
+    const TensorShape shape({3, 1633, 2449});
+    const size_t bytes = shape.elements() * sizeof(float);
+    ASSERT_GT(SizeBucketedPool::get_bucket_size(bytes), bytes + MiB);
+
+    auto& bucket_pool = SizeBucketedPool::instance();
+    const auto cached_before = bucket_pool.stats().bytes_cached.load(std::memory_order_relaxed);
+    const auto waste_before = bucket_pool.stats().live_rounding_waste.load(std::memory_order_relaxed);
+    {
+        auto exact = Tensor::empty_exact(shape, DataType::Float32);
+        ASSERT_TRUE(exact.is_valid());
+        EXPECT_EQ(exact.device(), Device::CUDA);
+        EXPECT_EQ(exact.dtype(), DataType::Float32);
+        EXPECT_EQ(exact.shape(), shape);
+        EXPECT_TRUE(exact.is_contiguous());
+        EXPECT_EQ(exact.bytes(), bytes);
+        EXPECT_EQ(bucket_pool.stats().live_rounding_waste.load(std::memory_order_relaxed), waste_before);
+
+        exact.fill_(2.5f);
+        EXPECT_NEAR(exact.mean().item<float>(), 2.5f, 1e-4f);
+    }
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    EXPECT_EQ(bucket_pool.stats().bytes_cached.load(std::memory_order_relaxed), cached_before);
+    EXPECT_EQ(bucket_pool.stats().live_rounding_waste.load(std::memory_order_relaxed), waste_before);
 }

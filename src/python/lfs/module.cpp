@@ -62,6 +62,7 @@
 #include "core/scene.hpp"
 #include "core/session_breadcrumb.hpp"
 #include "core/tensor_backend.hpp"
+#include "diagnostics/vram_owner_model.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/rmlui/elements/loss_graph_element.hpp"
 #include "gui/utils/file_association.hpp"
@@ -389,7 +390,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -2336,6 +2337,33 @@ NB_MODULE(lichtfeld, m) {
         },
         "Return whether the live VRAM diagnostics profiler is enabled");
 
+    m.def(
+        "vram_owner_breakdown", []() {
+            const auto snapshot = lfs::diagnostics::VramProfiler::instance().snapshot();
+            const auto owners = lfs::diagnostics::buildVramOwnerBreakdown(
+                snapshot, snapshot.process.shared_scratch_bytes > 0);
+            nb::dict categories;
+            for (std::size_t i = 0; i < lfs::diagnostics::kVramOwnerCount; ++i)
+                categories[lfs::diagnostics::vramOwnerName(
+                    static_cast<lfs::diagnostics::VramOwner>(i))] = owners.bytes[i];
+            nb::dict result;
+            result["iteration"] = snapshot.iteration;
+            result["splats"] = snapshot.training_state.live_splats;
+            result["process_bytes"] = owners.process_bytes;
+            result["process_valid"] = owners.process_valid;
+            result["signed_residual_bytes"] = owners.signed_residual_bytes;
+            result["context_inferred_bytes"] = owners.context_inferred_bytes;
+            result["categories"] = categories;
+            nb::dict unexplained;
+            constexpr std::array<std::string_view, 5> names{
+                "cuda_slab", "hooked_direct", "tensor_direct", "vulkan_vma", "process_balance"};
+            for (std::size_t i = 0; i < names.size(); ++i)
+                unexplained[names[i].data()] = owners.unattributed_roots[i];
+            result["unattributed_roots"] = unexplained;
+            return result;
+        },
+        "Return a sampled process VRAM breakdown by owner category");
+
     // Scene manipulation
     m.def(
         "set_node_visibility", [](const std::string& name, bool visible) {
@@ -2963,6 +2991,9 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "toggle_vram_hud", []() { lfs::core::events::ui::ToggleVramHud{}.emit(); },
         "Toggle the VRAM diagnostics HUD overlay (requires vram profiler enabled)");
+    m.def(
+        "toggle_perf_hud_expanded", []() { lfs::core::events::ui::TogglePerfHudExpanded{}.emit(); },
+        "Toggle the performance HUD between its full and compact views");
     m.def(
         "is_perf_hud_visible",
         []() -> bool { return lfs::vis::app_store().perf_hud.get().visible; },

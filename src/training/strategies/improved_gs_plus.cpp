@@ -608,7 +608,7 @@ namespace lfs::training {
         _edge_view_scores.set_stream(stream);
         kernels::launch_normalize_by_positive_median(
             _edge_view_scores.ptr<float>(), _edge_view_scores.numel(),
-            stream, &_edge_median_scratch);
+            stream);
         zero_frozen_scores_inplace(*_splat_data, _edge_view_scores);
         _edge_score_sum.add_(_edge_view_scores);
         ++_edge_sample_count;
@@ -729,7 +729,6 @@ namespace lfs::training {
             _edge_score_sum = lfs::core::Tensor();
             _edge_view_scores = lfs::core::Tensor();
             _edge_sample_count = 0;
-            _edge_median_scratch.release();
 
             lfs::core::Tensor::trim_device_memory_pool();
         }
@@ -1142,7 +1141,6 @@ namespace lfs::training {
             _edge_score_sum = lfs::core::Tensor();
             _edge_view_scores = lfs::core::Tensor();
             _edge_sample_count = 0;
-            _edge_median_scratch.release();
             _error_score_max = lfs::core::Tensor::zeros({static_cast<size_t>(_splat_data->size())}, _splat_data->means().device());
             _precompute_valid = false;
             _current_step = 0;
@@ -1251,7 +1249,6 @@ namespace lfs::training {
         _edge_score_sum = lfs::core::Tensor();
         _edge_view_scores = lfs::core::Tensor();
         _edge_sample_count = 0;
-        _edge_median_scratch.release();
         _error_score_max = lfs::core::Tensor::zeros({static_cast<size_t>(_splat_data->size())}, _splat_data->means().device());
         _precompute_valid = false;
 
@@ -1279,7 +1276,6 @@ namespace lfs::training {
         std::swap(_edge_score_sum, source._edge_score_sum);
         std::swap(_edge_view_scores, source._edge_view_scores);
         std::swap(_edge_sample_count, source._edge_sample_count);
-        std::swap(_edge_median_scratch, source._edge_median_scratch);
         std::swap(_error_score_max, source._error_score_max);
         std::swap(_precompute_valid, source._precompute_valid);
         std::swap(_free_mask, source._free_mask);

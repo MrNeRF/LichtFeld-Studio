@@ -392,6 +392,43 @@ namespace {
         expect_close(to_metal(matrix) / to_metal(row), matrix / row);
     }
 
+    TEST_F(TensorMetal, PadHandlesEveryDtype) {
+        // Non-Float32 pads copy the input into the interior of a zeroed result.
+        const auto pad = [](const Tensor& tensor, std::vector<std::pair<int, int>> widths) {
+            MovementArgs args;
+            args.args = std::move(widths);
+            return tensor.movement(MovementOp::Pad, args);
+        };
+        const Tensor base = random_tensor(3 * 4, -4.0f, 4.0f, 95).reshape({3, 4});
+        for (const auto dtype : {DataType::Int32, DataType::Bool, DataType::UInt8, DataType::Float16}) {
+            SCOPED_TRACE(static_cast<int>(dtype));
+            const Tensor source = dtype == DataType::Bool    ? base.gt(0.0f)
+                                  : dtype == DataType::UInt8 ? base.abs().to(DataType::Int32).to(DataType::UInt8)
+                                                             : base.to(dtype);
+            const Tensor expected = pad(source, {{1, 2}, {0, 3}});
+            ASSERT_EQ(expected.shape(), TensorShape({6, 7}));
+            const auto values = expected.to(DataType::Float32).to_vector();
+            const auto inside = source.to(DataType::Float32).to_vector();
+            for (size_t row = 0; row < 6; ++row) {
+                for (size_t column = 0; column < 7; ++column) {
+                    const bool interior = row >= 1 && row < 4 && column < 4;
+                    EXPECT_EQ(values[row * 7 + column], interior ? inside[(row - 1) * 4 + column] : 0.0f)
+                        << row << "," << column;
+                }
+            }
+            const Tensor volume = source.reshape({3, 2, 2});
+            for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+                if (!gpu_backend_available(backend))
+                    continue;
+                GpuBackendScope scope(backend);
+                expect_close(pad(source.to(Device::GPU), {{1, 2}, {0, 3}}).to(DataType::Float32),
+                             expected.to(DataType::Float32), 0.0f, 0.0f);
+                expect_close(pad(volume.to(Device::GPU), {{2, 0}, {1, 1}, {0, 1}}).to(DataType::Float32),
+                             pad(volume, {{2, 0}, {1, 1}, {0, 1}}).to(DataType::Float32), 0.0f, 0.0f);
+            }
+        }
+    }
+
     TEST_F(TensorMetal, FlipHandlesEveryDtypeAndDevice) {
         // The CPU Float32 flip is the reference for every dtype and backend.
         const auto flip = [](const Tensor& tensor, std::vector<int> axes) {

@@ -286,7 +286,7 @@ namespace lfs::python {
         const auto& cols = colors.tensor();
         assert(cols.shape().rank() == 2 && cols.shape()[1] == 3);
         assert(cols.shape()[0] == pc_->size());
-        pc_->colors = cols.to(core::Device::GPU);
+        pc_->colors = cols.to(pc_->means.device());
         if (scene_) {
             scene_->setPointCloudModified(true);
             scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
@@ -297,7 +297,7 @@ namespace lfs::python {
         const auto& pts = points.tensor();
         assert(pts.shape().rank() == 2 && pts.shape()[1] == 3);
         assert(pts.shape()[0] == pc_->size());
-        pc_->means = pts.to(core::Device::GPU);
+        pc_->means = pts.to(pc_->colors.device());
         if (node_ && pc_->size() > 0) {
             auto centroid = pc_->means.mean(0).cpu();
             auto acc = centroid.accessor<float, 1>();

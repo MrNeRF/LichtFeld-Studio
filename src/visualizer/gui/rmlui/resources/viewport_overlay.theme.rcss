@@ -271,8 +271,9 @@
 }
 
 .vram-hud-card {
-    background-color: @{viewport.metrics_bg};
+    background-color: @{surface};
     border-color: @{viewport.metrics_border};
+    color: @{text};
 }
 
 .vram-hud-title,
@@ -537,6 +538,33 @@
 .perf-hud-strip-badge { color: @{success}; }
 .perf-hud-strip-meter.warn .perf-hud-meter-fill,
 .perf-hud-meter-fill.warn { background-color: @{warning}; }
+
+.vram-hud-timeline-toolbar button, .vram-hud-timeline-legend button { background-color: @{surface_bright}; color: @{text}; border-width: 1dp; border-color: @{border}; }
+.vram-hud-timeline-toolbar button:hover, .vram-hud-timeline-legend button:hover { background-color: @{primary_dim}; }
+.vram-hud-timeline-tooltip, .vram-hud-export-path { color: @{text_dim}; }
+.vram-hud-crosshair { background-color: @{text}; }
+.vram-hud-timeline-axis { color: @{text_dim}; }
+.vram-hud-timeline-axis span { background-color: @{surface}; }
+.vram-hud-timeline-x-axis { color: @{text_dim}; }
+.vram-hud-timeline-capacity { color: @{text_dim}; }
+.vram-hud-marker { color: @{warning}; }
+.vram-hud-health { color: @{warning}; }
+.vram-hud-section-title { color: @{text}; }
+.vram-hud-mover-row:hover { background-color: @{surface_bright}; }
+.vram-hud-delta-positive { color: @{error}; }
+.vram-hud-delta-negative { color: @{success}; }
+.vram-hud-mover-spark span { background-color: @{primary}; }
+.vram-hud-peak-bar { background-color: @{surface_bright}; }
+.vram-hud-owner-0 { background-color: @{primary}; }
+.vram-hud-owner-1 { background-color: @{secondary}; }
+.vram-hud-owner-2 { background-color: @{info}; }
+.vram-hud-owner-3 { background-color: @{success}; }
+.vram-hud-owner-4 { background-color: @{warning}; }
+.vram-hud-owner-5 { background-color: @{primary_dim}; }
+.vram-hud-owner-6 { background-color: @{error}; }
+.vram-hud-owner-7 { background-color: @{text_dim}; }
+.vram-hud-owner-8 { background-color: @{border}; }
+.vram-hud-owner-9 { background-color: @{warning}; }
 .perf-hud-strip-meter.crit .perf-hud-meter-fill,
 .perf-hud-meter-fill.crit { background-color: @{error}; }
 .perf-hud-core-bar { background-color: @{primary}; }

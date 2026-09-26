@@ -1177,6 +1177,7 @@
             <div class="perf-hud-strip-header" data-perf-toggle-expanded="true">
                 <span class="perf-hud-strip-title">@tr:ui.perf_hud_title</span>
                 <span id="perf-hud-strip-rate" class="perf-hud-strip-rate"></span>
+                <span id="vram-hud-strip-health" class="vram-hud-health"></span>
                 <span class="perf-hud-strip-chevron" title="@tr:ui.perf_expand">⌄</span>
             </div>
             <div class="perf-hud-strip-meter" data-perf-tab="ledger" title="@tr:ui.perf_this_process">
@@ -1189,6 +1190,7 @@
                 <span id="perf-hud-vram-value" class="perf-hud-strip-value"></span>
                 <span id="perf-hud-vram-badge" class="perf-hud-strip-badge"></span>
             </div>
+            <vram-timeline id="vram-hud-mini-timeline" class="vram-hud-mini-timeline" />
             <div class="perf-hud-strip-meter" title="@tr:ui.perf_this_process">
                 <span class="perf-hud-strip-label">RAM</span>
                 <div class="perf-hud-meter-track">
@@ -1214,6 +1216,7 @@
             <div id="vram-hud-header" class="vram-hud-header">
                 <span class="vram-hud-title">@tr:ui.perf_hud_title</span>
                 <span class="vram-hud-header-meta">
+                    <span id="vram-hud-health" class="vram-hud-health"></span>
                     <span id="vram-hud-throughput" class="vram-hud-throughput hidden"></span>
                     <span id="vram-hud-iteration" class="vram-hud-iteration"></span>
                     <span class="perf-hud-card-chevron" data-perf-toggle-expanded="true" title="@tr:ui.perf_collapse">⌃</span>
@@ -1231,6 +1234,33 @@
                 <button class="perf-hud-enable-tracking" data-perf-enable-tracking="true">@tr:ui.perf_enable_tracking</button>
             </div>
             <div id="vram-hud-panel-overview" class="vram-hud-panel">
+                <div class="vram-hud-timeline-toolbar">
+                    <button data-vram-window="60">@tr:ui.vram_window_1m</button>
+                    <button data-vram-window="300">@tr:ui.vram_window_5m</button>
+                    <button data-vram-window="1800">@tr:ui.vram_window_30m</button>
+                    <button data-vram-window="0">@tr:ui.vram_window_all</button>
+                    <button data-vram-axis="true">@tr:ui.vram_axis_toggle</button>
+                    <button id="vram-hud-scale-toggle" data-vram-scale="true">@tr:ui.vram_scale_fit</button>
+                    <button data-vram-baseline="true">@tr:ui.vram_set_baseline</button>
+                    <button data-vram-export="true">@tr:ui.vram_export_csv</button>
+                    <button data-vram-opacity="true">@tr:ui.vram_opacity</button>
+                </div>
+                <div id="vram-hud-timeline-frame" class="vram-hud-timeline-frame">
+                    <vram-timeline id="vram-hud-timeline" class="vram-hud-timeline" />
+                    <div id="vram-hud-timeline-axis" class="vram-hud-timeline-axis"></div>
+                    <span id="vram-hud-timeline-capacity" class="vram-hud-timeline-capacity"></span>
+                    <div id="vram-hud-timeline-markers" class="vram-hud-timeline-markers"></div>
+                    <span id="vram-hud-crosshair" class="vram-hud-crosshair"></span>
+                </div>
+                <div id="vram-hud-timeline-x-axis" class="vram-hud-timeline-x-axis"></div>
+                <div id="vram-hud-timeline-tooltip" class="vram-hud-timeline-tooltip"></div>
+                <div id="vram-hud-timeline-legend" class="vram-hud-timeline-legend"></div>
+                <div class="vram-hud-section-title" data-vram-section="peak">@tr:ui.vram_peak_breakdown</div>
+                <div id="vram-hud-peak" class="vram-hud-peak"></div>
+                <div class="vram-hud-section-title" data-vram-section="movers">@tr:ui.vram_top_movers</div>
+                <input id="vram-hud-mover-filter" class="vram-hud-filter-input" type="text" placeholder="@tr:ui.vram_filter_movers" />
+                <div id="vram-hud-movers" class="vram-hud-movers"></div>
+                <div id="vram-hud-export-path" class="vram-hud-export-path"></div>
                 <div id="vram-hud-summary" class="vram-hud-summary"></div>
                 <div class="perf-hud-overview-meters">
                     <div class="perf-hud-sparkline-row">

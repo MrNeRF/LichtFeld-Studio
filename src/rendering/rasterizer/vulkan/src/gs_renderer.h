@@ -59,6 +59,7 @@
 // lod_enabled bit 6: projection writes overlay_flags. Clear when the bound
 // buffer is the one-word dummy (raster overlays idle).
 constexpr uint32_t kLodEnabledWriteOverlayFlags = LFS_VK_OVERLAY_WRITE_BIT;
+constexpr uint32_t kLodEnabledDeletedMask = 128u;
 
 PACK_STRUCT(struct VulkanGSRendererUniforms {
     uint32_t image_height;
@@ -160,7 +161,7 @@ PACK_STRUCT(struct VulkanGSSelectionMaskUniforms {
     uint32_t image_height;
     uint32_t image_width;
     uint32_t camera_model;
-    uint32_t pad0;
+    uint32_t deleted_mask_enabled;
     uint32_t pad1;
     float fx;
     float fy;
@@ -430,20 +431,20 @@ protected:
 
     // Binding 8 is unused (legacy write-only radii buffer deleted). Shader
     // binding numbers stay stable so tagged lists keep placeholder slot 8.
-    _ComputePipeline pipeline_projection_forward = _ComputePipeline(vksplatSkipBinding(24, 8));
-    _ComputePipeline pipeline_projection_forward_3dgut = _ComputePipeline(vksplatSkipBinding(24, 8));
+    _ComputePipeline pipeline_projection_forward = _ComputePipeline(vksplatSkipBinding(25, 8));
+    _ComputePipeline pipeline_projection_forward_3dgut = _ComputePipeline(vksplatSkipBinding(25, 8));
     // Canonical quantized LOD pool variants: same binding sets plus the
-    // per-page dequant frames appended last.
-    _ComputePipeline pipeline_projection_forward_quant = _ComputePipeline(vksplatSkipBindings(25, {8}));
-    _ComputePipeline pipeline_projection_forward_quant_3dgut = _ComputePipeline(vksplatSkipBindings(25, {8}));
+    // per-page dequant frames precede the deleted-mask binding.
+    _ComputePipeline pipeline_projection_forward_quant = _ComputePipeline(vksplatSkipBindings(26, {8}));
+    _ComputePipeline pipeline_projection_forward_quant_3dgut = _ComputePipeline(vksplatSkipBindings(26, {8}));
     // IEEE f16 SH rest (standalone PLY/SOG): fp32's 24 bindings minus shN (BDA)
     // and radii (8).
-    _ComputePipeline pipeline_projection_forward_shn_f16 = _ComputePipeline(vksplatSkipBindings(24, {2, 8}));
-    _ComputePipeline pipeline_projection_forward_shn_f16_3dgut = _ComputePipeline(vksplatSkipBindings(24, {2, 8}));
+    _ComputePipeline pipeline_projection_forward_shn_f16 = _ComputePipeline(vksplatSkipBindings(25, {2, 8}));
+    _ComputePipeline pipeline_projection_forward_shn_f16_3dgut = _ComputePipeline(vksplatSkipBindings(25, {2, 8}));
     // Pad-dropped q16 SH rest: 25 bindings minus shN (BDA) and radii (8).
-    _ComputePipeline pipeline_projection_forward_shn_q16 = _ComputePipeline(vksplatSkipBindings(25, {2, 8}));
-    _ComputePipeline pipeline_projection_forward_shn_q16_3dgut = _ComputePipeline(vksplatSkipBindings(25, {2, 8}));
-    _ComputePipeline pipeline_selection_mask = _ComputePipeline(11);
+    _ComputePipeline pipeline_projection_forward_shn_q16 = _ComputePipeline(vksplatSkipBindings(26, {2, 8}));
+    _ComputePipeline pipeline_projection_forward_shn_q16_3dgut = _ComputePipeline(vksplatSkipBindings(26, {2, 8}));
+    _ComputePipeline pipeline_selection_mask = _ComputePipeline(12);
     _ComputePipeline pipeline_selection_polygon_rasterize = _ComputePipeline(2);
     _ComputePipeline pipeline_generate_keys_wave = _ComputePipeline(8);
     _ComputePipeline pipeline_apply_depth_ordering = _ComputePipeline(4);
@@ -460,14 +461,14 @@ protected:
     // Bindings 6 (tiles_touched) and 8 (legacy radii, now unused) are
     // absent from the survivor variant.
     _ComputePipeline pipeline_projection_forward_survivors = _ComputePipeline(std::vector<int>{
-        0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28});
-    _ComputePipeline pipeline_projection_forward_quant_survivors = _ComputePipeline(std::vector<int>{
         0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29});
+    _ComputePipeline pipeline_projection_forward_quant_survivors = _ComputePipeline(std::vector<int>{
+        0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30});
     _ComputePipeline pipeline_projection_forward_shn_f16_survivors = _ComputePipeline(vksplatWithout(
-        {0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28},
+        {0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29},
         2));
     _ComputePipeline pipeline_projection_forward_shn_q16_survivors = _ComputePipeline(vksplatWithout(
-        {0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29},
+        {0, 1, 2, 3, 4, 5, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30},
         2));
     _ComputePipeline pipeline_prepare_visible_chain = _ComputePipeline(4);
     _ComputePipeline pipeline_copy_visible_indices = _ComputePipeline(3);

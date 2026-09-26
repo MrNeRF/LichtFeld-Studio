@@ -28,15 +28,20 @@ class MRNFStrategyTest_DirectAuxiliaryGrowthPreservesPrefix_Test;
 class MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Test;
 
 #include "core/camera.hpp"
+#include "core/cuda/memory_arena.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "cuda_backend_test.hpp"
+#include "io/formats/ply.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
+#include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/mean_step_scale.cuh"
 #include "lfs/training/sh_value_codec.hpp"
+#include "lfs/training/sh_value_storage.hpp"
 #include "training/checkpoint.hpp"
 #include "training/dataset.hpp"
 #include "training/kernels/mrnf_kernels.hpp"
@@ -53,6 +58,7 @@ class MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Te
 #include <gtest/gtest.h>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <vector>
 
@@ -60,6 +66,228 @@ using namespace lfs::core;
 using namespace lfs::training;
 
 class MRNFStrategyTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(MRNFStrategyTest, PruneBoundsOrMatchesTensorChain) {
+    constexpr size_t n = 513;
+    std::vector<float> means_values(n * 3);
+    std::vector<float> scale_values(n);
+    for (size_t i = 0; i < n; ++i) {
+        means_values[3 * i] = static_cast<float>(static_cast<int>(i % 13) - 6);
+        means_values[3 * i + 1] = static_cast<float>(static_cast<int>(i % 7) - 3);
+        means_values[3 * i + 2] = static_cast<float>(static_cast<int>(i % 5) - 2);
+        scale_values[i] = static_cast<float>(static_cast<int>(i % 11) - 5) * 0.4f;
+    }
+    means_values[3] = std::numeric_limits<float>::quiet_NaN();
+    means_values[4] = 100.0f;
+    means_values[6] = std::numeric_limits<float>::infinity();
+    scale_values[7] = std::numeric_limits<float>::quiet_NaN();
+
+    const auto means = Tensor::from_vector(means_values, TensorShape({n, 3}), Device::CUDA);
+    const auto scale_max = Tensor::from_vector(scale_values, TensorShape({n}), Device::CUDA);
+    const auto initial = scale_max < -1.0f;
+    auto actual = initial.clone();
+    constexpr float center_values[3] = {0.25f, -0.5f, 0.75f};
+    const auto center = Tensor::from_vector(
+        std::vector<float>{center_values[0], center_values[1], center_values[2]},
+        TensorShape({1, 3}), Device::CUDA);
+    const auto expected = initial | (scale_max > 1.25f) |
+                          ((means - center).abs().max(1) > 3.5f);
+
+    mrnf_strategy::launch_prune_bounds_or(
+        means.ptr<float>(), scale_max.ptr<float>(), actual.ptr<bool>(),
+        n, center_values, 3.5f, 1.25f);
+    const auto actual_host = actual.cpu();
+    const auto expected_host = expected.cpu();
+    EXPECT_EQ(std::memcmp(actual_host.ptr<bool>(), expected_host.ptr<bool>(), n * sizeof(bool)), 0);
+}
+
+TEST_F(MRNFStrategyTest, ReplaceParentWeightsMatchesTensorProducts) {
+    constexpr size_t n = 513;
+    std::vector<float> opacity_values(n);
+    std::vector<float> visibility_values(n);
+    std::vector<float> edge_values(n);
+    std::vector<bool> active_values(n);
+    std::vector<bool> trainable_values(n);
+    for (size_t i = 0; i < n; ++i) {
+        opacity_values[i] = static_cast<float>(i % 17) / 16.0f;
+        visibility_values[i] = i % 3 == 0 ? 0.0f : static_cast<float>(i % 5);
+        edge_values[i] = 0.5f + static_cast<float>(i % 11) / 10.0f;
+        active_values[i] = i % 7 != 0;
+        trainable_values[i] = i % 13 != 0;
+    }
+    opacity_values[1] = std::numeric_limits<float>::quiet_NaN();
+    opacity_values[2] = std::numeric_limits<float>::infinity();
+    opacity_values[3] = -0.0f;
+    edge_values[4] = std::numeric_limits<float>::quiet_NaN();
+    edge_values[5] = -0.0f;
+
+    const auto opacities = Tensor::from_vector(opacity_values, TensorShape({n}), Device::CUDA);
+    const auto visibility = Tensor::from_vector(visibility_values, TensorShape({n}), Device::CUDA);
+    const auto active = Tensor::from_vector(active_values, TensorShape({n}), Device::CUDA);
+    const auto trainable = Tensor::from_vector(trainable_values, TensorShape({n}), Device::CUDA);
+    const auto edge = Tensor::from_vector(edge_values, TensorShape({n}), Device::CUDA);
+
+    for (int options = 0; options < 8; ++options) {
+        auto expected = opacities * (visibility > 0.0f);
+        if (options & 1)
+            expected = expected * active;
+        if (options & 2)
+            expected = expected * trainable;
+        if (options & 4)
+            expected = expected * edge;
+
+        auto actual = Tensor::empty({n}, Device::CUDA);
+        mrnf_strategy::launch_replace_parent_weights(
+            opacities.ptr<float>(), visibility.ptr<float>(),
+            options & 1 ? active.ptr<bool>() : nullptr,
+            options & 2 ? trainable.ptr<bool>() : nullptr,
+            options & 4 ? edge.ptr<float>() : nullptr,
+            actual.ptr<float>(), n);
+        const auto actual_host = actual.cpu();
+        const auto expected_host = expected.cpu();
+        EXPECT_EQ(std::memcmp(actual_host.ptr<float>(), expected_host.ptr<float>(), n * sizeof(float)), 0)
+            << "options=" << options;
+    }
+}
+
+namespace {
+    // The largest trained splat model in the test data folder.
+    std::filesystem::path largest_scene_ply() {
+        std::filesystem::path best;
+        std::uintmax_t best_size = 0;
+        std::error_code ec;
+        for (const auto& entry : std::filesystem::directory_iterator(TEST_DATA_DIR, ec)) {
+            if (entry.path().extension() != ".ply" || !entry.is_regular_file(ec))
+                continue;
+            const auto size = entry.file_size(ec);
+            if (!ec && size > best_size) {
+                best = entry.path();
+                best_size = size;
+            }
+        }
+        return best;
+    }
+} // namespace
+
+TEST_F(MRNFStrategyTest, RefinePredicatesAndIndicesMatchTensorReferenceOnRealScene) {
+    const auto scene = largest_scene_ply();
+    if (scene.empty())
+        GTEST_SKIP() << "no splat model in " << TEST_DATA_DIR;
+    const auto loaded = lfs::io::load_ply(scene);
+    ASSERT_TRUE(loaded.has_value()) << lfs::format_for_developer(loaded.error());
+    const SplatData& splat = loaded->value;
+    const size_t n = static_cast<size_t>(splat.size());
+    ASSERT_GT(n, 100000u);
+    const auto means = splat.means();
+    const auto scale_max = splat.scaling_raw().max(1);
+    const auto initial = splat.opacity_raw().squeeze(-1) < -2.0f;
+    const auto center_host = means.slice(0, 0, 1).contiguous().cpu();
+    const float center_values[3] = {center_host.ptr<float>()[0], center_host.ptr<float>()[1],
+                                    center_host.ptr<float>()[2]};
+    const auto center = Tensor::from_vector(
+        std::vector<float>{center_values[0], center_values[1], center_values[2]},
+        TensorShape({1, 3}), Device::CUDA);
+    auto opacities = splat.get_opacity().squeeze(-1);
+    const auto visibility = (scale_max > -10.0f).to(DataType::Float32);
+    const auto active = means.slice(1, 0, 1).squeeze(-1) > center_values[0];
+    const auto trainable = means.slice(1, 1, 2).squeeze(-1) > center_values[1];
+    const auto edge = scale_max.abs() + 0.25f;
+
+    for (const float max_allowed : {1.0f, 5.0f, 20.0f, 100.0f}) {
+        const float log_max_allowed = std::log(max_allowed);
+        auto actual_mask = initial.clone();
+        const auto reference_mask = initial | (scale_max > log_max_allowed) |
+                                    ((means - center).abs().max(1) > max_allowed);
+        mrnf_strategy::launch_prune_bounds_or(
+            means.ptr<float>(), scale_max.ptr<float>(), actual_mask.ptr<bool>(),
+            n, center_values, max_allowed, log_max_allowed);
+        const auto actual_mask_host = actual_mask.cpu();
+        const auto reference_mask_host = reference_mask.cpu();
+        EXPECT_EQ(std::memcmp(actual_mask_host.ptr<bool>(), reference_mask_host.ptr<bool>(), n), 0);
+
+        const auto expected_weights = opacities * (visibility > 0.0f) * active * trainable * edge;
+        auto actual_weights = Tensor::empty({n}, Device::CUDA);
+        mrnf_strategy::launch_replace_parent_weights(
+            opacities.ptr<float>(), visibility.ptr<float>(), active.ptr<bool>(),
+            trainable.ptr<bool>(), edge.ptr<float>(), actual_weights.ptr<float>(), n);
+        const auto actual_weights_host = actual_weights.cpu();
+        const auto expected_weights_host = expected_weights.cpu();
+        EXPECT_EQ(std::memcmp(actual_weights_host.ptr<float>(), expected_weights_host.ptr<float>(),
+                              n * sizeof(float)),
+                  0);
+    }
+}
+
+TEST_F(MRNFStrategyTest, ShNBatchArenaMatchesCatFallbackOnRealScene) {
+    struct QuantReset {
+        ~QuantReset() { sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt); }
+    } reset;
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+    const auto scene = largest_scene_ply();
+    if (scene.empty())
+        GTEST_SKIP() << "no splat model in " << TEST_DATA_DIR;
+    auto loaded = lfs::io::load_ply(scene);
+    ASSERT_TRUE(loaded.has_value()) << lfs::format_for_developer(loaded.error());
+    SplatData base = std::move(loaded->value);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(base));
+    const size_t n = static_cast<size_t>(base.size());
+    constexpr size_t kScatter = 3000;
+    constexpr size_t kZero = 700;
+    ASSERT_GT(n, kScatter);
+    std::vector<int> src_host(kScatter), dest_host(kScatter), zero_host(kZero);
+    for (size_t i = 0; i < kScatter; ++i) {
+        src_host[i] = static_cast<int>((113 * i + 17) % n);
+        dest_host[i] = static_cast<int>((67 * i + 5) % n);
+    }
+    for (size_t i = 0; i < kZero; ++i)
+        zero_host[i] = static_cast<int>((67 * i + 6) % n);
+    const auto src_indices = Tensor::from_vector(src_host, TensorShape({kScatter}), Device::CUDA)
+                                 .to(DataType::Int64);
+    const auto dest_indices = Tensor::from_vector(dest_host, TensorShape({kScatter}), Device::CUDA)
+                                  .to(DataType::Int64);
+    const auto zero_indices = Tensor::from_vector(zero_host, TensorShape({kZero}), Device::CUDA)
+                                  .to(DataType::Int64);
+    Tensor canonical;
+    sh_value::gather_shN_to_canonical(base, src_indices, canonical);
+    ASSERT_EQ(canonical.shape()[0], kScatter);
+
+    auto arena_splat = base.clone();
+    auto fallback_splat = base.clone();
+    auto& arena = GlobalArenaManager::instance().get_arena();
+    const cudaStream_t stream = getCurrentCUDAStream();
+    const size_t rows = kScatter + kZero;
+    const size_t bytes = ((rows * sizeof(int64_t) + 255) & ~size_t{255}) +
+                         rows * static_cast<size_t>(base.max_sh_coeffs_rest()) * 3 * sizeof(float);
+    {
+        const auto frame = arena.begin_frame(stream);
+        ASSERT_NE(arena.get_allocator(frame, "test.shN_batch")(bytes + 4096), nullptr);
+        arena.end_frame(frame, stream);
+    }
+    ASSERT_GE(arena.get_memory_info().arena_capacity, bytes);
+
+    const auto flush = [&](SplatData& splat) {
+        LiveModelMutationGuard guard("test.shN_batch");
+        sh_value::ShNMutationBatch batch(splat);
+        batch.scatter(dest_indices, canonical);
+        batch.zero(zero_indices);
+        batch.flush();
+    };
+    flush(arena_splat);
+    EXPECT_GT(arena.get_memory_info().current_usage, 0u);
+    const auto held = arena.begin_frame(stream);
+    flush(fallback_splat);
+    arena.end_frame(held, stream);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    const auto arena_codes = arena_splat.shN().cpu().contiguous();
+    const auto fallback_codes = fallback_splat.shN().cpu().contiguous();
+    const auto arena_bounds = arena_splat.shN_value_bounds().cpu().contiguous();
+    const auto fallback_bounds = fallback_splat.shN_value_bounds().cpu().contiguous();
+    ASSERT_EQ(arena_codes.bytes(), fallback_codes.bytes());
+    ASSERT_EQ(arena_bounds.bytes(), fallback_bounds.bytes());
+    EXPECT_EQ(std::memcmp(arena_codes.data_ptr(), fallback_codes.data_ptr(), arena_codes.bytes()), 0);
+    EXPECT_EQ(std::memcmp(arena_bounds.data_ptr(), fallback_bounds.data_ptr(), arena_bounds.bytes()), 0);
+}
 
 namespace {
 
@@ -2488,4 +2716,85 @@ TEST_F(MRNFDecayTest, FrozenRowsAndZeroFarDecayRemainUnchangedWhileNaNsStayVisib
     EXPECT_FLOAT_EQ(actual_scales[0], 0.0f);
     EXPECT_FLOAT_EQ(actual_scales[3], 0.0f);
     EXPECT_LT(actual_scales[9], 0.0f);
+}
+
+namespace {
+    SplatData create_distinct_mrnf_splat_data(const size_t n) {
+        const size_t rest = sh_rest_coefficients_for_degree(3);
+        std::vector<float> means(n * 3), sh0(n * 3), scaling(n * 3), rotation(n * 4, 0.0f), opacity(n);
+        std::vector<float> shN(n * rest * 3);
+        for (size_t i = 0; i < n; ++i) {
+            for (size_t c = 0; c < 3; ++c) {
+                means[i * 3 + c] = 0.1f * static_cast<float>(i) + 0.01f * static_cast<float>(c);
+                sh0[i * 3 + c] = 0.02f * static_cast<float>(i % 17) - 0.1f * static_cast<float>(c);
+                scaling[i * 3 + c] = -2.0f + 0.03f * static_cast<float>((i + c) % 11);
+            }
+            rotation[i * 4 + 0] = 1.0f;
+            rotation[i * 4 + 1] = 0.01f * static_cast<float>(i % 7);
+            opacity[i] = -1.0f + 0.02f * static_cast<float>(i % 13);
+            for (size_t k = 0; k < rest * 3; ++k) {
+                shN[i * rest * 3 + k] = 0.001f * static_cast<float>((i * 31 + k * 7) % 97) - 0.05f;
+            }
+        }
+        return SplatData(3,
+                         Tensor::from_vector(means, TensorShape({n, 3}), Device::CUDA),
+                         Tensor::from_vector(sh0, TensorShape({n, 1, 3}), Device::CUDA),
+                         Tensor::from_vector(shN, TensorShape({n, rest, 3}), Device::CUDA),
+                         Tensor::from_vector(scaling, TensorShape({n, 3}), Device::CUDA),
+                         Tensor::from_vector(rotation, TensorShape({n, 4}), Device::CUDA),
+                         Tensor::from_vector(opacity, TensorShape({n, 1}), Device::CUDA),
+                         1.0f);
+    }
+} // namespace
+
+// Large growth events place children chunk by chunk. Fails if a chunk splits
+// the wrong parents, a child lands in the wrong free slot or appended row, a
+// chunk is skipped, or free-slot reuse does not continue across chunks.
+TEST_F(MRNFStrategyTest, ChunkedChildPlacementMatchesSingleChunk) {
+    constexpr size_t n = 64;
+    auto single_data = create_distinct_mrnf_splat_data(n);
+    auto chunked_data = create_distinct_mrnf_splat_data(n);
+    MRNF single(single_data);
+    MRNF chunked(chunked_data);
+    auto opt_params = vanilla_mrnf_params();
+    opt_params.iterations = 10'000;
+    opt_params.sh_degree_interval = 10'000;
+    opt_params.max_cap = 128;
+    single.initialize(opt_params);
+    chunked.initialize(opt_params);
+
+    const auto free_rows =
+        Tensor::from_vector(std::vector<int>{5, 17, 40}, TensorShape({3}), Device::CUDA).to(DataType::Int64);
+    for (MRNF* strategy : {&single, &chunked}) {
+        strategy->mark_as_free(free_rows);
+        strategy->_splat_data->deleted().index_put_(free_rows, Tensor::ones_bool({3}, Device::CUDA));
+    }
+
+    const auto parents = Tensor::from_vector(std::vector<int>{0, 2, 3, 7, 9, 11, 20, 21, 30, 33, 50, 60},
+                                             TensorShape({12}), Device::CUDA)
+                             .to(DataType::Int64);
+    const auto [single_reused, single_appended] = single.split_parents_into_children(parents, 12);
+    const auto [chunked_reused, chunked_appended] = chunked.split_parents_into_children(parents, 5);
+
+    EXPECT_EQ(single_reused, 3u);
+    EXPECT_EQ(single_appended, 9u);
+    EXPECT_EQ(chunked_reused, single_reused);
+    EXPECT_EQ(chunked_appended, single_appended);
+    ASSERT_EQ(chunked_data.size(), single_data.size());
+    EXPECT_EQ(chunked.free_count(), single.free_count());
+
+    EXPECT_EQ(chunked_data.means().cpu().to_vector(), single_data.means().cpu().to_vector());
+    EXPECT_EQ(chunked_data.sh0().cpu().to_vector(), single_data.sh0().cpu().to_vector());
+    EXPECT_EQ(chunked_data.scaling_raw().cpu().to_vector(), single_data.scaling_raw().cpu().to_vector());
+    EXPECT_EQ(chunked_data.rotation_raw().cpu().to_vector(), single_data.rotation_raw().cpu().to_vector());
+    EXPECT_EQ(chunked_data.opacity_raw().cpu().to_vector(), single_data.opacity_raw().cpu().to_vector());
+    EXPECT_EQ(chunked_data.deleted().to(DataType::Float32).cpu().to_vector(),
+              single_data.deleted().to(DataType::Float32).cpu().to_vector());
+
+    const auto single_sh = single_data.shN_canonical().cpu().to_vector();
+    const auto chunked_sh = chunked_data.shN_canonical().cpu().to_vector();
+    ASSERT_EQ(chunked_sh.size(), single_sh.size());
+    for (size_t i = 0; i < single_sh.size(); ++i) {
+        ASSERT_NEAR(chunked_sh[i], single_sh[i], 1e-4f) << "SH value " << i;
+    }
 }
