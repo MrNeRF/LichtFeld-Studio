@@ -1148,6 +1148,114 @@ kernel void reduce(device const uchar* input_buffer [[buffer(0)]],
 }
 
 // ---------------------------------------------------------------------------
+// Indexed extrema along the middle axis of an (outer, reduce, inner) view.
+// Each candidate becomes a 64-bit key whose largest value is the CPU loop's
+// choice: the high word orders values (inverted for the minimum), a NaN at
+// position 0 sits above every number and later NaNs above that; the low word
+// is the inverted position, so ties keep the first. kOp bit 0 picks the
+// maximum; kOp >> 1 picks the pass: 0 a thread folds a chunk of one output's
+// line, 1 a SIMD group folds a chunk of one contiguous line, 2 a SIMD group
+// folds one output's chunk keys. With one chunk the first passes finish the output themselves.
+
+struct ArgExtremeParams {
+    uint outer;
+    uint reduce;
+    uint inner;
+    uint chunk;
+    uint chunks;
+    uint padding[3];
+};
+
+static ulong arg_extreme_key(float value, uint position) {
+    uint bits = as_type<uint>(value);
+    uint order;
+    if ((bits & 0x7fffffffu) > 0x7f800000u) {
+        order = position == 0 ? 0xfffffffeu : 0xffffffffu;
+    } else {
+        if ((bits & 0x7fffffffu) == 0u)
+            bits = 0u; // -0 ties +0, as the CPU's strict comparison does.
+        order = (bits & 0x80000000u) != 0u ? ~bits : bits | 0x80000000u;
+        if ((kOp & 1u) == 0u)
+            order = ~order;
+    }
+    return (ulong(order) << 32) | ulong(~position);
+}
+
+static ulong arg_extreme_simdgroup(ulong key) {
+    for (ushort offset = 16; offset > 0; offset /= 2) {
+        const uint2 halves = as_type<uint2>(key);
+        key = max(key, as_type<ulong>(uint2(simd_shuffle_down(halves.x, offset), simd_shuffle_down(halves.y, offset))));
+    }
+    return key;
+}
+
+static void arg_extreme_finish(device const float* input, device float* values, device long* indices,
+                               constant ArgExtremeParams& params, uint output, ulong key) {
+    const uint position = ~uint(key);
+    const uint outer_index = output / params.inner;
+    const ulong base = ulong(outer_index) * params.reduce * params.inner + (output - outer_index * params.inner);
+    values[output] = input[base + ulong(position) * params.inner];
+    indices[output] = long(position);
+}
+
+kernel void arg_extreme(device const float* input [[buffer(0)]],
+                        device ulong* keys [[buffer(1)]],
+                        device float* values [[buffer(2)]],
+                        device long* indices [[buffer(3)]],
+                        constant ArgExtremeParams& params [[buffer(4)]],
+                        uint thread_index [[thread_index_in_threadgroup]],
+                        uint2 group [[threadgroup_position_in_grid]],
+                        ushort lane [[thread_index_in_simdgroup]],
+                        ushort simdgroup [[simdgroup_index_in_threadgroup]]) {
+    const uint pass = kOp >> 1;
+    const uint outputs = params.outer * params.inner;
+    if (pass == 1) {
+        const uint row = group.x * (kReduceThreads / 32) + simdgroup;
+        if (row >= params.outer)
+            return;
+        const ulong base = ulong(row) * params.reduce;
+        const uint end = min(params.reduce, (group.y + 1) * params.chunk);
+        ulong best = 0;
+        for (uint position = group.y * params.chunk + lane; position < end; position += 32)
+            best = max(best, arg_extreme_key(input[base + position], position));
+        best = arg_extreme_simdgroup(best);
+        if (lane != 0)
+            return;
+        if (params.chunks == 1)
+            arg_extreme_finish(input, values, indices, params, row, best);
+        else
+            keys[ulong(group.y) * outputs + row] = best;
+        return;
+    }
+    if (pass == 2) {
+        const uint output = group.x * (kReduceThreads / 32) + simdgroup;
+        if (output >= outputs)
+            return;
+        ulong best = 0;
+        for (uint chunk = lane; chunk < params.chunks; chunk += 32)
+            best = max(best, keys[ulong(chunk) * outputs + output]);
+        best = arg_extreme_simdgroup(best);
+        if (lane == 0)
+            arg_extreme_finish(input, values, indices, params, output, best);
+        return;
+    }
+    const uint output = group.x * kReduceThreads + thread_index;
+    if (output >= outputs)
+        return;
+    ulong best = 0;
+    const uint outer_index = output / params.inner;
+    const ulong base = ulong(outer_index) * params.reduce * params.inner + (output - outer_index * params.inner);
+    const uint end = min(params.reduce, (group.y + 1) * params.chunk);
+#pragma unroll(8)
+    for (uint position = group.y * params.chunk; position < end; ++position)
+        best = max(best, arg_extreme_key(input[base + ulong(position) * params.inner], position));
+    if (params.chunks == 1)
+        arg_extreme_finish(input, values, indices, params, output, best);
+    else
+        keys[ulong(group.y) * outputs + output] = best;
+}
+
+// ---------------------------------------------------------------------------
 // Counts over a threadgroup grid-stride, ported from count.slang. kOp picks
 // the match: 0 nonzero bytes, 1 nonzero floats, 2 NaN (flag), 3 infinity
 // (flag). Threadgroups add their tallies to one zeroed counter.

@@ -9,6 +9,7 @@
 #include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/backend/facade_trace.hpp"
 #include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_environment.hpp"
@@ -986,6 +987,55 @@ namespace {
                          0.0f, 0.0f);
             expect_close(gpu.argmax(), cpu.argmax(), 0.0f, 0.0f);
         }
+    }
+
+    TEST_F(TensorMetal, ArgExtremeKernelsMatchCpuOnLongAndStridedLines) {
+        // Contiguous and strided lines, short and long enough to split into
+        // chunks, with ties of equal values and of -0 and +0, and NaNs at the
+        // start and later in some lines.
+        struct Case {
+            std::vector<size_t> shape;
+            int dim;
+        };
+        const std::vector<Case> cases = {
+            {{1, 1000003}, 1}, {{3000, 700}, 1}, {{5, 100000, 3}, 1}, {{200000, 5}, 1}, {{100000, 4}, 0}, {{37}, 0}};
+        internal::facade_trace_enable_for_testing(true);
+        for (const auto& [shape, dim] : cases) {
+            size_t count = 1;
+            for (const size_t extent : shape)
+                count *= extent;
+            std::vector<float> values = random_tensor(count, -3.0f, 3.0f, 101).to_vector();
+            for (size_t i = 0; i < count; i += 7)
+                values[i] = 2.5f;
+            for (size_t i = 1; i < count; i += 13)
+                values[i] = (i / 13) % 2 == 0 ? 0.0f : -0.0f;
+            for (size_t i = 0; i < count; i += 99991)
+                values[i] = std::numeric_limits<float>::quiet_NaN();
+            for (size_t i = 0; i < count; i += 400009)
+                values[i] = std::numeric_limits<float>::infinity();
+            const Tensor cpu = Tensor::from_vector(values, TensorShape(shape), Device::CPU);
+            for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+                if (!gpu_backend_available(backend))
+                    continue;
+                SCOPED_TRACE(std::to_string(static_cast<int>(backend)) + " " + TensorShape(shape).str() + " dim " +
+                             std::to_string(dim));
+                GpuBackendScope scope(backend);
+                const Tensor gpu = cpu.to(Device::GPU);
+                const auto before = internal::facade_trace_snapshot_for_testing();
+                for (const bool maximum : {true, false}) {
+                    const auto [expected_values, expected_indices] =
+                        maximum ? cpu.max_with_indices(dim, false) : cpu.min_with_indices(dim, false);
+                    const auto [found_values, found_indices] =
+                        maximum ? gpu.max_with_indices(dim, false) : gpu.min_with_indices(dim, false);
+                    expect_close(found_indices, expected_indices, 0.0f, 0.0f);
+                    expect_close(found_values, expected_values, 0.0f, 0.0f);
+                }
+                const auto after = internal::facade_trace_snapshot_for_testing();
+                const auto entry = static_cast<size_t>(internal::FacadeEntry::arg_extreme);
+                EXPECT_EQ(after[entry] - before[entry], 2u);
+            }
+        }
+        internal::facade_trace_enable_for_testing(false);
     }
 
     TEST_F(TensorMetal, SortsMatchCpu) {
