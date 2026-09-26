@@ -14,6 +14,7 @@
 #include <cuda_runtime.h>
 #endif
 #include <format>
+#include <string_view>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -111,14 +112,16 @@ namespace lfs::io::video {
             height_ = opts.height;
             framerate_ = opts.framerate;
 #if LFS_HAS_CUDA
-            if (core::default_gpu_backend() != core::GpuBackend::CUDA ||
-                !tryInitNvenc(path, opts)) {
+            const bool hardware = core::default_gpu_backend() == core::GpuBackend::CUDA && tryInitNvenc(path, opts);
+#elif defined(__APPLE__)
+            const bool hardware = tryInitVideoToolbox(path, opts);
 #else
-            if (true) {
+            const bool hardware = false;
 #endif
+            if (!hardware) {
                 cleanup();
-                LOG_INFO("NVENC unavailable, falling back to software H.264");
-                if (const auto result = initSoftwareH264(path, opts); !result) {
+                LOG_INFO("Hardware H.264 encoding unavailable, falling back to software H.264");
+                if (const auto result = initH264(path, opts, avcodec_find_encoder(AV_CODEC_ID_H264)); !result) {
                     cleanup();
                     return result;
                 }
@@ -320,9 +323,29 @@ namespace lfs::io::video {
         }
 #endif
 
-        std::expected<void, std::string> initSoftwareH264(
+#ifdef __APPLE__
+        // The Mac's media engine encodes the same YUV420P frames as the
+        // software path, from system memory.
+        bool tryInitVideoToolbox(const std::filesystem::path& path, const VideoExportOptions& opts) {
+            const AVCodec* const codec = avcodec_find_encoder_by_name("h264_videotoolbox");
+            if (!codec) {
+                LOG_DEBUG("VideoToolbox H.264 encoder not available");
+                return false;
+            }
+            if (const auto result = initH264(path, opts, codec); !result) {
+                LOG_DEBUG("VideoToolbox H.264 encoder failed: {}", result.error());
+                return false;
+            }
+            return true;
+        }
+#endif
+
+        // An H.264 encoder fed YUV420P frames from system memory: the software
+        // encoder, or VideoToolbox on Macs.
+        std::expected<void, std::string> initH264(
             const std::filesystem::path& path,
-            const VideoExportOptions& opts) {
+            const VideoExportOptions& opts,
+            const AVCodec* const codec) {
 
             const std::string path_utf8 = lfs::core::path_to_utf8(path);
 
@@ -331,10 +354,10 @@ namespace lfs::io::video {
                 return std::unexpected("MP4 context creation failed");
             }
 
-            const AVCodec* const codec = avcodec_find_encoder(AV_CODEC_ID_H264);
             if (!codec) {
                 return std::unexpected("H.264 encoder not found");
             }
+            const bool hardware = std::string_view(codec->name) == "h264_videotoolbox";
 
             stream_ = avformat_new_stream(fmt_ctx_, nullptr);
             if (!stream_) {
@@ -353,14 +376,20 @@ namespace lfs::io::video {
             codec_ctx_->framerate = AVRational{framerate_, 1};
             codec_ctx_->pix_fmt = AV_PIX_FMT_YUV420P;
             codec_ctx_->gop_size = framerate_;
-            codec_ctx_->max_b_frames = 2;
+            codec_ctx_->max_b_frames = hardware ? 0 : 2;
             codec_ctx_->thread_count = 0;
 
             // Map CRF 18 to 0.1 bits per pixel per frame, with a 250 kbps floor and linear quality scaling.
             const int64_t crf_scale = 51 - opts.crf;
             codec_ctx_->bit_rate = std::max<int64_t>(
                 250'000, static_cast<int64_t>(width_) * height_ * framerate_ * crf_scale / 330);
-            av_opt_set(codec_ctx_->priv_data, "rc_mode", "bitrate", 0);
+            if (hardware) {
+                // Fail rather than fall back to Apple's own software encoder.
+                av_opt_set_int(codec_ctx_->priv_data, "allow_sw", 0, 0);
+                av_opt_set(codec_ctx_->priv_data, "profile", "high", 0);
+            } else {
+                av_opt_set(codec_ctx_->priv_data, "rc_mode", "bitrate", 0);
+            }
 
             if (fmt_ctx_->oformat->flags & AVFMT_GLOBALHEADER) {
                 codec_ctx_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
@@ -415,7 +444,8 @@ namespace lfs::io::video {
                 return std::unexpected("Packet allocation failed");
             }
 
-            LOG_INFO("Software H.264: {}x{} @ {} fps, bitrate {} bps", width_, height_, framerate_, codec_ctx_->bit_rate);
+            LOG_INFO("{} H.264 ({}): {}x{} @ {} fps, bitrate {} bps", hardware ? "Hardware" : "Software", codec->name,
+                     width_, height_, framerate_, codec_ctx_->bit_rate);
             return {};
         }
 

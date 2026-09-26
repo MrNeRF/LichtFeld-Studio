@@ -13,6 +13,7 @@ extern "C" {
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
+#include <stb_image.h>
 
 #include <chrono>
 #include <cstdint>
@@ -192,6 +193,28 @@ TEST(VideoToolboxExtractor, HardwareH264) {
     ASSERT_TRUE(writeH264(h264));
     EXPECT_TRUE(extractAndCheck(h264, temp.path / "hardware_frames",
                                 "videotoolbox", 6, 0.5));
+}
+
+// The export encoder (VideoToolbox on Macs) keeps the fixture's solid red.
+TEST(VideoToolboxEncoder, EncodedFramesDecodeToTheirColor) {
+    TempDir temp;
+    const auto h264 = temp.path / "red.mp4";
+    ASSERT_TRUE(writeH264(h264));
+    ASSERT_TRUE(extractAndCheck(h264, temp.path / "red_frames", "videotoolbox", 6, 0.5));
+    for (const auto& entry : std::filesystem::directory_iterator(temp.path / "red_frames")) {
+        if (entry.path().extension() != ".png")
+            continue;
+        int width = 0, height = 0, channels = 0;
+        stbi_uc* const pixels = stbi_load(entry.path().string().c_str(), &width, &height, &channels, 3);
+        ASSERT_NE(pixels, nullptr) << entry.path();
+        EXPECT_EQ(width, WIDTH);
+        EXPECT_EQ(height, HEIGHT);
+        const stbi_uc* const center = pixels + ((HEIGHT / 2) * WIDTH + WIDTH / 2) * 3;
+        EXPECT_GT(center[0], 230) << entry.path();
+        EXPECT_LT(center[1], 25) << entry.path();
+        EXPECT_LT(center[2], 25) << entry.path();
+        stbi_image_free(pixels);
+    }
 }
 
 TEST(VideoToolboxExtractor, SoftwareFallback) {
