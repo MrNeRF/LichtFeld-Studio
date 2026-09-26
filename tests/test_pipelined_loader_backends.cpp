@@ -12,10 +12,12 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <optional>
 #include <string>
 #include <utility>
@@ -159,7 +161,7 @@ namespace {
             config.use_16bit_color = sixteen_bit;
             PipelinedImageLoader loader(config);
             loader.prefetch({request});
-            auto completion = loader.get_completion();
+            auto completion = loader.try_get_completion_for(std::chrono::seconds(20));
             if (!completion || !completion->outcome) {
                 ADD_FAILURE() << "load failed";
                 return {};
@@ -167,13 +169,15 @@ namespace {
             auto& ready = *completion->outcome;
             for (auto* event : {&ready.depth_ready_event, &ready.normal_ready_event}) {
                 if (*event)
-                    (void)TensorFence::adopt(GpuBackend::CUDA, std::exchange(*event, nullptr));
+                    TensorFence::adopt(GpuBackend::CUDA, std::exchange(*event, nullptr)).wait();
             }
             EXPECT_TRUE(gpu_backend_of(ready.tensor) == GetParam());
-            const auto copy = [](const std::optional<Tensor>& tensor) {
-                return tensor ? tensor->cpu() : Tensor();
+            // Exercise a consumer GPU operation on a different thread before readback.
+            const auto copy = [](const Tensor& tensor) {
+                return gpu_backend_of(tensor) == GpuBackend::Vulkan ? tensor.clone().cpu() : tensor.cpu();
             };
-            return {ready.tensor.cpu(), copy(ready.mask), copy(ready.depth), copy(ready.normal)};
+            return {copy(ready.tensor), ready.mask ? copy(*ready.mask) : Tensor(),
+                    ready.depth ? copy(*ready.depth) : Tensor(), ready.normal ? copy(*ready.normal) : Tensor()};
         }
 
         static inline std::filesystem::path directory_;
@@ -262,6 +266,8 @@ namespace {
         for (const bool srgb : {false, true}) {
             auto normal = request("rgb8.png");
             normal.normal_path = path("normal.png");
+            normal.aux_target_width = 7;
+            normal.aux_target_height = 5;
             normal.normal_srgb = srgb;
             normal.normal_flip_yz = true;
             normal.normal_transform_world_to_camera = true;
@@ -282,8 +288,8 @@ namespace {
                         rotation[r * 3] * n[0] + rotation[r * 3 + 1] * n[1] + rotation[r * 3 + 2] * n[2];
             }
             expect_close(load(normal).normal,
-                         resize_normal_prior(host(expected, {3, HEIGHT, WIDTH}), HEIGHT, WIDTH),
-                         srgb ? 2e-5f : 1e-6f);
+                         resize_normal_prior(host(expected, {3, HEIGHT, WIDTH}), 5, 7),
+                         2e-5f);
         }
     }
 
@@ -318,6 +324,7 @@ namespace {
                             loader_logged = true;
                     });
                 bool delivered = false;
+                bool failed_and_recovered = false;
                 {
                     PipelinedLoaderConfig config;
                     config.backend = GpuBackend::Vulkan;
@@ -329,14 +336,34 @@ namespace {
                     request.depth_path = directory / "mask.png";
                     request.normal_path = directory / "image.png";
                     loader.prefetch({request});
-                    auto completion = loader.get_completion();
+                    auto completion = loader.try_get_completion_for(std::chrono::seconds(20));
                     delivered = completion && completion->outcome && completion->outcome->mask &&
                                 completion->outcome->depth && completion->outcome->normal;
                     (void)loader.load_image_immediate(request.path, {});
+
+                    // A JPEG 2000 signature is unsupported by the host codecs.
+                    const auto unsupported = directory / "unsupported.jp2";
+                    std::ofstream file(unsupported, std::ios::binary);
+                    file.write("\0\0\0\x0c"
+                               "jP  \r\n\x87\n",
+                               12);
+                    file.close();
+                    ImageRequest bad;
+                    bad.sequence_id = 1;
+                    bad.path = unsupported;
+                    loader.prefetch({bad});
+                    auto failure = loader.try_get_completion_for(std::chrono::seconds(20));
+                    const bool typed_failure = failure && !failure->outcome &&
+                                               failure->outcome.error().code() == lfs::ErrorCode::DataLoss &&
+                                               std::string(failure->outcome.error().user_message()).find("Unsupported image format") != std::string::npos;
+                    request.sequence_id = 2;
+                    loader.prefetch({request});
+                    auto recovered = loader.try_get_completion_for(std::chrono::seconds(20));
+                    failed_and_recovered = typed_failure && recovered && recovered->outcome;
                 }
                 Logger::get().remove_log_handler(handler);
                 std::filesystem::remove_all(directory);
-                std::_Exit(delivered && loader_logged && !codec_touched ? 0 : 1);
+                std::_Exit(delivered && failed_and_recovered && loader_logged && !codec_touched ? 0 : 1);
             },
             ::testing::ExitedWithCode(0), "");
         GTEST_FLAG_SET(death_test_style, style);
