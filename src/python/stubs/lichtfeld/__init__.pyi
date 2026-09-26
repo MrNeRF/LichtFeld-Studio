@@ -332,6 +332,12 @@ def project_is_dirty() -> bool:
 def project_has_path() -> bool:
     """Return whether the active project has a bound .licht path"""
 
+def project_path() -> str | None:
+    """Return the active project's bound .licht path, or None"""
+
+def project_uuid() -> str | None:
+    """Return the active project UUID (kept across saves), or None"""
+
 def project_can_embed_dataset() -> bool:
     """Return whether the active project can embed its external dataset"""
 
