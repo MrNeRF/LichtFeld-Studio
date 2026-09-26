@@ -13,6 +13,7 @@
 #include "vk_recorder.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <array>
 #include <span>
 
@@ -87,10 +88,16 @@ namespace lfs::core::internal {
                 .inner = checked_u32(lines.inner, "Vulkan sort inner size exceeds uint32"),
                 .descending = lines.descending ? 1u : 0u,
             };
+            // Short lines pack side by side, each running a network of its
+            // own power-of-two width.
+            const size_t width = std::bit_ceil(std::max<size_t>(lines.dim_size, 1));
+            const size_t lines_per_group = kBitonicCapacity / width;
+            const std::array constants{static_cast<uint32_t>(width)};
             const VulkanPipeline& pipeline =
-                context.pipelines().specialized("sort", sizeof(SortPush), {});
+                context.pipelines().specialized("sort", sizeof(SortPush), constants);
             const uint32_t groups = static_cast<uint32_t>(
-                std::min<size_t>(lines.count, context.caps().max_workgroup_count[0]));
+                std::min<size_t>((lines.count + lines_per_group - 1) / lines_per_group,
+                                 context.caps().max_workgroup_count[0]));
             const std::array reads{values};
             const std::array writes{values, indices};
             context.recorders().record(
