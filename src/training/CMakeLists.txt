@@ -94,6 +94,7 @@ set(TRAINING_NEW_SOURCES
     ops/adam_cuda.cpp
     ops/mcmc_cuda.cpp
     ops/mrnf_cuda.cpp
+    ops/morton_cuda.cpp
     losses/mask_loss.cpp
     strategies/strategy_utils.cpp
     strategies/mcmc.cpp

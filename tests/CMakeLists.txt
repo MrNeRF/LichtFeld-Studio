@@ -558,6 +558,7 @@ set(TEST_FILES
     test_geometry_ops.cpp
     test_mcmc_ops.cpp
     test_mrnf_ops.cpp
+    test_morton_ops.cpp
     test_persistent_masks.cpp
     test_fused_noise_injection.cpp
     test_densification_info_zero.cpp

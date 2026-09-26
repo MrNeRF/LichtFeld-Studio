@@ -7,6 +7,7 @@
 #include "lfs/training/ops/fast_cuda.hpp"
 #include "lfs/training/ops/geometry_cuda.hpp"
 #include "lfs/training/ops/mcmc_cuda.hpp"
+#include "lfs/training/ops/morton_cuda.hpp"
 #include "lfs/training/ops/mrnf_cuda.hpp"
 #include "lfs/training/ops/photometric_cuda.hpp"
 
@@ -30,6 +31,8 @@ namespace lfs::training {
                 return ops.geometry != nullptr;
             case Family::Fast:
                 return ops.fast != nullptr;
+            case Family::Morton:
+                return ops.morton != nullptr;
             case Family::Count:
                 return false;
             default:
@@ -48,6 +51,7 @@ namespace lfs::training {
             .mrnf = &cuda_mrnf_ops(),
             .geometry = &cuda_geometry_ops(),
             .fast = &cuda_fast_ops(),
+            .morton = &cuda_morton_ops(),
         };
         static const TrainingOps kVulkan{
             .backend = core::GpuBackend::Vulkan,

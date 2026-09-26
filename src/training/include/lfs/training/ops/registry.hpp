@@ -8,6 +8,7 @@
 #include "lfs/training/ops/geometry.hpp"
 #include "lfs/training/ops/loss.hpp"
 #include "lfs/training/ops/mcmc.hpp"
+#include "lfs/training/ops/morton.hpp"
 #include "lfs/training/ops/mrnf.hpp"
 #include "lfs/training/ops/raster.hpp"
 
@@ -33,6 +34,7 @@ namespace lfs::training {
         const ops::MrnfOps* mrnf = nullptr;
         const ops::GeometryLossOps* geometry = nullptr;
         const ops::FastRasterOps* fast = nullptr;
+        const ops::MortonOps* morton = nullptr;
     };
 
     enum class Family {
