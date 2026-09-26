@@ -3278,6 +3278,67 @@ namespace lfs::core::internal {
         return count_matches(3, input, count) != 0;
     }
 
+    // Long lines split into chunks whose keys a second pass folds, so a
+    // single argmax over a large tensor still fills the GPU. Contiguous lines
+    // fold in SIMD groups for coalesced loads; strided ones a thread each.
+    bool MetalBackendOps::arg_extreme(const StorageRef input, const StorageRef values, const StorageRef indices,
+                                      const ArgExtremeProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(arg_extreme);
+        LFS_ASSERT_MSG(input.dtype == DataType::Float32,
+                       std::format("Metal arg_extreme requires Float32 input, got {}", dtype_name(input.dtype)));
+        const size_t outputs = program.outer * program.inner;
+        if (outputs == 0)
+            return true;
+        LFS_ASSERT_MSG(program.reduce > 0, "arg_extreme cannot reduce an empty dimension");
+        struct ArgExtremeParams {
+            uint32_t outer, reduce, inner, chunk, chunks;
+            uint32_t padding[3];
+        };
+        constexpr size_t kTargetThreads = 65536, kMaxChunks = 1024;
+        const bool rows = program.inner == 1 && program.reduce >= 64;
+        const size_t lanes = rows ? 32 : 1;
+        const size_t minimum_chunk = rows ? 32 * 16 : 64;
+        const size_t chunks = std::clamp<size_t>(
+            std::min(kTargetThreads / (outputs * lanes), (program.reduce + minimum_chunk - 1) / minimum_chunk), 1,
+            kMaxChunks);
+        const size_t chunk = (program.reduce + chunks - 1) / chunks;
+        const ArgExtremeParams params{
+            .outer = checked_u32(program.outer, "Metal arg_extreme outer size exceeds uint32"),
+            .reduce = checked_u32(program.reduce, "Metal arg_extreme size exceeds uint32"),
+            .inner = checked_u32(program.inner, "Metal arg_extreme inner size exceeds uint32"),
+            .chunk = static_cast<uint32_t>(chunk),
+            .chunks = static_cast<uint32_t>(chunks)};
+        checked_u32(outputs, "Metal arg_extreme output count exceeds uint32");
+        const auto context = acquire_context();
+        const uint32_t maximum = program.maximum ? 1u : 0u;
+        std::optional<Scratch> keys;
+        if (chunks > 1)
+            keys.emplace(*context, chunks * outputs * sizeof(uint64_t));
+        const auto at = [&](const StorageRef storage) {
+            const auto located = context->locate(storage);
+            return located.address + located.offset;
+        };
+        const auto keys_address = keys ? at(keys->storage) : at(input);
+        const auto dispatch = [&](const uint32_t pass, const MTLSize grid) {
+            std::vector<StorageRef> uses{input, values, indices};
+            if (keys)
+                uses.push_back(keys->storage);
+            context->dispatch(uses, {.pipeline = context->pipeline("arg_extreme", {{0, pass << 1 | maximum}}),
+                                     .buffers = {at(input), keys_address, at(values), at(indices)},
+                                     .params = param_bytes(params),
+                                     .grid = grid,
+                                     .group_size = MTLSizeMake(kThreadgroupWidth, 1, 1)});
+        };
+        const size_t output_groups = (outputs + kThreadgroupWidth - 1) / kThreadgroupWidth;
+        if (rows)
+            dispatch(1, MTLSizeMake((program.outer + kThreadgroupWidth / 32 - 1) / (kThreadgroupWidth / 32), chunks, 1));
+        else
+            dispatch(0, MTLSizeMake(output_groups, chunks, 1));
+        if (chunks > 1)
+            dispatch(2, MTLSizeMake((outputs + kThreadgroupWidth / 32 - 1) / (kThreadgroupWidth / 32), 1, 1));
+        return true;
+    }
+
     void MetalBackendOps::cumsum(const StorageRef data, const StridedLayout& layout, const int dim, ExecContext) {
         LFS_FACADE_TRACE(cumsum);
         LFS_ASSERT_MSG(data.dtype == DataType::Float32 || data.dtype == DataType::Int32,

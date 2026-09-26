@@ -179,6 +179,15 @@ namespace lfs::core {
             DataType result_dtype;
         };
 
+        // Extrema with their positions along the middle axis of an
+        // (outer, reduce, inner) view.
+        struct ArgExtremeProgram {
+            size_t outer = 1;
+            size_t reduce = 0;
+            size_t inner = 1;
+            bool maximum = true;
+        };
+
         struct SortProgram {
             size_t outer_size = 1;
             size_t dim_size = 0;
