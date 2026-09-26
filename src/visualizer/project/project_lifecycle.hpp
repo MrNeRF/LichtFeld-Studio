@@ -669,7 +669,8 @@ namespace lfs::vis::project {
             lfs::io::project::ProjectDocument& document,
             const lfs::io::project::ProjectDocumentHydrationReport&
                 report);
-        void captureStoredTrainingSession(
+        // Returns whether a dataset-only session can build its trainer now.
+        bool captureStoredTrainingSession(
             const lfs::io::project::ProjectDocumentHydrationReport&
                 report);
         void clearStoredTrainingSession();
