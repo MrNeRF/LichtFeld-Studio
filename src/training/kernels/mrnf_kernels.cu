@@ -4,6 +4,7 @@
 
 #include "core/cuda_error.hpp"
 #include "core/tensor/backend/cuda/kernels/tensor_generic_ops.cuh"
+#include "densification_kernels.hpp"
 #include "lfs/cuda_scratch.hpp"
 #include "lfs/training/refine_scratch.hpp"
 #include "mrnf_kernels.hpp"
@@ -46,6 +47,88 @@ namespace lfs::training::mrnf_strategy {
         };
 
     } // namespace
+
+    __global__ void prune_bounds_or_kernel(
+        const float* __restrict__ means,
+        const float* __restrict__ max_log_scales,
+        bool* __restrict__ prune_mask,
+        size_t N,
+        float center_x,
+        float center_y,
+        float center_z,
+        float max_allowed,
+        float log_max_allowed) {
+        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i >= N)
+            return;
+
+        const float dx = fabsf(means[3 * i] - center_x);
+        const float dy = fabsf(means[3 * i + 1] - center_y);
+        const float dz = fabsf(means[3 * i + 2] - center_z);
+        const bool distance_exceeds = !isnan(dx) && !isnan(dy) && !isnan(dz) &&
+                                      fmaxf(dx, fmaxf(dy, dz)) > max_allowed;
+        prune_mask[i] = prune_mask[i] || max_log_scales[i] > log_max_allowed || distance_exceeds;
+    }
+
+    void launch_prune_bounds_or(
+        const float* means,
+        const float* max_log_scales,
+        bool* prune_mask,
+        size_t N,
+        const float* center,
+        float max_allowed,
+        float log_max_allowed,
+        void* stream) {
+        if (N == 0)
+            return;
+        constexpr int threads = 256;
+        const int blocks = static_cast<int>((N + threads - 1) / threads);
+        cudaStream_t s = resolve_stream(stream);
+        prune_bounds_or_kernel<<<blocks, threads, 0, s>>>(
+            means, max_log_scales, prune_mask, N,
+            center[0], center[1], center[2], max_allowed, log_max_allowed);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.prune_bounds_or");
+    }
+
+    __global__ void replace_parent_weights_kernel(
+        const float* __restrict__ opacities,
+        const float* __restrict__ visibility,
+        const bool* __restrict__ active_mask,
+        const bool* __restrict__ trainable_mask,
+        const float* __restrict__ edge_guidance,
+        float* __restrict__ output,
+        size_t N) {
+        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        if (i >= N)
+            return;
+        float weight = opacities[i] * static_cast<float>(visibility[i] > 0.0f);
+        if (active_mask)
+            weight = weight * static_cast<float>(active_mask[i]);
+        if (trainable_mask)
+            weight = weight * static_cast<float>(trainable_mask[i]);
+        if (edge_guidance)
+            weight = weight * edge_guidance[i];
+        output[i] = weight;
+    }
+
+    void launch_replace_parent_weights(
+        const float* opacities,
+        const float* visibility,
+        const bool* active_mask,
+        const bool* trainable_mask,
+        const float* edge_guidance,
+        float* output,
+        size_t N,
+        void* stream) {
+        if (N == 0)
+            return;
+        constexpr int threads = 256;
+        const int blocks = static_cast<int>((N + threads - 1) / threads);
+        cudaStream_t s = resolve_stream(stream);
+        replace_parent_weights_kernel<<<blocks, threads, 0, s>>>(
+            opacities, visibility, active_mask, trainable_mask, edge_guidance, output, N);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.replace_parent_weights");
+    }
 
     __global__ void mrnf_noise_injection_kernel(
         float* __restrict__ means,
@@ -577,7 +660,7 @@ namespace lfs::training::mrnf_strategy {
         cuda_scratch::DeviceBuffer sorted_indices_buffer;
 
         if (scratch) {
-            scratch->ensure_n(N, lfs::core::Device::GPU);
+            scratch->ensure_n(sort_count, lfs::core::Device::GPU);
             LFS_ASSERT_MSG(scratch->n_capacity >= sort_count,
                            lfs::core::detail::format_cuda_safe(
                                "Gumbel scratch n_capacity must be >= sort_count (cap={}, sort_count={})",
@@ -982,61 +1065,11 @@ namespace lfs::training::mrnf_strategy {
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.gather_seed_payloads");
     }
 
-    void launch_sorted_median(
-        const float* values,
-        size_t n,
-        float* out_median,
-        lfs::training::PositiveMedianScratch* scratch,
-        void* stream) {
-
-        LFS_ASSERT(out_median != nullptr);
-        *out_median = 0.0f;
+    float launch_sorted_median(const float* values, const size_t n, void* stream) {
         if (n == 0 || values == nullptr)
-            return;
-        LFS_ASSERT_MSG(n <= static_cast<size_t>(std::numeric_limits<int>::max()),
-                       "MRNF sorted-median input exceeds CUB's int item-count limit");
-        LFS_ASSERT_MSG(scratch != nullptr, "MRNF sorted-median requires PositiveMedianScratch");
-
-        cudaStream_t s = resolve_stream(stream);
-        const int n_int = static_cast<int>(n);
-        scratch->ensure_n(n, lfs::core::Device::GPU);
-        LFS_ASSERT_MSG(scratch->n_capacity >= n &&
-                           scratch->selected.is_valid() &&
-                           scratch->sorted.is_valid(),
-                       "MRNF sorted-median scratch must cover n");
-
-        float* d_selected = scratch->selected.ptr<float>();
-        float* d_sorted = scratch->sorted.ptr<float>();
-        LFS_CUDA_CHECK_MSG(
-            cudaMemcpyAsync(d_selected, values, n * sizeof(float), cudaMemcpyDeviceToDevice, s),
-            "MRNF sorted-median copy");
-
-        auto sort_op = [&](void* workspace, size_t& workspace_bytes) {
-            return cub::DeviceRadixSort::SortKeys(
-                workspace, workspace_bytes, d_selected, d_sorted,
-                n_int, 0, static_cast<int>(sizeof(float) * 8), s);
-        };
-        size_t sort_bytes = 0;
-        LFS_CUDA_CHECK_MSG(sort_op(nullptr, sort_bytes), "MRNF sorted-median sort size");
-        scratch->ensure_temps(0, sort_bytes, lfs::core::Device::GPU);
-        if (sort_bytes > 0) {
-            LFS_ASSERT_MSG(scratch->sort_temp.is_valid() &&
-                               scratch->sort_temp_bytes >= sort_bytes &&
-                               scratch->sort_temp.data_ptr() != nullptr,
-                           "MRNF sorted-median sort temp must cover queried bytes");
-            void* ws = scratch->sort_temp.data_ptr();
-            LFS_CUDA_CHECK_MSG(sort_op(ws, sort_bytes), "MRNF sorted-median sort");
-        } else {
-            LFS_CUDA_CHECK_MSG(sort_op(nullptr, sort_bytes), "MRNF sorted-median sort");
-        }
-
-        LFS_CUDA_CHECK_MSG(
-            cudaMemcpyAsync(out_median, d_sorted + (n / 2), sizeof(float),
-                            cudaMemcpyDeviceToHost, s),
-            "MRNF sorted-median readback");
-        LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(s), "MRNF sorted-median stream sync");
-        if (!std::isfinite(*out_median))
-            *out_median = 0.0f;
+            return 0.0f;
+        const float median = lfs::training::kernels::launch_select_median(values, n, resolve_stream(stream));
+        return std::isfinite(median) ? median : 0.0f;
     }
 
     __global__ void apply_explore_starvation_weights_kernel(

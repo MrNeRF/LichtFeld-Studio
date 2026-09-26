@@ -1,17 +1,20 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda/memory_arena.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/error.hpp"
 #include "core/event_bridge/control_boundary.hpp"
 #include "core/parameters.hpp"
 #include "core/scene.hpp"
 #include "core/sh_value_quant.hpp"
+#include "core/sh_value_quant_kernels.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_cuda_interop.hpp"
 #include "cuda_backend_test.hpp"
+#include "kernels/morton_reorder_kernels.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/morton_reorder.hpp"
@@ -791,4 +794,197 @@ TEST_F(MortonReorderCudaTest, Q16ChunkedPermuteMatchesOldRoundtripBitIdentical) 
     }
 
     (void)snapshot_fp32;
+}
+
+namespace {
+    [[nodiscard]] std::vector<std::uint8_t> device_bytes(const Tensor& t) {
+        std::vector<std::uint8_t> out(t.bytes());
+        EXPECT_EQ(cudaMemcpy(out.data(), t.data_ptr(), out.size(), cudaMemcpyDeviceToHost), cudaSuccess);
+        return out;
+    }
+
+    void fill_random_bytes(Tensor& t, std::mt19937& rng) {
+        std::vector<std::uint8_t> host(t.bytes());
+        std::uniform_int_distribution<int> byte(0, 255);
+        for (auto& b : host)
+            b = static_cast<std::uint8_t>(byte(rng));
+        ASSERT_EQ(cudaMemcpy(t.data_ptr(), host.data(), host.size(), cudaMemcpyHostToDevice), cudaSuccess);
+    }
+
+    void fill_joint_bounds(Tensor& bounds, std::mt19937& rng) {
+        std::vector<float> host(bounds.numel());
+        std::uniform_real_distribution<float> unit(0.0f, 1.0f);
+        for (size_t i = 0; i + 3 < host.size(); i += 4) {
+            host[i + 0] = -unit(rng);
+            host[i + 1] = unit(rng);
+            host[i + 2] = 0.0f;
+            host[i + 3] = unit(rng);
+        }
+        ASSERT_EQ(cudaMemcpy(bounds.data_ptr(), host.data(), host.size() * sizeof(float),
+                             cudaMemcpyHostToDevice),
+                  cudaSuccess);
+    }
+} // namespace
+
+// The SH destinations borrow the idle rasterizer arena. Fails if the borrowed
+// buffer is copied back from the wrong place, before the gather finished, or
+// not at all: the arena path must match the allocation fallback byte for byte.
+TEST_F(MortonReorderCudaTest, ArenaScratchMatchesAllocationFallbackBytewise) {
+    const ShValueQuantGuard quant_guard{true};
+    constexpr size_t n = 70000;
+    const cudaStream_t stream = getCurrentCUDAStream();
+    auto& arena = GlobalArenaManager::instance().get_arena();
+
+    auto base = make_mixed_splat(n, 3);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(base));
+    auto arena_splat = base.clone();
+    auto fallback_splat = base.clone();
+
+    AdamConfig cfg;
+    cfg.initial_capacity = n;
+    AdamOptimizer arena_opt(arena_splat, cfg);
+    AdamOptimizer fallback_opt(fallback_splat, cfg);
+    arena_opt.allocate_gradients(n);
+    fallback_opt.allocate_gradients(n);
+    for (const auto type : AdamOptimizer::all_param_types()) {
+        auto* a = arena_opt.get_state_mutable(type);
+        auto* f = fallback_opt.get_state_mutable(type);
+        if (a == nullptr || !a->is_joint() || !a->exp_avg.is_valid())
+            continue;
+        ASSERT_NE(f, nullptr);
+        std::mt19937 rng_a(1000 + static_cast<unsigned>(type));
+        std::mt19937 rng_f(1000 + static_cast<unsigned>(type));
+        fill_random_bytes(a->exp_avg, rng_a);
+        fill_random_bytes(f->exp_avg, rng_f);
+        fill_joint_bounds(a->joint_bounds, rng_a);
+        fill_joint_bounds(f->joint_bounds, rng_f);
+    }
+    const auto* shN_state = arena_opt.get_state(ParamType::ShN);
+    ASSERT_NE(shN_state, nullptr);
+    ASSERT_TRUE(shN_state->is_joint());
+
+    const size_t scratch_bytes = std::max(arena_splat.shN().bytes(), shN_state->exp_avg.bytes());
+    const size_t grown_bytes = scratch_bytes + (8u << 20);
+    {
+        const auto frame = arena.begin_frame(stream);
+        ASSERT_NE(arena.get_allocator(frame, "test.morton_grow")(grown_bytes), nullptr);
+        arena.end_frame(frame, stream);
+    }
+    ASSERT_GE(arena.get_memory_info().arena_capacity, grown_bytes);
+
+    const auto shN_moments_before = device_bytes(shN_state->exp_avg);
+    const auto arena_result = morton::apply_morton_reorder(arena_splat, &arena_opt, stream);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    EXPECT_NE(device_bytes(arena_opt.get_state(ParamType::ShN)->exp_avg), shN_moments_before)
+        << "SH Adam moments were not permuted";
+    ASSERT_TRUE(arena_result.applied);
+    const auto arena_info = arena.get_memory_info();
+    EXPECT_GT(arena_info.current_usage, 0u);
+    EXPECT_LT(arena_info.current_usage, grown_bytes) << "reorder did not borrow the arena";
+
+    const auto held = arena.begin_frame(stream);
+    const auto fallback_result = morton::apply_morton_reorder(fallback_splat, &fallback_opt, stream);
+    arena.end_frame(held, stream);
+    ASSERT_TRUE(fallback_result.applied);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    EXPECT_EQ(device_bytes(arena_result.permutation), device_bytes(fallback_result.permutation));
+    EXPECT_EQ(device_bytes(arena_splat.shN()), device_bytes(fallback_splat.shN()));
+    EXPECT_EQ(device_bytes(arena_splat.shN_value_bounds()), device_bytes(fallback_splat.shN_value_bounds()));
+    EXPECT_EQ(device_bytes(arena_splat.means()), device_bytes(fallback_splat.means()));
+    for (const auto type : AdamOptimizer::all_param_types()) {
+        const auto* a = arena_opt.get_state(type);
+        const auto* f = fallback_opt.get_state(type);
+        if (a == nullptr || !a->is_joint() || !a->exp_avg.is_valid())
+            continue;
+        EXPECT_EQ(device_bytes(a->exp_avg), device_bytes(f->exp_avg)) << static_cast<int>(type);
+        EXPECT_EQ(device_bytes(a->joint_bounds), device_bytes(f->joint_bounds)) << static_cast<int>(type);
+    }
+}
+
+// Fails if a cell or slot group lands at the wrong offset, a group is skipped
+// or overlaps, padding lanes differ, or the bounds pass differs from the
+// one-shot kernels.
+TEST_F(MortonReorderCudaTest, GroupedShPermutationMatchesOneShotBytewise) {
+    const ShValueQuantGuard quant_guard{true};
+    constexpr size_t n = 70000;
+    constexpr std::uint32_t rest = 15;
+    const cudaStream_t stream = getCurrentCUDAStream();
+    auto splat = make_mixed_splat(n, 3);
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+
+    std::vector<int> perm_host(n);
+    std::iota(perm_host.begin(), perm_host.end(), 0);
+    std::mt19937 rng(20260926);
+    std::shuffle(perm_host.begin(), perm_host.end(), rng);
+    const auto perm = Tensor::from_vector(perm_host, TensorShape({n}), Device::CUDA).to(DataType::Int64);
+    const auto* perm_ptr = perm.ptr<std::int64_t>();
+
+    const size_t code_count = sh_value_quant::sh_value_u16_count(n, rest);
+    const size_t bound_floats = sh_value_quant::n_bounds_for_prims(n) * 2;
+    const auto* src_codes = reinterpret_cast<const std::uint16_t*>(splat.shN().data_ptr());
+    const auto* src_bounds = splat.shN_value_bounds().ptr<float>();
+
+    auto one_codes = Tensor::zeros({code_count}, Device::CUDA, DataType::Float16);
+    auto one_bounds = Tensor::zeros({bound_floats}, Device::CUDA);
+    sh_value_quant::encode_shN_u16_gathered(
+        src_codes, src_bounds, perm_ptr, reinterpret_cast<std::uint16_t*>(one_codes.data_ptr()),
+        one_bounds.ptr<float>(), n, n, rest, stream);
+
+    auto grouped_codes = Tensor::zeros({code_count}, Device::CUDA, DataType::Float16);
+    auto grouped_bounds = Tensor::zeros({bound_floats}, Device::CUDA);
+    sh_value_quant::gathered_shN_u16_block_bounds(
+        src_codes, src_bounds, perm_ptr, grouped_bounds.ptr<float>(), n, n, rest, stream);
+    constexpr std::uint32_t cells = rest * 3;
+    constexpr std::uint32_t cells_per_group = 7;
+    constexpr size_t R = kShReorderSize;
+    const size_t tiles = sh_swizzled_padded_n(n) / R;
+    auto group = Tensor::empty({tiles * R * cells_per_group}, Device::CUDA, DataType::Float16);
+    auto* group_ptr = reinterpret_cast<std::uint16_t*>(group.data_ptr());
+    auto* grouped_ptr = reinterpret_cast<std::uint16_t*>(grouped_codes.data_ptr());
+    for (std::uint32_t first = 0; first < cells; first += cells_per_group) {
+        const std::uint32_t last = std::min(first + cells_per_group, cells);
+        const size_t width = (last - first) * R * sizeof(std::uint16_t);
+        ASSERT_EQ(cudaMemsetAsync(group_ptr, 0, width * tiles, stream), cudaSuccess);
+        sh_value_quant::encode_shN_u16_gathered_cells(
+            src_codes, src_bounds, perm_ptr, grouped_bounds.ptr<float>(), group_ptr, n, n, rest, first, last,
+            stream);
+        ASSERT_EQ(cudaMemcpy2DAsync(grouped_ptr + first * R, cells * R * sizeof(std::uint16_t), group_ptr, width,
+                                    width, tiles, cudaMemcpyDeviceToDevice, stream),
+                  cudaSuccess);
+    }
+    ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
+    EXPECT_EQ(device_bytes(grouped_codes), device_bytes(one_codes));
+    EXPECT_EQ(device_bytes(grouped_bounds), device_bytes(one_bounds));
+
+    AdamConfig cfg;
+    cfg.initial_capacity = n;
+    AdamOptimizer opt(splat, cfg);
+    opt.allocate_gradients(n);
+    auto* state = opt.get_state_mutable(ParamType::ShN);
+    ASSERT_NE(state, nullptr);
+    ASSERT_TRUE(state->is_joint());
+    std::mt19937 rng_m(77);
+    fill_random_bytes(state->exp_avg, rng_m);
+    fill_joint_bounds(state->joint_bounds, rng_m);
+    const int slots = static_cast<int>(sh_float4_slots_for_rest(rest));
+    const size_t moment_bounds = joint_adam::n_bounds_for_prims(n) * 4;
+
+    auto one_packed = Tensor::zeros({state->exp_avg.bytes()}, Device::CUDA, DataType::UInt8);
+    auto one_moment_bounds = Tensor::zeros({moment_bounds}, Device::CUDA);
+    kernels::launch_joint_permute_shN(
+        state->exp_avg.ptr<std::uint8_t>(), state->joint_bounds.ptr<float>(), one_packed.ptr<std::uint8_t>(),
+        one_moment_bounds.ptr<float>(), perm_ptr, static_cast<int>(n), slots, state->joint_bits, stream);
+
+    auto grouped_packed = state->exp_avg.clone();
+    auto grouped_moment_bounds = Tensor::zeros({moment_bounds}, Device::CUDA);
+    const size_t slot_bytes = tiles * R * 4 * static_cast<size_t>(joint_adam::bytes_per_cell(state->joint_bits));
+    auto slot_scratch = Tensor::empty({slot_bytes * 3}, Device::CUDA, DataType::UInt8);
+    kernels::launch_joint_permute_shN_grouped(
+        grouped_packed.ptr<std::uint8_t>(), state->joint_bounds.ptr<float>(), grouped_moment_bounds.ptr<float>(),
+        perm_ptr, static_cast<int>(n), slots, state->joint_bits, slot_scratch.ptr<std::uint8_t>(),
+        slot_scratch.bytes(), stream);
+    ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
+    EXPECT_EQ(device_bytes(grouped_packed), device_bytes(one_packed));
+    EXPECT_EQ(device_bytes(grouped_moment_bounds), device_bytes(one_moment_bounds));
 }

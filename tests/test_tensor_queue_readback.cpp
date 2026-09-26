@@ -169,6 +169,20 @@ namespace {
         const Tensor wrong = Tensor::empty({4}, Device::CPU, DataType::UInt8);
         EXPECT_THROW(TensorReadbackRing(GpuBackend::CUDA, 1, 4, queue, &wrong), std::invalid_argument);
         EXPECT_THROW(TensorReadbackRing(GpuBackend::CUDA, 1, scratch.bytes() + 1, queue, &scratch), std::invalid_argument);
+
+        // Staging is borrowed: the owner may allocate it after construction and
+        // release it between captures.
+        Tensor lent;
+        TensorReadbackRing borrowing(GpuBackend::CUDA, 1, source.bytes(), queue, &lent);
+        for (const bool allocated : {true, false}) {
+            lent = allocated ? Tensor::empty({source.bytes()}, Device::GPU, DataType::UInt8) : Tensor();
+            borrowing.enqueue(source, 0, source.bytes(), 0, 0, true);
+            borrowing.seal(0);
+            borrowing.wait(0);
+            std::memcpy(&last, borrowing.slot_bytes(0).data() + source.bytes() - sizeof(float), sizeof(float));
+            EXPECT_EQ(last, 3.f);
+            borrowing.release(0);
+        }
     }
 
     TEST(TensorQueueReadback, PreparedDestinationRetainsStorageAndReusesCompletion) {

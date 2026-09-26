@@ -2229,6 +2229,7 @@ void RenderInterface_VK::Initialize_Allocator() noexcept {
     info.instance = m_p_instance;
     info.physicalDevice = m_p_physical_device;
     info.pVulkanFunctions = &vulkanFunctions;
+    info.preferredLargeHeapBlockSize = VkDeviceSize{8} << 20;
 
     if (vmaCreateAllocator(&info, &m_p_allocator) != VK_SUCCESS)
         m_p_allocator = VK_NULL_HANDLE;

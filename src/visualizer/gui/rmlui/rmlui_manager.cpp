@@ -14,6 +14,7 @@
 #include "gui/rmlui/elements/python_editor_element.hpp"
 #include "gui/rmlui/elements/scene_graph_element.hpp"
 #include "gui/rmlui/elements/terminal_element.hpp"
+#include "gui/rmlui/elements/vram_timeline_element.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_text_input_handler.hpp"
@@ -216,6 +217,7 @@ namespace lfs::vis::gui {
         static Rml::ElementInstancerGeneric<ColorPickerElement> color_picker_instancer;
         static Rml::ElementInstancerGeneric<CRFCurveElement> crf_curve_instancer;
         static Rml::ElementInstancerGeneric<LossGraphElement> loss_graph_instancer;
+        static Rml::ElementInstancerGeneric<VramTimelineElement> vram_timeline_instancer;
         static Rml::ElementInstancerGeneric<PythonEditorElement> python_editor_instancer;
         static Rml::ElementInstancerGeneric<SceneGraphElement> scene_graph_instancer;
         static Rml::ElementInstancerGeneric<TerminalElement> terminal_instancer;
@@ -223,6 +225,7 @@ namespace lfs::vis::gui {
         Rml::Factory::RegisterElementInstancer("color-picker", &color_picker_instancer);
         Rml::Factory::RegisterElementInstancer("crf-curve", &crf_curve_instancer);
         Rml::Factory::RegisterElementInstancer("loss-graph", &loss_graph_instancer);
+        Rml::Factory::RegisterElementInstancer("vram-timeline", &vram_timeline_instancer);
         Rml::Factory::RegisterElementInstancer("python-editor-view", &python_editor_instancer);
         Rml::Factory::RegisterElementInstancer("scene-graph", &scene_graph_instancer);
         Rml::Factory::RegisterElementInstancer("terminal-view", &terminal_instancer);

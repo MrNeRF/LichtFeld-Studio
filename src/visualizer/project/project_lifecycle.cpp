@@ -23,6 +23,7 @@
 #include "lfs/training/ops/registry.hpp"
 #endif
 #include "core/user_paths.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "gui/error_event_bridge.hpp"
 #include "gui/error_surface_types.hpp"
 #include "gui/gui_manager.hpp"
@@ -8311,6 +8312,7 @@ namespace lfs::vis::project {
                                     hydration_.store(
                                         Hydration::Complete,
                                         std::memory_order_release);
+                                    lfs::diagnostics::VramProfiler::instance().mark("project_load");
                                     hydration_error_.clear();
                                     if (report
                                             .hydrated_payload_units >

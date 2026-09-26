@@ -2354,7 +2354,9 @@ namespace lfs::core {
                 std::pow(params.optimization.sh_degree + 1, 2));
 
             // Create final tensors first to avoid pool allocations
-            Tensor means_, scaling_, rotation_, opacity_, sh0_, shN_;
+            Tensor means_, scaling_, rotation_, opacity_, sh0_, shN_, shN_bounds_;
+            const bool direct_q16 = capacity > 0 && feature_shape > 1 &&
+                                    sh_value_quant::enabled();
 
             if (capacity > 0 && capacity < num_points) {
                 LOG_DEBUG("capacity {} was lower than num_points {}.  Matching capacity to points. ", capacity, num_points);
@@ -2404,15 +2406,27 @@ namespace lfs::core {
                           sh0_.is_valid(), static_cast<void*>(sh0_.ptr<float>()),
                           sh0_.shape().str(), sh0_.numel());
 
-                // SH-rest uses the resident float4-swizzled layout.
-                shN_ = allocate_swizzled_shN(num_points,
-                                             static_cast<size_t>(capacity),
-                                             static_cast<uint32_t>(feature_shape - 1),
-                                             tensor_allocator,
-                                             "SplatData.shN");
-                LOG_DEBUG("  shN_ allocated: is_valid={}, ptr={}, shape={}, numel={}",
-                          shN_.is_valid(), static_cast<void*>(shN_.ptr<float>()),
-                          shN_.shape().str(), shN_.numel());
+                if (direct_q16) {
+                    const auto rest = static_cast<uint32_t>(feature_shape - 1);
+                    const auto n_cells = sh_value_quant::sh_value_u16_count(num_points, rest);
+                    const auto cap_cells = sh_value_quant::sh_value_u16_count(static_cast<size_t>(capacity), rest);
+                    const auto n_bounds = sh_value_quant::n_bounds_for_prims(num_points);
+                    const auto cap_bounds = sh_value_quant::n_bounds_for_prims(static_cast<size_t>(capacity));
+                    shN_ = allocate_param_tensor(TensorShape({n_cells}), cap_cells,
+                                                 tensor_allocator, "SplatData.shN", DataType::Float16);
+                    shN_bounds_ = allocate_param_tensor(TensorShape({n_bounds * 2}), cap_bounds * 2,
+                                                        tensor_allocator, "SplatData.shN_value_bounds");
+                    shN_.zero_();
+                    shN_bounds_.zero_();
+                } else {
+                    shN_ = allocate_swizzled_shN(num_points,
+                                                 static_cast<size_t>(capacity),
+                                                 static_cast<uint32_t>(feature_shape - 1),
+                                                 tensor_allocator,
+                                                 "SplatData.shN");
+                }
+                LOG_DEBUG("  shN_ allocated: is_valid={}, shape={}, numel={}",
+                          shN_.is_valid(), shN_.shape().str(), shN_.numel());
 
                 LOG_DEBUG("Computing and filling values...");
             }
@@ -2498,35 +2512,33 @@ namespace lfs::core {
                 LOG_DEBUG("    fused_color: is_valid={}, shape={}, numel={}",
                           fused_color.is_valid(), fused_color.shape().str(), fused_color.numel());
 
-                // Create SH tensor on CPU
-                auto shs_cpu_tensor = Tensor::zeros(
-                    {fused_color.size(0), static_cast<size_t>(feature_shape), 3},
-                    Device::CPU);
-                LOG_DEBUG("    shs_cpu_tensor: is_valid={}, shape={}, numel={}",
-                          shs_cpu_tensor.is_valid(), shs_cpu_tensor.shape().str(), shs_cpu_tensor.numel());
-
-                auto shs_acc = shs_cpu_tensor.accessor<float, 3>();
-                auto fused_acc = fused_color.accessor<float, 2>();
-
-                for (size_t i = 0; i < fused_color.size(0); ++i) {
-                    for (size_t c = 0; c < 3; ++c) {
-                        shs_acc(i, 0, c) = fused_acc(i, c); // Set DC coefficient
-                    }
-                }
-
-                sh0_cpu = shs_cpu_tensor.slice(1, 0, 1).contiguous();
-                if (feature_shape > 1) {
-                    shN_cpu = shs_cpu_tensor.slice(1, 1, feature_shape).contiguous();
+                if (direct_q16) {
+                    sh0_cpu = fused_color.unsqueeze(1).contiguous();
                 } else {
-                    // sh-degree 0: create empty shN tensor [N, 0, 3]
-                    shN_cpu = Tensor::zeros({shs_cpu_tensor.size(0), 0, 3}, Device::CPU);
+                    auto shs_cpu_tensor = Tensor::zeros(
+                        {fused_color.size(0), static_cast<size_t>(feature_shape), 3},
+                        Device::CPU);
+                    auto shs_acc = shs_cpu_tensor.accessor<float, 3>();
+                    auto fused_acc = fused_color.accessor<float, 2>();
+                    for (size_t i = 0; i < fused_color.size(0); ++i) {
+                        for (size_t c = 0; c < 3; ++c) {
+                            shs_acc(i, 0, c) = fused_acc(i, c);
+                        }
+                    }
+                    sh0_cpu = shs_cpu_tensor.slice(1, 0, 1).contiguous();
+                    if (feature_shape > 1) {
+                        shN_cpu = shs_cpu_tensor.slice(1, 1, feature_shape).contiguous();
+                    } else {
+                        shN_cpu = Tensor::zeros({shs_cpu_tensor.size(0), 0, 3}, Device::CPU);
+                    }
                 }
                 LOG_DEBUG("  sh0_cpu: is_valid={}, ptr={}, shape={}, numel={}",
                           sh0_cpu.is_valid(), static_cast<const void*>(sh0_cpu.ptr<float>()),
                           sh0_cpu.shape().str(), sh0_cpu.numel());
-                LOG_DEBUG("  shN_cpu: is_valid={}, ptr={}, shape={}, numel={}",
-                          shN_cpu.is_valid(), static_cast<const void*>(shN_cpu.ptr<float>()),
-                          shN_cpu.shape().str(), shN_cpu.numel());
+                if (shN_cpu.is_valid()) {
+                    LOG_DEBUG("  shN_cpu: shape={}, numel={}",
+                              shN_cpu.shape().str(), shN_cpu.numel());
+                }
 
                 // Copy CPU data to direct GPU tensors
 #if LFS_HAS_CUDA
@@ -2620,27 +2632,16 @@ namespace lfs::core {
                 }
                 LOG_DEBUG("  SH0 copy successful");
 
-                // SHN swizzle
-                LOG_DEBUG("  Swizzling shN: src_ptr={}, dst_ptr={}, src_bytes={}",
-                          static_cast<const void*>(shN_cpu.ptr<float>()),
-                          static_cast<void*>(shN_.ptr<float>()),
-                          shN_cpu.numel() * sizeof(float));
-                reorder_canonical_into_swizzled(
-                    shN_cpu,
-                    shN_,
-                    num_points,
-                    static_cast<uint32_t>(feature_shape - 1),
-                    static_cast<uint32_t>(feature_shape - 1));
-                err = cudaGetLastError();
-                if (err != cudaSuccess) {
-                    LOG_ERROR("SH swizzle failed for shN:");
-                    LOG_ERROR("  src (CPU): is_valid={}, ptr={}, numel={}",
-                              shN_cpu.is_valid(), static_cast<const void*>(shN_cpu.ptr<float>()), shN_cpu.numel());
-                    LOG_ERROR("  dst (CUDA): is_valid={}, ptr={}, numel={}",
-                              shN_.is_valid(), static_cast<void*>(shN_.ptr<float>()), shN_.numel());
-                    throw TensorError("SH swizzle failed for shN: " + std::string(cudaGetErrorString(err)));
+                if (!direct_q16) {
+                    reorder_canonical_into_swizzled(
+                        shN_cpu, shN_, num_points,
+                        static_cast<uint32_t>(feature_shape - 1),
+                        static_cast<uint32_t>(feature_shape - 1));
+                    err = cudaGetLastError();
+                    if (err != cudaSuccess) {
+                        throw TensorError("SH swizzle failed for shN: " + std::string(cudaGetErrorString(err)));
+                    }
                 }
-                LOG_DEBUG("  SHN swizzle successful");
 
                 LOG_DEBUG("All CPU to CUDA copies completed successfully");
 #else
@@ -2733,6 +2734,10 @@ namespace lfs::core {
                 capacity > 0 ? SplatData::ShNLayout::Swizzled
                              : SplatData::ShNLayout::Canonical);
             result.set_tensor_allocator(std::move(tensor_allocator));
+            if (direct_q16) {
+                result.shN_value_bounds() = std::move(shN_bounds_);
+                result.shN_value_bounds().set_name("splat.shN_value_bounds");
+            }
 
             // One-shot pool trim after dataset SfM points finish loading into
             // SplatData / exportable storage. Not on the per-tensor path.

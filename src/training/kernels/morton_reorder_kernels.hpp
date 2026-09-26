@@ -5,6 +5,7 @@
 
 #include "core/tensor.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <cuda_runtime.h>
 
@@ -39,6 +40,23 @@ namespace lfs::training::kernels {
         int n_prims,
         int slots_per_primitive,
         int bits,
+        cudaStream_t stream = nullptr);
+
+    /// launch_joint_permute_shN without a second full moment array: the new
+    /// block bounds go to dst_bounds, then the moments are re-encoded in slot
+    /// groups that fit group_scratch and copied back into `packed` in place.
+    /// The caller installs dst_bounds after the call. Same bytes as the
+    /// one-shot launch.
+    void launch_joint_permute_shN_grouped(
+        std::uint8_t* packed,
+        const float* src_bounds,
+        float* dst_bounds,
+        const std::int64_t* perm,
+        int n_prims,
+        int slots_per_primitive,
+        int bits,
+        std::uint8_t* group_scratch,
+        std::size_t group_scratch_bytes,
         cudaStream_t stream = nullptr);
 
 } // namespace lfs::training::kernels

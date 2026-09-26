@@ -152,10 +152,11 @@ struct VulkanGSPipelineBuffers {
 
     // Raw split SplatData projection inputs used by the Vulkan viewer. These can
     // directly alias Vulkan-external tensor storage during training.
-    Buffer<float> sh0;         // (N, 1, 3) flattened
-    Buffer<float> shN;         // swizzled rest-only SH: [ceil(N/32), active slots, 32] float4
-    Buffer<float> scaling_raw; // (N, 3), log-scale
-    Buffer<float> opacity_raw; // (N, 1), logits
+    Buffer<float> sh0;            // (N, 1, 3) flattened
+    Buffer<float> shN;            // swizzled rest-only SH: [ceil(N/32), active slots, 32] float4
+    Buffer<float> scaling_raw;    // (N, 3), log-scale
+    Buffer<float> opacity_raw;    // (N, 1), logits
+    Buffer<uint8_t> deleted_mask; // (N,), optional soft-delete mask
 
     // Canonical quantized LOD pool (core/rad_pool_quant.hpp). When quant_pool is
     // set, sh0/shN/rotations/scaling_raw/opacity_raw hold the packed formats

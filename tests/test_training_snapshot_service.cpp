@@ -278,6 +278,62 @@ namespace {
             std::string::npos);
     }
 
+    // Fails if the gate defers without asking for memory, asks for the wrong
+    // amount, or ignores memory the callback released.
+    TEST_F(TrainingSnapshotServiceTest,
+           HostMemoryGateAsksForTheShortfallBeforeDeferring) {
+        constexpr std::size_t GAUSSIAN_COUNT = 8192;
+        constexpr std::uint64_t GIB = 1024ull * 1024 * 1024;
+        auto params = make_snapshot_test_params(GAUSSIAN_COUNT);
+        auto model = make_snapshot_test_splat(GAUSSIAN_COUNT);
+        lfs::training::MCMC strategy(*model);
+        strategy.initialize(params.optimization);
+
+        std::ostringstream reference_stream(std::ios::binary | std::ios::out);
+        const auto reference = lfs::training::serialize_checkpoint(
+            reference_stream, 500, strategy, params, nullptr, nullptr, nullptr, nullptr);
+        ASSERT_TRUE(reference.has_value())
+            << lfs::format_for_developer(reference.error());
+
+        const auto checkpoint_bytes = reference->bytes;
+        const ScopedEnvironmentVariable total_memory(
+            "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_TOTAL_BYTES", std::to_string(16 * GIB));
+        ScopedEnvironmentVariable available_memory(
+            "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
+            std::to_string(checkpoint_bytes + GIB));
+
+        lfs::training::TrainingSnapshotService service({
+            .ring_slots = 4,
+            .band_bytes = 64 * 1024,
+            .calibration_bytes = 64,
+            .calibration_iterations = 4,
+        });
+        lfs::training::TrainingSnapshotCaptureRequest request{
+            .iteration = 500,
+            .strategy = strategy,
+            .params = params,
+        };
+        ASSERT_TRUE(service.initialize(request));
+
+        std::uint64_t requested_bytes = 0;
+        request.release_host_memory = [&](const std::uint64_t bytes) -> std::uint64_t {
+            requested_bytes = bytes;
+            available_memory.set(std::to_string(checkpoint_bytes + 4 * GIB));
+            return bytes;
+        };
+        auto released_autosave = service.prepare(request);
+        ASSERT_TRUE(released_autosave.has_value())
+            << lfs::format_for_developer(released_autosave.error());
+        EXPECT_EQ(requested_bytes, 3 * GIB);
+
+        available_memory.set(std::to_string(checkpoint_bytes + GIB));
+        request.release_host_memory = [](std::uint64_t) -> std::uint64_t { return 0; };
+        auto deferred_autosave = service.prepare(request);
+        ASSERT_FALSE(deferred_autosave.has_value());
+        EXPECT_NE(lfs::format_for_developer(deferred_autosave.error()).find("deferred"),
+                  std::string::npos);
+    }
+
     TEST_F(TrainingSnapshotServiceTest,
            CapturesByteExactLfkpAndOwnsPostResumeBytes) {
         const ScopedEnvironmentVariable pinned_host_memory(
