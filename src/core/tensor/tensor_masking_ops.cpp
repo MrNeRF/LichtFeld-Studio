@@ -118,14 +118,15 @@ namespace lfs::core {
         }
 
         void assert_async_index_tensor(const Tensor& indices, size_t upper_bound,
-                                       std::string_view operation, bool check_bounds) {
+                                       std::string_view operation, bool check_bounds,
+                                       const bool allow_negative = false) {
 #ifdef NDEBUG
             if (indices.device() == Device::GPU) {
                 assert_index_tensor_host_only(indices, upper_bound, operation);
                 return;
             }
 #endif
-            assert_index_tensor(indices, upper_bound, operation, check_bounds);
+            assert_index_tensor(indices, upper_bound, operation, check_bounds, allow_negative);
         }
 
         Tensor index_cast(const Tensor& indices, const Tensor& consumer, size_t extent, BoundaryMode mode = BoundaryMode::Assert) {
@@ -1462,42 +1463,61 @@ namespace lfs::core {
         // Check if this is row-wise assignment (idx is 1D, vals is multi-dimensional)
         // Example: tensor[indices] = values where tensor:[N,M], indices:[K], values:[K,M]
         const bool is_row_assignment = (idx_same_device.ndim() == 1 && vals_same_device.ndim() >= 2 && ndim() >= 2);
+        // GPU scatters check their targets in the index kernels, as
+        // index_copy_ does; the host path validates the indices up front.
+        const bool gpu_scatter = device_ == Device::GPU && (dtype_ == DataType::Float32 ||
+                                                           dtype_ == DataType::Int32 || dtype_ == DataType::Bool);
         if (is_row_assignment) {
             std::vector<size_t> expected_shape = shape_.dims();
             expected_shape[0] = idx.numel();
             LFS_ASSERT_MSG(vals.shape() == TensorShape(expected_shape),
-                           "index_put_ row values do not match the indexed destination rows");
-            assert_index_tensor(idx, shape_[0], "index_put_", true);
+                           std::format("index_put_ row values must be {} (values={})",
+                                       TensorShape(expected_shape).str(), vals.shape().str()));
+            if (gpu_scatter)
+                assert_async_index_tensor(idx, shape_[0], "index_put_", true);
+            else
+                assert_index_tensor(idx, shape_[0], "index_put_", true);
         } else {
             LFS_ASSERT_MSG(vals.numel() == idx.numel(),
-                           "index_put_ requires one value per flat index");
-            assert_index_tensor(idx, numel(), "index_put_", true, true);
+                           std::format("index_put_ requires one value per flat index (indices={}, values={})",
+                                       idx.numel(), vals.numel()));
+            if (gpu_scatter)
+                assert_async_index_tensor(idx, numel(), "index_put_", true, true);
+            else
+                assert_index_tensor(idx, numel(), "index_put_", true, true);
         }
 
-        // Fast path: use GPU kernel for row assignment on GPU (avoids CPU roundtrip)
-        if (device_ == Device::GPU && is_row_assignment && dtype_ == DataType::Float32) {
-            // Verify shape compatibility: vals should be [K, d1, d2, ...]
-            std::vector<size_t> expected_shape = shape_.dims();
-            expected_shape[0] = idx_same_device.numel();
-            if (vals_same_device.shape() == TensorShape(expected_shape)) {
-                // Convert indices to Int32 if needed (index_copy_ requires Int32)
-                Tensor idx_int32 = (idx_same_device.dtype() == DataType::Int32)
-                                       ? idx_same_device
-                                       : idx_same_device.to(DataType::Int32);
-                pin_operands({this, &idx_int32, &vals_same_device});
-                const cudaStream_t execution_stream =
-                    prepare_inputs_for_stream(
-                        {this, &idx_int32, &vals_same_device}, stream());
-                internal::backend_ops_for(*this).index_copy(
-                    internal::storage_ref(*this), internal::storage_ref(idx_int32),
-                    internal::storage_ref(vals_same_device), internal::strided_layout(*this),
-                    internal::IndexProgram{
-                        .dim = 0,
-                        .index_size = idx_int32.numel(),
-                    },
-                    internal::ExecContext{execution_stream});
-                return *this;
+        // The backends' index_copy scatters rows, and single elements of a
+        // flat view. Duplicate targets keep the last value on Vulkan and
+        // Metal; CUDA keeps any one of them. Int64 destinations, which CUDA's
+        // index_copy lacks, stay on the host path below.
+        if (gpu_scatter) {
+            LFS_ASSERT_MSG(numel() <= static_cast<size_t>(std::numeric_limits<int32_t>::max()),
+                           std::format("index_put_ addresses its destination in int32 (numel={})", numel()));
+            Tensor idx_int32 = (idx_same_device.dtype() == DataType::Int32)
+                                   ? idx_same_device
+                                   : idx_same_device.to(DataType::Int32);
+            Tensor destination = *this;
+            Tensor source = vals_same_device;
+            if (!is_row_assignment) {
+                // Flat positions, negative ones counted from the end.
+                const int wrap = static_cast<int>(numel());
+                idx_int32 = Tensor::where(idx_int32.lt(0), idx_int32.add(wrap), idx_int32).reshape({-1});
+                destination = reshape({-1});
+                source = vals_same_device.reshape({-1});
             }
+            pin_operands({&destination, &idx_int32, &source});
+            const cudaStream_t execution_stream =
+                prepare_inputs_for_stream({&destination, &idx_int32, &source}, stream());
+            internal::backend_ops_for(*this).index_copy(
+                internal::storage_ref(destination), internal::storage_ref(idx_int32),
+                internal::storage_ref(source), internal::strided_layout(destination),
+                internal::IndexProgram{
+                    .dim = 0,
+                    .index_size = idx_int32.numel(),
+                },
+                internal::ExecContext{execution_stream});
+            return *this;
         }
 
         // Helper lambda for index_put_ implementation (fallback path)

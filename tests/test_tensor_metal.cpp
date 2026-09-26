@@ -492,6 +492,53 @@ namespace {
         expect_close(to_metal(line).index_select(0, to_metal(fine)), line.index_select(0, fine), 0.0f, 0.0f);
     }
 
+    TEST_F(TensorMetal, IndexPutMatchesCpu) {
+        // Flat puts into 2D destinations with negative and duplicate indices
+        // (the last value wins), and row puts, for every scattered dtype.
+        const Tensor flat_indices = Tensor::from_vector(std::vector<int>{3, -1, 7, 3, -12, 0}, {6}, Device::CPU);
+        const Tensor row_indices = Tensor::from_vector(std::vector<int>{2, 0, 2}, {3}, Device::CPU);
+        const Tensor base = random_tensor(4 * 3, -5.0f, 5.0f, 90).reshape({4, 3});
+        const Tensor flat_values = random_tensor(6, -5.0f, 5.0f, 91);
+        const Tensor row_values = random_tensor(3 * 3, -5.0f, 5.0f, 92).reshape({3, 3});
+        for (const auto dtype : {DataType::Float32, DataType::Int32, DataType::Bool}) {
+            SCOPED_TRACE(static_cast<int>(dtype));
+            const auto as = [&](const Tensor& t) { return dtype == DataType::Bool ? t.gt(0.0f) : t.to(dtype); };
+            for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+                if (!gpu_backend_available(backend))
+                    continue;
+                SCOPED_TRACE(static_cast<int>(backend));
+                Tensor expected = as(base).clone();
+                expected.index_put_(flat_indices, as(flat_values));
+                GpuBackendScope scope(backend);
+                Tensor actual = as(base).to(Device::GPU);
+                actual.index_put_(flat_indices.to(Device::GPU), as(flat_values).to(Device::GPU));
+                expect_close(actual.to(DataType::Float32), expected.to(DataType::Float32), 0.0f, 0.0f);
+
+                Tensor expected_rows = as(base).clone();
+                expected_rows.index_put_(row_indices, as(row_values));
+                Tensor actual_rows = as(base).to(Device::GPU);
+                actual_rows.index_put_(row_indices.to(Device::GPU), as(row_values).to(Device::GPU));
+                expect_close(actual_rows.to(DataType::Float32), expected_rows.to(DataType::Float32), 0.0f, 0.0f);
+            }
+        }
+        // Out-of-range targets fault in the index kernels and surface when
+        // the result is read.
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            SCOPED_TRACE(static_cast<int>(backend));
+            GpuBackendScope scope(backend);
+            Tensor destination = Tensor::zeros({4, 3}, Device::GPU);
+            const Tensor outside = Tensor::from_vector(std::vector<int>{1, 12}, {2}, Device::CPU).to(Device::GPU);
+            EXPECT_THROW(
+                {
+                    destination.index_put_(outside, Tensor::ones({2}, Device::GPU));
+                    (void)destination.cpu();
+                },
+                std::exception);
+        }
+    }
+
     TEST_F(TensorMetal, ScattersMatchCpu) {
         constexpr size_t count = 4099;
         const Tensor base = random_tensor(count, -5.0f, 5.0f, 53);
