@@ -28,6 +28,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <set>
 #include <cmath>
 #include <cstring>
 #include <functional>
@@ -1111,6 +1112,32 @@ namespace {
         const Tensor weights = random_tensor(50, 0.0f, 2.0f, 64);
         compare([&] { return Tensor::multinomial(weights.to(Device::GPU), 200, true); }, 0.0f);
         compare([&] { return Tensor::multinomial(weights.to(Device::GPU), 20, false); }, 0.0f);
+        // Many blocks of running sums, zero weights among them, and more draws
+        // than a single block of threads.
+        std::vector<float> wide = random_tensor(300007, 0.0f, 1.0f, 65).to_vector();
+        for (size_t i = 0; i < wide.size(); i += 3)
+            wide[i] = 0.0f;
+        const Tensor many = Tensor::from_vector(wide, {wide.size()}, Device::CPU);
+        compare([&] { return Tensor::multinomial(many.to(Device::GPU), 5000, true); }, 0.0f);
+        compare([&] { return Tensor::multinomial(many.to(Device::GPU), 3000, false); }, 0.0f);
+        // Draws follow the weights, and never pick a zero weight.
+        const Tensor skewed = Tensor::from_vector({1.0f, 0.0f, 3.0f, 6.0f}, {4}, Device::CPU);
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            const auto picks = draw(backend, [&] { return Tensor::multinomial(skewed.to(Device::GPU), 100000, true); })
+                                   .to_vector_int64();
+            std::array<size_t, 4> counts{};
+            for (const int64_t pick : picks)
+                ++counts[static_cast<size_t>(pick)];
+            EXPECT_EQ(counts[1], 0u);
+            EXPECT_NEAR(counts[0] / 100000.0, 0.1, 0.01);
+            EXPECT_NEAR(counts[2] / 100000.0, 0.3, 0.01);
+            EXPECT_NEAR(counts[3] / 100000.0, 0.6, 0.01);
+            const auto distinct = draw(backend, [&] { return Tensor::multinomial(many.to(Device::GPU), 3000, false); })
+                                      .to_vector_int64();
+            EXPECT_EQ(std::set<int64_t>(distinct.begin(), distinct.end()).size(), distinct.size());
+            for (const int64_t pick : distinct)
+                EXPECT_NE(pick % 3, 0) << pick;
+        }
 
         const Tensor uniform = draw(GpuBackend::Metal, [] { return Tensor::rand({100000}, Device::GPU); });
         EXPECT_NEAR(uniform.mean().item(), 0.5f, 0.01f);
