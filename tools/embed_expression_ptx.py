@@ -18,6 +18,7 @@ if not args.ptx:
              *args.tensor.glob('expression_*.cpp'), *args.tensor.glob('internal/expression_*.hpp'),
              *args.tensor.glob('backend/cuda/*expression*.cpp'),
              *args.tensor.glob('backend/vulkan/*expression*.cpp'),
+             *args.tensor.glob('backend/metal/*expression*.cpp'),
              args.tensor / 'backend/vulkan/spirv_module.cpp'}
     hash_value = hashlib.sha256()
     for path in sorted(paths):
@@ -59,6 +60,7 @@ paths = {args.ptx, Path(__file__), ops_header,
          *args.tensor.glob('expression_*.cpp'), *args.tensor.glob('internal/expression_*.hpp'),
          *args.tensor.glob('backend/cuda/*expression*.cpp'),
          *args.tensor.glob('backend/vulkan/*expression*.cpp'),
+         *args.tensor.glob('backend/metal/*expression*.cpp'),
          args.tensor / 'backend/vulkan/spirv_module.cpp'}
 hash_value = hashlib.sha256()
 for path in sorted(paths):
