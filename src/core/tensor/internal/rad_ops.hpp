@@ -8,4 +8,6 @@ namespace lfs::core::internal {
     void cuda_rad_page_quantize(const RadPageSources&, const RadPagePool&, uint32_t);
     void vulkan_rad_page_dequant(const Tensor&, const RadPagePool&, uint32_t);
     void vulkan_rad_page_quantize(const RadPageSources&, const RadPagePool&, uint32_t);
+    void metal_rad_page_dequant(const Tensor&, const RadPagePool&, uint32_t);
+    void metal_rad_page_quantize(const RadPageSources&, const RadPagePool&, uint32_t);
 } // namespace lfs::core::internal

@@ -62,6 +62,14 @@ namespace lfs::core {
 #endif
             return;
         }
+        if (gpu_backend_of(packed) == GpuBackend::Metal) {
+#if LFS_TENSOR_METAL
+            internal::metal_rad_page_dequant(packed, pool, page);
+#else
+            throw std::runtime_error("Metal tensor backend not built");
+#endif
+            return;
+        }
 #if LFS_HAS_CUDA
         internal::cuda_rad_page_dequant(packed, desc, pool, page);
 #else
@@ -97,6 +105,14 @@ namespace lfs::core {
             internal::vulkan_rad_page_quantize(src, pool, page);
 #else
             throw std::runtime_error("Vulkan tensor backend not built");
+#endif
+            return;
+        }
+        if (backend == GpuBackend::Metal) {
+#if LFS_TENSOR_METAL
+            internal::metal_rad_page_quantize(src, pool, page);
+#else
+            throw std::runtime_error("Metal tensor backend not built");
 #endif
             return;
         }

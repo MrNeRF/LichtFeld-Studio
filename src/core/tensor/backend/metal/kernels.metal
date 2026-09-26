@@ -2869,6 +2869,351 @@ kernel void sh_encode(constant ShParams& p [[buffer(0)]], uint group [[threadgro
 }
 
 // ---------------------------------------------------------------------------
+// RAD LOD pages, ported from rad_page.slang with the radmath formulas of
+// rad_dequant_math.hpp. The pool keeps float16 halves, so each step that can
+// move a value across a half rounding boundary follows the Slang arithmetic:
+// halves flush to zero, byte fractions multiply by rounded reciprocals and
+// rotation divisions multiply by a correctly rounded reciprocal. kOp is the
+// phase: 0 dequantizes a packed page, 1 clears the SH maxima of a resident
+// page, 2 reduces them and 3 quantizes the resident page.
+
+struct RadPackedProperty {
+    uint kind, encoding, plane_offset, plane_bytes;
+    float min_val, max_val, scale;
+};
+
+struct RadPagePackedDesc {
+    uint count, sh_coeffs_rest, lod_opacity, property_count;
+    uint meta_bounds_offset, meta_links_offset, meta_node_count, used_bytes, chunk, reserved[3];
+    float bbox_min[3], bbox_extent[3], log_size_min, log_size_range;
+    RadPackedProperty props[8];
+};
+
+struct RadSources {
+    device const float* means;
+    device const float* sh0;
+    device const uchar* shN;
+    device const float* rotation;
+    device const float* scaling;
+    device const float* opacity;
+    device const float* sh_bounds;
+    uint offset, count, rest, half_sh, quant_sh, padding;
+};
+
+struct RadPageParams {
+    device uint* means;
+    device uint* sh0;
+    device uint* shN;
+    device uint* rotation;
+    device uint* scaling;
+    device uint* opacity;
+    device uint* frames;
+    device uint* bounds;
+    device uint* links;
+    device const uchar* packed;
+    device const RadPagePackedDesc* descriptor;
+    uint page, page_splats, slots, padding;
+    RadSources sources;
+};
+
+static float rad_half_to_float(uint value) {
+    const uint sign = (value >> 15) & 1u;
+    uint exponent = (value >> 10) & 0x1fu;
+    uint mantissa = value & 0x3ffu;
+    uint bits;
+    if (exponent == 0u) {
+        if (mantissa == 0u) {
+            bits = sign << 31;
+        } else {
+            int shift = 0;
+            while ((mantissa & 0x400u) == 0u) {
+                mantissa <<= 1;
+                ++shift;
+            }
+            exponent = uint(1 - shift);
+            bits = (sign << 31) | ((exponent + 127u - 15u) << 23) | ((mantissa & 0x3ffu) << 13);
+        }
+    } else if (exponent == 0x1fu) {
+        bits = (sign << 31) | (0xffu << 23) | (mantissa << 13);
+    } else {
+        bits = (sign << 31) | ((exponent + 127u - 15u) << 23) | (mantissa << 13);
+    }
+    return as_type<float>(bits);
+}
+
+// Round to nearest even with flush to zero, like the RAD file encoder.
+static uint rad_float_to_half(float value) {
+    const uint bits = as_type<uint>(value);
+    const uint sign = (bits >> 31) & 1u;
+    const uint exponent = (bits >> 23) & 0xffu;
+    const uint mantissa = bits & 0x7fffffu;
+    if (exponent == 0u)
+        return sign << 15;
+    if (exponent == 0xffu)
+        return (sign << 15) | 0x7c00u | (mantissa >> 13);
+    const int biased = int(exponent) - 127 + 15;
+    if (biased >= 31)
+        return (sign << 15) | 0x7c00u;
+    if (biased <= 0)
+        return sign << 15;
+    uint half_mantissa = mantissa >> 13;
+    if ((mantissa & 0x1fffu) > 0x1000u || ((mantissa & 0x1fffu) == 0x1000u && (half_mantissa & 1u) != 0u))
+        ++half_mantissa;
+    return (sign << 15) + (uint(biased) << 10) + half_mantissa;
+}
+
+static uint rad_pair(float a, float b) { return rad_float_to_half(a) | (rad_float_to_half(b) << 16); }
+
+static float rad_at_least(float v, float lo) { return v < lo ? lo : v; }
+
+static float rad_byte_fraction(uint value, uint denominator) {
+    return float(value) * as_type<float>(denominator == 255u ? 0x3b808081u : 0x3c010204u);
+}
+
+// The comparisons of the shared formulas, so NaN ranges resolve the same way.
+static float rad_max_abs(RadPackedProperty p) {
+    float m = abs(p.min_val);
+    if (abs(p.max_val) > m)
+        m = abs(p.max_val);
+    if (abs(p.scale) > m)
+        m = abs(p.scale);
+    return m > 1e-6f ? m : 1e-6f;
+}
+
+static float rad_rotation_reciprocal(float value) {
+    float reciprocal = 1.0f / value;
+    reciprocal = fma(fma(-value, reciprocal, 1.0f), reciprocal, reciprocal);
+    const float error = fma(-value, reciprocal, 1.0f);
+    if (error == 0.0f)
+        return reciprocal;
+    const uint bits = as_type<uint>(reciprocal);
+    const float adjacent = as_type<float>(error > 0.0f ? bits + 1u : bits - 1u);
+    const float midpoint = value * (abs(adjacent - reciprocal) * 0.5f);
+    return abs(error) > midpoint || (abs(error) == midpoint && (bits & 1u) != 0u) ? adjacent : reciprocal;
+}
+
+static float4 rad_quat_oct88(uint b0, uint b1, uint b2) {
+    float oct_x = rad_byte_fraction(b0, 255u) * 2.0f - 1.0f;
+    float oct_y = rad_byte_fraction(b1, 255u) * 2.0f - 1.0f;
+    const float oct_z = 1.0f - abs(oct_x) - abs(oct_y);
+    if (oct_z < 0.0f) {
+        const float x = oct_x;
+        oct_x = (1.0f - abs(oct_y)) * (oct_x >= 0.0f ? 1.0f : -1.0f);
+        oct_y = (1.0f - abs(x)) * (oct_y >= 0.0f ? 1.0f : -1.0f);
+    }
+    float3 axis = float3(oct_x, oct_y, oct_z);
+    const float length = sqrt(axis.x * axis.x + axis.y * axis.y + axis.z * axis.z);
+    if (length > 0.0f)
+        axis *= rad_rotation_reciprocal(length);
+    const float half_theta = rad_byte_fraction(b2, 255u) * M_PI_F * 0.5f;
+    float4 q = float4(axis * sin(half_theta), cos(half_theta));
+    const float norm = sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+    if (norm > 0.0f)
+        q *= rad_rotation_reciprocal(norm);
+    if ((rad_float_to_half(q.x) & 0x7fffu) == 0u)
+        q.x = as_type<float>(b0 < 128u ? 0x80000000u : 0u);
+    if ((rad_float_to_half(q.y) & 0x7fffu) == 0u)
+        q.y = as_type<float>(b1 < 128u ? 0x80000000u : 0u);
+    return q;
+}
+
+static uint rad_property(device const RadPagePackedDesc& d, uint kind) {
+    for (uint p = 0; p < d.property_count; ++p) {
+        if (d.props[p].kind == kind)
+            return p;
+    }
+    return 8;
+}
+
+static float rad_plane(constant RadPageParams& p, device const RadPagePackedDesc& d, uint prop, uint dims,
+                       uint component, uint i) {
+    if (prop == 8 || i >= d.count)
+        return 0.0f;
+    const RadPackedProperty a = d.props[prop];
+    device const uchar* base = p.packed + a.plane_offset;
+    const uint e = component * d.count + i, stride = d.count * dims;
+    switch (a.encoding) {
+    case 0: return ((device const float*)base)[e];
+    case 1: return as_type<float>(uint(base[e]) | uint(base[stride + e]) << 8 | uint(base[2 * stride + e]) << 16 |
+                                  uint(base[3 * stride + e]) << 24);
+    case 2: return rad_half_to_float(((device const ushort*)base)[e]);
+    case 3: return rad_half_to_float(uint(base[e]) | uint(base[stride + e]) << 8);
+    case 4: return fma(rad_byte_fraction(base[e], 255u), a.max_val - a.min_val, a.min_val);
+    case 5: {
+        const int v = base[e] >= 128 ? int(base[e]) - 256 : int(base[e]);
+        return (v < 0 ? -rad_byte_fraction(uint(-v), 127u) : rad_byte_fraction(uint(v), 127u)) * rad_max_abs(a);
+    }
+    case 6: return base[e] == 0 ? 0.0f : exp(a.min_val + float(base[e] - 1) * (a.max_val - a.min_val) / 254.0f);
+    case 7: return exp(rad_half_to_float(((device const ushort*)base)[e]));
+    default: return 0.0f;
+    }
+}
+
+static uint rad_quantize(float v, float max_abs) { return uint(int(clamp(rint(v / max_abs * 127.0f), -127.0f, 127.0f))) & 255u; }
+
+static ulong rad_sh_index(constant RadPageParams& p, uint i, uint slot) {
+    return ((ulong(p.page) * p.page_splats + i) / 32 * p.slots + slot) * 32 + i % 32;
+}
+
+static float rad_resident_sh(constant RadSources& s, uint i, uint c) {
+    const uint splat = s.offset + i;
+    if (s.quant_sh != 0) {
+        const float lo = s.sh_bounds[splat / 256 * 2], hi = s.sh_bounds[splat / 256 * 2 + 1];
+        const uint cell = splat / 32 * (s.rest * 3 * 32) + c * 32 + splat % 32;
+        return lo + (hi - lo) * (float(((device const ushort*)s.shN)[cell]) * (1.0f / 65535.0f));
+    }
+    const uint index = ((splat / 32 * ((s.rest * 3 + 3) / 4) + c / 4) * 32 + splat % 32) * 4 + c % 4;
+    return s.half_sh != 0 ? rad_half_to_float(((device const ushort*)s.shN)[index])
+                          : ((device const float*)s.shN)[index];
+}
+
+static uint rad_band(uint c) { return c < 9 ? 0 : (c < 24 ? 1 : 2); }
+
+kernel void rad_page(constant RadPageParams& p [[buffer(0)]], uint i [[thread_position_in_grid]]) {
+    if (i >= p.page_splats)
+        return;
+    const ulong dst = ulong(p.page) * p.page_splats + i;
+    device uint* frame = p.frames + ulong(p.page) * 16;
+    if (kOp != 0) {
+        constant RadSources& s = p.sources;
+        if (kOp == 1) {
+            if (i < 4)
+                frame[i] = 0;
+            return;
+        }
+        if (kOp == 2) {
+            if (i >= s.count || !s.shN)
+                return;
+            float maxima[3] = {0, 0, 0};
+            for (uint c = 0; c < s.rest * 3; ++c)
+                maxima[rad_band(c)] = max(maxima[rad_band(c)], abs(rad_resident_sh(s, i, c)));
+            for (uint b = 0; b < 3; ++b)
+                atomic_fetch_max_explicit((device atomic_uint*)frame + b, as_type<uint>(maxima[b]),
+                                          memory_order_relaxed);
+            return;
+        }
+        const bool live = i < s.count;
+        const uint row = s.offset + i;
+        for (uint c = 0; c < 3; ++c)
+            p.means[dst * 3 + c] = live ? as_type<uint>(s.means[row * 3 + c]) : 0;
+        const float3 rgb = live ? float3(s.sh0[row * 3], s.sh0[row * 3 + 1], s.sh0[row * 3 + 2]) : 0;
+        const float3 scale = live ? float3(s.scaling[row * 3], s.scaling[row * 3 + 1], s.scaling[row * 3 + 2]) : 0;
+        p.sh0[dst * 2] = rad_pair(rgb.x, rgb.y);
+        p.sh0[dst * 2 + 1] = rad_pair(rgb.z, 0);
+        p.scaling[dst * 2] = rad_pair(scale.x, scale.y);
+        p.scaling[dst * 2 + 1] = rad_pair(scale.z, 0);
+        float4 q = float4(1, 0, 0, 0);
+        if (live)
+            q = float4(s.rotation[row * 4], s.rotation[row * 4 + 1], s.rotation[row * 4 + 2], s.rotation[row * 4 + 3]);
+        p.rotation[dst * 2] = rad_pair(q.x, q.y);
+        p.rotation[dst * 2 + 1] = rad_pair(q.z, q.w);
+        // One thread owns a whole opacity word, odd tails included.
+        if ((i & 1) == 0)
+            p.opacity[dst / 2] = rad_pair(live ? s.opacity[row] : 0, i + 1 < s.count ? s.opacity[row + 1] : 0);
+        for (uint slot = 0; slot < p.slots; ++slot) {
+            uint packed = 0;
+            for (uint b = 0; b < 4; ++b) {
+                const uint c = slot * 4 + b;
+                if (live && s.shN && c < s.rest * 3)
+                    packed |= rad_quantize(rad_resident_sh(s, i, c), max(as_type<float>(frame[rad_band(c)]), 1e-6f))
+                              << (b * 8);
+            }
+            p.shN[rad_sh_index(p, i, slot)] = packed;
+        }
+        return;
+    }
+    device const RadPagePackedDesc& d = *p.descriptor;
+    const bool live = i < d.count;
+    const uint xyz = rad_property(d, 0), alpha = rad_property(d, 1), rgb = rad_property(d, 2);
+    const uint scales = rad_property(d, 3), rot = rad_property(d, 4);
+    if (i == 0) {
+        for (uint b = 0; b < 16; ++b)
+            frame[b] = 0;
+        for (uint b = 0; b < 3; ++b) {
+            const uint prop = rad_property(d, 5 + b);
+            frame[b] = as_type<uint>(prop < 8 ? rad_max_abs(d.props[prop]) : 0.0f);
+            frame[4 + b] = as_type<uint>(d.bbox_min[b]);
+            frame[8 + b] = as_type<uint>(d.bbox_extent[b]);
+        }
+        frame[7] = as_type<uint>(d.log_size_min);
+        frame[11] = as_type<uint>(d.log_size_range);
+    }
+    for (uint c = 0; c < 3; ++c)
+        p.means[dst * 3 + c] = as_type<uint>(rad_plane(p, d, xyz, 3, c, i));
+    float sh[3] = {0, 0, 0};
+    uint sc[3] = {0, 0, 0};
+    if (live) {
+        for (uint c = 0; c < 3; ++c) {
+            if (rgb < 8)
+                sh[c] = (rad_plane(p, d, rgb, 3, c, i) - 0.5f) / 0.28209479177387814f;
+            if (scales < 8)
+                sc[c] = d.props[scales].encoding == 7
+                            ? ((device const ushort*)(p.packed + d.props[scales].plane_offset))[c * d.count + i]
+                            : rad_float_to_half(log(rad_at_least(rad_plane(p, d, scales, 3, c, i), 1.0e-8f)));
+        }
+    }
+    p.sh0[dst * 2] = rad_pair(sh[0], sh[1]);
+    p.sh0[dst * 2 + 1] = rad_pair(sh[2], 0);
+    p.scaling[dst * 2] = sc[0] | (sc[1] << 16);
+    p.scaling[dst * 2 + 1] = sc[2];
+    if ((i & 1) == 0) {
+        uint packed = 0;
+        for (uint b = 0; b < 2; ++b) {
+            float v = 0;
+            if (i + b < d.count && alpha < 8) {
+                const float raw = rad_plane(p, d, alpha, 1, 0, i + b);
+                if (d.lod_opacity != 0) {
+                    v = rad_at_least(raw, 0.0f);
+                } else {
+                    const float a = raw > 1.0f - 1.0e-6f ? 1.0f - 1.0e-6f : rad_at_least(raw, 1.0e-6f);
+                    v = log(a / (1.0f - a));
+                }
+            }
+            packed |= rad_float_to_half(v) << (b * 16);
+        }
+        p.opacity[dst / 2] = packed;
+    }
+    float4 q = float4(0, 0, 0, 1);
+    if (live && rot < 8) {
+        if (d.props[rot].encoding == 8) {
+            device const uchar* base = p.packed + d.props[rot].plane_offset;
+            q = rad_quat_oct88(base[i * 3], base[i * 3 + 1], base[i * 3 + 2]);
+        } else {
+            q.xyz = float3(rad_plane(p, d, rot, 3, 0, i), rad_plane(p, d, rot, 3, 1, i), rad_plane(p, d, rot, 3, 2, i));
+            const float w2 = 1.0f - q.x * q.x - q.y * q.y - q.z * q.z;
+            q.w = sqrt(w2 > 0.0f ? w2 : 0.0f);
+        }
+    }
+    p.rotation[dst * 2] = rad_pair(q.w, q.x);
+    p.rotation[dst * 2 + 1] = rad_pair(q.y, q.z);
+    for (uint slot = 0; slot < p.slots; ++slot) {
+        uint packed = 0;
+        for (uint b = 0; b < 4; ++b) {
+            const uint c = slot * 4 + b;
+            if (!live || c >= d.sh_coeffs_rest * 3)
+                continue;
+            const uint band = rad_band(c), local = c - (band == 0 ? 0 : (band == 1 ? 9 : 24));
+            const uint prop = rad_property(d, 5 + band);
+            if (prop < 8) {
+                const RadPackedProperty a = d.props[prop];
+                const uint v = a.encoding == 5 ? uint(p.packed[a.plane_offset + local * d.count + i])
+                                               : rad_quantize(rad_plane(p, d, prop, 9 + band * 6, local, i), rad_max_abs(a));
+                packed |= v << (b * 8);
+            }
+        }
+        p.shN[rad_sh_index(p, i, slot)] = packed;
+    }
+    if (p.bounds && p.links) {
+        device const uint* bounds = (device const uint*)(p.packed + d.meta_bounds_offset);
+        device const uint* links = (device const uint*)(p.packed + d.meta_links_offset);
+        for (uint c = 0; c < 2; ++c)
+            p.bounds[dst * 2 + c] = i < d.meta_node_count ? bounds[i * 2 + c] : 0;
+        for (uint c = 0; c < 3; ++c)
+            p.links[dst * 3 + c] = i < d.meta_node_count ? links[i * 3 + c] : 0xffffffffu;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Kernels of the portable neural-network ops, ported from inference.slang.
 // kOp is the InferenceKernel: im2col, col2im, resize, pool, activation, grid.
 

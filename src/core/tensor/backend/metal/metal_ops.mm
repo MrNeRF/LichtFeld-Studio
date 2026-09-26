@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "../../internal/point_filter.hpp"
+#include "../../internal/rad_ops.hpp"
 #include "../export_pipeline.hpp"
 #include "../facade_trace.hpp"
 #include "../readback_buffer.hpp"
@@ -2370,6 +2371,78 @@ namespace lfs::core::internal {
         };
         const std::array uses{scales, rotations, out_scales, out_rotations};
         dispatch_addressed(*context, uses, context->pipeline("affine_splat_geometry"), params, n);
+    }
+
+    namespace {
+        // The layouts of RadPageParams and RadPagePackedDesc in kernels.metal.
+        struct RadPageParams {
+            std::array<uint64_t, 9> regions{};
+            uint64_t packed = 0, descriptor = 0;
+            uint32_t page = 0, page_splats = 0, slots = 0, padding = 0;
+            struct {
+                uint64_t means, sh0, shN, rotation, scaling, opacity, sh_bounds;
+                uint32_t offset, count, rest, half_sh, quant_sh, padding;
+            } sources{};
+        };
+        static_assert(sizeof(RadPageParams) == 184 && sizeof(RadPagePackedDesc) == 304);
+
+        // Runs rad_page phases over one pool page; the kernel reaches the pool
+        // regions through the parameters.
+        API_AVAILABLE(macos(26.0))
+        void encode_rad_page(Context& context, RadPageParams params, const RadPagePool& pool,
+                             std::vector<StorageRef> uses, const std::initializer_list<uint32_t> phases) {
+            params.page_splats = pool.page_splats;
+            params.slots = pool.sh_slots;
+            for (size_t i = 0; i < pool.regions.size(); ++i) {
+                if (pool.regions[i].is_valid()) {
+                    uses.push_back(storage_ref(pool.regions[i]));
+                    params.regions[i] = address_of(context, uses.back());
+                }
+            }
+            for (const uint32_t phase : phases)
+                dispatch_addressed(context, uses, context.pipeline("rad_page", {{0, phase}}), params, pool.page_splats);
+        }
+    } // namespace
+
+    void metal_rad_page_dequant(const Tensor& packed, const RadPagePool& pool, const uint32_t page) {
+        if (@available(macOS 26.0, *)) {
+            const auto context = acquire_context();
+            const StorageRef input = storage_ref(packed);
+            const uint64_t descriptor = address_of(*context, input);
+            encode_rad_page(*context, {.packed = descriptor + sizeof(RadPagePackedDesc), .descriptor = descriptor, .page = page},
+                            pool, {input}, {0});
+        }
+    }
+
+    void metal_rad_page_quantize(const RadPageSources& src, const RadPagePool& pool, const uint32_t page) {
+        if (@available(macOS 26.0, *)) {
+            const auto context = acquire_context();
+            std::vector<StorageRef> uses;
+            // Absent attributes, such as the SH of degree-zero splats, have no storage.
+            const auto address = [&](const Tensor& tensor) {
+                if (!tensor.is_valid() || tensor.bytes() == 0)
+                    return uint64_t{0};
+                uses.push_back(storage_ref(tensor));
+                return address_of(*context, uses.back());
+            };
+            RadPageParams params{.page = page};
+            params.sources = {.means = address(src.means),
+                              .sh0 = address(src.sh0),
+                              .shN = src.sh_rest ? address(src.shN) : 0,
+                              .rotation = address(src.rotation),
+                              .scaling = address(src.scaling),
+                              .opacity = address(src.opacity),
+                              .sh_bounds = address(src.shN_bounds),
+                              .offset = src.offset,
+                              .count = src.count,
+                              .rest = src.sh_rest,
+                              .half_sh = src.shN.is_valid() && src.shN.dtype() == DataType::Float16,
+                              .quant_sh = src.sh_q16};
+            if (params.sources.shN)
+                encode_rad_page(*context, params, pool, std::move(uses), {1, 2, 3});
+            else
+                encode_rad_page(*context, params, pool, std::move(uses), {1, 3});
+        }
     }
 
     Tensor MetalBackendOps::image_undistort(const Tensor& input, const UndistortParams& p, const bool mask,

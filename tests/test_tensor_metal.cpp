@@ -5,6 +5,7 @@
 // reference or the Vulkan backend, and they must agree.
 
 #include "core/nn/ops.hpp"
+#include "core/rad_dequant_math.hpp"
 #include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/tensor.hpp"
@@ -18,6 +19,7 @@
 #include "core/tensor_image.hpp"
 #include "core/tensor_labels.hpp"
 #include "core/tensor_ppisp.hpp"
+#include "core/tensor_rad.hpp"
 #include "core/tensor_sh.hpp"
 #include "core/tensor_spatial.hpp"
 #include "core/tensor_splat.hpp"
@@ -26,6 +28,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <functional>
 #include <limits>
 #include <random>
@@ -1242,6 +1245,218 @@ namespace {
         expect_close(Tensor::from_vector(metal_cost, {metal_cost.size()}, Device::CPU),
                      Tensor::from_vector(vulkan_cost, {vulkan_cost.size()}, Device::CPU), 1.0e-5f, 1.0e-5f);
         expect_close(metal_rows, vulkan_rows, 1.0e-5f, 1.0e-5f);
+    }
+
+    // LOD pool pages: packed pages in every encoding, with metadata, both
+    // opacity modes and a partial page, then resident pages with float, half,
+    // Q16 and no SH. The pool stores half bits, so the backends must agree.
+    TEST_F(TensorMetal, RadPagesMatchVulkan) {
+        if (!gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP() << "No Vulkan device";
+        constexpr uint32_t splats = 65536, slots = 12;
+        std::mt19937 generator(101);
+        const auto random_bytes = [&](const size_t count) {
+            std::vector<uint8_t> bytes(count);
+            for (auto& byte : bytes)
+                byte = static_cast<uint8_t>(generator());
+            return bytes;
+        };
+        const auto float_bytes = [&](const size_t count, const float low, const float high, const bool half) {
+            std::uniform_real_distribution<float> distribution(low, high);
+            std::vector<uint8_t> bytes;
+            for (size_t i = 0; i < count; ++i) {
+                const float value = distribution(generator);
+                const uint16_t bits = radmath::floatToHalf(value);
+                const auto* source = half ? reinterpret_cast<const uint8_t*>(&bits) : reinterpret_cast<const uint8_t*>(&value);
+                bytes.insert(bytes.end(), source, source + (half ? 2 : 4));
+            }
+            return bytes;
+        };
+        // Byte-planar encodings keep byte k of every element in plane k.
+        const auto planar = [](const std::vector<uint8_t>& bytes, const size_t width) {
+            const size_t count = bytes.size() / width;
+            std::vector<uint8_t> result(bytes.size());
+            for (size_t e = 0; e < count; ++e)
+                for (size_t k = 0; k < width; ++k)
+                    result[k * count + e] = bytes[e * width + k];
+            return result;
+        };
+        struct Packet {
+            RadPagePackedDesc desc;
+            std::vector<uint8_t> planes;
+            void add(const RadPackedKind kind, const RadPackedEncoding encoding, const std::vector<uint8_t>& plane,
+                     const float low = 0.0f, const float high = 1.0f, const float scale = 1.0f) {
+                planes.resize((planes.size() + 15) & ~size_t{15});
+                desc.props[desc.property_count++] = {static_cast<uint32_t>(kind), static_cast<uint32_t>(encoding),
+                                                     static_cast<uint32_t>(planes.size()),
+                                                     static_cast<uint32_t>(plane.size()), low, high, scale};
+                planes.insert(planes.end(), plane.begin(), plane.end());
+                desc.used_bytes = static_cast<uint32_t>(planes.size());
+            }
+            Tensor tensor() const {
+                Tensor bytes = Tensor::empty({sizeof(desc) + planes.size()}, Device::CPU, DataType::UInt8);
+                std::memcpy(bytes.data_ptr(), &desc, sizeof(desc));
+                std::memcpy(static_cast<uint8_t*>(bytes.data_ptr()) + sizeof(desc), planes.data(), planes.size());
+                return bytes;
+            }
+        };
+        using Kind = RadPackedKind;
+        using Encoding = RadPackedEncoding;
+        std::vector<Packet> packets(3);
+        {
+            auto& p = packets[0];
+            const uint32_t n = p.desc.count = splats;
+            p.desc.sh_coeffs_rest = 15;
+            p.desc.frame = {{-3, 4, 2}, {2, 5, 8}, -4, 9};
+            p.add(Kind::Means, Encoding::F32, float_bytes(n * 3, -10, 10, false));
+            p.add(Kind::Alpha, Encoding::R8, random_bytes(n));
+            p.add(Kind::Sh0, Encoding::F16, float_bytes(n * 3, 0, 1, true));
+            p.add(Kind::Scales, Encoding::LnF16, float_bytes(n * 3, -6, 1, true));
+            // Every axis pair once, with the angles spread.
+            std::vector<uint8_t> rotation(n * 3);
+            for (uint32_t i = 0; i < n; ++i) {
+                rotation[i * 3] = i & 255;
+                rotation[i * 3 + 1] = i >> 8;
+                rotation[i * 3 + 2] = (i * 37) & 255;
+            }
+            p.add(Kind::Rotation, Encoding::Oct88R8, rotation);
+            p.add(Kind::Sh1, Encoding::S8, random_bytes(n * 9), -0.5f, 0.5f, 0.5f);
+            p.add(Kind::Sh2, Encoding::R8, random_bytes(n * 15), -0.3f, 0.4f);
+            p.add(Kind::Sh3, Encoding::F32, float_bytes(n * 21, -0.2f, 0.2f, false));
+            p.planes.resize((p.planes.size() + 15) & ~size_t{15});
+            p.desc.meta_node_count = n;
+            p.desc.meta_bounds_offset = static_cast<uint32_t>(p.planes.size());
+            p.desc.meta_links_offset = p.desc.meta_bounds_offset + n * 8;
+            const auto metadata = random_bytes(n * 20);
+            p.planes.insert(p.planes.end(), metadata.begin(), metadata.end());
+            p.desc.used_bytes = static_cast<uint32_t>(p.planes.size());
+        }
+        {
+            auto& p = packets[1];
+            const uint32_t n = p.desc.count = 40000;
+            p.desc.sh_coeffs_rest = 8;
+            p.desc.lod_opacity = 1;
+            p.add(Kind::Means, Encoding::F32LeBytes, planar(float_bytes(n * 3, -10, 10, false), 4));
+            p.add(Kind::Alpha, Encoding::F16LeBytes, planar(float_bytes(n, -0.5f, 1.5f, true), 2));
+            p.add(Kind::Sh0, Encoding::R8, random_bytes(n * 3));
+            p.add(Kind::Scales, Encoding::Ln0R8, random_bytes(n * 3), -8.0f, 2.0f);
+            p.add(Kind::Rotation, Encoding::F16, float_bytes(n * 3, -0.7f, 0.7f, true));
+            p.add(Kind::Sh1, Encoding::F16, float_bytes(n * 9, -0.5f, 0.5f, true), -0.5f, 0.5f);
+            p.add(Kind::Sh2, Encoding::S8, random_bytes(n * 15), -0.3f, 0.2f, 0.1f);
+            p.add(Kind::Sh3, Encoding::F32LeBytes, planar(float_bytes(n * 21, -0.2f, 0.2f, false), 4));
+        }
+        {
+            auto& p = packets[2];
+            const uint32_t n = p.desc.count = 1025;
+            p.desc.sh_coeffs_rest = 3;
+            p.add(Kind::Means, Encoding::F16, float_bytes(n * 3, -10, 10, true));
+            p.add(Kind::Alpha, Encoding::F32, float_bytes(n, -0.1f, 1.1f, false));
+            p.add(Kind::Scales, Encoding::F32, float_bytes(n * 3, -0.01f, 2.0f, false));
+            p.add(Kind::Rotation, Encoding::F32, float_bytes(n * 3, -0.7f, 0.7f, false));
+            p.add(Kind::Sh1, Encoding::R8, random_bytes(n * 9), -0.4f, 0.4f);
+        }
+        struct Resident {
+            RadPageSources source;
+            Tensor sh, bounds;
+        };
+        std::vector<Resident> residents;
+        struct ShLayout {
+            uint32_t rest;
+            bool half, q16;
+        };
+        for (const auto [rest, half, q16] :
+             {ShLayout{15, false, false}, ShLayout{8, true, false}, ShLayout{15, true, true}, ShLayout{0, false, false}}) {
+            constexpr uint32_t offset = 100, count = 5000, rows = offset + count, tiles = (rows + 31) / 32 * 32;
+            Resident r;
+            r.source = {.means = random_tensor(rows * 3, -10, 10, 102),
+                        .sh0 = random_tensor(rows * 3, -2, 2, 103),
+                        .rotation = random_tensor(rows * 4, -1, 1, 104),
+                        .scaling = random_tensor(rows * 3, -8, 1, 105),
+                        .opacity = random_tensor(rows, -4, 4, 106),
+                        .offset = offset,
+                        .count = count,
+                        .sh_rest = rest,
+                        .sh_q16 = q16};
+            const size_t values = tiles * (q16 ? rest * 3 : (rest * 3 + 3) / 4 * 4);
+            r.sh = Tensor::empty({values}, Device::CPU, half ? DataType::Float16 : DataType::Float32);
+            const auto bytes = q16 ? random_bytes(values * 2) : float_bytes(values, -0.8f, 0.8f, half);
+            if (!bytes.empty())
+                std::memcpy(r.sh.data_ptr(), bytes.data(), bytes.size());
+            if (q16) {
+                std::vector<float> bounds;
+                for (uint32_t group = 0; group < (rows + 255) / 256; ++group)
+                    bounds.insert(bounds.end(), {-0.5f - 0.01f * float(group), 0.25f + 0.02f * float(group)});
+                r.bounds = Tensor::from_vector(bounds, {bounds.size()}, Device::CPU);
+            }
+            residents.push_back(std::move(r));
+        }
+        const uint32_t pages = static_cast<uint32_t>(packets.size() + residents.size());
+        const auto run = [&](const GpuBackend backend) {
+            GpuBackendScope scope(backend);
+            const size_t n = size_t{pages} * splats;
+            const std::array<size_t, 9> sizes{n * 12, n * 8, n * slots * 4, n * 8, n * 8, n * 2,
+                                              pages * radq::kPageFrameBytes, n * 8, n * 12};
+            RadPagePool pool{.page_splats = splats, .sh_slots = slots};
+            for (size_t i = 0; i < sizes.size(); ++i)
+                pool.regions[i] = Tensor::zeros({sizes[i]}, Device::GPU, DataType::UInt8);
+            std::vector<Tensor> inputs;
+            for (uint32_t page = 0; page < packets.size(); ++page) {
+                inputs.push_back(packets[page].tensor().to(Device::GPU));
+                rad_page_dequant(inputs.back(), packets[page].desc, pool, page);
+            }
+            for (uint32_t k = 0; k < residents.size(); ++k) {
+                auto source = residents[k].source;
+                for (Tensor* tensor : {&source.means, &source.sh0, &source.rotation, &source.scaling, &source.opacity})
+                    *tensor = tensor->to(Device::GPU);
+                source.shN = residents[k].sh.to(Device::GPU);
+                if (residents[k].bounds.is_valid())
+                    source.shN_bounds = residents[k].bounds.to(Device::GPU);
+                inputs.insert(inputs.end(), {source.means, source.sh0, source.rotation, source.scaling,
+                                             source.opacity, source.shN, source.shN_bounds});
+                rad_page_quantize(source, pool, static_cast<uint32_t>(packets.size()) + k);
+            }
+            std::vector<std::vector<uint8_t>> regions;
+            for (const auto& region : pool.regions) {
+                const Tensor cpu = region.cpu();
+                const auto* data = static_cast<const uint8_t*>(cpu.data_ptr());
+                regions.emplace_back(data, data + cpu.bytes());
+            }
+            return regions;
+        };
+        const auto metal = run(GpuBackend::Metal);
+        const auto vulkan = run(GpuBackend::Vulkan);
+        // MoltenVK builds the Vulkan kernel with fast math: a product can lose
+        // the sign of zero, and the Q16 SH decode can contract into an fma that
+        // moves a rare quantized SH byte by one. Metal keeps IEEE results, like
+        // CUDA and the file codec; everything else must match exactly.
+        const auto signed_magnitude = [](const uint16_t half) {
+            return (half & 0x8000u) != 0 ? -int(half & 0x7fffu) : int(half & 0x7fffu);
+        };
+        size_t rounded = 0;
+        for (size_t region = 0; region < metal.size(); ++region) {
+            ASSERT_EQ(metal[region].size(), vulkan[region].size());
+            const bool halves = region == 1 || (region >= 3 && region <= 5);
+            size_t mismatches = 0;
+            for (size_t i = 0; i < metal[region].size(); i += halves ? 2 : 1) {
+                if (halves) {
+                    uint16_t a = 0, b = 0;
+                    std::memcpy(&a, &metal[region][i], 2);
+                    std::memcpy(&b, &vulkan[region][i], 2);
+                    if (signed_magnitude(a) == signed_magnitude(b))
+                        continue;
+                } else if (metal[region][i] == vulkan[region][i]) {
+                    continue;
+                } else if (region == 2 && std::abs(int(int8_t(metal[region][i])) - int(int8_t(vulkan[region][i]))) == 1) {
+                    ++rounded;
+                    continue;
+                }
+                if (mismatches++ < 4)
+                    ADD_FAILURE() << "region=" << region << " byte=" << i << " metal=" << int(metal[region][i])
+                                  << " vulkan=" << int(vulkan[region][i]);
+            }
+            EXPECT_EQ(mismatches, 0u) << "region " << region;
+        }
+        EXPECT_LT(rounded, 64u);
     }
 
 } // namespace
