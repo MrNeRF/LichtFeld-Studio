@@ -4,6 +4,7 @@
 // Metal backend conformance: every operation runs on Metal and on the CPU
 // reference or the Vulkan backend, and they must agree.
 
+#include "core/nn/ops.hpp"
 #include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/tensor.hpp"
@@ -998,6 +999,92 @@ namespace {
                      {.source_rows = rows, .destination_rows = rows, .count = 500, .source_rest = rest, .destination_rest = rest, .source_offset = 100, .destination_offset = 500});
             return Tensor::cat({packed, copy}, 0);
         });
+    }
+
+    // Metal and Vulkan share the portable neural-network ops; only their
+    // inference kernels and matrix products differ.
+    TEST_F(TensorMetal, NeuralNetworkOpsMatchVulkan) {
+        namespace nn = lfs::core::nn;
+        const auto gpu = [](const Tensor& host) { return host.to(Device::GPU); };
+        const auto shaped = [](const size_t count, const unsigned seed, const TensorShape& shape) {
+            return random_tensor(count, -1.0f, 1.0f, seed).reshape(shape);
+        };
+        const Tensor a = shaped(2 * 33 * 40, 101, {2, 33, 40}), w = shaped(24 * 40, 102, {24, 40});
+        const Tensor bias = shaped(24, 103, {24}), residual = shaped(2 * 33 * 24, 104, {2, 33, 24});
+        const Tensor scale = shaped(24, 105, {24});
+        constexpr float matrix_tolerance = 1.0e-4f;
+        expect_same_on_both([&] {
+            const Tensor gb = gpu(bias), gr = gpu(residual), gs = gpu(scale);
+            return nn::gemm(gpu(a), gpu(w), false, true, &gb, nn::Activation::GeluTanh, &gr, &gs);
+        },
+                            matrix_tolerance, matrix_tolerance);
+        expect_same_on_both([&] {
+            return nn::linear(gpu(a).to(DataType::Float16), gpu(w).to(DataType::Float16), nullptr, nn::Activation::Relu)
+                .to(DataType::Float32);
+        },
+                            1.0e-2f, 1.0e-2f);
+        const Tensor rows = shaped(6 * 32, 106, {6, 32}), gamma = shaped(32, 107, {32}), beta = shaped(32, 108, {32});
+        expect_same_on_both([&] { return nn::layer_norm(gpu(rows), gpu(gamma), gpu(beta)); }, 1.0e-5f, 1.0e-5f);
+        expect_same_on_both([&] { return nn::rms_norm(gpu(rows), gpu(gamma)); }, 1.0e-5f, 1.0e-5f);
+        const Tensor logits = shaped(4 * 9 * 17, 109, {4, 9, 17}), mask = shaped(4 * 9 * 17, 110, {4, 9, 17});
+        expect_same_on_both([&] {
+            const Tensor gm = gpu(mask);
+            return nn::softmax(gpu(logits), &gm);
+        },
+                            1.0e-5f, 1.0e-5f);
+        const Tensor q = shaped(2 * 3 * 20 * 16, 111, {2, 3, 20, 16}), k = shaped(2 * 3 * 28 * 16, 112, {2, 3, 28, 16});
+        const Tensor v = shaped(2 * 3 * 28 * 16, 113, {2, 3, 28, 16});
+        expect_same_on_both([&] { return nn::attention(gpu(q), gpu(k), gpu(v)); }, matrix_tolerance, matrix_tolerance);
+
+        const Tensor image = shaped(6 * 19 * 23, 114, {1, 6, 19, 23}), kernel = shaped(8 * 3 * 9, 115, {8, 3, 3, 3});
+        const Tensor conv_bias = shaped(8, 116, {8});
+        for (const nn::Conv2dParams params : {nn::Conv2dParams{.stride_h = 2, .stride_w = 2, .pad_h = 1, .pad_w = 1, .groups = 2},
+                                              nn::Conv2dParams{.pad_h = 2, .pad_w = 2, .dilation_h = 2, .dilation_w = 2, .groups = 2, .pad_mode = nn::ConvPadMode::Replicate, .activation = nn::Activation::Silu}}) {
+            SCOPED_TRACE(params.dilation_h);
+            expect_same_on_both([&] {
+                const Tensor gb = gpu(conv_bias);
+                return nn::conv2d(gpu(image), gpu(kernel), &gb, params);
+            },
+                                matrix_tolerance, matrix_tolerance);
+        }
+        const Tensor small = shaped(4 * 7 * 9, 117, {1, 4, 7, 9}), up = shaped(4 * 3 * 4, 118, {4, 3, 2, 2});
+        expect_same_on_both([&] { return nn::conv_transpose2d(gpu(small), gpu(up), nullptr, {.stride_h = 2, .stride_w = 2}); },
+                            matrix_tolerance, matrix_tolerance);
+        const Tensor picture = shaped(3 * 11 * 13, 119, {1, 3, 11, 13});
+        for (const auto mode : {nn::ResizeMode::Nearest, nn::ResizeMode::Bilinear, nn::ResizeMode::Cubic}) {
+            for (const auto coord : {nn::CoordTransform::HalfPixel, nn::CoordTransform::Asymmetric, nn::CoordTransform::AlignCorners}) {
+                SCOPED_TRACE(static_cast<int>(mode) * 3 + static_cast<int>(coord));
+                expect_same_on_both([&] { return nn::resize2d(gpu(picture), 17, 7, mode, coord); }, 1.0e-6f, 1.0e-6f);
+            }
+        }
+        expect_same_on_both([&] { return nn::max_pool2d(gpu(picture), 3, 3, 2, 2, 1, 1); });
+        for (const bool include_pad : {false, true})
+            expect_same_on_both([&] { return nn::avg_pool2d(gpu(picture), 3, 2, 2, 1, 1, 0, include_pad); }, 1.0e-6f, 1.0e-6f);
+        for (const auto approx : {nn::GELUApprox::Erf, nn::GELUApprox::Tanh})
+            expect_same_on_both([&] { return nn::gelu(gpu(a), approx); }, 1.0e-6f, 1.0e-6f);
+        expect_same_on_both([&] {
+            const Tensor x = gpu(a);
+            return Tensor::cat({nn::silu(x), nn::relu(x), nn::sigmoid(x)}, 0);
+        },
+                            1.0e-6f, 1.0e-6f);
+
+        const Tensor bhwc = shaped(2 * 10 * 12 * 8, 120, {2, 10, 12, 8});
+        expect_same_on_both([&] {
+            const auto windows = nn::window_partition_2d(gpu(bhwc), 4);
+            return nn::window_unpartition_2d(windows.windows, 4, windows.pad_h, windows.pad_w, 10, 12).sub(gpu(bhwc));
+        });
+        expect_same_on_both([&] { return nn::max_pool2d_bhwc(gpu(bhwc)); });
+        const Tensor qkv = shaped(2 * 20 * 3 * 4 * 8, 121, {2, 20, 3 * 4 * 8});
+        expect_same_on_both([&] {
+            const auto [sq, sk, sv] = nn::split_qkv(gpu(qkv), 4);
+            return Tensor::cat({nn::merge_heads(sq), nn::merge_heads(sk), nn::merge_heads(sv)}, 0);
+        });
+        const Tensor heads = shaped(2 * 3 * 24 * 5, 122, {2, 3, 24, 5});
+        expect_same_on_both([&] { return nn::max_pool_heads_2d(gpu(heads), 4, 6); });
+        const Tensor coords = random_tensor(5 * 2, 0.0f, 1.0f, 123).reshape({5, 2}), gaussian = shaped(2 * 8, 124, {2, 8});
+        expect_same_on_both([&] { return nn::fourier_pe(gpu(coords), gpu(gaussian)); }, 1.0e-5f, 1.0e-5f);
+        expect_same_on_both([&] { return nn::uv_grid(12, 16, 1.5f, DataType::Float32, Device::GPU, nullptr); }, 1.0e-6f, 1.0e-6f);
+        expect_same_on_both([&] { return nn::residual_scale(gpu(rows), gpu(rows), gpu(gamma)); }, 1.0e-6f, 1.0e-6f);
     }
 
     TEST_F(TensorMetal, SplatTransformMatchesVulkan) {

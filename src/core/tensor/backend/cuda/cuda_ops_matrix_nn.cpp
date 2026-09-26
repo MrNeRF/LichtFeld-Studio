@@ -124,6 +124,12 @@ namespace lfs::core::internal {
             program.output_height, program.output_width, context.cuda_stream);
     }
 
+    void CudaBackendOps::inference(const StorageRef, const StorageRef, const InferenceProgram&,
+                                   const ExecContext) {
+        LFS_FACADE_TRACE(inference);
+        throw TensorError("CUDA runs the neural-network ops with its own kernels");
+    }
+
     void CudaBackendOps::bias_add(
         const StorageRef input, const StorageRef bias, const StorageRef output,
         const int count, const int channels, const int spatial_size,

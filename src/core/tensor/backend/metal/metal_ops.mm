@@ -2497,6 +2497,24 @@ namespace lfs::core::internal {
                                      members, offsets, removed);
     }
 
+    void MetalBackendOps::inference(const StorageRef input, const StorageRef output, const InferenceProgram& program,
+                                    ExecContext) {
+        LFS_FACADE_TRACE(inference);
+        struct InferenceParams {
+            uint64_t input, output;
+            uint32_t total, step;
+            InferenceGeometry geometry;
+        };
+        static_assert(sizeof(InferenceParams) == 112);
+        const auto context = acquire_context();
+        const InferenceParams params{address_of(*context, input), address_of(*context, output),
+                                     checked_u32(program.count, "Metal inference output exceeds uint32"), 0,
+                                     program.geometry};
+        const std::array uses{input, output};
+        dispatch_addressed(*context, uses, context->pipeline("inference", {{0, static_cast<uint32_t>(program.kernel)}}),
+                           params, program.count);
+    }
+
     void MetalBackendOps::reduce(const StorageRef input, const StorageRef output, const StridedLayout& input_layout,
                                  const ReduceProgram& program, ExecContext) {
         LFS_FACADE_TRACE(reduce);

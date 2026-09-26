@@ -1,30 +1,20 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "gpu_backend_ops.hpp"
+#include "portable_ops.hpp"
+
 #include "core/tensor.hpp"
-#include "core/tensor/backend/vulkan/vk_context.hpp"
-#include "core/tensor/backend/vulkan/vk_ops_common.hpp"
-#include "core/tensor/backend/vulkan/vk_pipelines.hpp"
-#include "core/tensor/backend/vulkan/vk_recorder.hpp"
-#include "vulkan_ops.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <limits>
 
-namespace lfs::core::nn::vulkan {
+namespace lfs::core::nn::portable {
     namespace {
-        struct Push {
-            uint64_t input_address = 0, output_address = 0;
-            uint32_t total = 0, step = 0;
-            int32_t channels = 0, height = 0, width = 0, out_height = 0, out_width = 0;
-            int32_t kernel_h = 0, kernel_w = 0, stride_h = 0, stride_w = 0;
-            int32_t pad_h = 0, pad_w = 0, dilation_h = 0, dilation_w = 0;
-            int32_t offset = 0, columns = 0, mode = 0, coord = 0, include_pad = 0;
-            float u0 = 0, u1 = 0, v0 = 0, v1 = 0;
-        };
-        static_assert(sizeof(Push) == 112);
+        using internal::InferenceGeometry;
+        using internal::InferenceKernel;
 
         Tensor fp32(const Tensor& t) { return t.to(DataType::Float32).contiguous(); }
 
@@ -32,28 +22,14 @@ namespace lfs::core::nn::vulkan {
             return internal::allocate_like(like, shape, DataType::Float32);
         }
 
-        void dispatch(uint32_t kind, const Tensor& input, Tensor& output, Push push) {
+        void dispatch(const InferenceKernel kernel, const Tensor& input, Tensor& output,
+                      const InferenceGeometry& geometry) {
             if (output.numel() == 0)
                 return;
             LFS_ASSERT_MSG(output.numel() <= static_cast<size_t>(std::numeric_limits<int32_t>::max()),
-                           "NN shader output exceeds int32 indexing");
-            const auto src = internal::storage_ref(input);
-            const auto dst = internal::storage_ref(output);
-            const auto context = internal::acquire_vulkan_context();
-            const uint32_t groups = internal::vk::dispatch_groups(*context, output.numel());
-            push.input_address = internal::vk::address(src);
-            push.output_address = internal::vk::address(dst);
-            push.total = static_cast<uint32_t>(output.numel());
-            push.step = groups * internal::vk::kLocalSize;
-            const std::array constants{kind};
-            const auto& pipeline = context->pipelines().specialized("inference", sizeof(Push), constants);
-            const std::array reads{src};
-            const std::array writes{dst};
-            context->recorders().record(reads, writes, [&](VkCommandBuffer command) {
-                vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
-                vkCmdPushConstants(command, pipeline.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
-                vkCmdDispatch(command, groups, 1, 1);
-            });
+                           "NN kernel output exceeds int32 indexing");
+            internal::backend_ops_for(output).inference(internal::storage_ref(input), internal::storage_ref(output),
+                                                        {kernel, output.numel(), geometry}, {});
         }
 
         Tensor affine(Tensor out, const Tensor* bias, Activation activation,
@@ -74,7 +50,7 @@ namespace lfs::core::nn::vulkan {
             return input;
         const auto x = fp32(input);
         auto out = empty(x, x.shape());
-        dispatch(4, x, out, Push{.mode = static_cast<int32_t>(activation)});
+        dispatch(InferenceKernel::Activation, x, out, {.mode = static_cast<int32_t>(activation)});
         return out.to(input.dtype());
     }
 
@@ -158,7 +134,7 @@ namespace lfs::core::nn::vulkan {
         const auto x = fp32(input);
         const auto weights = fp32(weight);
         auto out = empty(x, TensorShape{static_cast<size_t>(n), static_cast<size_t>(cout), static_cast<size_t>(oh), static_cast<size_t>(ow)});
-        Push push{.channels = cig, .height = h, .width = w, .out_height = oh, .out_width = ow, .kernel_h = kh, .kernel_w = kw, .stride_h = params.stride_h, .stride_w = params.stride_w, .pad_h = params.pad_h, .pad_w = params.pad_w, .dilation_h = params.dilation_h, .dilation_w = params.dilation_w, .mode = static_cast<int32_t>(params.pad_mode)};
+        InferenceGeometry geometry{.channels = cig, .height = h, .width = w, .out_height = oh, .out_width = ow, .kernel_h = kh, .kernel_w = kw, .stride_h = params.stride_h, .stride_w = params.stride_w, .pad_h = params.pad_h, .pad_w = params.pad_w, .dilation_h = params.dilation_h, .dilation_w = params.dilation_w, .mode = static_cast<int32_t>(params.pad_mode)};
         for (int batch = 0; batch < n; ++batch) {
             for (int group = 0; group < params.groups; ++group) {
                 auto image = x.slice(0, batch, batch + 1).slice(1, group * cig, (group + 1) * cig).contiguous();
@@ -170,7 +146,7 @@ namespace lfs::core::nn::vulkan {
                     auto wt = weights.slice(0, group * cig, (group + 1) * cig).reshape({cig, cog * kh * kw}).transpose(0, 1).contiguous();
                     auto columns = wt.mm(image.reshape({cig, h * w}));
                     auto result = empty(x, destination.shape());
-                    dispatch(1, columns, result, push);
+                    dispatch(InferenceKernel::Col2im, columns, result, geometry);
                     destination.copy_from(result);
                 } else {
                     auto wt = weights.slice(0, group * cog, (group + 1) * cog).reshape({cog, cig * kh * kw});
@@ -179,9 +155,9 @@ namespace lfs::core::nn::vulkan {
                     for (int offset = 0; offset < oh * ow; offset += chunk) {
                         const int count = std::min(chunk, oh * ow - offset);
                         auto columns = empty(x, TensorShape{static_cast<size_t>(cig * kh * kw), static_cast<size_t>(count)});
-                        push.offset = offset;
-                        push.columns = count;
-                        dispatch(0, image, columns, push);
+                        geometry.offset = offset;
+                        geometry.columns = count;
+                        dispatch(InferenceKernel::Im2col, image, columns, geometry);
                         destination.slice(1, offset, offset + count).copy_from(wt.mm(columns));
                     }
                 }
@@ -195,7 +171,7 @@ namespace lfs::core::nn::vulkan {
     Tensor resize(const Tensor& input, int height, int width, ResizeMode mode, CoordTransform coord) {
         auto x = fp32(input);
         auto out = empty(x, TensorShape{input.shape()[0], input.shape()[1], static_cast<size_t>(height), static_cast<size_t>(width)});
-        dispatch(2, x, out, Push{.height = static_cast<int32_t>(input.shape()[2]), .width = static_cast<int32_t>(input.shape()[3]), .out_height = height, .out_width = width, .mode = static_cast<int32_t>(mode), .coord = static_cast<int32_t>(coord)});
+        dispatch(InferenceKernel::Resize, x, out, {.height = static_cast<int32_t>(input.shape()[2]), .width = static_cast<int32_t>(input.shape()[3]), .out_height = height, .out_width = width, .mode = static_cast<int32_t>(mode), .coord = static_cast<int32_t>(coord)});
         return out.to(input.dtype());
     }
 
@@ -205,7 +181,7 @@ namespace lfs::core::nn::vulkan {
         LFS_ASSERT_MSG(oh > 0 && ow > 0, "NN pooling requires positive output dimensions");
         auto x = fp32(input);
         auto out = empty(x, TensorShape{input.shape()[0], input.shape()[1], static_cast<size_t>(oh), static_cast<size_t>(ow)});
-        dispatch(3, x, out, Push{.height = h, .width = w, .out_height = oh, .out_width = ow, .kernel_h = kh, .kernel_w = kw, .stride_h = sh, .stride_w = sw, .pad_h = ph, .pad_w = pw, .mode = average ? 1 : 0, .include_pad = count_include_pad ? 1 : 0});
+        dispatch(InferenceKernel::Pool, x, out, {.height = h, .width = w, .out_height = oh, .out_width = ow, .kernel_h = kh, .kernel_w = kw, .stride_h = sh, .stride_w = sw, .pad_h = ph, .pad_w = pw, .mode = average ? 1 : 0, .include_pad = count_include_pad ? 1 : 0});
         return out.to(input.dtype());
     }
 
@@ -250,7 +226,7 @@ namespace lfs::core::nn::vulkan {
 
     Tensor grid(const Tensor& like, int height, int width, float u0, float u1, float v0, float v1) {
         auto out = empty(like, TensorShape{1, 2, static_cast<size_t>(height), static_cast<size_t>(width)});
-        dispatch(5, like, out, Push{.height = height, .width = width, .u0 = u0, .u1 = u1, .v0 = v0, .v1 = v1});
+        dispatch(InferenceKernel::Grid, like, out, {.height = height, .width = width, .u0 = u0, .u1 = u1, .v0 = v0, .v1 = v1});
         return out.to(like.dtype());
     }
-} // namespace lfs::core::nn::vulkan
+} // namespace lfs::core::nn::portable

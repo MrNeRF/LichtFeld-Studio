@@ -181,6 +181,9 @@ namespace lfs::core {
             virtual void adaptive_avg_pool2d(StorageRef input, StorageRef output,
                                              const PoolProgram& program,
                                              ExecContext context) = 0;
+            // The portable neural-network ops; CUDA runs its own kernels instead.
+            virtual void inference(StorageRef input, StorageRef output,
+                                   const InferenceProgram& program, ExecContext context) = 0;
             virtual void bias_add(StorageRef input, StorageRef bias, StorageRef output,
                                   int count, int channels, int spatial_size,
                                   ExecContext context) = 0;
@@ -477,6 +480,8 @@ namespace lfs::core {
             void adaptive_avg_pool2d(StorageRef input, StorageRef output,
                                      const PoolProgram& program,
                                      ExecContext context) override;
+            void inference(StorageRef input, StorageRef output,
+                           const InferenceProgram& program, ExecContext context) override;
             void bias_add(StorageRef input, StorageRef bias, StorageRef output,
                           int count, int channels, int spatial_size,
                           ExecContext context) override;

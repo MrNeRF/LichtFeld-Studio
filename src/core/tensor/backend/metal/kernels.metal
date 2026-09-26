@@ -2869,6 +2869,145 @@ kernel void sh_encode(constant ShParams& p [[buffer(0)]], uint group [[threadgro
 }
 
 // ---------------------------------------------------------------------------
+// Kernels of the portable neural-network ops, ported from inference.slang.
+// kOp is the InferenceKernel: im2col, col2im, resize, pool, activation, grid.
+
+struct InferenceGeometry {
+    int channels, height, width, out_height, out_width;
+    int kernel_h, kernel_w, stride_h, stride_w;
+    int pad_h, pad_w, dilation_h, dilation_w;
+    int offset, columns, mode, coord, include_pad;
+    float u0, u1, v0, v1;
+};
+
+struct InferenceParams {
+    device const float* input;
+    device float* output;
+    uint total, step;
+    InferenceGeometry p;
+};
+
+static float inference_sample(constant InferenceParams& params, int plane, int y, int x) {
+    constant InferenceGeometry& p = params.p;
+    return params.input[(plane * p.height + clamp(y, 0, p.height - 1)) * p.width + clamp(x, 0, p.width - 1)];
+}
+
+static float resize_coordinate(int i, int in_size, int out_size, int mode) {
+    if (out_size == 1)
+        return 0.0f;
+    if (mode == 2)
+        return float(i) * (in_size - 1) / (out_size - 1);
+    if (mode == 1)
+        return float(i) * in_size / out_size;
+    return (float(i) + 0.5f) * in_size / out_size - 0.5f;
+}
+
+static float cubic_weight(float x) {
+    x = abs(x);
+    if (x <= 1.0f)
+        return ((1.25f * x - 2.25f) * x) * x + 1.0f;
+    if (x < 2.0f)
+        return ((-0.75f * x + 3.75f) * x - 6.0f) * x + 3.0f;
+    return 0.0f;
+}
+
+// The erf approximation the Vulkan kernel evaluates in fp32.
+static float erf_approximation(float x) {
+    const float a = abs(x), t = 1.0f / (1.0f + 0.3275911f * a);
+    const float r =
+        1.0f - (((((1.061405429f * t - 1.453152027f) * t) + 1.421413741f) * t - 0.284496736f) * t + 0.254829592f) * t *
+                   exp(-a * a);
+    return x < 0.0f ? -r : r;
+}
+
+kernel void inference(constant InferenceParams& params [[buffer(0)]], uint i [[thread_position_in_grid]]) {
+    if (i >= params.total)
+        return;
+    constant InferenceGeometry& p = params.p;
+    const int index = int(i);
+    float value = 0.0f;
+    if (kOp == 0) {
+        const int column = index % p.columns + p.offset, tap = index / p.columns;
+        const int x = (column % p.out_width) * p.stride_w - p.pad_w + (tap % p.kernel_w) * p.dilation_w;
+        const int y = (column / p.out_width) * p.stride_h - p.pad_h + ((tap / p.kernel_w) % p.kernel_h) * p.dilation_h;
+        const int c = tap / (p.kernel_h * p.kernel_w);
+        if (p.mode == 1 || (x >= 0 && x < p.width && y >= 0 && y < p.height))
+            value = inference_sample(params, c, y, x);
+    } else if (kOp == 1) {
+        const int x = index % p.out_width, y = (index / p.out_width) % p.out_height;
+        const int c = index / (p.out_width * p.out_height);
+        for (int ky = 0; ky < p.kernel_h; ++ky) {
+            for (int kx = 0; kx < p.kernel_w; ++kx) {
+                int iy = y + p.pad_h - ky * p.dilation_h, ix = x + p.pad_w - kx * p.dilation_w;
+                if (iy < 0 || ix < 0 || iy % p.stride_h != 0 || ix % p.stride_w != 0)
+                    continue;
+                iy /= p.stride_h;
+                ix /= p.stride_w;
+                if (iy < p.height && ix < p.width)
+                    value += params.input[((c * p.kernel_h + ky) * p.kernel_w + kx) * p.height * p.width + iy * p.width + ix];
+            }
+        }
+    } else if (kOp == 2) {
+        const int x = index % p.out_width, y = (index / p.out_width) % p.out_height;
+        const int plane = index / (p.out_width * p.out_height);
+        const float fx = resize_coordinate(x, p.width, p.out_width, p.coord);
+        const float fy = resize_coordinate(y, p.height, p.out_height, p.coord);
+        const int ix = int(floor(fx)), iy = int(floor(fy));
+        if (p.mode == 0) {
+            value = inference_sample(params, plane, iy, ix);
+        } else if (p.mode == 1) {
+            const float dx = fx - ix, dy = fy - iy;
+            const float a = inference_sample(params, plane, iy, ix) * (1.0f - dx) + inference_sample(params, plane, iy, ix + 1) * dx;
+            const float b =
+                inference_sample(params, plane, iy + 1, ix) * (1.0f - dx) + inference_sample(params, plane, iy + 1, ix + 1) * dx;
+            value = a * (1.0f - dy) + b * dy;
+        } else {
+            for (int yy = -1; yy <= 2; ++yy) {
+                for (int xx = -1; xx <= 2; ++xx)
+                    value += inference_sample(params, plane, iy + yy, ix + xx) * cubic_weight(fy - (iy + yy)) *
+                             cubic_weight(fx - (ix + xx));
+            }
+        }
+    } else if (kOp == 3) {
+        const int x = (index % p.out_width) * p.stride_w - p.pad_w;
+        const int y = ((index / p.out_width) % p.out_height) * p.stride_h - p.pad_h;
+        const int plane = index / (p.out_width * p.out_height);
+        value = p.mode == 0 ? -INFINITY : 0.0f;
+        int count = 0;
+        for (int ky = 0; ky < p.kernel_h; ++ky) {
+            for (int kx = 0; kx < p.kernel_w; ++kx) {
+                if (y + ky >= 0 && y + ky < p.height && x + kx >= 0 && x + kx < p.width) {
+                    const float v = inference_sample(params, plane, y + ky, x + kx);
+                    value = p.mode == 0 ? max(value, v) : value + v;
+                    ++count;
+                }
+            }
+        }
+        if (p.mode != 0)
+            value /= max(1, p.include_pad != 0 ? p.kernel_h * p.kernel_w : count);
+    } else if (kOp == 4) {
+        const float x = params.input[index];
+        if (p.mode == 1)
+            value = max(x, 0.0f);
+        else if (p.mode == 2)
+            value = 0.5f * x * (1.0f + tanh(0.7978845608028654f * (x + 0.044715f * x * x * x)));
+        else if (p.mode == 3)
+            value = 0.5f * x * (1.0f + erf_approximation(x * 0.7071067811865475f));
+        else if (p.mode == 4)
+            value = x / (1.0f + exp(-x));
+        else
+            value = x;
+    } else {
+        const int pixel = index % (p.height * p.width);
+        if (index < p.height * p.width)
+            value = p.width == 1 ? p.u0 : p.u0 + (p.u1 - p.u0) * (pixel % p.width) / (p.width - 1);
+        else
+            value = p.height == 1 ? p.v0 : p.v0 + (p.v1 - p.v0) * (pixel / p.width) / (p.height - 1);
+    }
+    params.output[i] = value;
+}
+
+// ---------------------------------------------------------------------------
 // Float32 GEMM on the matrix units through Metal Performance Primitives:
 // C[m][n] = A[m][k] * B, with B stored as [k][n] or, with kTransposeB, as
 // [n][k]; batches are packed. kBiasRelu applies max(value + bias[row], 0) to

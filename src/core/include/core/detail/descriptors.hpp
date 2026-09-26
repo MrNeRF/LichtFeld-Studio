@@ -206,6 +206,35 @@ namespace lfs::core {
             int padding = 0;
         };
 
+        // Float32 kernels of the portable neural-network ops. Im2col writes
+        // `columns` im2col columns from `offset`; Col2im folds [C*kh*kw, H*W]
+        // columns back into images; Resize, Pool and Activation read `mode`
+        // as ResizeMode, max (0) or average (1), and Activation; Grid writes
+        // [2, out_height, out_width] coordinates spanning [u0, u1] x [v0, v1].
+        enum class InferenceKernel : uint32_t {
+            Im2col,
+            Col2im,
+            Resize,
+            Pool,
+            Activation,
+            Grid,
+        };
+
+        // Backends pass the geometry to their kernels unchanged.
+        struct InferenceGeometry {
+            int32_t channels = 0, height = 0, width = 0, out_height = 0, out_width = 0;
+            int32_t kernel_h = 0, kernel_w = 0, stride_h = 0, stride_w = 0;
+            int32_t pad_h = 0, pad_w = 0, dilation_h = 0, dilation_w = 0;
+            int32_t offset = 0, columns = 0, mode = 0, coord = 0, include_pad = 0;
+            float u0 = 0, u1 = 0, v0 = 0, v1 = 0;
+        };
+
+        struct InferenceProgram {
+            InferenceKernel kernel = InferenceKernel::Activation;
+            size_t count = 0;
+            InferenceGeometry geometry;
+        };
+
         struct RandomProgram {
             size_t count = 0;
             size_t sample_count = 0;

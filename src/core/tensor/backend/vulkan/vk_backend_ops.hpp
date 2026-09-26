@@ -96,6 +96,7 @@ namespace lfs::core::internal {
                                      size_t removed, ExecContext context) override;
         void max_pool2d(StorageRef, StorageRef, const PoolProgram&, ExecContext) override;
         void adaptive_avg_pool2d(StorageRef, StorageRef, const PoolProgram&, ExecContext) override;
+        void inference(StorageRef, StorageRef, const InferenceProgram&, ExecContext) override;
         void bias_add(StorageRef, StorageRef, StorageRef, int, int, int, ExecContext) override;
         void bias_relu(StorageRef, StorageRef, StorageRef, int, int, int, ExecContext) override;
         void relu(StorageRef, StorageRef, int, ExecContext) override;

@@ -4,7 +4,9 @@
 
 #include "core/nn/ops.hpp"
 
-namespace lfs::core::nn::vulkan {
+// Neural-network ops of the backends without dedicated kernels (Vulkan and
+// Metal), composed from tensor ops and the backend inference kernels.
+namespace lfs::core::nn::portable {
     Tensor gemm(const Tensor& a, const Tensor& b, bool trans_b, const Tensor* bias,
                 Activation activation, const Tensor* residual = nullptr, const Tensor* scale = nullptr);
     Tensor norm(const Tensor& input, const Tensor& weight, const Tensor* bias, float eps);
@@ -22,4 +24,4 @@ namespace lfs::core::nn::vulkan {
     Tensor merge_heads(const Tensor& input);
     Tensor fourier_pe(const Tensor& coords, const Tensor& gaussian);
     Tensor grid(const Tensor& like, int height, int width, float u0, float u1, float v0, float v1);
-} // namespace lfs::core::nn::vulkan
+} // namespace lfs::core::nn::portable

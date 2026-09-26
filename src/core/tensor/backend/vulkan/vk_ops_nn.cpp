@@ -132,6 +132,32 @@ namespace lfs::core::internal {
         record_nn(kAdaptiveAvgPool, pool_push(input, output, program), reads, output);
     }
 
+    void VulkanBackendOps::inference(const StorageRef input, const StorageRef output,
+                                     const InferenceProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(inference);
+        struct Push {
+            uint64_t input_address, output_address;
+            uint32_t total, step;
+            InferenceGeometry geometry;
+        };
+        static_assert(sizeof(Push) == 112);
+        if (program.count == 0)
+            return;
+        const auto context = acquire_vulkan_context();
+        const uint32_t groups = vk::dispatch_groups(*context, program.count);
+        const Push push{vk::address(input), vk::address(output), static_cast<uint32_t>(program.count),
+                        groups * vk::kLocalSize, program.geometry};
+        const std::array constants{static_cast<uint32_t>(program.kernel)};
+        const auto& pipeline = context->pipelines().specialized("inference", sizeof(push), constants);
+        const std::array reads{input};
+        const std::array writes{output};
+        context->recorders().record(reads, writes, [&](VkCommandBuffer command) {
+            vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
+            vkCmdPushConstants(command, pipeline.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+            vkCmdDispatch(command, groups, 1, 1);
+        });
+    }
+
     void VulkanBackendOps::bias_add(
         const StorageRef input, const StorageRef bias, const StorageRef output,
         const int count, const int channels, const int spatial_size, ExecContext) {
