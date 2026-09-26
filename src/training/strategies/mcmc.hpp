@@ -7,6 +7,7 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "istrategy.hpp"
+#include "lfs/training/ops/mcmc.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "optimizer/scheduler.hpp"
 #include <cassert>
@@ -68,6 +69,8 @@ namespace lfs::training {
         int relocate_gs_test() { return relocate_gs(); }
 
     private:
+        const lfs::gpu_ops::McmcOps& mcmc_ops() const;
+        const lfs::gpu_ops::McmcOps* mcmc_ops_ = nullptr;
         friend class ::CropDampingStrategyTest_McmcRejectedRowsAreNeverSampledAtZeroScale_Test;
 
         // Helper functions

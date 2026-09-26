@@ -5,6 +5,7 @@
 #pragma once
 
 #include "istrategy.hpp"
+#include "lfs/training/ops/mcmc.hpp"
 
 #include "lfs/training/refine_scratch.hpp"
 #include "optimizer/adam_optimizer.hpp"
@@ -96,6 +97,8 @@ namespace lfs::training {
         }
 
     private:
+        const lfs::gpu_ops::McmcOps& mcmc_ops() const;
+        const lfs::gpu_ops::McmcOps* mcmc_ops_ = nullptr;
         friend class ::CropDampingStrategyTest_IgsPlusRejectedRowsAreNeverSampledAtZeroScale_Test;
 
         // Helper Functions

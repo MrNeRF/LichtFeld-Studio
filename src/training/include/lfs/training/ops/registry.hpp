@@ -6,6 +6,7 @@
 #include "core/gpu_backend_fwd.hpp"
 #include "lfs/training/ops/adam.hpp"
 #include "lfs/training/ops/loss.hpp"
+#include "lfs/training/ops/mcmc.hpp"
 
 #include <bitset>
 #include <optional>
@@ -25,6 +26,7 @@ namespace lfs::training {
         core::GpuBackend backend = core::GpuBackend::CUDA;
         const ops::PhotometricOps* photometric = nullptr;
         const ops::AdamOps* adam = nullptr;
+        const ops::McmcOps* mcmc = nullptr;
     };
 
     enum class Family {

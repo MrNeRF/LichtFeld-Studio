@@ -16,8 +16,8 @@
 #include "strategy_utils.hpp"
 
 #include "kernels/densification_kernels.hpp"
-#include "kernels/mcmc_kernels.hpp"
 #include "kernels/mrnf_kernels.hpp"
+#include "lfs/training/ops/registry.hpp"
 #include "optimizer/adam_optimizer.hpp"
 
 #include <algorithm>
@@ -187,7 +187,18 @@ namespace lfs::training {
     } // namespace
 
     ImprovedGSPlus::ImprovedGSPlus(lfs::core::SplatData& splat_data)
-        : _splat_data(&splat_data) {}
+        : _splat_data(&splat_data) {
+        mcmc_ops_ = training_ops(lfs::core::default_gpu_backend()).mcmc;
+    }
+
+    const lfs::gpu_ops::McmcOps& ImprovedGSPlus::mcmc_ops() const {
+        if (mcmc_ops_ == nullptr) [[unlikely]] {
+            throw std::runtime_error(
+                unavailable_training_family(lfs::core::default_gpu_backend(), Family::Mcmc)
+                    .value_or("Mcmc training ops are unavailable"));
+        }
+        return *mcmc_ops_;
+    }
 
     std::vector<int64_t> ImprovedGSPlus::get_count_array() {
 
@@ -651,10 +662,7 @@ namespace lfs::training {
                 accum.ndim() == 2 &&
                 accum.shape()[0] >= 2 &&
                 accum.shape()[1] == _error_score_max.numel()) {
-                lfs::training::mcmc::launch_max_error_and_zero_densification(
-                    _error_score_max.ptr<float>(),
-                    _splat_data->_densification_info.ptr<float>(),
-                    _error_score_max.numel());
+                mcmc_ops().fold_error(_error_score_max, _splat_data->_densification_info);
                 zero_frozen_scores_inplace(*_splat_data, _error_score_max);
             } else if (accum.is_valid() && accum.numel() > 0) {
                 _splat_data->_densification_info.zero_();
