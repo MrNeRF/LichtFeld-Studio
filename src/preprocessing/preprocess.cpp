@@ -813,7 +813,8 @@ namespace {
             }
             LOG_INFO("Normal estimation: native engine on CUDA device {} ({})", device, properties.name);
 #else
-            LOG_INFO("Normal estimation: native engine on Vulkan");
+            LOG_INFO("Normal estimation: native engine on {}",
+                     lfs::core::gpu_backend_name(lfs::core::default_gpu_backend()));
 #endif
         }
 
@@ -828,7 +829,7 @@ namespace {
                 input_ = lfs::core::Tensor::empty(shape, lfs::core::Device::GPU,
                                                   lfs::core::DataType::Float32);
             }
-            if (lfs::core::gpu_backend_of(input_) == lfs::core::GpuBackend::Vulkan) {
+            if (lfs::core::gpu_backend_of(input_) != lfs::core::GpuBackend::CUDA) {
                 input_.copy_from(lfs::core::Tensor::from_vector(chw, shape, lfs::core::Device::CPU));
             }
 #if LFS_HAS_CUDA
