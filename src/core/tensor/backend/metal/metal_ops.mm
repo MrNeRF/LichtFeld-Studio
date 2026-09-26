@@ -1367,7 +1367,15 @@ namespace lfs::core::internal {
 
         // random_op kinds.
         constexpr uint32_t kUniform = 0, kBernoulli = 1, kRandint = 2, kNormal = 3, kMultinomialReplacement = 4,
-                           kGumbelKeys = 5, kWeightStatistics = 7, kRunningSums = 8;
+                           kGumbelKeys = 5, kWeightStatistics = 7, kRunningSums = 8, kBlockOffsets = 9;
+        // Weights per block of running sums; kernels.metal's kSumBlock.
+        constexpr uint32_t kSumBlock = 1024;
+
+        // A power of two that brings the largest weight near 2^0.
+        float multinomial_scale(const float maximum) {
+            const uint32_t exponent = std::clamp((std::bit_cast<uint32_t>(maximum) >> 23) & 255u, 1u, 253u);
+            return std::bit_cast<float>((254u - exponent) << 23);
+        }
 
         struct RandomParams {
             uint64_t output_offset;
@@ -2192,9 +2200,8 @@ namespace lfs::core::internal {
         const uint32_t samples = checked_u32(program.sample_count, "Metal multinomial sample count exceeds uint32");
         // The weights are validated on the host, like the CUDA path.
         struct WeightStatistics {
-            float sum;
+            float maximum;
             uint32_t invalid;
-            float scale;
         };
         WeightStatistics statistics{};
         {
@@ -2205,14 +2212,17 @@ namespace lfs::core::internal {
             std::memcpy(&statistics, context->host(scratch.storage), sizeof(statistics));
         }
         LFS_ASSERT_MSG(statistics.invalid == 0, "multinomial weights must be finite and non-negative");
-        LFS_ASSERT_MSG(std::isfinite(statistics.sum) && statistics.sum > 0.0f,
-                       "multinomial weights must have a positive finite sum");
+        LFS_ASSERT_MSG(statistics.maximum > 0.0f, "multinomial weights must have a positive finite sum");
         if (program.replacement) {
-            // One pass of running sums, then a binary search per draw.
-            const Scratch sums(*context, program.count * sizeof(float));
+            // Running sums within blocks, the blocks' offsets, then a binary
+            // search per draw. The weights are scaled so their maximum sits
+            // near 2^0, which keeps the sums finite.
+            const uint32_t blocks = (categories + kSumBlock - 1) / kSumBlock;
+            const Scratch sums(*context, (program.count + blocks + 1) * sizeof(float));
             const RandomParams params{.seed = program.seed, .count = categories, .sample_count = samples,
-                                      .first = statistics.scale, .total = statistics.sum};
-            encode_random(*context, kRunningSums, {}, weights, sums.storage, params, MTLSizeMake(1, 1, 1));
+                                      .first = multinomial_scale(statistics.maximum)};
+            encode_random(*context, kRunningSums, {}, weights, sums.storage, params, thread_groups(blocks));
+            encode_random(*context, kBlockOffsets, {}, weights, sums.storage, params, MTLSizeMake(1, 1, 1));
             encode_random(*context, kMultinomialReplacement, output, weights, sums.storage, params,
                           thread_groups(program.sample_count));
             return;

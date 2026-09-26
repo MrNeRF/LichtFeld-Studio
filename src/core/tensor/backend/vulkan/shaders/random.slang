@@ -2,14 +2,17 @@ static const uint LFS_LOCAL_SIZE_X = 256;
 static const uint LFS_PUSH_CONSTANT_SIZE = 64;
 
 // 0 uniform [first, second), 1 bernoulli(first), 2 randint [low, high),
-// 3 normal(first, second), 4 multinomial with replacement over weights,
-// 5 Gumbel keys for sampling without replacement, 6 rank selection of the
-// sampleCount largest keys into the int64 output, 7 weight statistics
-// (output[0] = scaled sum, output[1] = invalid flag, output[2] = scale), run by a single workgroup.
+// 3 normal(first, second), 4 multinomial with replacement over the running
+// sums of kinds 8 and 9, 5 Gumbel keys for sampling without replacement (the
+// host sorts them), 7 weight statistics (output[0] = maximum, output[1] =
+// invalid flag) in a single workgroup, 8 running sums of the scaled weights
+// within blocks of kSumBlock, a thread per block, 9 the blocks' offsets and
+// the total, in one thread. Metal's random_op adds the same sums in the same
+// order, so both draw the same samples.
 [SpecializationConstant]
 const uint kKind = 0;
 
-groupshared float sharedSum[LFS_LOCAL_SIZE_X];
+groupshared float sharedMaximum[LFS_LOCAL_SIZE_X];
 groupshared uint sharedInvalid[LFS_LOCAL_SIZE_X];
 
 struct Parameters
@@ -29,6 +32,7 @@ struct Parameters
 };
 
 static const float kUnitScale = 1.0f / 16777216.0f;
+static const uint kSumBlock = 1024;
 static const float kTwoPi = 6.28318530717958647692f;
 
 // Philox4x32-10 (Salmon et al. 2011): the element index is the counter and
@@ -101,59 +105,64 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupThreadId : SV
                 invalid = 1u;
             maximum = max(maximum, weight);
         }
-        sharedSum[thread] = maximum;
+        sharedMaximum[thread] = maximum;
         sharedInvalid[thread] = invalid;
         GroupMemoryBarrierWithGroupSync();
         for (uint span = LFS_LOCAL_SIZE_X / 2; span > 0; span >>= 1)
         {
             if (thread < span)
             {
-                sharedSum[thread] = max(sharedSum[thread], sharedSum[thread + span]);
+                sharedMaximum[thread] = max(sharedMaximum[thread], sharedMaximum[thread + span]);
                 sharedInvalid[thread] |= sharedInvalid[thread + span];
             }
             GroupMemoryBarrierWithGroupSync();
         }
-        maximum = sharedSum[0];
-        const uint exponent = min(max((asuint(maximum) >> 23) & 255u, 1u), 253u);
-        const float scale = asfloat((254u - exponent) << 23);
-        GroupMemoryBarrierWithGroupSync();
-        float sum = 0.0f;
-        for (uint index = thread; index < parameters.count; index += LFS_LOCAL_SIZE_X)
-            sum += weights[index] * scale;
-        sharedSum[thread] = sum;
-        GroupMemoryBarrierWithGroupSync();
-        for (uint span = LFS_LOCAL_SIZE_X / 2; span > 0; span >>= 1)
-        {
-            if (thread < span)
-                sharedSum[thread] += sharedSum[thread + span];
-            GroupMemoryBarrierWithGroupSync();
-        }
         if (thread == 0)
         {
-            ((Ptr<float, Access.ReadWrite>)parameters.outputAddress)[0] = sharedSum[0];
+            ((Ptr<float, Access.ReadWrite>)parameters.outputAddress)[0] = sharedMaximum[0];
             ((Ptr<uint, Access.ReadWrite>)parameters.outputAddress)[1] = sharedInvalid[0];
-            ((Ptr<float, Access.ReadWrite>)parameters.outputAddress)[2] = scale;
         }
+        return;
+    }
+    const uint blocks = (parameters.count + kSumBlock - 1) / kSumBlock;
+    if (kKind == 8)
+    {
+        // The weights, scaled by a power of two (exact), summed in order
+        // within the block.
+        Ptr<float, Access.Read> weights = (Ptr<float, Access.Read>)parameters.weightsAddress;
+        Ptr<float, Access.ReadWrite> sums = (Ptr<float, Access.ReadWrite>)parameters.keysAddress;
+        for (uint block = dispatchThreadId.x; block < blocks; block += stride)
+        {
+            const uint end = min(parameters.count, (block + 1) * kSumBlock);
+            float running = 0.0f;
+            for (uint category = block * kSumBlock; category < end; ++category)
+            {
+                running += weights[category] * parameters.first;
+                sums[category] = running;
+            }
+        }
+        return;
+    }
+    if (kKind == 9)
+    {
+        // Each block's offset is the running sum of the block totals before
+        // it; the running sum of category i is its block's offset plus its
+        // sum within the block, which never decreases along the categories.
+        if (dispatchThreadId.x != 0)
+            return;
+        Ptr<float, Access.ReadWrite> sums = (Ptr<float, Access.ReadWrite>)parameters.keysAddress;
+        float offset = 0.0f;
+        for (uint block = 0; block < blocks; ++block)
+        {
+            sums[parameters.count + block] = offset;
+            offset += sums[min(parameters.count, (block + 1) * kSumBlock) - 1];
+        }
+        sums[parameters.count + blocks] = offset;
         return;
     }
     const uint total = kKind == 4 ? parameters.sampleCount : parameters.count;
     for (uint index = dispatchThreadId.x; index < total; index += stride)
     {
-        if (kKind == 6)
-        {
-            Ptr<float, Access.Read> keys = (Ptr<float, Access.Read>)parameters.keysAddress;
-            const float key = keys[index];
-            uint rank = 0;
-            for (uint other = 0; other < parameters.count; ++other)
-            {
-                const float candidate = keys[other];
-                if (candidate > key || (candidate == key && other < index))
-                    ++rank;
-            }
-            if (rank < parameters.sampleCount)
-                ((Ptr<int64_t, Access.ReadWrite>)parameters.outputAddress)[rank] = int64_t(index);
-            continue;
-        }
         const uint4 words = draw(index, parameters.seed);
         if (kKind == 0)
         {
@@ -189,20 +198,37 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupThreadId : SV
         }
         else if (kKind == 4)
         {
-            Ptr<float, Access.Read> weights = (Ptr<float, Access.Read>)parameters.weightsAddress;
-            const float u = unitInterval(words.x) * parameters.total;
-            float cumulative = 0.0f;
-            int64_t sample = int64_t(parameters.count - 1);
-            for (uint category = 0; category < parameters.count; ++category)
+            // The first category whose running sum exceeds the draw: a binary
+            // search over the blocks' last sums, then within the block.
+            Ptr<float, Access.Read> sums = (Ptr<float, Access.Read>)parameters.keysAddress;
+            const float u = unitInterval(words.x) * sums[parameters.count + blocks];
+            uint low = 0;
+            uint high = blocks;
+            while (low < high)
             {
-                cumulative += weights[category] * parameters.first;
-                if (u < cumulative)
-                {
-                    sample = int64_t(category);
-                    break;
-                }
+                const uint middle = (low + high) / 2;
+                if (u < sums[parameters.count + middle] + sums[min(parameters.count, (middle + 1) * kSumBlock) - 1])
+                    high = middle;
+                else
+                    low = middle + 1;
             }
-            ((Ptr<int64_t, Access.ReadWrite>)parameters.outputAddress)[index] = sample;
+            uint sample = parameters.count - 1;
+            if (low < blocks)
+            {
+                const float offset = sums[parameters.count + low];
+                uint first = low * kSumBlock;
+                uint last = min(parameters.count, (low + 1) * kSumBlock);
+                while (first < last)
+                {
+                    const uint middle = (first + last) / 2;
+                    if (u < offset + sums[middle])
+                        last = middle;
+                    else
+                        first = middle + 1;
+                }
+                sample = min(first, parameters.count - 1);
+            }
+            ((Ptr<int64_t, Access.ReadWrite>)parameters.outputAddress)[index] = int64_t(sample);
         }
         else
         {
