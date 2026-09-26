@@ -671,6 +671,7 @@ class TrainingPanel(Panel):
             "dep_igs": params.strategy == "igs+",
             "dep_sparsity": params.enable_sparsity,
             "dep_random": params.random,
+            "dep_eval": params.enable_eval,
         }
         return bool(conditions.get(str(condition_id), True))
 
@@ -865,6 +866,13 @@ class TrainingPanel(Panel):
         )
         model.bind_func(
             "dep_eval", lambda: p() is not None and p().has_params() and p().enable_eval
+        )
+        model.bind_func(
+            "dep_eval_holdout",
+            lambda: p() is not None
+            and p().has_params()
+            and p().enable_eval
+            and not p().eval_all,
         )
         model.bind_func(
             "show_training_telemetry",
@@ -2221,7 +2229,10 @@ class TrainingPanel(Panel):
     def _eval_requires_training_split(self):
         params = lf.optimization_params()
         return bool(
-            params and params.has_params() and getattr(params, "enable_eval", False)
+            params
+            and params.has_params()
+            and getattr(params, "enable_eval", False)
+            and not getattr(params, "eval_all", False)
         )
 
     def _coerce_test_every_for_current_eval_split(self, val):

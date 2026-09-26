@@ -29,6 +29,7 @@
 #include <ctime>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <numeric>
 #include <stdexcept>
@@ -291,6 +292,52 @@ namespace lfs::training {
             }
             return static_cast<float>(sum / static_cast<double>(count));
         }
+
+        [[nodiscard]] bool eval_uses_masks(const lfs::core::param::MaskMode mode) {
+            return mode == lfs::core::param::MaskMode::Segment ||
+                   mode == lfs::core::param::MaskMode::Ignore ||
+                   mode == lfs::core::param::MaskMode::SegmentAndIgnore;
+        }
+
+        [[nodiscard]] nlohmann::json json_metric(const std::optional<float>& value) {
+            return value && std::isfinite(*value) ? nlohmann::json(*value) : nlohmann::json(nullptr);
+        }
+
+        void write_json_file(const std::filesystem::path& path, const nlohmann::json& document) {
+            std::error_code ec;
+            std::filesystem::create_directories(path.parent_path(), ec);
+            auto temp_path = path;
+            temp_path += ".tmp";
+            {
+                std::ofstream out;
+                if (!lfs::core::open_file_for_write(temp_path, std::ios::out | std::ios::binary, out)) {
+                    LOG_WARN("Eval: failed to open '{}'", lfs::core::path_to_utf8(temp_path));
+                    return;
+                }
+                out << document.dump(2, ' ', false, nlohmann::json::error_handler_t::replace) << '\n';
+                if (!out) {
+                    LOG_WARN("Eval: failed to write '{}'", lfs::core::path_to_utf8(temp_path));
+                    return;
+                }
+            }
+            std::filesystem::rename(temp_path, path, ec);
+            if (ec)
+                LOG_WARN("Eval: failed to replace '{}': {}", lfs::core::path_to_utf8(path), ec.message());
+        }
+
+        [[nodiscard]] nlohmann::json read_json_object(const std::filesystem::path& path) {
+            std::ifstream in;
+            if (!lfs::core::open_file_for_read(path, std::ios::in | std::ios::binary, in))
+                return nlohmann::json::object();
+            try {
+                auto document = nlohmann::json::parse(in);
+                if (document.is_object())
+                    return document;
+            } catch (const nlohmann::json::exception& e) {
+                LOG_WARN("Eval: replacing unreadable '{}' ({})", lfs::core::path_to_utf8(path), e.what());
+            }
+            return nlohmann::json::object();
+        }
     } // namespace
 
     std::optional<float> mean_normal_angle_deg(
@@ -427,7 +474,8 @@ namespace lfs::training {
     MetricsReporter::MetricsReporter(const std::filesystem::path& output_dir)
         : output_dir_(output_dir),
           csv_path_(output_dir_ / "metrics.csv"),
-          txt_path_(output_dir_ / "metrics_report.txt") {
+          txt_path_(output_dir_ / "metrics_report.txt"),
+          per_image_path_(output_dir_ / "per_image_metrics.json") {
         // Create CSV header if file doesn't exist
         if (!std::filesystem::exists(csv_path_)) {
             std::ofstream csv_file;
@@ -438,6 +486,57 @@ namespace lfs::training {
         }
     }
 
+    std::vector<size_t> unreachable_eval_steps(const std::vector<size_t>& eval_steps, const size_t last_iteration) {
+        std::vector<size_t> unreachable;
+        std::ranges::copy_if(eval_steps, std::back_inserter(unreachable),
+                             [last_iteration](const size_t step) { return step > last_iteration; });
+        return unreachable;
+    }
+
+    nlohmann::json add_view_evaluation(nlohmann::json document, const ViewMetrics& view, const int step,
+                                       const std::string_view split) {
+        if (!document.is_object())
+            document = nlohmann::json::object();
+        auto& record = document[view.image_name];
+        if (!record.is_object())
+            record = nlohmann::json::object();
+        if (view.width > 0 && view.height > 0) {
+            record["width"] = view.width;
+            record["height"] = view.height;
+        }
+        nlohmann::json entry = {
+            {"step", step},
+            {"split", split},
+            {"psnr", json_metric(view.psnr)},
+            {"ssim", json_metric(view.ssim)},
+            {"lpips", json_metric(view.lpips)},
+            {"masked", view.masked},
+        };
+        if (!view.skipped_reason.empty())
+            entry["skipped_reason"] = view.skipped_reason;
+
+        std::vector<nlohmann::json> evaluations;
+        if (const auto existing = record.find("evaluations");
+            existing != record.end() && existing->is_array()) {
+            for (auto& previous : *existing) {
+                if (!previous.is_object())
+                    continue;
+                const auto previous_step = previous.find("step");
+                if (previous_step == previous.end() || !previous_step->is_number_integer())
+                    continue;
+                const auto previous_split = previous.find("split");
+                const bool same_split = previous_split != previous.end() && previous_split->is_string() &&
+                                        previous_split->get<std::string>() == split;
+                if (previous_step->get<int>() != step || !same_split)
+                    evaluations.push_back(std::move(previous));
+            }
+        }
+        evaluations.push_back(std::move(entry));
+        std::ranges::stable_sort(evaluations, {}, [](const nlohmann::json& e) { return e.at("step").get<int>(); });
+        record["evaluations"] = std::move(evaluations);
+        return document;
+    }
+
     void MetricsReporter::add_metrics(const EvalMetrics& metrics) {
         all_metrics_.push_back(metrics);
 
@@ -446,6 +545,25 @@ namespace lfs::training {
         if (lfs::core::open_file_for_write(csv_path_, std::ios::app, csv_file)) {
             csv_file << metrics.to_csv_row() << std::endl;
             csv_file.close();
+        }
+    }
+
+    void MetricsReporter::write_view_evaluations(const EvalMetrics& metrics, const std::string_view split) const {
+        if (metrics.views.empty())
+            return;
+        auto document = read_json_object(per_image_path_);
+        for (const auto& view : metrics.views)
+            document = add_view_evaluation(std::move(document), view, metrics.iteration, split);
+        write_json_file(per_image_path_, document);
+    }
+
+    void MetricsReporter::write_training_config(const lfs::core::param::TrainingParameters& params) const {
+        std::error_code ec;
+        std::filesystem::create_directories(output_dir_, ec);
+        if (const auto saved = lfs::core::param::save_training_parameters_to_json(
+                params, output_dir_ / "training_config.json");
+            !saved) {
+            LOG_WARN("Eval: failed to write the training configuration: {}", saved.error());
         }
     }
 
@@ -540,6 +658,8 @@ namespace lfs::training {
         report_file.close();
         std::cout << "Evaluation report saved to: " << lfs::core::path_to_utf8(txt_path_) << std::endl;
         std::cout << "Metrics CSV saved to: " << lfs::core::path_to_utf8(csv_path_) << std::endl;
+        if (std::filesystem::exists(per_image_path_))
+            std::cout << "Per-image metrics JSON saved to: " << lfs::core::path_to_utf8(per_image_path_) << std::endl;
     }
 
     // MetricsEvaluator Implementation
@@ -557,9 +677,16 @@ namespace lfs::training {
         _reporter = std::make_unique<MetricsReporter>(params.dataset.output_path);
     }
 
-    bool MetricsEvaluator::should_evaluate(const int iteration) const {
+    void MetricsEvaluator::write_training_config(const lfs::core::param::TrainingParameters& params) const {
+        if (_reporter)
+            _reporter->write_training_config(params);
+    }
+
+    bool MetricsEvaluator::should_evaluate(const int iteration, const int final_iteration) const {
         if (!_params.optimization.enable_eval)
             return false;
+        if (iteration == final_iteration)
+            return true;
 
         return std::find(_params.optimization.eval_steps.cbegin(), _params.optimization.eval_steps.cend(), iteration) !=
                _params.optimization.eval_steps.cend();
@@ -623,21 +750,7 @@ namespace lfs::training {
             }
         }
         lfs::core::GpuElapsed lpips_timer(lfs::core::GpuBackend::CUDA, 2);
-        std::ofstream per_image_csv;
-        if (_params.optimization.enable_save_eval_images) {
-            if (lfs::core::open_file_for_write(eval_dir / "per_image_metrics.csv", per_image_csv)) {
-                per_image_csv << "image_name,psnr,ssim,lpips\n";
-            } else {
-                LOG_WARN("Eval: failed to open per-image metrics CSV at '{}'",
-                         lfs::core::path_to_utf8(eval_dir / "per_image_metrics.csv"));
-            }
-        }
-
-        const auto mask_mode = _params.optimization.mask_mode;
-        const bool use_masking =
-            mask_mode == lfs::core::param::MaskMode::Segment ||
-            mask_mode == lfs::core::param::MaskMode::Ignore ||
-            mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore;
+        const bool use_masking = eval_uses_masks(_params.optimization.mask_mode);
 
         bool render_normal = false;
         if (_params.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGS) {
@@ -649,8 +762,12 @@ namespace lfs::training {
             }
         }
 
+        result.views.reserve(val_dataset_size);
         for (size_t image_idx = 0; image_idx < val_dataset_size; ++image_idx) {
             lfs::core::Camera* cam = val_dataset->get_camera(image_idx);
+            auto& view = result.views.emplace_back();
+            view.index = static_cast<int>(image_idx);
+            view.image_name = cam->image_name();
             lfs::core::Tensor gt_image;
             try {
                 gt_image = load_eval_gt_image_cpu(
@@ -659,9 +776,12 @@ namespace lfs::training {
                     _params.dataset.max_width);
             } catch (const std::exception& e) {
                 LOG_WARN("Eval: skipping camera '{}' (failed to load GT image: {})", cam->image_name(), e.what());
+                view.skipped_reason = std::string("failed to load ground truth image: ") + e.what();
                 skipped_images++;
                 continue;
             }
+            view.height = static_cast<int>(gt_image.shape()[1]);
+            view.width = static_cast<int>(gt_image.shape()[2]);
 
             lfs::core::Tensor mask;
             if (use_masking) {
@@ -670,6 +790,7 @@ namespace lfs::training {
                     mask = load_eval_mask(cam, gt_image, cam_alpha);
                 } catch (const std::exception& e) {
                     LOG_WARN("Eval: skipping camera '{}' (failed to load mask: {})", cam->image_name(), e.what());
+                    view.skipped_reason = std::string("failed to load mask: ") + e.what();
                     skipped_images++;
                     continue;
                 }
@@ -704,6 +825,7 @@ namespace lfs::training {
                 ssim = _ssim_metric->compute(r_output.image, gt_image, mask);
             } catch (const std::exception& e) {
                 LOG_WARN("Eval: skipping camera '{}' (metric computation failed: {})", cam->image_name(), e.what());
+                view.skipped_reason = std::string("metric computation failed: ") + e.what();
                 skipped_images++;
                 continue;
             }
@@ -711,12 +833,16 @@ namespace lfs::training {
             if (!std::isfinite(psnr) || !std::isfinite(ssim)) {
                 LOG_WARN("Eval: skipping camera '{}' (non-finite metric values: PSNR={}, SSIM={})",
                          cam->image_name(), psnr, ssim);
+                view.skipped_reason = "non-finite metric values";
                 skipped_images++;
                 continue;
             }
 
             psnr_values.push_back(psnr);
             ssim_values.push_back(ssim);
+            view.psnr = psnr;
+            view.ssim = ssim;
+            view.masked = mask.is_valid();
             evaluated_images++;
 
             const auto gt_float = image_as_float01(gt_image).clamp(0.0f, 1.0f);
@@ -775,19 +901,7 @@ namespace lfs::training {
                     LOG_WARN("Eval: LPIPS failed for camera '{}' ({})", cam->image_name(), e.what());
                 }
             }
-            if (per_image_csv) {
-                per_image_csv << '"';
-                for (const char ch : cam->image_name()) {
-                    if (ch == '"')
-                        per_image_csv << '"';
-                    per_image_csv << ch;
-                }
-                per_image_csv << "\"," << std::fixed << std::setprecision(6)
-                              << psnr << "," << ssim << ",";
-                if (lpips)
-                    per_image_csv << *lpips;
-                per_image_csv << "\n";
-            }
+            view.lpips = lpips;
             auto accumulate_bias = [&](const lfs::core::Tensor& image,
                                        std::vector<float>& br,
                                        std::vector<float>& bg,
@@ -929,8 +1043,6 @@ namespace lfs::training {
         if (_params.optimization.enable_save_eval_images) {
             lfs::core::image_io::wait_for_pending_saves();
         }
-        if (per_image_csv)
-            per_image_csv.close();
 
         if (lpips_timed_images > 0) {
             LOG_DEBUG("Eval: LPIPS-only {:.3f} ms/image over {} images",
@@ -972,6 +1084,7 @@ namespace lfs::training {
         }
         if (evaluated_images == 0) {
             LOG_WARN("Eval: no images were successfully evaluated at iteration {}", iteration);
+            _reporter->write_view_evaluations(result, evaluated_split());
             return result;
         }
 
@@ -989,6 +1102,7 @@ namespace lfs::training {
 
         // Add metrics to reporter
         _reporter->add_metrics(result);
+        _reporter->write_view_evaluations(result, evaluated_split());
 
         if (_params.optimization.enable_save_eval_images) {
             std::cout << "Saved " << saved_images << " evaluation images to: " << lfs::core::path_to_utf8(eval_dir) << std::endl;

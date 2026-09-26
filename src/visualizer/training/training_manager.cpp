@@ -2140,12 +2140,12 @@ namespace lfs::vis {
                   params.optimization.strategy, params.optimization.iterations, params.optimization.max_cap);
 
         const bool evaluation_split_changed =
-            previous_params.optimization.enable_eval != params.optimization.enable_eval ||
+            previous_params.optimization.holds_out_eval_images() != params.optimization.holds_out_eval_images() ||
             previous_params.dataset.test_every != params.dataset.test_every;
         if (!trainer_->isInitialized() && scene_ && evaluation_split_changed) {
             refreshCameraEvaluationSplit(
                 *scene_,
-                params.optimization.enable_eval,
+                params.optimization.holds_out_eval_images(),
                 params.dataset.test_every);
         }
         return trainer_->setParams(params);

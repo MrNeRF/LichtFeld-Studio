@@ -190,13 +190,13 @@ namespace lfs::training {
                     }
 
                     const auto& cameras = data.cameras;
-                    const bool enable_eval = params.optimization.enable_eval;
+                    const bool hold_out = params.optimization.holds_out_eval_images();
                     const int test_every = params.dataset.test_every;
                     size_t train_count = 0;
                     size_t val_count = 0;
                     size_t mask_count = 0;
                     for (size_t i = 0; i < cameras.size(); ++i) {
-                        const bool is_eval = enable_eval && (i % test_every) == 0;
+                        const bool is_eval = hold_out && (i % test_every) == 0;
                         cameras[i]->set_split(is_eval ? lfs::core::CameraSplit::Eval : lfs::core::CameraSplit::Train);
                         if (is_eval) {
                             ++val_count;
@@ -212,11 +212,11 @@ namespace lfs::training {
                     const auto train_cameras_id = scene.addCameraGroup(
                         "Training", cameras_group_id, train_count);
                     for (size_t i = 0; i < cameras.size(); ++i) {
-                        if (!enable_eval || (i % test_every) != 0) {
+                        if (!hold_out || (i % test_every) != 0) {
                             scene.addCamera(cameras[i]->image_name(), train_cameras_id, cameras[i]);
                         }
                     }
-                    if (enable_eval && val_count > 0) {
+                    if (hold_out && val_count > 0) {
                         const auto val_cameras_id = scene.addCameraGroup(
                             "Validation", cameras_group_id, val_count);
                         for (size_t i = 0; i < cameras.size(); ++i) {
@@ -226,7 +226,7 @@ namespace lfs::training {
                         }
                     }
 
-                    const auto val_suffix = enable_eval ? std::format(" + {} val", val_count) : std::string{};
+                    const auto val_suffix = hold_out ? std::format(" + {} val", val_count) : std::string{};
                     const std::string mask_suffix = mask_count == 0 ? std::string{}
                                                     : direct_load   ? std::format(" ({} with masks)", mask_count)
                                                                     : std::format(" ({} masked)", mask_count);

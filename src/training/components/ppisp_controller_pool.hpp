@@ -23,8 +23,9 @@ namespace lfs::training {
     };
 
     /// Pool of PPISP controllers with shared resources for memory efficiency.
-    /// Only per-camera FC weights are unique; CNN, buffers, gradients, and Adam state are shared.
-    /// Memory: ~0.9 MB per camera + ~50 MB shared (vs ~3.8 MB per camera without sharing)
+    /// Only per-camera FC weights are unique; CNN weights, fixed-size buffers,
+    /// gradients, and Adam state are shared. Convolution intermediates are
+    /// allocated at each prediction's image size.
     class PPISPControllerPool {
     public:
         using Config = PPISPControllerPoolConfig;
@@ -38,7 +39,7 @@ namespace lfs::training {
         PPISPControllerPool(PPISPControllerPool&&) = delete;
         PPISPControllerPool& operator=(PPISPControllerPool&&) = delete;
 
-        /// Allocate shared buffers for the given max image size. Must be called before predict().
+        /// Prepare the pooled output and image-size bounds. Must be called before predict().
         void allocate_buffers(size_t max_h, size_t max_w);
 
         /// Serializes predict()/backward() transactions: predict() fills shared forward
@@ -122,7 +123,7 @@ namespace lfs::training {
 
         // Shared forward buffers
         size_t buf_h_ = 0, buf_w_ = 0;
-        lfs::core::Tensor buf_conv1_, buf_pool_, buf_conv2_, buf_conv3_, buf_pool2_;
+        lfs::core::Tensor buf_pool2_;
         lfs::core::Tensor buf_fc1_, buf_fc2_, buf_fc3_, buf_output_;
         lfs::core::Tensor fc_input_buffer_;
         lfs::core::Tensor cached_flat_;

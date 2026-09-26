@@ -2718,6 +2718,10 @@ def test_enabled_features_have_independent_parameter_sections():
     assert sections["depth"].find(".//*[@data-for='row : pv_basic_normal_weights_rows']") is None
     assert sections["normal"].find(".//*[@data-for='row : pv_basic_depth_weight_rows']") is None
     assert sections["evaluation"].find(".//*[@data-value='test_every_str']") is not None
+    eval_all = sections["evaluation"].find(".//*[@data-for='row : pv_dataset_eval_train_rows']")
+    assert eval_all is not None
+    holdout = sections["evaluation"].find(".//*[@data-tooltip='training.tooltip.test_every']")
+    assert "dep_eval_holdout" in holdout.get("data-if")
     assert sections["random-init"].find(".//*[@data-for='row : pv_init_random_rows']") is not None
     basic_params = document.find(
         ".//div[@class='training-panel-block'][@data-if='pv_section_basic_params_visible']"

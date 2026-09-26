@@ -43,7 +43,7 @@ namespace lfs::vis::training_session_detail {
 
     inline void refreshCameraEvaluationSplit(
         lfs::core::Scene& scene,
-        const bool enable_eval,
+        const bool hold_out,
         const int test_every) {
         auto cameras = scene.getActiveCameras();
         std::erase_if(cameras, [](const auto& camera) {
@@ -58,7 +58,7 @@ namespace lfs::vis::training_session_detail {
         const auto split_interval = static_cast<size_t>(std::max(1, test_every));
         size_t eval_count = 0;
         for (size_t i = 0; i < cameras.size(); ++i) {
-            const bool is_eval = enable_eval && (i % split_interval) == 0;
+            const bool is_eval = hold_out && (i % split_interval) == 0;
             cameras[i]->set_split(
                 is_eval ? lfs::core::CameraSplit::Eval
                         : lfs::core::CameraSplit::Train);
