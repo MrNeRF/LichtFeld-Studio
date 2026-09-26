@@ -17,7 +17,6 @@ namespace lfs::training {
         size_t error_map = 0;
     };
 
-    // Arena shrink and reset at the trainer's named memory boundaries.
     PhotoWorkspaceBytes photo_workspace_bytes(const lfs::gpu_ops::PhotoSaved& saved);
     void photo_shrink_to_required(lfs::gpu_ops::PhotoSaved& saved);
     void photo_reset(lfs::gpu_ops::PhotoSaved& saved);

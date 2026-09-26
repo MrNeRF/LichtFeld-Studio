@@ -20,8 +20,6 @@ namespace lfs::training {
 
     namespace ops = lfs::gpu_ops;
 
-    // One immutable table per GpuBackend. Only families with a live caller are
-    // members; every other family is still supplied by the CUDA training code.
     struct TrainingOps {
         core::GpuBackend backend = core::GpuBackend::CUDA;
         const ops::PhotometricOps* photometric = nullptr;
@@ -76,5 +74,9 @@ namespace lfs::training {
         const core::param::TrainingParameters& resolved,
         core::GpuBackend backend,
         FamilySet input_dependencies);
+
+    // Empty when this one family is present on the backend's table.
+    std::optional<std::string> unavailable_training_family(
+        core::GpuBackend backend, Family family);
 
 } // namespace lfs::training

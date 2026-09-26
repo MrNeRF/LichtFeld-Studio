@@ -48,6 +48,7 @@
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/morton_reorder.hpp"
+#include "lfs/training/ops/photometric_cuda.hpp"
 #include "lfs/training/perf_bench.hpp"
 #include "lfs/training/screen_share.cuh"
 #include "lfs/training/sh_value_codec.hpp"
@@ -1645,7 +1646,9 @@ namespace lfs::training {
         const lfs::core::param::OptimizationParameters& opt_params,
         const lfs::core::Tensor& raw_rendered) {
         if (training_ops_ == nullptr || training_ops_->photometric == nullptr) {
-            return std::unexpected("Photometric training ops are unavailable");
+            const auto reason = unavailable_training_family(
+                core::default_gpu_backend(), Family::Photometric);
+            return std::unexpected(reason.value_or("Photometric training ops are unavailable"));
         }
         const bool use_decoupled_appearance_loss =
             raw_rendered.is_valid() &&
@@ -1766,7 +1769,9 @@ namespace lfs::training {
 
         if (photometric_weight.is_valid()) {
             if (training_ops_ == nullptr || training_ops_->photometric == nullptr) {
-                return std::unexpected("Photometric training ops are unavailable");
+                const auto reason = unavailable_training_family(
+                    core::default_gpu_backend(), Family::Photometric);
+                return std::unexpected(reason.value_or("Photometric training ops are unavailable"));
             }
             const lfs::gpu_ops::PhotoParams photo_params{
                 .path = photometric_path(true, use_decoupled_appearance_loss, opt_params.lambda_dssim),

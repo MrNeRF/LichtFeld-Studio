@@ -3,9 +3,21 @@
 
 #pragma once
 
-#include "core/gpu_op_types.hpp"
+#include "core/tensor.hpp"
+
+#include <memory>
 
 namespace lfs::gpu_ops {
+
+    using Tensor = core::Tensor;
+    using In = const Tensor&;
+    using Out = Tensor&;
+
+    // Concrete members exist only in the backend implementation.
+    struct BackendState {
+        virtual ~BackendState() = default;
+    };
+    using State = std::unique_ptr<BackendState>;
 
     enum class PhotoPath {
         L1,
@@ -30,14 +42,12 @@ namespace lfs::gpu_ops {
     struct PhotometricOps {
         State (*create)();
 
-        // Loss and image gradient. Binds the caller's output tensors to the
-        // workspace views this pass produces.
+        // Binds the caller's outputs to the workspace views this pass produces.
         void (*evaluate)(
             PhotoSaved&, In corrected, In raw, In target, In mask,
             const PhotoParams&, Out loss, Out grad_corrected, Out grad_raw);
 
-        // Allocating metric reduction. maps selects the per-pixel map variant
-        // and publishes those maps on PhotoSaved.
+        // Allocating metric reduction. maps publishes the per-pixel maps on PhotoSaved.
         Tensor (*metric)(
             PhotoSaved&, In predicted, In target,
             bool maps, bool valid_padding);

@@ -19,7 +19,6 @@
 #include "dataset.hpp"
 #include "io/project_recovery.hpp"
 #include "kernels/depth_loss.hpp"
-#include "lfs/training/ops/photometric_cuda.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include "lfs/training/refine_scratch.hpp"
 #include "losses/mask_loss.hpp"

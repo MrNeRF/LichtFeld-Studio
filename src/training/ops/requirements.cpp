@@ -104,4 +104,15 @@ namespace lfs::training {
         return training_unavailable_message(backend, missing);
     }
 
+    std::optional<std::string> unavailable_training_family(
+        const core::GpuBackend backend, const Family family) {
+        FamilySet required;
+        required.set(static_cast<size_t>(family));
+        const auto missing = missing_training_families(training_ops(backend), required);
+        if (missing.empty()) {
+            return std::nullopt;
+        }
+        return training_unavailable_message(backend, missing);
+    }
+
 } // namespace lfs::training
