@@ -1162,25 +1162,22 @@ namespace {
         },
                             half_tolerance, half_tolerance);
 
-        // A query whose keys are all masked out attends to nothing, as on CUDA.
+        // A query whose keys are all masked out attends to nothing, as on CUDA
+        // (TensorVulkanMatrixNn checks the zeros); with split keys too.
         auto blocked = Tensor::zeros({1, 1, 19, 40}, Device::CPU);
         blocked.slice(2, 4, 5).fill_(-std::numeric_limits<float>::infinity());
-        const auto attended = [&] {
-            const Tensor gm = to_metal(blocked);
-            GpuBackendScope scope(GpuBackend::Metal);
-            return nn::attention(gpu(q), gpu(k), gpu(v), &gm).cpu();
-        }();
-        EXPECT_EQ(attended.slice(2, 4, 5).abs().max_scalar(), 0.0f);
-        EXPECT_GT(attended.slice(2, 5, 6).abs().max_scalar(), 0.0f);
+        expect_same_on_both([&] {
+            const Tensor gm = gpu(blocked);
+            return nn::attention(gpu(q), gpu(k), gpu(v), &gm);
+        },
+                            tolerance, tolerance);
         auto blocked_split = Tensor::zeros({1, 1, 5, 1000}, Device::CPU);
         blocked_split.slice(2, 3, 4).fill_(-std::numeric_limits<float>::infinity());
-        const auto attended_split = [&] {
-            const Tensor gm = to_metal(blocked_split);
-            GpuBackendScope scope(GpuBackend::Metal);
-            return nn::attention(gpu(few), gpu(many_keys), gpu(many_values), &gm).cpu();
-        }();
-        EXPECT_EQ(attended_split.slice(2, 3, 4).abs().max_scalar(), 0.0f);
-        EXPECT_GT(attended_split.slice(2, 4, 5).abs().max_scalar(), 0.0f);
+        expect_same_on_both([&] {
+            const Tensor gm = gpu(blocked_split);
+            return nn::attention(gpu(few), gpu(many_keys), gpu(many_values), &gm);
+        },
+                            tolerance, tolerance);
 
         // Convolutions over batches: grouped 1x1, a 3x3 with more output
         // channels than one tile whose patches exceed one 64 MiB chunk, and
