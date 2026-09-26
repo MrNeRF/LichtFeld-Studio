@@ -309,6 +309,58 @@ namespace lfs::core::internal {
             return shader_values(layout.dims, layout.rank, "Metal layout dimension exceeds uint32");
         }
 
+        // Mirrors BroadcastAxes in kernels.metal.
+        struct BroadcastAxes {
+            std::array<uint32_t, MAX_TENSOR_RANK> dims{};
+            std::array<std::array<uint32_t, 4>, MAX_TENSOR_RANK> strides{};
+            uint32_t rank = 0;
+            std::array<uint32_t, 3> padding{};
+        };
+        static_assert(sizeof(BroadcastAxes) == 176);
+
+        // Dense operands, right-aligned to an output of fewer than 2^32 elements.
+        // Adjacent axes that every operand broadcasts alike merge, so most
+        // launches divide once or twice per element for all operands together.
+        BroadcastAxes broadcast_axes(const StridedLayout& output,
+                                     const std::initializer_list<const StridedLayout*> operands) {
+            LFS_ASSERT_MSG(operands.size() <= 4, "Metal broadcast takes at most four operands");
+            std::array<size_t, 4> dense{1, 1, 1, 1};
+            BroadcastAxes inner_first;
+            uint32_t merging = 0; // which operands broadcast along the axis being merged
+            for (size_t axis = output.rank; axis-- > 0;) {
+                const size_t extent = output.dims[axis];
+                if (extent == 1)
+                    continue;
+                uint32_t broadcasting = 0;
+                std::array<uint32_t, 4> strides{};
+                size_t operand = 0;
+                for (const StridedLayout* const layout : operands) {
+                    const size_t lead = output.rank - layout->rank;
+                    const size_t operand_extent = axis >= lead ? layout->dims[axis - lead] : 1;
+                    LFS_ASSERT_MSG(operand_extent == 1 || operand_extent == extent,
+                                   "Metal broadcast operand does not match the output");
+                    if (operand_extent == 1)
+                        broadcasting |= 1u << operand;
+                    else
+                        strides[operand] = static_cast<uint32_t>(dense[operand]);
+                    dense[operand++] *= operand_extent;
+                }
+                if (inner_first.rank > 0 && broadcasting == merging) {
+                    inner_first.dims[inner_first.rank - 1] *= static_cast<uint32_t>(extent);
+                    continue;
+                }
+                inner_first.dims[inner_first.rank] = static_cast<uint32_t>(extent);
+                inner_first.strides[inner_first.rank++] = strides;
+                merging = broadcasting;
+            }
+            BroadcastAxes axes{.dims = {1}, .rank = std::max(inner_first.rank, 1u)};
+            for (uint32_t axis = 0; axis < inner_first.rank; ++axis) {
+                axes.dims[axis] = inner_first.dims[inner_first.rank - 1 - axis];
+                axes.strides[axis] = inner_first.strides[inner_first.rank - 1 - axis];
+            }
+            return axes;
+        }
+
         struct CatPadParams {
             uint64_t input_offset;
             uint64_t output_offset;
@@ -1598,10 +1650,11 @@ namespace lfs::core::internal {
             return;
         struct WhereParams {
             uint64_t condition_offset, x_offset, y_offset, output_offset;
-            std::array<uint32_t, MAX_TENSOR_RANK> condition_dims, x_dims, y_dims, output_dims;
-            uint32_t condition_rank, x_rank, y_rank, output_rank, count, padding;
+            uint32_t count;
+            std::array<uint32_t, 3> padding;
+            BroadcastAxes axes;
         };
-        static_assert(sizeof(WhereParams) == 184);
+        static_assert(sizeof(WhereParams) == 224);
         const auto context = acquire_context();
         const auto condition_at = context->locate(condition);
         const auto x_at = context->locate(x);
@@ -1612,16 +1665,9 @@ namespace lfs::core::internal {
             .x_offset = x_at.offset,
             .y_offset = y_at.offset,
             .output_offset = output_at.offset,
-            .condition_dims = shader_dims(condition_layout),
-            .x_dims = shader_dims(x_layout),
-            .y_dims = shader_dims(y_layout),
-            .output_dims = shader_dims(output_layout),
-            .condition_rank = static_cast<uint32_t>(condition_layout.rank),
-            .x_rank = static_cast<uint32_t>(x_layout.rank),
-            .y_rank = static_cast<uint32_t>(y_layout.rank),
-            .output_rank = static_cast<uint32_t>(output_layout.rank),
             .count = checked_u32(output_layout.element_count, "Metal where count exceeds uint32"),
-            .padding = 0,
+            .padding = {},
+            .axes = broadcast_axes(output_layout, {&condition_layout, &x_layout, &y_layout}),
         };
         const uint32_t dtype = static_cast<uint32_t>(output.dtype);
         const auto pipeline = context->pipeline(
@@ -1721,14 +1767,9 @@ namespace lfs::core::internal {
                        "Metal broadcast dtype does not match the pointwise program");
         struct BroadcastParams {
             PointwiseParams pointwise;
-            std::array<uint32_t, MAX_TENSOR_RANK> lhs_dims;
-            std::array<uint32_t, MAX_TENSOR_RANK> rhs_dims;
-            std::array<uint32_t, MAX_TENSOR_RANK> output_dims;
-            uint32_t lhs_rank;
-            uint32_t rhs_rank;
-            uint32_t output_rank;
-            uint32_t padding;
+            BroadcastAxes axes;
         };
+        static_assert(sizeof(BroadcastParams) == 224);
         const auto context = acquire_context();
         const auto lhs_at = context->locate(lhs);
         const auto rhs_at = context->locate(rhs);
@@ -1738,12 +1779,7 @@ namespace lfs::core::internal {
                           .rhs_offset = rhs_at.offset,
                           .output_offset = output_at.offset,
                           .count = checked_u32(output_layout.element_count, "Metal broadcast count exceeds uint32")},
-            .lhs_dims = shader_dims(lhs_layout),
-            .rhs_dims = shader_dims(rhs_layout),
-            .output_dims = shader_dims(output_layout),
-            .lhs_rank = static_cast<uint32_t>(lhs_layout.rank),
-            .rhs_rank = static_cast<uint32_t>(rhs_layout.rank),
-            .output_rank = static_cast<uint32_t>(output_layout.rank),
+            .axes = broadcast_axes(output_layout, {&lhs_layout, &rhs_layout}),
         };
         const auto pipeline = context->pipeline(
             "broadcast_binary", {{0, static_cast<uint32_t>(program.op)},

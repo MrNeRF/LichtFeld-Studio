@@ -734,41 +734,35 @@ kernel void strided_copy(device const uchar* input_buffer [[buffer(0)]],
                  output_buffer + params.output_offset, kScatter != 0 ? strided : ulong(index));
 }
 
+// Output axes of a broadcast launch, outermost first. The host merges
+// adjacent axes that every operand broadcasts alike; component i of a stride
+// serves operand i and is 0 on the axes that operand broadcasts along.
+struct BroadcastAxes {
+    uint dims[8];
+    uint4 strides[8];
+    uint rank;
+    uint padding[3];
+};
+
+static uint4 broadcast_indices(uint index, constant BroadcastAxes& axes) {
+    uint4 indices = 0;
+    for (int axis = int(axes.rank) - 1; axis > 0; --axis) {
+        const uint quotient = index / axes.dims[axis];
+        indices += (index - quotient * axes.dims[axis]) * axes.strides[axis];
+        index = quotient;
+    }
+    return indices + index * axes.strides[0];
+}
+
 struct WhereParams {
     ulong condition_offset;
     ulong x_offset;
     ulong y_offset;
     ulong output_offset;
-    uint condition_dims[8];
-    uint x_dims[8];
-    uint y_dims[8];
-    uint output_dims[8];
-    uint condition_rank;
-    uint x_rank;
-    uint y_rank;
-    uint output_rank;
     uint count;
-    uint padding;
+    uint padding[3];
+    BroadcastAxes axes;
 };
-
-// Right-aligned broadcast index, as in where.slang and the CUDA backend.
-static ulong broadcast_index(ulong index, constant uint* source_dims, uint source_rank,
-                             constant uint* output_dims, uint output_rank) {
-    ulong source_index = 0;
-    ulong source_stride = 1;
-    for (int axis = int(output_rank) - 1; axis >= 0; --axis) {
-        const ulong coordinate = axis == 0 ? index : index % output_dims[axis];
-        if (axis != 0)
-            index /= output_dims[axis];
-        const int source_axis = axis - int(output_rank - source_rank);
-        if (source_axis >= 0) {
-            const uint extent = source_dims[source_axis];
-            source_index += (extent == 1u ? 0 : coordinate) * source_stride;
-            source_stride *= extent;
-        }
-    }
-    return source_index;
-}
 
 kernel void where_select(device const uchar* condition [[buffer(0)]],
                          device const uchar* x [[buffer(1)]],
@@ -778,26 +772,16 @@ kernel void where_select(device const uchar* condition [[buffer(0)]],
                          uint index [[thread_position_in_grid]]) {
     if (index >= params.count)
         return;
-    const bool selected = (condition + params.condition_offset)[broadcast_index(
-                              index, params.condition_dims, params.condition_rank,
-                              params.output_dims, params.output_rank)] != 0;
-    const ulong source_index = selected
-        ? broadcast_index(index, params.x_dims, params.x_rank, params.output_dims, params.output_rank)
-        : broadcast_index(index, params.y_dims, params.y_rank, params.output_dims, params.output_rank);
-    copy_element(selected ? x + params.x_offset : y + params.y_offset, source_index,
+    const uint4 source = broadcast_indices(index, params.axes);
+    const bool selected = (condition + params.condition_offset)[source.x] != 0;
+    copy_element(selected ? x + params.x_offset : y + params.y_offset, selected ? source.y : source.z,
                  output + params.output_offset, index);
 }
 
-// Binary pointwise ops over right-aligned broadcast operands.
+// Binary pointwise ops over broadcast operands.
 struct BroadcastParams {
     PointwiseParams pointwise;
-    uint lhs_dims[8];
-    uint rhs_dims[8];
-    uint output_dims[8];
-    uint lhs_rank;
-    uint rhs_rank;
-    uint output_rank;
-    uint padding;
+    BroadcastAxes axes;
 };
 
 kernel void broadcast_binary(device const uchar* lhs_buffer [[buffer(0)]],
@@ -807,11 +791,9 @@ kernel void broadcast_binary(device const uchar* lhs_buffer [[buffer(0)]],
                              uint index [[thread_position_in_grid]]) {
     if (index >= params.pointwise.count)
         return;
+    const uint4 source = broadcast_indices(index, params.axes);
     evaluate(lhs_buffer + params.pointwise.lhs_offset, rhs_buffer + params.pointwise.rhs_offset,
-             output_buffer + params.pointwise.output_offset, params.pointwise,
-             uint(broadcast_index(index, params.lhs_dims, params.lhs_rank, params.output_dims, params.output_rank)),
-             uint(broadcast_index(index, params.rhs_dims, params.rhs_rank, params.output_dims, params.output_rank)),
-             index);
+             output_buffer + params.pointwise.output_offset, params.pointwise, source.x, source.y, index);
 }
 
 // ---------------------------------------------------------------------------

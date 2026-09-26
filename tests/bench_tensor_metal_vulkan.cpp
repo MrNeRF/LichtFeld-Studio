@@ -108,13 +108,17 @@ int main() {
             report(name, count, vulkan_ms, metal_ms);
         };
         compare("add", [](const Inputs& in) { return in.a + in.b; });
+        // Row and column operands broadcast, as in bias and normalization layers.
+        const int rows = static_cast<int>(count / 64);
+        compare("add_row", [&](const Inputs& in) { return in.a.reshape({rows, 64}) + in.b.slice(0, 0, 64); });
+        compare("div_column", [&](const Inputs& in) {
+            return in.a.reshape({rows, 64}) / in.b.slice(0, 0, rows).reshape({rows, 1});
+        });
         compare("mul_scalar", [](const Inputs& in) { return in.a * 1.5f; });
         compare("exp", [](const Inputs& in) { return in.a.exp(); });
         compare("chain4", [](const Inputs& in) { return ((in.a + in.b) * 2.0f - in.b).exp(); });
         compare("to_int32", [](const Inputs& in) { return in.a.to(DataType::Int32); });
-        compare("transpose", [&](const Inputs& in) {
-            return in.a.reshape({static_cast<int>(count / 64), 64}).transpose(0, 1).contiguous();
-        });
+        compare("transpose", [&](const Inputs& in) { return in.a.reshape({rows, 64}).transpose(0, 1).contiguous(); });
         compare("sum", [](const Inputs& in) { return Tensor::full({1}, in.a.sum_scalar(), Device::CPU); });
         // Square matrices of count elements: 64, 1024 and 4096 on a side.
         const int side = static_cast<int>(std::lround(std::sqrt(static_cast<double>(count))));
@@ -123,7 +127,7 @@ int main() {
         });
         // A 64 -> 64 fully connected layer with bias over count / 64 rows.
         compare("linear64", [&](const Inputs& in) {
-            return in.a.reshape({static_cast<int>(count / 64), 64})
+            return in.a.reshape({rows, 64})
                 .linear(in.b.slice(0, 0, 64 * 64).reshape({64, 64}), in.b.slice(0, 0, 64));
         });
         compare("upload", [](const Inputs& in) { return in.host.to(Device::GPU); });
