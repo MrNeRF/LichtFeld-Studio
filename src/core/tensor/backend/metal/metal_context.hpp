@@ -112,6 +112,9 @@ namespace lfs::core::internal::metal {
         // Commits the open batch and signals `event` with the last submitted
         // serial once all submitted work completed; returns that serial.
         uint64_t signal(id<MTLSharedEvent> event);
+        // Commits the open batch; the GPU starts later batches once `event`
+        // reaches `value`. The host does not wait.
+        void queue_wait(id<MTLSharedEvent> event, uint64_t value);
         void wait(uint64_t serial);
         uint64_t completed() const;
         void wait_idle();

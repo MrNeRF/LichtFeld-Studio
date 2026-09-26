@@ -306,6 +306,63 @@ namespace {
                                              std::pair{GpuBackend::Vulkan, true},
                                              std::pair{GpuBackend::Metal, false}));
 
+    // The LOD page queue on Metal: its work waits on the GPU for the consumer
+    // timeline, uploads reuse storage that Metal already used, and completion
+    // reaches the consumer device through the queue timeline.
+    TEST_F(TensorVulkanBufferQuery, MetalWorkQueueOrdersAgainstTheConsumerTimeline) {
+        if (!gpu_backend_available(GpuBackend::Metal))
+            GTEST_SKIP() << "Metal backend unavailable";
+        auto candidate = lfs::core::HeadlessAdoptedDevice::try_create(true);
+        if (!candidate || !candidate->handles().metal_objects)
+            GTEST_SKIP() << "No Vulkan device shares Metal objects";
+        adopted_.emplace(std::move(*candidate));
+        const auto device = static_cast<VkDevice>(adopted_->handles().device);
+        VkSemaphoreTypeCreateInfo type{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+        type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+        VkSemaphoreCreateInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+        info.pNext = &type;
+        VkSemaphore consumer = VK_NULL_HANDLE;
+        ASSERT_EQ(vkCreateSemaphore(device, &info, nullptr, &consumer), VK_SUCCESS);
+        {
+            const GpuBackendScope scope(GpuBackend::Metal);
+            TensorWorkQueue queue(GpuBackend::Metal, device, consumer);
+            ASSERT_NE(queue.timeline(), nullptr);
+            Tensor staging = Tensor::zeros({64}, Device::GPU);
+            Tensor output = Tensor::empty({64}, Device::GPU);
+            TensorUpload upload;
+            const auto completion = queue.execute([&] {
+                upload.enqueue(staging, Tensor::full({64}, 3.0f, Device::CPU));
+                output.copy_from(staging.mul(2.0f));
+            },
+                                                  1);
+            EXPECT_FALSE(upload.pending());
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            EXPECT_FALSE(completion.ready());
+
+            VkSemaphoreSignalInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+            signal.semaphore = consumer;
+            signal.value = 1;
+            ASSERT_EQ(vkSignalSemaphore(device, &signal), VK_SUCCESS);
+            completion.wait();
+            const auto point = completion.timeline();
+            EXPECT_EQ(point.semaphore, queue.timeline());
+            const auto timeline = static_cast<VkSemaphore>(point.semaphore);
+            VkSemaphoreWaitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+            wait.semaphoreCount = 1;
+            wait.pSemaphores = &timeline;
+            wait.pValues = &point.value;
+            EXPECT_EQ(vkWaitSemaphores(device, &wait, 1'000'000'000), VK_SUCCESS);
+            for (const float value : output.cpu().to_vector())
+                EXPECT_FLOAT_EQ(value, 6.0f);
+
+            upload.enqueue(staging, Tensor::full({64}, 5.0f, Device::CPU));
+            EXPECT_FALSE(upload.pending());
+            for (const float value : staging.cpu().to_vector())
+                EXPECT_FLOAT_EQ(value, 5.0f);
+        }
+        vkDestroySemaphore(device, consumer, nullptr);
+    }
+
     // Degree-zero splats carry an empty SH tensor, which has no storage, so
     // quantizing their resident LOD pages must not record it as a read.
     TEST_F(TensorVulkanBufferQuery, RadResidentPagesQuantizeWithoutSh) {

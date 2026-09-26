@@ -9,6 +9,8 @@ namespace lfs::core {
     struct TensorCompletionAccess {
         static TensorCompletion cuda(cudaStream_t stream, VulkanTimelinePoint point = {});
         static TensorCompletion vulkan(uint64_t value);
+        // Completes with the Metal batch `serial`; `point` is signaled with it.
+        static TensorCompletion metal(uint64_t serial, VulkanTimelinePoint point = {});
         static TensorCompletion external(void* device, VulkanTimelinePoint point);
     };
 } // namespace lfs::core

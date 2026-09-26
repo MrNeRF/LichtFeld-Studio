@@ -792,6 +792,15 @@ namespace lfs::core {
         return result;
     }
 
+    TensorCompletion TensorCompletionAccess::metal(const uint64_t serial, VulkanTimelinePoint point) {
+        TensorCompletion result;
+        result.impl_ = std::make_shared<TensorCompletion::Impl>();
+        result.impl_->settle_on_release = false;
+        result.impl_->metal_value = serial;
+        result.impl_->point = std::move(point);
+        return result;
+    }
+
     TensorCompletion TensorCompletionAccess::external(void* device, VulkanTimelinePoint point) {
         TensorCompletion result;
         result.impl_ = std::make_shared<TensorCompletion::Impl>();

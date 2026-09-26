@@ -13,6 +13,8 @@ namespace lfs::core {
     class Tensor;
     // Reusable asynchronous H2D slot. Owns both tensors until the queued copy
     // completes. Destruction waits; poll never blocks. Does not alter copy_from.
+    // Metal copies through unified memory during enqueue, after earlier GPU
+    // use of the destination.
     class LFS_CORE_API TensorUpload {
     public:
         TensorUpload();
@@ -21,7 +23,7 @@ namespace lfs::core {
         TensorUpload& operator=(TensorUpload&&) noexcept;
         void enqueue(Tensor destination, const Tensor& source);
         // execution_target is a CUDA stream (nullptr selects the CUDA default
-        // stream). Vulkan uses its backend-owned queue and requires nullptr.
+        // stream). Vulkan and Metal use their own queues and require nullptr.
         void enqueue(Tensor destination, const Tensor& source, void* execution_target);
         void enqueue(Tensor destination, std::span<const std::byte> source,
                      void* execution_target);

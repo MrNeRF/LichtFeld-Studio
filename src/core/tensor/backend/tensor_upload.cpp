@@ -13,6 +13,7 @@
 #include "cuda/runtime/memory_pool.hpp"
 #endif
 #include "tensor_completion.hpp"
+#include "tensor_vulkan_interop.hpp"
 #include "vulkan/vk_context.hpp"
 #if LFS_HAS_CUDA
 #include "vulkan/vk_cuda_bridge.hpp"
@@ -101,8 +102,8 @@ namespace lfs::core {
             !destination.is_contiguous() || destination.dtype() != source.dtype() || destination.bytes() != source.bytes())
             throw std::invalid_argument("TensorUpload requires matching contiguous CPU and GPU tensors");
         const auto backend = gpu_backend_of(destination);
-        if (backend == GpuBackend::Vulkan && execution_target != nullptr)
-            throw std::invalid_argument("TensorUpload Vulkan execution target is backend-owned");
+        if (backend != GpuBackend::CUDA && execution_target != nullptr)
+            throw std::invalid_argument("TensorUpload execution targets are CUDA streams");
         if (!impl_)
             impl_ = std::make_unique<Impl>();
         auto& s = *impl_;
@@ -124,10 +125,15 @@ namespace lfs::core {
                     check(cudaEventCreateWithFlags(&s.cuda_completion, cudaEventDisableTiming));
                 check(cudaEventRecord(s.cuda_completion, stream));
 #endif
-            } else {
+            } else if (backend == GpuBackend::Vulkan) {
                 s.vk = internal::acquire_vulkan_context();
                 s.completion = TensorCompletionAccess::vulkan(
                     s.vk->recorders().pending_value(internal::storage_ref(s.destination)));
+            } else {
+                // Metal copies through unified memory before returning.
+                s.pending = false;
+                s.source = {};
+                s.destination = {};
             }
         } catch (...) {
             internal::backend_ops_for(s.destination).synchronize_stream(internal::ExecContext{stream});
@@ -249,6 +255,7 @@ namespace lfs::core {
 #if LFS_HAS_CUDA
         std::vector<std::pair<cudaExternalSemaphore_t, VulkanTimelinePoint>> retired_consumers;
 #endif
+        std::unique_ptr<internal::MetalVulkanQueue> metal;
         uint64_t counter = 0;
         TensorCompletion last;
         ~Impl() {
@@ -420,6 +427,15 @@ namespace lfs::core {
             s.ready = internal::acquire_vulkan_context()->timeline();
             return;
         }
+        if (backend == GpuBackend::Metal) {
+#ifdef LFS_TENSOR_METAL
+            s.metal = internal::make_metal_vulkan_queue(device, consumer);
+            s.ready = static_cast<VkSemaphore>(s.metal->timeline());
+            return;
+#else
+            throw std::runtime_error("Metal tensor work queues are unavailable in this build");
+#endif
+        }
 #if LFS_HAS_CUDA
         check(cudaStreamCreateWithFlags(&s.stream, cudaStreamNonBlocking));
         if (!s.device)
@@ -470,6 +486,8 @@ namespace lfs::core {
 #else
                 throw std::runtime_error("CUDA tensor work queues are unavailable in this build");
 #endif
+            } else if (s.metal) {
+                s.metal->wait(value);
             } else {
                 const auto ctx = internal::acquire_vulkan_context();
                 consumer_completion = ctx->recorders().wait_external({}, s.consumer, value, {});
@@ -490,6 +508,8 @@ namespace lfs::core {
 #else
                 throw std::runtime_error("CUDA tensor work queues are unavailable in this build");
 #endif
+            } else if (s.metal) {
+                result = s.metal->signal();
             } else {
                 result = TensorCompletionAccess::vulkan(
                     std::max(consumer_completion, internal::acquire_vulkan_context()->recorders().flush_current()));
@@ -499,6 +519,8 @@ namespace lfs::core {
 #if LFS_HAS_CUDA
                 (void)cudaStreamSynchronize(s.stream);
 #endif
+            } else if (s.metal) {
+                s.metal->signal().wait();
             } else {
                 internal::acquire_vulkan_context()->recorders().wait_all();
             }

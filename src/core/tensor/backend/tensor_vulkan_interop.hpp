@@ -29,4 +29,18 @@ namespace lfs::core::internal {
     std::shared_ptr<TensorVulkanInteropBackend> make_cuda_vulkan_interop(VulkanInteropDevice device);
     std::shared_ptr<TensorVulkanInteropBackend> make_vulkan_vulkan_interop(VulkanInteropDevice device);
     std::shared_ptr<TensorVulkanInteropBackend> make_metal_vulkan_interop(VulkanInteropDevice device);
+
+    // Orders Metal tensor work against a Vulkan device on the GPU: wait() holds
+    // later Metal batches until the consumer timeline reaches a value, and
+    // signal() completes behind all submitted work on timeline(), a semaphore
+    // of the device. Without a device, signal() completes on Metal alone.
+    class MetalVulkanQueue {
+    public:
+        virtual ~MetalVulkanQueue() = default;
+        [[nodiscard]] virtual void* timeline() const = 0;
+        virtual void wait(uint64_t consumer_value) = 0;
+        virtual TensorCompletion signal() = 0;
+    };
+
+    std::unique_ptr<MetalVulkanQueue> make_metal_vulkan_queue(void* device, void* consumer_timeline);
 } // namespace lfs::core::internal

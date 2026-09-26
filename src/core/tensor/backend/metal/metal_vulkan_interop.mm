@@ -4,7 +4,8 @@
 // Shares Metal tensors with a Vulkan (MoltenVK) consumer without copies:
 // VK_EXT_metal_objects imports every storage's MTLBuffer into the consumer
 // device, and an event that the Metal queue signals behind tensor work into
-// a timeline semaphore, so the consumer's queue waits on the GPU.
+// a timeline semaphore, so the consumer's queue waits on the GPU. Work queues
+// also wait the other way, on the event behind the consumer's timeline.
 
 #include "../tensor_completion.hpp"
 #include "../tensor_vulkan_interop.hpp"
@@ -58,6 +59,26 @@ namespace lfs::core::internal {
             Tensor tensor;
             std::shared_ptr<Imported> buffer;
         };
+
+        // A timeline semaphore of the device that a new Metal event backs.
+        // MoltenVK sets an imported event to the initial value, so the event
+        // must be new and only the Metal queue may advance it.
+        std::shared_ptr<Imported> import_timeline(const VkDevice device, id<MTLDevice> const metal) {
+            auto imported = std::make_shared<Imported>();
+            imported->device = device;
+            imported->event = [metal newSharedEvent];
+            if (!imported->event)
+                throw TensorError("Metal could not create the Vulkan interop event");
+            VkImportMetalSharedEventInfoEXT source{VK_STRUCTURE_TYPE_IMPORT_METAL_SHARED_EVENT_INFO_EXT};
+            source.mtlSharedEvent = imported->event;
+            VkSemaphoreTypeCreateInfo type{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+            type.pNext = &source;
+            type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+            VkSemaphoreCreateInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+            info.pNext = &type;
+            check(vkCreateSemaphore(device, &info, nullptr, &imported->semaphore), "vkCreateSemaphore");
+            return imported;
+        }
 
         class API_AVAILABLE(macos(26.0)) MetalTensorVulkanInterop final : public TensorVulkanInteropBackend {
         public:
@@ -197,27 +218,14 @@ namespace lfs::core::internal {
                 return imported;
             }
 
-            // A consumer timeline for the current Metal context. MoltenVK sets an
-            // imported event to the initial value, so the event is new and only
-            // this session's signals advance it.
+            // Serials restart with a new Metal context, so each context signals
+            // its own timeline.
             std::shared_ptr<Imported> timeline(metal::Context& context) {
                 std::lock_guard lock(mutex_);
                 if (timeline_ && timeline_->semaphore && timeline_->context == context.context_id())
                     return timeline_;
-                auto imported = std::make_shared<Imported>();
-                imported->device = static_cast<VkDevice>(target_.device);
+                auto imported = import_timeline(static_cast<VkDevice>(target_.device), context.device());
                 imported->context = context.context_id();
-                imported->event = [context.device() newSharedEvent];
-                if (!imported->event)
-                    throw TensorError("Metal could not create the Vulkan interop event");
-                VkImportMetalSharedEventInfoEXT source{VK_STRUCTURE_TYPE_IMPORT_METAL_SHARED_EVENT_INFO_EXT};
-                source.mtlSharedEvent = imported->event;
-                VkSemaphoreTypeCreateInfo type{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
-                type.pNext = &source;
-                type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
-                VkSemaphoreCreateInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-                info.pNext = &type;
-                check(vkCreateSemaphore(imported->device, &info, nullptr, &imported->semaphore), "vkCreateSemaphore");
                 imports_.push_back(imported);
                 timeline_ = imported;
                 return imported;
@@ -234,11 +242,58 @@ namespace lfs::core::internal {
             std::vector<std::weak_ptr<Imported>> imports_;
             std::shared_ptr<Imported> timeline_;
         };
+
+        class API_AVAILABLE(macos(26.0)) MetalQueue final : public MetalVulkanQueue {
+        public:
+            MetalQueue(const VkDevice device, const VkSemaphore consumer) {
+                if (!device)
+                    return;
+                timeline_ = import_timeline(device, metal::acquire_context()->device());
+                if (!consumer)
+                    return;
+                const auto export_objects = reinterpret_cast<PFN_vkExportMetalObjectsEXT>(
+                    vkGetDeviceProcAddr(device, "vkExportMetalObjectsEXT"));
+                VkExportMetalSharedEventInfoEXT event{VK_STRUCTURE_TYPE_EXPORT_METAL_SHARED_EVENT_INFO_EXT};
+                event.semaphore = consumer;
+                VkExportMetalObjectsInfoEXT info{VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECTS_INFO_EXT};
+                info.pNext = &event;
+                if (export_objects)
+                    export_objects(device, &info);
+                if (!event.mtlSharedEvent)
+                    throw TensorError("The consumer timeline has no Metal event to wait on");
+                consumer_ = event.mtlSharedEvent;
+            }
+
+            void* timeline() const override { return timeline_ ? timeline_->semaphore : VK_NULL_HANDLE; }
+
+            void wait(const uint64_t consumer_value) override {
+                if (consumer_)
+                    metal::acquire_context()->queue_wait(consumer_, consumer_value);
+            }
+
+            TensorCompletion signal() override {
+                const auto context = metal::acquire_context();
+                if (!timeline_)
+                    return TensorCompletionAccess::metal(context->flush());
+                const uint64_t serial = context->signal(timeline_->event);
+                return TensorCompletionAccess::metal(serial, {timeline_->semaphore, serial, timeline_});
+            }
+
+        private:
+            std::shared_ptr<Imported> timeline_;
+            id<MTLSharedEvent> consumer_;
+        };
     } // namespace
 
     std::shared_ptr<TensorVulkanInteropBackend> make_metal_vulkan_interop(const VulkanInteropDevice target) {
         if (@available(macOS 26.0, *))
             return std::make_shared<MetalTensorVulkanInterop>(target);
+        throw TensorError("Metal tensors require macOS 26");
+    }
+
+    std::unique_ptr<MetalVulkanQueue> make_metal_vulkan_queue(void* const device, void* const consumer_timeline) {
+        if (@available(macOS 26.0, *))
+            return std::make_unique<MetalQueue>(static_cast<VkDevice>(device), static_cast<VkSemaphore>(consumer_timeline));
         throw TensorError("Metal tensors require macOS 26");
     }
 } // namespace lfs::core::internal
