@@ -1218,7 +1218,12 @@ namespace lfs::io {
     // -----------------------------------------------------------------------------
     //  Helper to extract scale factor from folder name
     // -----------------------------------------------------------------------------
-    static float extract_scale_from_folder(const std::string& folder_name) {
+    static float extract_scale_from_folder(const std::string& images_folder) {
+        auto folder_path = lfs::core::utf8_to_path(images_folder);
+        if (!folder_path.has_filename()) {
+            folder_path = folder_path.parent_path();
+        }
+        const std::string folder_name = lfs::core::path_to_utf8(folder_path.filename());
         size_t underscore_pos = folder_name.rfind('_');
         if (underscore_pos != std::string::npos) {
             std::string suffix = folder_name.substr(underscore_pos + 1);

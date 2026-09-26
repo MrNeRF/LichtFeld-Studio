@@ -1327,3 +1327,51 @@ TEST(SidecarResampling, InvalidDepthAndNormalVectorsStayZero) {
     EXPECT_FLOAT_EQ(resized[1], 0.0f);
     EXPECT_FLOAT_EQ(resized[2], -1.0f);
 }
+
+namespace {
+    class ScopedCurrentPath {
+    public:
+        explicit ScopedCurrentPath(const fs::path& path) : previous_(fs::current_path()) { fs::current_path(path); }
+        ~ScopedCurrentPath() {
+            std::error_code ec;
+            fs::current_path(previous_, ec);
+        }
+        ScopedCurrentPath(const ScopedCurrentPath&) = delete;
+        ScopedCurrentPath& operator=(const ScopedCurrentPath&) = delete;
+
+    private:
+        fs::path previous_;
+    };
+} // namespace
+
+TEST_F(ColmapImageLayoutTest, ResolvesImagesFolderNextToDatasetFromWorkingDirectory) {
+    // The parent directory name carries an "_2" that must not be read as an images_N scale.
+    const fs::path shot_dir = temp_dir_ / "take_2";
+    write_text_file(shot_dir / "colmap" / "sparse" / "0" / "cameras.txt", "1 PINHOLE 2 2 2 2 1 1\n");
+    write_text_file(shot_dir / "colmap" / "sparse" / "0" / "images.txt", "1 1 0 0 0 0 0 0 1 sub/frame_0001.png\n");
+    const fs::path image_path = shot_dir / "im01" / "sub" / "frame_0001.png";
+    fs::create_directories(image_path.parent_path());
+    const std::vector<unsigned char> pixels(2 * 2 * 3, 128);
+    ASSERT_TRUE(lfs::core::save_png(image_path, pixels.data(), 2, 2, 3, 8, 6));
+
+    const ScopedCurrentPath cwd(shot_dir);
+    lfs::io::ColmapLoader loader;
+    auto result = loader.load("colmap", {.images_folder = "im01"});
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+
+    const auto& cameras = std::get<lfs::io::LoadedScene>(result->data).cameras;
+    ASSERT_EQ(cameras.size(), 1u);
+    EXPECT_TRUE(fs::equivalent(cameras[0]->image_path(), image_path));
+    EXPECT_FLOAT_EQ(cameras[0]->focal_x(), 2.0f);
+}
+
+TEST_F(ColmapImageLayoutTest, MissingImagesFolderNamesBothSearchedLocations) {
+    write_minimal_colmap_text_dataset(temp_dir_ / "colmap" / "sparse" / "0", "frame_0001.png");
+
+    const ScopedCurrentPath cwd(temp_dir_);
+    lfs::io::ColmapLoader loader;
+    auto result = loader.load("colmap", {.images_folder = "im01"});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code, lfs::io::ErrorCode::MISSING_REQUIRED_FILES);
+    EXPECT_NE(result.error().message.find("dataset or the working directory"), std::string::npos);
+}
