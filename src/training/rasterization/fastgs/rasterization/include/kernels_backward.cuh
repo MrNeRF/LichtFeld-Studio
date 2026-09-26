@@ -483,6 +483,29 @@ namespace fast_lfs::rasterization::kernels::backward {
     }
 
     // Reverse-order index into [0, T_eff): high contributor first.
+    __device__ __forceinline__ float background_transmittance_grad(
+        const BackgroundAlphaGradient& background,
+        const float3 grad_color,
+        const uint pixel_idx,
+        const uint n_pixels) {
+        if (background.grad_alpha_map != nullptr) {
+            return -background.grad_alpha_map[pixel_idx];
+        }
+        float3 bg = make_float3(0.0f);
+        if (background.bg_image != nullptr) {
+            bg = make_float3(background.bg_image[pixel_idx],
+                             background.bg_image[n_pixels + pixel_idx],
+                             background.bg_image[2 * n_pixels + pixel_idx]);
+        } else if (background.bg_color != nullptr) {
+            bg = make_float3(background.bg_color[0], background.bg_color[1], background.bg_color[2]);
+        }
+        float grad_alpha = -(grad_color.x * bg.x + grad_color.y * bg.y + grad_color.z * bg.z);
+        if (background.grad_alpha_extra != nullptr) {
+            grad_alpha += background.grad_alpha_extra[pixel_idx];
+        }
+        return -grad_alpha;
+    }
+
     __device__ __forceinline__ int reverse_tile_primitive_idx(const int T_eff, const int reverse_i) {
         return T_eff - reverse_i - 1;
     }
@@ -520,7 +543,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float* __restrict__ primitive_depths,
         const float3* __restrict__ primitive_normals,
         const float* __restrict__ grad_image,
-        const float* __restrict__ grad_alpha_map,
+        const BackgroundAlphaGradient background_grad,
         const float* __restrict__ grad_depth_map,
         const float* __restrict__ grad_normal_map,
         const float* __restrict__ image,
@@ -643,8 +666,8 @@ namespace fast_lfs::rasterization::kernels::backward {
                                            grad_image[n_pixels + pixel_idx1],
                                            grad_image[2 * n_pixels + pixel_idx1])
                              : make_float3(0.0f);
-        float grad_T0 = inside0 ? -grad_alpha_map[pixel_idx0] : 0.0f;
-        float grad_T1 = inside1 ? -grad_alpha_map[pixel_idx1] : 0.0f;
+        float grad_T0 = inside0 ? background_transmittance_grad(background_grad, grad_c0, pixel_idx0, n_pixels) : 0.0f;
+        float grad_T1 = inside1 ? background_transmittance_grad(background_grad, grad_c1, pixel_idx1, n_pixels) : 0.0f;
         const float grad_d0 = (inside0 && grad_depth_map != nullptr) ? grad_depth_map[pixel_idx0] : 0.0f;
         const float grad_d1 = (inside1 && grad_depth_map != nullptr) ? grad_depth_map[pixel_idx1] : 0.0f;
         float3 grad_n0 = make_float3(0.0f);

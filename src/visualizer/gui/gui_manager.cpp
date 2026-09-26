@@ -1999,7 +1999,19 @@ namespace lfs::vis::gui {
                         releaseSlotLocked(it->second);
                         it = entries_.erase(it);
                     }
-                    while (!pages_.empty() && pages_.back().live_slots == 0) {
+                    for (size_t page_index = 0; page_index < pages_.size();) {
+                        if (pages_[page_index].live_slots != 0) {
+                            ++page_index;
+                            continue;
+                        }
+                        const size_t last_index = pages_.size() - 1;
+                        if (page_index != last_index) {
+                            pages_[page_index] = std::move(pages_.back());
+                            for (auto& [_, entry] : entries_) {
+                                if (entry.page_index == static_cast<int>(last_index))
+                                    entry.page_index = static_cast<int>(page_index);
+                            }
+                        }
                         pages_.pop_back();
                         changed = true;
                     }
@@ -2772,39 +2784,19 @@ namespace lfs::vis::gui {
                 thumbnail_cache.pruneTo(scene_camera_uids);
             }
 
-            const bool priority_changed =
-                camera_data_changed || !cache.valid ||
-                cache.key.selected_set_generation != selection_generation;
+            const bool priority_changed = camera_data_changed || !cache.valid ||
+                                          cache.key.selected_set_generation != selection_generation;
+            std::unordered_set<int> selected_uids;
+            for (const auto& name : scene_manager.getSelectedNodeNames()) {
+                const auto* node = scene.getNode(name);
+                if (node && node->type == lfs::core::NodeType::CAMERA && node->camera_uid >= 0)
+                    selected_uids.insert(node->camera_uid);
+            }
             if (priority_changed) {
-                const auto visible_uids = services().guiOrNull()
-                                              ? services().guiOrNull()->visibleCameraUids()
-                                              : std::unordered_set<int>{};
-                std::unordered_set<int> selected_uids;
-                for (const auto& name : scene_manager.getSelectedNodeNames()) {
-                    const auto* node = scene.getNode(name);
-                    if (node && node->type == lfs::core::NodeType::CAMERA && node->camera_uid >= 0)
-                        selected_uids.insert(node->camera_uid);
-                }
                 if (cache.emphasized_cameras.size() != cache.uids.size())
                     cache.emphasized_cameras.resize(cache.uids.size(), 0);
                 for (size_t i = 0; i < cache.uids.size(); ++i)
                     cache.emphasized_cameras[i] = selected_uids.contains(cache.uids[i]);
-                const std::vector<int> visible_uid_list(visible_uids.begin(), visible_uids.end());
-                const std::vector<int> selected_uid_list(selected_uids.begin(), selected_uids.end());
-                const auto thumbnail_order = cameraThumbnailRequestOrder(
-                    cache.all_uid_list, visible_uid_list, selected_uid_list);
-                std::unordered_map<int, std::shared_ptr<const lfs::core::Camera>> cameras_by_uid;
-                cameras_by_uid.reserve(cache.cameras.size());
-                for (const auto& camera : cache.cameras) {
-                    if (camera && camera->uid() >= 0)
-                        cameras_by_uid.emplace(camera->uid(), camera);
-                }
-                for (const int uid : thumbnail_order) {
-                    const auto camera_it = cameras_by_uid.find(uid);
-                    if (camera_it != cameras_by_uid.end() && camera_it->second->has_image())
-                        thumbnail_cache.request(*camera_it->second);
-                }
-                thumbnail_cache.reprioritize(thumbnail_order);
             }
             thumbnail_cache.processReadyUploads();
             if (thumbnail_cache.hasReadyUploads()) {
@@ -3154,6 +3146,37 @@ namespace lfs::vis::gui {
 
             if (geometry_changed || loss_changed || atlas_changed)
                 ++cache.data->generation;
+            if (geometry_changed || priority_changed) {
+                std::unordered_set<int> needed_uids = selected_uids;
+                std::vector<int> drawable_uids;
+                drawable_uids.reserve(cache.uids.size());
+                for (size_t projected_index = 0; projected_index < cache.projected_visible.size(); ++projected_index) {
+                    if (cache.projected_visible[projected_index]) {
+                        const int uid = cache.uids[projected_index % cache.uids.size()];
+                        if (uid >= 0) {
+                            needed_uids.insert(uid);
+                            drawable_uids.push_back(uid);
+                        }
+                    }
+                }
+                thumbnail_cache.pruneTo(needed_uids);
+                const std::vector<int> selected_uid_list(selected_uids.begin(), selected_uids.end());
+                const std::vector<int> needed_uid_list(needed_uids.begin(), needed_uids.end());
+                const auto thumbnail_order = cameraThumbnailRequestOrder(
+                    needed_uid_list, drawable_uids, selected_uid_list);
+                std::unordered_map<int, std::shared_ptr<const lfs::core::Camera>> cameras_by_uid;
+                cameras_by_uid.reserve(cache.cameras.size());
+                for (const auto& camera : cache.cameras) {
+                    if (camera && camera->uid() >= 0)
+                        cameras_by_uid.emplace(camera->uid(), camera);
+                }
+                for (const int uid : thumbnail_order) {
+                    const auto camera_it = cameras_by_uid.find(uid);
+                    if (camera_it != cameras_by_uid.end() && camera_it->second->has_image())
+                        thumbnail_cache.request(*camera_it->second);
+                }
+                thumbnail_cache.reprioritize(thumbnail_order);
+            }
             cache.key = key;
             cache.valid = true;
             params.frustum_overlay_data = cache.data;

@@ -17,7 +17,7 @@
 #include "core/tensor_readback.hpp"
 #include "core/tensor_serialization_sink.hpp"
 #include "core/tensor_upload.hpp"
-
+#include "diagnostics/vram_profiler.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "strategies/istrategy.hpp"
 
@@ -768,6 +768,7 @@ namespace lfs::training {
                 d2h_queue = std::make_unique<lfs::core::TensorWorkQueue>(lfs::core::GpuBackend::CUDA);
             ensure_device_scratch();
             calibrate_once(layout, mutating_streams);
+            device_scratch = {};
             if (slots.empty()) {
                 ring = std::make_unique<lfs::core::TensorReadbackRing>(lfs::core::GpuBackend::CUDA,
                                                                        config.ring_slots, config.band_bytes, *d2h_queue, &device_scratch);
@@ -1891,8 +1892,6 @@ namespace lfs::training {
 
             prepared->baseline_rss_bytes =
                 read_rss_bytes();
-            impl_->ensure_device_scratch();
-
             if (prepared->checkpoint_bytes >
                 std::numeric_limits<std::size_t>::max()) {
                 return snapshot_error(
@@ -1900,7 +1899,7 @@ namespace lfs::training {
                     "Checkpoint staging exceeds address space",
                     LFS_SOURCE_SITE_CURRENT());
             }
-            const auto host_memory =
+            auto host_memory =
                 read_host_memory_info();
             const auto reserve_bytes =
                 request.relaxed_host_memory_gate
@@ -1918,6 +1917,15 @@ namespace lfs::training {
             }
             const auto required_host_memory =
                 prepared->checkpoint_bytes + reserve_bytes;
+            if (request.release_host_memory &&
+                host_memory.available_bytes > 0 &&
+                host_memory.available_bytes <
+                    required_host_memory &&
+                request.release_host_memory(
+                    required_host_memory -
+                    host_memory.available_bytes) > 0) {
+                host_memory = read_host_memory_info();
+            }
             if (host_memory.available_bytes == 0 ||
                 host_memory.available_bytes <
                     required_host_memory) {
@@ -2091,6 +2099,7 @@ namespace lfs::training {
                 lfs::core::TensorWorkQueue(lfs::core::GpuBackend::CUDA, stream).wait();
             }
             const auto sync_end = Clock::now();
+            impl_->ensure_device_scratch();
 
             if (request.capture_additional_cpu_state) {
                 auto captured =
@@ -2174,6 +2183,7 @@ namespace lfs::training {
                     sink.last_event()) {
                 last_event->wait();
             }
+            impl_->device_scratch = {};
             const auto pause_end = Clock::now();
             const auto capture_rss = read_rss_bytes();
             if (capture_rss >=
@@ -2217,6 +2227,7 @@ namespace lfs::training {
                 Milliseconds(
                     pause_end - pause_begin)
                     .count();
+            lfs::diagnostics::VramProfiler::instance().mark("training_snapshot", {}, pending->metrics.device_snapshot_bytes, pending->metrics.pause_ms);
             pending->metrics.cold_path_ms =
                 pending->metrics.pause_ms +
                 (pending->metrics.cold_first_snapshot
@@ -2299,6 +2310,7 @@ namespace lfs::training {
             try {
                 impl_->d2h_queue->wait();
             } catch (const std::exception& e) { LOG_WARN("Failed snapshot drain: {}", e.what()); }
+            impl_->device_scratch = {};
             pending->pause_end = Clock::now();
             {
                 std::scoped_lock lock(pending->mutex);

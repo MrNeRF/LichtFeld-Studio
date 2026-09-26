@@ -394,8 +394,10 @@ namespace lfs::vis {
         static constexpr std::size_t kOverlayRegionCount = 7;
         static constexpr std::size_t kSelectionQueryRegionCount = 7;
         static constexpr std::size_t kRegionAlignment = 256; // VK minStorageBufferOffsetAlignment upper bound on common HW
-        struct OpacityCopySlot {
-            lfs::core::Tensor masked_opacity;
+        // A deleted mask whose byte size is not a multiple of 4 is bound from a
+        // padded copy; other masks bind directly.
+        struct DeletedMaskSlot {
+            lfs::core::Tensor padded_mask;
         };
         struct OverlaySlot {
             lfs::core::Tensor storage;
@@ -465,7 +467,7 @@ namespace lfs::vis {
         };
 
         void detachManagedBuffers();
-        void releaseOpacityCopySlot(std::size_t ring_slot);
+        void releaseDeletedMaskSlot(std::size_t ring_slot);
         void logVramBreakdownIfChanged(std::string_view reason);
         [[nodiscard]] std::expected<void, std::string> ensureSharedScratchArena(
             VulkanContext& context,
@@ -706,7 +708,7 @@ namespace lfs::vis {
         bool macro_chain_warmup_pending_ = true;
 
         static constexpr std::size_t kInputRingSize = kFrameRingSize;
-        std::array<OpacityCopySlot, kInputRingSize> opacity_copies_{};
+        std::array<DeletedMaskSlot, kInputRingSize> deleted_mask_copies_{};
         std::array<OverlaySlot, kInputRingSize> overlays_{};
         SelectionQuerySlot selection_query_{};
         std::array<ModelInputSnapshot, kInputRingSize> ring_uploaded_{};

@@ -7,13 +7,19 @@
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/tensor.hpp"
 #include "cuda_backend_test.hpp"
+#include "io/nvcodec_image_loader.hpp"
 #include "kernels/densification_kernels.hpp"
 #include "kernels/image_kernels.hpp"
-#include "lfs/training/refine_scratch.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <cstring>
 #include <cuda_runtime.h>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <memory>
 #include <vector>
 
 using namespace lfs::core;
@@ -81,10 +87,7 @@ TEST_F(ImageKernelsTest, EdgeWeightFloatPositiveMedianPreservesNonQuantizedValue
     const std::vector<float> values{0.0f, 0.2f, 0.3f, 0.46f};
     auto weights = Tensor::from_vector(
         values, TensorShape({2, 2}), Device::GPU);
-    lfs::training::PositiveMedianScratch scratch;
-
-    launch_normalize_by_positive_median(
-        weights.ptr<float>(), weights.numel(), weights.stream(), &scratch);
+    launch_normalize_by_positive_median(weights.ptr<float>(), weights.numel(), weights.stream());
 
     const auto result = weights.cpu();
     const auto* ptr = result.ptr<float>();
@@ -94,6 +97,82 @@ TEST_F(ImageKernelsTest, EdgeWeightFloatPositiveMedianPreservesNonQuantizedValue
     EXPECT_NEAR(ptr[3], 23.0f / 15.0f, 1.0e-6f);
     // 0.46 / 0.3 is not representable by the rejected u8/16 cache path.
     EXPECT_GT(std::abs(ptr[3] - std::round(ptr[3] * 16.0f) / 16.0f), 0.01f);
+}
+
+namespace {
+    uint32_t radix_order_key(const float v) {
+        uint32_t bits = 0;
+        std::memcpy(&bits, &v, sizeof(bits));
+        return (bits & 0x80000000u) ? ~bits : (bits | 0x80000000u);
+    }
+
+    std::filesystem::path first_dataset_jpeg() {
+        std::error_code ec;
+        for (const auto& dataset : std::filesystem::directory_iterator(
+                 std::filesystem::path(PROJECT_ROOT_PATH) / "data", ec)) {
+            std::vector<std::filesystem::path> jpegs;
+            for (const auto& entry : std::filesystem::directory_iterator(dataset.path() / "images_4", ec)) {
+                auto ext = entry.path().extension().string();
+                std::ranges::transform(ext, ext.begin(), [](unsigned char c) { return std::tolower(c); });
+                if (ext == ".jpg" || ext == ".jpeg")
+                    jpegs.push_back(entry.path());
+            }
+            if (!jpegs.empty())
+                return std::ranges::min(jpegs);
+        }
+        return {};
+    }
+} // namespace
+
+// Production input: the Canny edge map of a real training image. A radix select
+// that picked a neighboring order statistic would move every value by far more
+// than the 2 ulp the GPU division may differ from the host.
+TEST_F(ImageKernelsTest, EdgeWeightPositiveMedianMatchesSortOnRealImage) {
+    const auto path = first_dataset_jpeg();
+    if (path.empty()) {
+        GTEST_SKIP() << "no dataset with images_4 JPEGs under data/";
+    }
+    std::ifstream file(path, std::ios::binary);
+    const std::vector<uint8_t> jpeg{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+    ASSERT_FALSE(jpeg.empty());
+    std::unique_ptr<lfs::io::NvCodecImageLoader> loader;
+    try {
+        loader = std::make_unique<lfs::io::NvCodecImageLoader>(lfs::io::NvCodecImageLoader::Options{});
+    } catch (const std::exception& e) {
+        GTEST_SKIP() << "nvImageCodec unavailable: " << e.what();
+    }
+    const auto decoded = loader->decode_jpeg_batch_from_spans({{jpeg.data(), jpeg.size()}}, nullptr, true, true);
+    ASSERT_EQ(decoded.size(), 1u);
+    const auto& image = decoded[0];
+    ASSERT_EQ(image.ndim(), 3u);
+    ASSERT_EQ(image.shape()[0], 3u);
+    const int H = static_cast<int>(image.shape()[1]);
+    const int W = static_cast<int>(image.shape()[2]);
+
+    auto edges = Tensor::zeros({static_cast<size_t>(H), static_cast<size_t>(W)}, Device::CUDA, DataType::Float32);
+    launch_fused_canny_edge_filter_chw(image.ptr<uint8_t>(), edges.ptr<float>(), H, W);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    const auto raw = edges.cpu().to_vector();
+
+    launch_normalize_by_positive_median(edges.ptr<float>(), edges.numel());
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    const auto got = edges.cpu().to_vector();
+
+    std::vector<float> positives;
+    for (const float v : raw) {
+        if (v > 0.0f)
+            positives.push_back(v);
+    }
+    ASSERT_GT(positives.size(), 1000u) << "a real photo must have edges";
+    std::ranges::sort(positives, {}, radix_order_key);
+    const float median = std::max(positives[positives.size() / 2], 1e-9f);
+    ASSERT_EQ(got.size(), raw.size());
+    for (size_t i = 0; i < raw.size(); ++i) {
+        const float expected = std::isnan(raw[i]) ? 0.0f : raw[i] / median;
+        const auto a = radix_order_key(got[i]);
+        const auto b = radix_order_key(expected);
+        ASSERT_LE(a > b ? a - b : b - a, 2u) << "i=" << i << " got=" << got[i] << " expected=" << expected;
+    }
 }
 
 TEST_F(ImageKernelsTest, LanczosRgbAndGrayscaleUseBoundedCoefficientBuffers) {
