@@ -969,7 +969,7 @@ namespace lfs::training {
                 return config;
             }
 
-            const auto memory = lfs::core::gpu_backend_memory_info(lfs::core::GpuBackend::CUDA);
+            const auto memory = lfs::core::gpu_backend_memory_info(config.backend);
             const size_t free_bytes = memory.free_bytes;
             const size_t total_bytes = memory.total_bytes;
             if (free_bytes == 0 || total_bytes == 0) {
@@ -8220,6 +8220,7 @@ namespace lfs::training {
 
             // Conservative prefetch to avoid VRAM exhaustion
             lfs::io::PipelinedLoaderConfig pipelined_config;
+            pipelined_config.backend = training_ops_->backend;
             pipelined_config.jpeg_batch_size = 8;
             pipelined_config.prefetch_count = 8;
             pipelined_config.output_queue_size = 4;
