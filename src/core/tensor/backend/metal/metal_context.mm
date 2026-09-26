@@ -625,9 +625,14 @@ namespace lfs::core::internal {
     std::optional<GpuDeviceInfo> metal_device_info() {
         if (@available(macOS 26.0, *)) {
             if (const auto context = metal::live_context()) {
+                // The working set is the process's budget of the unified memory.
+                const auto budget = static_cast<size_t>(context->device().recommendedMaxWorkingSetSize);
                 return GpuDeviceInfo{
                     .name = context->device().name.UTF8String,
-                    .total_memory_bytes = static_cast<size_t>(context->device().recommendedMaxWorkingSetSize),
+                    .total_memory_bytes = budget,
+                    .supports_process_memory_budget = true,
+                    .process_memory_budget_bytes = budget,
+                    .process_memory_used_bytes = static_cast<size_t>(context->device().currentAllocatedSize),
                 };
             }
         }

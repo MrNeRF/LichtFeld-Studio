@@ -274,7 +274,7 @@ namespace lfs::vis::gui {
             info.device_name = shortenGpuDeviceName(device->name);
             info.total = device->total_memory_bytes;
         }
-        if (backend == lfs::core::GpuBackend::Vulkan) {
+        if (backend == lfs::core::GpuBackend::Vulkan || backend == lfs::core::GpuBackend::Metal) {
             info.uses_process_budget = true;
             if (device && device->supports_process_memory_budget) {
                 info.process_budget = device->process_memory_budget_bytes;
