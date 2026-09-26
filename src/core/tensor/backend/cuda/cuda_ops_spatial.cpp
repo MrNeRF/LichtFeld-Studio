@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "../facade_trace.hpp"
 #include "../gpu_backend_ops.hpp"
+
+#include "../../internal/tensor_impl.hpp"
 #include "core/assert.hpp"
 #include "kernels/tensor_point_region.hpp"
 #include "kernels/tensor_projection.hpp"
@@ -24,6 +26,11 @@ namespace lfs::core::internal {
         tensor_ops::launch_radius_neighbors(cuda_pointer<const float>(points), cuda_pointer<const uint8_t>(references),
                                             cuda_pointer<int32_t>(heads), cuda_pointer<int32_t>(next), cuda_pointer<bool>(output),
                                             count, buckets, radius, context.cuda_stream);
+    }
+
+    // CUDA builds rasterize point clouds with the renderer's own kernel.
+    void CudaBackendOps::rasterize_points(const PointRasterProgram&, ExecContext) {
+        throw TensorError("CUDA rasterizes point clouds in the renderer");
     }
 
     void CudaBackendOps::project_points(const StorageRef points, const StorageRef output, const size_t count,

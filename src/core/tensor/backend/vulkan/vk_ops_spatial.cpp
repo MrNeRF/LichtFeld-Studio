@@ -83,6 +83,64 @@ namespace lfs::core::internal {
         dispatch(1, query_reads, query_writes, (count + 3) / 4);
     }
 
+    void VulkanBackendOps::rasterize_points(const PointRasterProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(rasterize_points);
+        const auto context = acquire_vulkan_context();
+        struct Push {
+            uint64_t positions, colors, parameters, scratch, image, depth, transforms, indices, visibility, deleted;
+            uint32_t count, width, height, channels, transform_count, visibility_count, flags;
+            float ortho_scale, focal_y, voxel_size, far_plane;
+            uint32_t padding;
+        };
+        static_assert(sizeof(Push) == 128);
+        const auto address = [](const std::optional<StorageRef>& storage) {
+            return storage ? vk::address(*storage) : uint64_t{0};
+        };
+        const Push push{
+            .positions = vk::address(program.positions),
+            .colors = vk::address(program.colors),
+            .parameters = vk::address(program.parameters),
+            .scratch = vk::address(program.scratch),
+            .image = vk::address(program.image),
+            .depth = vk::address(program.depth),
+            .transforms = address(program.transforms),
+            .indices = address(program.indices),
+            .visibility = address(program.visibility),
+            .deleted = address(program.deleted),
+            .count = static_cast<uint32_t>(program.count),
+            .width = program.width,
+            .height = program.height,
+            .channels = program.channels,
+            .transform_count = program.transform_count,
+            .visibility_count = program.visibility_count,
+            .flags = program.flags,
+            .ortho_scale = program.ortho_scale,
+            .focal_y = program.focal_y,
+            .voxel_size = program.voxel_size,
+            .far_plane = program.far_plane,
+            .padding = 0,
+        };
+        std::array<StorageRef, 7> reads{program.positions, program.colors, program.parameters};
+        size_t read_count = 3;
+        for (const auto& operand : {program.transforms, program.indices, program.visibility, program.deleted}) {
+            if (operand)
+                reads[read_count++] = *operand;
+        }
+        const std::array writes{program.scratch, program.image, program.depth};
+        const size_t pixels = static_cast<size_t>(program.width) * program.height;
+        // Clear, nearest depth, winning color, then the image.
+        for (const uint32_t phase : {0u, 1u, 2u, 3u}) {
+            const std::array constants{phase};
+            const auto& pipeline = context->pipelines().specialized("point_raster", sizeof(push), constants);
+            const size_t threads = phase == 1 || phase == 2 ? program.count : pixels;
+            context->recorders().record(std::span(reads.data(), read_count), writes, [&](VkCommandBuffer command) {
+                vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
+                vkCmdPushConstants(command, pipeline.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+                vkCmdDispatch(command, vk::dispatch_groups(*context, threads), 1, 1);
+            });
+        }
+    }
+
     void VulkanBackendOps::project_points(const StorageRef points, const StorageRef output, const size_t count,
                                           const PointProjection& projection,
                                           const StorageRef* transforms, const size_t transform_count,

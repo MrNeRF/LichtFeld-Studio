@@ -744,6 +744,120 @@ namespace {
         expect_close(result(GpuBackend::Metal), result(GpuBackend::Vulkan), rtol, atol);
     }
 
+    // A camera at the origin looking down -Z, column-major like glm, with
+    // depth mapped to [0, 1].
+    PointRaster raster_camera(const int width, const int height) {
+        PointRaster raster;
+        raster.width = width;
+        raster.height = height;
+        raster.view = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        const float f = 1.0f / std::tan(0.5f), aspect = float(width) / float(height), near = 0.1f, far = 100.0f;
+        raster.view_projection = {f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, far / (near - far), -1, 0, 0, near * far / (near - far), 0};
+        raster.focal_y = f * height * 0.5f;
+        raster.voxel_size = 0.02f;
+        raster.far_plane = far;
+        raster.background = {0.1f, 0.2f, 0.3f};
+        return raster;
+    }
+
+    TEST_F(TensorMetal, PointRasterSplatsTheNearestPoint) {
+        // Two points on the optical axis: the nearer one's disk covers the center.
+        const Tensor points = Tensor::from_vector({0.0f, 0.0f, -2.0f, 0.0f, 0.0f, -1.0f}, {2, 3}, Device::CPU);
+        const Tensor colors = Tensor::from_vector({1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f}, {2, 3}, Device::CPU);
+        auto raster = raster_camera(33, 33);
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            SCOPED_TRACE(static_cast<int>(backend));
+            GpuBackendScope scope(backend);
+            const auto [image, depth] = rasterize_points(points.to(Device::GPU), colors.to(Device::GPU), raster);
+            const auto rgb = image.cpu().to_vector(), z = depth.cpu().to_vector();
+            const size_t plane = 33 * 33, center = 16 * 33 + 16;
+            EXPECT_EQ(rgb[center], 0.0f);
+            EXPECT_EQ(rgb[plane + center], 1.0f);
+            EXPECT_FLOAT_EQ(z[center], 1.0f);
+            // The radius is ceil(voxel * focal / depth) = 1 pixel at depth 1.
+            EXPECT_EQ(rgb[plane + center + 2], 0.2f);
+            EXPECT_FLOAT_EQ(z[0], raster.far_plane);
+        }
+    }
+
+    TEST_F(TensorMetal, PointRasterMatchesVulkan) {
+        if (!gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP() << "No Vulkan device";
+        constexpr size_t count = 20000;
+        auto points = random_tensor(count * 3, -1.5f, 1.5f, 301).reshape({count, 3});
+        points.slice(1, 2, 3).copy_from(random_tensor(count, -6.0f, -1.0f, 302).reshape({count, 1}));
+        const Tensor colors = random_tensor(count * 3, -0.2f, 1.2f, 303).reshape({count, 3});
+        std::vector<float> transform_values = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
+                                               1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0.4f, -0.2f, 0.3f, 1,
+                                               2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1};
+        const Tensor transforms = Tensor::from_vector(transform_values, {3, 16}, Device::CPU);
+        std::vector<int> index_values(count);
+        for (size_t i = 0; i < count; ++i)
+            index_values[i] = static_cast<int>(i % 4) - 1; // -1 and 3 clamp
+        const Tensor indices = Tensor::from_vector(index_values, {count}, Device::CPU);
+        const Tensor visibility = Tensor::from_vector(std::vector<int>{1, 1, 0}, {3}, Device::CPU).to(DataType::UInt8);
+        const Tensor deleted = random_tensor(count, 0.0f, 1.0f, 304) > 0.9f;
+
+        std::vector<std::pair<std::string, PointRaster>> cases;
+        cases.emplace_back("perspective", raster_camera(160, 120));
+        auto orthographic = raster_camera(160, 120);
+        orthographic.orthographic = true;
+        orthographic.ortho_scale = 4.0f;
+        orthographic.view_projection = {0.5f * 120.0f / 160.0f, 0, 0, 0, 0, 0.5f, 0, 0, 0, 0, -0.01f, 0, 0, 0, 0, 1};
+        cases.emplace_back("orthographic", orthographic);
+        auto panorama = raster_camera(200, 100);
+        panorama.equirectangular = true;
+        panorama.transparent_background = true;
+        cases.emplace_back("equirectangular", panorama);
+        auto box = raster_camera(160, 120);
+        box.crop = PointRasterCrop::Box;
+        box.crop_to_local = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 3, 1};
+        box.crop_min = {-0.8f, -0.8f, -1.0f};
+        box.crop_max = {0.8f, 0.8f, 1.0f};
+        cases.emplace_back("box", box);
+        box.crop_inverse = true;
+        box.crop_desaturate = true;
+        cases.emplace_back("inverse desaturated box", box);
+        auto ellipsoid = raster_camera(160, 120);
+        ellipsoid.crop = PointRasterCrop::Ellipsoid;
+        ellipsoid.crop_to_local = box.crop_to_local;
+        ellipsoid.crop_min = {1.0f, 0.6f, 1.5f};
+        cases.emplace_back("ellipsoid", ellipsoid);
+
+        for (const auto& [name, raster] : cases) {
+            for (const bool nodes : {false, true}) {
+                SCOPED_TRACE(name + (nodes ? " with nodes" : ""));
+                const auto rasterize = [&](const GpuBackend backend) {
+                    GpuBackendScope scope(backend);
+                    const Tensor gpu_transforms = transforms.to(Device::GPU), gpu_indices = indices.to(Device::GPU);
+                    const Tensor gpu_visibility = visibility.to(Device::GPU), gpu_deleted = deleted.to(Device::GPU);
+                    const auto [image, depth] = rasterize_points(
+                        points.to(Device::GPU), colors.to(Device::GPU), raster, nodes ? &gpu_transforms : nullptr,
+                        nodes ? &gpu_indices : nullptr, nodes ? &gpu_visibility : nullptr, nodes ? &gpu_deleted : nullptr);
+                    return std::pair{image.cpu().to_vector(), depth.cpu().to_vector()};
+                };
+                const auto [metal_image, metal_depth] = rasterize(GpuBackend::Metal);
+                const auto [vulkan_image, vulkan_depth] = rasterize(GpuBackend::Vulkan);
+                ASSERT_EQ(metal_image.size(), vulkan_image.size());
+                // MoltenVK's fast math can round a boundary point into the next
+                // pixel, and divides colors by 255 one ULP off.
+                const size_t pixels = metal_depth.size();
+                size_t differing = 0, covered = 0;
+                for (size_t i = 0; i < pixels; ++i) {
+                    covered += metal_depth[i] != raster.far_plane;
+                    bool same = std::abs(metal_depth[i] - vulkan_depth[i]) <= 1.0e-5f * std::abs(vulkan_depth[i]);
+                    for (size_t c = 0; c < metal_image.size() / pixels; ++c)
+                        same = same && std::abs(metal_image[c * pixels + i] - vulkan_image[c * pixels + i]) <= 1.0e-6f;
+                    differing += same ? 0 : 1;
+                }
+                EXPECT_GT(covered, pixels / 50);
+                EXPECT_LE(differing, pixels / 500);
+            }
+        }
+    }
+
     TEST_F(TensorMetal, SpatialSelectionMatchesVulkan) {
         const Tensor points = random_tensor(4000 * 3, -2.0f, 2.0f, 68).reshape({4000, 3});
         const Tensor references = random_tensor(4000, 0.0f, 1.0f, 69) > 0.9f;

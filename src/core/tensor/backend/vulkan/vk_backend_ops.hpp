@@ -68,6 +68,7 @@ namespace lfs::core::internal {
         void project_points(StorageRef, StorageRef, size_t, const PointProjection&,
                             const StorageRef*, size_t, const StorageRef*,
                             const StorageRef*, size_t, ExecContext) override;
+        void rasterize_points(const PointRasterProgram&, ExecContext) override;
         void radius_neighbors(StorageRef, StorageRef, StorageRef, StorageRef, StorageRef,
                               size_t, size_t, float, ExecContext) override;
         void mark_points_2d(StorageRef, StorageRef, size_t, const PointRegion2D&,

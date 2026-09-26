@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor_spatial.hpp"
+#include "core/tensor_backend.hpp"
 #include "internal/point_projection.hpp"
 #include "internal/tensor_impl.hpp"
 
@@ -9,6 +10,7 @@
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <vector>
 
 namespace lfs::core {
     Tensor project_points(const Tensor& points, const PointProjection& projection,
@@ -101,5 +103,125 @@ namespace lfs::core {
         for (size_t i = 0; i < count; ++i)
             internal::projectPoint(xyz, result, i, projection, matrices_data, transform_count, ids, visibility_data, visibility_count);
         return output;
+    }
+
+    std::pair<Tensor, Tensor> rasterize_points(const Tensor& points, const Tensor& colors, const PointRaster& raster,
+                                               const Tensor* transforms, const Tensor* indices,
+                                               const Tensor* visibility, const Tensor* deleted) {
+        LFS_ASSERT_MSG(points.is_valid() && points.dtype() == DataType::Float32 && points.ndim() == 2 &&
+                           points.size(1) == 3 && points.device() == Device::GPU,
+                       "rasterize_points requires Float32 [N,3] GPU points");
+        const auto count = points.size(0);
+        LFS_ASSERT_MSG(colors.is_valid() && colors.dtype() == DataType::Float32 && colors.ndim() == 2 &&
+                           colors.size(0) == count && colors.size(1) == 3,
+                       "rasterize_points requires Float32 [N,3] colors");
+        LFS_ASSERT_MSG(gpu_backend_of(points) != GpuBackend::CUDA,
+                       "rasterize_points runs on Vulkan and Metal; CUDA builds rasterize in the renderer");
+        LFS_ASSERT_MSG(raster.width > 0 && raster.height > 0, "rasterize_points requires positive image dimensions");
+        const size_t pixels = static_cast<size_t>(raster.width) * static_cast<size_t>(raster.height);
+        constexpr auto max_count = static_cast<size_t>(std::numeric_limits<int32_t>::max());
+        LFS_ASSERT_MSG(count <= max_count && 2 * pixels <= max_count, "rasterize_points size exceeds int32");
+
+        const auto present = [](const Tensor* tensor) { return tensor && tensor->is_valid() && tensor->numel() != 0; };
+        // As in the renderer's CUDA kernel, points without indices take
+        // transform and visibility entry zero.
+        for (const Tensor** tensor : {&transforms, &indices, &visibility, &deleted}) {
+            if (!present(*tensor))
+                *tensor = nullptr;
+        }
+        internal::require_same_gpu_backend(points, colors, "rasterize_points");
+        for (const auto* tensor : {transforms, indices, visibility, deleted}) {
+            if (tensor)
+                internal::require_same_gpu_backend(points, *tensor, "rasterize_points");
+        }
+        LFS_ASSERT_MSG(!transforms || (transforms->dtype() == DataType::Float32 && transforms->numel() % 16 == 0),
+                       "rasterize_points transforms must be Float32 [T,16]");
+        LFS_ASSERT_MSG(!indices || (indices->dtype() == DataType::Int32 && indices->numel() == count),
+                       "rasterize_points indices must be Int32 [N]");
+        const auto is_byte_mask = [](const Tensor& tensor) {
+            return tensor.dtype() == DataType::Bool || tensor.dtype() == DataType::UInt8;
+        };
+        LFS_ASSERT_MSG(!visibility || is_byte_mask(*visibility), "rasterize_points visibility must be Bool or UInt8");
+        LFS_ASSERT_MSG(!deleted || (is_byte_mask(*deleted) && deleted->numel() == count),
+                       "rasterize_points deleted mask must be Bool or UInt8 [N]");
+
+        const uint32_t channels = raster.transparent_background ? 4u : 3u;
+        auto image = internal::allocate_like(
+            points, TensorShape{channels, static_cast<size_t>(raster.height), static_cast<size_t>(raster.width)},
+            DataType::Float32);
+        auto depth = internal::allocate_like(
+            points, TensorShape{1, static_cast<size_t>(raster.height), static_cast<size_t>(raster.width)},
+            DataType::Float32);
+        auto scratch = internal::allocate_like(points, TensorShape{2 * pixels}, DataType::Int32);
+
+        // Layout of internal::kPointRasterParameters, as the kernels read it.
+        std::vector<float> values;
+        values.reserve(internal::kPointRasterParameters);
+        for (const auto* block : {&raster.view, &raster.view_projection, &raster.crop_to_local})
+            values.insert(values.end(), block->begin(), block->end());
+        for (const auto* block : {&raster.crop_min, &raster.crop_max, &raster.background})
+            values.insert(values.end(), block->begin(), block->end());
+        LFS_ASSERT_MSG(values.size() == internal::kPointRasterParameters, "rasterize_points parameter layout");
+        Tensor parameters;
+        {
+            GpuBackendScope scope(*gpu_backend_of(points));
+            parameters = Tensor::from_vector(values, {values.size()}, Device::CPU).to(Device::GPU);
+        }
+
+        const auto positions = points.contiguous();
+        const auto rgb = colors.contiguous();
+        const auto matrices = transforms ? transforms->contiguous() : Tensor{};
+        const auto node_indices = indices ? indices->contiguous() : Tensor{};
+        const auto visible = visibility ? visibility->contiguous() : Tensor{};
+        const auto removed = deleted ? deleted->contiguous() : Tensor{};
+        pin_operands({&positions, &rgb, &parameters, transforms ? &matrices : nullptr,
+                      indices ? &node_indices : nullptr, visibility ? &visible : nullptr,
+                      deleted ? &removed : nullptr});
+        const auto stream = prepare_inputs_for_stream({&positions, &rgb, &parameters}, image.stream());
+        const auto optional_ref = [&](const bool used, const Tensor& tensor) -> std::optional<internal::StorageRef> {
+            if (!used)
+                return std::nullopt;
+            (void)prepare_inputs_for_stream({&tensor}, stream);
+            return internal::storage_ref(tensor);
+        };
+        uint32_t flags = 0;
+        if (raster.crop == PointRasterCrop::Box)
+            flags |= internal::kPointRasterCropBox;
+        if (raster.crop == PointRasterCrop::Ellipsoid)
+            flags |= internal::kPointRasterCropEllipsoid;
+        if (raster.crop_inverse)
+            flags |= internal::kPointRasterCropInverse;
+        if (raster.crop_desaturate)
+            flags |= internal::kPointRasterCropDesaturate;
+        if (raster.equirectangular)
+            flags |= internal::kPointRasterEquirectangular;
+        if (raster.orthographic)
+            flags |= internal::kPointRasterOrthographic;
+        if (raster.transparent_background)
+            flags |= internal::kPointRasterTransparent;
+        internal::backend_ops_for(positions).rasterize_points(
+            {.positions = internal::storage_ref(positions),
+             .colors = internal::storage_ref(rgb),
+             .parameters = internal::storage_ref(parameters),
+             .scratch = internal::storage_ref(scratch),
+             .image = internal::storage_ref(image),
+             .depth = internal::storage_ref(depth),
+             .transforms = optional_ref(transforms != nullptr, matrices),
+             .indices = optional_ref(indices != nullptr, node_indices),
+             .visibility = optional_ref(visibility != nullptr, visible),
+             .deleted = optional_ref(deleted != nullptr, removed),
+             .count = count,
+             .width = static_cast<uint32_t>(raster.width),
+             .height = static_cast<uint32_t>(raster.height),
+             .channels = channels,
+             .transform_count = static_cast<uint32_t>(transforms ? transforms->numel() / 16 : 0),
+             .visibility_count = static_cast<uint32_t>(visibility ? visibility->numel() : 0),
+             .flags = flags,
+             .ortho_scale = raster.ortho_scale,
+             .focal_y = raster.focal_y,
+             .voxel_size = raster.voxel_size,
+             .far_plane = raster.far_plane},
+            internal::ExecContext{stream});
+        return {std::move(image), std::move(depth)};
     }
 } // namespace lfs::core

@@ -149,6 +149,7 @@ namespace lfs::core {
                                         const StorageRef* indices,
                                         const StorageRef* visibility, size_t visibility_count,
                                         ExecContext context) = 0;
+            virtual void rasterize_points(const PointRasterProgram& program, ExecContext context) = 0;
             virtual void mark_points_2d(StorageRef mask, StorageRef points, size_t count,
                                         const PointRegion2D& region, const StorageRef* geometry,
                                         size_t geometry_count, ExecContext context) = 0;
@@ -461,6 +462,7 @@ namespace lfs::core {
                                 const StorageRef* indices,
                                 const StorageRef* visibility, size_t visibility_count,
                                 ExecContext context) override;
+            void rasterize_points(const PointRasterProgram& program, ExecContext context) override;
             void mark_points_2d(StorageRef mask, StorageRef points, size_t count,
                                 const PointRegion2D& region, const StorageRef* geometry,
                                 size_t geometry_count, ExecContext context) override;

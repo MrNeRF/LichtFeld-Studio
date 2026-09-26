@@ -11,6 +11,8 @@
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
+#include "core/tensor_spatial.hpp"
 #include "environment_image.hpp"
 #include "image_layout.hpp"
 #if LFS_HAS_CUDA
@@ -409,10 +411,6 @@ namespace lfs::rendering {
             const Tensor& colors_source,
             const PointCloudRenderRequest& request,
             const Tensor* const deleted_mask_source) {
-#if !LFS_HAS_CUDA
-            return std::unexpected(
-                "CUDA point-cloud rasterization is unavailable in this build");
-#else
             if (request.frame_view.size.x <= 0 || request.frame_view.size.y <= 0) {
                 return std::unexpected("Invalid viewport dimensions");
             }
@@ -452,7 +450,6 @@ namespace lfs::rendering {
             colors_cuda = colors_cuda.contiguous();
 
             Tensor transform_indices_cuda;
-            const std::int32_t* transform_indices_ptr = nullptr;
             if (request.scene.transform_indices && request.scene.transform_indices->is_valid() &&
                 request.scene.transform_indices->numel() == positions_source.size(0)) {
                 transform_indices_cuda = *request.scene.transform_indices;
@@ -463,7 +460,6 @@ namespace lfs::rendering {
                     transform_indices_cuda = transform_indices_cuda.gpu();
                 }
                 transform_indices_cuda = transform_indices_cuda.contiguous();
-                transform_indices_ptr = transform_indices_cuda.ptr<std::int32_t>();
             }
 
             const std::vector<glm::mat4>* const transforms_ptr = request.scene.model_transforms;
@@ -471,7 +467,6 @@ namespace lfs::rendering {
             const auto& transforms = transforms_ptr ? *transforms_ptr : empty_transforms;
 
             Tensor transforms_cuda;
-            const float* transforms_device = nullptr;
             if (!transforms.empty()) {
                 std::vector<float> transforms_host(transforms.size() * 16);
                 for (size_t i = 0; i < transforms.size(); ++i) {
@@ -484,11 +479,9 @@ namespace lfs::rendering {
                                       lfs::core::Device::CPU)
                                       .gpu()
                                       .contiguous();
-                transforms_device = transforms_cuda.ptr<float>();
             }
 
             Tensor visibility_cuda;
-            const std::uint8_t* visibility_device = nullptr;
             if (!request.scene.node_visibility_mask.empty()) {
                 std::vector<int> mask_host(request.scene.node_visibility_mask.size());
                 for (size_t i = 0; i < mask_host.size(); ++i) {
@@ -501,11 +494,9 @@ namespace lfs::rendering {
                                       .gpu()
                                       .to(lfs::core::DataType::UInt8)
                                       .contiguous();
-                visibility_device = visibility_cuda.ptr<std::uint8_t>();
             }
 
             Tensor deleted_mask_cuda;
-            const bool* deleted_mask_device = nullptr;
             if (deleted_mask_source && deleted_mask_source->is_valid()) {
                 deleted_mask_cuda = *deleted_mask_source;
                 if (deleted_mask_cuda.dtype() != lfs::core::DataType::Bool) {
@@ -515,7 +506,6 @@ namespace lfs::rendering {
                     deleted_mask_cuda = deleted_mask_cuda.gpu();
                 }
                 deleted_mask_cuda = deleted_mask_cuda.contiguous();
-                deleted_mask_device = deleted_mask_cuda.ptr<bool>();
             }
 
             const glm::mat4 view = request.frame_view.getViewMatrix();
@@ -530,6 +520,52 @@ namespace lfs::rendering {
 
             const int width = request.frame_view.size.x;
             const int height = request.frame_view.size.y;
+            const auto optional_tensor = [](const Tensor& tensor) { return tensor.is_valid() ? &tensor : nullptr; };
+
+            // Vulkan and Metal splat through the tensor backend's rasterizer.
+            if (lfs::core::gpu_backend_of(positions_cuda) != lfs::core::GpuBackend::CUDA) {
+                lfs::core::PointRaster raster{
+                    .width = width,
+                    .height = height,
+                    .orthographic = request.frame_view.orthographic,
+                    .equirectangular = request.render.equirectangular,
+                    .transparent_background = request.transparent_background,
+                    .ortho_scale = request.frame_view.ortho_scale,
+                    .focal_y = lfs::core::fov2focal(focalLengthToVFovRad(request.frame_view.focal_length_mm),
+                                                    request.frame_view.size.y),
+                    .voxel_size = request.render.voxel_size * request.render.scaling_modifier,
+                    .far_plane = request.frame_view.far_plane,
+                    .background = {request.frame_view.background_color.r, request.frame_view.background_color.g,
+                                   request.frame_view.background_color.b},
+                    .crop_inverse = request.filters.crop_inverse,
+                    .crop_desaturate = request.filters.crop_desaturate,
+                };
+                std::copy_n(glm::value_ptr(view), 16, raster.view.begin());
+                std::copy_n(glm::value_ptr(view_proj), 16, raster.view_projection.begin());
+                if (request.filters.crop_box) {
+                    const auto& crop = *request.filters.crop_box;
+                    raster.crop = lfs::core::PointRasterCrop::Box;
+                    std::copy_n(glm::value_ptr(crop.transform), 16, raster.crop_to_local.begin());
+                    raster.crop_min = {crop.min.x, crop.min.y, crop.min.z};
+                    raster.crop_max = {crop.max.x, crop.max.y, crop.max.z};
+                } else if (request.filters.crop_ellipsoid) {
+                    const auto& ellipsoid = *request.filters.crop_ellipsoid;
+                    raster.crop = lfs::core::PointRasterCrop::Ellipsoid;
+                    std::copy_n(glm::value_ptr(ellipsoid.transform), 16, raster.crop_to_local.begin());
+                    raster.crop_min = {ellipsoid.radii.x, ellipsoid.radii.y, ellipsoid.radii.z};
+                }
+                auto [image_tensor, depth_tensor] = lfs::core::rasterize_points(
+                    positions_cuda, colors_cuda, raster, optional_tensor(transforms_cuda),
+                    optional_tensor(transform_indices_cuda), optional_tensor(visibility_cuda),
+                    optional_tensor(deleted_mask_cuda));
+                return RasterImageResult{
+                    .image = std::move(image_tensor),
+                    .depth = std::move(depth_tensor),
+                    .valid = true,
+                    .far_plane = request.frame_view.far_plane,
+                    .orthographic = request.frame_view.orthographic};
+            }
+#if LFS_HAS_CUDA
             const int channels = request.transparent_background ? 4 : 3;
 
             Tensor image_tensor = Tensor::empty(
@@ -543,10 +579,11 @@ namespace lfs::rendering {
             pcraster::LaunchParams params{};
             params.positions = positions_cuda.ptr<float>();
             params.colors = colors_cuda.ptr<float>();
-            params.transforms = transforms_device;
-            params.transform_indices = transform_indices_ptr;
-            params.visibility_mask = visibility_device;
-            params.deleted_mask = deleted_mask_device;
+            params.transforms = transforms_cuda.is_valid() ? transforms_cuda.ptr<float>() : nullptr;
+            params.transform_indices =
+                transform_indices_cuda.is_valid() ? transform_indices_cuda.ptr<std::int32_t>() : nullptr;
+            params.visibility_mask = visibility_cuda.is_valid() ? visibility_cuda.ptr<std::uint8_t>() : nullptr;
+            params.deleted_mask = deleted_mask_cuda.is_valid() ? deleted_mask_cuda.ptr<bool>() : nullptr;
             params.n_points = static_cast<std::size_t>(positions_source.size(0));
             params.n_transforms = static_cast<int>(transforms.size());
             params.n_visibility = static_cast<int>(request.scene.node_visibility_mask.size());
@@ -608,6 +645,8 @@ namespace lfs::rendering {
                 .valid = true,
                 .far_plane = request.frame_view.far_plane,
                 .orthographic = request.frame_view.orthographic};
+#else
+            return std::unexpected("CUDA tensors in a build without CUDA");
 #endif
         }
 

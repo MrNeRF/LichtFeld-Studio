@@ -2254,6 +2254,61 @@ namespace lfs::core::internal {
         dispatch_addressed(*context, uses, context->pipeline("radius_neighbors", {{0, 1}}), params, count);
     }
 
+    void MetalBackendOps::rasterize_points(const PointRasterProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(rasterize_points);
+        struct Params {
+            uint64_t positions, colors, parameters, scratch, image, depth, transforms, indices, visibility, deleted;
+            uint32_t count, width, height, channels, transform_count, visibility_count, flags;
+            float ortho_scale, focal_y, voxel_size, far_plane;
+            uint32_t padding;
+        };
+        static_assert(sizeof(Params) == 128);
+        const auto context = acquire_context();
+        const auto address = [&](const std::optional<StorageRef>& storage) {
+            return storage ? address_of(*context, *storage) : uint64_t{0};
+        };
+        const Params params{
+            .positions = address_of(*context, program.positions),
+            .colors = address_of(*context, program.colors),
+            .parameters = address_of(*context, program.parameters),
+            .scratch = address_of(*context, program.scratch),
+            .image = address_of(*context, program.image),
+            .depth = address_of(*context, program.depth),
+            .transforms = address(program.transforms),
+            .indices = address(program.indices),
+            .visibility = address(program.visibility),
+            .deleted = address(program.deleted),
+            .count = checked_u32(program.count, "Metal point raster count exceeds uint32"),
+            .width = program.width,
+            .height = program.height,
+            .channels = program.channels,
+            .transform_count = program.transform_count,
+            .visibility_count = program.visibility_count,
+            .flags = program.flags,
+            .ortho_scale = program.ortho_scale,
+            .focal_y = program.focal_y,
+            .voxel_size = program.voxel_size,
+            .far_plane = program.far_plane,
+            .padding = 0,
+        };
+        std::array<StorageRef, 10> uses{program.positions, program.colors, program.parameters,
+                                        program.scratch,   program.image,  program.depth};
+        size_t used = 6;
+        for (const auto& operand : {program.transforms, program.indices, program.visibility, program.deleted}) {
+            if (operand)
+                uses[used++] = *operand;
+        }
+        const size_t pixels = static_cast<size_t>(program.width) * program.height;
+        // Clear, nearest depth, winning color, then the image.
+        for (const uint32_t phase : {0u, 1u, 2u, 3u}) {
+            context->dispatch(std::span(uses.data(), used),
+                              {.pipeline = context->pipeline("point_raster", {{0, phase}}),
+                               .buffers = {},
+                               .params = param_bytes(params),
+                               .grid = threads(phase == 1 || phase == 2 ? program.count : pixels)});
+        }
+    }
+
     void MetalBackendOps::project_points(const StorageRef points, const StorageRef output, const size_t count,
                                          const PointProjection& projection, const StorageRef* transforms,
                                          const size_t transform_count, const StorageRef* indices,

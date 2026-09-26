@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdint>
 #include <limits>
+#include <utility>
 
 namespace lfs::core {
     enum class PointRegion2DKind : uint32_t { Disk,
@@ -67,6 +68,55 @@ namespace lfs::core {
                                        const Tensor* transforms = nullptr,
                                        const Tensor* indices = nullptr,
                                        const Tensor* visibility = nullptr);
+
+    enum class PointRasterCrop : uint32_t {
+        None,
+        Box,
+        Ellipsoid,
+    };
+
+    struct PointRaster {
+        // Column-major matrices, as glm stores them.
+        std::array<float, 16> view{};
+        std::array<float, 16> view_projection{};
+        int32_t width = 1;
+        int32_t height = 1;
+        bool orthographic = false;
+        bool equirectangular = false;
+        bool transparent_background = false;
+        float ortho_scale = 1;
+        float focal_y = 1;
+        // World-space splat size, already scaled.
+        float voxel_size = 0;
+        float far_plane = 0;
+        std::array<float, 3> background{};
+        // Points outside the crop (inside with crop_inverse) are dropped, or
+        // with crop_desaturate drawn mostly gray. crop_to_local is column-major;
+        // an ellipsoid takes its radii from crop_min.
+        PointRasterCrop crop = PointRasterCrop::None;
+        std::array<float, 16> crop_to_local{};
+        std::array<float, 3> crop_min{};
+        std::array<float, 3> crop_max{};
+        bool crop_inverse = false;
+        bool crop_desaturate = false;
+    };
+
+    // Splat Float32 [N,3] points with Float32 [N,3] colors in [0,1] as
+    // depth-tested disks whose pixel radius follows voxel_size and depth, into
+    // a Float32 [3 or 4 with transparent_background, H, W] image and a
+    // [1, H, W] depth, which is far_plane where nothing lands. Of the points
+    // at a pixel's nearest depth, the one with the smallest 8-bit color wins.
+    // Optional column-major Float32 [T,16] transforms apply per Int32 [N]
+    // index (clamped to [0,T-1], zero without indices); a Bool/UInt8 [T]
+    // visibility table hides points by that index, and a Bool/UInt8 [N]
+    // deleted mask hides points. Runs on the
+    // Vulkan and Metal backends; CUDA builds rasterize in the renderer.
+    LFS_CORE_API std::pair<Tensor, Tensor> rasterize_points(const Tensor& points, const Tensor& colors,
+                                                            const PointRaster& raster,
+                                                            const Tensor* transforms = nullptr,
+                                                            const Tensor* indices = nullptr,
+                                                            const Tensor* visibility = nullptr,
+                                                            const Tensor* deleted = nullptr);
 
     // For each Float32 [N,3] point, return whether a reference point is within
     // the inclusive radius. references is a Bool or UInt8 [N] mask; nonzero
