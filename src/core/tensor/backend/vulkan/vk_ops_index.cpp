@@ -382,8 +382,17 @@ namespace lfs::core::internal {
             return;
         }
         const auto context = acquire_vulkan_context();
-        const Geometry shape = geometry(input_layout, program.dim);
-        Launch launch{.mode = kIndexSelectMode, .dtype = input.dtype};
+        Geometry shape = geometry(input_layout, program.dim);
+        // Rows whose bytes pair up into aligned 8-byte words move as Int64
+        // elements: the same bytes in half the loads and stores.
+        DataType moved = input.dtype;
+        const size_t row_bytes = shape.inner * dtype_size(input.dtype);
+        if (dtype_size(input.dtype) < 8 && row_bytes % 8 == 0 && (address(input) & 7u) == 0 &&
+            (address(output) & 7u) == 0) {
+            moved = DataType::Int64;
+            shape.inner = row_bytes / 8;
+        }
+        Launch launch{.mode = kIndexSelectMode, .dtype = moved};
         launch.boundary = static_cast<uint32_t>(program.boundary_mode);
         launch.total = shape.outer * program.index_size * shape.inner;
         launch.push.input_address = address(input);

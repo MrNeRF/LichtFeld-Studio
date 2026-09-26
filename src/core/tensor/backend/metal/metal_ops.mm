@@ -2019,9 +2019,18 @@ namespace lfs::core::internal {
     void MetalBackendOps::index_select(const StorageRef input, const StorageRef indices, const StorageRef output,
                                        const StridedLayout& input_layout, const IndexProgram& program, ExecContext) {
         LFS_FACADE_TRACE(index_select);
-        const Geometry shape = geometry(input_layout, program.dim);
+        Geometry shape = geometry(input_layout, program.dim);
+        // Rows whose bytes pair up into aligned 8-byte words move as Int64
+        // elements: the same bytes in fewer loads and stores.
+        DataType moved = input.dtype;
+        const size_t row_bytes = shape.inner * dtype_size(input.dtype);
+        if (dtype_size(input.dtype) < 8 && row_bytes % 8 == 0 && input.byte_offset % 8 == 0 &&
+            output.byte_offset % 8 == 0) {
+            moved = DataType::Int64;
+            shape.inner = row_bytes / 8;
+        }
         encode_index(*acquire_context(),
-                     {.mode = kIndexSelectMode, .dtype = input.dtype,
+                     {.mode = kIndexSelectMode, .dtype = moved,
                       .total = shape.outer * program.index_size * shape.inner, .input = input, .indices = indices,
                       .values = output, .boundary = static_cast<uint32_t>(program.boundary_mode),
                       .params = {.outer = checked_u32(shape.outer, "Metal index_select outer size exceeds uint32"),

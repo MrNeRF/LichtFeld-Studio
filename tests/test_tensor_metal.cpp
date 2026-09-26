@@ -864,6 +864,34 @@ namespace {
         }
     }
 
+    TEST_F(TensorMetal, IndexSelectRowsMatchCpuForEveryWidth) {
+        // Rows of 8-byte multiples move as 8-byte words; others, and views
+        // whose start breaks the alignment, element by element.
+        const std::vector<int> picks = {7, 0, 3, 3, 9, 1};
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            SCOPED_TRACE(static_cast<int>(backend));
+            GpuBackendScope scope(backend);
+            const Tensor indices = Tensor::from_vector(picks, {picks.size()}, Device::CPU).to(Device::GPU);
+            for (const auto dtype : {DataType::Bool, DataType::UInt8, DataType::Float16, DataType::Float32}) {
+                for (const size_t width : {size_t{1}, size_t{3}, size_t{8}, size_t{16}, size_t{24}}) {
+                    SCOPED_TRACE(std::to_string(static_cast<int>(dtype)) + " width " + std::to_string(width));
+                    const Tensor base = random_tensor(11 * width, -1.0f, 1.0f, 106);
+                    const Tensor rows = (dtype == DataType::Bool ? base.gt(0.0f) : base.mul(100.0f).abs().to(dtype))
+                                            .reshape(TensorShape({11, width}));
+                    const Tensor expected = rows.slice(0, 1, 11).index_select(0, Tensor::from_vector(picks, {picks.size()}, Device::CPU));
+                    expect_close(rows.to(Device::GPU).slice(0, 1, 11).index_select(0, indices).to(DataType::Float32),
+                                 expected.to(DataType::Float32), 0.0f, 0.0f);
+                    expect_close(rows.to(Device::GPU).index_select(0, indices).to(DataType::Float32),
+                                 rows.index_select(0, Tensor::from_vector(picks, {picks.size()}, Device::CPU))
+                                     .to(DataType::Float32),
+                                 0.0f, 0.0f);
+                }
+            }
+        }
+    }
+
     TEST_F(TensorMetal, ScattersMatchCpu) {
         constexpr size_t count = 4099;
         const Tensor base = random_tensor(count, -5.0f, 5.0f, 53);
