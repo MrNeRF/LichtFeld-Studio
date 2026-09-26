@@ -14,8 +14,6 @@
 
 namespace fast_lfs::optimizer::kernels::adam {
 
-    inline constexpr int kMaxContiguousBatch = 6;
-
     struct JointContiguousBatch {
         JointContiguousBatchEntry entries[kMaxContiguousBatch];
     };

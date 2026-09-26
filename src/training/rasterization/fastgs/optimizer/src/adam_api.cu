@@ -117,7 +117,7 @@ namespace fast_lfs::optimizer {
         if (n_entries <= 0) {
             return;
         }
-        if (n_entries > kernels::adam::kMaxContiguousBatch) {
+        if (n_entries > kMaxContiguousBatch) {
             throw std::runtime_error("adam_step_joint_contiguous_batched: too many entries");
         }
         int max_prims = 0;

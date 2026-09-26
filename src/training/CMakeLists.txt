@@ -90,6 +90,7 @@ set(TRAINING_NEW_SOURCES
     ops/registry.cpp
     ops/requirements.cpp
     ops/photometric_cuda.cpp
+    ops/adam_cuda.cpp
     losses/mask_loss.cpp
     strategies/strategy_utils.cpp
     strategies/mcmc.cpp

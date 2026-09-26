@@ -4,6 +4,7 @@
 #pragma once
 
 #include "core/gpu_backend_fwd.hpp"
+#include "lfs/training/ops/adam.hpp"
 #include "lfs/training/ops/loss.hpp"
 
 #include <bitset>
@@ -23,6 +24,7 @@ namespace lfs::training {
     struct TrainingOps {
         core::GpuBackend backend = core::GpuBackend::CUDA;
         const ops::PhotometricOps* photometric = nullptr;
+        const ops::AdamOps* adam = nullptr;
     };
 
     enum class Family {

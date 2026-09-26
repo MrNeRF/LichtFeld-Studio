@@ -9,6 +9,8 @@
 
 namespace fast_lfs::optimizer {
 
+    inline constexpr int kMaxContiguousBatch = 6;
+
     struct JointContiguousBatchEntry {
         float* param = nullptr;
         std::uint8_t* packed = nullptr;
