@@ -99,9 +99,13 @@ namespace lfs::core::nn::portable {
     Tensor softmax(const Tensor& input, const Tensor* mask) {
         const auto source = fp32(input);
         const auto x = mask ? source.add(fp32(*mask)) : source;
-        auto shifted = x.sub(x.max(-1, true));
+        // A row whose entries are all -inf attends to nothing and yields zeros, as
+        // in the CUDA and Metal kernels: the shift stays finite, so every
+        // exponential is 0, and a zero sum divides by 1.
+        auto shifted = x.sub(x.max(-1, true).maximum(-std::numeric_limits<float>::max()));
         auto e = shifted.exp();
-        return e.div(e.sum(-1, true)).to(input.dtype());
+        const auto sum = e.sum(-1, true);
+        return e.div(sum.add(sum.eq(0.0f).to(DataType::Float32))).to(input.dtype());
     }
 
     Tensor attention(const Tensor& q, const Tensor& k, const Tensor& v, const Tensor* mask, float scale) {

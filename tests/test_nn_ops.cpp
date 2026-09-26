@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <random>
@@ -647,6 +648,41 @@ TEST_F(NnOpsTest, AttentionVsExplicitSoftmax) {
         const float rtol = dtype == lfs::core::DataType::Float16 ? kF16Rtol : 2e-4f;
         const float atol = dtype == lfs::core::DataType::Float16 ? kF16Atol : 2e-4f;
         EXPECT_TRUE(all_close(host_f32(O), ref, rtol, atol));
+    }
+}
+
+TEST_F(NnOpsTest, FullyMaskedRowsAreZero) {
+    constexpr float inf = std::numeric_limits<float>::infinity();
+    const auto y = host_f32(lfs::core::nn::softmax(
+        upload({1.0f, 2.0f, 3.0f, -inf, -inf, -inf}, {2, 3}, lfs::core::DataType::Float32)));
+    EXPECT_TRUE(all_close({y.begin(), y.begin() + 3}, cpu_softmax({1.0f, 2.0f, 3.0f}, 1, 3), kF32Rtol, kF32Atol));
+    EXPECT_EQ(std::vector<float>(y.begin() + 3, y.end()), std::vector<float>(3, 0.0f));
+
+    const int nq = 5, nk = 40, d = 16;
+    std::vector<float> q(nq * d), k(nk * d), v(nk * d), mask(nq * nk, 0.0f);
+    std::mt19937 rng(7);
+    std::uniform_real_distribution<float> dist(-0.8f, 0.8f);
+    for (auto* values : {&q, &k, &v}) {
+        for (auto& val : *values) {
+            val = dist(rng);
+        }
+    }
+    std::fill_n(mask.begin() + 2 * nk, nk, -inf);
+    for (const auto dtype : {lfs::core::DataType::Float32, lfs::core::DataType::Float16}) {
+        const auto M = upload(mask, {1, 1, nq, nk}, dtype);
+        const auto O = host_f32(lfs::core::nn::attention(upload(q, {1, 1, nq, d}, dtype), upload(k, {1, 1, nk, d}, dtype),
+                                                         upload(v, {1, 1, nk, d}, dtype), &M));
+        for (int row = 0; row < nq; ++row) {
+            float largest = 0.0f;
+            for (int c = 0; c < d; ++c) {
+                largest = std::max(largest, std::abs(O[row * d + c]));
+            }
+            if (row == 2) {
+                EXPECT_EQ(largest, 0.0f) << "dtype " << static_cast<int>(dtype);
+            } else {
+                EXPECT_TRUE(std::isfinite(largest) && largest > 0.0f) << "row " << row;
+            }
+        }
     }
 }
 
