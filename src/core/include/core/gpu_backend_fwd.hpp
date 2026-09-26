@@ -29,6 +29,8 @@ namespace lfs::core {
     LFS_CORE_API const char* gpu_backend_name(GpuBackend backend);
     LFS_CORE_API std::optional<GpuBackend> gpu_backend_of(const Tensor& tensor);
     LFS_CORE_API GpuBackend default_gpu_backend();
+    // The backend default_gpu_backend() resolves to, without freezing it.
+    LFS_CORE_API GpuBackend configured_gpu_backend();
 
     // Keep scoped factory selection available to CUDA translation units without
     // pulling in the host-only Result/Error declarations from tensor_backend.hpp.

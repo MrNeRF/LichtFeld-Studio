@@ -1315,7 +1315,8 @@ namespace lfs::app {
     // user-facing message (#1540). show_dialog is false for CLI-only modes: a modal in a
     // non-interactive process blocks it forever.
     bool preflightGpu(const bool show_dialog, const bool viewer_only) {
-        if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Metal) {
+        // Falling back changes the default, so it must not be resolved yet.
+        if (lfs::core::configured_gpu_backend() == lfs::core::GpuBackend::Metal) {
             if (viewer_only && lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan)) {
                 if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::Metal))
                     return true;
@@ -1331,7 +1332,7 @@ namespace lfs::app {
                 show_dialog);
             return false;
         }
-        if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Vulkan) {
+        if (lfs::core::configured_gpu_backend() == lfs::core::GpuBackend::Vulkan) {
             if (viewer_only &&
                 lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan)) {
                 return true;

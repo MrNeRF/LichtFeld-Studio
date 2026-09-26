@@ -63,6 +63,9 @@ namespace {
         internal::gpu_backend_reset_for_testing();
         ASSERT_TRUE(set_default_gpu_backend(GpuBackend::Vulkan));
 
+        // Catches a configuration query that resolves the default.
+        EXPECT_EQ(configured_gpu_backend(), GpuBackend::Vulkan);
+
         // The last explicit configuration wins until the first resolution.
         const lfs::Status accepted = set_default_gpu_backend(GpuBackend::CUDA);
         EXPECT_TRUE(accepted.has_value());

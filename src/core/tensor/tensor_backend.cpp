@@ -310,6 +310,13 @@ namespace lfs::core {
             return kConfiguredBase - static_cast<int>(backend);
         }
 
+        GpuBackend backend_of_state(const int state) {
+            if (is_resolved(state))
+                return static_cast<GpuBackend>(state);
+            return state == kUnconfigured ? (LFS_HAS_CUDA ? GpuBackend::CUDA : GpuBackend::Vulkan)
+                                          : configured_backend(state);
+        }
+
         [[noreturn]] void throw_backend_unavailable(const GpuBackend backend) {
 #ifdef LFS_TENSOR_VULKAN
             if (backend == GpuBackend::Vulkan && internal::vulkan_backend_lost()) {
@@ -361,19 +368,18 @@ namespace lfs::core {
     GpuBackend default_gpu_backend() {
         for (;;) {
             int state = process_backend_state.load(std::memory_order_acquire);
-            if (is_resolved(state)) {
-                return static_cast<GpuBackend>(state);
-            }
-
-            const GpuBackend selected = state == kUnconfigured
-                                            ? (LFS_HAS_CUDA ? GpuBackend::CUDA : GpuBackend::Vulkan)
-                                            : configured_backend(state);
-            if (process_backend_state.compare_exchange_weak(
+            const GpuBackend selected = backend_of_state(state);
+            if (is_resolved(state) ||
+                process_backend_state.compare_exchange_weak(
                     state, static_cast<int>(selected),
                     std::memory_order_acq_rel, std::memory_order_acquire)) {
                 return selected;
             }
         }
+    }
+
+    GpuBackend configured_gpu_backend() {
+        return backend_of_state(process_backend_state.load(std::memory_order_acquire));
     }
 
     lfs::Status set_default_gpu_backend(const GpuBackend backend) {
