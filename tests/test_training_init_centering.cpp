@@ -204,6 +204,40 @@ namespace {
         check_positions(scene.getTrainingModel()->means(), source, glm::vec3{0}, scene);
     }
 
+    TEST_F(TrainingInitCentering, EvalAllKeepsEveryCameraInTrainingOnBothLoadPaths) {
+        for (const bool async : {false, true}) {
+            for (const bool eval_all : {false, true}) {
+                SCOPED_TRACE(::testing::Message() << "async=" << async << " eval_all=" << eval_all);
+                param::TrainingParameters params;
+                params.dataset.data_path = root;
+                params.dataset.test_every = 2;
+                params.optimization.enable_eval = true;
+                params.optimization.eval_all = eval_all;
+                Scene scene;
+                if (async) {
+                    auto loader = lfs::io::Loader::create();
+                    auto loaded = loader->load(root, {});
+                    ASSERT_TRUE(loaded) << loaded.error().format();
+                    const auto applied = lfs::training::applyLoadResultToScene(params, scene, std::move(*loaded));
+                    ASSERT_TRUE(applied) << applied.error();
+                } else {
+                    const auto loaded = lfs::training::loadTrainingDataIntoScene(params, scene);
+                    ASSERT_TRUE(loaded) << loaded.error();
+                }
+                const auto cameras = scene.getAllCameras();
+                ASSERT_EQ(cameras.size(), 2u);
+                size_t training = 0;
+                size_t evaluation = 0;
+                for (const auto& camera : cameras) {
+                    training += camera->split() == CameraSplit::Train;
+                    evaluation += camera->split() == CameraSplit::Eval;
+                }
+                EXPECT_EQ(training, eval_all ? 2u : 1u);
+                EXPECT_EQ(evaluation, eval_all ? 0u : 1u);
+            }
+        }
+    }
+
     TEST_F(TrainingInitCentering, DeferredInitializationUsesCapturedOrigin) {
         param::TrainingParameters params;
         params.dataset.data_path = root;

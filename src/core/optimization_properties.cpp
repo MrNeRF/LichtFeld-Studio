@@ -717,6 +717,12 @@ namespace lfs::core::param {
                        "Run evaluation at specified steps")
             .locale("training_params.enable_eval")
             .tooltip("training.tooltip.enable_eval")
+            .all_strategies()
+            .bool_prop(&OptimizationParameters::eval_all,
+                       "eval_all", "Eval All", d.eval_all,
+                       "Train on every image and evaluate all of them; no image is held out")
+            .locale("training_params.eval_all")
+            .tooltip("training.tooltip.eval_all")
 
             // Random initialization
             .all_strategies()

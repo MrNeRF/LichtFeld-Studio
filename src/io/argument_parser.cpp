@@ -4,12 +4,14 @@
 
 #include "io/argument_parser.hpp"
 #include "core/environment.hpp"
+#include "core/error.hpp"
 #include "core/logger.hpp"
 #include "core/optimization_properties.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/project_path.hpp"
 #include "core/property_registry.hpp"
+#include "core/source_site.hpp"
 #include "core/user_paths.hpp"
 #include "io/exporter.hpp"
 #include "io/splat_path.hpp"
@@ -94,6 +96,7 @@ namespace lfs::io::args {
             OptimizationCliBinding{"--ppisp-freeze", "ppisp_freeze_from_sidecar", Bool},
             OptimizationCliBinding{"--gut", "gut", Bool},
             OptimizationCliBinding{"--eval", "enable_eval", Bool},
+            OptimizationCliBinding{"--eval-all", "eval_all", Bool},
             OptimizationCliBinding{"--far-scene-min-fraction", "far_scene_min_fraction", Float},
             OptimizationCliBinding{"--growth-ratio-pow", "growth_ratio_pow", Float},
             OptimizationCliBinding{"--fill-pacing-iter", "fill_pacing_iter", Integer},
@@ -180,6 +183,41 @@ namespace {
     };
 
     const std::set<std::string> VALID_STRATEGIES = {"mcmc", "mrnf", "mnrf", "lfs", "igs+"};
+
+    // Each --eval-steps value may hold several comma-separated iterations; the
+    // result is sorted and free of duplicates.
+    lfs::Result<std::vector<size_t>> parse_eval_steps(const std::vector<std::string>& values) {
+        std::vector<size_t> steps;
+        for (const auto& value : values) {
+            std::string_view rest = value;
+            while (true) {
+                const auto comma = rest.find(',');
+                auto token = rest.substr(0, comma);
+                while (!token.empty() && std::isspace(static_cast<unsigned char>(token.front())))
+                    token.remove_prefix(1);
+                while (!token.empty() && std::isspace(static_cast<unsigned char>(token.back())))
+                    token.remove_suffix(1);
+                size_t step = 0;
+                const auto [end, error] = std::from_chars(token.data(), token.data() + token.size(), step);
+                if (token.empty() || error != std::errc{} || end != token.data() + token.size() || step == 0) {
+                    return lfs::make_error(lfs::ErrorInit{
+                        .code = lfs::ErrorCode::InvalidArgument,
+                        .domain = lfs::ErrorDomain::IO,
+                        .user_message = "Evaluation steps must be positive iterations.",
+                        .detail = std::format("Invalid --eval-steps '{}'. Use positive iterations, e.g. 1000,7000,30000", value),
+                        .detection = LFS_SOURCE_SITE_CURRENT(),
+                    });
+                }
+                steps.push_back(step);
+                if (comma == std::string_view::npos)
+                    break;
+                rest.remove_prefix(comma + 1);
+            }
+        }
+        std::ranges::sort(steps);
+        steps.erase(std::unique(steps.begin(), steps.end()), steps.end());
+        return steps;
+    }
 
     std::optional<lfs::core::param::BackgroundMode> parse_bg_mode(const std::string& mode) {
         using lfs::core::param::BackgroundMode;
@@ -717,8 +755,9 @@ namespace {
             ::args::Group output_sep(parser, " ");
             ::args::Group output_group(parser, "OUTPUT OPTIONS:");
             ::args::Flag enable_eval(output_group, "eval", lfs::io::args::optimization_cli_help("--eval"), {"eval"});
+            ::args::Flag eval_all(output_group, "eval_all", lfs::io::args::optimization_cli_help("--eval-all"), {"eval-all"});
             ::args::Flag no_download(output_group, "no_download", "Do not download optional model weights", {"no-download"});
-            ::args::ValueFlagList<int> eval_steps(output_group, "eval_steps", "Held-out evaluation iterations (repeatable; default: 7000 and 30000)", {"eval-steps"});
+            ::args::ValueFlagList<std::string> eval_steps(output_group, "eval_steps", "Evaluation iterations as a comma list, e.g. 1000,7000,30000 (replaces the default 7000,30000; the final iteration is always evaluated)", {"eval-steps"});
             ::args::Flag no_save_eval_images(output_group, "no_save_eval_images", "Disable saving of evaluation comparison images (GT vs rendered) during eval (default: enabled)", {"no-save-eval-images"});
             ::args::ValueFlagList<std::string> timelapse_images(output_group, "timelapse_images", "Image filenames to render timelapse images for", {"timelapse-images"});
             ::args::ValueFlag<int> timelapse_every(output_group, "timelapse_every", "Render timelapse image every N iterations (default: 50)", {"timelapse-every"});
@@ -1259,6 +1298,14 @@ namespace {
                 return false;
             };
 
+            std::optional<std::vector<size_t>> eval_steps_val;
+            if (cli_option_present({"--eval-steps"})) {
+                auto steps = parse_eval_steps(::args::get(eval_steps));
+                if (!steps)
+                    return std::unexpected(std::string(steps.error().detail()));
+                eval_steps_val = std::move(*steps);
+            }
+
             // Create lambda to apply command line overrides after JSON loading
             auto apply_cmd_overrides = [&params,
                                         // Capture values, not references
@@ -1321,6 +1368,7 @@ namespace {
                                         ppisp_freeze_from_sidecar_flag = bool(ppisp_freeze_from_sidecar),
                                         ppisp_sidecar_path_val = cli_option_present({"--ppisp-sidecar"}) ? std::optional<std::string>(::args::get(ppisp_sidecar_path)) : std::optional<std::string>(),
                                         enable_eval_flag = bool(enable_eval),
+                                        eval_all_flag = bool(eval_all),
                                         no_download_flag = bool(no_download),
                                         headless_flag = bool(headless),
                                         auto_train_flag = bool(auto_train),
@@ -1367,7 +1415,7 @@ namespace {
                                         growth_ratio_pow_val = cli_option_present({"--growth-ratio-pow"}) ? std::optional<float>(::args::get(growth_ratio_pow)) : std::optional<float>(),
                                         fill_pacing_iter_val = cli_option_present({"--fill-pacing-iter"}) ? std::optional<int>(::args::get(fill_pacing_iter)) : std::optional<int>(),
                                         far_seed_dose_val = cli_option_present({"--far-seed-dose"}) ? std::optional<int>(::args::get(far_seed_dose)) : std::optional<int>(),
-                                        eval_steps_val = cli_option_present({"--eval-steps"}) ? std::optional<std::vector<int>>(::args::get(eval_steps)) : std::optional<std::vector<int>>(),
+                                        eval_steps_val = std::move(eval_steps_val),
                                         freeze_lr_scale_val = cli_option_present({"--freeze-lr-scale"}) ? std::optional<float>(::args::get(freeze_lr_scale)) : std::optional<float>(),
                                         exclude_export_flag = bool(exclude_export),
                                         save_project_at_iteration_val =
@@ -1378,6 +1426,7 @@ namespace {
                                             cli_option_present({"--save-project-path"})
                                                 ? std::optional<std::string>(::args::get(save_project_path))
                                                 : std::optional<std::string>(),
+
                                         output_path_explicit_val = cli_option_present({"-o", "--output-path"}),
                                         output_name_val = cli_option_present({"--output-name"}) ? std::optional<std::string>(::args::get(output_name)) : std::optional<std::string>()]() {
                 auto& opt = params.optimization;
@@ -1478,6 +1527,8 @@ namespace {
                 if (opt.ppisp_freeze_from_sidecar)
                     opt.use_ppisp = true;
                 setFlag(enable_eval_flag, opt.enable_eval);
+                setFlag(eval_all_flag, opt.eval_all);
+                setFlag(eval_all_flag, opt.enable_eval);
                 setFlag(no_download_flag, params.no_download);
                 setFlag(headless_flag, opt.headless);
                 setFlag(auto_train_flag, opt.auto_train);
@@ -1526,15 +1577,7 @@ namespace {
                 setVal(fill_pacing_iter_val, opt.fill_pacing_iter);
                 setVal(far_seed_dose_val, opt.far_seed_dose);
                 if (eval_steps_val && !eval_steps_val->empty()) {
-                    opt.eval_steps.clear();
-                    for (const int step : *eval_steps_val) {
-                        if (step > 0) {
-                            opt.eval_steps.push_back(static_cast<size_t>(step));
-                        }
-                    }
-                    std::sort(opt.eval_steps.begin(), opt.eval_steps.end());
-                    opt.eval_steps.erase(std::unique(opt.eval_steps.begin(), opt.eval_steps.end()),
-                                         opt.eval_steps.end());
+                    opt.eval_steps = *eval_steps_val;
                 }
                 setVal(freeze_lr_scale_val, params.freeze_lr_scale);
                 setFlag(exclude_export_flag, params.exclude_frozen_add_splats_from_export);
@@ -1608,7 +1651,8 @@ namespace {
                 note_opt("ppisp_use_controller", ppisp_controller_flag);
                 note_opt("ppisp_freeze_from_sidecar", ppisp_freeze_from_sidecar_flag);
                 note_opt("ppisp_sidecar_path", ppisp_sidecar_path_val.has_value());
-                note_opt("enable_eval", enable_eval_flag);
+                note_opt("enable_eval", enable_eval_flag || eval_all_flag);
+                note_opt("eval_all", eval_all_flag);
                 note_opt("headless", headless_flag);
                 note_opt("auto_train", auto_train_flag);
                 note_opt("no_splash", no_splash_flag);
@@ -1772,6 +1816,15 @@ lfs::io::args::parse_args_and_params(int argc, const char* const argv[]) {
     if (apply_overrides) {
         apply_overrides();
     }
+    const auto flag_given = [&args](const std::string_view flag) {
+        return std::ranges::any_of(args, [flag](const std::string& arg) {
+            return arg == flag || (arg.starts_with(flag) && arg.size() > flag.size() && arg[flag.size()] == '=');
+        });
+    };
+    if (flag_given("--eval-steps") && !params->optimization.enable_eval)
+        return std::unexpected("--eval-steps needs --eval or --eval-all; without them no evaluation runs");
+    if (params->optimization.eval_all && flag_given("--test-every"))
+        return std::unexpected("--test-every selects held-out images; --eval-all trains on every image and evaluates all of them");
     apply_step_scaling(*params);
     apply_ppisp_defaults(*params);
 

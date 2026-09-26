@@ -639,7 +639,14 @@
 <div class="training-panel-block" data-if="pv_section_evaluation_visible &amp;&amp; (dep_eval)">
 <div class="section-header text-accent" id="hdr-evaluation" data-event-click="toggle_section('evaluation')"><span class="section-arrow" id="arrow-evaluation">&#x25BC;</span><span>{{pv_header_evaluation}}</span></div>
 <div class="section-content" id="sec-evaluation"><div data-class-disabled-overlay="live_disabled">
-<div data-class-disabled-overlay="dataset_disabled">          <div class="setting-row" data-if="dep_eval &amp;&amp; pv_show_evaluation_fields" data-tooltip="training.tooltip.test_every">
+<div data-class-disabled-overlay="dataset_disabled">
+          <div class="setting-row" data-for="row : pv_dataset_eval_train_rows" data-if="dep_eval"
+               data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="checkbox" data-checked="row.checked"
+                   data-event-click="pv_value_change(row.id, !row.checked)" />
+          </div>
+          <div class="setting-row" data-if="dep_eval_holdout &amp;&amp; pv_show_evaluation_fields" data-tooltip="training.tooltip.test_every">
             <span class="prop-label">{{label_test_every}}</span>
             <input type="text" class="number-input" data-value="test_every_str" />
             <button class="num-step-btn" data-event-mousedown="num_step('test_every', -1)">-</button>
