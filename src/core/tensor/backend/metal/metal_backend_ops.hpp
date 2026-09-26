@@ -55,6 +55,7 @@ namespace lfs::core::internal {
         size_t count_nonzero_float(StorageRef, size_t, ExecContext) override;
         bool has_nan(StorageRef, size_t, ExecContext) override;
         bool has_inf(StorageRef, size_t, ExecContext) override;
+        bool arg_extreme(StorageRef, StorageRef, StorageRef, const ArgExtremeProgram&, ExecContext) override;
         void cumsum(StorageRef, const StridedLayout&, int, ExecContext) override;
         void sort_1d(StorageRef, StorageRef, size_t, const SortProgram&, ExecContext) override;
         void sort_2d(StorageRef, StorageRef, const SortProgram&, ExecContext) override;

@@ -41,16 +41,19 @@ void storeByte(uint64_t address, uint64_t index, uint value)
     } while (true);
 }
 
+// Every extent divides the uint32 element count, so the walk divides in 32
+// bits; only the offsets need 64.
 uint64_t logicalOffset(uint linear, uniform Parameters parameters)
 {
     uint64_t offset = 0;
     for (uint reverse = 0; reverse + 1 < parameters.rank; ++reverse)
     {
         const uint dimension = parameters.rank - reverse - 1;
-        if (parameters.dims[dimension] == 1) continue;
-        const uint64_t coordinate = uint64_t(linear) % parameters.dims[dimension];
-        linear = uint(uint64_t(linear) / parameters.dims[dimension]);
-        offset += coordinate * parameters.strides[dimension];
+        const uint extent = uint(parameters.dims[dimension]);
+        if (extent == 1) continue;
+        const uint coordinate = linear % extent;
+        linear /= extent;
+        offset += uint64_t(coordinate) * parameters.strides[dimension];
     }
     return offset + uint64_t(linear) * parameters.strides[0];
 }

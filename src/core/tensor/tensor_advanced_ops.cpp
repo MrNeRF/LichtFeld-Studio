@@ -113,9 +113,9 @@ namespace lfs::core {
     }
 
     namespace {
-        // The CPU loop's choice along `dim`, from tensor ops on the input's
-        // backend: the first NaN after the first element, else the first
-        // element if it is NaN, else the first strict extreme.
+        // The CPU loop's choice along `dim`, on the input's backend: the
+        // first NaN after the first element, else the first element if it is
+        // NaN, else the first strict extreme.
         std::pair<Tensor, Tensor> gpu_extreme_with_indices(
             const Tensor& input, const int dim, const bool keepdim, const bool find_maximum) {
             const size_t size = input.size(static_cast<size_t>(dim));
@@ -123,6 +123,27 @@ namespace lfs::core {
                            std::format("indexed extrema index their dimension in int32 (dim={}, size={})", dim,
                                        size));
             const Tensor x = input.contiguous();
+            std::vector<size_t> kept = x.shape().dims();
+            size_t outer = 1, inner = 1;
+            for (int axis = 0; axis < dim; ++axis)
+                outer *= kept[static_cast<size_t>(axis)];
+            for (size_t axis = static_cast<size_t>(dim) + 1; axis < kept.size(); ++axis)
+                inner *= kept[axis];
+            kept[static_cast<size_t>(dim)] = 1;
+            Tensor kernel_values = internal::allocate_like(x, TensorShape(kept), DataType::Float32);
+            Tensor kernel_indices = internal::allocate_like(x, TensorShape(kept), DataType::Int64);
+            if (internal::backend_ops_for(x).arg_extreme(
+                    internal::storage_ref(x), internal::storage_ref(kernel_values),
+                    internal::storage_ref(kernel_indices),
+                    internal::ArgExtremeProgram{.outer = outer, .reduce = size, .inner = inner, .maximum = find_maximum},
+                    internal::ExecContext{kernel_values.stream()})) {
+                if (!keepdim) {
+                    kernel_values = kernel_values.squeeze(dim);
+                    kernel_indices = kernel_indices.squeeze(dim);
+                }
+                return {kernel_values, kernel_indices};
+            }
+            // Backends without the kernel compose it from tensor ops.
             std::vector<int32_t> positions(size);
             for (size_t i = 0; i < size; ++i)
                 positions[i] = static_cast<int32_t>(i);
