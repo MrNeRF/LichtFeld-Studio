@@ -107,6 +107,8 @@ namespace lfs::core::internal {
                           const AttentionProgram&, ExecContext) override;
         void nn_norm(StorageRef, StorageRef, std::optional<StorageRef>, StorageRef, const NormProgram&,
                      ExecContext) override;
+        void nn_conv2d(StorageRef, StorageRef, std::optional<StorageRef>, StorageRef, const ConvProgram&,
+                       ExecContext) override;
         void bias_add(StorageRef, StorageRef, StorageRef, int, int, int, ExecContext) override;
         void bias_relu(StorageRef, StorageRef, StorageRef, int, int, int, ExecContext) override;
         void relu(StorageRef, StorageRef, int, ExecContext) override;

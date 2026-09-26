@@ -147,6 +147,11 @@ namespace lfs::core::internal {
         throw TensorError("Vulkan runs the neural-network ops as the portable composition");
     }
 
+    void VulkanBackendOps::nn_conv2d(StorageRef, StorageRef, std::optional<StorageRef>, StorageRef, const ConvProgram&,
+                                     ExecContext) {
+        throw TensorError("Vulkan runs the neural-network ops as the portable composition");
+    }
+
     void VulkanBackendOps::inference(const StorageRef input, const StorageRef output,
                                      const InferenceProgram& program, ExecContext) {
         LFS_FACADE_TRACE(inference);

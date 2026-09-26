@@ -195,6 +195,8 @@ namespace lfs::core {
                                       StorageRef output, const AttentionProgram& program, ExecContext context) = 0;
             virtual void nn_norm(StorageRef input, StorageRef weight, std::optional<StorageRef> bias,
                                  StorageRef output, const NormProgram& program, ExecContext context) = 0;
+            virtual void nn_conv2d(StorageRef input, StorageRef weight, std::optional<StorageRef> bias,
+                                   StorageRef output, const ConvProgram& program, ExecContext context) = 0;
             virtual void bias_add(StorageRef input, StorageRef bias, StorageRef output,
                                   int count, int channels, int spatial_size,
                                   ExecContext context) = 0;
@@ -500,6 +502,8 @@ namespace lfs::core {
                               const AttentionProgram&, ExecContext) override;
             void nn_norm(StorageRef, StorageRef, std::optional<StorageRef>, StorageRef, const NormProgram&,
                          ExecContext) override;
+            void nn_conv2d(StorageRef, StorageRef, std::optional<StorageRef>, StorageRef, const ConvProgram&,
+                           ExecContext) override;
             void bias_add(StorageRef input, StorageRef bias, StorageRef output,
                           int count, int channels, int spatial_size,
                           ExecContext context) override;

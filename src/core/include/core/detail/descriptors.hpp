@@ -255,6 +255,18 @@ namespace lfs::core {
             std::array<int64_t, 4> mask_strides{};
         };
 
+        // 2D convolution of NCHW input with OIHW weights or, with `transpose`,
+        // the transposed convolution with weights stored per group as
+        // [out / groups][kh][kw][in / groups]. The geometry holds the
+        // per-group input channels and the image and kernel sizes, with the
+        // ConvPadMode in `mode`; `activation` is an nn::Activation.
+        struct ConvProgram {
+            size_t batch = 0, out_channels = 0, groups = 1;
+            bool transpose = false;
+            InferenceGeometry geometry;
+            int activation = 0;
+        };
+
         // Layer norm over rows of `cols` values; RMS norm without a bias.
         struct NormProgram {
             size_t rows = 0, cols = 0;

@@ -754,6 +754,27 @@ namespace lfs::core::nn {
             b_c = &b_s;
         }
 
+        if (runs_backend_kernels(in_c)) {
+            auto out = empty_like_shape(
+                in_c, TensorShape{std::vector<std::size_t>{static_cast<std::size_t>(n),
+                                                           static_cast<std::size_t>(cout),
+                                                           static_cast<std::size_t>(out_h),
+                                                           static_cast<std::size_t>(out_w)}});
+            internal::backend_ops_for(in_c).nn_conv2d(
+                internal::storage_ref(in_c), internal::storage_ref(w_c), optional_storage(b_c),
+                internal::storage_ref(out),
+                {.batch = static_cast<std::size_t>(n),
+                 .out_channels = static_cast<std::size_t>(cout),
+                 .groups = static_cast<std::size_t>(params.groups),
+                 .geometry = {.channels = cin_g, .height = h, .width = w, .out_height = out_h, .out_width = out_w,
+                              .kernel_h = kh, .kernel_w = kw, .stride_h = params.stride_h,
+                              .stride_w = params.stride_w, .pad_h = params.pad_h, .pad_w = params.pad_w,
+                              .dilation_h = params.dilation_h, .dilation_w = params.dilation_w,
+                              .mode = static_cast<int32_t>(params.pad_mode)},
+                 .activation = static_cast<int>(params.activation)},
+                {});
+            return out;
+        }
         if (runs_portable(in_c)) {
             return portable::conv(in_c, w_c, b_c, params);
         }
@@ -902,6 +923,33 @@ namespace lfs::core::nn {
             b_c = &b_s;
         }
 
+        if (runs_backend_kernels(in_c)) {
+            if (b_c && b_c->dtype() != in_c.dtype()) {
+                b_s = b_c->to(in_c.dtype());
+                b_c = &b_s;
+            }
+            auto out = empty_like_shape(
+                in_c, TensorShape{std::vector<std::size_t>{static_cast<std::size_t>(n),
+                                                           static_cast<std::size_t>(cout),
+                                                           static_cast<std::size_t>(out_h),
+                                                           static_cast<std::size_t>(out_w)}});
+            // Each group's [in][out * kh * kw] weights become [out * kh * kw][in].
+            const Tensor w_t = w_c.reshape({params.groups, cin_g, cout_g * kh * kw}).transpose(1, 2).contiguous();
+            internal::backend_ops_for(in_c).nn_conv2d(
+                internal::storage_ref(in_c), internal::storage_ref(w_t), optional_storage(b_c),
+                internal::storage_ref(out),
+                {.batch = static_cast<std::size_t>(n),
+                 .out_channels = static_cast<std::size_t>(cout),
+                 .groups = static_cast<std::size_t>(params.groups),
+                 .transpose = true,
+                 .geometry = {.channels = cin_g, .height = hin, .width = win, .out_height = out_h, .out_width = out_w,
+                              .kernel_h = kh, .kernel_w = kw, .stride_h = params.stride_h,
+                              .stride_w = params.stride_w, .pad_h = params.pad_h, .pad_w = params.pad_w,
+                              .dilation_h = params.dilation_h, .dilation_w = params.dilation_w},
+                 .activation = static_cast<int>(params.activation)},
+                {});
+            return out;
+        }
         if (runs_portable(in_c)) {
             return portable::conv(in_c, w_c, b_c, params, true);
         }

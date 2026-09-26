@@ -24,6 +24,8 @@ constant uint kReduce [[function_constant(6)]];
 constant uint kScatter [[function_constant(7)]];
 constant uint kTransposeB [[function_constant(14)]];
 constant uint kBiasRelu [[function_constant(15)]];
+// Matrix-unit GEMMs compute 64x64 tiles instead of 32x32 ones.
+constant uint kWideTile [[function_constant(27)]];
 
 constant uint kReduceThreads = 256;
 
@@ -692,13 +694,15 @@ kernel void copy_bytes(device const uchar* source_buffer [[buffer(0)]],
 
 // ---------------------------------------------------------------------------
 // Strided gather and scatter over up to eight dimensions, and broadcast
-// selection. Elements move as kElementSize bytes; the one converting form is
-// the Int32 to Float32 scatter.
+// selection. Elements move as kElementSize bytes, up to 16-byte chunks of
+// several elements; the one converting form is the Int32 to Float32 scatter.
 
 static void copy_element(device const uchar* source, ulong source_index,
                          device uchar* destination, ulong destination_index) {
     if (kInputDType != kOutputDType)
         ((device float*)destination)[destination_index] = float(((device const int*)source)[source_index]);
+    else if (kElementSize == 16)
+        ((device uint4*)destination)[destination_index] = ((device const uint4*)source)[source_index];
     else if (kElementSize == 8)
         ((device ulong*)destination)[destination_index] = ((device const ulong*)source)[source_index];
     else if (kElementSize == 4)
@@ -3342,9 +3346,8 @@ kernel void inference(constant InferenceParams& params [[buffer(0)]], uint i [[t
 // C[m][n] = A[m][k] * B, with B stored as [k][n] or, with kTransposeB, as
 // [n][k]; batches are packed. kBiasRelu applies max(value + bias[row], 0) to
 // the tile in registers before it is stored. A threadgroup of four SIMD
-// groups computes one 32x32 tile, and the matmul checks the matrix edges.
-
-constant int kGemmTile = 32;
+// groups computes one 32x32 tile, or 64x64 with kWideTile, and the matmul
+// checks the matrix edges.
 
 struct GemmParams {
     ulong lhs_offset;
@@ -3362,7 +3365,7 @@ struct GemmParams {
 
 using Matrix = tensor<device float, dextents<int32_t, 2>, tensor_inline>;
 
-template <bool TransposeB>
+template <bool TransposeB, int Tile>
 static void gemm_tile(device float* lhs, device float* rhs, device float* output, device const float* bias,
                       constant GemmParams& params, uint2 group) {
     const int m = int(params.m), n = int(params.n), k = int(params.k);
@@ -3370,10 +3373,10 @@ static void gemm_tile(device float* lhs, device float* rhs, device float* output
     Matrix a(lhs, dextents<int32_t, 2>(k, m));
     Matrix b(rhs, TransposeB ? dextents<int32_t, 2>(k, n) : dextents<int32_t, 2>(n, k));
     Matrix c(output, dextents<int32_t, 2>(n, m));
-    constexpr auto descriptor = mpp::tensor_ops::matmul2d_descriptor(
-        kGemmTile, kGemmTile, static_cast<int>(dynamic_extent), false, TransposeB);
+    constexpr auto descriptor =
+        mpp::tensor_ops::matmul2d_descriptor(Tile, Tile, static_cast<int>(dynamic_extent), false, TransposeB);
     mpp::tensor_ops::matmul2d<descriptor, execution_simdgroups<4>> matmul;
-    const int row = int(group.y) * kGemmTile, column = int(group.x) * kGemmTile;
+    const int row = int(group.y) * Tile, column = int(group.x) * Tile;
     auto a_tile = a.slice(0, row);
     auto b_tile = TransposeB ? b.slice(0, column) : b.slice(column, 0);
     auto c_tile = c.slice(column, row);
@@ -3407,10 +3410,14 @@ kernel void gemm(device const uchar* lhs_buffer [[buffer(0)]],
     device float* rhs = (device float*)(rhs_buffer + params.rhs_offset) + group.z * params.rhs_stride;
     device float* output = (device float*)(output_buffer + params.output_offset) + group.z * params.output_stride;
     device const float* bias = kBiasRelu != 0 ? (device const float*)(bias_buffer + params.bias_offset) : nullptr;
-    if (kTransposeB != 0)
-        gemm_tile<true>(lhs, rhs, output, bias, params, group.xy);
+    if (kTransposeB != 0 && kWideTile != 0)
+        gemm_tile<true, 64>(lhs, rhs, output, bias, params, group.xy);
+    else if (kTransposeB != 0)
+        gemm_tile<true, 32>(lhs, rhs, output, bias, params, group.xy);
+    else if (kWideTile != 0)
+        gemm_tile<false, 64>(lhs, rhs, output, bias, params, group.xy);
     else
-        gemm_tile<false>(lhs, rhs, output, bias, params, group.xy);
+        gemm_tile<false, 32>(lhs, rhs, output, bias, params, group.xy);
 }
 
 // ---------------------------------------------------------------------------

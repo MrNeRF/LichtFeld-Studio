@@ -38,6 +38,13 @@ namespace lfs::core::internal {
         using metal::live_context;
         using metal::param_bytes;
 
+        // Matrix-unit GEMMs take 64x64 tiles when those still give every GPU
+        // core several threadgroups, and 32x32 tiles otherwise.
+        size_t gemm_tile(const size_t m, const size_t n, const size_t batch) {
+            constexpr size_t kWideTiles = 256;
+            return ((m + 63) / 64) * ((n + 63) / 64) * batch >= kWideTiles ? 64 : 32;
+        }
+
         MTLSize threads(const size_t count) {
             return MTLSizeMake(count, 1, 1);
         }
@@ -241,14 +248,59 @@ namespace lfs::core::internal {
             uint32_t padding;
         };
 
+        // The same walk with size-1 axes dropped and each axis merged into the
+        // one outside it when the two are contiguous together.
+        StridedLayout merge_axes(const StridedLayout& layout) {
+            StridedLayout merged{.element_count = layout.element_count};
+            for (size_t axis = 0; axis < layout.rank; ++axis) {
+                if (layout.dims[axis] == 1)
+                    continue;
+                if (merged.rank > 0 &&
+                    merged.strides[merged.rank - 1] == layout.strides[axis] * layout.dims[axis]) {
+                    merged.dims[merged.rank - 1] *= layout.dims[axis];
+                    merged.strides[merged.rank - 1] = layout.strides[axis];
+                    continue;
+                }
+                merged.dims[merged.rank] = layout.dims[axis];
+                merged.strides[merged.rank++] = layout.strides[axis];
+            }
+            if (merged.rank == 0) {
+                merged.rank = 1;
+                merged.dims[0] = 1;
+                merged.strides[0] = 1;
+            }
+            return merged;
+        }
+
+        // Bytes each thread of a strided copy moves: up to 16 when the inner
+        // axis is contiguous and every stride and offset keeps them aligned.
+        size_t strided_chunk_bytes(const StridedLayout& layout, const size_t element, const size_t input_offset,
+                                   const size_t output_offset) {
+            if (layout.strides[layout.rank - 1] != 1)
+                return element;
+            for (const size_t bytes : {size_t{16}, size_t{8}, size_t{4}}) {
+                if (bytes <= element)
+                    break;
+                bool aligned = layout.dims[layout.rank - 1] * element % bytes == 0 && input_offset % bytes == 0 &&
+                               output_offset % bytes == 0;
+                for (size_t axis = 0; axis + 1 < layout.rank; ++axis)
+                    aligned = aligned && layout.strides[axis] * element % bytes == 0;
+                if (aligned)
+                    return bytes;
+            }
+            return element;
+        }
+
         // Gathers a strided input into contiguous output or, for a scatter, the
         // reverse; the layout describes the strided side.
         API_AVAILABLE(macos(26.0))
-        void encode_strided(const StorageRef input, const StorageRef output, const StridedLayout& layout,
+        void encode_strided(const StorageRef input, const StorageRef output, const StridedLayout& source_layout,
                             const bool scatter, const DataType input_dtype, const DataType output_dtype) {
-            if (layout.element_count == 0)
+            if (source_layout.element_count == 0)
                 return;
-            LFS_ASSERT_MSG(layout.rank <= MAX_TENSOR_RANK, "Metal strided layout rank exceeds MAX_TENSOR_RANK");
+            LFS_ASSERT_MSG(source_layout.rank <= MAX_TENSOR_RANK,
+                           "Metal strided layout rank exceeds MAX_TENSOR_RANK");
+            StridedLayout layout = merge_axes(source_layout);
             const auto context = acquire_context();
             const auto input_at = context->locate(input);
             const auto output_at = context->locate(output);
@@ -273,6 +325,18 @@ namespace lfs::core::internal {
                                          .group_size = MTLSizeMake(32, 8, 1)});
                 return;
             }
+            // Same-dtype copies move whole aligned chunks of the inner axis.
+            const size_t element = dtype_size(output_dtype);
+            const size_t chunk = input_dtype == output_dtype
+                                     ? strided_chunk_bytes(layout, element, input_at.offset, output_at.offset)
+                                     : element;
+            if (chunk != element) {
+                const size_t per_chunk = chunk / element;
+                layout.dims[layout.rank - 1] /= per_chunk;
+                for (size_t axis = 0; axis + 1 < layout.rank; ++axis)
+                    layout.strides[axis] /= per_chunk;
+                layout.element_count /= per_chunk;
+            }
             StridedParams params{
                 .input_offset = input_at.offset,
                 .output_offset = output_at.offset,
@@ -288,7 +352,7 @@ namespace lfs::core::internal {
             const auto pipeline = context->pipeline(
                 "strided_copy", {{1, static_cast<uint32_t>(input_dtype)},
                                  {2, static_cast<uint32_t>(output_dtype)},
-                                 {5, static_cast<uint32_t>(dtype_size(output_dtype))},
+                                 {5, static_cast<uint32_t>(chunk)},
                                  {7, scatter ? 1u : 0u}});
             const std::array uses{input, output};
             context->dispatch(uses, {.pipeline = pipeline,
@@ -889,7 +953,6 @@ namespace lfs::core::internal {
                                output.dtype == DataType::Float32 &&
                                (bias == nullptr || bias->dtype == DataType::Float32),
                            "Metal GEMM requires Float32 operands");
-            constexpr size_t kGemmTile = 32; // kGemmTile in kernels.metal
             const auto context = acquire_context();
             if (program.k == 0) {
                 // An empty product is zero; the bias epilogue still applies.
@@ -920,14 +983,15 @@ namespace lfs::core::internal {
                 .k = checked_extent(program.k, "Metal GEMM depth exceeds int32"),
                 .padding = 0,
             };
+            const size_t tile = gemm_tile(program.m, program.n, program.batch);
             const auto pipeline = context->pipeline(
-                "gemm", {{14, transpose_rhs ? 1u : 0u}, {15, bias != nullptr ? 1u : 0u}});
+                "gemm", {{14, transpose_rhs ? 1u : 0u}, {15, bias != nullptr ? 1u : 0u}, {27, tile == 64 ? 1u : 0u}});
             const std::array uses{lhs, rhs, output, bias != nullptr ? *bias : output};
             context->dispatch(uses, {.pipeline = pipeline,
                                      .buffers = {lhs_at.address, rhs_at.address, output_at.address, bias_at.address},
                                      .params = param_bytes(params),
-                                     .grid = MTLSizeMake((program.n + kGemmTile - 1) / kGemmTile,
-                                                         (program.m + kGemmTile - 1) / kGemmTile, program.batch),
+                                     .grid = MTLSizeMake((program.n + tile - 1) / tile, (program.m + tile - 1) / tile,
+                                                         program.batch),
                                      // The matmul runs on four SIMD groups.
                                      .group_size = MTLSizeMake(4 * pipeline.threadExecutionWidth, 1, 1)});
         }
@@ -2625,6 +2689,77 @@ namespace lfs::core::internal {
                            params, program.count);
     }
 
+    namespace {
+        // One matrix-unit GEMM of nn.metal's nn_linear. Strides and pitch are
+        // in elements, and the byte offsets move a, w, bias and output within
+        // their storage.
+        struct LinearLaunch {
+            StorageRef a, w;
+            std::optional<StorageRef> bias, scale, residual;
+            StorageRef output;
+            size_t batch = 1, m = 0, n = 0, k = 0;
+            size_t a_stride = 0, w_stride = 0, output_stride = 0, out_pitch = 0;
+            size_t a_offset = 0, w_offset = 0, bias_offset = 0, output_offset = 0;
+            bool trans_b = false, row_bias = false;
+            int activation = 0;
+        };
+
+        API_AVAILABLE(macos(26.0))
+        void dispatch_linear(Context& context, const LinearLaunch& launch) {
+            struct Params {
+                uint64_t a, w, bias, scale, residual, output, a_stride, w_stride, output_stride;
+                uint32_t m, n, k;
+                int32_t activation;
+                uint32_t has_bias, has_scale, has_residual, row_bias, out_pitch, padding;
+            };
+            static_assert(sizeof(Params) == 112);
+            const auto address = [&](const std::optional<StorageRef>& storage, const size_t offset) {
+                return storage ? address_of(context, *storage) + offset : uint64_t{0};
+            };
+            (void)checked_extent(launch.m * launch.out_pitch, "Metal linear output exceeds int32");
+            const Params params{
+                .a = address_of(context, launch.a) + launch.a_offset,
+                .w = address_of(context, launch.w) + launch.w_offset,
+                .bias = address(launch.bias, launch.bias_offset),
+                .scale = address(launch.scale, 0),
+                .residual = address(launch.residual, 0),
+                .output = address_of(context, launch.output) + launch.output_offset,
+                .a_stride = launch.a_stride,
+                .w_stride = launch.w_stride,
+                .output_stride = launch.output_stride,
+                .m = checked_extent(launch.m, "Metal linear rows exceed int32"),
+                .n = checked_extent(launch.n, "Metal linear columns exceed int32"),
+                .k = checked_extent(launch.k, "Metal linear depth exceeds int32"),
+                .activation = launch.activation,
+                .has_bias = launch.bias ? 1u : 0u,
+                .has_scale = launch.scale ? 1u : 0u,
+                .has_residual = launch.residual ? 1u : 0u,
+                .row_bias = launch.row_bias ? 1u : 0u,
+                .out_pitch = checked_extent(launch.out_pitch, "Metal linear pitch exceeds int32"),
+                .padding = 0,
+            };
+            std::array<StorageRef, 6> uses{launch.a, launch.w, launch.output};
+            size_t used = 3;
+            for (const auto& operand : {launch.bias, launch.scale, launch.residual}) {
+                if (operand)
+                    uses[used++] = *operand;
+            }
+            const size_t tile = gemm_tile(launch.m, launch.n, launch.batch);
+            // Scratch outputs carry no dtype of their own.
+            const uint32_t dtype = static_cast<uint32_t>(launch.a.dtype);
+            const auto pipeline = context.pipeline(
+                "nn_linear", {{1, dtype}, {2, dtype}, {14, launch.trans_b ? 1u : 0u}, {27, tile == 64 ? 1u : 0u}});
+            context.dispatch(std::span(uses.data(), used),
+                             {.pipeline = pipeline,
+                              .buffers = {},
+                              .params = param_bytes(params),
+                              .grid = MTLSizeMake((launch.n + tile - 1) / tile, (launch.m + tile - 1) / tile,
+                                                  checked_u32(launch.batch, "Metal linear batch exceeds uint32")),
+                              // The matmul runs on four SIMD groups.
+                              .group_size = MTLSizeMake(4 * pipeline.threadExecutionWidth, 1, 1)});
+        }
+    } // namespace
+
     void MetalBackendOps::nn_linear(const StorageRef a, const StorageRef w, const std::optional<StorageRef> bias,
                                     const std::optional<StorageRef> scale, const std::optional<StorageRef> residual,
                                     const StorageRef output, const LinearProgram& program, ExecContext) {
@@ -2632,55 +2767,179 @@ namespace lfs::core::internal {
         if (program.batch == 0 || program.m == 0 || program.n == 0)
             return;
         LFS_ASSERT_MSG(program.k > 0, "Metal linear layers need a positive inner dimension");
-        (void)checked_extent(program.m * program.n, "Metal linear output exceeds int32");
-        struct Params {
-            uint64_t a, w, bias, scale, residual, output, a_stride, w_stride, output_stride;
-            uint32_t m, n, k;
-            int32_t activation;
-            uint32_t has_bias, has_scale, has_residual, padding;
-        };
-        static_assert(sizeof(Params) == 104);
         const auto context = acquire_context();
-        const auto address = [&](const std::optional<StorageRef>& storage) {
-            return storage ? address_of(*context, *storage) : uint64_t{0};
-        };
-        const Params params{
-            .a = address_of(*context, a),
-            .w = address_of(*context, w),
-            .bias = address(bias),
-            .scale = address(scale),
-            .residual = address(residual),
-            .output = address_of(*context, output),
-            .a_stride = program.m * program.k,
-            .w_stride = program.batched_b ? program.n * program.k : 0,
-            .output_stride = program.m * program.n,
-            .m = checked_extent(program.m, "Metal linear rows exceed int32"),
-            .n = checked_extent(program.n, "Metal linear columns exceed int32"),
-            .k = checked_extent(program.k, "Metal linear depth exceeds int32"),
-            .activation = program.activation,
-            .has_bias = bias ? 1u : 0u,
-            .has_scale = scale ? 1u : 0u,
-            .has_residual = residual ? 1u : 0u,
-            .padding = 0,
-        };
-        std::array<StorageRef, 6> uses{a, w, output};
-        size_t used = 3;
-        for (const auto& operand : {bias, scale, residual}) {
-            if (operand)
-                uses[used++] = *operand;
+        dispatch_linear(*context, {.a = a,
+                                   .w = w,
+                                   .bias = bias,
+                                   .scale = scale,
+                                   .residual = residual,
+                                   .output = output,
+                                   .batch = program.batch,
+                                   .m = program.m,
+                                   .n = program.n,
+                                   .k = program.k,
+                                   .a_stride = program.m * program.k,
+                                   .w_stride = program.batched_b ? program.n * program.k : 0,
+                                   .output_stride = program.m * program.n,
+                                   .out_pitch = program.n,
+                                   .trans_b = program.trans_b,
+                                   .activation = program.activation});
+    }
+
+    namespace {
+        // Transposed convolution: per group, GEMMs of the weights, transposed
+        // to [out][ky][kx][in], with the images [in][pixels] give columns that
+        // nn_col2im gathers into the output, adding the bias. The columns of
+        // as many images as fit 64 MiB go at once.
+        API_AVAILABLE(macos(26.0))
+        void encode_conv_transpose(Context& context, const StorageRef input, const StorageRef weight,
+                              const std::optional<StorageRef> bias, const StorageRef output,
+                              const ConvProgram& program) {
+            const InferenceGeometry& g = program.geometry;
+            const size_t in_group = static_cast<size_t>(g.channels), out_group = program.out_channels / program.groups;
+            const size_t plane = static_cast<size_t>(g.height) * static_cast<size_t>(g.width);
+            const size_t pixels = static_cast<size_t>(g.out_height) * static_cast<size_t>(g.out_width);
+            const size_t rows = out_group * static_cast<size_t>(g.kernel_h) * static_cast<size_t>(g.kernel_w);
+            const size_t element = dtype_size(output.dtype);
+            const size_t in_batch = in_group * program.groups * plane, out_batch = program.out_channels * pixels;
+            (void)checked_u32(program.batch * std::max(in_batch, out_batch), "Metal convolution exceeds uint32");
+            constexpr size_t kColumnBytes = size_t{64} << 20;
+            const size_t images = std::clamp<size_t>(kColumnBytes / (rows * plane * element), 1, program.batch);
+            const Scratch columns(context, images * rows * plane * element);
+            struct Col2imParams {
+                uint64_t columns, bias, output;
+                uint32_t pixels, channel0, out_batch, columns_batch;
+                int32_t activation;
+                uint32_t has_bias;
+                InferenceGeometry geometry;
+            };
+            static_assert(sizeof(Col2imParams) == 136);
+            const uint32_t dtype = static_cast<uint32_t>(output.dtype);
+            const auto col2im = context.pipeline("nn_col2im", {{1, dtype}, {2, dtype}});
+            for (size_t first = 0; first < program.batch; first += images) {
+                const size_t count = std::min(images, program.batch - first);
+                for (size_t group = 0; group < program.groups; ++group) {
+                    dispatch_linear(context, {.a = weight,
+                                              .w = input,
+                                              .output = columns.storage,
+                                              .batch = count,
+                                              .m = rows,
+                                              .n = plane,
+                                              .k = in_group,
+                                              .w_stride = in_batch,
+                                              .output_stride = rows * plane,
+                                              .out_pitch = plane,
+                                              .a_offset = group * in_group * rows * element,
+                                              .w_offset = (first * in_batch + group * in_group * plane) * element});
+                    const Col2imParams params{
+                        .columns = address_of(context, columns.storage),
+                        .bias = bias ? address_of(context, *bias) : 0,
+                        .output = address_of(context, output) + first * out_batch * element,
+                        .pixels = static_cast<uint32_t>(pixels),
+                        .channel0 = static_cast<uint32_t>(group * out_group),
+                        .out_batch = static_cast<uint32_t>(out_batch),
+                        .columns_batch = static_cast<uint32_t>(rows * plane),
+                        .activation = program.activation,
+                        .has_bias = bias ? 1u : 0u,
+                        .geometry = g};
+                    const std::array uses{columns.storage, bias.value_or(output), output};
+                    context.dispatch(uses, {.pipeline = col2im,
+                                            .buffers = {},
+                                            .params = param_bytes(params),
+                                            .grid = MTLSizeMake(pixels, out_group, count)});
+                }
+            }
         }
-        constexpr size_t kTile = 32; // kNnTile in nn.metal
+    } // namespace
+
+    // Convolution as GEMMs of each group's weights [out][taps] with the
+    // image's patches [taps][pixels], written straight into NCHW rows with
+    // the bias per row. 1x1 convolutions multiply the image itself; others
+    // build the patches in bounded chunks of output pixels.
+    void MetalBackendOps::nn_conv2d(const StorageRef input, const StorageRef weight,
+                                    const std::optional<StorageRef> bias, const StorageRef output,
+                                    const ConvProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(nn_conv2d);
+        const InferenceGeometry& g = program.geometry;
+        const size_t pixels = static_cast<size_t>(g.out_height) * static_cast<size_t>(g.out_width);
+        if (program.batch == 0 || program.out_channels == 0 || pixels == 0)
+            return;
+        const size_t in_group = static_cast<size_t>(g.channels), out_group = program.out_channels / program.groups;
+        const size_t taps = in_group * static_cast<size_t>(g.kernel_h) * static_cast<size_t>(g.kernel_w);
+        const size_t plane = static_cast<size_t>(g.height) * static_cast<size_t>(g.width);
+        const size_t in_batch = in_group * program.groups * plane, out_batch = program.out_channels * pixels;
+        const size_t element = dtype_size(output.dtype);
+        (void)checked_u32(program.batch * in_batch, "Metal convolution input exceeds uint32");
+        const auto context = acquire_context();
+        if (program.transpose) {
+            encode_conv_transpose(*context, input, weight, bias, output, program);
+            return;
+        }
+        LinearLaunch launch{.a = weight,
+                            .w = input,
+                            .bias = bias,
+                            .output = output,
+                            .batch = program.batch,
+                            .m = out_group,
+                            .k = taps,
+                            .output_stride = out_batch,
+                            .out_pitch = pixels,
+                            .row_bias = true,
+                            .activation = program.activation};
+        const bool pointwise = g.kernel_h == 1 && g.kernel_w == 1 && g.stride_h == 1 && g.stride_w == 1 &&
+                               g.pad_h == 0 && g.pad_w == 0;
+        if (pointwise) {
+            for (size_t group = 0; group < program.groups; ++group) {
+                launch.n = pixels;
+                launch.w_stride = in_batch;
+                launch.a_offset = group * out_group * taps * element;
+                launch.w_offset = group * in_group * plane * element;
+                launch.bias_offset = group * out_group * element;
+                launch.output_offset = group * out_group * pixels * element;
+                dispatch_linear(*context, launch);
+            }
+            return;
+        }
+        // Patches for at most 64 MiB, in whole 32-pixel tiles.
+        constexpr size_t kPatchBytes = size_t{64} << 20;
+        const size_t per_pixel = program.batch * taps * element;
+        const size_t chunk = std::min(pixels, std::max<size_t>(32, kPatchBytes / per_pixel / 32 * 32));
+        const Scratch patches(*context, chunk * per_pixel);
+        struct Im2colParams {
+            uint64_t input, columns;
+            uint32_t input_batch, count, taps, first, channel0, padding;
+            InferenceGeometry geometry;
+        };
+        static_assert(sizeof(Im2colParams) == 128);
         const uint32_t dtype = static_cast<uint32_t>(output.dtype);
-        const auto pipeline =
-            context->pipeline("nn_linear", {{1, dtype}, {2, dtype}, {14, program.trans_b ? 1u : 0u}});
-        context->dispatch(std::span(uses.data(), used),
-                          {.pipeline = pipeline,
-                           .buffers = {},
-                           .params = param_bytes(params),
-                           .grid = MTLSizeMake((program.n + kTile - 1) / kTile, (program.m + kTile - 1) / kTile,
-                                               checked_u32(program.batch, "Metal linear batch exceeds uint32")),
-                           // The matmul runs on four SIMD groups.
-                           .group_size = MTLSizeMake(4 * pipeline.threadExecutionWidth, 1, 1)});
+        const auto im2col = context->pipeline("nn_im2col", {{1, dtype}, {2, dtype}});
+        launch.w = patches.storage;
+        for (size_t group = 0; group < program.groups; ++group) {
+            for (size_t first = 0; first < pixels; first += chunk) {
+                const size_t count = std::min(chunk, pixels - first);
+                (void)checked_u32(program.batch * taps * count, "Metal convolution patches exceed uint32");
+                const Im2colParams params{.input = address_of(*context, input),
+                                          .columns = address_of(*context, patches.storage),
+                                          .input_batch = static_cast<uint32_t>(in_batch),
+                                          .count = static_cast<uint32_t>(count),
+                                          .taps = static_cast<uint32_t>(taps),
+                                          .first = static_cast<uint32_t>(first),
+                                          .channel0 = static_cast<uint32_t>(group * in_group),
+                                          .padding = 0,
+                                          .geometry = g};
+                const std::array uses{input, patches.storage};
+                context->dispatch(uses, {.pipeline = im2col,
+                                         .buffers = {},
+                                         .params = param_bytes(params),
+                                         .grid = MTLSizeMake(count, in_group, program.batch)});
+                launch.n = count;
+                launch.w_stride = taps * count;
+                launch.a_offset = group * out_group * taps * element;
+                launch.bias_offset = group * out_group * element;
+                launch.output_offset = (group * out_group * pixels + first) * element;
+                dispatch_linear(*context, launch);
+            }
+        }
     }
 
     void MetalBackendOps::nn_attention(const StorageRef q, const StorageRef k, const StorageRef v,
@@ -2693,12 +2952,25 @@ namespace lfs::core::internal {
         struct Params {
             uint64_t q, k, v, mask, output;
             int64_t mask_batch, mask_head, mask_query, mask_key;
+            uint64_t partial;
             uint32_t heads, queries, keys, dim;
             float scale;
-            uint32_t has_mask;
+            uint32_t has_mask, key_split, groups;
         };
-        static_assert(sizeof(Params) == 96);
+        static_assert(sizeof(Params) == 112);
         const auto context = acquire_context();
+        // Four SIMD groups of 16 queries (kNnAttentionQueries, kNnAttentionSimds).
+        constexpr size_t kQueries = 64, kSimdQueries = 16;
+        // Too few query blocks to fill the GPU split the keys, in whole
+        // 32-key blocks, until there are about kBusySimds SIMD groups.
+        constexpr size_t kBusySimds = 1024, kMinSplitKeys = 128;
+        const size_t simds = (program.queries + kSimdQueries - 1) / kSimdQueries * program.groups;
+        const size_t splits = std::clamp<size_t>(std::min(kBusySimds / simds, program.keys / kMinSplitKeys), 1, 64);
+        const size_t key_split = ((program.keys + splits - 1) / splits + 31) & ~size_t{31};
+        const size_t used_splits = (program.keys + key_split - 1) / key_split;
+        std::optional<Scratch> partial;
+        if (used_splits > 1)
+            partial.emplace(*context, used_splits * program.groups * program.queries * (program.dim + 2) * sizeof(float));
         const Params params{
             .q = address_of(*context, q),
             .k = address_of(*context, k),
@@ -2709,27 +2981,36 @@ namespace lfs::core::internal {
             .mask_head = program.mask_strides[1],
             .mask_query = program.mask_strides[2],
             .mask_key = program.mask_strides[3],
+            .partial = partial ? address_of(*context, partial->storage) : 0,
             .heads = checked_u32(program.heads, "Metal attention heads exceed uint32"),
             .queries = checked_u32(program.queries, "Metal attention queries exceed uint32"),
             .keys = checked_u32(program.keys, "Metal attention keys exceed uint32"),
             .dim = static_cast<uint32_t>(program.dim),
             .scale = program.scale,
             .has_mask = mask ? 1u : 0u,
+            .key_split = static_cast<uint32_t>(key_split),
+            .groups = checked_u32(program.groups, "Metal attention groups exceed uint32"),
         };
-        std::array<StorageRef, 5> uses{q, k, v, output, output};
+        std::array<StorageRef, 6> uses{q, k, v, output, output, output};
         if (mask)
             uses[4] = *mask;
-        constexpr size_t kQueries = 32; // kNnAttentionQueries in nn.metal
+        if (partial)
+            uses[5] = partial->storage;
         const uint32_t dtype = static_cast<uint32_t>(output.dtype);
         const auto pipeline = context->pipeline(
-            "nn_attention", {{1, dtype}, {2, dtype}, {12, static_cast<uint32_t>((program.dim + 7) / 8)}});
+            "nn_attention", {{1, dtype}, {2, dtype}, {12, program.dim <= 64 ? 64u : 128u}, {28, partial ? 1u : 0u}});
         context->dispatch(uses, {.pipeline = pipeline,
                                  .buffers = {},
                                  .params = param_bytes(params),
-                                 .grid = MTLSizeMake((program.queries + kQueries - 1) / kQueries,
-                                                     checked_u32(program.groups, "Metal attention groups exceed uint32"), 1),
-                                 // Four SIMD groups of eight queries.
-                                 .group_size = MTLSizeMake(128, 1, 1)});
+                                 .grid = MTLSizeMake((program.queries + kQueries - 1) / kQueries, params.groups,
+                                                     used_splits),
+                                 .group_size = MTLSizeMake(4 * pipeline.threadExecutionWidth, 1, 1)});
+        if (partial) {
+            context->dispatch(uses, {.pipeline = context->pipeline("nn_attention_combine", {{1, dtype}, {2, dtype}}),
+                                     .buffers = {},
+                                     .params = param_bytes(params),
+                                     .grid = MTLSizeMake(program.dim, program.queries, program.groups)});
+        }
     }
 
     void MetalBackendOps::nn_norm(const StorageRef input, const StorageRef weight, const std::optional<StorageRef> bias,

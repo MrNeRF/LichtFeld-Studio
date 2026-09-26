@@ -1148,6 +1148,20 @@ namespace {
                                 half_tolerance, half_tolerance);
         }
 
+        // Few queries over many keys split the keys; with a mask, whole splits
+        // of a row can be masked out.
+        const Tensor few = shaped({2, 2, 5, 40}, 227), many_keys = shaped({2, 2, 1000, 40}, 228);
+        const Tensor many_values = shaped({2, 2, 1000, 40}, 229);
+        auto split_mask = shaped({1, 1, 5, 1000}, 230);
+        split_mask.slice(2, 1, 2).slice(3, 0, 700).fill_(-std::numeric_limits<float>::infinity());
+        expect_same_on_both([&] { return nn::attention(gpu(few), gpu(many_keys), gpu(many_values)); }, tolerance,
+                            tolerance);
+        expect_same_on_both([&] {
+            const Tensor gm = half(split_mask);
+            return nn::attention(half(few), half(many_keys), half(many_values), &gm).to(DataType::Float32);
+        },
+                            half_tolerance, half_tolerance);
+
         // A query whose keys are all masked out attends to nothing, as on CUDA.
         auto blocked = Tensor::zeros({1, 1, 19, 40}, Device::CPU);
         blocked.slice(2, 4, 5).fill_(-std::numeric_limits<float>::infinity());
@@ -1158,6 +1172,56 @@ namespace {
         }();
         EXPECT_EQ(attended.slice(2, 4, 5).abs().max_scalar(), 0.0f);
         EXPECT_GT(attended.slice(2, 5, 6).abs().max_scalar(), 0.0f);
+        auto blocked_split = Tensor::zeros({1, 1, 5, 1000}, Device::CPU);
+        blocked_split.slice(2, 3, 4).fill_(-std::numeric_limits<float>::infinity());
+        const auto attended_split = [&] {
+            const Tensor gm = to_metal(blocked_split);
+            GpuBackendScope scope(GpuBackend::Metal);
+            return nn::attention(gpu(few), gpu(many_keys), gpu(many_values), &gm).cpu();
+        }();
+        EXPECT_EQ(attended_split.slice(2, 3, 4).abs().max_scalar(), 0.0f);
+        EXPECT_GT(attended_split.slice(2, 4, 5).abs().max_scalar(), 0.0f);
+
+        // Convolutions over batches: grouped 1x1, and a 3x3 whose patches
+        // exceed one 64 MiB chunk.
+        const Tensor images = shaped({2, 8, 13, 11}, 218), pointwise = shaped({6, 4, 1, 1}, 219);
+        const Tensor pointwise_bias = shaped({6}, 220);
+        expect_same_on_both([&] {
+            const Tensor gb = gpu(pointwise_bias);
+            return nn::conv2d(gpu(images), gpu(pointwise), &gb, {.groups = 2, .activation = nn::Activation::Relu});
+        },
+                            tolerance, tolerance);
+        const Tensor large = shaped({2, 32, 200, 200}, 221), kernel = shaped({24, 32, 3, 3}, 222);
+        const Tensor kernel_bias = shaped({24}, 223);
+        expect_same_on_both([&] {
+            const Tensor gb = gpu(kernel_bias);
+            return nn::conv2d(gpu(large), gpu(kernel), &gb, {.pad_h = 1, .pad_w = 1});
+        },
+                            tolerance, tolerance);
+        expect_same_on_both([&] {
+            const Tensor gb = half(kernel_bias);
+            return nn::conv2d(half(images), half(kernel.slice(1, 0, 8)), &gb,
+                              {.stride_h = 2, .stride_w = 2, .pad_h = 1, .pad_w = 1})
+                .to(DataType::Float32);
+        },
+                            half_tolerance, half_tolerance);
+
+        // Transposed convolutions: grouped, padded and dilated, and SAM2's
+        // 2x2 stride-2 upscaling.
+        const Tensor up_grouped = shaped({8, 3, 3, 3}, 224), up_bias = shaped({6}, 225);
+        expect_same_on_both([&] {
+            const Tensor gb = gpu(up_bias);
+            return nn::conv_transpose2d(gpu(images), gpu(up_grouped), &gb,
+                                        {.stride_h = 2, .stride_w = 2, .pad_h = 1, .pad_w = 1, .dilation_h = 2,
+                                         .groups = 2, .output_pad_h = 1, .activation = nn::Activation::GeluTanh});
+        },
+                            tolerance, tolerance);
+        const Tensor upscale = shaped({8, 5, 2, 2}, 226);
+        expect_same_on_both([&] {
+            return nn::conv_transpose2d(half(images), half(upscale), nullptr, {.stride_h = 2, .stride_w = 2})
+                .to(DataType::Float32);
+        },
+                            half_tolerance, half_tolerance);
 
         // Rows past a threadgroup's eight, and widths off the SIMD width.
         const Tensor rows = shaped({13, 3, 77}, 215), gamma = shaped({77}, 216), beta = shaped({77}, 217);
