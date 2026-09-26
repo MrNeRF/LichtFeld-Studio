@@ -470,6 +470,10 @@ namespace {
             expect_close(to_metal(line).gather(0, to_metal(wild), mode), line.gather(0, wild, mode), 0.0f, 0.0f);
         }
         EXPECT_THROW((void)to_metal(line).index_select(0, to_metal(wild), BoundaryMode::Assert).cpu(), std::exception);
+        // A fault that another operation's wait raises is raised once.
+        const Tensor pending = to_metal(line).index_select(0, to_metal(wild), BoundaryMode::Assert);
+        EXPECT_THROW((void)to_metal(line).count_nonzero(), std::exception);
+        EXPECT_EQ(to_metal(line).count_nonzero(), line.count_nonzero());
         const Tensor fine = int_tensor({1, 2, 3}, {3});
         expect_close(to_metal(line).index_select(0, to_metal(fine)), line.index_select(0, fine), 0.0f, 0.0f);
     }

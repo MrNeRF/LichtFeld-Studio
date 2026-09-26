@@ -46,6 +46,18 @@ namespace lfs::core::internal {
             return static_cast<uint32_t>(value);
         }
 
+        // Scratch storage of one operation. It returns to the context even when
+        // the operation throws; queued work that still uses it runs first.
+        struct API_AVAILABLE(macos(26.0)) Scratch {
+            Scratch(Context& owner, const size_t bytes) : context(owner), storage(owner.allocate(bytes)) {}
+            ~Scratch() { context.release(storage); }
+            Scratch(const Scratch&) = delete;
+            Scratch& operator=(const Scratch&) = delete;
+
+            Context& context;
+            StorageRef storage;
+        };
+
         struct PointwiseParams {
             uint64_t lhs_offset;
             uint64_t rhs_offset;
@@ -482,16 +494,15 @@ namespace lfs::core::internal {
             }
             const size_t groups = std::min(kMaxPartials, (count + kElementsPerPartial - 1) / kElementsPerPartial);
             const uint32_t partial = partial_code(source.input.dtype, op);
-            const StorageRef partials = context.allocate(groups * sizeof(int64_t));
+            const Scratch partials(context, groups * sizeof(int64_t));
             encode_reduce_stage(context, source,
-                                {.op = op, .mode = kPartialMode, .output_code = partial, .output = partials,
+                                {.op = op, .mode = kPartialMode, .output_code = partial, .output = partials.storage,
                                  .groups = MTLSizeMake(groups, 1, 1), .params = {.count = count32, .mean_scale = 1.0f}});
-            encode_reduce_stage(context, {.input = partials, .code = partial},
+            encode_reduce_stage(context, {.input = partials.storage, .code = partial},
                                 {.op = op, .mode = kSegmentedMode, .output_code = element_code(output_dtype),
                                  .output = output, .groups = MTLSizeMake(1, 1, 1),
                                  .params = {.outer = 1, .reduce = static_cast<uint32_t>(groups), .inner = 1,
                                             .mean_scale = mean_scale_for(op, count)}});
-            context.release(partials);
         }
 
         // Reduces the middle extent of an (outer, reduce, inner) view into
@@ -534,20 +545,19 @@ namespace lfs::core::internal {
                 return;
             }
             const uint32_t partial = partial_code(source.input.dtype, op);
-            const StorageRef partials = context.allocate(splits * outputs * sizeof(int64_t));
+            const Scratch partials(context, splits * outputs * sizeof(int64_t));
             encode_reduce_stage(context, source,
-                                {.op = op, .mode = kStridedMode, .output_code = partial, .output = partials,
+                                {.op = op, .mode = kStridedMode, .output_code = partial, .output = partials.storage,
                                  .groups = MTLSizeMake(output_groups, splits, 1),
                                  .params = {.outer = outer32, .reduce = reduce32, .inner = inner32,
                                             .split_chunk = static_cast<uint32_t>((reduce + splits - 1) / splits),
                                             .mean_scale = 1.0f}});
-            encode_reduce_stage(context, {.input = partials, .code = partial},
+            encode_reduce_stage(context, {.input = partials.storage, .code = partial},
                                 {.op = op, .mode = kStridedMode, .output_code = element_code(output_dtype),
                                  .output = output, .groups = MTLSizeMake(output_groups, 1, 1),
                                  .params = {.outer = 1, .reduce = static_cast<uint32_t>(splits),
                                             .inner = static_cast<uint32_t>(outputs),
                                             .split_chunk = static_cast<uint32_t>(splits), .mean_scale = mean_scale}});
-            context.release(partials);
         }
 
         // Axes that are not one contiguous run: the kept axes are permute-copied
@@ -575,12 +585,11 @@ namespace lfs::core::internal {
                     }
                 }
             }
-            StorageRef scratch = context.allocate(layout.element_count * dtype_size(input.dtype));
-            scratch.dtype = input.dtype;
-            encode_strided(input, scratch, permuted, false, input.dtype, input.dtype);
-            reduce_axes(context, op, {.input = scratch, .code = element_code(input.dtype)}, output, output_dtype,
+            Scratch scratch(context, layout.element_count * dtype_size(input.dtype));
+            scratch.storage.dtype = input.dtype;
+            encode_strided(input, scratch.storage, permuted, false, input.dtype, input.dtype);
+            reduce_axes(context, op, {.input = scratch.storage, .code = element_code(input.dtype)}, output, output_dtype,
                         outputs, reduce, 1);
-            context.release(scratch);
         }
 
         // The kernel's IEEE rules for folding the per-threadgroup partials on
@@ -611,14 +620,14 @@ namespace lfs::core::internal {
             const auto context = acquire_context();
             constexpr size_t kElementsPerGroup = kThreadgroupWidth * 4;
             const size_t groups = std::clamp<size_t>((count + kElementsPerGroup - 1) / kElementsPerGroup, 1, kMaxPartials);
-            const StorageRef partials = context->allocate(groups * 2 * sizeof(float));
+            const Scratch partials(*context, groups * 2 * sizeof(float));
             encode_reduce_stage(*context, {.input = input, .code = element_code(DataType::Float32)},
-                                {.op = op, .mode = kPartialMode, .output_code = metal::kPairDType, .output = partials,
+                                {.op = op, .mode = kPartialMode, .output_code = metal::kPairDType, .output = partials.storage,
                                  .groups = MTLSizeMake(groups, 1, 1),
                                  .params = {.count = checked_u32(count, "Metal reduction count exceeds uint32"),
                                             .mean_scale = 1.0f}});
-            context->wait(context->pending(partials));
-            const auto* const pairs = reinterpret_cast<const float*>(context->host(partials));
+            context->wait(context->pending(partials.storage));
+            const auto* const pairs = reinterpret_cast<const float*>(context->host(partials.storage));
             float accumulator = pairs[0], compensation = extreme ? 0.0f : pairs[1];
             for (size_t group = 1; group < groups; ++group) {
                 const float value = pairs[2 * group];
@@ -631,7 +640,6 @@ namespace lfs::core::internal {
                 compensation += (accumulator - (total - carried)) + (value - carried) + pairs[2 * group + 1];
                 accumulator = total;
             }
-            context->release(partials);
             if (extreme)
                 return accumulator;
             const float sum = std::isfinite(compensation) ? accumulator + compensation : accumulator;
@@ -650,22 +658,21 @@ namespace lfs::core::internal {
                 uint32_t padding;
             };
             const auto context = acquire_context();
-            const StorageRef result = context->allocate(sizeof(uint32_t));
-            encode_fill(*context, result, sizeof(uint32_t), 0, sizeof(uint32_t));
+            const Scratch result(*context, sizeof(uint32_t));
+            encode_fill(*context, result.storage, sizeof(uint32_t), 0, sizeof(uint32_t));
             const auto input_at = context->locate(input);
-            const auto result_at = context->locate(result);
+            const auto result_at = context->locate(result.storage);
             const CountParams params{.input_offset = input_at.offset,
                                      .count = checked_u32(count, "Metal count exceeds uint32")};
-            const std::array uses{input, result};
+            const std::array uses{input, result.storage};
             context->dispatch(uses, {.pipeline = context->pipeline("count_matches", {{0, kind}}),
                                      .buffers = {input_at.address, result_at.address + result_at.offset},
                                      .params = param_bytes(params),
                                      .grid = MTLSizeMake(std::min<size_t>(256, (count + kThreadgroupWidth - 1) / kThreadgroupWidth), 1, 1),
                                      .group_size = MTLSizeMake(kThreadgroupWidth, 1, 1)});
-            context->wait(context->pending(result));
+            context->wait(context->pending(result.storage));
             uint32_t value = 0;
-            std::memcpy(&value, context->host(result), sizeof(value));
-            context->release(result);
+            std::memcpy(&value, context->host(result.storage), sizeof(value));
             return value;
         }
 
@@ -686,9 +693,10 @@ namespace lfs::core::internal {
             const size_t lines = outer * inner;
             const size_t blocks = (size + kThreadgroupWidth - 1) / kThreadgroupWidth;
             const uint32_t pass = size <= 32 ? 0 : blocks == 1 ? 1 : 2;
+            std::optional<Scratch> block_totals;
             StorageRef totals = data;
             if (pass == 2) {
-                totals = context.allocate(lines * blocks * sizeof(uint32_t));
+                totals = block_totals.emplace(context, lines * blocks * sizeof(uint32_t)).storage;
                 totals.dtype = data.dtype;
             }
             const auto data_at = context.locate(data);
@@ -715,7 +723,6 @@ namespace lfs::core::internal {
             if (pass == 2) {
                 encode_scan(context, totals, lines, blocks, 1);
                 dispatch(3, MTLSizeMake((lines * size + kThreadgroupWidth - 1) / kThreadgroupWidth, 1, 1));
-                context.release(totals);
             }
         }
 
@@ -1016,7 +1023,8 @@ namespace lfs::core::internal {
         void scatter_assign(Context& context, IndexLaunch launch) {
             if (launch.total == 0)
                 return;
-            launch.winners = context.allocate(launch.params.dim_size * sizeof(int32_t));
+            const Scratch last_positions(context, launch.params.dim_size * sizeof(int32_t));
+            launch.winners = last_positions.storage;
             encode_fill(context, launch.winners, launch.params.dim_size * sizeof(int32_t), 0xffffffffu, sizeof(int32_t));
             IndexLaunch winners = launch;
             winners.mode = kWinnerMode;
@@ -1025,7 +1033,6 @@ namespace lfs::core::internal {
             encode_index(context, winners);
             launch.mode = kScatterAssignMode;
             encode_index(context, launch);
-            context.release(launch.winners);
         }
 
         API_AVAILABLE(macos(26.0))
@@ -1096,15 +1103,15 @@ namespace lfs::core::internal {
         }
 
         // Inclusive scan of the predicate: the compacted slot of i is scan[i] - 1.
-        API_AVAILABLE(macos(26.0))
-        StorageRef scan_predicate(Context& context, const uint32_t predicate, const StorageRef mask, const size_t count) {
-            StorageRef scan = context.allocate(count * sizeof(uint32_t));
-            scan.dtype = DataType::Int32;
-            encode_mask(context, {.mode = kMaskScan, .dtype = DataType::UInt8, .count = count, .mask = mask,
-                                  .scan = scan, .predicate = predicate});
-            encode_scan(context, scan, 1, count, 1);
-            return scan;
-        }
+        struct API_AVAILABLE(macos(26.0)) PredicateScan : Scratch {
+            PredicateScan(Context& owner, const uint32_t predicate, const StorageRef mask, const size_t count)
+                : Scratch(owner, count * sizeof(uint32_t)) {
+                storage.dtype = DataType::Int32;
+                encode_mask(owner, {.mode = kMaskScan, .dtype = DataType::UInt8, .count = count, .mask = mask,
+                                    .scan = storage, .predicate = predicate});
+                encode_scan(owner, storage, 1, count, 1);
+            }
+        };
 
         // Writes the Int64 positions where the predicate holds and returns
         // their count, which the scan's last element holds.
@@ -1114,13 +1121,12 @@ namespace lfs::core::internal {
             if (program.count == 0 || program.selected_count == 0)
                 return 0;
             const auto context = acquire_context();
-            const StorageRef scan = scan_predicate(*context, predicate, input, program.count);
+            const PredicateScan scan(*context, predicate, input, program.count);
             encode_mask(*context, {.mode = kNonzeroPositions, .dtype = DataType::Int64, .count = program.count,
-                                   .mask = input, .source = output, .scan = scan, .predicate = predicate});
-            context->wait(context->pending(scan));
+                                   .mask = input, .source = output, .scan = scan.storage, .predicate = predicate});
+            context->wait(context->pending(scan.storage));
             uint32_t total = 0;
-            std::memcpy(&total, context->host(scan) + (program.count - 1) * sizeof(uint32_t), sizeof(total));
-            context->release(scan);
+            std::memcpy(&total, context->host(scan.storage) + (program.count - 1) * sizeof(uint32_t), sizeof(total));
             return total;
         }
 
@@ -1183,9 +1189,8 @@ namespace lfs::core::internal {
             // follow, all in one scratch block.
             const size_t total = lines * dim_size;
             const size_t blocks_per_line = (dim_size + kRadixBlock - 1) / kRadixBlock;
-            const StorageRef scratch =
-                context->allocate((4 * total + lines * kRadixDigits * blocks_per_line) * sizeof(uint32_t));
-            const auto scratch_at = context->locate(scratch);
+            const Scratch scratch(*context, (4 * total + lines * kRadixDigits * blocks_per_line) * sizeof(uint32_t));
+            const auto scratch_at = context->locate(scratch.storage);
             const uint64_t array_bytes = total * sizeof(uint32_t);
             params.keys_a_offset = scratch_at.offset;
             params.keys_b_offset = scratch_at.offset + array_bytes;
@@ -1194,7 +1199,7 @@ namespace lfs::core::internal {
             params.histogram_offset = scratch_at.offset + 4 * array_bytes;
             params.blocks_per_line = checked_u32(blocks_per_line, "Metal sort block count exceeds uint32");
             params.total = checked_u32(total, "Metal sort element count exceeds uint32");
-            const std::array uses{values, indices, scratch};
+            const std::array uses{values, indices, scratch.storage};
             const auto dispatch = [&](const uint32_t phase, const size_t groups) {
                 context->dispatch(uses, {.pipeline = context->pipeline("radix_sort", {{0, phase}}),
                                          .buffers = {values_at.address, indices_at.address, scratch_at.address},
@@ -1213,7 +1218,6 @@ namespace lfs::core::internal {
             }
             dispatch(4, element_groups);
             dispatch(5, element_groups);
-            context->release(scratch);
         }
 
         // random_op kinds.
@@ -1964,10 +1968,9 @@ namespace lfs::core::internal {
         if (program.count == 0 || program.selected_count == 0)
             return 0;
         const auto context = acquire_context();
-        const StorageRef scan = scan_predicate(*context, kBytePredicate, mask, program.count);
+        const PredicateScan scan(*context, kBytePredicate, mask, program.count);
         encode_mask(*context, {.mode = kCompactSelect, .dtype = input.dtype, .count = program.count, .data = input,
-                               .mask = mask, .source = output, .scan = scan});
-        context->release(scan);
+                               .mask = mask, .source = output, .scan = scan.storage});
         // The host sized the output from the same mask; like CUDA, the launch trusts it.
         return program.selected_count;
     }
@@ -1978,10 +1981,9 @@ namespace lfs::core::internal {
         if (program.count == 0 || program.selected_count == 0)
             return;
         const auto context = acquire_context();
-        const StorageRef scan = scan_predicate(*context, kBytePredicate, mask, program.count);
+        const PredicateScan scan(*context, kBytePredicate, mask, program.count);
         encode_mask(*context, {.mode = kCompactScatter, .dtype = output.dtype, .count = program.count, .data = output,
-                               .mask = mask, .source = source, .scan = scan});
-        context->release(scan);
+                               .mask = mask, .source = source, .scan = scan.storage});
     }
 
     void MetalBackendOps::and_live(const StorageRef mask, const StorageRef live_mask, const MaskProgram& program,
@@ -2054,12 +2056,14 @@ namespace lfs::core::internal {
             uint32_t invalid;
             float scale;
         };
-        const StorageRef scratch = context->allocate(sizeof(WeightStatistics));
-        encode_random(*context, kWeightStatistics, scratch, weights, {}, {.count = categories}, MTLSizeMake(1, 1, 1));
-        context->wait(context->pending(scratch));
         WeightStatistics statistics{};
-        std::memcpy(&statistics, context->host(scratch), sizeof(statistics));
-        context->release(scratch);
+        {
+            const Scratch scratch(*context, sizeof(WeightStatistics));
+            encode_random(*context, kWeightStatistics, scratch.storage, weights, {}, {.count = categories},
+                          MTLSizeMake(1, 1, 1));
+            context->wait(context->pending(scratch.storage));
+            std::memcpy(&statistics, context->host(scratch.storage), sizeof(statistics));
+        }
         LFS_ASSERT_MSG(statistics.invalid == 0, "multinomial weights must be finite and non-negative");
         LFS_ASSERT_MSG(std::isfinite(statistics.sum) && statistics.sum > 0.0f,
                        "multinomial weights must have a positive finite sum");
@@ -2074,13 +2078,12 @@ namespace lfs::core::internal {
                        "multinomial sample count exceeds weights without replacement");
         // Gumbel-top-k: the sample_count largest perturbed log-weights, ranked
         // by counting; ties fall back to the lower index.
-        const StorageRef keys = context->allocate(program.count * sizeof(float));
-        encode_random(*context, kGumbelKeys, {}, weights, keys,
+        const Scratch keys(*context, program.count * sizeof(float));
+        encode_random(*context, kGumbelKeys, {}, weights, keys.storage,
                       {.seed = program.seed, .count = categories, .sample_count = samples},
                       thread_groups(program.count));
-        encode_random(*context, kRankSelect, output, {}, keys, {.count = categories, .sample_count = samples},
+        encode_random(*context, kRankSelect, output, {}, keys.storage, {.count = categories, .sample_count = samples},
                       thread_groups(program.count));
-        context->release(keys);
     }
 
     void MetalBackendOps::radius_neighbors(const StorageRef points, const StorageRef references, const StorageRef heads,
