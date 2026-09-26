@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "adam_optimizer.hpp"
-#include "adam_api.h"
 #include "core/alloc_counter.hpp"
 #include "core/assert.hpp"
 #include "core/checkpoint_format.hpp"
@@ -18,6 +17,7 @@
 #include "core/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
+#include "lfs/training/ops/registry.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include <algorithm>
 #include <atomic>
@@ -117,7 +117,37 @@ namespace lfs::training {
 
     AdamOptimizer::AdamOptimizer(lfs::core::SplatData& splat_data, const AdamConfig& config)
         : config_(config),
-          splat_data_(splat_data) {}
+          splat_data_(splat_data),
+          ops_(training_ops(lfs::core::default_gpu_backend()).adam) {}
+
+    const lfs::gpu_ops::AdamOps& AdamOptimizer::adam_ops() const {
+        if (ops_ == nullptr) [[unlikely]] {
+            throw std::runtime_error(
+                unavailable_training_family(lfs::core::default_gpu_backend(), Family::Adam)
+                    .value_or("Adam training ops are unavailable"));
+        }
+        return *ops_;
+    }
+
+    lfs::gpu_ops::AdamHyper AdamOptimizer::adam_hyper() const {
+        return {
+            .beta1 = static_cast<float>(config_.beta1),
+            .beta2 = static_cast<float>(config_.beta2),
+            .eps = static_cast<float>(config_.eps),
+        };
+    }
+
+    lfs::gpu_ops::AdamModifiers AdamOptimizer::adam_modifiers() const {
+        return {
+            .frozen_lr_scale = frozen_lr_scale_,
+            .cropbox_lr_scale = cropbox_lr_scale_,
+            .median_extent = mean_step_median_extent_,
+            .r_min = mean_step_r_min_,
+            .r_max = mean_step_r_max_,
+            .screen_share_limit = screen_share_limit_,
+            .screen_share_penalty = screen_share_penalty_,
+        };
+    }
 
     void AdamOptimizer::set_frozen_mask(lfs::core::Tensor mask) {
         if (mask.is_valid()) {
@@ -249,19 +279,20 @@ namespace lfs::training {
         }
         last_step_zeroed_gradients_ = false;
 
-        fast_lfs::optimizer::JointContiguousBatchEntry entries[5];
-        int n_entries = 0;
         const cudaStream_t batch_stream = lfs::core::getCurrentCUDAStream();
-        const float* batch_mean_step_scale_raw = nullptr;
-        int batch_mean_step_scale_n = 0;
-        const ParamType contiguous[] = {
-            ParamType::Means, ParamType::Sh0, ParamType::Scaling,
-            ParamType::Rotation, ParamType::Opacity};
+        bool mean_step_scaled = false;
+        int n_present = 0;
 
-        auto prepare_contiguous = [&](ParamType type) {
+        auto contiguous_step = [&](ParamType type) -> lfs::gpu_ops::JointStep {
+            const lfs::gpu_ops::JointStep absent{
+                .parameter = absent_,
+                .packed = absent_,
+                .bounds = absent_,
+                .gradient = absent_,
+            };
             auto& param = get_param(type);
             if (!param.is_valid() || param.numel() == 0) {
-                return;
+                return absent;
             }
             const auto name = param_name(type);
             if (!states_.contains(name)) {
@@ -271,7 +302,7 @@ namespace lfs::training {
             if (!state.grad.is_valid() || state.grad.numel() == 0 ||
                 !state.exp_avg.is_valid() || state.exp_avg.numel() == 0 ||
                 !state.is_joint() || !state.joint_bounds.is_valid()) {
-                return;
+                return absent;
             }
             auto& param_live = get_param(type);
             const size_t param_size = param_live.shape()[0];
@@ -289,38 +320,44 @@ namespace lfs::training {
             state.joint_bounds.sync_to_stream(batch_stream);
             state.grad.sync_to_stream(batch_stream);
             const size_t feature_dim = param_live.numel() / param_size;
-            auto& e = entries[n_entries++];
-            e.param = param_live.ptr<float>();
-            e.packed = state.exp_avg.ptr<uint8_t>();
-            e.bounds = state.joint_bounds.ptr<float>();
-            e.grad = state.grad.ptr<float>();
-            e.n_prims = static_cast<int>(state.size);
-            e.n_attr = static_cast<int>(feature_dim);
-            e.lr = param_lr;
-            e.bias_correction1_rcp = static_cast<float>(bias_correction1_rcp);
-            e.bias_correction2_sqrt_rcp = static_cast<float>(bias_correction2_sqrt_rcp);
+            bool apply_mean_step = false;
             if (type == ParamType::Means && per_splat_mean_step_) {
                 auto& scaling = splat_data_.scaling_raw();
                 if (scaling.is_valid() && scaling.numel() > 0) {
                     scaling.sync_to_stream(batch_stream);
-                    batch_mean_step_scale_raw = scaling.ptr<float>();
-                    batch_mean_step_scale_n = static_cast<int>(scaling.numel());
-                    e.apply_mean_step = 1;
+                    apply_mean_step = true;
+                    mean_step_scaled = true;
                 }
-            }
-            if (type == ParamType::Scaling) {
-                e.apply_screen_share = 1;
             }
             param_live.set_stream(batch_stream);
             state.exp_avg.set_stream(batch_stream);
             state.joint_bounds.set_stream(batch_stream);
             state.grad.set_stream(batch_stream);
+            ++n_present;
+            return {
+                .parameter = param_live,
+                .packed = state.exp_avg,
+                .bounds = state.joint_bounds,
+                .gradient = state.grad,
+                .primitives = static_cast<int>(state.size),
+                .attributes = static_cast<int>(feature_dim),
+                .bits = state.joint_bits,
+                .lr = param_lr,
+                .bc1_rcp = static_cast<float>(bias_correction1_rcp),
+                .bc2_sqrt_rcp = static_cast<float>(bias_correction2_sqrt_rcp),
+                .apply_mean_step = apply_mean_step,
+                .apply_screen_share = type == ParamType::Scaling,
+            };
         };
 
-        for (const auto type : contiguous) {
-            prepare_contiguous(type);
-        }
-        if (n_entries > 0) {
+        const std::array<lfs::gpu_ops::JointStep, 5> steps{
+            contiguous_step(ParamType::Means),
+            contiguous_step(ParamType::Sh0),
+            contiguous_step(ParamType::Scaling),
+            contiguous_step(ParamType::Rotation),
+            contiguous_step(ParamType::Opacity),
+        };
+        if (n_present > 0) {
             if (mean_step_far_mask_storage_.is_valid()) {
                 mean_step_far_mask_storage_.sync_to_stream(batch_stream);
             }
@@ -330,18 +367,14 @@ namespace lfs::training {
             if (crop_damping_mask_.is_valid()) {
                 crop_damping_mask_.sync_to_stream(batch_stream);
             }
-            fast_lfs::optimizer::adam_step_joint_contiguous_batched(
-                entries, n_entries,
-                frozen_mask_ptr(), frozen_mask_size(), frozen_lr_scale_,
-                crop_damping_mask_ptr(), crop_damping_mask_size(), cropbox_lr_scale_,
-                static_cast<float>(config_.beta1),
-                static_cast<float>(config_.beta2),
-                static_cast<float>(config_.eps),
-                batch_stream,
-                batch_mean_step_scale_raw, batch_mean_step_scale_n,
-                mean_step_median_extent_, mean_step_r_min_, mean_step_r_max_,
-                mean_step_far_mask_, mean_step_far_mask_n_,
-                screen_share_max_, screen_share_n_, screen_share_limit_, screen_share_penalty_);
+            const lfs::gpu_ops::AdamMasks masks{
+                .frozen = frozen_mask_,
+                .crop_damping = crop_damping_mask_,
+                .raw_scales = mean_step_scaled ? splat_data_.scaling_raw() : absent_,
+                .far_mask = mean_step_far_mask_storage_,
+                .screen_share = screen_share_max_ != nullptr ? splat_data_._max_screen_share : absent_,
+            };
+            adam_ops().step_batch(steps, masks, adam_hyper(), adam_modifiers());
         }
         step_param(ParamType::ShN, iteration);
     }
@@ -702,8 +735,8 @@ namespace lfs::training {
             crop_damping_mask_.sync_to_stream(execution_stream);
         }
 
-        // Contiguous params use adam_step_joint_contiguous_raw. shN uses the
-        // standalone joint kernel that shares apply_shN_grads_packed_joint with FastGS.
+        // Contiguous params use the joint step. shN uses the SH step, which shares
+        // its device code with the fused FastGS update.
         if (state.is_joint()) {
             if (type == ParamType::ShN) {
                 if (!state.joint_bounds.is_valid()) {
@@ -719,53 +752,36 @@ namespace lfs::training {
                 if (state.size != float_layout) {
                     throw std::runtime_error("Optimizer state desync: shN");
                 }
-                const int sh_layout_slots = static_cast<int>(
-                    lfs::core::sh_float4_slots_for_rest(layout_rest));
-                const int active_sh_bases = static_cast<int>(active_rest + 1u);
-
-                float* param_ptr = nullptr;
-                float* sh_value_bounds = nullptr;
-                int sh_value_bits = 0;
-                int sh_value_n_cells = 0;
-                if (splat_data_.shN_value_quantized() &&
-                    splat_data_.shN_value_bounds().is_valid()) {
-                    const auto q16 = lfs::core::resolve_q16_bind_ptrs(splat_data_);
-                    param_ptr = const_cast<float*>(q16.codes);
-                    sh_value_bounds = const_cast<float*>(q16.bounds);
-                    sh_value_bits = 16;
-                    sh_value_n_cells = static_cast<int>(q16.n_cells_per_prim);
-                } else if (splat_data_.shN_ieee_f16()) {
-                    param_ptr = static_cast<float*>(
-                        lfs::core::resolve_exportable_device_ptr(param_live));
-                    sh_value_bits = 16;
-                } else {
-                    param_ptr = static_cast<float*>(
-                        lfs::core::resolve_exportable_device_ptr(param_live));
-                }
-
-                fast_lfs::optimizer::adam_step_shN_joint_from_grad(
-                    param_ptr,
-                    state.exp_avg.ptr<uint8_t>(),
-                    state.joint_bounds.ptr<float>(),
-                    sh_value_bounds,
-                    state.grad.ptr<float>(),
-                    frozen_mask_ptr(),
-                    frozen_mask_size(),
-                    frozen_lr_scale_,
-                    crop_damping_mask_ptr(),
-                    crop_damping_mask_size(),
-                    cropbox_lr_scale_,
-                    static_cast<int>(n_live),
-                    sh_layout_slots,
-                    active_sh_bases,
-                    sh_value_bits,
-                    sh_value_n_cells,
-                    param_lr * static_cast<float>(bias_correction1_rcp),
-                    static_cast<float>(config_.beta1),
-                    static_cast<float>(config_.beta2),
-                    static_cast<float>(config_.eps),
-                    static_cast<float>(bias_correction2_sqrt_rcp),
-                    execution_stream);
+                const bool q16 = splat_data_.shN_value_quantized() &&
+                                 splat_data_.shN_value_bounds().is_valid();
+                const lfs::gpu_ops::AdamMasks masks{
+                    .frozen = frozen_mask_,
+                    .crop_damping = crop_damping_mask_,
+                    .raw_scales = absent_,
+                    .far_mask = absent_,
+                    .screen_share = absent_,
+                };
+                adam_ops().step_sh(
+                    param_live,
+                    state.exp_avg,
+                    state.joint_bounds,
+                    q16 ? splat_data_.shN_value_bounds() : absent_,
+                    state.grad,
+                    masks,
+                    adam_hyper(),
+                    adam_modifiers(),
+                    {
+                        .primitives = static_cast<int>(n_live),
+                        .layout_slots = static_cast<int>(
+                            lfs::core::sh_float4_slots_for_rest(layout_rest)),
+                        .active_bases = static_cast<int>(active_rest + 1u),
+                        .value_bits = q16 || splat_data_.shN_ieee_f16() ? 16 : 0,
+                        .value_cells = q16 ? static_cast<int>(
+                                                 lfs::core::sh_value_quant::n_value_cells_per_prim(layout_rest))
+                                           : 0,
+                        .step_size = param_lr * static_cast<float>(bias_correction1_rcp),
+                        .bc2_sqrt_rcp = static_cast<float>(bias_correction2_sqrt_rcp),
+                    });
                 param_live.set_stream(execution_stream);
                 state.exp_avg.set_stream(execution_stream);
                 state.joint_bounds.set_stream(execution_stream);
@@ -783,58 +799,39 @@ namespace lfs::training {
             if (mean_step_far_mask_storage_.is_valid()) {
                 mean_step_far_mask_storage_.sync_to_stream(execution_stream);
             }
-            const float* mean_step_scale_raw = nullptr;
-            int mean_step_scale_n = 0;
+            bool apply_mean_step = false;
             if (type == ParamType::Means && per_splat_mean_step_) {
                 auto& scaling = splat_data_.scaling_raw();
                 if (scaling.is_valid() && scaling.numel() > 0) {
                     scaling.sync_to_stream(execution_stream);
-                    mean_step_scale_raw = scaling.ptr<float>();
-                    mean_step_scale_n = static_cast<int>(scaling.numel());
+                    apply_mean_step = true;
                 }
             }
-            const float* share_max = nullptr;
-            int share_n = 0;
-            float share_limit = 0.0f;
-            float share_penalty = 0.0f;
-            if (type == ParamType::Scaling) {
-                share_max = screen_share_max_;
-                share_n = screen_share_n_;
-                share_limit = screen_share_limit_;
-                share_penalty = screen_share_penalty_;
-            }
-            fast_lfs::optimizer::adam_step_joint_contiguous_raw(
-                param_live.ptr<float>(),
-                state.exp_avg.ptr<uint8_t>(),
-                state.joint_bounds.ptr<float>(),
-                state.grad.ptr<float>(),
-                frozen_mask_ptr(),
-                frozen_mask_size(),
-                frozen_lr_scale_,
-                crop_damping_mask_ptr(),
-                crop_damping_mask_size(),
-                cropbox_lr_scale_,
-                static_cast<int>(state.size),
-                static_cast<int>(feature_dim),
-                state.joint_bits,
-                param_lr,
-                static_cast<float>(config_.beta1),
-                static_cast<float>(config_.beta2),
-                static_cast<float>(config_.eps),
-                static_cast<float>(bias_correction1_rcp),
-                static_cast<float>(bias_correction2_sqrt_rcp),
-                execution_stream,
-                mean_step_scale_raw,
-                mean_step_scale_n,
-                mean_step_median_extent_,
-                mean_step_r_min_,
-                mean_step_r_max_,
-                mean_step_far_mask_,
-                mean_step_far_mask_n_,
-                share_max,
-                share_n,
-                share_limit,
-                share_penalty);
+            const lfs::gpu_ops::AdamMasks masks{
+                .frozen = frozen_mask_,
+                .crop_damping = crop_damping_mask_,
+                .raw_scales = apply_mean_step ? splat_data_.scaling_raw() : absent_,
+                .far_mask = mean_step_far_mask_storage_,
+                .screen_share = screen_share_max_ != nullptr ? splat_data_._max_screen_share : absent_,
+            };
+            adam_ops().step(
+                {
+                    .parameter = param_live,
+                    .packed = state.exp_avg,
+                    .bounds = state.joint_bounds,
+                    .gradient = state.grad,
+                    .primitives = static_cast<int>(state.size),
+                    .attributes = static_cast<int>(feature_dim),
+                    .bits = state.joint_bits,
+                    .lr = param_lr,
+                    .bc1_rcp = static_cast<float>(bias_correction1_rcp),
+                    .bc2_sqrt_rcp = static_cast<float>(bias_correction2_sqrt_rcp),
+                    .apply_mean_step = apply_mean_step,
+                    .apply_screen_share = type == ParamType::Scaling,
+                },
+                masks,
+                adam_hyper(),
+                adam_modifiers());
             param_live.set_stream(execution_stream);
             state.exp_avg.set_stream(execution_stream);
             state.joint_bounds.set_stream(execution_stream);
@@ -1146,37 +1143,34 @@ namespace lfs::training {
         d_indices_tensor.set_stream(stream);
         reset_indices_upload_.enqueue(
             d_indices_tensor, std::as_bytes(std::span(indices)), reinterpret_cast<void*>(stream));
-        int64_t* const d_indices = d_indices_tensor.ptr<int64_t>();
         state.exp_avg.sync_to_stream(stream);
         state.joint_bounds.sync_to_stream(stream);
         if (type == ParamType::ShN) {
             const int slots = static_cast<int>(lfs::core::sh_float4_slots_for_rest(
                 static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest())));
             if (slots > 0) {
-                fast_lfs::optimizer::joint_encode_zero_shN_at_indices(
-                    state.exp_avg.ptr<uint8_t>(),
-                    state.joint_bounds.ptr<float>(),
-                    d_indices,
-                    static_cast<int>(indices.size()),
-                    slots,
-                    state.joint_bits,
-                    static_cast<int>(splat_data_.size()),
-                    stream);
+                adam_ops().encode_zero(
+                    state.exp_avg, state.joint_bounds, d_indices_tensor,
+                    {
+                        .layout = lfs::gpu_ops::JointLayout::SwizzledSH,
+                        .primitives = static_cast<int>(splat_data_.size()),
+                        .attributes_or_slots = slots,
+                        .bits = state.joint_bits,
+                    });
             }
         } else {
             const int bpc = joint_adam::bytes_per_cell(state.joint_bits);
             const int row_bytes = static_cast<int>(tensor_row_size(state.exp_avg));
             const int n_attr = bpc > 0 ? row_bytes / bpc : 0;
             if (n_attr > 0) {
-                fast_lfs::optimizer::joint_encode_zero_rows_at_indices(
-                    state.exp_avg.ptr<uint8_t>(),
-                    state.joint_bounds.ptr<float>(),
-                    d_indices,
-                    static_cast<int>(indices.size()),
-                    n_attr,
-                    state.joint_bits,
-                    static_cast<int>(splat_data_.size()),
-                    stream);
+                adam_ops().encode_zero(
+                    state.exp_avg, state.joint_bounds, d_indices_tensor,
+                    {
+                        .layout = lfs::gpu_ops::JointLayout::Rows,
+                        .primitives = static_cast<int>(splat_data_.size()),
+                        .attributes_or_slots = n_attr,
+                        .bits = state.joint_bits,
+                    });
             }
         }
         state.exp_avg.set_stream(stream);
@@ -1199,8 +1193,7 @@ namespace lfs::training {
             }
             const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
             lfs::core::waitForCUDAStream(stream, device_indices.stream());
-            relocate_params_at_indices_gpu(
-                type, device_indices.ptr<int64_t>(), device_indices.numel());
+            relocate_params_at_indices_gpu(type, device_indices);
             device_indices.set_stream(stream);
             return;
         }
@@ -1299,23 +1292,15 @@ namespace lfs::training {
                     state.joint_bounds.sync_to_stream(stream);
                     indices.sync_to_stream(stream);
                     const bool idx_i64 = indices.dtype() == lfs::core::DataType::Int64;
-                    lfs::core::Tensor idx64;
-                    const int64_t* idx_ptr = nullptr;
-                    if (idx_i64) {
-                        idx_ptr = indices.ptr<int64_t>();
-                    } else {
-                        idx64 = indices.to(lfs::core::DataType::Int64);
-                        idx_ptr = idx64.ptr<int64_t>();
-                    }
-                    fast_lfs::optimizer::joint_transcode_gathered_rows_at_indices(
-                        state.exp_avg.ptr<uint8_t>(),
-                        state.joint_bounds.ptr<float>(),
-                        idx_ptr,
-                        static_cast<int>(n_new),
+                    const lfs::core::Tensor idx64 =
+                        idx_i64 ? lfs::core::Tensor{} : indices.to(lfs::core::DataType::Int64);
+                    adam_ops().transcode_gathered(
+                        state.exp_avg,
+                        state.joint_bounds,
+                        idx_i64 ? indices : idx64,
                         static_cast<int>(old_N),
                         n_attr,
-                        state.joint_bits,
-                        stream);
+                        state.joint_bits);
                     state.exp_avg.set_stream(stream);
                 }
             }
@@ -1446,37 +1431,34 @@ namespace lfs::training {
                 extend_indices_upload_.enqueue(
                     d_idx_tensor, std::as_bytes(std::span(new_idx)),
                     reinterpret_cast<void*>(stream));
-                int64_t* const d_idx = d_idx_tensor.ptr<int64_t>();
                 state.exp_avg.sync_to_stream(stream);
                 state.joint_bounds.sync_to_stream(stream);
                 if (type == ParamType::ShN) {
                     const int slots = static_cast<int>(lfs::core::sh_float4_slots_for_rest(
                         static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest())));
                     if (slots > 0) {
-                        fast_lfs::optimizer::joint_encode_zero_shN_at_indices(
-                            state.exp_avg.ptr<uint8_t>(),
-                            state.joint_bounds.ptr<float>(),
-                            d_idx,
-                            static_cast<int>(n_new),
-                            slots,
-                            state.joint_bits,
-                            static_cast<int>(prim_n),
-                            stream);
+                        adam_ops().encode_zero(
+                            state.exp_avg, state.joint_bounds, d_idx_tensor,
+                            {
+                                .layout = lfs::gpu_ops::JointLayout::SwizzledSH,
+                                .primitives = static_cast<int>(prim_n),
+                                .attributes_or_slots = slots,
+                                .bits = state.joint_bits,
+                            });
                     }
                 } else {
                     const int bpc = joint_adam::bytes_per_cell(state.joint_bits);
                     const int row_bytes = static_cast<int>(tensor_row_size(state.exp_avg));
                     const int n_attr = bpc > 0 ? row_bytes / bpc : 0;
                     if (n_attr > 0) {
-                        fast_lfs::optimizer::joint_encode_zero_rows_at_indices(
-                            state.exp_avg.ptr<uint8_t>(),
-                            state.joint_bounds.ptr<float>(),
-                            d_idx,
-                            static_cast<int>(n_new),
-                            n_attr,
-                            state.joint_bits,
-                            static_cast<int>(prim_n),
-                            stream);
+                        adam_ops().encode_zero(
+                            state.exp_avg, state.joint_bounds, d_idx_tensor,
+                            {
+                                .layout = lfs::gpu_ops::JointLayout::Rows,
+                                .primitives = static_cast<int>(prim_n),
+                                .attributes_or_slots = n_attr,
+                                .bits = state.joint_bits,
+                            });
                     }
                 }
                 state.exp_avg.set_stream(stream);
@@ -1750,21 +1732,19 @@ namespace lfs::training {
                         add_indices_upload_.enqueue(
                             d_idx_tensor, std::as_bytes(std::span(new_idx)),
                             reinterpret_cast<void*>(stream));
-                        int64_t* const d_idx = d_idx_tensor.ptr<int64_t>();
                         const int slots = static_cast<int>(
                             lfs::core::sh_float4_slots_for_rest(layout_rest));
                         if (slots > 0) {
                             state.exp_avg.sync_to_stream(stream);
                             state.joint_bounds.sync_to_stream(stream);
-                            fast_lfs::optimizer::joint_encode_zero_shN_at_indices(
-                                state.exp_avg.ptr<uint8_t>(),
-                                state.joint_bounds.ptr<float>(),
-                                d_idx,
-                                static_cast<int>(n_new),
-                                slots,
-                                state.joint_bits,
-                                static_cast<int>(new_N),
-                                stream);
+                            adam_ops().encode_zero(
+                                state.exp_avg, state.joint_bounds, d_idx_tensor,
+                                {
+                                    .layout = lfs::gpu_ops::JointLayout::SwizzledSH,
+                                    .primitives = static_cast<int>(new_N),
+                                    .attributes_or_slots = slots,
+                                    .bits = state.joint_bits,
+                                });
                             state.exp_avg.set_stream(stream);
                             state.joint_bounds.set_stream(stream);
                         }
@@ -1797,8 +1777,8 @@ namespace lfs::training {
         extend_state_for_new_params(type, n_new);
     }
 
-    void AdamOptimizer::relocate_params_at_indices_gpu(ParamType type, const int64_t* indices_device, const size_t n_indices) {
-        if (n_indices == 0)
+    void AdamOptimizer::relocate_params_at_indices_gpu(ParamType type, const lfs::core::Tensor& indices) {
+        if (indices.numel() == 0)
             return;
 
         const auto name = param_name(type);
@@ -1832,30 +1812,28 @@ namespace lfs::training {
                 const int slots = static_cast<int>(lfs::core::sh_float4_slots_for_rest(
                     static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest())));
                 if (slots > 0) {
-                    fast_lfs::optimizer::joint_encode_zero_shN_at_indices(
-                        state.exp_avg.ptr<uint8_t>(),
-                        state.joint_bounds.ptr<float>(),
-                        indices_device,
-                        static_cast<int>(n_indices),
-                        slots,
-                        state.joint_bits,
-                        static_cast<int>(splat_data_.size()),
-                        stream);
+                    adam_ops().encode_zero(
+                        state.exp_avg, state.joint_bounds, indices,
+                        {
+                            .layout = lfs::gpu_ops::JointLayout::SwizzledSH,
+                            .primitives = static_cast<int>(splat_data_.size()),
+                            .attributes_or_slots = slots,
+                            .bits = state.joint_bits,
+                        });
                 }
             } else {
                 const int bpc = joint_adam::bytes_per_cell(state.joint_bits);
                 const int row_bytes = static_cast<int>(tensor_row_size(state.exp_avg));
                 const int n_attr = bpc > 0 ? row_bytes / bpc : 0;
                 if (n_attr > 0) {
-                    fast_lfs::optimizer::joint_encode_zero_rows_at_indices(
-                        state.exp_avg.ptr<uint8_t>(),
-                        state.joint_bounds.ptr<float>(),
-                        indices_device,
-                        static_cast<int>(n_indices),
-                        n_attr,
-                        state.joint_bits,
-                        static_cast<int>(splat_data_.size()),
-                        stream);
+                    adam_ops().encode_zero(
+                        state.exp_avg, state.joint_bounds, indices,
+                        {
+                            .layout = lfs::gpu_ops::JointLayout::Rows,
+                            .primitives = static_cast<int>(splat_data_.size()),
+                            .attributes_or_slots = n_attr,
+                            .bits = state.joint_bits,
+                        });
                 }
             }
             state.exp_avg.set_stream(stream);

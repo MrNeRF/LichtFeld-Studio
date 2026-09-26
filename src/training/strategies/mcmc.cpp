@@ -148,14 +148,8 @@ namespace lfs::training {
 
         // Reset optimizer moment state for rows whose params changed.
         // Source rows get adjusted opacity/scaling; destination rows receive fresh params.
-        _optimizer->relocate_params_at_indices_gpu(
-            param_type,
-            sampled_indices.ptr<int64_t>(),
-            sampled_indices.numel());
-        _optimizer->relocate_params_at_indices_gpu(
-            param_type,
-            dead_indices.ptr<int64_t>(),
-            dead_indices.numel());
+        _optimizer->relocate_params_at_indices_gpu(param_type, sampled_indices);
+        _optimizer->relocate_params_at_indices_gpu(param_type, dead_indices);
     }
 
     void MCMC::ensure_densification_info_shape() {
