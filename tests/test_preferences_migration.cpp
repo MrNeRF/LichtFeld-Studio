@@ -250,6 +250,47 @@ TEST(PreferencesMigration, TensorBackendOptionsPersistWithoutChangingTheRunningB
     EXPECT_EQ(lfs::core::default_gpu_backend(), active_backend);
 }
 
+TEST(PreferencesMigration, TensorBackendDefaultsToAutomaticAndRoundTrips) {
+    const auto home = makeHome("lfs_preferences_tensor_auto");
+    const ScopedLfsHome scoped_home(home);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    ASSERT_TRUE(paths->ensureDirectories());
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    EXPECT_FALSE(preferences.tensorBackend().backend.has_value());
+    preferences.setTensorBackend({});
+    EXPECT_EQ(readPreferences(*paths).at("tensor_backend").at("backend"), "auto");
+    EXPECT_FALSE(preferences.tensorBackend().backend.has_value());
+    preferences.setTensorBackend({.backend = lfs::core::GpuBackend::Vulkan});
+    EXPECT_EQ(preferences.tensorBackend().backend, lfs::core::GpuBackend::Vulkan);
+}
+
+TEST(PreferencesMigration, LegacyMacVulkanPreferenceBecomesAutomatic) {
+    const auto home = makeHome("lfs_preferences_tensor_legacy");
+    const ScopedLfsHome scoped_home(home);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    ASSERT_TRUE(paths->ensureDirectories());
+    writePreferences(*paths, {{"schema_version", 1}, {"tensor_backend", {{"backend", "vulkan"}}}});
+    const auto legacy = lfs::vis::UserPreferences::instance().tensorBackend();
+#ifdef __APPLE__
+    // Before schema 2 the panel saved the default, so a Mac never chose Vulkan.
+    EXPECT_FALSE(legacy.backend.has_value());
+    EXPECT_EQ(readPreferences(*paths).at("tensor_backend").at("backend"), "auto");
+#else
+    EXPECT_EQ(legacy.backend, lfs::core::GpuBackend::Vulkan);
+#endif
+
+    // A choice saved under schema 2 is explicit.
+    const auto current = makeHome("lfs_preferences_tensor_current");
+    const ScopedLfsHome scoped_current(current);
+    const auto current_paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(current_paths);
+    ASSERT_TRUE(current_paths->ensureDirectories());
+    writePreferences(*current_paths, {{"schema_version", 2}, {"tensor_backend", {{"backend", "vulkan"}}}});
+    EXPECT_EQ(lfs::vis::UserPreferences::instance().tensorBackend().backend, lfs::core::GpuBackend::Vulkan);
+}
+
 TEST(PreferencesMigration, MalformedTensorPreferencesKeepSafeDefaults) {
     const auto home = makeHome("lfs_preferences_tensor_invalid");
     const ScopedLfsHome scoped_home(home);

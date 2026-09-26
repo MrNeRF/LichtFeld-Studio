@@ -16,11 +16,8 @@
 namespace lfs::vis {
 
     struct TensorPreferenceState {
-#if LFS_HAS_CUDA
-        core::GpuBackend backend = core::GpuBackend::CUDA;
-#else
-        core::GpuBackend backend = core::GpuBackend::Vulkan;
-#endif
+        // Unset picks the backend automatically at startup; see default_gpu_backend().
+        std::optional<core::GpuBackend> backend;
         core::TensorBackendOptions options;
     };
 

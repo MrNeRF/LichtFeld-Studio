@@ -28,6 +28,9 @@ namespace lfs::core {
 
     LFS_CORE_API const char* gpu_backend_name(GpuBackend backend);
     LFS_CORE_API std::optional<GpuBackend> gpu_backend_of(const Tensor& tensor);
+    // The configured backend, or without a configuration CUDA where it is
+    // built, else Metal where the GPU supports it, else Vulkan. The first call
+    // freezes the choice for the process.
     LFS_CORE_API GpuBackend default_gpu_backend();
     // The backend default_gpu_backend() resolves to, without freezing it.
     LFS_CORE_API GpuBackend configured_gpu_backend();

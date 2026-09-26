@@ -1,7 +1,7 @@
 # Native model inference on GPU backends
 
-LPIPS, MoGe 2, and SAM2 use the native `.lfw` weight files on both the CUDA
-and Vulkan tensor backends. Select Vulkan before loading the model and creating
+LPIPS, MoGe 2, and SAM2 use the native `.lfw` weight files on the CUDA,
+Vulkan and Metal tensor backends. Select Vulkan before loading the model and creating
 its input tensors:
 
 ```sh
@@ -28,7 +28,8 @@ The Vulkan implementation uses the tensor backend's existing device, memory pool
 and command recorder. Weight uploads use owned staging memory, and inference uses
 Vulkan tensor programs plus shaders for image sampling, convolution packing,
 pooling, activation functions, and coordinate grids. It does not transfer the
-model to CUDA for execution.
+model to CUDA for execution. The Metal backend runs the same portable operations
+with its own kernels.
 
 FP32 and FP16 model storage are supported. Vulkan computes these native inference
 operations in FP32 and converts their outputs to the model's storage dtype.

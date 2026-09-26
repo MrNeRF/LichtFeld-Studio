@@ -5490,7 +5490,7 @@ namespace lfs::python {
         m.def("get_tensor_backend_preferences", [] {
             const auto state = vis::UserPreferences::instance().tensorBackend();
             nb::dict result;
-            std::string backend = core::gpu_backend_name(state.backend);
+            std::string backend = state.backend ? core::gpu_backend_name(*state.backend) : "auto";
             std::transform(backend.begin(), backend.end(), backend.begin(),
                            [](const unsigned char c) { return std::tolower(c); });
             result["backend"] = backend;
@@ -5503,8 +5503,8 @@ namespace lfs::python {
             return result; }, "Get saved tensor backend preferences; changes apply after restart");
 
         m.def("set_tensor_backend_preferences", [](const std::string& backend, const std::string& device, int validation, bool fp32_half, bool no_atomic_float) {
-                  if (backend != "cuda" && backend != "vulkan" && backend != "metal")
-                      throw nb::value_error("Backend must be cuda, vulkan or metal");
+                  if (backend != "auto" && backend != "cuda" && backend != "vulkan" && backend != "metal")
+                      throw nb::value_error("Backend must be auto, cuda, vulkan or metal");
                   if constexpr (!LFS_HAS_CUDA) {
                     if (backend == "cuda")
                       throw nb::value_error("CUDA is not compiled into this build");
@@ -5514,13 +5514,14 @@ namespace lfs::python {
                   if (validation < 0 || validation > 2)
                       throw nb::value_error("Validation must be 0, 1, or 2");
                   const vis::TensorPreferenceState state{
-                      .backend = backend == "vulkan"  ? core::GpuBackend::Vulkan
-                                 : backend == "metal" ? core::GpuBackend::Metal
-                                                      : core::GpuBackend::CUDA,
+                      .backend = backend == "auto"     ? std::nullopt
+                                 : backend == "vulkan" ? std::optional(core::GpuBackend::Vulkan)
+                                 : backend == "metal"  ? std::optional(core::GpuBackend::Metal)
+                                                       : std::optional(core::GpuBackend::CUDA),
                       .options = {.vulkan_device = device, .vulkan_validation = validation,
                                   .force_fp32_half = fp32_half, .force_no_atomic_float = no_atomic_float},
                   };
-                  vis::UserPreferences::instance().setTensorBackend(state); }, nb::arg("backend") = LFS_HAS_CUDA ? "cuda" : "vulkan", nb::arg("vulkan_device") = "", nb::arg("vulkan_validation") = 0, nb::arg("force_fp32_half") = false, nb::arg("force_no_atomic_float") = false, "Save tensor backend preferences for the next application start");
+                  vis::UserPreferences::instance().setTensorBackend(state); }, nb::arg("backend") = "auto", nb::arg("vulkan_device") = "", nb::arg("vulkan_validation") = 0, nb::arg("force_fp32_half") = false, nb::arg("force_no_atomic_float") = false, "Save tensor backend preferences for the next application start");
 
         m.def(
             "get_mcp_preferences",

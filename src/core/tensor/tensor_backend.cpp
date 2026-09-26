@@ -310,11 +310,22 @@ namespace lfs::core {
             return kConfiguredBase - static_cast<int>(backend);
         }
 
+        // Without a configuration: CUDA where it is built, else Metal where the
+        // GPU supports it, else Vulkan.
+        GpuBackend automatic_backend() {
+            if (LFS_HAS_CUDA)
+                return GpuBackend::CUDA;
+#ifdef LFS_TENSOR_METAL
+            if (internal::metal_backend_available())
+                return GpuBackend::Metal;
+#endif
+            return GpuBackend::Vulkan;
+        }
+
         GpuBackend backend_of_state(const int state) {
             if (is_resolved(state))
                 return static_cast<GpuBackend>(state);
-            return state == kUnconfigured ? (LFS_HAS_CUDA ? GpuBackend::CUDA : GpuBackend::Vulkan)
-                                          : configured_backend(state);
+            return state == kUnconfigured ? automatic_backend() : configured_backend(state);
         }
 
         [[noreturn]] void throw_backend_unavailable(const GpuBackend backend) {

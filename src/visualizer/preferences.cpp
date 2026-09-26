@@ -254,7 +254,7 @@ namespace lfs::vis {
         void saveValuesLocked() {
             if (!paths || !writable)
                 return;
-            values["schema_version"] = 1;
+            values["schema_version"] = 2;
             if (const auto result = paths->writePreferencesAtomically(values.dump(2) + '\n'); !result)
                 LOG_WARN("Unable to save user preferences: {}",
                          lfs::format_for_developer(result.error()));
@@ -297,6 +297,22 @@ namespace lfs::vis {
             }
             if (changed)
                 saveValuesLocked();
+        }
+
+        // Before schema 2 the panel saved its default back on every start, so on
+        // a Mac, where Vulkan was the only backend, "vulkan" was never chosen:
+        // it becomes automatic, which picks Metal where the GPU supports it.
+        void migrateTensorBackendLocked() {
+#ifdef __APPLE__
+            const auto tensor = values.find("tensor_backend");
+            if (tensor == values.end() || !tensor->is_object())
+                return;
+            const auto backend = tensor->find("backend");
+            if (backend != tensor->end() && *backend == "vulkan") {
+                *backend = "auto";
+                saveValuesLocked();
+            }
+#endif
         }
 
         void loadLocked() {
@@ -344,7 +360,13 @@ namespace lfs::vis {
                     throw std::runtime_error("root value is not an object");
                 values = std::move(parsed);
                 input.close();
+                // Migrations save the current schema, so read the loaded one first.
+                const auto schema = values.find("schema_version");
+                const bool before_schema_2 = schema == values.end() || !schema->is_number_integer() ||
+                                             schema->get<int>() < 2;
                 migrateProjectLocationLocked();
+                if (before_schema_2)
+                    migrateTensorBackendLocked();
             } catch (const std::exception& error) {
                 // Windows does not allow the malformed file to be moved while
                 // this reader still holds it open.
@@ -624,7 +646,7 @@ namespace lfs::vis {
     void UserPreferences::setTensorBackend(const TensorPreferenceState& state) {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
-        const char* backend = "vulkan";
+        const char* backend = state.backend ? "vulkan" : "auto";
 #if LFS_HAS_CUDA
         if (state.backend == core::GpuBackend::CUDA)
             backend = "cuda";
@@ -653,6 +675,10 @@ namespace lfs::vis {
         if (const auto backend = it->find("backend"); backend != it->end() && backend->is_string()) {
             if (*backend == "vulkan")
                 result.backend = core::GpuBackend::Vulkan;
+#if LFS_HAS_CUDA
+            else if (*backend == "cuda")
+                result.backend = core::GpuBackend::CUDA;
+#endif
 #ifdef __APPLE__
             else if (*backend == "metal")
                 result.backend = core::GpuBackend::Metal;

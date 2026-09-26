@@ -56,8 +56,9 @@ training commands. Saved models, project metadata, dataset viewing, appearance
 settings and video export still use their shared application code.
 
 On Windows and Linux, this flag alone does not remove CUDA from the viewer
-dependencies. The macOS Apple Silicon viewer uses the Vulkan tensor backend
-without CUDA; use the `macos-release` preset described below. With
+dependencies. The macOS Apple Silicon viewer runs without CUDA: by default on
+the Metal tensor backend with macOS 26 and a Metal 4 GPU, else on the Vulkan
+tensor backend. Use the `macos-release` preset described below. With
 `BUILD_TESTS=ON`, the build without training provides `lichtfeld_viewer_tests`;
 the full build retains `lichtfeld_tests`.
 

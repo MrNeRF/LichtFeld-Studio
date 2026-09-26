@@ -2787,7 +2787,7 @@ def reset_scene_reconstruction_preferences() -> None:
 def get_tensor_backend_preferences() -> dict:
     """Get saved tensor backend preferences; changes apply after restart"""
 
-def set_tensor_backend_preferences(backend: str = 'cuda', vulkan_device: str = '', vulkan_validation: int = 0, force_fp32_half: bool = False, force_no_atomic_float: bool = False) -> None:
+def set_tensor_backend_preferences(backend: str = 'auto', vulkan_device: str = '', vulkan_validation: int = 0, force_fp32_half: bool = False, force_no_atomic_float: bool = False) -> None:
     """Save tensor backend preferences for the next application start"""
 
 def get_mcp_preferences() -> dict:

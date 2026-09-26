@@ -833,11 +833,12 @@
     "zoom": "Zoom"
   },
   "preferences": {
+    "tensor_auto": "Automatique",
     "tensor_cuda": "CUDA",
     "tensor_vulkan": "Vulkan",
     "tensor_metal": "Metal",
     "tensor_backend": "Tensor backend",
-    "tensor_restart": "Changes apply after restarting LichtFeld Studio. Vulkan supports viewing and inference; training requires CUDA.",
+    "tensor_restart": "Changes apply after restarting LichtFeld Studio. Automatic picks CUDA where it is built, else Metal where the GPU supports it, else Vulkan. Vulkan and Metal support viewing and inference; training requires CUDA.",
     "tensor_device": "Vulkan device",
     "tensor_device_hint": "Leave empty for automatic selection, or enter a device index or UUID. CUDA rendering must use the CUDA device.",
     "tensor_validation": "Vulkan diagnostics",
