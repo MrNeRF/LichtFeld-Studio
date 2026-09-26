@@ -531,7 +531,7 @@ namespace lfs::core {
                 internal::ExecContext{execution_stream});
 #ifndef NDEBUG
             if (device_fault_assert_path) {
-                if (internal::gpu_backend_tag(*this) == GpuBackend::Vulkan) {
+                if (internal::gpu_backend_tag(*this) != GpuBackend::CUDA) {
                     internal::backend_ops_for(*this).synchronize_stream(
                         internal::ExecContext{execution_stream});
                 } else {
