@@ -5,8 +5,8 @@
 #include "core/logger.hpp"
 #include "internal/tensor_broadcast.hpp"
 #include "internal/tensor_impl.hpp"
-#include <format>
 #include <algorithm>
+#include <format>
 #include <limits>
 #include <numeric>
 #include <string>

@@ -26,8 +26,7 @@ namespace lfs::core::nn::dedicated {
         internal::backend_ops_for(a).nn_linear(
             internal::storage_ref(a), internal::storage_ref(w), optional_storage(bias), optional_storage(scale),
             optional_storage(residual), internal::storage_ref(out),
-            {.batch = batch, .m = m, .n = n, .k = k, .trans_b = trans_b, .batched_b = batched_b,
-             .activation = static_cast<int>(activation)},
+            {.batch = batch, .m = m, .n = n, .k = k, .trans_b = trans_b, .batched_b = batched_b, .activation = static_cast<int>(activation)},
             {});
         return out;
     }

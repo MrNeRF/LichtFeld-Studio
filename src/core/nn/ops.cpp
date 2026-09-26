@@ -6,12 +6,12 @@
 #include "core/nn/models/romav1.hpp"
 #endif
 
+#include "backend_kernels.hpp"
 #include "core/cuda_error.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_cuda_interop.hpp"
 #include "nn_kernels.hpp"
-#include "backend_kernels.hpp"
 #include "portable_ops.hpp"
 
 #if !LFS_HAS_CUDA

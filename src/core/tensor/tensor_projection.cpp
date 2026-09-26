@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/tensor_spatial.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_spatial.hpp"
 #include "internal/point_projection.hpp"
 #include "internal/tensor_impl.hpp"
 

@@ -28,12 +28,12 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
-#include <set>
 #include <cmath>
 #include <cstring>
 #include <functional>
 #include <limits>
 #include <random>
+#include <set>
 #include <span>
 #include <string>
 #include <tuple>
@@ -423,8 +423,12 @@ namespace {
             std::vector<size_t> condition, x, y;
         };
         const std::vector<Case> cases = {
-            {{64, 1}, {64, 30}, {64, 30}},       {{64, 30}, {64, 30}, {64, 30}}, {{1, 30}, {64, 30}, {1}},
-            {{4, 1, 5, 1}, {4, 3, 5, 2}, {3, 5, 2}}, {{2, 3, 1, 1}, {1, 1, 4, 5}, {2, 3, 4, 5}}, {{7}, {1}, {7}},
+            {{64, 1}, {64, 30}, {64, 30}},
+            {{64, 30}, {64, 30}, {64, 30}},
+            {{1, 30}, {64, 30}, {1}},
+            {{4, 1, 5, 1}, {4, 3, 5, 2}, {3, 5, 2}},
+            {{2, 3, 1, 1}, {1, 1, 4, 5}, {2, 3, 4, 5}},
+            {{7}, {1}, {7}},
             {{1}, {6, 7}, {6, 7}}};
         for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
             if (!gpu_backend_available(backend))
@@ -902,8 +906,7 @@ namespace {
             const Tensor numbers = Tensor::from_vector(std::vector<int>{7, -9, 12, 5}, {4}, Device::CPU);
             const Tensor divisors = Tensor::from_vector(std::vector<int>{3, 4, 5, 2}, {4}, Device::CPU);
             expect_close(numbers.to(Device::GPU).mod(divisors.to(Device::GPU)), numbers.mod(divisors), 0.0f, 0.0f);
-            EXPECT_THROW((void)numbers.to(Device::GPU).mod(
-                             Tensor::from_vector(std::vector<int>{3, 0, 5, 2}, {4}, Device::CPU).to(Device::GPU)),
+            EXPECT_THROW((void)numbers.to(Device::GPU).mod(Tensor::from_vector(std::vector<int>{3, 0, 5, 2}, {4}, Device::CPU).to(Device::GPU)),
                          std::exception);
             EXPECT_THROW((void)Tensor::multinomial(
                              Tensor::from_vector({1.0f, -1.0f, 2.0f}, {3}, Device::CPU).to(Device::GPU), 2, true),
@@ -1131,7 +1134,12 @@ namespace {
             int dim;
         };
         const std::vector<Case> cases = {
-            {{1, 1000003}, 1}, {{3000, 700}, 1}, {{5, 100000, 3}, 1}, {{200000, 5}, 1}, {{100000, 4}, 0}, {{37}, 0}};
+            {{1, 1000003}, 1},
+            {{3000, 700}, 1},
+            {{5, 100000, 3}, 1},
+            {{200000, 5}, 1},
+            {{100000, 4}, 0},
+            {{37}, 0}};
         internal::facade_trace_enable_for_testing(true);
         for (const auto& [shape, dim] : cases) {
             size_t count = 1;
@@ -1967,8 +1975,7 @@ namespace {
         expect_same_on_both([&] {
             const Tensor gb = gpu(up_bias);
             return nn::conv_transpose2d(gpu(images), gpu(up_grouped), &gb,
-                                        {.stride_h = 2, .stride_w = 2, .pad_h = 1, .pad_w = 1, .dilation_h = 2,
-                                         .groups = 2, .output_pad_h = 1, .activation = nn::Activation::GeluTanh});
+                                        {.stride_h = 2, .stride_w = 2, .pad_h = 1, .pad_w = 1, .dilation_h = 2, .groups = 2, .output_pad_h = 1, .activation = nn::Activation::GeluTanh});
         },
                             tolerance, tolerance);
         const Tensor upscale = shaped({8, 5, 2, 2}, 226);

@@ -13,8 +13,8 @@
 #include "vk_recorder.hpp"
 
 #include <algorithm>
-#include <bit>
 #include <array>
+#include <bit>
 #include <span>
 
 namespace lfs::core::internal {
