@@ -130,6 +130,10 @@ namespace lfs::core::internal {
         void submit_external_wait(VkSemaphore semaphore, uint64_t value, uint64_t signal_value);
         void wait(uint64_t value);
         [[nodiscard]] uint64_t completed_timeline() const;
+        // The newest timeline value submitted to the queue.
+        [[nodiscard]] uint64_t submitted_timeline() const noexcept {
+            return submitted_timeline_.load(std::memory_order_acquire);
+        }
         void check_fault_buffer();
         // Shaders record an out-of-range index as {code, index, extent, op}; the
         // adapter that owns the launch reads and clears the record after its wait.
@@ -177,6 +181,7 @@ namespace lfs::core::internal {
         VkPhysicalDeviceMemoryProperties memory_properties_{};
         VkDeviceCaps caps_{};
         std::atomic<uint64_t> next_timeline_{0};
+        std::atomic<uint64_t> submitted_timeline_{0};
         std::atomic<bool> accepting_work_{true};
         std::atomic<bool> dead_{false};
         std::atomic<bool> device_loss_reported_{false};

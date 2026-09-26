@@ -875,6 +875,7 @@ namespace lfs::core::internal {
         std::lock_guard lock(queue_mutex_);
         vk_check(this, vkQueueSubmit2(queue_, 1, &submit_info, VK_NULL_HANDLE),
                  "vkQueueSubmit2");
+        submitted_timeline_.store(signal_value, std::memory_order_release);
     }
 
     void VulkanContext::submit_external_wait(VkSemaphore semaphore, uint64_t value, uint64_t signal_value) {
@@ -893,6 +894,7 @@ namespace lfs::core::internal {
         submit.pSignalSemaphoreInfos = &signal;
         std::lock_guard lock(queue_mutex_);
         vk_check(this, vkQueueSubmit2(queue_, 1, &submit, VK_NULL_HANDLE), "vkQueueSubmit2(external tensor wait)");
+        submitted_timeline_.store(signal_value, std::memory_order_release);
     }
 
     void VulkanContext::wait(const uint64_t value) {

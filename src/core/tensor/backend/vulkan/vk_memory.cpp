@@ -790,8 +790,16 @@ namespace lfs::core::internal {
     }
 
     void VulkanMemory::collect_retired_locked(const uint64_t completed) {
+#ifdef __APPLE__
+        // MoltenVK makes all device memory resident for every command buffer
+        // it submits without keeping that memory alive, so freeing memory also
+        // waits for work that never used it.
+        const bool idle = completed >= context_.submitted_timeline();
+#else
+        constexpr bool idle = true;
+#endif
         std::erase_if(retired_, [&](auto& record) {
-            if (record->last_use > completed) {
+            if (record->last_use > completed || (!record->cacheable && !idle)) {
                 return false;
             }
             if (!record->cacheable) {
@@ -852,6 +860,9 @@ namespace lfs::core::internal {
 
     void VulkanMemory::trim() {
         context_.recorders().flush_all();
+#ifdef __APPLE__
+        context_.wait(context_.submitted_timeline()); // see collect_retired_locked
+#endif
         std::lock_guard lock(allocations_mutex_);
         collect_retired_locked(context_.completed_timeline());
         destroy_free_locked();

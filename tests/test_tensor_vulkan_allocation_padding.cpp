@@ -125,6 +125,22 @@ namespace {
         }
     }
 
+    // MoltenVK makes all device memory resident for every command buffer it
+    // submits, so freeing a buffer also waits for unrelated work submitted
+    // while the buffer existed.
+    TEST_F(TensorVulkanAllocationPadding, DirectFreeWaitsForWorkSubmittedWhileItLived) {
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        // Large enough for dedicated memory, which returns to the driver when freed.
+        Tensor direct = Tensor::full({size_t{40} << 20}, 1.0f, Device::GPU);
+        EXPECT_FLOAT_EQ(direct.slice(0, 0, 4).sum().item<float>(), 4.0f);
+        const Tensor lhs = Tensor::ones({2048, 2048}, Device::GPU);
+        const Tensor product = lhs.mm(lhs);
+        // Submits the product without waiting for it.
+        ASSERT_TRUE(tensor_vulkan_buffer(product).has_value());
+        direct = Tensor();
+        EXPECT_FLOAT_EQ(product.slice(0, 0, 1).slice(1, 0, 1).cpu().item<float>(), 2048.0f);
+    }
+
     TEST_F(TensorVulkanAllocationPadding,
            DirectRangeWordPaddingOverflowThrowsTypedError) {
         GpuBackendScope scope(GpuBackend::Vulkan);
