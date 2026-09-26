@@ -260,8 +260,6 @@ namespace {
                   retired_allocation);
     }
 
-    // Pooled buffers of 16 MiB and above go back to the driver; dedicated ones,
-    // above the 64 MiB pool block, stay cached for reuse until trimmed.
     TEST_F(TensorVulkanRuntime, LargeOutputsReturnToTheDriverWhenFreed) {
         GpuBackendScope scope(GpuBackend::Vulkan);
         {
@@ -277,20 +275,10 @@ namespace {
             EXPECT_EQ(internal::vulkan_live_vma_objects_for_testing(), baseline + 6);
         }
         EXPECT_EQ(internal::vulkan_live_vma_objects_for_testing(), baseline);
-        uint64_t dedicated = 0;
         {
             const Tensor output = Tensor::empty({204u * 1024u * 1024u}, Device::GPU, DataType::UInt8);
             EXPECT_EQ(internal::vulkan_live_vma_objects_for_testing(), baseline + 1);
-            dedicated = internal::storage_ref(output).meta->gpu_descriptor.native_allocation;
         }
-        EXPECT_EQ(internal::vulkan_live_vma_objects_for_testing(), baseline + 1);
-        {
-            // A request up to a quarter smaller reuses the cached buffer.
-            const Tensor output = Tensor::empty({180u * 1024u * 1024u}, Device::GPU, DataType::UInt8);
-            EXPECT_EQ(internal::storage_ref(output).meta->gpu_descriptor.native_allocation, dedicated);
-            EXPECT_EQ(internal::vulkan_live_vma_objects_for_testing(), baseline + 1);
-        }
-        Tensor::trim_memory_pool();
         EXPECT_EQ(internal::vulkan_live_vma_objects_for_testing(), baseline);
     }
 
