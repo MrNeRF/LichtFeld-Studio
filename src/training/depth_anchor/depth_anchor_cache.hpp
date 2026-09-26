@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "lfs/training/ops/geometry.hpp"
 #include "training/kernels/depth_loss.hpp"
 
 #include <cstdint>
@@ -41,6 +42,7 @@ namespace lfs::training {
     // projected, with (done, total_depth_cameras).
     using DepthAnchorProgress = std::function<void(std::size_t done, std::size_t total)>;
     [[nodiscard]] RawDepthAnchorMap computeRawDepthAnchors(
+        const lfs::gpu_ops::GeometryLossOps& geometry,
         const lfs::core::Tensor& means,
         const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras,
         int resize_factor,

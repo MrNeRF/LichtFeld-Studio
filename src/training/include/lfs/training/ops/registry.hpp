@@ -5,6 +5,7 @@
 
 #include "core/gpu_backend_fwd.hpp"
 #include "lfs/training/ops/adam.hpp"
+#include "lfs/training/ops/geometry.hpp"
 #include "lfs/training/ops/loss.hpp"
 #include "lfs/training/ops/mcmc.hpp"
 #include "lfs/training/ops/mrnf.hpp"
@@ -29,6 +30,7 @@ namespace lfs::training {
         const ops::AdamOps* adam = nullptr;
         const ops::McmcOps* mcmc = nullptr;
         const ops::MrnfOps* mrnf = nullptr;
+        const ops::GeometryLossOps* geometry = nullptr;
     };
 
     enum class Family {

@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "lfs/training/ops/geometry_types.hpp"
+
 #include <cstddef>
 #include <cuda_runtime.h>
 #include <vector>
@@ -43,33 +45,10 @@ namespace lfs::training::kernels {
     // Below this prior variance the prior is considered flat and is rejected for
     // anchored supervision. A constant target has no geometry signal.
     constexpr float kDepthLossFlatPriorVar = 4.0f * kDepthLossTargetVarRidge;
-    struct DepthAnchorCandidate {
-        bool valid = false;
-        float scale = 0.0f;
-        float shift = 0.0f;
-        float corr = 0.0f;
-        int samples = 0;
-    };
-
-    // Per-camera alignment of the depth prior against sparse anchor points
-    // (COLMAP / init point cloud), fitted once at startup. Keeps the target
-    // depth absolute and multi-view consistent instead of chasing the render.
-    struct DepthAnchor {
-        bool valid = false;
-        int model = 0; // 0 = disparity-space fit, 1 = depth-space fit
-        float scale = 0.0f;
-        float shift = 0.0f;
-        float floor = 0.0f;
-        float corr = 0.0f;
-        int samples = 0;
-        DepthAnchorCandidate disparity;
-        DepthAnchorCandidate depth;
-    };
-
     // Projects the anchor cloud into the prior and
     // returns the raw (prior value, camera-space depth) sample pairs. Empty when
     // too few samples land in view. Synchronizes the stream; startup use only.
-    [[nodiscard]] std::vector<float2> collect_depth_anchor_samples(
+    [[nodiscard]] std::vector<lfs::gpu_ops::AnchorSample> collect_depth_anchor_samples(
         const float* points_xyz, // [N,3] CUDA
         size_t num_points,
         const float* w2c, // [16] CUDA row-major world-to-camera
@@ -87,7 +66,7 @@ namespace lfs::training::kernels {
 
     // Robust affine fits over collected samples.
     // Pure host work — safe to run across a worker thread pool.
-    [[nodiscard]] DepthAnchor fit_depth_anchor_from_samples(const std::vector<float2>& pairs);
+    [[nodiscard]] DepthAnchor fit_depth_anchor_from_samples(const std::vector<lfs::gpu_ops::AnchorSample>& pairs);
 
     [[nodiscard]] size_t depth_loss_partial_count(size_t num_pixels);
 

@@ -553,6 +553,7 @@ set(TEST_FILES
     test_photometric_hygiene.cpp
     test_photometric_ops.cpp
     test_adam_ops.cpp
+    test_geometry_ops.cpp
     test_mcmc_ops.cpp
     test_mrnf_ops.cpp
     test_persistent_masks.cpp
