@@ -468,9 +468,11 @@ if(NOT LFS_HAS_CUDA)
         pkg_check_modules(VIDEO_TEST_FFMPEG REQUIRED IMPORTED_TARGET
             libavcodec libavformat libavutil)
         target_sources(lichtfeld_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/io/stb_image_impl.cpp)
-        target_include_directories(lichtfeld_tests SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/external)
-        target_link_libraries(lichtfeld_tests PRIVATE
-            lfs_video PkgConfig::VIDEO_TEST_FFMPEG nlohmann_json::nlohmann_json)
+        # lfs_video already links FFmpeg; linking it a second time lets CMake
+        # merge the duplicated "-framework X" pairs into a broken link line.
+        target_include_directories(lichtfeld_tests SYSTEM PRIVATE
+            ${CMAKE_SOURCE_DIR}/external ${VIDEO_TEST_FFMPEG_INCLUDE_DIRS})
+        target_link_libraries(lichtfeld_tests PRIVATE lfs_video nlohmann_json::nlohmann_json)
     endif()
     target_compile_features(lichtfeld_tests PRIVATE cxx_std_23)
     target_include_directories(lichtfeld_tests PRIVATE
