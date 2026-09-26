@@ -2043,7 +2043,7 @@ namespace lfs::training {
                     "Checkpoint staging exceeds address space",
                     LFS_SOURCE_SITE_CURRENT());
             }
-            const auto host_memory =
+            auto host_memory =
                 read_host_memory_info();
             const auto reserve_bytes =
                 request.relaxed_host_memory_gate
@@ -2061,6 +2061,15 @@ namespace lfs::training {
             }
             const auto required_host_memory =
                 prepared->checkpoint_bytes + reserve_bytes;
+            if (request.release_host_memory &&
+                host_memory.available_bytes > 0 &&
+                host_memory.available_bytes <
+                    required_host_memory &&
+                request.release_host_memory(
+                    required_host_memory -
+                    host_memory.available_bytes) > 0) {
+                host_memory = read_host_memory_info();
+            }
             if (host_memory.available_bytes == 0 ||
                 host_memory.available_bytes <
                     required_host_memory) {

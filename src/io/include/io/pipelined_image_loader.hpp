@@ -245,6 +245,9 @@ namespace lfs::io {
         [[nodiscard]] size_t adaptive_prefetch_target() const;
         void clear();
         void reclaim_idle_decoded_frames();
+        // Moves least recently used cached images from RAM to the run spill until at
+        // least `bytes` are released or none remain; returns the bytes released.
+        size_t release_host_cache(size_t bytes);
         void shutdown();
         bool is_running() const { return running_.load(); }
         CacheStats get_stats() const;
@@ -444,6 +447,8 @@ namespace lfs::io {
         void put_in_jpeg_cache(const std::string& cache_key, std::vector<uint8_t>&& data);
         void invalidate_cache_entry(const std::string& cache_key);
         void evict_jpeg_cache_if_needed(size_t required_bytes);
+        size_t spill_least_recent_until_locked(size_t cached_bytes_target);
+        void relieve_host_memory_pressure();
         void spill_cache_entry_locked(const std::string& cache_key,
                                       const std::shared_ptr<std::vector<uint8_t>>& data);
         void cleanup_run_spill_directory();
@@ -518,6 +523,7 @@ namespace lfs::io {
         std::unordered_map<std::string, JpegCacheEntry> jpeg_cache_;
         mutable std::mutex jpeg_cache_mutex_;
         std::atomic<size_t> jpeg_cache_bytes_{0};
+        std::atomic<std::int64_t> next_host_memory_check_ns_{0};
 
         struct SpillCacheEntry {
             std::filesystem::path path;

@@ -171,6 +171,57 @@ TEST_F(PipelinedImageLoaderTest, OriginalJpegUsesDirectDecodeWithoutColdReencodi
     }
 }
 
+// Fails if a release frees nothing, spills a newer image before the oldest, or
+// loses pixels on the way through the spill.
+TEST_F(PipelinedImageLoaderTest, ReleaseHostCacheSpillsLeastRecentImagesFirst) {
+    std::vector<std::filesystem::path> paths;
+    for (const auto& entry : std::filesystem::directory_iterator(image_path_.parent_path())) {
+        if (entry.path().extension() == ".JPG")
+            paths.push_back(entry.path());
+    }
+    std::ranges::sort(paths);
+    ASSERT_GE(paths.size(), 3u);
+    paths.resize(3);
+
+    PipelinedImageLoader loader(config());
+    const auto load = [&loader](const size_t sequence_id, const std::filesystem::path& path) {
+        ImageRequest input;
+        input.sequence_id = sequence_id;
+        input.path = path;
+        input.params.resize_factor = 1;
+        input.params.max_width = 0;
+        input.params.output_uint8 = true;
+        loader.prefetch({input});
+        const auto ready = loader.get();
+        EXPECT_TRUE(ready.error.empty()) << ready.error;
+        return ready.tensor.to(DataType::Float32).cpu().to_vector();
+    };
+
+    std::vector<std::vector<float>> first_pass;
+    for (size_t i = 0; i < paths.size(); ++i)
+        first_pass.push_back(load(i, paths[i]));
+
+    const auto cached = loader.get_stats();
+    ASSERT_EQ(cached.jpeg_cache_entries, paths.size());
+    const auto oldest_bytes = static_cast<size_t>(std::filesystem::file_size(paths.front()));
+
+    EXPECT_EQ(loader.release_host_cache(1), oldest_bytes);
+    const auto after_one = loader.get_stats();
+    EXPECT_EQ(after_one.jpeg_cache_entries, paths.size() - 1);
+    EXPECT_EQ(after_one.jpeg_cache_bytes, cached.jpeg_cache_bytes - oldest_bytes);
+    EXPECT_EQ(after_one.spill_cache_entries, cached.spill_cache_entries + 1);
+
+    EXPECT_EQ(loader.release_host_cache(cached.jpeg_cache_bytes), after_one.jpeg_cache_bytes);
+    const auto after_all = loader.get_stats();
+    EXPECT_EQ(after_all.jpeg_cache_entries, 0u);
+    EXPECT_EQ(after_all.jpeg_cache_bytes, 0u);
+    EXPECT_EQ(after_all.spill_cache_entries, cached.spill_cache_entries + paths.size());
+    EXPECT_EQ(loader.release_host_cache(1), 0u);
+
+    for (size_t i = 0; i < paths.size(); ++i)
+        EXPECT_EQ(load(paths.size() + i, paths[i]), first_pass[i]) << paths[i];
+}
+
 TEST_F(PipelinedImageLoaderTest, TrainingStartupOnlyPrefetchesBoundedBatch) {
     const auto empty = Tensor::zeros({0}, Device::CPU);
     const auto camera = std::make_shared<Camera>(

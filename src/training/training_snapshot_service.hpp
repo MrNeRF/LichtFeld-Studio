@@ -149,6 +149,9 @@ namespace lfs::training {
         // Explicit saves may use the smaller headroom-only host-memory
         // reserve; autosave captures retain the full safety reserve.
         bool relaxed_host_memory_gate = false;
+        // Asked for the missing bytes before the host-memory gate defers or
+        // rejects the capture; returns how many bytes it released.
+        std::function<std::uint64_t(std::uint64_t)> release_host_memory;
         // Optional origin for the one optimizer-pause clock. The caller sets
         // this immediately before draining model readers/locks so those waits
         // are included with the service-side stream synchronizations.

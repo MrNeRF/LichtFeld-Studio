@@ -3177,6 +3177,12 @@ namespace lfs::training {
         return active_image_loader_;
     }
 
+    std::function<std::uint64_t(std::uint64_t)> Trainer::release_image_cache_for_snapshot() const {
+        return [loader = getActiveImageLoader()](const std::uint64_t bytes) -> std::uint64_t {
+            return loader ? loader->release_host_cache(static_cast<size_t>(bytes)) : 0;
+        };
+    }
+
     Trainer::GTLoadConfigSnapshot Trainer::getGTLoadConfigSnapshot() const {
         std::lock_guard<std::mutex> lock(gt_load_config_mutex_);
         return gt_load_config_snapshot_;
@@ -4178,6 +4184,7 @@ namespace lfs::training {
             .snapshot_uuid = snapshot_uuid,
             .relaxed_host_memory_gate =
                 write_kind == ProjectSnapshotWriteKind::Explicit,
+            .release_host_memory = release_image_cache_for_snapshot(),
             .strategy = *strategy_,
             .params = checkpoint_params,
             .bilateral_grid = bilateral_grid_.get(),
@@ -4426,6 +4433,7 @@ namespace lfs::training {
             .snapshot_uuid = snapshot_uuid,
             .relaxed_host_memory_gate =
                 cpu_write_kind == ProjectSnapshotWriteKind::Explicit,
+            .release_host_memory = release_image_cache_for_snapshot(),
             .strategy = *strategy_,
             .params = checkpoint_params,
             .bilateral_grid = bilateral_grid_.get(),
