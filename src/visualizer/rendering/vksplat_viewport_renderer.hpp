@@ -401,7 +401,7 @@ namespace lfs::vis {
         static constexpr std::size_t kOverlayRegionCount = 7;
         static constexpr std::size_t kSelectionQueryRegionCount = 7;
         static constexpr std::size_t kRegionAlignment = 256; // VK minStorageBufferOffsetAlignment upper bound on common HW
-        struct CudaOpacityCopySlot {
+        struct CudaDeletedMaskSlot {
             std::shared_ptr<lfs::core::ExportableBlock> block;
             VulkanContext::ExternalBuffer buffer{};
             std::size_t bytes = 0;
@@ -464,7 +464,7 @@ namespace lfs::vis {
         };
 
         void detachManagedBuffers();
-        void releaseOpacityCopySlot(VulkanContext& context, std::size_t ring_slot);
+        void releaseDeletedMaskSlot(VulkanContext& context, std::size_t ring_slot);
         void logVramBreakdownIfChanged(std::string_view reason);
         [[nodiscard]] std::expected<void, std::string> ensureSharedScratchArena(
             VulkanContext& context,
@@ -704,7 +704,7 @@ namespace lfs::vis {
         bool macro_chain_warmup_pending_ = true;
 
         static constexpr std::size_t kInputRingSize = kFrameRingSize;
-        std::array<CudaOpacityCopySlot, kInputRingSize> cuda_opacity_copies_{};
+        std::array<CudaDeletedMaskSlot, kInputRingSize> cuda_deleted_mask_copies_{};
         std::array<CudaOverlaySlot, kInputRingSize> cuda_overlays_{};
         CudaSelectionQuerySlot cuda_selection_query_{};
         std::array<ModelInputSnapshot, kInputRingSize> ring_uploaded_{};

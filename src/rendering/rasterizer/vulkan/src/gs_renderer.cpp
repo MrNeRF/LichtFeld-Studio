@@ -1377,6 +1377,11 @@ void VulkanGSRenderer::executeProjectionForward(
     } else {
         projection_uniforms.lod_enabled &= ~kLodEnabledWriteOverlayFlags;
     }
+    if (buffers.deleted_mask.deviceBuffer.buffer != VK_NULL_HANDLE) {
+        projection_uniforms.lod_enabled |= kLodEnabledDeletedMask;
+    } else {
+        projection_uniforms.lod_enabled &= ~kLodEnabledDeletedMask;
+    }
     if (buffers.quant_pool) {
         projection_uniforms.lod_page_splats = buffers.pool_page_splats;
         tagged.push_back({buffers.page_frames.deviceBuffer, BufferUse::ComputeRead});
@@ -1385,6 +1390,10 @@ void VulkanGSRenderer::executeProjectionForward(
         projection_uniforms.shN_layout_slots = buffers.shN_n_cells;
         tagged.push_back({buffers.shN_bounds.deviceBuffer, BufferUse::ComputeRead});
     }
+    tagged.push_back({buffers.deleted_mask.deviceBuffer.buffer != VK_NULL_HANDLE
+                          ? buffers.deleted_mask.deviceBuffer
+                          : primitive_depth_keys,
+                      BufferUse::ComputeRead});
     applyShNUniforms(projection_uniforms, buffers, deviceInfo.maxStorageBufferRange);
 
     auto& pipeline = buffers.quant_pool
@@ -1398,7 +1407,7 @@ void VulkanGSRenderer::executeProjectionForward(
                                                : pipeline_projection_forward_shn_f16)
                          : (use_gut_projection ? pipeline_projection_forward_3dgut
                                                : pipeline_projection_forward);
-    // fp32: 24 layouts; quant/q16: 25 with the extra last binding; q16/f16 skip
+    // fp32: 25 layouts; quant/q16: 26 with the extra SH binding; q16/f16 skip
     // binding 2 (shN is BDA). tagged keeps placeholder slots so indices match
     // shader binding numbers.
     executeCompute(
@@ -1844,11 +1853,13 @@ void VulkanGSRenderer::executeSelectionMask(
     using lfs::rendering::vulkan::BufferUse;
     using lfs::rendering::vulkan::DeclaredAccess;
 
-    // Tags from selection_mask.slang bindings 0–10.
+    // Tags from selection_mask.slang bindings 0-11.
     const size_t num_words = _CEIL_DIV(static_cast<size_t>(uniforms.num_splats), 4);
+    VulkanGSSelectionMaskUniforms selection_uniforms = uniforms;
+    selection_uniforms.deleted_mask_enabled = buffers.deleted_mask.deviceBuffer.buffer != VK_NULL_HANDLE;
     executeCompute(
         {{num_words, SUBGROUP_SIZE}},
-        &uniforms, sizeof(uniforms),
+        &selection_uniforms, sizeof(selection_uniforms),
         pipeline_selection_mask,
         std::vector<TaggedBinding>{
             {buffers.xyz_ws.deviceBuffer, BufferUse::ComputeRead},
@@ -1862,6 +1873,10 @@ void VulkanGSRenderer::executeSelectionMask(
             {polygon_mask, BufferUse::ComputeRead},
             {buffers.opacity_raw.deviceBuffer, BufferUse::ComputeRead},
             {ring_pick_out, BufferUse::ComputeWrite},
+            {buffers.deleted_mask.deviceBuffer.buffer != VK_NULL_HANDLE
+                 ? buffers.deleted_mask.deviceBuffer
+                 : buffers.xyz_ws.deviceBuffer,
+             BufferUse::ComputeRead},
         });
 
     // Handoff: host/CUDA download consumers lack their own barrier site (§3.4.5).
@@ -2670,6 +2685,11 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
     } else {
         survivor_uniforms.lod_enabled &= ~kLodEnabledWriteOverlayFlags;
     }
+    if (buffers.deleted_mask.deviceBuffer.buffer != VK_NULL_HANDLE) {
+        survivor_uniforms.lod_enabled |= kLodEnabledDeletedMask;
+    } else {
+        survivor_uniforms.lod_enabled &= ~kLodEnabledDeletedMask;
+    }
     if (buffers.quant_pool) {
         survivor_uniforms.lod_page_splats = buffers.pool_page_splats;
     }
@@ -2736,6 +2756,10 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
         survivor_uniforms.shN_layout_slots = buffers.shN_n_cells;
         tagged.push_back({buffers.shN_bounds.deviceBuffer, BufferUse::ComputeRead}); // 29
     }
+    tagged.push_back({buffers.deleted_mask.deviceBuffer.buffer != VK_NULL_HANDLE
+                          ? buffers.deleted_mask.deviceBuffer
+                          : unsorted_keys,
+                      BufferUse::ComputeRead});
     applyShNUniforms(survivor_uniforms, buffers, deviceInfo.maxStorageBufferRange);
 
     // Indirect: plan() adds implicit IndirectRead on survivor_state (replaces L2629 handoff).

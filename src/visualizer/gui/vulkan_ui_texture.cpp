@@ -657,8 +657,10 @@ namespace lfs::vis::gui {
                 destroyImage();
                 return false;
             }
-            vmaSetAllocationName(allocator, image_allocation, "Vulkan UI texture");
-            image_vram_label = std::format("cpu_upload_rgba8:{}x{}", new_width, new_height);
+            image_vram_label = std::format("cpu_upload_rgba8:{}x{}:{:#x}",
+                                           new_width, new_height,
+                                           lfs::rendering::vkHandleValue(image));
+            vmaSetAllocationName(allocator, image_allocation, image_vram_label.c_str());
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 "vulkan.ui_texture.image",
                 image_vram_label,

@@ -48,7 +48,7 @@
 #endif
 
 // Your specified API version. Ideally, this will be dynamic in the future.
-#define RMLUI_VK_API_VERSION VK_API_VERSION_1_0
+#define RMLUI_VK_API_VERSION VK_API_VERSION_1_3
 
 class RenderInterface_VK : public Rml::RenderInterface {
 public:

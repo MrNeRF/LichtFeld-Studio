@@ -3564,7 +3564,7 @@ namespace lfs::vis {
             for (auto& transform : state.model_transforms) {
                 transform = rendering::dataWorldTransformToVisualizerWorld(transform);
             }
-            if (!options.metadata_only) {
+            if (!options.metadata_only && state.model_transforms.size() > 1) {
                 state.transform_indices = scene_.getTransformIndices();
             }
 

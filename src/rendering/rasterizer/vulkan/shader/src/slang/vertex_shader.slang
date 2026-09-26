@@ -730,7 +730,7 @@ layout(binding=28) RWStructuredBuffer<int32_t> out_orig_ids;
 #endif
 #if LFS_QUANT_POOL
 // Per-page dequant frames (lod_pool_quant.hpp PageFrame), bound after every
-// variant-specific binding so the C++ buffer list just appends it last.
+// variant-specific binding except the deleted mask that follows it.
 #if LFS_PROJECTION_SURVIVORS
 layout(binding=29) StructuredBuffer<float4> page_frames;
 #else
@@ -739,12 +739,26 @@ layout(binding=24) StructuredBuffer<float4> page_frames;
 #endif
 #if LFS_SHN_Q16
 // Per-256-splat float2 (min,max) bounds for pad-dropped q16 SH rest.
-// Appended last like page_frames so the C++ buffer list just appends it.
+// Appended before the deleted-mask binding like page_frames.
 #if LFS_PROJECTION_SURVIVORS
 layout(binding=29) StructuredBuffer<float2> shN_bounds;
 #else
 layout(binding=24) StructuredBuffer<float2> shN_bounds;
 #endif
+#endif
+
+#if LFS_PROJECTION_SURVIVORS
+  #if LFS_QUANT_POOL || LFS_SHN_Q16
+layout(binding=30) ByteAddressBuffer deleted_mask;
+  #else
+layout(binding=29) ByteAddressBuffer deleted_mask;
+  #endif
+#else
+  #if LFS_QUANT_POOL || LFS_SHN_Q16
+layout(binding=25) ByteAddressBuffer deleted_mask;
+  #else
+layout(binding=24) ByteAddressBuffer deleted_mask;
+  #endif
 #endif
 
 #if !LFS_PROJECTION_SURVIVORS
@@ -857,6 +871,15 @@ void main(
             ? lod_logical_indices[render_idx]
             : g_idx;
     }
+
+  #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
+    if ((uniforms.lod_enabled & 128u) != 0u && read_byte(deleted_mask, g_idx) != 0u) {
+      #if !LFS_PROJECTION_SURVIVORS
+        clear_forward_projection_output(out_idx, 0u, uniforms.lod_enabled);
+      #endif
+        return;
+    }
+  #endif
 
   #if EXPORT_MODE == EXPORT_MODE_VULKAN_BACKWARD
     // no overlap
