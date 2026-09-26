@@ -501,6 +501,8 @@ namespace lfs::core {
                 return ErrorDomain::CUDA;
             case MemoryDomain::VulkanDevice:
                 return ErrorDomain::Vulkan;
+            case MemoryDomain::MetalDevice:
+                return ErrorDomain::Tensor;
             case MemoryDomain::PinnedHost:
             case MemoryDomain::PageableHost:
                 return ErrorDomain::Core;

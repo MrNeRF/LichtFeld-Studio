@@ -27,6 +27,7 @@
 #include <format>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -39,9 +40,19 @@ namespace lfs::core {
             return std::format("{:.1f} MiB", static_cast<double>(bytes) / mib);
         }
 
-        MemoryInfo query_vulkan_memory() {
+        // The tensor backend of a Vulkan or Metal device domain; CUDA and host
+        // domains have none.
+        std::optional<GpuBackend> domain_backend(const MemoryDomain domain) {
+            if (domain == MemoryDomain::VulkanDevice)
+                return GpuBackend::Vulkan;
+            if (domain == MemoryDomain::MetalDevice)
+                return GpuBackend::Metal;
+            return std::nullopt;
+        }
+
+        MemoryInfo query_backend_memory(const GpuBackend backend) {
             try {
-                if (const auto device = gpu_backend_device_info(GpuBackend::Vulkan);
+                if (const auto device = gpu_backend_device_info(backend);
                     device && device->supports_process_memory_budget) {
                     MemoryInfo result;
                     result.total_bytes = device->process_memory_budget_bytes;
@@ -51,16 +62,16 @@ namespace lfs::core {
                                             : 0;
                     return result;
                 }
-                return gpu_backend_memory_info(GpuBackend::Vulkan);
+                return gpu_backend_memory_info(backend);
             } catch (const std::exception& error) {
-                LOG_WARN("Cannot query Vulkan memory headroom: {}", error.what());
+                LOG_WARN("Cannot query {} memory headroom: {}", gpu_backend_name(backend), error.what());
                 return {};
             }
         }
 
         size_t query_device_free_bytes(const MemoryDomain domain) {
-            if (domain == MemoryDomain::VulkanDevice)
-                return query_vulkan_memory().free_bytes;
+            if (const auto backend = domain_backend(domain))
+                return query_backend_memory(*backend).free_bytes;
 #if LFS_HAS_CUDA
             // Consume only a sticky OOM so an unrelated asynchronous CUDA error
             // is preserved for its real handler.
@@ -84,8 +95,8 @@ namespace lfs::core {
         }
 
         size_t query_device_total_bytes(const MemoryDomain domain) {
-            if (domain == MemoryDomain::VulkanDevice)
-                return query_vulkan_memory().total_bytes;
+            if (const auto backend = domain_backend(domain))
+                return query_backend_memory(*backend).total_bytes;
 #if LFS_HAS_CUDA
             size_t free_bytes = 0;
             size_t total_bytes = 0;
@@ -200,8 +211,10 @@ namespace lfs::core {
         std::function<bool(MemoryDomain, size_t)> alloc_probe;
         std::function<size_t(MemoryDomain)> free_probe;
 
-        std::array<std::once_flag, kGpuBackendCount> reserve_once;
-        std::array<size_t, kGpuBackendCount> reserve_bytes{};
+        // One reserve per backend, indexed by GpuBackend on every platform.
+        static constexpr size_t kReserveSlots = static_cast<size_t>(GpuBackend::Metal) + 1;
+        std::array<std::once_flag, kReserveSlots> reserve_once;
+        std::array<size_t, kReserveSlots> reserve_bytes{};
 
         static thread_local bool in_episode;
 
@@ -378,7 +391,7 @@ namespace lfs::core {
     }
 
     size_t MemoryPressureCoordinator::reserve_bytes(const MemoryDomain domain) const noexcept {
-        const size_t index = domain == MemoryDomain::VulkanDevice ? 1 : 0;
+        const size_t index = static_cast<size_t>(domain_backend(domain).value_or(GpuBackend::CUDA));
         std::call_once(impl_->reserve_once[index], [this, domain, index]() {
             size_t reserve = static_cast<size_t>(512) * 1024 * 1024;
             if (const auto mb = environment::unsigned_integer<unsigned long long>("LFS_VRAM_RESERVE_MB");
@@ -410,7 +423,7 @@ namespace lfs::core {
         if (Impl::in_episode) {
             return 0;
         }
-        if (failure.domain != MemoryDomain::VulkanDevice && cuda_is_unavailable()) {
+        if (!domain_backend(failure.domain) && cuda_is_unavailable()) {
             return 0;
         }
         Impl::in_episode = true;
@@ -419,7 +432,7 @@ namespace lfs::core {
         } guard;
 
         std::lock_guard<std::mutex> episode_lock(impl_->episode_mutex);
-        if (failure.domain != MemoryDomain::VulkanDevice && cuda_is_unavailable()) {
+        if (!domain_backend(failure.domain) && cuda_is_unavailable()) {
             return 0;
         }
 
@@ -514,7 +527,7 @@ namespace lfs::core {
 
     bool MemoryPressureCoordinator::relieve_and_should_retry(const AllocationFailure& failure,
                                                              PressureContext context) {
-        if (failure.domain != MemoryDomain::VulkanDevice && cuda_is_unavailable()) {
+        if (!domain_backend(failure.domain) && cuda_is_unavailable()) {
             return false;
         }
         const size_t target = saturating_add(failure.requested_bytes, reserve_bytes(failure.domain));
@@ -587,7 +600,7 @@ namespace lfs::core {
         const size_t target = impl_->last_target_free.load();
         const size_t hysteresis = saturating_add(target, target / 5); // require 20% headroom to restore
         if (impl_->query_free(LFS_HAS_CUDA ? MemoryDomain::CudaDevice
-                                           : MemoryDomain::VulkanDevice) >= hysteresis) {
+                                           : device_memory_domain(default_gpu_backend())) >= hysteresis) {
             impl_->pressure_active.store(false);
             LOG_INFO("VRAM pressure lease released; sustained headroom restored");
         }

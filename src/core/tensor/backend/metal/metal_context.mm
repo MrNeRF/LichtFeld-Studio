@@ -8,6 +8,7 @@
 #include "core/assert.hpp"
 #include "core/error.hpp"
 #include "core/gpu_device_info.hpp"
+#include "core/memory_pressure.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -435,8 +436,15 @@ namespace lfs::core::internal::metal {
                 evict_locked(0);
                 buffer = [device_ newBufferWithLength:capacity options:MTLResourceStorageModeShared];
             }
+            // The typed failure of the other backends, so callers that retry or
+            // report on MemoryAllocationError see one contract.
             if (!buffer)
-                throw TensorError(std::format("Metal tensor allocation of {} bytes failed", capacity));
+                throw MemoryAllocationError(AllocationFailure{
+                    .domain = MemoryDomain::MetalDevice,
+                    .requested_bytes = capacity,
+                    .label = "tensor.storage",
+                    .operation = "tensor.allocate",
+                });
             [residency_ addAllocation:buffer];
             [residency_ commit];
             block.buffer = buffer;

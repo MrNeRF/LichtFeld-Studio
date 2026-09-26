@@ -2346,7 +2346,7 @@ namespace lfs::core {
             if (!device_bytes[i])
                 continue;
             const OperationMemoryPlan plan{.operation = "Scene splat snapshot", .persistent_device_bytes = device_bytes[i]};
-            const auto domain = i == 0 ? MemoryDomain::CudaDevice : MemoryDomain::VulkanDevice;
+            const auto domain = device_memory_domain(kGpuBackends[i]);
             if (!MemoryPressureCoordinator::instance().preflight(plan, domain).ok)
                 throw std::runtime_error("There is not enough free graphics memory to prepare this scene. Free some memory and retry.");
         }
