@@ -6,8 +6,8 @@
 #include "core/cuda_error.hpp"
 #include "densification_kernels.hpp"
 #include "lfs/cuda_scratch.hpp"
-#include "lfs/training/refine_scratch.hpp"
 #include "lfs/training/screen_share.cuh"
+#include <algorithm>
 #include <cub/cub.cuh>
 #include <limits>
 
@@ -473,192 +473,197 @@ namespace lfs::training::kernels {
             data[i] = 0.0f;
     }
 
-    struct PositivePred {
-        __host__ __device__ bool operator()(const float& x) const { return x > 0.0f; }
-    };
+    // Exact order statistic without sorting: three radix passes (11/11/10 bits)
+    // over the float keys, each building a histogram of one digit among the
+    // values that share the digits already fixed. Keys use the same bit
+    // transform as cub::DeviceRadixSort on floats, so the selected element is
+    // the one sorted[k] would return, including NaN and signed-zero ordering.
+    namespace radix_select {
+        constexpr int kBins = 2048;
+        constexpr int kThreads = 256;
+        __host__ __device__ constexpr int digit_shift(const int pass) { return pass == 0 ? 21 : (pass == 1 ? 10 : 0); }
+        __host__ __device__ constexpr int digit_bits(const int pass) { return pass == 2 ? 10 : 11; }
 
-    __global__ void div_by_device_scalar_kernel(
-        float* data, size_t n, const float* scalar, float skip_below) {
-        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-        if (i >= n)
-            return;
-        const float s = fmaxf(*scalar, 1e-9f);
-        if (s <= skip_below)
-            return;
-        data[i] /= s;
-    }
+        struct State {
+            unsigned int total;
+            unsigned int rank;
+            unsigned int prefix;
+            float value;
+        };
 
-    __global__ void fill_pos_inf_kernel(float* data, size_t n) {
-        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-        if (i < n)
-            data[i] = INFINITY;
-    }
+        __device__ __forceinline__ unsigned int ordered_key(const float v) {
+            const unsigned int bits = __float_as_uint(v);
+            return (bits & 0x80000000u) ? ~bits : (bits | 0x80000000u);
+        }
+
+        __device__ __forceinline__ float key_value(const unsigned int key) {
+            return __uint_as_float((key & 0x80000000u) ? (key & 0x7fffffffu) : ~key);
+        }
+
+        template <bool kPositiveOnly, int kPass>
+        __global__ void histogram_kernel(const float* __restrict__ values,
+                                         const size_t n,
+                                         State* __restrict__ state,
+                                         unsigned int* __restrict__ hist) {
+            __shared__ unsigned int shared_hist[kBins];
+            for (int b = threadIdx.x; b < kBins; b += blockDim.x) {
+                shared_hist[b] = 0u;
+            }
+            __syncthreads();
+
+            constexpr int shift = digit_shift(kPass);
+            constexpr unsigned int digit_mask = (1u << digit_bits(kPass)) - 1u;
+            constexpr int fixed_shift = shift + digit_bits(kPass);
+            const unsigned int fixed = kPass == 0 ? 0u : state->prefix >> fixed_shift;
+            unsigned int counted = 0u;
+            const size_t stride = static_cast<size_t>(gridDim.x) * blockDim.x;
+            for (size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x; i < n; i += stride) {
+                const float v = values[i];
+                if (kPositiveOnly && !(v > 0.0f)) {
+                    continue;
+                }
+                const unsigned int key = ordered_key(v);
+                if constexpr (kPass > 0) {
+                    if ((key >> fixed_shift) != fixed) {
+                        continue;
+                    }
+                }
+                ++counted;
+                atomicAdd(&shared_hist[(key >> shift) & digit_mask], 1u);
+            }
+            if constexpr (kPass == 0 && kPositiveOnly) {
+                for (int offset = 16; offset > 0; offset >>= 1) {
+                    counted += __shfl_down_sync(0xffffffffu, counted, offset);
+                }
+                if ((threadIdx.x & 31) == 0 && counted != 0u) {
+                    atomicAdd(&state->total, counted);
+                }
+            }
+            __syncthreads();
+            for (int b = threadIdx.x; b < kBins; b += blockDim.x) {
+                if (shared_hist[b] != 0u) {
+                    atomicAdd(&hist[b], shared_hist[b]);
+                }
+            }
+        }
+
+        // One thread walks the digit histogram; kBins steps are negligible
+        // next to the histogram passes and keep the pick deterministic.
+        template <int kPass>
+        __global__ void pick_kernel(const bool positive_only,
+                                    const size_t n,
+                                    State* __restrict__ state,
+                                    unsigned int* __restrict__ hist) {
+            if (threadIdx.x != 0 || blockIdx.x != 0) {
+                return;
+            }
+            if constexpr (kPass == 0) {
+                if (!positive_only) {
+                    state->total = static_cast<unsigned int>(n);
+                }
+                state->rank = state->total / 2u;
+                state->prefix = 0u;
+            }
+            constexpr int bins = 1 << digit_bits(kPass);
+            unsigned int below = 0u;
+            int digit = bins - 1;
+            for (int b = 0; b < bins; ++b) {
+                const unsigned int count = hist[b];
+                if (state->rank < below + count) {
+                    digit = b;
+                    break;
+                }
+                below += count;
+            }
+            for (int b = 0; b < kBins; ++b) {
+                hist[b] = 0u;
+            }
+            state->prefix |= static_cast<unsigned int>(digit) << digit_shift(kPass);
+            state->rank -= below;
+            if constexpr (kPass == 2) {
+                state->value = state->total == 0u ? 0.0f : key_value(state->prefix);
+            }
+        }
+
+        template <bool kPositiveOnly>
+        void run(const float* values, const size_t n, State* state, unsigned int* hist, cudaStream_t stream) {
+            const int blocks = static_cast<int>(std::clamp<size_t>(
+                (n + static_cast<size_t>(kThreads) * 16 - 1) / (static_cast<size_t>(kThreads) * 16), 1, 512));
+            histogram_kernel<kPositiveOnly, 0><<<blocks, kThreads, 0, stream>>>(values, n, state, hist);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.radix_select.histogram0");
+            pick_kernel<0><<<1, 32, 0, stream>>>(kPositiveOnly, n, state, hist);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.radix_select.pick0");
+            histogram_kernel<kPositiveOnly, 1><<<blocks, kThreads, 0, stream>>>(values, n, state, hist);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.radix_select.histogram1");
+            pick_kernel<1><<<1, 32, 0, stream>>>(kPositiveOnly, n, state, hist);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.radix_select.pick1");
+            histogram_kernel<kPositiveOnly, 2><<<blocks, kThreads, 0, stream>>>(values, n, state, hist);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.radix_select.histogram2");
+            pick_kernel<2><<<1, 32, 0, stream>>>(kPositiveOnly, n, state, hist);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.radix_select.pick2");
+        }
+
+        struct Workspace {
+            cuda_scratch::DeviceBuffer buffer;
+            State* state = nullptr;
+            unsigned int* hist = nullptr;
+
+            explicit Workspace(cudaStream_t stream)
+                : buffer(sizeof(State) + sizeof(unsigned int) * kBins, stream,
+                         "training.radix_select.workspace") {
+                state = buffer.as<State>();
+                hist = reinterpret_cast<unsigned int*>(buffer.as<char>() + sizeof(State));
+                LFS_CUDA_CHECK_MSG(
+                    cudaMemsetAsync(buffer.get(), 0, sizeof(State) + sizeof(unsigned int) * kBins, stream),
+                    "radix select workspace clear");
+            }
+        };
+    } // namespace radix_select
 
     __global__ void div_by_positive_median_or_zero_kernel(
-        float* data, size_t n, const float* sorted, const int* count) {
-        const int c = *count;
+        float* data, size_t n, const radix_select::State* median) {
         const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
         if (i >= n)
             return;
-        if (c <= 0) {
+        if (median->total == 0u) {
             data[i] = 0.0f;
             return;
         }
-        data[i] /= fmaxf(sorted[c / 2], 1e-9f);
+        data[i] /= fmaxf(median->value, 1e-9f);
     }
 
-    void launch_normalize_by_positive_median(
-        float* data,
-        size_t n,
-        cudaStream_t stream,
-        PositiveMedianScratch* scratch) {
+    float launch_select_median(const float* values, const size_t n, cudaStream_t stream) {
+        stream = resolve_stream(stream);
+        if (n == 0 || values == nullptr) {
+            return 0.0f;
+        }
+        LFS_ASSERT_MSG(n <= static_cast<size_t>(std::numeric_limits<unsigned int>::max()),
+                       "median selection input exceeds the 32-bit count limit");
+        radix_select::Workspace workspace(stream);
+        radix_select::run<false>(values, n, workspace.state, workspace.hist, stream);
+        radix_select::State result{};
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyAsync(&result, workspace.state, sizeof(result), cudaMemcpyDeviceToHost, stream),
+            "median selection readback");
+        LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream), "median selection sync");
+        return result.value;
+    }
 
+    void launch_normalize_by_positive_median(float* data, size_t n, cudaStream_t stream) {
         stream = resolve_stream(stream);
         if (n == 0 || data == nullptr)
             return;
+        LFS_ASSERT_MSG(n <= static_cast<size_t>(std::numeric_limits<unsigned int>::max()),
+                       "positive-median input exceeds the 32-bit count limit");
 
         const int block = 256;
         const int grid = static_cast<int>((n + block - 1) / block);
         zero_nan_kernel<<<grid, block, 0, stream>>>(data, n);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.zero_nan");
 
-        if (scratch) {
-            LFS_ASSERT_MSG(n <= static_cast<size_t>(std::numeric_limits<int>::max()),
-                           "positive-median input exceeds CUB's int item-count limit");
-            scratch->ensure_n(n, lfs::core::Device::CUDA);
-            LFS_ASSERT_MSG(scratch->n_capacity >= n &&
-                               scratch->selected.is_valid() &&
-                               scratch->selected.ptr<float>() != nullptr,
-                           lfs::core::detail::format_cuda_safe(
-                               "positive-median selected scratch must cover n (cap={}, n={})",
-                               scratch->n_capacity, n));
-            LFS_ASSERT_MSG(scratch->sorted.is_valid() && scratch->sorted.ptr<float>() != nullptr,
-                           "positive-median sorted scratch must be a non-null CUDA f32 tensor");
-            LFS_ASSERT_MSG(scratch->count.is_valid() && scratch->count.ptr<int>() != nullptr,
-                           "positive-median count scratch must be a non-null CUDA i32 tensor");
-
-            float* d_selected = scratch->selected.ptr<float>();
-            float* d_sorted = scratch->sorted.ptr<float>();
-            int* d_count = scratch->count.ptr<int>();
-            const int n_int = static_cast<int>(n);
-
-            fill_pos_inf_kernel<<<grid, block, 0, stream>>>(d_selected, n);
-            LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.positive_median_fill_inf");
-
-            size_t temp_bytes = 0;
-            LFS_CUDA_CHECK_MSG(
-                cub::DeviceSelect::If(nullptr, temp_bytes, data, d_selected, d_count,
-                                      n_int, PositivePred{}, stream),
-                "positive_median select size");
-            scratch->ensure_temps(temp_bytes, 0, lfs::core::Device::CUDA);
-            LFS_ASSERT_MSG(temp_bytes == 0 ||
-                               (scratch->select_temp.is_valid() &&
-                                scratch->select_temp_bytes >= temp_bytes &&
-                                scratch->select_temp.data_ptr() != nullptr),
-                           lfs::core::detail::format_cuda_safe(
-                               "positive-median select temp must cover queried bytes (have={}, need={})",
-                               scratch->select_temp_bytes, temp_bytes));
-            LFS_CUDA_CHECK_MSG(
-                cub::DeviceSelect::If(
-                    temp_bytes == 0 ? nullptr : scratch->select_temp.data_ptr(),
-                    temp_bytes, data, d_selected, d_count,
-                    n_int, PositivePred{}, stream),
-                "positive_median select");
-
-            size_t sort_bytes = 0;
-            LFS_CUDA_CHECK_MSG(
-                cub::DeviceRadixSort::SortKeys(nullptr, sort_bytes, d_selected, d_sorted,
-                                               n_int, 0, sizeof(float) * 8, stream),
-                "positive_median sort size");
-            scratch->ensure_temps(temp_bytes, sort_bytes, lfs::core::Device::CUDA);
-            LFS_ASSERT_MSG(sort_bytes == 0 ||
-                               (scratch->sort_temp.is_valid() &&
-                                scratch->sort_temp_bytes >= sort_bytes &&
-                                scratch->sort_temp.data_ptr() != nullptr),
-                           lfs::core::detail::format_cuda_safe(
-                               "positive-median sort temp must cover queried bytes (have={}, need={})",
-                               scratch->sort_temp_bytes, sort_bytes));
-            LFS_CUDA_CHECK_MSG(
-                cub::DeviceRadixSort::SortKeys(
-                    sort_bytes == 0 ? nullptr : scratch->sort_temp.data_ptr(),
-                    sort_bytes, d_selected, d_sorted,
-                    n_int, 0, sizeof(float) * 8, stream),
-                "positive_median sort");
-
-            div_by_positive_median_or_zero_kernel<<<grid, block, 0, stream>>>(
-                data, n, d_sorted, d_count);
-            LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.div_by_median");
-            return;
-        }
-
-        // Compact positives into a scratch buffer, radix-sort that only, pick mid.
-        // Falls back to no-op (leave data) when zero positives.
-        cuda_scratch::DeviceBuffer selected_buffer(
-            cuda_scratch::checked_bytes(n, sizeof(float), "positive-median selected"),
-            stream, "training.densify.positive_median.selected");
-        cuda_scratch::DeviceBuffer count_buffer(
-            sizeof(int), stream, "training.densify.positive_median.count");
-        float* d_selected = selected_buffer.as<float>();
-        int* d_count = count_buffer.as<int>();
-        LFS_CUDA_CHECK_MSG(cudaMemsetAsync(d_count, 0, sizeof(int), stream), "positive_median count z");
-
-        // CUB DeviceSelect::If
-        size_t temp_bytes = 0;
-        LFS_CUDA_CHECK_MSG(
-            cub::DeviceSelect::If(nullptr, temp_bytes, data, d_selected, d_count,
-                                  static_cast<int>(n), PositivePred{}, stream),
-            "positive_median select size");
-        cuda_scratch::DeviceBuffer select_temp_buffer;
-        void* d_temp = nullptr;
-        if (temp_bytes > 0) {
-            select_temp_buffer = cuda_scratch::DeviceBuffer(
-                temp_bytes, stream, "training.densify.positive_median.select_temp");
-            d_temp = select_temp_buffer.get();
-        }
-        LFS_CUDA_CHECK_MSG(
-            cub::DeviceSelect::If(d_temp, temp_bytes, data, d_selected, d_count,
-                                  static_cast<int>(n), PositivePred{}, stream),
-            "positive_median select");
-
-        int h_count = 0;
-        LFS_CUDA_CHECK_MSG(
-            cudaMemcpyAsync(&h_count, d_count, sizeof(int), cudaMemcpyDeviceToHost, stream),
-            "positive_median count D2H");
-        LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream), "positive_median count sync");
-
-        if (h_count <= 0) {
-            // No positives → zero the tensor (match prior masked_select empty path).
-            LFS_CUDA_CHECK_MSG(cudaMemsetAsync(data, 0, n * sizeof(float), stream),
-                               "positive_median zero empty");
-            return;
-        }
-
-        // Radix sort the compacted positives only (O(P log P), P << n for sparse edges).
-        cuda_scratch::DeviceBuffer sorted_buffer(
-            cuda_scratch::checked_bytes(
-                static_cast<size_t>(h_count), sizeof(float), "positive-median sorted"),
-            stream, "training.densify.positive_median.sorted");
-        float* d_sorted = sorted_buffer.as<float>();
-        size_t sort_bytes = 0;
-        LFS_CUDA_CHECK_MSG(
-            cub::DeviceRadixSort::SortKeys(nullptr, sort_bytes, d_selected, d_sorted,
-                                           h_count, 0, sizeof(float) * 8, stream),
-            "positive_median sort size");
-        cuda_scratch::DeviceBuffer sort_temp_buffer;
-        void* d_sort_temp = nullptr;
-        if (sort_bytes > 0) {
-            sort_temp_buffer = cuda_scratch::DeviceBuffer(
-                sort_bytes, stream, "training.densify.positive_median.sort_temp");
-            d_sort_temp = sort_temp_buffer.get();
-        }
-        LFS_CUDA_CHECK_MSG(
-            cub::DeviceRadixSort::SortKeys(d_sort_temp, sort_bytes, d_selected, d_sorted,
-                                           h_count, 0, sizeof(float) * 8, stream),
-            "positive_median sort");
-
-        // Median at count/2 (same index as prior sorted[valid.numel()/2]).
-        const float* d_median = d_sorted + (h_count / 2);
-        div_by_device_scalar_kernel<<<grid, block, 0, stream>>>(data, n, d_median, 0.0f);
+        radix_select::Workspace workspace(stream);
+        radix_select::run<true>(data, n, workspace.state, workspace.hist, stream);
+        div_by_positive_median_or_zero_kernel<<<grid, block, 0, stream>>>(data, n, workspace.state);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.div_by_median");
     }
 

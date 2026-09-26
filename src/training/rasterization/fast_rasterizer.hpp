@@ -171,7 +171,8 @@ namespace lfs::training {
         int tile_height = 0,
         bool mip_filter = false,
         const lfs::core::Tensor& bg_image = {},
-        bool render_normal = false);
+        bool render_normal = false,
+        bool render_depth = true);
 
     // Backward pass with optional extra alpha gradient for masked training
     void fast_rasterize_backward(

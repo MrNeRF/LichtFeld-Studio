@@ -2512,7 +2512,9 @@ namespace lfs::training::kernels {
                 cs_map.is_contiguous()) {
                 return;
             }
-            cs_map = lfs::core::Tensor::empty(ssim_map.shape(), ssim_map.device(), ssim_map.dtype());
+            cs_map = ssim_map.device() == lfs::core::Device::CUDA
+                         ? lfs::core::Tensor::empty_exact(ssim_map.shape(), ssim_map.dtype())
+                         : lfs::core::Tensor::empty(ssim_map.shape(), ssim_map.device(), ssim_map.dtype());
         }
     } // namespace
 
@@ -2742,8 +2744,7 @@ namespace lfs::training::kernels {
         LFS_ASSERT_MSG(required_capacity > 0,
                        "LossWorkspaceArena cannot allocate an empty active layout");
 
-        auto new_storage = lfs::core::Tensor::empty(
-            {required_capacity}, lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+        auto new_storage = lfs::core::Tensor::empty_exact({required_capacity}, lfs::core::DataType::UInt8);
         // Stamp the home stream so from_blob views inherit a valid producer stream.
         if (new_storage.stream() != lfs::core::getCurrentCUDAStream()) {
             new_storage.set_stream(lfs::core::getCurrentCUDAStream());

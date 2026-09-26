@@ -416,8 +416,11 @@ namespace lfs::training {
                                    ? n
                                    : std::max(
                                          n, static_cast<size_t>(static_cast<double>(std::max(n_capacity, n)) * 1.2) + 1);
-        f32_a = Tensor::zeros_direct(TensorShape({new_cap}), new_cap, device, DataType::Float32);
-        bool_a = Tensor::zeros_direct(TensorShape({new_cap}), new_cap, device, DataType::Bool);
+        LFS_ASSERT_MSG(device == Device::CUDA, "DensifyNScratch requires CUDA storage");
+        f32_a = Tensor::empty_exact({new_cap}, DataType::Float32);
+        bool_a = Tensor::empty_exact({new_cap}, DataType::Bool);
+        f32_a.zero_();
+        bool_a.zero_();
         n_capacity = new_cap;
     }
 
@@ -450,9 +453,11 @@ namespace lfs::training {
 
         if (capacity < need || layout_changed) {
             const auto alloc_start = std::chrono::steady_clock::now();
-            const size_t new_cap = std::max(
-                need,
-                static_cast<size_t>(static_cast<double>(std::max(capacity, need)) * 1.2) + 1);
+            const size_t new_cap = capacity == 0
+                                       ? need
+                                       : std::max(
+                                             need,
+                                             static_cast<size_t>(static_cast<double>(std::max(capacity, need)) * 1.2) + 1);
             means = Tensor::empty({new_cap, 3}, device);
             rotations = Tensor::empty({new_cap, 4}, device);
             scales = Tensor::empty({new_cap, 3}, device);

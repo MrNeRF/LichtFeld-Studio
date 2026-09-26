@@ -1466,8 +1466,35 @@ namespace lfs::io {
         std::vector<nvimgcodecCodeStream_t> streams(count, nullptr);
         std::vector<nvimgcodecImage_t> images(count, nullptr);
         std::vector<nvimgcodecImage_t> retry_images;
-        std::vector<Tensor> hwc(count);
+        // uint8 requests decode planar RGB straight into the CHW destination;
+        // float requests decode interleaved RGB into a staging buffer and widen.
+        std::vector<Tensor> decoded(count);
         std::vector<size_t> heights(count), widths(count);
+        const auto decoded_shape = [&](const size_t i) {
+            return output_uint8 ? TensorShape({size_t{3}, heights[i], widths[i]})
+                                : TensorShape({heights[i], widths[i], size_t{3}});
+        };
+        const auto describe_destination = [&](const size_t i, void* const buffer) {
+            nvimgcodecImageInfo_t output{};
+            output.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
+            output.struct_size = sizeof(nvimgcodecImageInfo_t);
+            output.color_spec = NVIMGCODEC_COLORSPEC_SRGB;
+            output.chroma_subsampling = NVIMGCODEC_SAMPLING_444;
+            output.sample_format = output_uint8 ? NVIMGCODEC_SAMPLEFORMAT_P_RGB
+                                                : NVIMGCODEC_SAMPLEFORMAT_I_RGB;
+            output.num_planes = output_uint8 ? 3 : 1;
+            for (uint32_t p = 0; p < output.num_planes; ++p) {
+                output.plane_info[p].height = static_cast<uint32_t>(heights[i]);
+                output.plane_info[p].width = static_cast<uint32_t>(widths[i]);
+                output.plane_info[p].row_stride = output_uint8 ? widths[i] : widths[i] * 3;
+                output.plane_info[p].num_channels = output_uint8 ? 1 : 3;
+                output.plane_info[p].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT8;
+            }
+            output.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
+            output.buffer = buffer;
+            output.cuda_stream = static_cast<cudaStream_t>(cuda_stream);
+            return output;
+        };
         std::vector<nvimgcodecProcessingStatus_t> statuses(
             count, NVIMGCODEC_PROCESSING_STATUS_UNKNOWN);
         nvimgcodecFuture_t future = nullptr;
@@ -1524,49 +1551,36 @@ namespace lfs::io {
                 }
                 heights[i] = info.plane_info[0].height;
                 widths[i] = info.plane_info[0].width;
-                const TensorShape hwc_shape({heights[i], widths[i], size_t{3}});
-                if (reusable_hwc && i < reusable_hwc->size() && (*reusable_hwc)[i] &&
-                    (*reusable_hwc)[i]->is_valid() &&
-                    (*reusable_hwc)[i]->shape() == hwc_shape &&
-                    (*reusable_hwc)[i]->device() == Device::CUDA &&
-                    (*reusable_hwc)[i]->dtype() == DataType::UInt8) {
-                    hwc[i] = *(*reusable_hwc)[i];
+                const TensorShape dst_shape = decoded_shape(i);
+                auto* const reusable = output_uint8 ? reusable_outputs : reusable_hwc;
+                if (reusable && i < reusable->size() && (*reusable)[i] &&
+                    (*reusable)[i]->is_valid() &&
+                    (*reusable)[i]->shape() == dst_shape &&
+                    (*reusable)[i]->device() == Device::CUDA &&
+                    (*reusable)[i]->dtype() == DataType::UInt8) {
+                    decoded[i] = *(*reusable)[i];
                 } else {
-                    hwc[i] = Tensor::empty(hwc_shape, Device::CUDA, DataType::UInt8);
+                    decoded[i] = Tensor::empty_exact(dst_shape, DataType::UInt8);
                 }
                 if (cuda_stream) {
-                    hwc[i].set_stream(static_cast<cudaStream_t>(cuda_stream));
+                    decoded[i].set_stream(static_cast<cudaStream_t>(cuda_stream));
                 }
-                if (reusable_hwc && i < reusable_hwc->size() && (*reusable_hwc)[i]) {
-                    *(*reusable_hwc)[i] = hwc[i];
+                if (reusable && i < reusable->size() && (*reusable)[i]) {
+                    *(*reusable)[i] = decoded[i];
                 }
                 cuda::launch_fill_u8_sentinel(
-                    hwc[i].ptr<uint8_t>(), hwc[i].bytes(),
+                    decoded[i].ptr<uint8_t>(), decoded[i].bytes(),
                     jpeg_batch_sentinel_seed(i, false),
                     static_cast<cudaStream_t>(cuda_stream));
 
-                nvimgcodecImageInfo_t output{};
-                output.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
-                output.struct_size = sizeof(nvimgcodecImageInfo_t);
-                output.sample_format = NVIMGCODEC_SAMPLEFORMAT_I_RGB;
-                output.color_spec = NVIMGCODEC_COLORSPEC_SRGB;
-                output.chroma_subsampling = NVIMGCODEC_SAMPLING_444;
-                output.num_planes = 1;
-                output.plane_info[0].height = static_cast<uint32_t>(heights[i]);
-                output.plane_info[0].width = static_cast<uint32_t>(widths[i]);
-                output.plane_info[0].row_stride = widths[i] * 3;
-                output.plane_info[0].num_channels = 3;
-                output.plane_info[0].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT8;
-                output.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
-                output.buffer = hwc[i].data_ptr();
+                nvimgcodecImageInfo_t output = describe_destination(i, decoded[i].data_ptr());
                 if (impl_->sentinel_test_skipped_member == static_cast<int>(i)) {
-                    primary_discard = Tensor::empty(hwc_shape, Device::CUDA, DataType::UInt8);
+                    primary_discard = Tensor::empty(dst_shape, Device::CUDA, DataType::UInt8);
                     if (cuda_stream) {
                         primary_discard.set_stream(static_cast<cudaStream_t>(cuda_stream));
                     }
                     output.buffer = primary_discard.data_ptr();
                 }
-                output.cuda_stream = static_cast<cudaStream_t>(cuda_stream);
                 status = nvimgcodecImageCreate(impl_->instance, &images[i], &output);
                 if (status != NVIMGCODEC_STATUS_SUCCESS) {
                     throw std::runtime_error("Failed to create JPEG batch image descriptor");
@@ -1622,7 +1636,7 @@ namespace lfs::io {
                 for (size_t pos = 0; pos < members.size(); ++pos) {
                     const size_t member = members[pos];
                     cuda::launch_flag_u8_sentinel_unchanged(
-                        hwc[member].ptr<uint8_t>(), hwc[member].bytes(),
+                        decoded[member].ptr<uint8_t>(), decoded[member].bytes(),
                         jpeg_batch_sentinel_seed(member, cuda_retry),
                         device_flags + pos, stream);
                 }
@@ -1668,34 +1682,20 @@ namespace lfs::io {
                 for (size_t pos = 0; pos < skipped_members.size(); ++pos) {
                     const size_t member = skipped_members[pos];
                     cuda::launch_fill_u8_sentinel(
-                        hwc[member].ptr<uint8_t>(), hwc[member].bytes(),
+                        decoded[member].ptr<uint8_t>(), decoded[member].bytes(),
                         jpeg_batch_sentinel_seed(member, true), stream);
 
-                    nvimgcodecImageInfo_t output{};
-                    output.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
-                    output.struct_size = sizeof(nvimgcodecImageInfo_t);
-                    output.sample_format = NVIMGCODEC_SAMPLEFORMAT_I_RGB;
-                    output.color_spec = NVIMGCODEC_COLORSPEC_SRGB;
-                    output.chroma_subsampling = NVIMGCODEC_SAMPLING_444;
-                    output.num_planes = 1;
-                    output.plane_info[0].height = static_cast<uint32_t>(heights[member]);
-                    output.plane_info[0].width = static_cast<uint32_t>(widths[member]);
-                    output.plane_info[0].row_stride = widths[member] * 3;
-                    output.plane_info[0].num_channels = 3;
-                    output.plane_info[0].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT8;
-                    output.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
-                    output.buffer = hwc[member].data_ptr();
+                    nvimgcodecImageInfo_t output =
+                        describe_destination(member, decoded[member].data_ptr());
                     if (impl_->sentinel_test_skip_cuda_retry &&
                         impl_->sentinel_test_skipped_member == static_cast<int>(member)) {
                         retry_discard = Tensor::empty(
-                            TensorShape({heights[member], widths[member], size_t{3}}),
-                            Device::CUDA, DataType::UInt8);
+                            decoded_shape(member), Device::CUDA, DataType::UInt8);
                         if (cuda_stream) {
                             retry_discard.set_stream(stream);
                         }
                         output.buffer = retry_discard.data_ptr();
                     }
-                    output.cuda_stream = stream;
                     const nvimgcodecStatus_t create_status = nvimgcodecImageCreate(
                         impl_->instance, &retry_images[pos], &output);
                     if (create_status != NVIMGCODEC_STATUS_SUCCESS) {
@@ -1749,27 +1749,7 @@ namespace lfs::io {
             outputs.reserve(count);
             for (size_t i = 0; i < count; ++i) {
                 if (output_uint8) {
-                    const TensorShape output_shape({size_t{3}, heights[i], widths[i]});
-                    Tensor output;
-                    if (reusable_outputs && i < reusable_outputs->size() && (*reusable_outputs)[i] &&
-                        (*reusable_outputs)[i]->is_valid() &&
-                        (*reusable_outputs)[i]->shape() == output_shape &&
-                        (*reusable_outputs)[i]->device() == Device::CUDA &&
-                        (*reusable_outputs)[i]->dtype() == DataType::UInt8) {
-                        output = *(*reusable_outputs)[i];
-                    } else {
-                        output = Tensor::empty(output_shape, Device::CUDA, DataType::UInt8);
-                    }
-                    if (cuda_stream) {
-                        output.set_stream(static_cast<cudaStream_t>(cuda_stream));
-                    }
-                    cuda::launch_uint8_hwc_to_uint8_chw(
-                        hwc[i].ptr<uint8_t>(), output.ptr<uint8_t>(),
-                        heights[i], widths[i], 3, static_cast<cudaStream_t>(cuda_stream));
-                    if (reusable_outputs && i < reusable_outputs->size() && (*reusable_outputs)[i]) {
-                        *(*reusable_outputs)[i] = output;
-                    }
-                    outputs.push_back(std::move(output));
+                    outputs.push_back(std::move(decoded[i]));
                 } else {
                     const TensorShape output_shape({size_t{3}, heights[i], widths[i]});
                     Tensor output;
@@ -1786,7 +1766,7 @@ namespace lfs::io {
                         output.set_stream(static_cast<cudaStream_t>(cuda_stream));
                     }
                     cuda::launch_uint8_hwc_to_float32_chw(
-                        hwc[i].ptr<uint8_t>(), output.ptr<float>(),
+                        decoded[i].ptr<uint8_t>(), output.ptr<float>(),
                         heights[i], widths[i], 3, static_cast<cudaStream_t>(cuda_stream));
                     if (reusable_outputs && i < reusable_outputs->size() && (*reusable_outputs)[i]) {
                         *(*reusable_outputs)[i] = output;

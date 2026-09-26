@@ -3606,6 +3606,36 @@ namespace lfs::core {
         : std::runtime_error(msg),
           tensor_info_(t ? t->str() : "") {}
 
+    Tensor Tensor::empty_exact(TensorShape shape, DataType dtype) {
+        LFS_ASSERT_MSG(is_supported_dtype(dtype), "empty_exact received an invalid dtype");
+        const size_t elements = shape.elements();
+        LFS_ASSERT_MSG(elements == 0 || dtype_size(dtype) <= std::numeric_limits<size_t>::max() / elements,
+                       "empty_exact byte count overflow");
+        const size_t bytes = elements * dtype_size(dtype);
+        if (bytes == 0) {
+            return empty(std::move(shape), Device::CUDA, dtype);
+        }
+
+        Tensor t;
+        t.shape_ = shape;
+        t.strides_ = shape.strides();
+        t.storage_offset_ = 0;
+        t.is_contiguous_ = true;
+        t.device_ = Device::CUDA;
+        t.dtype_ = dtype;
+        t.id_ = next_id_++;
+        t.ensure_state();
+        t.state_->stream = getCurrentCUDAStream();
+        const cudaStream_t stream = t.state_->stream;
+        void* ptr = allocate_cuda_storage(
+            bytes, stream, CudaStorageMode::ExactAsync, "tensor.exact", "tensor.empty_exact");
+        t.adopt_storage(ptr, [stream](void* p) { safe_cuda_pool_deallocate(p, stream); });
+        t.data_ = t.data_owner_.get();
+        t.compute_alignment();
+        CudaMemoryPool::instance().record_tensor(t.data_, t.shape().dims(), bytes, dtype_name(t.dtype_));
+        return t;
+    }
+
     Tensor Tensor::zeros_direct(TensorShape shape, size_t capacity, Device device, DataType dtype) {
         LFS_ASSERT_MSG(device == Device::CUDA,
                        "zeros_direct currently supports only CUDA tensors");

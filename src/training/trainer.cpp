@@ -5597,7 +5597,6 @@ namespace lfs::training {
         ++edge_weight_preprocessing_generation_;
         edge_weight_scoring_active_ = false;
         edge_map_buffer_ = {};
-        edge_weight_median_scratch_.release();
     }
 
     lfs::core::Tensor Trainer::get_edge_weight_map(
@@ -5635,8 +5634,7 @@ namespace lfs::training {
 
         if (!edge_map_buffer_.is_valid() || edge_map_buffer_.shape() != map_shape ||
             edge_map_buffer_.dtype() != lfs::core::DataType::Float32) {
-            edge_map_buffer_ = lfs::core::Tensor::empty(
-                map_shape, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            edge_map_buffer_ = lfs::core::Tensor::empty_exact(map_shape, lfs::core::DataType::Float32);
         }
         edge_map_buffer_.set_stream(stream);
         if (gt_image.dtype() == lfs::core::DataType::UInt8) {
@@ -5649,8 +5647,7 @@ namespace lfs::training {
                 static_cast<int>(height), static_cast<int>(width), stream);
         }
         kernels::launch_normalize_by_positive_median(
-            edge_map_buffer_.ptr<float>(), height * width, stream,
-            &edge_weight_median_scratch_);
+            edge_map_buffer_.ptr<float>(), height * width, stream);
 
         lfs::core::Tensor map;
         const bool cacheable = map_bytes <= EDGE_WEIGHT_CACHE_BUDGET_BYTES;
@@ -6417,6 +6414,11 @@ namespace lfs::training {
                                   normal_prior_usable_ &&
                                   cam->has_normal()) ||
                                  params_.optimization.normal_consistency_weight > 0.0f);
+                            const bool render_depth =
+                                render_normal ||
+                                (params_.optimization.use_depth_loss &&
+                                 params_.optimization.depth_loss_weight > 0.0f) ||
+                                strategy_->reads_render_depth(iter);
                             const MutationStamp forward_stamp{
                                 static_cast<std::uint64_t>(iter), mutation_epoch_,
                                 StepPhase::Forward, fastgs_strategy_hooks_at_start};
@@ -6427,7 +6429,7 @@ namespace lfs::training {
                                     *cam, strategy_->get_model(), bg,
                                     0, 0, 0, 0,
                                     params_.optimization.mip_filter, bg_tile,
-                                    render_normal);
+                                    render_normal, render_depth);
                                 if (rasterize_result) {
                                     output = std::move(rasterize_result->first);
                                     fast_ctx.emplace(std::move(rasterize_result->second));
@@ -8624,18 +8626,10 @@ namespace lfs::training {
                 cam = example.data.camera;
                 gt_image = std::move(example.data.image);
 
-                // The 8-bit decode ring keeps its leases compact. Widen only the
-                // frame being consumed, on the training stream, using the exact
-                // normalization used by the original float decode path.
+                // Loss, edge weighting and MRNF accept the decoded uint8 image.
+                // Keep the decoder lease alive until train_step has consumed it.
                 if (gt_image.dtype() == lfs::core::DataType::UInt8) {
                     gt_image.sync_to_stream(training_stream_);
-                    auto gt_image_fp32 = lfs::core::Tensor::empty(
-                        gt_image.shape(), lfs::core::Device::CUDA,
-                        lfs::core::DataType::Float32);
-                    lfs::io::cuda::launch_uint8_chw_to_float32_chw(
-                        gt_image.ptr<uint8_t>(), gt_image_fp32.ptr<float>(),
-                        gt_image.numel(), training_stream_);
-                    gt_image = std::move(gt_image_fp32);
                 }
 
                 for (CUevent_st** event : {&example.depth_ready_event, &example.normal_ready_event}) {

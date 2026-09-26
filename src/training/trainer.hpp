@@ -911,7 +911,6 @@ namespace lfs::training {
         uint64_t edge_weight_cache_clock_ = 0;
         uint64_t edge_weight_preprocessing_generation_ = 0;
         bool edge_weight_scoring_active_ = false;
-        PositiveMedianScratch edge_weight_median_scratch_;
 
         // Metrics evaluator - handles all evaluation logic
         std::unique_ptr<lfs::training::MetricsEvaluator> evaluator_;

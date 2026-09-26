@@ -1546,6 +1546,10 @@ namespace lfs::core {
                             DataType dtype = DataType::Float32);
         static Tensor zeros_direct(TensorShape shape, size_t capacity, Device device = Device::CUDA,
                                    DataType dtype = DataType::Float32);
+        // Uninitialized CUDA storage of exactly the requested size, stream-ordered
+        // and outside the size buckets. For large buffers retained across steps,
+        // where bucket rounding would be permanent waste.
+        static Tensor empty_exact(TensorShape shape, DataType dtype = DataType::Float32);
         static Tensor ones(TensorShape shape, Device device = Device::CUDA,
                            DataType dtype = DataType::Float32);
         static Tensor full(TensorShape shape, float value, Device device = Device::CUDA,

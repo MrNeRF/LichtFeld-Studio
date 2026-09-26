@@ -562,8 +562,8 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     // Production: warp cull ON (mode 0), blend_batch_size from config (or test hook).
     const int warp_cull_mode = g_warp_cull_mode.load(std::memory_order_relaxed);
     const int blend_batch_override = g_blend_batch_size_override.load(std::memory_order_relaxed);
-    auto launch_blend = [&]<bool RENDER_NORMAL>() {
-        kernels::forward::blend_cu<RENDER_NORMAL><<<grid, dim3(config::block_size_blend_forward), 0, stream>>>(
+    auto launch_blend = [&]<bool RENDER_NORMAL, bool RENDER_DEPTH>() {
+        kernels::forward::blend_cu<RENDER_NORMAL, RENDER_DEPTH><<<grid, dim3(config::block_size_blend_forward), 0, stream>>>(
             per_tile_buffers.instance_ranges,
             sorted_primitive_indices,
             visibility_buffers.primitive_work_indices,
@@ -588,9 +588,15 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.blend");
     };
     if (normal != nullptr) {
-        launch_blend.template operator()<true>();
+        if (depth != nullptr)
+            launch_blend.template operator()<true, true>();
+        else
+            launch_blend.template operator()<true, false>();
     } else {
-        launch_blend.template operator()<false>();
+        if (depth != nullptr)
+            launch_blend.template operator()<false, true>();
+        else
+            launch_blend.template operator()<false, false>();
     }
     check_cuda_with_fastgs_status(cudaGetLastError(), "blend", forward_status, "blend", static_cast<uint64_t>(n_primitives), n_tiles_u64);
     sync_fastgs_phase_if_requested("blend", forward_status, "blend", static_cast<uint64_t>(n_primitives), n_tiles_u64);
