@@ -81,6 +81,9 @@ namespace lfs::training {
         // view before adding it to its refine window.
         virtual lfs::core::Tensor edge_score_scratch(int /*iter*/) { return {}; }
         virtual void on_edge_score_accumulated(int /*iter*/) {}
+
+        // Whether post_render/post_backward read RenderOutput::depth this step.
+        virtual bool reads_render_depth(int /*iter*/) const { return false; }
     };
 
     class ICheckpointStateAdopter {

@@ -13,8 +13,11 @@
 #include "training/strategies/strategy_utils.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <limits>
 #include <vector>
 
 using namespace lfs::core;
@@ -162,32 +165,86 @@ TEST_F(DensifyEvents4x, PositiveMedianNormalizeMatchesSortReference) {
     }
 }
 
-TEST_F(DensifyEvents4x, PositiveMedianWorkspaceMatchesAllocatingPath) {
-    std::vector<float> data = {0.f, 1.f, 0.f, 5.f, 2.f, 4.f, 3.f, 0.f, -1.f};
-    auto allocating = Tensor::from_vector(data, TensorShape({data.size()}), Device::GPU);
-    auto persisted = Tensor::from_vector(data, TensorShape({data.size()}), Device::GPU);
+namespace {
+    // Host reference in cub::DeviceRadixSort float order (NaN and -0.0 included).
+    uint32_t radix_order_key(const float v) {
+        uint32_t bits = 0;
+        std::memcpy(&bits, &v, sizeof(bits));
+        return (bits & 0x80000000u) ? ~bits : (bits | 0x80000000u);
+    }
 
-    kernels::launch_normalize_by_positive_median(allocating.ptr<float>(), allocating.numel());
-    PositiveMedianScratch scratch;
-    scratch.ensure_n(data.size(), Device::GPU);
-    kernels::launch_normalize_by_positive_median(
-        persisted.ptr<float>(), persisted.numel(), nullptr, &scratch);
-    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    std::vector<float> reference_positive_median_normalize(std::vector<float> values) {
+        std::vector<float> positives;
+        for (auto& v : values) {
+            if (std::isnan(v))
+                v = 0.0f;
+            if (v > 0.0f)
+                positives.push_back(v);
+        }
+        if (positives.empty())
+            return std::vector<float>(values.size(), 0.0f);
+        std::ranges::sort(positives, {}, radix_order_key);
+        const float median = std::max(positives[positives.size() / 2], 1e-9f);
+        for (auto& v : values)
+            v /= median;
+        return values;
+    }
 
-    const auto got_a = to_host(allocating);
-    const auto got_b = to_host(persisted);
-    ASSERT_EQ(got_a.size(), got_b.size());
-    for (size_t i = 0; i < got_a.size(); ++i) {
-        EXPECT_NEAR(got_a[i], got_b[i], 1e-5f) << "i=" << i;
+    // Value sets that stress the three radix digits: runs of equal keys that
+    // straddle digit boundaries, adjacent ulps, extremes and non-finite input.
+    std::vector<std::vector<float>> median_cases() {
+        std::vector<std::vector<float>> cases;
+        cases.push_back({0.f, 1.f, 0.f, 5.f, 2.f, 4.f, 3.f, 0.f, -1.f});
+        cases.push_back({3.f});
+        cases.push_back({7.f, 7.f, 7.f, 7.f});
+        cases.push_back({1e-30f, 1e30f, std::numeric_limits<float>::infinity(), -0.0f, 0.0f,
+                         std::numeric_limits<float>::quiet_NaN(), 2.5f, 2.5f,
+                         std::nextafter(2.5f, 3.0f), std::numeric_limits<float>::denorm_min()});
+        std::vector<float> ramp;
+        for (int i = 0; i < 100003; ++i)
+            ramp.push_back(static_cast<float>((i * 7919) % 100003) * 1.25e-3f - 3.0f);
+        cases.push_back(std::move(ramp));
+        std::vector<float> ulps;
+        for (int i = 0; i < 40000; ++i)
+            ulps.push_back(std::nextafter(1.0f + static_cast<float>(i % 17) * 1e-7f, 2.0f));
+        cases.push_back(std::move(ulps));
+        return cases;
+    }
+} // namespace
+
+TEST_F(DensifyEvents4x, PositiveMedianNormalizeMatchesSortedReference) {
+    for (const auto& values : median_cases()) {
+        auto t = Tensor::from_vector(values, TensorShape({values.size()}), Device::CUDA);
+        kernels::launch_normalize_by_positive_median(t.ptr<float>(), t.numel());
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        const auto got = to_host(t);
+        const auto expected = reference_positive_median_normalize(values);
+        ASSERT_EQ(got.size(), expected.size());
+        for (size_t i = 0; i < got.size(); ++i) {
+            // The median is exact (see SelectMedianMatchesRadixSortOrder); the GPU
+            // division itself may round one ulp differently from the host.
+            const auto a = radix_order_key(got[i]);
+            const auto b = radix_order_key(expected[i]);
+            ASSERT_LE(a > b ? a - b : b - a, 2u)
+                << "n=" << values.size() << " i=" << i << " got=" << got[i] << " expected=" << expected[i];
+        }
     }
 }
 
-TEST_F(DensifyEvents4x, PositiveMedianWorkspaceZerosWhenNoPositives) {
+TEST_F(DensifyEvents4x, SelectMedianMatchesRadixSortOrder) {
+    for (const auto& values : median_cases()) {
+        auto t = Tensor::from_vector(values, TensorShape({values.size()}), Device::CUDA);
+        auto sorted = values;
+        std::ranges::sort(sorted, {}, radix_order_key);
+        const float got = kernels::launch_select_median(t.ptr<float>(), t.numel(), nullptr);
+        EXPECT_EQ(radix_order_key(got), radix_order_key(sorted[sorted.size() / 2])) << "n=" << values.size();
+    }
+}
+
+TEST_F(DensifyEvents4x, PositiveMedianNormalizeZerosWhenNoPositives) {
     std::vector<float> data = {0.f, -1.f, 0.f, -2.f};
-    auto t = Tensor::from_vector(data, TensorShape({data.size()}), Device::GPU);
-    PositiveMedianScratch scratch;
-    scratch.ensure_n(data.size(), Device::GPU);
-    kernels::launch_normalize_by_positive_median(t.ptr<float>(), t.numel(), nullptr, &scratch);
+    auto t = Tensor::from_vector(data, TensorShape({data.size()}), Device::CUDA);
+    kernels::launch_normalize_by_positive_median(t.ptr<float>(), t.numel());
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     for (float v : to_host(t)) {
         EXPECT_FLOAT_EQ(v, 0.f);
@@ -223,6 +280,26 @@ TEST_F(DensifyEvents4x, GumbelScratchMatchesAllocatingPath) {
     for (size_t i = 0; i < a.size(); ++i) {
         EXPECT_EQ(a[i], b[i]) << "i=" << i;
     }
+}
+
+TEST_F(DensifyEvents4x, GumbelScratchUsesSelectableCount) {
+    constexpr size_t n = 1024;
+    constexpr size_t nnz = 31;
+    constexpr size_t k = 7;
+    std::vector<float> weights(n, 0.0f);
+    for (size_t i = 0; i < nnz; ++i)
+        weights[(i * 31) % n] = static_cast<float>(i + 1);
+    auto w = Tensor::from_vector(weights, TensorShape({n}), Device::CUDA);
+    auto expected = Tensor::empty({k}, Device::CUDA, DataType::Int64);
+    auto actual = Tensor::empty({k}, Device::CUDA, DataType::Int64);
+    constexpr uint64_t seed = 0x4c4653ULL;
+    mrnf_strategy::launch_gumbel_topk(w.ptr<float>(), n, k, seed, expected.ptr<int64_t>());
+    GumbelTopKScratch scratch;
+    mrnf_strategy::launch_gumbel_topk(
+        w.ptr<float>(), n, k, seed, actual.ptr<int64_t>(), nullptr, true, &scratch, nnz);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    EXPECT_EQ(scratch.n_capacity, nnz);
+    EXPECT_EQ(actual.cpu().to_vector_int64(), expected.cpu().to_vector_int64());
 }
 
 TEST_F(DensifyEvents4x, GumbelScratchDenseMatchesAllocatingPath) {
@@ -282,17 +359,11 @@ TEST_F(DensifyEvents4x, GumbelUInt32PayloadsAreBoundedAndUnique) {
 
 TEST_F(DensifyEvents4x, TopologyScratchReleaseDropsAllResidentBytes) {
     GumbelTopKScratch gumbel;
-    PositiveMedianScratch median;
-    gumbel.ensure_n(128, Device::GPU);
-    median.ensure_n(128, Device::GPU);
+    gumbel.ensure_n(128, Device::CUDA);
     EXPECT_GT(gumbel.resident_bytes(), 0u);
-    EXPECT_GT(median.resident_bytes(), 0u);
     gumbel.release();
-    median.release();
     EXPECT_EQ(gumbel.resident_bytes(), 0u);
-    EXPECT_EQ(median.resident_bytes(), 0u);
     EXPECT_FALSE(gumbel.indices.is_valid());
-    EXPECT_FALSE(median.selected.is_valid());
 }
 
 TEST_F(DensifyEvents4x, DensifyChildWorkspaceGrowsOnly) {
@@ -310,8 +381,16 @@ TEST_F(DensifyEvents4x, DensifyChildWorkspaceGrowsOnly) {
     EXPECT_GT(ws.capacity, cap1);
 }
 
+// The first ensure is sized exactly; the growth headroom applies only when a
+// reused workspace grows.
+TEST_F(DensifyEvents4x, DensifyChildWorkspaceStartsAtExactCapacity) {
+    DensifyChildWorkspace ws;
+    ws.ensure(100, 0, false, false, Device::CUDA);
+    EXPECT_EQ(ws.capacity, 100u);
+}
+
 TEST_F(DensifyEvents4x, ScoreBufferAppendZerosInPlace) {
-    Tensor scores = Tensor::zeros_direct(TensorShape({4}), /*capacity=*/16, Device::GPU);
+    Tensor scores = Tensor::zeros_direct(TensorShape({4}), /*capacity=*/16, Device::CUDA);
     std::vector<float> init = {1.f, 2.f, 3.f, 4.f};
     ASSERT_EQ(cudaMemcpy(scores.ptr<float>(), init.data(), 4 * sizeof(float),
                          cudaMemcpyHostToDevice),

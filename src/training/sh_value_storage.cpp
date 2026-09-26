@@ -15,10 +15,12 @@
 #include "core/tensor_completion.hpp"
 #include "core/tensor_sh.hpp"
 #include "lfs/cuda_scratch.hpp"
+#include "lfs/training/idle_arena_scratch.hpp"
 #include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cstdint>
 #include <cstring>
 #include <cuda_runtime.h>
@@ -109,6 +111,23 @@ namespace lfs::training::sh_value {
                 out.set_stream(stream);
             }
             return out;
+        }
+
+        [[nodiscard]] Tensor concatenate_into_arena(
+            const std::vector<Tensor>& parts, char* data, const TensorShape shape,
+            const DataType dtype, const cudaStream_t stream) {
+            Tensor result = Tensor::from_blob(data, shape, Device::CUDA, dtype, stream);
+            std::size_t offset = 0;
+            for (const Tensor& part : parts) {
+                assert(part.is_contiguous() && part.device() == Device::CUDA &&
+                       part.dtype() == dtype);
+                core::waitForCUDAStream(stream, part.stream());
+                LFS_CUDA_CHECK(cudaMemcpyAsync(data + offset, part.data_ptr(), part.bytes(),
+                                               cudaMemcpyDeviceToDevice, stream));
+                offset += part.bytes();
+            }
+            assert(offset == result.bytes());
+            return result;
         }
 
         void copy_prefix_bytes(Tensor& dest, const Tensor& src, std::size_t nbytes, cudaStream_t stream) {
@@ -329,15 +348,13 @@ namespace lfs::training::sh_value {
                 dest_indices_i64.ptr<std::int64_t>(), block_ids.ptr<float>(), K, stream);
             auto sorted = block_ids.sort(0, false);
             Tensor order = std::move(sorted.second);
+            assert(order.dtype() == DataType::Int64 && order.numel() == K);
+            assert(src_canonical.is_contiguous() && src_canonical.shape()[0] == K);
             Tensor sorted_dest = dest_indices_i64.index_select(0, order);
-            Tensor sorted_can = src_canonical.index_select(0, order);
-            if (!sorted_can.is_contiguous()) {
-                sorted_can = sorted_can.contiguous();
-            }
             sorted.first.set_stream(stream);
             order.set_stream(stream);
             sorted_dest.set_stream(stream);
-            sorted_can.set_stream(stream);
+            lfs::core::waitForCUDAStream(stream, src_canonical.stream());
 
             Tensor unique_blocks = Tensor::empty(TensorShape({K}), Device::GPU, DataType::Int32);
             Tensor run_offsets = Tensor::empty(TensorShape({K}), Device::GPU, DataType::Int32);
@@ -374,7 +391,7 @@ namespace lfs::training::sh_value {
             core::sh_value_quant::reencode_touched_q16_blocks(
                 codes,
                 mm,
-                sorted_can.ptr<float>(),
+                src_canonical.ptr<float>(),
                 sorted_dest.ptr<std::int64_t>(),
                 unique_blocks.ptr<int>(),
                 run_offsets.ptr<int>(),
@@ -383,7 +400,8 @@ namespace lfs::training::sh_value {
                 n_prims,
                 n_decode_src,
                 rest,
-                stream);
+                stream,
+                order.ptr<std::int64_t>());
         }
     } // namespace
 
@@ -898,10 +916,35 @@ namespace lfs::training::sh_value {
         if (dest_parts.empty()) {
             return;
         }
+        const std::size_t rest = layout_rest(splat);
+        for (std::size_t i = 0; i < dest_parts.size(); ++i) {
+            if (can_parts[i].ndim() != 3 || can_parts[i].shape()[0] != dest_parts[i].numel() ||
+                can_parts[i].shape()[1] != rest || can_parts[i].shape()[2] != 3) {
+                throw std::invalid_argument("SH batch part shape mismatch");
+            }
+        }
 
         grow_q16_storage(splat, n_prims, stream);
-        Tensor dests = dest_parts.size() == 1 ? dest_parts[0] : Tensor::cat(dest_parts, 0);
-        Tensor cans = can_parts.size() == 1 ? can_parts[0] : Tensor::cat(can_parts, 0);
+        const std::size_t n_rows = std::accumulate(
+            dest_parts.begin(), dest_parts.end(), std::size_t{0},
+            [](const std::size_t sum, const Tensor& part) { return sum + part.numel(); });
+        const std::size_t dest_bytes = n_rows * sizeof(std::int64_t);
+        const std::size_t can_bytes = n_rows * rest * 3 * sizeof(float);
+        const std::size_t can_offset = (dest_bytes + 255) & ~std::size_t{255};
+        const std::size_t cat_bytes = dest_parts.size() > 1 ? can_offset + can_bytes : 0;
+        const IdleArenaScratch arena_cat(cat_bytes, cat_bytes, stream);
+        Tensor dests;
+        Tensor cans;
+        if (arena_cat.data()) {
+            dests = concatenate_into_arena(dest_parts, arena_cat.data(),
+                                           TensorShape({n_rows}), DataType::Int64, stream);
+            cans = concatenate_into_arena(can_parts, arena_cat.data() + can_offset,
+                                          TensorShape({n_rows, rest, std::size_t{3}}),
+                                          DataType::Float32, stream);
+        } else {
+            dests = dest_parts.size() == 1 ? dest_parts[0] : Tensor::cat(dest_parts, 0);
+            cans = can_parts.size() == 1 ? can_parts[0] : Tensor::cat(can_parts, 0);
+        }
         if (dests.stream() != stream) {
             dests.set_stream(stream);
         }

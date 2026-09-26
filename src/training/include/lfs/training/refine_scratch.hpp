@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <stdexcept>
 
 namespace lfs::training {
 
@@ -28,9 +29,8 @@ namespace lfs::training {
         }
     } // namespace detail
 
-    // Grow-only Gumbel-top-k sort buffers + CUB workspace. The initial N
-    // reservation is supplied by the model's reserved capacity; later
-    // refinements grow on demand.
+    // Grow-only Gumbel-top-k sort buffers + CUB workspace, sized to the
+    // actual sort length. Sparse selections can use less than N slots.
     struct GumbelTopKScratch {
         lfs::core::Tensor keys;
         lfs::core::Tensor indices;
@@ -45,11 +45,16 @@ namespace lfs::training {
             if (n == 0 || n_capacity >= n) {
                 return;
             }
+            if (device != Device::CUDA) {
+                throw std::invalid_argument("GumbelTopKScratch requires CUDA storage");
+            }
             const size_t new_cap = detail::grow_only_capacity(n_capacity, n);
-            keys = Tensor::zeros_direct(TensorShape({new_cap}), new_cap, device, DataType::Float32);
-            keys_sorted = Tensor::zeros_direct(TensorShape({new_cap}), new_cap, device, DataType::Float32);
-            indices = Tensor::empty({new_cap}, device, DataType::UInt32);
-            indices_sorted = Tensor::empty({new_cap}, device, DataType::UInt32);
+            keys = Tensor::empty_exact({new_cap}, DataType::Float32);
+            keys_sorted = Tensor::empty_exact({new_cap}, DataType::Float32);
+            indices = Tensor::empty_exact({new_cap}, DataType::UInt32);
+            indices_sorted = Tensor::empty_exact({new_cap}, DataType::UInt32);
+            keys.zero_();
+            keys_sorted.zero_();
             n_capacity = new_cap;
         }
 
@@ -58,8 +63,11 @@ namespace lfs::training {
             if (bytes == 0 || cub_bytes >= bytes) {
                 return;
             }
+            if (device != Device::CUDA) {
+                throw std::invalid_argument("GumbelTopKScratch requires CUDA storage");
+            }
             const size_t new_cap = detail::grow_only_capacity(cub_bytes, bytes);
-            cub = Tensor::empty({new_cap}, device, DataType::UInt8);
+            cub = Tensor::empty_exact({new_cap}, DataType::UInt8);
             cub_bytes = new_cap;
         }
 
@@ -75,66 +83,6 @@ namespace lfs::training {
             cub = {};
             n_capacity = 0;
             cub_bytes = 0;
-        }
-    };
-
-    // Grow-only positive-median workspace; omitting scratch keeps the malloc path.
-    struct PositiveMedianScratch {
-        lfs::core::Tensor selected;
-        lfs::core::Tensor sorted;
-        lfs::core::Tensor count;
-        lfs::core::Tensor select_temp;
-        lfs::core::Tensor sort_temp;
-        size_t n_capacity = 0;
-        size_t select_temp_bytes = 0;
-        size_t sort_temp_bytes = 0;
-
-        void ensure_n(const size_t n, const lfs::core::Device device) {
-            using namespace lfs::core;
-            if (n == 0 || n_capacity >= n) {
-                return;
-            }
-            const size_t new_cap = detail::grow_only_capacity(n_capacity, n);
-            selected = Tensor::zeros_direct(TensorShape({new_cap}), new_cap, device, DataType::Float32);
-            sorted = Tensor::zeros_direct(TensorShape({new_cap}), new_cap, device, DataType::Float32);
-            if (!count.is_valid() || count.numel() < 1 ||
-                count.device() != device || count.dtype() != DataType::Int32) {
-                count = Tensor::zeros({1}, device, DataType::Int32);
-            }
-            n_capacity = new_cap;
-        }
-
-        void ensure_temps(const size_t select_bytes,
-                          const size_t sort_bytes,
-                          const lfs::core::Device device) {
-            using namespace lfs::core;
-            if (select_bytes > select_temp_bytes) {
-                const size_t new_cap = detail::grow_only_capacity(select_temp_bytes, select_bytes);
-                select_temp = Tensor::empty({new_cap}, device, DataType::UInt8);
-                select_temp_bytes = new_cap;
-            }
-            if (sort_bytes > sort_temp_bytes) {
-                const size_t new_cap = detail::grow_only_capacity(sort_temp_bytes, sort_bytes);
-                sort_temp = Tensor::empty({new_cap}, device, DataType::UInt8);
-                sort_temp_bytes = new_cap;
-            }
-        }
-
-        [[nodiscard]] std::size_t resident_bytes() const noexcept {
-            return n_capacity * 2 * sizeof(float) +
-                   (count.is_valid() ? sizeof(std::int32_t) : 0) +
-                   select_temp_bytes + sort_temp_bytes;
-        }
-
-        void release() noexcept {
-            selected = {};
-            sorted = {};
-            count = {};
-            select_temp = {};
-            sort_temp = {};
-            n_capacity = 0;
-            select_temp_bytes = 0;
-            sort_temp_bytes = 0;
         }
     };
 

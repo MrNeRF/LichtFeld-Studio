@@ -65,7 +65,9 @@ namespace {
         EXPECT_EQ(0, std::memcmp(actual_cpu.ptr<float>(), reference_cpu.ptr<float>(), actual_cpu.bytes()));
     }
 
+    // The outputs are views into the saved workspace, so the run keeps it alive.
     struct PhotoRun {
+        lfs::gpu_ops::PhotoSaved saved;
         Tensor loss;
         Tensor grad_corrected;
         Tensor grad_raw;
@@ -74,10 +76,9 @@ namespace {
     PhotoRun evaluate_path(const lfs::gpu_ops::PhotoPath path, const float weight, const Tensor& corrected,
                            const Tensor& raw, const Tensor& target, const Tensor& mask) {
         const auto& ops = lfs::training::cuda_photometric_ops();
-        lfs::gpu_ops::PhotoSaved saved{.backend = ops.create()};
-        PhotoRun run;
+        PhotoRun run{.saved = {.backend = ops.create()}};
         ops.evaluate(
-            saved, corrected, raw, target, mask,
+            run.saved, corrected, raw, target, mask,
             {.path = path, .ssim_weight = weight, .valid_padding = true},
             run.loss, run.grad_corrected, run.grad_raw);
         return run;
