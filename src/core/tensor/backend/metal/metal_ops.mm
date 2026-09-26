@@ -50,7 +50,7 @@ namespace lfs::core::internal {
         }
 
         uint32_t checked_u32(const size_t value, const char* const description) {
-            LFS_ASSERT_MSG(value <= std::numeric_limits<uint32_t>::max(), description);
+            LFS_ASSERT_MSG(value <= std::numeric_limits<uint32_t>::max(), std::format("{} (value={})", description, value));
             return static_cast<uint32_t>(value);
         }
 
@@ -953,7 +953,8 @@ namespace lfs::core::internal {
 
         // The matmul tiles index with int32.
         uint32_t checked_extent(const size_t value, const char* const description) {
-            LFS_ASSERT_MSG(value <= static_cast<size_t>(std::numeric_limits<int32_t>::max()), description);
+            LFS_ASSERT_MSG(value <= static_cast<size_t>(std::numeric_limits<int32_t>::max()),
+                           std::format("{} (value={})", description, value));
             return static_cast<uint32_t>(value);
         }
 
@@ -2854,7 +2855,9 @@ namespace lfs::core::internal {
         LFS_FACADE_TRACE(nn_linear);
         if (program.batch == 0 || program.m == 0 || program.n == 0)
             return;
-        LFS_ASSERT_MSG(program.k > 0, "Metal linear layers need a positive inner dimension");
+        LFS_ASSERT_MSG(program.k > 0,
+                       std::format("Metal linear layers need a positive inner dimension (m={}, n={}, k={})",
+                                   program.m, program.n, program.k));
         const auto context = acquire_context();
         dispatch_linear(*context, {.a = a,
                                    .w = w,
@@ -3083,7 +3086,8 @@ namespace lfs::core::internal {
         LFS_FACADE_TRACE(nn_attention);
         if (program.groups == 0 || program.queries == 0)
             return;
-        LFS_ASSERT_MSG(program.dim > 0 && program.dim <= 128, "Metal attention supports head dims up to 128");
+        LFS_ASSERT_MSG(program.dim > 0 && program.dim <= 128,
+                       std::format("Metal attention supports head dims 1 to 128 (dim={})", program.dim));
         struct Params {
             uint64_t q, k, v, mask, output;
             int64_t mask_batch, mask_head, mask_query, mask_key;

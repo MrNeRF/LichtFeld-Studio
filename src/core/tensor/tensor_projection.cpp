@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <format>
 #include <limits>
 #include <optional>
 #include <vector>
@@ -108,19 +109,28 @@ namespace lfs::core {
     std::pair<Tensor, Tensor> rasterize_points(const Tensor& points, const Tensor& colors, const PointRaster& raster,
                                                const Tensor* transforms, const Tensor* indices,
                                                const Tensor* visibility, const Tensor* deleted) {
-        LFS_ASSERT_MSG(points.is_valid() && points.dtype() == DataType::Float32 && points.ndim() == 2 &&
-                           points.size(1) == 3 && points.device() == Device::GPU,
-                       "rasterize_points requires Float32 [N,3] GPU points");
+        const auto site = LFS_SOURCE_SITE_CURRENT();
+        tensor_contract::require_valid(points, "rasterize_points", "points", site);
+        tensor_contract::require_dtype(points, DataType::Float32, "rasterize_points", "points", site);
+        LFS_ASSERT_MSG(points.ndim() == 2 && points.size(1) == 3 && points.device() == Device::GPU,
+                       std::format("rasterize_points requires [N,3] GPU points (points={} on {})",
+                                   points.shape().str(), points.device() == Device::GPU ? "gpu" : "cpu"));
         const auto count = points.size(0);
-        LFS_ASSERT_MSG(colors.is_valid() && colors.dtype() == DataType::Float32 && colors.ndim() == 2 &&
-                           colors.size(0) == count && colors.size(1) == 3,
-                       "rasterize_points requires Float32 [N,3] colors");
+        tensor_contract::require_valid(colors, "rasterize_points", "colors", site);
+        tensor_contract::require_dtype(colors, DataType::Float32, "rasterize_points", "colors", site);
+        tensor_contract::require_shape(colors, points.shape(), "rasterize_points", "colors", site);
         LFS_ASSERT_MSG(gpu_backend_of(points) != GpuBackend::CUDA,
-                       "rasterize_points runs on Vulkan and Metal; CUDA builds rasterize in the renderer");
-        LFS_ASSERT_MSG(raster.width > 0 && raster.height > 0, "rasterize_points requires positive image dimensions");
+                       "rasterize_points runs on Vulkan and Metal; CUDA builds rasterize in the renderer "
+                       "(points are CUDA tensors)");
+        LFS_ASSERT_MSG(raster.width > 0 && raster.height > 0,
+                       std::format("rasterize_points requires a positive image size (width={}, height={})",
+                                   raster.width, raster.height));
         const size_t pixels = static_cast<size_t>(raster.width) * static_cast<size_t>(raster.height);
         constexpr auto max_count = static_cast<size_t>(std::numeric_limits<int32_t>::max());
-        LFS_ASSERT_MSG(count <= max_count && 2 * pixels <= max_count, "rasterize_points size exceeds int32");
+        LFS_ASSERT_MSG(count <= max_count && 2 * pixels <= max_count,
+                       std::format("rasterize_points indexes points and twice the pixels in int32 "
+                                   "(points={}, pixels={})",
+                                   count, pixels));
 
         const auto present = [](const Tensor* tensor) { return tensor && tensor->is_valid() && tensor->numel() != 0; };
         // As in the renderer's CUDA kernel, points without indices take
@@ -134,16 +144,28 @@ namespace lfs::core {
             if (tensor)
                 internal::require_same_gpu_backend(points, *tensor, "rasterize_points");
         }
-        LFS_ASSERT_MSG(!transforms || (transforms->dtype() == DataType::Float32 && transforms->numel() % 16 == 0),
-                       "rasterize_points transforms must be Float32 [T,16]");
-        LFS_ASSERT_MSG(!indices || (indices->dtype() == DataType::Int32 && indices->numel() == count),
-                       "rasterize_points indices must be Int32 [N]");
-        const auto is_byte_mask = [](const Tensor& tensor) {
-            return tensor.dtype() == DataType::Bool || tensor.dtype() == DataType::UInt8;
-        };
-        LFS_ASSERT_MSG(!visibility || is_byte_mask(*visibility), "rasterize_points visibility must be Bool or UInt8");
-        LFS_ASSERT_MSG(!deleted || (is_byte_mask(*deleted) && deleted->numel() == count),
-                       "rasterize_points deleted mask must be Bool or UInt8 [N]");
+        if (transforms) {
+            tensor_contract::require_dtype(*transforms, DataType::Float32, "rasterize_points", "transforms", site);
+            LFS_ASSERT_MSG(transforms->numel() % 16 == 0,
+                           std::format("rasterize_points transforms must be [T,16] (transforms={})",
+                                       transforms->shape().str()));
+        }
+        if (indices) {
+            tensor_contract::require_dtype(*indices, DataType::Int32, "rasterize_points", "indices", site);
+            LFS_ASSERT_MSG(indices->numel() == count,
+                           std::format("rasterize_points needs an index per point (indices={}, points={})",
+                                       indices->numel(), count));
+        }
+        if (visibility)
+            tensor_contract::require_dtype(*visibility, {DataType::Bool, DataType::UInt8}, "rasterize_points",
+                                           "visibility", site);
+        if (deleted) {
+            tensor_contract::require_dtype(*deleted, {DataType::Bool, DataType::UInt8}, "rasterize_points", "deleted",
+                                           site);
+            LFS_ASSERT_MSG(deleted->numel() == count,
+                           std::format("rasterize_points needs a deleted flag per point (deleted={}, points={})",
+                                       deleted->numel(), count));
+        }
 
         const uint32_t channels = raster.transparent_background ? 4u : 3u;
         auto image = internal::allocate_like(
@@ -161,7 +183,8 @@ namespace lfs::core {
             values.insert(values.end(), block->begin(), block->end());
         for (const auto* block : {&raster.crop_min, &raster.crop_max, &raster.background})
             values.insert(values.end(), block->begin(), block->end());
-        LFS_ASSERT_MSG(values.size() == internal::kPointRasterParameters, "rasterize_points parameter layout");
+        LFS_DEBUG_ASSERT_MSG(values.size() == internal::kPointRasterParameters,
+                             "rasterize_points parameter block must match the kernels' layout");
         Tensor parameters;
         {
             GpuBackendScope scope(*gpu_backend_of(points));

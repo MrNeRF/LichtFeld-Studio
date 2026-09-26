@@ -1867,8 +1867,7 @@ namespace lfs::vis {
     }
 
     void WindowManager::adoptTensorBackendDevice() {
-        // Metal tensors reach the window device through their own interop.
-        if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Metal)
+        if (!lfs::core::tensor_backend_shares_vulkan_device())
             return;
         const auto& device = vulkan_context_->tensorBackendDevice();
         if (!device.complete) {

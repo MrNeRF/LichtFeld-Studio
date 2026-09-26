@@ -977,6 +977,10 @@ namespace lfs::core {
 #endif
     }
 
+    bool tensor_backend_shares_vulkan_device() {
+        return default_gpu_backend() != GpuBackend::Metal;
+    }
+
     bool vulkan_backend_adopted() {
 #ifdef LFS_TENSOR_VULKAN
         return internal::vulkan_context_adopted();

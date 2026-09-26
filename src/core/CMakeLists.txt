@@ -50,6 +50,7 @@ set(TENSOR_SOURCES
         tensor/tensor_backend_selftest.cpp
         tensor/backend/backend_registry.cpp
         tensor/backend/portable_nn_ops.cpp
+        tensor/backend/dedicated_nn_ops.cpp
         tensor/backend/facade_trace.cpp
         tensor/backend/cuda/cuda_ops_pointwise.cpp
         tensor/backend/cuda/cuda_ops_expression.cpp
