@@ -1148,7 +1148,7 @@ kernel void count_matches(device const uchar* input_buffer [[buffer(0)]],
     threadgroup uint shared[kReduceThreads / 32];
     device const uchar* input = input_buffer + params.input_offset;
     uint matches = 0;
-    for (uint index = group * kReduceThreads + thread_index; index < params.count; index += groups * kReduceThreads) {
+    for (ulong index = group * kReduceThreads + thread_index; index < params.count; index += groups * kReduceThreads) {
         if (kOp == 0) {
             matches += input[index] != 0 ? 1u : 0u;
         } else {
