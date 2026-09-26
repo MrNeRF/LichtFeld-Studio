@@ -43,7 +43,9 @@ namespace lfs::core::internal {
             uint32_t offset, count, rest, half_sh, quant_sh, padding;
         };
         static_assert(sizeof(Sources) == 80);
-        const auto address = [](const Tensor& t) { return t.is_valid() ? vk::address(storage_ref(t)) : uint64_t{0}; };
+        // Absent attributes, such as the SH of degree-zero splats, have no storage.
+        const auto present = [](const Tensor& t) { return t.is_valid() && t.bytes() != 0; };
+        const auto address = [&](const Tensor& t) { return present(t) ? vk::address(storage_ref(t)) : uint64_t{0}; };
         const Sources source{address(src.means), address(src.sh0), src.sh_rest ? address(src.shN) : 0,
                              address(src.rotation), address(src.scaling), address(src.opacity), address(src.shN_bounds),
                              src.offset, src.count, src.sh_rest, src.shN.is_valid() && src.shN.dtype() == DataType::Float16, src.sh_q16, 0};
@@ -55,7 +57,7 @@ namespace lfs::core::internal {
                                                .synchronous = false});
         std::vector<StorageRef> reads{descriptor.storage()};
         for (const auto* t : {&src.means, &src.sh0, &src.shN, &src.rotation, &src.scaling, &src.opacity, &src.shN_bounds})
-            if (t->is_valid())
+            if (present(*t))
                 reads.push_back(storage_ref(*t));
         dispatch(pool, page, descriptor.storage(), 0, reads, 1);
         if (source.shN && source.rest)
