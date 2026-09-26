@@ -392,6 +392,38 @@ namespace {
         expect_close(to_metal(matrix) / to_metal(row), matrix / row);
     }
 
+    TEST_F(TensorMetal, ToBoolStaysOnTheDevice) {
+        // Nonzero, including NaN and values that round to zero in narrower
+        // types, converts to true on every backend.
+        const std::vector<float> values = {0.0f, 1.0f, -2.0f, 0.0f, std::numeric_limits<float>::quiet_NaN(),
+                                           -0.0f, 3.5f, 0.0f, 7.0f, -1.0f, 0.0f, 65504.0f};
+        const Tensor floats = Tensor::from_vector(values, {3, 4}, Device::CPU);
+        std::vector<int> integers(values.size());
+        for (size_t i = 0; i < values.size(); ++i)
+            integers[i] = std::isnan(values[i]) ? 5 : static_cast<int>(values[i]);
+        const Tensor ints = Tensor::from_vector(integers, {3, 4}, Device::CPU);
+        // Int64 values whose low 32 bits are zero stay true.
+        Tensor wide = Tensor::empty({3, 4}, Device::CPU, DataType::Int64);
+        for (size_t i = 0; i < integers.size(); ++i)
+            wide.ptr<int64_t>()[i] = static_cast<int64_t>(integers[i]) << 40;
+        for (const Tensor& source : {floats, floats.to(DataType::Float16), ints, wide}) {
+            SCOPED_TRACE(static_cast<int>(source.dtype()));
+            const Tensor expected = source.to(DataType::Bool);
+            ASSERT_EQ(expected.dtype(), DataType::Bool);
+            for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+                if (!gpu_backend_available(backend))
+                    continue;
+                GpuBackendScope scope(backend);
+                const Tensor converted = source.to(Device::GPU).to(DataType::Bool);
+                EXPECT_EQ(converted.dtype(), DataType::Bool);
+                EXPECT_EQ(gpu_backend_of(converted), backend);
+                expect_close(converted, expected, 0.0f, 0.0f);
+                expect_close(source.to(Device::GPU).transpose(0, 1).to(DataType::Bool),
+                             expected.transpose(0, 1).contiguous(), 0.0f, 0.0f);
+            }
+        }
+    }
+
     TEST_F(TensorMetal, ClampCatAndPadMatchCpu) {
         std::vector<float> values = random_tensor(1000, -3.0f, 3.0f, 37).to_vector();
         values[123] = std::numeric_limits<float>::quiet_NaN();

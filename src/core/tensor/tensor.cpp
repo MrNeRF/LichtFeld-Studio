@@ -1686,42 +1686,13 @@ namespace lfs::core {
             }
 
             if (device_ == Device::GPU) {
-                // Can't use launch_convert_type - need custom != 0 logic
-                auto result_cpu = empty(shape_, Device::CPU, DataType::Bool);
-                std::vector<float> temp(numel());
-                float* const download_dst = temp.data();
-                const size_t download_bytes = bytes();
-                internal::order_legacy_after_home(*this);
-                internal::backend_ops_for(*this).copy_device_to_host(
-                    internal::CopyRequest{
-                        .src = internal::storage_ref(*this),
-                        .dst = internal::raw_storage_ref(download_dst, dtype_),
-                        .bytes = download_bytes,
-                        .synchronous = true,
-                        .context = internal::ExecContext{},
-                    });
-
-                unsigned char* dst_cpu = result_cpu.ptr<unsigned char>();
-                for (size_t i = 0; i < numel(); ++i) {
-                    dst_cpu[i] = (temp[i] != 0.0f) ? 1 : 0;
-                }
-
-                const size_t upload_bytes = numel();
-                internal::backend_ops_for(result).copy_host_to_device(
-                    internal::CopyRequest{
-                        .src = internal::raw_storage_ref(dst_cpu, DataType::Bool),
-                        .dst = internal::storage_ref(result),
-                        .bytes = upload_bytes,
-                        .synchronous = true,
-                        .context = internal::ExecContext{},
-                    });
-                internal::order_home_after_legacy(result);
-            } else {
-                const float* src = ptr<float>();
-                unsigned char* dst = result.ptr<unsigned char>();
-                for (size_t i = 0; i < numel(); ++i) {
-                    dst[i] = (src[i] != 0.0f) ? 1 : 0;
-                }
+                // != 0 on the device, so NaN maps to true like the CPU loop.
+                return ne(internal::allocate_zeros_like(*this, TensorShape({1}), dtype_));
+            }
+            const float* src = ptr<float>();
+            unsigned char* dst = result.ptr<unsigned char>();
+            for (size_t i = 0; i < numel(); ++i) {
+                dst[i] = (src[i] != 0.0f) ? 1 : 0;
             }
             return result;
         }
@@ -1804,49 +1775,18 @@ namespace lfs::core {
 
         // Bool <-> Int32: Manual conversion (bool != 0 logic)
         if (dtype_ == DataType::Int32 && dtype == DataType::Bool) {
+            if (device_ == Device::GPU && numel() > 0) {
+                // != 0 on the device.
+                return ne(internal::allocate_zeros_like(*this, TensorShape({1}), dtype_));
+            }
             auto result = internal::allocate_like(*this, shape_, DataType::Bool);
             if (numel() == 0)
                 return result;
 
-            if (device_ == Device::GPU) {
-                // Copy to CPU, convert, copy back
-                auto result_cpu = empty(shape_, Device::CPU, DataType::Bool);
-                std::vector<int> temp(numel());
-                int* const download_dst = temp.data();
-                const size_t download_bytes = bytes();
-                internal::order_legacy_after_home(*this);
-                internal::backend_ops_for(*this).copy_device_to_host(
-                    internal::CopyRequest{
-                        .src = internal::storage_ref(*this),
-                        .dst = internal::raw_storage_ref(download_dst, dtype_),
-                        .bytes = download_bytes,
-                        .synchronous = true,
-                        .context = internal::ExecContext{},
-                    });
-
-                unsigned char* dst_cpu = result_cpu.ptr<unsigned char>();
-                for (size_t i = 0; i < numel(); ++i) {
-                    dst_cpu[i] = (temp[i] != 0) ? 1 : 0;
-                }
-
-                const unsigned char* const upload_src = result_cpu.ptr<unsigned char>();
-                const size_t upload_bytes = numel() * sizeof(unsigned char);
-                internal::backend_ops_for(result).copy_host_to_device(
-                    internal::CopyRequest{
-                        .src = internal::raw_storage_ref(
-                            const_cast<unsigned char*>(upload_src), DataType::Bool),
-                        .dst = internal::storage_ref(result),
-                        .bytes = upload_bytes,
-                        .synchronous = true,
-                        .context = internal::ExecContext{},
-                    });
-                internal::order_home_after_legacy(result);
-            } else {
-                const int* src = ptr<int>();
-                unsigned char* dst = result.ptr<unsigned char>();
-                for (size_t i = 0; i < numel(); ++i) {
-                    dst[i] = (src[i] != 0) ? 1 : 0;
-                }
+            const int* src = ptr<int>();
+            unsigned char* dst = result.ptr<unsigned char>();
+            for (size_t i = 0; i < numel(); ++i) {
+                dst[i] = (src[i] != 0) ? 1 : 0;
             }
             return result;
         }
@@ -1896,49 +1836,18 @@ namespace lfs::core {
 
         // Int64 -> Bool
         if (dtype_ == DataType::Int64 && dtype == DataType::Bool) {
+            if (device_ == Device::GPU && numel() > 0) {
+                // != 0 on the device.
+                return ne(internal::allocate_zeros_like(*this, TensorShape({1}), dtype_));
+            }
             auto result = internal::allocate_like(*this, shape_, DataType::Bool);
             if (numel() == 0)
                 return result;
 
-            if (device_ == Device::GPU) {
-                // Copy to CPU, convert, copy back
-                auto result_cpu = empty(shape_, Device::CPU, DataType::Bool);
-                std::vector<int64_t> temp(numel());
-                int64_t* const download_dst = temp.data();
-                const size_t download_bytes = bytes();
-                internal::order_legacy_after_home(*this);
-                internal::backend_ops_for(*this).copy_device_to_host(
-                    internal::CopyRequest{
-                        .src = internal::storage_ref(*this),
-                        .dst = internal::raw_storage_ref(download_dst, dtype_),
-                        .bytes = download_bytes,
-                        .synchronous = true,
-                        .context = internal::ExecContext{},
-                    });
-
-                unsigned char* dst_cpu = result_cpu.ptr<unsigned char>();
-                for (size_t i = 0; i < numel(); ++i) {
-                    dst_cpu[i] = (temp[i] != 0) ? 1 : 0;
-                }
-
-                const unsigned char* const upload_src = result_cpu.ptr<unsigned char>();
-                const size_t upload_bytes = numel() * sizeof(unsigned char);
-                internal::backend_ops_for(result).copy_host_to_device(
-                    internal::CopyRequest{
-                        .src = internal::raw_storage_ref(
-                            const_cast<unsigned char*>(upload_src), DataType::Bool),
-                        .dst = internal::storage_ref(result),
-                        .bytes = upload_bytes,
-                        .synchronous = true,
-                        .context = internal::ExecContext{},
-                    });
-                internal::order_home_after_legacy(result);
-            } else {
-                const int64_t* src = ptr<int64_t>();
-                unsigned char* dst = result.ptr<unsigned char>();
-                for (size_t i = 0; i < numel(); ++i) {
-                    dst[i] = (src[i] != 0) ? 1 : 0;
-                }
+            const int64_t* src = ptr<int64_t>();
+            unsigned char* dst = result.ptr<unsigned char>();
+            for (size_t i = 0; i < numel(); ++i) {
+                dst[i] = (src[i] != 0) ? 1 : 0;
             }
             return result;
         }
@@ -1970,51 +1879,18 @@ namespace lfs::core {
 
         // Float16 -> Bool
         if (dtype_ == DataType::Float16 && dtype == DataType::Bool) {
+            if (device_ == Device::GPU && numel() > 0) {
+                // != 0 on the device, so NaN maps to true like the CPU loop.
+                return ne(internal::allocate_zeros_like(*this, TensorShape({1}), dtype_));
+            }
             auto result = internal::allocate_like(*this, shape_, DataType::Bool);
             if (numel() == 0)
                 return result;
 
-            if (device_ == Device::GPU) {
-                // Copy to CPU, convert, copy back
-                auto result_cpu = empty(shape_, Device::CPU, DataType::Bool);
-                std::vector<detail::tensor_half_t> temp(numel());
-                detail::tensor_half_t* const download_dst = temp.data();
-                const size_t download_bytes = bytes();
-                internal::order_legacy_after_home(*this);
-                internal::backend_ops_for(*this).copy_device_to_host(
-                    internal::CopyRequest{
-                        .src = internal::storage_ref(*this),
-                        .dst = internal::raw_storage_ref(download_dst, dtype_),
-                        .bytes = download_bytes,
-                        .synchronous = true,
-                        .context = internal::ExecContext{},
-                    });
-                internal::backend_ops_for(*this).synchronize_device();
-
-                unsigned char* dst_cpu = result_cpu.ptr<unsigned char>();
-                for (size_t i = 0; i < numel(); ++i) {
-                    dst_cpu[i] = (detail::tensor_half_to_float(temp[i]) != 0.0f) ? 1 : 0;
-                }
-
-                const unsigned char* const upload_src = result_cpu.ptr<unsigned char>();
-                const size_t upload_bytes = numel() * sizeof(unsigned char);
-                internal::backend_ops_for(result).copy_host_to_device(
-                    internal::CopyRequest{
-                        .src = internal::raw_storage_ref(
-                            const_cast<unsigned char*>(upload_src), DataType::Bool),
-                        .dst = internal::storage_ref(result),
-                        .bytes = upload_bytes,
-                        .synchronous = true,
-                        .context = internal::ExecContext{},
-                    });
-                internal::order_home_after_legacy(result);
-                internal::backend_ops_for(result).synchronize_device();
-            } else {
-                const detail::tensor_half_t* src = ptr<detail::tensor_half_t>();
-                unsigned char* dst = result.ptr<unsigned char>();
-                for (size_t i = 0; i < numel(); ++i) {
-                    dst[i] = (detail::tensor_half_to_float(src[i]) != 0.0f) ? 1 : 0;
-                }
+            const detail::tensor_half_t* src = ptr<detail::tensor_half_t>();
+            unsigned char* dst = result.ptr<unsigned char>();
+            for (size_t i = 0; i < numel(); ++i) {
+                dst[i] = (detail::tensor_half_to_float(src[i]) != 0.0f) ? 1 : 0;
             }
             return result;
         }
