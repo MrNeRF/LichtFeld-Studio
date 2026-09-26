@@ -49,6 +49,7 @@ set(TENSOR_SOURCES
         tensor/tensor_gpu_elapsed.cpp
         tensor/tensor_backend_selftest.cpp
         tensor/backend/backend_registry.cpp
+        tensor/backend/nn_ops.cpp
         tensor/backend/portable_nn_ops.cpp
         tensor/backend/dedicated_nn_ops.cpp
         tensor/backend/facade_trace.cpp
@@ -107,7 +108,6 @@ set(TENSOR_SOURCES
         tensor/backend/cuda/runtime/pinned_memory_allocator.cpp
         tensor/backend/cuda/kernels/tensor_exports.cu
         tensor/backend/cuda/kernels/where_scalar.cu
-        nn/ops.cpp
         nn/weight_file.cpp
         nn/weight_file_open.cpp
         nn/activation_arena.cpp
