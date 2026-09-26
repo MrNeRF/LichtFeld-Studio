@@ -71,6 +71,10 @@ namespace lfs::io {
     constexpr size_t DECODE_FRAME_RING_CAPACITY = 14;
 
     struct PipelinedLoaderConfig {
+        // Tensor backend of the run, fixed for the loader's lifetime. Only CUDA
+        // uses nvImageCodec and CUDA queues; other backends decode on the host
+        // and convert with general tensor operations.
+        lfs::core::GpuBackend backend = lfs::core::GpuBackend::CUDA;
         size_t jpeg_batch_size = config::DEFAULT_BATCH_SIZE;
         size_t prefetch_count = config::DEFAULT_PREFETCH_COUNT;
         size_t output_queue_size = config::DEFAULT_OUTPUT_QUEUE_SIZE;
@@ -417,6 +421,10 @@ namespace lfs::io {
         void prefetch_thread_func();
         void gpu_batch_decode_thread_func();
         void cold_process_thread_func(size_t worker_index);
+        void portable_process_thread_func();
+        lfs::core::Tensor decode_portable_rgb(const std::filesystem::path& path,
+                                              const LoadParams& params,
+                                              lfs::core::TensorUpload& upload) const;
 
         std::string make_cache_key(const std::filesystem::path& path, const LoadParams& params) const;
         bool is_jpeg_data(const std::vector<uint8_t>& data) const;

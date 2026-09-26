@@ -312,7 +312,8 @@ if(LFS_HAS_CUDA)
     target_sources(lfs_io PRIVATE
         nvcodec_image_loader.hpp
         nvcodec_image_loader.cpp
-        pipelined_image_loader.cpp)
+        pipelined_image_loader.cpp
+        pipelined_image_loader_portable.cpp)
 endif()
 
 # Set include directories
