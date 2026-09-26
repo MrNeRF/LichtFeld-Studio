@@ -99,9 +99,14 @@ namespace lfs::core::nn::portable {
     Tensor softmax(const Tensor& input, const Tensor* mask) {
         const auto source = fp32(input);
         const auto x = mask ? source.add(fp32(*mask)) : source;
-        auto shifted = x.sub(x.max(-1, true));
+        // As in the CUDA kernel, the row max starts at the lowest finite value,
+        // so a row masked out entirely exponentiates to zeros instead of NaN.
+        // Any other row holds exp(0) = 1, so its sum is at least 1 and the
+        // clamp only turns the empty row's 0 / 0 into 0.
+        constexpr float kInfinity = std::numeric_limits<float>::infinity();
+        auto shifted = x.sub(x.max(-1, true).clamp(std::numeric_limits<float>::lowest(), kInfinity));
         auto e = shifted.exp();
-        return e.div(e.sum(-1, true)).to(input.dtype());
+        return e.div(e.sum(-1, true).clamp(1.0f, kInfinity)).to(input.dtype());
     }
 
     Tensor attention(const Tensor& q, const Tensor& k, const Tensor& v, const Tensor* mask, float scale) {
