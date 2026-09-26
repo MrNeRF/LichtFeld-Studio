@@ -377,6 +377,43 @@ namespace {
         }
     }
 
+    TEST_F(TensorMetal, WhereBroadcastsMatchCpu) {
+        // Conditions and values broadcast along leading, middle and trailing
+        // axes, including patterns whose neighbouring axes merge.
+        struct Case {
+            std::vector<size_t> condition, x, y;
+        };
+        const std::vector<Case> cases = {
+            {{64, 1}, {64, 30}, {64, 30}},       {{64, 30}, {64, 30}, {64, 30}}, {{1, 30}, {64, 30}, {1}},
+            {{4, 1, 5, 1}, {4, 3, 5, 2}, {3, 5, 2}}, {{2, 3, 1, 1}, {1, 1, 4, 5}, {2, 3, 4, 5}}, {{7}, {1}, {7}},
+            {{1}, {6, 7}, {6, 7}}};
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            SCOPED_TRACE(static_cast<int>(backend));
+            GpuBackendScope scope(backend);
+            unsigned seed = 105;
+            for (const auto& [condition_shape, x_shape, y_shape] : cases) {
+                const auto make = [&](const std::vector<size_t>& shape) {
+                    size_t count = 1;
+                    for (const size_t extent : shape)
+                        count *= extent;
+                    return random_tensor(count, -50.0f, 50.0f, seed++).reshape(TensorShape(shape));
+                };
+                const Tensor condition = make(condition_shape).gt(0.0f), x = make(x_shape), y = make(y_shape);
+                for (const auto dtype : {DataType::Float32, DataType::Float16, DataType::Int64, DataType::Bool}) {
+                    SCOPED_TRACE(static_cast<int>(dtype));
+                    const auto as = [&](const Tensor& t) { return dtype == DataType::Bool ? t.gt(0.0f) : t.to(dtype); };
+                    const Tensor expected = Tensor::where(condition, as(x), as(y));
+                    const Tensor found =
+                        Tensor::where(condition.to(Device::GPU), as(x).to(Device::GPU), as(y).to(Device::GPU));
+                    EXPECT_EQ(found.shape(), expected.shape());
+                    expect_close(found.to(DataType::Float32), expected.to(DataType::Float32), 0.0f, 0.0f);
+                }
+            }
+        }
+    }
+
     TEST_F(TensorMetal, BroadcastsMatchCpu) {
         const Tensor a_cpu = random_tensor(4 * 1 * 3, -2.0f, 2.0f, 33).reshape({4, 1, 3});
         const Tensor b_cpu = random_tensor(5 * 1, -2.0f, 2.0f, 34).reshape({5, 1});
