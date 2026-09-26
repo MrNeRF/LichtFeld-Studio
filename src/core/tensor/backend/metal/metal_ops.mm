@@ -1345,14 +1345,15 @@ namespace lfs::core::internal {
 
         // A readback snapshots its source on the GPU timeline into a shared
         // staging block; poll() copies it out once that batch completed.
-        // Metal adds floats atomically; the SH3 assignment is not screened.
+        // Metal adds floats atomically and screens the SH3 assignment with
+        // SIMD-group matrices.
         class API_AVAILABLE(macos(26.0)) MetalExportKernels final : public ExportKernels {
         public:
             GpuBackend backend() const override { return GpuBackend::Metal; }
 
             bool float_atomics() const override { return true; }
 
-            bool screened_assignment() const override { return false; }
+            bool screened_assignment() const override { return true; }
 
             uint64_t address(const Tensor& tensor) const override { return address_of(*context_, storage_ref(tensor)); }
 

@@ -1166,6 +1166,49 @@ namespace {
         }
     }
 
+    // Screening must keep the FP32 argmin's winners: near ties, centroids that
+    // round to one half value or exceed half's range, and seeds that are not
+    // labels. Each point sits on a centroid or halfway between two.
+    TEST_F(TensorMetal, ScreenedSh3AssignmentKeepsTheFp32ArgminAtHalfLimits) {
+        constexpr size_t points = 257, palette = 1025, dims = 45;
+        std::mt19937 rng(1741);
+        std::uniform_real_distribution<float> jitter(-1.0f, 1.0f);
+        for (const float scale : {1e-20f, 1e-8f, 1e-4f, 0.01f, 1.0f, 100.0f, 100000.0f}) {
+            SCOPED_TRACE(scale);
+            std::vector<float> sh((points + 31) / 32 * 12 * 32 * 4), centers(palette * dims), lengths(palette);
+            for (size_t c = 0; c < palette; ++c) {
+                for (size_t d = 0; d < dims; ++d) {
+                    const float v = scale * (0.75f + jitter(rng) * 0.0001f);
+                    centers[c * dims + d] = v;
+                    lengths[c] = std::fma(v, v, lengths[c]);
+                }
+            }
+            for (size_t i = 0; i < points; ++i) {
+                for (size_t d = 0; d < dims; ++d) {
+                    const float a = centers[(i * 17 % palette) * dims + d];
+                    const float b = centers[((i * 17 + 1) % palette) * dims + d];
+                    sh[swizzled_sh_index(i, d, dims)] = i % 2 ? a : (a + b) * 0.5f;
+                }
+            }
+            const Tensor values = to_metal(Tensor::from_vector(sh, {sh.size()}, Device::CPU));
+            const Tensor centroids = to_metal(Tensor::from_vector(centers, {palette, dims}, Device::CPU));
+            const Tensor norms = to_metal(Tensor::from_vector(lengths, {palette}, Device::CPU));
+            Tensor reference = to_metal(Tensor::zeros({points}, Device::CPU, DataType::Int32));
+            Tensor screened = to_metal(Tensor::zeros({points}, Device::CPU, DataType::Int32));
+            assign_sh3(values, centroids, norms, reference, false);
+            assign_sh3(values, centroids, norms, screened, true);
+            const auto expected = reference.to_vector_int();
+            EXPECT_EQ(screened.to_vector_int(), expected);
+            std::vector<int> seeds(points);
+            for (size_t i = 0; i < points; ++i)
+                seeds[i] = i % 3 == 0 ? -1 : i % 3 == 1 ? int(palette + 1)
+                                                        : int(i % palette);
+            Tensor seeded = to_metal(Tensor::from_vector(seeds, {points}, Device::CPU));
+            assign_sh3(values, centroids, norms, seeded, true, true);
+            EXPECT_EQ(seeded.to_vector_int(), expected);
+        }
+    }
+
     // Seeds are random, but the last update leaves every used centroid at the
     // mean of the points labelled with it. Both backends run the same driver.
     TEST_F(TensorMetal, PaletteCentroidsAreTheMeansOfTheirPoints) {

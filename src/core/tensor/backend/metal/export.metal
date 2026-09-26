@@ -183,10 +183,11 @@ kernel void export_radix(constant ExportRadixParams& p [[buffer(0)]], uint gid [
 // 0 seeds centroids from point indices and 1 computes their norms; 2 assigns
 // points to the nearest centroid (11 for SH3, 16 for dense SH3 rows); 4 moves
 // centroids to their means and reseeds empty ones; 7, 9 and 10 are 2, 0 and 4
-// over dense [row, dims] points; 17 keys points by label, 18 finds the run
+// over dense [row, dims] points; 13 and 14 key points and centroids by norm
+// for the screened assignment; 17 keys points by label, 18 finds the run
 // offsets of sorted keys, 19 splits runs into tasks of 256 points and 20 lists
 // the four nearest centroids of every centroid. The float-atomic sums make
-// the sorted-run phase 21 and the screening phases 13 to 15 unnecessary.
+// the sorted-run phase 21 unnecessary.
 
 struct ExportKmeansParams {
     device const float* sh;
@@ -221,7 +222,23 @@ kernel void export_kmeans(constant ExportKmeansParams& p [[buffer(0)]], uint gid
     threadgroup float tile[32 * 48];
     threadgroup float tile_norm[32];
     const uint first = gid * kExportWidth + tid, stride = groups * kExportWidth;
-    if (kOp == 17) {
+    if (kOp == 13 || kOp == 14) {
+        device ulong* keys = (device ulong*)p.sums;
+        for (uint i = first; i < (kOp == 13 ? p.n : p.k); i += stride) {
+            float norm = 0;
+            if (kOp == 13) {
+                for (uint d = 0; d < 45u; ++d) {
+                    const float v = kmeans_sh_dim(p.sh, i, d, p.slots);
+                    norm = fma(v, v, norm);
+                }
+            } else {
+                norm = p.norms[i];
+            }
+            const uint bits = norm == 0 ? 0u : as_type<uint>(norm);
+            keys[i] = kOp == 13 ? bits >> 16u : bits;
+            p.counts[i] = int(i);
+        }
+    } else if (kOp == 17) {
         device ulong* keys = (device ulong*)p.sums;
         for (uint i = first; i < p.n; i += stride) {
             keys[i] = uint(p.indices[i]);
@@ -365,6 +382,165 @@ kernel void export_kmeans_accumulate(constant ExportKmeansParams& p [[buffer(0)]
                                       memory_order_relaxed);
         }
         atomic_fetch_add_explicit((device atomic_int*)&p.counts[uint(label)], 1, memory_order_relaxed);
+    }
+}
+
+// Half centroid rows of 48 in norm order for the screened assignment, from
+// export_kmeans_pack.slang.
+kernel void export_kmeans_pack(constant ExportKmeansParams& p [[buffer(0)]], uint gid [[threadgroup_position_in_grid]],
+                               uint tid [[thread_position_in_threadgroup]], uint groups [[threadgroups_per_grid]]) {
+    device half* packed = (device half*)p.sums;
+    for (uint c = gid * kExportWidth + tid; c < p.k; c += groups * kExportWidth) {
+        for (uint d = 0; d < 48u; ++d)
+            packed[c * 48u + d] = d < p.dims ? half(p.centroids[uint(p.indices[c]) * p.dims + d]) : half(0);
+    }
+}
+
+// Screened SH3 assignment, from export_kmeans_screen.slang. A SIMD group
+// scores 16 points sorted by norm. Half matrix products only reject centroids
+// that cannot win; every survivor is scored with the ordered FP32 FMAs of
+// phase 11, so the labels are its exact argmin.
+struct ExportScreenParams {
+    device const float* sh;
+    device const float* centroids;
+    device const half* half_centroids;
+    device const float* norms;
+    device int* labels;
+    device const int* point_order;
+    device const int* centroid_order;
+    uint n, k, slots, have_labels;
+};
+
+// The first centroid in norm order whose norm is not below value (or, with
+// upper, not above it).
+static uint kmeans_norm_bound(constant ExportScreenParams& p, float value, bool upper) {
+    uint lo = 0, hi = p.k;
+    while (lo < hi) {
+        const uint mid = lo + (hi - lo) / 2u;
+        const float norm = p.norms[uint(p.centroid_order[mid])];
+        if (norm < value || (upper && norm == value))
+            lo = mid + 1u;
+        else
+            hi = mid;
+    }
+    return lo;
+}
+
+constant uint kScreenSimdgroups = kExportWidth / 32u;
+
+kernel void export_kmeans_screen(constant ExportScreenParams& p [[buffer(0)]],
+                                 uint gid [[threadgroup_position_in_grid]], uint groups [[threadgroups_per_grid]],
+                                 ushort simd [[simdgroup_index_in_threadgroup]],
+                                 ushort lane [[thread_index_in_simdgroup]]) {
+    threadgroup half packed[kScreenSimdgroups * 16 * 48];
+    threadgroup float approx[kScreenSimdgroups * 16 * 16];
+    threadgroup half* points = packed + simd * 16u * 48u;
+    threadgroup float* estimates = approx + simd * 16u * 16u;
+    const uint point_lane = lane >> 1u;
+    const uint tiles = (p.n + 15u) / 16u;
+    const float last_norm = p.norms[uint(p.centroid_order[p.k - 1u])];
+    const bool norms_safe = last_norm >= 0 && last_norm < 4.0e9f;
+    for (uint tile = gid * kScreenSimdgroups + simd; tile < tiles; tile += groups * kScreenSimdgroups) {
+        const uint point0 = tile * 16u;
+        if (lane < 16) {
+            for (uint d = 0; d < 48u; ++d) {
+                const bool present = point0 + lane < p.n && d < 45u;
+                points[lane * 48u + d] =
+                    present ? half(kmeans_sh_dim(p.sh, uint(p.point_order[point0 + lane]), d, p.slots)) : half(0);
+            }
+        }
+        simdgroup_barrier(mem_flags::mem_threadgroup);
+        const bool live = point0 + point_lane < p.n;
+        const uint point = live ? uint(p.point_order[point0 + point_lane]) : 0;
+        float best = 1e30f;
+        int best_id = int(p.k);
+        float values[45];
+        float point_norm = 0;
+        bool safe = true;
+        for (uint d = 0; d < 45u; ++d) {
+            const float v = live ? kmeans_sh_dim(p.sh, point, d, p.slots) : 0;
+            values[d] = v;
+            point_norm = fma(v, v, point_norm);
+            safe = safe && isfinite(v) && abs(v) <= 65000.0f;
+        }
+        if (live && p.have_labels != 0) {
+            const int seed = p.labels[point];
+            if (seed >= 0 && uint(seed) < p.k) {
+                float dot = 0;
+                for (uint d = 0; d < 45u; ++d)
+                    dot = fma(values[d], p.centroids[uint(seed) * 45u + d], dot);
+                best = fma(-2.0f, dot, p.norms[uint(seed)]);
+                best_id = seed;
+            }
+        }
+        uint first = p.k, last = 0;
+        if (live) {
+            first = 0;
+            last = p.k;
+            if (safe && norms_safe && point_norm < 4.0e9f && isfinite(best) && best < 1e30f) {
+                // A winner satisfies ny - 2*sqrt(nx*ny) - m*(nx+ny) <= best + eta.
+                const float m = 0.0011f;
+                const float a = 1.0f - m;
+                const float root = sqrt(point_norm);
+                const float radius = sqrt(m * (2.0f - m) * point_norm + a * max(point_norm + best + 1e-8f, 0.0f));
+                const float pad = 1e-5f * (root + radius) + 1e-10f;
+                const float lower = max(0.0f, (root - radius - pad) / a);
+                const float upper = (root + radius + pad) / a;
+                first = kmeans_norm_bound(p, lower * lower, false);
+                last = kmeans_norm_bound(p, upper * upper, true);
+            }
+        }
+        simdgroup_half8x8 a[2][6];
+        for (uint r = 0; r < 2u; ++r) {
+            for (uint b = 0; b < 6u; ++b)
+                simdgroup_load(a[r][b], points + r * 8u * 48u + b * 8u, 48);
+        }
+        const uint last_tile = (simd_max(last) + 15u) / 16u;
+        for (uint t = simd_min(first) / 16u; t < last_tile; ++t) {
+            for (uint c = 0; c < 2u; ++c) {
+                // The rows hold centroids, so the loads transpose them into dims x centroids.
+                simdgroup_half8x8 b[6];
+                for (uint i = 0; i < 6u; ++i)
+                    simdgroup_load(b[i], p.half_centroids + (t * 16u + c * 8u) * 48u + i * 8u, 48, ulong2(0), true);
+                for (uint r = 0; r < 2u; ++r) {
+                    simdgroup_float8x8 product = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+                    for (uint i = 0; i < 6u; ++i)
+                        simdgroup_multiply_accumulate(product, a[r][i], b[i], product);
+                    simdgroup_store(product, estimates + r * 8u * 16u + c * 8u, 16);
+                }
+            }
+            // Lane c holds the id and norm of the tile's centroid c.
+            const uint tile_id = t * 16u + (lane & 15u) < p.k ? uint(p.centroid_order[t * 16u + (lane & 15u)]) : 0u;
+            const float tile_norm = p.norms[tile_id];
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+            for (uint c = lane & 1u; c < 16u; c += 2u) {
+                const uint id = simd_shuffle(tile_id, ushort(c));
+                const float norm = simd_shuffle(tile_norm, ushort(c));
+                const uint sorted = t * 16u + c;
+                if (live && sorted >= first && sorted < last) {
+                    const float estimate = fma(-2.0f, estimates[point_lane * 16u + c], norm);
+                    const float margin = 0.0011f * (point_norm + norm) + 1e-8f;
+                    if (!safe || !(norm >= 0.0f && norm < 4.0e9f) || !isfinite(estimate) || estimate <= best + margin) {
+                        float dot = 0;
+                        for (uint d = 0; d < 45u; ++d)
+                            dot = fma(values[d], p.centroids[id * 45u + d], dot);
+                        const float dist = fma(-2.0f, dot, norm);
+                        if (dist < best || (dist == best && int(id) < best_id)) {
+                            best = dist;
+                            best_id = int(id);
+                        }
+                    }
+                }
+            }
+            // The next tile overwrites the estimates.
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+        }
+        const float other_best = simd_shuffle_xor(best, 1);
+        const int other_id = simd_shuffle_xor(best_id, 1);
+        if (other_best < best || (other_best == best && other_id < best_id))
+            best_id = other_id;
+        if ((lane & 1u) == 0 && live)
+            p.labels[point] = best_id;
     }
 }
 
