@@ -7,6 +7,7 @@
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/shareable_allocation_limit.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "diagnostics/vram_profiler.hpp"
 
 #include <cuda.h>
@@ -267,7 +268,7 @@ namespace lfs::core {
 
             LFS_CUDA_BREADCRUMB_ARGS(
                 "exportable.cudaMemset.slice", a.va + offset, offset, bytes);
-            if (const auto err = cudaMemset(reinterpret_cast<void*>(a.va + offset), 0, bytes);
+            if (const auto err = cudaMemsetAsync(reinterpret_cast<void*>(a.va + offset), 0, bytes, getCurrentCUDAStream());
                 err != cudaSuccess) {
                 release_slice(a, slice);
                 return std::unexpected(std::format("cudaMemset on exportable chunk failed: {}",
@@ -275,7 +276,7 @@ namespace lfs::core {
             }
             LFS_CUDA_BREADCRUMB_ARGS(
                 "exportable.cudaStreamSynchronize.slice", a.va + offset, offset, bytes);
-            if (const auto err = cudaStreamSynchronize(nullptr); err != cudaSuccess) {
+            if (const auto err = cudaStreamSynchronize(getCurrentCUDAStream()); err != cudaSuccess) {
                 release_slice(a, slice);
                 return std::unexpected(std::format(
                     "cudaStreamSynchronize after exportable chunk zero-fill failed: {} ({})",

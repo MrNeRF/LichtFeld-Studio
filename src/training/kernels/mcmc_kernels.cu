@@ -46,10 +46,13 @@ namespace lfs::training::mcmc {
                     binom *= static_cast<float>(n - k) / static_cast<float>(k + 1);
             }
         }
+        const auto stream = lfs::core::getCurrentCUDAStream();
         LFS_CUDA_CHECK_MSG(
-            cudaMemcpyToSymbol(d_relocation_coefficients, coeffs.data(),
-                               RELOCATION_N_MAX * RELOCATION_N_MAX * sizeof(float)),
+            cudaMemcpyToSymbolAsync(d_relocation_coefficients, coeffs.data(),
+                                    RELOCATION_N_MAX * RELOCATION_N_MAX * sizeof(float),
+                                    0, cudaMemcpyHostToDevice, stream),
             "MCMC relocation coefficient upload (n_max={})", n_max);
+        LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
     }
 
     // Equation (9) in "3D Gaussian Splatting as Markov Chain Monte Carlo"

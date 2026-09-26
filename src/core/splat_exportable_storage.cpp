@@ -305,19 +305,21 @@ namespace lfs::core {
                             old_capacity * kFloatBytes;
         void* rotation_dst = static_cast<char*>(block->device_ptr) + region_offsets[Rotation] +
                              old_capacity * 4 * kFloatBytes;
-        if (const auto err = cudaMemcpy(opacity_dst,
-                                        opacity_host.data(),
-                                        opacity_host.size() * kFloatBytes,
-                                        cudaMemcpyHostToDevice);
+        if (const auto err = cudaMemcpyAsync(opacity_dst,
+                                             opacity_host.data(),
+                                             opacity_host.size() * kFloatBytes,
+                                             cudaMemcpyHostToDevice,
+                                             getCurrentCUDAStream());
             err != cudaSuccess) {
             return std::unexpected(std::format(
                 "SplatExportableStorage::grow: slack opacity init failed: {}",
                 cudaGetErrorString(err)));
         }
-        if (const auto err = cudaMemcpy(rotation_dst,
-                                        rotation_host.data(),
-                                        rotation_host.size() * kFloatBytes,
-                                        cudaMemcpyHostToDevice);
+        if (const auto err = cudaMemcpyAsync(rotation_dst,
+                                             rotation_host.data(),
+                                             rotation_host.size() * kFloatBytes,
+                                             cudaMemcpyHostToDevice,
+                                             getCurrentCUDAStream());
             err != cudaSuccess) {
             return std::unexpected(std::format(
                 "SplatExportableStorage::grow: slack rotation init failed: {}",

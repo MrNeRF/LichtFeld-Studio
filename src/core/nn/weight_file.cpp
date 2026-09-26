@@ -113,7 +113,9 @@ namespace lfs::core::nn {
         }
         if (device == Device::GPU && !out.empty()) {
             TensorCompletion completion;
-            completion.include(*gpu_backend_of(out.begin()->second));
+            for (const auto& [name, tensor] : out) {
+                completion.include(tensor);
+            }
             completion.wait();
         }
         return out;
