@@ -694,11 +694,12 @@ namespace lfs::training {
             grad_alpha_extra_2d = (grad_alpha_extra.ndim() == 3 && grad_alpha_extra.shape()[0] == 1)
                                       ? grad_alpha_extra.squeeze(0)
                                       : grad_alpha_extra;
-            assert(grad_alpha_extra_2d.ndim() == 2 &&
-                   checked_dim_to_int(grad_alpha_extra_2d.shape()[0], "grad_alpha_extra height") == H &&
-                   checked_dim_to_int(grad_alpha_extra_2d.shape()[1], "grad_alpha_extra width") == W &&
-                   grad_alpha_extra_2d.dtype() == core::DataType::Float32 &&
-                   "grad_alpha_extra must have shape [H, W] or [1, H, W]");
+            if (!(grad_alpha_extra_2d.ndim() == 2 &&
+                  checked_dim_to_int(grad_alpha_extra_2d.shape()[0], "grad_alpha_extra height") == H &&
+                  checked_dim_to_int(grad_alpha_extra_2d.shape()[1], "grad_alpha_extra width") == W &&
+                  grad_alpha_extra_2d.dtype() == core::DataType::Float32)) {
+                throw std::runtime_error("grad_alpha_extra must have shape [H, W] or [1, H, W]");
+            }
             grad_alpha_extra_2d = grad_alpha_extra_2d.contiguous();
             background_grad.grad_alpha_extra = grad_alpha_extra_2d.ptr<float>();
         }
@@ -710,10 +711,11 @@ namespace lfs::training {
             if (grad_depth_2d.ndim() == 3 && grad_depth_2d.shape()[0] == 1) {
                 grad_depth_2d = grad_depth_2d.squeeze(0);
             }
-            assert(grad_depth_2d.ndim() == 2 &&
-                   checked_dim_to_int(grad_depth_2d.shape()[0], "grad_depth height") == H &&
-                   checked_dim_to_int(grad_depth_2d.shape()[1], "grad_depth width") == W &&
-                   "grad_depth must have shape [H, W] or [1, H, W]");
+            if (!(grad_depth_2d.ndim() == 2 &&
+                  checked_dim_to_int(grad_depth_2d.shape()[0], "grad_depth height") == H &&
+                  checked_dim_to_int(grad_depth_2d.shape()[1], "grad_depth width") == W)) {
+                throw std::runtime_error("grad_depth must have shape [H, W] or [1, H, W]");
+            }
             if (grad_depth_2d.device() != core::Device::CUDA) {
                 grad_depth_2d = grad_depth_2d.cuda();
             }
@@ -727,11 +729,12 @@ namespace lfs::training {
         const float* grad_normal_ptr = nullptr;
         if (grad_normal.is_valid() && grad_normal.numel() > 0) {
             grad_normal_chw = grad_normal;
-            assert(grad_normal_chw.ndim() == 3 &&
-                   grad_normal_chw.shape()[0] == 3 &&
-                   checked_dim_to_int(grad_normal_chw.shape()[1], "grad_normal height") == H &&
-                   checked_dim_to_int(grad_normal_chw.shape()[2], "grad_normal width") == W &&
-                   "grad_normal must have shape [3, H, W]");
+            if (!(grad_normal_chw.ndim() == 3 &&
+                  grad_normal_chw.shape()[0] == 3 &&
+                  checked_dim_to_int(grad_normal_chw.shape()[1], "grad_normal height") == H &&
+                  checked_dim_to_int(grad_normal_chw.shape()[2], "grad_normal width") == W)) {
+                throw std::runtime_error("grad_normal must have shape [3, H, W]");
+            }
             if (grad_normal_chw.device() != core::Device::CUDA) {
                 grad_normal_chw = grad_normal_chw.cuda();
             }
