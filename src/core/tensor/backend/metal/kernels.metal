@@ -909,7 +909,7 @@ kernel void transpose_2d(device const uchar* input_buffer [[buffer(0)]],
 // elements into output[group]; 2 segmented, one threadgroup per contiguous
 // segment of reduce elements; 3 strided, one thread per (outer, inner)
 // output over the reduce range of its split (grid y), writing
-// output[split][outer][inner].
+// output[split][outer][inner]; 4 rows, one SIMD group per contiguous segment.
 
 constant uint kReduceMode [[function_constant(16)]];
 
@@ -1091,6 +1091,25 @@ kernel void reduce(device const uchar* input_buffer [[buffer(0)]],
     threadgroup long shared_integers[kReduceThreads / 32];
     device const uchar* input = input_buffer + params.input_offset;
     device uchar* output = output_buffer + params.output_offset;
+    if (kReduceMode == 4) {
+        const uint row = group.x * (kReduceThreads / 32) + simdgroup;
+        if (row >= params.outer)
+            return;
+        const ulong base = ulong(row) * params.reduce;
+        Accumulator accumulator = start_accumulator();
+        for (uint element = lane; element < params.reduce; element += 32)
+            accumulate(accumulator, input, base + element, params);
+        if (kFloatAccumulator) {
+            const float2 total = reduce_simdgroup(float2(accumulator.value, accumulator.compensation));
+            accumulator.value = total.x;
+            accumulator.compensation = total.y;
+        } else {
+            accumulator.integer = reduce_simdgroup(accumulator.integer);
+        }
+        if (lane == 0)
+            store_reduction(output, row, accumulator, params);
+        return;
+    }
     if (kReduceMode == 3) {
         const uint outputs = params.outer * params.inner;
         const uint output_index = group.x * kReduceThreads + thread_index;
@@ -1100,6 +1119,8 @@ kernel void reduce(device const uchar* input_buffer [[buffer(0)]],
         const ulong base = ulong(outer_index) * params.reduce * params.inner + (output_index - outer_index * params.inner);
         const uint end = min(params.reduce, (group.y + 1) * params.split_chunk);
         Accumulator accumulator = start_accumulator();
+        // Unrolled so the strided loads issue ahead of the in-order combines.
+#pragma unroll(8)
         for (uint element = group.y * params.split_chunk; element < end; ++element)
             accumulate(accumulator, input, base + ulong(element) * params.inner, params);
         store_reduction(output, ulong(group.y) * outputs + output_index, accumulator, params);
@@ -1584,6 +1605,17 @@ static uint sortable_key(float value, bool descending) {
     return descending ? ~key : key;
 }
 
+// Decodes a sort key into its value. Zeros, whose sign the key drops, and
+// NaNs, whose payload it drops, return false and are read back instead.
+static bool value_from_key(uint key, bool descending, thread float& value) {
+    if (descending)
+        key = ~key;
+    if (key == 0x80000000u || key == 0xffffffffu)
+        return false;
+    value = as_type<float>((key & 0x80000000u) != 0u ? key & 0x7fffffffu : ~key);
+    return true;
+}
+
 static ulong sort_line_base(uint line, constant SortParams& params) {
     const uint outer_index = line / params.inner;
     return ulong(outer_index) * params.dim_size * params.inner + (line - outer_index * params.inner);
@@ -1661,10 +1693,10 @@ static uint read_packed(uint4 low, uint4 high, uint digit) {
 }
 
 // Least-significant-digit radix sort over 4-bit digits for longer lines.
-// kOp is the phase: 0 extract keys and positions, 1 block histograms, 2 an
-// exclusive digit-major scan per line, 3 stable scatter from A to B or B to A
-// by pass parity, 4 gather values by position into keys B, 5 write values
-// and positions.
+// kOp is the phase: 0 extract keys and positions, 1 block histograms, 3
+// stable scatter from A to B or B to A by pass parity, 4 decode the sorted
+// keys into values in keys B, 5 write values and positions. Between 1 and 3
+// the host scans each line's digit-major histogram inclusively.
 kernel void radix_sort(device uchar* values_buffer [[buffer(0)]],
                        device uchar* indices_buffer [[buffer(1)]],
                        device uchar* scratch [[buffer(2)]],
@@ -1673,9 +1705,7 @@ kernel void radix_sort(device uchar* values_buffer [[buffer(0)]],
                        uint group [[threadgroup_position_in_grid]],
                        uint position [[thread_position_in_grid]]) {
     threadgroup atomic_uint shared_histogram[kRadixDigits];
-    threadgroup uint shared_scan[kReduceThreads];
-    threadgroup uint4 shared_low[kReduceThreads];
-    threadgroup uint4 shared_high[kReduceThreads];
+    threadgroup uint4 simd_low[kReduceThreads / 32], simd_high[kReduceThreads / 32];
     device float* values = (device float*)(values_buffer + params.values_offset);
     device uint* keys_a = (device uint*)(scratch + params.keys_a_offset);
     device uint* keys_b = (device uint*)(scratch + params.keys_b_offset);
@@ -1692,33 +1722,14 @@ kernel void radix_sort(device uchar* values_buffer [[buffer(0)]],
             keys_a[position] = sortable_key(values[base + ulong(element) * params.inner], params.descending != 0);
             positions_a[position] = element;
         } else if (kOp == 4) {
-            keys_b[position] = as_type<uint>(values[base + ulong(positions_a[position]) * params.inner]);
+            float value;
+            if (!value_from_key(keys_a[position], params.descending != 0, value))
+                value = values[base + ulong(positions_a[position]) * params.inner];
+            keys_b[position] = as_type<uint>(value);
         } else {
             values[base + ulong(element) * params.inner] = as_type<float>(keys_b[position]);
             ((device long*)(indices_buffer + params.indices_offset))[base + ulong(element) * params.inner] =
                 long(positions_a[position]);
-        }
-        return;
-    }
-    if (kOp == 2) {
-        const uint entries = kRadixDigits * params.blocks_per_line;
-        device uint* line_histogram = histogram + ulong(group) * entries;
-        uint carry = 0;
-        for (uint chunk = 0; chunk < entries; chunk += kReduceThreads) {
-            const uint entry = chunk + thread_index;
-            const uint count = entry < entries ? line_histogram[entry] : 0u;
-            shared_scan[thread_index] = count;
-            threadgroup_barrier(mem_flags::mem_threadgroup);
-            for (uint offset = 1; offset < kReduceThreads; offset <<= 1) {
-                const uint partial = thread_index >= offset ? shared_scan[thread_index - offset] : 0u;
-                threadgroup_barrier(mem_flags::mem_threadgroup);
-                shared_scan[thread_index] += partial;
-                threadgroup_barrier(mem_flags::mem_threadgroup);
-            }
-            if (entry < entries)
-                line_histogram[entry] = carry + shared_scan[thread_index] - count;
-            carry += shared_scan[kReduceThreads - 1];
-            threadgroup_barrier(mem_flags::mem_threadgroup);
         }
         return;
     }
@@ -1736,7 +1747,8 @@ kernel void radix_sort(device uchar* values_buffer [[buffer(0)]],
         digits[slot] = kRadixDigits;
         if (element < params.dim_size) {
             keys[slot] = from_a ? keys_a[line_offset + element] : keys_b[line_offset + element];
-            origins[slot] = from_a ? positions_a[line_offset + element] : positions_b[line_offset + element];
+            if (kOp == 3)
+                origins[slot] = from_a ? positions_a[line_offset + element] : positions_b[line_offset + element];
             digits[slot] = (keys[slot] >> params.shift) & (kRadixDigits - 1u);
             add_packed(low, high, digits[slot], 1u);
         }
@@ -1756,20 +1768,21 @@ kernel void radix_sort(device uchar* values_buffer [[buffer(0)]],
                 atomic_load_explicit(&shared_histogram[thread_index], memory_order_relaxed);
         return;
     }
-    // Ranks within the block come from a prefix over the packed counters.
-    shared_low[thread_index] = low;
-    shared_high[thread_index] = high;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint offset = 1; offset < kReduceThreads; offset <<= 1) {
-        const uint4 partial_low = thread_index >= offset ? shared_low[thread_index - offset] : uint4(0);
-        const uint4 partial_high = thread_index >= offset ? shared_high[thread_index - offset] : uint4(0);
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-        shared_low[thread_index] += partial_low;
-        shared_high[thread_index] += partial_high;
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+    // Ranks within the block come from a prefix over the packed counters:
+    // within each SIMD group, then across the groups' totals.
+    uint4 exclusive_low = simd_prefix_exclusive_sum(low), exclusive_high = simd_prefix_exclusive_sum(high);
+    const uint simd = thread_index / 32, lane = thread_index % 32;
+    if (lane == 31) {
+        simd_low[simd] = exclusive_low + low;
+        simd_high[simd] = exclusive_high + high;
     }
-    const uint4 exclusive_low = shared_low[thread_index] - low;
-    const uint4 exclusive_high = shared_high[thread_index] - high;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint earlier = 0; earlier < simd; ++earlier) {
+        exclusive_low += simd_low[earlier];
+        exclusive_high += simd_high[earlier];
+    }
+    // The line's histogram holds inclusive sums; the exclusive one is the entry before.
+    const ulong line_base = ulong(line) * kRadixDigits * params.blocks_per_line;
     uint4 seen_low = uint4(0), seen_high = uint4(0);
     for (uint slot = 0; slot < kRadixPerThread; ++slot) {
         if (digits[slot] == kRadixDigits)
@@ -1777,8 +1790,8 @@ kernel void radix_sort(device uchar* values_buffer [[buffer(0)]],
         const uint rank = read_packed(exclusive_low, exclusive_high, digits[slot]) +
                           read_packed(seen_low, seen_high, digits[slot]);
         add_packed(seen_low, seen_high, digits[slot], 1u);
-        const ulong destination =
-            line_offset + histogram[(ulong(line) * kRadixDigits + digits[slot]) * params.blocks_per_line + block] + rank;
+        const uint entry = digits[slot] * params.blocks_per_line + block;
+        const ulong destination = line_offset + (entry == 0 ? 0u : histogram[line_base + entry - 1]) + rank;
         if (from_a) {
             keys_b[destination] = keys[slot];
             positions_b[destination] = origins[slot];

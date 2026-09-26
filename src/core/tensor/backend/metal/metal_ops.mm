@@ -511,14 +511,19 @@ namespace lfs::core::internal {
         }
 
         // Stages of the reduce kernel, as in vk_ops_reduce.cpp.
-        constexpr uint32_t kPartialMode = 0, kSegmentedMode = 2, kStridedMode = 3;
+        constexpr uint32_t kPartialMode = 0, kSegmentedMode = 2, kStridedMode = 3, kRowMode = 4;
         constexpr size_t kMaxPartials = 1024;
         constexpr size_t kElementsPerPartial = kThreadgroupWidth * 8;
         constexpr size_t kSingleGroupFullReduce = 4096;
         constexpr size_t kSegmentedThreshold = 64;
-        constexpr size_t kSplitOutputLimit = 4096;
+        // Rows up to this long reduce per SIMD group rather than per threadgroup.
+        constexpr size_t kRowModeLimit = 2048;
+        // Strided reductions over a long extent split it until about
+        // kSplitThreads threads run, each folding at least kSplitMinChunk.
         constexpr size_t kSplitReduceThreshold = 1024;
-        constexpr size_t kMaxSplits = 64;
+        constexpr size_t kSplitThreads = 65536;
+        constexpr size_t kSplitMinChunk = 256;
+        constexpr size_t kMaxSplits = 1024;
 
         struct ReduceParams {
             uint64_t input_offset;
@@ -642,6 +647,14 @@ namespace lfs::core::internal {
             const uint32_t reduce32 = checked_u32(reduce, "Metal reduction size exceeds uint32");
             const uint32_t inner32 = checked_u32(inner, "Metal reduction inner size exceeds uint32");
             const float mean_scale = mean_scale_for(op, reduce);
+            if (inner == 1 && reduce >= kSegmentedThreshold && reduce <= kRowModeLimit) {
+                encode_reduce_stage(context, source,
+                                    {.op = op, .mode = kRowMode, .output_code = element_code(output_dtype),
+                                     .output = output,
+                                     .groups = MTLSizeMake((outer + kThreadgroupWidth / 32 - 1) / (kThreadgroupWidth / 32), 1, 1),
+                                     .params = {.outer = outer32, .reduce = reduce32, .inner = 1, .mean_scale = mean_scale}});
+                return;
+            }
             if (inner == 1 && reduce >= kSegmentedThreshold) {
                 encode_reduce_stage(context, source,
                                     {.op = op, .mode = kSegmentedMode, .output_code = element_code(output_dtype),
@@ -655,9 +668,11 @@ namespace lfs::core::internal {
             // Few outputs over a long reduce extent starve the GPU of threads, so
             // the range splits across grid rows into partials that a second
             // strided pass folds.
-            const size_t splits = outputs < kSplitOutputLimit && reduce >= kSplitReduceThreshold
-                                      ? std::min(kMaxSplits, (reduce + kThreadgroupWidth - 1) / kThreadgroupWidth)
-                                      : 1;
+            const size_t splits =
+                reduce >= kSplitReduceThreshold
+                    ? std::clamp<size_t>(std::min(kSplitThreads / outputs, (reduce + kSplitMinChunk - 1) / kSplitMinChunk),
+                                         1, kMaxSplits)
+                    : 1;
             if (splits == 1) {
                 encode_reduce_stage(context, source,
                                     {.op = op, .mode = kStridedMode, .output_code = element_code(output_dtype),
@@ -1327,13 +1342,16 @@ namespace lfs::core::internal {
                                          .grid = MTLSizeMake(groups, 1, 1),
                                          .group_size = MTLSizeMake(kThreadgroupWidth, 1, 1)});
             };
+            StorageRef histogram = scratch.storage;
+            histogram.byte_offset += 4 * array_bytes;
+            histogram.dtype = DataType::Int32;
             const size_t element_groups = (total + kThreadgroupWidth - 1) / kThreadgroupWidth;
             dispatch(0, element_groups);
             for (uint32_t pass = 0; pass < kRadixPasses; ++pass) {
                 params.shift = pass * 4;
                 params.parity = pass & 1u;
                 dispatch(1, lines * blocks_per_line);
-                dispatch(2, lines);
+                encode_scan(*context, histogram, lines, kRadixDigits * blocks_per_line, 1);
                 dispatch(3, lines * blocks_per_line);
             }
             dispatch(4, element_groups);
