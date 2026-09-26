@@ -1152,6 +1152,48 @@ namespace lfs::python {
         second->gaussian_count.store(2, std::memory_order_release);
     }
 
+    // A removed node leaves a tombstone in the consolidated slot table until the
+    // background compaction lands. Removals inside that window must complete and
+    // keep the selection of the remaining nodes.
+    TEST_F(SceneValidityTest, RemovalsBeforeConsolidatedCompactionKeepSelection) {
+        const auto first_id = dummy_scene_.addSplat("First", make_test_splat(2));
+        const auto second_id = dummy_scene_.addSplat("Second", make_test_splat(2));
+        const auto third_id = dummy_scene_.addSplat("Third", make_test_splat(2));
+        ASSERT_NE(third_id, core::NULL_NODE);
+        dummy_scene_.setSelectionMask(std::make_shared<core::Tensor>(
+            make_test_selection_mask({1, 0, 2, 0, 3, 3})));
+        ASSERT_EQ(dummy_scene_.consolidateNodeModels(), 3u);
+
+        dummy_scene_.removeNodeById(first_id);
+        ASSERT_EQ(dummy_scene_.getNodeById(first_id), nullptr);
+        ASSERT_TRUE(dummy_scene_.isConsolidated());
+        EXPECT_EQ(dummy_scene_.capturePerNodeSelectionSlices().size(), 2u);
+        EXPECT_EQ(selection_mask_values(dummy_scene_), (std::vector<uint8_t>{2, 0, 3, 3}));
+
+        dummy_scene_.removeNodeById(second_id);
+        EXPECT_EQ(dummy_scene_.getNodeById(second_id), nullptr);
+        EXPECT_EQ(selection_mask_values(dummy_scene_), (std::vector<uint8_t>{3, 3}));
+    }
+
+    // Once a removal starts it must finish; a selection it cannot map is cleared.
+    TEST_F(SceneValidityTest, RemovalCompletesWhenSelectionCannotBeMapped) {
+        const auto first_id = dummy_scene_.addSplat("First", make_test_splat(2));
+        const auto second_id = dummy_scene_.addSplat("Second", make_test_splat(2));
+        dummy_scene_.setSelectionMask(std::make_shared<core::Tensor>(
+            make_test_selection_mask({1, 0, 0, 2})));
+        ASSERT_EQ(dummy_scene_.consolidateNodeModels(), 2u);
+        auto* second = dummy_scene_.getNodeById(second_id);
+        ASSERT_NE(second, nullptr);
+        second->gaussian_count.store(3, std::memory_order_release);
+
+        EXPECT_NO_THROW(dummy_scene_.removeNodeById(first_id));
+        EXPECT_EQ(dummy_scene_.getNodeById(first_id), nullptr);
+        for (const auto value : selection_mask_values(dummy_scene_)) {
+            EXPECT_EQ(value, 0);
+        }
+        second->gaussian_count.store(2, std::memory_order_release);
+    }
+
     TEST_F(SceneValidityTest, GetApplicationSceneReturnsCorrectPointer) {
         EXPECT_EQ(get_application_scene(), nullptr);
         set_application_scene(&dummy_scene_);

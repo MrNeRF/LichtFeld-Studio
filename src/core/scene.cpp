@@ -429,17 +429,24 @@ namespace lfs::core {
             }
         }
 
+        // The caller may already have detached the node's models, so the removal
+        // must complete: a selection that cannot be mapped is cleared instead.
+        const auto capture_or_clear = [this](const SelectionDomain domain) {
+            try {
+                return capturePerNodeSelectionSlices(domain);
+            } catch (const SelectionTopologyError& error) {
+                LOG_WARN("Clearing the selection while removing a node: {}", error.what());
+                return PerNodeSelectionSlices{};
+            }
+        };
         std::optional<PerNodeSelectionSlices> splat_selection_slices;
         std::optional<PerNodeSelectionSlices>
             point_cloud_selection_slices;
         if (removes_splat_range) {
-            splat_selection_slices = capturePerNodeSelectionSlices(
-                SelectionDomain::Splat);
+            splat_selection_slices = capture_or_clear(SelectionDomain::Splat);
         }
         if (removes_point_cloud_range) {
-            point_cloud_selection_slices =
-                capturePerNodeSelectionSlices(
-                    SelectionDomain::PointCloud);
+            point_cloud_selection_slices = capture_or_clear(SelectionDomain::PointCloud);
         }
 
         removeNodeInternal(id, keep_children);
@@ -1819,11 +1826,17 @@ namespace lfs::core {
             fail("consolidated slot table is empty");
         }
 
+        // A removed node leaves a tombstone until the background compaction
+        // drops its rows. The selection mask already excludes those rows, and
+        // the live slots keep nodes_ order, so tombstones only pad the combined
+        // model.
         size_t node_cursor = 0;
         size_t slot_gaussians = 0;
+        size_t tombstone_gaussians = 0;
         for (const auto& slot : consolidated_node_slots_) {
             if (slot.id == NULL_NODE) {
-                fail("consolidated slot table contains a removed-node tombstone");
+                tombstone_gaussians += slot.gaussian_count;
+                continue;
             }
 
             while (node_cursor < nodes_.size() && nodes_[node_cursor]->id != slot.id) {
@@ -1865,9 +1878,10 @@ namespace lfs::core {
             fail("ordered slot total is " + std::to_string(slot_gaussians) +
                  ", canonical nodes_ total is " + std::to_string(canonical_gaussians));
         }
-        if (static_cast<size_t>(cached_combined_->size()) != slot_gaussians) {
+        if (static_cast<size_t>(cached_combined_->size()) != slot_gaussians + tombstone_gaussians) {
             fail("combined model size is " + std::to_string(cached_combined_->size()) +
-                 ", ordered slot total is " + std::to_string(slot_gaussians));
+                 ", ordered slot total is " + std::to_string(slot_gaussians) + " plus " +
+                 std::to_string(tombstone_gaussians) + " removed");
         }
     }
 
