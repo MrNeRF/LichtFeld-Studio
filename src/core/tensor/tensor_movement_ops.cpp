@@ -6,6 +6,7 @@
 #include "internal/tensor_broadcast.hpp"
 #include "internal/tensor_impl.hpp"
 #include <algorithm>
+#include <format>
 #include <limits>
 #include <numeric>
 #include <string>
@@ -449,18 +450,18 @@ namespace lfs::core {
 
         case MovementOp::Flip: {
             if (auto* vec = std::get_if<std::vector<int>>(&args.args)) {
-                LFS_ASSERT_MSG(device_ == Device::CPU && dtype_ == DataType::Float32,
-                               "flip currently supports only CPU Float32 tensors");
-                auto result = clone();
+                for (const int axis : *vec) {
+                    const int resolved = resolve_dim(axis);
+                    LFS_ASSERT_MSG(resolved >= 0 && resolved < static_cast<int>(shape_.rank()),
+                                   std::format("flip axis {} is out of range for rank {}", axis, shape_.rank()));
+                }
 
                 if (device_ == Device::CPU && dtype_ == DataType::Float32) {
+                    auto result = clone();
                     float* data = result.ptr<float>();
 
                     for (int axis : *vec) {
-                        const int requested_axis = axis;
                         axis = resolve_dim(axis);
-                        LFS_ASSERT_MSG(axis >= 0 && axis < static_cast<int>(shape_.rank()),
-                                       "flip axis is out of range");
 
                         size_t stride = 1;
                         for (size_t i = axis + 1; i < shape_.rank(); ++i) {
@@ -484,11 +485,27 @@ namespace lfs::core {
                             }
                         }
                     }
-                } else {
-                    LOG_WARN("Flip not fully implemented for CUDA");
+                    return result;
                 }
 
-                return result;
+                // Other dtypes and devices gather each axis in reverse. The
+                // indices are in range by construction, so Clamp skips the
+                // validation download.
+                Tensor result = *this;
+                bool flipped = false;
+                for (const int axis : *vec) {
+                    const int resolved = resolve_dim(axis);
+                    const size_t extent = shape_[resolved];
+                    std::vector<int> reversed(extent);
+                    for (size_t i = 0; i < extent; ++i) {
+                        reversed[i] = static_cast<int>(extent - 1 - i);
+                    }
+                    const Tensor indices = ensure_same_device(
+                        Tensor::from_vector(reversed, {extent}, Device::CPU));
+                    result = result.index_select(resolved, indices, BoundaryMode::Clamp);
+                    flipped = true;
+                }
+                return flipped ? result : clone();
             }
             LFS_ASSERT_MSG(false,
                            "flip requires axis arguments");
