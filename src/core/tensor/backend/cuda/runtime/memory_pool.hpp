@@ -92,7 +92,7 @@ namespace lfs::core {
             const cudaError_t sync_status = cudaDeviceSynchronize();
             if (sync_status == cudaSuccess) {
                 GPUSlabAllocator::instance().merge_all_streams_into_virgin();
-                SizeBucketedPool::instance().retag_all_streams(nullptr);
+                SizeBucketedPool::instance().retag_all_streams(reclaim_stream_);
             } else {
                 ensure_cuda_success(
                     sync_status, "cudaDeviceSynchronize(memory-pool shutdown)", {},
@@ -100,6 +100,16 @@ namespace lfs::core {
             }
             SizeBucketedPool::instance().shutdown();
             GPUSlabAllocator::instance().shutdown();
+            if (reclaim_stream_) {
+                // The pool shutdowns above queue their frees on this stream.
+                ensure_cuda_success(
+                    cudaStreamSynchronize(reclaim_stream_), "cudaStreamSynchronize(memory-pool reclaim stream)", {},
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                ensure_cuda_success(
+                    cudaStreamDestroy(reclaim_stream_), "cudaStreamDestroy(memory-pool reclaim stream)", {},
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
+                reclaim_stream_ = nullptr;
+            }
             CudaEventPool::instance().shutdown();
         }
 
@@ -335,12 +345,12 @@ namespace lfs::core {
                     auto& info = entry.second;
                     std::erase(info.extra_streams, stream);
                     if (info.home_stream == stream) {
-                        info.home_stream = nullptr;
+                        info.home_stream = reclaim_stream_;
                     }
                 }
             }
             GPUSlabAllocator::instance().merge_stream_into_virgin(stream);
-            SizeBucketedPool::instance().retag_stream(stream, nullptr);
+            SizeBucketedPool::instance().retag_stream(stream, reclaim_stream_);
             PinnedMemoryAllocator::instance().release_stream(stream);
             // The teardown calls above log-and-continue on CUDA errors; drop any
             // latched error so LFS_CUDA_LAUNCH_CHECK does not blame a later launch.
@@ -574,7 +584,7 @@ namespace lfs::core {
             // Return fully-empty slabs to the driver (steady-state VRAM hygiene).
             // Device is synchronized above; free lists are stream-merged into virgin.
             GPUSlabAllocator::instance().reclaim_empty_slabs();
-            SizeBucketedPool::instance().retag_all_streams(nullptr);
+            SizeBucketedPool::instance().retag_all_streams(reclaim_stream_);
             SizeBucketedPool::instance().trim_cache();
 
 #if CUDART_VERSION >= 12080
@@ -634,6 +644,16 @@ namespace lfs::core {
         };
 
         CudaMemoryPool() {
+            // Cached blocks are retagged onto this stream after a trim or stream
+            // release so later reuse orders against a non-blocking stream instead
+            // of the legacy default stream. Without it they stay on nullptr.
+            if (const cudaError_t status = cudaStreamCreateWithFlags(&reclaim_stream_, cudaStreamNonBlocking);
+                status != cudaSuccess) {
+                reclaim_stream_ = nullptr;
+                ensure_cuda_success(
+                    status, "cudaStreamCreateWithFlags(memory-pool reclaim stream)", {},
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+            }
             configure();
         }
 
@@ -702,10 +722,11 @@ namespace lfs::core {
         // the edges — no host sync, no deferred retention.
         void free_routed(void* ptr, const AllocationInfo& info) {
             for (cudaStream_t extra : info.extra_streams) {
-                // Skip null / home-equal extras. Bridging a destroyed capture stream
-                // can SIGSEGV inside the driver — callers should rehome first,
-                // but free must stay best-effort.
-                if (extra == nullptr || extra == info.home_stream || is_stream_retired(extra))
+                // nullptr is the legacy default stream: a non-blocking home does not
+                // order against it, so it is bridged like any other user. Bridging a
+                // destroyed capture stream can SIGSEGV inside the driver — callers
+                // should rehome first, but free must stay best-effort.
+                if (extra == info.home_stream || is_stream_retired(extra))
                     continue;
                 bridgeStreams(extra, info.home_stream);
             }
@@ -844,6 +865,7 @@ namespace lfs::core {
         }
 #endif
 
+        cudaStream_t reclaim_stream_ = nullptr;
         std::unordered_map<void*, AllocationInfo> allocation_map_;
         mutable std::mutex map_mutex_;
         std::shared_mutex stream_routing_mutex_;
