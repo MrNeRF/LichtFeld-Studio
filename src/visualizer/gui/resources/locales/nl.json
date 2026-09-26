@@ -144,6 +144,7 @@
     "file.save_project": "Project opslaan",
     "file.save_project_as": "Project opslaan als...",
     "file.compact_project": "Project comprimeren",
+    "file.compact_stop_training": "Stop de training voordat je het project comprimeert.",
     "file.embed_dataset": "Dataset in project insluiten",
     "file.auto_save_on_close": "Opslaan bij sluiten zonder te vragen",
     "file.no_recent_projects": "Geen recente projecten",

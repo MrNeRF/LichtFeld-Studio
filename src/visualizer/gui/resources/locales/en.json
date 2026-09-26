@@ -140,6 +140,7 @@
     "file.save_project": "Save Project",
     "file.save_project_as": "Save Project As...",
     "file.compact_project": "Compact Project",
+    "file.compact_stop_training": "Stop training before compacting the project.",
     "file.embed_dataset": "Embed Dataset in Project",
     "file.auto_save_on_close": "Save on Close Without Asking",
     "file.no_recent_projects": "No Recent Projects",

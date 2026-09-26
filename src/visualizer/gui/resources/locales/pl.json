@@ -144,6 +144,7 @@
     "file.save_project": "Zapisz projekt",
     "file.save_project_as": "Zapisz projekt jako...",
     "file.compact_project": "Kompaktuj projekt",
+    "file.compact_stop_training": "Zatrzymaj trening przed kompaktowaniem projektu.",
     "file.embed_dataset": "Osadź zbiór danych w projekcie",
     "file.auto_save_on_close": "Zapisz przy zamykaniu bez pytania",
     "file.no_recent_projects": "Brak ostatnich projektów",

@@ -144,6 +144,7 @@
     "file.save_project": "Guardar proyecto",
     "file.save_project_as": "Guardar proyecto como...",
     "file.compact_project": "Compactar proyecto",
+    "file.compact_stop_training": "Detén el entrenamiento antes de compactar el proyecto.",
     "file.embed_dataset": "Incrustar dataset en el proyecto",
     "file.auto_save_on_close": "Guardar al cerrar sin preguntar",
     "file.no_recent_projects": "No hay proyectos recientes",

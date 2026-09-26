@@ -144,6 +144,7 @@
     "file.save_project": "Salva progetto",
     "file.save_project_as": "Salva progetto con nome...",
     "file.compact_project": "Compatta progetto",
+    "file.compact_stop_training": "Interrompi l'addestramento prima di compattare il progetto.",
     "file.embed_dataset": "Incorpora dataset nel progetto",
     "file.auto_save_on_close": "Salva alla chiusura senza chiedere",
     "file.no_recent_projects": "Nessun progetto recente",

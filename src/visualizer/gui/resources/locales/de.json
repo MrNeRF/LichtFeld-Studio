@@ -144,6 +144,7 @@
     "file.save_project": "Projekt speichern",
     "file.save_project_as": "Projekt speichern unter...",
     "file.compact_project": "Projekt komprimieren",
+    "file.compact_stop_training": "Beenden Sie das Training, bevor Sie das Projekt komprimieren.",
     "file.embed_dataset": "Datensatz ins Projekt einbetten",
     "file.auto_save_on_close": "Beim Schließen speichern ohne Nachfrage",
     "file.no_recent_projects": "Keine zuletzt geöffneten Projekte",

@@ -274,6 +274,10 @@ class CompactProjectOperator(Operator):
     description = "Reclaim dead bytes in the active LichtFeld project"
 
     def execute(self, context) -> set:
+        if lf.is_training_active():
+            lf.ui.message_dialog(lf.ui.tr("menu.file.compact_project"),
+                                 lf.ui.tr("menu.file.compact_stop_training"), "error")
+            return {"CANCELLED"}
         lf.project_compact()
         return {"FINISHED"}
 

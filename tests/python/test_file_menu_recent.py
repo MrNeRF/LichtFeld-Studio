@@ -892,6 +892,27 @@ def test_embed_dataset_operator_requires_external_incomplete_dataset(monkeypatch
     assert file_menu.lf.embed_calls == [True]
 
 
+@pytest.mark.parametrize("training", [True, False])
+def test_compact_during_training_asks_to_stop_training(monkeypatch, training):
+    file_menu = _load_file_menu(monkeypatch)
+    compacted = []
+    file_menu.lf.is_training_active = lambda: training
+    file_menu.lf.project_compact = lambda: compacted.append(True)
+
+    result = file_menu.CompactProjectOperator().execute(None)
+
+    if training:
+        assert result == {"CANCELLED"}
+        assert compacted == []
+        assert file_menu.lf.message_dialogs == [
+            ("tr:menu.file.compact_project", "tr:menu.file.compact_stop_training", "error")
+        ]
+    else:
+        assert result == {"FINISHED"}
+        assert compacted == [True]
+        assert file_menu.lf.message_dialogs == []
+
+
 def test_unrecognized_dataset_reports_modal_and_warning(monkeypatch):
     file_menu = _load_file_menu(monkeypatch)
     selected = "/tmp/not-a-dataset"
