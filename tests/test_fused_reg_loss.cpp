@@ -7,9 +7,9 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "cuda_backend_test.hpp"
+#include "fast_raster_test_helpers.hpp"
 #include "training/losses/regularization.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
-#include "training/rasterization/fast_rasterizer.hpp"
 
 #include <cmath>
 #include <cuda_runtime.h>
@@ -170,6 +170,7 @@ TEST_F(FusedRegLossTest, FusedPathHasNoPerCallRegLossAllocs) {
     auto scale_loss = Tensor::zeros({1}, Device::GPU);
     auto opacity_loss = Tensor::zeros({1}, Device::GPU);
 
+    std::size_t backward_allocs = 0;
     auto run_bwd = [&](int iter) {
         auto fwd = fast_rasterize_forward(*camera_, *splat_, bg_, 0, 0, 0, 0, false);
         ASSERT_TRUE(fwd.has_value()) << std::string(fwd.error().user_message());
@@ -181,9 +182,12 @@ TEST_F(FusedRegLossTest, FusedPathHasNoPerCallRegLossAllocs) {
         extra.opacity_reg_weight = kOpacityWeight;
         extra.scale_reg_loss_out = scale_loss.ptr<float>();
         extra.opacity_reg_loss_out = opacity_loss.ptr<float>();
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        const auto snap = alloc_counter::snapshot();
         fast_rasterize_backward(fwd->second, grad_out, *splat_, opt, {}, {},
                                 DensificationType::None, iter, extra);
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        backward_allocs = alloc_counter::delta_since(snap);
         // Drop forward cache so the next step is a clean same-size run.
         fwd->second.release_forward_context();
     };
@@ -193,14 +197,11 @@ TEST_F(FusedRegLossTest, FusedPathHasNoPerCallRegLossAllocs) {
     ASSERT_GT(scale_loss.cpu().item<float>(), 0.0f);
     ASSERT_GT(opacity_loss.cpu().item<float>(), 0.0f);
 
-    // Steady fused step: zero_ + fused bwd only — no empty for reg loss.
-    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
-    const auto snap = alloc_counter::snapshot();
+    // Steady fused step: the fused backward issues no empty for reg loss.
     ASSERT_NO_FATAL_FAILURE(run_bwd(2));
-    const auto fused_delta = alloc_counter::delta_since(snap);
 
-    EXPECT_EQ(fused_delta, 0u)
-        << "fused reg-loss path must not allocate (got " << fused_delta
+    EXPECT_EQ(backward_allocs, 0u)
+        << "fused reg-loss path must not allocate (got " << backward_allocs
         << " driver allocs); legacy path does empty({num_blocks})+empty({1}) per call";
 
     EXPECT_GT(scale_loss.cpu().item<float>(), 0.0f);

@@ -14,12 +14,12 @@
 #include "core/tensor_cuda_interop.hpp"
 #include "core/tensor_upload.hpp"
 #include "cuda_backend_test.hpp"
+#include "fast_raster_test_helpers.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "training/components/ppisp.hpp"
 #include "training/kernels/densification_kernels.hpp"
-#include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/gsplat/Common.h"
 #include "training/rasterization/gsplat/IntersectionCount.h"
 #include "training/rasterization/gsplat/Ops.h"
@@ -1824,7 +1824,6 @@ TEST_F(GsplatRasterizerTest, FastContextRetiresOutsideExecutionScopeWithoutDevic
     EXPECT_FALSE(other_work.ready()) << "Context retirement must not synchronize unrelated GPU work";
     other_work.wait();
     render.wait();
-    release_fast_rasterizer_thread_local_caches();
 }
 
 TEST_F(GsplatRasterizerTest, FastContextKeepsBackwardQueueAfterException) {
@@ -1866,5 +1865,4 @@ TEST_F(GsplatRasterizerTest, FastContextKeepsBackwardQueueAfterException) {
     EXPECT_TRUE(pending.ready());
     arena.end_frame(frame, static_cast<cudaStream_t>(forward.native_handle()));
     backward.wait();
-    release_fast_rasterizer_thread_local_caches();
 }

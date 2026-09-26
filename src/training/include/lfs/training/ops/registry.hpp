@@ -9,6 +9,7 @@
 #include "lfs/training/ops/loss.hpp"
 #include "lfs/training/ops/mcmc.hpp"
 #include "lfs/training/ops/mrnf.hpp"
+#include "lfs/training/ops/raster.hpp"
 
 #include <bitset>
 #include <optional>
@@ -31,6 +32,7 @@ namespace lfs::training {
         const ops::McmcOps* mcmc = nullptr;
         const ops::MrnfOps* mrnf = nullptr;
         const ops::GeometryLossOps* geometry = nullptr;
+        const ops::FastRasterOps* fast = nullptr;
     };
 
     enum class Family {

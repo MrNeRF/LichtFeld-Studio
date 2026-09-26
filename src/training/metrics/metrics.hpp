@@ -10,6 +10,7 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "lfs/training/ops/loss.hpp"
+#include "lfs/training/ops/raster.hpp"
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -202,6 +203,12 @@ namespace lfs::training {
             }
         }
 
+        // saved is the trainer's Fast state when evaluation runs on that thread.
+        void set_fast(const lfs::gpu_ops::FastRasterOps* ops, lfs::gpu_ops::FastSaved* saved) {
+            _fast_ops = ops;
+            _fast_saved = saved;
+        }
+
         void set_appearance(AppearanceFn fn) { appearance_ = std::move(fn); }
         [[nodiscard]] bool has_appearance() const { return static_cast<bool>(appearance_); }
 
@@ -259,6 +266,9 @@ namespace lfs::training {
         bool _lpips_load_attempted = false;
         std::unique_ptr<MetricsReporter> _reporter;
         AppearanceFn appearance_;
+        const lfs::gpu_ops::FastRasterOps* _fast_ops = nullptr;
+        lfs::gpu_ops::FastSaved* _fast_saved = nullptr;
+        lfs::gpu_ops::FastSaved _fast_owned{};
 
         // Helper functions
         lfs::core::Tensor load_eval_mask(lfs::core::Camera* cam, lfs::core::Tensor& gt_image,
