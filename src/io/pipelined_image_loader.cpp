@@ -502,7 +502,9 @@ namespace lfs::io {
         : config_(std::move(config)),
           output_queue_(std::max<size_t>(1, config_.output_queue_size)) {
 
-        cleanup_stale_run_spill_directories();
+        const bool cuda_run = config_.backend == lfs::core::GpuBackend::CUDA;
+        if (cuda_run)
+            cleanup_stale_run_spill_directories();
         config_.jpeg_batch_size = std::clamp<size_t>(config_.jpeg_batch_size, 1, 12);
         if (config_.decode_frame_ring_capacity == 0) {
             config_.decode_frame_ring_capacity = DECODE_FRAME_RING_CAPACITY;
@@ -530,12 +532,11 @@ namespace lfs::io {
                  config_.cold_process_threads,
                  config_.use_16bit_color);
 
-        const bool cuda_run = config_.backend == lfs::core::GpuBackend::CUDA;
         const bool nvcodec_available = cuda_run && is_nvcodec_available();
         LOG_INFO("[PipelinedImageLoader] host compressed cache cap: {:.1f} GiB",
                  config_.max_cache_bytes / (1024.0 * 1024.0 * 1024.0));
 
-        {
+        if (cuda_run) {
             const auto base = run_spill_base();
             std::error_code ec;
             std::filesystem::create_directories(base, ec);
@@ -563,10 +564,12 @@ namespace lfs::io {
             }
         }
         running_ = true;
-        decoded_frame_ring_ = std::make_shared<DecodedFrameRing>(
-            config_.decode_frame_ring_capacity, &running_);
-        decoded_frame_ring_->set_capacity(adaptive_target_ + 2);
-        decode_hwc_workspace_.resize(config_.jpeg_batch_size);
+        if (cuda_run) {
+            decoded_frame_ring_ = std::make_shared<DecodedFrameRing>(
+                config_.decode_frame_ring_capacity, &running_);
+            decoded_frame_ring_->set_capacity(adaptive_target_ + 2);
+            decode_hwc_workspace_.resize(config_.jpeg_batch_size);
+        }
 
         for (size_t i = 0; i < config_.io_threads; ++i) {
             io_threads_.emplace_back([this] { prefetch_thread_func(); });
@@ -1950,7 +1953,8 @@ namespace lfs::io {
 
         // Capture each producer before publishing. Waiting belongs to the consumer,
         // otherwise a slow mask stalls subsequent work on the shared decode queue.
-        // Other backends order cross-thread tensor use inside the tensor library.
+        // VulkanRecorderRegistry submits foreign producers and tracks access barriers;
+        // Metal serializes dispatches through its shared context encoder.
         std::optional<lfs::core::TensorFence> image_ready, mask_ready;
         const bool cuda_run = config_.backend == lfs::core::GpuBackend::CUDA;
         if (image && cuda_run) {
@@ -2047,6 +2051,10 @@ namespace lfs::io {
                 depth_result.undistort = request.undistort;
                 depth_result.aux_target_width = request.aux_target_width;
                 depth_result.aux_target_height = request.aux_target_height;
+                if (!cuda_run) {
+                    cold_queue_.push(std::move(depth_result));
+                    return;
+                }
                 depth_result.cache_key = make_sidecar_key(depth_result, SidecarCacheFormat::Depth);
                 if (auto cached = load_cached_jpeg_blob(depth_result.cache_key)) {
                     depth_result.jpeg_data = std::move(cached);
@@ -2089,6 +2097,10 @@ namespace lfs::io {
                 normal_result.undistort = request.undistort;
                 normal_result.aux_target_width = request.aux_target_width;
                 normal_result.aux_target_height = request.aux_target_height;
+                if (!cuda_run) {
+                    cold_queue_.push(std::move(normal_result));
+                    return;
+                }
                 normal_result.cache_key = make_sidecar_key(normal_result, SidecarCacheFormat::Normal);
                 if (auto cached = load_cached_jpeg_blob(normal_result.cache_key)) {
                     normal_result.jpeg_data = std::move(cached);
