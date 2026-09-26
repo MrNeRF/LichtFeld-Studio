@@ -170,9 +170,9 @@ TEST_F(AdamCapacityInvariant, SlowPathGatherAlsoRestoresCapacity) {
     auto indices = Tensor::arange(0.0f, static_cast<float>(n_grow), 1.0f)
                        .to(DataType::Int32)
                        .to(Device::GPU);
-    // extend_state_by_gather expects param already grown; grow param first then state.
-    splat.scaling_raw().append_gather(indices);
-    opt.extend_state_by_gather(ParamType::Scaling, indices);
+    // The model row count follows means, which a densify grow extends first.
+    splat.means().append_gather(indices);
+    opt.add_new_params_gather(ParamType::Scaling, indices);
 
     EXPECT_EQ(AdamOptimizer::slow_path_grow_count(), 1u);
     state = opt.get_state_mutable(ParamType::Scaling);
@@ -183,8 +183,8 @@ TEST_F(AdamCapacityInvariant, SlowPathGatherAlsoRestoresCapacity) {
     // Second gather grow — fast.
     const uint64_t slow_before = AdamOptimizer::slow_path_grow_count();
     const auto snap = alloc_counter::snapshot();
-    splat.scaling_raw().append_gather(indices);
-    opt.extend_state_by_gather(ParamType::Scaling, indices);
+    splat.means().append_gather(indices);
+    opt.add_new_params_gather(ParamType::Scaling, indices);
     EXPECT_EQ(AdamOptimizer::slow_path_grow_count(), slow_before);
     EXPECT_LE(alloc_counter::delta_since(snap), 2u);
     EXPECT_GE(state->capacity, state->size);

@@ -1008,12 +1008,8 @@
   "result-in-cu": {},
   "unchecked-kernel-launch": {
     "training": [
-      "src/training/rasterization/fastgs/optimizer/src/adam_api.cu:104",
-      "src/training/rasterization/fastgs/optimizer/src/adam_api.cu:114",
-      "src/training/rasterization/fastgs/optimizer/src/adam_api.cu:240",
-      "src/training/rasterization/fastgs/optimizer/src/adam_api.cu:290",
-      "src/training/rasterization/fastgs/optimizer/src/adam_api.cu:320",
-      "src/training/rasterization/fastgs/optimizer/src/adam_api.cu:323"
+      "src/training/rasterization/fastgs/optimizer/src/adam_api.cu:122",
+      "src/training/rasterization/fastgs/optimizer/src/adam_api.cu:172"
     ]
   },
   "unpinned-multi-capture": {},

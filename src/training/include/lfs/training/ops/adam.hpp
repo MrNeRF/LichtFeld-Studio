@@ -71,10 +71,6 @@ namespace lfs::gpu_ops {
     };
 
     struct AdamOps {
-        void (*step)(
-            const JointStep&, const AdamMasks&,
-            const AdamHyper&, const AdamModifiers&);
-
         // One update over every present step. A step whose parameter binding is
         // invalid is absent.
         void (*step_batch)(
@@ -89,12 +85,6 @@ namespace lfs::gpu_ops {
         // Encodes zero moments at int64 indices. Block bounds may widen.
         void (*encode_zero)(
             Out packed, Out bounds, In indices, const JointCodecParams&);
-
-        // Re-encodes rows appended by a gather of int64 source indices under
-        // their destination block bounds.
-        void (*transcode_gathered)(
-            Out packed, In bounds, In indices,
-            int old_primitives, int attributes, int bits);
     };
 
 } // namespace lfs::gpu_ops

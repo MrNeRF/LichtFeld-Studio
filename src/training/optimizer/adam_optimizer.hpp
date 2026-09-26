@@ -203,7 +203,6 @@ namespace lfs::training {
         // Keeps CUDA-resident indices on device; accepts int32 or int64 tensors.
         void reset_state_at_indices(ParamType type, const lfs::core::Tensor& indices);
         void extend_state_for_new_params(ParamType type, size_t n_new);
-        void extend_state_by_gather(ParamType type, const lfs::core::Tensor& indices);
 
         // State access
         const AdamParamState* get_state(ParamType type) const;
@@ -259,7 +258,7 @@ namespace lfs::training {
         std::string param_name(ParamType type) const;
         void init_state(ParamType type, bool allocate_grad = false);
         void ensure_grad(ParamType type);
-        void step_param(ParamType type, int iteration);
+        void step_shN(int iteration);
         [[nodiscard]] const lfs::gpu_ops::AdamOps& adam_ops() const;
         [[nodiscard]] lfs::gpu_ops::AdamHyper adam_hyper() const;
         [[nodiscard]] lfs::gpu_ops::AdamModifiers adam_modifiers() const;

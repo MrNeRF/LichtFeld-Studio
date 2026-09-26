@@ -2564,10 +2564,23 @@ TEST_F(NormalLossHunt, JointRotationCuda100kSteps) {
     for (int c = 0; c < 8; ++c)
         g[c] = (c % 2 ? -7.f : 10.f) * (c < 4 ? 1e-5f : 1e-11f);
     auto grad = Tensor::from_vector(g, {size_t{rows}, size_t{attrs}}, Device::GPU);
+    auto adam_step = [&](const float bc1, const float bc2) {
+        const fast_lfs::optimizer::JointContiguousBatchEntry entry{
+            .param = p.ptr<float>(),
+            .packed = packed.ptr<uint8_t>(),
+            .bounds = bounds.ptr<float>(),
+            .grad = grad.ptr<float>(),
+            .n_prims = rows,
+            .n_attr = attrs,
+            .lr = .002f,
+            .bias_correction1_rcp = bc1,
+            .bias_correction2_sqrt_rcp = bc2,
+        };
+        fast_lfs::optimizer::adam_step_joint_contiguous_batched(
+            &entry, 1, nullptr, 0, 1, nullptr, 0, 1, .9f, .999f, 1e-15f);
+    };
     for (int step = 1; step <= 100000; ++step) {
-        float bc1 = 1 / (1 - std::pow(.9f, step)), bc2 = 1 / std::sqrt(1 - std::pow(.999f, step));
-        fast_lfs::optimizer::adam_step_joint_contiguous_raw(p.ptr<float>(), packed.ptr<uint8_t>(), bounds.ptr<float>(), grad.ptr<float>(),
-                                                            nullptr, 0, 1, nullptr, 0, 1, rows, attrs, 16, .002, .9, .999, 1e-15, bc1, bc2);
+        adam_step(1 / (1 - std::pow(.9f, step)), 1 / std::sqrt(1 - std::pow(.999f, step)));
     }
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     auto pc = p.cpu(), bc = bounds.cpu(), qc = packed.cpu();
@@ -2584,9 +2597,7 @@ TEST_F(NormalLossHunt, JointRotationCuda100kSteps) {
     // Starting a real gradient after zero history must not skip its first step.
     g[8] = 1e-10f;
     grad = Tensor::from_vector(g, {size_t{rows}, size_t{attrs}}, Device::GPU);
-    fast_lfs::optimizer::adam_step_joint_contiguous_raw(
-        p.ptr<float>(), packed.ptr<uint8_t>(), bounds.ptr<float>(), grad.ptr<float>(),
-        nullptr, 0, 1, nullptr, 0, 1, rows, attrs, 16, .002f, .9f, .999f, 1e-15f, 1, 1);
+    adam_step(1, 1);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     const auto resumed = p.cpu();
     const float expected_delta = .002f * (1.0f - .9f) * g[8] /

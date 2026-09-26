@@ -148,27 +148,6 @@ namespace {
         return static_cast<float>(1.0 / std::sqrt(1.0 - std::pow(0.999, step)));
     }
 
-    void launch_step(Group& g, const Masks& m, const int bits, const int step,
-                     const bool mean_step, const bool share) {
-        const int n = static_cast<int>(g.parameter.shape()[0]);
-        const int attrs = static_cast<int>(g.parameter.shape()[1]);
-        fast_lfs::optimizer::adam_step_joint_contiguous_raw(
-            g.parameter.ptr<float>(), g.packed.ptr<uint8_t>(), g.bounds.ptr<float>(),
-            g.gradient.ptr<float>(),
-            optional_ptr<bool>(m.frozen), static_cast<int>(m.frozen.numel()), kModifiers.frozen_lr_scale,
-            optional_ptr<bool>(m.crop), static_cast<int>(m.crop.numel()), kModifiers.cropbox_lr_scale,
-            n, attrs, bits, 0.01f, kBeta1, kBeta2, kEps, bc1(step), bc2(step),
-            lfs::core::getCurrentCUDAStream(),
-            mean_step ? optional_ptr<float>(m.raw_scales) : nullptr,
-            mean_step ? static_cast<int>(m.raw_scales.numel()) : 0,
-            kModifiers.median_extent, kModifiers.r_min, kModifiers.r_max,
-            optional_ptr<bool>(m.far), static_cast<int>(m.far.numel()),
-            share ? optional_ptr<float>(m.share) : nullptr,
-            share ? static_cast<int>(m.share.numel()) : 0,
-            share ? kModifiers.screen_share_limit : 0.0f,
-            share ? kModifiers.screen_share_penalty : 0.0f);
-    }
-
     ops::JointStep joint_step(Group& g, const int bits, const int step,
                               const bool mean_step, const bool share) {
         return {
@@ -296,27 +275,6 @@ namespace {
 
 class AdamOpsBytes : public lfs::test::CudaBackendTest {};
 
-TEST_F(AdamOpsBytes, StepMatchesLauncher) {
-    constexpr size_t n = 700;
-    for (const int bits : {8, 16}) {
-        for (const bool modified : {false, true}) {
-            SCOPED_TRACE(std::to_string(bits) + (modified ? " bit, masked" : " bit"));
-            const Masks masks = Masks::make(n, modified);
-            Group expected = Group::make(n, 3, bits, 1);
-            Group actual = expected.clone();
-            const auto parameter_before = bytes(actual.parameter);
-            for (int step = 1; step <= 3; ++step) {
-                launch_step(expected, masks, bits, step, modified, modified);
-                lfs::training::cuda_adam_ops().step(
-                    joint_step(actual, bits, step, modified, modified), masks.view(), kHyper, kModifiers);
-                advance_gradient(expected, actual, step);
-            }
-            expect_changed(actual.parameter, parameter_before, "step parameter");
-            actual.expect_same(expected, "step");
-        }
-    }
-}
-
 TEST_F(AdamOpsBytes, StepBatchMatchesLauncherAndSkipsAbsentSteps) {
     constexpr size_t n = 700;
     constexpr std::array<size_t, 5> attrs{3, 3, 3, 4, 1};
@@ -420,9 +378,8 @@ TEST_F(AdamOpsBytes, EncodeZeroMatchesLauncher) {
     for (const int bits : {8, 16}) {
         SCOPED_TRACE(std::to_string(bits) + " bit rows");
         Group expected = Group::make(n, 4, bits, 3);
-        for (int step = 1; step <= 2; ++step) {
-            launch_step(expected, masks, bits, step, false, false);
-        }
+        expected.packed.copy_from(pattern(expected.packed.shape(), 100.0f, 63).abs().to(DataType::UInt8));
+        expected.bounds.copy_from(pattern(expected.bounds.shape(), 0.5f, 64));
         Group actual = expected.clone();
         const auto packed_before = bytes(actual.packed);
         fast_lfs::optimizer::joint_encode_zero_rows_at_indices(
@@ -462,35 +419,6 @@ TEST_F(AdamOpsBytes, EncodeZeroMatchesLauncher) {
             {.layout = ops::JointLayout::SwizzledSH, .primitives = static_cast<int>(n), .attributes_or_slots = slots, .bits = bits});
         expect_changed(actual.packed, packed_before, "encode_zero SH");
         actual.expect_same(expected, "encode_zero SH");
-    }
-}
-
-TEST_F(AdamOpsBytes, TranscodeGatheredMatchesLauncher) {
-    constexpr size_t old_n = 760;
-    const std::vector<int64_t> sources{0, 17, 255, 256, 257, 759, 3, 300, 300, 511};
-    const Tensor indices = rows(sources);
-    const size_t new_n = old_n + sources.size();
-    const Masks masks = Masks::make(old_n, false);
-    for (const int bits : {8, 16}) {
-        SCOPED_TRACE(std::to_string(bits) + " bit");
-        Group stepped = Group::make(old_n, 3, bits, 5);
-        for (int step = 1; step <= 2; ++step) {
-            launch_step(stepped, masks, bits, step, false, false);
-        }
-        Tensor packed = Tensor::cat({stepped.packed, stepped.packed.index_select(0, indices)}, 0);
-        Tensor bounds = Tensor::zeros({joint_adam::n_bounds_for_prims(new_n), size_t{4}}, Device::GPU);
-        bounds.slice(0, 0, stepped.bounds.shape()[0]).copy_from(stepped.bounds);
-        bounds.slice(0, stepped.bounds.shape()[0], bounds.shape()[0]).fill_(0.25f);
-        Tensor expected = packed.clone();
-        Tensor actual = packed.clone();
-        fast_lfs::optimizer::joint_transcode_gathered_rows_at_indices(
-            expected.ptr<uint8_t>(), bounds.ptr<float>(), indices.ptr<int64_t>(),
-            static_cast<int>(indices.numel()), static_cast<int>(old_n), 3, bits,
-            lfs::core::getCurrentCUDAStream());
-        lfs::training::cuda_adam_ops().transcode_gathered(
-            actual, bounds, indices, static_cast<int>(old_n), 3, bits);
-        expect_changed(actual, bytes(packed), "transcode_gathered");
-        expect_same_bytes(actual, expected, "transcode_gathered");
     }
 }
 

@@ -376,7 +376,7 @@ namespace lfs::training {
             };
             adam_ops().step_batch(steps, masks, adam_hyper(), adam_modifiers());
         }
-        step_param(ParamType::ShN, iteration);
+        step_shN(iteration);
     }
 
     size_t AdamOptimizer::compute_state_growth(ParamType type, size_t n_new) const {
@@ -693,19 +693,18 @@ namespace lfs::training {
         state.capacity = std::max(state.capacity, alloc_cap);
     }
 
-    void AdamOptimizer::step_param(ParamType type, const int iteration) {
-        auto& param = get_param(type);
+    void AdamOptimizer::step_shN(const int iteration) {
+        auto& param = get_param(ParamType::ShN);
         if (!param.is_valid() || param.numel() == 0) {
             return;
         }
-        if (type == ParamType::ShN &&
-            (iteration <= SH_WARMUP_ITERATIONS || splat_data_.active_sh_coeffs_rest() == 0)) {
+        if (iteration <= SH_WARMUP_ITERATIONS || splat_data_.active_sh_coeffs_rest() == 0) {
             return;
         }
 
-        const auto name = param_name(type);
+        const auto name = param_name(ParamType::ShN);
         if (!states_.contains(name)) {
-            init_state(type, false);
+            init_state(ParamType::ShN, false);
         }
 
         auto& state = states_[name];
@@ -716,11 +715,11 @@ namespace lfs::training {
 
         state.step_count++;
 
-        auto& param_live = get_param(type);
+        auto& param_live = get_param(ParamType::ShN);
 
         const double bias_correction1_rcp = 1.0 / (1.0 - std::pow(config_.beta1, state.step_count));
         const double bias_correction2_sqrt_rcp = 1.0 / std::sqrt(1.0 - std::pow(config_.beta2, state.step_count));
-        const float param_lr = static_cast<float>(get_param_lr(type));
+        const float param_lr = static_cast<float>(get_param_lr(ParamType::ShN));
 
         const cudaStream_t execution_stream = lfs::core::getCurrentCUDAStream();
         param_live.sync_to_stream(execution_stream);
@@ -735,113 +734,58 @@ namespace lfs::training {
             crop_damping_mask_.sync_to_stream(execution_stream);
         }
 
-        // Contiguous params use the joint step. shN uses the SH step, which shares
-        // its device code with the fused FastGS update.
-        if (state.is_joint()) {
-            if (type == ParamType::ShN) {
-                if (!state.joint_bounds.is_valid()) {
-                    throw std::runtime_error("AdamOptimizer::step_param: joint state missing bounds");
-                }
-                const auto layout_rest =
-                    static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest());
-                const auto active_rest =
-                    static_cast<uint32_t>(splat_data_.active_sh_coeffs_rest());
-                const size_t n_live = static_cast<size_t>(splat_data_.size());
-                const size_t float_layout =
-                    lfs::core::sh_swizzled_float_count(n_live, layout_rest);
-                if (state.size != float_layout) {
-                    throw std::runtime_error("Optimizer state desync: shN");
-                }
-                const bool q16 = splat_data_.shN_value_quantized() &&
-                                 splat_data_.shN_value_bounds().is_valid();
-                const lfs::gpu_ops::AdamMasks masks{
-                    .frozen = frozen_mask_,
-                    .crop_damping = crop_damping_mask_,
-                    .raw_scales = absent_,
-                    .far_mask = absent_,
-                    .screen_share = absent_,
-                };
-                adam_ops().step_sh(
-                    param_live,
-                    state.exp_avg,
-                    state.joint_bounds,
-                    q16 ? splat_data_.shN_value_bounds() : absent_,
-                    state.grad,
-                    masks,
-                    adam_hyper(),
-                    adam_modifiers(),
-                    {
-                        .primitives = static_cast<int>(n_live),
-                        .layout_slots = static_cast<int>(
-                            lfs::core::sh_float4_slots_for_rest(layout_rest)),
-                        .active_bases = static_cast<int>(active_rest + 1u),
-                        .value_bits = q16 || splat_data_.shN_ieee_f16() ? 16 : 0,
-                        .value_cells = q16 ? static_cast<int>(
-                                                 lfs::core::sh_value_quant::n_value_cells_per_prim(layout_rest))
-                                           : 0,
-                        .step_size = param_lr * static_cast<float>(bias_correction1_rcp),
-                        .bc2_sqrt_rcp = static_cast<float>(bias_correction2_sqrt_rcp),
-                    });
-                param_live.set_stream(execution_stream);
-                state.exp_avg.set_stream(execution_stream);
-                state.joint_bounds.set_stream(execution_stream);
-                state.grad.set_stream(execution_stream);
-                return;
-            }
-            if (!state.joint_bounds.is_valid()) {
-                throw std::runtime_error("AdamOptimizer::step_param: joint state missing bounds");
-            }
-            const size_t param_size = param_live.shape()[0];
-            if (param_size != state.size) {
-                throw std::runtime_error("Optimizer state desync: " + name);
-            }
-            const size_t feature_dim = param_live.numel() / param_size;
-            if (mean_step_far_mask_storage_.is_valid()) {
-                mean_step_far_mask_storage_.sync_to_stream(execution_stream);
-            }
-            bool apply_mean_step = false;
-            if (type == ParamType::Means && per_splat_mean_step_) {
-                auto& scaling = splat_data_.scaling_raw();
-                if (scaling.is_valid() && scaling.numel() > 0) {
-                    scaling.sync_to_stream(execution_stream);
-                    apply_mean_step = true;
-                }
-            }
-            const lfs::gpu_ops::AdamMasks masks{
-                .frozen = frozen_mask_,
-                .crop_damping = crop_damping_mask_,
-                .raw_scales = apply_mean_step ? splat_data_.scaling_raw() : absent_,
-                .far_mask = mean_step_far_mask_storage_,
-                .screen_share = screen_share_max_ != nullptr ? splat_data_._max_screen_share : absent_,
-            };
-            adam_ops().step(
-                {
-                    .parameter = param_live,
-                    .packed = state.exp_avg,
-                    .bounds = state.joint_bounds,
-                    .gradient = state.grad,
-                    .primitives = static_cast<int>(state.size),
-                    .attributes = static_cast<int>(feature_dim),
-                    .bits = state.joint_bits,
-                    .lr = param_lr,
-                    .bc1_rcp = static_cast<float>(bias_correction1_rcp),
-                    .bc2_sqrt_rcp = static_cast<float>(bias_correction2_sqrt_rcp),
-                    .apply_mean_step = apply_mean_step,
-                    .apply_screen_share = type == ParamType::Scaling,
-                },
-                masks,
-                adam_hyper(),
-                adam_modifiers());
-            param_live.set_stream(execution_stream);
-            state.exp_avg.set_stream(execution_stream);
-            state.joint_bounds.set_stream(execution_stream);
-            state.grad.set_stream(execution_stream);
-            return;
+        if (!state.is_joint()) {
+            throw std::runtime_error(
+                "AdamOptimizer::step_shN: non-joint state is unsupported "
+                "(joint (u,log_s) is the only Adam codec)");
         }
-
-        throw std::runtime_error(
-            "AdamOptimizer::step_param: non-joint state is unsupported "
-            "(joint (u,log_s) is the only Adam codec)");
+        if (!state.joint_bounds.is_valid()) {
+            throw std::runtime_error("AdamOptimizer::step_shN: joint state missing bounds");
+        }
+        const auto layout_rest =
+            static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest());
+        const auto active_rest =
+            static_cast<uint32_t>(splat_data_.active_sh_coeffs_rest());
+        const size_t n_live = static_cast<size_t>(splat_data_.size());
+        const size_t float_layout =
+            lfs::core::sh_swizzled_float_count(n_live, layout_rest);
+        if (state.size != float_layout) {
+            throw std::runtime_error("Optimizer state desync: shN");
+        }
+        const bool q16 = splat_data_.shN_value_quantized() &&
+                         splat_data_.shN_value_bounds().is_valid();
+        const lfs::gpu_ops::AdamMasks masks{
+            .frozen = frozen_mask_,
+            .crop_damping = crop_damping_mask_,
+            .raw_scales = absent_,
+            .far_mask = absent_,
+            .screen_share = absent_,
+        };
+        adam_ops().step_sh(
+            param_live,
+            state.exp_avg,
+            state.joint_bounds,
+            q16 ? splat_data_.shN_value_bounds() : absent_,
+            state.grad,
+            masks,
+            adam_hyper(),
+            adam_modifiers(),
+            {
+                .primitives = static_cast<int>(n_live),
+                .layout_slots = static_cast<int>(
+                    lfs::core::sh_float4_slots_for_rest(layout_rest)),
+                .active_bases = static_cast<int>(active_rest + 1u),
+                .value_bits = q16 || splat_data_.shN_ieee_f16() ? 16 : 0,
+                .value_cells = q16 ? static_cast<int>(
+                                         lfs::core::sh_value_quant::n_value_cells_per_prim(layout_rest))
+                                   : 0,
+                .step_size = param_lr * static_cast<float>(bias_correction1_rcp),
+                .bc2_sqrt_rcp = static_cast<float>(bias_correction2_sqrt_rcp),
+            });
+        param_live.set_stream(execution_stream);
+        state.exp_avg.set_stream(execution_stream);
+        state.joint_bounds.set_stream(execution_stream);
+        state.grad.set_stream(execution_stream);
     }
 
     FastGSFusedAdamState AdamOptimizer::prepare_fastgs_fused_adam(
@@ -1211,107 +1155,6 @@ namespace lfs::training {
             }
         }
         reset_state_at_indices(type, host_indices);
-    }
-
-    void AdamOptimizer::extend_state_by_gather(ParamType type, const lfs::core::Tensor& indices) {
-        const auto name = param_name(type);
-        if (!states_.contains(name))
-            return;
-
-        const size_t n_new = indices.numel();
-        if (n_new == 0)
-            return;
-
-        auto& param = get_param(type);
-        auto& state = states_[name];
-        const size_t new_size = state.size + n_new;
-
-        if (type == ParamType::ShN &&
-            (splat_data_.max_sh_coeffs_rest() == 0 ||
-             !state.exp_avg.is_valid())) {
-            return;
-        }
-
-        if (!param.is_valid() || param.shape().rank() == 0) {
-            LOG_WARN("extend_state_by_gather: {} param invalid", name);
-            return;
-        }
-        if (!state.exp_avg.is_valid() || state.exp_avg.ndim() == 0) {
-            LOG_WARN("extend_state_by_gather: {} state invalid", name);
-            return;
-        }
-
-        // Contiguous params only: moment rows == primitive rows == scale rows, so moments and
-        // scales grow with the same indices. (shN duplication goes through add_new_params_gather.)
-        if (type == ParamType::ShN) {
-            LOG_WARN("extend_state_by_gather: shN handled via add_new_params_gather; skipping");
-            return;
-        }
-
-        if (state.is_joint()) {
-            // Joint packed [N, C*bpc]: gather rows; grow bounds table for new N.
-            const bool grad_has_capacity = !state.grad.is_valid() || state.grad.capacity() > 0;
-            const bool fits = grad_has_capacity && state.exp_avg.capacity() > 0 &&
-                              new_size <= state.exp_avg.capacity() &&
-                              (!state.grad.is_valid() || new_size <= state.grad.capacity());
-            if (fits) {
-                state.exp_avg.append_gather(indices);
-                if (state.grad.is_valid())
-                    state.grad.append_zeros(n_new);
-            } else {
-                note_slow_path_grow("extend_state_by_gather(joint)", name);
-                state.exp_avg = lfs::core::Tensor::cat(
-                    {state.exp_avg, state.exp_avg.index_select(0, indices)}, 0);
-                if (state.grad.is_valid()) {
-                    const auto& shape = param.shape();
-                    std::vector<size_t> new_dims(shape.dims());
-                    new_dims[0] = new_size;
-                    state.grad = lfs::core::Tensor::zeros(lfs::core::TensorShape(new_dims), param.device());
-                }
-                const size_t target_cap = compute_new_capacity(new_size, new_size);
-                state.exp_avg.reserve(target_cap);
-                if (state.grad.is_valid())
-                    state.grad.reserve(target_cap);
-            }
-            // Bounds: grow-only to cover ceil(new_N/256); zero-init new blocks only.
-            const size_t old_N = new_size - n_new;
-            const size_t prim_cap =
-                state.capacity > 0 ? state.capacity
-                                   : compute_new_capacity(new_size, new_size);
-            ensure_joint_bounds_capacity(state.joint_bounds, new_size, prim_cap,
-                                         param.device(), /*zero_all=*/false);
-            // raw gather copies codes across blocks with different bounds → garbage.
-            // Transcode decode(src bounds) → encode(dst bounds) for the new rows.
-            if (n_new > 0 && state.joint_bounds.is_valid()) {
-                const int bpc = joint_adam::bytes_per_cell(state.joint_bits);
-                const int row_bytes = static_cast<int>(tensor_row_size(state.exp_avg));
-                const int n_attr = bpc > 0 ? row_bytes / bpc : 0;
-                if (n_attr > 0) {
-                    const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
-                    state.exp_avg.sync_to_stream(stream);
-                    state.joint_bounds.sync_to_stream(stream);
-                    indices.sync_to_stream(stream);
-                    const bool idx_i64 = indices.dtype() == lfs::core::DataType::Int64;
-                    const lfs::core::Tensor idx64 =
-                        idx_i64 ? lfs::core::Tensor{} : indices.to(lfs::core::DataType::Int64);
-                    adam_ops().transcode_gathered(
-                        state.exp_avg,
-                        state.joint_bounds,
-                        idx_i64 ? indices : idx64,
-                        static_cast<int>(old_N),
-                        n_attr,
-                        state.joint_bits);
-                    state.exp_avg.set_stream(stream);
-                }
-            }
-            state.size = new_size;
-            state.capacity = state.exp_avg.capacity();
-            return;
-        }
-
-        throw std::runtime_error(
-            "extend_state_by_gather: non-joint Adam state is unsupported "
-            "(joint (u,log_s) is the only codec)");
     }
 
     void AdamOptimizer::extend_state_for_new_params(ParamType type, const size_t n_new) {

@@ -31,43 +31,6 @@ namespace lfs::training {
             return static_cast<int>(tensor.numel());
         }
 
-        void adam_step(
-            const JointStep& step, const AdamMasks& masks,
-            const AdamHyper& hyper, const AdamModifiers& modifiers) {
-            fast_lfs::optimizer::adam_step_joint_contiguous_raw(
-                step.parameter.ptr<float>(),
-                step.packed.ptr<std::uint8_t>(),
-                step.bounds.ptr<float>(),
-                step.gradient.ptr<float>(),
-                optional_ptr<bool>(masks.frozen),
-                count(masks.frozen),
-                modifiers.frozen_lr_scale,
-                optional_ptr<bool>(masks.crop_damping),
-                count(masks.crop_damping),
-                modifiers.cropbox_lr_scale,
-                step.primitives,
-                step.attributes,
-                step.bits,
-                step.lr,
-                hyper.beta1,
-                hyper.beta2,
-                hyper.eps,
-                step.bc1_rcp,
-                step.bc2_sqrt_rcp,
-                lfs::core::getCurrentCUDAStream(),
-                step.apply_mean_step ? optional_ptr<float>(masks.raw_scales) : nullptr,
-                step.apply_mean_step ? count(masks.raw_scales) : 0,
-                modifiers.median_extent,
-                modifiers.r_min,
-                modifiers.r_max,
-                optional_ptr<bool>(masks.far_mask),
-                count(masks.far_mask),
-                step.apply_screen_share ? optional_ptr<float>(masks.screen_share) : nullptr,
-                step.apply_screen_share ? count(masks.screen_share) : 0,
-                step.apply_screen_share ? modifiers.screen_share_limit : 0.0f,
-                step.apply_screen_share ? modifiers.screen_share_penalty : 0.0f);
-        }
-
         void adam_step_batch(
             const std::span<const JointStep> steps, const AdamMasks& masks,
             const AdamHyper& hyper, const AdamModifiers& modifiers) {
@@ -181,26 +144,10 @@ namespace lfs::training {
                 lfs::core::getCurrentCUDAStream());
         }
 
-        void adam_transcode_gathered(
-            Tensor& packed, const Tensor& bounds, const Tensor& indices,
-            const int old_primitives, const int attributes, const int bits) {
-            fast_lfs::optimizer::joint_transcode_gathered_rows_at_indices(
-                packed.ptr<std::uint8_t>(),
-                bounds.ptr<float>(),
-                indices.ptr<int64_t>(),
-                count(indices),
-                old_primitives,
-                attributes,
-                bits,
-                lfs::core::getCurrentCUDAStream());
-        }
-
         const lfs::gpu_ops::AdamOps kCudaAdamOps{
-            .step = adam_step,
             .step_batch = adam_step_batch,
             .step_sh = adam_step_sh,
             .encode_zero = adam_encode_zero,
-            .transcode_gathered = adam_transcode_gathered,
         };
 
     } // namespace
