@@ -377,6 +377,36 @@ namespace {
         }
     }
 
+    TEST_F(TensorMetal, FillInPlaceMatchesCpu) {
+        // Contiguous tensors, offset views and strided views, for every
+        // filled dtype, including a signed zero.
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            SCOPED_TRACE(static_cast<int>(backend));
+            GpuBackendScope scope(backend);
+            for (const auto dtype : {DataType::Float32, DataType::Int32, DataType::Bool}) {
+                for (const float value : {0.0f, -0.0f, 1.0f, 7.0f}) {
+                    SCOPED_TRACE(std::to_string(static_cast<int>(dtype)) + " " + std::to_string(value));
+                    const Tensor source = random_tensor(6 * 10, 0.0f, 3.0f, 107).to(dtype).reshape({6, 10});
+                    Tensor expected = source.clone(), found = source.to(Device::GPU);
+                    expected.fill_(value);
+                    found.fill_(value);
+                    expect_close(found.to(DataType::Float32), expected.to(DataType::Float32), 0.0f, 0.0f);
+                    if (dtype == DataType::Float32)
+                        EXPECT_EQ(std::signbit(found.to_vector()[3]), std::signbit(value));
+                    expected = source.clone();
+                    found = source.to(Device::GPU);
+                    expected.slice(0, 2, 5).fill_(value);
+                    found.slice(0, 2, 5).fill_(value);
+                    expected.transpose(0, 1).slice(0, 7, 9).fill_(value);
+                    found.transpose(0, 1).slice(0, 7, 9).fill_(value);
+                    expect_close(found.to(DataType::Float32), expected.to(DataType::Float32), 0.0f, 0.0f);
+                }
+            }
+        }
+    }
+
     TEST_F(TensorMetal, BroadcastsMatchCpu) {
         const Tensor a_cpu = random_tensor(4 * 1 * 3, -2.0f, 2.0f, 33).reshape({4, 1, 3});
         const Tensor b_cpu = random_tensor(5 * 1, -2.0f, 2.0f, 34).reshape({5, 1});
