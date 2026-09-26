@@ -154,9 +154,12 @@ namespace lfs::core::internal::metal {
 
         // A batch records into a frame, its command memory and the parameter
         // blocks of its dispatches, which are reused once the batch completes.
+        // Command buffers do not retain pipelines, and the expression cache may
+        // evict one while its batch runs, so the frame holds them.
         struct Frame {
             id<MTL4CommandAllocator> allocator;
             id<MTLBuffer> params;
+            std::vector<id<MTLComputePipelineState>> pipelines;
             uint64_t serial = 0;
         };
 

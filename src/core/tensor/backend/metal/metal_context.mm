@@ -172,6 +172,7 @@ namespace lfs::core::internal::metal {
                            beforeEncoderStages:MTLStageDispatch
                              visibilityOptions:MTL4VisibilityOptionDevice];
         [encoder setComputePipelineState:dispatch.pipeline];
+        frames_[frame_].pipelines.push_back(dispatch.pipeline);
         NSUInteger slot = 0;
         for (const uint64_t address : dispatch.buffers)
             [arguments_ setAddress:address atIndex:slot++];
@@ -186,6 +187,9 @@ namespace lfs::core::internal::metal {
             const NSUInteger width = std::min(dispatch.pipeline.maxTotalThreadsPerThreadgroup, kThreadgroupWidth);
             [encoder dispatchThreads:dispatch.grid threadsPerThreadgroup:MTLSizeMake(width, 1, 1)];
         } else {
+            LFS_ASSERT_MSG(dispatch.group_size.width * dispatch.group_size.height * dispatch.group_size.depth <=
+                               dispatch.pipeline.maxTotalThreadsPerThreadgroup,
+                           "Metal threadgroup exceeds its pipeline's limit");
             [encoder dispatchThreadgroups:dispatch.grid threadsPerThreadgroup:dispatch.group_size];
         }
         for (const StorageRef& use : uses) {
@@ -255,6 +259,7 @@ namespace lfs::core::internal::metal {
     void Context::prepare_locked() {
         frame_ = acquire_frame_locked();
         [frames_[frame_].allocator reset];
+        frames_[frame_].pipelines.clear();
         params_used_ = 0;
         [command_buffer_ beginCommandBufferWithAllocator:frames_[frame_].allocator];
         encoder_ = [command_buffer_ computeCommandEncoder];
