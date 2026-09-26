@@ -1367,7 +1367,15 @@ namespace lfs::core::internal {
 
         // random_op kinds.
         constexpr uint32_t kUniform = 0, kBernoulli = 1, kRandint = 2, kNormal = 3, kMultinomialReplacement = 4,
-                           kGumbelKeys = 5, kWeightStatistics = 7, kRunningSums = 8;
+                           kGumbelKeys = 5, kWeightStatistics = 7, kRunningSums = 8, kBlockOffsets = 9;
+        // Weights per block of running sums; kernels.metal's kSumBlock.
+        constexpr uint32_t kSumBlock = 1024;
+
+        // A power of two that brings the largest weight near 2^0.
+        float multinomial_scale(const float maximum) {
+            const uint32_t exponent = std::clamp((std::bit_cast<uint32_t>(maximum) >> 23) & 255u, 1u, 253u);
+            return std::bit_cast<float>((254u - exponent) << 23);
+        }
 
         struct RandomParams {
             uint64_t output_offset;
@@ -2201,9 +2209,8 @@ namespace lfs::core::internal {
         const uint32_t samples = checked_u32(program.sample_count, "Metal multinomial sample count exceeds uint32");
         // The weights are validated on the host, like the CUDA path.
         struct WeightStatistics {
-            float sum;
+            float maximum;
             uint32_t invalid;
-            float scale;
         };
         WeightStatistics statistics{};
         {
@@ -2214,14 +2221,17 @@ namespace lfs::core::internal {
             std::memcpy(&statistics, context->host(scratch.storage), sizeof(statistics));
         }
         LFS_ASSERT_MSG(statistics.invalid == 0, "multinomial weights must be finite and non-negative");
-        LFS_ASSERT_MSG(std::isfinite(statistics.sum) && statistics.sum > 0.0f,
-                       "multinomial weights must have a positive finite sum");
+        LFS_ASSERT_MSG(statistics.maximum > 0.0f, "multinomial weights must have a positive finite sum");
         if (program.replacement) {
-            // One pass of running sums, then a binary search per draw.
-            const Scratch sums(*context, program.count * sizeof(float));
+            // Running sums within blocks, the blocks' offsets, then a binary
+            // search per draw. The weights are scaled so their maximum sits
+            // near 2^0, which keeps the sums finite.
+            const uint32_t blocks = (categories + kSumBlock - 1) / kSumBlock;
+            const Scratch sums(*context, (program.count + blocks + 1) * sizeof(float));
             const RandomParams params{.seed = program.seed, .count = categories, .sample_count = samples,
-                                      .first = statistics.scale, .total = statistics.sum};
-            encode_random(*context, kRunningSums, {}, weights, sums.storage, params, MTLSizeMake(1, 1, 1));
+                                      .first = multinomial_scale(statistics.maximum)};
+            encode_random(*context, kRunningSums, {}, weights, sums.storage, params, thread_groups(blocks));
+            encode_random(*context, kBlockOffsets, {}, weights, sums.storage, params, MTLSizeMake(1, 1, 1));
             encode_random(*context, kMultinomialReplacement, output, weights, sums.storage, params,
                           thread_groups(program.sample_count));
             return;
@@ -3285,6 +3295,67 @@ namespace lfs::core::internal {
     bool MetalBackendOps::has_inf(const StorageRef input, const size_t count, ExecContext) {
         LFS_FACADE_TRACE(has_inf);
         return count_matches(3, input, count) != 0;
+    }
+
+    // Long lines split into chunks whose keys a second pass folds, so a
+    // single argmax over a large tensor still fills the GPU. Contiguous lines
+    // fold in SIMD groups for coalesced loads; strided ones a thread each.
+    bool MetalBackendOps::arg_extreme(const StorageRef input, const StorageRef values, const StorageRef indices,
+                                      const ArgExtremeProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(arg_extreme);
+        LFS_ASSERT_MSG(input.dtype == DataType::Float32,
+                       std::format("Metal arg_extreme requires Float32 input, got {}", dtype_name(input.dtype)));
+        const size_t outputs = program.outer * program.inner;
+        if (outputs == 0)
+            return true;
+        LFS_ASSERT_MSG(program.reduce > 0, "arg_extreme cannot reduce an empty dimension");
+        struct ArgExtremeParams {
+            uint32_t outer, reduce, inner, chunk, chunks;
+            uint32_t padding[3];
+        };
+        constexpr size_t kTargetThreads = 65536, kMaxChunks = 1024;
+        const bool rows = program.inner == 1 && program.reduce >= 64;
+        const size_t lanes = rows ? 32 : 1;
+        const size_t minimum_chunk = rows ? 32 * 16 : 64;
+        const size_t chunks = std::clamp<size_t>(
+            std::min(kTargetThreads / (outputs * lanes), (program.reduce + minimum_chunk - 1) / minimum_chunk), 1,
+            kMaxChunks);
+        const size_t chunk = (program.reduce + chunks - 1) / chunks;
+        const ArgExtremeParams params{
+            .outer = checked_u32(program.outer, "Metal arg_extreme outer size exceeds uint32"),
+            .reduce = checked_u32(program.reduce, "Metal arg_extreme size exceeds uint32"),
+            .inner = checked_u32(program.inner, "Metal arg_extreme inner size exceeds uint32"),
+            .chunk = static_cast<uint32_t>(chunk),
+            .chunks = static_cast<uint32_t>(chunks)};
+        checked_u32(outputs, "Metal arg_extreme output count exceeds uint32");
+        const auto context = acquire_context();
+        const uint32_t maximum = program.maximum ? 1u : 0u;
+        std::optional<Scratch> keys;
+        if (chunks > 1)
+            keys.emplace(*context, chunks * outputs * sizeof(uint64_t));
+        const auto at = [&](const StorageRef storage) {
+            const auto located = context->locate(storage);
+            return located.address + located.offset;
+        };
+        const auto keys_address = keys ? at(keys->storage) : at(input);
+        const auto dispatch = [&](const uint32_t pass, const MTLSize grid) {
+            std::vector<StorageRef> uses{input, values, indices};
+            if (keys)
+                uses.push_back(keys->storage);
+            context->dispatch(uses, {.pipeline = context->pipeline("arg_extreme", {{0, pass << 1 | maximum}}),
+                                     .buffers = {at(input), keys_address, at(values), at(indices)},
+                                     .params = param_bytes(params),
+                                     .grid = grid,
+                                     .group_size = MTLSizeMake(kThreadgroupWidth, 1, 1)});
+        };
+        const size_t output_groups = (outputs + kThreadgroupWidth - 1) / kThreadgroupWidth;
+        if (rows)
+            dispatch(1, MTLSizeMake((program.outer + kThreadgroupWidth / 32 - 1) / (kThreadgroupWidth / 32), chunks, 1));
+        else
+            dispatch(0, MTLSizeMake(output_groups, chunks, 1));
+        if (chunks > 1)
+            dispatch(2, MTLSizeMake((outputs + kThreadgroupWidth / 32 - 1) / (kThreadgroupWidth / 32), 1, 1));
+        return true;
     }
 
     void MetalBackendOps::cumsum(const StorageRef data, const StridedLayout& layout, const int dim, ExecContext) {

@@ -116,6 +116,12 @@ namespace lfs::core {
             // NaN and Inf checks synchronize and download their flag before returning.
             virtual bool has_nan(StorageRef input, size_t count, ExecContext context) = 0;
             virtual bool has_inf(StorageRef input, size_t count, ExecContext context) = 0;
+            // Float32 extrema and their Int64 positions, chosen as the CPU loop
+            // does: the first NaN after position 0, else a NaN at position 0,
+            // else the first strict extreme. Returns false, writing nothing,
+            // when the backend has no kernel for it.
+            virtual bool arg_extreme(StorageRef input, StorageRef values, StorageRef indices,
+                                     const ArgExtremeProgram& program, ExecContext context) = 0;
             virtual void cumsum(StorageRef data, const StridedLayout& layout, int dim,
                                 ExecContext context) = 0;
             virtual void sort_1d(StorageRef values, StorageRef indices, size_t count,
@@ -427,6 +433,8 @@ namespace lfs::core {
                                        ExecContext context) override;
             bool has_nan(StorageRef input, size_t count, ExecContext context) override;
             bool has_inf(StorageRef input, size_t count, ExecContext context) override;
+            bool arg_extreme(StorageRef, StorageRef, StorageRef, const ArgExtremeProgram&,
+                             ExecContext) override { return false; }
             void cumsum(StorageRef data, const StridedLayout& layout, int dim,
                         ExecContext context) override;
             void sort_1d(StorageRef values, StorageRef indices, size_t count,

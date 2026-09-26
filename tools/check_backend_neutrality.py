@@ -83,12 +83,16 @@ BACKEND_BRANCH = re.compile(
 INTERNAL_SYMBOL = re.compile(r'(?<![\w:])(?:(?:lfs::)?core::)?internal::\w+')
 CORE_SCOPE = re.compile(r'\b(?:namespace|using\s+namespace)\s+lfs::core(?:\s*[;{]|::nn\b)')
 INTERNAL_NAMESPACE = re.compile(r'\b(?:using\s+namespace|namespace\s+\w+\s*=)\s+(?:(?:lfs::)?core::)internal\b')
-TOKEN = re.compile(r'/\*[\s\S]*?\*/|//[^\n]*|R"([^ ()\\\t\r\n]{0,16})\([\s\S]*?\)\1"|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'')
+# Numbers come before character literals so digit separators (1'000) do not open one.
+TOKEN = re.compile(r'/\*[\s\S]*?\*/|//[^\n]*|R"([^ ()\\\t\r\n]{0,16})\([\s\S]*?\)\1"|"(?:\\.|[^"\\])*"|'
+                   r'(?<![\w.])\.?\d(?:[eEpP][+-]|\'?[\w.])*|\'(?:\\.|[^\'\\])*\'')
 
 
 def mask_tokens(source: str, *, strings: bool = True) -> str:
     def replace(match: re.Match) -> str:
         text = match.group()
+        if text[0].isdigit() or text[0] == ".":
+            return text
         if not strings and not text.startswith(("//", "/*")):
             return text
         return re.sub(r'[^\n]', ' ', text)
