@@ -989,46 +989,53 @@ namespace {
     }
 
     TEST_F(TensorMetal, SortsMatchCpu) {
-        // Short lines sort in one threadgroup, longer ones through the radix sort.
-        for (const size_t count : {size_t{1}, size_t{7}, size_t{2048}, size_t{2049}, size_t{100000}}) {
-            SCOPED_TRACE(count);
-            std::vector<float> values = random_tensor(count, -3.0f, 3.0f, 62).to_vector();
-            for (size_t i = 0; i < count; i += 11)
-                values[i] = i % 2 == 0 ? 0.0f : -0.0f;
-            for (size_t i = 5; i < count; i += 97)
-                values[i] = std::numeric_limits<float>::quiet_NaN();
-            const Tensor x_cpu = Tensor::from_vector(values, {count}, Device::CPU);
-            for (const bool descending : {false, true}) {
-                SCOPED_TRACE(descending);
-                const auto [sorted, indices] = to_metal(x_cpu).sort(0, descending);
-                const auto [sorted_cpu, indices_cpu] = x_cpu.sort(0, descending);
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            SCOPED_TRACE(static_cast<int>(backend));
+            GpuBackendScope scope(backend);
+            const auto on_gpu = [](const Tensor& cpu) { return cpu.to(Device::GPU); };
+            // Short lines sort in one threadgroup, longer ones through the radix sort.
+            for (const size_t count : {size_t{1}, size_t{7}, size_t{2048}, size_t{2049}, size_t{100000}}) {
+                SCOPED_TRACE(count);
+                std::vector<float> values = random_tensor(count, -3.0f, 3.0f, 62).to_vector();
+                for (size_t i = 0; i < count; i += 11)
+                    values[i] = i % 2 == 0 ? 0.0f : -0.0f;
+                for (size_t i = 5; i < count; i += 97)
+                    values[i] = std::numeric_limits<float>::quiet_NaN();
+                const Tensor x_cpu = Tensor::from_vector(values, {count}, Device::CPU);
+                for (const bool descending : {false, true}) {
+                    SCOPED_TRACE(descending);
+                    const auto [sorted, indices] = on_gpu(x_cpu).sort(0, descending);
+                    const auto [sorted_cpu, indices_cpu] = x_cpu.sort(0, descending);
+                    expect_close(sorted, sorted_cpu, 0.0f, 0.0f);
+                    expect_close(indices, indices_cpu, 0.0f, 0.0f);
+                }
+            }
+            // Many short rows share a threadgroup, each sorted in its own direction.
+            for (const size_t width : {size_t{1}, size_t{2}, size_t{5}, size_t{64}, size_t{1000}, size_t{2048}}) {
+                SCOPED_TRACE(width);
+                std::vector<float> values = random_tensor(300 * width, -3.0f, 3.0f, 64).to_vector();
+                for (size_t i = 3; i < values.size(); i += 13)
+                    values[i] = i % 2 == 0 ? std::numeric_limits<float>::quiet_NaN() : -0.0f;
+                const Tensor rows = Tensor::from_vector(values, {300, width}, Device::CPU);
+                for (const bool descending : {false, true}) {
+                    SCOPED_TRACE(descending);
+                    const auto [sorted, indices] = on_gpu(rows).sort(1, descending);
+                    const auto [sorted_cpu, indices_cpu] = rows.sort(1, descending);
+                    expect_close(sorted, sorted_cpu, 0.0f, 0.0f);
+                    expect_close(indices, indices_cpu, 0.0f, 0.0f);
+                }
+            }
+            // Along an inner axis of a 3D tensor, short and long lines.
+            for (const int length : {33, 3000}) {
+                SCOPED_TRACE(length);
+                const Tensor volume = random_tensor(static_cast<size_t>(4 * length * 3), -3.0f, 3.0f, 63).reshape({4, length, 3});
+                const auto [sorted, indices] = on_gpu(volume).sort(1);
+                const auto [sorted_cpu, indices_cpu] = volume.sort(1);
                 expect_close(sorted, sorted_cpu, 0.0f, 0.0f);
                 expect_close(indices, indices_cpu, 0.0f, 0.0f);
             }
-        }
-        // Many short rows share a threadgroup, each sorted in its own direction.
-        for (const size_t width : {size_t{5}, size_t{64}, size_t{1000}}) {
-            SCOPED_TRACE(width);
-            std::vector<float> values = random_tensor(300 * width, -3.0f, 3.0f, 64).to_vector();
-            for (size_t i = 3; i < values.size(); i += 13)
-                values[i] = i % 2 == 0 ? std::numeric_limits<float>::quiet_NaN() : -0.0f;
-            const Tensor rows = Tensor::from_vector(values, {300, width}, Device::CPU);
-            for (const bool descending : {false, true}) {
-                SCOPED_TRACE(descending);
-                const auto [sorted, indices] = to_metal(rows).sort(1, descending);
-                const auto [sorted_cpu, indices_cpu] = rows.sort(1, descending);
-                expect_close(sorted, sorted_cpu, 0.0f, 0.0f);
-                expect_close(indices, indices_cpu, 0.0f, 0.0f);
-            }
-        }
-        // Along an inner axis of a 3D tensor, short and long lines.
-        for (const int length : {33, 3000}) {
-            SCOPED_TRACE(length);
-            const Tensor volume = random_tensor(static_cast<size_t>(4 * length * 3), -3.0f, 3.0f, 63).reshape({4, length, 3});
-            const auto [sorted, indices] = to_metal(volume).sort(1);
-            const auto [sorted_cpu, indices_cpu] = volume.sort(1);
-            expect_close(sorted, sorted_cpu, 0.0f, 0.0f);
-            expect_close(indices, indices_cpu, 0.0f, 0.0f);
         }
     }
 
