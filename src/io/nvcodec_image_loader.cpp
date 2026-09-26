@@ -5,6 +5,7 @@
 #include "io/nvcodec_image_loader.hpp"
 #include "core/assert.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
+#include "core/cuda_error.hpp"
 #include "core/environment.hpp"
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
@@ -125,8 +126,7 @@ namespace lfs::io {
             }
         }
 
-        bool cuda_context_poisoned_for_nvcodec_teardown() noexcept {
-            const cudaError_t sync_status = cudaDeviceSynchronize();
+        bool cuda_context_poisoned_for_nvcodec_teardown(const cudaError_t sync_status) noexcept {
             if (sync_status == cudaSuccess) {
                 return false;
             }
@@ -808,6 +808,8 @@ namespace lfs::io {
         // to the fixed-function nvJPEG path that produced the false success.
         std::vector<nvimgcodecDecoder_t> cuda_fallback_decoder_pool;
         std::vector<bool> decoder_available;
+        std::vector<cudaEvent_t> decoder_done;
+        std::atomic<cudaError_t> completion_error{cudaSuccess};
         std::vector<uint32_t*> sentinel_flag_scratch;
         std::vector<size_t> sentinel_flag_capacity;
         std::mutex pool_mutex;
@@ -870,17 +872,18 @@ namespace lfs::io {
                 new_capacity *= 2;
             }
             uint32_t* replacement = nullptr;
-            if (const cudaError_t status = cudaMalloc(
-                    reinterpret_cast<void**>(&replacement), new_capacity * sizeof(uint32_t));
+            const auto stream = lfs::core::getCurrentCUDAStream();
+            if (const cudaError_t status = cudaMallocAsync(
+                    reinterpret_cast<void**>(&replacement), new_capacity * sizeof(uint32_t), stream);
                 status != cudaSuccess) {
                 throw std::runtime_error(
                     std::string("Sentinel validation scratch allocation failed: ") +
                     cudaGetErrorString(status));
             }
             if (sentinel_flag_scratch[idx]) {
-                if (const cudaError_t status = cudaFree(sentinel_flag_scratch[idx]);
+                if (const cudaError_t status = cudaFreeAsync(sentinel_flag_scratch[idx], stream);
                     status != cudaSuccess) {
-                    if (const cudaError_t release_status = cudaFree(replacement);
+                    if (const cudaError_t release_status = cudaFreeAsync(replacement, stream);
                         release_status != cudaSuccess) {
                         LOG_WARN("[NvCodecImageLoader] Sentinel scratch rollback free failed: {}",
                                  cudaGetErrorString(release_status));
@@ -898,10 +901,13 @@ namespace lfs::io {
         size_t acquire_decoder() {
             std::unique_lock<std::mutex> lock(pool_mutex);
             pool_cv.wait(lock, [this] {
-                return std::find(decoder_available.begin(), decoder_available.end(), true) != decoder_available.end();
+                return completion_error.load() != cudaSuccess ||
+                       std::find(decoder_available.begin(), decoder_available.end(), true) != decoder_available.end();
             });
+            LFS_CUDA_CHECK(completion_error.load());
             for (size_t i = 0; i < decoder_available.size(); ++i) {
                 if (decoder_available[i]) {
+                    LFS_CUDA_CHECK(cudaStreamWaitEvent(lfs::core::getCurrentCUDAStream(), decoder_done[i], 0));
                     decoder_available[i] = false;
                     return i;
                 }
@@ -912,9 +918,16 @@ namespace lfs::io {
         void release_decoder(const size_t idx) {
             {
                 std::lock_guard<std::mutex> lock(pool_mutex);
+                const auto status = cudaEventRecord(decoder_done[idx], lfs::core::getCurrentCUDAStream());
+                if (status != cudaSuccess) {
+                    const auto sync_status = cudaStreamSynchronize(lfs::core::getCurrentCUDAStream());
+                    if (sync_status != cudaSuccess)
+                        completion_error.store(sync_status);
+                    LOG_WARN("[NvCodecImageLoader] Decoder completion record failed: {}", cudaGetErrorString(status));
+                }
                 decoder_available[idx] = true;
             }
-            pool_cv.notify_one();
+            pool_cv.notify_all();
         }
 
         ~Impl() noexcept {
@@ -922,7 +935,15 @@ namespace lfs::io {
                 CUcontext current_ctx = nullptr;
                 const CUresult ctx_result = cuCtxGetCurrent(&current_ctx);
                 if (ctx_result == CUDA_SUCCESS && current_ctx != nullptr) {
-                    if (cuda_context_poisoned_for_nvcodec_teardown()) {
+                    auto completion_status = completion_error.load();
+                    for (const auto event : decoder_done) {
+                        if (!event)
+                            continue;
+                        const auto status = cudaEventSynchronize(event);
+                        if (status != cudaSuccess)
+                            completion_status = status;
+                    }
+                    if (cuda_context_poisoned_for_nvcodec_teardown(completion_status)) {
                         encoder = nullptr;
                         decoder_pool.clear();
                         cuda_fallback_decoder_pool.clear();
@@ -934,6 +955,15 @@ namespace lfs::io {
                         return;
                     }
 
+                    for (const auto event : decoder_done) {
+                        if (!event)
+                            continue;
+                        if (const cudaError_t status = cudaEventDestroy(event); status != cudaSuccess) {
+                            LOG_WARN("[NvCodecImageLoader] Decoder completion event destroy failed at teardown: {}",
+                                     cudaGetErrorString(status));
+                        }
+                    }
+                    decoder_done.clear();
                     if (encoder) {
                         nvimgcodecEncoderDestroy(encoder);
                         encoder = nullptr;
@@ -957,8 +987,7 @@ namespace lfs::io {
 
                     for (auto*& scratch : sentinel_flag_scratch) {
                         if (scratch) {
-                            if (const cudaError_t status = cudaFree(scratch);
-                                status != cudaSuccess) {
+                            if (const cudaError_t status = cudaFree(scratch); status != cudaSuccess) {
                                 LOG_WARN("[NvCodecImageLoader] Sentinel scratch free failed at teardown: {}",
                                          cudaGetErrorString(status));
                             }
@@ -1047,6 +1076,9 @@ namespace lfs::io {
         impl_->decoder_pool.resize(pool_size);
         impl_->cuda_fallback_decoder_pool.resize(pool_size, nullptr);
         impl_->decoder_available.resize(pool_size, true);
+        impl_->decoder_done.resize(pool_size, nullptr);
+        for (auto& event : impl_->decoder_done)
+            LFS_CUDA_CHECK(cudaEventCreateWithFlags(&event, cudaEventDisableTiming));
         impl_->sentinel_flag_scratch.resize(pool_size, nullptr);
         impl_->sentinel_flag_capacity.resize(pool_size, 0);
 
@@ -1429,15 +1461,10 @@ namespace lfs::io {
             }
         }
 
-        // Materialize before handoff. With a caller stream, sync only it — a
-        // device-wide sync would couple image availability to in-flight
-        // training kernels on other streams.
-        if (cuda_stream) {
-            if (const cudaError_t err = cudaStreamSynchronize(static_cast<cudaStream_t>(cuda_stream));
-                err != cudaSuccess) {
-                throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
-            }
-        } else if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
+        // Materialize before handoff by syncing the execution stream only: a
+        // device-wide sync would couple image availability to training work.
+        if (const cudaError_t err = cudaStreamSynchronize(static_cast<cudaStream_t>(cuda_stream));
+            err != cudaSuccess) {
             throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
         }
         image_tensor_aux = Tensor();
@@ -1781,10 +1808,8 @@ namespace lfs::io {
                 }
             }
             if (synchronize) {
-                const auto err = cuda_stream
-                                     ? cudaStreamSynchronize(static_cast<cudaStream_t>(cuda_stream))
-                                     : cudaDeviceSynchronize();
-                if (err != cudaSuccess) {
+                if (const auto err = cudaStreamSynchronize(static_cast<cudaStream_t>(cuda_stream));
+                    err != cudaSuccess) {
                     throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
                 }
             }
@@ -2349,13 +2374,9 @@ namespace lfs::io {
         }
 
         if (decode_uint8) {
-            if (synchronize && cuda_stream) {
+            if (synchronize) {
                 if (const cudaError_t err = cudaStreamSynchronize(static_cast<cudaStream_t>(cuda_stream));
                     err != cudaSuccess) {
-                    throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
-                }
-            } else if (synchronize) {
-                if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
                     throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
                 }
             }
@@ -2375,13 +2396,9 @@ namespace lfs::io {
             output_tensor.ptr<float>(),
             height, width, num_components, static_cast<cudaStream_t>(cuda_stream));
 
-        if (synchronize && cuda_stream) {
+        if (synchronize) {
             if (const cudaError_t err = cudaStreamSynchronize(static_cast<cudaStream_t>(cuda_stream));
                 err != cudaSuccess) {
-                throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
-            }
-        } else if (synchronize) {
-            if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
                 throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
             }
         }
@@ -2565,13 +2582,9 @@ namespace lfs::io {
                 outputs.push_back(std::move(output));
             }
 
-            if (synchronize && cuda_stream) {
+            if (synchronize) {
                 if (const cudaError_t err = cudaStreamSynchronize(static_cast<cudaStream_t>(cuda_stream));
                     err != cudaSuccess) {
-                    throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
-                }
-            } else if (synchronize) {
-                if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
                     throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
                 }
             }
