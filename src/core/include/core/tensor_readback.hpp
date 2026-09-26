@@ -66,8 +66,10 @@ namespace lfs::core {
     // CUDA implemented; Vulkan reports unsupported before allocating resources.
     class LFS_CORE_API TensorReadbackRing {
     public:
-        // Optional staging is retained and reused for device staging; it must be
-        // contiguous UInt8 storage on this backend, at least slot_bytes long.
+        // Optional staging is borrowed for device staging: the caller owns it and
+        // may release and reallocate it between captures. Whenever it is valid it
+        // must be contiguous UInt8 storage on this backend, at least slot_bytes
+        // long; while it is empty the ring stages through its own buffer.
         // Serialize any other staging reads/writes on the same queue.
         TensorReadbackRing(GpuBackend backend, std::size_t slots,
                            std::size_t slot_bytes, TensorWorkQueue& queue,

@@ -164,7 +164,6 @@ namespace lfs::training {
         lfs::core::Tensor _edge_score_sum;
         lfs::core::Tensor _edge_view_scores;
         int _edge_sample_count = 0;
-        PositiveMedianScratch _edge_median_scratch;
         lfs::core::Tensor _error_score_max;
         bool _precompute_valid = false;
 

@@ -650,10 +650,11 @@ namespace lfs::training {
         void record_vram_tensor(std::string_view scope,
                                 std::string_view label,
                                 const lfs::core::Tensor& tensor) {
-            // C7: Sampled disclosures must not claim Direct. Direct is reserved for
-            // hooked cudaMalloc via try_allocate_direct. External storage is External;
-            // ordinary CUDA tensors are Unknown (method census only).
-            const auto method = tensor.is_external_storage()
+            // The zeros_direct storage total backs Direct tensor disclosures.
+            // Other external tensors retain their external provenance.
+            const auto method = tensor.external_storage_kind() == "cuda.direct"
+                                    ? lfs::diagnostics::VramAllocationMethod::Direct
+                                : tensor.is_external_storage()
                                     ? lfs::diagnostics::VramAllocationMethod::External
                                     : lfs::diagnostics::VramAllocationMethod::Unknown;
             record_vram_current(scope, label, tensor_reserved_bytes(tensor), false, method);
@@ -746,6 +747,9 @@ namespace lfs::training {
         }
 
         void record_optimizer_vram_breakdown(const AdamOptimizer& optimizer) {
+            lfs::diagnostics::VramProfiler::instance().setGauge(
+                "vram.audit.tensor.cuda_direct_live_bytes",
+                static_cast<double>(lfs::core::Tensor::cuda_direct_storage_live_bytes()));
             for (const auto type : AdamOptimizer::all_param_types()) {
                 const auto* state = optimizer.get_state(type);
                 if (!state) {
@@ -3042,6 +3046,12 @@ namespace lfs::training {
         return active_image_loader_;
     }
 
+    std::function<std::uint64_t(std::uint64_t)> Trainer::release_image_cache_for_snapshot() const {
+        return [loader = getActiveImageLoader()](const std::uint64_t bytes) -> std::uint64_t {
+            return loader ? loader->release_host_cache(static_cast<size_t>(bytes)) : 0;
+        };
+    }
+
     Trainer::GTLoadConfigSnapshot Trainer::getGTLoadConfigSnapshot() const {
         std::lock_guard<std::mutex> lock(gt_load_config_mutex_);
         return gt_load_config_snapshot_;
@@ -4041,6 +4051,7 @@ namespace lfs::training {
             .snapshot_uuid = snapshot_uuid,
             .relaxed_host_memory_gate =
                 write_kind == ProjectSnapshotWriteKind::Explicit,
+            .release_host_memory = release_image_cache_for_snapshot(),
             .strategy = *strategy_,
             .params = checkpoint_params,
             .bilateral_grid = bilateral_grid_.get(),
@@ -4289,6 +4300,7 @@ namespace lfs::training {
             .snapshot_uuid = snapshot_uuid,
             .relaxed_host_memory_gate =
                 cpu_write_kind == ProjectSnapshotWriteKind::Explicit,
+            .release_host_memory = release_image_cache_for_snapshot(),
             .strategy = *strategy_,
             .params = checkpoint_params,
             .bilateral_grid = bilateral_grid_.get(),
@@ -4469,6 +4481,7 @@ namespace lfs::training {
             false, std::memory_order_release);
         project_writer_in_flight_.store(
             true, std::memory_order_release);
+        lfs::diagnostics::VramProfiler::instance().mark("save");
 
         try {
             project_writer_thread_ = std::jthread(
@@ -5362,6 +5375,7 @@ namespace lfs::training {
             photo_reset(photo_saved_);
             resize_rasterizer_arena_at_boundary("B3 pause", true);
             LOG_INFO("Training paused at iteration {}", iter);
+            lfs::diagnostics::VramProfiler::instance().mark("training_pause");
             LOG_DEBUG("Click 'Resume Training' to continue.");
         } else if (!pause_requested_.load() && is_paused_.load()) {
             is_paused_ = false;
@@ -5373,6 +5387,7 @@ namespace lfs::training {
                     get_progress_phase(iter));
             }
             LOG_INFO("Training resumed at iteration {}", iter);
+            lfs::diagnostics::VramProfiler::instance().mark("training_resume");
         }
 
         // Handle stop request - this permanently stops training
@@ -5380,6 +5395,7 @@ namespace lfs::training {
             // B3: no new forward work will consume these views.
             photo_reset(photo_saved_);
             LOG_INFO("Stopping training permanently at iteration {}...", iter);
+            lfs::diagnostics::VramProfiler::instance().mark("training_stop");
         }
     }
 
@@ -5467,7 +5483,6 @@ namespace lfs::training {
         ++edge_weight_preprocessing_generation_;
         edge_weight_scoring_active_ = false;
         edge_map_buffer_ = {};
-        edge_weight_median_scratch_.release();
     }
 
     lfs::core::Tensor Trainer::get_edge_weight_map(
@@ -5506,8 +5521,7 @@ namespace lfs::training {
 
         if (!edge_map_buffer_.is_valid() || edge_map_buffer_.shape() != map_shape ||
             edge_map_buffer_.dtype() != lfs::core::DataType::Float32) {
-            edge_map_buffer_ = lfs::core::Tensor::empty(
-                map_shape, lfs::core::Device::GPU, lfs::core::DataType::Float32);
+            edge_map_buffer_ = lfs::core::Tensor::empty_exact(map_shape, lfs::core::DataType::Float32);
         }
         edge_map_buffer_.set_stream(stream);
         if (gt_image.dtype() == lfs::core::DataType::UInt8) {
@@ -5520,8 +5534,7 @@ namespace lfs::training {
                 static_cast<int>(height), static_cast<int>(width), stream);
         }
         kernels::launch_normalize_by_positive_median(
-            edge_map_buffer_.ptr<float>(), height * width, stream,
-            &edge_weight_median_scratch_);
+            edge_map_buffer_.ptr<float>(), height * width, stream);
 
         lfs::core::Tensor map;
         const bool cacheable = map_bytes <= EDGE_WEIGHT_CACHE_BUDGET_BYTES;
@@ -6296,6 +6309,11 @@ namespace lfs::training {
                                   normal_prior_usable_ &&
                                   cam->has_normal()) ||
                                  params_.optimization.normal_consistency_weight > 0.0f);
+                            const bool render_depth =
+                                render_normal ||
+                                (params_.optimization.use_depth_loss &&
+                                 params_.optimization.depth_loss_weight > 0.0f) ||
+                                strategy_->reads_render_depth(iter);
                             const MutationStamp forward_stamp{
                                 static_cast<std::uint64_t>(iter), mutation_epoch_,
                                 StepPhase::Forward, fastgs_strategy_hooks_at_start};
@@ -6306,7 +6324,7 @@ namespace lfs::training {
                                     *cam, strategy_->get_model(), bg,
                                     0, 0, 0, 0,
                                     params_.optimization.mip_filter, bg_tile,
-                                    render_normal);
+                                    render_normal, render_depth);
                                 if (rasterize_result) {
                                     output = std::move(rasterize_result->first);
                                     fast_ctx.emplace(std::move(rasterize_result->second));
@@ -7826,6 +7844,10 @@ namespace lfs::training {
                             static_cast<size_t>(model.size()) != model_size_before;
                         if (topology_changed) {
                             syncTrainingSceneTopology(scene_, model);
+                            if (params_.optimization.max_cap > 0 &&
+                                model_size_before < static_cast<size_t>(params_.optimization.max_cap) &&
+                                static_cast<size_t>(model.size()) >= static_cast<size_t>(params_.optimization.max_cap))
+                                lfs::diagnostics::VramProfiler::instance().mark("splat_cap_reached");
                         }
                         if (auto result = ensureModelTensorAllocatorStorage(model, "strategy step"); !result) {
                             return lfs::from_legacy_expected<StepDisposition>(
@@ -7859,6 +7881,7 @@ namespace lfs::training {
 
                     // Clean evaluation - let the evaluator handle everything
                     if (evaluator_->is_enabled() && evaluator_->should_evaluate(iter, get_total_iterations())) {
+                        lfs::diagnostics::VramProfiler::instance().mark("evaluation");
                         evaluator_->print_evaluation_header(iter);
                         eval_ppisp_applied_.store(0);
                         eval_ppisp_exif_.store(0);
@@ -8158,6 +8181,7 @@ namespace lfs::training {
         }
         apply_pending_params_at_safe_point();
         LOG_INFO("Starting training loop");
+        lfs::diagnostics::VramProfiler::instance().mark("training_start");
         if (params_.optimization.gut && params_.optimization.use_normal_loss) {
             LOG_WARN("normal loss requested but the 3DGUT backend has no normal channel; normal terms are inactive");
         }
@@ -8496,18 +8520,10 @@ namespace lfs::training {
                         training_queue_->wait_for(**fence);
                 }
 
-                // The 8-bit decode ring keeps its leases compact. Widen only the
-                // frame being consumed, on the training stream, using the exact
-                // normalization used by the original float decode path.
+                // Loss, edge weighting and MRNF accept the decoded uint8 image.
+                // Keep the decoder lease alive until train_step has consumed it.
                 if (gt_image.dtype() == lfs::core::DataType::UInt8) {
                     gt_image.sync_to_stream(static_cast<cudaStream_t>(training_queue_->native_handle()));
-                    auto gt_image_fp32 = lfs::core::Tensor::empty(
-                        gt_image.shape(), lfs::core::Device::GPU,
-                        lfs::core::DataType::Float32);
-                    lfs::io::cuda::launch_uint8_chw_to_float32_chw(
-                        gt_image.ptr<uint8_t>(), gt_image_fp32.ptr<float>(),
-                        gt_image.numel(), static_cast<cudaStream_t>(training_queue_->native_handle()));
-                    gt_image = std::move(gt_image_fp32);
                 }
 
                 for (auto* event : {&example.depth_ready_event, &example.normal_ready_event}) {
@@ -8599,6 +8615,8 @@ namespace lfs::training {
                 }
 
                 ++iter;
+                if (iter == params_.optimization.stop_refine)
+                    lfs::diagnostics::VramProfiler::instance().mark("densification_stop");
             }
 
             // A resume at the terminal iteration starts at max+1, so there is no
@@ -8608,6 +8626,7 @@ namespace lfs::training {
                 evaluator_->should_evaluate(current_iteration_.load(), get_total_iterations())) {
                 const int eval_iteration = current_iteration_.load();
                 evaluator_->print_evaluation_header(eval_iteration);
+                lfs::diagnostics::VramProfiler::instance().mark("evaluation");
                 eval_ppisp_applied_.store(0);
                 eval_ppisp_exif_.store(0);
                 auto metrics = evaluator_->evaluate(eval_iteration,

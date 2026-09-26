@@ -23,6 +23,7 @@
 #include "input/input_controller.hpp"
 #include "internal/resource_paths.hpp"
 #include "preferences.hpp"
+#include "python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
@@ -537,6 +538,9 @@ namespace lfs::vis::gui {
     }
 
     void RmlStatusBar::shutdown() {
+        if (document_registered_)
+            lfs::python::unregister_rml_document("status_bar");
+        document_registered_ = false;
         if (pending_gpu_mem_.valid()) {
             pending_gpu_mem_.wait();
             try {
@@ -579,6 +583,9 @@ namespace lfs::vis::gui {
             rml_manager_->releaseCachedVulkanContext(direct_cache_);
 
         if (document_) {
+            if (document_registered_)
+                lfs::python::unregister_rml_document("status_bar");
+            document_registered_ = false;
             rml_context_->UnloadDocument(document_);
             rml_context_->Update();
         }
@@ -1615,27 +1622,39 @@ namespace lfs::vis::gui {
         // Right section: GPU memory
         pollGpuMemoryQuery(now);
         const auto mem = cached_gpu_mem_;
-        constexpr float gib = 1024.0f * 1024.0f * 1024.0f;
-        float app_gib = mem.process_used / gib;
-        float used_gib = (mem.uses_process_budget ? mem.process_budget_used : mem.total_used) / gib;
-        float total_gib = (mem.uses_process_budget ? mem.process_budget : mem.total) / gib;
-        float pct = total_gib > 0.0f ? (used_gib / total_gib) * 100.0f : 0.0f;
+        const std::size_t shown_used = mem.uses_process_budget ? mem.process_budget_used : mem.total_used;
+        const std::size_t shown_total = mem.uses_process_budget ? mem.process_budget : mem.total;
+        float pct = shown_total > 0 ? 100.0f * static_cast<float>(shown_used) / static_cast<float>(shown_total)
+                                    : 0.0f;
 
         ThemeColor mem_color = pct < 50.0f ? p.success : (pct < 75.0f ? p.warning : p.error);
         setModelBool("gpu_panel_active", model_.gpu_panel_active,
                      lfs::vis::app_store().perf_hud.get().visible);
-        setModelString("lfs_mem_text", model_.lfs_mem_text, std::format("LFS {:.2f} GiB", app_gib));
+        setModelString("lfs_mem_text", model_.lfs_mem_text,
+                       std::format("LFS {}{} GiB", mem.process_estimated ? "≤" : "",
+                                   formatGpuGiB(mem.process_used)));
         setModelString("lfs_mem_color", model_.lfs_mem_color, colorToRml(p.info));
         setModelBool("show_lfs_memory", model_.show_lfs_memory, !mem.uses_process_budget);
         setModelBool("show_gpu_model", model_.show_gpu_model, !mem.device_name.empty());
         setModelString("gpu_model_text", model_.gpu_model_text, mem.device_name);
         setModelString("gpu_mem_text", model_.gpu_mem_text,
-                       total_gib > 0.0f
-                           ? std::format("{} {:.2f}/{:.2f} GiB",
+                       shown_total > 0
+                           ? std::format("{} {}{}/{} GiB",
                                          mem.uses_process_budget ? LOC("status_bar.gpu_budget") : LOC("status_bar.gpu"),
-                                         used_gib, total_gib)
+                                         mem.device_estimated ? "≈" : "",
+                                         formatGpuGiB(shown_used), formatGpuGiB(shown_total))
                            : std::format("{} —", LOC("status_bar.gpu")));
         setModelString("gpu_mem_color", model_.gpu_mem_color, colorToRml(mem_color));
+        if (document_) {
+            if (auto* element = document_->GetElementById("lfs-mem"))
+                element->SetAttribute("title", LOC(mem.process_estimated
+                                                       ? "ui.vram_process_estimate_tooltip"
+                                                       : "ui.vram_process_nvml_tooltip"));
+            if (auto* element = document_->GetElementById("gpu-mem"))
+                element->SetAttribute("title", LOC(mem.device_estimated
+                                                       ? "ui.vram_device_cuda_tooltip"
+                                                       : "ui.vram_device_nvml_tooltip"));
+        }
 
         // FPS: prefer scene-render rate when scene frames are in the measurement
         // window; when only GUI frames are presented, show that rate as ui-fps
@@ -1851,6 +1870,11 @@ namespace lfs::vis::gui {
             rml_animation_active_ = false;
             animation_active_ = model_animation_active_;
             return;
+        }
+
+        if (!document_registered_) {
+            lfs::python::register_rml_document("status_bar", document_);
+            document_registered_ = true;
         }
 
         if (w_px <= 0.0f || h_px <= 0.0f || screen_w <= 0 || screen_h <= 0) {

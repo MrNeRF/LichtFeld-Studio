@@ -1167,7 +1167,7 @@ namespace lfs::core {
                        "multinomial cannot sample more entries than weights without replacement");
 
         // The kernels scan weights densely. Force a contiguous logical copy at
-        // the API boundary so host validation and
+        // the API boundary so validation and
         // device sampling always see the same probability mass (strided column
         // views from densify LAS paths are training-reachable).
         Tensor weights_materialized;
@@ -1175,16 +1175,21 @@ namespace lfs::core {
         LFS_ASSERT_MSG(dense_weights.is_contiguous(),
                        "multinomial requires contiguous weights after materialize firewall");
 
-        const auto host_weights = dense_weights.to_vector();
-        double weight_sum = 0.0;
-        for (size_t index = 0; index < host_weights.size(); ++index) {
-            const float weight = host_weights[index];
-            LFS_ASSERT_MSG(std::isfinite(weight) && weight >= 0.0f,
-                           "multinomial weights must be finite and non-negative");
-            weight_sum += weight;
+        // Every GPU backend checks the weights on the device before sampling.
+        if (dense_weights.device() == Device::CPU) {
+            const float* const host_weights = dense_weights.ptr<float>();
+            double weight_sum = 0.0;
+            for (size_t index = 0; index < dense_weights.numel(); ++index) {
+                const float weight = host_weights[index];
+                LFS_ASSERT_MSG(std::isfinite(weight) && weight >= 0.0f,
+                               std::format("multinomial weight {} at index {} is not finite and non-negative",
+                                           weight, index));
+                weight_sum += weight;
+            }
+            LFS_ASSERT_MSG(std::isfinite(weight_sum) && weight_sum > 0.0,
+                           std::format("multinomial weights sum to {}, which is not positive and finite",
+                                       weight_sum));
         }
-        LFS_ASSERT_MSG(std::isfinite(weight_sum) && weight_sum > 0.0,
-                       "multinomial weights must have a positive finite sum");
 
         LoadArgs args;
         args.shape = TensorShape({static_cast<size_t>(num_samples)});
