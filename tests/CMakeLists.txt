@@ -552,6 +552,8 @@ set(TEST_FILES
     test_fused_bg_blend.cpp
     test_photometric_hygiene.cpp
     test_photometric_ops.cpp
+    test_fast_ops.cpp
+    fast_raster_test_helpers.cpp
     test_adam_ops.cpp
     test_geometry_ops.cpp
     test_mcmc_ops.cpp
@@ -1685,7 +1687,7 @@ set_tests_properties(lichtfeld.decimate.perf PROPERTIES
     LABELS "nightly;gpu" ENVIRONMENT "LFS_DECIMATE_PERF=1" TIMEOUT 60)
 
 # Focused CUDA renderer contracts.
-add_executable(gsplat_tests test_main.cpp test_gsplat_rasterizer.cpp tensor_hardening_cuda_utils.cu)
+add_executable(gsplat_tests test_main.cpp test_gsplat_rasterizer.cpp fast_raster_test_helpers.cpp tensor_hardening_cuda_utils.cu)
 target_compile_features(gsplat_tests PRIVATE cxx_std_23)
 target_include_directories(gsplat_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/training ${CUDAToolkit_INCLUDE_DIRS})

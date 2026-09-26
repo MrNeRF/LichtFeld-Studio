@@ -48,6 +48,7 @@
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/morton_reorder.hpp"
+#include "lfs/training/ops/fast_cuda.hpp"
 #include "lfs/training/ops/photometric_cuda.hpp"
 #include "lfs/training/perf_bench.hpp"
 #include "lfs/training/screen_share.cuh"
@@ -513,25 +514,6 @@ namespace lfs::training {
             }
         };
 
-        [[nodiscard]] size_t tensor_reserved_bytes(const lfs::core::Tensor& tensor) {
-            if (!tensor.is_valid()) {
-                return 0;
-            }
-
-            if (tensor.capacity() == 0 || tensor.ndim() == 0) {
-                return tensor.bytes();
-            }
-
-            size_t row_elems = 1;
-            if (tensor.ndim() > 1) {
-                for (size_t dim = 1; dim < tensor.ndim(); ++dim) {
-                    row_elems *= tensor.shape()[dim];
-                }
-            }
-
-            return tensor.capacity() * row_elems * lfs::core::dtype_size(tensor.dtype());
-        }
-
         template <typename Entries>
         void add_tensor_entry(Entries& entries, std::string label, const lfs::core::Tensor& tensor) {
             const size_t bytes = tensor_reserved_bytes(tensor);
@@ -635,49 +617,6 @@ namespace lfs::training {
             return lfs::diagnostics::VramProfiler::instance().enabled();
         }
 
-        void record_vram_current(std::string_view scope,
-                                 std::string_view label,
-                                 const size_t bytes,
-                                 const bool publish_zero = false,
-                                 const lfs::diagnostics::VramAllocationMethod method =
-                                     lfs::diagnostics::VramAllocationMethod::External) {
-            if (bytes == 0 && !publish_zero) {
-                return;
-            }
-            lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(scope, label, bytes, method);
-        }
-
-        void record_vram_tensor(std::string_view scope,
-                                std::string_view label,
-                                const lfs::core::Tensor& tensor) {
-            // The zeros_direct storage total backs Direct tensor disclosures.
-            // Other external tensors retain their external provenance.
-            const auto method = tensor.external_storage_kind() == "cuda.direct"
-                                    ? lfs::diagnostics::VramAllocationMethod::Direct
-                                : tensor.is_external_storage()
-                                    ? lfs::diagnostics::VramAllocationMethod::External
-                                    : lfs::diagnostics::VramAllocationMethod::Unknown;
-            record_vram_current(scope, label, tensor_reserved_bytes(tensor), false, method);
-        }
-
-        void record_rasterizer_arena_disclosure(std::string_view scope) {
-            auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena();
-            if (!arena) {
-                return;
-            }
-            const auto info = arena->get_memory_info();
-            record_vram_current(scope, "arena.capacity", info.arena_capacity);
-            record_vram_current(scope, "arena.current_usage", info.current_usage);
-            record_vram_current(scope, "arena.peak_usage", info.peak_usage);
-            auto& profiler = lfs::diagnostics::VramProfiler::instance();
-            profiler.setGauge("vram.audit.rasterizer_arena.required_bytes",
-                              static_cast<double>(info.required_bytes));
-            profiler.setGauge("vram.audit.rasterizer_arena.allocated_bytes",
-                              static_cast<double>(info.arena_capacity));
-            profiler.setGauge("vram.audit.rasterizer_arena.current_usage_bytes",
-                              static_cast<double>(info.current_usage));
-        }
-
         void resize_rasterizer_arena_at_boundary(std::string_view boundary,
                                                  bool release_all) {
             auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena();
@@ -697,7 +636,6 @@ namespace lfs::training {
                 // boundary after the arena has drained.
                 (void)release_gsplat_rasterizer_thread_local_caches();
                 (void)gsplat_lfs::release_intersect_thread_local_cache();
-                (void)release_fast_rasterizer_thread_local_caches();
 
                 // The viewer may have installed its exportable block as the
                 // arena backing. release_at_boundary intentionally preserves
@@ -765,64 +703,6 @@ namespace lfs::training {
                 record_vram_tensor("optimizer.adam", prefix + ".grad", state->grad);
                 record_vram_tensor("optimizer.adam", prefix + ".exp_avg", state->exp_avg);
             }
-        }
-
-        void record_fastgs_vram_breakdown(const FastRasterizeContext& ctx,
-                                          const RenderOutput& output,
-                                          const lfs::core::Tensor& gt_tile,
-                                          const lfs::core::Tensor& bg_tile,
-                                          const lfs::core::Tensor& tile_error_map,
-                                          const bool run_gaussian_backward,
-                                          const std::size_t num_primitives) {
-            constexpr std::string_view scope = "rasterizer.fastgs";
-            record_vram_current(scope, "forward.per_primitive_buffers", ctx.forward_ctx.per_primitive_buffers_size);
-            record_vram_current(scope, "forward.per_tile_buffers", ctx.forward_ctx.per_tile_buffers_size);
-            record_vram_current(scope, "forward.sorted_indices_live", ctx.forward_ctx.sorted_primitive_indices_size);
-            record_vram_current(scope,
-                                "forward.sort_workspace_arena",
-                                ctx.forward_ctx.per_instance_sort_total_size,
-                                false,
-                                lfs::diagnostics::VramAllocationMethod::Arena);
-            record_rasterizer_arena_disclosure(scope);
-            const std::size_t raster_arena_live =
-                ctx.forward_ctx.per_primitive_buffers_size +
-                ctx.forward_ctx.per_tile_buffers_size +
-                ctx.forward_ctx.per_instance_sort_total_size;
-            const std::size_t raster_sort_live = 0;
-            const std::size_t raster_live = raster_arena_live + raster_sort_live;
-            auto& profiler = lfs::diagnostics::VramProfiler::instance();
-            profiler.setGauge("vram.audit.fastgs_raster_live.required_bytes",
-                              static_cast<double>(raster_live));
-            profiler.setGauge("vram.audit.fastgs_raster_live.allocated_bytes",
-                              static_cast<double>(raster_live));
-            if (PerfBenchCollector::enabled()) {
-                PerfBenchCollector::instance().set_fastgs_raster_live_bytes(
-                    raster_arena_live, raster_sort_live);
-            }
-            // Sort storage is part of the arena frame. Keep legacy transient
-            // rows clear so the HUD does not count the arena allocation twice.
-            record_vram_current(scope, "forward.sort_scratch_transient", 0, true);
-            record_vram_current(scope, "forward.sort_total_transient", 0, true);
-            record_vram_current(scope, "backward.grad_mean2d_helper", num_primitives * 2 * sizeof(float));
-            record_vram_current(scope, "backward.grad_conic_helper", num_primitives * 3 * sizeof(float));
-            record_vram_current(scope,
-                                "backward.fused_grad_opacity_helper",
-                                run_gaussian_backward && ctx.forward_ctx.grad_opacity_helper
-                                    ? num_primitives * sizeof(float)
-                                    : 0,
-                                true);
-            record_vram_current(scope,
-                                "backward.fused_grad_color_helper",
-                                run_gaussian_backward && ctx.forward_ctx.grad_color_helper
-                                    ? num_primitives * 3 * sizeof(float)
-                                    : 0,
-                                true);
-            record_vram_tensor(scope, "output.image", output.image);
-            record_vram_tensor(scope, "output.alpha", output.alpha);
-            record_vram_tensor(scope, "saved.bg_color", ctx.bg_color);
-            record_vram_tensor("train.inputs", "gt_tile", gt_tile);
-            record_vram_tensor("train.inputs", "background_tile", bg_tile);
-            record_vram_tensor("train.losses", "densification_error_map.live", tile_error_map);
         }
 
         void record_gsplat_vram_breakdown(const GsplatRasterizeContext& ctx,
@@ -1086,6 +966,7 @@ namespace lfs::training {
         pipelined_normal_ = {};
 
         photo_saved_ = {};
+        fast_saved_ = {};
         photo_loss_ = {};
         photo_grad_corrected_ = {};
         photo_grad_raw_ = {};
@@ -1641,8 +1522,12 @@ namespace lfs::training {
         if (training_ops_->photometric != nullptr && !photo_saved_.backend) {
             photo_saved_.backend = training_ops_->photometric->create();
         }
+        if (training_ops_->fast != nullptr && !fast_saved_.backend) {
+            fast_saved_.backend = training_ops_->fast->create();
+        }
         if (evaluator_) {
             evaluator_->set_photometric(training_ops_->photometric);
+            evaluator_->set_fast(training_ops_->fast, &fast_saved_);
         }
     }
 
@@ -3201,8 +3086,17 @@ namespace lfs::training {
                         camera, model, background,
                         1.0f, false, GsplatRenderMode::RGB, true);
                 } else {
-                    output = fast_rasterize(
-                        camera, model, background, params.optimization.mip_filter);
+                    if (training_ops_ == nullptr || training_ops_->fast == nullptr) {
+                        throw std::runtime_error(*unavailable_training_family(
+                            lfs::core::default_gpu_backend(), Family::Fast));
+                    }
+                    if (!metrics_fast_saved_.backend) {
+                        metrics_fast_saved_.backend = training_ops_->fast->create();
+                    }
+                    output = fast_infer(
+                        *training_ops_->fast, metrics_fast_saved_,
+                        const_cast<lfs::core::Camera&>(camera), model, background,
+                        params.optimization.mip_filter);
                 }
 
                 rendered = output.image;
@@ -3342,6 +3236,8 @@ namespace lfs::training {
         pipelined_depth_ = {};
         pipelined_normal_ = {};
         photo_saved_ = {};
+        fast_saved_ = {};
+        metrics_fast_saved_ = {};
         photo_loss_ = {};
         photo_grad_corrected_ = {};
         photo_grad_raw_ = {};
@@ -5373,6 +5269,7 @@ namespace lfs::training {
             }
             // B3: the previous step is complete; release the production loss arena.
             photo_reset(photo_saved_);
+            fast_release_caches(fast_saved_);
             resize_rasterizer_arena_at_boundary("B3 pause", true);
             LOG_INFO("Training paused at iteration {}", iter);
             lfs::diagnostics::VramProfiler::instance().mark("training_pause");
@@ -6240,7 +6137,6 @@ namespace lfs::training {
 
                     // Storage for render output (used by both paths)
                     RenderOutput output;
-                    std::optional<FastRasterizeContext> fast_ctx;
                     std::optional<GsplatRasterizeContext> gsplat_ctx;
 
                     {
@@ -6318,20 +6214,28 @@ namespace lfs::training {
                                 static_cast<std::uint64_t>(iter), mutation_epoch_,
                                 StepPhase::Forward, fastgs_strategy_hooks_at_start};
                             unsigned forward_attempts = 0;
+                            bool fast_has_work = false;
                             for (;;) {
                                 ++forward_attempts;
-                                auto rasterize_result = fast_rasterize_forward(
-                                    *cam, strategy_->get_model(), bg,
-                                    0, 0, 0, 0,
-                                    params_.optimization.mip_filter, bg_tile,
-                                    render_normal, render_depth);
-                                if (rasterize_result) {
-                                    output = std::move(rasterize_result->first);
-                                    fast_ctx.emplace(std::move(rasterize_result->second));
+                                if (training_ops_ == nullptr || training_ops_->fast == nullptr ||
+                                    !fast_saved_.backend) {
+                                    nvtxRangePop();
+                                    nvtxRangePop();
+                                    return fast_raster_error(lfs::gpu_ops::RasterResult{
+                                        .code = lfs::gpu_ops::RasterResult::Code::Failed,
+                                        .message = "Fast raster ops are not available",
+                                    });
+                                }
+                                const auto raster_result = fast_render(
+                                    *training_ops_->fast, fast_saved_, *cam, strategy_->get_model(), bg,
+                                    0, 0, 0, 0, params_.optimization.mip_filter, bg_tile, render_normal,
+                                    render_depth, output);
+                                if (raster_result.code == lfs::gpu_ops::RasterResult::Code::Success) {
+                                    fast_has_work = raster_result.has_work;
                                     break;
                                 }
 
-                                lfs::Error forward_error = std::move(rasterize_result.error());
+                                lfs::Error forward_error = fast_raster_error(raster_result);
                                 // pathological 32-bit instance overflow must not
                                 // kill the run — skip the step (loud error) and continue.
                                 if (forward_error.code() == lfs::ErrorCode::FailedPrecondition &&
@@ -6371,8 +6275,8 @@ namespace lfs::training {
                                 }
                             }
 
-                            if (fast_ctx->forward_ctx.n_instances == 0) {
-                                fast_ctx->release_forward_context();
+                            if (!fast_has_work) {
+                                training_ops_->fast->release(fast_saved_);
                                 nvtxRangePop();
                                 nvtxRangePop();
                                 LOG_DEBUG("Skipping iteration {} - no visible primitives", iter);
@@ -6395,9 +6299,11 @@ namespace lfs::training {
                         }
                         tile_context_cleaned = true;
 
-                        if (fast_ctx) {
-                            fast_ctx->release_forward_context();
-                            fast_ctx.reset();
+                        if (params_.optimization.raster_backend() !=
+                            lfs::core::param::RasterBackendId::ThreeDGUT) {
+                            if (training_ops_ != nullptr && training_ops_->fast != nullptr) {
+                                training_ops_->fast->release(fast_saved_);
+                            }
                         } else if (gsplat_ctx) {
                             // Isect/flatten ids belong to the TLS VMM cache, not
                             // the context; only end the arena frame here.
@@ -7265,14 +7171,14 @@ namespace lfs::training {
                         }
 
                         if (live_vram_profiler_enabled()) {
-                            if (fast_ctx) {
-                                record_fastgs_vram_breakdown(*fast_ctx,
-                                                             output,
-                                                             gt_tile,
-                                                             bg_tile,
-                                                             tile_error_map,
-                                                             run_fastgs_gaussian_backward,
-                                                             static_cast<std::size_t>(strategy_->get_model().size()));
+                            if (params_.optimization.raster_backend() !=
+                                lfs::core::param::RasterBackendId::ThreeDGUT) {
+                                fast_record_vram(
+                                    fast_saved_, output.image, output.alpha,
+                                    run_fastgs_gaussian_backward,
+                                    static_cast<std::size_t>(strategy_->get_model().size()));
+                                record_vram_tensor("train.inputs", "gt_tile", gt_tile);
+                                record_vram_tensor("train.inputs", "background_tile", bg_tile);
                             } else if (gsplat_ctx) {
                                 record_gsplat_vram_breakdown(*gsplat_ctx, output, gt_tile, bg_tile, tile_error_map);
                             }
@@ -7374,12 +7280,12 @@ namespace lfs::training {
                             } else {
                                 tile_context_guard.release();
                                 if (run_fastgs_gaussian_backward) {
-                                    if (fused_extra_gradients.edge_score_out != nullptr) {
+                                    if (edge_weight_scoring_active_) {
                                         LFS_ASSERT_MSG(
                                             edge_weight_map.is_valid() && edge_weight_map.ndim() == 2 &&
                                                 edge_weight_map.dtype() == lfs::core::DataType::Float32 &&
-                                                edge_weight_map.shape()[0] == static_cast<size_t>(fast_ctx->height) &&
-                                                edge_weight_map.shape()[1] == static_cast<size_t>(fast_ctx->width),
+                                                edge_weight_map.shape()[0] == static_cast<size_t>(output.height) &&
+                                                edge_weight_map.shape()[1] == static_cast<size_t>(output.width),
                                             "cached edge-weight map dimensions must match FastGS context");
                                     }
                                     // Topology-only locking (see post_backward/step above): the
@@ -7389,15 +7295,56 @@ namespace lfs::training {
                                     std::unique_lock<std::shared_mutex> model_write_lock(render_mutex_, std::defer_lock);
                                     if (strategy_->is_refining(iter))
                                         model_write_lock.lock();
-                                    fast_rasterize_backward(*fast_ctx, raster_grad, strategy_->get_model(),
-                                                            strategy_->get_optimizer(), tile_grad_alpha,
-                                                            use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{},
-                                                            densification_type,
-                                                            iter,
-                                                            fused_extra_gradients,
-                                                            tile_grad_depth,
-                                                            tile_grad_normal);
-                                    if (fused_extra_gradients.edge_score_out != nullptr) {
+                                    auto& model = strategy_->get_model();
+                                    auto& optimizer = strategy_->get_optimizer();
+                                    const cudaStream_t backward_stream = lfs::core::getCurrentCUDAStream();
+                                    const auto prepared = optimizer.prepare_fastgs_fused_adam(iter, backward_stream);
+                                    lfs::core::Tensor none;
+                                    const auto* admm = dynamic_cast<const ADMMSparsityOptimizer*>(sparsity_optimizer_.get());
+                                    const bool apply_sparsity = fused_extra_gradients.sparsity_opa_sigmoid != nullptr && admm != nullptr;
+                                    const lfs::core::Tensor& sparsity_sigmoid = apply_sparsity ? admm->sparsity_sigmoid() : none;
+                                    const lfs::core::Tensor& sparsity_z = apply_sparsity ? admm->sparsity_z() : none;
+                                    const lfs::core::Tensor& sparsity_u = apply_sparsity ? admm->sparsity_u() : none;
+                                    const lfs::core::Tensor& error_map =
+                                        use_pixel_error_densification ? tile_error_map : none;
+                                    lfs::core::Tensor& scale_loss =
+                                        fused_extra_gradients.scale_reg_loss_out != nullptr ? fused_scale_reg_loss_ : none;
+                                    lfs::core::Tensor& opacity_loss =
+                                        fused_extra_gradients.opacity_reg_loss_out != nullptr ? fused_opacity_reg_loss_ : none;
+                                    training_ops_->fast->backward(
+                                        fast_saved_,
+                                        {.image = raster_grad,
+                                         .alpha = tile_grad_alpha,
+                                         .depth = tile_grad_depth,
+                                         .normal = tile_grad_normal},
+                                        model._densification_info,
+                                        error_map,
+                                        edge_weight_scoring_active_ ? edge_weight_map : none,
+                                        edge_weight_scoring_active_ ? edge_score_scratch : none,
+                                        {.groups = prepared.groups,
+                                         .scale_reg_loss = scale_loss,
+                                         .opacity_reg_loss = opacity_loss,
+                                         .sparsity_sigmoid = sparsity_sigmoid,
+                                         .sparsity_z = sparsity_z,
+                                         .sparsity_u = sparsity_u,
+                                         .far_mask = prepared.far_mask,
+                                         .beta1 = prepared.beta1,
+                                         .beta2 = prepared.beta2,
+                                         .eps = prepared.eps,
+                                         .scale_reg_weight = fused_extra_gradients.scale_reg_weight,
+                                         .flatten_reg_weight = fused_extra_gradients.flatten_reg_weight,
+                                         .opacity_reg_weight = fused_extra_gradients.opacity_reg_weight,
+                                         .sparsity_rho = fused_extra_gradients.sparsity_rho,
+                                         .sparsity_grad_loss = fused_extra_gradients.sparsity_grad_loss,
+                                         .median_extent = prepared.median_extent,
+                                         .r_min = prepared.r_min,
+                                         .r_max = prepared.r_max,
+                                         .per_splat_mean_step = prepared.per_splat_mean_step},
+                                        densification_type);
+                                    if (fastgs_adam_enabled(prepared)) {
+                                        optimizer.commit_fastgs_fused_adam(iter);
+                                    }
+                                    if (edge_weight_scoring_active_) {
                                         strategy_->on_edge_score_accumulated(iter);
                                     }
                                     if (model_write_lock.owns_lock()) {
@@ -7914,7 +7861,9 @@ namespace lfs::training {
                                     rendered_timelapse_output = gsplat_rasterize(*cam_to_use, strategy_->get_model(), background_,
                                                                                  1.0f, false, GsplatRenderMode::RGB, true);
                                 } else {
-                                    rendered_timelapse_output = fast_rasterize(*cam_to_use, strategy_->get_model(), background_);
+                                    rendered_timelapse_output = fast_infer(
+                                        *training_ops_->fast, fast_saved_, *cam_to_use, strategy_->get_model(),
+                                        background_, false);
                                 }
 
                                 // Get folder name to save in by stripping file extension
@@ -8801,6 +8750,7 @@ namespace lfs::training {
 
         // B3: training has stopped or completed; the editor may remain alive.
         release_training_transient_state_at_boundary();
+        fast_release_caches(fast_saved_);
         resize_rasterizer_arena_at_boundary("B3 training end", true);
         lfs::core::Tensor::trim_memory_pool();
         if (auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena()) {

@@ -5,12 +5,9 @@
 #pragma once
 
 #include "helper_math.h"
+#include "lfs/training/ops/domain_types.hpp"
 
 #define DEF inline constexpr
-
-enum class DensificationType : int { None = 0,
-                                     MCMC = 1,
-                                     MRNF = 2 };
 
 namespace fast_lfs::rasterization {
     // dL/dalpha of the background blend (output = color + (1 - alpha) * bg).
