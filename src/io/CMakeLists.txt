@@ -465,4 +465,4 @@ message(STATUS "  Archive library: ${ARCHIVE_LIB}")
 
 # Host decimation matches the double oracle without contracted FMAs.
 set_source_files_properties(splat_decimate.cpp PROPERTIES
-    COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU,Clang>:-ffp-contract=off>")
+    COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-ffp-contract=off>")

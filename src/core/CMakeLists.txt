@@ -160,7 +160,7 @@ endif()
 if(LFS_TENSOR_VULKAN OR APPLE)
     list(APPEND TENSOR_SOURCES tensor/backend/export_pipeline.cpp)
     set_source_files_properties(tensor/backend/export_pipeline.cpp PROPERTIES
-        COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU,Clang>:-ffp-contract=off>")
+        COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-ffp-contract=off>")
 endif()
 
 # Metal tensor backend: the kernel sources are embedded and compiled at
