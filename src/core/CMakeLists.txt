@@ -219,6 +219,7 @@ set(CORE_SOURCES
         operator_callbacks.cpp
         animatable_property.cpp
         camera.cpp
+        undistort_params.cpp
         checkpoint_format.cpp
         image_loader.cpp
         cuda_version.cpp

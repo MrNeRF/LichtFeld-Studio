@@ -457,6 +457,7 @@ if(NOT LFS_HAS_CUDA)
         test_tensor_vulkan_random.cpp
         test_tensor_vulkan_buffer.cpp
         test_tensor_metal.cpp
+        test_camera_priors_portable.cpp
         test_viewer_no_cuda.cpp
     )
     add_executable(lichtfeld_tests ${TEST_SOURCES})

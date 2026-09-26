@@ -1278,7 +1278,6 @@ namespace lfs::vis {
                             const bool undistort_gt =
                                 gt_layout == lfs::rendering::ImageLayout::CHW &&
                                 request.undistort_requested;
-#if LFS_HAS_CUDA
                             if (undistort_gt) {
                                 if (gt_tensor.device() != lfs::core::Device::GPU) {
                                     gt_tensor = gt_tensor.to(lfs::core::Device::GPU);
@@ -1293,7 +1292,6 @@ namespace lfs::vis {
                                     request.preview_max_dimension);
                                 gt_tensor = lfs::core::internal::undistort_image_tensor(gt_tensor, scaled, false);
                             }
-#endif
                             gt_tensor = lfs::rendering::flipImageVertical(gt_tensor, gt_layout);
                             // Static GT display images must be decoupled from the CUDA pool
                             // while training can recycle device buffers mid-frame.
@@ -1307,7 +1305,6 @@ namespace lfs::vis {
                         auto depth = request.camera->load_and_get_depth(
                             -1, request.preview_max_dimension);
                         if (depth.is_valid() && depth.ndim() == 2) {
-#if LFS_HAS_CUDA
                             if (request.undistort_requested) {
                                 const auto scaled = lfs::core::scale_undistort_params(
                                     request.undistort_params,
@@ -1316,7 +1313,6 @@ namespace lfs::vis {
                                     request.preview_max_dimension);
                                 depth = lfs::core::internal::undistort_image_tensor(depth, scaled, true);
                             }
-#endif
                             image = makeDepthDisplayTensor(
                                 depth, request.depth_visualization_mode, request.background_color);
                             image = resizeChwDisplayTensor(image, request.image_size);
@@ -1331,7 +1327,6 @@ namespace lfs::vis {
                             -1, request.preview_max_dimension, lfs::core::Camera::NormalPriorDecode{});
                         if (normal.is_valid() && normal.ndim() == 3) {
                             const auto normal_layout = lfs::rendering::detectImageLayout(normal);
-#if LFS_HAS_CUDA
                             if (request.undistort_requested &&
                                 normal_layout != lfs::rendering::ImageLayout::Unknown) {
                                 const auto scaled = lfs::core::scale_undistort_params(
@@ -1341,7 +1336,6 @@ namespace lfs::vis {
                                     request.preview_max_dimension);
                                 normal = lfs::core::internal::undistort_image_tensor(normal, scaled, false);
                             }
-#endif
                             image = makeNormalDisplayTensor(normal);
                             image = resizeChwDisplayTensor(image, request.image_size);
                             if (image) {

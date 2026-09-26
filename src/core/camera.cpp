@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
-#if LFS_HAS_CUDA
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
+#if LFS_HAS_CUDA
 #include "core/cuda_error_typed.hpp"
 #endif
 #include "core/image_io.hpp"
@@ -26,6 +26,16 @@
 #include <stdexcept>
 
 namespace lfs::core {
+    // Host data uploaded on a CUDA stream must land before its source is freed;
+    // the other backends copy synchronously.
+    static void finish_upload([[maybe_unused]] cudaStream_t stream, [[maybe_unused]] const char* what) {
+#if LFS_HAS_CUDA
+        if (stream) {
+            LFS_CUDA_TRY(cudaStreamSynchronize(stream), stream, what);
+        }
+#endif
+    }
+
     static Tensor world_to_view(const Tensor& R, const Tensor& t) {
         // Create 4x4 identity matrix
         auto w2c = Tensor::eye(4, R.device());
@@ -430,11 +440,7 @@ namespace lfs::core {
 
         if (image.device() != Device::GPU) {
             image = image.to(Device::GPU, _stream);
-#if LFS_HAS_CUDA
-            if (_stream) {
-                LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "image upload sync");
-            }
-#endif
+            finish_upload(_stream, "image upload sync");
         }
 
         return image;
@@ -596,11 +602,7 @@ namespace lfs::core {
             mask = _in_memory_mask_raw;
             if (mask.device() != Device::GPU) {
                 mask = mask.to(Device::GPU, _stream);
-#if LFS_HAS_CUDA
-                if (_stream) {
-                    LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "mask upload sync");
-                }
-#endif
+                finish_upload(_stream, "mask upload sync");
             }
             if (mask.dtype() == DataType::UInt8) {
                 mask = mask.to(DataType::Float32).div(255.0f);
@@ -624,11 +626,7 @@ namespace lfs::core {
 
             if (mask.device() != Device::GPU) {
                 mask = mask.to(Device::GPU, _stream);
-#if LFS_HAS_CUDA
-                if (_stream) {
-                    LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "mask upload sync");
-                }
-#endif
+                finish_upload(_stream, "mask upload sync");
             }
 
             // Convert RGB [C,H,W] to grayscale [H,W]
@@ -653,7 +651,6 @@ namespace lfs::core {
             mask = mask.ge(mask_threshold).to(DataType::Float32);
         }
 
-#if LFS_HAS_CUDA
         if (_undistort_prepared) {
             const auto scaled = scale_undistort_params(
                 _undistort_params,
@@ -662,7 +659,6 @@ namespace lfs::core {
                 max_width);
             mask = undistort_mask(mask, scaled, _stream);
         }
-#endif
 
         if (binarize) {
             mask = mask.ge(0.5f).to(DataType::UInt8).contiguous();
@@ -687,7 +683,6 @@ namespace lfs::core {
     }
 
     Tensor Camera::load_and_get_depth(const int resize_factor, const int max_width) {
-#if LFS_HAS_CUDA
         if (_depth_loaded && _cached_depth.is_valid()) {
             return _cached_depth;
         }
@@ -703,9 +698,7 @@ namespace lfs::core {
                 TensorShape({static_cast<size_t>(native_h), static_cast<size_t>(native_w)}),
                 Device::CPU, DataType::Float32);
             depth = cpu_depth.to(Device::GPU, _stream);
-            if (_stream) {
-                LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "depth upload sync");
-            }
+            finish_upload(_stream, "depth upload sync");
             free_image_float(gray);
         } else {
             const ImageLoadParams params{
@@ -716,9 +709,7 @@ namespace lfs::core {
 
             if (depth.device() != Device::GPU) {
                 depth = depth.to(Device::GPU, _stream);
-                if (_stream) {
-                    LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "depth upload sync");
-                }
+                finish_upload(_stream, "depth upload sync");
             }
 
             if (depth.dtype() == DataType::UInt8) {
@@ -759,14 +750,10 @@ namespace lfs::core {
         LOG_DEBUG("Loaded depth for {}: [{},{}]", _image_name, _cached_depth.shape()[0], _cached_depth.shape()[1]);
 
         return _cached_depth;
-#else
-        throw std::runtime_error("Depth priors require CUDA");
-#endif
     }
 
     Tensor Camera::load_and_get_normal(const int resize_factor, const int max_width,
                                        const NormalPriorDecode& decode) {
-#if LFS_HAS_CUDA
         if (_normal_loaded && _cached_normal.is_valid()) {
             return _cached_normal;
         }
@@ -782,9 +769,7 @@ namespace lfs::core {
                 TensorShape({static_cast<size_t>(native_h), static_cast<size_t>(native_w), 3}),
                 Device::CPU, DataType::Float32);
             normal = cpu_normal.to(Device::GPU, _stream);
-            if (_stream) {
-                LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "normal upload sync");
-            }
+            finish_upload(_stream, "normal upload sync");
             free_image_float(rgb);
             normal = normal.permute({2, 0, 1}).contiguous();
         } else {
@@ -796,9 +781,7 @@ namespace lfs::core {
 
             if (normal.is_valid() && normal.device() != Device::GPU) {
                 normal = normal.to(Device::GPU, _stream);
-                if (_stream) {
-                    LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "normal upload sync");
-                }
+                finish_upload(_stream, "normal upload sync");
             }
             if (normal.is_valid()) {
                 if (normal.dtype() == DataType::UInt8) {
@@ -855,9 +838,7 @@ namespace lfs::core {
                     world_to_camera);
             }
             normal = normal_cpu.to(Device::GPU, _stream);
-            if (_stream) {
-                LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "normal upload sync");
-            }
+            finish_upload(_stream, "normal upload sync");
         }
 
         if (!_image_size_loaded)
@@ -881,9 +862,6 @@ namespace lfs::core {
                   _cached_normal.shape()[1], _cached_normal.shape()[2]);
 
         return _cached_normal;
-#else
-        throw std::runtime_error("Normal priors require CUDA");
-#endif
     }
 
     float Camera::depth_prior_quantization_step() {
@@ -894,7 +872,6 @@ namespace lfs::core {
     }
 
     void Camera::precompute_undistortion(float blank_pixels) {
-#if LFS_HAS_CUDA
         if (_undistort_precomputed)
             return;
         if (!has_distortion())
@@ -907,7 +884,6 @@ namespace lfs::core {
             _camera_model_type, blank_pixels);
 
         _undistort_precomputed = true;
-#endif
     }
 
     void Camera::adopt_undistortion(const UndistortParams& params) noexcept {

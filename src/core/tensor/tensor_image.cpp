@@ -1,6 +1,10 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/tensor_image.hpp"
+#if !LFS_HAS_CUDA
+#include "core/cuda/lanczos_resize/lanczos_resize.hpp"
+#include "core/cuda/undistort/undistort.hpp"
+#endif
 #include "internal/image_resample.hpp"
 #include "internal/tensor_impl.hpp"
 #include <limits>
@@ -48,3 +52,26 @@ namespace lfs::core::internal {
         return output;
     }
 } // namespace lfs::core::internal
+
+#if !LFS_HAS_CUDA
+// Builds without CUDA lack lanczos_resize.cu and undistort.cu, whose wrappers
+// send every non-CUDA tensor to the portable implementations above; these
+// definitions do the same.
+namespace lfs::core {
+    Tensor resize_depth_prior(const Tensor& input, const int output_h, const int output_w, cudaStream_t) {
+        return internal::resize_image_prior_tensor(input, output_h, output_w, false);
+    }
+
+    Tensor resize_normal_prior(const Tensor& input, const int output_h, const int output_w, cudaStream_t) {
+        return internal::resize_image_prior_tensor(input, output_h, output_w, true);
+    }
+
+    Tensor undistort_image(const Tensor& src, const UndistortParams& params, cudaStream_t) {
+        return internal::undistort_image_tensor(src, params, false);
+    }
+
+    Tensor undistort_mask(const Tensor& src, const UndistortParams& params, cudaStream_t) {
+        return internal::undistort_image_tensor(src, params, true);
+    }
+} // namespace lfs::core
+#endif

@@ -17,13 +17,13 @@ namespace lfs::core {
         bool crop_solve_failed = false;
     };
 
-    UndistortParams compute_undistort_params(
+    LFS_CORE_API UndistortParams compute_undistort_params(
         float fx, float fy, float cx, float cy,
         int width, int height,
         const Tensor& radial, const Tensor& tangential,
         CameraModelType model, float blank_pixels = 0.0f);
 
-    UndistortParams scale_undistort_params(
+    LFS_CORE_API UndistortParams scale_undistort_params(
         const UndistortParams& params, const int actual_src_width, const int actual_src_height,
         const int max_width = 0);
 

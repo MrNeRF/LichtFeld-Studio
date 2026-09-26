@@ -2845,7 +2845,6 @@ namespace lfs::io {
             if (!calibration) {
                 continue;
             }
-#if LFS_HAS_CUDA
             if (colmap_calibration_has_distortion(*calibration)) {
                 LOG_TIMER_DEBUG("COLMAP assemble: undistort");
                 undistort_cache.emplace(
@@ -2857,9 +2856,7 @@ namespace lfs::io {
                         calibration->radial_distortion,
                         calibration->tangential_distortion,
                         calibration->camera_model_type));
-            } else
-#endif
-            {
+            } else {
                 undistort_cache.emplace(camera_id, std::nullopt);
             }
             calibrations.emplace(camera_id, std::move(*calibration));
