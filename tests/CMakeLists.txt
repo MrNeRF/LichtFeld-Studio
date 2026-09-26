@@ -538,6 +538,7 @@ set(TEST_FILES
     test_photometric_hygiene.cpp
     test_photometric_ops.cpp
     test_adam_ops.cpp
+    test_mcmc_ops.cpp
     test_persistent_masks.cpp
     test_fused_noise_injection.cpp
     test_densification_info_zero.cpp
