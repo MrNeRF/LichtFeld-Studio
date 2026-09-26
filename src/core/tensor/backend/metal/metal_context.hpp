@@ -193,7 +193,7 @@ namespace lfs::core::internal::metal {
         void check_failures() const;
         void check_fault();
         void consume_fault_locked(size_t slot);
-        void trim_locked();
+        void evict_locked(size_t limit);
 
         id<MTLDevice> device_;
         id<MTLLibrary> library_;
@@ -234,7 +234,10 @@ namespace lfs::core::internal::metal {
         std::mutex memory_mutex_;
         id<MTLResidencySet> residency_;
         std::map<uint64_t, Block> live_;
-        std::unordered_map<size_t, std::vector<Block>> free_;
+        // Released blocks by capacity, kept for reuse up to cache_limit_ bytes.
+        std::map<size_t, std::vector<Block>> free_;
+        size_t cached_bytes_ = 0;
+        size_t cache_limit_ = 0;
     };
 
     std::shared_ptr<Context> acquire_context();

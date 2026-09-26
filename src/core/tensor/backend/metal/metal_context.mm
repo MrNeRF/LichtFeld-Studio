@@ -61,8 +61,9 @@ namespace lfs::core::internal::metal {
         }
 
         // Power-of-two size classes keep reuse simple; large blocks round to 2 MiB.
+        constexpr size_t kLargeBlock = size_t{64} << 20;
+
         size_t size_class(const size_t bytes) {
-            constexpr size_t kLargeBlock = size_t{64} << 20;
             constexpr size_t kLargeGranule = size_t{2} << 20;
             if (bytes <= 256)
                 return 256;
@@ -96,6 +97,9 @@ namespace lfs::core::internal::metal {
             throw TensorError("Metal fault record allocation failed");
         std::memset(fault_.contents, 0, fault_.length);
         [residency_ addAllocation:fault_];
+        // The cache holds at most a sixteenth of the process budget; the rest
+        // goes back to the system as its last batch completes.
+        cache_limit_ = static_cast<size_t>(device_.recommendedMaxWorkingSetSize) / 16;
         [residency_ commit];
         [queue_ addResidencySet:residency_];
         context_id_ = next_context_id.fetch_add(1);
@@ -405,13 +409,19 @@ namespace lfs::core::internal::metal {
         const size_t capacity = size_class(bytes);
         std::lock_guard lock(memory_mutex_);
         Block block;
-        if (auto found = free_.find(capacity); found != free_.end() && !found->second.empty()) {
+        // Large requests vary in size, so they also take a cached block up to a
+        // quarter larger.
+        const size_t reach = capacity > kLargeBlock ? capacity + capacity / 4 : capacity;
+        if (auto found = free_.lower_bound(capacity); found != free_.end() && found->first <= reach) {
             block = std::move(found->second.back());
             found->second.pop_back();
+            if (found->second.empty())
+                free_.erase(found);
+            cached_bytes_ -= block.capacity;
         } else {
             id<MTLBuffer> buffer = [device_ newBufferWithLength:capacity options:MTLResourceStorageModeShared];
             if (!buffer) {
-                trim_locked();
+                evict_locked(0);
                 buffer = [device_ newBufferWithLength:capacity options:MTLResourceStorageModeShared];
             }
             if (!buffer)
@@ -452,38 +462,44 @@ namespace lfs::core::internal::metal {
         Block block = std::move(found->second);
         live_.erase(found);
         block.guard = newest_serial_.load(std::memory_order_acquire);
+        cached_bytes_ += block.capacity;
         free_[block.capacity].push_back(std::move(block));
+        if (cached_bytes_ > cache_limit_)
+            evict_locked(cache_limit_);
     }
 
-    // Batches do not retain their buffers, so only blocks whose last batch
-    // completed go back to the system.
-    void Context::trim_locked() {
+    // Returns cached blocks to the system, largest first, until at most limit
+    // bytes stay cached. Batches do not retain their buffers, so only blocks
+    // whose last batch completed can go.
+    void Context::evict_locked(const size_t limit) {
         const uint64_t done = completed();
         bool removed = false;
-        for (auto& [capacity, blocks] : free_) {
-            std::erase_if(blocks, [&](const Block& block) {
-                if (block.guard > done)
+        for (auto size = free_.end(); size != free_.begin() && cached_bytes_ > limit;) {
+            --size;
+            std::erase_if(size->second, [&](const Block& block) {
+                if (cached_bytes_ <= limit || block.guard > done)
                     return false;
                 [residency_ removeAllocation:block.buffer];
+                cached_bytes_ -= block.capacity;
                 removed = true;
                 return true;
             });
+            if (size->second.empty())
+                size = free_.erase(size);
         }
         if (removed)
             [residency_ commit];
     }
 
     void Context::trim() {
+        flush();
         std::lock_guard lock(memory_mutex_);
-        trim_locked();
+        evict_locked(0);
     }
 
     size_t Context::cached_bytes() {
         std::lock_guard lock(memory_mutex_);
-        size_t bytes = 0;
-        for (const auto& [capacity, blocks] : free_)
-            bytes += capacity * blocks.size();
-        return bytes;
+        return cached_bytes_;
     }
 
     MemoryInfo Context::stats() {
