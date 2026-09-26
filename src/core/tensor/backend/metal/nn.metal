@@ -361,6 +361,104 @@ kernel void nn_im2col(constant NnIm2colParams& params [[buffer(0)]], uint3 id [[
     }
 }
 
+// Convolution as an implicit GEMM: a threadgroup computes 64 output
+// channels of 64 output pixels for one image and group. The weights come as
+// [out][ky][kx][in], so each chunk of up to 32 input channels at one kernel
+// offset is a plain strided gather, staged in threadgroup memory (double
+// buffered) for the matrix units; the patches never reach device memory.
+// Bias and activation apply per output channel before the NCHW store.
+struct NnConvParams {
+    device const uchar* input;
+    device const uchar* weight;
+    device const uchar* bias;
+    device uchar* output;
+    uint in_batch, out_batch, pixels, taps, out_group, groups;
+    int activation;
+    uint has_bias;
+    InferenceGeometry p;
+};
+
+constant int kNnConvTile = 64, kNnConvChannels = 32;
+
+template <typename T>
+static void nn_conv_tile(constant NnConvParams& params, uint3 tile, ushort thread_index, threadgroup T* patches) {
+    using Matrix = tensor<device T, dextents<int32_t, 2>, tensor_inline>;
+    using Staged = tensor<threadgroup T, dextents<int32_t, 2>, tensor_inline>;
+    constant InferenceGeometry& p = params.p;
+    const int taps = int(params.taps), pixels = int(params.pixels), rows = int(params.out_group);
+    const int channels = p.channels, plane = p.height * p.width;
+    const int column0 = int(tile.x) * kNnConvTile, row0 = int(tile.y) * kNnConvTile;
+    const uint image = tile.z / params.groups, group = tile.z % params.groups;
+    device const T* input = (device const T*)params.input + image * params.in_batch + group * uint(channels * plane);
+    device T* weight = (device T*)params.weight + (group * params.out_group + uint(row0)) * params.taps;
+    constexpr auto descriptor = mpp::tensor_ops::matmul2d_descriptor(
+        kNnConvTile, kNnConvTile, static_cast<int>(dynamic_extent), false, false, false,
+        mpp::tensor_ops::matmul2d_descriptor::mode::multiply_accumulate);
+    mpp::tensor_ops::matmul2d<descriptor, execution_simdgroups<4>> matmul;
+    const int columns = min(kNnConvTile, pixels - column0);
+    Matrix weights(weight, dextents<int32_t, 2>(taps, rows - row0), array<int32_t, 2>{1, taps});
+    Staged staged(patches, dextents<int32_t, 2>(columns, kNnConvChannels), array<int32_t, 2>{1, kNnConvTile});
+    auto result = matmul.template get_destination_cooperative_tensor<decltype(weights), decltype(staged), float>();
+    for (uint16_t i = 0; i < result.get_capacity(); ++i) {
+        if (result.is_valid_element(i))
+            result[i] = 0.0f;
+    }
+    // Each thread gathers one pixel column for every other channel of a chunk.
+    const int column = thread_index % kNnConvTile, pixel = column0 + column;
+    const int first_channel = thread_index / kNnConvTile;
+    const bool live = pixel < pixels;
+    const int x0 = (pixel % p.out_width) * p.stride_w - p.pad_w, y0 = (pixel / p.out_width) * p.stride_h - p.pad_h;
+    const int chunks_per_offset = (channels + kNnConvChannels - 1) / kNnConvChannels;
+    const int chunks = p.kernel_h * p.kernel_w * chunks_per_offset;
+    const auto gather = [&](const int chunk, threadgroup T* destination) {
+        const int offset = chunk / chunks_per_offset, channel0 = (chunk % chunks_per_offset) * kNnConvChannels;
+        const int y = y0 + (offset / p.kernel_w) * p.dilation_h, x = x0 + (offset % p.kernel_w) * p.dilation_w;
+        const bool inside = live && (p.mode == 1 || (x >= 0 && x < p.width && y >= 0 && y < p.height));
+        device const T* source = input + clamp(y, 0, p.height - 1) * p.width + clamp(x, 0, p.width - 1);
+        for (int t = first_channel; t < kNnConvChannels; t += 128 / kNnConvTile) {
+            const int channel = channel0 + t;
+            destination[t * kNnConvTile + column] = inside && channel < channels ? source[channel * plane] : T(0);
+        }
+    };
+    gather(0, patches);
+    for (int chunk = 0; chunk < chunks; ++chunk) {
+        threadgroup T* current = patches + (chunk & 1) * kNnConvChannels * kNnConvTile;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (chunk + 1 < chunks)
+            gather(chunk + 1, patches + ((chunk + 1) & 1) * kNnConvChannels * kNnConvTile);
+        const int offset = chunk / chunks_per_offset, channel0 = (chunk % chunks_per_offset) * kNnConvChannels;
+        const int count = min(kNnConvChannels, channels - channel0);
+        // The inner dimension of the product is this chunk's channel count.
+        Matrix chunk_weights(weight + offset * channels + channel0, dextents<int32_t, 2>(count, rows - row0),
+                             array<int32_t, 2>{1, taps});
+        Staged chunk_patches(current, dextents<int32_t, 2>(columns, count), array<int32_t, 2>{1, kNnConvTile});
+        matmul.run(chunk_weights, chunk_patches, result);
+    }
+    device T* output = (device T*)params.output + image * params.out_batch;
+    for (uint16_t i = 0; i < result.get_capacity(); ++i) {
+        const auto index = result.get_multidimensional_index(i);
+        const int r = row0 + index[1], c = column0 + index[0];
+        if (!result.is_valid_element(i) || r >= rows || c >= pixels)
+            continue;
+        const uint channel = group * params.out_group + uint(r);
+        float value = result[i];
+        if (params.has_bias != 0)
+            value += float(((device const T*)params.bias)[channel]);
+        output[channel * uint(pixels) + uint(c)] = T(nn_activation(value, params.activation));
+    }
+}
+
+kernel void nn_conv(constant NnConvParams& params [[buffer(0)]], uint3 tile [[threadgroup_position_in_grid]],
+                    ushort thread_index [[thread_index_in_threadgroup]]) {
+    // Only the buffer of the specialized dtype stays in the pipeline.
+    threadgroup half half_patches[2 * kNnConvChannels * kNnConvTile];
+    threadgroup float float_patches[2 * kNnConvChannels * kNnConvTile];
+    if (kInputDType == LFS_DT_Float16)
+        nn_conv_tile<half>(params, tile, thread_index, half_patches);
+    else
+        nn_conv_tile<float>(params, tile, thread_index, float_patches);
+}
+
 // Transposed convolution outputs gathered from the GEMM's columns
 // [image][channel][ky][kx][input pixel], with the bias and activation. A
 // thread computes one output pixel of one channel.

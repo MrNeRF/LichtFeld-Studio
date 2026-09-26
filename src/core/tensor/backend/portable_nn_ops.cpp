@@ -22,6 +22,16 @@ namespace lfs::core::nn::portable {
             return internal::allocate_like(like, shape, DataType::Float32);
         }
 
+        // Operands of the inference kernels: backends with dedicated
+        // neural-network kernels read and write Float16 directly.
+        Tensor inference_operand(const Tensor& t) {
+            return internal::backend_ops_for(t).nn_kernels() ? t.contiguous() : fp32(t);
+        }
+
+        Tensor inference_output(const Tensor& like, const TensorShape& shape) {
+            return internal::allocate_like(like, shape, like.dtype());
+        }
+
         void dispatch(const InferenceKernel kernel, const Tensor& input, Tensor& output,
                       const InferenceGeometry& geometry) {
             if (output.numel() == 0)
@@ -48,8 +58,8 @@ namespace lfs::core::nn::portable {
     Tensor activate(const Tensor& input, Activation activation) {
         if (activation == Activation::None)
             return input;
-        const auto x = fp32(input);
-        auto out = empty(x, x.shape());
+        const auto x = inference_operand(input);
+        auto out = inference_output(x, x.shape());
         dispatch(InferenceKernel::Activation, x, out, {.mode = static_cast<int32_t>(activation)});
         return out.to(input.dtype());
     }
@@ -169,8 +179,8 @@ namespace lfs::core::nn::portable {
     }
 
     Tensor resize(const Tensor& input, int height, int width, ResizeMode mode, CoordTransform coord) {
-        auto x = fp32(input);
-        auto out = empty(x, TensorShape{input.shape()[0], input.shape()[1], static_cast<size_t>(height), static_cast<size_t>(width)});
+        auto x = inference_operand(input);
+        auto out = inference_output(x, TensorShape{input.shape()[0], input.shape()[1], static_cast<size_t>(height), static_cast<size_t>(width)});
         dispatch(InferenceKernel::Resize, x, out, {.height = static_cast<int32_t>(input.shape()[2]), .width = static_cast<int32_t>(input.shape()[3]), .out_height = height, .out_width = width, .mode = static_cast<int32_t>(mode), .coord = static_cast<int32_t>(coord)});
         return out.to(input.dtype());
     }
@@ -179,8 +189,8 @@ namespace lfs::core::nn::portable {
         const int h = static_cast<int>(input.shape()[2]), w = static_cast<int>(input.shape()[3]);
         const int oh = (h + 2 * ph - kh) / sh + 1, ow = (w + 2 * pw - kw) / sw + 1;
         LFS_ASSERT_MSG(oh > 0 && ow > 0, "NN pooling requires positive output dimensions");
-        auto x = fp32(input);
-        auto out = empty(x, TensorShape{input.shape()[0], input.shape()[1], static_cast<size_t>(oh), static_cast<size_t>(ow)});
+        auto x = inference_operand(input);
+        auto out = inference_output(x, TensorShape{input.shape()[0], input.shape()[1], static_cast<size_t>(oh), static_cast<size_t>(ow)});
         dispatch(InferenceKernel::Pool, x, out, {.height = h, .width = w, .out_height = oh, .out_width = ow, .kernel_h = kh, .kernel_w = kw, .stride_h = sh, .stride_w = sw, .pad_h = ph, .pad_w = pw, .mode = average ? 1 : 0, .include_pad = count_include_pad ? 1 : 0});
         return out.to(input.dtype());
     }
@@ -225,7 +235,8 @@ namespace lfs::core::nn::portable {
     }
 
     Tensor grid(const Tensor& like, int height, int width, float u0, float u1, float v0, float v1) {
-        auto out = empty(like, TensorShape{1, 2, static_cast<size_t>(height), static_cast<size_t>(width)});
+        const TensorShape shape{1, 2, static_cast<size_t>(height), static_cast<size_t>(width)};
+        auto out = internal::backend_ops_for(like).nn_kernels() ? inference_output(like, shape) : empty(like, shape);
         dispatch(InferenceKernel::Grid, like, out, {.height = height, .width = width, .u0 = u0, .u1 = u1, .v0 = v0, .v1 = v1});
         return out.to(like.dtype());
     }

@@ -2685,8 +2685,10 @@ namespace lfs::core::internal {
                                      checked_u32(program.count, "Metal inference output exceeds uint32"), 0,
                                      program.geometry};
         const std::array uses{input, output};
-        dispatch_addressed(*context, uses, context->pipeline("inference", {{0, static_cast<uint32_t>(program.kernel)}}),
-                           params, program.count);
+        const auto pipeline = context->pipeline("inference", {{0, static_cast<uint32_t>(program.kernel)},
+                                                              {1, static_cast<uint32_t>(input.dtype)},
+                                                              {2, static_cast<uint32_t>(output.dtype)}});
+        dispatch_addressed(*context, uses, pipeline, params, program.count);
     }
 
     namespace {
@@ -2854,8 +2856,9 @@ namespace lfs::core::internal {
 
     // Convolution as GEMMs of each group's weights [out][taps] with the
     // image's patches [taps][pixels], written straight into NCHW rows with
-    // the bias per row. 1x1 convolutions multiply the image itself; others
-    // build the patches in bounded chunks of output pixels.
+    // the bias per row. 1x1 convolutions multiply the image itself, groups of
+    // up to 64 output channels run the implicit GEMM, and the rest build the
+    // patches in bounded chunks of output pixels.
     void MetalBackendOps::nn_conv2d(const StorageRef input, const StorageRef weight,
                                     const std::optional<StorageRef> bias, const StorageRef output,
                                     const ConvProgram& program, ExecContext) {
@@ -2898,6 +2901,52 @@ namespace lfs::core::internal {
                 launch.output_offset = group * out_group * pixels * element;
                 dispatch_linear(*context, launch);
             }
+            return;
+        }
+        // With at most one tile row of output channels, patches built in
+        // device memory would be read once; the implicit GEMM gathers them
+        // into threadgroup memory instead.
+        constexpr size_t kConvTile = 64; // kNnConvTile in nn.metal
+        if (out_group <= kConvTile) {
+            struct ConvParams {
+                uint64_t input, weight, bias, output;
+                uint32_t in_batch, out_batch, pixels, taps, out_group, groups;
+                int32_t activation;
+                uint32_t has_bias;
+                InferenceGeometry geometry;
+            };
+            static_assert(sizeof(ConvParams) == 152);
+            // The kernel takes the weights as [out][ky][kx][in].
+            const Scratch permuted(*context, program.out_channels * taps * element);
+            const size_t window = static_cast<size_t>(g.kernel_h) * static_cast<size_t>(g.kernel_w);
+            encode_strided(weight, permuted.storage,
+                           {.rank = 4,
+                            .dims = {program.out_channels, static_cast<size_t>(g.kernel_h),
+                                     static_cast<size_t>(g.kernel_w), in_group},
+                            .strides = {taps, static_cast<size_t>(g.kernel_w), 1, window},
+                            .element_count = program.out_channels * taps},
+                           false, output.dtype, output.dtype);
+            const ConvParams params{.input = address_of(*context, input),
+                                    .weight = address_of(*context, permuted.storage),
+                                    .bias = bias ? address_of(*context, *bias) : 0,
+                                    .output = address_of(*context, output),
+                                    .in_batch = static_cast<uint32_t>(in_batch),
+                                    .out_batch = checked_u32(out_batch, "Metal convolution output exceeds uint32"),
+                                    .pixels = static_cast<uint32_t>(pixels),
+                                    .taps = static_cast<uint32_t>(taps),
+                                    .out_group = static_cast<uint32_t>(out_group),
+                                    .groups = static_cast<uint32_t>(program.groups),
+                                    .activation = program.activation,
+                                    .has_bias = bias ? 1u : 0u,
+                                    .geometry = g};
+            const std::array uses{input, permuted.storage, bias.value_or(weight), output};
+            const uint32_t dtype = static_cast<uint32_t>(output.dtype);
+            context->dispatch(uses, {.pipeline = context->pipeline("nn_conv", {{1, dtype}, {2, dtype}}),
+                                     .buffers = {},
+                                     .params = param_bytes(params),
+                                     .grid = MTLSizeMake((pixels + kConvTile - 1) / kConvTile, 1,
+                                                         program.batch * program.groups),
+                                     .group_size = MTLSizeMake(128, 1, 1)});
             return;
         }
         // Patches for at most 64 MiB, in whole 32-pixel tiles.

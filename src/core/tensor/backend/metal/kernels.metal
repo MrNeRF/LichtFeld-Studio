@@ -3211,16 +3211,17 @@ struct InferenceGeometry {
     float u0, u1, v0, v1;
 };
 
+// Operands are Float32 or Float16 (kInputDType, kOutputDType); the math is FP32.
 struct InferenceParams {
-    device const float* input;
-    device float* output;
+    device const uchar* input;
+    device uchar* output;
     uint total, step;
     InferenceGeometry p;
 };
 
 static float inference_sample(constant InferenceParams& params, int plane, int y, int x) {
     constant InferenceGeometry& p = params.p;
-    return params.input[(plane * p.height + clamp(y, 0, p.height - 1)) * p.width + clamp(x, 0, p.width - 1)];
+    return load_float(params.input, (plane * p.height + clamp(y, 0, p.height - 1)) * p.width + clamp(x, 0, p.width - 1));
 }
 
 static float resize_coordinate(int i, int in_size, int out_size, int mode) {
@@ -3288,7 +3289,8 @@ kernel void inference(constant InferenceParams& params [[buffer(0)]], uint i [[t
                 iy /= p.stride_h;
                 ix /= p.stride_w;
                 if (iy < p.height && ix < p.width)
-                    value += params.input[((c * p.kernel_h + ky) * p.kernel_w + kx) * p.height * p.width + iy * p.width + ix];
+                    value += load_float(params.input, ((c * p.kernel_h + ky) * p.kernel_w + kx) * p.height * p.width +
+                                                          iy * p.width + ix);
             }
         }
     } else if (kOp == 2) {
@@ -3330,7 +3332,7 @@ kernel void inference(constant InferenceParams& params [[buffer(0)]], uint i [[t
         if (p.mode != 0)
             value /= max(1, p.include_pad != 0 ? p.kernel_h * p.kernel_w : count);
     } else if (kOp == 4) {
-        value = nn_activation(params.input[index], p.mode);
+        value = nn_activation(load_float(params.input, index), p.mode);
     } else {
         const int pixel = index % (p.height * p.width);
         if (index < p.height * p.width)
@@ -3338,7 +3340,7 @@ kernel void inference(constant InferenceParams& params [[buffer(0)]], uint i [[t
         else
             value = p.height == 1 ? p.v0 : p.v0 + (p.v1 - p.v0) * (pixel / p.width) / (p.height - 1);
     }
-    params.output[i] = value;
+    store_float(params.output, i, value);
 }
 
 // ---------------------------------------------------------------------------
