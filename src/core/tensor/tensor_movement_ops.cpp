@@ -5,6 +5,7 @@
 #include "core/logger.hpp"
 #include "internal/tensor_broadcast.hpp"
 #include "internal/tensor_impl.hpp"
+#include <format>
 #include <algorithm>
 #include <limits>
 #include <numeric>
@@ -387,16 +388,16 @@ namespace lfs::core {
         case MovementOp::Pad: {
             if (auto* padding = std::get_if<std::vector<std::pair<int, int>>>(&args.args)) {
                 LFS_ASSERT_MSG(padding->size() <= shape_.rank(),
-                               "pad has more entries than tensor dimensions");
-                LFS_ASSERT_MSG(dtype_ == DataType::Float32,
-                               "pad currently supports only Float32");
+                               std::format("pad has more entries than tensor dimensions (entries={}, rank={})",
+                                           padding->size(), shape_.rank()));
                 std::vector<size_t> new_shape = shape_.dims();
                 std::vector<size_t> pad_before(shape_.rank(), 0);
                 std::vector<size_t> pad_after(shape_.rank(), 0);
 
                 for (size_t i = 0; i < padding->size() && i < shape_.rank(); ++i) {
                     LFS_ASSERT_MSG((*padding)[i].first >= 0 && (*padding)[i].second >= 0,
-                                   "pad widths must be non-negative");
+                                   std::format("pad widths must be non-negative (dim={}, before={}, after={})", i,
+                                               (*padding)[i].first, (*padding)[i].second));
                     pad_before[i] = (*padding)[i].first;
                     pad_after[i] = (*padding)[i].second;
                     new_shape[i] += pad_before[i] + pad_after[i];
@@ -438,7 +439,13 @@ namespace lfs::core {
                         dst[dst_idx] = src[i];
                     }
                 } else {
-                    LOG_WARN("Pad: unsupported dtype/device");
+                    // Other dtypes copy the input into the interior of the
+                    // zeroed result, through the strided copy every backend has.
+                    Tensor interior = result;
+                    for (size_t d = 0; d < shape_.rank(); ++d) {
+                        interior = interior.slice(d, pad_before[d], pad_before[d] + shape_[d]);
+                    }
+                    interior.copy_from(*this);
                 }
 
                 return result;
