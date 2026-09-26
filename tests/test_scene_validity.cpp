@@ -34,6 +34,7 @@
 #include "cuda_backend_test.hpp"
 #include "io/exporter.hpp"
 #include "io/project_document.hpp"
+#include "lfs/training/ops/registry.hpp"
 #include "licht_test_support.hpp"
 #include "ppisp_fixture.hpp"
 #include "python/python_runtime.hpp"
@@ -1390,6 +1391,15 @@ namespace lfs::python {
         params.optimization.sh_degree = 1;
 
         const auto result = lfs::training::initializeTrainingModel(params, dummy_scene_);
+        if (const auto unavailable = lfs::training::unavailable_training_reason(
+                params, core::default_gpu_backend(), lfs::training::training_loader_dependencies(params))) {
+            ASSERT_FALSE(result.has_value());
+            EXPECT_EQ(result.error(), *unavailable);
+            const auto* model = dummy_scene_.getTrainingModel();
+            ASSERT_NE(model, nullptr);
+            expect_sh_degree(*model, 3, count);
+            return;
+        }
 
         ASSERT_TRUE(result.has_value()) << result.error();
         const auto* model = dummy_scene_.getTrainingModel();
@@ -1425,6 +1435,16 @@ namespace lfs::python {
         params.optimization.max_cap = static_cast<int>(capacity);
 
         const auto result = lfs::training::initializeTrainingModel(params, dummy_scene_, allocator);
+        if (const auto unavailable = lfs::training::unavailable_training_reason(
+                params, core::default_gpu_backend(), lfs::training::training_loader_dependencies(params))) {
+            ASSERT_FALSE(result.has_value());
+            EXPECT_EQ(result.error(), *unavailable);
+            EXPECT_TRUE(calls->empty());
+            const auto* model = dummy_scene_.getTrainingModel();
+            ASSERT_NE(model, nullptr);
+            EXPECT_EQ(model->size(), count);
+            return;
+        }
 
         ASSERT_TRUE(result.has_value()) << result.error();
         const auto* model = dummy_scene_.getTrainingModel();
@@ -1453,10 +1473,6 @@ namespace lfs::python {
     }
 
     TEST_F(SceneValidityTest, InitializeTrainingModelCapsPointCloudBeforeAllocatorAllocation) {
-        if (!core::gpu_backend_available(core::GpuBackend::CUDA)) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
-        const core::GpuBackendScope backend_scope(core::GpuBackend::CUDA);
         constexpr size_t source_count = 12;
         constexpr size_t capacity = 5;
         dummy_scene_.addPointCloud("PointCloud", make_test_point_cloud(source_count));
@@ -1483,6 +1499,19 @@ namespace lfs::python {
         params.optimization.sh_degree = 1;
         params.optimization.max_cap = static_cast<int>(capacity);
 
+        if (const auto unavailable = lfs::training::unavailable_training_reason(
+                params, core::default_gpu_backend(), lfs::training::training_loader_dependencies(params))) {
+            const auto result = lfs::training::initializeTrainingModel(params, dummy_scene_, allocator);
+            ASSERT_FALSE(result.has_value());
+            EXPECT_EQ(result.error(), *unavailable);
+            EXPECT_TRUE(calls->empty());
+            EXPECT_EQ(dummy_scene_.getTrainingModel(), nullptr);
+            return;
+        }
+        if (!core::gpu_backend_available(core::GpuBackend::CUDA)) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const core::GpuBackendScope backend_scope(core::GpuBackend::CUDA);
         const auto result = lfs::training::initializeTrainingModel(params, dummy_scene_, allocator);
 
         ASSERT_TRUE(result.has_value()) << result.error();
