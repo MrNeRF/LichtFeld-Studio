@@ -110,9 +110,8 @@
       "src/training/strategies/strategy_utils.cpp:607"
     ],
     "visualizer": [
-      "src/visualizer/gui/gpu_memory_query.cpp:57",
-      "src/visualizer/gui/gpu_memory_query.cpp:218",
-      "src/visualizer/gui/gpu_memory_query.cpp:276",
+      "src/visualizer/gui/gpu_memory_query.cpp:64",
+      "src/visualizer/gui/gpu_memory_query.cpp:225",
       "src/visualizer/rendering/viewport_appearance_correction.cpp:381",
       "src/visualizer/rendering/viewport_appearance_correction.cpp:384",
       "src/visualizer/rendering/vksplat_viewport_renderer.cpp:1951",

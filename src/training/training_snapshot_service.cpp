@@ -15,6 +15,7 @@
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_serialization_sink.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "lfs/cuda_scratch.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "strategies/istrategy.hpp"
@@ -2374,6 +2375,7 @@ namespace lfs::training {
                 Milliseconds(
                     pause_end - pause_begin)
                     .count();
+            lfs::diagnostics::VramProfiler::instance().mark("training_snapshot", {}, pending->metrics.device_snapshot_bytes, pending->metrics.pause_ms);
             pending->metrics.cold_path_ms =
                 pending->metrics.pause_ms +
                 (pending->metrics.cold_first_snapshot

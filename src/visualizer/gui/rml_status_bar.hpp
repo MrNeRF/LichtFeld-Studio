@@ -135,6 +135,7 @@ namespace lfs::vis::gui {
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
+        bool document_registered_ = false;
         Rml::DataModelHandle model_handle_;
         Rml::EventListener* git_commit_listener_ = nullptr;
         Rml::EventListener* gpu_icon_listener_ = nullptr;

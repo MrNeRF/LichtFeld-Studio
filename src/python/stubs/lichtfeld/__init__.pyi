@@ -481,6 +481,9 @@ def set_vram_profiler_enabled(enabled: bool) -> None:
 def get_vram_profiler_enabled() -> bool:
     """Return whether the live VRAM diagnostics profiler is enabled"""
 
+def vram_owner_breakdown() -> dict:
+    """Return a sampled process VRAM breakdown by owner category"""
+
 def set_node_visibility(name: str, visible: bool) -> None:
     """Set visibility of a scene node by name"""
 
@@ -636,6 +639,9 @@ def toggle_vram_hud() -> None:
     """
     Toggle the VRAM diagnostics HUD overlay (requires vram profiler enabled)
     """
+
+def toggle_perf_hud_expanded() -> None:
+    """Toggle the performance HUD between its full and compact views"""
 
 def is_perf_hud_visible() -> bool:
     """True when the performance HUD is currently shown"""

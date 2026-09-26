@@ -1938,6 +1938,7 @@ namespace lfs::core {
             return storage_meta_ ? storage_meta_->exportable_bound_generation : 0u;
         }
         static std::string storage_memory_summary();
+        static std::size_t cuda_direct_storage_live_bytes();
         static void log_storage_memory();
         static void log_storage_memory(std::string_view label);
 
