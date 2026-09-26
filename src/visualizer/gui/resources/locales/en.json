@@ -1994,6 +1994,7 @@
     "reload": "Reload"
   },
   "status_bar": {
+    "preview_reduced": "Preview resolution reduced (GPU memory)",
     "safe_mode": "SAFE MODE",
     "mcp_preferences": "Edit",
     "mcp_turn_on": "Turn on",

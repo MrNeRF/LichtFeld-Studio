@@ -6,6 +6,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/number_format.hpp"
 #include "core/services.hpp"
 #include "diagnostics/vram_profiler.hpp"
@@ -437,6 +438,8 @@ namespace lfs::vis::gui {
         ctor.Bind("fps_value", &model_.fps_value);
         ctor.Bind("fps_color", &model_.fps_color);
         ctor.Bind("fps_label", &model_.fps_label);
+        ctor.Bind("preview_reduced", &model_.preview_reduced);
+        ctor.Bind("preview_reduced_text", &model_.preview_reduced_text);
         ctor.Bind("git_commit", &model_.git_commit);
         ctor.Bind("mcp_details_expanded", &model_.mcp_details_expanded);
         ctor.Bind("mcp_summary", &model_.mcp_summary);
@@ -1531,6 +1534,11 @@ namespace lfs::vis::gui {
             setModelBool("show_zoom", model_.show_zoom, false);
         }
 
+        setModelBool("preview_reduced", model_.preview_reduced,
+                     lfs::core::MemoryPressureCoordinator::instance().pressure_active());
+        setModelString("preview_reduced_text", model_.preview_reduced_text,
+                       LOC("status_bar.preview_reduced"));
+
         // Transient StatusOnly message (ErrorBus)
         const auto status_msg = status_message_.snapshot(now);
         setModelBool("show_status_message", model_.show_status_message, status_msg.visible);
@@ -1600,6 +1608,7 @@ namespace lfs::vis::gui {
             (model_.show_split ? uint32_t{1} << 3 : 0) |
             (model_.show_wasd ? uint32_t{1} << 4 : 0) |
             (model_.show_zoom ? uint32_t{1} << 5 : 0) |
+            (model_.preview_reduced ? uint32_t{1} << 10 : 0) |
             (model_.show_status_message ? uint32_t{1} << 6 : 0) |
             (model_.show_gpu_model ? uint32_t{1} << 7 : 0);
 

@@ -1891,9 +1891,8 @@ namespace lfs::vis {
         if (resize_result.use_interactive_render_scale) {
             scale = std::min(scale, kInteractiveResizeRenderScale);
         }
-        // Under an active VRAM pressure lease, halve the viewer render resolution
-        // to shrink per-frame output allocation. Restored automatically once the
-        // coordinator observes sustained headroom. Does not affect training.
+        // Only unresolved viewer allocation failures lease a reduced preview.
+        // Training allocation retries must not lower the viewer resolution.
         if (lfs::core::MemoryPressureCoordinator::instance().pressure_active()) {
             scale = std::clamp(scale * 0.5f, 0.25f, 1.0f);
         }

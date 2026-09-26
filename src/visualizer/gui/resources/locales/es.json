@@ -1996,6 +1996,7 @@
     "reload": "Recargar"
   },
   "status_bar": {
+    "preview_reduced": "Resolución de vista previa reducida (memoria GPU)",
     "safe_mode": "MODO SEGURO",
     "mcp_preferences": "Editar",
     "mcp_turn_on": "Activar",

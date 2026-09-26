@@ -1996,6 +1996,7 @@
     "reload": "다시 로드"
   },
   "status_bar": {
+    "preview_reduced": "미리 보기 해상도 감소 (GPU 메모리)",
     "safe_mode": "안전 모드",
     "mcp_preferences": "편집",
     "mcp_turn_on": "켜기",

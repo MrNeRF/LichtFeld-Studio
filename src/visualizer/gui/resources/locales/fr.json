@@ -1996,6 +1996,7 @@
     "reload": "Recharger"
   },
   "status_bar": {
+    "preview_reduced": "Résolution de l’aperçu réduite (mémoire GPU)",
     "safe_mode": "MODE SANS ÉCHEC",
     "mcp_preferences": "Modifier",
     "mcp_turn_on": "Activer",

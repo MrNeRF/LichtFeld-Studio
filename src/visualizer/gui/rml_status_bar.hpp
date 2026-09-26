@@ -251,6 +251,8 @@ namespace lfs::vis::gui {
             std::string fps_value;
             std::string fps_color;
             std::string fps_label;
+            bool preview_reduced = false;
+            std::string preview_reduced_text;
             std::string git_commit;
             bool mcp_details_expanded = false;
             std::string mcp_summary;
