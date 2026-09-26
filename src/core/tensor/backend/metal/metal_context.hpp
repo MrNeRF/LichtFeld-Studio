@@ -107,10 +107,6 @@ namespace lfs::core::internal::metal {
         // which host access and completion wait for.
         void dispatch(std::span<const StorageRef> uses, const Dispatch& dispatch);
 
-        // Kernels record the first out-of-range index here; the next wait
-        // raises it as a BoundsViolation and clears it.
-        uint64_t fault_address() const { return fault_.gpuAddress; }
-
         uint64_t flush();
         void wait(uint64_t serial);
         uint64_t completed() const;
@@ -135,6 +131,10 @@ namespace lfs::core::internal::metal {
         static constexpr uint32_t kBatchDispatches = 64;
         // where_select binds four buffers and its parameters.
         static constexpr NSUInteger kArgumentSlots = 5;
+        // Kernels record the first out-of-range index of their batch in the
+        // fault record bound after the argument slots; the first wait after
+        // the batch completed raises it as a BoundsViolation.
+        static constexpr NSUInteger kFaultSlot = kArgumentSlots;
         static constexpr size_t kParamsAlignment = 256;
         // Fused expressions pass up to ExpressionLayout::max_words argument words.
         static constexpr size_t kMaxParamsBytes = ExpressionLayout::max_words * sizeof(uint32_t);
@@ -189,6 +189,7 @@ namespace lfs::core::internal::metal {
         void wait_signaled(uint64_t serial);
         void check_failures() const;
         void check_fault();
+        void consume_fault_locked(size_t slot);
         void trim_locked();
 
         id<MTLDevice> device_;
@@ -219,7 +220,12 @@ namespace lfs::core::internal::metal {
         id<MTLSharedEvent> event_;
         std::shared_ptr<Failure> failure_;
 
+        // One record per batch in flight, so a record is read only after its
+        // batch completed and before a later batch reuses it.
+        std::mutex fault_mutex_;
         id<MTLBuffer> fault_;
+        std::array<uint64_t, kMaxFrames> fault_serials_{};
+        std::array<uint32_t, 4> fault_record_{};
 
         // Every buffer the context creates stays resident for the queue.
         std::mutex memory_mutex_;

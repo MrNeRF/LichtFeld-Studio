@@ -916,7 +916,6 @@ namespace lfs::core::internal {
             uint64_t index_offset;
             uint64_t value_offset;
             uint64_t winner_offset;
-            uint64_t fault_address;
             uint32_t outer;
             uint32_t dim_size;
             uint32_t inner;
@@ -932,7 +931,7 @@ namespace lfs::core::internal {
             std::array<uint32_t, MAX_TENSOR_RANK> input_dims;
             std::array<uint32_t, MAX_TENSOR_RANK> index_dims;
         };
-        static_assert(sizeof(IndexParams) == 40 + 12 * 4 + 2 * 32);
+        static_assert(sizeof(IndexParams) == 32 + 12 * 4 + 2 * 32);
 
         // One index_op dispatch; the tensor it reads or writes is input, the
         // gathered output or scattered source is values.
@@ -967,7 +966,6 @@ namespace lfs::core::internal {
             bind(launch.indices, 1, launch.params.index_offset);
             bind(launch.values, 2, launch.params.value_offset);
             bind(launch.winners, 3, launch.params.winner_offset);
-            launch.params.fault_address = context.fault_address();
             launch.params.total = checked_u32(launch.total, "Metal index operation count exceeds uint32");
             const auto dtype = static_cast<uint32_t>(launch.dtype);
             const auto pipeline = context.pipeline(

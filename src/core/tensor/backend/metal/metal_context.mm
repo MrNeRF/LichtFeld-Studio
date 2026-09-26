@@ -82,7 +82,7 @@ namespace lfs::core::internal::metal {
             throw TensorError("No Metal 4 device is available");
         NSError* error = nil;
         MTL4ArgumentTableDescriptor* const arguments = [MTL4ArgumentTableDescriptor new];
-        arguments.maxBufferBindCount = kArgumentSlots;
+        arguments.maxBufferBindCount = kFaultSlot + 1;
         queue_ = [device_ newMTL4CommandQueue];
         command_buffer_ = [device_ newCommandBuffer];
         arguments_ = [device_ newArgumentTableWithDescriptor:arguments error:&error];
@@ -91,7 +91,7 @@ namespace lfs::core::internal::metal {
         if (!queue_ || !command_buffer_ || !arguments_ || !residency_ || !event_)
             throw TensorError(std::format("Metal 4 queue setup failed: {}",
                                           error ? error.localizedDescription.UTF8String : "unknown error"));
-        fault_ = [device_ newBufferWithLength:4 * sizeof(uint32_t) options:MTLResourceStorageModeShared];
+        fault_ = [device_ newBufferWithLength:kMaxFrames * sizeof(fault_record_) options:MTLResourceStorageModeShared];
         if (!fault_)
             throw TensorError("Metal fault record allocation failed");
         std::memset(fault_.contents, 0, fault_.length);
@@ -239,6 +239,15 @@ namespace lfs::core::internal::metal {
             open_serial_ = submitted_.load(std::memory_order_relaxed) + 1;
             newest_serial_.store(open_serial_, std::memory_order_release);
             frames_[frame_].serial = open_serial_;
+            // At most kMaxFrames batches are in flight, so the batch that last
+            // used this record has completed.
+            const size_t slot = open_serial_ % kMaxFrames;
+            {
+                std::lock_guard lock(fault_mutex_);
+                consume_fault_locked(slot);
+                fault_serials_[slot] = open_serial_;
+            }
+            [arguments_ setAddress:fault_.gpuAddress + slot * sizeof(fault_record_) atIndex:kFaultSlot];
         }
         return encoder_;
     }
@@ -335,13 +344,29 @@ namespace lfs::core::internal::metal {
         check_fault();
     }
 
-    void Context::check_fault() {
-        auto* const words = static_cast<uint32_t*>(fault_.contents);
+    // Keeps the first fault of a completed batch and clears its record.
+    void Context::consume_fault_locked(const size_t slot) {
+        auto* const words = static_cast<uint32_t*>(fault_.contents) + slot * fault_record_.size();
         if (words[0] == 0)
             return;
+        if (fault_record_[0] == 0)
+            std::memcpy(fault_record_.data(), words, sizeof(fault_record_));
+        std::memset(words, 0, sizeof(fault_record_));
+    }
+
+    void Context::check_fault() {
         std::array<uint32_t, 4> record{};
-        std::memcpy(record.data(), words, sizeof(record));
-        std::memset(words, 0, sizeof(record));
+        {
+            std::lock_guard lock(fault_mutex_);
+            const uint64_t done = completed();
+            for (size_t slot = 0; slot < kMaxFrames; ++slot) {
+                if (fault_serials_[slot] != 0 && fault_serials_[slot] <= done)
+                    consume_fault_locked(slot);
+            }
+            record = std::exchange(fault_record_, {});
+        }
+        if (record[0] == 0)
+            return;
         // Code 2 stores the signed index in words 1-2 and the extent in word 3.
         const bool wide = record[0] == 2;
         const int64_t value = wide ? std::bit_cast<int64_t>((uint64_t{record[2]} << 32) | record[1])

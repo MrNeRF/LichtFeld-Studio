@@ -1277,7 +1277,6 @@ struct IndexParams {
     ulong index_offset;
     ulong value_offset;
     ulong winner_offset;
-    device atomic_uint* fault;
     uint outer;
     uint dim_size;
     uint inner;
@@ -1294,22 +1293,23 @@ struct IndexParams {
     uint index_dims[8];
 };
 
-// The first fault wins; the host reads the record after its next wait.
-static void record_fault(constant IndexParams& params, uint code, uint word1, uint word2, uint word3) {
+// Each batch binds its own fault record at buffer 5. The first fault of the
+// batch wins; the host reads the record once the batch completed.
+static void record_fault(device atomic_uint* fault, uint code, uint word1, uint word2, uint word3) {
     uint expected = 0;
-    while (!atomic_compare_exchange_weak_explicit(params.fault, &expected, code, memory_order_relaxed,
+    while (!atomic_compare_exchange_weak_explicit(fault, &expected, code, memory_order_relaxed,
                                                   memory_order_relaxed)) {
         if (expected != 0)
             return;
     }
-    device uint* words = (device uint*)params.fault;
+    device uint* words = (device uint*)fault;
     words[1] = word1;
     words[2] = word2;
     words[3] = word3;
 }
 
-static void record_index_fault(constant IndexParams& params, int index, uint extent) {
-    record_fault(params, 1, as_type<uint>(index), extent, params.op_id);
+static void record_index_fault(device atomic_uint* fault, constant IndexParams& params, int index, uint extent) {
+    record_fault(fault, 1, as_type<uint>(index), extent, params.op_id);
 }
 
 static void store_zero(device uchar* destination, ulong index) {
@@ -1349,19 +1349,20 @@ static int wrap_index(int index, uint extent) {
 }
 
 // Applies the boundary mode; false when an asserted index is out of range.
-static bool bound_index(thread int& index, uint extent, constant IndexParams& params) {
+static bool bound_index(thread int& index, uint extent, constant IndexParams& params, device atomic_uint* fault) {
     if (kBoundary == 1) {
         index = max(0, min(int(extent) - 1, index));
     } else if (kBoundary == 2) {
         index = wrap_index(index, extent);
     } else if (index < 0 || index >= int(extent)) {
-        record_index_fault(params, index, extent);
+        record_index_fault(fault, params, index, extent);
         return false;
     }
     return true;
 }
 
-static bool gather_source(uint tid, device const int* indices, constant IndexParams& params, thread ulong& source) {
+static bool gather_source(uint tid, device const int* indices, constant IndexParams& params, device atomic_uint* fault,
+                          thread ulong& source) {
     if (kOp == 1) {
         source = clamp_flat(indices[tid], params.input_size);
         return true;
@@ -1370,13 +1371,13 @@ static bool gather_source(uint tid, device const int* indices, constant IndexPar
         const uint outer_index = tid / (params.index_size * params.inner);
         const uint position = tid / params.inner % params.index_size;
         int selected = indices[position];
-        if (!bound_index(selected, params.dim_size, params))
+        if (!bound_index(selected, params.dim_size, params, fault))
             return false;
         source = (ulong(outer_index) * params.dim_size + uint(selected)) * params.inner + tid % params.inner;
         return true;
     }
     int gathered = indices[tid];
-    if (!bound_index(gathered, params.input_dims[params.dim], params))
+    if (!bound_index(gathered, params.input_dims[params.dim], params, fault))
         return false;
     // Output coordinates follow the index tensor; the input is contiguous.
     uint remaining = tid;
@@ -1422,6 +1423,7 @@ kernel void index_op(device uchar* input_buffer [[buffer(0)]],
                      device uchar* value_buffer [[buffer(2)]],
                      device uchar* winner_buffer [[buffer(3)]],
                      constant IndexParams& params [[buffer(4)]],
+                     device atomic_uint* fault [[buffer(5)]],
                      uint tid [[thread_position_in_grid]]) {
     if (tid >= params.total)
         return;
@@ -1431,7 +1433,7 @@ kernel void index_op(device uchar* input_buffer [[buffer(0)]],
     device atomic_int* winners = (device atomic_int*)(winner_buffer + params.winner_offset);
     if (kOp <= 2) {
         ulong source = 0;
-        if (!gather_source(tid, indices, params, source))
+        if (!gather_source(tid, indices, params, fault, source))
             store_zero(values, tid);
         else if (kUnary == 0)
             copy_element(input, source, values, tid);
@@ -1448,7 +1450,7 @@ kernel void index_op(device uchar* input_buffer [[buffer(0)]],
     if (kOp == 7) {
         const int target = indices[tid];
         if (target < 0 || target >= int(params.dim_size))
-            record_index_fault(params, target, params.dim_size);
+            record_index_fault(fault, params, target, params.dim_size);
         else
             atomic_fetch_max_explicit(winners + target, int(tid), memory_order_relaxed);
         return;
@@ -1457,7 +1459,7 @@ kernel void index_op(device uchar* input_buffer [[buffer(0)]],
         const long index = ((device const long*)input)[tid];
         if (index < 0 || index >= long(params.dim_size)) {
             // Code 2 stores the signed index in words 1-2 and the extent in word 3.
-            record_fault(params, 2, uint(index), uint(ulong(index) >> 32), params.dim_size);
+            record_fault(fault, 2, uint(index), uint(ulong(index) >> 32), params.dim_size);
             ((device int*)values)[tid] = -1;
         } else {
             ((device int*)values)[tid] = int(index);
@@ -1469,7 +1471,7 @@ kernel void index_op(device uchar* input_buffer [[buffer(0)]],
     const int target = indices[position];
     if (target < 0 || target >= int(params.dim_size)) {
         if (kOp != 3)
-            record_index_fault(params, target, params.dim_size);
+            record_index_fault(fault, params, target, params.dim_size);
         return;
     }
     const ulong destination = (ulong(tid / (params.index_size * params.inner)) * params.dim_size + uint(target)) * params.inner +
