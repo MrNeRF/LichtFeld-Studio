@@ -201,7 +201,8 @@ namespace {
                              name, lfs::format_for_developer(status.error()));
                 return 1;
             } else if constexpr (std::is_same_v<T, lfs::io::args::ConvertMode>) {
-                preflightGpuOrExit(false);
+                // Converting trains nothing, so any tensor backend can run it.
+                preflightGpuOrExit(false, true);
                 return lfs::app::run_converter(mode.params);
             } else if constexpr (std::is_same_v<T, lfs::io::args::Mesh2SplatMode>) {
                 preflightGpuOrExit(false);
