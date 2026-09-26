@@ -6,6 +6,7 @@
 //   cmake --build <dir> --target bench_tensor_metal_vulkan
 
 #include "core/gpu_device_runtime.hpp"
+#include "core/nn/ops.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_completion.hpp"
@@ -15,6 +16,7 @@
 #include <cmath>
 #include <cstdio>
 #include <functional>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -81,6 +83,70 @@ namespace {
         std::printf("%-14s %10zu %12.3f %12.3f %9.2fx\n", name, count, vulkan, metal, vulkan / metal);
     }
 
+    // Layers at the sizes of the SAM2 and MoGe encoders, in both precisions.
+    struct Layers {
+        Tensor tokens, weight, bias, heads, image, kernel3, kernel1, strided, up, channels;
+    };
+
+    Layers make_layers(const GpuBackend backend, const DataType dtype) {
+        GpuBackendScope scope(backend);
+        std::mt19937 generator(7);
+        const auto random = [&](const TensorShape& shape) {
+            std::uniform_real_distribution<float> distribution(-0.5f, 0.5f);
+            std::vector<float> values(shape.elements());
+            for (float& value : values)
+                value = distribution(generator);
+            return Tensor::from_vector(values, shape, Device::CPU).to(Device::GPU).to(dtype);
+        };
+        Layers layers{.tokens = random({4096, 1024}),
+                      .weight = random({1024, 1024}),
+                      .bias = random({1024}),
+                      .heads = random({1, 16, 4096, 64}),
+                      .image = random({1, 256, 64, 64}),
+                      .kernel3 = random({256, 256, 3, 3}),
+                      .kernel1 = random({256, 256, 1, 1}),
+                      .strided = random({256, 64, 3, 3}),
+                      .up = random({256, 128, 2, 2}),
+                      .channels = random({256})};
+        settle(layers.channels);
+        return layers;
+    }
+
+    void run_layers() {
+        namespace nn = lfs::core::nn;
+        std::printf("\n%-24s %12s %12s %10s\n", "layer", "vulkan ms", "metal ms", "speedup");
+        for (const auto dtype : {DataType::Float32, DataType::Float16}) {
+            const Layers vulkan = make_layers(GpuBackend::Vulkan, dtype);
+            const Layers metal = make_layers(GpuBackend::Metal, dtype);
+            const auto compare = [&](const char* const name, const std::function<Tensor(const Layers&)>& op) {
+                const auto [vulkan_ms, metal_ms] = median_ms([&] { return op(vulkan); }, [&] { return op(metal); });
+                std::printf("%-20s %s %12.3f %12.3f %9.2fx\n", name, dtype == DataType::Float16 ? "f16" : "f32",
+                            vulkan_ms, metal_ms, vulkan_ms / metal_ms);
+            };
+            compare("linear_gelu", [](const Layers& l) {
+                return nn::linear(l.tokens, l.weight, &l.bias, nn::Activation::GeluErf);
+            });
+            compare("attention", [](const Layers& l) { return nn::attention(l.heads, l.heads, l.heads); });
+            compare("layer_norm", [](const Layers& l) { return nn::layer_norm(l.tokens, l.bias, l.bias); });
+            compare("softmax", [](const Layers& l) { return nn::softmax(l.tokens); });
+            compare("gelu", [](const Layers& l) { return nn::gelu(l.tokens); });
+            compare("conv3x3", [](const Layers& l) {
+                return nn::conv2d(l.image, l.kernel3, &l.channels, {.pad_h = 1, .pad_w = 1});
+            });
+            compare("conv1x1", [](const Layers& l) { return nn::conv2d(l.image, l.kernel1, &l.channels, {}); });
+            compare("conv3x3_s2_g4", [](const Layers& l) {
+                return nn::conv2d(l.image, l.strided, &l.channels,
+                                  {.stride_h = 2, .stride_w = 2, .pad_h = 1, .pad_w = 1, .groups = 4});
+            });
+            compare("conv_transpose", [](const Layers& l) {
+                return nn::conv_transpose2d(l.image, l.up, nullptr, {.stride_h = 2, .stride_w = 2});
+            });
+            compare("resize_bilinear", [](const Layers& l) {
+                return nn::resize2d(l.image, 128, 128, nn::ResizeMode::Bilinear, nn::CoordTransform::HalfPixel);
+            });
+        }
+    }
+
 } // namespace
 
 int main() {
@@ -130,6 +196,26 @@ int main() {
             return in.a.reshape({rows, 64})
                 .linear(in.b.slice(0, 0, 64 * 64).reshape({64, 64}), in.b.slice(0, 0, 64));
         });
+        compare("sum_rows", [&](const Inputs& in) { return in.a.reshape({rows, 64}).sum(1); });
+        compare("max_cols", [&](const Inputs& in) { return in.a.reshape({rows, 64}).max(0); });
+        compare("cumsum", [](const Inputs& in) { return in.a.cumsum(0); });
+        compare("sort", [](const Inputs& in) { return in.a.sort().first; });
+        compare("argsort", [](const Inputs& in) { return in.a.sort(-1, true).second; });
+        // Rows of 64 picked at random, as when gathering splat attributes.
+        const Tensor host_rows = (Tensor::rand({static_cast<size_t>(rows)}, Device::CPU) * static_cast<float>(rows - 1))
+                                     .to(DataType::Int64);
+        compare("index_select", [&](const Inputs& in) {
+            return in.a.reshape({rows, 64}).index_select(0, host_rows.to(Device::GPU));
+        });
+        compare("index_add", [&](const Inputs& in) {
+            Tensor target = Tensor::zeros({static_cast<size_t>(rows), 64}, Device::GPU);
+            return target.index_add_(0, host_rows.to(Device::GPU), in.b.reshape({rows, 64}));
+        });
+        compare("nonzero", [](const Inputs& in) { return (in.a > 1.2f).nonzero(); });
+        compare("masked_select", [](const Inputs& in) { return in.a.masked_select(in.a > 1.2f); });
+        compare("where", [](const Inputs& in) { return in.a.where(in.a > 1.0f, in.b); });
+        compare("cat", [](const Inputs& in) { return Tensor::cat({in.a, in.b}, 0); });
+        compare("randn", [count](const Inputs&) { return Tensor::randn({count}, Device::GPU); });
         compare("upload", [](const Inputs& in) { return in.host.to(Device::GPU); });
         compare("download", [](const Inputs& in) { return in.a.cpu(); });
         if (count == 4096) {
@@ -144,5 +230,6 @@ int main() {
             });
         }
     }
+    run_layers();
     return 0;
 }

@@ -235,6 +235,32 @@ namespace lfs::core {
             InferenceGeometry geometry;
         };
 
+        // Dedicated neural-network kernels, whose operands share one dtype.
+        // Linear: out[b][m][n] = act(a[b][m] . w + bias[n]) * scale[n] +
+        // residual[b][m][n], with w stored [k][n] or, with trans_b, [n][k],
+        // and shared by every batch unless batched_b. `activation` is an
+        // nn::Activation.
+        struct LinearProgram {
+            size_t batch = 1, m = 0, n = 0, k = 0;
+            bool trans_b = false, batched_b = false;
+            int activation = 0;
+        };
+
+        // softmax(q . k^T * scale + mask) . v over [groups][queries][dim] q and
+        // [groups][keys][dim] k and v, where a group is one head of one batch.
+        // The mask strides step batch, head, query and key; 0 broadcasts.
+        struct AttentionProgram {
+            size_t groups = 0, heads = 1, queries = 0, keys = 0, dim = 0;
+            float scale = 1.0f;
+            std::array<int64_t, 4> mask_strides{};
+        };
+
+        // Layer norm over rows of `cols` values; RMS norm without a bias.
+        struct NormProgram {
+            size_t rows = 0, cols = 0;
+            float eps = 0.0f;
+        };
+
         struct RandomProgram {
             size_t count = 0;
             size_t sample_count = 0;

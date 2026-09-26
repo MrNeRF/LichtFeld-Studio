@@ -130,6 +130,21 @@ namespace lfs::core::internal {
         throw TensorError("CUDA runs the neural-network ops with its own kernels");
     }
 
+    void CudaBackendOps::nn_linear(StorageRef, StorageRef, std::optional<StorageRef>, std::optional<StorageRef>,
+                                   std::optional<StorageRef>, StorageRef, const LinearProgram&, ExecContext) {
+        throw TensorError("CUDA runs the neural-network ops with its own kernels");
+    }
+
+    void CudaBackendOps::nn_attention(StorageRef, StorageRef, StorageRef, std::optional<StorageRef>, StorageRef,
+                                      const AttentionProgram&, ExecContext) {
+        throw TensorError("CUDA runs the neural-network ops with its own kernels");
+    }
+
+    void CudaBackendOps::nn_norm(StorageRef, StorageRef, std::optional<StorageRef>, StorageRef, const NormProgram&,
+                                 ExecContext) {
+        throw TensorError("CUDA runs the neural-network ops with its own kernels");
+    }
+
     void CudaBackendOps::bias_add(
         const StorageRef input, const StorageRef bias, const StorageRef output,
         const int count, const int channels, const int spatial_size,

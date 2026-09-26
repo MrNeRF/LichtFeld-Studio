@@ -3247,6 +3247,19 @@ static float erf_approximation(float x) {
     return x < 0.0f ? -r : r;
 }
 
+// An nn::Activation of x, as the Vulkan kernels evaluate it in fp32.
+static float nn_activation(float x, int activation) {
+    if (activation == 1)
+        return max(x, 0.0f);
+    if (activation == 2)
+        return 0.5f * x * (1.0f + tanh(0.7978845608028654f * (x + 0.044715f * x * x * x)));
+    if (activation == 3)
+        return 0.5f * x * (1.0f + erf_approximation(x * 0.7071067811865475f));
+    if (activation == 4)
+        return x / (1.0f + exp(-x));
+    return x;
+}
+
 kernel void inference(constant InferenceParams& params [[buffer(0)]], uint i [[thread_position_in_grid]]) {
     if (i >= params.total)
         return;
@@ -3313,17 +3326,7 @@ kernel void inference(constant InferenceParams& params [[buffer(0)]], uint i [[t
         if (p.mode != 0)
             value /= max(1, p.include_pad != 0 ? p.kernel_h * p.kernel_w : count);
     } else if (kOp == 4) {
-        const float x = params.input[index];
-        if (p.mode == 1)
-            value = max(x, 0.0f);
-        else if (p.mode == 2)
-            value = 0.5f * x * (1.0f + tanh(0.7978845608028654f * (x + 0.044715f * x * x * x)));
-        else if (p.mode == 3)
-            value = 0.5f * x * (1.0f + erf_approximation(x * 0.7071067811865475f));
-        else if (p.mode == 4)
-            value = x / (1.0f + exp(-x));
-        else
-            value = x;
+        value = nn_activation(params.input[index], p.mode);
     } else {
         const int pixel = index % (p.height * p.width);
         if (index < p.height * p.width)

@@ -8,6 +8,7 @@
 
 #include "core/cuda_error.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_cuda_interop.hpp"
 #include "nn_kernels.hpp"
@@ -59,6 +60,18 @@ namespace lfs::core::nn {
         // Backends without dedicated neural-network kernels run the portable ops.
         bool runs_portable(const Tensor& tensor) {
             return gpu_backend_of(tensor) != GpuBackend::CUDA;
+        }
+
+        // Linear layers, attention and norms run on the backend's own kernels
+        // where it has them.
+        bool runs_backend_kernels(const Tensor& tensor) {
+            return internal::backend_ops_for(tensor).nn_kernels();
+        }
+
+        std::optional<internal::StorageRef> optional_storage(const Tensor* tensor) {
+            if (tensor == nullptr)
+                return std::nullopt;
+            return internal::storage_ref(*tensor);
         }
 
         void require_nn_tensor(const Tensor& tensor, const std::string_view op,
@@ -203,6 +216,17 @@ namespace lfs::core::nn {
             scale_c = &scale_store;
         }
 
+        if (runs_backend_kernels(a_c)) {
+            auto out = empty_like_shape(a_c, TensorShape(out_dims));
+            internal::backend_ops_for(a_c).nn_linear(
+                internal::storage_ref(a_c), internal::storage_ref(b_c), optional_storage(bias_c),
+                optional_storage(scale_c), optional_storage(residual_c), internal::storage_ref(out),
+                {.batch = batch_a, .m = static_cast<std::size_t>(m), .n = static_cast<std::size_t>(n),
+                 .k = static_cast<std::size_t>(ka), .trans_b = trans_b, .batched_b = batch_b != 1,
+                 .activation = static_cast<int>(activation)},
+                {});
+            return out;
+        }
         if (runs_portable(a_c)) {
             return portable::gemm(a_c, b_c, trans_b, bias_c, activation, residual_c, scale_c);
         }
@@ -259,6 +283,18 @@ namespace lfs::core::nn {
             residual_c = &residual_store;
         }
 
+        if (runs_backend_kernels(in_c)) {
+            std::vector<std::size_t> shape;
+            for (std::size_t i = 0; i < input.ndim(); ++i)
+                shape.push_back(input.shape()[i]);
+            shape.back() = n;
+            auto out = empty_like_shape(in_c, TensorShape(shape));
+            internal::backend_ops_for(in_c).nn_linear(
+                internal::storage_ref(in_2d), internal::storage_ref(w_c), optional_storage(bias_c), std::nullopt,
+                optional_storage(residual_c), internal::storage_ref(out),
+                {.m = m, .n = n, .k = k, .trans_b = true, .activation = static_cast<int>(activation)}, {});
+            return out;
+        }
         if (runs_portable(in_c)) {
             auto out = portable::gemm(in_2d, w_c, true, bias_c, activation, residual_c);
             std::vector<std::size_t> shape;
@@ -305,6 +341,15 @@ namespace lfs::core::nn {
         const Tensor in_c = input.contiguous();
         const Tensor w_c = weight.contiguous();
         const Tensor b_c = bias.contiguous();
+        if (runs_backend_kernels(in_c)) {
+            auto out = empty_like_shape(in_c, in_c.shape());
+            internal::backend_ops_for(in_c).nn_norm(
+                internal::storage_ref(in_c), internal::storage_ref(w_c), internal::storage_ref(b_c),
+                internal::storage_ref(out), {.rows = in_c.numel() / static_cast<std::size_t>(cols),
+                                             .cols = static_cast<std::size_t>(cols), .eps = eps},
+                {});
+            return out;
+        }
         if (runs_portable(in_c)) {
             return portable::norm(in_c, w_c, &b_c, eps);
         }
@@ -327,6 +372,15 @@ namespace lfs::core::nn {
                        "rms_norm weight must match the last dim");
         const Tensor in_c = input.contiguous();
         const Tensor w_c = weight.contiguous();
+        if (runs_backend_kernels(in_c)) {
+            auto out = empty_like_shape(in_c, in_c.shape());
+            internal::backend_ops_for(in_c).nn_norm(
+                internal::storage_ref(in_c), internal::storage_ref(w_c), std::nullopt, internal::storage_ref(out),
+                {.rows = in_c.numel() / static_cast<std::size_t>(cols), .cols = static_cast<std::size_t>(cols),
+                 .eps = eps},
+                {});
+            return out;
+        }
         if (runs_portable(in_c)) {
             return portable::norm(in_c, w_c, nullptr, eps);
         }
@@ -429,6 +483,18 @@ namespace lfs::core::nn {
             }
         }
 
+        if (runs_backend_kernels(q_c)) {
+            auto out = empty_like_shape(q_c, q_c.shape());
+            internal::backend_ops_for(q_c).nn_attention(
+                internal::storage_ref(q_c), internal::storage_ref(k_c), internal::storage_ref(v_c), optional_storage(m_c),
+                internal::storage_ref(out),
+                {.groups = static_cast<std::size_t>(b) * static_cast<std::size_t>(h),
+                 .heads = static_cast<std::size_t>(h), .queries = static_cast<std::size_t>(n_q),
+                 .keys = static_cast<std::size_t>(n_k), .dim = static_cast<std::size_t>(d), .scale = used_scale,
+                 .mask_strides = {sb, sh, sq, sk}},
+                {});
+            return out;
+        }
         if (runs_portable(q_c)) {
             return portable::attention(q_c, k_c, v_c, m_c, used_scale);
         }

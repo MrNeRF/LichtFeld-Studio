@@ -184,6 +184,17 @@ namespace lfs::core {
             // The portable neural-network ops; CUDA runs its own kernels instead.
             virtual void inference(StorageRef input, StorageRef output,
                                    const InferenceProgram& program, ExecContext context) = 0;
+            // Dedicated neural-network kernels. A backend without them reports
+            // false and leaves these ops to the portable composition; CUDA
+            // runs its own kernels instead.
+            virtual bool nn_kernels() const = 0;
+            virtual void nn_linear(StorageRef a, StorageRef w, std::optional<StorageRef> bias,
+                                   std::optional<StorageRef> scale, std::optional<StorageRef> residual,
+                                   StorageRef output, const LinearProgram& program, ExecContext context) = 0;
+            virtual void nn_attention(StorageRef q, StorageRef k, StorageRef v, std::optional<StorageRef> mask,
+                                      StorageRef output, const AttentionProgram& program, ExecContext context) = 0;
+            virtual void nn_norm(StorageRef input, StorageRef weight, std::optional<StorageRef> bias,
+                                 StorageRef output, const NormProgram& program, ExecContext context) = 0;
             virtual void bias_add(StorageRef input, StorageRef bias, StorageRef output,
                                   int count, int channels, int spatial_size,
                                   ExecContext context) = 0;
@@ -482,6 +493,13 @@ namespace lfs::core {
                                      ExecContext context) override;
             void inference(StorageRef input, StorageRef output,
                            const InferenceProgram& program, ExecContext context) override;
+            bool nn_kernels() const override { return false; }
+            void nn_linear(StorageRef, StorageRef, std::optional<StorageRef>, std::optional<StorageRef>,
+                           std::optional<StorageRef>, StorageRef, const LinearProgram&, ExecContext) override;
+            void nn_attention(StorageRef, StorageRef, StorageRef, std::optional<StorageRef>, StorageRef,
+                              const AttentionProgram&, ExecContext) override;
+            void nn_norm(StorageRef, StorageRef, std::optional<StorageRef>, StorageRef, const NormProgram&,
+                         ExecContext) override;
             void bias_add(StorageRef input, StorageRef bias, StorageRef output,
                           int count, int channels, int spatial_size,
                           ExecContext context) override;

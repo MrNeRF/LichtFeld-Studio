@@ -132,6 +132,21 @@ namespace lfs::core::internal {
         record_nn(kAdaptiveAvgPool, pool_push(input, output, program), reads, output);
     }
 
+    void VulkanBackendOps::nn_linear(StorageRef, StorageRef, std::optional<StorageRef>, std::optional<StorageRef>,
+                                     std::optional<StorageRef>, StorageRef, const LinearProgram&, ExecContext) {
+        throw TensorError("Vulkan runs the neural-network ops as the portable composition");
+    }
+
+    void VulkanBackendOps::nn_attention(StorageRef, StorageRef, StorageRef, std::optional<StorageRef>, StorageRef,
+                                        const AttentionProgram&, ExecContext) {
+        throw TensorError("Vulkan runs the neural-network ops as the portable composition");
+    }
+
+    void VulkanBackendOps::nn_norm(StorageRef, StorageRef, std::optional<StorageRef>, StorageRef, const NormProgram&,
+                                   ExecContext) {
+        throw TensorError("Vulkan runs the neural-network ops as the portable composition");
+    }
+
     void VulkanBackendOps::inference(const StorageRef input, const StorageRef output,
                                      const InferenceProgram& program, ExecContext) {
         LFS_FACADE_TRACE(inference);

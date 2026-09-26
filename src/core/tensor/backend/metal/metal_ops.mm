@@ -2625,6 +2625,147 @@ namespace lfs::core::internal {
                            params, program.count);
     }
 
+    void MetalBackendOps::nn_linear(const StorageRef a, const StorageRef w, const std::optional<StorageRef> bias,
+                                    const std::optional<StorageRef> scale, const std::optional<StorageRef> residual,
+                                    const StorageRef output, const LinearProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(nn_linear);
+        if (program.batch == 0 || program.m == 0 || program.n == 0)
+            return;
+        LFS_ASSERT_MSG(program.k > 0, "Metal linear layers need a positive inner dimension");
+        (void)checked_extent(program.m * program.n, "Metal linear output exceeds int32");
+        struct Params {
+            uint64_t a, w, bias, scale, residual, output, a_stride, w_stride, output_stride;
+            uint32_t m, n, k;
+            int32_t activation;
+            uint32_t has_bias, has_scale, has_residual, padding;
+        };
+        static_assert(sizeof(Params) == 104);
+        const auto context = acquire_context();
+        const auto address = [&](const std::optional<StorageRef>& storage) {
+            return storage ? address_of(*context, *storage) : uint64_t{0};
+        };
+        const Params params{
+            .a = address_of(*context, a),
+            .w = address_of(*context, w),
+            .bias = address(bias),
+            .scale = address(scale),
+            .residual = address(residual),
+            .output = address_of(*context, output),
+            .a_stride = program.m * program.k,
+            .w_stride = program.batched_b ? program.n * program.k : 0,
+            .output_stride = program.m * program.n,
+            .m = checked_extent(program.m, "Metal linear rows exceed int32"),
+            .n = checked_extent(program.n, "Metal linear columns exceed int32"),
+            .k = checked_extent(program.k, "Metal linear depth exceeds int32"),
+            .activation = program.activation,
+            .has_bias = bias ? 1u : 0u,
+            .has_scale = scale ? 1u : 0u,
+            .has_residual = residual ? 1u : 0u,
+            .padding = 0,
+        };
+        std::array<StorageRef, 6> uses{a, w, output};
+        size_t used = 3;
+        for (const auto& operand : {bias, scale, residual}) {
+            if (operand)
+                uses[used++] = *operand;
+        }
+        constexpr size_t kTile = 32; // kNnTile in nn.metal
+        const uint32_t dtype = static_cast<uint32_t>(output.dtype);
+        const auto pipeline =
+            context->pipeline("nn_linear", {{1, dtype}, {2, dtype}, {14, program.trans_b ? 1u : 0u}});
+        context->dispatch(std::span(uses.data(), used),
+                          {.pipeline = pipeline,
+                           .buffers = {},
+                           .params = param_bytes(params),
+                           .grid = MTLSizeMake((program.n + kTile - 1) / kTile, (program.m + kTile - 1) / kTile,
+                                               checked_u32(program.batch, "Metal linear batch exceeds uint32")),
+                           // The matmul runs on four SIMD groups.
+                           .group_size = MTLSizeMake(4 * pipeline.threadExecutionWidth, 1, 1)});
+    }
+
+    void MetalBackendOps::nn_attention(const StorageRef q, const StorageRef k, const StorageRef v,
+                                       const std::optional<StorageRef> mask, const StorageRef output,
+                                       const AttentionProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(nn_attention);
+        if (program.groups == 0 || program.queries == 0)
+            return;
+        LFS_ASSERT_MSG(program.dim > 0 && program.dim <= 128, "Metal attention supports head dims up to 128");
+        struct Params {
+            uint64_t q, k, v, mask, output;
+            int64_t mask_batch, mask_head, mask_query, mask_key;
+            uint32_t heads, queries, keys, dim;
+            float scale;
+            uint32_t has_mask;
+        };
+        static_assert(sizeof(Params) == 96);
+        const auto context = acquire_context();
+        const Params params{
+            .q = address_of(*context, q),
+            .k = address_of(*context, k),
+            .v = address_of(*context, v),
+            .mask = mask ? address_of(*context, *mask) : 0,
+            .output = address_of(*context, output),
+            .mask_batch = program.mask_strides[0],
+            .mask_head = program.mask_strides[1],
+            .mask_query = program.mask_strides[2],
+            .mask_key = program.mask_strides[3],
+            .heads = checked_u32(program.heads, "Metal attention heads exceed uint32"),
+            .queries = checked_u32(program.queries, "Metal attention queries exceed uint32"),
+            .keys = checked_u32(program.keys, "Metal attention keys exceed uint32"),
+            .dim = static_cast<uint32_t>(program.dim),
+            .scale = program.scale,
+            .has_mask = mask ? 1u : 0u,
+        };
+        std::array<StorageRef, 5> uses{q, k, v, output, output};
+        if (mask)
+            uses[4] = *mask;
+        constexpr size_t kQueries = 32; // kNnAttentionQueries in nn.metal
+        const uint32_t dtype = static_cast<uint32_t>(output.dtype);
+        const auto pipeline = context->pipeline(
+            "nn_attention", {{1, dtype}, {2, dtype}, {12, static_cast<uint32_t>((program.dim + 7) / 8)}});
+        context->dispatch(uses, {.pipeline = pipeline,
+                                 .buffers = {},
+                                 .params = param_bytes(params),
+                                 .grid = MTLSizeMake((program.queries + kQueries - 1) / kQueries,
+                                                     checked_u32(program.groups, "Metal attention groups exceed uint32"), 1),
+                                 // Four SIMD groups of eight queries.
+                                 .group_size = MTLSizeMake(128, 1, 1)});
+    }
+
+    void MetalBackendOps::nn_norm(const StorageRef input, const StorageRef weight, const std::optional<StorageRef> bias,
+                                  const StorageRef output, const NormProgram& program, ExecContext) {
+        LFS_FACADE_TRACE(nn_norm);
+        if (program.rows == 0)
+            return;
+        struct Params {
+            uint64_t input, weight, bias, output;
+            uint32_t rows, cols;
+            float eps;
+            uint32_t has_bias;
+        };
+        static_assert(sizeof(Params) == 48);
+        const auto context = acquire_context();
+        const Params params{
+            .input = address_of(*context, input),
+            .weight = address_of(*context, weight),
+            .bias = bias ? address_of(*context, *bias) : 0,
+            .output = address_of(*context, output),
+            .rows = checked_u32(program.rows, "Metal norm rows exceed uint32"),
+            .cols = checked_u32(program.cols, "Metal norm columns exceed uint32"),
+            .eps = program.eps,
+            .has_bias = bias ? 1u : 0u,
+        };
+        (void)checked_u32(program.rows * program.cols, "Metal norm input exceeds uint32");
+        const std::array uses{input, weight, bias.value_or(weight), output};
+        const uint32_t dtype = static_cast<uint32_t>(output.dtype);
+        // A SIMD group per row, eight rows per threadgroup.
+        context->dispatch(uses, {.pipeline = context->pipeline("nn_norm", {{1, dtype}, {2, dtype}}),
+                                 .buffers = {},
+                                 .params = param_bytes(params),
+                                 .grid = MTLSizeMake((program.rows + 7) / 8, 1, 1),
+                                 .group_size = MTLSizeMake(256, 1, 1)});
+    }
+
     void MetalBackendOps::reduce(const StorageRef input, const StorageRef output, const StridedLayout& input_layout,
                                  const ReduceProgram& program, ExecContext) {
         LFS_FACADE_TRACE(reduce);
