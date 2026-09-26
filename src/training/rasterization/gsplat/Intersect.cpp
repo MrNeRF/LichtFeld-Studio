@@ -4,8 +4,11 @@
 
 #include "Intersect.h"
 #include "Common.h"
+#include "IntersectionCount.h"
 #include "Ops.h"
 #include "core/cuda/vmm_device_buffer.hpp"
+#include "core/environment.hpp"
+#include "core/error.hpp"
 
 #include <algorithm>
 #include <array>
@@ -64,6 +67,7 @@ namespace gsplat_lfs {
             size_t cum_tiles_capacity = 0;
             size_t isect_capacity = 0;
             size_t sort_capacity = 0;
+            size_t pair_budget = 0;
             cudaEvent_t sort_reuse_event = nullptr;
             bool sort_reuse_event_recorded = false;
             int64_t* h_n_isects_pinned = nullptr;
@@ -404,6 +408,7 @@ namespace gsplat_lfs {
                 cum_tiles_capacity = 0;
                 isect_capacity = 0;
                 sort_capacity = 0;
+                pair_budget = 0;
                 cum_tiles_peak = {};
                 isect_peak = {};
                 call_count = 0;
@@ -475,22 +480,35 @@ namespace gsplat_lfs {
         bool sort,
         int32_t* tiles_per_gauss_out,
         cudaStream_t stream,
-        int32_t* isect_offsets) {
-        bool packed = (camera_ids != nullptr && gaussian_ids != nullptr);
-        const uint64_t dense_elements = static_cast<uint64_t>(C) * static_cast<uint64_t>(N);
-        LFS_ASSERT_MSG(
-            packed || dense_elements <= std::numeric_limits<uint32_t>::max(),
-            "gsplat dense intersection input exceeds uint32 range");
+        int32_t* isect_offsets, TileRange tiles) {
+        auto bounds_failure = [](const std::string& message, lfs::ErrorCode code = lfs::ErrorCode::BoundsViolation) {
+            throw lfs::Exception(lfs::make_error(lfs::ErrorInit{
+                .code = code,
+                .domain = lfs::ErrorDomain::Rendering,
+                .user_message = message,
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
+        };
+        const bool packed = (camera_ids != nullptr && gaussian_ids != nullptr);
+        const uint64_t dense_elements = static_cast<uint64_t>(C) * N;
+        const uint64_t tile_count = static_cast<uint64_t>(tile_width) * tile_height;
+        if (C == 0 || tile_count == 0 || tile_count > INT32_MAX ||
+            (!packed && dense_elements > INT32_MAX)) {
+            bounds_failure("gsplat primitive or tile grid exceeds the supported index range");
+        }
+        if ((tiles.end == UINT32_MAX && tiles.begin != 0) ||
+            (tiles.end != UINT32_MAX && (tiles.begin >= tiles.end || tiles.end > tile_count))) {
+            bounds_failure("gsplat tile batch is outside the image grid");
+        }
         uint32_t n_elements = packed ? 0 : static_cast<uint32_t>(dense_elements);
         uint32_t nnz = 0;
 
-        const uint64_t tile_count = static_cast<uint64_t>(tile_width) * tile_height;
-        LFS_ASSERT_MSG(tile_count > 0 && tile_count <= std::numeric_limits<uint32_t>::max(),
-                       "gsplat tile count is zero or exceeds uint32 range");
-        LFS_ASSERT_MSG(C > 0, "gsplat camera count must be nonzero");
         uint32_t n_tiles = static_cast<uint32_t>(tile_count);
         uint32_t tile_n_bits = static_cast<uint32_t>(floor(log2(n_tiles))) + 1;
         uint32_t cam_n_bits = static_cast<uint32_t>(floor(log2(C))) + 1;
+        if (tile_n_bits + cam_n_bits > 32) {
+            bounds_failure("gsplat camera/tile key exceeds 64 bits");
+        }
 
         IntersectTileResult result = {};
         result.tiles_per_gauss = tiles_per_gauss_out;
@@ -505,6 +523,26 @@ namespace gsplat_lfs {
 
         auto& cache = get_cache();
         cache.begin_call(n_elements, stream);
+        if (cache.pair_budget == 0) {
+            size_t free_bytes = 0, total_bytes = 0;
+            LFS_CUDA_CHECK_MSG(cudaMemGetInfo(&free_bytes, &total_bytes), "gsplat pair budget");
+            // 24 bytes/pair for the two key/value sets; reserve additional
+            // space for CUB, forward/backward tensors and the optimizer.
+            cache.pair_budget = std::max<size_t>(1, std::min<size_t>(INT32_MAX, free_bytes / 64));
+            if (const auto value = lfs::core::environment::value("LFS_GSPLAT_PAIR_BUDGET")) {
+                const auto requested = lfs::core::environment::unsigned_integer<size_t>(*value);
+                if (requested && *requested > 0) {
+                    cache.pair_budget = std::min(cache.pair_budget, *requested);
+                }
+            }
+        }
+        // A whole tile is indivisible and has at most C*N pairs. Only a
+        // one-tile leaf may exceed the target, so tiny test budgets still
+        // exercise every split even when most Gaussians are invisible.
+        const bool single_tile = n_tiles == 1 || (tiles.end != UINT32_MAX && tiles.end - tiles.begin == 1);
+        const size_t budget = std::min<size_t>(INT32_MAX, single_tile
+                                                              ? std::max<size_t>(n_elements, cache.pair_budget)
+                                                              : cache.pair_budget);
 
         launch_intersect_tile_kernel(
             means2d, radii, depths,
@@ -514,7 +552,7 @@ namespace gsplat_lfs {
             nullptr,
             tiles_per_gauss_out,
             nullptr, nullptr,
-            stream);
+            stream, -1, tiles);
 
         cache.ensure_cum_tiles(n_elements);
         int64_t* d_cum_tiles = cache.cum_tiles.as<int64_t>();
@@ -537,9 +575,9 @@ namespace gsplat_lfs {
                                    "gsplat intersection-count stream sync");
             }
             const int64_t n = *cache.h_n_isects_pinned;
-            LFS_ASSERT_MSG(
-                n >= 0 && n <= std::numeric_limits<int32_t>::max(),
-                std::format("gsplat intersection count {} exceeds int32 range", n));
+            if (auto status = validate_intersection_count(n); !status) {
+                throw lfs::Exception(std::move(status).error());
+            }
             return n;
         };
 
@@ -555,8 +593,8 @@ namespace gsplat_lfs {
 
         auto fill_and_sort_capacity = [&](const size_t cap) {
             cache.ensure_isect_buffers(cap);
-            cache.ensure_sort_buffers(cache.isect_capacity, stream);
-            const size_t sort_n = cache.isect_capacity;
+            const size_t sort_n = intersection_sort_capacity(cache.isect_capacity, budget);
+            cache.ensure_sort_buffers(sort_n, stream);
             launch_fill_isect_sentinels_kernel(
                 cache.isect_ids(), cache.flatten_ids(),
                 static_cast<int64_t>(sort_n), sentinel_key, stream);
@@ -568,7 +606,7 @@ namespace gsplat_lfs {
                 d_cum_tiles,
                 nullptr,
                 cache.isect_ids(), cache.flatten_ids(),
-                stream, static_cast<int64_t>(sort_n));
+                stream, static_cast<int64_t>(sort_n), tiles);
 
             int64_t* keys_out = cache.isect_ids();
             int32_t* vals_out = cache.flatten_ids();
@@ -604,7 +642,15 @@ namespace gsplat_lfs {
 
         if (cache.isect_capacity == 0) {
             const int64_t n_isects = drain_count();
-            result.n_isects = static_cast<int32_t>(n_isects);
+            result.n_isects = n_isects;
+            if (n_isects > static_cast<int64_t>(budget)) {
+                // The caller subdivides whole tiles. Never accept a truncated
+                // speculative fill or allocate the full-frame pair list.
+                result.isect_ids = nullptr;
+                result.flatten_ids = nullptr;
+                result.n_sort = 0;
+                return result;
+            }
             if (n_isects == 0) {
                 cache.finish_call(n_isects);
                 launch_offsets();
@@ -621,7 +667,15 @@ namespace gsplat_lfs {
         // Count event was recorded before fill; fill/sort/offsets are already
         // queued so this wait does not drain the GPU.
         const int64_t n_isects = drain_count();
-        result.n_isects = static_cast<int32_t>(n_isects);
+        result.n_isects = n_isects;
+        if (n_isects > static_cast<int64_t>(budget)) {
+            // The caller subdivides whole tiles. Never accept a truncated
+            // speculative fill or allocate the full-frame pair list.
+            result.isect_ids = nullptr;
+            result.flatten_ids = nullptr;
+            result.n_sort = 0;
+            return result;
+        }
         if (n_isects > static_cast<int64_t>(result.n_sort)) {
             LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream),
                                "gsplat intersection overflow drain");

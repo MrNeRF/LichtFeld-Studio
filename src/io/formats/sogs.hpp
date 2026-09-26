@@ -6,10 +6,25 @@
 
 // Re-export public API
 #include "io/exporter.hpp"
+#include "io/filesystem_utils.hpp"
+#include <algorithm>
+#include <string>
+#include <string_view>
 
 namespace lfs::io {
 
+    inline bool is_sog_license_member(std::string_view name) {
+        if (name.find('/') != std::string_view::npos)
+            return false;
+        std::string lower(name);
+        detail::ascii_lower_inplace(lower);
+        return lower == "license" || lower == "license.txt" || lower == "license.md";
+    }
+
     inline constexpr size_t MAX_METADATA_BYTES = 16ULL * 1024 * 1024;
+    // A streamed-SOG lod-meta.json grows with its leaf count (~0.5 KiB per
+    // leaf), so it gets its own cap: 512 MiB is roughly one million leaves.
+    inline constexpr size_t MAX_SSOG_MANIFEST_BYTES = 512ULL * 1024 * 1024;
     inline constexpr size_t MAX_ENCODED_IMAGE_BYTES = 512ULL * 1024 * 1024;
     inline constexpr size_t MAX_ARCHIVE_BYTES = 4ULL * 1024 * 1024 * 1024;
 
@@ -30,13 +45,18 @@ namespace lfs::io {
     Result<void> encode_sog(const SplatData&, const SogEncodeOptions&, SogSink&);
     Result<void> encode_sog_directory(const SplatData&, const SogEncodeOptions&);
     // CPU-only I/O and WebP decode. Invoke the returned closure on the owning CUDA thread.
+#if defined(__cpp_lib_move_only_function)
     using SogDirectoryReconstruct = std::move_only_function<Result<SplatData>()>;
+#else
+    using SogDirectoryReconstruct = std::function<Result<SplatData>()>;
+#endif
     // Bounded entry access shared by directory and bundle readers.
     using SogEntryReader = std::function<Result<std::vector<uint8_t>>(const std::string&, size_t)>;
     Result<SogDirectoryReconstruct> prepare_sog_entries(const SogEntryReader&, const std::string& prefix);
     std::unique_ptr<SogSink> make_sog_archive(const std::filesystem::path&);
 
     // Internal: Loading function (not in public API)
-    Result<SplatData> load_sog(const std::filesystem::path& filepath);
+    Result<SplatData> load_sog(const std::filesystem::path& filepath,
+                               std::optional<std::vector<uint8_t>>* license_bytes = nullptr);
 
 } // namespace lfs::io

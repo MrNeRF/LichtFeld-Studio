@@ -7,6 +7,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data_transform.hpp"
+#include "core/training_manager.hpp"
 #include "gui/bounds_gizmo.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
@@ -17,6 +18,7 @@
 #include "input/input_router.hpp"
 #include "input/input_types.hpp"
 #include "input/key_codes.hpp"
+#include "input/sdl_coordinate_utils.hpp"
 #include "input/sdl_key_mapping.hpp"
 #include "io/loader.hpp"
 #include "io/splat_path.hpp"
@@ -33,7 +35,7 @@
 #include "tools/selection_tool.hpp"
 #include "tools/tool_base.hpp"
 #include "tools/unified_tool_registry.hpp"
-#include "training/training_manager.hpp"
+#include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/visualizer.hpp"
@@ -53,7 +55,32 @@ namespace lfs::vis {
         constexpr double kCameraContextMenuDragThreshold = 4.0;
         constexpr double kCameraFrustumClickThreshold = 5.0;
         constexpr int kDepthWindowModifiers = input::KEYMOD_SHIFT | input::KEYMOD_ALT;
+        // SDL reports trackpad scrolling in fractional lines of about 10 px
+        // (macOS's default line height, SDL's Wayland scaling).
+        constexpr float kTrackpadPixelsPerScrollLine = 10.0f;
+        // At the default trackpad zoom speed a pinch zooms about the square of
+        // the finger scale, and Ctrl+swipe zooms 2x per ~14 scroll lines.
+        constexpr float kPinchZoomExponent = 2.0f;
+        constexpr float kTrackpadZoomPerLine = 0.05f;
         namespace string_keys = lichtfeld::Strings;
+
+        // Trackpad speed levels are 1..100; 50 is 1x and every 25 levels doubles.
+        [[nodiscard]] float trackpadSpeedFactor(const float level) {
+            return std::exp2((level - 50.0f) / 25.0f);
+        }
+
+        // Scroll-stepped adjustments follow the delta: whole wheel notches keep
+        // their exact step while fractional trackpad deltas stay smooth.
+        [[nodiscard]] float scrollStepScale(const double yoff, const float up, const float down) {
+            return yoff > 0.0 ? std::pow(up, static_cast<float>(yoff))
+                              : std::pow(down, static_cast<float>(-yoff));
+        }
+
+        // FPV and Drone zooms move the pivot along with the camera.
+        [[nodiscard]] bool zoomCarriesPivot(const InputController::CameraNavigationMode mode) {
+            return mode == InputController::CameraNavigationMode::FPV ||
+                   mode == InputController::CameraNavigationMode::Drone;
+        }
 
         [[nodiscard]] SDL_Cursor* depthWindowSdlCursor(const op::DepthWindowCursor cursor) {
             static SDL_Cursor* const nwse = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NWSE_RESIZE);
@@ -82,7 +109,7 @@ namespace lfs::vis {
         void expandNodeWorldBounds(const core::Scene& scene, const core::SceneNode& node,
                                    glm::vec3& world_min, glm::vec3& world_max,
                                    bool use_percentile = false) {
-            glm::vec3 local_min, local_max;
+            glm::vec3 local_min{0.0f}, local_max{0.0f};
             bool have_local = false;
             if (use_percentile) {
                 if (node.model && node.model->size() > 0)
@@ -168,6 +195,7 @@ namespace lfs::vis {
                                  double x, double y, const bool over_gui) {
             op::ModalEvent evt{};
             evt.type = op::ModalEvent::Type::KEY;
+            evt.over_gui = over_gui;
             evt.data = KeyEvent{key, scancode, action, mods};
 
             if (op::operators().hasModalOperator()) {
@@ -193,6 +221,7 @@ namespace lfs::vis {
                                          double x, double y, const bool over_gui) {
             op::ModalEvent evt{};
             evt.type = op::ModalEvent::Type::MOUSE_BUTTON;
+            evt.over_gui = over_gui;
             evt.data = MouseButtonEvent{button, action, mods, {x, y}};
 
             if (op::operators().hasModalOperator()) {
@@ -218,6 +247,7 @@ namespace lfs::vis {
                                        [[maybe_unused]] int mods, const bool over_gui) {
             op::ModalEvent evt{};
             evt.type = op::ModalEvent::Type::MOUSE_MOVE;
+            evt.over_gui = over_gui;
             evt.data = MouseMoveEvent{{x, y}, {delta_x, delta_y}};
 
             if (op::operators().hasModalOperator()) {
@@ -242,6 +272,7 @@ namespace lfs::vis {
                                     [[maybe_unused]] int mods, const bool over_gui) {
             op::ModalEvent evt{};
             evt.type = op::ModalEvent::Type::MOUSE_SCROLL;
+            evt.over_gui = over_gui;
             evt.data = MouseScrollEvent{xoff, yoff};
 
             if (op::operators().hasModalOperator()) {
@@ -382,11 +413,10 @@ namespace lfs::vis {
         go_to_cam_view_handler_id_ =
             cmd::GoToCamView::when([this](const auto& e) { handleGoToCamView(e); });
 
+        // Panel-less reset targets the primary viewport; explicit-panel callers
+        // use resetCameraForPanel.
         reset_camera_handler_id_ = cmd::ResetCamera::when([this](const auto&) {
-            viewport_.camera.resetToHome();
-            if (auto* const rendering = services().renderingOrNull())
-                rendering->markCameraCut();
-            publishCameraMove();
+            handleResetCameraHome(viewport_);
         });
 
         dataset_load_completed_handler_id_ = state::DatasetLoadCompleted::when([this](const auto& e) {
@@ -483,7 +513,7 @@ namespace lfs::vis {
 
         // Get initial mouse position
         float fx, fy;
-        SDL_GetMouseState(&fx, &fy);
+        input::mouseStateInPixels(window_, &fx, &fy);
         last_mouse_pos_ = {fx, fy};
 
         // Initialize frame timer
@@ -790,11 +820,18 @@ namespace lfs::vis {
             wants_text_input &&
             !over_gui &&
             isInViewport(x, y)) {
+            // Swallow text-dismissal presses for camera, operators and selection.
+            // GuiManager may move panel focus only after the buffered press has blurred
+            // and committed the edit; focusing in this earlier event handler would
+            // commit to the wrong panel.
             text_input_viewport_click_button_ = button;
             return;
         }
 
-        if (action == input::ACTION_PRESS) {
+        const bool selection_pointer_blocked =
+            op::operators().activeModalId() == op::to_string(op::BuiltinOp::SelectionStroke) &&
+            (over_gui || (!input_router_ && !isInViewport(x, y)));
+        if (!selection_pointer_blocked && action == input::ACTION_PRESS) {
             const auto mouse_btn = static_cast<input::MouseButton>(button);
             const auto tool_mode = getCurrentToolMode();
             auto modal_action = bindings_.getActionForMouseButton(tool_mode, mouse_btn, mods, false);
@@ -810,7 +847,8 @@ namespace lfs::vis {
         const bool depth_drag_was_active =
             op::operators().activeModalId() ==
             op::to_string(op::BuiltinOp::DepthWindowDrag);
-        if (dispatchMouseButtonToModals(button, action, mods, x, y, over_gui_hover)) {
+        if (!selection_pointer_blocked &&
+            dispatchMouseButtonToModals(button, action, mods, x, y, over_gui_hover)) {
             const bool depth_drag_ended =
                 depth_drag_was_active &&
                 op::operators().activeModalId() !=
@@ -1067,49 +1105,8 @@ namespace lfs::vis {
                 const glm::vec3 new_pivot = unprojectScreenPoint(x, y, current_distance);
                 const glm::vec3 forward = lfs::rendering::cameraForward(target_viewport.camera.R);
 
-                glm::vec3 camera_offset(0.0f);
-
-                // In comparison split modes, offset camera so the pivot lands in the active panel center.
-                if (auto* const rendering = services().renderingOrNull();
-                    rendering && rendering->isSplitViewActive() && !rendering->isIndependentSplitViewActive()) {
-                    if (const auto divider_x = rendering->getSplitDividerScreenX(
-                            {viewport_bounds_.x, viewport_bounds_.y},
-                            {viewport_bounds_.width, viewport_bounds_.height})) {
-                        const float local_x = static_cast<float>(x) - viewport_bounds_.x;
-                        const float viewport_width = viewport_bounds_.width;
-                        const float viewport_height = viewport_bounds_.height;
-                        if (viewport_width <= 0.0f || viewport_height <= 0.0f) {
-                            break;
-                        }
-                        const float split_x = *divider_x - viewport_bounds_.x;
-
-                        // Determine which panel was clicked and its center
-                        float panel_center_x;
-                        if (local_x < split_x) {
-                            panel_center_x = split_x * 0.5f;
-                        } else {
-                            panel_center_x = split_x + (viewport_width - split_x) * 0.5f;
-                        }
-
-                        // Offset from viewport center to panel center (in pixels)
-                        const float viewport_center_x = viewport_width / 2.0f;
-                        const float dx = panel_center_x - viewport_center_x;
-
-                        // Convert screen offset to camera offset
-                        const float fov_y = glm::radians(services().renderingOrNull()->getFovDegrees());
-                        const float aspect = viewport_width / viewport_height;
-                        const float fov_x = 2.0f * std::atan(std::tan(fov_y / 2.0f) * aspect);
-                        const float fx = viewport_width / (2.0f * std::tan(fov_x / 2.0f));
-
-                        // Shift camera opposite to desired screen shift
-                        const float shift = -dx * current_distance / fx;
-                        const glm::vec3 right = lfs::rendering::cameraRight(target_viewport.camera.R);
-                        camera_offset = right * shift;
-                    }
-                }
-
                 target_viewport.camera.setPivot(new_pivot);
-                target_viewport.camera.startGlide(new_pivot - forward * current_distance + camera_offset);
+                target_viewport.camera.startGlide(new_pivot - forward * current_distance);
                 onCameraMovementStart();
                 publishCameraMove(&target_viewport);
                 break;
@@ -1180,14 +1177,15 @@ namespace lfs::vis {
                             }
                             // Operator is now modal, don't set drag mode - modal dispatch handles it
                         }
-                    } else if (align_tool_ && align_tool_->isEnabled()) {
+                    } else if (align_tool_ && align_tool_->isEnabled() &&
+                               !op::operators().hasModalOperator()) {
                         op::OperatorProperties props;
                         props.set("x", x);
                         props.set("y", y);
                         props.set("button", button);
                         props.set("modifiers", mods);
                         const auto result = op::operators().invoke(op::BuiltinOp::AlignPickPoint, &props);
-                        if (result.status != op::OperatorResult::CANCELLED) {
+                        if (result.status == op::OperatorResult::RUNNING_MODAL) {
                             return;
                         }
                     }
@@ -1204,14 +1202,15 @@ namespace lfs::vis {
 
             case input::Action::NONE:
             default:
-                if (align_tool_ && align_tool_->isEnabled() && tool_context_ && !over_gui) {
+                if (align_tool_ && align_tool_->isEnabled() && tool_context_ && !over_gui &&
+                    !op::operators().hasModalOperator()) {
                     op::OperatorProperties props;
                     props.set("x", x);
                     props.set("y", y);
                     props.set("button", button);
                     props.set("modifiers", mods);
                     const auto result = op::operators().invoke(op::BuiltinOp::AlignPickPoint, &props);
-                    if (result.status != op::OperatorResult::CANCELLED) {
+                    if (result.status == op::OperatorResult::RUNNING_MODAL) {
                         return;
                     }
                 }
@@ -1280,10 +1279,10 @@ namespace lfs::vis {
             if (press_consumed_camera_frustum) {
                 const double drag_dist = glm::length(glm::dvec2(x, y) - pressed_camera_frustum_pos);
                 const bool was_click = drag_dist < kCameraFrustumClickThreshold;
-                const auto tool_mode = getCurrentToolMode();
+                const auto release_tool_mode = getCurrentToolMode();
                 const bool allow_camera_frustum_pick =
-                    tool_mode == input::ToolMode::GLOBAL ||
-                    tool_mode == input::ToolMode::SELECTION;
+                    release_tool_mode == input::ToolMode::GLOBAL ||
+                    release_tool_mode == input::ToolMode::SELECTION;
                 if (allow_camera_frustum_pick &&
                     was_click && pressed_camera_frustum_id >= 0 &&
                     !over_gui && !over_transform_gizmo) {
@@ -1446,7 +1445,11 @@ namespace lfs::vis {
             over_gui = isPointerOverBlockingUi(x, y);
             over_gui_hover = isPointerOverUiHover(x, y);
         }
-        if (dispatchMouseMoveToModals(x, y, delta_x, delta_y, getModifierKeys(), over_gui_hover)) {
+        const bool selection_pointer_blocked =
+            op::operators().activeModalId() == op::to_string(op::BuiltinOp::SelectionStroke) &&
+            (over_gui || (!input_router_ && !isInViewport(x, y)));
+        if (!selection_pointer_blocked &&
+            dispatchMouseMoveToModals(x, y, delta_x, delta_y, getModifierKeys(), over_gui_hover)) {
             last_mouse_pos_ = current_pos;
             return;
         }
@@ -1642,7 +1645,7 @@ namespace lfs::vis {
         }
     }
 
-    void InputController::handleScroll([[maybe_unused]] double xoff, double yoff) {
+    void InputController::handleScroll(double xoff, double yoff) {
         // Capture mode (input settings panel) consumes scroll first so the user
         // can rebind scroll-only actions like Camera Zoom or chord-style Roll.
         if (bindings_.isCapturing()) {
@@ -1654,9 +1657,8 @@ namespace lfs::vis {
             return;
         }
 
-        float fx, fy;
-        SDL_GetMouseState(&fx, &fy);
-        double mouse_x = fx, mouse_y = fy;
+        const glm::vec2 pointer = input::wheelPointerInPixels(window_);
+        double mouse_x = pointer.x, mouse_y = pointer.y;
         bool over_gui = false;
         bool over_gui_hover = false;
         if (input_router_) {
@@ -1674,16 +1676,46 @@ namespace lfs::vis {
         }
 
         const int mods = getModifierKeys();
-        const input::Action scroll_action = bindings_.getActionForScroll(getCurrentToolMode(), mods, held_keys_);
+        const auto tool_mode = getCurrentToolMode();
+        const input::Action scroll_action = bindings_.getActionForScroll(tool_mode, mods, held_keys_);
+
+        // Trackpad navigation reads two-finger swipes as navigation: a swipe
+        // orbits (looks around in FPV/Drone) and Shift+swipe pans, or the
+        // reverse when swipes pan; Ctrl+swipe zooms. Chord bindings (R roll)
+        // and Alt depth-box swipes keep their bindings, and Ctrl+swipe still
+        // resizes the selection brush (pinch zooms there). Automatic mode does
+        // this only while two fingers rest on the trackpad, so a mouse wheel
+        // or a resting thumb keeps the wheel bindings.
+        enum class Swipe {
+            None,
+            Orbit,
+            Pan,
+            Zoom,
+        };
+        Swipe swipe = Swipe::None;
+        const bool chord = !held_keys_.empty() &&
+                           scroll_action != bindings_.getActionForScroll(tool_mode, mods);
+        const bool trackpad_swipe =
+            trackpad_.device == NavigationDevice::Trackpad ||
+            (trackpad_.device == NavigationDevice::Automatic && trackpad_touches_ >= 2);
+        if (trackpad_swipe && !chord) {
+            if (mods == input::MODIFIER_NONE)
+                swipe = trackpad_.swipe_pans ? Swipe::Pan : Swipe::Orbit;
+            else if (mods == input::MODIFIER_SHIFT)
+                swipe = trackpad_.swipe_pans ? Swipe::Orbit : Swipe::Pan;
+            else if (mods == input::MODIFIER_CTRL && scroll_action != input::Action::BRUSH_RESIZE)
+                swipe = Swipe::Zoom;
+        }
+
         if (selection_tool_ && selection_tool_->isEnabled()) {
             if (scroll_action == input::Action::DEPTH_ADJUST_FAR &&
                 selection_tool_->isDepthFilterEnabled()) {
-                selection_tool_->adjustDepthFar((yoff > 0) ? 1.1f : 0.9f);
+                selection_tool_->adjustDepthFar(scrollStepScale(yoff, 1.1f, 0.9f));
                 return;
             }
             if (scroll_action == input::Action::DEPTH_ADJUST_SIZE &&
                 selection_tool_->isDepthFilterEnabled()) {
-                selection_tool_->adjustWindowScale((yoff > 0) ? 1.05f : 0.95f);
+                selection_tool_->adjustWindowScale(scrollStepScale(yoff, 1.05f, 0.95f));
                 return;
             }
         }
@@ -1692,9 +1724,9 @@ namespace lfs::vis {
         // for selection strokes pass scroll through, so it's safe to honor
         // BRUSH_RESIZE here even mid-stroke — that's what lets the user grow
         // or shrink the ring while in the middle of an add or subtract drag.
-        if (scroll_action == input::Action::BRUSH_RESIZE) {
+        if (scroll_action == input::Action::BRUSH_RESIZE && swipe == Swipe::None) {
             if (selection_tool_ && selection_tool_->isEnabled()) {
-                const float scale = (yoff > 0) ? 1.1f : 0.9f;
+                const float scale = scrollStepScale(yoff, 1.1f, 0.9f);
                 selection_tool_->setBrushRadius(selection_tool_->getBrushRadius() * scale);
                 return;
             }
@@ -1714,44 +1746,129 @@ namespace lfs::vis {
         focusSplitPanel(interaction->panel);
         target_viewport.camera.finishGlide();
 
+        if (swipe == Swipe::Orbit || swipe == Swipe::Pan) {
+            // Move like a middle/right drag. SDL deltas already follow the OS
+            // natural-scrolling setting, so (-x, y) is where the content goes.
+            const glm::vec2 drag = glm::vec2(static_cast<float>(-xoff), static_cast<float>(yoff)) *
+                                   kTrackpadPixelsPerScrollLine * trackpadSpeedFactor(trackpad_.swipe_speed) *
+                                   input::windowPixelScale(window_);
+            // A concurrent mouse drag owns the camera's drag state.
+            if (drag_mode_ != DragMode::None || glm::length(drag) < 0.01f)
+                return;
+            if (swipe == Swipe::Orbit) {
+                orbitViewport(target_viewport, drag);
+            } else {
+                target_viewport.camera.startPan(glm::vec2(0.0f), 0.0f);
+                target_viewport.camera.translate(drag);
+            }
+            onCameraMovementStart();
+            publishCameraMove(&target_viewport);
+            return;
+        }
+
         const float delta = static_cast<float>(yoff);
         if (std::abs(delta) < 0.01f)
             return;
 
-        const bool carry_pivot = camera_navigation_mode_ == CameraNavigationMode::FPV ||
-                                 camera_navigation_mode_ == CameraNavigationMode::Drone;
-
         if (scroll_action == input::Action::CAMERA_ROLL) {
             target_viewport.camera.rotate_roll(delta);
+        } else if (swipe == Swipe::Zoom) {
+            zoomViewportBy(target_viewport,
+                           std::exp(delta * kTrackpadZoomPerLine * trackpadSpeedFactor(trackpad_.zoom_speed)));
         } else if (scroll_action == input::Action::CAMERA_ZOOM) {
-            // In orthographic mode, adjust ortho_scale instead of camera position
-            if (services().renderingOrNull()) {
-                auto settings = services().renderingOrNull()->getSettings();
-                if (settings.orthographic) {
-                    constexpr float ORTHO_ZOOM_FACTOR = 0.1f;
-                    constexpr float MIN_ORTHO_SCALE = 1.0f;
-                    constexpr float MAX_ORTHO_SCALE = 10000.0f;
-                    const float scale_factor = 1.0f + delta * ORTHO_ZOOM_FACTOR;
-                    if (&target_viewport != &viewport_) {
-                        const float current = target_viewport.ortho_scale_override.value_or(settings.ortho_scale);
-                        target_viewport.ortho_scale_override =
-                            std::clamp(current * scale_factor, MIN_ORTHO_SCALE, MAX_ORTHO_SCALE);
-                    } else {
-                        settings.ortho_scale = std::clamp(settings.ortho_scale * scale_factor, MIN_ORTHO_SCALE, MAX_ORTHO_SCALE);
-                        services().renderingOrNull()->updateSettings(settings);
-                    }
-                } else {
-                    target_viewport.camera.zoom(delta, carry_pivot);
-                }
-            } else {
-                target_viewport.camera.zoom(delta, carry_pivot);
-            }
+            zoomViewport(target_viewport, delta);
         } else {
             return;
         }
 
         onCameraMovementStart();
         publishCameraMove(&target_viewport);
+    }
+
+    void InputController::handlePinch(const float scale) {
+        if (bindings_.isCapturing() || !std::isfinite(scale) || scale <= 0.0f)
+            return;
+        if (drag_mode_ == DragMode::Gizmo || drag_mode_ == DragMode::Splitter)
+            return;
+
+        const glm::vec2 pointer = input::wheelPointerInPixels(window_);
+        const double mouse_x = pointer.x, mouse_y = pointer.y;
+        const bool over_gui = input_router_
+                                  ? input_router_->pointerTargets(mouse_x, mouse_y).pointer_target ==
+                                        input::InputTarget::Gui
+                                  : isPointerOverBlockingUi(mouse_x, mouse_y);
+        if (!isInViewport(mouse_x, mouse_y) || over_gui)
+            return;
+
+        const auto interaction = resolvePanelInteraction(mouse_x, mouse_y);
+        if (!interaction || !interaction->valid())
+            return;
+        auto& target_viewport = *interaction->viewport;
+        focusSplitPanel(interaction->panel);
+        target_viewport.camera.finishGlide();
+
+        zoomViewportBy(target_viewport,
+                       std::pow(scale, kPinchZoomExponent * trackpadSpeedFactor(trackpad_.zoom_speed)));
+        onCameraMovementStart();
+        publishCameraMove(&target_viewport);
+    }
+
+    void InputController::handleTrackpadTouch(const bool down) {
+        trackpad_touches_ = down ? trackpad_touches_ + 1 : std::max(trackpad_touches_ - 1, 0);
+    }
+
+    void InputController::zoomViewport(Viewport& target_viewport, const float delta) {
+        constexpr float ORTHO_ZOOM_FACTOR = 0.1f;
+        if (!scaleOrthographicView(target_viewport, 1.0f + delta * ORTHO_ZOOM_FACTOR))
+            target_viewport.camera.zoom(delta, zoomCarriesPivot(camera_navigation_mode_));
+    }
+
+    void InputController::zoomViewportBy(Viewport& target_viewport, const float factor) {
+        if (!scaleOrthographicView(target_viewport, factor))
+            target_viewport.camera.dolly(1.0f - 1.0f / factor, zoomCarriesPivot(camera_navigation_mode_));
+    }
+
+    bool InputController::scaleOrthographicView(Viewport& target_viewport, const float factor) {
+        auto* const rendering = services().renderingOrNull();
+        if (!rendering)
+            return false;
+        auto settings = rendering->getSettings();
+        if (!settings.orthographic)
+            return false;
+        constexpr float MIN_ORTHO_SCALE = 1.0f;
+        constexpr float MAX_ORTHO_SCALE = 10000.0f;
+        if (&target_viewport != &viewport_) {
+            const float current = target_viewport.ortho_scale_override.value_or(settings.ortho_scale);
+            target_viewport.ortho_scale_override =
+                std::clamp(current * factor, MIN_ORTHO_SCALE, MAX_ORTHO_SCALE);
+        } else {
+            settings.ortho_scale = std::clamp(settings.ortho_scale * factor, MIN_ORTHO_SCALE, MAX_ORTHO_SCALE);
+            rendering->updateSettings(settings);
+        }
+        return true;
+    }
+
+    void InputController::orbitViewport(Viewport& target_viewport, const glm::vec2& drag) {
+        auto& camera = target_viewport.camera;
+        camera.initScreenPos(glm::vec2(0.0f));
+        switch (camera_navigation_mode_) {
+        case CameraNavigationMode::FPV:
+            camera.rotateFpv(drag);
+            break;
+        case CameraNavigationMode::Drone:
+            camera.droneLook(drag);
+            break;
+        case CameraNavigationMode::Orbit:
+        case CameraNavigationMode::Trackball:
+            camera.startRotateAroundCenter(glm::vec2(0.0f), 0.0f);
+            if (camera_navigation_mode_ == CameraNavigationMode::Trackball) {
+                camera.updateTrackballRotateAroundCenter(drag, 0.0f);
+            } else {
+                camera.updateRotateAroundCenter(drag, 0.0f);
+            }
+            camera.endRotateAroundCenter();
+            break;
+        }
     }
 
     void InputController::handleKey(const int key, const int action, const int mods) {
@@ -1812,7 +1929,7 @@ namespace lfs::vis {
 
         // Dispatch to modal operators first - if consumed, don't continue
         float mx_f, my_f;
-        SDL_GetMouseState(&mx_f, &my_f);
+        input::mouseStateInPixels(window_, &mx_f, &my_f);
         double mx = mx_f, my = my_f;
         const bool over_gui_hover = isPointerOverUiHover(mx, my);
         if (op::operators().activeModalId() !=
@@ -2214,7 +2331,7 @@ namespace lfs::vis {
             case input::Action::PIE_MENU:
                 if (gui) {
                     float px, py;
-                    SDL_GetMouseState(&px, &py);
+                    input::mouseStateInPixels(window_, &px, &py);
                     gui->gizmo().openPieMenu({px, py});
                 }
                 return;
@@ -2528,7 +2645,7 @@ namespace lfs::vis {
 
         if (paths.size() == 1) {
             const std::filesystem::path dropped_path = lfs::core::utf8_to_path(paths.front());
-            auto extension = dropped_path.extension().string();
+            auto extension = lfs::core::path_to_utf8(dropped_path.extension());
             std::ranges::transform(
                 extension, extension.begin(),
                 [](const unsigned char character) {
@@ -2536,6 +2653,16 @@ namespace lfs::vis {
                         std::tolower(character));
                 });
             if (extension == ".licht") {
+                auto& panels = gui::PanelRegistry::instance();
+                if (panels.is_panel_enabled("lfs.asset_manager")) {
+                    if (const auto panel = panels.get_panel_instance("lfs.asset_manager");
+                        panel && panel->onViewportDrop(
+                                     "application/x-lichtfeld-project-file", paths.front())) {
+                        LOG_INFO("Added project to Asset Manager via drag-and-drop: {}",
+                                 lfs::core::path_to_utf8(dropped_path.filename()));
+                        return;
+                    }
+                }
                 // Unpublished *.tmp.licht names still emit ProjectOpen so
                 // lifecycle can reject with unpublishedLichtUserMessage.
                 cmd::ProjectOpen{.path = dropped_path}.emit();
@@ -2545,7 +2672,7 @@ namespace lfs::vis {
                         dropped_path.filename()));
                 return;
             }
-            if (lfs::io::video::is_supported_video_extension(dropped_path.extension().string())) {
+            if (lfs::io::video::is_supported_video_extension(extension)) {
                 cmd::ShowVideoExtractor{.video_path = dropped_path}.emit();
                 LOG_INFO("Opening video extractor via drag-and-drop: {}",
                          lfs::core::path_to_utf8(dropped_path.filename()));
@@ -2557,8 +2684,11 @@ namespace lfs::vis {
             std::filesystem::path filepath = lfs::core::utf8_to_path(path_str);
             LOG_DEBUG("Processing dropped file: {}", lfs::core::path_to_utf8(filepath));
 
-            auto ext = filepath.extension().string();
-            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            auto ext = lfs::core::path_to_utf8(filepath.extension());
+            std::ranges::transform(
+                ext, ext.begin(), [](const unsigned char character) {
+                    return static_cast<char>(std::tolower(character));
+                });
 
             if (ext == ".resume") {
                 cmd::ShowResumeCheckpointPopup{.checkpoint_path = filepath}.emit();
@@ -2587,8 +2717,11 @@ namespace lfs::vis {
                 splat_files.push_back(filepath);
             } else if (ext == ".bin" || ext == ".txt") {
                 // Check if this is a COLMAP file (cameras.bin, images.bin, etc.)
-                auto filename = filepath.filename().string();
-                std::transform(filename.begin(), filename.end(), filename.begin(), ::tolower);
+                auto filename = lfs::core::path_to_utf8(filepath.filename());
+                std::ranges::transform(
+                    filename, filename.begin(), [](const unsigned char character) {
+                        return static_cast<char>(std::tolower(character));
+                    });
                 if (filename == "cameras.bin" || filename == "cameras.txt" ||
                     filename == "images.bin" || filename == "images.txt") {
                     auto parent = filepath.parent_path();
@@ -2672,13 +2805,8 @@ namespace lfs::vis {
         auto& target_viewport = activeKeyboardViewport();
 
         std::shared_ptr<const lfs::core::Camera> cam_data;
-        if (auto* trainer = services().trainerOrNull()) {
-            cam_data = trainer->getCamById(event.cam_id);
-        }
-        if (!cam_data) {
-            if (auto* scene_mgr = services().sceneOrNull()) {
-                cam_data = scene_mgr->getScene().getCameraByUid(event.cam_id);
-            }
+        if (auto* scene_mgr = services().sceneOrNull()) {
+            cam_data = scene_mgr->getScene().getCameraByUid(event.cam_id);
         }
         if (!cam_data) {
             LOG_ERROR("Camera ID {} not found", event.cam_id);
@@ -2814,7 +2942,8 @@ namespace lfs::vis {
         }
     }
 
-    bool InputController::handleFocusSelection(Viewport& target_viewport) {
+    bool InputController::handleFocusSelection(Viewport& target_viewport,
+                                               const std::optional<SplitViewPanelId> acted_panel) {
         if (!tool_context_)
             return false;
         auto* const sm = tool_context_->getSceneManager();
@@ -2842,7 +2971,7 @@ namespace lfs::vis {
             target_viewport.camera.focusOnBounds(total_min, total_max);
             if (auto* const rendering = services().renderingOrNull())
                 rendering->markCameraCut();
-            publishCameraMove(&target_viewport);
+            publishCameraMove(&target_viewport, acted_panel);
             return true;
         }
         return false;
@@ -2918,6 +3047,29 @@ namespace lfs::vis {
 
     bool InputController::focusSelection() {
         return handleFocusSelection(activeKeyboardViewport());
+    }
+
+    void InputController::handleResetCameraHome(Viewport& target_viewport,
+                                                const std::optional<SplitViewPanelId> acted_panel) {
+        target_viewport.camera.resetToHome();
+        if (auto* const rendering = services().renderingOrNull())
+            rendering->markCameraCut();
+        publishCameraMove(&target_viewport, acted_panel);
+    }
+
+    Viewport& InputController::panelViewport(const SplitViewPanelId panel) {
+        if (auto* const rendering = services().renderingOrNull()) {
+            return rendering->resolvePanelViewport(viewport_, panel);
+        }
+        return viewport_;
+    }
+
+    void InputController::resetCameraForPanel(const SplitViewPanelId panel) {
+        handleResetCameraHome(panelViewport(panel), panel);
+    }
+
+    bool InputController::focusSelectionForPanel(const SplitViewPanelId panel) {
+        return handleFocusSelection(panelViewport(panel), panel);
     }
 
     // Helpers
@@ -3335,10 +3487,27 @@ namespace lfs::vis {
             .emit();
     }
 
-    void InputController::publishCameraMove(Viewport* target_viewport) {
+    // The depth transform and x/y extents are global, outside DepthWindowState.
+    // Moving an off-focus panel's camera must not re-anchor the focused panel's
+    // box; panelViewport() already chose the target without changing focus.
+    bool InputController::shouldSkipDepthAnchorSync(
+        const std::optional<SplitViewPanelId> acted_panel) const {
+        if (!acted_panel) {
+            return false;
+        }
+        auto* const rendering = services().renderingOrNull();
+        if (!rendering || !rendering->isIndependentSplitViewActive()) {
+            return false;
+        }
+        return rendering->getFocusedSplitPanel() != *acted_panel;
+    }
+
+    void InputController::publishCameraMove(Viewport* target_viewport,
+                                            const std::optional<SplitViewPanelId> acted_panel) {
         LOG_PERF("InputController::publishCameraMove drag_mode={}", static_cast<int>(drag_mode_));
         auto* const active_viewport = target_viewport ? target_viewport : &viewport_;
-        if (selection_tool_ && selection_tool_->isEnabled()) {
+        if (selection_tool_ && selection_tool_->isEnabled() &&
+            !shouldSkipDepthAnchorSync(acted_panel)) {
             selection_tool_->syncDepthFilterToCamera(*active_viewport);
         }
 
@@ -3428,6 +3597,7 @@ namespace lfs::vis {
                     .focal_length_mm = focal_length_mm,
                     .orthographic = render_settings.orthographic,
                     .ortho_scale = ortho_scale,
+                    .panel = interaction->panel,
                 });
         }
         if (depth <= 0.0f) {

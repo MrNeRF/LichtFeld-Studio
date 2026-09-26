@@ -132,7 +132,7 @@
       <span class="hk"><span class="hk-key">R</span><span class="hk-label" id="hk-reset"></span></span>
       <span class="hk"><span class="hk-key">Esc</span><span class="hk-label" id="hk-close"></span></span>
     </span>
-    <span class="status-counter" id="st-counter"></span>
+    <span class="status-position" id="st-position"></span>
   </div>
 
 </body>

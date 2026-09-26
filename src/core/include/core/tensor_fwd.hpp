@@ -16,7 +16,8 @@ namespace lfs::core {
 
     enum class Device : uint8_t {
         CPU = 0,
-        CUDA = 1
+        GPU = 1,
+        CUDA = GPU
     };
 
     enum class DataType : uint8_t {
@@ -62,7 +63,7 @@ namespace lfs::core {
     inline const char* device_name(Device device) {
         switch (device) {
         case Device::CPU: return "cpu";
-        case Device::CUDA: return "cuda";
+        case Device::GPU: return "gpu";
         default: return "unknown";
         }
     }

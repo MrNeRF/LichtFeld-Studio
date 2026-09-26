@@ -5,7 +5,7 @@
 #include "backward.h"
 #include "buffer_utils.h"
 #include "core/cuda/memory_arena.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "forward.h"
 #include "helper_math.h"
@@ -30,12 +30,6 @@ namespace fast_lfs::rasterization {
 
         // count cudaPointerGetAttributes preflight calls (test/telemetry).
         std::atomic<std::uint64_t> g_preflight_pointer_attr_calls{0};
-
-        void free_sorted_primitive_indices(void* ptr, cudaStream_t stream) noexcept {
-            // The pointer belongs to the active rasterizer arena frame; the
-            // frame release returns it after backward has finished.
-            release_sorted_primitive_indices(ptr, stream);
-        }
 
 #ifndef NDEBUG
         // Debug-only preflight helpers (skipped entirely in Release).
@@ -172,7 +166,9 @@ namespace fast_lfs::rasterization {
             checked_device_pointer_on_current_device(cam_position_ptr, "cam_position_ptr", current_device);
             checked_device_pointer_on_current_device(image_ptr, "image_ptr", current_device);
             checked_device_pointer_on_current_device(alpha_ptr, "alpha_ptr", current_device);
-            checked_device_pointer_on_current_device(depth_ptr, "depth_ptr", current_device);
+            if (depth_ptr != nullptr) {
+                checked_device_pointer_on_current_device(depth_ptr, "depth_ptr", current_device);
+            }
 #else
             (void)means_ptr;
             (void)scales_raw_ptr;
@@ -240,7 +236,7 @@ namespace fast_lfs::rasterization {
         try {
             auto fail = [&](std::string message, const bool resource_exhausted) {
                 if (frame_started && arena) {
-                    arena->end_frame(frame_id);
+                    arena->end_frame(frame_id, stream);
                     frame_started = false;
                 }
                 last_forward_error = std::move(message);
@@ -401,7 +397,7 @@ namespace fast_lfs::rasterization {
             // post-grow corruption, etc.). Soft-fail the frame; trainer skips
             // the step instead of killing the run.
             if (frame_started && arena) {
-                arena->end_frame(frame_id);
+                arena->end_frame(frame_id, stream);
                 frame_started = false;
             }
             last_forward_error = e.what();
@@ -414,7 +410,7 @@ namespace fast_lfs::rasterization {
         } catch (const std::exception& e) {
             // Clean up frame on error and return error context instead of throwing
             if (frame_started && arena) {
-                arena->end_frame(frame_id);
+                arena->end_frame(frame_id, stream);
                 frame_started = false;
             }
             last_forward_error = e.what();
@@ -428,22 +424,26 @@ namespace fast_lfs::rasterization {
         }
     }
 
-    void release_forward_context(const ForwardContext& forward_ctx) {
+    void release_forward_context(const ForwardContext& forward_ctx, cudaStream_t completion_stream) {
         if (!forward_ctx.success) {
             return;
         }
-        // Release on the context's stream, not the caller's current one —
-        // robust against unwind paths on threads whose guard already popped.
-        free_sorted_primitive_indices(forward_ctx.sorted_primitive_indices, forward_ctx.stream);
+        // Cleanup can run after the execution scope has gone away. Retire on
+        // the queue of the last reader, including inference and exceptions.
         auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
-        arena.end_frame(forward_ctx.frame_id, forward_ctx.stream);
+        const auto stream = completion_stream;
+        lfs::core::bridgeStreams(forward_ctx.stream, stream);
+        // Borrowed camera/model storage can retire on the forward queue.
+        // Include the backward reader before those owners can release it.
+        lfs::core::bridgeStreams(stream, forward_ctx.stream);
+        arena.end_frame(forward_ctx.frame_id, stream);
     }
 
     BackwardOutputs backward_raw(
         float* densification_info_ptr,
         const float* densification_error_map_ptr,
         const float* grad_image_ptr,
-        const float* grad_alpha_ptr,
+        const BackgroundAlphaGradient& background_grad,
         const float* grad_depth_ptr,
         const float* grad_normal_ptr,
         const float* image_ptr,
@@ -478,28 +478,27 @@ namespace fast_lfs::rasterization {
         const float* edge_weight_map,
         float* edge_score_out) {
 
-        // The forward chose the stream and chained the arena frame on it; the
-        // backward shares the same context/arena frame and must match.
-        const cudaStream_t stream = forward_ctx.stream;
+        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+        lfs::core::bridgeStreams(forward_ctx.stream, stream);
 
         BackwardOutputs outputs;
         outputs.success = false;
         outputs.error_message = nullptr;
         if (fused_adam == nullptr || !fused_adam->enabled) {
-            release_forward_context(forward_ctx);
+            release_forward_context(forward_ctx, stream);
             outputs.error_message = "FastGS backward requires fused Adam settings";
             return outputs;
         }
         if (n_primitives <= 0 || n_visible < 0 || n_visible > n_primitives || width <= 0 ||
             height <= 0 || forward_ctx.n_instances < 0) {
-            release_forward_context(forward_ctx);
+            release_forward_context(forward_ctx, stream);
             outputs.error_message = "Invalid dimensions in backward_raw";
             return outputs;
         }
         if (active_sh_bases <= 0 || active_sh_bases > 16 ||
             sh_layout_bases <= 0 || sh_layout_bases > 16 ||
             sh_layout_bases < active_sh_bases) {
-            release_forward_context(forward_ctx);
+            release_forward_context(forward_ctx, stream);
             last_backward_error =
                 "Invalid SH layout in backward_raw (active_sh_bases=" +
                 std::to_string(active_sh_bases) +
@@ -508,7 +507,7 @@ namespace fast_lfs::rasterization {
             return outputs;
         }
         if ((edge_weight_map == nullptr) != (edge_score_out == nullptr)) {
-            release_forward_context(forward_ctx);
+            release_forward_context(forward_ctx, stream);
             outputs.error_message = "Invalid edge-score inputs in backward_raw";
             return outputs;
         }
@@ -516,7 +515,10 @@ namespace fast_lfs::rasterization {
         try {
             // Validate required inputs using pure CUDA validation
             LFS_VALIDATE_CUDA_DEVICE_POINTER(grad_image_ptr, "grad_image_ptr");
-            LFS_VALIDATE_CUDA_DEVICE_POINTER(grad_alpha_ptr, "grad_alpha_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(background_grad.grad_alpha_map, "grad_alpha_map");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(background_grad.bg_color, "bg_color");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(background_grad.bg_image, "bg_image");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(background_grad.grad_alpha_extra, "grad_alpha_extra");
             LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(grad_depth_ptr, "grad_depth_ptr");
             LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(grad_normal_ptr, "grad_normal_ptr");
             LFS_VALIDATE_CUDA_DEVICE_POINTER(image_ptr, "image_ptr");
@@ -538,7 +540,7 @@ namespace fast_lfs::rasterization {
             LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(edge_weight_map, "edge_weight_map");
             LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(edge_score_out, "edge_score_out");
         } catch (const std::exception& e) {
-            release_forward_context(forward_ctx);
+            release_forward_context(forward_ctx, stream);
             last_backward_error = e.what();
             outputs.error_message = last_backward_error.c_str();
             return outputs;
@@ -546,13 +548,13 @@ namespace fast_lfs::rasterization {
 
         // Validate forward context
         if (!forward_ctx.per_primitive_buffers || !forward_ctx.per_tile_buffers) {
-            release_forward_context(forward_ctx);
+            release_forward_context(forward_ctx, stream);
             outputs.error_message = "Invalid forward context buffers";
             return outputs;
         }
 
         if (forward_ctx.n_instances > 0 && !forward_ctx.sorted_primitive_indices) {
-            release_forward_context(forward_ctx);
+            release_forward_context(forward_ctx, stream);
             outputs.error_message = "Missing sorted primitive indices in forward context";
             return outputs;
         }
@@ -562,7 +564,7 @@ namespace fast_lfs::rasterization {
             (!forward_ctx.grad_mean2d_helper || !forward_ctx.grad_conic_helper ||
              !forward_ctx.grad_depth_helper || !forward_ctx.grad_opacity_helper ||
              !forward_ctx.grad_color_helper || !forward_ctx.primitive_work_indices)) {
-            release_forward_context(forward_ctx);
+            release_forward_context(forward_ctx, stream);
             outputs.error_message = "Missing pre-allocated helper buffers in forward context";
             return outputs;
         }
@@ -623,7 +625,7 @@ namespace fast_lfs::rasterization {
             backward(
                 densification_error_map_ptr,
                 grad_image_ptr,
-                grad_alpha_ptr,
+                background_grad,
                 grad_depth_ptr,
                 grad_normal_ptr,
                 image_ptr,
@@ -672,14 +674,14 @@ namespace fast_lfs::rasterization {
                 stream);
 
             // Mark frame as complete
-            release_forward_context(forward_ctx);
+            release_forward_context(forward_ctx, stream);
 
             outputs.success = true;
             return outputs;
 
         } catch (const std::exception& e) {
             // Clean up on error
-            release_forward_context(forward_ctx);
+            release_forward_context(forward_ctx, stream);
 
             last_backward_error = e.what();
             outputs.error_message = last_backward_error.c_str();
@@ -790,7 +792,7 @@ namespace fast_lfs::rasterization {
 
             // Backward pass compiles backward kernels (also releases arena)
             backward_raw(
-                nullptr, nullptr, grad_image, grad_alpha, nullptr, nullptr, image, alpha,
+                nullptr, nullptr, grad_image, BackgroundAlphaGradient{.grad_alpha_map = grad_alpha}, nullptr, nullptr, image, alpha,
                 means, scales, rotations, opacities, nullptr, w2c, cam_pos, ctx,
                 nullptr,
                 NUM_GAUSSIANS, NUM_GAUSSIANS, 1, 1,
@@ -798,7 +800,7 @@ namespace fast_lfs::rasterization {
                 DensificationType::None, &warmup_adam);
 
         } else {
-            lfs::core::GlobalArenaManager::instance().get_arena().end_frame(ctx.frame_id);
+            lfs::core::GlobalArenaManager::instance().get_arena().end_frame(ctx.frame_id, ctx.stream);
         }
     }
 

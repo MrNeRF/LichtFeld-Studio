@@ -3,14 +3,11 @@
 
 #pragma once
 
-/**
- * Core-side SH value quant size helpers + runtime flag.
- * Codec math lives in lfs/training/sh_value_codec.hpp; this header is for SplatData
- * allocation without a core→training dependency.
- */
+/** Size helpers and runtime flag for block-quantized SH storage. */
 
 #include "core/cuda/sh_layout.cuh"
 #include "core/export.hpp"
+#include "core/tensor_fwd.hpp"
 
 #include <cstdint>
 #include <optional>

@@ -6,18 +6,24 @@
  */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "lfs/training/refine_scratch.hpp"
 #include "training/kernels/densification_kernels.hpp"
 #include "training/kernels/mrnf_kernels.hpp"
 #include "training/strategies/strategy_utils.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <limits>
 #include <vector>
 
 using namespace lfs::core;
 using namespace lfs::training;
+
+class DensifyEvents4x : public lfs::test::CudaBackendTest {};
 
 namespace {
 
@@ -27,40 +33,40 @@ namespace {
 
 } // namespace
 
-TEST(DensifyEvents4x, FillFreeSlotsFusedWritesAttrsAndZerosAdam) {
+TEST_F(DensifyEvents4x, FillFreeSlotsFusedWritesAttrsAndClearsFreeMask) {
     constexpr size_t N = 8;
     constexpr size_t K = 3;
 
-    auto means = Tensor::zeros({N, 3}, Device::CUDA);
-    auto rots = Tensor::zeros({N, 4}, Device::CUDA);
-    auto scales = Tensor::zeros({N, 3}, Device::CUDA);
-    auto sh0 = Tensor::zeros({N, 1, 3}, Device::CUDA);
-    auto opac = Tensor::zeros({N}, Device::CUDA);
-    auto free_mask = Tensor::zeros_bool({N}, Device::CUDA);
+    auto means = Tensor::zeros({N, 3}, Device::GPU);
+    auto rots = Tensor::zeros({N, 4}, Device::GPU);
+    auto scales = Tensor::zeros({N, 3}, Device::GPU);
+    auto sh0 = Tensor::zeros({N, 1, 3}, Device::GPU);
+    auto opac = Tensor::zeros({N}, Device::GPU);
+    auto free_mask = Tensor::zeros_bool({N}, Device::GPU);
     // Mark slots 1, 3, 5 free.
     {
         auto host = free_mask.cpu();
         auto* p = host.ptr<bool>();
         p[1] = p[3] = p[5] = true;
-        free_mask = host.cuda();
+        free_mask = host.gpu();
     }
 
     auto src_means = Tensor::from_vector(
         std::vector<float>{10, 11, 12, 20, 21, 22, 30, 31, 32},
-        TensorShape({K, 3}), Device::CUDA);
+        TensorShape({K, 3}), Device::GPU);
     auto src_rots = Tensor::from_vector(
         std::vector<float>{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0},
-        TensorShape({K, 4}), Device::CUDA);
+        TensorShape({K, 4}), Device::GPU);
     auto src_scales = Tensor::from_vector(
         std::vector<float>{0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f, 0.9f},
-        TensorShape({K, 3}), Device::CUDA);
+        TensorShape({K, 3}), Device::GPU);
     auto src_sh0 = Tensor::from_vector(
         std::vector<float>{1, 2, 3, 4, 5, 6, 7, 8, 9},
-        TensorShape({K, 1, 3}), Device::CUDA);
+        TensorShape({K, 1, 3}), Device::GPU);
     auto src_opac = Tensor::from_vector(
-        std::vector<float>{0.5f, 0.6f, 0.7f}, TensorShape({K}), Device::CUDA);
+        std::vector<float>{0.5f, 0.6f, 0.7f}, TensorShape({K}), Device::GPU);
 
-    auto targets = Tensor::zeros({K}, Device::CUDA, DataType::Int64);
+    auto targets = Tensor::zeros({K}, Device::GPU, DataType::Int64);
     {
         const int64_t host_t[3] = {1, 3, 5};
         ASSERT_EQ(cudaMemcpy(targets.ptr<int64_t>(), host_t, K * sizeof(int64_t),
@@ -68,17 +74,13 @@ TEST(DensifyEvents4x, FillFreeSlotsFusedWritesAttrsAndZerosAdam) {
                   cudaSuccess);
     }
 
-    auto adam0 = Tensor::ones({N}, Device::CUDA);
-    auto adam1 = Tensor::ones({N}, Device::CUDA);
-    float* adam_ptrs[2] = {adam0.ptr<float>(), adam1.ptr<float>()};
-
     kernels::launch_fill_free_slots_fused(
         targets.ptr<int64_t>(), K,
         src_means.ptr<float>(), src_rots.ptr<float>(), src_scales.ptr<float>(),
         src_sh0.ptr<float>(), src_opac.ptr<float>(),
         means.ptr<float>(), rots.ptr<float>(), scales.ptr<float>(),
         sh0.ptr<float>(), opac.ptr<float>(),
-        /*opacity_dim=*/0, adam_ptrs, 2, free_mask.ptr<bool>(), N);
+        /*opacity_dim=*/0, free_mask.ptr<bool>(), N);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
     auto mh = to_host(means);
@@ -87,13 +89,6 @@ TEST(DensifyEvents4x, FillFreeSlotsFusedWritesAttrsAndZerosAdam) {
     EXPECT_FLOAT_EQ(mh[5 * 3 + 2], 32.f);
     EXPECT_FLOAT_EQ(mh[0], 0.f); // untouched
 
-    auto ah0 = to_host(adam0);
-    auto ah1 = to_host(adam1);
-    EXPECT_FLOAT_EQ(ah0[1], 0.f);
-    EXPECT_FLOAT_EQ(ah0[3], 0.f);
-    EXPECT_FLOAT_EQ(ah0[0], 1.f);
-    EXPECT_FLOAT_EQ(ah1[5], 0.f);
-
     auto fm = free_mask.cpu();
     EXPECT_FALSE(fm.ptr<bool>()[1]);
     EXPECT_FALSE(fm.ptr<bool>()[3]);
@@ -101,7 +96,7 @@ TEST(DensifyEvents4x, FillFreeSlotsFusedWritesAttrsAndZerosAdam) {
     EXPECT_FALSE(fm.ptr<bool>()[0]);
 }
 
-TEST(DensifyEvents4x, PackedRefineCountsMatchHost) {
+TEST_F(DensifyEvents4x, PackedRefineCountsMatchHost) {
     constexpr size_t N = 16;
     std::vector<uint8_t> b0(N, 0), b1(N, 0);
     std::vector<float> f0(N, 0.f), f1(N, 0.f);
@@ -112,8 +107,8 @@ TEST(DensifyEvents4x, PackedRefineCountsMatchHost) {
     f0[5] = 0.5f; // 2 positives
     f1[7] = 3.f;  // 1 positive
 
-    auto bool0 = Tensor::zeros_bool({N}, Device::CUDA);
-    auto bool1 = Tensor::zeros_bool({N}, Device::CUDA);
+    auto bool0 = Tensor::zeros_bool({N}, Device::GPU);
+    auto bool1 = Tensor::zeros_bool({N}, Device::GPU);
     {
         auto h0 = bool0.cpu();
         auto h1 = bool1.cpu();
@@ -121,12 +116,12 @@ TEST(DensifyEvents4x, PackedRefineCountsMatchHost) {
             h0.ptr<bool>()[i] = b0[i] != 0;
             h1.ptr<bool>()[i] = b1[i] != 0;
         }
-        bool0 = h0.cuda();
-        bool1 = h1.cuda();
+        bool0 = h0.gpu();
+        bool1 = h1.gpu();
     }
-    auto tf0 = Tensor::from_vector(f0, TensorShape({N}), Device::CUDA);
-    auto tf1 = Tensor::from_vector(f1, TensorShape({N}), Device::CUDA);
-    auto out = Tensor::zeros({4}, Device::CUDA, DataType::Int64);
+    auto tf0 = Tensor::from_vector(f0, TensorShape({N}), Device::GPU);
+    auto tf1 = Tensor::from_vector(f1, TensorShape({N}), Device::GPU);
+    auto out = Tensor::zeros({4}, Device::GPU, DataType::Int64);
 
     kernels::launch_packed_refine_counts(
         bool0.ptr<bool>(), N, bool1.ptr<bool>(), N,
@@ -144,10 +139,10 @@ TEST(DensifyEvents4x, PackedRefineCountsMatchHost) {
     EXPECT_EQ(counts[3], 1);
 }
 
-TEST(DensifyEvents4x, PositiveMedianNormalizeMatchesSortReference) {
+TEST_F(DensifyEvents4x, PositiveMedianNormalizeMatchesSortReference) {
     // Values: positives 1,2,3,4,5 → median 3; zeros stay 0; result /3
     std::vector<float> data = {0.f, 1.f, 0.f, 5.f, 2.f, 4.f, 3.f, 0.f, -1.f};
-    auto t = Tensor::from_vector(data, TensorShape({data.size()}), Device::CUDA);
+    auto t = Tensor::from_vector(data, TensorShape({data.size()}), Device::GPU);
 
     // Reference: positives only sorted mid
     std::vector<float> pos;
@@ -170,39 +165,93 @@ TEST(DensifyEvents4x, PositiveMedianNormalizeMatchesSortReference) {
     }
 }
 
-TEST(DensifyEvents4x, PositiveMedianWorkspaceMatchesAllocatingPath) {
-    std::vector<float> data = {0.f, 1.f, 0.f, 5.f, 2.f, 4.f, 3.f, 0.f, -1.f};
-    auto allocating = Tensor::from_vector(data, TensorShape({data.size()}), Device::CUDA);
-    auto persisted = Tensor::from_vector(data, TensorShape({data.size()}), Device::CUDA);
+namespace {
+    // Host reference in cub::DeviceRadixSort float order (NaN and -0.0 included).
+    uint32_t radix_order_key(const float v) {
+        uint32_t bits = 0;
+        std::memcpy(&bits, &v, sizeof(bits));
+        return (bits & 0x80000000u) ? ~bits : (bits | 0x80000000u);
+    }
 
-    kernels::launch_normalize_by_positive_median(allocating.ptr<float>(), allocating.numel());
-    PositiveMedianScratch scratch;
-    scratch.ensure_n(data.size(), Device::CUDA);
-    kernels::launch_normalize_by_positive_median(
-        persisted.ptr<float>(), persisted.numel(), nullptr, &scratch);
-    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    std::vector<float> reference_positive_median_normalize(std::vector<float> values) {
+        std::vector<float> positives;
+        for (auto& v : values) {
+            if (std::isnan(v))
+                v = 0.0f;
+            if (v > 0.0f)
+                positives.push_back(v);
+        }
+        if (positives.empty())
+            return std::vector<float>(values.size(), 0.0f);
+        std::ranges::sort(positives, {}, radix_order_key);
+        const float median = std::max(positives[positives.size() / 2], 1e-9f);
+        for (auto& v : values)
+            v /= median;
+        return values;
+    }
 
-    const auto got_a = to_host(allocating);
-    const auto got_b = to_host(persisted);
-    ASSERT_EQ(got_a.size(), got_b.size());
-    for (size_t i = 0; i < got_a.size(); ++i) {
-        EXPECT_NEAR(got_a[i], got_b[i], 1e-5f) << "i=" << i;
+    // Value sets that stress the three radix digits: runs of equal keys that
+    // straddle digit boundaries, adjacent ulps, extremes and non-finite input.
+    std::vector<std::vector<float>> median_cases() {
+        std::vector<std::vector<float>> cases;
+        cases.push_back({0.f, 1.f, 0.f, 5.f, 2.f, 4.f, 3.f, 0.f, -1.f});
+        cases.push_back({3.f});
+        cases.push_back({7.f, 7.f, 7.f, 7.f});
+        cases.push_back({1e-30f, 1e30f, std::numeric_limits<float>::infinity(), -0.0f, 0.0f,
+                         std::numeric_limits<float>::quiet_NaN(), 2.5f, 2.5f,
+                         std::nextafter(2.5f, 3.0f), std::numeric_limits<float>::denorm_min()});
+        std::vector<float> ramp;
+        for (int i = 0; i < 100003; ++i)
+            ramp.push_back(static_cast<float>((i * 7919) % 100003) * 1.25e-3f - 3.0f);
+        cases.push_back(std::move(ramp));
+        std::vector<float> ulps;
+        for (int i = 0; i < 40000; ++i)
+            ulps.push_back(std::nextafter(1.0f + static_cast<float>(i % 17) * 1e-7f, 2.0f));
+        cases.push_back(std::move(ulps));
+        return cases;
+    }
+} // namespace
+
+TEST_F(DensifyEvents4x, PositiveMedianNormalizeMatchesSortedReference) {
+    for (const auto& values : median_cases()) {
+        auto t = Tensor::from_vector(values, TensorShape({values.size()}), Device::CUDA);
+        kernels::launch_normalize_by_positive_median(t.ptr<float>(), t.numel());
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        const auto got = to_host(t);
+        const auto expected = reference_positive_median_normalize(values);
+        ASSERT_EQ(got.size(), expected.size());
+        for (size_t i = 0; i < got.size(); ++i) {
+            // The median is exact (see SelectMedianMatchesRadixSortOrder); the GPU
+            // division itself may round one ulp differently from the host.
+            const auto a = radix_order_key(got[i]);
+            const auto b = radix_order_key(expected[i]);
+            ASSERT_LE(a > b ? a - b : b - a, 2u)
+                << "n=" << values.size() << " i=" << i << " got=" << got[i] << " expected=" << expected[i];
+        }
     }
 }
 
-TEST(DensifyEvents4x, PositiveMedianWorkspaceZerosWhenNoPositives) {
+TEST_F(DensifyEvents4x, SelectMedianMatchesRadixSortOrder) {
+    for (const auto& values : median_cases()) {
+        auto t = Tensor::from_vector(values, TensorShape({values.size()}), Device::CUDA);
+        auto sorted = values;
+        std::ranges::sort(sorted, {}, radix_order_key);
+        const float got = kernels::launch_select_median(t.ptr<float>(), t.numel(), nullptr);
+        EXPECT_EQ(radix_order_key(got), radix_order_key(sorted[sorted.size() / 2])) << "n=" << values.size();
+    }
+}
+
+TEST_F(DensifyEvents4x, PositiveMedianNormalizeZerosWhenNoPositives) {
     std::vector<float> data = {0.f, -1.f, 0.f, -2.f};
     auto t = Tensor::from_vector(data, TensorShape({data.size()}), Device::CUDA);
-    PositiveMedianScratch scratch;
-    scratch.ensure_n(data.size(), Device::CUDA);
-    kernels::launch_normalize_by_positive_median(t.ptr<float>(), t.numel(), nullptr, &scratch);
+    kernels::launch_normalize_by_positive_median(t.ptr<float>(), t.numel());
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     for (float v : to_host(t)) {
         EXPECT_FLOAT_EQ(v, 0.f);
     }
 }
 
-TEST(DensifyEvents4x, GumbelScratchMatchesAllocatingPath) {
+TEST_F(DensifyEvents4x, GumbelScratchMatchesAllocatingPath) {
     constexpr size_t n = 64;
     constexpr size_t k = 7;
     std::vector<float> weights(n, 0.f);
@@ -213,14 +262,14 @@ TEST(DensifyEvents4x, GumbelScratchMatchesAllocatingPath) {
             ++nnz;
         }
     }
-    auto w = Tensor::from_vector(weights, TensorShape({n}), Device::CUDA);
-    auto allocating = Tensor::empty({k}, Device::CUDA, DataType::Int64);
-    auto persisted = Tensor::empty({k}, Device::CUDA, DataType::Int64);
+    auto w = Tensor::from_vector(weights, TensorShape({n}), Device::GPU);
+    auto allocating = Tensor::empty({k}, Device::GPU, DataType::Int64);
+    auto persisted = Tensor::empty({k}, Device::GPU, DataType::Int64);
     constexpr uint64_t seed = 0xC0FFEEULL;
 
     mrnf_strategy::launch_gumbel_topk(w.ptr<float>(), n, k, seed, allocating.ptr<int64_t>());
     GumbelTopKScratch scratch;
-    scratch.ensure_n(n, Device::CUDA);
+    scratch.ensure_n(n, Device::GPU);
     mrnf_strategy::launch_gumbel_topk(
         w.ptr<float>(), n, k, seed, persisted.ptr<int64_t>(), nullptr, true, &scratch, nnz);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
@@ -233,22 +282,42 @@ TEST(DensifyEvents4x, GumbelScratchMatchesAllocatingPath) {
     }
 }
 
-TEST(DensifyEvents4x, GumbelScratchDenseMatchesAllocatingPath) {
+TEST_F(DensifyEvents4x, GumbelScratchUsesSelectableCount) {
+    constexpr size_t n = 1024;
+    constexpr size_t nnz = 31;
+    constexpr size_t k = 7;
+    std::vector<float> weights(n, 0.0f);
+    for (size_t i = 0; i < nnz; ++i)
+        weights[(i * 31) % n] = static_cast<float>(i + 1);
+    auto w = Tensor::from_vector(weights, TensorShape({n}), Device::CUDA);
+    auto expected = Tensor::empty({k}, Device::CUDA, DataType::Int64);
+    auto actual = Tensor::empty({k}, Device::CUDA, DataType::Int64);
+    constexpr uint64_t seed = 0x4c4653ULL;
+    mrnf_strategy::launch_gumbel_topk(w.ptr<float>(), n, k, seed, expected.ptr<int64_t>());
+    GumbelTopKScratch scratch;
+    mrnf_strategy::launch_gumbel_topk(
+        w.ptr<float>(), n, k, seed, actual.ptr<int64_t>(), nullptr, true, &scratch, nnz);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    EXPECT_EQ(scratch.n_capacity, nnz);
+    EXPECT_EQ(actual.cpu().to_vector_int64(), expected.cpu().to_vector_int64());
+}
+
+TEST_F(DensifyEvents4x, GumbelScratchDenseMatchesAllocatingPath) {
     constexpr size_t n = 32;
     constexpr size_t k = 5;
     std::vector<float> weights(n);
     for (size_t i = 0; i < n; ++i) {
         weights[i] = 0.25f + static_cast<float>(i);
     }
-    auto w = Tensor::from_vector(weights, TensorShape({n}), Device::CUDA);
-    auto allocating = Tensor::empty({k}, Device::CUDA, DataType::Int64);
-    auto persisted = Tensor::empty({k}, Device::CUDA, DataType::Int64);
+    auto w = Tensor::from_vector(weights, TensorShape({n}), Device::GPU);
+    auto allocating = Tensor::empty({k}, Device::GPU, DataType::Int64);
+    auto persisted = Tensor::empty({k}, Device::GPU, DataType::Int64);
     constexpr uint64_t seed = 42;
 
     mrnf_strategy::launch_gumbel_topk(
         w.ptr<float>(), n, k, seed, allocating.ptr<int64_t>(), nullptr, false);
     GumbelTopKScratch scratch;
-    scratch.ensure_n(n, Device::CUDA);
+    scratch.ensure_n(n, Device::GPU);
     mrnf_strategy::launch_gumbel_topk(
         w.ptr<float>(), n, k, seed, persisted.ptr<int64_t>(), nullptr, false, &scratch, n);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
@@ -261,15 +330,15 @@ TEST(DensifyEvents4x, GumbelScratchDenseMatchesAllocatingPath) {
     }
 }
 
-TEST(DensifyEvents4x, GumbelUInt32PayloadsAreBoundedAndUnique) {
+TEST_F(DensifyEvents4x, GumbelUInt32PayloadsAreBoundedAndUnique) {
     constexpr size_t n = 257;
     constexpr size_t k = 31;
     std::vector<float> weights(n, 1.0f);
     weights.back() = 1.0e30f;
-    auto w = Tensor::from_vector(weights, TensorShape({n}), Device::CUDA);
-    auto selected = Tensor::empty({k}, Device::CUDA, DataType::Int64);
+    auto w = Tensor::from_vector(weights, TensorShape({n}), Device::GPU);
+    auto selected = Tensor::empty({k}, Device::GPU, DataType::Int64);
     GumbelTopKScratch scratch;
-    scratch.ensure_n(n, Device::CUDA);
+    scratch.ensure_n(n, Device::GPU);
     ASSERT_EQ(scratch.indices.dtype(), DataType::UInt32);
     ASSERT_EQ(scratch.indices_sorted.dtype(), DataType::UInt32);
 
@@ -288,43 +357,45 @@ TEST(DensifyEvents4x, GumbelUInt32PayloadsAreBoundedAndUnique) {
     }
 }
 
-TEST(DensifyEvents4x, TopologyScratchReleaseDropsAllResidentBytes) {
+TEST_F(DensifyEvents4x, TopologyScratchReleaseDropsAllResidentBytes) {
     GumbelTopKScratch gumbel;
-    PositiveMedianScratch median;
     gumbel.ensure_n(128, Device::CUDA);
-    median.ensure_n(128, Device::CUDA);
     EXPECT_GT(gumbel.resident_bytes(), 0u);
-    EXPECT_GT(median.resident_bytes(), 0u);
     gumbel.release();
-    median.release();
     EXPECT_EQ(gumbel.resident_bytes(), 0u);
-    EXPECT_EQ(median.resident_bytes(), 0u);
     EXPECT_FALSE(gumbel.indices.is_valid());
-    EXPECT_FALSE(median.selected.is_valid());
 }
 
-TEST(DensifyEvents4x, DensifyChildWorkspaceGrowsOnly) {
+TEST_F(DensifyEvents4x, DensifyChildWorkspaceGrowsOnly) {
     DensifyChildWorkspace ws;
-    ws.ensure(100, 0, false, false, Device::CUDA);
+    ws.ensure(100, 0, false, false, Device::GPU);
     const size_t cap1 = ws.capacity;
     EXPECT_GE(cap1, 100u);
     auto m1 = ws.means.ptr<float>();
 
-    ws.ensure(50, 0, false, false, Device::CUDA); // smaller — no realloc
+    ws.ensure(50, 0, false, false, Device::GPU); // smaller — no realloc
     EXPECT_EQ(ws.capacity, cap1);
     EXPECT_EQ(ws.means.ptr<float>(), m1);
 
-    ws.ensure(cap1 + 10, 0, false, false, Device::CUDA); // grow
+    ws.ensure(cap1 + 10, 0, false, false, Device::GPU); // grow
     EXPECT_GT(ws.capacity, cap1);
 }
 
-TEST(DensifyEvents4x, ScoreBufferAppendZerosInPlace) {
+// The first ensure is sized exactly; the growth headroom applies only when a
+// reused workspace grows.
+TEST_F(DensifyEvents4x, DensifyChildWorkspaceStartsAtExactCapacity) {
+    DensifyChildWorkspace ws;
+    ws.ensure(100, 0, false, false, Device::CUDA);
+    EXPECT_EQ(ws.capacity, 100u);
+}
+
+TEST_F(DensifyEvents4x, ScoreBufferAppendZerosInPlace) {
     Tensor scores = Tensor::zeros_direct(TensorShape({4}), /*capacity=*/16, Device::CUDA);
     std::vector<float> init = {1.f, 2.f, 3.f, 4.f};
     ASSERT_EQ(cudaMemcpy(scores.ptr<float>(), init.data(), 4 * sizeof(float),
                          cudaMemcpyHostToDevice),
               cudaSuccess);
-    ensure_score_buffer_inplace(scores, 10, Device::CUDA, 16);
+    ensure_score_buffer_inplace(scores, 10, Device::GPU, 16);
     EXPECT_EQ(scores.numel(), 10u);
     EXPECT_GE(scores.capacity(), 16u);
     auto v = to_host(scores);
@@ -334,12 +405,12 @@ TEST(DensifyEvents4x, ScoreBufferAppendZerosInPlace) {
     EXPECT_FLOAT_EQ(v[9], 0.f);
 }
 
-TEST(DensifyEvents4x, DensificationInfoReusesMatchingShape) {
-    Tensor info = Tensor::zeros({2, 32}, Device::CUDA);
+TEST_F(DensifyEvents4x, DensificationInfoReusesMatchingShape) {
+    Tensor info = Tensor::zeros({2, 32}, Device::GPU);
     float* p0 = info.ptr<float>();
-    ensure_densification_info_shape_inplace(info, 32, Device::CUDA);
+    ensure_densification_info_shape_inplace(info, 32, Device::GPU);
     EXPECT_EQ(info.ptr<float>(), p0); // same storage
-    ensure_densification_info_shape_inplace(info, 40, Device::CUDA);
+    ensure_densification_info_shape_inplace(info, 40, Device::GPU);
     EXPECT_EQ(info.shape()[1], 40u);
     EXPECT_NE(info.ptr<float>(), p0); // reallocated for new N
 }

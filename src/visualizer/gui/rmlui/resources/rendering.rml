@@ -25,6 +25,23 @@
         <span class="slider-value">{{render_scale | format_float(2)}}</span>
       </div>
     </div>
+    <div class="setting-row setting-row--aligned">
+      <span class="setting-row__label-col">{{label_color_tonemapping}}</span>
+      <div class="setting-row__control-col setting-row__control-col--fill">
+        <select data-value="color_tonemapping">
+          <option value="none">@tr:export.none</option><option value="linear">@tr:scene.keyframe_easing.linear</option>
+          <option value="filmic">@tr:rendering.tonemapping.filmic</option><option value="hejl">Hejl</option>
+          <option value="aces">ACES</option><option value="aces2">ACES 2</option><option value="neutral">@tr:rendering.tonemapping.neutral</option>
+        </select>
+      </div>
+    </div>
+    <div class="setting-row setting-row--aligned">
+      <span class="setting-row__label-col">{{label_color_exposure}}</span>
+      <div class="setting-row__control-col setting-row__control-col--slider">
+        <input type="range" class="setting-slider" data-value="color_exposure" min="0.1" max="8" step="0.01" data-attrif-disabled="color_tonemapping == 'none'"/>
+        <span class="slider-value">{{color_exposure | format_float(2)}}×</span>
+      </div>
+    </div>
     <div class="setting-row setting-row--aligned" data-tooltip="tooltip.environment_mode">
       <span class="setting-row__label-col">{{label_environment_mode}}</span>
       <div class="setting-row__control-col setting-row__control-col--fill">
@@ -90,7 +107,7 @@
         <input type="checkbox" data-checked="show_pivot" />
       </label>
     </div>
-    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.grid">
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.grid" data-keymap-action="toggle_grid">
       <span class="setting-row__label-col">{{label_show_grid}}</span>
       <label class="setting-row__control-col setting-row__control-col--checkbox">
         <input type="checkbox" data-checked="show_grid" />
@@ -115,7 +132,7 @@
         </div>
       </div>
     </div>
-    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.camera_frustums">
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.camera_frustums" data-keymap-action="toggle_camera_frustums">
       <span class="setting-row__label-col">{{label_show_camera_frustums}}</span>
       <label class="setting-row__control-col setting-row__control-col--checkbox">
         <input type="checkbox" data-checked="show_camera_frustums" />

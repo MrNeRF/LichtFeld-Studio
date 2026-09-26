@@ -28,8 +28,7 @@ body {
     display: flex;
     flex-direction: row;
     align-items: center;
-    flex: 1;
-    min-width: 0;
+    flex: 1 0 auto;
     height: 30dp;
     overflow: hidden;
 }
@@ -38,9 +37,49 @@ body {
     display: flex;
     flex-direction: row;
     align-items: center;
-    flex: none;
+    flex: 0 1 auto;
+    min-width: 0;
     height: 30dp;
     margin-right: 0;
+}
+
+#project-title {
+    position: absolute;
+    top: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 30dp;
+    overflow: hidden;
+}
+
+#project-title-content {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 30dp;
+    max-width: 100%;
+    min-width: 0;
+    padding: 0 8dp;
+    box-sizing: border-box;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#project-title-content span:first-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#project-title.hidden,
+#project-title.no-room {
+    display: none;
+}
+
+.project-dirty {
+    flex: none;
 }
 
 #brand-logo {
@@ -56,13 +95,100 @@ body {
     display: flex;
     flex-direction: row;
     align-items: center;
-    flex: none;
+    flex: 0 1 auto;
+    min-width: 0;
     height: 30dp;
     margin-left: 2dp;
 }
 
 #menu-toolbar.hidden {
     display: none;
+}
+
+.menu-portal-connection {
+    display: flex;
+    align-items: center;
+    height: 26dp;
+    padding: 0 8dp;
+    gap: 6dp;
+    margin: 0 3dp;
+    border-radius: 5dp;
+    white-space: nowrap;
+    flex-shrink: 1;
+    min-width: 34dp;
+    overflow: hidden;
+    cursor: pointer;
+}
+
+/* The menus keep their space; the connection label gives way down to its icon. */
+.menu-portal-connection span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.menu-portal-connection img {
+    width: 18dp;
+    height: 18dp;
+}
+
+@keyframes portal-transfer-pulse {
+    from { opacity: 1; }
+    to { opacity: 0.35; }
+}
+
+.menu-portal-connection.transferring img {
+    animation: portal-transfer-pulse 0.8s quadratic-in-out infinite alternate;
+}
+
+.menu-gallery-progress {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    width: 200dp;
+    height: 28dp;
+    padding: 0 6dp;
+    gap: 1dp;
+    border-radius: 5dp;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+
+.menu-gallery-progress.hidden {
+    display: none;
+}
+
+.menu-gallery-progress span {
+    font-size: 11dp;
+    line-height: 12dp;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.menu-gallery-progress .menu-gallery-progress-detail {
+    font-size: 10dp;
+    line-height: 11dp;
+}
+
+.menu-gallery-progress-detail.hidden {
+    display: none;
+}
+
+.menu-gallery-progress-track {
+    width: 100%;
+    height: 3dp;
+    border-radius: 2dp;
+    overflow: hidden;
+}
+
+.menu-gallery-progress-fill {
+    height: 100%;
+    border-radius: 2dp;
+}
+
+.menu-gallery-progress.indeterminate .menu-gallery-progress-fill {
+    opacity: 0.4;
 }
 
 #menu-toolbar {

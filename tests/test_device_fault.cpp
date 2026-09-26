@@ -4,9 +4,11 @@
 // Device-fault reference kernel and ValidatedIndexToken coverage for the ABI,
 // graph capture, first-fault handling, and device traps.
 
+#include "core/cuda_error.hpp"
 #include "core/device_fault.hpp"
 #include "core/error.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "device_fault_cuda_utils.hpp"
 
 #include <cuda_runtime.h>
@@ -27,15 +29,6 @@
 
 namespace {
 
-    [[nodiscard]] bool cuda_device_available() {
-        int device = -1;
-        if (cudaGetDevice(&device) != cudaSuccess) {
-            (void)cudaGetLastError();
-            return false;
-        }
-        return device >= 0;
-    }
-
     [[nodiscard]] const lfs::SmallFields::Entry* find_field(
         const lfs::Error& error, const std::string_view key) {
         if (error.frames().empty()) {
@@ -49,13 +42,11 @@ namespace {
         return nullptr;
     }
 
-    class DeviceFaultTest : public ::testing::Test {
+    class DeviceFaultTest : public lfs::test::CudaBackendTest {
     protected:
         void SetUp() override {
             lfs::core::reset_cuda_diagnostics_for_testing();
-            if (!cuda_device_available()) {
-                GTEST_SKIP() << "a live CUDA device is required";
-            }
+            CudaBackendTest::SetUp();
         }
 
         void TearDown() override {
@@ -64,7 +55,7 @@ namespace {
         }
     };
 
-    class DeviceFaultDeathTest : public ::testing::Test {
+    class DeviceFaultDeathTest : public lfs::test::CudaBackendTest {
     protected:
         void SetUp() override {
             // threadsafe re-execs the binary so the child initializes CUDA from
@@ -72,6 +63,7 @@ namespace {
             saved_death_test_style_ = GTEST_FLAG_GET(death_test_style);
             GTEST_FLAG_SET(death_test_style, "threadsafe");
             lfs::core::reset_cuda_diagnostics_for_testing();
+            CudaBackendTest::SetUp();
         }
 
         void TearDown() override {
@@ -190,13 +182,12 @@ namespace {
         using namespace lfs::core;
         // Input [0,1,2,3,4]; single OOB index 99.
         auto input = Tensor::from_vector(std::vector<float>{0.f, 1.f, 2.f, 3.f, 4.f},
-                                         {5}, Device::CUDA);
-        auto indices = Tensor::from_vector(std::vector<int>{99}, {1}, Device::CUDA);
+                                         {5}, Device::GPU);
+        auto indices = Tensor::from_vector(std::vector<int>{99}, {1}, Device::GPU);
 
-        // Assert mode drains inline (replaces the old synchronous D2H scan):
-        // the op itself throws BoundsViolation; the slot is consumed by the op.
         try {
             auto out = input.index_select(0, indices, BoundaryMode::Assert);
+            (void)out.cpu();
             FAIL() << "expected BoundsViolation from Assert-mode index_select";
         } catch (const lfs::Exception& ex) {
             const lfs::Error& error = ex.error();
@@ -211,11 +202,23 @@ namespace {
         }
     }
 
+    TEST_F(DeviceFaultTest, LaterValidLaunchDoesNotEraseAnUnconsumedFault) {
+        using namespace lfs::core;
+        auto input = Tensor::from_vector(std::vector<float>{1, 2, 3}, {3}, Device::GPU);
+        auto bad = Tensor::from_vector(std::vector<int>{99}, {1}, Device::GPU);
+        auto good = Tensor::from_vector(std::vector<int>{1}, {1}, Device::GPU);
+        EXPECT_THROW({
+            auto first = input.index_select(0, bad);
+            auto second = input.index_select(0, good);
+            (void)second.cpu(); }, lfs::Exception);
+        EXPECT_EQ(input.index_select(0, good).to_vector(), std::vector<float>{2});
+    }
+
     TEST_F(DeviceFaultTest, IndexSelectValidIndicesNoThrowRegression) {
         using namespace lfs::core;
         auto input = Tensor::from_vector(std::vector<float>{10.f, 20.f, 30.f, 40.f},
-                                         {4}, Device::CUDA);
-        auto indices = Tensor::from_vector(std::vector<int>{0, 2, 3}, {3}, Device::CUDA);
+                                         {4}, Device::GPU);
+        auto indices = Tensor::from_vector(std::vector<int>{0, 2, 3}, {3}, Device::GPU);
 
         Tensor out;
         EXPECT_NO_THROW({
@@ -245,9 +248,8 @@ namespace {
         ASSERT_EQ(cudaStreamCreate(&stream), cudaSuccess);
 
         DeviceFaultRecord* device_record = nullptr;
-        ASSERT_EQ(device_fault_slot_acquire(stream, &device_record), cudaSuccess);
+        ASSERT_EQ(device_fault_slot_arm(stream, &device_record), cudaSuccess);
         ASSERT_NE(device_record, nullptr);
-        ASSERT_EQ(device_fault_slot_enqueue_reset(stream), cudaSuccess);
 
         constexpr std::uint32_t op_id = 0xA11u;
         constexpr std::int64_t value = -7;
@@ -258,7 +260,6 @@ namespace {
                       /*trap_after_record=*/false,
                       /*blocks=*/32, /*threads_per_block=*/128, stream),
                   cudaSuccess);
-        ASSERT_EQ(device_fault_slot_enqueue_harvest(stream), cudaSuccess);
         ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
 
         const DeviceFaultRecord record = device_fault_slot_consume(stream);
@@ -270,10 +271,8 @@ namespace {
         // Exactly one winner: value/bound/op_id are stable for the first CAS.
         // thread_id may legitimately be 0 (block 0 / thread 0 winner).
 
-        // Second consume without a new record remains the staging contents until
-        // reset; reset + harvest of a clean kernel yields NoFault.
-        ASSERT_EQ(device_fault_slot_enqueue_reset(stream), cudaSuccess);
-        ASSERT_EQ(device_fault_slot_enqueue_harvest(stream), cudaSuccess);
+        // A consumed fault leaves the next checked range clean.
+        ASSERT_EQ(device_fault_slot_arm(stream, &device_record), cudaSuccess);
         ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
         const DeviceFaultRecord clean = device_fault_slot_consume(stream);
         EXPECT_EQ(clean.code, static_cast<std::uint32_t>(DeviceFaultCode::NoFault));
@@ -297,12 +296,12 @@ namespace {
             // via the home stream. Destroying the stream first can fault in
             // cuStreamWaitEvent on CUDA 13.3.
             auto input = Tensor::from_vector(std::vector<float>{1.f, 2.f, 3.f},
-                                             {3}, Device::CUDA);
-            auto indices = Tensor::from_vector(std::vector<int>{0}, {1}, Device::CUDA);
+                                             {3}, Device::GPU);
+            auto indices = Tensor::from_vector(std::vector<int>{0}, {1}, Device::GPU);
             input.set_stream(stream);
             indices.set_stream(stream);
             // Materialize a result tensor on the same stream for index_select_into.
-            auto out = Tensor::zeros({1}, Device::CUDA, DataType::Float32);
+            auto out = Tensor::zeros({1}, Device::GPU, DataType::Float32);
             out.set_stream(stream);
             ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
 
@@ -360,8 +359,8 @@ namespace {
         try {
             using namespace lfs::core;
             auto input = Tensor::from_vector(std::vector<float>{0.f, 1.f, 2.f},
-                                             {3}, Device::CUDA);
-            auto indices = Tensor::from_vector(std::vector<int>{99}, {1}, Device::CUDA);
+                                             {3}, Device::GPU);
+            auto indices = Tensor::from_vector(std::vector<int>{99}, {1}, Device::GPU);
             (void)input.index_select(0, indices, BoundaryMode::Assert);
             // Harvest is the preferred host trap site (§1.8): records then abort.
             device_fault_await_and_consume_or_throw(

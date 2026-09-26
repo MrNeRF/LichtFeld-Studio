@@ -5,75 +5,50 @@
 
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 
 #include <array>
-#include <cassert>
-#include <cstdint>
-#include <expected>
-#include <string>
-
-#include <cuda_runtime.h>
+#include <stdexcept>
+#include <vector>
 
 namespace lfs::vis::selection {
 
-    inline constexpr size_t LOCKED_GROUPS_WORDS = 8;
-    inline constexpr size_t kSelectionGroupCount = LOCKED_GROUPS_WORDS * 32;
-    using LockedGroupMaskWords = std::array<uint32_t, LOCKED_GROUPS_WORDS>;
+    inline constexpr size_t kSelectionGroupCount = 256;
+    using LockedGroupMask = std::array<bool, kSelectionGroupCount>;
 
-    [[nodiscard]] inline LockedGroupMaskWords build_locked_group_mask(const core::Scene& scene) {
-        LockedGroupMaskWords locked_bitmask{};
+    [[nodiscard]] inline LockedGroupMask build_locked_group_mask(const core::Scene& scene) {
+        LockedGroupMask locked_mask{};
         for (const auto& group : scene.getSelectionGroups()) {
             if (group.locked) {
-                const size_t group_id = static_cast<size_t>(group.id);
-                assert(group_id < kSelectionGroupCount && "selection group id exceeds locked-group mask capacity");
-                if (group_id >= kSelectionGroupCount)
-                    continue;
-                locked_bitmask[group_id / 32] |= (1u << (group_id % 32));
+                locked_mask[group.id] = true;
             }
         }
-        return locked_bitmask;
+        return locked_mask;
     }
 
-    inline std::expected<uint32_t*, std::string> upload_locked_group_mask(
+    inline const core::Tensor& update_locked_group_mask(
         const core::Scene& scene,
+        const core::Tensor& selection,
         core::Tensor& device_mask,
-        LockedGroupMaskWords& cached_host_mask,
+        LockedGroupMask& cached_host_mask,
         bool& cached_host_mask_valid) {
-        bool device_recreated = false;
-        if (!device_mask.is_valid() ||
-            device_mask.device() != core::Device::CUDA ||
-            device_mask.dtype() != core::DataType::Int32 ||
-            device_mask.numel() != LOCKED_GROUPS_WORDS) {
-            device_mask = core::Tensor::zeros({LOCKED_GROUPS_WORDS}, core::Device::CUDA, core::DataType::Int32);
-            device_recreated = true;
-        }
-
-        const auto locked_bitmask = build_locked_group_mask(scene);
-        const bool needs_upload =
-            device_recreated || !cached_host_mask_valid || locked_bitmask != cached_host_mask;
-
-        if (needs_upload) {
-            cached_host_mask = locked_bitmask;
-            if (const auto err = cudaMemcpyAsync(device_mask.ptr<uint32_t>(),
-                                                 cached_host_mask.data(),
-                                                 sizeof(cached_host_mask),
-                                                 cudaMemcpyHostToDevice,
-                                                 device_mask.stream());
-                err != cudaSuccess) {
-                cached_host_mask_valid = false;
-                return std::unexpected(cudaGetErrorString(err));
-            }
+        const auto backend = core::gpu_backend_of(selection);
+        if (!backend)
+            throw std::invalid_argument("Selection group locks require a GPU selection tensor");
+        const auto locked_mask = build_locked_group_mask(scene);
+        if (!device_mask.is_valid() || core::gpu_backend_of(device_mask) != backend ||
+            device_mask.dtype() != core::DataType::Bool ||
+            device_mask.numel() != kSelectionGroupCount || !device_mask.is_contiguous() ||
+            !cached_host_mask_valid || locked_mask != cached_host_mask) {
+            const core::GpuBackendScope scope(*backend);
+            // Publish a new version: an earlier queued selection may still read
+            // the previous tensor. Unchanged lock state reuses its cached tensor.
+            core::Tensor updated = core::Tensor::from_vector(std::vector<bool>(locked_mask.begin(), locked_mask.end()), {kSelectionGroupCount}, core::Device::GPU);
+            device_mask = std::move(updated);
+            cached_host_mask = locked_mask;
             cached_host_mask_valid = true;
         }
-
-        return device_mask.ptr<uint32_t>();
-    }
-
-    inline std::expected<uint32_t*, std::string> upload_locked_group_mask(const core::Scene& scene,
-                                                                          core::Tensor& device_mask) {
-        LockedGroupMaskWords cached_host_mask{};
-        bool cached_host_mask_valid = false;
-        return upload_locked_group_mask(scene, device_mask, cached_host_mask, cached_host_mask_valid);
+        return device_mask;
     }
 
 } // namespace lfs::vis::selection

@@ -137,13 +137,13 @@ TEST_F(StridedTensorOpsTest, MaskedSelect_TransposedView_CPU) {
 }
 
 TEST_F(StridedTensorOpsTest, MaskedSelect_TransposedView_CUDA) {
-    auto base = Tensor::from_vector({1.f, 2.f, 3.f, 4.f, 5.f, 6.f}, {2, 3}, Device::CUDA);
+    auto base = Tensor::from_vector({1.f, 2.f, 3.f, 4.f, 5.f, 6.f}, {2, 3}, Device::GPU);
     auto view = base.transpose(0, 1);
     ASSERT_FALSE(view.is_contiguous());
 
     const std::vector<float> logical_in = {1.f, 4.f, 2.f, 5.f, 3.f, 6.f};
     const std::vector<bool> logical_mask = {true, false, true, false, false, true};
-    auto mask = bool_mask_from(logical_mask, {3, 2}, Device::CUDA);
+    auto mask = bool_mask_from(logical_mask, {3, 2}, Device::GPU);
 
     auto selected = view.masked_select(mask);
     expect_vec_eq(host_f32(selected), ref_masked_select(logical_in, logical_mask),
@@ -162,13 +162,13 @@ TEST_F(StridedTensorOpsTest, MaskedSelect_TransposedView_CUDA) {
 // [[-1,2,3],[-1,5,6]] (different).
 
 TEST_F(StridedTensorOpsTest, MaskedFill_TransposedView_NoSiblingCorruption_CUDA) {
-    auto base = Tensor::from_vector({1.f, 2.f, 3.f, 4.f, 5.f, 6.f}, {2, 3}, Device::CUDA);
+    auto base = Tensor::from_vector({1.f, 2.f, 3.f, 4.f, 5.f, 6.f}, {2, 3}, Device::GPU);
     auto view = base.transpose(0, 1); // [3,2]
     ASSERT_FALSE(view.is_contiguous());
 
     // Logical mask over [3,2]: positions 0 and 3
     const std::vector<bool> logical_mask = {true, false, false, true, false, false};
-    auto mask = bool_mask_from(logical_mask, {3, 2}, Device::CUDA);
+    auto mask = bool_mask_from(logical_mask, {3, 2}, Device::GPU);
 
     view.masked_fill_(mask, -1.0f);
 
@@ -207,14 +207,14 @@ TEST_F(StridedTensorOpsTest, MaskedFill_TransposedView_CPU) {
 
 TEST_F(StridedTensorOpsTest, IndexPut_OffsetContiguousView_CUDA) {
     auto base = Tensor::from_vector(
-        {0.f, 1.f, 2.f, 3.f, 4.f, 5.f, 6.f, 7.f}, {8}, Device::CUDA);
+        {0.f, 1.f, 2.f, 3.f, 4.f, 5.f, 6.f, 7.f}, {8}, Device::GPU);
     auto v = base.slice(0, 2, 5); // [2,3,4]
     ASSERT_EQ(v.numel(), 3u);
     ASSERT_TRUE(v.is_contiguous());
     ASSERT_EQ(v.storage_offset(), 2u);
 
-    auto idx = i32_tensor_from({1}, Device::CUDA);
-    auto vals = Tensor::from_vector(std::vector<float>{9.f}, {1}, Device::CUDA);
+    auto idx = i32_tensor_from({1}, Device::GPU);
+    auto vals = Tensor::from_vector(std::vector<float>{9.f}, {1}, Device::GPU);
     v.index_put_(idx, vals);
 
     std::vector<float> ref = {0.f, 1.f, 2.f, 3.f, 4.f, 5.f, 6.f, 7.f};
@@ -246,12 +246,12 @@ TEST_F(StridedTensorOpsTest, IndexPut_NonContiguousSlice_RowAssign_CUDA) {
     std::vector<float> data(16);
     for (int i = 0; i < 16; ++i)
         data[i] = static_cast<float>(i + 1);
-    auto base = Tensor::from_vector(data, {4, 4}, Device::CUDA);
+    auto base = Tensor::from_vector(data, {4, 4}, Device::GPU);
     auto slice = base.slice(0, 0, 3).slice(1, 0, 3); // 3x3, non-contiguous
     ASSERT_FALSE(slice.is_contiguous());
 
-    auto row_idx = i32_tensor_from({1}, Device::CUDA);
-    auto vals = Tensor::from_vector(std::vector<float>{100.f, 200.f, 300.f}, {1, 3}, Device::CUDA);
+    auto row_idx = i32_tensor_from({1}, Device::GPU);
+    auto vals = Tensor::from_vector(std::vector<float>{100.f, 200.f, 300.f}, {1, 3}, Device::GPU);
     slice.index_put_(row_idx, vals);
 
     auto got = host_f32(base);
@@ -282,11 +282,11 @@ TEST_F(StridedTensorOpsTest, DensificationInfo_IndexSelectDim1_CUDA) {
         info_data[i] = static_cast<float>(i);             // row 0
         info_data[N + i] = 100.f + static_cast<float>(i); // row 1
     }
-    auto info = Tensor::from_vector(info_data, {2, N}, Device::CUDA);
+    auto info = Tensor::from_vector(info_data, {2, N}, Device::GPU);
     ASSERT_TRUE(info.is_contiguous());
 
     const std::vector<int> valid = {1, 3, 5};
-    auto idx = i32_tensor_from(valid, Device::CUDA);
+    auto idx = i32_tensor_from(valid, Device::GPU);
 
     auto gathered = info.index_select(1, idx);
     ASSERT_EQ(gathered.ndim(), 2u);
@@ -297,7 +297,7 @@ TEST_F(StridedTensorOpsTest, DensificationInfo_IndexSelectDim1_CUDA) {
     expect_vec_eq(host_f32(gathered), ref, "DensificationInfo_IndexSelectDim1");
 
     // Also verify index_select_into (compact_splats path)
-    auto dest = Tensor::zeros({2, valid.size()}, Device::CUDA);
+    auto dest = Tensor::zeros({2, valid.size()}, Device::GPU);
     info.index_select_into(dest, 1, idx, BoundaryMode::Assert);
     expect_vec_eq(host_f32(dest), ref, "DensificationInfo_IndexSelectIntoDim1");
 }
@@ -327,7 +327,7 @@ TEST_F(StridedTensorOpsTest, DensificationInfo_IndexSelectDim1_StridedSource_CUD
         wide[i] = static_cast<float>(i);
         wide[10 + i] = 100.f + static_cast<float>(i);
     }
-    auto wide_t = Tensor::from_vector(wide, {2, 10}, Device::CUDA);
+    auto wide_t = Tensor::from_vector(wide, {2, 10}, Device::GPU);
     auto info = wide_t.slice(1, 2, 8); // [2, 6], columns 2..7 of wide
     ASSERT_EQ(info.shape()[0], 2u);
     ASSERT_EQ(info.shape()[1], 6u);
@@ -340,7 +340,7 @@ TEST_F(StridedTensorOpsTest, DensificationInfo_IndexSelectDim1_StridedSource_CUD
         logical[6 + i] = 100.f + static_cast<float>(i + 2);
     }
     const std::vector<int> valid = {1, 3, 5}; // within window → wide cols 3,5,7
-    auto idx = i32_tensor_from(valid, Device::CUDA);
+    auto idx = i32_tensor_from(valid, Device::GPU);
     auto gathered = info.index_select(1, idx);
     expect_vec_eq(host_f32(gathered), ref_index_select_dim1_2xN(logical, 6, valid),
                   "DensificationInfo_IndexSelectDim1_StridedSource");
@@ -361,7 +361,7 @@ TEST_F(StridedTensorOpsTest, Multinomial_StridedColumnWeights_CUDA) {
         {0.f, 0.f,
          100.f, 0.f,
          0.f, 0.f},
-        {3, 2}, Device::CUDA);
+        {3, 2}, Device::GPU);
     auto strided_w = own.slice(1, 0, 1).squeeze(); // [3]
     ASSERT_EQ(strided_w.ndim(), 1u);
     ASSERT_EQ(strided_w.numel(), 3u);
@@ -422,8 +422,8 @@ TEST_F(StridedTensorOpsTest, DensificationInfo_RowExtractDim0_Control) {
         info_data[i] = static_cast<float>(i);
         info_data[N + i] = 10.f * static_cast<float>(i);
     }
-    auto info = Tensor::from_vector(info_data, {2, N}, Device::CUDA);
-    auto idx = i32_tensor_from({1}, Device::CUDA);
+    auto info = Tensor::from_vector(info_data, {2, N}, Device::GPU);
+    auto idx = i32_tensor_from({1}, Device::GPU);
     auto row1 = info.index_select(0, idx); // [1, N]
     ASSERT_EQ(row1.shape()[0], 1u);
     ASSERT_EQ(row1.shape()[1], N);

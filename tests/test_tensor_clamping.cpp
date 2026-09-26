@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include <gtest/gtest.h>
 #include <limits>
 #include <torch/torch.h>
@@ -25,7 +26,7 @@ namespace {
                                default: return torch::kFloat32;
                                }
                            }())
-                           .device(t.device() == Device::CPU ? torch::kCPU : torch::kCUDA);
+                           .device(torch::kCPU);
 
         std::vector<int64_t> shape;
         for (size_t i = 0; i < t.ndim(); ++i) {
@@ -34,17 +35,13 @@ namespace {
 
         torch::Tensor result = torch::empty(shape, options);
 
-        if (t.device() == Device::CPU) {
-            std::memcpy(result.data_ptr(), t.data_ptr(), t.bytes());
-        } else {
-            cudaMemcpy(result.data_ptr(), t.data_ptr(), t.bytes(), cudaMemcpyDeviceToDevice);
-        }
-
-        return result;
+        const auto host = t.cpu().contiguous();
+        std::memcpy(result.data_ptr(), host.data_ptr(), host.bytes());
+        return t.device() == Device::CPU ? result : result.cuda();
     }
 
     Tensor from_torch(const torch::Tensor& t, Device device = Device::CPU) {
-        auto t_cont = t.contiguous();
+        auto t_cont = t.cpu().contiguous();
 
         DataType dtype;
         switch (t_cont.scalar_type()) {
@@ -62,19 +59,9 @@ namespace {
             shape.push_back(static_cast<size_t>(t_cont.size(i)));
         }
 
-        Tensor result = Tensor::empty(TensorShape(shape), device, dtype);
-
-        if (device == Device::CPU) {
-            std::memcpy(result.data_ptr(), t_cont.data_ptr(), result.bytes());
-        } else {
-            if (t_cont.is_cpu()) {
-                cudaMemcpy(result.data_ptr(), t_cont.data_ptr(), result.bytes(), cudaMemcpyHostToDevice);
-            } else {
-                cudaMemcpy(result.data_ptr(), t_cont.data_ptr(), result.bytes(), cudaMemcpyDeviceToDevice);
-            }
-        }
-
-        return result;
+        return Tensor::from_blob(t_cont.data_ptr(), TensorShape(shape), Device::CPU, dtype)
+            .clone()
+            .to(device);
     }
 
     void compare_tensors(const Tensor& custom, const torch::Tensor& reference,
@@ -131,41 +118,15 @@ namespace {
         }
     }
 
-    // Helper to check CUDA availability
-    bool is_cuda_available() {
-        int device_count = 0;
-        cudaError_t err = cudaGetDeviceCount(&device_count);
-        if (err != cudaSuccess || device_count == 0) {
-            return false;
-        }
-
-        // Try to initialize device 0
-        err = cudaSetDevice(0);
-        if (err != cudaSuccess) {
-            return false;
-        }
-
-        // Try to allocate and free memory to verify device works
-        void* test_ptr = nullptr;
-        err = cudaMalloc(&test_ptr, 1024);
-        if (err != cudaSuccess) {
-            return false;
-        }
-        cudaFree(test_ptr);
-
-        // Synchronize to catch any lingering errors
-        err = cudaDeviceSynchronize();
-        if (err != cudaSuccess) {
-            return false;
-        }
-
-        return true;
-    }
 } // anonymous namespace
 
-class TensorClampTest : public ::testing::Test {
+class TensorClampTest : public lfs::test::CudaDeviceTest {
 protected:
     void SetUp() override {
+        CudaDeviceTest::SetUp();
+        if (IsSkipped()) {
+            return;
+        }
         // Clear any previous CUDA errors
         cudaGetLastError();
 
@@ -264,32 +225,24 @@ TEST_F(TensorClampTest, ClampMaxInPlace) {
 // ============= CUDA Tests =============
 
 TEST_F(TensorClampTest, ClampCUDA) {
-    if (!is_cuda_available()) {
-        GTEST_SKIP() << "CUDA not available, skipping test";
-    }
-
     std::vector<float> data = {-5.0f, -2.0f, 0.0f, 2.0f, 5.0f};
 
-    auto t_custom = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto t_custom = Tensor::from_vector(data, {5}, Device::GPU);
     auto t_torch = torch::tensor(data, torch::kCUDA);
 
     auto result_custom = t_custom.clamp(-1.0f, 3.0f);
     auto result_torch = t_torch.clamp(-1.0f, 3.0f);
 
     ASSERT_TRUE(result_custom.is_valid());
-    EXPECT_EQ(result_custom.device(), Device::CUDA);
+    EXPECT_EQ(result_custom.device(), Device::GPU);
 
     compare_tensors(result_custom, result_torch, 1e-5f, 1e-7f, "ClampCUDA");
 }
 
 TEST_F(TensorClampTest, ClampInPlaceCUDA) {
-    if (!is_cuda_available()) {
-        GTEST_SKIP() << "CUDA not available, skipping test";
-    }
-
     std::vector<float> data = {-5.0f, -2.0f, 0.0f, 2.0f, 5.0f};
 
-    auto t_custom = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto t_custom = Tensor::from_vector(data, {5}, Device::GPU);
     auto t_torch = torch::tensor(data, torch::kCUDA);
 
     t_custom.clamp_(-1.0f, 3.0f);
@@ -299,13 +252,9 @@ TEST_F(TensorClampTest, ClampInPlaceCUDA) {
 }
 
 TEST_F(TensorClampTest, ClampMinCUDA) {
-    if (!is_cuda_available()) {
-        GTEST_SKIP() << "CUDA not available, skipping test";
-    }
-
     std::vector<float> data = {-5.0f, 0.0f, 5.0f};
 
-    auto t_custom = Tensor::from_vector(data, {3}, Device::CUDA);
+    auto t_custom = Tensor::from_vector(data, {3}, Device::GPU);
     auto t_torch = torch::tensor(data, torch::kCUDA);
 
     auto result_custom = t_custom.clamp_min(0.0f);
@@ -315,13 +264,9 @@ TEST_F(TensorClampTest, ClampMinCUDA) {
 }
 
 TEST_F(TensorClampTest, ClampMaxCUDA) {
-    if (!is_cuda_available()) {
-        GTEST_SKIP() << "CUDA not available, skipping test";
-    }
-
     std::vector<float> data = {-5.0f, 0.0f, 5.0f};
 
-    auto t_custom = Tensor::from_vector(data, {3}, Device::CUDA);
+    auto t_custom = Tensor::from_vector(data, {3}, Device::GPU);
     auto t_torch = torch::tensor(data, torch::kCUDA);
 
     auto result_custom = t_custom.clamp_max(3.0f);

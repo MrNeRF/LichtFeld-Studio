@@ -5,91 +5,22 @@
 #pragma once
 
 #include "core/tensor.hpp"
+#include "core/tensor_spatial.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cuda_runtime.h>
 #include <vector>
 
 namespace lfs::rendering {
 
     using lfs::core::Tensor;
 
-    struct SelectionGroupCountResult {
-        std::array<size_t, 256> group_counts{};
-        size_t changed_count = 0;
-    };
+    // Screen positions below this on either axis are the projection's invalid marker.
+    constexpr float kInvalidScreenPositionThreshold = -1000.0f;
 
-    struct SelectionGroupDeltaResult {
-        std::array<int32_t, 256> group_deltas{};
-        size_t changed_count = 0;
-    };
+    void set_selection_element(Tensor& selection, int index, bool value);
 
-    enum class ScreenWindowCameraModel : std::uint32_t {
-        Pinhole = 0,
-        Orthographic = 1,
-        Equirectangular = 3,
-    };
-
-    void brush_select(
-        const float2* screen_positions,
-        float mouse_x,
-        float mouse_y,
-        float radius,
-        uint8_t* selection_out,
-        int n_primitives);
-
-    void rect_select(
-        const float2* positions,
-        float x0,
-        float y0,
-        float x1,
-        float y1,
-        bool* selection,
-        int n_primitives);
-
-    void polygon_select(
-        const float2* positions,
-        const float2* polygon,
-        int num_vertices,
-        bool* selection,
-        int n_primitives);
-
-    void set_selection_element(bool* selection, int index, bool value);
-    [[nodiscard]] Tensor project_screen_positions_tensor(
-        const Tensor& means,
-        int width,
-        int height,
-        const std::array<float, 9>& view_rotation_rows,
-        const std::array<float, 3>& translation,
-        float pixel_focal_x,
-        float pixel_focal_y,
-        ScreenWindowCameraModel camera_model,
-        float ortho_scale);
-    [[nodiscard]] Tensor project_screen_positions_tensor(
-        const Tensor& means,
-        int width,
-        int height,
-        const std::array<float, 9>& view_rotation_rows,
-        const std::array<float, 3>& translation,
-        float pixel_focal_x,
-        float pixel_focal_y,
-        ScreenWindowCameraModel camera_model,
-        float ortho_scale,
-        const Tensor* model_transforms);
-    [[nodiscard]] Tensor project_screen_positions_tensor(
-        const Tensor& means,
-        int width,
-        int height,
-        const std::array<float, 9>& view_rotation_rows,
-        const std::array<float, 3>& translation,
-        float pixel_focal_x,
-        float pixel_focal_y,
-        ScreenWindowCameraModel camera_model,
-        float ortho_scale,
-        const Tensor* model_transforms,
-        const Tensor* transform_indices);
     [[nodiscard]] Tensor project_screen_positions_tensor(
         const Tensor& means,
         int width,
@@ -100,7 +31,7 @@ namespace lfs::rendering {
         float pixel_focal_y,
         float center_x,
         float center_y,
-        ScreenWindowCameraModel camera_model,
+        core::PointProjectionModel camera_model,
         float ortho_scale,
         const Tensor* model_transforms,
         const Tensor* transform_indices,
@@ -117,6 +48,12 @@ namespace lfs::rendering {
         float mouse_y,
         float radius,
         Tensor& selection_out);
+    // Union of disks. Iterates samples; does not allocate an N x stroke matrix.
+    void brush_select_disks_tensor(
+        const Tensor& screen_positions,
+        const std::vector<float>& disk_xy,
+        float radius,
+        Tensor& selection_out);
 
     void rect_select_tensor(
         const Tensor& screen_positions,
@@ -131,17 +68,18 @@ namespace lfs::rendering {
         const Tensor& polygon_vertices,
         Tensor& selection_out);
 
+    // Lock flags are a dense Bool tensor with one entry per group (256), on
+    // the selection backend. An invalid tensor means that no group is locked.
     void apply_selection_group_tensor_mask(
         const Tensor& cumulative_selection,
         const Tensor& existing_mask,
         Tensor& output_mask,
         uint8_t group_id,
-        const uint32_t* locked_groups,
+        const Tensor& locked_groups,
         bool add_mode,
         const Tensor* transform_indices,
         const std::vector<bool>& valid_nodes,
-        bool replace_mode = false,
-        Tensor* group_counts_scratch = nullptr);
+        bool replace_mode = false);
 
     void apply_selection_group_indexed_tensor_mask(
         const Tensor& visible_selection,
@@ -149,30 +87,14 @@ namespace lfs::rendering {
         const Tensor& existing_mask,
         Tensor& output_mask,
         uint8_t group_id,
-        const uint32_t* locked_groups,
+        const Tensor& locked_groups,
         bool add_mode,
         const Tensor* transform_indices,
         const std::vector<bool>& valid_nodes,
         bool replace_mode = false);
 
-    [[nodiscard]] std::array<size_t, 256> count_selection_groups(
-        const Tensor& selection_mask,
-        Tensor& counts_scratch);
-    // Queue the group histogram and, optionally, a pinned-host copy. Neither
-    // function waits for the CUDA stream; callers that need the values can
-    // poll/synchronize their own event later.
     void count_selection_groups_async(const Tensor& selection_mask,
                                       Tensor& counts_scratch);
-    void enqueue_selection_group_count_read(const Tensor& counts_scratch,
-                                            int* pinned_host_counts,
-                                            cudaEvent_t ready_event);
-    [[nodiscard]] SelectionGroupCountResult read_selection_group_count_result(
-        const Tensor& counts_scratch);
-    [[nodiscard]] SelectionGroupDeltaResult read_selection_group_delta_result(
-        const Tensor& counts_scratch);
-    [[nodiscard]] std::array<size_t, 256> read_selection_group_counts(
-        const Tensor& counts_scratch);
-
     void merge_selection_mask_or(Tensor& accumulated_mask, const Tensor& delta_mask);
 
     void filter_selection_by_node_mask(
@@ -198,7 +120,7 @@ namespace lfs::rendering {
         const Tensor& means,
         const std::array<float, 9>& view_rotation_rows,
         const std::array<float, 3>& translation,
-        ScreenWindowCameraModel camera_model,
+        core::PointProjectionModel camera_model,
         int width,
         int height,
         float pixel_focal_x,
@@ -214,10 +136,5 @@ namespace lfs::rendering {
         float offset_y,
         const Tensor* model_transforms = nullptr,
         const Tensor* transform_indices = nullptr);
-
-    namespace config {
-        void setSelectionGroupColor(int group_id, float3 color);
-        void setSelectionPreviewColor(float3 color);
-    } // namespace config
 
 } // namespace lfs::rendering

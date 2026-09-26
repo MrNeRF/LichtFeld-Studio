@@ -3,6 +3,7 @@
 
 #include "components/ppisp.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <cmath>
 #include <cstring>
@@ -22,7 +23,9 @@ namespace {
 
 } // namespace
 
-TEST(PPISPExposureSeedTest, CentersAndScalesKnownFrames) {
+class PPISPExposureSeedTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(PPISPExposureSeedTest, CentersAndScalesKnownFrames) {
     PPISP ppisp(100);
     ppisp.register_frame(10, 0);
     ppisp.register_frame(20, 0);
@@ -42,7 +45,7 @@ TEST(PPISPExposureSeedTest, CentersAndScalesKnownFrames) {
     EXPECT_NEAR(values[3], 0.5f * (4.0f - mean), 1e-6f);
 }
 
-TEST(PPISPExposureSeedTest, CopyInferenceWeightsOverwritesSeed) {
+TEST_F(PPISPExposureSeedTest, CopyInferenceWeightsOverwritesSeed) {
     PPISPConfig config;
     config.warmup_steps = 0;
 
@@ -71,7 +74,9 @@ TEST(PPISPExposureSeedTest, CopyInferenceWeightsOverwritesSeed) {
     }
 }
 
-TEST(PPISPApplyWithExposureTest, MatchesApplyForRegisteredFrame) {
+class PPISPApplyWithExposureTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(PPISPApplyWithExposureTest, MatchesApplyForRegisteredFrame) {
     PPISP ppisp(100);
     ppisp.register_frame(10, 7);
     ppisp.register_frame(20, 7);
@@ -88,7 +93,7 @@ TEST(PPISPApplyWithExposureTest, MatchesApplyForRegisteredFrame) {
     for (size_t i = 0; i < pixels.size(); ++i) {
         pixels[i] = 0.2f + 0.01f * static_cast<float>(i);
     }
-    const auto rgb = lfs::core::Tensor::from_vector(pixels, {3, 4, 4}, Device::CUDA);
+    const auto rgb = lfs::core::Tensor::from_vector(pixels, {3, 4, 4}, Device::GPU);
 
     const auto from_apply = ppisp.apply(rgb, 7, 10).cpu().contiguous().to_vector();
     const auto from_explicit = ppisp.apply_with_exposure(rgb, 7, e).cpu().contiguous().to_vector();
@@ -99,7 +104,7 @@ TEST(PPISPApplyWithExposureTest, MatchesApplyForRegisteredFrame) {
     EXPECT_NE(std::memcmp(from_apply.data(), other.data(), from_apply.size() * sizeof(float)), 0);
 }
 
-TEST(PPISPExposureSeedTest, ClampsToExposureRange) {
+TEST_F(PPISPExposureSeedTest, ClampsToExposureRange) {
     PPISP ppisp(100);
     ppisp.register_frame(1, 0);
     ppisp.register_frame(2, 0);

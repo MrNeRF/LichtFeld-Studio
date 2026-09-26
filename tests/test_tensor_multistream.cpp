@@ -11,11 +11,12 @@
 
 #include "core/cuda/memory_arena.hpp"
 #include "core/tensor.hpp"
-#include "core/tensor/internal/cuda_event_pool.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
-#include "core/tensor/internal/gpu_slab_allocator.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
-#include "core/tensor/internal/size_bucketed_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_event_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/gpu_slab_allocator.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/size_bucketed_pool.hpp"
+#include "cuda_backend_test.hpp"
 
 using namespace lfs::core;
 
@@ -86,9 +87,10 @@ namespace {
 
 } // namespace
 
-class TensorMultiStreamTest : public ::testing::Test {
+class TensorMultiStreamTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
         auto& pinned = PinnedMemoryAllocator::instance();
         original_cache_limit_ = pinned.cache_limit_bytes();
@@ -97,6 +99,9 @@ protected:
     }
 
     void TearDown() override {
+        if (IsSkipped()) {
+            return;
+        }
         auto& pinned = PinnedMemoryAllocator::instance();
         pinned.set_force_fallback_for_testing(false);
         pinned.set_enabled(true);
@@ -409,7 +414,7 @@ TEST_F(TensorMultiStreamTest, ExplicitH2DTransferGuardsDroppedPinnedSource) {
     {
         auto source = Tensor::ones({kElements}, Device::CPU);
         source_ptr = source.data_ptr();
-        gpu = source.to(Device::CUDA, transfer.get());
+        gpu = source.to(Device::GPU, transfer.get());
     }
 
     auto replacement = Tensor::empty({kElements}, Device::CPU);
@@ -439,7 +444,7 @@ TEST_F(TensorMultiStreamTest, ExplicitD2HTransferGuardsDroppedPinnedDestination)
     GateStream transfer;
     constexpr size_t kElements = 256 * 1024;
 
-    auto gpu = Tensor::full({kElements}, 2.0f, Device::CUDA);
+    auto gpu = Tensor::full({kElements}, 2.0f, Device::GPU);
     ASSERT_EQ(cudaStreamSynchronize(gpu.stream()), cudaSuccess);
     transfer.close();
 
@@ -469,7 +474,7 @@ TEST_F(TensorMultiStreamTest, ExplicitH2DViewMoveAssignmentGuardsDroppedPinnedSo
     GateStream transfer;
     constexpr size_t kElements = 256 * 1024;
 
-    auto destination = Tensor::zeros({kElements + 2}, Device::CUDA);
+    auto destination = Tensor::zeros({kElements + 2}, Device::GPU);
     auto destination_view = destination.slice(0, 1, kElements + 1);
     ASSERT_TRUE(destination_view.is_view());
     destination_view.set_stream(transfer.get());
@@ -482,7 +487,7 @@ TEST_F(TensorMultiStreamTest, ExplicitH2DViewMoveAssignmentGuardsDroppedPinnedSo
         ASSERT_EQ(source.shape(), destination_view.shape());
         ASSERT_FLOAT_EQ(source.ptr<float>()[0], 3.0f);
         destination_view = std::move(source);
-        EXPECT_EQ(destination_view.device(), Device::CUDA);
+        EXPECT_EQ(destination_view.device(), Device::GPU);
         EXPECT_TRUE(destination_view.is_view());
     }
 
@@ -510,7 +515,7 @@ TEST_F(TensorMultiStreamTest, ExplicitD2HViewAssignmentGuardsDroppedPinnedDestin
     GateStream transfer;
     constexpr size_t kElements = 256 * 1024;
 
-    auto source = Tensor::full({kElements}, 4.0f, Device::CUDA);
+    auto source = Tensor::full({kElements}, 4.0f, Device::GPU);
     ASSERT_EQ(cudaStreamSynchronize(source.stream()), cudaSuccess);
 
     void* destination_ptr = nullptr;

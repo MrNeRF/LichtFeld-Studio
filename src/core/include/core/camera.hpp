@@ -5,13 +5,13 @@
 #pragma once
 
 #include "core/camera_types.h"
-#include "core/cuda/undistort/undistort.hpp"
+#include "core/cuda_types.hpp"
 #include "core/export.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_image.hpp"
 #include <array>
 #include <cassert>
 #include <cstdint>
-#include <cuda_runtime.h>
 #include <filesystem>
 #include <future>
 #include <string>
@@ -131,6 +131,8 @@ namespace lfs::core {
 
         const Tensor& R() const { return _R; }
         const Tensor& T() const { return _T; }
+
+        void to_backend(GpuBackend backend);
 
         Tensor K() const;
 
@@ -265,9 +267,17 @@ namespace lfs::core {
         Tensor _world_view_transform;
         Tensor _cam_position;
 
-        // Mask caching (processed mask stored on GPU)
+        // Mask caching (processed mask stored on GPU). Keyed on the processing
+        // arguments: a binarized 0.5 load must not poison a later SegmentAndIgnore
+        // keep-band load (or the reverse).
         Tensor _cached_mask;
         bool _mask_loaded = false;
+        int _cached_mask_resize_factor = 0;
+        int _cached_mask_max_width = 0;
+        bool _cached_mask_invert = false;
+        float _cached_mask_threshold = 0.5f;
+        bool _cached_mask_binarize = true;
+        bool _cached_mask_undistort_prepared = false;
         // Raw, pre-supplied in-memory mask (used by direct-scene plugins) —
         // takes precedence over _mask_path when set. Processed on first use.
         Tensor _in_memory_mask_raw;

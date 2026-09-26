@@ -397,6 +397,15 @@ namespace lfs::python {
     };
 
     // Main scene wrapper
+    class PySceneSplatSnapshot {
+    public:
+        explicit PySceneSplatSnapshot(core::Scene::SplatSnapshot snapshot) : snapshot_(std::move(snapshot)) {}
+        [[nodiscard]] const core::Scene::SplatSnapshot& snapshot() const { return snapshot_; }
+
+    private:
+        core::Scene::SplatSnapshot snapshot_;
+    };
+
     class PyScene {
     public:
         explicit PyScene(core::Scene* scene);
@@ -404,6 +413,7 @@ namespace lfs::python {
         // Thread-safe validity checking
         bool is_valid() const;
         uint64_t generation() const;
+        uint64_t render_generation() const;
 
         // Node CRUD
         int32_t add_group(const std::string& name, int32_t parent = core::NULL_NODE);
@@ -453,6 +463,7 @@ namespace lfs::python {
         std::optional<PySceneNode> get_node(const std::string& name);
         std::vector<PySceneNode> get_nodes();
         std::vector<PySceneNode> get_visible_nodes();
+        std::vector<PySceneSplatSnapshot> snapshot_visible_splats();
         bool is_node_effectively_visible(int32_t id) const {
             return scene_->isNodeEffectivelyVisible(id);
         }

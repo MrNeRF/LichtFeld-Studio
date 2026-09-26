@@ -4,17 +4,20 @@
 
 #pragma once
 
+#include "core/camera_metrics.hpp"
 #include "geometry/euclidean_transform.hpp"
 #include "rendering/frame_contract.hpp"
 #include "rendering/render_constants.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace lfs::vis {
 
@@ -122,6 +125,26 @@ namespace lfs::vis {
 
     [[nodiscard]] inline bool splitViewUsesPLYComparison(const SplitViewMode mode) {
         return mode == SplitViewMode::PLYComparison;
+    }
+
+    // Ordered pair of visible splat-node indices for a PLY-comparison offset.
+    // The sequence walks unique unordered pairs (0,1), (0,2), ..., (n-2,n-1).
+    [[nodiscard]] inline std::optional<std::pair<size_t, size_t>>
+    plyComparisonPairForOffset(const size_t node_count, const size_t offset) {
+        if (node_count < 2) {
+            return std::nullopt;
+        }
+
+        size_t remaining = offset % ((node_count * (node_count - 1)) / 2);
+        for (size_t left = 0; left + 1 < node_count; ++left) {
+            const size_t row_count = node_count - left - 1;
+            if (remaining < row_count) {
+                return std::pair<size_t, size_t>{left, left + 1 + remaining};
+            }
+            remaining -= row_count;
+        }
+
+        return std::nullopt;
     }
 
     [[nodiscard]] inline bool splitViewUsesGTComparison(const SplitViewMode mode) {
@@ -242,6 +265,15 @@ namespace lfs::vis {
                                            splitViewDividerPixel(total_width, current_split_position))) <= margin;
     }
 
+    // Normalized texture coordinates address pixel centers at (pixel + 0.5) / extent.
+    // Using extent - 1 here stretches clipped comparison panels by a different amount
+    // whenever their cached widths change, so a divider refresh appears to reframe them.
+    [[nodiscard]] inline float splitViewPixelCenterUv(
+        const int pixel, const int rect_origin, const int rect_extent) {
+        return (static_cast<float>(pixel - rect_origin) + 0.5f) /
+               static_cast<float>(std::max(rect_extent, 1));
+    }
+
     enum class SelectionPreviewMode {
         Centers,
         Rectangle,
@@ -253,42 +285,7 @@ namespace lfs::vis {
         Color
     };
 
-    struct PPISPOverrides {
-        // Exposure (Section 4.1)
-        float exposure_offset = 0.0f; // EV stops (-3 to +3)
-
-        // Vignetting (Section 4.2)
-        bool vignette_enabled = true;
-        float vignette_strength = 1.0f; // 0.0 to 2.0
-
-        // Color Correction (Section 4.3) - 4 chromaticity control points
-        // White point (neutral) - intuitive temperature/tint controls
-        float wb_temperature = 0.0f; // -1.0 to +1.0 (cool to warm)
-        float wb_tint = 0.0f;        // -1.0 to +1.0 (green to magenta)
-        // RGB primary offsets - direct chromaticity manipulation
-        float color_red_x = 0.0f;   // -0.5 to +0.5
-        float color_red_y = 0.0f;   // -0.5 to +0.5
-        float color_green_x = 0.0f; // -0.5 to +0.5
-        float color_green_y = 0.0f; // -0.5 to +0.5
-        float color_blue_x = 0.0f;  // -0.5 to +0.5
-        float color_blue_y = 0.0f;  // -0.5 to +0.5
-
-        // CRF (Section 4.4) - piecewise power curve per channel
-        float gamma_multiplier = 1.0f; // 0.5 to 2.5 (overall gamma)
-        float gamma_red = 0.0f;        // -0.5 to +0.5 (per-channel offset)
-        float gamma_green = 0.0f;      // -0.5 to +0.5
-        float gamma_blue = 0.0f;       // -0.5 to +0.5
-        float crf_toe = 0.0f;          // -1.0 to +1.0 (shadow compression)
-        float crf_shoulder = 0.0f;     // -1.0 to +1.0 (highlight roll-off)
-
-        [[nodiscard]] bool isIdentity() const {
-            return exposure_offset == 0.0f && vignette_enabled && vignette_strength == 1.0f &&
-                   wb_temperature == 0.0f && wb_tint == 0.0f && color_red_x == 0.0f && color_red_y == 0.0f &&
-                   color_green_x == 0.0f && color_green_y == 0.0f && color_blue_x == 0.0f && color_blue_y == 0.0f &&
-                   gamma_multiplier == 1.0f && gamma_red == 0.0f && gamma_green == 0.0f && gamma_blue == 0.0f &&
-                   crf_toe == 0.0f && crf_shoulder == 0.0f;
-        }
-    };
+    using PPISPOverrides = lfs::training::PPISPViewportOverrides;
 
     struct RenderSettings {
         enum class CameraMetricsMode {
@@ -325,6 +322,11 @@ namespace lfs::vis {
                                AUTO = 1 };
         PPISPMode ppisp_mode = PPISPMode::AUTO;
         PPISPOverrides ppisp_overrides;
+
+        // Display color: tone IDs match none, linear, filmic, hejl, aces, aces2, neutral.
+        float color_exposure = 1.0f;
+        int color_tonemapping = 0;
+        int splat_render_profile = 0; // 0: Studio, 1: standard portal
 
         // Background
         glm::vec3 background_color = glm::vec3(0.0f, 0.0f, 0.0f);

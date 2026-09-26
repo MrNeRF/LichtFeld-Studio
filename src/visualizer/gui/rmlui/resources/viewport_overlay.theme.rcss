@@ -31,6 +31,22 @@
     background-color: @{menu.background};
 }
 
+.empty-state-icon {
+    image-color: @{overlay.icon};
+}
+
+.empty-state-title {
+    color: @{overlay.text};
+}
+
+.empty-state-subtitle {
+    color: @{overlay.text_dim};
+}
+
+.empty-state-import {
+    color: @{alpha(overlay.text_dim,0.5)};
+}
+
 .project-drop-overlay {
     background-color: @{alpha(primary,0.10)};
     border-color: @{primary};
@@ -255,8 +271,9 @@
 }
 
 .vram-hud-card {
-    background-color: @{viewport.metrics_bg};
+    background-color: @{surface};
     border-color: @{viewport.metrics_border};
+    color: @{text};
 }
 
 .vram-hud-title,
@@ -497,24 +514,15 @@
     background-color: @{primary};
 }
 
-.viewport-status-backdrop {
-    background-color: @{viewport.status_backdrop};
-}
-
-.viewport-status-panel {
-    background-color: @{viewport.panel_bg};
-    border-color: @{viewport.panel_border};
-    border-radius: @{num(size.window_rounding)}dp;
-}
-
-.viewport-status-title {
+.viewport-transfer-queue {
+    background-color: @{surface};
+    border-color: @{border};
     color: @{text};
 }
-
-.viewport-status-path,
-.viewport-status-stage {
-    color: @{text_dim};
-}
+.viewport-transfer-row, .viewport-transfer-footer { border-color: @{border}; }
+.viewport-transfer-detail { color: @{text_dim}; }
+.viewport-transfer-progress { background-color: @{statusbar.progress_bg}; }
+.viewport-transfer-fill { background-color: @{primary}; }
 
 .perf-hud-strip {
     background-color: @{viewport.panel_bg};
@@ -530,6 +538,33 @@
 .perf-hud-strip-badge { color: @{success}; }
 .perf-hud-strip-meter.warn .perf-hud-meter-fill,
 .perf-hud-meter-fill.warn { background-color: @{warning}; }
+
+.vram-hud-timeline-toolbar button, .vram-hud-timeline-legend button { background-color: @{surface_bright}; color: @{text}; border-width: 1dp; border-color: @{border}; }
+.vram-hud-timeline-toolbar button:hover, .vram-hud-timeline-legend button:hover { background-color: @{primary_dim}; }
+.vram-hud-timeline-tooltip, .vram-hud-export-path { color: @{text_dim}; }
+.vram-hud-crosshair { background-color: @{text}; }
+.vram-hud-timeline-axis { color: @{text_dim}; }
+.vram-hud-timeline-axis span { background-color: @{surface}; }
+.vram-hud-timeline-x-axis { color: @{text_dim}; }
+.vram-hud-timeline-capacity { color: @{text_dim}; }
+.vram-hud-marker { color: @{warning}; }
+.vram-hud-health { color: @{warning}; }
+.vram-hud-section-title { color: @{text}; }
+.vram-hud-mover-row:hover { background-color: @{surface_bright}; }
+.vram-hud-delta-positive { color: @{error}; }
+.vram-hud-delta-negative { color: @{success}; }
+.vram-hud-mover-spark span { background-color: @{primary}; }
+.vram-hud-peak-bar { background-color: @{surface_bright}; }
+.vram-hud-owner-0 { background-color: @{primary}; }
+.vram-hud-owner-1 { background-color: @{secondary}; }
+.vram-hud-owner-2 { background-color: @{info}; }
+.vram-hud-owner-3 { background-color: @{success}; }
+.vram-hud-owner-4 { background-color: @{warning}; }
+.vram-hud-owner-5 { background-color: @{primary_dim}; }
+.vram-hud-owner-6 { background-color: @{error}; }
+.vram-hud-owner-7 { background-color: @{text_dim}; }
+.vram-hud-owner-8 { background-color: @{border}; }
+.vram-hud-owner-9 { background-color: @{warning}; }
 .perf-hud-strip-meter.crit .perf-hud-meter-fill,
 .perf-hud-meter-fill.crit { background-color: @{error}; }
 .perf-hud-core-bar { background-color: @{primary}; }
@@ -539,4 +574,17 @@
 }
 .perf-hud-meter-track {
     background-color: @{statusbar.progress_bg};
+}
+
+/* Give the independent-dual L/R chip a faint wash of the palette's text color.
+   Like toolbar icon borders, this follows the theme instead of fixed white,
+   keeping the chip distinct in light themes without competing with sliders. */
+#selection-block .viewport-selection-depth-panel-chip {
+    background-color: @{alpha(text,0.125)};
+}
+
+.toolbar-hcenter .align-toolbar {
+    decorator: none;
+    background-color: @{alpha(toolbar.background,1.0)};
+    color: @{text};
 }

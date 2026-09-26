@@ -3,9 +3,10 @@
 
 #include "core/alloc_counter.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "core/tensor/internal/lazy_executor.hpp"
 #include "core/tensor/internal/lazy_ir.hpp"
-#include "core/tensor/internal/tensor_ops.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <cmath>
 #include <cuda_runtime.h>
@@ -43,12 +44,6 @@ namespace {
         }
     };
 
-    bool has_cuda_device() {
-        int device_count = 0;
-        const auto status = cudaGetDeviceCount(&device_count);
-        return status == cudaSuccess && device_count > 0;
-    }
-
     Tensor fill_linear(const std::vector<size_t>& shape, float scale, Device dev) {
         auto t = Tensor::empty(TensorShape(shape), Device::CPU, DataType::Float32);
         auto* p = t.ptr<float>();
@@ -56,7 +51,7 @@ namespace {
         for (size_t i = 0; i < n; ++i) {
             p[i] = scale * static_cast<float>(i % 97) + 0.25f;
         }
-        return dev == Device::CUDA ? t.to(Device::CUDA) : t;
+        return dev == Device::GPU ? t.to(Device::GPU) : t;
     }
 
     void expect_close(const Tensor& got, const Tensor& expected, float atol = 1e-5f,
@@ -80,17 +75,16 @@ namespace {
 // Binary(+reduce) fusion
 // ---------------------------------------------------------------------------
 
-TEST(TensorKernelFusion, BinaryMulAddFusesToOneLaunch) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA required";
-    }
+class TensorKernelFusion : public lfs::test::CudaBackendTest {};
+
+TEST_F(TensorKernelFusion, BinaryMulAddFusesToOneLaunch) {
     Kernels6CGuard guard;
 
     // Large enough to cross the size-heuristic defer threshold (4 KiB default).
     constexpr size_t N = 8192;
-    auto a = fill_linear({N}, 0.01f, Device::CUDA);
-    auto b = fill_linear({N}, 0.02f, Device::CUDA);
-    auto c = fill_linear({N}, 0.03f, Device::CUDA);
+    auto a = fill_linear({N}, 0.01f, Device::GPU);
+    auto b = fill_linear({N}, 0.02f, Device::GPU);
+    auto c = fill_linear({N}, 0.03f, Device::GPU);
 
     // Reference: force unfused via fusion off
     Tensor ref;
@@ -115,15 +109,12 @@ TEST(TensorKernelFusion, BinaryMulAddFusesToOneLaunch) {
     expect_close(fused, ref, 1e-5f, "mul+add");
 }
 
-TEST(TensorKernelFusion, BinaryMulSumFusesToOneOrTwoLaunches) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA required";
-    }
+TEST_F(TensorKernelFusion, BinaryMulSumFusesToOneOrTwoLaunches) {
     Kernels6CGuard guard;
 
     constexpr size_t N = 8192;
-    auto a = fill_linear({N}, 0.01f, Device::CUDA);
-    auto b = fill_linear({N}, 0.02f, Device::CUDA);
+    auto a = fill_linear({N}, 0.01f, Device::GPU);
+    auto b = fill_linear({N}, 0.02f, Device::GPU);
 
     Tensor ref;
     {
@@ -149,31 +140,25 @@ TEST(TensorKernelFusion, BinaryMulSumFusesToOneOrTwoLaunches) {
     expect_close(s, ref, 1e-3f, "mul+sum"); // reduce accum may use double path vs fused
 }
 
-TEST(TensorKernelFusion, SingleBinaryKeepsFastPathWhenSmall) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA required";
-    }
+TEST_F(TensorKernelFusion, SingleBinaryKeepsFastPathWhenSmall) {
     Kernels6CGuard guard;
 
     // Below 4 KiB threshold → eager fast path, not deferred fusion seed.
-    auto a = fill_linear({64}, 0.01f, Device::CUDA);
-    auto b = fill_linear({64}, 0.02f, Device::CUDA);
+    auto a = fill_linear({64}, 0.01f, Device::GPU);
+    auto b = fill_linear({64}, 0.02f, Device::GPU);
     auto c = a.mul(b);
     EXPECT_FALSE(c.is_deferred()) << "small single binary must stay on the eager path";
-    expect_close(c, a.cpu().mul(b.cpu()).to(Device::CUDA), 1e-5f, "small mul");
+    expect_close(c, a.cpu().mul(b.cpu()).to(Device::GPU), 1e-5f, "small mul");
 }
 
-TEST(TensorKernelFusion, BinaryFusionNumericalSuite) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA required";
-    }
+TEST_F(TensorKernelFusion, BinaryFusionNumericalSuite) {
     Kernels6CGuard guard;
 
     constexpr size_t N = 4096;
-    auto a = fill_linear({N}, 0.011f, Device::CUDA);
-    auto b = fill_linear({N}, 0.017f, Device::CUDA);
-    auto c = fill_linear({N}, 0.023f, Device::CUDA);
-    auto d = fill_linear({N}, 0.029f, Device::CUDA);
+    auto a = fill_linear({N}, 0.011f, Device::GPU);
+    auto b = fill_linear({N}, 0.017f, Device::GPU);
+    auto c = fill_linear({N}, 0.023f, Device::GPU);
+    auto d = fill_linear({N}, 0.029f, Device::GPU);
 
     // (a*b + c) * d
     auto chain = a.mul(b).add(c).mul(d);
@@ -198,18 +183,15 @@ TEST(TensorKernelFusion, BinaryFusionNumericalSuite) {
 // where host clones + same-shape broadcast
 // ---------------------------------------------------------------------------
 
-TEST(TensorKernelFusion, WhereSameShapeZeroExtraAllocs) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA required";
-    }
+TEST_F(TensorKernelFusion, WhereSameShapeZeroExtraAllocs) {
     Kernels6CGuard guard;
 
     constexpr size_t N = 4096;
-    auto cond_f = fill_linear({N}, 1.0f, Device::CUDA);
+    auto cond_f = fill_linear({N}, 1.0f, Device::GPU);
     // Build bool condition: > 0.5
     auto cond = cond_f.gt(0.5f);
-    auto x = fill_linear({N}, 0.1f, Device::CUDA);
-    auto y = fill_linear({N}, 0.2f, Device::CUDA);
+    auto x = fill_linear({N}, 0.1f, Device::GPU);
+    auto y = fill_linear({N}, 0.2f, Device::GPU);
 
     // Warm pools so where itself should not drive new device allocs for clones.
     {
@@ -238,16 +220,13 @@ TEST(TensorKernelFusion, WhereSameShapeZeroExtraAllocs) {
     }
 }
 
-TEST(TensorKernelFusion, WhereSameShapePeakMemoryNoCloneBuffers) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA required";
-    }
+TEST_F(TensorKernelFusion, WhereSameShapePeakMemoryNoCloneBuffers) {
     Kernels6CGuard guard;
 
     constexpr size_t N = 1 << 18; // 256k floats
-    auto cond = fill_linear({N}, 1.0f, Device::CUDA).gt(0.5f);
-    auto x = fill_linear({N}, 0.1f, Device::CUDA);
-    auto y = fill_linear({N}, 0.2f, Device::CUDA);
+    auto cond = fill_linear({N}, 1.0f, Device::GPU).gt(0.5f);
+    auto x = fill_linear({N}, 0.1f, Device::GPU);
+    auto y = fill_linear({N}, 0.2f, Device::GPU);
     // Warm
     (void)Tensor::where(cond, x, y);
     cudaDeviceSynchronize();
@@ -274,10 +253,7 @@ TEST(TensorKernelFusion, WhereSameShapePeakMemoryNoCloneBuffers) {
 // Channel3D kernel selection
 // ---------------------------------------------------------------------------
 
-TEST(TensorKernelFusion, Channel3DEquivalenceAcrossC) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA required";
-    }
+TEST_F(TensorKernelFusion, Channel3DEquivalenceAcrossC) {
     Kernels6CGuard guard;
 
     const std::vector<size_t> Cs = {1, 3, 4, 16, 64};
@@ -285,8 +261,8 @@ TEST(TensorKernelFusion, Channel3DEquivalenceAcrossC) {
     constexpr size_t W = 32;
 
     for (size_t C : Cs) {
-        auto img = fill_linear({H, W, C}, 0.01f, Device::CUDA);
-        auto ch = fill_linear({1, 1, C}, 0.05f, Device::CUDA);
+        auto img = fill_linear({H, W, C}, 0.01f, Device::GPU);
+        auto ch = fill_linear({1, 1, C}, 0.05f, Device::GPU);
         auto got = img.add(ch); // Channel3D broadcast pattern
         (void)got.data_ptr();
 

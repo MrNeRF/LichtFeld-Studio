@@ -1,421 +1,269 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
- *
  * SPDX-License-Identifier: GPL-3.0-or-later */
-
 #include "lod_upload_engine.hpp"
-
 #include "core/logger.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
-
-#include "lod_page_dequant_cuda.hpp"
-
+#include "core/tensor_backend.hpp"
 #include <algorithm>
-#include <cstdlib>
+#include <condition_variable>
 #include <cstring>
-#include <format>
+#include <deque>
+#include <mutex>
 #include <thread>
 #include <utility>
 
 namespace lfs::vis {
+    using namespace lfs::core;
     namespace {
-
-        constexpr std::size_t kPageSplats = LodPageCache::kChunkSplats;
-
-        std::size_t stagingRingDepth() {
-            const std::size_t hw = std::max<std::size_t>(std::thread::hardware_concurrency(), 1);
-            return std::max<std::size_t>(8, std::clamp<std::size_t>(hw / 2, 2, 8) + 2);
-        }
-
-        LodUploadEngine::StagingLayout stagingLayoutFor(const bool has_meta) {
-            // Worst case per splat: every payload property stored f32 at SH
-            // degree 3 (means 12 + sh0 12 + scales 12 + orientation xyz 12 +
-            // alpha 4 + SH bands 45*4), plus the sidecar planes (8 + 12) and
-            // per-plane 16-byte alignment slack. Quantized profiles use a
-            // fraction; only used_bytes is ever copied.
-            constexpr std::size_t kWorstPayloadPerSplat = 232;
-            constexpr std::size_t kMetaPerSplat = 20;
-            constexpr std::size_t kAlignSlack = 16u * (lfs::io::kRadPackedMaxProps + 2u);
-            LodUploadEngine::StagingLayout layout{};
-            layout.total_bytes =
-                kPageSplats * (kWorstPayloadPerSplat + (has_meta ? kMetaPerSplat : 0u)) + kAlignSlack;
-            return layout;
-        }
-
+        constexpr size_t kPageSplats = LodPageCache::kChunkSplats;
+        constexpr size_t kDescriptorBytes = sizeof(RadPagePackedDesc);
+        constexpr size_t kStagingBytes = rad_page_staging_bytes(kPageSplats);
+        constexpr size_t kRingDepth = 16;
     } // namespace
+    struct LodUploadEngine::Impl {
+        struct Slot : StagingSlot {
+            Tensor host, scratch;
+            TensorUpload upload;
+            TensorCompletion completion;
+            bool acquired = false, queued = false;
+        };
+        struct Job {
+            Slot* slot;
+            RadPagePackedDesc desc;
+            LodPageCache::PendingUpload result;
+        };
+        struct Batch {
+            TensorCompletion completion;
+            std::vector<Job> jobs;
+        };
+        DeviceLayout layout;
+        std::unique_ptr<TensorWorkQueue> queue;
+        std::vector<Slot> slots;
+        std::deque<Job> pending;
+        std::deque<Batch> submitted;
+        std::vector<LodPageCache::PendingUpload> finished;
+        mutable std::mutex mutex;
+        std::mutex queue_mutex;
+        std::condition_variable cv;
+        std::thread worker;
+        bool stopping = false, working = false;
+        uint64_t published = 0, consumer = 0;
+        size_t cursor = 0;
 
-    LodUploadEngine::LodUploadEngine() = default;
-
+        void run() {
+            for (;;) {
+                std::vector<Job> jobs;
+                uint64_t wait_value;
+                {
+                    std::unique_lock lock(mutex);
+                    cv.wait(lock, [&] { return stopping || !pending.empty(); });
+                    if (stopping && pending.empty())
+                        return;
+                    while (!pending.empty()) {
+                        jobs.push_back(std::move(pending.front()));
+                        pending.pop_front();
+                    }
+                    working = true;
+                    wait_value = consumer;
+                }
+                TensorCompletion completion;
+                try {
+                    std::lock_guard queue_lock(queue_mutex);
+                    completion = queue->execute([&] {
+                        for (auto& job : jobs) {
+                            auto& slot = *job.slot;
+                            const size_t bytes = (kDescriptorBytes + job.desc.used_bytes + 3) & ~size_t(3);
+                            slot.upload.enqueue(slot.scratch.slice(0, 0, bytes), slot.host.slice(0, 0, bytes));
+                            rad_page_dequant(slot.scratch, job.desc, layout.pool, job.result.page);
+                        }
+                    },
+                                                wait_value);
+                } catch (const std::exception& e) {
+                    for (auto& job : jobs)
+                        job.result.error = e.what();
+                    LOG_ERROR("LOD tensor upload batch failed: {}", e.what());
+                }
+                {
+                    std::lock_guard lock(mutex);
+                    for (auto& job : jobs) {
+                        job.slot->completion = completion;
+                        job.slot->queued = false;
+                    }
+                    submitted.push_back({completion, std::move(jobs)});
+                    working = false;
+                    cv.notify_all();
+                }
+            }
+        }
+        void collect() {
+            while (!submitted.empty() && submitted.front().completion.ready()) {
+                auto& batch = submitted.front();
+                published = std::max(published, batch.completion.timeline().value);
+                for (auto& job : batch.jobs)
+                    finished.push_back(std::move(job.result));
+                submitted.pop_front();
+            }
+        }
+    };
+    LodUploadEngine::LodUploadEngine() : impl_(std::make_unique<Impl>()) {}
     LodUploadEngine::~LodUploadEngine() {
-        (void)drainAndSync();
-        std::lock_guard lock(mutex_);
-        shutdown_ = true;
-        slot_cv_.notify_all();
-        for (const cudaEvent_t event : event_pool_) {
-            (void)cudaEventDestroy(event);
-        }
-        event_pool_.clear();
-        releaseStagingRingLocked();
-        if (stream_ != nullptr) {
-            // The staging copies and dequant launches only touch raw cudaMalloc /
-            // cudaHostAlloc + Vulkan-external memory, never the tensor pool — but
-            // sever the stream from the pool anyway so the engine obeys the same
-            // lifetime contract as every other long-lived stream and stays UAF-safe
-            // if pool-backed memory ever flows through it.
-            lfs::core::CudaMemoryPool::instance().release_stream(stream_);
-            (void)cudaStreamDestroy(stream_);
-            stream_ = nullptr;
+        try {
+            (void)configure({});
+        } catch (const std::exception& e) {
+            LOG_ERROR("LOD tensor engine retained after shutdown failure: {}", e.what());
+            {
+                std::lock_guard lock(impl_->mutex);
+                impl_->stopping = true;
+                impl_->cv.notify_all();
+            }
+            if (impl_->worker.joinable())
+                impl_->worker.join();
+            (void)impl_.release();
         }
     }
-
-    std::vector<LodPageCache::PendingUpload>
-    LodUploadEngine::configure(const DeviceLayout& layout,
-                               const lfs::rendering::CudaTimelineSemaphore* const timeline) {
+    std::vector<LodPageCache::PendingUpload> LodUploadEngine::configure(DeviceLayout layout, void* device, void* consumer) {
+        auto results = drainAndSync();
+        auto& s = *impl_;
         {
-            std::lock_guard lock(mutex_);
-            if (layout_ == layout && timeline_ == timeline) {
-                return {};
-            }
+            std::lock_guard lock(s.mutex);
+            s.stopping = true;
+            s.cv.notify_all();
         }
-        auto drained = drainAndSync();
-        std::lock_guard lock(mutex_);
-        layout_ = layout;
-        timeline_ = timeline;
-        if (stream_ == nullptr && layout_.valid()) {
-            if (cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking) != cudaSuccess) {
-                stream_ = nullptr;
-            }
+        if (s.worker.joinable())
+            s.worker.join();
+        s.slots.clear();
+        s.queue.reset();
+        s.layout = std::move(layout);
+        s.stopping = false;
+        s.published = 0;
+        s.consumer = 0;
+        s.cursor = 0;
+        if (!s.layout.valid())
+            return results;
+        const auto backend = *gpu_backend_of(s.layout.pool.regions[0]);
+        const GpuBackendScope scope(backend);
+        s.queue = std::make_unique<TensorWorkQueue>(backend, device, consumer);
+        s.slots.resize(kRingDepth);
+        for (auto& slot : s.slots) {
+            slot.host = Tensor::empty({kDescriptorBytes + kStagingBytes}, Device::CPU, DataType::UInt8, true);
+            slot.scratch = Tensor::empty({kDescriptorBytes + kStagingBytes}, Device::GPU, DataType::UInt8);
+            slot.data = slot.host.ptr<uint8_t>() + kDescriptorBytes;
         }
-        releaseStagingRingLocked();
-        staging_layout_ = stagingLayoutFor(layout_.meta_base != nullptr);
-        if (layout_.valid() && stream_ != nullptr) {
-            staging_ring_.resize(stagingRingDepth());
-            for (auto& slot : staging_ring_) {
-                if (cudaHostAlloc(reinterpret_cast<void**>(&slot.data),
-                                  staging_layout_.total_bytes,
-                                  cudaHostAllocDefault) != cudaSuccess) {
-                    slot.data = nullptr;
-                }
-                if (cudaMalloc(reinterpret_cast<void**>(&slot.device_data),
-                               staging_layout_.total_bytes) != cudaSuccess) {
-                    slot.device_data = nullptr;
-                }
-                if (cudaEventCreateWithFlags(&slot.last_use, cudaEventDisableTiming) != cudaSuccess) {
-                    slot.last_use = nullptr;
-                }
-            }
-            // Partially-allocated slots can never be acquired; keep only
-            // complete ones so an allocation-starved ring reads as
-            // unconfigured instead of parking decode workers forever in
-            // acquireStagingSlot (cache reset would then hang on the join).
-            std::erase_if(staging_ring_, [](StagingSlot& slot) {
-                const bool complete = slot.data != nullptr &&
-                                      slot.device_data != nullptr &&
-                                      slot.last_use != nullptr;
-                if (!complete) {
-                    if (slot.data != nullptr) {
-                        (void)cudaFreeHost(slot.data);
-                    }
-                    if (slot.device_data != nullptr) {
-                        (void)cudaFree(slot.device_data);
-                    }
-                    if (slot.last_use != nullptr) {
-                        (void)cudaEventDestroy(slot.last_use);
-                    }
-                }
-                return !complete;
-            });
-            if (staging_ring_.empty()) {
-                LOG_ERROR("LOD upload engine: no staging slot survived allocation; "
-                          "engine stays unconfigured");
-                layout_ = {};
-            }
-        }
-        slot_cv_.notify_all();
-        return drained;
+        s.worker = std::thread([&s] { s.run(); });
+        return results;
     }
-
     bool LodUploadEngine::configured() const {
-        std::lock_guard lock(mutex_);
-        return layout_.valid() && stream_ != nullptr && !staging_ring_.empty();
+        std::lock_guard lock(impl_->mutex);
+        return impl_->layout.valid();
     }
-
-    LodUploadEngine::StagingLayout LodUploadEngine::stagingLayout() const {
-        std::lock_guard lock(mutex_);
-        return staging_layout_;
-    }
-
-    bool LodUploadEngine::idle() const {
-        std::lock_guard lock(mutex_);
-        if (!in_flight_.empty()) {
-            return false;
-        }
-        return std::none_of(staging_ring_.begin(), staging_ring_.end(),
-                            [](const StagingSlot& slot) { return slot.acquired; });
-    }
-
-    std::uint64_t LodUploadEngine::lastPublishedSignalValue() const {
-        std::lock_guard lock(mutex_);
-        return last_published_signal_;
-    }
-
+    size_t LodUploadEngine::stagingBytes() const { return kStagingBytes; }
     LodUploadEngine::StagingSlot* LodUploadEngine::acquireStagingSlot() {
-        std::unique_lock lock(mutex_);
-        while (true) {
-            if (shutdown_ || staging_ring_.empty()) {
+        auto& s = *impl_;
+        std::unique_lock lock(s.mutex);
+        for (;;) {
+            if (s.stopping || !s.layout.valid())
                 return nullptr;
-            }
-            StagingSlot* candidate = nullptr;
-            for (std::size_t probe = 0; probe < staging_ring_.size(); ++probe) {
-                StagingSlot& slot = staging_ring_[(staging_cursor_ + probe) % staging_ring_.size()];
-                if (!slot.acquired && slot.data != nullptr && slot.device_data != nullptr &&
-                    slot.last_use != nullptr) {
-                    candidate = &slot;
-                    staging_cursor_ = (staging_cursor_ + probe + 1) % staging_ring_.size();
-                    break;
+            s.collect();
+            Impl::Slot* waiting = nullptr;
+            for (size_t i = 0; i < s.slots.size(); ++i) {
+                auto& slot = s.slots[s.cursor++ % s.slots.size()];
+                if (slot.acquired || slot.queued)
+                    continue;
+                if (slot.completion.ready()) {
+                    slot.upload.wait();
+                    slot.acquired = true;
+                    return &slot;
                 }
+                if (!waiting)
+                    waiting = &slot;
             }
-            if (candidate == nullptr) {
-                slot_cv_.wait(lock);
-                continue;
-            }
-            candidate->acquired = true;
-            if (candidate->used) {
-                // The slot's previous copies may still be in flight; wait off
-                // the lock so other workers keep packing.
-                const cudaEvent_t guard = candidate->last_use;
+            if (waiting) {
+                // Reserve before dropping the lock so another decode worker
+                // cannot reuse the slot during the completion wait.
+                waiting->acquired = true;
                 lock.unlock();
-                if (cudaEventSynchronize(guard) != cudaSuccess) {
-                    lock.lock();
-                    candidate->acquired = false;
-                    slot_cv_.notify_all();
-                    return nullptr;
-                }
-                lock.lock();
+                waiting->completion.wait();
+                waiting->upload.wait();
+                return waiting;
             }
-            return candidate;
+            s.cv.wait(lock);
         }
     }
-
-    void LodUploadEngine::releaseSlot(StagingSlot* const slot) {
-        if (slot == nullptr) {
+    void LodUploadEngine::releaseSlot(StagingSlot* raw) {
+        if (!raw)
             return;
-        }
-        std::lock_guard lock(mutex_);
-        slot->acquired = false;
-        slot_cv_.notify_all();
+        std::lock_guard lock(impl_->mutex);
+        static_cast<Impl::Slot*>(raw)->acquired = false;
+        impl_->cv.notify_all();
     }
-
-    void LodUploadEngine::submitPackedPage(StagingSlot* const slot,
-                                           const lfs::io::RadPagePackedDesc& desc,
-                                           const std::uint32_t page,
-                                           const std::uint64_t generation) {
-        Job job{
-            .upload = {
-                .page = page,
-                .chunk = desc.chunk,
-                .generation = generation,
-                .error = {},
-            },
-        };
-
-        // One lock section covers copy + kernel + timeline signal + event
-        // record so timeline values stay monotone in stream order across
-        // workers.
-        std::lock_guard lock(mutex_);
-        const auto guard_slot_reuse = [&]() -> std::string {
-            if (const cudaError_t status = cudaEventRecord(slot->last_use, stream_);
-                status == cudaSuccess) {
-                slot->used = true;
-                return {};
-            } else {
-                // A failed guard must not expose pinned host/device scratch to
-                // another decoder while the H2D copy or dequant kernel may
-                // still be using it. This is an error path, so draining the
-                // dedicated upload stream is preferable to corrupting a page.
-                const cudaError_t sync_status = cudaStreamSynchronize(stream_);
-                slot->used = false;
-                if (sync_status != cudaSuccess) {
-                    return std::format(
-                        "LOD staging-slot event record failed: {} ({}); stream sync also failed: "
-                        "{} ({})",
-                        cudaGetErrorName(status),
-                        cudaGetErrorString(status),
-                        cudaGetErrorName(sync_status),
-                        cudaGetErrorString(sync_status));
-                }
-                return std::format("LOD staging-slot event record failed: {} ({})",
-                                   cudaGetErrorName(status),
-                                   cudaGetErrorString(status));
-            }
-        };
-        const auto submit = [&]() -> std::string {
-            if (!layout_.valid() || stream_ == nullptr) {
-                return "LOD upload engine is not configured";
-            }
-            const std::size_t dst_start = static_cast<std::size_t>(page) * kPageSplats;
-            if (dst_start + kPageSplats > layout_.splat_capacity || desc.count == 0 ||
-                desc.count > kPageSplats) {
-                return std::format("LOD upload page {} exceeds splat capacity {}",
-                                   page, layout_.splat_capacity);
-            }
-            if (layout_.meta_base != nullptr &&
-                dst_start + kPageSplats > layout_.meta_capacity_nodes) {
-                return std::format("LOD upload page {} exceeds metadata capacity {}",
-                                   page, layout_.meta_capacity_nodes);
-            }
-            if (desc.used_bytes == 0 || desc.used_bytes > staging_layout_.total_bytes) {
-                return std::format("LOD packed page descriptor spans {} bytes, slot holds {}",
-                                   desc.used_bytes, staging_layout_.total_bytes);
-            }
-            if (const cudaError_t status = cudaMemcpyAsync(slot->device_data, slot->data,
-                                                           desc.used_bytes,
-                                                           cudaMemcpyHostToDevice, stream_);
-                status != cudaSuccess) {
-                return std::format("LOD page slot H2D copy failed: {} ({})",
-                                   cudaGetErrorName(status),
-                                   cudaGetErrorString(status));
-            }
-
-            auto* const device_base = static_cast<std::uint8_t*>(layout_.device_base);
-            LodPoolDeviceView view{};
-            view.means = reinterpret_cast<float*>(device_base + layout_.region_offset[0]);
-            view.sh0 = reinterpret_cast<uint2*>(device_base + layout_.region_offset[1]);
-            view.shN = reinterpret_cast<std::uint32_t*>(device_base + layout_.region_offset[2]);
-            view.rotation = reinterpret_cast<uint2*>(device_base + layout_.region_offset[3]);
-            view.scaling = reinterpret_cast<uint2*>(device_base + layout_.region_offset[4]);
-            view.opacity = reinterpret_cast<std::uint16_t*>(device_base + layout_.region_offset[5]);
-            view.page_frames = reinterpret_cast<float4*>(device_base + layout_.region_offset[6]);
-            view.dst_rest = layout_.dst_rest;
-            view.dst_slots = layout_.dst_slots;
-            if (layout_.meta_base != nullptr) {
-                auto* const meta_base = static_cast<std::uint8_t*>(layout_.meta_base);
-                view.meta_bounds =
-                    reinterpret_cast<uint2*>(meta_base + layout_.meta_bounds_offset);
-                view.meta_links =
-                    reinterpret_cast<std::uint32_t*>(meta_base + layout_.meta_links_offset);
-            }
-            if (const cudaError_t status =
-                    launchLodPageDequant(slot->device_data, desc, view, page,
-                                         static_cast<std::uint32_t>(kPageSplats), stream_);
-                status != cudaSuccess) {
-                std::string error =
-                    std::format("LOD page dequant kernel launch failed: {} ({})",
-                                cudaGetErrorName(status),
-                                cudaGetErrorString(status));
-                if (const std::string guard_error = guard_slot_reuse(); !guard_error.empty()) {
-                    error += std::format("; {}", guard_error);
-                }
-                return error;
-            }
-            if (const std::string guard_error = guard_slot_reuse(); !guard_error.empty()) {
-                return guard_error;
-            }
-
-            const cudaEvent_t event = acquireEventLocked();
-            if (event == nullptr) {
-                return "LOD upload failed to create a CUDA event";
-            }
-            const std::uint64_t signal_value = ++signal_counter_;
-            if (timeline_ != nullptr && timeline_->valid() &&
-                !timeline_->cudaSignal(signal_value, stream_)) {
-                // Publishing without the signal would hand the renderer a
-                // timeline value CUDA never reaches - a render-queue hang.
-                // The skipped value is safe: any later successful signal is
-                // larger and satisfies waits at or below it.
-                event_pool_.push_back(event);
-                return "LOD upload timeline signal failed";
-            }
-            if (const cudaError_t status = cudaEventRecord(event, stream_); status != cudaSuccess) {
-                event_pool_.push_back(event);
-                return std::format("LOD upload event record failed: {} ({})",
-                                   cudaGetErrorName(status),
-                                   cudaGetErrorString(status));
-            }
-            job.event = event;
-            job.signal_value = signal_value;
-            return {};
-        };
-
-        job.upload.error = submit();
-        slot->acquired = false;
-        slot_cv_.notify_all();
-        in_flight_.push_back(std::move(job));
-    }
-
-    cudaEvent_t LodUploadEngine::acquireEventLocked() {
-        if (!event_pool_.empty()) {
-            const cudaEvent_t event = event_pool_.back();
-            event_pool_.pop_back();
-            return event;
+    void LodUploadEngine::submitPackedPage(StagingSlot* raw, const lfs::core::RadPagePackedDesc& desc, uint32_t page, uint64_t generation) {
+        auto& s = *impl_;
+        auto& slot = *static_cast<Impl::Slot*>(raw);
+        std::lock_guard lock(s.mutex);
+        LodPageCache::PendingUpload result{.page = page, .chunk = desc.chunk, .generation = generation, .error = {}};
+        try {
+            if (!slot.acquired)
+                throw std::logic_error("LOD staging slot was not acquired");
+            rad_page_validate(s.layout.pool, desc, kDescriptorBytes + kStagingBytes, page);
+            std::memcpy(slot.host.data_ptr(), &desc, kDescriptorBytes);
+            const size_t padded = (desc.used_bytes + 3) & ~size_t(3);
+            std::memset(slot.data + desc.used_bytes, 0, padded - desc.used_bytes);
+            slot.queued = true;
+            s.pending.push_back({&slot, desc, std::move(result)});
+        } catch (const std::exception& e) {
+            // LFS-CENSUS-OK(empty-catch): the error is published with the page result.
+            result.error = e.what();
+            s.finished.push_back(std::move(result));
         }
-        cudaEvent_t event = nullptr;
-        if (cudaEventCreateWithFlags(&event, cudaEventDisableTiming) != cudaSuccess) {
-            return nullptr;
-        }
-        return event;
+        slot.acquired = false;
+        s.cv.notify_all();
     }
-
-    std::vector<LodPageCache::PendingUpload>
-    LodUploadEngine::takeCompletedLocked(const bool wait_for_all) {
-        std::vector<LodPageCache::PendingUpload> published;
-        while (!in_flight_.empty()) {
-            Job& job = in_flight_.front();
-            if (job.event != nullptr) {
-                if (!wait_for_all) {
-                    const cudaError_t status = cudaEventQuery(job.event);
-                    if (status == cudaErrorNotReady) {
-                        break;
-                    }
-                    if (status != cudaSuccess) {
-                        job.upload.error = std::format("LOD upload event query failed: {} ({})",
-                                                       cudaGetErrorName(status),
-                                                       cudaGetErrorString(status));
-                    }
-                }
-                event_pool_.push_back(job.event);
-                job.event = nullptr;
-                last_published_signal_ = std::max(last_published_signal_, job.signal_value);
-            }
-            published.push_back(std::move(job.upload));
-            in_flight_.pop_front();
-        }
-        return published;
-    }
-
     std::vector<LodPageCache::PendingUpload> LodUploadEngine::collectPublished() {
-        std::lock_guard lock(mutex_);
-        return takeCompletedLocked(false);
+        std::lock_guard lock(impl_->mutex);
+        impl_->collect();
+        return std::exchange(impl_->finished, {});
     }
-
     std::vector<LodPageCache::PendingUpload> LodUploadEngine::drainAndSync() {
+        auto& s = *impl_;
+        std::unique_lock lock(s.mutex);
+        s.cv.wait(lock, [&] { return s.pending.empty() && !s.working &&
+                                     std::none_of(s.slots.begin(), s.slots.end(), [](const auto& slot) { return slot.acquired; }); });
+        for (auto& batch : s.submitted)
+            batch.completion.wait();
+        s.collect();
+        return std::exchange(s.finished, {});
+    }
+    bool LodUploadEngine::idle() const {
+        std::lock_guard lock(impl_->mutex);
+        const auto& s = *impl_;
+        return s.pending.empty() && s.submitted.empty() && s.finished.empty() && !s.working &&
+               std::none_of(s.slots.begin(), s.slots.end(), [](const auto& slot) { return slot.acquired; });
+    }
+    uint64_t LodUploadEngine::lastPublishedSignalValue() const {
+        std::lock_guard lock(impl_->mutex);
+        return impl_->published;
+    }
+    void* LodUploadEngine::timeline() const { return impl_->queue ? impl_->queue->timeline() : nullptr; }
+    void LodUploadEngine::noteRendererCompletion(uint64_t value) {
+        std::lock_guard lock(impl_->mutex);
+        impl_->consumer = std::max(impl_->consumer, value);
+    }
+    TensorCompletion LodUploadEngine::quantizeResident(const RadPageSources& source,
+                                                       std::span<const ResidentPage> pages) {
+        auto& s = *impl_;
+        uint64_t value;
         {
-            std::unique_lock lock(mutex_);
-            slot_cv_.wait(lock, [this] {
-                return std::none_of(staging_ring_.begin(), staging_ring_.end(),
-                                    [](const StagingSlot& slot) { return slot.acquired; });
-            });
+            std::lock_guard lock(s.mutex);
+            value = s.consumer;
         }
-        if (stream_ != nullptr) {
-            (void)cudaStreamSynchronize(stream_);
-        }
-        std::lock_guard lock(mutex_);
-        return takeCompletedLocked(true);
+        std::lock_guard lock(s.queue_mutex);
+        return s.queue->execute([&] {
+            auto inputs = source;
+            for (const auto& page : pages) {
+                inputs.offset = page.offset;
+                inputs.count = page.count;
+                rad_page_quantize(inputs, s.layout.pool, page.page);
+            }
+        },
+                                value);
     }
-
-    void LodUploadEngine::releaseStagingRingLocked() {
-        for (auto& slot : staging_ring_) {
-            if (slot.data != nullptr) {
-                (void)cudaFreeHost(slot.data);
-            }
-            if (slot.device_data != nullptr) {
-                (void)cudaFree(slot.device_data);
-            }
-            if (slot.last_use != nullptr) {
-                (void)cudaEventDestroy(slot.last_use);
-            }
-        }
-        staging_ring_.clear();
-        staging_cursor_ = 0;
-    }
-
 } // namespace lfs::vis

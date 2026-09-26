@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
-#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
 using namespace lfs::core;
@@ -18,24 +17,14 @@ using namespace lfs::core;
  * 5. Multiple slices share same underlying buffer
  */
 
-class TensorSlicingSafetyTest : public ::testing::Test {
-protected:
-    void SetUp() override {
-        // Ensure CUDA is available
-        int device_count = 0;
-        cudaGetDeviceCount(&device_count);
-        if (device_count == 0) {
-            GTEST_SKIP() << "No CUDA devices available";
-        }
-    }
-};
+class TensorSlicingSafetyTest : public ::testing::Test {};
 
 /**
  * Test 1: Verify slicing is zero-copy (doesn't allocate new memory)
  */
 TEST_F(TensorSlicingSafetyTest, SliceIsZeroCopy) {
     const size_t N = 1000;
-    Tensor full = Tensor::zeros({N, 3}, Device::CUDA);
+    Tensor full = Tensor::zeros({N, 3}, Device::GPU);
 
     void* full_ptr = full.data_ptr();
 
@@ -54,7 +43,7 @@ TEST_F(TensorSlicingSafetyTest, SliceShapeReturnsLogicalSize) {
     const size_t N = 1000;
     const size_t SLICE_SIZE = 500;
 
-    Tensor full = Tensor::zeros({N, 3}, Device::CUDA);
+    Tensor full = Tensor::zeros({N, 3}, Device::GPU);
     Tensor slice = full.slice(0, 0, SLICE_SIZE);
 
     EXPECT_EQ(full.shape()[0], N) << "Full tensor shape changed!";
@@ -70,7 +59,7 @@ TEST_F(TensorSlicingSafetyTest, SliceShapeReturnsLogicalSize) {
  */
 TEST_F(TensorSlicingSafetyTest, SlicePtrBehavior) {
     const size_t N = 1000;
-    Tensor full = Tensor::zeros({N, 3}, Device::CUDA);
+    Tensor full = Tensor::zeros({N, 3}, Device::GPU);
 
     float* full_ptr = full.ptr<float>();
 
@@ -104,7 +93,7 @@ TEST_F(TensorSlicingSafetyTest, SlicePtrBehavior) {
  */
 TEST_F(TensorSlicingSafetyTest, SliceModifiesOriginalTensor) {
     const size_t N = 1000;
-    Tensor full = Tensor::zeros({N, 3}, Device::CUDA);
+    Tensor full = Tensor::zeros({N, 3}, Device::GPU);
 
     // Modify through slice
     Tensor slice = full.slice(0, 0, 500);
@@ -115,10 +104,8 @@ TEST_F(TensorSlicingSafetyTest, SliceModifiesOriginalTensor) {
     Tensor last_500 = full.slice(0, 500, 1000);
 
     // Copy first and last values to CPU to check
-    float first_val, last_val;
-    cudaMemcpy(&first_val, first_500.ptr<float>(), sizeof(float), cudaMemcpyDeviceToHost);
-    cudaMemcpy(&last_val, last_500.ptr<float>(), sizeof(float), cudaMemcpyDeviceToHost);
-    cudaDeviceSynchronize();
+    const float first_val = first_500.cpu().ptr<float>()[0];
+    const float last_val = last_500.cpu().ptr<float>()[0];
 
     EXPECT_FLOAT_EQ(first_val, 42.0f)
         << "Slice modification didn't affect original tensor!";
@@ -131,7 +118,7 @@ TEST_F(TensorSlicingSafetyTest, SliceModifiesOriginalTensor) {
  */
 TEST_F(TensorSlicingSafetyTest, MultipleSlicesShareBuffer) {
     const size_t N = 1000;
-    Tensor full = Tensor::zeros({N, 3}, Device::CUDA);
+    Tensor full = Tensor::zeros({N, 3}, Device::GPU);
 
     // Create multiple overlapping slices
     Tensor slice1 = full.slice(0, 0, 500);    // [0:500]
@@ -149,9 +136,7 @@ TEST_F(TensorSlicingSafetyTest, MultipleSlicesShareBuffer) {
 
     // Verify slice2's overlapping region [250:500] is modified
     Tensor overlap = slice2.slice(0, 0, 250); // First 250 of slice2 = [250:500] of full
-    float overlap_val;
-    cudaMemcpy(&overlap_val, overlap.ptr<float>(), sizeof(float), cudaMemcpyDeviceToHost);
-    cudaDeviceSynchronize();
+    const float overlap_val = overlap.cpu().ptr<float>()[0];
 
     EXPECT_FLOAT_EQ(overlap_val, 10.0f)
         << "Multiple slices don't share buffer!";
@@ -171,7 +156,7 @@ TEST_F(TensorSlicingSafetyTest, SlicingDifferentShapes) {
     };
 
     for (const auto& shape : shapes) {
-        Tensor full = Tensor::zeros(TensorShape(shape), Device::CUDA);
+        Tensor full = Tensor::zeros(TensorShape(shape), Device::GPU);
         Tensor slice = full.slice(0, 0, 500);
 
         // Verify slice has correct shape
@@ -190,7 +175,7 @@ TEST_F(TensorSlicingSafetyTest, SlicingDifferentShapes) {
  */
 TEST_F(TensorSlicingSafetyTest, SliceOutOfBounds) {
     const size_t N = 1000;
-    Tensor full = Tensor::zeros({N, 3}, Device::CUDA);
+    Tensor full = Tensor::zeros({N, 3}, Device::GPU);
 
     EXPECT_THROW(full.slice(0, 0, 2000), std::runtime_error);
 }
@@ -203,7 +188,7 @@ TEST_F(TensorSlicingSafetyTest, SimulateMCMCGrowth) {
     const size_t START_SIZE = 64;
 
     // Pre-allocate full capacity
-    Tensor storage = Tensor::zeros({MAX_CAP, 3}, Device::CUDA);
+    Tensor storage = Tensor::zeros({MAX_CAP, 3}, Device::GPU);
     size_t current_size = START_SIZE;
 
     const auto* storage_ptr = storage.storage_ptr();

@@ -1,21 +1,21 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-#include "cuda/splat_decimate_math.hpp"
+#include "core/decimate/math.hpp"
+#include "core/tensor_backend.hpp"
+#include "core/tensor_export.hpp"
+#include "cuda/splat_decimate_internal.hpp"
 #include <algorithm>
 #include <array>
-#include <cuda_runtime.h>
 #include <io/splat_decimate.hpp>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <stdexcept>
 
 namespace lfs::io::decimate {
+    using namespace core::decimate;
     using core::Device;
     using core::Tensor;
-    Data allocate(size_t n, int rest, Device device) {
-        return {Tensor::empty({n, 3}, device), Tensor::empty({n, 4}, device), Tensor::empty({n, 3}, device),
-                Tensor::empty({n, 1}, device), Tensor::empty({n, 1, 3}, device), Tensor::empty({n, size_t(rest), 3}, device), n, rest};
-    }
     Selection select(const Candidates& c, size_t n, int k, size_t needed) {
         constexpr int buckets = 1024;
         double low = INFINITY, high = -INFINITY;
@@ -36,7 +36,7 @@ namespace lfs::io::decimate {
         std::vector<uint32_t> order(counts[buckets]);
         for (size_t e = 0; e < c.cost.size(); ++e)
             if (std::isfinite(c.cost[e]))
-                order[cursor[bucket(c.cost[e])]++] = e;
+                order[cursor[bucket(c.cost[e])]++] = static_cast<uint32_t>(e);
         Selection s;
         s.member_group.assign(n, -1);
         std::vector<std::array<uint32_t, 4>> groups;
@@ -75,7 +75,7 @@ namespace lfs::io::decimate {
         for (size_t g = 0; g < groups.size(); ++g) {
             s.minimum.push_back(*std::min_element(groups[g].begin(), groups[g].begin() + sizes[g]));
             s.members.insert(s.members.end(), groups[g].begin(), groups[g].begin() + sizes[g]);
-            s.offsets.push_back(s.members.size());
+            s.offsets.push_back(static_cast<uint32_t>(s.members.size()));
         }
         return s;
     }
@@ -86,7 +86,7 @@ namespace lfs::io::decimate {
         size_t n = data.n;
         std::vector<Cache> cache(n);
         for (size_t i = 0; i < n; ++i)
-            cache[i] = cache_one(v, i);
+            cache[i] = cache_one(v, static_cast<uint32_t>(i));
         std::vector<uint32_t> ids(n);
         std::iota(ids.begin(), ids.end(), 0);
         auto build = [&](auto&& self, size_t begin, size_t end, int axis) -> void {
@@ -167,6 +167,18 @@ namespace lfs::io::decimate {
         }
         return out;
     }
+    Candidates gpu_candidates(const Data& data) {
+        Candidates out;
+        core::decimate_candidates(data.pos, data.rot, data.scale, data.opacity, data.dc, data.sh, data.rest, out.idx, out.cost);
+        return out;
+    }
+    Data gpu_merge(const Data& data, const Selection& selection) {
+        auto merged = core::decimate_merge(data.pos, data.rot, data.scale, data.opacity, data.dc, data.sh, data.rest,
+                                           selection.member_group, selection.minimum, selection.members, selection.offsets,
+                                           selection.removed);
+        return {std::move(merged.position), std::move(merged.rotation), std::move(merged.scale), std::move(merged.opacity),
+                std::move(merged.dc), std::move(merged.sh), data.n - selection.removed, data.rest};
+    }
 } // namespace lfs::io::decimate
 
 namespace lfs::io {
@@ -200,7 +212,7 @@ namespace lfs::io {
                 // apply_deleted deliberately refuses to remove every row. The IO
                 // contract must still exclude an entirely soft-deleted scene.
                 if (size_t(mask.sum_scalar()) == input_n) {
-                    auto empty = allocate(0, int(input.max_sh_coeffs_rest()), Device::CUDA);
+                    auto empty = allocate(0, int(input.max_sh_coeffs_rest()), Device::GPU);
                     visible = core::SplatData(input.get_max_sh_degree(), empty.pos, empty.dc, empty.sh,
                                               empty.scale, empty.rot, empty.opacity, input.get_scene_scale(), core::SplatData::ShNLayout::Canonical);
                     visible.set_active_sh_degree(input.get_active_sh_degree());
@@ -213,16 +225,18 @@ namespace lfs::io {
             size_t n = source->size();
             if (n > size_t(std::numeric_limits<int>::max()) || n * candidates_k > std::numeric_limits<uint32_t>::max())
                 return make_error(ErrorCode::INVALID_DATASET, "decimation input exceeds index capacity");
-            Device device = o.use_gpu ? Device::CUDA : Device::CPU;
-            auto materialize = [&](const core::Tensor& t) { return t.device() == device ? t.contiguous() : t.to(device).contiguous(); };
+            std::optional<core::GpuBackendScope> backend_scope;
+            if (o.use_gpu)
+                if (const auto backend = core::gpu_backend_of(source->means()))
+                    backend_scope.emplace(*backend);
+            Device device = o.use_gpu ? Device::GPU : Device::CPU;
+            auto materialize = [&](const core::Tensor& t) {
+                return t.device() == device && (!o.use_gpu || core::gpu_backend_of(t) == core::gpu_backend_of(source->means()))
+                           ? t.contiguous()
+                           : t.to(device).contiguous();
+            };
             Data data{materialize(source->means()), materialize(source->rotation_raw()), materialize(source->scaling_raw()),
                       materialize(source->opacity_raw()), materialize(source->sh0()), materialize(source->shN_canonical()), n, int(source->max_sh_coeffs_rest())};
-            // Establish ordering with caller-owned streams before default-stream kernels.
-            if (o.use_gpu) {
-                auto err = cudaDeviceSynchronize();
-                if (err != cudaSuccess)
-                    throw std::runtime_error(cudaGetErrorString(err));
-            }
             size_t initial = n;
             int generation = 0;
             while (data.n > o.target_count) {
@@ -241,7 +255,7 @@ namespace lfs::io {
                 data = o.use_gpu ? gpu_merge(data, s) : cpu_merge(data, s);
             }
             // Clone unchanged inputs too: the API promises independently owned output.
-            auto output = [&](core::Tensor& t) { return t.device() == Device::CUDA ? (generation ? t : t.clone()) : t.to(Device::CUDA); };
+            auto output = [&](core::Tensor& t) { return t.device() == Device::GPU ? (generation ? t : t.clone()) : t.to(Device::GPU); };
             core::SplatData result(source->get_max_sh_degree(), output(data.pos), output(data.dc), output(data.sh),
                                    output(data.scale), output(data.rot), output(data.opacity), source->get_scene_scale(), core::SplatData::ShNLayout::Canonical);
             result.set_active_sh_degree(source->get_active_sh_degree());

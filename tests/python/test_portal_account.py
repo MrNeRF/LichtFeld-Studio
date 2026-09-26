@@ -8,15 +8,18 @@ import json
 import logging
 import os
 import stat
+import threading
 import time
 import urllib.error
 import urllib.parse
 from collections import deque
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from lfs_plugins import portal_account
+from lfs_plugins.ui.store import RuntimeState
 
 
 class FakeResponse:
@@ -39,8 +42,8 @@ class FakeResponse:
     def getcode(self):
         return self.status
 
-    def read(self):
-        return self._raw
+    def read(self, size=-1):
+        return self._raw if size < 0 else self._raw[:size]
 
 
 class StubUrlopen:
@@ -71,6 +74,139 @@ def token_pair(access="access-new", refresh="refresh-new"):
         "refresh_expires_in": 90 * 24 * 60 * 60,
         "token_type": "Bearer",
     }
+
+
+@pytest.mark.parametrize("worker", ["_flow_thread", "_sync_thread", "_sign_out_thread"])
+def test_busy_tracks_account_worker_lifetime(tmp_path, worker):
+    account = portal_account.PortalAccountService(credentials_path=tmp_path / "credentials.json")
+    assert account.busy is False
+    release = threading.Event()
+    thread = threading.Thread(target=release.wait)
+    setattr(account, worker, thread)
+    assert account.busy is False
+    thread.start()
+    try:
+        assert account.busy is True
+    finally:
+        release.set()
+        account.wait_for_idle()
+    assert not thread.is_alive()
+    assert account.busy is False
+
+
+def test_saved_authorization_is_visible_while_connection_is_switched_off(tmp_path):
+    path = tmp_path / "credentials.json"
+    write_credentials(path, connection_enabled=False)
+
+    account = portal_account.PortalAccountService(credentials_path=path)
+
+    assert account.snapshot().signed_in is False
+    assert account.snapshot().authorized is True
+    from lfs_plugins.portal_connection_ui import connection_state
+    assert connection_state(account.snapshot()) == "switched_off"
+
+
+def test_action_waits_for_successful_connection_and_runs_once(tmp_path, monkeypatch):
+    account = make_service(tmp_path)
+    actions = []
+    scheduled = []
+    monkeypatch.setattr(account, "start_device_flow", lambda: True)
+    monkeypatch.setattr(account, "_run_connection_action", scheduled.append)
+
+    assert account.run_after_connection(lambda: actions.append("publish")) is True
+    assert actions == [] and len(account._connection_actions) == 1
+
+    account._snapshot = replace(account.snapshot(), signed_in=True)
+    account._run_pending_connection_actions()
+    account._run_pending_connection_actions()
+    assert len(scheduled) == 1
+    scheduled.pop()()
+    assert actions == ["publish"]
+
+
+def test_action_waits_for_profile_identity_after_device_approval(tmp_path, monkeypatch):
+    account = make_service(tmp_path)
+    actions = []
+    scheduled = []
+    monkeypatch.setattr(account, "start_device_flow", lambda: True)
+    monkeypatch.setattr(account, "_run_connection_action", scheduled.append)
+    account.run_after_connection(lambda: actions.append("publish"))
+
+    credentials = account._credentials_from_token_pair(token_pair())
+    account._apply_credentials_state(credentials)
+    assert scheduled == []
+
+    account._apply_credentials_state(replace(credentials, email="ada@example.com",
+                                             connected_since="2026-09-24T11:00:00Z"))
+    assert len(scheduled) == 1
+    scheduled[0]()
+    assert actions == ["publish"]
+
+
+def test_cancelled_connection_drops_pending_action(tmp_path, monkeypatch):
+    account = make_service(tmp_path)
+    actions = []
+    monkeypatch.setattr(account, "start_device_flow", lambda: True)
+
+    account.run_after_connection(lambda: actions.append("check"))
+    account._finish_device_flow("")
+
+    assert actions == []
+    assert account._connection_actions == []
+
+
+def test_gallery_request_rejects_different_session_before_network(tmp_path, monkeypatch):
+    path = tmp_path / "credentials.json"
+    write_credentials(path)
+    account = portal_account.PortalAccountService(credentials_path=path)
+    network = StubUrlopen()
+    monkeypatch.setattr(portal_account, "urlopen", network)
+    with pytest.raises(portal_account.PortalProtocolError, match="account changed"):
+        account.request_json_authenticated("POST", "/api/gallery/v1/splats/uploads", {},
+            expected_session=("different@example.com", "session"))
+    assert network.requests == []
+
+
+def test_gallery_delete_preserves_revision_body_on_explicit_retry_after_refresh(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from lfs_plugins.portal_gallery import PortalGalleryClient
+    path = tmp_path / 'credentials.json'
+    write_credentials(path)
+    account = portal_account.PortalAccountService(credentials_path=path)
+    old = account._current_credentials()
+    network = StubUrlopen((401, {'error': 'invalid_token'}), (204, None))
+    monkeypatch.setattr(portal_account, 'urlopen', network)
+    def refresh(*args, **kwargs):
+        account._set_current_credentials(replace(old, access_token='replacement-token'))
+        return 'ok'
+    monkeypatch.setattr(account, '_refresh_tokens', refresh)
+    client = PortalGalleryClient(account, expected_session=(old.email, old.connected_since), revision_domains=1)
+    with pytest.raises(portal_account.PortalHTTPError, match='access_refreshed'):
+        client.delete('7e812ba8-6cfb-4307-a0bc-da8e395bb721', {'contentRevision': 'content', 'metadataRevision': 'metadata'})
+    assert len(network.requests) == 1
+    client.delete('7e812ba8-6cfb-4307-a0bc-da8e395bb721', {'contentRevision': 'content', 'metadataRevision': 'metadata'})
+    assert len(network.requests) == 2
+    assert all(r.method == 'DELETE' and json.loads(r.data) == {'baseRevisions': {'content': 'content', 'metadata': 'metadata'}}
+               for r in network.requests)
+    assert network.requests[-1].get_header('Authorization') == 'Bearer replacement-token'
+
+
+def test_gallery_request_does_not_retry_under_account_changed_during_refresh(tmp_path, monkeypatch):
+    from dataclasses import replace
+    path = tmp_path / "credentials.json"
+    write_credentials(path)
+    account = portal_account.PortalAccountService(credentials_path=path)
+    old = account._current_credentials()
+    network = StubUrlopen((401, {"error": "invalid_token"}))
+    monkeypatch.setattr(portal_account, "urlopen", network)
+    def refresh(*args, **kwargs):
+        account._set_current_credentials(replace(old, email="different@example.com", access_token="other-account"))
+        return "ok"
+    monkeypatch.setattr(account, "_refresh_tokens", refresh)
+    with pytest.raises(portal_account.PortalProtocolError, match="account changed"):
+        account.request_json_authenticated("POST", "/api/gallery/v1/splats/uploads", {},
+            expected_session=(old.email, old.connected_since))
+    assert len(network.requests) == 1
 
 
 def profile(name="Ada Lovelace", tier="Professional"):
@@ -109,6 +245,7 @@ def write_credentials(
     refresh_expires_at=None,
     display_name="Ada Lovelace",
     tier="Professional",
+    connection_enabled=True,
 ):
     now = time.time()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -126,6 +263,7 @@ def write_credentials(
                 "customer_tier": tier,
                 "member_since": "2025-01-02T03:04:05Z",
                 "connected_since": "2026-02-03T04:05:06Z",
+                "connection_enabled": connection_enabled,
             }
         ),
         encoding="utf-8",
@@ -149,6 +287,24 @@ def make_service(tmp_path, *, waiter=None, base_url=None):
         platform="TestOS",
         waiter=waiter,
     )
+
+
+def test_account_runtime_state_publishes_session_identity_as_it_arrives(tmp_path, monkeypatch):
+    monkeypatch.setattr("lfs_plugins.ui.store._native_store", lambda: None)
+    service = make_service(tmp_path)
+    service._snapshot = replace(
+        service.snapshot(), signed_in=True, email="", connected_since=""
+    )
+    service._publish_account_state()
+    assert (RuntimeState.account_state.value["email"], RuntimeState.account_state.value["connected_since"]) == ("", "")
+
+    service._snapshot = replace(service.snapshot(), email="ada@example.com")
+    service._publish_account_state()
+    assert (RuntimeState.account_state.value["email"], RuntimeState.account_state.value["connected_since"]) == ("ada@example.com", "")
+
+    service._snapshot = replace(service.snapshot(), connected_since="session-1")
+    service._publish_account_state()
+    assert (RuntimeState.account_state.value["email"], RuntimeState.account_state.value["connected_since"]) == ("ada@example.com", "session-1")
 
 
 def test_device_flow_state_machine_polls_and_caches_profile(tmp_path, monkeypatch):
@@ -191,6 +347,7 @@ def test_device_flow_state_machine_polls_and_caches_profile(tmp_path, monkeypatc
         "client_name": "LichtFeld Studio",
         "client_version": "1.2.3",
         "platform": "TestOS",
+        "scope": "desktop.basic gallery.sync",
     }
     assert request_json(stub.requests[1]) == {"device_code": "device-secret"}
     stored = json.loads(service.credentials_file.read_text(encoding="utf-8"))

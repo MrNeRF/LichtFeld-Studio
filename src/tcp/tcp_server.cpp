@@ -18,7 +18,7 @@ namespace lfs::tcp {
           context_(kNumberOfThreads),
           socket_(context_, type) {
         port_ = std::max(port_, 0); // Port == 0 sets automatic port
-        socket_.bind("tcp://*:" + std::to_string(port_));
+        socket_.bind("tcp://127.0.0.1:" + std::to_string(port_));
         endpoint_ = socket_.get(zmq::sockopt::last_endpoint);
         auto str_port = endpoint_.substr(endpoint_.find_last_of(':') + 1);
         port_ = std::stoi(str_port);

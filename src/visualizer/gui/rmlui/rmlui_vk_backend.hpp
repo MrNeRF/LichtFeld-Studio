@@ -48,7 +48,7 @@
 #endif
 
 // Your specified API version. Ideally, this will be dynamic in the future.
-#define RMLUI_VK_API_VERSION VK_API_VERSION_1_0
+#define RMLUI_VK_API_VERSION VK_API_VERSION_1_3
 
 class RenderInterface_VK : public Rml::RenderInterface {
 public:
@@ -104,9 +104,13 @@ public:
     void EndCacheCapture();
 
     // Build a Rml::Image src URL referencing an externally-owned VkImageView/VkSampler.
-    // The view+sampler must remain alive while any element references this URL. The
-    // returned URL form is "lfs-vk://?v=<view_hex>&s=<sampler_hex>&w=W&h=H".
-    static std::string MakeExternalTextureSource(VkImageView image_view, VkSampler sampler, int width, int height);
+    // The view+sampler must remain alive while any element references this URL.
+    // Form: "lfs-vk://?v=<view_hex>&s=<sampler_hex>&w=W&h=H[&g=<incarnation_hex>]".
+    // `g` is a process-wide image incarnation so TextureDatabase cannot reuse a
+    // descriptor after the driver recycles the view handle. The query parser
+    // ignores unknown keys; `g` is a cache-key only.
+    static std::string MakeExternalTextureSource(VkImageView image_view, VkSampler sampler, int width, int height,
+                                                 std::uint64_t incarnation = 0);
     void SetTextureDebugName(Rml::TextureHandle texture_handle, std::string_view debug_name) const;
 
     struct VmaStatistics {
@@ -436,7 +440,6 @@ private:
 
         void Free_Allocation(VmaVirtualAllocation allocation) noexcept;
         void Free_GeometryHandle(geometry_handle_t* p_valid_geometry_handle) noexcept;
-        void Free_GeometryHandle_ShaderDataOnly(geometry_handle_t* p_valid_geometry_handle) noexcept;
 
     private:
         VkDeviceSize m_memory_total_size;

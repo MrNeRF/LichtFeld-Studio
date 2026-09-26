@@ -1,11 +1,12 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/path_utils.hpp"
+#include "core/project_path.hpp"
 #include "core/uuid.hpp"
 #include "io/project/crc32c.hpp"
 #include "io/project/project_container_internal.hpp"
 #include "io/project_container.hpp"
-#include "io/project_path.hpp"
 #include "io/project_recovery.hpp"
 #include "licht_test_support.hpp"
 
@@ -2865,7 +2866,7 @@ namespace {
                 writer, cycle);
             require_status(writer.commit());
 
-            const auto current_autosave =
+            const std::uint64_t current_autosave =
                 fs::file_size(sidecar);
             autosave_min =
                 std::min(
@@ -3423,6 +3424,63 @@ namespace {
         EXPECT_FALSE(fs::exists(backup_temp));
     }
 
+    TEST(ProjectContainerWriter, ActiveAutosaveWriteTempSurvivesRecoverySweep) {
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "active-autosave.licht";
+        create_single_chunk_fixture(
+            master, 1033, 1034, 1035, fixed_key("PROJ", 1036),
+            R"({"master":"active-autosave"})");
+        ProjectReader base = require_result(ProjectReader::open(master));
+        const fs::path sidecar = autosave_sidecar_path(master);
+        const auto snapshot_uuid = fixed_uuid(1037);
+        ProjectWriter writer = require_result(ProjectWriter::create(
+            sidecar,
+            CreateOptions{
+                .project_uuid = base.superblock().project_uuid,
+                .file_uuid = fixed_uuid(1038),
+                .role = ContainerRole::AutosaveSidecar,
+                .base_explicit_commit_uuid = base.commit().commit_uuid,
+                .autosave_sequence = 1,
+                .sidecar_snapshot_uuid = snapshot_uuid,
+                .creation_time_unix_ns = FIXED_CREATION_TIME_NS + 1,
+                .index_compression =
+                    IndexCompression::StoredForDeterministicTests,
+                .disk_reserve_bytes = 0,
+                .writer_lock_anchor = master,
+            }));
+
+        fs::path active_temp;
+        for (const auto& entry : fs::directory_iterator(temporary.path)) {
+            const auto name = entry.path().filename().string();
+            if (name.find(".project-write.") != std::string::npos &&
+                name.ends_with(".tmp.autosave")) {
+                active_temp = entry.path();
+                break;
+            }
+        }
+        ASSERT_FALSE(active_temp.empty());
+        ASSERT_TRUE(fs::is_regular_file(active_temp));
+
+        RecoveryInspection sweep;
+        sweep_orphan_project_artifacts(sidecar, sweep);
+        EXPECT_TRUE(fs::is_regular_file(active_temp));
+        EXPECT_TRUE(sweep.deleted_paths.empty());
+
+        auto commit = fixture_commit_options(1039, 1037, 1);
+        commit.kind = CommitKind::Autosave;
+        commit.snapshot_uuid = snapshot_uuid;
+        require_status(writer.plan_commit(commit));
+        require_status(writer.preflight(0));
+        for (const ChunkInfo& row : base.chunks()) {
+            if (row.row_kind == RowKind::Live) {
+                require_status(writer.add_sidecar_base_reference(row));
+            }
+        }
+        require_status(writer.commit());
+        EXPECT_TRUE(fs::is_regular_file(sidecar));
+        EXPECT_FALSE(fs::exists(active_temp));
+    }
+
     TEST(ProjectContainerWriter, InspectPrunesCorruptAsidesToNewestThree) {
         // Would fail if .corrupt-* asides grew without a per-stem cap.
         TemporaryDirectory temporary;
@@ -3802,8 +3860,8 @@ namespace {
         for (const auto& row : rows) {
             SCOPED_TRACE(row.relative);
             const fs::path path = parent / row.relative;
-            EXPECT_EQ(isPublishedLichtPath(path), row.published);
-            const auto derived = derivedPublishedMasterPath(path);
+            EXPECT_EQ(lfs::core::project::isPublishedLichtPath(path), row.published);
+            const auto derived = lfs::core::project::derivedPublishedMasterPath(path);
             if (row.derived == nullptr) {
                 EXPECT_FALSE(derived.has_value());
             } else {
@@ -3811,6 +3869,25 @@ namespace {
                 EXPECT_EQ(derived->filename(), fs::path(row.derived));
             }
         }
+    }
+
+    TEST(ProjectPathTest, UnicodeNamesPreservePublishedAndRecoveryPaths) {
+        const fs::path parent{"/tmp/licht-path-unicode"};
+        const auto published_name = lfs::core::utf8_to_path("\u9879\u76ee_\u00e8.licht");
+        const auto temporary_name = lfs::core::utf8_to_path(
+            "\u9879\u76ee_\u00e8.project-write.1.2.3.tmp.licht");
+        const auto published = parent / published_name;
+        const auto temporary = parent / temporary_name;
+
+        EXPECT_TRUE(lfs::core::project::isPublishedLichtPath(published));
+        EXPECT_FALSE(lfs::core::project::isPublishedLichtPath(temporary));
+
+        const auto derived = lfs::core::project::derivedPublishedMasterPath(temporary);
+        ASSERT_TRUE(derived.has_value());
+        EXPECT_EQ(*derived, published);
+
+        const auto message = lfs::core::project::unpublishedLichtUserMessage(temporary);
+        EXPECT_NE(message.find(lfs::core::path_to_generic_utf8(published)), std::string::npos);
     }
 
 } // namespace

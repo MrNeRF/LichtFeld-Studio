@@ -5,20 +5,37 @@
 #include "core/camera.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
+#if LFS_HAS_CUDA
 #include "core/cuda_error_typed.hpp"
+#endif
 #include "core/image_io.hpp"
 #include "core/image_loader.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
+#include "core/tensor_backend.hpp"
+#if LFS_HAS_CUDA
+#include "core/tensor_cuda_interop.hpp"
+#endif
 #include <algorithm>
 #include <array>
 #include <cassert>
+#if LFS_HAS_CUDA
 #include <cuda_runtime.h>
+#endif
 #include <format>
 #include <stdexcept>
 
 namespace lfs::core {
+    // Host data uploaded on a CUDA stream must land before its source is freed;
+    // the other backends copy synchronously.
+    static void finish_upload([[maybe_unused]] cudaStream_t stream, [[maybe_unused]] const char* what) {
+#if LFS_HAS_CUDA
+        if (stream) {
+            LFS_CUDA_TRY(cudaStreamSynchronize(stream), stream, what);
+        }
+#endif
+    }
+
     static Tensor world_to_view(const Tensor& R, const Tensor& t) {
         // Create 4x4 identity matrix
         auto w2c = Tensor::eye(4, R.device());
@@ -44,8 +61,8 @@ namespace lfs::core {
             w2c_acc(i, 3) = t_acc(i);
         }
 
-        // Return as [1, 4, 4] on CUDA
-        return w2c_cpu.to(Device::CUDA).unsqueeze(0).contiguous();
+        // Return as [1, 4, 4] on GPU
+        return w2c_cpu.to(Device::GPU).unsqueeze(0).contiguous();
     }
 
     static std::array<float, 9> camera_rotation_to_cpu_array(const Tensor& R) {
@@ -131,10 +148,16 @@ namespace lfs::core {
         auto R_T = R_part.transpose(0, 1);
         auto cam_pos = R_T.matmul(t_part.unsqueeze(1)).squeeze(1).neg();
 
-        _cam_position = cam_pos.to(Device::CUDA).contiguous();
+        _cam_position = cam_pos.to(Device::GPU).contiguous();
 
         _FoVx = focal2fov(_focal_x, _camera_width);
         _FoVy = focal2fov(_focal_y, _camera_height);
+
+#if LFS_HAS_CUDA
+        // Camera metadata and Vulkan viewing do not need a CUDA image stream.
+        if (default_gpu_backend() != GpuBackend::CUDA || !gpu_backend_available(GpuBackend::CUDA)) {
+            return;
+        }
 
         // Non-blocking so image loading doesn't serialize with the legacy stream.
         // On failure fall back to the default stream rather than a bad handle.
@@ -158,15 +181,18 @@ namespace lfs::core {
                 stream_create_site);
             _stream = nullptr;
         }
+#endif
     }
 
     Camera::~Camera() {
+#if LFS_HAS_CUDA
         // Destroy CUDA stream if it was created
         if (_stream) {
-            CudaMemoryPool::instance().release_stream(_stream);
+            release_cuda_stream(_stream);
             LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(_stream), _stream, "camera stream teardown");
             _stream = nullptr;
         }
+#endif
     }
 
     Camera::Camera(Camera&& other) noexcept
@@ -198,6 +224,12 @@ namespace lfs::core {
           _cam_position(std::move(other._cam_position)),
           _cached_mask(std::move(other._cached_mask)),
           _mask_loaded(other._mask_loaded),
+          _cached_mask_resize_factor(other._cached_mask_resize_factor),
+          _cached_mask_max_width(other._cached_mask_max_width),
+          _cached_mask_invert(other._cached_mask_invert),
+          _cached_mask_threshold(other._cached_mask_threshold),
+          _cached_mask_binarize(other._cached_mask_binarize),
+          _cached_mask_undistort_prepared(other._cached_mask_undistort_prepared),
           _in_memory_mask_raw(std::move(other._in_memory_mask_raw)),
           _cached_depth(std::move(other._cached_depth)),
           _depth_loaded(other._depth_loaded),
@@ -220,11 +252,13 @@ namespace lfs::core {
 
     Camera& Camera::operator=(Camera&& other) noexcept {
         if (this != &other) {
+#if LFS_HAS_CUDA
             // Destroy our current stream
             if (_stream) {
-                CudaMemoryPool::instance().release_stream(_stream);
+                release_cuda_stream(_stream);
                 LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(_stream), _stream, "camera stream teardown");
             }
+#endif
 
             // Move all members
             _FoVx = other._FoVx;
@@ -255,6 +289,12 @@ namespace lfs::core {
             _cam_position = std::move(other._cam_position);
             _cached_mask = std::move(other._cached_mask);
             _mask_loaded = other._mask_loaded;
+            _cached_mask_resize_factor = other._cached_mask_resize_factor;
+            _cached_mask_max_width = other._cached_mask_max_width;
+            _cached_mask_invert = other._cached_mask_invert;
+            _cached_mask_threshold = other._cached_mask_threshold;
+            _cached_mask_binarize = other._cached_mask_binarize;
+            _cached_mask_undistort_prepared = other._cached_mask_undistort_prepared;
             _in_memory_mask_raw = std::move(other._in_memory_mask_raw);
             _cached_depth = std::move(other._cached_depth);
             _depth_loaded = other._depth_loaded;
@@ -308,6 +348,11 @@ namespace lfs::core {
         _world_view_transform = transform;
         _sfm_observations = other._sfm_observations;
 
+#if LFS_HAS_CUDA
+        if (default_gpu_backend() != GpuBackend::CUDA || !gpu_backend_available(GpuBackend::CUDA)) {
+            return;
+        }
+
         // Non-blocking so image loading doesn't serialize with the legacy stream.
         // On failure fall back to the default stream rather than a bad handle.
         // log_cuda_teardown_failure is the frozen no-throw log-and-continue adapter.
@@ -330,7 +375,21 @@ namespace lfs::core {
                 stream_create_site);
             _stream = nullptr;
         }
+#endif
     }
+
+    void Camera::to_backend(const GpuBackend backend) {
+        for (auto* tensor : {&_R, &_T, &_radial_distortion, &_tangential_distortion,
+                             &_world_view_transform, &_cam_position, &_cached_mask,
+                             &_in_memory_mask_raw, &_cached_depth, &_cached_normal}) {
+            if (tensor->is_valid() && tensor->device() == Device::GPU &&
+                gpu_backend_of(*tensor) != backend) {
+                auto migrated = (*tensor).to(backend);
+                std::swap(*tensor, migrated);
+            }
+        }
+    }
+
     Tensor Camera::K() const {
         // Create [1, 3, 3] zero matrix on same device as world_view_transform
         auto K = Tensor::zeros({1, 3, 3}, _world_view_transform.device());
@@ -379,11 +438,9 @@ namespace lfs::core {
             _image_size_loaded = true;
         }
 
-        if (image.device() != Device::CUDA) {
-            image = image.to(Device::CUDA, _stream);
-            if (_stream) {
-                LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "image upload sync");
-            }
+        if (image.device() != Device::GPU) {
+            image = image.to(Device::GPU, _stream);
+            finish_upload(_stream, "image upload sync");
         }
 
         return image;
@@ -527,7 +584,13 @@ namespace lfs::core {
     Tensor Camera::load_and_get_mask(const int resize_factor, const int max_width,
                                      const bool invert_mask, const float mask_threshold,
                                      const bool binarize) {
-        if (_mask_loaded && _cached_mask.is_valid()) {
+        if (_mask_loaded && _cached_mask.is_valid() &&
+            _cached_mask_resize_factor == resize_factor &&
+            _cached_mask_max_width == max_width &&
+            _cached_mask_invert == invert_mask &&
+            _cached_mask_threshold == mask_threshold &&
+            _cached_mask_binarize == binarize &&
+            _cached_mask_undistort_prepared == _undistort_prepared) {
             return _cached_mask;
         }
 
@@ -537,11 +600,9 @@ namespace lfs::core {
             // at the image's on-disk resolution; further resize_factor /
             // max_width handling is the trainer's responsibility upstream.
             mask = _in_memory_mask_raw;
-            if (mask.device() != Device::CUDA) {
-                mask = mask.to(Device::CUDA, _stream);
-                if (_stream) {
-                    LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "mask upload sync");
-                }
+            if (mask.device() != Device::GPU) {
+                mask = mask.to(Device::GPU, _stream);
+                finish_upload(_stream, "mask upload sync");
             }
             if (mask.dtype() == DataType::UInt8) {
                 mask = mask.to(DataType::Float32).div(255.0f);
@@ -563,11 +624,9 @@ namespace lfs::core {
 
             mask = load_image_cached(params);
 
-            if (mask.device() != Device::CUDA) {
-                mask = mask.to(Device::CUDA, _stream);
-                if (_stream) {
-                    LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "mask upload sync");
-                }
+            if (mask.device() != Device::GPU) {
+                mask = mask.to(Device::GPU, _stream);
+                finish_upload(_stream, "mask upload sync");
             }
 
             // Convert RGB [C,H,W] to grayscale [H,W]
@@ -596,17 +655,27 @@ namespace lfs::core {
             const auto scaled = scale_undistort_params(
                 _undistort_params,
                 static_cast<int>(mask.shape()[1]),
-                static_cast<int>(mask.shape()[0]));
+                static_cast<int>(mask.shape()[0]),
+                max_width);
             mask = undistort_mask(mask, scaled, _stream);
         }
 
         if (binarize) {
             mask = mask.ge(0.5f).to(DataType::UInt8).contiguous();
         } else {
-            mask = (mask * 255.f).to(DataType::UInt8).contiguous();
+            // Keep Float32 [0,1] so undistorted samples match the pipelined
+            // loader / fused-kernel domain (kMaskKeepMin). Rounding through
+            // UInt8 truncates interpolated values such as 250.6 → 250.
+            mask = mask.contiguous();
         }
         _cached_mask = mask;
         _mask_loaded = true;
+        _cached_mask_resize_factor = resize_factor;
+        _cached_mask_max_width = max_width;
+        _cached_mask_invert = invert_mask;
+        _cached_mask_threshold = mask_threshold;
+        _cached_mask_binarize = binarize;
+        _cached_mask_undistort_prepared = _undistort_prepared;
 
         LOG_DEBUG("Loaded mask for {}: [{},{}]", _image_name, mask.shape()[0], mask.shape()[1]);
 
@@ -628,10 +697,8 @@ namespace lfs::core {
                 gray,
                 TensorShape({static_cast<size_t>(native_h), static_cast<size_t>(native_w)}),
                 Device::CPU, DataType::Float32);
-            depth = cpu_depth.to(Device::CUDA, _stream);
-            if (_stream) {
-                LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "depth upload sync");
-            }
+            depth = cpu_depth.to(Device::GPU, _stream);
+            finish_upload(_stream, "depth upload sync");
             free_image_float(gray);
         } else {
             const ImageLoadParams params{
@@ -640,11 +707,9 @@ namespace lfs::core {
 
             depth = load_image_cached(params);
 
-            if (depth.device() != Device::CUDA) {
-                depth = depth.to(Device::CUDA, _stream);
-                if (_stream) {
-                    LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "depth upload sync");
-                }
+            if (depth.device() != Device::GPU) {
+                depth = depth.to(Device::GPU, _stream);
+                finish_upload(_stream, "depth upload sync");
             }
 
             if (depth.dtype() == DataType::UInt8) {
@@ -674,7 +739,8 @@ namespace lfs::core {
             const auto scaled = scale_undistort_params(
                 _undistort_params,
                 static_cast<int>(depth.shape()[1]),
-                static_cast<int>(depth.shape()[0]));
+                static_cast<int>(depth.shape()[0]),
+                max_width);
             depth = undistort_mask(depth, scaled, _stream);
         }
 
@@ -702,10 +768,8 @@ namespace lfs::core {
                 rgb,
                 TensorShape({static_cast<size_t>(native_h), static_cast<size_t>(native_w), 3}),
                 Device::CPU, DataType::Float32);
-            normal = cpu_normal.to(Device::CUDA, _stream);
-            if (_stream) {
-                LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "normal upload sync");
-            }
+            normal = cpu_normal.to(Device::GPU, _stream);
+            finish_upload(_stream, "normal upload sync");
             free_image_float(rgb);
             normal = normal.permute({2, 0, 1}).contiguous();
         } else {
@@ -715,11 +779,9 @@ namespace lfs::core {
 
             normal = load_image_cached(params);
 
-            if (normal.is_valid() && normal.device() != Device::CUDA) {
-                normal = normal.to(Device::CUDA, _stream);
-                if (_stream) {
-                    LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "normal upload sync");
-                }
+            if (normal.is_valid() && normal.device() != Device::GPU) {
+                normal = normal.to(Device::GPU, _stream);
+                finish_upload(_stream, "normal upload sync");
             }
             if (normal.is_valid()) {
                 if (normal.dtype() == DataType::UInt8) {
@@ -775,10 +837,8 @@ namespace lfs::core {
                     pixel_count,
                     world_to_camera);
             }
-            normal = normal_cpu.to(Device::CUDA, _stream);
-            if (_stream) {
-                LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "normal upload sync");
-            }
+            normal = normal_cpu.to(Device::GPU, _stream);
+            finish_upload(_stream, "normal upload sync");
         }
 
         if (!_image_size_loaded)
@@ -789,7 +849,8 @@ namespace lfs::core {
             const auto scaled = scale_undistort_params(
                 _undistort_params,
                 static_cast<int>(normal.shape()[2]),
-                static_cast<int>(normal.shape()[1]));
+                static_cast<int>(normal.shape()[1]),
+                max_width);
             normal = undistort_image(normal, scaled, _stream);
             normal = resize_normal_prior(normal.contiguous(), normal.shape()[1], normal.shape()[2], _stream);
         }
@@ -871,7 +932,7 @@ namespace lfs::core {
 
         _T = Tensor::from_vector(T_new, {3}, Device::CPU);
         _world_view_transform = world_to_view(_R, _T);
-        _cam_position = _cam_position + trans.to(Device::CUDA).contiguous();
+        _cam_position = _cam_position + trans.to(Device::GPU).contiguous();
         for (auto& observation : _sfm_observations) {
             observation.x += t_acc(0);
             observation.y += t_acc(1);

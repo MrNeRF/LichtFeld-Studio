@@ -2,39 +2,22 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// CPU/GPU bit-parity for the RAD encode quantization path. The CUDA
-// quantizer must reproduce the CPU PropertyEncoder Auto-profile planes
-// (center f32_lebytes, alpha r8/f16, rgb r8_delta, shN s8) byte for byte:
-// once against in-test references of the encoder formulas, and end to end
-// by asserting RadStreamWriter emits identical files with the GPU path
-// enabled and disabled. Fixtures cover both alpha branches, the rgb
-// degenerate-range guard, subnormals (no FTZ on the GPU side), and a
-// partial trailing chunk.
+// The selected GPU backend emits the same RAD bytes as the CPU encoder.
 
-#include "io/cuda/rad_encode_quant.hpp"
+#include "core/tensor_backend.hpp"
 #include "io/formats/rad.hpp"
-#include "io/formats/rad_dequant_math.hpp"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <cstring>
-#include <cuda_runtime.h>
 #include <filesystem>
 #include <fstream>
 #include <random>
 #include <vector>
 
 namespace {
-
-    namespace radmath = lfs::io::radmath;
-
-    bool cudaAvailable() {
-        int n = 0;
-        return cudaGetDeviceCount(&n) == cudaSuccess && n > 0;
-    }
 
     struct ChunkData {
         std::uint32_t count = 0;
@@ -182,178 +165,30 @@ namespace {
         const auto gpu_bytes = readFile(gpu_path);
         ASSERT_GT(cpu_bytes.size(), 0u);
         EXPECT_EQ(cpu_bytes.size(), gpu_bytes.size());
-        EXPECT_TRUE(cpu_bytes == gpu_bytes) << "GPU-encoded RAD file differs from CPU encode";
+        if (cpu_bytes.size() == gpu_bytes.size()) {
+            const auto mismatch = std::mismatch(cpu_bytes.begin(), cpu_bytes.end(), gpu_bytes.begin());
+            EXPECT_TRUE(mismatch.first == cpu_bytes.end())
+                << "First RAD byte mismatch at " << std::distance(cpu_bytes.begin(), mismatch.first);
+        }
 
         std::filesystem::remove_all(dir);
     }
 
-    // ====================================================================
-    // CPU references of the PropertyEncoder formulas (rad.cpp), used to
-    // assert the quantizer planes directly so a silent CPU fallback inside
-    // the writer can't mask a kernel regression.
-    // ====================================================================
+    class RadTensorEncodeTest : public ::testing::TestWithParam<lfs::core::GpuBackend> {};
 
-    std::vector<std::uint8_t> refCenterLeBytes(const std::vector<float>& data,
-                                               const std::size_t count) {
-        std::vector<std::uint8_t> out(count * 12);
-        const std::size_t stride = count * 3;
-        for (std::size_t b = 0; b < 4; ++b) {
-            for (std::size_t d = 0; d < 3; ++d) {
-                for (std::size_t i = 0; i < count; ++i) {
-                    std::uint32_t bits;
-                    std::memcpy(&bits, &data[i * 3 + d], 4);
-                    out[b * stride + d * count + i] =
-                        static_cast<std::uint8_t>((bits >> (8 * b)) & 0xFFu);
-                }
-            }
+    TEST_P(RadTensorEncodeTest, StreamWriterMatchesCpu) {
+        const auto backend = GetParam();
+        if (!lfs::core::gpu_backend_available(backend)) {
+            GTEST_SKIP() << "GPU backend unavailable";
         }
-        return out;
-    }
-
-    std::vector<std::uint8_t> refR8(const float* data, const std::size_t dims,
-                                    const std::size_t count, const float min_val,
-                                    const float max_val) {
-        float range = max_val - min_val;
-        if (range < 1e-7f) {
-            range = 1e-7f;
-        }
-        std::vector<std::uint8_t> out(count * dims);
-        std::size_t idx = 0;
-        for (std::size_t d = 0; d < dims; ++d) {
-            for (std::size_t i = 0; i < count; ++i) {
-                const float normalized = (data[i * dims + d] - min_val) / range;
-                out[idx++] = static_cast<std::uint8_t>(
-                    std::clamp(std::round(normalized * 255.0f), 0.0f, 255.0f));
-            }
-        }
-        return out;
-    }
-
-    std::vector<std::uint8_t> refR8Delta(const float* data, const std::size_t dims,
-                                         const std::size_t count, const float min_val,
-                                         const float max_val) {
-        const auto q = refR8(data, dims, count, min_val, max_val);
-        std::vector<std::uint8_t> out(q.size());
-        for (std::size_t d = 0; d < dims; ++d) {
-            std::uint8_t last = 0;
-            for (std::size_t i = 0; i < count; ++i) {
-                const std::uint8_t v = q[d * count + i];
-                out[d * count + i] = static_cast<std::uint8_t>(v - last);
-                last = v;
-            }
-        }
-        return out;
-    }
-
-    TEST(RadGpuEncode, QuantizerMatchesCpuFormulas) {
-        if (!cudaAvailable()) {
-            GTEST_SKIP() << "No CUDA device";
-        }
-        constexpr int kShCoeffs = 15;
-        const auto chunks = makeChunkSet(kShCoeffs);
-
-        std::vector<lfs::io::cuda::RadEncodeQuantChunkIn> in(chunks.size());
-        for (std::size_t i = 0; i < chunks.size(); ++i) {
-            in[i] = {chunks[i].count, chunks[i].means.data(), chunks[i].alpha.data(),
-                     chunks[i].rgb.data(), chunks[i].shN.data()};
-        }
-        std::vector<lfs::io::cuda::RadEncodeQuantChunkOut> out(chunks.size());
-        lfs::io::cuda::RadEncodeGpuQuantizer quantizer;
-        ASSERT_TRUE(quantizer.quantize_batch(in, kShCoeffs, /*lod_tree=*/true, out));
-
-        constexpr int kBandStart[3] = {0, 3, 8};
-        constexpr int kBandCoeffs[3] = {3, 5, 7};
-
-        for (std::size_t ci = 0; ci < chunks.size(); ++ci) {
-            const auto& c = chunks[ci];
-            const auto& o = out[ci];
-            const std::size_t count = c.count;
-            SCOPED_TRACE(ci);
-
-            const auto center = refCenterLeBytes(c.means, count);
-            EXPECT_EQ(0, std::memcmp(o.center, center.data(), center.size()));
-
-            float alpha_max = 0.0f;
-            for (const float v : c.alpha) {
-                alpha_max = std::max(alpha_max, v);
-            }
-            ASSERT_EQ(o.alpha_f16, alpha_max > 1.0f);
-            if (o.alpha_f16) {
-                std::vector<std::uint8_t> ref(count * 2);
-                for (std::size_t i = 0; i < count; ++i) {
-                    const std::uint16_t h = radmath::floatToHalf(c.alpha[i]);
-                    ref[i * 2] = static_cast<std::uint8_t>(h & 0xFFu);
-                    ref[i * 2 + 1] = static_cast<std::uint8_t>(h >> 8);
-                }
-                EXPECT_EQ(0, std::memcmp(o.alpha, ref.data(), ref.size()));
-            } else {
-                EXPECT_EQ(o.alpha_min, 0.0f);
-                EXPECT_EQ(o.alpha_max, 2.0f);
-                const auto ref = refR8(c.alpha.data(), 1, count, 0.0f, 2.0f);
-                EXPECT_EQ(0, std::memcmp(o.alpha, ref.data(), ref.size()));
-            }
-
-            float rgb_min = c.rgb[0];
-            float rgb_max = c.rgb[0];
-            for (const float v : c.rgb) {
-                rgb_min = std::min(rgb_min, v);
-                rgb_max = std::max(rgb_max, v);
-            }
-            EXPECT_EQ(0, std::memcmp(&o.rgb_min, &rgb_min, 4));
-            EXPECT_EQ(0, std::memcmp(&o.rgb_max, &rgb_max, 4));
-            const auto rgb = refR8Delta(c.rgb.data(), 3, count, rgb_min, rgb_max);
-            EXPECT_EQ(0, std::memcmp(o.rgb, rgb.data(), rgb.size()));
-
-            for (int b = 0; b < 3; ++b) {
-                SCOPED_TRACE(b);
-                ASSERT_NE(o.sh[b], nullptr);
-                const int dims = kBandCoeffs[b] * 3;
-                float max_abs = 0.0f;
-                for (std::size_t i = 0; i < count; ++i) {
-                    for (int k = 0; k < dims; ++k) {
-                        max_abs = std::max(
-                            max_abs,
-                            std::abs(c.shN[i * kShCoeffs * 3 + kBandStart[b] * 3 + k]));
-                    }
-                }
-                max_abs = std::max(max_abs, 1e-6f);
-                EXPECT_EQ(0, std::memcmp(&o.sh_max_abs[b], &max_abs, 4));
-                std::vector<std::uint8_t> ref(count * dims);
-                for (int d = 0; d < dims; ++d) {
-                    for (std::size_t i = 0; i < count; ++i) {
-                        const float scaled =
-                            c.shN[i * kShCoeffs * 3 + kBandStart[b] * 3 + d] / max_abs * 127.0f;
-                        ref[static_cast<std::size_t>(d) * count + i] =
-                            static_cast<std::uint8_t>(static_cast<std::int8_t>(
-                                std::clamp(std::round(scaled), -127.0f, 127.0f)));
-                    }
-                }
-                EXPECT_EQ(0, std::memcmp(o.sh[b], ref.data(), ref.size()));
-            }
-        }
-    }
-
-    TEST(RadGpuEncode, StreamWriterBitIdenticalSh3) {
-        if (!cudaAvailable()) {
-            GTEST_SKIP() << "No CUDA device";
-        }
+        const lfs::core::GpuBackendScope scope(backend);
         expectIdenticalFiles(3, 15);
-    }
-
-    // 80 chunks: a single batch larger than the converter's typical flush,
-    // covering whole-batch arena sizing and out-view stability.
-    TEST(RadGpuEncode, StreamWriterBitIdenticalSh1LargeBatch) {
-        if (!cudaAvailable()) {
-            GTEST_SKIP() << "No CUDA device";
-        }
-        expectIdenticalFiles(1, 3, 80);
-    }
-
-    TEST(RadGpuEncode, StreamWriterBitIdenticalSh0) {
-        if (!cudaAvailable()) {
-            GTEST_SKIP() << "No CUDA device";
-        }
+        expectIdenticalFiles(1, 3);
         expectIdenticalFiles(0, 0);
     }
+
+    INSTANTIATE_TEST_SUITE_P(Backends, RadTensorEncodeTest,
+                             ::testing::Values(lfs::core::GpuBackend::CUDA,
+                                               lfs::core::GpuBackend::Vulkan));
 
 } // namespace

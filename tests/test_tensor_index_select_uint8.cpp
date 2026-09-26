@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
@@ -51,10 +52,14 @@ namespace {
 
 } // namespace
 
-class TensorIndexSelectUInt8Test : public ::testing::Test {
+class TensorIndexSelectUInt8Test : public lfs::test::CudaDeviceTest {
 protected:
     void SetUp() override {
-        ASSERT_TRUE(Tensor::zeros({1}, Device::CUDA).is_valid());
+        CudaDeviceTest::SetUp();
+        if (IsSkipped()) {
+            return;
+        }
+        ASSERT_TRUE(Tensor::zeros({1}, Device::GPU).is_valid());
     }
 };
 
@@ -62,7 +67,7 @@ protected:
 
 TEST_F(TensorIndexSelectUInt8Test, Basic_1D_CUDA) {
     // Create UInt8 data
-    auto data = Tensor::zeros({10}, Device::CUDA, DataType::UInt8);
+    auto data = Tensor::zeros({10}, Device::GPU, DataType::UInt8);
     auto data_cpu = data.cpu();
     auto* p = data_cpu.ptr<uint8_t>();
     for (int i = 0; i < 10; ++i)
@@ -70,7 +75,7 @@ TEST_F(TensorIndexSelectUInt8Test, Basic_1D_CUDA) {
     data = data_cpu.cuda();
 
     // Create indices
-    auto indices = Tensor::from_vector(std::vector<int>{0, 2, 4, 6, 8}, {5}, Device::CUDA);
+    auto indices = Tensor::from_vector(std::vector<int>{0, 2, 4, 6, 8}, {5}, Device::GPU);
 
     // Select
     auto result = data.index_select(0, indices);
@@ -89,7 +94,7 @@ TEST_F(TensorIndexSelectUInt8Test, Basic_1D_CUDA) {
 
 TEST_F(TensorIndexSelectUInt8Test, Basic_2D_CUDA) {
     // Create UInt8 [4, 3] tensor (like colors)
-    auto data = Tensor::zeros({4, 3}, Device::CUDA, DataType::UInt8);
+    auto data = Tensor::zeros({4, 3}, Device::GPU, DataType::UInt8);
     auto data_cpu = data.cpu();
     auto* p = data_cpu.ptr<uint8_t>();
     for (int i = 0; i < 12; ++i)
@@ -97,7 +102,7 @@ TEST_F(TensorIndexSelectUInt8Test, Basic_2D_CUDA) {
     data = data_cpu.cuda();
 
     // Select rows 0 and 2
-    auto indices = Tensor::from_vector(std::vector<int>{0, 2}, {2}, Device::CUDA);
+    auto indices = Tensor::from_vector(std::vector<int>{0, 2}, {2}, Device::GPU);
     auto result = data.index_select(0, indices);
 
     ASSERT_EQ(result.size(0), 2);
@@ -133,8 +138,8 @@ TEST_F(TensorIndexSelectUInt8Test, Basic_CPU) {
 }
 
 TEST_F(TensorIndexSelectUInt8Test, EmptyIndices) {
-    auto data = Tensor::zeros({10, 3}, Device::CUDA, DataType::UInt8);
-    auto indices = Tensor::empty({0}, Device::CUDA, DataType::Int32);
+    auto data = Tensor::zeros({10, 3}, Device::GPU, DataType::UInt8);
+    auto indices = Tensor::empty({0}, Device::GPU, DataType::Int32);
     auto result = data.index_select(0, indices);
 
     ASSERT_EQ(result.size(0), 0);
@@ -142,14 +147,14 @@ TEST_F(TensorIndexSelectUInt8Test, EmptyIndices) {
 }
 
 TEST_F(TensorIndexSelectUInt8Test, SelectAll) {
-    auto data = Tensor::zeros({5, 3}, Device::CUDA, DataType::UInt8);
+    auto data = Tensor::zeros({5, 3}, Device::GPU, DataType::UInt8);
     auto data_cpu = data.cpu();
     auto* p = data_cpu.ptr<uint8_t>();
     for (int i = 0; i < 15; ++i)
         p[i] = static_cast<uint8_t>(i);
     data = data_cpu.cuda();
 
-    auto indices = Tensor::from_vector(std::vector<int>{0, 1, 2, 3, 4}, {5}, Device::CUDA);
+    auto indices = Tensor::from_vector(std::vector<int>{0, 1, 2, 3, 4}, {5}, Device::GPU);
     auto result = data.index_select(0, indices);
 
     ASSERT_EQ(result.numel(), data.numel());
@@ -165,7 +170,7 @@ TEST_F(TensorIndexSelectUInt8Test, SelectAll) {
 TEST_F(TensorIndexSelectUInt8Test, VsTorch_1D) {
     // Create matching data in torch and lfs
     auto t_data = torch::arange(256, torch::kUInt8).cuda();
-    auto lfs_data = Tensor::zeros({256}, Device::CUDA, DataType::UInt8);
+    auto lfs_data = Tensor::zeros({256}, Device::GPU, DataType::UInt8);
     auto lfs_cpu = lfs_data.cpu();
     auto* p = lfs_cpu.ptr<uint8_t>();
     for (int i = 0; i < 256; ++i)
@@ -174,7 +179,7 @@ TEST_F(TensorIndexSelectUInt8Test, VsTorch_1D) {
 
     // Indices
     auto t_indices = torch::tensor({0, 50, 100, 150, 200, 255}, torch::kLong).cuda();
-    auto lfs_indices = Tensor::from_vector(std::vector<int>{0, 50, 100, 150, 200, 255}, {6}, Device::CUDA);
+    auto lfs_indices = Tensor::from_vector(std::vector<int>{0, 50, 100, 150, 200, 255}, {6}, Device::GPU);
 
     // Select
     auto t_result = torch::index_select(t_data, 0, t_indices);
@@ -188,14 +193,14 @@ TEST_F(TensorIndexSelectUInt8Test, VsTorch_2D_RowSelect) {
     constexpr int N = 100;
     auto t_data = torch::randint(0, 256, {N, 3}, torch::kUInt8).cuda();
 
-    auto lfs_data = Tensor::zeros({N, 3}, Device::CUDA, DataType::UInt8);
+    auto lfs_data = Tensor::zeros({N, 3}, Device::GPU, DataType::UInt8);
     auto t_cpu = t_data.cpu().contiguous();
-    cudaMemcpy(lfs_data.data_ptr(), t_cpu.data_ptr<uint8_t>(), N * 3, cudaMemcpyHostToDevice);
+    lfs_data = Tensor::from_blob(t_cpu.data_ptr<uint8_t>(), lfs_data.shape(), Device::CPU, DataType::UInt8).to(Device::GPU);
 
     // Random indices
     std::vector<int> idx_vec = {0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 99};
     auto t_indices = torch::tensor(std::vector<int64_t>(idx_vec.begin(), idx_vec.end()), torch::kLong).cuda();
-    auto lfs_indices = Tensor::from_vector(idx_vec, {idx_vec.size()}, Device::CUDA);
+    auto lfs_indices = Tensor::from_vector(idx_vec, {idx_vec.size()}, Device::GPU);
 
     auto t_result = torch::index_select(t_data, 0, t_indices);
     auto lfs_result = lfs_data.index_select(0, lfs_indices);
@@ -208,9 +213,9 @@ TEST_F(TensorIndexSelectUInt8Test, VsTorch_LargeScale) {
     constexpr int N = 100000;
     auto t_data = torch::randint(0, 256, {N, 3}, torch::kUInt8).cuda();
 
-    auto lfs_data = Tensor::zeros({N, 3}, Device::CUDA, DataType::UInt8);
+    auto lfs_data = Tensor::zeros({N, 3}, Device::GPU, DataType::UInt8);
     auto t_cpu = t_data.cpu().contiguous();
-    cudaMemcpy(lfs_data.data_ptr(), t_cpu.data_ptr<uint8_t>(), N * 3, cudaMemcpyHostToDevice);
+    lfs_data = Tensor::from_blob(t_cpu.data_ptr<uint8_t>(), lfs_data.shape(), Device::CPU, DataType::UInt8).to(Device::GPU);
 
     // Select every 10th point
     std::vector<int> idx_vec;
@@ -218,7 +223,7 @@ TEST_F(TensorIndexSelectUInt8Test, VsTorch_LargeScale) {
         idx_vec.push_back(i);
 
     auto t_indices = torch::tensor(std::vector<int64_t>(idx_vec.begin(), idx_vec.end()), torch::kLong).cuda();
-    auto lfs_indices = Tensor::from_vector(idx_vec, {idx_vec.size()}, Device::CUDA);
+    auto lfs_indices = Tensor::from_vector(idx_vec, {idx_vec.size()}, Device::GPU);
 
     auto t_result = torch::index_select(t_data, 0, t_indices);
     auto lfs_result = lfs_data.index_select(0, lfs_indices);
@@ -238,8 +243,8 @@ TEST_F(TensorIndexSelectUInt8Test, PointCloudCroppingPipeline_Basic) {
     constexpr size_t N = 1000;
 
     // Create means [N, 3] and colors [N, 3]
-    auto means = Tensor::randn({N, 3}, Device::CUDA);
-    auto colors = Tensor::zeros({N, 3}, Device::CUDA, DataType::UInt8);
+    auto means = Tensor::randn({N, 3}, Device::GPU);
+    auto colors = Tensor::zeros({N, 3}, Device::GPU, DataType::UInt8);
     auto colors_cpu = colors.cpu();
     auto* cp = colors_cpu.ptr<uint8_t>();
     for (size_t i = 0; i < N * 3; ++i)
@@ -270,8 +275,8 @@ TEST_F(TensorIndexSelectUInt8Test, PointCloudCroppingPipeline_WithTransform) {
     constexpr size_t N = 5000;
 
     // Create point cloud
-    auto means = Tensor::randn({N, 3}, Device::CUDA) * 10.0f; // Points in [-10, 10]
-    auto colors = Tensor::zeros({N, 3}, Device::CUDA, DataType::UInt8);
+    auto means = Tensor::randn({N, 3}, Device::GPU) * 10.0f; // Points in [-10, 10]
+    auto colors = Tensor::zeros({N, 3}, Device::GPU, DataType::UInt8);
     auto colors_cpu = colors.cpu();
     for (size_t i = 0; i < N * 3; ++i) {
         colors_cpu.ptr<uint8_t>()[i] = static_cast<uint8_t>(i % 256);
@@ -285,10 +290,10 @@ TEST_F(TensorIndexSelectUInt8Test, PointCloudCroppingPipeline_WithTransform) {
         m[0][1], m[1][1], m[2][1], m[3][1],
         m[0][2], m[1][2], m[2][2], m[3][2],
         m[0][3], m[1][3], m[2][3], m[3][3]};
-    auto transform = Tensor::from_vector(transform_data, {4, 4}, Device::CUDA);
+    auto transform = Tensor::from_vector(transform_data, {4, 4}, Device::GPU);
 
     // Transform: [4,4] x [4,N] -> [4,N] -> [N,3]
-    auto ones = Tensor::ones({N, 1}, Device::CUDA);
+    auto ones = Tensor::ones({N, 1}, Device::GPU);
     auto means_homo = means.cat(ones, 1);              // [N, 4]
     auto local_pos = transform.mm(means_homo.t()).t(); // [N, 4]
 
@@ -321,13 +326,13 @@ TEST_F(TensorIndexSelectUInt8Test, PointCloudCroppingPipeline_VsTorch) {
     auto t_means = torch::randn({N, 3}, torch::kFloat32).cuda();
     auto t_colors = torch::randint(0, 256, {N, 3}, torch::kUInt8).cuda();
 
-    auto lfs_means = Tensor::zeros({static_cast<size_t>(N), 3}, Device::CUDA);
-    auto lfs_colors = Tensor::zeros({static_cast<size_t>(N), 3}, Device::CUDA, DataType::UInt8);
+    auto lfs_means = Tensor::zeros({static_cast<size_t>(N), 3}, Device::GPU);
+    auto lfs_colors = Tensor::zeros({static_cast<size_t>(N), 3}, Device::GPU, DataType::UInt8);
 
     auto t_means_cpu = t_means.cpu().contiguous();
     auto t_colors_cpu = t_colors.cpu().contiguous();
-    cudaMemcpy(lfs_means.data_ptr(), t_means_cpu.data_ptr<float>(), N * 3 * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(lfs_colors.data_ptr(), t_colors_cpu.data_ptr<uint8_t>(), N * 3, cudaMemcpyHostToDevice);
+    lfs_means = Tensor::from_blob(t_means_cpu.data_ptr<float>(), lfs_means.shape(), Device::CPU, DataType::Float32).to(Device::GPU);
+    lfs_colors = Tensor::from_blob(t_colors_cpu.data_ptr<uint8_t>(), lfs_colors.shape(), Device::CPU, DataType::UInt8).to(Device::GPU);
 
     // Create mask: x > 0
     auto t_x = t_means.select(1, 0);
@@ -352,14 +357,14 @@ TEST_F(TensorIndexSelectUInt8Test, PointCloudCroppingPipeline_VsTorch) {
 // ============= Edge cases =============
 
 TEST_F(TensorIndexSelectUInt8Test, SingleElement) {
-    auto data = Tensor::zeros({1, 3}, Device::CUDA, DataType::UInt8);
+    auto data = Tensor::zeros({1, 3}, Device::GPU, DataType::UInt8);
     auto data_cpu = data.cpu();
     data_cpu.ptr<uint8_t>()[0] = 100;
     data_cpu.ptr<uint8_t>()[1] = 150;
     data_cpu.ptr<uint8_t>()[2] = 200;
     data = data_cpu.cuda();
 
-    auto indices = Tensor::from_vector(std::vector<int>{0}, {1}, Device::CUDA);
+    auto indices = Tensor::from_vector(std::vector<int>{0}, {1}, Device::GPU);
     auto result = data.index_select(0, indices);
 
     ASSERT_EQ(result.size(0), 1);
@@ -372,14 +377,14 @@ TEST_F(TensorIndexSelectUInt8Test, SingleElement) {
 }
 
 TEST_F(TensorIndexSelectUInt8Test, DuplicateIndices) {
-    auto data = Tensor::zeros({3, 2}, Device::CUDA, DataType::UInt8);
+    auto data = Tensor::zeros({3, 2}, Device::GPU, DataType::UInt8);
     auto data_cpu = data.cpu();
     for (int i = 0; i < 6; ++i)
         data_cpu.ptr<uint8_t>()[i] = static_cast<uint8_t>(i * 40);
     data = data_cpu.cuda();
 
     // Select row 1 three times
-    auto indices = Tensor::from_vector(std::vector<int>{1, 1, 1}, {3}, Device::CUDA);
+    auto indices = Tensor::from_vector(std::vector<int>{1, 1, 1}, {3}, Device::GPU);
     auto result = data.index_select(0, indices);
 
     ASSERT_EQ(result.size(0), 3);
@@ -394,13 +399,13 @@ TEST_F(TensorIndexSelectUInt8Test, DuplicateIndices) {
 }
 
 TEST_F(TensorIndexSelectUInt8Test, ReversedIndices) {
-    auto data = Tensor::zeros({5}, Device::CUDA, DataType::UInt8);
+    auto data = Tensor::zeros({5}, Device::GPU, DataType::UInt8);
     auto data_cpu = data.cpu();
     for (int i = 0; i < 5; ++i)
         data_cpu.ptr<uint8_t>()[i] = static_cast<uint8_t>(i);
     data = data_cpu.cuda();
 
-    auto indices = Tensor::from_vector(std::vector<int>{4, 3, 2, 1, 0}, {5}, Device::CUDA);
+    auto indices = Tensor::from_vector(std::vector<int>{4, 3, 2, 1, 0}, {5}, Device::GPU);
     auto result = data.index_select(0, indices);
 
     auto r_cpu = result.cpu();

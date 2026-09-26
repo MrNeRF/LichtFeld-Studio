@@ -223,13 +223,13 @@ class TestCreationFactories:
 
     def test_zeros_creation(self, lf, numpy):
         """Test zeros factory creates zero-filled tensor."""
-        t = lf.Tensor.zeros([3, 4])
+        t = lf.Tensor.zeros([3, 4], device="cpu")
         assert t.shape == (3, 4)
         assert t.numel == 12
         numpy.testing.assert_allclose(t.cpu().numpy(), numpy.zeros((3, 4)))
 
     def test_ones_creation(self, lf, numpy):
         """Test ones factory creates one-filled tensor."""
-        t = lf.Tensor.ones([2, 3])
+        t = lf.Tensor.ones([2, 3], device="cpu")
         assert t.shape == (2, 3)
         numpy.testing.assert_allclose(t.cpu().numpy(), numpy.ones((2, 3)))

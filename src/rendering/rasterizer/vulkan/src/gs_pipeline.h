@@ -7,6 +7,7 @@
 #include <exception>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -88,9 +89,7 @@ public:
     void beginCommandBatch();
     void endCommandBatch(bool use_fence = true,
                          VkSemaphore signal_semaphore = VK_NULL_HANDLE,
-                         std::uint64_t signal_value = 0,
-                         VkSemaphore secondary_signal_semaphore = VK_NULL_HANDLE,
-                         std::uint64_t secondary_signal_value = 0);
+                         std::uint64_t signal_value = 0);
     void cancelCommandBatch() noexcept;
     void waitForPendingBatch();
     [[nodiscard]] bool timelineValueComplete(VkSemaphore semaphore, std::uint64_t value) const;
@@ -109,6 +108,7 @@ public:
     bool writeTimestampNoExcept(int delta);
     void addTimerCallback(TimerCallback callback);
     void setCpuTimerCallback(CpuTimerCallback callback);
+    void setBandedExport(bool enabled);
 
     size_t getCurrentAllocSize() const { return current_vram; }
     size_t getPeakAllocSize() const { return peak_vram; }
@@ -185,7 +185,6 @@ protected:
         VkPipelineStageFlags stage_mask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
     };
     std::vector<PendingTimelineWait> pending_timeline_waits_;
-    std::unordered_map<VkSemaphore, std::uint64_t> last_timeline_wait_values_;
     std::unordered_map<VkSemaphore, std::uint64_t> last_timeline_signal_values_;
 
     static constexpr std::uint32_t kCommandBatchSlotCount = 3;
@@ -263,6 +262,7 @@ protected:
         VkPipeline pipeline;
         std::vector<int> buffer_layouts;
         std::string diagnostic_name;
+        std::string spirv_path;
         bool compatible_subgroup_size = true;
         uint32_t expected_workgroup_size_x = 0;
 
@@ -294,6 +294,9 @@ protected:
 
     std::vector<_ComputePipeline*> all_compute_pipelines;
     std::vector<_ComputePipeline*> pending_compute_pipelines;
+    std::vector<std::pair<_ComputePipeline*, std::unique_ptr<_ComputePipeline>>> banded_export_pipelines_;
+    bool banded_export_initialized_ = false;
+    bool banded_export_active_ = false;
 
     uint32_t queue_family_index;
 
@@ -393,8 +396,6 @@ class [[nodiscard]] DeviceGuard {
     bool use_fence = true;
     VkSemaphore signal_semaphore = VK_NULL_HANDLE;
     std::uint64_t signal_value = 0;
-    VkSemaphore secondary_signal_semaphore = VK_NULL_HANDLE;
-    std::uint64_t secondary_signal_value = 0;
     int uncaught_exceptions = 0;
 
 public:
@@ -409,15 +410,11 @@ public:
     DeviceGuard(VulkanGSPipeline* pipeline,
                 const bool use_fence,
                 const VkSemaphore signal_semaphore,
-                const std::uint64_t signal_value,
-                const VkSemaphore secondary_signal_semaphore = VK_NULL_HANDLE,
-                const std::uint64_t secondary_signal_value = 0)
+                const std::uint64_t signal_value)
         : DeviceGuard(pipeline) {
         this->use_fence = use_fence;
         this->signal_semaphore = signal_semaphore;
         this->signal_value = signal_value;
-        this->secondary_signal_semaphore = secondary_signal_semaphore;
-        this->secondary_signal_value = secondary_signal_value;
     }
     ~DeviceGuard() noexcept(false) {
         if (std::uncaught_exceptions() > uncaught_exceptions) {
@@ -427,9 +424,7 @@ public:
         if (!cbip) {
             pipeline->endCommandBatch(use_fence,
                                       signal_semaphore,
-                                      signal_value,
-                                      secondary_signal_semaphore,
-                                      secondary_signal_value);
+                                      signal_value);
         } else if (cbip != pipeline->isCommandBatchInProgress()) {
             lfs::rendering::throw_renderer_contract(
                 std::format(

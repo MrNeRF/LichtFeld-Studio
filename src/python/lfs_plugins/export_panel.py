@@ -28,6 +28,7 @@ class ExportFormat(IntEnum):
     RAD = 6
     COLMAP = 7
     SSOG = 8
+    GLB = 13
 
 
 FORMAT_INFO = (
@@ -35,6 +36,7 @@ FORMAT_INFO = (
     (ExportFormat.SOG, "export.format.sog_supersplat"),
     (ExportFormat.SSOG, "export.format.ssog"),
     (ExportFormat.SPZ, "export.format.spz_niantic"),
+    (ExportFormat.GLB, "export.format.glb_gltf"),
     (ExportFormat.RAD, "export.format.rad_random_access"),
     (ExportFormat.USD, "export.format.usd_openusd"),
     (ExportFormat.NUREC_USDZ, "export.format.usdz_nurec"),
@@ -47,6 +49,7 @@ EXPORT_PROGRESS_FORMAT_NAMES = {
     ExportFormat.SOG: "SOG",
     ExportFormat.SSOG: "SSOG",
     ExportFormat.SPZ: "SPZ",
+    ExportFormat.GLB: "GLB",
     ExportFormat.HTML_VIEWER: "HTML",
     ExportFormat.USD: "USD",
     ExportFormat.NUREC_USDZ: "USDZ",
@@ -265,7 +268,7 @@ class ExportPanel(Panel):
     def _show_include_provenance(self):
         if self._format == ExportFormat.COLMAP:
             return False
-        if self._format == ExportFormat.SPZ and self._spz_version == 3:
+        if self._format == ExportFormat.GLB or (self._format == ExportFormat.SPZ and self._spz_version == 3):
             return False
         return True
 
@@ -584,7 +587,7 @@ class ExportPanel(Panel):
                     {
                         "name": node.name,
                         "selected": node.name in self._selected_nodes,
-                        "count_text": f"({node.gaussian_count})",
+                        "count_text": f"({node.gaussian_count:,})",
                     }
                     for node in nodes
                 ],
@@ -654,11 +657,6 @@ class ExportPanel(Panel):
         self._selected_nodes.clear()
         self._rebuild_model_records(self._get_splat_nodes())
         self._dirty_model("can_export", "export_label", "export_error_text")
-
-    def _on_export(self, _handle, _ev, _args):
-        if not self._can_export():
-            return
-        self._do_export()
 
     def _on_export_submit(self, ev):
         if self._can_export():
@@ -730,6 +728,8 @@ class ExportPanel(Panel):
             return lf.ui.save_sog_file_dialog(default_name)
         if self._format == ExportFormat.SPZ:
             return lf.ui.save_spz_file_dialog(default_name)
+        if self._format == ExportFormat.GLB:
+            return lf.ui.save_glb_file_dialog(default_name)
         if self._format == ExportFormat.USD:
             return lf.ui.save_usd_file_dialog(default_name)
         if self._format == ExportFormat.NUREC_USDZ:

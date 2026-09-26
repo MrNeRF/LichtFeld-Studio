@@ -8,16 +8,17 @@ add_subdirectory(rasterizer)
 find_package(glslang CONFIG REQUIRED)
 
 set(RENDERING_TENSOR_SOURCES
-        cuda_vulkan_interop.cpp
-        cuda_vulkan_interop.cu
-        selection_ops.cu
+        selection_group_count.cpp
+        selection_screen_ops.cpp
+        selection_mask_ops.cpp
         raster_rendering_engine.cpp
         export_post_process.cpp
-        export_post_process.cu
-        point_cloud_raster.cu
         mesh2splat.cpp
         screen_overlay_renderer.cpp
 )
+if(LFS_HAS_CUDA)
+    list(APPEND RENDERING_TENSOR_SOURCES rasterizer/cuda/point_cloud_raster.cu)
+endif()
 
 add_library(lfs_rendering_tensor STATIC ${RENDERING_TENSOR_SOURCES})
 
@@ -25,7 +26,7 @@ target_link_libraries(lfs_rendering_tensor
         PUBLIC
         lfs_core
         PRIVATE
-        CUDA::cudart
+        $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::cudart>
         glm::glm
         Vulkan::Vulkan
         glslang::glslang

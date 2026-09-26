@@ -7,6 +7,7 @@
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "training/dataset.hpp"
 #include "training/metrics/metrics.hpp"
 
@@ -83,12 +84,12 @@ namespace {
 
     std::unique_ptr<SplatData> make_eval_splat() {
         const size_t n = 1;
-        auto means = Tensor::zeros({n, 3}, Device::CUDA);
-        auto sh0 = Tensor::full({n, 1, 3}, 0.5f, Device::CUDA);
-        auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-        auto scaling = Tensor::full({n, 3}, -2.0f, Device::CUDA);
-        auto rotation = Tensor::from_vector({1.0f, 0.0f, 0.0f, 0.0f}, {n, 4}, Device::CUDA);
-        auto opacity = Tensor::full({n, 1}, 2.0f, Device::CUDA);
+        auto means = Tensor::zeros({n, 3}, Device::GPU);
+        auto sh0 = Tensor::full({n, 1, 3}, 0.5f, Device::GPU);
+        auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+        auto scaling = Tensor::full({n, 3}, -2.0f, Device::GPU);
+        auto rotation = Tensor::from_vector({1.0f, 0.0f, 0.0f, 0.0f}, {n, 4}, Device::GPU);
+        auto opacity = Tensor::full({n, 1}, 2.0f, Device::GPU);
         return std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
     }
 
@@ -106,9 +107,10 @@ namespace {
 
 } // namespace
 
-class MetricsEvaluatorAppearanceTest : public ::testing::Test {
+class MetricsEvaluatorAppearanceTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         // Drop leftover EvaluationCompleted handlers (TrainerManager never unsubscribes).
         lfs::event::EventBridge::instance().clear_all();
     }
@@ -125,7 +127,7 @@ TEST_F(MetricsEvaluatorAppearanceTest, HookNotConsultedWhenUnset) {
     auto cam = make_eval_camera(root.path() / "gt.png", 1);
     CameraDataset dataset({cam}, {}, CameraDataset::Split::ALL);
     auto splat = make_eval_splat();
-    auto background = Tensor::zeros({3}, Device::CUDA);
+    auto background = Tensor::zeros({3}, Device::GPU);
 
     auto params = make_eval_params(root.path());
     MetricsEvaluator evaluator(params);
@@ -152,7 +154,7 @@ TEST_F(MetricsEvaluatorAppearanceTest, HookRunsOncePerFrameBeforeClampAndSavesCo
     auto cam_a = make_eval_camera(root.path() / "a.png", 1);
     auto cam_b = make_eval_camera(root.path() / "b.png", 2);
     auto splat = make_eval_splat();
-    auto background = Tensor::zeros({3}, Device::CUDA);
+    auto background = Tensor::zeros({3}, Device::GPU);
 
     auto params = make_eval_params(root.path());
     MetricsEvaluator evaluator(params);

@@ -14,6 +14,128 @@
                 data-event-click="close_panel()"><span class="btn-label">{{ close_label }}</span></button>
       </div>
     </div>
+    <div id="histogram-empty" data-class-hidden="!show_empty_state">
+      <div class="empty-card">
+        <span class="empty-title">{{ empty_title }}</span>
+        <span class="empty-message">{{ empty_message }}</span>
+      </div>
+    </div>
+
+    <div id="histogram-content"
+         data-class-hidden="!show_chart">
+      <div id="histogram-card" class="hidden" data-class-hidden="!show_histogram_card">
+        <div id="histogram-card-header">
+          <span id="histogram-summary">{{ summary_text }}</span>
+          <span id="histogram-bin-count">{{ bin_count_text }}</span>
+        </div>
+
+        <div id="histogram-range-of-interest">
+          <span class="range-of-interest-label">{{ range_of_interest_label }}</span>
+          <input id="range-min-input" type="text" class="number-input range-input" data-value="range_min_str" />
+          <span class="range-separator">–</span>
+          <input id="range-max-input" type="text" class="number-input range-input" data-value="range_max_str" />
+          <button class="btn btn--secondary range-reset"
+                  data-event-click="reset_range()"
+                  data-attrif-disabled="!has_custom_range"><span class="btn-label">{{ reset_range_label }}</span></button>
+        </div>
+
+        <div id="histogram-chart">
+          <div class="histogram-grid-line histogram-grid-line--top-16"></div>
+          <div class="histogram-grid-line histogram-grid-line--top-36"></div>
+          <div class="histogram-grid-line histogram-grid-line--top-56"></div>
+          <div class="histogram-grid-line histogram-grid-line--top-76"></div>
+
+          <div id="histogram-bars" tab-index="0" data-style-gap="histogram_bar_gap_style">
+            <div id="histogram-selection"
+                 data-class-hidden="!show_selection_overlay"
+                 data-style-left="selection_left_style"
+                 data-style-width="selection_width_style"></div>
+            <div class="histogram-bar"
+                 data-for="bin : bins"
+                 data-class-selected="bin.selected"
+                 data-attr-title="bin.tooltip">
+              <div class="histogram-bar-fill"
+                   data-style-height="bin.height_style"
+                   data-style-opacity="bin.opacity_style"></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="histogram-axis">
+          <span class="axis-label">{{ axis_min }}</span>
+          <span class="axis-label">{{ axis_max }}</span>
+        </div>
+      </div>
+
+      <div id="compare-card" class="hidden" data-class-hidden="!show_compare_card">
+        <div id="compare-empty" class="hidden" data-class-hidden="!show_compare_empty_state">
+          <div class="empty-card compare-empty-card">
+            <span class="empty-title">{{ compare_empty_title }}</span>
+            <span class="empty-message">{{ compare_empty_message }}</span>
+          </div>
+        </div>
+
+        <div id="compare-content" class="hidden" data-class-hidden="!show_compare_chart">
+          <div id="compare-card-header">
+            <span id="compare-summary">{{ compare_summary_text }}</span>
+            <span id="compare-bin-count">{{ compare_bin_count_text }}</span>
+          </div>
+
+          <div id="compare-range-of-interest">
+            <span class="range-of-interest-label">{{ range_of_interest_label }}</span>
+            <span class="compare-axis-marker">X</span>
+            <input id="compare-range-x-min-input" type="text" class="number-input range-input" data-value="range_min_str" />
+            <span class="range-separator">–</span>
+            <input id="compare-range-x-max-input" type="text" class="number-input range-input" data-value="range_max_str" />
+            <span class="compare-axis-marker">Y</span>
+            <input id="compare-range-y-min-input" type="text" class="number-input range-input" data-value="compare_y_range_min_str" />
+            <span class="range-separator">–</span>
+            <input id="compare-range-y-max-input" type="text" class="number-input range-input" data-value="compare_y_range_max_str" />
+            <button class="btn btn--secondary range-reset"
+                    data-event-click="reset_compare_range()"
+                    data-attrif-disabled="!compare_has_custom_range"><span class="btn-label">{{ reset_range_label }}</span></button>
+          </div>
+
+          <div id="compare-chart-shell">
+            <div id="compare-y-axis">
+              <span class="axis-metric">{{ compare_y_metric_label }}</span>
+              <div id="compare-y-axis-values">
+                <span class="axis-label">{{ compare_y_axis_max }}</span>
+                <span class="axis-label">{{ compare_y_axis_min }}</span>
+              </div>
+            </div>
+
+            <div id="compare-chart-column">
+              <div id="compare-chart">
+                <div id="compare-cells" tab-index="0">
+                  <div id="compare-selection" class="hidden"
+                       data-class-hidden="!show_compare_selection_overlay"
+                       data-style-left="compare_selection_left_style"
+                       data-style-top="compare_selection_top_style"
+                       data-style-width="compare_selection_width_style"
+                       data-style-height="compare_selection_height_style"></div>
+                  <div class="compare-cell"
+                       data-for="bin : compare_bins"
+                       data-class-selected="bin.selected"
+                       data-attr-style="bin.style_attr"
+                       data-attr-title="bin.tooltip">
+                    <div class="compare-cell-fill"
+                         data-style-opacity="bin.opacity_style"></div>
+                  </div>
+                </div>
+              </div>
+
+              <div id="compare-axis">
+                <span class="axis-label">{{ compare_x_axis_min }}</span>
+                <span class="axis-metric">{{ compare_x_metric_label }}</span>
+                <span class="axis-label">{{ compare_x_axis_max }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div id="histogram-hero">
       <div class="hero-copy">
         <span class="hero-eyebrow">{{ analysis_label }}</span>
@@ -133,152 +255,30 @@
       </div>
     </div>
 
-    <div id="histogram-empty" data-class-hidden="!show_empty_state">
-      <div class="empty-card">
-        <span class="empty-title">{{ empty_title }}</span>
-        <span class="empty-message">{{ empty_message }}</span>
+    <div id="histogram-stats" data-class-hidden="!show_chart">
+      <div class="stat-card">
+        <span class="stat-label">{{ samples_label }}</span>
+        <span class="stat-value">{{ sample_count }}</span>
       </div>
-    </div>
-
-    <div id="histogram-content"
-         data-class-hidden="!show_chart">
-      <div id="histogram-stats">
-        <div class="stat-card">
-          <span class="stat-label">{{ samples_label }}</span>
-          <span class="stat-value">{{ sample_count }}</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">{{ range_label }}</span>
-          <span class="stat-value stat-value--small">{{ range_text }}</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">{{ mean_label }}</span>
-          <span class="stat-value">{{ mean_text }}</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">{{ median_label }}</span>
-          <span class="stat-value">{{ median_text }}</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">{{ p95_label }}</span>
-          <span class="stat-value">{{ p95_text }}</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">{{ peak_bin_label }}</span>
-          <span class="stat-value">{{ peak_text }}</span>
-        </div>
+      <div class="stat-card">
+        <span class="stat-label">{{ range_label }}</span>
+        <span class="stat-value stat-value--small">{{ range_text }}</span>
       </div>
-
-      <div id="histogram-card" class="hidden" data-class-hidden="!show_histogram_card">
-        <div id="histogram-card-header">
-          <span id="histogram-summary">{{ summary_text }}</span>
-          <span id="histogram-bin-count">{{ bin_count_text }}</span>
-        </div>
-
-        <div id="histogram-range-of-interest">
-          <span class="range-of-interest-label">{{ range_of_interest_label }}</span>
-          <input id="range-min-input" type="text" class="number-input range-input" data-value="range_min_str" />
-          <span class="range-separator">–</span>
-          <input id="range-max-input" type="text" class="number-input range-input" data-value="range_max_str" />
-          <button class="btn btn--secondary range-reset"
-                  data-event-click="reset_range()"
-                  data-attrif-disabled="!has_custom_range"><span class="btn-label">{{ reset_range_label }}</span></button>
-        </div>
-
-        <div id="histogram-chart">
-          <div class="histogram-grid-line histogram-grid-line--top-16"></div>
-          <div class="histogram-grid-line histogram-grid-line--top-36"></div>
-          <div class="histogram-grid-line histogram-grid-line--top-56"></div>
-          <div class="histogram-grid-line histogram-grid-line--top-76"></div>
-
-          <div id="histogram-bars" tab-index="0" data-style-gap="histogram_bar_gap_style">
-            <div id="histogram-selection"
-                 data-class-hidden="!show_selection_overlay"
-                 data-style-left="selection_left_style"
-                 data-style-width="selection_width_style"></div>
-            <div class="histogram-bar"
-                 data-for="bin : bins"
-                 data-class-selected="bin.selected"
-                 data-attr-title="bin.tooltip">
-              <div class="histogram-bar-fill"
-                   data-style-height="bin.height_style"
-                   data-style-opacity="bin.opacity_style"></div>
-            </div>
-          </div>
-        </div>
-
-        <div id="histogram-axis">
-          <span class="axis-label">{{ axis_min }}</span>
-          <span class="axis-label">{{ axis_max }}</span>
-        </div>
+      <div class="stat-card">
+        <span class="stat-label">{{ mean_label }}</span>
+        <span class="stat-value">{{ mean_text }}</span>
       </div>
-
-      <div id="compare-card" class="hidden" data-class-hidden="!show_compare_card">
-        <div id="compare-empty" class="hidden" data-class-hidden="!show_compare_empty_state">
-          <div class="empty-card compare-empty-card">
-            <span class="empty-title">{{ compare_empty_title }}</span>
-            <span class="empty-message">{{ compare_empty_message }}</span>
-          </div>
-        </div>
-
-        <div id="compare-content" class="hidden" data-class-hidden="!show_compare_chart">
-          <div id="compare-card-header">
-            <span id="compare-summary">{{ compare_summary_text }}</span>
-            <span id="compare-bin-count">{{ compare_bin_count_text }}</span>
-          </div>
-
-          <div id="compare-range-of-interest">
-            <span class="range-of-interest-label">{{ range_of_interest_label }}</span>
-            <span class="compare-axis-marker">X</span>
-            <input id="compare-range-x-min-input" type="text" class="number-input range-input" data-value="range_min_str" />
-            <span class="range-separator">–</span>
-            <input id="compare-range-x-max-input" type="text" class="number-input range-input" data-value="range_max_str" />
-            <span class="compare-axis-marker">Y</span>
-            <input id="compare-range-y-min-input" type="text" class="number-input range-input" data-value="compare_y_range_min_str" />
-            <span class="range-separator">–</span>
-            <input id="compare-range-y-max-input" type="text" class="number-input range-input" data-value="compare_y_range_max_str" />
-            <button class="btn btn--secondary range-reset"
-                    data-event-click="reset_compare_range()"
-                    data-attrif-disabled="!compare_has_custom_range"><span class="btn-label">{{ reset_range_label }}</span></button>
-          </div>
-
-          <div id="compare-chart-shell">
-            <div id="compare-y-axis">
-              <span class="axis-metric">{{ compare_y_metric_label }}</span>
-              <div id="compare-y-axis-values">
-                <span class="axis-label">{{ compare_y_axis_max }}</span>
-                <span class="axis-label">{{ compare_y_axis_min }}</span>
-              </div>
-            </div>
-
-            <div id="compare-chart-column">
-              <div id="compare-chart">
-                <div id="compare-cells" tab-index="0">
-                  <div id="compare-selection" class="hidden"
-                       data-class-hidden="!show_compare_selection_overlay"
-                       data-style-left="compare_selection_left_style"
-                       data-style-top="compare_selection_top_style"
-                       data-style-width="compare_selection_width_style"
-                       data-style-height="compare_selection_height_style"></div>
-                  <div class="compare-cell"
-                       data-for="bin : compare_bins"
-                       data-class-selected="bin.selected"
-                       data-attr-style="bin.style_attr"
-                       data-attr-title="bin.tooltip">
-                    <div class="compare-cell-fill"
-                         data-style-opacity="bin.opacity_style"></div>
-                  </div>
-                </div>
-              </div>
-
-              <div id="compare-axis">
-                <span class="axis-label">{{ compare_x_axis_min }}</span>
-                <span class="axis-metric">{{ compare_x_metric_label }}</span>
-                <span class="axis-label">{{ compare_x_axis_max }}</span>
-              </div>
-            </div>
-          </div>
-        </div>
+      <div class="stat-card">
+        <span class="stat-label">{{ median_label }}</span>
+        <span class="stat-value">{{ median_text }}</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">{{ p95_label }}</span>
+        <span class="stat-value">{{ p95_text }}</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">{{ peak_bin_label }}</span>
+        <span class="stat-value">{{ peak_text }}</span>
       </div>
     </div>
 

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "cuda_backend_test.hpp"
 #include "fastgs_tile_culling_boundary_cuda.hpp"
 
 #include <cmath>
@@ -65,7 +66,9 @@ namespace {
 
 // Closed exclusive end: coord on a tile-size integer is a pixel center of the
 // next tile, so ceil must be floor+1, not IEEE ceil (which returns the integer).
-TEST(FastGSTileCullingBoundary, CeilTileClampedKeepsExactTileBoundary) {
+class FastGSTileCullingBoundary : public lfs::test::CudaBackendTest {};
+
+TEST_F(FastGSTileCullingBoundary, CeilTileClampedKeepsExactTileBoundary) {
     std::vector<FloorCeilSample> samples = {
         {0.0f, 0, 8, kTile, 0, 0},
         {15.0f, 0, 8, kTile, 0, 0},
@@ -101,7 +104,7 @@ TEST(FastGSTileCullingBoundary, CeilTileClampedKeepsExactTileBoundary) {
 
 // Unit ellipse x^2+y^2=1 touching the box [1,2]x[-0.5,0.5] at (1,0).
 // Blend includes alpha == min_alpha, so the overlap test is closed.
-TEST(FastGSTileCullingBoundary, EllipseBoxOverlapIncludesExactTouch) {
+TEST_F(FastGSTileCullingBoundary, EllipseBoxOverlapIncludesExactTouch) {
     OverlapSample touch{1.0f, 0.0f, 1.0f, 1.0f, 2.0f, -0.5f, 0.5f, 0};
     OverlapSample interior{1.0f, 0.0f, 1.0f, -0.5f, 0.5f, -0.5f, 0.5f, 0};
     OverlapSample miss{1.0f, 0.0f, 1.0f, 2.0f, 3.0f, -0.5f, 0.5f, 0};
@@ -114,7 +117,7 @@ TEST(FastGSTileCullingBoundary, EllipseBoxOverlapIncludesExactTouch) {
 
 // Mean one pixel left of a tile/sub-tile edge, radius 1: the edge pixel center
 // sits on the contribution boundary. Backward warp cull must keep that subtile.
-TEST(FastGSTileCullingBoundary, SubtileEllipseKeepsExactEdgePixel) {
+TEST_F(FastGSTileCullingBoundary, SubtileEllipseKeepsExactEdgePixel) {
     const float opacity = boundary_opacity();
     SplatSubtileSample edge{};
     edge.mean_x = 15.5f;
@@ -146,7 +149,7 @@ TEST(FastGSTileCullingBoundary, SubtileEllipseKeepsExactEdgePixel) {
 
 // opacity == min_alpha => power == 0, a point ellipse. Blend still shades the
 // coinciding pixel center; the overlap helper must not reject it.
-TEST(FastGSTileCullingBoundary, PointEllipseOnPixelCenterOverlapsSubtile) {
+TEST_F(FastGSTileCullingBoundary, PointEllipseOnPixelCenterOverlapsSubtile) {
     SplatSubtileSample on_center{};
     on_center.mean_x = 16.5f;
     on_center.mean_y = 16.5f;
@@ -170,7 +173,7 @@ TEST(FastGSTileCullingBoundary, PointEllipseOnPixelCenterOverlapsSubtile) {
     EXPECT_EQ(samples[1].overlaps, 0);
 }
 
-TEST(FastGSTileCullingBoundary, CountInstancesBlendAgreeOnInteriorSplat) {
+TEST_F(FastGSTileCullingBoundary, CountInstancesBlendAgreeOnInteriorSplat) {
     auto s = make_agreement(8.5f, 8.5f, boundary_opacity());
     ASSERT_EQ(eval_agreement(&s, 1), cudaSuccess);
     EXPECT_NEAR(s.power_threshold, kPower, 1e-5);
@@ -186,7 +189,7 @@ TEST(FastGSTileCullingBoundary, CountInstancesBlendAgreeOnInteriorSplat) {
 // Mean at pixel 15 center, E=1: pixel 16 center is on the contribution
 // boundary and is the first pixel of tile 1. Count, instance walk, and blend
 // gold must all include tile 1; backward subtile overlap must keep it.
-TEST(FastGSTileCullingBoundary, RightTileEdgePixelIsBinnedAndShaded) {
+TEST_F(FastGSTileCullingBoundary, RightTileEdgePixelIsBinnedAndShaded) {
     auto s = make_agreement(15.5f, 8.5f, boundary_opacity());
     ASSERT_EQ(eval_agreement(&s, 1), cudaSuccess);
     EXPECT_NEAR(s.power_threshold, kPower, 1e-5);
@@ -207,7 +210,7 @@ TEST(FastGSTileCullingBoundary, RightTileEdgePixelIsBinnedAndShaded) {
     EXPECT_TRUE(saw_tile1) << "pixel (16,8) belongs to tile 1";
 }
 
-TEST(FastGSTileCullingBoundary, LowerTileEdgePixelIsBinnedAndShaded) {
+TEST_F(FastGSTileCullingBoundary, LowerTileEdgePixelIsBinnedAndShaded) {
     auto s = make_agreement(8.5f, 15.5f, boundary_opacity());
     ASSERT_EQ(eval_agreement(&s, 1), cudaSuccess);
     EXPECT_EQ(s.count, s.n_instances);
@@ -227,7 +230,7 @@ TEST(FastGSTileCullingBoundary, LowerTileEdgePixelIsBinnedAndShaded) {
     EXPECT_TRUE(saw) << "pixel (8,16) belongs to tile (0,1)";
 }
 
-TEST(FastGSTileCullingBoundary, PointEllipseOnTileOriginPixelCenter) {
+TEST_F(FastGSTileCullingBoundary, PointEllipseOnTileOriginPixelCenter) {
     auto s = make_agreement(16.5f, 16.5f, kMinAlpha);
     ASSERT_EQ(eval_agreement(&s, 1), cudaSuccess);
     EXPECT_FLOAT_EQ(s.power_threshold, 0.0f);
@@ -244,7 +247,7 @@ TEST(FastGSTileCullingBoundary, PointEllipseOnTileOriginPixelCenter) {
 
 // Same mean/conic/opacity: every subtile with a contributing pixel must be
 // kept by splat_overlaps_subtile_ellipse (the backward warp-cull path).
-TEST(FastGSTileCullingBoundary, ForwardBackwardTouchedSubtilesAgree) {
+TEST_F(FastGSTileCullingBoundary, ForwardBackwardTouchedSubtilesAgree) {
     AgreementSample cases[] = {
         make_agreement(8.5f, 8.5f, boundary_opacity()),
         make_agreement(15.5f, 8.5f, boundary_opacity()),

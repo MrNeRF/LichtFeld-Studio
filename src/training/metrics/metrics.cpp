@@ -9,13 +9,17 @@
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/events.hpp"
+#include "core/gpu_device_runtime.hpp"
+#include "core/gpu_elapsed.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/splat_data.hpp"
+#include "core/tensor_backend.hpp"
+#include "eval_mask.hpp"
 #include "io/cuda/image_format_kernels.cuh"
-#include "lfs/kernels/ssim.cuh"
+#include "lfs/training/ops/registry.hpp"
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -25,6 +29,7 @@
 #include <ctime>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <numeric>
 #include <stdexcept>
@@ -152,7 +157,7 @@ namespace lfs::training {
             image_data.reset();
 
             cam.set_image_dimensions(width, height);
-            return chw.to(lfs::core::Device::CUDA);
+            return chw.to(lfs::core::Device::GPU);
         }
     } // namespace
 
@@ -213,6 +218,20 @@ namespace lfs::training {
             throw std::runtime_error("SSIM: prediction and target must have the same shape");
         }
 
+        if (ops_ == nullptr) {
+            const auto backend = lfs::core::default_gpu_backend();
+            if (const auto reason = unavailable_training_family(backend, Family::Photometric)) {
+                throw std::runtime_error(*reason);
+            }
+            ops_ = training_ops(backend).photometric;
+        }
+        if (ops_ == nullptr || ops_->metric == nullptr || ops_->create == nullptr) {
+            throw std::runtime_error("SSIM: photometric ops are unavailable");
+        }
+        if (!saved_.backend) {
+            saved_.backend = ops_->create();
+        }
+
         if (mask.is_valid()) {
             // Match masked training semantics: no valid-padding crop, masked mean over all pixels.
             const auto layout = get_layout_info(pred, "SSIM");
@@ -220,8 +239,8 @@ namespace lfs::training {
             validate_mask_shape_or_throw(mask_f, layout, "SSIM");
             const float mask_sum = get_non_empty_mask_sum_or_throw(mask_f, "SSIM");
 
-            auto map_result = kernels::ssim_forward_map(pred, target, false);
-            auto ssim_map = map_result.ssim_map;
+            (void)ops_->metric(saved_, pred, target, true, false);
+            auto ssim_map = saved_.ssim_map;
             assert(ssim_map.ndim() == 4);
             assert(static_cast<int>(ssim_map.shape()[2]) == layout.h);
             assert(static_cast<int>(ssim_map.shape()[3]) == layout.w);
@@ -237,7 +256,7 @@ namespace lfs::training {
             return masked_ssim;
         }
 
-        auto [ssim_value, ctx] = kernels::ssim_forward(pred, target, apply_valid_padding_);
+        auto ssim_value = ops_->metric(saved_, pred, target, false, apply_valid_padding_);
         const float value = ssim_value.mean().item<float>();
         if (!std::isfinite(value)) {
             throw std::runtime_error("SSIM: produced non-finite SSIM");
@@ -286,6 +305,52 @@ namespace lfs::training {
                 return std::nullopt;
             }
             return static_cast<float>(sum / static_cast<double>(count));
+        }
+
+        [[nodiscard]] bool eval_uses_masks(const lfs::core::param::MaskMode mode) {
+            return mode == lfs::core::param::MaskMode::Segment ||
+                   mode == lfs::core::param::MaskMode::Ignore ||
+                   mode == lfs::core::param::MaskMode::SegmentAndIgnore;
+        }
+
+        [[nodiscard]] nlohmann::json json_metric(const std::optional<float>& value) {
+            return value && std::isfinite(*value) ? nlohmann::json(*value) : nlohmann::json(nullptr);
+        }
+
+        void write_json_file(const std::filesystem::path& path, const nlohmann::json& document) {
+            std::error_code ec;
+            std::filesystem::create_directories(path.parent_path(), ec);
+            auto temp_path = path;
+            temp_path += ".tmp";
+            {
+                std::ofstream out;
+                if (!lfs::core::open_file_for_write(temp_path, std::ios::out | std::ios::binary, out)) {
+                    LOG_WARN("Eval: failed to open '{}'", lfs::core::path_to_utf8(temp_path));
+                    return;
+                }
+                out << document.dump(2, ' ', false, nlohmann::json::error_handler_t::replace) << '\n';
+                if (!out) {
+                    LOG_WARN("Eval: failed to write '{}'", lfs::core::path_to_utf8(temp_path));
+                    return;
+                }
+            }
+            std::filesystem::rename(temp_path, path, ec);
+            if (ec)
+                LOG_WARN("Eval: failed to replace '{}': {}", lfs::core::path_to_utf8(path), ec.message());
+        }
+
+        [[nodiscard]] nlohmann::json read_json_object(const std::filesystem::path& path) {
+            std::ifstream in;
+            if (!lfs::core::open_file_for_read(path, std::ios::in | std::ios::binary, in))
+                return nlohmann::json::object();
+            try {
+                auto document = nlohmann::json::parse(in);
+                if (document.is_object())
+                    return document;
+            } catch (const nlohmann::json::exception& e) {
+                LOG_WARN("Eval: replacing unreadable '{}' ({})", lfs::core::path_to_utf8(path), e.what());
+            }
+            return nlohmann::json::object();
         }
     } // namespace
 
@@ -423,7 +488,8 @@ namespace lfs::training {
     MetricsReporter::MetricsReporter(const std::filesystem::path& output_dir)
         : output_dir_(output_dir),
           csv_path_(output_dir_ / "metrics.csv"),
-          txt_path_(output_dir_ / "metrics_report.txt") {
+          txt_path_(output_dir_ / "metrics_report.txt"),
+          per_image_path_(output_dir_ / "per_image_metrics.json") {
         // Create CSV header if file doesn't exist
         if (!std::filesystem::exists(csv_path_)) {
             std::ofstream csv_file;
@@ -434,6 +500,57 @@ namespace lfs::training {
         }
     }
 
+    std::vector<size_t> unreachable_eval_steps(const std::vector<size_t>& eval_steps, const size_t last_iteration) {
+        std::vector<size_t> unreachable;
+        std::ranges::copy_if(eval_steps, std::back_inserter(unreachable),
+                             [last_iteration](const size_t step) { return step > last_iteration; });
+        return unreachable;
+    }
+
+    nlohmann::json add_view_evaluation(nlohmann::json document, const ViewMetrics& view, const int step,
+                                       const std::string_view split) {
+        if (!document.is_object())
+            document = nlohmann::json::object();
+        auto& record = document[view.image_name];
+        if (!record.is_object())
+            record = nlohmann::json::object();
+        if (view.width > 0 && view.height > 0) {
+            record["width"] = view.width;
+            record["height"] = view.height;
+        }
+        nlohmann::json entry = {
+            {"step", step},
+            {"split", split},
+            {"psnr", json_metric(view.psnr)},
+            {"ssim", json_metric(view.ssim)},
+            {"lpips", json_metric(view.lpips)},
+            {"masked", view.masked},
+        };
+        if (!view.skipped_reason.empty())
+            entry["skipped_reason"] = view.skipped_reason;
+
+        std::vector<nlohmann::json> evaluations;
+        if (const auto existing = record.find("evaluations");
+            existing != record.end() && existing->is_array()) {
+            for (auto& previous : *existing) {
+                if (!previous.is_object())
+                    continue;
+                const auto previous_step = previous.find("step");
+                if (previous_step == previous.end() || !previous_step->is_number_integer())
+                    continue;
+                const auto previous_split = previous.find("split");
+                const bool same_split = previous_split != previous.end() && previous_split->is_string() &&
+                                        previous_split->get<std::string>() == split;
+                if (previous_step->get<int>() != step || !same_split)
+                    evaluations.push_back(std::move(previous));
+            }
+        }
+        evaluations.push_back(std::move(entry));
+        std::ranges::stable_sort(evaluations, {}, [](const nlohmann::json& e) { return e.at("step").get<int>(); });
+        record["evaluations"] = std::move(evaluations);
+        return document;
+    }
+
     void MetricsReporter::add_metrics(const EvalMetrics& metrics) {
         all_metrics_.push_back(metrics);
 
@@ -442,6 +559,25 @@ namespace lfs::training {
         if (lfs::core::open_file_for_write(csv_path_, std::ios::app, csv_file)) {
             csv_file << metrics.to_csv_row() << std::endl;
             csv_file.close();
+        }
+    }
+
+    void MetricsReporter::write_view_evaluations(const EvalMetrics& metrics, const std::string_view split) const {
+        if (metrics.views.empty())
+            return;
+        auto document = read_json_object(per_image_path_);
+        for (const auto& view : metrics.views)
+            document = add_view_evaluation(std::move(document), view, metrics.iteration, split);
+        write_json_file(per_image_path_, document);
+    }
+
+    void MetricsReporter::write_training_config(const lfs::core::param::TrainingParameters& params) const {
+        std::error_code ec;
+        std::filesystem::create_directories(output_dir_, ec);
+        if (const auto saved = lfs::core::param::save_training_parameters_to_json(
+                params, output_dir_ / "training_config.json");
+            !saved) {
+            LOG_WARN("Eval: failed to write the training configuration: {}", saved.error());
         }
     }
 
@@ -536,6 +672,8 @@ namespace lfs::training {
         report_file.close();
         std::cout << "Evaluation report saved to: " << lfs::core::path_to_utf8(txt_path_) << std::endl;
         std::cout << "Metrics CSV saved to: " << lfs::core::path_to_utf8(csv_path_) << std::endl;
+        if (std::filesystem::exists(per_image_path_))
+            std::cout << "Per-image metrics JSON saved to: " << lfs::core::path_to_utf8(per_image_path_) << std::endl;
     }
 
     // MetricsEvaluator Implementation
@@ -553,9 +691,16 @@ namespace lfs::training {
         _reporter = std::make_unique<MetricsReporter>(params.dataset.output_path);
     }
 
-    bool MetricsEvaluator::should_evaluate(const int iteration) const {
+    void MetricsEvaluator::write_training_config(const lfs::core::param::TrainingParameters& params) const {
+        if (_reporter)
+            _reporter->write_training_config(params);
+    }
+
+    bool MetricsEvaluator::should_evaluate(const int iteration, const int final_iteration) const {
         if (!_params.optimization.enable_eval)
             return false;
+        if (iteration == final_iteration)
+            return true;
 
         return std::find(_params.optimization.eval_steps.cbegin(), _params.optimization.eval_steps.cend(), iteration) !=
                _params.optimization.eval_steps.cend();
@@ -564,82 +709,8 @@ namespace lfs::training {
     lfs::core::Tensor MetricsEvaluator::load_eval_mask(lfs::core::Camera* cam,
                                                        lfs::core::Tensor& gt_image,
                                                        const bool alpha_as_mask) const {
-        if (cam->has_mask()) {
-            bool is_segment_and_ignore = _params.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore;
-            auto m = cam->load_and_get_mask(
-                _params.dataset.resize_factor,
-                _params.dataset.max_width,
-                _params.optimization.invert_masks,
-                _params.optimization.mask_threshold,
-                !is_segment_and_ignore);
-            if (is_segment_and_ignore) {
-                m = m.gt(250).to(lfs::core::DataType::UInt8).contiguous();
-            }
-            return m;
-        }
-
-        if (!alpha_as_mask)
-            return {};
-
-        // Re-load from disk because the dataloader strips alpha to produce RGB gt_image.
-        // We need the original alpha channel as the mask, with undistortion applied consistently.
-        auto [img_data, width, height, channels] = lfs::core::load_image_with_alpha(
-            cam->image_path(), _params.dataset.resize_factor, _params.dataset.max_width);
-
-        if (!img_data || channels != 4) {
-            if (img_data)
-                lfs::core::free_image(img_data);
-            return {};
-        }
-
-        const auto H = static_cast<size_t>(height);
-        const auto W = static_cast<size_t>(width);
-
-        auto cpu_tensor = lfs::core::Tensor::from_blob(
-            img_data, lfs::core::TensorShape({H, W, 4}),
-            lfs::core::Device::CPU, lfs::core::DataType::UInt8);
-        auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
-        lfs::core::free_image(img_data);
-
-        auto rgb = lfs::core::Tensor::zeros(
-            lfs::core::TensorShape({3, H, W}),
-            lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
-        auto mask = lfs::core::Tensor::zeros(
-            lfs::core::TensorShape({H, W}),
-            lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-
-        lfs::io::cuda::launch_uint8_rgba_split_to_uint8_rgb_and_float32_alpha(
-            gpu_uint8.ptr<uint8_t>(), rgb.ptr<uint8_t>(), mask.ptr<float>(),
-            H, W, nullptr);
-        gpu_uint8 = lfs::core::Tensor();
-
-        if (_params.optimization.invert_masks)
-            lfs::io::cuda::launch_mask_invert(mask.ptr<float>(), H, W, nullptr);
-        if (_params.optimization.mask_threshold > 0)
-            lfs::io::cuda::launch_mask_threshold(
-                mask.ptr<float>(), H, W, _params.optimization.mask_threshold, nullptr);
-
-        if (cam->is_undistort_prepared()) {
-            const auto scaled = lfs::core::scale_undistort_params(
-                cam->undistort_params(),
-                static_cast<int>(W), static_cast<int>(H));
-            auto rgb_float = rgb.to(lfs::core::DataType::Float32) / 255.0f;
-            rgb_float = lfs::core::undistort_image(rgb_float, scaled, nullptr);
-            auto rgb_uint8 = lfs::core::Tensor::empty(
-                rgb_float.shape(), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
-            lfs::io::cuda::launch_float32_chw_to_uint8_chw(
-                rgb_float.ptr<float>(),
-                rgb_uint8.ptr<uint8_t>(),
-                rgb_float.shape()[1],
-                rgb_float.shape()[2],
-                rgb_float.shape()[0],
-                nullptr);
-            rgb = std::move(rgb_uint8);
-            mask = lfs::core::undistort_mask(mask, scaled, nullptr);
-        }
-
-        gt_image = std::move(rgb);
-        return mask.ge(0.5f).to(lfs::core::DataType::UInt8).contiguous();
+        return lfs::training::load_eval_mask(
+            cam, gt_image, alpha_as_mask, metrics_mask_config_from(_params));
     }
 
     EvalMetrics MetricsEvaluator::evaluate(const int iteration,
@@ -648,6 +719,10 @@ namespace lfs::training {
                                            lfs::core::Tensor& background) {
         if (!_params.optimization.enable_eval) {
             throw std::runtime_error("Evaluation is not enabled");
+        }
+        if (const auto reason = unavailable_training_family(
+                lfs::core::default_gpu_backend(), Family::Photometric)) {
+            throw std::runtime_error(*reason);
         }
 
         EvalMetrics result;
@@ -671,8 +746,6 @@ namespace lfs::training {
         size_t evaluated_images = 0;
         size_t saved_images = 0;
         std::optional<std::pair<int, int>> lpips_preflight_size;
-        cudaEvent_t lpips_start_event = nullptr;
-        cudaEvent_t lpips_stop_event = nullptr;
         double lpips_elapsed_ms = 0.0;
         std::size_t lpips_timed_images = 0;
 
@@ -681,7 +754,7 @@ namespace lfs::training {
             const auto& weights_path = *_lpips_weights_path;
             try {
                 auto loaded = lfs::core::nn::models::Lpips::load(
-                    weights_path, lfs::core::Device::CUDA, lfs::core::DataType::Float16,
+                    weights_path, lfs::core::Device::GPU, lfs::core::DataType::Float16,
                     lfs::core::nn::models::InputScaling::Identity);
                 if (loaded) {
                     _lpips_metric.emplace(std::move(*loaded));
@@ -694,34 +767,8 @@ namespace lfs::training {
                          lfs::core::path_to_utf8(weights_path), e.what());
             }
         }
-        if (_lpips_metric) {
-            const bool start_created = cudaEventCreate(&lpips_start_event) == cudaSuccess;
-            const bool stop_created = start_created && cudaEventCreate(&lpips_stop_event) == cudaSuccess;
-            if (!start_created || !stop_created) {
-                if (lpips_start_event != nullptr)
-                    cudaEventDestroy(lpips_start_event);
-                if (lpips_stop_event != nullptr)
-                    cudaEventDestroy(lpips_stop_event);
-                lpips_start_event = nullptr;
-                lpips_stop_event = nullptr;
-            }
-        }
-
-        std::ofstream per_image_csv;
-        if (_params.optimization.enable_save_eval_images) {
-            if (lfs::core::open_file_for_write(eval_dir / "per_image_metrics.csv", per_image_csv)) {
-                per_image_csv << "image_name,psnr,ssim,lpips\n";
-            } else {
-                LOG_WARN("Eval: failed to open per-image metrics CSV at '{}'",
-                         lfs::core::path_to_utf8(eval_dir / "per_image_metrics.csv"));
-            }
-        }
-
-        const auto mask_mode = _params.optimization.mask_mode;
-        const bool use_masking =
-            mask_mode == lfs::core::param::MaskMode::Segment ||
-            mask_mode == lfs::core::param::MaskMode::Ignore ||
-            mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore;
+        lfs::core::GpuElapsed lpips_timer(lfs::core::GpuBackend::CUDA, 2);
+        const bool use_masking = eval_uses_masks(_params.optimization.mask_mode);
 
         bool render_normal = false;
         if (_params.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGS) {
@@ -733,8 +780,12 @@ namespace lfs::training {
             }
         }
 
+        result.views.reserve(val_dataset_size);
         for (size_t image_idx = 0; image_idx < val_dataset_size; ++image_idx) {
             lfs::core::Camera* cam = val_dataset->get_camera(image_idx);
+            auto& view = result.views.emplace_back();
+            view.index = static_cast<int>(image_idx);
+            view.image_name = cam->image_name();
             lfs::core::Tensor gt_image;
             try {
                 gt_image = load_eval_gt_image_cpu(
@@ -743,9 +794,12 @@ namespace lfs::training {
                     _params.dataset.max_width);
             } catch (const std::exception& e) {
                 LOG_WARN("Eval: skipping camera '{}' (failed to load GT image: {})", cam->image_name(), e.what());
+                view.skipped_reason = std::string("failed to load ground truth image: ") + e.what();
                 skipped_images++;
                 continue;
             }
+            view.height = static_cast<int>(gt_image.shape()[1]);
+            view.width = static_cast<int>(gt_image.shape()[2]);
 
             lfs::core::Tensor mask;
             if (use_masking) {
@@ -754,6 +808,7 @@ namespace lfs::training {
                     mask = load_eval_mask(cam, gt_image, cam_alpha);
                 } catch (const std::exception& e) {
                     LOG_WARN("Eval: skipping camera '{}' (failed to load mask: {})", cam->image_name(), e.what());
+                    view.skipped_reason = std::string("failed to load mask: ") + e.what();
                     skipped_images++;
                     continue;
                 }
@@ -788,6 +843,7 @@ namespace lfs::training {
                 ssim = _ssim_metric->compute(r_output.image, gt_image, mask);
             } catch (const std::exception& e) {
                 LOG_WARN("Eval: skipping camera '{}' (metric computation failed: {})", cam->image_name(), e.what());
+                view.skipped_reason = std::string("metric computation failed: ") + e.what();
                 skipped_images++;
                 continue;
             }
@@ -795,12 +851,16 @@ namespace lfs::training {
             if (!std::isfinite(psnr) || !std::isfinite(ssim)) {
                 LOG_WARN("Eval: skipping camera '{}' (non-finite metric values: PSNR={}, SSIM={})",
                          cam->image_name(), psnr, ssim);
+                view.skipped_reason = "non-finite metric values";
                 skipped_images++;
                 continue;
             }
 
             psnr_values.push_back(psnr);
             ssim_values.push_back(ssim);
+            view.psnr = psnr;
+            view.ssim = ssim;
+            view.masked = mask.is_valid();
             evaluated_images++;
 
             const auto gt_float = image_as_float01(gt_image).clamp(0.0f, 1.0f);
@@ -809,17 +869,16 @@ namespace lfs::training {
                 try {
                     const auto pred_lpips = mask_image_for_lpips(r_output.image, mask);
                     const auto target_lpips = mask_image_for_lpips(
-                        gt_float.to(lfs::core::Device::CUDA), mask);
+                        gt_float.to(lfs::core::Device::GPU), mask);
                     const int image_height = static_cast<int>(gt_image.shape()[1]);
                     const int image_width = static_cast<int>(gt_image.shape()[2]);
                     const std::pair<int, int> image_size{image_height, image_width};
                     const bool size_changed = !lpips_preflight_size || *lpips_preflight_size != image_size;
                     lpips_preflight_size = image_size;
                     const auto required = _lpips_metric->estimated_peak_bytes(image_height, image_width);
-                    std::size_t free_bytes = 0;
-                    std::size_t total_bytes = 0;
-                    const auto status = cudaMemGetInfo(&free_bytes, &total_bytes);
-                    const bool lpips_preflight_ok = status == cudaSuccess && free_bytes >= required;
+                    const std::size_t free_bytes =
+                        lfs::core::gpu_backend_memory_info(lfs::core::GpuBackend::CUDA).free_bytes;
+                    const bool lpips_preflight_ok = free_bytes >= required && free_bytes != 0;
                     if (!lpips_preflight_ok && size_changed) {
                         const auto shortfall = required > free_bytes ? required - free_bytes : 0;
                         LOG_WARN("Eval: LPIPS skipped for this image size; tile={} required={} free={} shortfall={} bytes",
@@ -830,22 +889,19 @@ namespace lfs::training {
                                   _lpips_metric->tile_size_for(image_height, image_width), required, free_bytes);
                     }
                     if (lpips_preflight_ok) {
-                        const cudaStream_t lpips_stream = pred_lpips.stream();
-                        const bool timed_lpips = lpips_start_event != nullptr &&
-                                                 cudaEventRecord(lpips_start_event, lpips_stream) == cudaSuccess;
+                        const cudaStream_t lpips_stream = lfs::core::getCurrentCUDAStream();
+                        const bool timed_lpips = lpips_timer.mark(0, lpips_stream);
                         auto value = _lpips_metric->forward(
                             pred_lpips, target_lpips,
                             lfs::core::nn::models::InputScaling::Identity);
                         const bool lpips_event_complete =
-                            timed_lpips && cudaEventRecord(lpips_stop_event, lpips_stream) == cudaSuccess &&
-                            cudaEventSynchronize(lpips_stop_event) == cudaSuccess;
+                            timed_lpips && lpips_timer.mark(1, lpips_stream) &&
+                            lpips_timer.wait_event(1);
                         if (value && std::isfinite(*value)) {
                             if (lpips_event_complete) {
-                                float elapsed_ms = 0.0f;
-                                if (cudaEventElapsedTime(&elapsed_ms, lpips_start_event, lpips_stop_event) ==
-                                        cudaSuccess &&
-                                    std::isfinite(elapsed_ms)) {
-                                    lpips_elapsed_ms += elapsed_ms;
+                                const auto elapsed_ms = lpips_timer.milliseconds(0, 1);
+                                if (elapsed_ms && std::isfinite(*elapsed_ms)) {
+                                    lpips_elapsed_ms += *elapsed_ms;
                                     lpips_timed_images++;
                                 }
                             }
@@ -863,19 +919,7 @@ namespace lfs::training {
                     LOG_WARN("Eval: LPIPS failed for camera '{}' ({})", cam->image_name(), e.what());
                 }
             }
-            if (per_image_csv) {
-                per_image_csv << '"';
-                for (const char ch : cam->image_name()) {
-                    if (ch == '"')
-                        per_image_csv << '"';
-                    per_image_csv << ch;
-                }
-                per_image_csv << "\"," << std::fixed << std::setprecision(6)
-                              << psnr << "," << ssim << ",";
-                if (lpips)
-                    per_image_csv << *lpips;
-                per_image_csv << "\n";
-            }
+            view.lpips = lpips;
             auto accumulate_bias = [&](const lfs::core::Tensor& image,
                                        std::vector<float>& br,
                                        std::vector<float>& bg,
@@ -914,7 +958,7 @@ namespace lfs::training {
                             if (static_cast<int>(prior.shape()[1]) != render_h ||
                                 static_cast<int>(prior.shape()[2]) != render_w) {
                                 prior = lfs::core::lanczos_resize_float_chw(
-                                    prior, render_h, render_w, 2, r_output.normal.stream());
+                                    prior, render_h, render_w, 2, lfs::core::getCurrentCUDAStream());
                             }
                             if (const auto angle = mean_normal_angle_deg(
                                     r_output.normal, prior, r_output.alpha)) {
@@ -1017,13 +1061,7 @@ namespace lfs::training {
         if (_params.optimization.enable_save_eval_images) {
             lfs::core::image_io::wait_for_pending_saves();
         }
-        if (per_image_csv)
-            per_image_csv.close();
 
-        if (lpips_start_event != nullptr)
-            cudaEventDestroy(lpips_start_event);
-        if (lpips_stop_event != nullptr)
-            cudaEventDestroy(lpips_stop_event);
         if (lpips_timed_images > 0) {
             LOG_DEBUG("Eval: LPIPS-only {:.3f} ms/image over {} images",
                       lpips_elapsed_ms / static_cast<double>(lpips_timed_images), lpips_timed_images);
@@ -1064,6 +1102,7 @@ namespace lfs::training {
         }
         if (evaluated_images == 0) {
             LOG_WARN("Eval: no images were successfully evaluated at iteration {}", iteration);
+            _reporter->write_view_evaluations(result, evaluated_split());
             return result;
         }
 
@@ -1081,6 +1120,7 @@ namespace lfs::training {
 
         // Add metrics to reporter
         _reporter->add_metrics(result);
+        _reporter->write_view_evaluations(result, evaluated_split());
 
         if (_params.optimization.enable_save_eval_images) {
             std::cout << "Saved " << saved_images << " evaluation images to: " << lfs::core::path_to_utf8(eval_dir) << std::endl;

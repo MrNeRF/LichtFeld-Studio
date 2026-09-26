@@ -4,6 +4,7 @@
 
 #include "core/cuda/sh_layout.cuh"
 #include "core/splat_data.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/formats/ply.hpp"
 #include <cmath>
 #include <cstdint>
@@ -30,7 +31,9 @@ namespace {
     // Round-trip the shN buffer: canonical -> swizzled -> canonical and verify equality.
     // Layout bijects the 45 active floats per primitive onto 12 float4 slots (48 floats
     // with 3 of tail padding); the active range round-trips bitwise.
-    TEST(ShSwizzleLayout, CanonicalRoundTrip_RealData) {
+    class ShSwizzleLayout : public lfs::test::CudaBackendTest {};
+
+    TEST_F(ShSwizzleLayout, CanonicalRoundTrip_RealData) {
         using namespace lfs::core;
 
         const auto ply_path = find_real_ply();
@@ -58,11 +61,11 @@ namespace {
 
         // Build a swizzled buffer from the canonical view.
         const size_t swizzled_floats = sh_swizzled_float_count(N, K);
-        Tensor swizzled = Tensor::zeros({swizzled_floats}, Device::CUDA);
+        Tensor swizzled = Tensor::zeros({swizzled_floats}, Device::GPU);
         reorder_sh_to_swizzled(canonical.ptr<float>(), swizzled.ptr<float>(), N, K);
 
         // Deswizzle back into a fresh canonical buffer.
-        Tensor recovered = Tensor::empty({N, K, 3}, Device::CUDA);
+        Tensor recovered = Tensor::empty({N, K, 3}, Device::GPU);
         undo_reorder_sh_from_swizzled(swizzled.ptr<float>(), recovered.ptr<float>(), N, K);
         cudaDeviceSynchronize();
 
@@ -86,7 +89,7 @@ namespace {
         EXPECT_EQ(mismatches, 0u) << "max_abs_diff=" << max_abs_diff;
     }
 
-    TEST(ShSwizzleLayout, CompactStorageMatchesActiveDegree) {
+    TEST_F(ShSwizzleLayout, CompactStorageMatchesActiveDegree) {
         using namespace lfs::core;
         constexpr std::size_t N = 70;
         constexpr std::size_t BLOCKS = 3;
@@ -107,7 +110,7 @@ namespace {
     // holds 4 consecutive floats of the linear canonical row for primitive p (with the last
     // slot's tail floats zero-padded). Equivalent to vksplat's tight pack of 45 floats into
     // 12 float4 = 48 floats with 3 of tail padding.
-    TEST(ShSwizzleLayout, IndexFormulaMatchesKernel) {
+    TEST_F(ShSwizzleLayout, IndexFormulaMatchesKernel) {
         using namespace lfs::core;
         constexpr std::uint32_t N = 96; // 3 full blocks of 32
         constexpr std::uint32_t K = 15;
@@ -124,9 +127,9 @@ namespace {
             }
         }
 
-        Tensor canonical = Tensor::from_vector(host_canonical, {N, K, 3}, Device::CUDA);
+        Tensor canonical = Tensor::from_vector(host_canonical, {N, K, 3}, Device::GPU);
         const size_t swizzled_floats = sh_swizzled_float_count(N);
-        Tensor swizzled = Tensor::zeros({swizzled_floats}, Device::CUDA);
+        Tensor swizzled = Tensor::zeros({swizzled_floats}, Device::GPU);
         reorder_sh_to_swizzled(canonical.ptr<float>(), swizzled.ptr<float>(), N, K);
         cudaDeviceSynchronize();
 
@@ -150,7 +153,7 @@ namespace {
         }
     }
 
-    TEST(ShSwizzleLayout, GatherSelectedRowsToLinearMatchesCanonical) {
+    TEST_F(ShSwizzleLayout, GatherSelectedRowsToLinearMatchesCanonical) {
         using namespace lfs::core;
         constexpr std::uint32_t N = 70;
         constexpr std::uint32_t K = 15;
@@ -166,13 +169,13 @@ namespace {
             }
         }
 
-        Tensor canonical = Tensor::from_vector(host_canonical, {N, K, 3}, Device::CUDA);
-        Tensor swizzled = Tensor::zeros({sh_swizzled_float_count(N)}, Device::CUDA);
+        Tensor canonical = Tensor::from_vector(host_canonical, {N, K, 3}, Device::GPU);
+        Tensor swizzled = Tensor::zeros({sh_swizzled_float_count(N)}, Device::GPU);
         reorder_sh_to_swizzled(canonical.ptr<float>(), swizzled.ptr<float>(), N, K);
 
         const std::vector<int> selected = {0, 5, 31, 32, 69};
-        Tensor indices = Tensor::from_vector(selected, {selected.size()}, Device::CUDA).to(DataType::Int64);
-        Tensor gathered = Tensor::empty({selected.size(), K, 3}, Device::CUDA);
+        Tensor indices = Tensor::from_vector(selected, {selected.size()}, Device::GPU).to(DataType::Int64);
+        Tensor gathered = Tensor::empty({selected.size(), K, 3}, Device::GPU);
         shN_swizzled_gather_to_linear_i64(
             swizzled.ptr<float>(), indices.ptr<std::int64_t>(),
             gathered.ptr<float>(), selected.size(), K);
@@ -192,16 +195,16 @@ namespace {
 
     // Both lane padding (primitives in the trailing block beyond N) and the tail padding
     // (slot 11's .y/.z/.w per primitive) must be zero after reorder.
-    TEST(ShSwizzleLayout, PaddingLanesAreZero) {
+    TEST_F(ShSwizzleLayout, PaddingLanesAreZero) {
         using namespace lfs::core;
         constexpr std::uint32_t N = 70; // last block has 6 padding lanes
         constexpr std::uint32_t K = 15;
         constexpr std::uint32_t SLOTS_PER_PRIM = 12u;
 
         std::vector<float> host_canonical(N * K * 3, 1.0f); // non-zero source so padding is visibly distinct
-        Tensor canonical = Tensor::from_vector(host_canonical, {N, K, 3}, Device::CUDA);
+        Tensor canonical = Tensor::from_vector(host_canonical, {N, K, 3}, Device::GPU);
         const size_t swizzled_floats = sh_swizzled_float_count(N);
-        Tensor swizzled = Tensor::zeros({swizzled_floats}, Device::CUDA);
+        Tensor swizzled = Tensor::zeros({swizzled_floats}, Device::GPU);
         reorder_sh_to_swizzled(canonical.ptr<float>(), swizzled.ptr<float>(), N, K);
         cudaDeviceSynchronize();
 

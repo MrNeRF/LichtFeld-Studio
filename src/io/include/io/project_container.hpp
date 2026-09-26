@@ -146,6 +146,7 @@ namespace lfs::io::project {
         // Byte-plane (f32-word) prefilter + zstd. Distinct wire encoding from
         // plain CHUNK_ZSTD_V1; readers without this bit refuse the generation.
         CHUNK_BYTESHUFFLE_ZSTD_V1 = 8,
+        ENCODED_SCENE_ASSETS = 9,
     };
 
     [[nodiscard]] LFS_IO_API CapabilitySet supported_reader_capabilities();
@@ -161,6 +162,9 @@ namespace lfs::io::project {
         Autosave = 2,
         Recovered = 3,
         Compaction = 4,
+        // Inspector classification from generation-scoped PROJ provenance.
+        // Contents writes retain the Explicit wire kind for older readers.
+        Contents = 5,
     };
 
     // Chunk payload entropy encodings (wire u16 / index-row u8).
@@ -264,7 +268,7 @@ namespace lfs::io::project {
         std::uint64_t commit_offset = 0;
         std::uint64_t committed_file_end = 0;
         std::uint32_t commit_crc32c_echo = 0;
-        std::optional<PreviewLocator> preview;
+        std::optional<PreviewLocator> preview = std::nullopt;
         std::uint32_t head_crc32c = 0;
     };
 
@@ -397,6 +401,10 @@ namespace lfs::io::project {
     public:
         [[nodiscard]] static lfs::Result<ProjectReader>
         open(const std::filesystem::path& path, const ReaderOptions& options = {});
+        [[nodiscard]] static lfs::Result<ProjectReader>
+        open_generation(const std::filesystem::path& path,
+                        std::uint64_t generation,
+                        const ReaderOptions& options = {});
         [[nodiscard]] static OpenClassification
         classify(const std::filesystem::path& path, const ReaderOptions& options = {});
 
@@ -412,7 +420,10 @@ namespace lfs::io::project {
         [[nodiscard]] const SuperblockInfo& superblock() const noexcept;
         [[nodiscard]] const HeadInfo& selected_head() const noexcept;
         [[nodiscard]] const CommitInfo& commit() const noexcept;
+        [[nodiscard]] std::vector<CommitInfo> lineage() const;
         [[nodiscard]] const std::vector<ChunkInfo>& chunks() const noexcept;
+        [[nodiscard]] lfs::Result<std::vector<std::vector<ChunkInfo>>>
+        lineage_chunks() const;
         [[nodiscard]] const std::vector<std::string>& warnings() const noexcept;
         [[nodiscard]] const std::optional<PreviewLocator>& preview() const noexcept;
         [[nodiscard]] const ReaderOptions& reader_options() const noexcept;
@@ -512,31 +523,33 @@ namespace lfs::io::project {
         lfs::core::Uuid project_uuid;
         lfs::core::Uuid file_uuid;
         ContainerRole role = ContainerRole::Master;
-        lfs::core::Uuid base_explicit_commit_uuid;
+        lfs::core::Uuid base_explicit_commit_uuid = {};
         std::uint64_t autosave_sequence = 0;
-        lfs::core::Uuid sidecar_snapshot_uuid;
+        lfs::core::Uuid sidecar_snapshot_uuid = {};
         std::uint64_t creation_time_unix_ns = 0;
         IndexCompression index_compression = IndexCompression::Zstd;
         std::uint64_t disk_reserve_bytes = 64ull * 1024 * 1024;
-        CommitBoundaryObserver boundary_observer;
+        CommitBoundaryObserver boundary_observer = {};
         // Sidecars use the master path here so creation, replacement, and
         // recovery cleanup all share the master's exclusive writer lock.
         ReaderOptions writer_lock_anchor_compatibility = {};
-        std::optional<std::filesystem::path> writer_lock_anchor;
+        std::optional<std::filesystem::path> writer_lock_anchor = std::nullopt;
         std::optional<WriterLockLease> writer_lock_lease =
             std::nullopt;
     };
 
     struct AppendOptions {
-        ReaderOptions compatibility;
+        ReaderOptions compatibility = {};
         IndexCompression index_compression = IndexCompression::Zstd;
         std::uint64_t disk_reserve_bytes = 64ull * 1024 * 1024;
-        CommitBoundaryObserver boundary_observer;
+        CommitBoundaryObserver boundary_observer = {};
         std::optional<WriterLockLease> writer_lock_lease =
             std::nullopt;
         // Writers that must not lose their generation to a transient
         // in-process lock holder wait instead of failing immediately.
         std::chrono::milliseconds writer_lock_wait{0};
+        lfs::core::Uuid expected_project_uuid = {};
+        lfs::core::Uuid expected_commit_uuid = {};
     };
 
     struct ChunkWriteOptions {
@@ -544,12 +557,12 @@ namespace lfs::io::project {
         Compression compression = Compression::Stored;
         bool tensor_payload = false;
         bool block_crcs = false;
-        std::optional<std::uint64_t> expected_stream_bytes;
+        std::optional<std::uint64_t> expected_stream_bytes = std::nullopt;
     };
 
     struct CommitOptions {
         CommitKind kind = CommitKind::Explicit;
-        lfs::core::Uuid commit_uuid;
+        lfs::core::Uuid commit_uuid = {};
         lfs::core::Uuid snapshot_uuid;
         std::uint64_t wallclock_unix_ns = 0;
         // The 1.1 container can still carry 1.0-compatible commits.  A
@@ -562,6 +575,7 @@ namespace lfs::io::project {
     };
 
     struct CompactionOptions {
+        std::optional<WriterLockLease> writer_lock_lease = std::nullopt;
         ReaderOptions compatibility;
         lfs::core::Uuid new_file_uuid;
         // Save As staging may replace the project identity before rewriting
@@ -578,6 +592,14 @@ namespace lfs::io::project {
         // must complete the final append, full CRC verification, and durable
         // publication before exposing it as the destination.
         bool private_staging = false;
+        std::function<void(float, const std::string&)> progress = {};
+        std::function<bool()> cancel = {};
+        // Optional PROJ metadata prepared by a closed-file Contents operation.
+        // It is published atomically with the compacted file.
+        std::vector<std::byte> project_chapter_override = {};
+        // Closed-file cleanup excludes only checkpoints not bound to the scene.
+        std::vector<lfs::core::Uuid> excluded_checkpoints = {};
+        lfs::core::Uuid expected_source_commit_uuid = {};
     };
 
     class LFS_IO_API ProjectWriter {

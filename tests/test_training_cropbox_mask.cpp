@@ -6,6 +6,7 @@
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training_cropbox_mask.hpp"
 
@@ -156,7 +157,9 @@ namespace {
 
 } // namespace
 
-TEST(TrainingCropBoxMask, TranslatedCropBoxRemovesOnlyPointsOutsideBox) {
+class TrainingCropBoxMask : public lfs::test::CudaBackendTest {};
+
+TEST_F(TrainingCropBoxMask, TranslatedCropBoxRemovesOnlyPointsOutsideBox) {
     lfs::core::Scene scene;
     auto* const model = add_training_model_with_translated_cropbox(scene, false);
     const auto before = snapshot_cropbox_scene(scene, *model);
@@ -169,7 +172,7 @@ TEST(TrainingCropBoxMask, TranslatedCropBoxRemovesOnlyPointsOutsideBox) {
     expect_cropbox_scene_unchanged(scene, *model, before);
 }
 
-TEST(TrainingCropBoxMask, InverseTranslatedCropBoxRemovesOnlyPointsInsideBox) {
+TEST_F(TrainingCropBoxMask, InverseTranslatedCropBoxRemovesOnlyPointsInsideBox) {
     lfs::core::Scene scene;
     auto* const model = add_training_model_with_translated_cropbox(scene, true);
     const auto before = snapshot_cropbox_scene(scene, *model);
@@ -182,7 +185,7 @@ TEST(TrainingCropBoxMask, InverseTranslatedCropBoxRemovesOnlyPointsInsideBox) {
     expect_cropbox_scene_unchanged(scene, *model, before);
 }
 
-TEST(TrainingCropBoxMask, SoftDeletedSplatsAreNotReturnedForRemovalAgain) {
+TEST_F(TrainingCropBoxMask, SoftDeletedSplatsAreNotReturnedForRemovalAgain) {
     lfs::core::Scene scene;
     auto* const model = add_training_model_with_translated_cropbox(scene, false);
     model->deleted() = lfs::core::Tensor::from_vector(
@@ -199,7 +202,7 @@ TEST(TrainingCropBoxMask, SoftDeletedSplatsAreNotReturnedForRemovalAgain) {
     expect_cropbox_scene_unchanged(scene, *model, before);
 }
 
-TEST(TrainingCropBoxMask, MissingTrainingModelReturnsNulloptWithoutSceneMutation) {
+TEST_F(TrainingCropBoxMask, MissingTrainingModelReturnsNulloptWithoutSceneMutation) {
     lfs::core::Scene scene;
     auto model = make_crop_test_splat();
     const size_t node_count_before = scene.getNodes().size();
@@ -214,7 +217,7 @@ TEST(TrainingCropBoxMask, MissingTrainingModelReturnsNulloptWithoutSceneMutation
     EXPECT_EQ(model->means().to(lfs::core::Device::CPU).to_vector(), means_before);
 }
 
-TEST(TrainingCropBoxMask, MissingCropBoxReturnsNulloptWithoutCreatingCropBox) {
+TEST_F(TrainingCropBoxMask, MissingCropBoxReturnsNulloptWithoutCreatingCropBox) {
     lfs::core::Scene scene;
     auto model = make_crop_test_splat();
     auto* const model_ptr = model.get();
@@ -233,7 +236,7 @@ TEST(TrainingCropBoxMask, MissingCropBoxReturnsNulloptWithoutCreatingCropBox) {
     EXPECT_EQ(model_ptr->means().to(lfs::core::Device::CPU).to_vector(), means_before);
 }
 
-TEST(TrainingCropBoxMask, DisabledCropBoxReturnsNulloptWithoutMutation) {
+TEST_F(TrainingCropBoxMask, DisabledCropBoxReturnsNulloptWithoutMutation) {
     lfs::core::Scene scene;
     auto* const model = add_training_model_with_translated_cropbox(scene, false);
     const lfs::core::NodeId cropbox_id = cropbox_id_for_model(scene);
@@ -248,7 +251,7 @@ TEST(TrainingCropBoxMask, DisabledCropBoxReturnsNulloptWithoutMutation) {
     expect_cropbox_scene_unchanged(scene, *model, before);
 }
 
-TEST(TrainingCropBoxMask, LossGeometryIsInactiveWithoutCropOrAtUnitWeight) {
+TEST_F(TrainingCropBoxMask, LossGeometryIsInactiveWithoutCropOrAtUnitWeight) {
     lfs::core::Scene no_crop_scene;
     EXPECT_FALSE(
         lfs::training::resolve_training_cropbox_loss_geom(no_crop_scene, 0.1f)
@@ -264,7 +267,7 @@ TEST(TrainingCropBoxMask, LossGeometryIsInactiveWithoutCropOrAtUnitWeight) {
             .has_value());
 }
 
-TEST(TrainingCropBoxMask, WiderMeansUseFirstThreeColumnsForCropMask) {
+TEST_F(TrainingCropBoxMask, WiderMeansUseFirstThreeColumnsForCropMask) {
     const auto means = lfs::core::Tensor::from_vector(
         std::vector<float>{
             0.0f, 0.0f, 0.0f, 1000.0f,
@@ -287,7 +290,7 @@ TEST(TrainingCropBoxMask, WiderMeansUseFirstThreeColumnsForCropMask) {
     EXPECT_EQ(means.to(lfs::core::Device::CPU).to_vector(), means_before);
 }
 
-TEST(TrainingCropBoxMask, RotatedCropBoxUsesPointToBoxTransform) {
+TEST_F(TrainingCropBoxMask, RotatedCropBoxUsesPointToBoxTransform) {
     const auto means = lfs::core::Tensor::from_vector(
         std::vector<float>{
             0.0f, 1.5f, 0.0f,
@@ -311,7 +314,7 @@ TEST(TrainingCropBoxMask, RotatedCropBoxUsesPointToBoxTransform) {
               (std::vector<bool>{false, true, false, true}));
 }
 
-TEST(TrainingCropBoxMask, NonUniformlyScaledCropBoxUsesFullAffineTransform) {
+TEST_F(TrainingCropBoxMask, NonUniformlyScaledCropBoxUsesFullAffineTransform) {
     const auto means = lfs::core::Tensor::from_vector(
         std::vector<float>{
             1.5f, 0.0f, 0.0f,
@@ -336,7 +339,7 @@ TEST(TrainingCropBoxMask, NonUniformlyScaledCropBoxUsesFullAffineTransform) {
               (std::vector<bool>{false, true, false, true, false}));
 }
 
-TEST(TrainingCropBoxMask, TrainingModelTransformIsComposedBeforeChildCropBox) {
+TEST_F(TrainingCropBoxMask, TrainingModelTransformIsComposedBeforeChildCropBox) {
     lfs::core::Scene scene;
     auto model = make_test_splat({2.0f, 0.0f, 0.0f,
                                   2.75f, 0.25f, 0.0f,
@@ -372,7 +375,7 @@ TEST(TrainingCropBoxMask, TrainingModelTransformIsComposedBeforeChildCropBox) {
     expect_cropbox_scene_unchanged(scene, *model_ptr, before);
 }
 
-TEST(TrainingCropBoxMask, PureMaskMatchesOnCpuAndCuda) {
+TEST_F(TrainingCropBoxMask, PureMaskMatchesOnCpuAndCuda) {
     const auto cpu_means = lfs::core::Tensor::from_vector(
         std::vector<float>{
             1.0f, 0.0f, 0.0f,
@@ -396,8 +399,8 @@ TEST(TrainingCropBoxMask, PureMaskMatchesOnCpuAndCuda) {
         false,
         &cpu_deleted);
 
-    const auto cuda_means = cpu_means.to(lfs::core::Device::CUDA);
-    const auto cuda_deleted = cpu_deleted.to(lfs::core::Device::CUDA);
+    const auto cuda_means = cpu_means.to(lfs::core::Device::GPU);
+    const auto cuda_deleted = cpu_deleted.to(lfs::core::Device::GPU);
     const auto cuda_mask = lfs::training::compute_cropbox_remove_mask(
         cuda_means,
         {-1.0f, -1.0f, -1.0f},
@@ -413,11 +416,11 @@ TEST(TrainingCropBoxMask, PureMaskMatchesOnCpuAndCuda) {
     EXPECT_EQ(cuda_mask->to(lfs::core::Device::CPU).to_vector_bool(), expected);
 }
 
-TEST(TrainingCropBoxMask, DampedOptimizerStepUsesComputedRejectedMask) {
+TEST_F(TrainingCropBoxMask, DampedOptimizerStepUsesComputedRejectedMask) {
     auto model = make_test_splat(
         {0.0f, 0.0f, 0.0f,
          2.0f, 0.0f, 0.0f},
-        lfs::core::Device::CUDA);
+        lfs::core::Device::GPU);
     const auto remove_mask = lfs::training::compute_cropbox_remove_mask(
         model->means(),
         {-1.0f, -1.0f, -1.0f},
@@ -448,7 +451,7 @@ TEST(TrainingCropBoxMask, DampedOptimizerStepUsesComputedRejectedMask) {
     EXPECT_NEAR(delta[3], delta[0] * 0.1f, 1e-7f);
 }
 
-TEST(TrainingCropBoxMask, EmptyMeansReturnNulloptWithoutMutation) {
+TEST_F(TrainingCropBoxMask, EmptyMeansReturnNulloptWithoutMutation) {
     const auto means = lfs::core::Tensor::zeros({size_t{0}, size_t{3}},
                                                 lfs::core::Device::CPU,
                                                 lfs::core::DataType::Float32);

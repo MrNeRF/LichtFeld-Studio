@@ -8,15 +8,16 @@
 #include "core/igs_failure_diagnostics.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
+#include "core/tensor_cuda_interop.hpp"
+#include "core/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "strategy_utils.hpp"
 
-#include "core/tensor/internal/memory_pool.hpp"
 #include "kernels/densification_kernels.hpp"
-#include "kernels/mcmc_kernels.hpp"
 #include "kernels/mrnf_kernels.hpp"
+#include "lfs/training/ops/registry.hpp"
 #include "optimizer/adam_optimizer.hpp"
 
 #include <algorithm>
@@ -53,7 +54,7 @@ namespace lfs::training {
         }
 
         void normalize_by_positive_median_inplace(lfs::core::Tensor& tensor) {
-            if (tensor.device() == lfs::core::Device::CUDA &&
+            if (tensor.device() == lfs::core::Device::GPU &&
                 tensor.dtype() == lfs::core::DataType::Float32 &&
                 tensor.is_valid() && tensor.numel() > 0) {
                 kernels::launch_normalize_by_positive_median(
@@ -186,7 +187,18 @@ namespace lfs::training {
     } // namespace
 
     ImprovedGSPlus::ImprovedGSPlus(lfs::core::SplatData& splat_data)
-        : _splat_data(&splat_data) {}
+        : _splat_data(&splat_data) {
+        mcmc_ops_ = training_ops(lfs::core::default_gpu_backend()).mcmc;
+    }
+
+    const lfs::gpu_ops::McmcOps& ImprovedGSPlus::mcmc_ops() const {
+        if (mcmc_ops_ == nullptr) [[unlikely]] {
+            throw std::runtime_error(
+                unavailable_training_family(lfs::core::default_gpu_backend(), Family::Mcmc)
+                    .value_or("Mcmc training ops are unavailable"));
+        }
+        return *mcmc_ops_;
+    }
 
     std::vector<int64_t> ImprovedGSPlus::get_count_array() {
 
@@ -423,26 +435,18 @@ namespace lfs::training {
                         return;
 
                     if (state->is_joint()) {
-                        auto idx_cpu = sampled_idxs.cpu();
-                        std::vector<int64_t> host_idx;
-                        host_idx.reserve(sampled_idxs.numel());
-                        if (idx_cpu.dtype() == lfs::core::DataType::Int64) {
-                            const auto* p = idx_cpu.ptr<int64_t>();
-                            host_idx.assign(p, p + sampled_idxs.numel());
-                        } else if (idx_cpu.dtype() == lfs::core::DataType::Int32) {
-                            const auto* p = idx_cpu.ptr<int32_t>();
-                            for (size_t i = 0; i < sampled_idxs.numel(); ++i)
-                                host_idx.push_back(static_cast<int64_t>(p[i]));
-                        }
-                        if (!host_idx.empty())
-                            _optimizer->reset_state_at_indices(param_type, host_idx);
+                        _optimizer->reset_state_at_indices(param_type, sampled_idxs);
                         if (param_type == ParamType::ShN) {
                             if (layout_rest_u32 != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
                                 auto idx_i32 = sampled_idxs.dtype() == lfs::core::DataType::Int32
                                                    ? sampled_idxs
                                                    : sampled_idxs.to(lfs::core::DataType::Int32);
+                                const auto stream = lfs::core::getCurrentCUDAStream();
+                                idx_i32.sync_to_stream(stream);
+                                state->grad.set_stream(stream);
                                 lfs::core::shN_swizzled_zero_at_indices(
-                                    state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest_u32);
+                                    state->grad.ptr<float>(), idx_i32.ptr<int>(),
+                                    idx_i32.numel(), layout_rest_u32, stream);
                             }
                             return;
                         }
@@ -467,17 +471,6 @@ namespace lfs::training {
                 reset_optimizer_state_at_indices(ParamType::Sh0);
                 reset_optimizer_state_at_indices(ParamType::ShN);
                 reset_optimizer_state_at_indices(ParamType::Opacity);
-            } else {
-                // fused Adam-scale zero for split parents (legacy codec fast path).
-                {
-                    float* adam_ptrs[12] = {};
-                    const int n_adam = collect_adam_scale_ptrs(*_optimizer, adam_ptrs);
-                    if (n_adam > 0) {
-                        kernels::launch_zero_adam_scales_at_indices(
-                            sampled_idxs.ptr<int64_t>(), K, adam_ptrs, n_adam,
-                            static_cast<size_t>(_splat_data->size()));
-                    }
-                }
             }
             zero_adam_grads_at_indices(*_optimizer, sampled_idxs, layout_rest_u32);
         }
@@ -611,9 +604,11 @@ namespace lfs::training {
             return;
         }
 
+        const auto stream = lfs::core::getCurrentCUDAStream();
+        _edge_view_scores.set_stream(stream);
         kernels::launch_normalize_by_positive_median(
             _edge_view_scores.ptr<float>(), _edge_view_scores.numel(),
-            _edge_view_scores.stream(), &_edge_median_scratch);
+            stream);
         zero_frozen_scores_inplace(*_splat_data, _edge_view_scores);
         _edge_score_sum.add_(_edge_view_scores);
         ++_edge_sample_count;
@@ -667,10 +662,7 @@ namespace lfs::training {
                 accum.ndim() == 2 &&
                 accum.shape()[0] >= 2 &&
                 accum.shape()[1] == _error_score_max.numel()) {
-                lfs::training::mcmc::launch_max_error_and_zero_densification(
-                    _error_score_max.ptr<float>(),
-                    _splat_data->_densification_info.ptr<float>(),
-                    _error_score_max.numel());
+                mcmc_ops().fold_error(_error_score_max, _splat_data->_densification_info);
                 zero_frozen_scores_inplace(*_splat_data, _error_score_max);
             } else if (accum.is_valid() && accum.numel() > 0) {
                 _splat_data->_densification_info.zero_();
@@ -737,9 +729,8 @@ namespace lfs::training {
             _edge_score_sum = lfs::core::Tensor();
             _edge_view_scores = lfs::core::Tensor();
             _edge_sample_count = 0;
-            _edge_median_scratch.release();
 
-            lfs::core::CudaMemoryPool::instance().trim_cached_memory();
+            lfs::core::Tensor::trim_device_memory_pool();
         }
     }
 
@@ -895,19 +886,7 @@ namespace lfs::training {
                 return;
 
             if (state->is_joint()) {
-                auto idx_cpu = prune_indices.cpu();
-                std::vector<int64_t> host_idx;
-                host_idx.reserve(static_cast<size_t>(num_pruned));
-                if (idx_cpu.dtype() == lfs::core::DataType::Int64) {
-                    const auto* p = idx_cpu.ptr<int64_t>();
-                    host_idx.assign(p, p + num_pruned);
-                } else if (idx_cpu.dtype() == lfs::core::DataType::Int32) {
-                    const auto* p = idx_cpu.ptr<int32_t>();
-                    for (int64_t i = 0; i < num_pruned; ++i)
-                        host_idx.push_back(static_cast<int64_t>(p[i]));
-                }
-                if (!host_idx.empty())
-                    _optimizer->reset_state_at_indices(param_type, host_idx);
+                _optimizer->reset_state_at_indices(param_type, prune_indices);
                 if (param_type == ParamType::ShN) {
                     const auto layout_rest =
                         static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
@@ -915,9 +894,12 @@ namespace lfs::training {
                         auto idx_i32 = prune_indices.dtype() == lfs::core::DataType::Int32
                                            ? prune_indices
                                            : prune_indices.to(lfs::core::DataType::Int32);
+                        const auto stream = lfs::core::getCurrentCUDAStream();
+                        idx_i32.sync_to_stream(stream);
+                        state->grad.set_stream(stream);
                         lfs::core::shN_swizzled_zero_at_indices(
-                            state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(),
-                            layout_rest);
+                            state->grad.ptr<float>(), idx_i32.ptr<int>(),
+                            idx_i32.numel(), layout_rest, stream);
                     }
                     return;
                 }
@@ -986,8 +968,6 @@ namespace lfs::training {
         const int64_t slots_to_fill = std::min(count, num_free);
         auto target_indices = free_indices.slice(0, 0, slots_to_fill);
 
-        float* adam_ptrs[12] = {};
-        const int n_adam = collect_adam_scale_ptrs(*_optimizer, adam_ptrs);
         const int opacity_dim = (_splat_data->opacity_raw().ndim() == 2) ? 1 : 0;
         auto pos_slice = positions.slice(0, 0, slots_to_fill);
         auto rot_slice = rotations.slice(0, 0, slots_to_fill);
@@ -1009,8 +989,6 @@ namespace lfs::training {
             _splat_data->sh0().ptr<float>(),
             _splat_data->opacity_raw().ptr<float>(),
             opacity_dim,
-            adam_ptrs,
-            n_adam,
             _free_mask.ptr<bool>(),
             current_size);
 
@@ -1042,26 +1020,18 @@ namespace lfs::training {
                         return;
 
                     if (state->is_joint()) {
-                        auto idx_cpu = target_indices.cpu();
-                        std::vector<int64_t> host_idx;
-                        host_idx.reserve(target_indices.numel());
-                        if (idx_cpu.dtype() == lfs::core::DataType::Int64) {
-                            const auto* p = idx_cpu.ptr<int64_t>();
-                            host_idx.assign(p, p + target_indices.numel());
-                        } else if (idx_cpu.dtype() == lfs::core::DataType::Int32) {
-                            const auto* p = idx_cpu.ptr<int32_t>();
-                            for (size_t i = 0; i < target_indices.numel(); ++i)
-                                host_idx.push_back(static_cast<int64_t>(p[i]));
-                        }
-                        if (!host_idx.empty())
-                            _optimizer->reset_state_at_indices(param_type, host_idx);
+                        _optimizer->reset_state_at_indices(param_type, target_indices);
                         if (param_type == ParamType::ShN) {
                             if (layout_rest != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
                                 auto idx_i32 = target_indices.dtype() == lfs::core::DataType::Int32
                                                    ? target_indices
                                                    : target_indices.to(lfs::core::DataType::Int32);
+                                const auto stream = lfs::core::getCurrentCUDAStream();
+                                idx_i32.sync_to_stream(stream);
+                                state->grad.set_stream(stream);
                                 lfs::core::shN_swizzled_zero_at_indices(
-                                    state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
+                                    state->grad.ptr<float>(), idx_i32.ptr<int>(),
+                                    idx_i32.numel(), layout_rest, stream);
                             }
                             return;
                         }
@@ -1171,7 +1141,6 @@ namespace lfs::training {
             _edge_score_sum = lfs::core::Tensor();
             _edge_view_scores = lfs::core::Tensor();
             _edge_sample_count = 0;
-            _edge_median_scratch.release();
             _error_score_max = lfs::core::Tensor::zeros({static_cast<size_t>(_splat_data->size())}, _splat_data->means().device());
             _precompute_valid = false;
             _current_step = 0;
@@ -1260,8 +1229,8 @@ namespace lfs::training {
                 free_mask.numel() > max_capacity) {
                 throw std::runtime_error("Invalid ImprovedGSPlus checkpoint: free mask has incompatible schema");
             }
-            if (_splat_data->means().device() == lfs::core::Device::CUDA) {
-                free_mask = free_mask.cuda();
+            if (_splat_data->means().device() == lfs::core::Device::GPU) {
+                free_mask = free_mask.gpu();
             }
         } else {
             const size_t capacity = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap)
@@ -1280,7 +1249,6 @@ namespace lfs::training {
         _edge_score_sum = lfs::core::Tensor();
         _edge_view_scores = lfs::core::Tensor();
         _edge_sample_count = 0;
-        _edge_median_scratch.release();
         _error_score_max = lfs::core::Tensor::zeros({static_cast<size_t>(_splat_data->size())}, _splat_data->means().device());
         _precompute_valid = false;
 
@@ -1308,7 +1276,6 @@ namespace lfs::training {
         std::swap(_edge_score_sum, source._edge_score_sum);
         std::swap(_edge_view_scores, source._edge_view_scores);
         std::swap(_edge_sample_count, source._edge_sample_count);
-        std::swap(_edge_median_scratch, source._edge_median_scratch);
         std::swap(_error_score_max, source._error_score_max);
         std::swap(_precompute_valid, source._precompute_valid);
         std::swap(_free_mask, source._free_mask);

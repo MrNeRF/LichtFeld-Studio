@@ -259,9 +259,15 @@ namespace lfs::io::project {
                 }
                 return {};
             }
+            if (node.type == lfs::core::NodeType::SPLAT && binding.fourcc == "DSRC" &&
+                (binding.source_kind == "ply" || binding.source_kind == "sog" ||
+                 binding.source_kind == "ssog" || binding.source_kind == "spz") &&
+                binding.instance_uuid == node.uuid && !binding.reference_uuid) {
+                return {};
+            }
             if (node.type == lfs::core::NodeType::SPLAT &&
                 (binding.source_kind == "ply" || binding.source_kind == "spz" ||
-                 binding.source_kind == "sog" ||
+                 binding.source_kind == "sog" || binding.source_kind == "ssog" ||
                  binding.source_kind == "generated" ||
                  binding.source_kind == "baked_rad") &&
                 (binding.fourcc != "SPLT" ||
@@ -436,7 +442,9 @@ namespace lfs::io::project {
                     camera->adopt_undistortion(cached->second);
                 } else {
                     camera->precompute_undistortion(0.0f);
-                    undistort_cache.emplace(std::move(key), camera->undistort_params());
+                    // Share only parameters that were actually computed.
+                    if (camera->is_undistort_precomputed())
+                        undistort_cache.emplace(std::move(key), camera->undistort_params());
                 }
             }
             camera->set_image_dimensions(value.image_width, value.image_height);

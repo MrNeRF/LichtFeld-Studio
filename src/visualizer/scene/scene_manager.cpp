@@ -14,6 +14,7 @@
 #include "core/services.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data_transform.hpp"
+#include "core/tensor_backend.hpp"
 #include "geometry/bounding_box.hpp"
 #include "geometry/euclidean_transform.hpp"
 #include "gui/gui_manager.hpp"
@@ -23,18 +24,28 @@
 #include "io/splat_path.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
+#include "operator/operator_registry.hpp"
 #include "python/python_runtime.hpp"
+#include "rendering/appearance_tensor_model.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
+#include "scene/point_cloud_merge.hpp"
 #include "scene/viewer_splat_quantize.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "training/checkpoint.hpp"
+#include <sstream>
+#if LFS_BUILD_TRAINER
+#include "lfs/training/ops/registry.hpp"
 #include "training/components/ppisp.hpp"
-#include "training/components/ppisp_controller.hpp"
-#include "training/components/ppisp_file.hpp"
+#include "training/components/ppisp_controller_pool.hpp"
+#endif
+#include "core/camera_metrics.hpp"
+#include "io/ppisp_file.hpp"
+#if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
-#include "training/training_manager.hpp"
+#endif
+#include "core/training_manager.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui_capabilities.hpp"
@@ -45,7 +56,6 @@
 #include "window/window_manager.hpp"
 #include <algorithm>
 #include <cctype>
-#include <cuda_runtime.h>
 #include <format>
 #include <glm/gtc/quaternion.hpp>
 #include <limits>
@@ -72,11 +82,6 @@ namespace lfs::vis {
         }
 
         void clearMeshCpuCache();
-
-        template <typename TRenderable>
-        [[nodiscard]] bool containsRenderableNode(const std::vector<TRenderable>& renderables, const core::NodeId node_id) {
-            return std::ranges::any_of(renderables, [node_id](const auto& item) { return item.node_id == node_id; });
-        }
 
         template <typename TRenderable>
         [[nodiscard]] bool containsEnabledScopedRenderableNode(const std::vector<TRenderable>& renderables,
@@ -413,38 +418,10 @@ namespace lfs::vis {
             for (const auto* node : visible_nodes) {
                 const auto& point_cloud = *node->point_cloud;
                 const glm::mat4 world_transform = scene.getWorldTransform(node->id);
-                auto means_cpu = point_cloud.means.to(core::DataType::Float32).cpu();
-                auto means_acc = means_cpu.accessor<float, 2>();
-                const size_t point_count = static_cast<size_t>(point_cloud.size());
-
-                for (size_t i = 0; i < point_count; ++i) {
-                    const glm::vec4 world_pos = world_transform * glm::vec4(
-                                                                      means_acc(i, 0),
-                                                                      means_acc(i, 1),
-                                                                      means_acc(i, 2),
-                                                                      1.0f);
-                    merged_means.push_back(world_pos.x);
-                    merged_means.push_back(world_pos.y);
-                    merged_means.push_back(world_pos.z);
-                }
-
-                if (point_cloud.colors.dtype() == core::DataType::UInt8) {
-                    auto colors_cpu = point_cloud.colors.cpu();
-                    auto colors_acc = colors_cpu.accessor<uint8_t, 2>();
-                    for (size_t i = 0; i < point_count; ++i) {
-                        merged_colors.push_back(static_cast<float>(colors_acc(i, 0)) / 255.0f);
-                        merged_colors.push_back(static_cast<float>(colors_acc(i, 1)) / 255.0f);
-                        merged_colors.push_back(static_cast<float>(colors_acc(i, 2)) / 255.0f);
-                    }
-                } else {
-                    auto colors_cpu = point_cloud.colors.to(core::DataType::Float32).cpu();
-                    auto colors_acc = colors_cpu.accessor<float, 2>();
-                    for (size_t i = 0; i < point_count; ++i) {
-                        merged_colors.push_back(colors_acc(i, 0));
-                        merged_colors.push_back(colors_acc(i, 1));
-                        merged_colors.push_back(colors_acc(i, 2));
-                    }
-                }
+                const auto means = transformPointsToWorld(point_cloud.means, world_transform).to_vector();
+                const auto colors = pointColorsAsFloat(point_cloud.colors).to_vector();
+                merged_means.insert(merged_means.end(), means.begin(), means.end());
+                merged_colors.insert(merged_colors.end(), colors.begin(), colors.end());
             }
 
             auto merged = std::make_shared<core::PointCloud>();
@@ -567,7 +544,6 @@ namespace lfs::vis {
                 }
             }
 
-            // Normal mode: existing cycle code
             if (content_type_ == ContentType::SplatFiles) {
                 auto [hidden, shown] = scene_.cycleVisibilityWithNames();
 
@@ -850,14 +826,16 @@ namespace lfs::vis {
     std::expected<lfs::io::LoadResult, std::string> SceneManager::stageSplatFile(
         const std::filesystem::path& path,
         lfs::io::ProgressCallback progress,
-        lfs::io::CancelCallback cancel_requested) {
+        lfs::io::CancelCallback cancel_requested, const bool preserve_raw) {
         LOG_TIMER("SceneManager::stageSplatFile");
 
         try {
             LOG_INFO("Loading splat file: {}", lfs::core::path_to_utf8(path));
             LOG_DEBUG("Creating loader for splat file");
             auto loader = lfs::io::Loader::create();
-            auto splat_allocator = makeExternalSplatAllocator();
+            // Import gallery coefficients directly into float-capable renderer
+            // storage; the loader otherwise encodes pooled SH to q16.
+            auto splat_allocator = makeViewerSplatTensorAllocator(preserve_raw);
             lfs::io::LoadOptions options{
                 .resize_factor = -1,
                 .max_width = 0,
@@ -866,7 +844,7 @@ namespace lfs::vis {
                 .progress = std::move(progress),
                 .cancel_requested = std::move(cancel_requested),
                 .splat_tensor_allocator = splat_allocator,
-                .shN_q16 = lfs::core::sh_value_quant::enabled()};
+                .shN_q16 = !preserve_raw && lfs::core::sh_value_quant::enabled()};
 
             LOG_TRACE("Loading splat file with loader");
             auto load_result = loader->load(path, options);
@@ -888,7 +866,8 @@ namespace lfs::vis {
                                                     const std::string& name_hint,
                                                     const bool is_visible,
                                                     lfs::io::LoadResult load_result,
-                                                    const bool replace_scene) {
+                                                    const bool replace_scene,
+                                                    const bool defer_import_license) {
         LOG_TIMER("SceneManager::attachLoadedSplatFile");
         (void)is_visible;
 
@@ -1082,6 +1061,8 @@ namespace lfs::vis {
                 .voxel_size = DEFAULT_VOXEL_SIZE}
                 .emit();
 
+            if (!defer_import_license && load_result.license_bytes && import_license_callback_)
+                import_license_callback_(load_result.license_bytes);
             return attached_name;
 
         } catch (const std::exception& e) {
@@ -1092,56 +1073,17 @@ namespace lfs::vis {
 
     void SceneManager::loadPPISPCompanion(const std::filesystem::path& ppisp_path) {
         try {
-            // Read header to get dimensions
-            std::ifstream file;
-            if (!lfs::core::open_file_for_read(ppisp_path, std::ios::binary, file)) {
-                LOG_ERROR("Failed to open PPISP file: {}", lfs::core::path_to_utf8(ppisp_path));
+            auto loaded = AppearanceTensorModel::load(ppisp_path, lfs::core::default_gpu_backend());
+            if (!loaded) {
+                LOG_ERROR("Failed to load PPISP file: {}", lfs::format_for_developer(loaded.error()));
                 return;
             }
-
-            lfs::training::PPISPFileHeader header{};
-            file.read(reinterpret_cast<char*>(&header), sizeof(header));
-            file.close();
-
-            if (header.magic != lfs::training::PPISP_FILE_MAGIC) {
-                LOG_ERROR("Invalid PPISP file: wrong magic");
-                return;
-            }
-
-            // Create PPISP for inference (total_iterations=1 since we won't be training)
-            // deserialize_inference will set up internal maps from the file
-            auto ppisp = std::make_unique<lfs::training::PPISP>(1);
-
-            // Create controller pool if present in file
-            std::unique_ptr<lfs::training::PPISPControllerPool> controller_pool;
-            if (lfs::training::has_flag(header.flags, lfs::training::PPISPFileFlags::HAS_CONTROLLER)) {
-                controller_pool = std::make_unique<lfs::training::PPISPControllerPool>(
-                    static_cast<int>(header.num_cameras), 1);
-            }
-
-            // Load the actual data
-            auto result = lfs::training::load_ppisp_file(ppisp_path, *ppisp, controller_pool.get());
-            if (!result) {
-                LOG_ERROR("Failed to load PPISP file: {}", result.error());
-                return;
-            }
-
-            // Allocate CNN buffers for controller if present
-            if (controller_pool) {
-                // Use a reasonable default size for viewport rendering
-                // Buffers will be reallocated if larger images are needed
-                constexpr size_t DEFAULT_MAX_H = 1080;
-                constexpr size_t DEFAULT_MAX_W = 1920;
-                controller_pool->allocate_buffers(DEFAULT_MAX_H, DEFAULT_MAX_W);
-            }
-
-            const bool has_controller = (controller_pool != nullptr);
-            setAppearanceModel(std::move(ppisp), std::move(controller_pool));
+            setAppearanceModel(std::move(*loaded));
             {
                 std::lock_guard<std::mutex> lock(state_mutex_);
                 ppisp_path_ = ppisp_path;
             }
-            ui::AppearanceModelLoaded{.has_controller = has_controller}.emit();
+            ui::AppearanceModelLoaded{.has_controller = appearance_tensor_model_->hasController()}.emit();
 
         } catch (const std::exception& e) {
             LOG_ERROR("Failed to load PPISP companion: {}", e.what());
@@ -1151,7 +1093,9 @@ namespace lfs::vis {
     std::string SceneManager::attachLoadedSplatNode(const std::filesystem::path& path,
                                                     const std::string& name_hint,
                                                     const bool is_visible,
-                                                    lfs::io::LoadResult load_result) {
+                                                    lfs::io::LoadResult load_result,
+                                                    const bool preserve_raw, const core::NodeId parent,
+                                                    const bool defer_import_license) {
         LOG_TIMER_TRACE("SceneManager::attachLoadedSplatNode");
 
         try {
@@ -1165,7 +1109,8 @@ namespace lfs::vis {
                     throw std::runtime_error(migrated.error().format());
                 }
             }
-            quantizeViewerLoadedPlyShN(path, load_result);
+            if (!preserve_raw)
+                quantizeViewerLoadedPlyShN(path, load_result);
 
             const std::string base_name = name_hint.empty() ? lfs::io::splat_import_name(path) : name_hint;
             std::string name = base_name;
@@ -1216,7 +1161,7 @@ namespace lfs::vis {
             const size_t gaussian_count = (*splat_data)->size();
             const core::NodeId node_id = scene_.addSplat(
                 name,
-                std::make_unique<lfs::core::SplatData>(std::move(**splat_data)));
+                std::make_unique<lfs::core::SplatData>(std::move(**splat_data)), parent);
             if (node_id == core::NULL_NODE) {
                 throw std::runtime_error("Failed to add splat node '" + name + "'");
             }
@@ -1264,13 +1209,15 @@ namespace lfs::vis {
             if (is_visible)
                 selectNode(node_id);
 
-            auto ppisp_path = lfs::training::find_ppisp_companion(path);
+            auto ppisp_path = preserve_raw ? std::filesystem::path{} : lfs::training::find_ppisp_companion(path);
             if (!ppisp_path.empty()) {
                 LOG_INFO("Found PPISP companion file: {}", lfs::core::path_to_utf8(ppisp_path));
                 loadPPISPCompanion(ppisp_path);
             }
 
             LOG_DEBUG("Added '{}' ({} gaussians)", added_name, gaussian_count);
+            if (!defer_import_license && load_result.license_bytes && import_license_callback_)
+                import_license_callback_(load_result.license_bytes);
             return added_name;
 
         } catch (const std::exception& e) {
@@ -1424,6 +1371,9 @@ namespace lfs::vis {
     void SceneManager::drainGpuForTensorRelease() {
         if (auto* const rendering = services().renderingOrNull()) {
             rendering->viewportInterop().setSceneImage(nullptr, glm::ivec2(0, 0), false, 0);
+            // Stop asynchronous page decoding and uploads before device idle
+            // and before the scene releases the model and its mapped metadata.
+            rendering->releaseSceneModelResources();
         }
         if (auto* const window_mgr = services().windowOrNull()) {
             if (auto* const vulkan_ctx = window_mgr->getVulkanContext()) {
@@ -1440,6 +1390,11 @@ namespace lfs::vis {
                     return false;
                 }
             }
+        }
+
+        if (services().sceneOrNull() == this &&
+            op::operators().activeModalId() == op::to_string(op::BuiltinOp::AlignPickPoint)) {
+            op::operators().cancelModalOperator();
         }
 
         selection_.clearNodeSelection();
@@ -1653,9 +1608,6 @@ namespace lfs::vis {
         }
 
         drainGpuForTensorRelease();
-        if (auto* rendering = services().renderingOrNull()) {
-            rendering->releaseSceneModelResources();
-        }
 
         auto detached_models = scene_.detachSplatModelsForRemoval(id, keep_children);
         if (history_before) {
@@ -2249,7 +2201,7 @@ namespace lfs::vis {
             }
 
             glm::vec3 vertex(int64_t i) const {
-                assert(i >= 0 && i < verts_cpu.size(0));
+                assert(i >= 0 && static_cast<uint64_t>(i) < verts_cpu.size(0));
                 const float* p = verts_cpu.ptr<float>() + i * 3;
                 return {p[0], p[1], p[2]};
             }
@@ -2939,6 +2891,42 @@ namespace lfs::vis {
         syncDatasetCameraFrustumsToRenderSettings();
     }
 
+    lfs::Status SceneManager::prepareDatasetTrainer(
+        const lfs::core::param::TrainingParameters& params) {
+        auto* manager = services().trainerOrNull();
+        if (manager) {
+            manager->setScene(&scene_);
+        }
+#if LFS_BUILD_TRAINER
+        // Cameras and point clouds can be viewed without a CUDA trainer.
+        // CUDA availability only controls whether training can be prepared.
+        if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
+            LOG_INFO("Dataset ready for viewing; CUDA training is unavailable");
+            return {};
+        }
+        if (const auto unavailable = lfs::training::unavailable_training_reason(
+                params, lfs::core::default_gpu_backend(),
+                lfs::training::training_loader_dependencies(params))) {
+            LOG_INFO("{}", *unavailable);
+            return {};
+        }
+        if (!manager) {
+            return lfs::Status::failure(lfs::make_error({
+                .code = lfs::ErrorCode::FailedPrecondition,
+                .domain = lfs::ErrorDomain::App,
+                .detail = "No trainer manager available",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
+        }
+        auto trainer = std::make_unique<lfs::training::Trainer>(scene_);
+        if (auto updated = trainer->setParams(params); !updated) {
+            return updated;
+        }
+        manager->setTrainer(std::move(trainer));
+#endif
+        return {};
+    }
+
     std::expected<void, std::string> SceneManager::applyLoadedDataset(
         const std::filesystem::path& path,
         const lfs::core::param::TrainingParameters& params,
@@ -2967,17 +2955,9 @@ namespace lfs::vis {
             }
 
             if (scene_.hasTrainingData()) {
-                auto trainer = std::make_unique<lfs::training::Trainer>(scene_);
-                if (auto updated = trainer->setParams(dataset_params); !updated) {
-                    return std::unexpected(
-                        lfs::format_for_developer(updated.error()));
+                if (auto prepared = prepareDatasetTrainer(dataset_params); !prepared) {
+                    return std::unexpected(lfs::format_for_developer(prepared.error()));
                 }
-
-                if (!services().trainerOrNull()) {
-                    return std::unexpected("No trainer manager");
-                }
-                services().trainerOrNull()->setScene(&scene_);
-                services().trainerOrNull()->setTrainer(std::move(trainer));
             }
 
             const size_t num_gaussians = scene_.getTrainingModelGaussianCount();
@@ -2985,7 +2965,7 @@ namespace lfs::vis {
 
             finalizeDatasetSceneLoad(path, path, state::SceneLoaded::Type::Dataset, num_gaussians);
 
-            if ((num_gaussians > 0 || num_points > 0) && services().trainerOrNull() && services().trainerOrNull()->getTrainer()) {
+            if (num_gaussians > 0 || num_points > 0) {
                 ui::PointCloudModeChanged{.enabled = true, .voxel_size = DEFAULT_VOXEL_SIZE}.emit();
             }
 
@@ -3052,21 +3032,8 @@ namespace lfs::vis {
                 return std::unexpected(load_result.error());
             }
 
-            // Create Trainer from Scene
-            auto trainer = std::make_unique<lfs::training::Trainer>(scene_);
-            if (auto updated = trainer->setParams(dataset_params); !updated) {
-                return std::unexpected(
-                    lfs::format_for_developer(updated.error()));
-            }
-
-            // Pass trainer to manager
-            if (services().trainerOrNull()) {
-                LOG_DEBUG("Setting trainer in manager");
-                services().trainerOrNull()->setScene(&scene_);
-                services().trainerOrNull()->setTrainer(std::move(trainer));
-            } else {
-                LOG_ERROR("No trainer manager available");
-                throw std::runtime_error("No trainer manager available");
+            if (auto prepared = prepareDatasetTrainer(dataset_params); !prepared) {
+                return std::unexpected(lfs::format_for_developer(prepared.error()));
             }
 
             // Get info from scene
@@ -3088,7 +3055,7 @@ namespace lfs::vis {
                 .emit();
 
             // Switch to point cloud rendering mode by default for datasets
-            if ((num_gaussians > 0 || num_points > 0) && services().trainerOrNull() && services().trainerOrNull()->getTrainer()) {
+            if (num_gaussians > 0 || num_points > 0) {
                 ui::PointCloudModeChanged{.enabled = true, .voxel_size = DEFAULT_VOXEL_SIZE}.emit();
                 LOG_INFO("Switched to point cloud mode ({} points)", num_gaussians > 0 ? num_gaussians : num_points);
             }
@@ -3173,6 +3140,7 @@ namespace lfs::vis {
     }
 
     void SceneManager::prepareTrainingFromScene() {
+#if LFS_BUILD_TRAINER
         if (!scene_.hasTrainingData()) {
             LOG_ERROR("Cannot prepare training: scene has no cameras");
             return;
@@ -3210,10 +3178,17 @@ namespace lfs::vis {
         } catch (const std::exception& e) {
             LOG_ERROR("Failed to prepare training from scene: {}", e.what());
         }
+
+#else
+        LOG_ERROR("Training is not included in this build");
+#endif
     }
 
     void SceneManager::loadCheckpointForTraining(const std::filesystem::path& path,
                                                  const lfs::core::param::TrainingParameters& params) {
+#if LFS_BUILD_TRAINER
+        const lfs::core::GpuBackend training_backend = lfs::core::default_gpu_backend();
+        const lfs::core::GpuBackendScope backend(lfs::core::GpuBackend::CUDA);
         LOG_TIMER("SceneManager::loadCheckpointForTraining");
 
         try {
@@ -3244,6 +3219,12 @@ namespace lfs::vis {
             if (!std::filesystem::exists(checkpoint_params.dataset.data_path)) {
                 throw std::runtime_error("Dataset path does not exist: " +
                                          lfs::core::path_to_utf8(checkpoint_params.dataset.data_path));
+            }
+
+            if (const auto unavailable = lfs::training::unavailable_training_reason(
+                    checkpoint_params, training_backend,
+                    lfs::training::training_loader_dependencies(checkpoint_params))) {
+                throw std::runtime_error(*unavailable);
             }
 
             // Validate dataset structure before clearing
@@ -3344,6 +3325,10 @@ namespace lfs::vis {
             LOG_ERROR("Failed to load checkpoint: {}", e.what());
             throw;
         }
+
+#else
+        throw std::runtime_error("Training is not included in this build; open the checkpoint for viewing instead");
+#endif
     }
 
     bool SceneManager::clear() {
@@ -3373,10 +3358,10 @@ namespace lfs::vis {
             return;
         }
 
-        std::unique_ptr<lfs::training::PPISP> ppisp;
-        std::unique_ptr<lfs::training::PPISPControllerPool> controller_pool;
+        std::unique_ptr<AppearanceTensorModel> appearance;
         auto* trainer_mgr = services().trainerOrNull();
         lfs::training::Trainer* trainer = nullptr;
+#if LFS_BUILD_TRAINER
         if (trainer_mgr) {
             if (trainer_mgr->isPaused()) {
                 if (auto* active_trainer = trainer_mgr->getTrainer()) {
@@ -3392,10 +3377,28 @@ namespace lfs::vis {
             }
             trainer = trainer_mgr->getTrainer();
             if (trainer && trainer->hasPPISP()) {
-                ppisp = trainer->takePPISP();
-                controller_pool = trainer->takePPISPControllerPool();
+                const auto* ppisp = trainer->getPPISP();
+                const auto* pool = trainer->hasPPISPController() ? trainer->getPPISPControllerPool() : nullptr;
+                lfs::training::PPISPFileHeader header;
+                header.num_cameras = ppisp->num_cameras();
+                header.num_frames = ppisp->num_frames();
+                header.flags = pool ? static_cast<uint32_t>(lfs::training::PPISPFileFlags::HAS_CONTROLLER) : 0;
+                std::stringstream bytes(std::ios::in | std::ios::out | std::ios::binary);
+                bytes.write(reinterpret_cast<const char*>(&header), sizeof(header));
+                ppisp->serialize_inference(bytes);
+                if (pool)
+                    pool->serialize_inference(bytes);
+                bytes.seekg(0);
+                auto loaded = AppearanceTensorModel::load(bytes, core::default_gpu_backend(),
+                                                          ppisp->camera_index(ppisp->majority_camera_id()));
+                if (!loaded) {
+                    LOG_ERROR("Cannot preserve appearance in edit mode: {}", lfs::format_for_developer(loaded.error()));
+                    return;
+                }
+                appearance = std::move(*loaded);
             }
         }
+#endif
 
         model_node = scene_.getNodeByUuid(scene_.getTrainingModelNodeUuid());
         if (!model_node || !model_node->model) {
@@ -3405,6 +3408,11 @@ namespace lfs::vis {
 
         if (trainer && !prepareSplatDataForEditMode(*model_node->model)) {
             return;
+        }
+
+        if (services().sceneOrNull() == this &&
+            op::operators().activeModalId() == op::to_string(op::BuiltinOp::AlignPickPoint)) {
+            op::operators().cancelModalOperator();
         }
 
         core::Scene::Transaction txn(scene_);
@@ -3442,8 +3450,8 @@ namespace lfs::vis {
         // Restore the world transform
         scene_.setNodeTransform(edit_model_id, old_model_world);
 
-        if (ppisp) {
-            setAppearanceModel(std::move(ppisp), std::move(controller_pool));
+        if (appearance) {
+            setAppearanceModel(std::move(appearance));
         }
 
         {
@@ -3477,7 +3485,7 @@ namespace lfs::vis {
         return nullptr;
     }
 
-    SceneRenderState SceneManager::buildRenderState() const {
+    SceneRenderState SceneManager::buildRenderState(const SceneRenderStateOptions options) const {
         if (selection_service_) {
             selection_service_->pollPendingSelectionCounts();
         }
@@ -3487,14 +3495,20 @@ namespace lfs::vis {
         const auto selection_generation = static_cast<std::uint64_t>(selection_.generation());
         const auto gaussian_selection_generation = scene_.selectionGeneration();
         const auto local_scene_generation = scene_.renderGeneration();
-        const auto* current_model = content_type_ == ContentType::Dataset
-                                        ? scene_.getTrainingModel()
-                                        : scene_.getCombinedModel();
+        const auto* current_model = options.metadata_only
+                                        ? nullptr
+                                        : (content_type_ == ContentType::Dataset
+                                               ? scene_.getTrainingModel()
+                                               : scene_.getCombinedModel());
         // PointCloud tensors are public and can be edited in place without a Scene mutation
         // notification. Keep the small node scan, but do not reuse a state that owns a merged
         // point cloud unless those tensors acquire an explicit generation in the future.
         const auto visible_point_cloud_nodes = collectVisiblePointCloudNodes(scene_);
-        const bool point_cloud_fallback = !hasRenderableGaussians(current_model) &&
+        const auto node_active_sh_degrees = content_type_ == ContentType::SplatFiles
+                                                ? scene_.getVisibleNodeActiveShDegrees()
+                                                : std::vector<int>{};
+        const bool point_cloud_fallback = !options.metadata_only &&
+                                          !hasRenderableGaussians(current_model) &&
                                           !visible_point_cloud_nodes.empty();
         if (!point_cloud_fallback && cached_render_state_ &&
             cached_render_scene_generation_ == scene_generation &&
@@ -3502,16 +3516,20 @@ namespace lfs::vis {
             cached_render_gaussian_selection_generation_ == gaussian_selection_generation &&
             cached_render_scene_generation_local_ == local_scene_generation &&
             cached_render_model_ == current_model &&
-            cached_render_content_type_ == content_type_)
+            cached_render_content_type_ == content_type_ &&
+            cached_render_metadata_only_ == options.metadata_only &&
+            cached_render_state_->node_active_sh_degrees == node_active_sh_degrees)
             return *cached_render_state_;
 
         SceneRenderState state;
+        state.node_active_sh_degrees = node_active_sh_degrees;
 
-        // Get combined model or point cloud
+        // Get combined model or point cloud. Comparison and GUI overlays pass
+        // metadata_only so this snapshot cannot start a combined-model worker.
         bool hidden_dataset_training_model = false;
-        if (content_type_ == ContentType::SplatFiles) {
+        if (!options.metadata_only && content_type_ == ContentType::SplatFiles) {
             state.combined_model = scene_.getCombinedModel();
-        } else if (content_type_ == ContentType::Dataset) {
+        } else if (!options.metadata_only && content_type_ == ContentType::Dataset) {
             state.combined_model = scene_.getTrainingModel();
             hidden_dataset_training_model =
                 state.combined_model != nullptr &&
@@ -3520,7 +3538,7 @@ namespace lfs::vis {
 
         // Fall back to the visible point cloud whenever the active splat model is absent or empty.
         // This keeps dataset "ready" scenes renderable before training has produced gaussians.
-        if (!hasRenderableGaussians(state.combined_model)) {
+        if (!options.metadata_only && !hasRenderableGaussians(state.combined_model)) {
             if (visible_point_cloud_nodes.size() > 1) {
                 state.owned_point_cloud = buildMergedVisiblePointCloud(scene_, visible_point_cloud_nodes);
                 state.point_cloud = state.owned_point_cloud.get();
@@ -3558,7 +3576,9 @@ namespace lfs::vis {
             for (auto& transform : state.model_transforms) {
                 transform = rendering::dataWorldTransformToVisualizerWorld(transform);
             }
-            state.transform_indices = scene_.getTransformIndices();
+            if (!options.metadata_only && state.model_transforms.size() > 1) {
+                state.transform_indices = scene_.getTransformIndices();
+            }
 
             // Get node visibility mask (for consolidated models)
             state.node_visibility_mask = scene_.getNodeVisibilityMask();
@@ -3575,8 +3595,9 @@ namespace lfs::vis {
         }
 
         // Renderers consume masks in visible-model order. Scene selection state remains full-scene
-        // so hidden-node selections survive visibility toggles.
-        if (!hidden_dataset_training_model) {
+        // so hidden-node selections survive visibility toggles. metadata_only must not
+        // gather the combined-visible selection tensor.
+        if (!options.metadata_only && !hidden_dataset_training_model) {
             state.selection_mask = scene_.getVisibleSelectionMask();
         }
         const size_t render_splat_count = state.combined_model
@@ -3589,8 +3610,9 @@ namespace lfs::vis {
         // Authoritative non-empty selection (Scene::has_selection_ / hasSelection()).
         // Mask pointer validity alone is not enough: a size-matched all-zero tensor
         // must not report has_selection (see uploadOverlayBindings gate).
-        state.has_selection = scene_.hasSelection() && state.selection_mask &&
-                              state.selection_mask->is_valid();
+        state.has_selection = scene_.hasSelection() &&
+                              (options.metadata_only ||
+                               (state.selection_mask && state.selection_mask->is_valid()));
 
         // Get cropboxes (before lock — no selection dependency)
         state.cropboxes = scene_.getRenderableCropBoxes();
@@ -3638,6 +3660,7 @@ namespace lfs::vis {
         cached_render_scene_generation_local_ = local_scene_generation;
         cached_render_model_ = current_model;
         cached_render_content_type_ = content_type_;
+        cached_render_metadata_only_ = options.metadata_only;
         return *cached_render_state_;
     }
 
@@ -3675,6 +3698,8 @@ namespace lfs::vis {
                     info.source_type = "PLY";
                 } else if (ext == ".spz") {
                     info.source_type = "SPZ";
+                } else if (ext == ".glb") {
+                    info.source_type = "GLB";
                 } else if (ext == ".rad") {
                     info.source_type = "RAD";
                 }
@@ -5330,14 +5355,14 @@ namespace lfs::vis {
         const auto& src = *gaussian_clipboard_;
         auto data = std::make_unique<lfs::core::SplatData>(
             src.get_max_sh_degree(),
-            src.means_raw().cuda(), src.sh0_raw().cuda(),
-            src.shN_raw().is_valid() ? src.shN_raw().cuda() : lfs::core::Tensor{},
-            src.scaling_raw().cuda(), src.rotation_raw().cuda(), src.opacity_raw().cuda(),
+            src.means_raw().gpu(), src.sh0_raw().gpu(),
+            src.shN_raw().is_valid() ? src.shN_raw().gpu() : lfs::core::Tensor{},
+            src.scaling_raw().gpu(), src.rotation_raw().gpu(), src.opacity_raw().gpu(),
             src.get_scene_scale(),
             lfs::core::SplatData::ShNLayout::Swizzled);
         data->set_active_sh_degree(
             src.get_active_sh_degree(),
-            src.shN_value_quantized() ? src.shN_value_bounds().cuda() : lfs::core::Tensor{});
+            src.shN_value_quantized() ? src.shN_value_bounds().gpu() : lfs::core::Tensor{});
 
         const std::string name = makeUniqueCounterNodeName(scene_, "Selection", clipboard_counter_);
         if (auto allocator = makeExternalSplatAllocator()) {
@@ -5482,14 +5507,14 @@ namespace lfs::vis {
                                 } else if (child.type == core::NodeType::SPLAT && child.data) {
                                     auto paste_data = std::make_unique<lfs::core::SplatData>(
                                         child.data->get_max_sh_degree(),
-                                        child.data->means_raw().cuda(), child.data->sh0_raw().cuda(),
-                                        child.data->shN_raw().is_valid() ? child.data->shN_raw().cuda() : lfs::core::Tensor{},
-                                        child.data->scaling_raw().cuda(), child.data->rotation_raw().cuda(),
-                                        child.data->opacity_raw().cuda(), child.data->get_scene_scale(),
+                                        child.data->means_raw().gpu(), child.data->sh0_raw().gpu(),
+                                        child.data->shN_raw().is_valid() ? child.data->shN_raw().gpu() : lfs::core::Tensor{},
+                                        child.data->scaling_raw().gpu(), child.data->rotation_raw().gpu(),
+                                        child.data->opacity_raw().gpu(), child.data->get_scene_scale(),
                                         lfs::core::SplatData::ShNLayout::Swizzled);
                                     paste_data->set_active_sh_degree(
                                         child.data->get_active_sh_degree(),
-                                        child.data->shN_value_quantized() ? child.data->shN_value_bounds().cuda()
+                                        child.data->shN_value_quantized() ? child.data->shN_value_bounds().gpu()
                                                                           : lfs::core::Tensor{});
                                     child_id = scene_.addSplat(child_name, std::move(paste_data), parent_id);
                                 } else if (child.type == core::NodeType::CROPBOX && child.cropbox) {
@@ -5543,14 +5568,14 @@ namespace lfs::vis {
                 name = makeUniqueCounterNodeName(scene_, "Pasted", clipboard_counter_);
                 auto paste_data = std::make_unique<lfs::core::SplatData>(
                     entry.data->get_max_sh_degree(),
-                    entry.data->means_raw().cuda(), entry.data->sh0_raw().cuda(),
-                    entry.data->shN_raw().is_valid() ? entry.data->shN_raw().cuda() : lfs::core::Tensor{},
-                    entry.data->scaling_raw().cuda(), entry.data->rotation_raw().cuda(), entry.data->opacity_raw().cuda(),
+                    entry.data->means_raw().gpu(), entry.data->sh0_raw().gpu(),
+                    entry.data->shN_raw().is_valid() ? entry.data->shN_raw().gpu() : lfs::core::Tensor{},
+                    entry.data->scaling_raw().gpu(), entry.data->rotation_raw().gpu(), entry.data->opacity_raw().gpu(),
                     entry.data->get_scene_scale(),
                     lfs::core::SplatData::ShNLayout::Swizzled);
                 paste_data->set_active_sh_degree(
                     entry.data->get_active_sh_degree(),
-                    entry.data->shN_value_quantized() ? entry.data->shN_value_bounds().cuda()
+                    entry.data->shN_value_quantized() ? entry.data->shN_value_bounds().gpu()
                                                       : lfs::core::Tensor{});
 
                 if (auto allocator = makeExternalSplatAllocator()) {
@@ -5642,15 +5667,16 @@ namespace lfs::vis {
         return pasted_names;
     }
 
-    void SceneManager::setAppearanceModel(std::unique_ptr<lfs::training::PPISP> ppisp,
-                                          std::unique_ptr<lfs::training::PPISPControllerPool> controller_pool) {
-        appearance_ppisp_ = std::move(ppisp);
-        appearance_controller_pool_ = std::move(controller_pool);
+    void SceneManager::setAppearanceModel(std::unique_ptr<AppearanceTensorModel> model) {
+        appearance_tensor_model_ = std::move(model);
     }
 
     void SceneManager::clearAppearanceModel() {
-        appearance_ppisp_.reset();
-        appearance_controller_pool_.reset();
+        appearance_tensor_model_.reset();
+    }
+
+    bool SceneManager::hasAppearanceController() const {
+        return appearance_tensor_model_ && appearance_tensor_model_->hasController();
     }
 
     // --- Selection service and gaussian-level selection operations ---
@@ -5977,8 +6003,11 @@ namespace lfs::vis {
         scene_.clearSelection();
         scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
 
+        if (selection_service_)
+            selection_service_->suppressPassiveHoverPreview();
         if (auto* rm = services().renderingOrNull()) {
             rm->clearCursorPreviewState();
+            rm->clearPreviewSelection();
             rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::SELECTION);
         }
 
@@ -6079,14 +6108,14 @@ namespace lfs::vis {
             const auto inverted_active = active.logical_xor(other_selected.logical_not());
 
             const auto group_tensor = lfs::core::Tensor::full(
-                {total}, static_cast<float>(group_id), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
-            const auto zeros = lfs::core::Tensor::zeros({total}, lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                {total}, static_cast<float>(group_id), lfs::core::Device::GPU, lfs::core::DataType::UInt8);
+            const auto zeros = lfs::core::Tensor::zeros({total}, lfs::core::Device::GPU, lfs::core::DataType::UInt8);
             const auto active_values = group_tensor.where(inverted_active, zeros);
             new_mask = old_u8.where(other_selected, active_values);
         } else {
             // No active selection -> invert becomes select-all (into the active selection group).
             new_mask = lfs::core::Tensor::full(
-                {total}, static_cast<float>(group_id), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                {total}, static_cast<float>(group_id), lfs::core::Device::GPU, lfs::core::DataType::UInt8);
         }
 
         scene_.setSelectionMask(std::make_shared<lfs::core::Tensor>(std::move(new_mask)));
@@ -6156,7 +6185,7 @@ namespace lfs::vis {
             const auto visible_values = visible_bool.to(lfs::core::DataType::UInt8) *
                                         lfs::core::Tensor::full(
                                             {visible_total}, static_cast<float>(group_id),
-                                            lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                                            lfs::core::Device::GPU, lfs::core::DataType::UInt8);
             lfs::core::Tensor full_mask;
             const auto visible_indices = scene_.getVisibleSelectionIndices();
             if (visible_values.numel() == full_total && !visible_indices) {
@@ -6164,7 +6193,7 @@ namespace lfs::vis {
             } else if (visible_indices && visible_indices->is_valid() &&
                        visible_indices->numel() == visible_values.numel()) {
                 full_mask = lfs::core::Tensor::zeros(
-                    {full_total}, lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                    {full_total}, lfs::core::Device::GPU, lfs::core::DataType::UInt8);
                 full_mask.index_copy_(0, *visible_indices, visible_values);
             } else {
                 return;

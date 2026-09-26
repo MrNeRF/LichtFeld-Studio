@@ -12,6 +12,7 @@
 #include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "io/loader.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
@@ -37,13 +38,6 @@
 using namespace lfs::core;
 
 namespace {
-
-    void require_cuda() {
-        int device_count = 0;
-        if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
-    }
 
     std::size_t align_up_for_test(std::size_t value, std::size_t alignment) {
         return ((value + alignment - 1) / alignment) * alignment;
@@ -80,14 +74,14 @@ namespace {
         const auto rest = q16_sh1_rest();
         const size_t cells = sh_value_quant::sh_value_u16_count(kQ16Sh1N, rest);
         const size_t bounds_n = sh_value_quant::n_bounds_for_prims(kQ16Sh1N) * 2u;
-        Tensor means = Tensor::zeros({kQ16Sh1N, 3}, Device::CUDA);
-        Tensor sh0 = Tensor::zeros({kQ16Sh1N, 1, 3}, Device::CUDA);
-        Tensor scaling = Tensor::zeros({kQ16Sh1N, 3}, Device::CUDA);
-        Tensor rotation = Tensor::zeros({kQ16Sh1N, 4}, Device::CUDA);
-        Tensor opacity = Tensor::zeros({kQ16Sh1N, 1}, Device::CUDA);
+        Tensor means = Tensor::zeros({kQ16Sh1N, 3}, Device::GPU);
+        Tensor sh0 = Tensor::zeros({kQ16Sh1N, 1, 3}, Device::GPU);
+        Tensor scaling = Tensor::zeros({kQ16Sh1N, 3}, Device::GPU);
+        Tensor rotation = Tensor::zeros({kQ16Sh1N, 4}, Device::GPU);
+        Tensor opacity = Tensor::zeros({kQ16Sh1N, 1}, Device::GPU);
         Tensor shN = Tensor::zeros_direct(
-            TensorShape({cells}), cells, Device::CUDA, DataType::Float16);
-        Tensor bounds = Tensor::zeros({bounds_n}, Device::CUDA, DataType::Float32);
+            TensorShape({cells}), cells, Device::GPU, DataType::Float16);
+        Tensor bounds = Tensor::zeros({bounds_n}, Device::GPU, DataType::Float32);
         SplatData model(kQ16Sh1Degree,
                         std::move(means),
                         std::move(sh0),
@@ -105,8 +99,10 @@ namespace {
 
 } // namespace
 
-TEST(ExportableStorageTest, ImmediateDestroyLeavesCudaUsable) {
-    require_cuda();
+class ExportableStorageTest : public lfs::test::CudaBackendTest {};
+class SplatExportableStorageTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(ExportableStorageTest, ImmediateDestroyLeavesCudaUsable) {
 
     constexpr std::size_t BLOCK_BYTES = 1 << 20;
     auto block_result = allocateExportableDeviceBlock(BLOCK_BYTES, 0, false);
@@ -163,8 +159,7 @@ TEST(ExportableStorageTest, ImmediateDestroyLeavesCudaUsable) {
 // exportable splat block grows with live N
 // ---------------------------------------------------------------------------
 
-TEST(SplatExportableStorageTest, CreateTracksLiveCapacityNotMaxCap) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, CreateTracksLiveCapacityNotMaxCap) {
 
     constexpr std::size_t kLive = 1024;
     constexpr std::size_t kMaxCap = 5'000'000;
@@ -196,7 +191,7 @@ TEST(SplatExportableStorageTest, CreateTracksLiveCapacityNotMaxCap) {
     EXPECT_LT(snap.process.exportable_splat_bytes, max_bytes / 4);
 }
 
-TEST(SplatExportableStorageTest, LayoutBytesRejectsRegionSizeOverflow) {
+TEST_F(SplatExportableStorageTest, LayoutBytesRejectsRegionSizeOverflow) {
     constexpr std::size_t kPerPrimitiveBytes = 3 * sizeof(float);
     const std::size_t overflowing_capacity =
         std::numeric_limits<std::size_t>::max() / kPerPrimitiveBytes + 1;
@@ -210,8 +205,7 @@ TEST(SplatExportableStorageTest, LayoutBytesRejectsRegionSizeOverflow) {
     }
 }
 
-TEST(SplatExportableStorageTest, GrowPreservesDataAndTracksBytes) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, GrowPreservesDataAndTracksBytes) {
 
     constexpr std::size_t kInitial = 256;
     constexpr std::size_t kGrown = 512;
@@ -270,8 +264,7 @@ TEST(SplatExportableStorageTest, GrowPreservesDataAndTracksBytes) {
     EXPECT_FALSE(*grew_again);
 }
 
-TEST(SplatExportableStorageTest, GrowBeyondReserveFailsCleanly) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, GrowBeyondReserveFailsCleanly) {
 
     constexpr std::size_t kInitial = 128;
     constexpr std::size_t kReserve = 256;
@@ -300,8 +293,7 @@ TEST(SplatExportableStorageTest, GrowBeyondReserveFailsCleanly) {
     expect_device_pattern(storage.block->device_ptr, kInitial * 3, 7.0f);
 }
 
-TEST(SplatExportableStorageTest, TensorViewsValidAfterGrowViaRebind) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, TensorViewsValidAfterGrowViaRebind) {
 
     constexpr std::size_t kInitial = 128;
     constexpr std::size_t kGrown = 256;
@@ -379,7 +371,7 @@ TEST(SplatExportableStorageTest, TensorViewsValidAfterGrowViaRebind) {
     EXPECT_EQ(means2.capacity(), kGrown) << "allocator must clamp to committed capacity";
 }
 
-TEST(SplatExportableStorageTest, GrowthCapacityHelper) {
+TEST_F(SplatExportableStorageTest, GrowthCapacityHelper) {
     EXPECT_EQ(SplatExportableStorage::growthCapacity(100), 150u);
     EXPECT_EQ(SplatExportableStorage::growthCapacity(100, 120), 120u);
     EXPECT_EQ(SplatExportableStorage::growthCapacity(100, 50), 50u);
@@ -409,8 +401,7 @@ namespace {
 
 } // namespace
 
-TEST(SplatExportableStorageTest, ManyGrowCyclesCudaMemGetInfoPlateaus) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, ManyGrowCyclesCudaMemGetInfoPlateaus) {
 
     constexpr std::size_t kInitial = 256;
     constexpr std::size_t kReserve = 200'000; // enough virtual headroom for steps
@@ -467,8 +458,7 @@ TEST(SplatExportableStorageTest, ManyGrowCyclesCudaMemGetInfoPlateaus) {
         << " committed=" << committed << ")";
 }
 
-TEST(SplatExportableStorageTest, RepeatedCreateGrowDestroyDoesNotLeakVmm) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, RepeatedCreateGrowDestroyDoesNotLeakVmm) {
 
     constexpr std::size_t kInitial = 512;
     constexpr std::size_t kGrown = 8192;
@@ -520,8 +510,7 @@ TEST(SplatExportableStorageTest, RepeatedCreateGrowDestroyDoesNotLeakVmm) {
 // object + stable VA intact; consumers that still hold the block after grow
 // see the new size/handle. The real Vulkan fix is to drop VkDeviceMemory
 // BEFORE grow (see TrainerManager::installExportableCapacityEnsure).
-TEST(SplatExportableStorageTest, GrowKeepsStableVaWhileImportersHoldBlock) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, GrowKeepsStableVaWhileImportersHoldBlock) {
 
     auto storage_result = SplatExportableStorage::create(256, /*sh=*/0, 0, 4096);
     if (!storage_result) {
@@ -571,8 +560,7 @@ TEST(SplatExportableStorageTest, GrowKeepsStableVaWhileImportersHoldBlock) {
 //   rebind(make_allocator) -> grow -> rebind(make_allocator)
 // grow() relocates every region; a copying rebind overwrites correct new-offset
 // data with garbage from old offsets (means@0 survives; scaling/rot/opacity die).
-TEST(SplatExportableStorageTest, RebindGrowRebindPreservesAllRegionPatterns) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, RebindGrowRebindPreservesAllRegionPatterns) {
 
     constexpr std::size_t kInitial = 128;
     constexpr std::size_t kGrown = 256;
@@ -615,7 +603,7 @@ TEST(SplatExportableStorageTest, RebindGrowRebindPreservesAllRegionPatterns) {
             for (size_t i = 0; i < n; ++i) {
                 hp[i] = f16_val(base, i);
             }
-            Tensor half = host_f.to(DataType::Float16).cuda();
+            Tensor half = host_f.to(DataType::Float16).gpu();
             ASSERT_EQ(cudaMemcpy(t.data_ptr(), half.data_ptr(), n * sizeof(std::uint16_t),
                                  cudaMemcpyDeviceToDevice),
                       cudaSuccess);
@@ -733,8 +721,7 @@ TEST(SplatExportableStorageTest, RebindGrowRebindPreservesAllRegionPatterns) {
 
 // Grown slack rows must be non-renderable (opacity → sigmoid(−∞)≈0,
 // identity quaternion) so an accidental stale-row read remains dark.
-TEST(SplatExportableStorageTest, GrowSlackRowsAreNonRenderable) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, GrowSlackRowsAreNonRenderable) {
 
     constexpr std::size_t kInitial = 64;
     constexpr std::size_t kGrown = 128;
@@ -774,7 +761,7 @@ TEST(SplatExportableStorageTest, GrowSlackRowsAreNonRenderable) {
     }
 }
 
-TEST(SplatExportableStorageTest, UnboundChunkIndicesSkipsBoundOffsetsNotPrefixCount) {
+TEST_F(SplatExportableStorageTest, UnboundChunkIndicesSkipsBoundOffsetsNotPrefixCount) {
     const std::vector<ExportableChunk> chunks = {
         {.offset = 0, .bytes = 100, .handle = {}},
         {.offset = 50, .bytes = 10, .handle = {}},
@@ -794,8 +781,7 @@ TEST(SplatExportableStorageTest, UnboundChunkIndicesSkipsBoundOffsetsNotPrefixCo
 // importer (bind chunks[bound_count:]) misses those insertions — that is
 // the GUI giant-sphere / tile-instance overflow: CUDA densify writes live
 // rows the viewport's sparse VkBuffer never bound.
-TEST(SplatExportableStorageTest, GrowInsertsChunksBetweenRegionsSoPrefixBindMisses) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, GrowInsertsChunksBetweenRegionsSoPrefixBindMisses) {
 
     const std::size_t gran = std::max<std::size_t>(exportable_allocation_granularity(0), 1);
     // Means are 12 B/row. Start under one granule, grow past two so at least
@@ -874,8 +860,7 @@ TEST(SplatExportableStorageTest, GrowInsertsChunksBetweenRegionsSoPrefixBindMiss
 // block via capacity_ensure (storage layer, no GUI). Mirrors
 // TrainerManager::growExportableForDensify: work lives outside the std::function
 // so rebind can replace SplatData mid-grow without destroying the active frame.
-TEST(SplatExportableStorageTest, CapacityEnsureGrowsPastInitialCommit) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, CapacityEnsureGrowsPastInitialCommit) {
 
     constexpr std::size_t kInitialCap = 128;
     constexpr std::size_t kLiveN = 64;
@@ -951,8 +936,7 @@ TEST(SplatExportableStorageTest, CapacityEnsureGrowsPastInitialCommit) {
 
 // Migration must retain the capacity-ensure callback even when committed
 // exportable headroom is below max_cap.
-TEST(SplatExportableStorageTest, MigratePreservesCapacityEnsureUnderMaxCap) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, MigratePreservesCapacityEnsureUnderMaxCap) {
 
     constexpr std::size_t kInitialCap = 128;
     constexpr std::size_t kLiveN = 64;
@@ -1050,8 +1034,7 @@ TEST(SplatExportableStorageTest, MigratePreservesCapacityEnsureUnderMaxCap) {
 // q16 region (12 vs 9 / 48 vs 45 cells per primitive); migrate used to abort
 // with "shape for 'SplatData.shN' needs ... bytes". It must fall back to the
 // float workspace and land q16-encoded.
-TEST(SplatExportableStorageTest, MigrateFloatSwizzledShNFallsBackToQ16AtFullCapacity) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, MigrateFloatSwizzledShNFallsBackToQ16AtFullCapacity) {
 
     constexpr std::size_t kCap = 1000;
 
@@ -1063,15 +1046,15 @@ TEST(SplatExportableStorageTest, MigrateFloatSwizzledShNFallsBackToQ16AtFullCapa
         auto storage = std::move(*storage_result);
 
         const auto rest = sh_rest_coefficients_for_degree(sh_degree);
-        Tensor means = Tensor::zeros({kCap, 3}, Device::CUDA);
-        Tensor sh0 = Tensor::zeros({kCap, 1, 3}, Device::CUDA);
-        Tensor scaling = Tensor::zeros({kCap, 3}, Device::CUDA);
-        Tensor rotation = Tensor::zeros({kCap, 4}, Device::CUDA);
-        Tensor opacity = Tensor::zeros({kCap, 1}, Device::CUDA);
+        Tensor means = Tensor::zeros({kCap, 3}, Device::GPU);
+        Tensor sh0 = Tensor::zeros({kCap, 1, 3}, Device::GPU);
+        Tensor scaling = Tensor::zeros({kCap, 3}, Device::GPU);
+        Tensor rotation = Tensor::zeros({kCap, 4}, Device::GPU);
+        Tensor opacity = Tensor::zeros({kCap, 1}, Device::GPU);
         Tensor shN = Tensor::zeros_direct(
             TensorShape({sh_swizzled_float_count(kCap, rest)}),
             sh_swizzled_float_count(kCap, rest),
-            Device::CUDA);
+            Device::GPU);
 
         SplatData model(sh_degree,
                         std::move(means),
@@ -1097,12 +1080,7 @@ TEST(SplatExportableStorageTest, MigrateFloatSwizzledShNFallsBackToQ16AtFullCapa
     }
 }
 
-// The reported failure: dataset init with init_points > 0.75 x max_cap and
-// SH degree 1 threw from the exportable allocator inside
-// init_model_from_pointcloud. The float shN must come back as an
-// out-of-block workspace instead.
-TEST(SplatExportableStorageTest, InitModelFromPointcloudSucceedsAtFullExportableCapacitySh1) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, InitModelFromPointcloudSucceedsAtFullExportableCapacitySh1) {
 
     constexpr std::size_t kCap = 1000;
 
@@ -1128,16 +1106,24 @@ TEST(SplatExportableStorageTest, InitModelFromPointcloudSucceedsAtFullExportable
                                             storage.make_allocator());
     ASSERT_TRUE(model.has_value()) << model.error();
     EXPECT_EQ(model->size(), kCap);
-    EXPECT_EQ(model->shN_raw().dtype(), DataType::Float32);
+    EXPECT_TRUE(model->shN_value_quantized());
+    EXPECT_EQ(model->shN_raw().dtype(), DataType::Float16);
     EXPECT_EQ(static_cast<std::size_t>(model->shN_raw().numel()),
-              sh_swizzled_float_count(kCap, sh_rest_coefficients_for_degree(1)));
+              sh_value_quant::sh_value_u16_count(kCap, sh_rest_coefficients_for_degree(1)));
+    const auto codes = model->shN_raw().cpu();
+    const auto bounds = model->shN_value_bounds().cpu();
+    const auto* code_values = reinterpret_cast<const std::uint16_t*>(codes.data_ptr());
+    for (std::size_t i = 0; i < codes.numel(); ++i)
+        EXPECT_EQ(code_values[i], 0);
+    for (std::size_t i = 0; i < bounds.numel(); ++i)
+        EXPECT_FLOAT_EQ(bounds.ptr<float>()[i], 0.0f);
     EXPECT_EQ(model->means_raw().external_storage_kind(), "splat.exportable");
+    EXPECT_EQ(model->shN_raw().external_storage_kind(), "splat.exportable");
 }
 
 // A failed capacity ensure must abort before mutation and leave all parameter
 // row counts unchanged.
-TEST(SplatExportableStorageTest, ForcedGrowFailureLeavesModelUntouched) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, ForcedGrowFailureLeavesModelUntouched) {
 
     constexpr std::size_t kInitialCap = 64;
     constexpr std::size_t kLiveN = 32;
@@ -1198,7 +1184,7 @@ TEST(SplatExportableStorageTest, ForcedGrowFailureLeavesModelUntouched) {
     EXPECT_EQ(model.scaling_raw().capacity(), scaling_cap_before);
 
     // add_new_params must also throw without mutating when ensure fails.
-    auto new_means = Tensor::zeros({n_new, 3}, Device::CUDA);
+    auto new_means = Tensor::zeros({n_new, 3}, Device::GPU);
     EXPECT_THROW(
         opt.add_new_params(lfs::training::ParamType::Means, new_means, true),
         std::runtime_error);
@@ -1207,8 +1193,7 @@ TEST(SplatExportableStorageTest, ForcedGrowFailureLeavesModelUntouched) {
     EXPECT_EQ(static_cast<std::size_t>(model.size()), size_before);
 }
 
-TEST(ExportableStorageTest, GrowWhileImporterHoldsBlockKeepsStableVa) {
-    require_cuda();
+TEST_F(ExportableStorageTest, GrowWhileImporterHoldsBlockKeepsStableVa) {
 
     auto block_result = allocateExportableDeviceBlock(1 << 20, 0, false, 8 << 20);
     if (!block_result) {
@@ -1243,8 +1228,7 @@ TEST(ExportableStorageTest, GrowWhileImporterHoldsBlockKeepsStableVa) {
 }
 
 // shape that overruns the packed region must fail loud (not silent OOB view).
-TEST(SplatExportableStorageTest, AllocatorRejectsShapeOverrunRegion) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, AllocatorRejectsShapeOverrunRegion) {
 
     constexpr std::size_t kCap = 64;
     constexpr int kShDegree = 1;
@@ -1277,8 +1261,7 @@ TEST(SplatExportableStorageTest, AllocatorRejectsShapeOverrunRegion) {
 
 // partially-constructed storage (no control) must refuse make_allocator
 // no by-value snapshot flavor that hands out offsets which go stale on grow.
-TEST(SplatExportableStorageTest, MakeAllocatorRequiresControlBlock) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, MakeAllocatorRequiresControlBlock) {
     SplatExportableStorage empty{};
     EXPECT_FALSE(empty.valid());
     EXPECT_THROW((void)empty.make_allocator(), std::runtime_error);
@@ -1286,8 +1269,7 @@ TEST(SplatExportableStorageTest, MakeAllocatorRequiresControlBlock) {
 
 // Generation-checked resolve: holding a Tensor across grow sees live pointer via
 // resolve_exportable_device_ptr (baked storage_ptr is stale after grow).
-TEST(SplatExportableStorageTest, ResolveUsesLivePointerAfterGrow) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, ResolveUsesLivePointerAfterGrow) {
 
     constexpr std::size_t kInitial = 128;
     constexpr std::size_t kGrown = 512;
@@ -1344,8 +1326,7 @@ TEST(SplatExportableStorageTest, ResolveUsesLivePointerAfterGrow) {
 
 // Stale held view + resolve pair for q16 codes/bounds must agree on generation
 // when rebound, and survive a grow under a held Tensor without illegal address.
-TEST(SplatExportableStorageTest, Q16BindPtrsSurviveGrowUnderHeldView) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, Q16BindPtrsSurviveGrowUnderHeldView) {
 
     constexpr std::size_t kInitial = 256;
     constexpr std::size_t kGrown = 1024;
@@ -1422,8 +1403,7 @@ TEST(SplatExportableStorageTest, Q16BindPtrsSurviveGrowUnderHeldView) {
 // (SH1) must not be treated as corrupted when bounds are installed with the
 // degree setter. One-arg set_active_sh_degree is the tripwire; the two-arg
 // helper attaches bounds first.
-TEST(SplatExportableStorageTest, SetActiveShDegreeInstallsQ16BoundsBeforeValidation) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, SetActiveShDegreeInstallsQ16BoundsBeforeValidation) {
 
     const auto rest = q16_sh1_rest();
     ASSERT_NE(sh_value_quant::sh_value_u16_count(kQ16Sh1N, rest),
@@ -1450,8 +1430,7 @@ TEST(SplatExportableStorageTest, SetActiveShDegreeInstallsQ16BoundsBeforeValidat
 // migrateTrainingModelToAllocator copies codes+bounds into exportable storage
 // and restores the active degree. Previously set_active_sh_degree ran before
 // bounds were attached and threw "q16 codes without bounds".
-TEST(SplatExportableStorageTest, MigrateQ16Sh1DirectAllocationsAppliesDegree) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, MigrateQ16Sh1DirectAllocationsAppliesDegree) {
 
     const auto rest = q16_sh1_rest();
     ASSERT_NE(sh_value_quant::sh_value_u16_count(kQ16Sh1N, rest),
@@ -1557,8 +1536,7 @@ namespace {
 
 } // namespace
 
-TEST(ExportableStorageTest, AllocateSplitsIntoShareableChunks) {
-    require_cuda();
+TEST_F(ExportableStorageTest, AllocateSplitsIntoShareableChunks) {
     ScopedShareableAllocLimit limit("16777216"); // 16 MiB chunks
 
     size_t free_before = 0;
@@ -1617,8 +1595,7 @@ TEST(ExportableStorageTest, AllocateSplitsIntoShareableChunks) {
     EXPECT_GE(free_after + gran, free_before);
 }
 
-TEST(ExportableStorageTest, GrowAppendsChunksUnderSmallLimit) {
-    require_cuda();
+TEST_F(ExportableStorageTest, GrowAppendsChunksUnderSmallLimit) {
     ScopedShareableAllocLimit limit("4194304"); // 4 MiB chunks
 
     auto block_result = allocateExportableDeviceBlock(1ull << 20, 0, false, 16ull << 20);
@@ -1636,8 +1613,7 @@ TEST(ExportableStorageTest, GrowAppendsChunksUnderSmallLimit) {
     }
 }
 
-TEST(SplatExportableStorageTest, ReservedLayoutOffsetsStayPutAcrossGrow) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, ReservedLayoutOffsetsStayPutAcrossGrow) {
 
     constexpr std::size_t kInitial = 1000;
     constexpr std::size_t kReserve = 200000;
@@ -1734,8 +1710,7 @@ TEST(SplatExportableStorageTest, ReservedLayoutOffsetsStayPutAcrossGrow) {
 // Block half of makeVulkanExternalTensor (allocateExportableDeviceBlock with
 // reserve==size and track=false). No Vulkan context fixture, so import is not
 // exercised here.
-TEST(ExportableStorageTest, MakeVulkanExternalTensorShapedBlockSplitsChunksAndIsZeroFilled) {
-    require_cuda();
+TEST_F(ExportableStorageTest, MakeVulkanExternalTensorShapedBlockSplitsChunksAndIsZeroFilled) {
     ScopedShareableChunkBytes limit("16777216");
 
     constexpr std::size_t kBytes = 100ull << 20;
@@ -1768,7 +1743,7 @@ TEST(ExportableStorageTest, MakeVulkanExternalTensorShapedBlockSplitsChunksAndIs
     auto tensor = Tensor::from_external_owner(
         block->device_ptr,
         TensorShape({kBytes}),
-        Device::CUDA,
+        Device::GPU,
         DataType::UInt8,
         std::shared_ptr<void>(block),
         kBytes,
@@ -1800,13 +1775,13 @@ namespace {
                                                   const int sh_degree,
                                                   const float shN_fill) {
         const auto rest = static_cast<size_t>(sh_rest_coefficients_for_degree(sh_degree));
-        Tensor means = Tensor::zeros({n, size_t{3}}, Device::CUDA);
-        Tensor sh0 = Tensor::zeros({n, size_t{1}, size_t{3}}, Device::CUDA);
-        Tensor shN = rest > 0 ? Tensor::zeros({n, rest, size_t{3}}, Device::CUDA)
-                              : Tensor::zeros({0}, Device::CUDA);
-        Tensor scaling = Tensor::zeros({n, size_t{3}}, Device::CUDA);
-        Tensor rotation = Tensor::zeros({n, size_t{4}}, Device::CUDA);
-        Tensor opacity = Tensor::zeros({n, size_t{1}}, Device::CUDA);
+        Tensor means = Tensor::zeros({n, size_t{3}}, Device::GPU);
+        Tensor sh0 = Tensor::zeros({n, size_t{1}, size_t{3}}, Device::GPU);
+        Tensor shN = rest > 0 ? Tensor::zeros({n, rest, size_t{3}}, Device::GPU)
+                              : Tensor::zeros({0}, Device::GPU);
+        Tensor scaling = Tensor::zeros({n, size_t{3}}, Device::GPU);
+        Tensor rotation = Tensor::zeros({n, size_t{4}}, Device::GPU);
+        Tensor opacity = Tensor::zeros({n, size_t{1}}, Device::GPU);
 
         std::vector<float> host_means(n * 3, 0.0f);
         std::vector<float> host_rot(n * 4, 0.0f);
@@ -1863,8 +1838,7 @@ namespace {
 
 } // namespace
 
-TEST(SplatExportableStorageTest, ConsolidateTwoModelsKeepsExportableQ16ShN) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, ConsolidateTwoModelsKeepsExportableQ16ShN) {
     sh_value_quant::set_enabled_for_testing(true);
 
     constexpr size_t kN0 = 32;
@@ -1894,8 +1868,7 @@ TEST(SplatExportableStorageTest, ConsolidateTwoModelsKeepsExportableQ16ShN) {
     sh_value_quant::set_enabled_for_testing(std::nullopt);
 }
 
-TEST(SplatExportableStorageTest, CompactConsolidatedSnapshotKeepsExportableQ16ShN) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, CompactConsolidatedSnapshotKeepsExportableQ16ShN) {
     sh_value_quant::set_enabled_for_testing(true);
 
     constexpr size_t kN0 = 32;
@@ -1938,8 +1911,7 @@ TEST(SplatExportableStorageTest, CompactConsolidatedSnapshotKeepsExportableQ16Sh
     sh_value_quant::set_enabled_for_testing(std::nullopt);
 }
 
-TEST(SplatExportableStorageTest, MigrateMergedModelsEncodesExportableQ16ShN) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, MigrateMergedModelsEncodesExportableQ16ShN) {
     sh_value_quant::set_enabled_for_testing(true);
 
     constexpr size_t kN0 = 32;
@@ -1968,8 +1940,7 @@ TEST(SplatExportableStorageTest, MigrateMergedModelsEncodesExportableQ16ShN) {
     sh_value_quant::set_enabled_for_testing(std::nullopt);
 }
 
-TEST(SplatExportableStorageTest, ApplyDeletedKeepsExportableQ16ModelConsistent) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, ApplyDeletedKeepsExportableQ16ModelConsistent) {
     sh_value_quant::set_enabled_for_testing(true);
 
     constexpr size_t kN = 96;
@@ -1990,7 +1961,7 @@ TEST(SplatExportableStorageTest, ApplyDeletedKeepsExportableQ16ModelConsistent) 
     for (size_t i = 0; i < kN; i += 2) {
         host_mask[i] = 1;
     }
-    Tensor mask = Tensor::from_blob(host_mask.data(), {kN}, Device::CPU, DataType::Bool).to(Device::CUDA);
+    Tensor mask = Tensor::from_blob(host_mask.data(), {kN}, Device::CPU, DataType::Bool).to(Device::GPU);
     model->soft_delete(mask);
     ASSERT_TRUE(model->has_deleted_mask());
 
@@ -2013,8 +1984,7 @@ TEST(SplatExportableStorageTest, ApplyDeletedKeepsExportableQ16ModelConsistent) 
     sh_value_quant::set_enabled_for_testing(std::nullopt);
 }
 
-TEST(SplatExportableStorageTest, ApplyDeletedThenMergeKeepsMaskLengthConsistent) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, ApplyDeletedThenMergeKeepsMaskLengthConsistent) {
     sh_value_quant::set_enabled_for_testing(true);
 
     constexpr size_t kN = 64;
@@ -2035,7 +2005,7 @@ TEST(SplatExportableStorageTest, ApplyDeletedThenMergeKeepsMaskLengthConsistent)
     for (size_t i = 0; i < kN / 2; ++i) {
         host_mask[i] = 1;
     }
-    Tensor mask = Tensor::from_blob(host_mask.data(), {kN}, Device::CPU, DataType::Bool).to(Device::CUDA);
+    Tensor mask = Tensor::from_blob(host_mask.data(), {kN}, Device::CPU, DataType::Bool).to(Device::GPU);
     model->soft_delete(mask);
     ASSERT_TRUE(model->has_deleted_mask());
 
@@ -2064,8 +2034,7 @@ TEST(SplatExportableStorageTest, ApplyDeletedThenMergeKeepsMaskLengthConsistent)
     sh_value_quant::set_enabled_for_testing(std::nullopt);
 }
 
-TEST(SplatExportableStorageTest, ApplyDeletedKeepsExportableFloatShNWhenQ16Disabled) {
-    require_cuda();
+TEST_F(SplatExportableStorageTest, ApplyDeletedKeepsExportableFloatShNWhenQ16Disabled) {
     sh_value_quant::set_enabled_for_testing(false);
     struct QuantFlagRestorer {
         ~QuantFlagRestorer() { sh_value_quant::set_enabled_for_testing(std::nullopt); }
@@ -2089,7 +2058,7 @@ TEST(SplatExportableStorageTest, ApplyDeletedKeepsExportableFloatShNWhenQ16Disab
     for (size_t i = 0; i < kN; i += 2) {
         host_mask[i] = 1;
     }
-    Tensor mask = Tensor::from_blob(host_mask.data(), {kN}, Device::CPU, DataType::Bool).to(Device::CUDA);
+    Tensor mask = Tensor::from_blob(host_mask.data(), {kN}, Device::CPU, DataType::Bool).to(Device::GPU);
     model->soft_delete(mask);
     ASSERT_TRUE(model->has_deleted_mask());
 

@@ -8,6 +8,7 @@
  */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include <chrono>
 #include <cmath>
 #include <gtest/gtest.h>
@@ -17,11 +18,11 @@
 
 using namespace lfs::core;
 
-class NaNInfGPUCheckTest : public ::testing::Test {
+class NaNInfGPUCheckTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
         // Ensure CUDA is available
-        ASSERT_TRUE(torch::cuda::is_available()) << "CUDA not available";
+        LFS_CUDA_BACKEND_OR_RETURN();
     }
 
     // Helper to create LFS tensor from torch tensor
@@ -35,7 +36,7 @@ protected:
             shape.push_back(static_cast<size_t>(cpu_t.size(i)));
         }
 
-        return Tensor::from_vector(data, TensorShape(shape), Device::CUDA);
+        return Tensor::from_vector(data, TensorShape(shape), Device::GPU);
     }
 
     // Reference implementation using LibTorch
@@ -206,7 +207,7 @@ TEST_F(NaNInfGPUCheckTest, InfOnlyMatchesTorchPredicates) {
 // ============= Edge Cases =============
 
 TEST_F(NaNInfGPUCheckTest, EmptyTensor) {
-    auto lfs_t = Tensor::empty({0}, Device::CUDA);
+    auto lfs_t = Tensor::empty({0}, Device::GPU);
 
     EXPECT_FALSE(lfs_t.has_nan()) << "Empty tensor should not have NaN";
     EXPECT_FALSE(lfs_t.has_inf()) << "Empty tensor should not have Inf";
@@ -549,10 +550,10 @@ TEST_F(NaNInfGPUCheckTest, UnalignedTensor_UsesScalarKernel) {
 
     // We can't easily create unaligned LFS tensor, but we can test small sizes
     // which use scalar kernel
-    auto lfs_small = Tensor::randn({100}, Device::CUDA);
+    auto lfs_small = Tensor::randn({100}, Device::GPU);
     auto vec = lfs_small.to_vector();
     vec[50] = std::numeric_limits<float>::quiet_NaN();
-    auto lfs_with_nan = Tensor::from_vector(vec, {100}, Device::CUDA);
+    auto lfs_with_nan = Tensor::from_vector(vec, {100}, Device::GPU);
 
     EXPECT_TRUE(lfs_with_nan.has_nan());
 }

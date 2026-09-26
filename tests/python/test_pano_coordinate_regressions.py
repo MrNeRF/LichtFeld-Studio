@@ -42,7 +42,7 @@ def test_vksplat_equirectangular_shaders_project_rays_and_wrap_tiles():
 
 def test_viewer_equirectangular_software_projection_uses_rasterizer_mapping():
     source = _read("src/rendering/raster_rendering_engine.cpp")
-    mapping = _read("src/rendering/environment_math.hpp")
+    mapping = _read("src/core/include/core/environment_math.hpp")
 
     assert "envmath::equirectUvForDirection(envmath::normalized(rotated))" in source
     assert "const float longitude = std::atan2(world_dir.x, -world_dir.z);" in mapping

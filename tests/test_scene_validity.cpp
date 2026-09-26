@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "core/cuda/sh_layout.cuh"
+#include "core/event_bridge/command_api.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
@@ -28,26 +29,30 @@
 #include "core/pinned_memory_allocator.hpp"
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
+#include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/exporter.hpp"
+#include "io/project_document.hpp"
+#include "lfs/training/ops/registry.hpp"
+#include "licht_test_support.hpp"
 #include "ppisp_fixture.hpp"
 #include "python/python_runtime.hpp"
 #include "training/components/bilateral_grid.hpp"
 #include "training/components/ppisp.hpp"
 #include "training/components/ppisp_file.hpp"
-#include "training/control/command_api.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/parameter_manager.hpp"
 #include "visualizer/core/services.hpp"
+#include "visualizer/core/training_manager.hpp"
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/scene/selection_state.hpp"
 #include "visualizer/sequencer/sequencer_controller.hpp"
-#include "visualizer/training/training_manager.hpp"
 
 namespace lfs::python {
 
@@ -186,7 +191,9 @@ namespace lfs::python {
         EXPECT_TRUE(state_machine.canPerform(vis::TrainingAction::Reset));
     }
 
-    TEST(BilateralGridValidationTest, RejectsInvalidConstructorAndImageContracts) {
+    class BilateralGridValidationTest : public lfs::test::CudaBackendTest {};
+
+    TEST_F(BilateralGridValidationTest, RejectsInvalidConstructorAndImageContracts) {
         EXPECT_THROW((lfs::training::BilateralGrid(0, 16, 16, 8, 100)), std::invalid_argument);
         EXPECT_THROW((lfs::training::BilateralGrid(1, -1, 16, 8, 100)), std::invalid_argument);
         EXPECT_THROW((lfs::training::BilateralGrid(1, 2, 2, 2, 100,
@@ -196,19 +203,19 @@ namespace lfs::python {
 
         lfs::training::BilateralGrid grid(1, 2, 2, 2, 100);
         auto cpu_image = core::Tensor::ones({3, 2, 2}, core::Device::CPU);
-        auto wrong_channels = core::Tensor::ones({2, 2, 2}, core::Device::CUDA);
-        auto image = core::Tensor::ones({3, 2, 2}, core::Device::CUDA);
-        auto wrong_grad = core::Tensor::ones({3, 2, 1}, core::Device::CUDA);
+        auto wrong_channels = core::Tensor::ones({2, 2, 2}, core::Device::GPU);
+        auto image = core::Tensor::ones({3, 2, 2}, core::Device::GPU);
+        auto wrong_grad = core::Tensor::ones({3, 2, 1}, core::Device::GPU);
 
         EXPECT_THROW((void)grid.apply(cpu_image, 0), std::invalid_argument);
         EXPECT_THROW((void)grid.apply(wrong_channels, 0), std::invalid_argument);
         EXPECT_THROW((void)grid.backward(image, wrong_grad, 0), std::invalid_argument);
     }
 
-    TEST(BilateralGridValidationTest, SingletonImageAxesRemainFinite) {
+    TEST_F(BilateralGridValidationTest, SingletonImageAxesRemainFinite) {
         lfs::training::BilateralGrid grid(1, 2, 2, 2, 100);
-        auto image = core::Tensor::ones({3, 1, 1}, core::Device::CUDA);
-        auto grad = core::Tensor::ones({3, 1, 1}, core::Device::CUDA);
+        auto image = core::Tensor::ones({3, 1, 1}, core::Device::GPU);
+        auto grad = core::Tensor::ones({3, 1, 1}, core::Device::GPU);
 
         const auto output = grid.apply(image, 0).cpu().to_vector();
         const auto grad_input = grid.backward(image, grad, 0).cpu().to_vector();
@@ -225,12 +232,12 @@ namespace lfs::python {
         std::vector<float> rotation{1.0f, 0.0f, 0.0f, 0.0f};
         return std::make_unique<core::SplatData>(
             0,
-            core::Tensor::zeros({n, 3}, core::Device::CUDA),
-            core::Tensor::zeros({n, 1, 3}, core::Device::CUDA),
-            core::Tensor::zeros({n, 0, 3}, core::Device::CUDA),
-            core::Tensor::zeros({n, 3}, core::Device::CUDA),
-            core::Tensor::from_vector(rotation, {n, 4}, core::Device::CUDA),
-            core::Tensor::zeros({n, 1}, core::Device::CUDA),
+            core::Tensor::zeros({n, 3}, core::Device::GPU),
+            core::Tensor::zeros({n, 1, 3}, core::Device::GPU),
+            core::Tensor::zeros({n, 0, 3}, core::Device::GPU),
+            core::Tensor::zeros({n, 3}, core::Device::GPU),
+            core::Tensor::from_vector(rotation, {n, 4}, core::Device::GPU),
+            core::Tensor::zeros({n, 1}, core::Device::GPU),
             1.0f);
     }
 
@@ -248,7 +255,9 @@ namespace lfs::python {
         return params;
     }
 
-    TEST(TrainerConstructionTest, EvalAppearanceHookPresentIffUsePpisp) {
+    class TrainerConstructionTest : public lfs::test::CudaBackendTest {};
+
+    TEST_F(TrainerConstructionTest, EvalAppearanceHookPresentIffUsePpisp) {
         const auto output_on = std::filesystem::temp_directory_path() / "lfs_trainer_eval_hook_on";
         const auto output_off = std::filesystem::temp_directory_path() / "lfs_trainer_eval_hook_off";
         std::error_code ec;
@@ -287,7 +296,7 @@ namespace lfs::python {
         std::filesystem::remove_all(output_off, ec);
     }
 
-    TEST(TrainerConstructionTest, RejectsInvalidSceneBeforeAllocatingCudaResources) {
+    TEST_F(TrainerConstructionTest, RejectsInvalidSceneBeforeAllocatingCudaResources) {
         core::Scene scene;
         const auto before = core::PinnedMemoryAllocator::instance().get_stats();
 
@@ -306,7 +315,7 @@ namespace lfs::python {
         EXPECT_EQ(after.num_deallocs, before.num_deallocs);
     }
 
-    TEST(TrainerConstructionTest, CreatesAndReleasesCudaResourcesForValidScene) {
+    TEST_F(TrainerConstructionTest, DefersLossReadbackAllocationForValidScene) {
         core::Scene scene;
         const core::NodeId cameras = scene.addGroup("Cameras");
         scene.addCamera("camera.png", cameras, make_test_camera());
@@ -315,15 +324,16 @@ namespace lfs::python {
         {
             training::Trainer trainer(scene);
             const auto active = core::PinnedMemoryAllocator::instance().get_stats();
-            EXPECT_GT(active.allocated_bytes, before.allocated_bytes);
+            EXPECT_EQ(active.allocated_bytes, before.allocated_bytes);
         }
 
         const auto after = core::PinnedMemoryAllocator::instance().get_stats();
         EXPECT_EQ(after.allocated_bytes, before.allocated_bytes);
-        EXPECT_GT(after.num_deallocs, before.num_deallocs);
+        EXPECT_EQ(after.num_allocs, before.num_allocs);
+        EXPECT_EQ(after.num_deallocs, before.num_deallocs);
     }
 
-    TEST(TrainerConstructionTest, ParameterSnapshotsStayGenerationConsistent) {
+    TEST_F(TrainerConstructionTest, ParameterSnapshotsStayGenerationConsistent) {
         core::Scene scene;
         const core::NodeId cameras = scene.addGroup("Cameras");
         scene.addCamera("camera.png", cameras, make_test_camera());
@@ -357,7 +367,7 @@ namespace lfs::python {
                   "generation_" + std::to_string(final_snapshot.optimization.iterations));
     }
 
-    TEST(TrainerConstructionTest, InvalidParameterUpdateReturnsTheRejectionReason) {
+    TEST_F(TrainerConstructionTest, InvalidParameterUpdateReturnsTheRejectionReason) {
         core::Scene scene;
         const auto cameras = scene.addGroup("Cameras");
         scene.addCamera("camera.png", cameras, make_test_camera());
@@ -385,7 +395,7 @@ namespace lfs::python {
             original.optimization.to_json());
     }
 
-    TEST(TrainerConstructionTest, InitializeRejectsInvalidIntervalsBeforeTraining) {
+    TEST_F(TrainerConstructionTest, InitializeRejectsInvalidIntervalsBeforeTraining) {
         core::Scene scene;
         const core::NodeId cameras = scene.addGroup("Cameras");
         scene.addCamera("camera.png", cameras, make_test_camera());
@@ -400,7 +410,7 @@ namespace lfs::python {
         EXPECT_FALSE(trainer.isInitialized());
     }
 
-    TEST(TrainerConstructionTest, InitializeDoesNotRejectGutWithShRest) {
+    TEST_F(TrainerConstructionTest, InitializeDoesNotRejectGutWithShRest) {
         core::Scene scene;
         const core::NodeId cameras = scene.addGroup("Cameras");
         scene.addCamera("camera.png", cameras, make_test_camera());
@@ -417,7 +427,7 @@ namespace lfs::python {
         }
     }
 
-    TEST(TrainerConstructionTest, ExportableDensifyBarrierDistinguishesAbsentAndFailed) {
+    TEST_F(TrainerConstructionTest, ExportableDensifyBarrierDistinguishesAbsentAndFailed) {
         core::Scene scene;
         const core::NodeId cameras = scene.addGroup("Cameras");
         scene.addCamera("camera.png", cameras, make_test_camera());
@@ -460,7 +470,7 @@ namespace lfs::python {
         EXPECT_EQ(end_calls, 1);
     }
 
-    TEST(TrainerConstructionTest, ExportableDensifyBarrierEndFailureStopsTrainer) {
+    TEST_F(TrainerConstructionTest, ExportableDensifyBarrierEndFailureStopsTrainer) {
         core::Scene scene;
         const core::NodeId cameras = scene.addGroup("Cameras");
         scene.addCamera("camera.png", cameras, make_test_camera());
@@ -481,7 +491,7 @@ namespace lfs::python {
         EXPECT_TRUE(trainer.has_stopped());
     }
 
-    TEST(TrainerConstructionTest, ManagerClearReleasesTrainerResourcesAndPoolCache) {
+    TEST_F(TrainerConstructionTest, ManagerClearPreservesDeferredLossReadbackAllocation) {
         core::Scene scene;
         const core::NodeId cameras = scene.addGroup("Cameras");
         scene.addCamera("camera.png", cameras, make_test_camera());
@@ -492,7 +502,7 @@ namespace lfs::python {
         manager.setTrainer(std::make_unique<training::Trainer>(scene));
         const auto active = core::PinnedMemoryAllocator::instance().get_stats();
         ASSERT_TRUE(manager.hasTrainer());
-        EXPECT_GT(active.allocated_bytes, before.allocated_bytes);
+        EXPECT_EQ(active.allocated_bytes, before.allocated_bytes);
 
         ASSERT_TRUE(manager.clearTrainer());
 
@@ -503,7 +513,7 @@ namespace lfs::python {
         EXPECT_EQ(after.cached_bytes, 0u);
     }
 
-    TEST(TrainerConstructionTest, ClearTrainerSuppressesStoppedNotificationForPausedTrainer) {
+    TEST_F(TrainerConstructionTest, ClearTrainerSuppressesStoppedNotificationForPausedTrainer) {
         core::Scene scene;
         const core::NodeId cameras = scene.addGroup("Cameras");
         scene.addCamera("camera.png", cameras, make_test_camera());
@@ -533,7 +543,7 @@ namespace lfs::python {
             typeid(lfs::core::events::state::TrainingCompleted), id);
     }
 
-    TEST(TrainerConstructionTest, ClearTrainerResetsPausedCommandCenterSnapshot) {
+    TEST_F(TrainerConstructionTest, ClearTrainerResetsPausedCommandCenterSnapshot) {
         core::Scene scene;
         const core::NodeId cameras = scene.addGroup("Cameras");
         scene.addCamera("camera.png", cameras, make_test_camera());
@@ -631,7 +641,7 @@ namespace lfs::python {
 
         std::shared_ptr<core::MeshData> make_test_mesh(const core::Device device = core::Device::CPU) {
             auto mesh = std::make_shared<core::MeshData>(make_test_mesh_data());
-            if (device == core::Device::CUDA) {
+            if (device == core::Device::GPU) {
                 mesh->vertices = mesh->vertices.to(device);
                 mesh->indices = mesh->indices.to(device);
             }
@@ -722,7 +732,7 @@ namespace lfs::python {
         }
     } // namespace
 
-    TEST(TrainerConstructionTest, RejectsNoCamerasBeforeWorkerInitialization) {
+    TEST_F(TrainerConstructionTest, RejectsNoCamerasBeforeWorkerInitialization) {
         core::Scene scene;
         const auto model_id = scene.addSplat("Model", make_test_splat(1));
         ASSERT_NE(model_id, core::NULL_NODE);
@@ -774,7 +784,7 @@ namespace lfs::python {
         EXPECT_EQ(scene.getTrainingModel()->size(), 1u);
     }
 
-    TEST(TrainerConstructionTest, StartRejectsInvalidPendingParamsBeforeTransition) {
+    TEST_F(TrainerConstructionTest, StartRejectsInvalidPendingParamsBeforeTransition) {
         struct EventScope {
             EventScope() { lfs::event::EventBridge::instance().clear_all(); }
             ~EventScope() { lfs::event::EventBridge::instance().clear_all(); }
@@ -814,7 +824,7 @@ namespace lfs::python {
                   installed_params.optimization.to_json());
     }
 
-    TEST(TrainerConstructionTest, ResumeRejectsInvalidPendingParamsWithoutLeavingPaused) {
+    TEST_F(TrainerConstructionTest, ResumeRejectsInvalidPendingParamsWithoutLeavingPaused) {
         struct EventScope {
             EventScope() { lfs::event::EventBridge::instance().clear_all(); }
             ~EventScope() { lfs::event::EventBridge::instance().clear_all(); }
@@ -842,7 +852,7 @@ namespace lfs::python {
         EXPECT_TRUE(manager.waitForInitialization());
     }
 
-    TEST(TrainerConstructionTest, StartAcknowledgesBeforeWorkerInitializationFailure) {
+    TEST_F(TrainerConstructionTest, StartAcknowledgesBeforeWorkerInitializationFailure) {
         struct EventScope {
             EventScope() { lfs::event::EventBridge::instance().clear_all(); }
             ~EventScope() { lfs::event::EventBridge::instance().clear_all(); }
@@ -1143,6 +1153,48 @@ namespace lfs::python {
         second->gaussian_count.store(2, std::memory_order_release);
     }
 
+    // A removed node leaves a tombstone in the consolidated slot table until the
+    // background compaction lands. Removals inside that window must complete and
+    // keep the selection of the remaining nodes.
+    TEST_F(SceneValidityTest, RemovalsBeforeConsolidatedCompactionKeepSelection) {
+        const auto first_id = dummy_scene_.addSplat("First", make_test_splat(2));
+        const auto second_id = dummy_scene_.addSplat("Second", make_test_splat(2));
+        const auto third_id = dummy_scene_.addSplat("Third", make_test_splat(2));
+        ASSERT_NE(third_id, core::NULL_NODE);
+        dummy_scene_.setSelectionMask(std::make_shared<core::Tensor>(
+            make_test_selection_mask({1, 0, 2, 0, 3, 3})));
+        ASSERT_EQ(dummy_scene_.consolidateNodeModels(), 3u);
+
+        dummy_scene_.removeNodeById(first_id);
+        ASSERT_EQ(dummy_scene_.getNodeById(first_id), nullptr);
+        ASSERT_TRUE(dummy_scene_.isConsolidated());
+        EXPECT_EQ(dummy_scene_.capturePerNodeSelectionSlices().size(), 2u);
+        EXPECT_EQ(selection_mask_values(dummy_scene_), (std::vector<uint8_t>{2, 0, 3, 3}));
+
+        dummy_scene_.removeNodeById(second_id);
+        EXPECT_EQ(dummy_scene_.getNodeById(second_id), nullptr);
+        EXPECT_EQ(selection_mask_values(dummy_scene_), (std::vector<uint8_t>{3, 3}));
+    }
+
+    // Once a removal starts it must finish; a selection it cannot map is cleared.
+    TEST_F(SceneValidityTest, RemovalCompletesWhenSelectionCannotBeMapped) {
+        const auto first_id = dummy_scene_.addSplat("First", make_test_splat(2));
+        const auto second_id = dummy_scene_.addSplat("Second", make_test_splat(2));
+        dummy_scene_.setSelectionMask(std::make_shared<core::Tensor>(
+            make_test_selection_mask({1, 0, 0, 2})));
+        ASSERT_EQ(dummy_scene_.consolidateNodeModels(), 2u);
+        auto* second = dummy_scene_.getNodeById(second_id);
+        ASSERT_NE(second, nullptr);
+        second->gaussian_count.store(3, std::memory_order_release);
+
+        EXPECT_NO_THROW(dummy_scene_.removeNodeById(first_id));
+        EXPECT_EQ(dummy_scene_.getNodeById(first_id), nullptr);
+        for (const auto value : selection_mask_values(dummy_scene_)) {
+            EXPECT_EQ(value, 0);
+        }
+        second->gaussian_count.store(2, std::memory_order_release);
+    }
+
     TEST_F(SceneValidityTest, GetApplicationSceneReturnsCorrectPointer) {
         EXPECT_EQ(get_application_scene(), nullptr);
         set_application_scene(&dummy_scene_);
@@ -1382,6 +1434,15 @@ namespace lfs::python {
         params.optimization.sh_degree = 1;
 
         const auto result = lfs::training::initializeTrainingModel(params, dummy_scene_);
+        if (const auto unavailable = lfs::training::unavailable_training_reason(
+                params, core::default_gpu_backend(), lfs::training::training_loader_dependencies(params))) {
+            ASSERT_FALSE(result.has_value());
+            EXPECT_EQ(result.error(), *unavailable);
+            const auto* model = dummy_scene_.getTrainingModel();
+            ASSERT_NE(model, nullptr);
+            expect_sh_degree(*model, 3, count);
+            return;
+        }
 
         ASSERT_TRUE(result.has_value()) << result.error();
         const auto* model = dummy_scene_.getTrainingModel();
@@ -1407,7 +1468,7 @@ namespace lfs::python {
                     const std::string_view name) {
                 EXPECT_EQ(dtype, core::DataType::Float32);
                 calls->push_back({std::string{name}, requested_capacity});
-                auto tensor = core::Tensor::zeros_direct(std::move(shape), requested_capacity, core::Device::CUDA);
+                auto tensor = core::Tensor::zeros_direct(std::move(shape), requested_capacity, core::Device::GPU);
                 tensor.set_name(std::string{name});
                 return tensor;
             };
@@ -1417,6 +1478,16 @@ namespace lfs::python {
         params.optimization.max_cap = static_cast<int>(capacity);
 
         const auto result = lfs::training::initializeTrainingModel(params, dummy_scene_, allocator);
+        if (const auto unavailable = lfs::training::unavailable_training_reason(
+                params, core::default_gpu_backend(), lfs::training::training_loader_dependencies(params))) {
+            ASSERT_FALSE(result.has_value());
+            EXPECT_EQ(result.error(), *unavailable);
+            EXPECT_TRUE(calls->empty());
+            const auto* model = dummy_scene_.getTrainingModel();
+            ASSERT_NE(model, nullptr);
+            EXPECT_EQ(model->size(), count);
+            return;
+        }
 
         ASSERT_TRUE(result.has_value()) << result.error();
         const auto* model = dummy_scene_.getTrainingModel();
@@ -1459,9 +1530,11 @@ namespace lfs::python {
                     const size_t requested_capacity,
                     const core::DataType dtype,
                     const std::string_view name) {
-                EXPECT_EQ(dtype, core::DataType::Float32);
+                EXPECT_EQ(dtype, name == "SplatData.shN" ? core::DataType::Float16 : core::DataType::Float32)
+                    << name;
                 calls->push_back({std::string{name}, requested_capacity});
-                auto tensor = core::Tensor::zeros_direct(std::move(shape), requested_capacity, core::Device::CUDA);
+                auto tensor =
+                    core::Tensor::zeros_direct(std::move(shape), requested_capacity, core::Device::CUDA, dtype);
                 tensor.set_name(std::string{name});
                 return tensor;
             };
@@ -1471,6 +1544,19 @@ namespace lfs::python {
         params.optimization.sh_degree = 1;
         params.optimization.max_cap = static_cast<int>(capacity);
 
+        if (const auto unavailable = lfs::training::unavailable_training_reason(
+                params, core::default_gpu_backend(), lfs::training::training_loader_dependencies(params))) {
+            const auto result = lfs::training::initializeTrainingModel(params, dummy_scene_, allocator);
+            ASSERT_FALSE(result.has_value());
+            EXPECT_EQ(result.error(), *unavailable);
+            EXPECT_TRUE(calls->empty());
+            EXPECT_EQ(dummy_scene_.getTrainingModel(), nullptr);
+            return;
+        }
+        if (!core::gpu_backend_available(core::GpuBackend::CUDA)) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const core::GpuBackendScope backend_scope(core::GpuBackend::CUDA);
         const auto result = lfs::training::initializeTrainingModel(params, dummy_scene_, allocator);
 
         ASSERT_TRUE(result.has_value()) << result.error();
@@ -1482,8 +1568,8 @@ namespace lfs::python {
         EXPECT_LE(model->scaling_raw().capacity(), capacity);
         EXPECT_LE(model->rotation_raw().capacity(), capacity);
         EXPECT_LE(model->opacity_raw().capacity(), capacity);
-        EXPECT_LE(model->shN_raw().capacity(),
-                  core::sh_swizzled_float_count(capacity, core::sh_rest_coefficients_for_degree(1)));
+        const auto rest = static_cast<std::uint32_t>(core::sh_rest_coefficients_for_degree(1));
+        EXPECT_LE(model->shN_raw().capacity(), core::sh_value_quant::sh_value_u16_count(capacity, rest));
 
         const auto max_capacity_for = [&](const std::string_view name) -> size_t {
             size_t max_capacity = 0;
@@ -1499,8 +1585,9 @@ namespace lfs::python {
         EXPECT_EQ(max_capacity_for("SplatData.scaling"), capacity);
         EXPECT_EQ(max_capacity_for("SplatData.rotation"), capacity);
         EXPECT_EQ(max_capacity_for("SplatData.opacity"), capacity);
-        EXPECT_EQ(max_capacity_for("SplatData.shN"),
-                  core::sh_swizzled_float_count(capacity, core::sh_rest_coefficients_for_degree(1)));
+        EXPECT_EQ(max_capacity_for("SplatData.shN"), core::sh_value_quant::sh_value_u16_count(capacity, rest));
+        EXPECT_EQ(max_capacity_for("SplatData.shN_value_bounds"),
+                  core::sh_value_quant::n_bounds_for_prims(capacity) * 2);
     }
 
     TEST_F(SceneValidityTest, MigrateTrainingModelAcceptsCudaOnlyExportableStorage) {
@@ -1536,7 +1623,7 @@ namespace lfs::python {
                                 const core::DataType,
                                 const std::string_view) {
                 ++allocation_calls;
-                return core::Tensor::zeros_direct(std::move(shape), requested_capacity, core::Device::CUDA);
+                return core::Tensor::zeros_direct(std::move(shape), requested_capacity, core::Device::GPU);
             };
 
         auto* training_model = dummy_scene_.getTrainingModel();
@@ -1582,7 +1669,7 @@ namespace lfs::python {
                                 const core::DataType,
                                 const std::string_view name) {
                 ++allocation_calls;
-                auto tensor = core::Tensor::zeros_direct(std::move(shape), requested_capacity, core::Device::CUDA);
+                auto tensor = core::Tensor::zeros_direct(std::move(shape), requested_capacity, core::Device::GPU);
                 tensor.set_name(std::string{name});
                 return tensor;
             };
@@ -1660,6 +1747,38 @@ namespace lfs::python {
         EXPECT_EQ(scene_manager.getScene().getNodeCount(), 0u);
     }
 
+    TEST_F(SceneValidityTest, GalleryPreviewAttachmentLeavesProjectLicenseUntouched) {
+        auto document = lfs::io::project::ProjectDocument::create(lfs::core::generate_uuid_v4());
+        ASSERT_TRUE(document);
+        lfs::vis::SceneManager manager;
+        int license_callbacks = 0;
+        manager.setImportLicenseCallback([&](const auto& bytes) {
+            ++license_callbacks;
+            EXPECT_TRUE(document->adopt_import_license(bytes));
+        });
+
+        const std::string notice = "License: Preview terms";
+        const auto attach = [&](const bool defer) {
+            lfs::io::LoadResult loaded;
+            loaded.data = std::shared_ptr<lfs::core::SplatData>(lfs::test::licht::make_splat(1).release());
+            loaded.license_bytes = std::vector<uint8_t>(notice.begin(), notice.end());
+            const auto group = manager.getScene().addGroup(defer ? "preview" : "regular");
+            ASSERT_NE(group, lfs::core::NULL_NODE);
+            EXPECT_FALSE(manager.attachLoadedSplatNode("preview.sog", "splat", true,
+                                                       std::move(loaded), true, group, defer)
+                             .empty());
+        };
+
+        attach(true);
+        EXPECT_EQ(license_callbacks, 0);
+        EXPECT_FALSE(document->project().license().value().has_value());
+
+        attach(false);
+        EXPECT_EQ(license_callbacks, 1);
+        EXPECT_EQ(document->project().license().value(),
+                  (lfs::io::project::ProjectLicense{"LicenseRef-Previewterms", notice}));
+    }
+
     TEST_F(SceneValidityTest, ColmapSparsePathTracksSuccessfulLoadAndClearsOnReset) {
         const ScopedTestDirectory sparse_dir("lfs_scene_manager_colmap_path");
         {
@@ -1678,6 +1797,10 @@ namespace lfs::python {
     }
 
     TEST_F(SceneValidityTest, PPISPPathTracksSuccessfulLoadAndClearsOnReset) {
+        if (!core::gpu_backend_available(core::GpuBackend::CUDA)) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const core::GpuBackendScope backend_scope(core::GpuBackend::CUDA);
         const ScopedTestDirectory temp_dir("lfs_scene_manager_ppisp_path");
         const auto splat_path = temp_dir.path() / "appearance.ply";
         const auto splat = make_test_splat(1);
@@ -1785,7 +1908,7 @@ namespace lfs::python {
 
     TEST_F(SceneValidityTest, SceneManagerClearReleasesMeshRayPickCpuCache) {
         lfs::vis::SceneManager scene_manager;
-        auto mesh = make_test_mesh(core::Device::CUDA);
+        auto mesh = make_test_mesh(core::Device::GPU);
         ASSERT_NE(scene_manager.getScene().addMesh("Triangle", mesh), core::NULL_NODE);
         const auto before_pick = core::PinnedMemoryAllocator::instance().get_stats();
 

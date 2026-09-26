@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/environment_math.hpp"
 #include "core/executable_path.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
@@ -10,17 +11,22 @@
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
+#include "core/tensor_spatial.hpp"
 #include "environment_image.hpp"
-#include "environment_math.hpp"
 #include "image_layout.hpp"
-#include "point_cloud_raster.cuh"
+#if LFS_HAS_CUDA
+#include "rasterizer/cuda/point_cloud_raster.cuh"
+#endif
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering.hpp"
 #include "screen_overlay_renderer.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
+#if LFS_HAS_CUDA
 #include <cuda_runtime.h>
+#endif
 #include <filesystem>
 #include <format>
 #include <glm/gtc/constants.hpp>
@@ -30,6 +36,7 @@
 #include <vector>
 
 namespace lfs::rendering {
+    namespace envmath = lfs::core::envmath;
 
     namespace {
         struct RasterImageResult {
@@ -87,11 +94,11 @@ namespace lfs::rendering {
         if (resolved_path.empty()) {
             return std::unexpected("Environment map path is empty");
         }
+        const std::string path_utf8 = lfs::core::path_to_utf8(resolved_path);
         if (!std::filesystem::exists(resolved_path)) {
-            return std::unexpected(std::format("Environment map not found: {}", resolved_path.string()));
+            return std::unexpected(std::format("Environment map not found: {}", path_utf8));
         }
 
-        const std::string path_utf8 = lfs::core::path_to_utf8(resolved_path);
         auto [source, width, height, channels] = lfs::core::load_image_float(resolved_path);
         if (!source)
             return std::unexpected(std::format("Failed to read environment map {}", path_utf8));
@@ -132,7 +139,7 @@ namespace lfs::rendering {
         lfs::core::free_image_float(source);
 
         cache.image = image;
-        LOG_INFO("Loaded tensor environment map {}", resolved_path.string());
+        LOG_INFO("Loaded tensor environment map {}", path_utf8);
         return image;
     }
 
@@ -425,8 +432,8 @@ namespace lfs::rendering {
             }
 
             Tensor positions_cuda = positions_source;
-            if (positions_cuda.device() != lfs::core::Device::CUDA) {
-                positions_cuda = positions_cuda.cuda();
+            if (positions_cuda.device() != lfs::core::Device::GPU) {
+                positions_cuda = positions_cuda.gpu();
             }
             positions_cuda = positions_cuda.contiguous();
 
@@ -437,24 +444,22 @@ namespace lfs::rendering {
             if (colors_cuda.dtype() != lfs::core::DataType::Float32) {
                 colors_cuda = colors_cuda.to(lfs::core::DataType::Float32);
             }
-            if (colors_cuda.device() != lfs::core::Device::CUDA) {
-                colors_cuda = colors_cuda.cuda();
+            if (colors_cuda.device() != lfs::core::Device::GPU) {
+                colors_cuda = colors_cuda.gpu();
             }
             colors_cuda = colors_cuda.contiguous();
 
             Tensor transform_indices_cuda;
-            const std::int32_t* transform_indices_ptr = nullptr;
             if (request.scene.transform_indices && request.scene.transform_indices->is_valid() &&
                 request.scene.transform_indices->numel() == positions_source.size(0)) {
                 transform_indices_cuda = *request.scene.transform_indices;
                 if (transform_indices_cuda.dtype() != lfs::core::DataType::Int32) {
                     transform_indices_cuda = transform_indices_cuda.to(lfs::core::DataType::Int32);
                 }
-                if (transform_indices_cuda.device() != lfs::core::Device::CUDA) {
-                    transform_indices_cuda = transform_indices_cuda.cuda();
+                if (transform_indices_cuda.device() != lfs::core::Device::GPU) {
+                    transform_indices_cuda = transform_indices_cuda.gpu();
                 }
                 transform_indices_cuda = transform_indices_cuda.contiguous();
-                transform_indices_ptr = transform_indices_cuda.ptr<std::int32_t>();
             }
 
             const std::vector<glm::mat4>* const transforms_ptr = request.scene.model_transforms;
@@ -462,7 +467,6 @@ namespace lfs::rendering {
             const auto& transforms = transforms_ptr ? *transforms_ptr : empty_transforms;
 
             Tensor transforms_cuda;
-            const float* transforms_device = nullptr;
             if (!transforms.empty()) {
                 std::vector<float> transforms_host(transforms.size() * 16);
                 for (size_t i = 0; i < transforms.size(); ++i) {
@@ -473,13 +477,11 @@ namespace lfs::rendering {
                                       transforms_host,
                                       {transforms.size(), static_cast<size_t>(16)},
                                       lfs::core::Device::CPU)
-                                      .cuda()
+                                      .gpu()
                                       .contiguous();
-                transforms_device = transforms_cuda.ptr<float>();
             }
 
             Tensor visibility_cuda;
-            const std::uint8_t* visibility_device = nullptr;
             if (!request.scene.node_visibility_mask.empty()) {
                 std::vector<int> mask_host(request.scene.node_visibility_mask.size());
                 for (size_t i = 0; i < mask_host.size(); ++i) {
@@ -489,24 +491,21 @@ namespace lfs::rendering {
                                       mask_host,
                                       {mask_host.size()},
                                       lfs::core::Device::CPU)
-                                      .cuda()
+                                      .gpu()
                                       .to(lfs::core::DataType::UInt8)
                                       .contiguous();
-                visibility_device = visibility_cuda.ptr<std::uint8_t>();
             }
 
             Tensor deleted_mask_cuda;
-            const bool* deleted_mask_device = nullptr;
             if (deleted_mask_source && deleted_mask_source->is_valid()) {
                 deleted_mask_cuda = *deleted_mask_source;
                 if (deleted_mask_cuda.dtype() != lfs::core::DataType::Bool) {
                     deleted_mask_cuda = deleted_mask_cuda.to(lfs::core::DataType::Bool);
                 }
-                if (deleted_mask_cuda.device() != lfs::core::Device::CUDA) {
-                    deleted_mask_cuda = deleted_mask_cuda.cuda();
+                if (deleted_mask_cuda.device() != lfs::core::Device::GPU) {
+                    deleted_mask_cuda = deleted_mask_cuda.gpu();
                 }
                 deleted_mask_cuda = deleted_mask_cuda.contiguous();
-                deleted_mask_device = deleted_mask_cuda.ptr<bool>();
             }
 
             const glm::mat4 view = request.frame_view.getViewMatrix();
@@ -521,23 +520,70 @@ namespace lfs::rendering {
 
             const int width = request.frame_view.size.x;
             const int height = request.frame_view.size.y;
+            const auto optional_tensor = [](const Tensor& tensor) { return tensor.is_valid() ? &tensor : nullptr; };
+
+            // Vulkan and Metal splat through the tensor backend's rasterizer.
+            if (lfs::core::gpu_backend_of(positions_cuda) != lfs::core::GpuBackend::CUDA) {
+                lfs::core::PointRaster raster{
+                    .width = width,
+                    .height = height,
+                    .orthographic = request.frame_view.orthographic,
+                    .equirectangular = request.render.equirectangular,
+                    .transparent_background = request.transparent_background,
+                    .ortho_scale = request.frame_view.ortho_scale,
+                    .focal_y = lfs::core::fov2focal(focalLengthToVFovRad(request.frame_view.focal_length_mm),
+                                                    request.frame_view.size.y),
+                    .voxel_size = request.render.voxel_size * request.render.scaling_modifier,
+                    .far_plane = request.frame_view.far_plane,
+                    .background = {request.frame_view.background_color.r, request.frame_view.background_color.g,
+                                   request.frame_view.background_color.b},
+                    .crop_inverse = request.filters.crop_inverse,
+                    .crop_desaturate = request.filters.crop_desaturate,
+                };
+                std::copy_n(glm::value_ptr(view), 16, raster.view.begin());
+                std::copy_n(glm::value_ptr(view_proj), 16, raster.view_projection.begin());
+                if (request.filters.crop_box) {
+                    const auto& crop = *request.filters.crop_box;
+                    raster.crop = lfs::core::PointRasterCrop::Box;
+                    std::copy_n(glm::value_ptr(crop.transform), 16, raster.crop_to_local.begin());
+                    raster.crop_min = {crop.min.x, crop.min.y, crop.min.z};
+                    raster.crop_max = {crop.max.x, crop.max.y, crop.max.z};
+                } else if (request.filters.crop_ellipsoid) {
+                    const auto& ellipsoid = *request.filters.crop_ellipsoid;
+                    raster.crop = lfs::core::PointRasterCrop::Ellipsoid;
+                    std::copy_n(glm::value_ptr(ellipsoid.transform), 16, raster.crop_to_local.begin());
+                    raster.crop_min = {ellipsoid.radii.x, ellipsoid.radii.y, ellipsoid.radii.z};
+                }
+                auto [image_tensor, depth_tensor] = lfs::core::rasterize_points(
+                    positions_cuda, colors_cuda, raster, optional_tensor(transforms_cuda),
+                    optional_tensor(transform_indices_cuda), optional_tensor(visibility_cuda),
+                    optional_tensor(deleted_mask_cuda));
+                return RasterImageResult{
+                    .image = std::move(image_tensor),
+                    .depth = std::move(depth_tensor),
+                    .valid = true,
+                    .far_plane = request.frame_view.far_plane,
+                    .orthographic = request.frame_view.orthographic};
+            }
+#if LFS_HAS_CUDA
             const int channels = request.transparent_background ? 4 : 3;
 
             Tensor image_tensor = Tensor::empty(
                 {static_cast<size_t>(channels), static_cast<size_t>(height), static_cast<size_t>(width)},
-                lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+                lfs::core::Device::GPU, lfs::core::DataType::Float32);
             Tensor depth_tensor = Tensor::empty(
                 {static_cast<size_t>(1), static_cast<size_t>(height), static_cast<size_t>(width)},
-                lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+                lfs::core::Device::GPU, lfs::core::DataType::Float32);
 
             lfs::core::pin_operands({&positions_cuda, &colors_cuda});
             pcraster::LaunchParams params{};
             params.positions = positions_cuda.ptr<float>();
             params.colors = colors_cuda.ptr<float>();
-            params.transforms = transforms_device;
-            params.transform_indices = transform_indices_ptr;
-            params.visibility_mask = visibility_device;
-            params.deleted_mask = deleted_mask_device;
+            params.transforms = transforms_cuda.is_valid() ? transforms_cuda.ptr<float>() : nullptr;
+            params.transform_indices =
+                transform_indices_cuda.is_valid() ? transform_indices_cuda.ptr<std::int32_t>() : nullptr;
+            params.visibility_mask = visibility_cuda.is_valid() ? visibility_cuda.ptr<std::uint8_t>() : nullptr;
+            params.deleted_mask = deleted_mask_cuda.is_valid() ? deleted_mask_cuda.ptr<bool>() : nullptr;
             params.n_points = static_cast<std::size_t>(positions_source.size(0));
             params.n_transforms = static_cast<int>(transforms.size());
             params.n_visibility = static_cast<int>(request.scene.node_visibility_mask.size());
@@ -599,6 +645,9 @@ namespace lfs::rendering {
                 .valid = true,
                 .far_plane = request.frame_view.far_plane,
                 .orthographic = request.frame_view.orthographic};
+#else
+            return std::unexpected("CUDA tensors in a build without CUDA");
+#endif
         }
 
         [[nodiscard]] Result<Tensor> toCpuChwFloatTensor(const Tensor& image) {
@@ -732,14 +781,14 @@ namespace lfs::rendering {
                            image,
                            {static_cast<size_t>(3), static_cast<size_t>(height), static_cast<size_t>(width)},
                            lfs::core::Device::CPU)
-                    .cuda();
+                    .gpu();
             }
 
             return Tensor::from_vector(
                        image,
                        {static_cast<size_t>(3), static_cast<size_t>(height), static_cast<size_t>(width)},
                        lfs::core::Device::CPU)
-                .cuda();
+                .gpu();
         }
     } // namespace
 

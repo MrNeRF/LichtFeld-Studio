@@ -7,9 +7,12 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/services.hpp"
+#include "core/tensor_backend.hpp"
+#include "gui/gui_manager.hpp"
 #include "input/input_controller.hpp"
+#include "input/sdl_coordinate_utils.hpp"
 #include "input/sdl_key_mapping.hpp"
-#include "rendering/cuda_vulkan_interop.hpp"
 #include "vulkan_context.hpp"
 #include "vulkan_loader_probe.hpp"
 #include "window_state_utils.hpp"
@@ -360,7 +363,9 @@ namespace lfs::vis {
             const bool bottom = area->y >= size.y - kResizeBorder && area->y < size.y;
             const bool titlebar_point = self->isTitlebarDragPoint(area->x, area->y);
 
-            if (!self->isMaximized()) {
+            // Wayland supplies per-edge constraints to SDL. Let the compositor
+            // decide whether a tiled or maximized window can be resized.
+            if (!self->isMaximized() || self->usesWayland()) {
                 unsigned edge_mask = 0;
                 if (left)
                     edge_mask |= kResizeLeft;
@@ -382,7 +387,7 @@ namespace lfs::vis {
             }
 
             if (titlebar_point) {
-                if (self->isMaximized())
+                if (self->isMaximized() && !self->usesWayland())
                     return SDL_HITTEST_NORMAL;
                 if (self->usesEventDrivenTitlebarDrag())
                     return SDL_HITTEST_NORMAL;
@@ -523,6 +528,7 @@ namespace lfs::vis {
             g_x11_error_owner = nullptr;
         }
 #endif
+        releaseTensorBackendDevice();
         vulkan_context_.reset();
         if (window_) {
             SDL_DestroyWindow(window_);
@@ -642,7 +648,7 @@ namespace lfs::vis {
         const WindowRectangle target = centeredWindowRectangleOnPrimaryDisplay(1280, 720);
 
         const bool size_set = SDL_SetWindowSize(window_, target.width, target.height);
-        const bool position_set = SDL_SetWindowPosition(window_, target.x, target.y);
+        const bool position_set = is_wayland_ || SDL_SetWindowPosition(window_, target.x, target.y);
         if (!size_set || !position_set) {
             LOG_WARN("Failed to reset window geometry to {}x{} at {},{}: {}",
                      target.width, target.height, target.x, target.y, SDL_GetError());
@@ -671,6 +677,9 @@ namespace lfs::vis {
             SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11,wayland");
             LOG_INFO("GNOME Wayland session detected; preferring X11/Xwayland for native window decorations");
         }
+        // Report macOS trackpad contacts as touch events so automatic navigation
+        // can tell trackpad swipes from mouse wheels.
+        SDL_SetHint(SDL_HINT_TRACKPAD_IS_TOUCH_ONLY, "1");
 
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             reportSdlVideoInitFailure();
@@ -706,6 +715,7 @@ namespace lfs::vis {
             LOG_DEBUG("Failed to set window minimum size: {}", SDL_GetError());
         }
 
+        is_wayland_ = std::strcmp(SDL_GetCurrentVideoDriver(), "wayland") == 0;
         native_titlebar_move_available_ = hasX11NativeMoveSupport(window_);
         if (native_titlebar_move_available_) {
             LOG_DEBUG("Using X11 native titlebar move for borderless window drag");
@@ -720,7 +730,7 @@ namespace lfs::vis {
         }
 
         // Position window on specified monitor (if provided)
-        if (monitor_size_.x > 0 && monitor_size_.y > 0) {
+        if (!is_wayland_ && monitor_size_.x > 0 && monitor_size_.y > 0) {
             const int xpos = monitor_pos_.x + (monitor_size_.x - window_size_.x) / 2;
             const int ypos = monitor_pos_.y + (monitor_size_.y - window_size_.y) / 2;
             SDL_SetWindowPosition(window_, xpos, ypos);
@@ -729,7 +739,7 @@ namespace lfs::vis {
         if (initial_window_state_) {
             auto state = *initial_window_state_;
             sanitizeInitialWindowState(state);
-            const bool position_set = SDL_SetWindowPosition(window_, state.x, state.y);
+            const bool position_set = is_wayland_ || SDL_SetWindowPosition(window_, state.x, state.y);
             const bool size_set = SDL_SetWindowSize(window_, state.width, state.height);
             if (!position_set || !size_set) {
                 LOG_WARN("Failed to restore saved window geometry {}x{} at {},{}: {}",
@@ -742,7 +752,7 @@ namespace lfs::vis {
             const auto target = centeredWindowRectangleOnPrimaryDisplay(
                 window_size_.x, window_size_.y);
             const bool size_set = SDL_SetWindowSize(window_, target.width, target.height);
-            const bool position_set = SDL_SetWindowPosition(window_, target.x, target.y);
+            const bool position_set = is_wayland_ || SDL_SetWindowPosition(window_, target.x, target.y);
             if (!size_set || !position_set) {
                 LOG_WARN("Failed to apply initial window geometry {}x{} at {},{}: {}",
                          target.width, target.height, target.x, target.y, SDL_GetError());
@@ -765,9 +775,10 @@ namespace lfs::vis {
             SDL_Quit();
             return false;
         }
-        lfs::rendering::setExpectedVulkanDeviceUuid(vulkan_context_->deviceUUID());
+        adoptTensorBackendDevice();
         if (!vulkan_context_->presentBootstrapFrame(0.11f, 0.11f, 0.14f, 1.0f)) {
             std::cerr << "Failed to present Vulkan bootstrap frame: " << vulkan_context_->lastError() << std::endl;
+            releaseTensorBackendDevice();
             vulkan_context_.reset();
             SDL_DestroyWindow(window_);
             window_ = nullptr;
@@ -1054,6 +1065,18 @@ namespace lfs::vis {
             const int mouse_x = static_cast<int>(std::round(event.button.x));
             const int mouse_y = static_cast<int>(std::round(event.button.y));
             const bool titlebar_point = isTitlebarDragPoint(mouse_x, mouse_y);
+            // Record GUI ownership at the press and carry it in the frame buffer.
+            // Frame-time bounds miss GUI edges overlapping the viewport (the dock resize
+            // strip) and layout changes. Input routing reuses this hit, including keyboard intent.
+            const auto position = glm::vec2(event.button.x, event.button.y) * input::windowPixelScale(window_);
+            gui::GuiHitTestResult press_hit;
+            if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+                if (auto* const gui = services().guiOrNull())
+                    press_hit = gui->hitTestMouseButton(position.x, position.y);
+                frame_input_.notePressOwner(
+                    event.button.button,
+                    press_hit.blocks_pointer || press_hit.blocks_mouse_button);
+            }
             if (event.button.button == SDL_BUTTON_LEFT) {
                 if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
                     const ResizeEdge resize_edge = resizeEdgeAt(mouse_x, mouse_y);
@@ -1088,8 +1111,8 @@ namespace lfs::vis {
                 break;
             const int button = input::sdlMouseButtonToApp(event.button.button);
             const int action = (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) ? input::ACTION_PRESS : input::ACTION_RELEASE;
-            input_router_.beginMouseButton(action, event.button.x, event.button.y);
-            input_controller_->handleMouseButton(button, action, event.button.x, event.button.y);
+            input_router_.beginMouseButton(action, position.x, position.y, press_hit);
+            input_controller_->handleMouseButton(button, action, position.x, position.y);
             input_router_.endMouseButton(action);
             break;
         }
@@ -1106,7 +1129,8 @@ namespace lfs::vis {
                 break;
             }
             if (input_controller_) {
-                input_controller_->handleMouseMove(event.motion.x, event.motion.y);
+                const auto position = glm::vec2(event.motion.x, event.motion.y) * input::windowPixelScale(window_);
+                input_controller_->handleMouseMove(position.x, position.y);
             }
             updateResizeCursor(static_cast<int>(std::round(event.motion.x)),
                                static_cast<int>(std::round(event.motion.y)));
@@ -1117,6 +1141,24 @@ namespace lfs::vis {
                 break;
             if (input_controller_) {
                 input_controller_->handleScroll(event.wheel.x, event.wheel.y);
+            }
+            break;
+
+        case SDL_EVENT_PINCH_UPDATE:
+            // macOS sends trackpad pinches without a window, so no window filter.
+            if (input_controller_) {
+                input_controller_->handlePinch(event.pinch.scale);
+            }
+            break;
+
+        case SDL_EVENT_FINGER_DOWN:
+        case SDL_EVENT_FINGER_UP:
+        case SDL_EVENT_FINGER_CANCELED:
+            // Trackpad touches are indirect and arrive without a window too.
+            if (input_controller_) {
+                const SDL_TouchDeviceType type = SDL_GetTouchDeviceType(event.tfinger.touchID);
+                if (type == SDL_TOUCH_DEVICE_INDIRECT_ABSOLUTE || type == SDL_TOUCH_DEVICE_INDIRECT_RELATIVE)
+                    input_controller_->handleTrackpadTouch(event.type == SDL_EVENT_FINGER_DOWN);
             }
             break;
 
@@ -1202,7 +1244,8 @@ namespace lfs::vis {
                 LOG_WARN("Failed to leave fullscreen: {}", SDL_GetError());
                 return;
             }
-            SDL_SetWindowPosition(window_, windowed_pos_.x, windowed_pos_.y);
+            if (!is_wayland_)
+                SDL_SetWindowPosition(window_, windowed_pos_.x, windowed_pos_.y);
             SDL_SetWindowSize(window_, windowed_size_.x, windowed_size_.y);
             is_fullscreen_ = false;
             LOG_DEBUG("setFullscreen leave requested: restoring windowed pos={}x{}, size={}x{}",
@@ -1266,14 +1309,15 @@ namespace lfs::vis {
     }
 
     bool WindowManager::isTitlebarDragPoint(const int x, const int y) const {
-        if (titlebar_drag_height_px_ <= 0 || y < 0 || y >= titlebar_drag_height_px_)
+        const auto pixel = glm::vec2(x, y) * input::windowPixelScale(window_);
+        if (titlebar_drag_height_px_ <= 0 || pixel.y < 0 || pixel.y >= titlebar_drag_height_px_)
             return false;
 
         for (const auto& rect : titlebar_drag_excluded_rects_) {
             if (rect.w <= 0 || rect.h <= 0)
                 continue;
-            if (x >= rect.x && x < rect.x + rect.w &&
-                y >= rect.y && y < rect.y + rect.h)
+            if (pixel.x >= rect.x && pixel.x < rect.x + rect.w &&
+                pixel.y >= rect.y && pixel.y < rect.y + rect.h)
                 return false;
         }
 
@@ -1574,7 +1618,7 @@ namespace lfs::vis {
     }
 
     void WindowManager::normalizeNativeMaximize(const char* const reason) {
-        if (!window_ || is_fullscreen_) {
+        if (!window_ || is_fullscreen_ || is_wayland_) {
             updateWindowSize(reason, ResizeIntent::Exact);
             return;
         }
@@ -1615,6 +1659,14 @@ namespace lfs::vis {
         if (!window_ || is_fullscreen_)
             return;
 
+        // Wayland owns top-level placement and maximize/restore geometry.
+        // Applying work-area bounds ourselves cannot replace a native maximize.
+        if (is_wayland_) {
+            if (!SDL_MaximizeWindow(window_))
+                LOG_WARN("Failed to maximize Wayland window: {}", SDL_GetError());
+            return;
+        }
+
         if (save_restore_geometry) {
             saveBorderlessRestoreGeometry();
         }
@@ -1643,13 +1695,10 @@ namespace lfs::vis {
             return;
         }
 
-        SDL_Rect target_bounds = usable_bounds;
-#if defined(_WIN32)
-        // Windows-only: keep work-area dimensions so the taskbar stays visible.
-        // Ask for the display top; the WM may still clamp managed windows to work-area y.
-        target_bounds.y = display_bounds.y;
-        target_bounds.h = std::min(usable_bounds.h, display_bounds.h);
-#endif
+        // Borderless windows are not constrained by the native non-client area.
+        // Respect the complete work area, including its origin: a top taskbar or
+        // desktop dock moves usable_bounds.y below display_bounds.y.
+        const SDL_Rect target_bounds = usable_bounds;
 
         const bool size_set = SDL_SetWindowSize(window_, target_bounds.w, target_bounds.h);
         const bool position_set = SDL_SetWindowPosition(window_, target_bounds.x, target_bounds.y);
@@ -1815,6 +1864,51 @@ namespace lfs::vis {
 
         pending_titlebar_double_click_ = false;
         toggleMaximized();
+    }
+
+    void WindowManager::adoptTensorBackendDevice() {
+        if (!lfs::core::tensor_backend_shares_vulkan_device())
+            return;
+        const auto& device = vulkan_context_->tensorBackendDevice();
+        if (!device.complete) {
+            LOG_INFO("Tensor Vulkan backend keeps its own device: the window device has no spare compute queue or lacks a required feature");
+            return;
+        }
+        const lfs::core::VulkanDeviceHandles handles{
+            .instance = vulkan_context_->instance(),
+            .physical_device = vulkan_context_->physicalDevice(),
+            .device = vulkan_context_->device(),
+            .queue = device.queue,
+            .queue_family = device.queue_family,
+            .sharing_queue_families = {vulkan_context_->graphicsQueueFamily(), vulkan_context_->computeQueueFamily(), device.queue_family},
+            .sharing_queue_family_count = 3,
+            .shader_atomic_float = device.shader_atomic_float,
+            .memory_budget = false,
+            .shader_float64 = device.shader_float64,
+            .shader_float16 = device.shader_float16,
+            .vulkan_memory_model = device.vulkan_memory_model,
+            .vulkan_memory_model_device_scope = device.vulkan_memory_model_device_scope,
+            .cooperative_matrix = device.cooperative_matrix,
+            .external_memory = vulkan_context_->externalMemoryInteropEnabled(),
+            .external_semaphore = vulkan_context_->externalSemaphoreInteropEnabled(),
+        };
+        if (const auto status = lfs::core::adopt_vulkan_device(handles); !status) {
+            LOG_WARN("Tensor Vulkan backend keeps its own device: {}", lfs::format_for_developer(status.error()));
+            return;
+        }
+        tensor_backend_adopted_ = true;
+        LOG_INFO("Tensor Vulkan backend runs on the window device (queue family {})", device.queue_family);
+    }
+
+    void WindowManager::releaseTensorBackendDevice() {
+        if (!tensor_backend_adopted_) {
+            return;
+        }
+        tensor_backend_adopted_ = false;
+        if (const auto status = lfs::core::shutdown_gpu_backend(lfs::core::GpuBackend::Vulkan); !status) {
+            LOG_WARN("Tensor Vulkan backend shutdown failed before the window device is destroyed: {}",
+                     lfs::format_for_developer(status.error()));
+        }
     }
 
 } // namespace lfs::vis

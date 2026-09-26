@@ -14,7 +14,200 @@ from lfs_plugins.asset_index import AssetIndex, Project
 from lfs_plugins.asset_watch import scan_asset_folder
 
 
-ROOT = Path(__file__).resolve().parents[2]
+@pytest.mark.parametrize("operation", [
+    "register", "relink", "rename", "viewing_copy", "delete", "delete_batch",
+    "delete_folder", "default_folder", "reconcile", "verify", "verify_batch", "clean_missing",
+])
+def test_library_rechecks_identity_at_json_replacement(monkeypatch, tmp_path, operation):
+    from lfs_plugins import asset_index
+
+    folder = tmp_path / "项目"
+    folder.mkdir()
+    path = folder / "é.licht"
+    path.write_bytes(b"original project")
+    original = _inspection(str(uuid.uuid4()))
+    current = original
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda _path: current))
+    index = AssetIndex(tmp_path / "library.json", tmp_path / "default")
+    assert index.load()
+    project, _ = index.register_licht_asset(str(path))
+    alternate = folder / "new.licht"
+    shutil.copyfile(path, alternate)
+    if operation == "clean_missing":
+        path.unlink()
+    before = index.library_path.read_bytes()
+    rows = index.assets.copy()
+    real_fsync = asset_index.os.fsync
+
+    def replace_identity(fd):
+        nonlocal current
+        real_fsync(fd)
+        current = _inspection(str(uuid.uuid4()))
+        if operation == "clean_missing":
+            path.write_bytes(b"a new project appeared")
+
+    monkeypatch.setattr(asset_index.os, "fsync", replace_identity)
+    actions = {
+        "register": lambda: index.register_licht_asset(str(alternate), inspection=original),
+        "relink": lambda: index.relink_asset(project.id, str(alternate)),
+        "rename": lambda: index.update_asset(project.id, name="New title"),
+        "viewing_copy": lambda: index.update_asset(project.id, viewing_copy=True),
+        "delete": lambda: index.delete_asset(project.id),
+        "delete_batch": lambda: index.delete_assets([project.id]),
+        "delete_folder": lambda: index.delete_folder(project.folder_id),
+        "default_folder": lambda: index.set_default_folder_path(str(tmp_path / "new-default")),
+        "reconcile": lambda: index.reconcile_observations([
+            asset_index.AssetObservation(str(path), project.folder_id, original)]),
+        "verify": lambda: index.verify_asset(project.id),
+        "verify_batch": lambda: index.verify_projects_batch([project.id]),
+        "clean_missing": lambda: index.clean_missing_entries(project.folder_id),
+    }
+    actions[operation]()
+    assert "changed" in index.last_error
+    assert index.library_path.read_bytes() == before
+    assert index.assets == rows
+
+
+def test_library_rejects_redirected_project_and_library_paths(monkeypatch, tmp_path):
+    path = tmp_path / "项目.licht"
+    path.write_bytes(b"original project")
+    other = tmp_path / "other.licht"
+    shutil.copyfile(path, other)
+    alias = tmp_path / "别名.licht"
+    alias.symlink_to(path)
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda _path: inspection))
+    index = AssetIndex(tmp_path / "library.json", tmp_path)
+    assert index.load()
+    project, _ = index.register_licht_asset(str(alias))
+    assert index.find_asset_by_path(str(path)).id == project.id
+    before = index.library_path.read_bytes()
+    index.update_asset(project.id, save=False, name="Pending")
+    alias.unlink()
+    alias.symlink_to(other)
+    assert not index.save()
+    assert "path changed" in index.last_error and index.library_path.read_bytes() == before
+
+    redirected = tmp_path / "other-library.json"
+    redirected.write_bytes(before)
+    index.library_path.unlink()
+    index.library_path.symlink_to(redirected)
+    assert not index.save()
+    assert "library path changed" in index.last_error and redirected.read_bytes() == before
+
+
+def test_reconciliation_refuses_an_alias_redirected_after_observation(monkeypatch, tmp_path):
+    from lfs_plugins.asset_index import AssetObservation
+
+    path, other, alias = (tmp_path / name for name in ("a.licht", "b.licht", "alias.licht"))
+    path.write_bytes(b"same identity")
+    shutil.copyfile(path, other)
+    alias.symlink_to(path)
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda _path: inspection))
+    index = AssetIndex(tmp_path / "library.json", tmp_path)
+    assert index.load()
+    observation = AssetObservation(str(alias), "default", inspection)
+    before = index.library_path.read_bytes()
+    alias.unlink()
+    alias.symlink_to(other)
+    assert index.reconcile_observations([observation])["failed"] == 1
+    assert "path changed" in index.last_error and index.library_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("operation", ["verify", "verify_batch", "reconcile_all", "scan_batch"])
+def test_library_keeps_path_identity_from_before_inspection(monkeypatch, tmp_path, operation):
+    from lfs_plugins import asset_watch
+
+    path, other, alias = (tmp_path / name for name in ("a.licht", "b.licht", "别名.licht"))
+    path.write_bytes(b"project")
+    shutil.copyfile(path, other)
+    alias.symlink_to(path)
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda *args: inspection))
+    index = AssetIndex(tmp_path / "library.json", tmp_path)
+    assert index.load()
+    project, _ = index.register_licht_asset(str(alias))
+    before = index.library_path.read_bytes()
+    swapped = False
+
+    def inspect(*args):
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            alias.unlink()
+            alias.symlink_to(other)
+        return inspection
+
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(inspect))
+    if operation == "verify":
+        index.verify_asset(project.id)
+    elif operation == "verify_batch":
+        index.verify_projects_batch([project.id])
+    elif operation == "reconcile_all":
+        index.reconcile_all()
+    else:
+        monkeypatch.setattr(asset_watch, "_known_path_is_unchanged", lambda *args: False)
+        asset_watch._commit_registration_batch(index, [(str(alias), "default")], None)
+        assert not index.save()
+    assert swapped and "identity or path changed" in index.last_error
+    assert index.library_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("operation", ["verify", "verify_batch", "reconcile_all", "reconcile_observations"])
+@pytest.mark.parametrize("health", ["missing", "unreadable"])
+def test_library_health_write_refuses_a_replaced_project(monkeypatch, tmp_path, operation, health):
+    from lfs_plugins import asset_index
+
+    path = tmp_path / "项目.licht"
+    path.write_bytes(b"project")
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda *args: inspection))
+    index = AssetIndex(tmp_path / "library.json", tmp_path)
+    assert index.load()
+    project, _ = index.register_licht_asset(str(path))
+    before = index.library_path.read_bytes()
+    rows = index.assets.copy()
+    if health == "missing":
+        path.unlink()
+    else:
+        def unreadable(*args):
+            raise ValueError("Damaged project")
+        monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(unreadable))
+    observation = asset_index.AssetObservation(str(path), "default", error="Could not read the project")
+    original_fsync = asset_index.os.fsync
+
+    def replace(fd):
+        original_fsync(fd)
+        path.write_bytes(b"a replacement project")
+
+    monkeypatch.setattr(asset_index.os, "fsync", replace)
+    if operation == "verify":
+        index.verify_asset(project.id)
+    elif operation == "verify_batch":
+        index.verify_projects_batch([project.id])
+    elif operation == "reconcile_all":
+        index.reconcile_all()
+    else:
+        index.reconcile_observations([observation])
+    assert "identity or path changed" in index.last_error
+    assert index.library_path.read_bytes() == before and index.assets == rows
+
+
+def test_library_writes_preserve_unicode_symlinks(monkeypatch, tmp_path):
+    path = tmp_path / "项目-é.licht"
+    path.write_bytes(b"project")
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda _path: inspection))
+    library = tmp_path / "library.json"
+    assert AssetIndex(library, tmp_path).load()
+    alias = tmp_path / "图书馆.json"
+    alias.symlink_to(library)
+    index = AssetIndex(alias, tmp_path)
+    assert index.load()
+    project, _ = index.register_licht_asset(str(path), name="项目 é")
+    assert alias.is_symlink()
+    assert json.loads(library.read_text())["projects"][project.id]["name"] == "项目 é"
 
 
 def _inspection(
@@ -24,6 +217,8 @@ def _inspection(
     commit_uuid: str | None = None,
     generation: int = 1,
     has_preview: bool = True,
+    preview_width: int = 640,
+    preview_height: int = 360,
     open_state: str = "OPEN",
 ):
     return SimpleNamespace(
@@ -37,7 +232,131 @@ def _inspection(
         role=SimpleNamespace(name="MASTER"),
         open_state=SimpleNamespace(name=open_state),
         has_preview=has_preview,
+        preview_width=preview_width,
+        preview_height=preview_height,
     )
+
+
+def test_single_file_project_is_persisted_without_watching_parent(monkeypatch, tmp_path):
+    project_dir = tmp_path / "three-projects"
+    project_dir.mkdir()
+    project_path = project_dir / "chosen.licht"
+    project_path.write_bytes(b"project")
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda _path: inspection))
+    library_path = tmp_path / "library.json"
+
+    index = AssetIndex(library_path, tmp_path / "default")
+    assert index.load()
+    project, created = index.register_licht_asset(str(project_path), pin=True)
+    assert created and project is not None
+    assert set(index.folders) == {"default"}
+    assert project.to_dict()["pinned"] is True
+
+    restarted = AssetIndex(library_path, tmp_path / "default")
+    assert restarted.load()
+    assert set(restarted.folders) == {"default"}
+    restored = restarted.get_asset(project.id)
+    assert restored is not None and restored.to_dict()["pinned"] is True
+    assert restarted.verify_asset(project.id).status == "AVAILABLE"
+
+    project_path.unlink()
+    assert restarted.verify_asset(project.id).status == "MISSING"
+    assert restarted.delete_asset(project.id)
+    assert restarted.list_projects() == []
+
+
+def test_changing_default_folder_does_not_watch_pinned_project_parent(monkeypatch, tmp_path):
+    project_dir = tmp_path / "external-projects"
+    project_dir.mkdir()
+    project_path = project_dir / "chosen.licht"
+    project_path.write_bytes(b"project")
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda _path: inspection))
+    index = AssetIndex(tmp_path / "library.json", tmp_path / "default")
+    assert index.load()
+    project, _ = index.register_licht_asset(str(project_path), pin=True)
+
+    assert index.set_default_folder_path(str(tmp_path / "new-default"))
+    assert set(index.folders) == {"default"}
+    assert index.get_asset(project.id).folder_id == "default"
+
+
+def test_pinned_project_scanned_from_watched_folder_is_not_duplicated(monkeypatch, tmp_path):
+    from lfs_plugins import asset_watch
+
+    watched = tmp_path / "watched"
+    watched.mkdir()
+    project_path = watched / "chosen.licht"
+    project_path.write_bytes(b"project")
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda _path: inspection))
+    index = AssetIndex(tmp_path / "library.json", tmp_path / "default")
+    assert index.load()
+    project, _ = index.register_licht_asset(str(project_path), pin=True)
+    folder = index.add_folder(str(watched))
+    assert folder is not None
+
+    monkeypatch.setattr(asset_watch, "iter_licht_projects", lambda *_args, **_kwargs: iter([str(project_path)]))
+    asset_watch.scan_asset_folder(index, folder.id, str(watched))
+    assert len(index.list_projects()) == 1
+    assert index.get_asset(project.id).to_dict()["pinned"] is True
+    assert index.get_asset(project.id).folder_id == folder.id
+
+
+def test_loading_pinned_project_uses_matching_watched_folder(monkeypatch, tmp_path):
+    watched = tmp_path / "watched"
+    watched.mkdir()
+    project_path = watched / "chosen.licht"
+    project_path.write_bytes(b"project")
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda _path: inspection))
+    library_path = tmp_path / "library.json"
+
+    index = AssetIndex(library_path, tmp_path / "default")
+    assert index.load()
+    folder = index.add_folder(str(watched))
+    assert folder is not None
+    project, _ = index.register_licht_asset(str(project_path), pin=True)
+    assert project.folder_id == folder.id
+    project.folder_id = "default"
+    assert index.save()
+
+    restarted = AssetIndex(library_path, tmp_path / "default")
+    assert restarted.load()
+    restored = restarted.get_asset(project.id)
+    assert restored is not None and restored.pinned is True
+    assert restored.folder_id == folder.id
+    assert set(restarted.folders) == {"default", folder.id}
+
+
+def test_removing_watched_folder_keeps_pinned_project_in_default_scope(monkeypatch, tmp_path):
+    watched = tmp_path / "watched"
+    watched.mkdir()
+    pinned_path = watched / "pinned.licht"
+    ordinary_path = watched / "ordinary.licht"
+    pinned_path.write_bytes(b"pinned project")
+    ordinary_path.write_bytes(b"ordinary project")
+    pinned_inspection = _inspection(str(uuid.uuid4()))
+    ordinary_inspection = _inspection(str(uuid.uuid4()))
+    _install_inspections(
+        monkeypatch,
+        {pinned_path.name: pinned_inspection, ordinary_path.name: ordinary_inspection},
+    )
+    index = AssetIndex(tmp_path / "library.json", tmp_path / "default")
+    assert index.load()
+    folder = index.add_folder(str(watched))
+    assert folder is not None
+    pinned, _ = index.register_licht_asset(str(pinned_path), pin=True)
+    ordinary, _ = index.register_licht_asset(str(ordinary_path))
+    assert pinned.folder_id == folder.id and pinned.pinned
+    assert ordinary.folder_id == folder.id and not ordinary.pinned
+
+    assert index.delete_folder(folder.id) == 1
+    assert index.list_projects() == [pinned]
+    assert pinned.folder_id == "default"
+    assert pinned.pinned is True
+    assert set(index.folders) == {"default"}
 
 
 def _legacy_backup_path(library_path: Path) -> Path:
@@ -70,6 +389,8 @@ def _cached_record(path: Path, project_uuid: str, inspection=None):
         "role": "MASTER",
         "open_state": inspection.open_state.name,
         "has_preview": inspection.has_preview,
+        "preview_width": inspection.preview_width,
+        "preview_height": inspection.preview_height,
         "status": "AVAILABLE",
     }
 
@@ -89,25 +410,29 @@ def test_catalog_uses_project_uuid_and_persists_inspection_fields(monkeypatch, t
     )
 
     index = AssetIndex(library_path=tmp_path / "library.json")
-    index.ensure_default_catalog()
+    index.load()
 
     first, first_created = index.register_licht_asset(str(first_path), name="My project")
-    duplicate, duplicate_created = index.register_licht_asset(str(copied_path))
+    copy, copy_created = index.register_licht_asset(str(copied_path))
 
     assert first is not None
     assert first_created is True
-    assert duplicate_created is False
-    assert duplicate.id == first.id
-    assert len(index.list_projects()) == 1
-    assert duplicate.path == str(copied_path)
-    assert duplicate.name == "My project"
+    assert copy_created is True
+    assert first.id == project_uuid
+    assert copy.id != first.id
+    assert copy.project_uuid == project_uuid
+    assert copy.to_dict()["copy_of"] == project_uuid
+    assert len(index.list_projects()) == 2
+    assert (first.path, first.name) == (str(first_path), "My project")
+    assert (copy.path, copy.name) == (str(copied_path), "copy")
 
     catalog = json.loads((tmp_path / "library.json").read_text(encoding="utf-8"))
-    assert set(catalog) == {"schema_version", "folders", "projects", "directory_mtimes"}
-    assert catalog["schema_version"] == 4
-    assert catalog["directory_mtimes"] == {}
+    assert set(catalog) == {"schema_version", "folders", "projects"}
+    assert catalog["schema_version"] == 6
     assert catalog["folders"]["default"] == {"path": str(tmp_path)}
-    assert catalog["projects"][first.id] == duplicate.to_storage_dict()
+    assert catalog["projects"][first.id] == first.to_storage_dict()
+    assert "project_uuid" not in catalog["projects"][first.id]
+    assert catalog["projects"][copy.id]["project_uuid"] == project_uuid
     assert {
         "file_uuid",
         "commit_uuid",
@@ -118,6 +443,8 @@ def test_catalog_uses_project_uuid_and_persists_inspection_fields(monkeypatch, t
         "role",
         "open_state",
         "has_preview",
+        "preview_width",
+        "preview_height",
         "status",
     }.issubset(catalog["projects"][first.id])
 
@@ -126,7 +453,7 @@ def test_catalog_rejects_non_licht_paths(tmp_path: Path):
     unsupported = tmp_path / "unsupported.txt"
     unsupported.write_bytes(b"not a LichtFeld project")
     index = AssetIndex(library_path=tmp_path / "library.json")
-    index.ensure_default_catalog()
+    index.load()
 
     asset, created = index.register_licht_asset(str(unsupported))
 
@@ -147,7 +474,7 @@ def test_projects_are_assigned_by_real_directory_not_virtual_folder_id(
     _install_inspections(monkeypatch, {project_path.name: _inspection(project_uuid)})
     library_path = tmp_path / "catalog" / "library.json"
     index = AssetIndex(library_path=library_path, default_folder_path=default)
-    index.ensure_default_catalog()
+    index.load()
     selected_folder = index.add_folder(str(selected))
 
     project, created = index.register_licht_asset(
@@ -186,7 +513,7 @@ def test_failed_project_inspection_does_not_leave_an_implicit_folder(
         library_path=tmp_path / "catalog" / "library.json",
         default_folder_path=default,
     )
-    index.ensure_default_catalog()
+    index.load()
 
     with pytest.raises(ValueError, match="broken"):
         index.register_licht_asset(str(project_path))
@@ -208,7 +535,7 @@ def test_changing_default_directory_preserves_old_real_folder_mapping(
         library_path=tmp_path / "catalog" / "library.json",
         default_folder_path=old_default,
     )
-    index.ensure_default_catalog()
+    index.load()
     project, _ = index.register_licht_asset(str(project_path))
 
     assert index.set_default_folder_path(str(new_default)) is True
@@ -233,7 +560,7 @@ def test_existing_folder_mapping_becomes_default_without_duplicate(tmp_path: Pat
         library_path=tmp_path / "catalog" / "library.json",
         default_folder_path=old_default,
     )
-    index.ensure_default_catalog()
+    index.load()
     added = index.add_folder(str(new_default))
     assert added is not None
 
@@ -259,7 +586,7 @@ def test_project_commit_changes_do_not_change_catalog_identity(monkeypatch, tmp_
 
     library_path = tmp_path / "library.json"
     index = AssetIndex(library_path=library_path)
-    index.ensure_default_catalog()
+    index.load()
     licht_asset, _ = index.register_licht_asset(str(project))
 
     new_commit_uuid = str(uuid.uuid4())
@@ -318,9 +645,8 @@ def test_v2_load_rewrites_records_to_the_exact_minimal_schema(monkeypatch, tmp_p
     assert index.load() is True
 
     migrated = json.loads(library_path.read_text(encoding="utf-8"))
-    assert migrated["schema_version"] == 4
+    assert migrated["schema_version"] == 6
     assert migrated["folders"] == {"default": {"path": str(tmp_path)}}
-    assert migrated["directory_mtimes"] == {}
     assert migrated["projects"][project_uuid] == index.get_asset(project_uuid).to_storage_dict()
 
 
@@ -338,7 +664,7 @@ def test_deleting_last_project_keeps_default_import_folder(monkeypatch, tmp_path
     )
 
     index = AssetIndex(library_path=tmp_path / "library.json")
-    index.ensure_default_catalog()
+    index.load()
     registered, _ = index.register_licht_asset(str(first))
 
     assert index.delete_asset(registered.id) is True
@@ -368,16 +694,17 @@ def test_folder_scan_does_not_replace_a_live_explicit_locator(monkeypatch, tmp_p
     )
 
     index = AssetIndex(library_path=tmp_path / "library.json")
-    index.ensure_default_catalog()
+    index.load()
     result = scan_asset_folder(index, "default", str(watched))
 
     assert result.discovered == 3
-    assert result.added == 2
-    assert result.already_cataloged == 1
+    assert result.added == 3
+    assert result.already_cataloged == 0
     assert result.failed == 0
-    assert len(index.list_projects()) == 2
+    assert len(index.list_projects()) == 3
     assert index.get_asset(first_uuid).path == str(first)
     assert index.get_asset(first_uuid).relocation_candidate == ""
+    assert index.find_asset_by_path(str(duplicate)).to_dict()["copy_of"] == first_uuid
     assert all(Path(asset.path).suffix.lower() == ".licht" for asset in index.list_projects())
 
 
@@ -397,7 +724,7 @@ def test_relink_requires_the_same_project_uuid(monkeypatch, tmp_path: Path):
         },
     )
     index = AssetIndex(library_path=tmp_path / "library.json")
-    index.ensure_default_catalog()
+    index.load()
     project, _ = index.register_licht_asset(str(original))
 
     assert index.relink_asset(project.id, str(other_project)) is False
@@ -453,7 +780,7 @@ def test_legacy_catalog_migration_keeps_only_names_paths_folders_and_watch_roots
     assert index.load() is True
     migrated = json.loads(library_path.read_text(encoding="utf-8"))
 
-    assert migrated["schema_version"] == 4
+    assert migrated["schema_version"] == 6
     assert migrated["folders"] == {"default": {"path": str(tmp_path)}}
     migrated_project = index.get_asset(project_uuid)
     assert migrated_project is not None
@@ -527,7 +854,7 @@ def test_pre_1265_projects_are_migrated_as_folders(monkeypatch, tmp_path: Path):
     assert index.assets[project_uuid]["folder_id"] == "default"
 
 
-def test_v3_load_skips_bad_project_rows_without_saving(monkeypatch, tmp_path: Path):
+def test_v3_load_skips_bad_project_rows_and_migrates_valid_rows(monkeypatch, tmp_path: Path):
     good_path = tmp_path / "good.licht"
     good_path.write_bytes(b"good")
     good_uuid = str(uuid.uuid4())
@@ -589,43 +916,7 @@ def test_v3_load_skips_bad_project_rows_without_saving(monkeypatch, tmp_path: Pa
     assert any(empty_uuid in issue for issue in index.load_issues)
     assert any("not an object" in issue for issue in index.load_issues)
     migrated = json.loads(library_path.read_text(encoding="utf-8"))
-    assert migrated["schema_version"] == 4
-    assert migrated["projects"][good_uuid] == index.get_asset(good_uuid).to_storage_dict()
-
-
-def test_v3_load_skips_one_bad_row_and_keeps_the_rest(monkeypatch, tmp_path: Path):
-    good_path = tmp_path / "good.licht"
-    good_path.write_bytes(b"good")
-    good_uuid = str(uuid.uuid4())
-    _install_inspections(monkeypatch, {good_path.name: _inspection(good_uuid)})
-    library_path = tmp_path / "library.json"
-    payload = {
-        "schema_version": 3,
-        "folders": {"default": {"path": str(tmp_path)}},
-        "projects": {
-            good_uuid: {
-                "name": "Good",
-                "path": str(good_path),
-                "folder_id": "default",
-            },
-            "not-a-uuid": {
-                "name": "Broken",
-                "path": str(tmp_path / "broken.licht"),
-                "folder_id": "default",
-            },
-        },
-    }
-    original = json.dumps(payload, indent=2) + "\n"
-    library_path.write_text(original, encoding="utf-8")
-
-    index = AssetIndex(library_path=library_path)
-    assert index.load() is True
-
-    assert [project.id for project in index.list_projects()] == [good_uuid]
-    assert len(index.load_issues) == 1
-    assert "not-a-uuid" in index.load_issues[0]
-    migrated = json.loads(library_path.read_text(encoding="utf-8"))
-    assert migrated["schema_version"] == 4
+    assert migrated["schema_version"] == 6
     assert migrated["projects"][good_uuid] == index.get_asset(good_uuid).to_storage_dict()
 
 
@@ -665,7 +956,7 @@ def test_v3_load_leaves_cached_rows_unverified_without_inspecting(
 
     project = index.get_asset(project_uuid)
     assert project is not None
-    assert project.status == "UNVERIFIED"
+    assert project.status == "READING"
     assert project.name == "Garden"
     assert project.path == str(project_path)
     assert project.exists is True
@@ -680,12 +971,9 @@ def test_v3_load_leaves_cached_rows_unverified_without_inspecting(
     assert verified.status == "AVAILABLE"
     assert verified.available is True
 
-    unavailable, total = index.verify_projects()
-    assert total == 1
-    assert unavailable == 0
 
 
-def test_v4_full_cached_inspection_skips_batch_inspection(
+def test_v4_restored_inspection_is_verified_before_becoming_available(
     monkeypatch, tmp_path: Path
 ):
     project_path = tmp_path / "cached.licht"
@@ -710,11 +998,12 @@ def test_v4_full_cached_inspection_skips_batch_inspection(
 
     def inspect(*_args):
         inspect_calls.append(True)
-        raise AssertionError("matching full cache must skip inspection")
+        return inspection
 
     monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(inspect))
     index = AssetIndex(library_path=library_path)
     assert index.load() is True
+    assert "directory_mtimes" in json.loads(library_path.read_text(encoding="utf-8"))
 
     project = index.get_asset(project_uuid)
     assert project is not None
@@ -723,9 +1012,70 @@ def test_v4_full_cached_inspection_skips_batch_inspection(
     assert project.status == "AVAILABLE"
     assert project.available is True
     assert project.has_preview is True
+    assert project.preview_width == 640
+    assert project.preview_height == 360
     assert project.commit_uuid == "cached-commit"
     assert project.inspection_verified is True
-    assert inspect_calls == []
+    assert inspect_calls == [True, True]  # Inspection and the guarded library write.
+
+
+def test_identity_mismatch_preserves_inspected_file_size_and_clears_path_stat(
+    monkeypatch, tmp_path: Path
+):
+    project_path = tmp_path / "mismatch.licht"
+    project_path.write_bytes(b"small container")
+    project_uuid = str(uuid.uuid4())
+    mismatch = _inspection(str(uuid.uuid4()))
+    mismatch.physical_file_size = 500 * 1024 * 1024
+    inspection = _inspection(project_uuid)
+    monkeypatch.setattr(
+        AssetIndex,
+        "_inspect_path",
+        staticmethod(lambda _path: inspection),
+    )
+    library_path = tmp_path / "library.json"
+    index = AssetIndex(library_path=library_path)
+    index.load()
+    project, _ = index.register_licht_asset(str(project_path))
+
+    project_path.write_bytes(b"changed container")
+    inspection = mismatch
+    result = index.verify_asset(project.id)
+
+    assert result.status == "IDENTITY_MISMATCH"
+    assert result.file_size_bytes == mismatch.physical_file_size
+    assert result.path_size_bytes == 0
+    assert result.path_mtime_ns == 0
+    stored = json.loads(library_path.read_text(encoding="utf-8"))["projects"][project.id]
+    assert stored["file_size_bytes"] == mismatch.physical_file_size
+    assert stored["size"] == 0
+    assert stored["mtime_ns"] == 0
+
+
+@pytest.mark.parametrize("status", ["MISSING", "UNREADABLE", "IDENTITY_MISMATCH", "UNSUPPORTED"])
+def test_cleared_inspection_status_and_exists_round_trip(
+    monkeypatch, tmp_path: Path, status: str
+):
+    project_path = tmp_path / "cleared.licht"
+    project_path.write_bytes(b"container")
+    project_uuid = str(uuid.uuid4())
+    monkeypatch.setattr(
+        AssetIndex, "_inspect_path", staticmethod(lambda _path: _inspection(project_uuid))
+    )
+    library_path = tmp_path / "library.json"
+    index = AssetIndex(library_path=library_path)
+    index.load()
+    project, _ = index.register_licht_asset(str(project_path))
+    index._clear_runtime(project, status, "saved diagnostic")
+    assert index.save()
+
+    restored_index = AssetIndex(library_path=library_path)
+    assert restored_index.load()
+    restored = restored_index.get_asset(project.id)
+
+    assert restored.status == status
+    assert restored.exists is (status != "MISSING")
+    assert restored.available is False
 
 
 def test_v4_cached_inspection_with_changed_stat_refreshes_fields(
@@ -768,7 +1118,7 @@ def test_v4_cached_inspection_with_changed_stat_refreshes_fields(
     assert project.status == "AVAILABLE"
     assert project.inspection_restored is False
     assert project.inspection_verified is True
-    assert len(inspect_calls) == 1
+    assert len(inspect_calls) == 2  # Inspection and the guarded library write.
 
 
 def test_v4_cached_inspection_missing_field_is_inspected(
@@ -808,7 +1158,7 @@ def test_v4_cached_inspection_missing_field_is_inspected(
     assert project is not None
     assert project.commit_uuid == "refreshed-commit"
     assert project.inspection_verified is True
-    assert len(inspect_calls) == 1
+    assert len(inspect_calls) == 2  # Inspection and the guarded library write.
 
 
 def test_malformed_v3_catalog_restores_previous_catalog(monkeypatch, tmp_path: Path):
@@ -818,7 +1168,7 @@ def test_malformed_v3_catalog_restores_previous_catalog(monkeypatch, tmp_path: P
     _install_inspections(monkeypatch, {original_path.name: _inspection(original_uuid)})
     library_path = tmp_path / "library.json"
     index = AssetIndex(library_path=library_path)
-    index.ensure_default_catalog()
+    index.load()
     index.register_licht_asset(str(original_path))
     before = index.assets
     disk_before = library_path.read_text(encoding="utf-8")
@@ -849,7 +1199,7 @@ def test_failed_v2_load_restores_previous_catalog(monkeypatch, tmp_path: Path):
     )
     library_path = tmp_path / "library.json"
     index = AssetIndex(library_path=library_path)
-    index.ensure_default_catalog()
+    index.load()
     index.register_licht_asset(str(original_path))
     before = index.assets
     library_path.write_text(
@@ -898,7 +1248,7 @@ def test_failed_mutations_restore_in_memory_catalog(monkeypatch, tmp_path: Path)
         },
     )
     index = AssetIndex(library_path=tmp_path / "library.json")
-    index.ensure_default_catalog()
+    index.load()
     folder = index.add_folder(str(folder_path))
     project, _ = index.register_licht_asset(
         str(original_path), folder_id=folder.id
@@ -910,7 +1260,7 @@ def test_failed_mutations_restore_in_memory_catalog(monkeypatch, tmp_path: Path)
     assert index.add_folder(str(unsaved_folder_path)) is None
     assert index.update_asset(project.id, name="Unsaved project") is None
     assert index.relink_asset(project.id, str(relink_path)) is False
-    assert index.delete_folder(folder.id) is False
+    assert index.delete_folder(folder.id) == 0
     assert index.register_licht_asset(str(new_path)) == (None, False)
 
     assert index.folders == before_folders
@@ -935,79 +1285,77 @@ def test_folder_scan_duplicate_does_not_adopt_when_locator_is_offline(
         },
     )
     index = AssetIndex(library_path=tmp_path / "library.json")
-    index.ensure_default_catalog()
+    index.load()
     project, _ = index.register_licht_asset(str(original))
     original.unlink()
 
     library_path = tmp_path / "library.json"
     result = scan_asset_folder(index, "default", str(watched))
 
-    missing = index.get_asset(project.id)
-    assert result.already_cataloged == 1
-    assert missing.path == str(original)
-    assert missing.status == "MISSING"
-    assert missing.relocation_candidate == str(duplicate)
-    assert missing.to_dict()["relocation_candidate"] == str(duplicate)
+    relocated = index.get_asset(project.id)
+    assert result.already_cataloged >= 1
+    assert relocated.path == str(duplicate)
+    assert relocated.status == "AVAILABLE"
+    assert relocated.relocation_candidate == ""
     assert "relocation_candidate" not in json.loads(library_path.read_text(encoding="utf-8"))[
         "projects"
     ][project.id]
 
-    original.write_bytes(b"container")
-    restored = index.verify_asset(project.id)
-    assert restored.status == "AVAILABLE"
-    assert restored.relocation_candidate == ""
 
-    original.unlink()
-    index.verify_asset(project.id)
-    scan_asset_folder(index, "default", str(watched))
-    candidate = index.get_asset(project.id).relocation_candidate
-    assert candidate == str(duplicate)
-    assert index.relink_asset(project.id, candidate) is True
-    relinked = index.get_asset(project.id)
-    assert relinked.path == str(duplicate)
-    assert relinked.relocation_candidate == ""
+def test_storage_resolution_keeps_unwritable_native_path(monkeypatch, tmp_path):
+    from lfs_plugins import asset_index
 
-
-def test_storage_resolution_falls_back_from_unwritable_native_path(
-    monkeypatch, tmp_path: Path
-):
-    from lfs_plugins import asset_index as asset_index_module
-
-    native = tmp_path / "unwritable" / "asset_library"
-    native.mkdir(parents=True)
-    (native / "library.json").write_text('{"schema_version": 2}', encoding="utf-8")
-    appdata = tmp_path / "appdata"
-    fallback = appdata / "LichtFeldStudio" / "asset_manager"
+    native = tmp_path / "blocked"
+    native.write_text("not a directory")
     monkeypatch.delenv("LFS_ASSET_MANAGER_DIR", raising=False)
     monkeypatch.setenv("LFS_RESOLVED_ASSET_LIBRARY_DIR", str(native))
-    monkeypatch.setenv("APPDATA", str(appdata))
-    monkeypatch.delenv("LFS_SAFE_MODE", raising=False)
-    monkeypatch.setattr(
-        asset_index_module,
-        "_path_accepts_writes",
-        lambda path: path == fallback,
-    )
-
-    assert asset_index_module.resolve_asset_manager_storage_path() == fallback
-    assert (fallback / "library.json").read_text(encoding="utf-8") == (
-        '{"schema_version": 2}'
-    )
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    assert asset_index.resolve_asset_manager_storage_path() == native
+    with pytest.raises(OSError):
+        AssetIndex(library_path=native / "library.json")
+    assert not (tmp_path / "appdata").exists()
 
 
-def test_safe_mode_storage_resolution_does_not_probe(monkeypatch, tmp_path: Path):
-    from lfs_plugins import asset_index as asset_index_module
+def test_safe_mode_storage_resolution_does_not_write(monkeypatch, tmp_path):
+    from lfs_plugins import asset_index
 
     native = tmp_path / "native" / "asset_library"
     monkeypatch.delenv("LFS_ASSET_MANAGER_DIR", raising=False)
     monkeypatch.setenv("LFS_RESOLVED_ASSET_LIBRARY_DIR", str(native))
     monkeypatch.setenv("LFS_SAFE_MODE", "1")
-    monkeypatch.setattr(
-        asset_index_module,
-        "_path_accepts_writes",
-        lambda _path: pytest.fail("safe mode must not probe storage"),
-    )
+    assert asset_index.resolve_asset_manager_storage_path() == native
+    assert not native.exists()
 
-    assert asset_index_module.resolve_asset_manager_storage_path() == native
+
+def test_preview_capture_stays_home_and_cleans_failure(monkeypatch, tmp_path):
+    from lfs_plugins import asset_storage
+
+    monkeypatch.setenv("LFS_HOME", str(tmp_path / "Lichtfeld 日本語"))
+    with pytest.raises(RuntimeError, match="capture failed"):
+        with asset_storage.preview_capture("project") as target:
+            assert target.parent == asset_storage.lichtfeld_home() / "cache" / "previews"
+            target.write_bytes(b"png")
+            raise RuntimeError("capture failed")
+    assert not target.exists()
+
+
+def test_preview_cache_evicts_oldest_and_removed_project(monkeypatch, tmp_path):
+    import os
+    from lfs_plugins import asset_storage
+
+    monkeypatch.setenv("LFS_HOME", str(tmp_path))
+    monkeypatch.setattr(asset_storage, "PREVIEW_CACHE_BYTES", 8)
+    directory = tmp_path / "cache" / "previews"
+    directory.mkdir(parents=True)
+    paths = [directory / (asset_storage._preview_prefix(key) + "old.png") for key in ("old", "keep", "removed")]
+    for index, path in enumerate(paths):
+        path.write_bytes(b"1234")
+        os.utime(path, ns=(index + 1, index + 1))
+    asset_storage.prune_previews()
+    assert not paths[0].exists()
+    assert paths[1].exists() and paths[2].exists()
+    asset_storage.prune_previews(["removed"])
+    assert paths[1].exists() and not paths[2].exists()
 
 
 def test_safe_mode_does_not_create_default_asset_directory(monkeypatch, tmp_path: Path):
@@ -1084,7 +1432,7 @@ def test_inspection_maps_repair_only_and_unsupported_newer_status(
         },
     )
     index = AssetIndex(library_path=tmp_path / "library.json")
-    index.ensure_default_catalog()
+    index.load()
 
     repair_project, _ = index.register_licht_asset(str(repair))
     newer_project, _ = index.register_licht_asset(str(newer))
@@ -1100,11 +1448,7 @@ def test_inspection_maps_repair_only_and_unsupported_newer_status(
     assert stored["projects"][repair_uuid]["status"] == "REPAIR_ONLY"
 
 
-def test_asset_library_binding_returns_canonical_path(lf):
-    assert Path(lf.io.asset_library_dir()).name == "asset_library"
-
-
-def test_asset_snapshot_is_cached_per_epoch_and_mtime_verify_shortcuts(monkeypatch, tmp_path: Path):
+def test_asset_snapshot_is_cached_but_explicit_verify_reinspects(monkeypatch, tmp_path: Path):
     project_path = tmp_path / "project.licht"
     project_path.write_bytes(b"container")
     project_uuid = str(uuid.uuid4())
@@ -1116,33 +1460,16 @@ def test_asset_snapshot_is_cached_per_epoch_and_mtime_verify_shortcuts(monkeypat
 
     monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(inspect))
     index = AssetIndex(library_path=tmp_path / "library.json")
-    index.ensure_default_catalog()
+    index.load()
     project, _ = index.register_licht_asset(str(project_path))
     assert project is not None
     snapshot = index.assets
     assert index.assets is snapshot
     calls_before_verify = len(calls)
     index.verify_asset(project.id)
-    assert len(calls) == calls_before_verify
+    assert len(calls) == calls_before_verify + 2
     index.update_asset(project.id, save=False, name="Renamed")
     assert index.assets is not snapshot
-
-
-def test_asset_manager_ui_exposes_only_project_import_and_open_actions():
-    rml = (
-        ROOT / "src/visualizer/gui/rmlui/resources/asset_manager.rml"
-    ).read_text(encoding="utf-8")
-    panel_source = (
-        ROOT / "src/python/lfs_plugins/asset_manager_panel.py"
-    ).read_text(encoding="utf-8")
-
-    assert 'data-event-click="on_import_project"' in rml
-    assert 'data-asset-action="load"' in rml
-    assert 'data-folder-action="menu"' in rml
-    assert '"action": "watch_dirs"' not in panel_source
-    assert '"action": "move_to_folder' not in panel_source
-    assert "open_folder_dialog" in panel_source
-    assert rml.count('data-event-click="on_import_project"') == 1
 
 
 def test_fallback_preview_path_is_cached_in_catalog(monkeypatch, tmp_path: Path):
@@ -1155,7 +1482,7 @@ def test_fallback_preview_path_is_cached_in_catalog(monkeypatch, tmp_path: Path)
     _install_inspections(monkeypatch, {project_path.name: inspection})
     library_path = tmp_path / "library.json"
     index = AssetIndex(library_path=library_path)
-    index.ensure_default_catalog()
+    index.load()
 
     project, created = index.register_licht_asset(str(project_path))
 

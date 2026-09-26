@@ -4,6 +4,7 @@
 
 #include "backward.h"
 #include "buffer_utils.h"
+#include "core/cuda_error.hpp"
 #include "forward.h"
 #include "helper_math.h"
 #include "kernels_backward.cuh"
@@ -17,7 +18,7 @@
 void fast_lfs::rasterization::backward(
     const float* densification_error_map,
     const float* grad_image,
-    const float* grad_alpha,
+    const BackgroundAlphaGradient& background_grad,
     const float* grad_depth,
     const float* grad_normal,
     const float* image,
@@ -102,7 +103,7 @@ void fast_lfs::rasterization::backward(
                         per_primitive_buffers.depths,
                         primitive_normals,
                         grad_image,
-                        grad_alpha,
+                        background_grad,
                         grad_depth,
                         grad_normal,
                         image,

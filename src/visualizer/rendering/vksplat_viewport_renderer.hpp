@@ -7,23 +7,26 @@
 #include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/exportable_storage.hpp"
+#include "core/rad_pool_quant.hpp"
 #include "core/splat_data.hpp"
 #include "lod_page_cache.hpp"
-#include "lod_pool_quant.hpp"
 #include "lod_upload_engine.hpp"
 #include "output_image_pool.hpp"
 #include "output_slot_ring.hpp"
 #include "readback_ticket_ring.hpp"
-#include "rendering/cuda_vulkan_interop.hpp"
+#if LFS_BUILD_TRAINER
+#include <cuda_runtime.h>
+#endif
 #include "rendering/rasterizer/vulkan/src/gs_renderer.h"
 #include "rendering/rendering.hpp"
+#include "vksplat_shared_scratch_install.hpp"
 #include "window/vulkan_context.hpp"
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <cuda_runtime.h>
 #include <expected>
 #include <glm/glm.hpp>
 #include <memory>
@@ -141,40 +144,32 @@ namespace lfs::vis {
         VksplatViewportRenderer(const VksplatViewportRenderer&) = delete;
         VksplatViewportRenderer& operator=(const VksplatViewportRenderer&) = delete;
 
-        [[nodiscard]] std::expected<RenderResult, std::string> render(
+        // Compiles the immutable raster pipelines. Independent of scene contents.
+        [[nodiscard]] LFS_VIS_API std::expected<void, std::string> prepareDevice(VulkanContext& context);
+
+        [[nodiscard]] LFS_VIS_API std::expected<RenderResult, std::string> render(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
             const lfs::rendering::ViewportRenderRequest& request,
             bool force_input_upload,
             OutputSlot output_slot = OutputSlot::Main,
-            bool synchronize_input_upload = false);
+            bool synchronize_input_upload = false,
+            bool deterministic_export = false);
         [[nodiscard]] std::expected<RenderResult, std::string> rerenderSelectionOverlay(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
             const lfs::rendering::ViewportRenderRequest& request,
             OutputSlot output_slot = OutputSlot::Main,
             bool synchronize_input_read = false);
-        // Dedicated non-blocking CUDA stream for the render path (input
-        // packing, overlay staging, selection queries). Producer tensors
-        // bridge in with event edges; upload-timeline signals are enqueued on
-        // it so Vulkan's waits cover the packing.
-        [[nodiscard]] cudaStream_t renderStream() const { return render_stream_; }
-
-        // Reverse edge of the trainer↔viewer handshake: the render-complete
-        // timeline imported into CUDA, and the latest completion value covering
-        // submits that bound live training storage. The trainer enqueues
-        // "wait fence >= value" on its stream before in-place writes.
+#if LFS_BUILD_TRAINER
         [[nodiscard]] cudaExternalSemaphore_t renderCompleteFence() const {
-            return render_complete_cuda_.handle();
+            return static_cast<cudaExternalSemaphore_t>(training_completion_.get());
         }
+#endif
+        [[nodiscard]] void* renderCompleteTimeline() const { return render_complete_timeline_; }
         [[nodiscard]] std::uint64_t renderCompleteValue() const { return last_submitted_render_value_; }
 
-        // Eagerly create the render stream + completion fence so the trainer↔viewer
-        // handshake can be installed before the first live frame submits (covers
-        // training start, scene switch, and post-reset() frames).
-        [[nodiscard]] std::expected<void, std::string> ensureHandshakeReady(VulkanContext& context) {
-            return ensureInitialized(context);
-        }
+        [[nodiscard]] std::expected<void, std::string> ensureHandshakeReady(VulkanContext& context);
         [[nodiscard]] std::expected<void, std::string> ensureTrainingSharedScratchReady(
             VulkanContext& context,
             std::size_t num_splats,
@@ -183,6 +178,20 @@ namespace lfs::vis {
         // Release viewer-owned scratch after an idle boundary. Shared training
         // scratch is released only when the caller explicitly permits it.
         void releaseScratchOnIdle(bool release_shared, bool allow_shared_reclaim = false);
+        // Retain the next idle arena window after a bounded contention timeout.
+        // The arena also expires the request, so an abandoned retry cannot stall
+        // training indefinitely.
+        void requestArenaHandoff();
+        void cancelArenaHandoff();
+        // Keeps a pending reservation alive and reports whether the next render
+        // could claim the arena without waiting.
+        [[nodiscard]] bool pollArenaHandoff();
+        // Reserves the arena and waits, holding no lock, until the next render can
+        // claim it or the timeout passes.
+        [[nodiscard]] bool waitForArenaHandoff(std::chrono::milliseconds timeout);
+        // While the camera moves during training, the viewer and training take
+        // turns on the shared scratch (see kTrainingFramesPerNavigationRender).
+        void setCameraNavigating(bool navigating);
 
         // Invoked with the completion value immediately after each live-model
         // submit, BEFORE the shared arena frame is released — the trainer's
@@ -196,7 +205,7 @@ namespace lfs::vis {
         [[nodiscard]] bool nextOutputImagesNeedResize(
             glm::ivec2 size,
             OutputSlot output_slot = OutputSlot::Main) const;
-        [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
+        [[nodiscard]] LFS_VIS_API std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
             VulkanContext& context,
             OutputSlot output_slot = OutputSlot::Main) const;
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgba(
@@ -334,9 +343,9 @@ namespace lfs::vis {
             const lfs::core::SplatData& splat_data);
         [[nodiscard]] std::expected<void, std::string> uploadLodPageInputs(
             const lfs::core::SplatData& splat_data,
-            std::span<const LodPageCache::PendingUpload> uploads,
-            std::size_t ring_slot);
+            std::span<const LodPageCache::PendingUpload> uploads);
         void configureLodUploadEngine(const lfs::core::SplatData& splat_data);
+        void unconfigureLodUploadEngines(std::string_view reason);
         void stopLodStreaming(std::string_view reason);
         void discardLodEngineResults(std::vector<LodPageCache::PendingUpload>&& results,
                                      std::string_view reason);
@@ -385,15 +394,20 @@ namespace lfs::vis {
         static constexpr std::size_t kOverlayRegionCount = 7;
         static constexpr std::size_t kSelectionQueryRegionCount = 7;
         static constexpr std::size_t kRegionAlignment = 256; // VK minStorageBufferOffsetAlignment upper bound on common HW
-        struct CudaOpacityCopySlot {
-            std::shared_ptr<lfs::core::ExportableBlock> block;
-            VulkanContext::ExternalBuffer buffer{};
-            std::size_t bytes = 0;
+        // A deleted mask whose byte size is not a multiple of 4 is bound from a
+        // padded copy; other masks bind directly.
+        struct DeletedMaskSlot {
+            lfs::core::Tensor padded_mask;
         };
-        struct CudaOverlaySlot {
-            std::shared_ptr<lfs::core::ExportableBlock> block;
-            VulkanContext::ExternalBuffer buffer{};
-            lfs::core::Tensor copy_keep_alive;
+        struct OverlaySlot {
+            lfs::core::Tensor storage;
+            lfs::core::Tensor vulkan_selection_mask;
+            lfs::core::Tensor vulkan_preview_mask;
+            lfs::core::Tensor vulkan_selection_colors;
+            lfs::core::Tensor vulkan_transform_indices;
+            lfs::core::Tensor vulkan_node_mask;
+            lfs::core::Tensor vulkan_overlay_params;
+            lfs::core::Tensor vulkan_model_transforms;
             std::array<std::size_t, kOverlayRegionCount> region_offset{};
             std::array<std::size_t, kOverlayRegionCount> region_bytes{};
             lfs::core::Tensor selection_source;
@@ -423,10 +437,15 @@ namespace lfs::vis {
             std::vector<float> cached_model_transforms_cpu;
             bool model_transforms_uploaded = false;
         };
-        struct CudaSelectionQuerySlot {
-            std::shared_ptr<lfs::core::ExportableBlock> block;
-            VulkanContext::ExternalBuffer buffer{};
-            lfs::core::Tensor copy_keep_alive;
+        struct SelectionQuerySlot {
+            lfs::core::Tensor storage;
+            lfs::core::Tensor vulkan_transform_indices;
+            lfs::core::Tensor vulkan_node_mask;
+            lfs::core::Tensor vulkan_primitives;
+            lfs::core::Tensor vulkan_model_transforms;
+            lfs::core::Tensor vulkan_polygon_vertices;
+            lfs::core::Tensor vulkan_polygon_mask;
+            lfs::core::Tensor vulkan_ring_pick;
             std::array<std::size_t, kSelectionQueryRegionCount> region_offset{};
             std::array<std::size_t, kSelectionQueryRegionCount> region_bytes{};
             std::array<std::size_t, kSelectionQueryRegionCount> region_capacity_bytes{};
@@ -448,7 +467,7 @@ namespace lfs::vis {
         };
 
         void detachManagedBuffers();
-        void releaseOpacityCopySlot(VulkanContext& context, std::size_t ring_slot);
+        void releaseDeletedMaskSlot(std::size_t ring_slot);
         void logVramBreakdownIfChanged(std::string_view reason);
         [[nodiscard]] std::expected<void, std::string> ensureSharedScratchArena(
             VulkanContext& context,
@@ -473,6 +492,7 @@ namespace lfs::vis {
                                       std::size_t image_height);
         LFS_VIS_API void releasePrivateScratchBuffers();
         void releaseGpuLodTreeStorage();
+        void renewArenaHandoff();
         void detachSharedScratchBuffers();
         void releaseSharedScratchImportOnly();
         void releaseSharedScratchArena();
@@ -622,16 +642,21 @@ namespace lfs::vis {
             std::uint64_t tree_signature = 0;
             std::uint64_t page_map_generation = 0;
             std::vector<std::uint32_t> parent_indices;
-            std::vector<std::uint32_t> page_to_chunk_cpu;
+            std::vector<std::uint32_t> page_to_chunk_cpu, chunk_to_page_cpu, page_age_cpu;
+            lfs::core::Tensor cached_means_cpu, cached_scaling_cpu;
             bool valid = false;
         };
         GpuLodTreeStorage gpu_lod_tree_;
-        // CUDA-importable backing for node_bounds/node_links so the upload
-        // engine writes expanded tree metadata with page payloads; the
-        // Buffer shells above hold region views into it.
+        struct LodTreeUpdate {
+            _VulkanBuffer destination;
+            std::vector<std::byte> bytes;
+            size_t offset = 0;
+        };
+        std::vector<LodTreeUpdate> lod_tree_updates_;
+        // The upload engine and renderer share tensor storage for tree metadata.
         struct LodTreeMetaStorage {
-            std::shared_ptr<lfs::core::ExportableBlock> block;
-            VulkanContext::ExternalBuffer buffer{};
+            lfs::core::Tensor tensor;
+            _VulkanBuffer view{};
             std::size_t bounds_offset = 0;
             std::size_t links_offset = 0;
             std::size_t capacity_nodes = 0;
@@ -641,11 +666,10 @@ namespace lfs::vis {
         // (pinned roots / in-core); for view-backed trees only these need
         // render-thread metadata writes — engine pages carry their own.
         std::vector<std::uint32_t> lod_sync_meta_pages_;
-        LodUploadEngine::DeviceLayout lod_engine_layout_{};
         const lfs::core::SplatData* lod_sink_model_ = nullptr;
         struct LodPageInputStorage {
-            std::shared_ptr<lfs::core::ExportableBlock> block;
-            VulkanContext::ExternalBuffer buffer{};
+            lfs::core::Tensor tensor;
+            _VulkanBuffer view{};
             std::array<std::size_t, kInputRegionCount> region_offset{};
             std::array<std::size_t, kInputRegionCount> region_bytes{};
             const lfs::core::SplatData* model = nullptr;
@@ -659,10 +683,7 @@ namespace lfs::vis {
         static constexpr std::size_t kFrameRingSize = OutputSlotRing::kFrameRingSize;
         OutputSlotRing ring_{};
         OutputImagePool output_pool_{};
-        // Vulkan-only completion counter for queue-to-queue dependencies. Keep
-        // this separate from the externally shared CUDA payload below so Vulkan
-        // readbacks never depend on external-payload tracking semantics.
-        VkSemaphore vulkan_render_complete_timeline_ = VK_NULL_HANDLE;
+        // Completion counter shared by tensor producers and Vulkan consumers.
         VkSemaphore render_complete_timeline_ = VK_NULL_HANDLE;
         // Last value whose signal operation was accepted by vkQueueSubmit.
         // Failed recording leaves it unchanged, so no consumer waits on an
@@ -687,11 +708,16 @@ namespace lfs::vis {
         bool macro_chain_warmup_pending_ = true;
 
         static constexpr std::size_t kInputRingSize = kFrameRingSize;
-        std::array<CudaOpacityCopySlot, kInputRingSize> cuda_opacity_copies_{};
-        std::array<CudaOverlaySlot, kInputRingSize> cuda_overlays_{};
-        CudaSelectionQuerySlot cuda_selection_query_{};
+        std::array<DeletedMaskSlot, kInputRingSize> deleted_mask_copies_{};
+        std::array<OverlaySlot, kInputRingSize> overlays_{};
+        SelectionQuerySlot selection_query_{};
         std::array<ModelInputSnapshot, kInputRingSize> ring_uploaded_{};
         int current_input_sh_degree_ = -1;
+#if LFS_HAS_CUDA
+        lfs::core::GpuBackend active_tensor_backend_ = lfs::core::GpuBackend::CUDA;
+#else
+        lfs::core::GpuBackend active_tensor_backend_ = lfs::core::GpuBackend::Vulkan;
+#endif
         std::size_t last_vram_report_signature_ = 0;
 
         struct SharedScratchArena {
@@ -720,27 +746,8 @@ namespace lfs::vis {
         // Private VMA scratch buffers awaiting the same timeline retirement.
         std::vector<std::pair<std::uint64_t, _VulkanBuffer>> retired_private_scratch_buffers_;
 
-        // Per-ring-slot timeline semaphore used to gate Vulkan compute on the
-        // CUDA upload completing; eliminates the per-frame
-        // cudaStreamSynchronize that previously blocked the CPU after every
-        // upload (P15). Values are monotonic; on each upload we bump the slot's
-        // counter, signal CUDA-side, and queue a Vulkan-side wait.
-        struct CudaTimelineHandoff {
-            VulkanContext::ExternalSemaphore vk_semaphore{};
-            lfs::rendering::CudaTimelineSemaphore cuda_semaphore{};
-            std::uint64_t value = 0;
-
-            [[nodiscard]] std::expected<void, std::string> initialize(
-                VulkanContext& context,
-                std::string_view error_label,
-                std::string_view debug_name);
-            void reset(VulkanContext* context);
-        };
-        std::array<CudaTimelineHandoff, kInputRingSize> upload_timelines_{};
-        std::array<CudaTimelineHandoff, kInputRingSize> overlay_upload_timelines_{};
-        CudaTimelineHandoff selection_query_timeline_{};
-
-        cudaStream_t render_stream_ = nullptr;
+        std::uint64_t arena_handoff_token_ = 0;
+        bool camera_navigating_ = false;
 
         std::function<void(std::uint64_t)> live_submit_callback_;
 
@@ -748,23 +755,24 @@ namespace lfs::vis {
         // trainer↔viewer handshake. The trainer waits "render_complete >=
         // borrow value" GPU-side before its next in-place parameter writes.
         VulkanContext::ExternalSemaphore render_complete_external_{};
-        lfs::rendering::CudaTimelineSemaphore render_complete_cuda_{};
-
-        // The last completion value whose frame read the persistent (non-ring)
-        // lod_page_inputs_ buffer; next-frame page uploads wait on it GPU-side.
-        std::uint64_t last_lod_page_borrow_value_ = 0;
+#if LFS_BUILD_TRAINER
+        std::shared_ptr<void> training_completion_;
+#endif
+        VkSemaphore vulkan_query_complete_timeline_ = VK_NULL_HANDLE;
+        std::uint64_t vulkan_query_complete_value_ = 0;
 
         // Zero-copy input storages bound to in-flight frames, keyed by the
         // completion value at which the GPU is done reading them. Keeps
         // VkBuffer + external memory + CUDA allocation alive across trainer
-        // topology reallocations.
+        // topology reallocations. Vulkan-backend tensors pin the same way
+        // through TensorVulkanBuffer::keep_alive.
         std::vector<std::pair<std::uint64_t, std::vector<std::shared_ptr<void>>>>
             retired_input_storages_;
-
         // Async RAD page streaming: decoded pages are packed and copied on the
         // engine's own thread/stream; render frames only publish completions.
-        CudaTimelineHandoff lod_engine_timeline_{};
         LodUploadEngine lod_upload_engine_;
+        // Last completion value whose frame read the LOD pool; pool reuse waits on it GPU-side.
+        std::uint64_t last_lod_page_borrow_value_ = 0;
         std::uint64_t lod_upload_log_batches_ = 0;
         bool lod_upload_log_converged_ = false;
     };

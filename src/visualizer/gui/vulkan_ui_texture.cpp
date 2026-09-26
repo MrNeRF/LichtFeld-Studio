@@ -5,12 +5,14 @@
 #include "gui/vulkan_ui_texture.hpp"
 
 #include "config.h"
+#include "core/error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/rmlui/rmlui_vk_backend.hpp"
-#include "rendering/cuda_vulkan_interop.hpp"
 #include "rendering/image_layout.hpp"
+#include "rendering/image_tensor.hpp"
 #include "rendering/vulkan_wait.hpp"
 #include "window/vulkan_context.hpp"
 #include "window/vulkan_image_barrier_tracker.hpp"
@@ -18,11 +20,14 @@
 #include <vulkan/vulkan.h>
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <format>
 #include <limits>
 #include <memory>
+#include <span>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -33,7 +38,9 @@ namespace lfs::vis::gui {
 
     namespace {
         VulkanContext* g_texture_context = nullptr;
-        lfs::rendering::CudaVulkanUploadStream g_texture_upload_stream;
+        // Process-wide, not per-VulkanUiTexture: image/view handles are recycled
+        // across instances, so a per-object generation is not a unique Rml cache key.
+        std::atomic<std::uint64_t> g_external_src_incarnation{1};
 
         [[nodiscard]] const char* waitOutcomeLabel(const lfs::rendering::WaitOutcome outcome) noexcept {
             using lfs::rendering::WaitOutcome;
@@ -91,60 +98,62 @@ namespace lfs::vis::gui {
             return rgba;
         }
 
-        [[nodiscard]] std::vector<std::uint8_t> tensorToRgba(const lfs::core::Tensor& image,
-                                                             const int expected_width,
-                                                             const int expected_height,
-                                                             const bool flip_y = false) {
-            if (!image.is_valid() || image.ndim() != 3 || expected_width <= 0 || expected_height <= 0) {
+        [[nodiscard]] lfs::core::Tensor prepareUiRgba8(const lfs::core::Tensor& image,
+                                                       const int expected_width,
+                                                       const int expected_height,
+                                                       const bool flip_y) {
+            if (!image.is_valid() || expected_width <= 0 || expected_height <= 0) {
                 return {};
             }
 
-            const auto layout = lfs::rendering::detectImageLayout(image);
-            if (layout == lfs::rendering::ImageLayout::Unknown) {
+            lfs::core::Tensor formatted = lfs::rendering::prepareImageRgba8(image, flip_y);
+            if (!formatted.is_valid()) {
                 LOG_ERROR("Vulkan UI texture upload received unsupported tensor shape [{}, {}, {}]",
-                          image.size(0), image.size(1), image.size(2));
+                          image.ndim() >= 1 ? image.size(0) : 0,
+                          image.ndim() >= 2 ? image.size(1) : 0,
+                          image.ndim() >= 3 ? image.size(2) : 0);
                 return {};
             }
-
-            lfs::core::Tensor formatted = (layout == lfs::rendering::ImageLayout::HWC)
-                                              ? image
-                                              : image.permute({1, 2, 0}).contiguous();
-            if (formatted.device() == lfs::core::Device::CUDA) {
-                formatted = formatted.cpu();
-            }
-            if (formatted.dtype() != lfs::core::DataType::UInt8) {
-                formatted = (formatted.clamp(0.0f, 1.0f) * 255.0f).to(lfs::core::DataType::UInt8);
-            }
-            formatted = formatted.contiguous();
 
             const int height = static_cast<int>(formatted.size(0));
             const int width = static_cast<int>(formatted.size(1));
-            const int channels = static_cast<int>(formatted.size(2));
-            if (width != expected_width || height != expected_height || !formatted.ptr<std::uint8_t>()) {
+            if (width != expected_width || height != expected_height) {
                 LOG_ERROR("Vulkan UI texture upload dimension mismatch: {}x{} vs {}x{}",
                           width, height, expected_width, expected_height);
                 return {};
             }
-            if (channels != 1 && channels != 3 && channels != 4) {
-                LOG_ERROR("Vulkan UI texture upload received unsupported channel count {}", channels);
-                return {};
-            }
-            return toRgba(formatted.ptr<std::uint8_t>(), width, height, channels, flip_y);
+            return formatted;
         }
+
     } // namespace
 
     void setVulkanUiTextureContext(VulkanContext* const context) {
         if (context == nullptr) {
-            if (!g_texture_upload_stream.synchronize()) {
-                LOG_WARN("CUDA/Vulkan UI texture stream synchronization failed during shutdown: {}",
-                         g_texture_upload_stream.lastError());
+            if (g_texture_context != nullptr) {
+                if (!g_texture_context->waitForSubmittedFrames()) {
+                    LOG_WARN(
+                        "Vulkan UI texture context shutdown could not wait for submitted frames: {}",
+                        g_texture_context->lastError());
+                }
+                if (!g_texture_context->waitForImmediateSubmits()) {
+                    LOG_WARN(
+                        "Vulkan UI texture context shutdown could not drain immediate transitions: {}",
+                        g_texture_context->lastError());
+                }
             }
-            g_texture_upload_stream.reset();
-        } else if (!g_texture_upload_stream.valid() && !g_texture_upload_stream.init()) {
-            LOG_ERROR("Could not create the non-blocking CUDA/Vulkan UI texture stream: {}",
-                      g_texture_upload_stream.lastError());
+            if (const std::size_t remaining = VulkanUiTexture::serviceOrphanedImpls(true);
+                remaining != 0) {
+                LOG_ERROR(
+                    "Vulkan UI texture retaining {} quarantined impl(s) after context shutdown",
+                    remaining);
+                // These objects deliberately retain GPU-live resources. Never
+                // revisit their context after it has been destroyed.
+                VulkanUiTexture::orphaned_impls_.clear();
+            }
         }
         g_texture_context = context;
+        if (context != nullptr)
+            VulkanUiTexture::serviceOrphanedImpls(false);
     }
 
     VulkanContext* getVulkanUiTextureContext() {
@@ -152,11 +161,6 @@ namespace lfs::vis::gui {
     }
 
     struct VulkanUiTexture::Impl {
-        enum class Mode : std::uint8_t {
-            Uninitialized,
-            Cpu,
-            CudaInterop,
-        };
 
         VkDevice device = VK_NULL_HANDLE;
         VulkanContext* context = nullptr;
@@ -175,11 +179,13 @@ namespace lfs::vis::gui {
         VkImageLayout image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
         VulkanImageBarrierTracker image_barriers;
         std::uint64_t image_generation_ = 0;
+        std::uint64_t src_incarnation_ = 0;
         struct PendingUpload {
             VkFence fence = VK_NULL_HANDLE;
             VkCommandBuffer command_buffer = VK_NULL_HANDLE;
             VkBuffer staging_buffer = VK_NULL_HANDLE;
             VmaAllocation staging_allocation = VK_NULL_HANDLE;
+            std::shared_ptr<void> keep_alive;
         };
         struct RgbaRegion {
             const std::uint8_t* pixels = nullptr;
@@ -212,15 +218,6 @@ namespace lfs::vis::gui {
         int width = 0;
         int height = 0;
 
-        // CUDA-Vulkan interop path: bypasses CPU readback by writing the rasterizer's
-        // CUDA tensor directly into the VkImage via a shared external memory handle.
-        Mode mode = Mode::Uninitialized;
-        VulkanContext::ExternalImage interop_image{};
-        VulkanContext::ExternalSemaphore interop_semaphore{};
-        lfs::rendering::CudaVulkanInterop interop;
-        std::uint64_t interop_timeline_value = 0;
-        bool interop_disabled = false;
-
         void destroyPendingUpload(PendingUpload& upload) {
             if (upload.command_buffer != VK_NULL_HANDLE && command_pool != VK_NULL_HANDLE) {
                 vkFreeCommandBuffers(device, command_pool, 1, &upload.command_buffer);
@@ -234,11 +231,29 @@ namespace lfs::vis::gui {
             upload = {};
         }
 
+        [[nodiscard]] bool pendingUploadFencesReady(const PendingUpload& upload,
+                                                    const bool wait,
+                                                    const std::string_view fingerprint) const {
+            if (upload.fence == VK_NULL_HANDLE)
+                return true;
+            if (!wait)
+                return vkGetFenceStatus(device, upload.fence) == VK_SUCCESS;
+            lfs::rendering::WaitContext wait_ctx;
+            wait_ctx.fingerprint = fingerprint;
+            const auto outcome = lfs::rendering::wait_fence_bounded(
+                device, upload.fence, std::stop_token{}, lfs::rendering::VulkanWaitPolicy{}, wait_ctx);
+            if (outcome.has_value() && *outcome == lfs::rendering::WaitOutcome::Ready)
+                return true;
+            LOG_ERROR("Vulkan UI texture pending-upload wait failed: {}", formatWaitFailure(outcome));
+            return false;
+        }
+
         // Reap entries whose GPU work has completed. Non-blocking.
         void tryReleasePendingUpload() {
+            releaseRetiredImages(false);
             auto write = pending_uploads.begin();
             for (auto read = pending_uploads.begin(); read != pending_uploads.end(); ++read) {
-                if (read->fence != VK_NULL_HANDLE && vkGetFenceStatus(device, read->fence) == VK_SUCCESS) {
+                if (pendingUploadFencesReady(*read, false, {})) {
                     destroyPendingUpload(*read);
                 } else {
                     if (write != read) {
@@ -255,27 +270,7 @@ namespace lfs::vis::gui {
         void waitAndReleasePendingUpload() {
             auto write = pending_uploads.begin();
             for (auto read = pending_uploads.begin(); read != pending_uploads.end(); ++read) {
-                bool ready = true;
-                if (read->fence != VK_NULL_HANDLE) {
-                    lfs::rendering::WaitContext wait_ctx;
-                    wait_ctx.fingerprint = "ui_texture.pending_upload.wait";
-                    auto wait_outcome = lfs::rendering::wait_fence_bounded(
-                        device,
-                        read->fence,
-                        std::stop_token{},
-                        lfs::rendering::VulkanWaitPolicy{},
-                        wait_ctx);
-                    ready = wait_outcome.has_value() &&
-                            *wait_outcome == lfs::rendering::WaitOutcome::Ready;
-                    if (!ready) {
-                        LOG_ERROR(
-                            "Vulkan UI texture pending-upload wait did not reach Ready "
-                            "(fence={:#x}): {} — retaining upload resources",
-                            lfs::rendering::vkHandleValue(read->fence),
-                            formatWaitFailure(wait_outcome));
-                    }
-                }
-                if (ready) {
+                if (pendingUploadFencesReady(*read, true, "ui_texture.pending_upload.wait")) {
                     destroyPendingUpload(*read);
                 } else {
                     if (write != read) {
@@ -292,23 +287,8 @@ namespace lfs::vis::gui {
             bool all_ready = true;
             for (auto read = retired.pending_uploads.begin();
                  read != retired.pending_uploads.end(); ++read) {
-                bool ready = read->fence == VK_NULL_HANDLE;
-                if (!ready && wait) {
-                    lfs::rendering::WaitContext wait_ctx;
-                    wait_ctx.fingerprint = "ui_texture.retired_upload.wait";
-                    const auto wait_outcome = lfs::rendering::wait_fence_bounded(
-                        device,
-                        read->fence,
-                        std::stop_token{},
-                        lfs::rendering::VulkanWaitPolicy{},
-                        wait_ctx);
-                    ready = wait_outcome.has_value() &&
-                            *wait_outcome == lfs::rendering::WaitOutcome::Ready;
-                } else if (!ready) {
-                    ready = vkGetFenceStatus(device, read->fence) == VK_SUCCESS;
-                }
-
-                if (ready) {
+                if (pendingUploadFencesReady(
+                        *read, wait, wait ? "ui_texture.retired_upload.wait" : std::string_view{})) {
                     destroyPendingUpload(*read);
                 } else {
                     all_ready = false;
@@ -321,16 +301,37 @@ namespace lfs::vis::gui {
             return all_ready;
         }
 
+        [[nodiscard]] std::uint64_t displayedImageRetireSerial() const {
+            if (!context)
+                return 0;
+            std::uint64_t serial = context->lastSuccessfulFrameSubmitSerial();
+            if (context->hasActiveFrame()) {
+                // Current command buffer is unsubmitted and may still sample this view.
+                serial = std::max(serial, context->lastFrameSubmitSerial() + 1);
+            }
+            return serial;
+        }
+
         void releaseRetiredImages(const bool wait) {
             if (wait && context) {
-                const auto serial = context->lastSuccessfulFrameSubmitSerial();
-                if (serial != 0 && !context->waitForRetiredFrameSubmitSerial(serial))
+                // Only wait serials that already have a submit. lastFrame+1 (current
+                // unsubmitted GUI frame) has no fence yet; waitForRetiredFrameSubmitSerial
+                // returns true on an empty fence list without the serial having retired.
+                const std::uint64_t submitted = context->lastFrameSubmitSerial();
+                std::uint64_t need = 0;
+                for (const auto& retired : retired_images) {
+                    if (retired.retire_serial > 0 && retired.retire_serial <= submitted)
+                        need = std::max(need, retired.retire_serial);
+                }
+
+                if (need != 0 && !context->waitForRetiredFrameSubmitSerial(need))
                     LOG_WARN("Vulkan UI texture could not retire frame serial {}: {}",
-                             serial,
+                             need,
                              context->lastError());
             }
-            const auto retired_serial = context ? context->retiredFrameSubmitSerial()
-                                                : std::numeric_limits<std::uint64_t>::max();
+            // No context: only serial-0 (no frame dependency) entries may free.
+            // Do not treat missing context as "all frames retired".
+            const auto retired_serial = context ? context->retiredFrameSubmitSerial() : 0;
             auto write = retired_images.begin();
             for (auto read = retired_images.begin(); read != retired_images.end(); ++read) {
                 const bool uploads_ready = releaseRetiredUploads(*read, wait);
@@ -357,17 +358,10 @@ namespace lfs::vis::gui {
             if (image == VK_NULL_HANDLE)
                 return;
             tryReleasePendingUpload();
-            const std::uint64_t serial = context ? context->lastSuccessfulFrameSubmitSerial() : 0;
-            if (serial == 0) {
-                image_barriers.forgetImage(image, image_generation_);
-                if (image_view != VK_NULL_HANDLE)
-                    vkDestroyImageView(device, image_view, nullptr);
-                vmaDestroyImage(allocator, image, image_allocation);
-                image = VK_NULL_HANDLE;
-                image_view = VK_NULL_HANDLE;
-                image_allocation = VK_NULL_HANDLE;
-                return;
-            }
+            // Serial 0 means no frame sampling dependency, not "no upload
+            // dependency". Keep submitted pending uploads with the image until
+            // their fences are Ready. An unsubmitted GUI frame is lastFrame+1.
+            const std::uint64_t serial = displayedImageRetireSerial();
             if (retired_images.size() >= kMaxRetiredImages)
                 releaseRetiredImages(true);
             retired_images.push_back({
@@ -386,31 +380,64 @@ namespace lfs::vis::gui {
             image_vram_label.clear();
         }
 
+        [[nodiscard]] bool hasGpuLifetime() const {
+            return !pending_uploads.empty() || !retired_images.empty() || image != VK_NULL_HANDLE;
+        }
+
+        [[nodiscard]] bool tryFinishDestroy(const bool wait) {
+            if (wait)
+                waitAndReleasePendingUpload();
+            else
+                tryReleasePendingUpload();
+            retireCurrentImage();
+            releaseRetiredImages(wait);
+            return !hasGpuLifetime();
+        }
+
+        void destroyDeviceObjects() {
+            if (hasGpuLifetime())
+                return;
+            if (sampler != VK_NULL_HANDLE) {
+                vkDestroySampler(device, sampler, nullptr);
+                sampler = VK_NULL_HANDLE;
+            }
+            if (descriptor_pool != VK_NULL_HANDLE) {
+                vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
+                descriptor_pool = VK_NULL_HANDLE;
+                descriptor_set = VK_NULL_HANDLE;
+            }
+            if (descriptor_set_layout != VK_NULL_HANDLE) {
+                vkDestroyDescriptorSetLayout(device, descriptor_set_layout, nullptr);
+                descriptor_set_layout = VK_NULL_HANDLE;
+            }
+            if (command_pool != VK_NULL_HANDLE) {
+                vkDestroyCommandPool(device, command_pool, nullptr);
+                command_pool = VK_NULL_HANDLE;
+            }
+            device = VK_NULL_HANDLE;
+            context = nullptr;
+            allocator = VK_NULL_HANDLE;
+            graphics_queue = VK_NULL_HANDLE;
+            graphics_queue_family = 0;
+
+            image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            src_incarnation_ = 0;
+            width = 0;
+            height = 0;
+        }
+
         // Block only when the ring is full: wait on the oldest entry to free a slot.
         // Returns false if the oldest entry cannot be drained (quarantine/cancel/error).
         [[nodiscard]] bool enforcePendingUploadBound() {
             tryReleasePendingUpload();
             while (pending_uploads.size() >= kMaxPendingUploads) {
                 PendingUpload& oldest = pending_uploads.front();
-                if (oldest.fence != VK_NULL_HANDLE) {
-                    lfs::rendering::WaitContext wait_ctx;
-                    wait_ctx.fingerprint = "ui_texture.pending_upload.bound";
-                    auto wait_outcome = lfs::rendering::wait_fence_bounded(
-                        device,
-                        oldest.fence,
-                        std::stop_token{},
-                        lfs::rendering::VulkanWaitPolicy{},
-                        wait_ctx);
-                    if (!wait_outcome.has_value() ||
-                        *wait_outcome != lfs::rendering::WaitOutcome::Ready) {
-                        LOG_ERROR(
-                            "Vulkan UI texture pending-upload bound wait did not reach Ready "
-                            "(fence={:#x}, pending={}): {} — retaining oldest slot",
-                            lfs::rendering::vkHandleValue(oldest.fence),
-                            pending_uploads.size(),
-                            formatWaitFailure(wait_outcome));
-                        return false;
-                    }
+                if (!pendingUploadFencesReady(oldest, true, "ui_texture.pending_upload.bound")) {
+                    LOG_ERROR(
+                        "Vulkan UI texture pending-upload bound wait did not reach Ready "
+                        "(pending={}) — retaining oldest slot",
+                        pending_uploads.size());
+                    return false;
                 }
                 destroyPendingUpload(oldest);
                 pending_uploads.erase(pending_uploads.begin());
@@ -455,7 +482,9 @@ namespace lfs::vis::gui {
             sampler_info.maxLod = 1.0f;
             if (vkCreateSampler(device, &sampler_info, nullptr, &sampler) != VK_SUCCESS) {
                 LOG_ERROR("Failed to create Vulkan UI texture sampler");
-                reset();
+                if (!reset(true)) {
+                    LOG_ERROR("Vulkan UI texture retaining device objects after sampler init failure");
+                }
                 return false;
             }
 
@@ -471,7 +500,9 @@ namespace lfs::vis::gui {
             layout_info.pBindings = &binding;
             if (vkCreateDescriptorSetLayout(device, &layout_info, nullptr, &descriptor_set_layout) != VK_SUCCESS) {
                 LOG_ERROR("Failed to create Vulkan UI texture descriptor set layout");
-                reset();
+                if (!reset(true)) {
+                    LOG_ERROR("Vulkan UI texture retaining device objects after descriptor-layout init failure");
+                }
                 return false;
             }
 
@@ -486,7 +517,9 @@ namespace lfs::vis::gui {
             pool_create.pPoolSizes = &pool_size;
             if (vkCreateDescriptorPool(device, &pool_create, nullptr, &descriptor_pool) != VK_SUCCESS) {
                 LOG_ERROR("Failed to create Vulkan UI texture descriptor pool");
-                reset();
+                if (!reset(true)) {
+                    LOG_ERROR("Vulkan UI texture retaining device objects after descriptor-pool init failure");
+                }
                 return false;
             }
             return true;
@@ -618,10 +651,7 @@ namespace lfs::vis::gui {
         }
 
         [[nodiscard]] bool ensureImage(const int new_width, const int new_height) {
-            if (mode == Mode::CudaInterop) {
-                LOG_ERROR("Vulkan UI texture used CPU upload after CUDA-interop mode was engaged");
-                return false;
-            }
+
             if (image != VK_NULL_HANDLE && width == new_width && height == new_height) {
                 return true;
             }
@@ -632,7 +662,6 @@ namespace lfs::vis::gui {
             }
             width = new_width;
             height = new_height;
-            mode = Mode::Cpu;
 
             VkImageCreateInfo image_info{};
             image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -648,7 +677,6 @@ namespace lfs::vis::gui {
             image_info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
             image_info.samples = VK_SAMPLE_COUNT_1_BIT;
             image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
             VmaAllocationCreateInfo allocation_info{};
             allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
             VmaAllocationInfo created_allocation_info{};
@@ -657,8 +685,10 @@ namespace lfs::vis::gui {
                 destroyImage();
                 return false;
             }
-            vmaSetAllocationName(allocator, image_allocation, "Vulkan UI texture");
-            image_vram_label = std::format("cpu_upload_rgba8:{}x{}", new_width, new_height);
+            image_vram_label = std::format("cpu_upload_rgba8:{}x{}:{:#x}",
+                                           new_width, new_height,
+                                           lfs::rendering::vkHandleValue(image));
+            vmaSetAllocationName(allocator, image_allocation, image_vram_label.c_str());
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 "vulkan.ui_texture.image",
                 image_vram_label,
@@ -690,6 +720,7 @@ namespace lfs::vis::gui {
                                          new_width,
                                          new_height);
             ++image_generation_;
+            src_incarnation_ = g_external_src_incarnation.fetch_add(1, std::memory_order_relaxed);
             image_barriers.registerImage(image, image_generation_, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
 
             if (descriptor_set == VK_NULL_HANDLE) {
@@ -722,147 +753,116 @@ namespace lfs::vis::gui {
             return descriptor_set != VK_NULL_HANDLE;
         }
 
-        [[nodiscard]] bool ensureInteropImage(const int new_width, const int new_height) {
-            if (interop_disabled || !context || !context->externalMemoryInteropEnabled() ||
-                !context->externalSemaphoreInteropEnabled()) {
-                return false;
+        [[nodiscard]] VkCommandBuffer beginCommands(const VkCommandPool pool) const {
+            if (pool == VK_NULL_HANDLE) {
+                return VK_NULL_HANDLE;
             }
-            if (mode == Mode::Cpu) {
-                LOG_ERROR("Vulkan UI texture used CUDA-interop after CPU mode was engaged");
-                return false;
-            }
-            if (interop.valid() && width == new_width && height == new_height) {
-                return true;
+            VkCommandBufferAllocateInfo alloc_info{};
+            alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            alloc_info.commandPool = pool;
+            alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            alloc_info.commandBufferCount = 1;
+
+            VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+            if (vkAllocateCommandBuffers(device, &alloc_info, &command_buffer) != VK_SUCCESS) {
+                LOG_ERROR("Failed to allocate Vulkan UI texture command buffer");
+                return VK_NULL_HANDLE;
             }
 
-            destroyImage();
-            width = new_width;
-            height = new_height;
-
-            const VkExtent2D extent{
-                static_cast<std::uint32_t>(new_width),
-                static_cast<std::uint32_t>(new_height),
-            };
-            if (!context->createExternalImage(extent,
-                                              VK_FORMAT_R8G8B8A8_UNORM,
-                                              interop_image,
-                                              "vulkan.ui_texture.interop_image",
-                                              "rgba8") ||
-                !context->createExternalTimelineSemaphore(0, interop_semaphore, "vulkan.ui_texture.interop_semaphore")) {
-                LOG_WARN("Vulkan UI texture interop setup failed: {}", context->lastError());
-                destroyImage();
-                interop_disabled = true;
-                return false;
+            VkCommandBufferBeginInfo begin_info{};
+            begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            if (vkBeginCommandBuffer(command_buffer, &begin_info) != VK_SUCCESS) {
+                LOG_ERROR("Failed to begin Vulkan UI texture command buffer");
+                vkFreeCommandBuffers(device, pool, 1, &command_buffer);
+                return VK_NULL_HANDLE;
             }
-            const std::uint64_t vulkan_ready_value = ++interop_timeline_value;
-            if (!context->transitionImageLayoutImmediate(interop_image.image,
-                                                         VK_IMAGE_LAYOUT_UNDEFINED,
-                                                         VK_IMAGE_LAYOUT_GENERAL,
-                                                         VulkanContext::ImmediateTransitionOptions::signalAt(
-                                                             {interop_semaphore.semaphore, vulkan_ready_value}))) {
-                LOG_WARN("Vulkan UI texture interop initial transition failed: {}", context->lastError());
-                destroyImage();
-                interop_disabled = true;
-                return false;
-            }
-            // Retire the initial Vulkan signal before CUDA can advance the
-            // exported timeline. Per-upload ownership transfers below stay
-            // asynchronous; this is the one-time cross-API handoff boundary.
-            if (!context->waitForImmediateSubmits()) {
-                LOG_WARN("Vulkan UI texture interop initialization handoff failed: {}",
-                         context->lastError());
-                destroyImage();
-                interop_disabled = true;
-                return false;
-            }
-
-            const auto memory_handle = context->releaseExternalImageNativeHandle(interop_image);
-            const auto semaphore_handle = context->releaseExternalSemaphoreNativeHandle(interop_semaphore);
-            const lfs::rendering::CudaVulkanExternalImageImport image_import{
-                .memory_handle = memory_handle,
-                .allocation_size = static_cast<std::size_t>(interop_image.allocation_size),
-                .extent = {.width = extent.width, .height = extent.height},
-                .format = lfs::rendering::CudaVulkanImageFormat::Rgba8Unorm,
-                .dedicated_allocation = context->externalMemoryDedicatedAllocationEnabled(),
-            };
-            const lfs::rendering::CudaVulkanExternalSemaphoreImport semaphore_import{
-                .semaphore_handle = semaphore_handle,
-                .initial_value = 0,
-            };
-            if (!interop.init(image_import, semaphore_import)) {
-                LOG_WARN("Vulkan UI texture CUDA import failed: {}", interop.lastError());
-                destroyImage();
-                interop_disabled = true;
-                return false;
-            }
-
-            image = interop_image.image;
-            image_view = interop_image.view;
-            image_layout = VK_IMAGE_LAYOUT_GENERAL;
-            ++image_generation_;
-            image_barriers.registerImage(image, image_generation_, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
-            mode = Mode::CudaInterop;
-
-            // Skip allocating an internal descriptor set: the interop path is consumed via RmlUi
-            // (which allocates its own descriptor against its texture-set layout).
-            descriptor_set = VK_NULL_HANDLE;
-            return true;
+            return command_buffer;
         }
 
-        [[nodiscard]] bool uploadCudaTensorImpl(const lfs::core::Tensor& tensor,
-                                                const int expected_width,
-                                                const int expected_height,
-                                                const bool flip_y) {
-            if (!tensor.is_valid() || tensor.device() != lfs::core::Device::CUDA) {
-                return false;
+        using AccessScope = VulkanImageBarrierTracker::AccessScope;
+
+        void restoreImageTracker(const VkImageLayout layout) {
+            if (image != VK_NULL_HANDLE) {
+                image_barriers.registerImage(
+                    image, image_generation_, VK_IMAGE_ASPECT_COLOR_BIT, layout);
             }
+        }
+
+        // The snapshot owns immutable bytes until the graphics copy completes.
+        [[nodiscard]] bool uploadVulkanTensorImpl(const lfs::core::Tensor& rgba) {
+            if (!rgba.is_valid() || rgba.device() != lfs::core::Device::GPU)
+                return false;
             VulkanContext* const ctx = getVulkanUiTextureContext();
-            if (!ctx || !g_texture_upload_stream.valid() || !init(*ctx)) {
+            if (!ctx || !init(*ctx))
                 return false;
-            }
-            if (!ensureInteropImage(expected_width, expected_height)) {
+            auto& interop = ctx->tensorInterop();
+            const auto backend = lfs::core::gpu_backend_of(rgba).value();
+            const auto scope = interop.execution_scope(backend);
+            auto snapshot = interop.empty(rgba.shape(), rgba.dtype(), backend);
+            snapshot.copy_from(rgba);
+            auto storage = interop.buffer(snapshot);
+            if (!storage || !storage->buffer)
                 return false;
-            }
+            const std::array<const lfs::core::Tensor*, 1> tensors{&snapshot};
+            const auto ready = interop.ready(tensors).timeline();
+            const int region_width = static_cast<int>(snapshot.size(1));
+            const int region_height = static_cast<int>(snapshot.size(0));
+            const VkDeviceSize packed_bytes = VkDeviceSize(region_width) * region_height * 4;
+            if (!packed_bytes || storage->bytes < packed_bytes || storage->offset % 4)
+                return false;
+            if (!ensureImage(region_width, region_height) || !enforcePendingUploadBound())
+                return false;
 
-            if (image_layout != VK_IMAGE_LAYOUT_GENERAL) {
-                const std::uint64_t vulkan_ready_value = ++interop_timeline_value;
-                if (!ctx->transitionImageLayoutImmediate(image,
-                                                         image_layout,
-                                                         VK_IMAGE_LAYOUT_GENERAL,
-                                                         VulkanContext::ImmediateTransitionOptions::signalAt(
-                                                             {interop_semaphore.semaphore, vulkan_ready_value}))) {
-                    LOG_ERROR("Vulkan UI texture interop transition to GENERAL failed: {}", ctx->lastError());
-                    return false;
-                }
-                image_layout = VK_IMAGE_LAYOUT_GENERAL;
-            }
-
-            const cudaStream_t upload_stream = g_texture_upload_stream.stream();
-            if (!interop.wait(interop_timeline_value, upload_stream)) {
-                LOG_ERROR("Vulkan UI texture CUDA wait for Vulkan image release failed: {}",
-                          interop.lastError());
+            const auto previous_layout = image_layout;
+            PendingUpload pending{};
+            const auto rollback = [&] {
+                restoreImageTracker(previous_layout);
+                destroyPendingUpload(pending);
+            };
+            pending.command_buffer = beginCommands(command_pool);
+            if (!pending.command_buffer)
+                return false;
+            image_barriers.transitionImage(pending.command_buffer, image, image_generation_,
+                                           VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            VkBufferImageCopy copy{};
+            copy.bufferOffset = storage->offset;
+            copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            copy.imageExtent = {std::uint32_t(region_width), std::uint32_t(region_height), 1};
+            vkCmdCopyBufferToImage(pending.command_buffer, static_cast<VkBuffer>(storage->buffer),
+                                   image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+            image_barriers.transitionImage(pending.command_buffer, image, image_generation_,
+                                           VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            if (vkEndCommandBuffer(pending.command_buffer) != VK_SUCCESS) {
+                rollback();
                 return false;
             }
-            if (!interop.copyTensorToSurface(tensor, upload_stream, flip_y)) {
-                LOG_ERROR("Vulkan UI texture CUDA copy failed: {}", interop.lastError());
+            VkFenceCreateInfo fence{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+            if (vkCreateFence(device, &fence, nullptr, &pending.fence) != VK_SUCCESS) {
+                rollback();
                 return false;
             }
-
-            const std::uint64_t signal_value = ++interop_timeline_value;
-            if (!interop.signal(signal_value, upload_stream)) {
-                LOG_ERROR("Vulkan UI texture CUDA signal failed: {}", interop.lastError());
+            const auto semaphore = static_cast<VkSemaphore>(ready.semaphore);
+            constexpr VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+            VkTimelineSemaphoreSubmitInfo timeline{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
+            timeline.waitSemaphoreValueCount = ready.value ? 1 : 0;
+            timeline.pWaitSemaphoreValues = &ready.value;
+            VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+            submit.pNext = &timeline;
+            submit.commandBufferCount = 1;
+            submit.pCommandBuffers = &pending.command_buffer;
+            submit.waitSemaphoreCount = ready.value ? 1 : 0;
+            submit.pWaitSemaphores = &semaphore;
+            submit.pWaitDstStageMask = &wait_stage;
+            const auto status = lfs::rendering::vk_queue_submit_synced(graphics_queue, 1, &submit, pending.fence);
+            if (status != VK_SUCCESS) {
+                LOG_ERROR("Vulkan UI texture copy submit failed: {}", static_cast<int>(status));
+                rollback();
                 return false;
             }
-            if (!ctx->transitionImageLayoutImmediate(image,
-                                                     VK_IMAGE_LAYOUT_GENERAL,
-                                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                                     VulkanContext::ImmediateTransitionOptions::waitOn(
-                                                         {interop_semaphore.semaphore, signal_value},
-                                                         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT))) {
-                LOG_ERROR("Vulkan UI texture interop transition to read-only failed: {}", ctx->lastError());
-                return false;
-            }
+            pending.keep_alive = std::move(storage->keep_alive);
             image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            pending_uploads.push_back(std::move(pending));
             return true;
         }
 
@@ -1099,99 +1099,54 @@ namespace lfs::vis::gui {
         }
 
         void destroyImage() {
-            waitAndReleasePendingUpload();
-            releaseRetiredImages(true);
-            const bool has_interop_resources =
-                mode == Mode::CudaInterop || interop.valid() ||
-                interop_image.image != VK_NULL_HANDLE ||
-                interop_semaphore.semaphore != VK_NULL_HANDLE;
-            if (has_interop_resources) {
-                if (g_texture_upload_stream.valid() && !g_texture_upload_stream.synchronize()) {
-                    LOG_WARN("Vulkan UI texture CUDA upload drain failed during image destruction: {}",
-                             g_texture_upload_stream.lastError());
-                }
-                if (context != nullptr) {
-                    if (!context->waitForSubmittedFrames()) {
-                        LOG_WARN("Vulkan UI texture could not drain submitted frames before image destruction: {}",
-                                 context->lastError());
-                    }
-                    if (!context->waitForImmediateSubmits()) {
-                        LOG_WARN("Vulkan UI texture could not drain immediate transitions before image destruction: {}",
-                                 context->lastError());
-                    }
-                }
-                if (image != VK_NULL_HANDLE) {
-                    image_barriers.forgetImage(image, image_generation_);
-                }
-                interop.reset();
-                if (context) {
-                    context->destroyExternalSemaphore(interop_semaphore);
-                    context->destroyExternalImage(interop_image);
-                } else {
-                    interop_image = {};
-                    interop_semaphore = {};
-                }
-                image = VK_NULL_HANDLE;
-                image_view = VK_NULL_HANDLE;
-                image_allocation = VK_NULL_HANDLE;
-                interop_timeline_value = 0;
-            } else {
-                if (image_view != VK_NULL_HANDLE) {
-                    vkDestroyImageView(device, image_view, nullptr);
-                    image_view = VK_NULL_HANDLE;
-                }
-                if (image != VK_NULL_HANDLE) {
-                    if (!image_vram_label.empty()) {
-                        lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
-                            "vulkan.ui_texture.image",
-                            image_vram_label,
-                            0);
-                    }
-                    image_barriers.forgetImage(image, image_generation_);
-                    vmaDestroyImage(allocator, image, image_allocation);
-                    image = VK_NULL_HANDLE;
-                    image_allocation = VK_NULL_HANDLE;
-                }
-            }
+            // Retire current resources; never destroy leftover retired images whose
+            // serial is the in-progress unsubmitted GUI frame.
+            (void)tryFinishDestroy(true);
             image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
             image_vram_label.clear();
-            mode = Mode::Uninitialized;
+            src_incarnation_ = 0;
+
             width = 0;
             height = 0;
         }
 
-        void reset() {
-            if (device != VK_NULL_HANDLE) {
-                if (context != nullptr && !context->waitForSubmittedFrames()) {
-                    LOG_WARN("Vulkan UI texture shutdown could not wait for submitted frames: {}",
-                             context->lastError());
-                }
-                destroyImage();
-                if (sampler != VK_NULL_HANDLE) {
-                    vkDestroySampler(device, sampler, nullptr);
-                    sampler = VK_NULL_HANDLE;
-                }
-                if (descriptor_pool != VK_NULL_HANDLE) {
-                    vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
-                    descriptor_pool = VK_NULL_HANDLE;
-                    descriptor_set = VK_NULL_HANDLE;
-                }
-                if (descriptor_set_layout != VK_NULL_HANDLE) {
-                    vkDestroyDescriptorSetLayout(device, descriptor_set_layout, nullptr);
-                    descriptor_set_layout = VK_NULL_HANDLE;
-                }
-                if (command_pool != VK_NULL_HANDLE) {
-                    vkDestroyCommandPool(device, command_pool, nullptr);
-                    command_pool = VK_NULL_HANDLE;
-                }
+        [[nodiscard]] bool reset(const bool wait) {
+            if (device == VK_NULL_HANDLE && !hasGpuLifetime())
+                return true;
+            if (wait && context != nullptr && !context->waitForSubmittedFrames()) {
+                LOG_WARN("Vulkan UI texture shutdown could not wait for submitted frames: {}",
+                         context->lastError());
             }
-            device = VK_NULL_HANDLE;
-            context = nullptr;
-            allocator = VK_NULL_HANDLE;
-            graphics_queue = VK_NULL_HANDLE;
-            graphics_queue_family = 0;
+            if (!tryFinishDestroy(wait))
+                return false;
+            destroyDeviceObjects();
+            return true;
         }
     };
+
+    std::vector<VulkanUiTexture::Impl*> VulkanUiTexture::orphaned_impls_;
+
+    std::size_t VulkanUiTexture::serviceOrphanedImpls(const bool wait) {
+        if (g_texture_context == nullptr)
+            return orphaned_impls_.size();
+        auto write = orphaned_impls_.begin();
+        for (auto read = orphaned_impls_.begin(); read != orphaned_impls_.end(); ++read) {
+            if (*read && (*read)->reset(wait)) {
+                delete *read;
+                continue;
+            }
+            if (write != read)
+                *write = *read;
+            ++write;
+        }
+        orphaned_impls_.erase(write, orphaned_impls_.end());
+        return orphaned_impls_.size();
+    }
+
+    void VulkanUiTexture::orphanImpl(Impl* const impl) {
+        if (impl)
+            orphaned_impls_.push_back(impl);
+    }
 
     VulkanUiTexture::~VulkanUiTexture() {
         reset();
@@ -1214,6 +1169,7 @@ namespace lfs::vis::gui {
                                  const int width,
                                  const int height,
                                  const int channels) {
+        serviceOrphanedImpls(false);
         if (!impl_) {
             impl_ = new Impl();
         }
@@ -1228,6 +1184,7 @@ namespace lfs::vis::gui {
                                        const int width,
                                        const int height,
                                        const int channels) {
+        serviceOrphanedImpls(false);
         if (!impl_) {
             impl_ = new Impl();
         }
@@ -1235,6 +1192,7 @@ namespace lfs::vis::gui {
     }
 
     bool VulkanUiTexture::uploadRegions(const std::span<const Region> regions) {
+        serviceOrphanedImpls(false);
         if (!impl_) {
             impl_ = new Impl();
         }
@@ -1245,19 +1203,29 @@ namespace lfs::vis::gui {
                                  const int expected_width,
                                  const int expected_height,
                                  const bool flip_y) {
+        serviceOrphanedImpls(false);
         if (!impl_) {
             impl_ = new Impl();
         }
-        if (image.is_valid() && image.device() == lfs::core::Device::CUDA &&
-            impl_->mode != Impl::Mode::Cpu) {
-            if (impl_->uploadCudaTensorImpl(image, expected_width, expected_height, flip_y))
-                return true;
+        const lfs::core::Tensor prepared =
+            prepareUiRgba8(image, expected_width, expected_height, flip_y);
+        if (!prepared.is_valid()) {
+            return false;
         }
-        const std::vector<std::uint8_t> rgba = tensorToRgba(image, expected_width, expected_height, flip_y);
-        return impl_->uploadRgba(rgba, expected_width, expected_height);
+        if (prepared.device() == lfs::core::Device::GPU)
+            return impl_->uploadVulkanTensorImpl(prepared);
+        const lfs::core::Tensor host = prepared.contiguous();
+        const auto* pixels = host.ptr<std::uint8_t>();
+        if (!pixels) {
+            return false;
+        }
+        return impl_->uploadRgba(std::vector<std::uint8_t>(pixels, pixels + host.bytes()),
+                                 expected_width,
+                                 expected_height);
     }
 
     std::uintptr_t VulkanUiTexture::textureId() const {
+        serviceOrphanedImpls(false);
         if (!impl_) {
             return 0;
         }
@@ -1266,14 +1234,17 @@ namespace lfs::vis::gui {
     }
 
     std::string VulkanUiTexture::rmlSrcUrl(const int width, const int height) const {
+        serviceOrphanedImpls(false);
         if (!impl_) {
             return {};
         }
         impl_->tryReleasePendingUpload();
-        return RenderInterface_VK::MakeExternalTextureSource(impl_->image_view, impl_->sampler, width, height);
+        return RenderInterface_VK::MakeExternalTextureSource(
+            impl_->image_view, impl_->sampler, width, height, impl_->src_incarnation_);
     }
 
     bool VulkanUiTexture::valid() const {
+        serviceOrphanedImpls(false);
         if (!impl_) {
             return false;
         }
@@ -1281,12 +1252,16 @@ namespace lfs::vis::gui {
         if (impl_->image_view == VK_NULL_HANDLE) {
             return false;
         }
-        return impl_->mode == Impl::Mode::CudaInterop || impl_->descriptor_set != VK_NULL_HANDLE;
+        return impl_->descriptor_set != VK_NULL_HANDLE;
     }
 
     void VulkanUiTexture::reset() {
-        if (impl_) {
-            impl_->reset();
+        serviceOrphanedImpls(false);
+        if (!impl_)
+            return;
+        if (!impl_->reset(true)) {
+            orphanImpl(impl_);
+            impl_ = nullptr;
         }
     }
 

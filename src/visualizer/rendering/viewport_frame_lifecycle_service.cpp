@@ -5,6 +5,9 @@
 #include "viewport_frame_lifecycle_service.hpp"
 #include "viewport_artifact_service.hpp"
 
+#include <algorithm>
+#include <utility>
+
 namespace lfs::vis {
 
     namespace {
@@ -74,8 +77,9 @@ namespace lfs::vis {
     DirtyMask ViewportFrameLifecycleService::handleTrainingRefresh(const bool is_training,
                                                                    const float refresh_interval_sec) {
         if (!is_training) {
-            return 0;
+            return std::exchange(training_refreshing_, false) ? DirtyFlag::SPLATS : 0;
         }
+        training_refreshing_ = true;
 
         const auto now = std::chrono::steady_clock::now();
         const auto interval = std::chrono::duration<float>(refresh_interval_sec);
@@ -85,6 +89,13 @@ namespace lfs::vis {
 
         last_training_render_ = now;
         return DirtyFlag::SPLATS;
+    }
+
+    double ViewportFrameLifecycleService::secondsUntilTrainingRefresh(const float refresh_interval_sec) const {
+        const auto due = last_training_render_ + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                                     std::chrono::duration<float>(refresh_interval_sec));
+        const auto remaining = due - std::chrono::steady_clock::now();
+        return std::max(0.0, std::chrono::duration<double>(remaining).count());
     }
 
     DirtyMask ViewportFrameLifecycleService::requiredDirtyMask(const bool has_viewport_output,

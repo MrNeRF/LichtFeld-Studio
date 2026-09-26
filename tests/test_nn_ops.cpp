@@ -2,7 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/nn.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor_cuda_interop.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <cuda_runtime.h>
 #include <nlohmann/json.hpp>
@@ -34,7 +35,7 @@ namespace {
     lfs::core::Tensor upload(const std::vector<float>& data, const std::vector<std::size_t>& shape,
                              lfs::core::DataType dtype) {
         auto t = lfs::core::Tensor::from_vector(data, lfs::core::TensorShape(shape),
-                                                lfs::core::Device::CUDA);
+                                                lfs::core::Device::GPU);
         if (dtype == lfs::core::DataType::Float16) {
             return t.to(lfs::core::DataType::Float16);
         }
@@ -233,16 +234,11 @@ namespace {
 
 } // namespace
 
-class NnOpsTest : public ::testing::Test {
-protected:
-    void SetUp() override {
-        int devices = 0;
-        ASSERT_EQ(cudaGetDeviceCount(&devices), cudaSuccess);
-        ASSERT_GT(devices, 0);
-    }
-};
+class NnOpsTest : public lfs::test::CudaDeviceTest {};
 
-TEST_F(NnOpsTest, ConvWaitsForPrecomputedWeightTaps) {
+class NnOpsCudaTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(NnOpsCudaTest, ConvWaitsForPrecomputedWeightTaps) {
     using namespace lfs::core;
     struct Streams {
         cudaStream_t producer = nullptr, consumer = nullptr;
@@ -258,9 +254,9 @@ TEST_F(NnOpsTest, ConvWaitsForPrecomputedWeightTaps) {
     ASSERT_EQ(cudaStreamCreateWithFlags(&streams.producer, cudaStreamNonBlocking), cudaSuccess);
     ASSERT_EQ(cudaStreamCreateWithFlags(&streams.consumer, cudaStreamNonBlocking), cudaSuccess);
     CUDAStreamGuard guard(streams.consumer);
-    auto input = Tensor::ones({1, 8, 5, 7}, Device::CUDA, DataType::Float16);
-    auto weight = Tensor::ones({8, 8, 3, 3}, Device::CUDA, DataType::Float16);
-    auto taps = Tensor::zeros({9, 8, 8}, Device::CUDA, DataType::Float16);
+    auto input = Tensor::ones({1, 8, 5, 7}, Device::GPU, DataType::Float16);
+    auto weight = Tensor::ones({8, 8, 3, 3}, Device::GPU, DataType::Float16);
+    auto taps = Tensor::zeros({9, 8, 8}, Device::GPU, DataType::Float16);
     nn::Conv2dParams params;
     params.pad_h = params.pad_w = 1;
     const auto expected = host_f32(nn::conv2d(input, weight, nullptr, params));
@@ -423,6 +419,71 @@ TEST_F(NnOpsTest, LinearResidualMatchesAdd) {
     }
 }
 
+// LayerNorm reduces the sum and the sum of squares through shared memory. A
+// single buffer for both needs a barrier between reading the block sum and
+// refilling it; without one a fast warp overwrites the sum while a slow warp is
+// still reading it, and roughly one launch in a few hundred comes out wrong.
+// Softmax reduces the row max and the row sum through shared memory and has the
+// same buffer-reuse hazard as LayerNorm.
+TEST_F(NnOpsTest, SoftmaxIsBitwiseRepeatable) {
+    const int rows = 1029;
+    const int cols = 1024;
+    std::vector<float> x(static_cast<std::size_t>(rows) * cols);
+    for (std::size_t i = 0; i < x.size(); ++i) {
+        x[i] = std::sin(0.41f * static_cast<float>(i)) * 6.0f;
+    }
+    auto X = upload(x, {static_cast<std::size_t>(rows), static_cast<std::size_t>(cols)},
+                    lfs::core::DataType::Float32);
+    const auto reference = host_f32(lfs::core::nn::softmax(X));
+    int differing = 0;
+    for (int run = 0; run < 200; ++run) {
+        const auto got = host_f32(lfs::core::nn::softmax(X));
+        ASSERT_EQ(got.size(), reference.size());
+        for (std::size_t i = 0; i < got.size(); ++i) {
+            if (got[i] != reference[i]) {
+                ++differing;
+                break;
+            }
+        }
+    }
+    EXPECT_EQ(differing, 0) << "softmax gave a different answer on " << differing
+                            << " of 200 launches with identical input";
+}
+
+TEST_F(NnOpsTest, LayerNormIsBitwiseRepeatable) {
+    const int rows = 1029;
+    const int cols = 1024;
+    std::vector<float> x(static_cast<std::size_t>(rows) * cols);
+    std::vector<float> w(cols);
+    std::vector<float> b(cols);
+    for (std::size_t i = 0; i < x.size(); ++i) {
+        x[i] = std::sin(0.37f * static_cast<float>(i)) * 3.0f;
+    }
+    for (int c = 0; c < cols; ++c) {
+        w[c] = 1.0f + 0.001f * static_cast<float>(c);
+        b[c] = -0.25f + 0.002f * static_cast<float>(c);
+    }
+    auto X = upload(x, {static_cast<std::size_t>(rows), static_cast<std::size_t>(cols)},
+                    lfs::core::DataType::Float16);
+    auto W = upload(w, {static_cast<std::size_t>(cols)}, lfs::core::DataType::Float16);
+    auto B = upload(b, {static_cast<std::size_t>(cols)}, lfs::core::DataType::Float16);
+
+    const auto reference = host_f32(lfs::core::nn::layer_norm(X, W, B, 1e-5f));
+    int differing = 0;
+    for (int run = 0; run < 300; ++run) {
+        const auto got = host_f32(lfs::core::nn::layer_norm(X, W, B, 1e-5f));
+        ASSERT_EQ(got.size(), reference.size());
+        for (std::size_t i = 0; i < got.size(); ++i) {
+            if (got[i] != reference[i]) {
+                ++differing;
+                break;
+            }
+        }
+    }
+    EXPECT_EQ(differing, 0) << "layer_norm gave a different answer on " << differing
+                            << " of 300 launches with identical input";
+}
+
 TEST_F(NnOpsTest, LayerNormAndRmsNorm) {
     const int rows = 6, cols = 17;
     std::vector<float> x(rows * cols), w(cols, 1.2f), b(cols, -0.3f);
@@ -519,6 +580,46 @@ TEST_F(NnOpsTest, AttentionD56RectangularParity) {
     run(2, 8, 12, 40, 56);
     run(1, 8, 128, 128, 56);
     run(1, 1, 64, 64, 32);
+}
+
+// Head dimensions wider than the key tile take the WMMA path with a
+// probability-weighted-value stride that differs from the score stride. Getting
+// that stride wrong overruns shared memory and silently corrupts the output.
+TEST_F(NnOpsTest, AttentionWideHeadDimParity) {
+    std::mt19937 rng(37);
+    std::uniform_real_distribution<float> dist(-0.6f, 0.6f);
+    const auto run = [&](int b, int h, int n_q, int n_k, int d) {
+        std::vector<float> q(static_cast<std::size_t>(b) * h * n_q * d);
+        std::vector<float> k(static_cast<std::size_t>(b) * h * n_k * d);
+        std::vector<float> v(k.size());
+        for (auto& val : q) {
+            val = dist(rng);
+        }
+        for (auto& val : k) {
+            val = dist(rng);
+        }
+        for (auto& val : v) {
+            val = dist(rng);
+        }
+        const auto ref = cpu_attention(q, k, v, b, h, n_q, n_k, d);
+        auto q_shape = std::vector<std::size_t>{
+            static_cast<std::size_t>(b), static_cast<std::size_t>(h),
+            static_cast<std::size_t>(n_q), static_cast<std::size_t>(d)};
+        auto kv_shape = std::vector<std::size_t>{
+            static_cast<std::size_t>(b), static_cast<std::size_t>(h),
+            static_cast<std::size_t>(n_k), static_cast<std::size_t>(d)};
+        auto Q = upload(q, q_shape, lfs::core::DataType::Float16);
+        auto K = upload(k, kv_shape, lfs::core::DataType::Float16);
+        auto V = upload(v, kv_shape, lfs::core::DataType::Float16);
+        auto O = lfs::core::nn::attention(Q, K, V);
+        EXPECT_TRUE(all_close(host_f32(O), ref, kF16Rtol, kF16Atol))
+            << "b=" << b << " h=" << h << " n_q=" << n_q << " n_k=" << n_k << " d=" << d;
+    };
+    // The RoMa v1 coarse decoder: 1024 channels over 8 heads.
+    run(1, 8, 128, 128, 128);
+    run(1, 1, 65, 65, 128);
+    run(1, 2, 33, 97, 96);
+    run(2, 4, 64, 64, 80);
 }
 
 TEST_F(NnOpsTest, AttentionVsExplicitSoftmax) {
@@ -832,7 +933,7 @@ TEST_F(NnOpsTest, UvGridMatchesCpuFormula) {
     const int height = 3, width = 5;
     const float aspect = 1.5f;
     auto t = lfs::core::nn::uv_grid(height, width, aspect, lfs::core::DataType::Float32,
-                                    lfs::core::Device::CUDA, nullptr);
+                                    lfs::core::Device::GPU, nullptr);
     const auto got = host_f32(t);
     const float span_x = aspect / std::sqrt(1.0f + aspect * aspect);
     const float span_y = 1.0f / std::sqrt(1.0f + aspect * aspect);
@@ -978,14 +1079,14 @@ TEST_F(NnOpsTest, WeightFilePythonRoundTrip) {
     }
     auto file = lfs::core::nn::WeightFile::open(out);
     ASSERT_TRUE(file.has_value()) << std::string(file.error().detail());
-    auto w = file->load("w", lfs::core::Device::CUDA);
+    auto w = file->load("w", lfs::core::Device::GPU);
     ASSERT_TRUE(w.has_value()) << std::string(w.error().detail());
     EXPECT_EQ(w->shape()[0], 3u);
     EXPECT_EQ(w->dtype(), lfs::core::DataType::Float32);
     auto h = file->load("h", lfs::core::Device::CPU, lfs::core::DataType::Float32);
     ASSERT_TRUE(h.has_value());
     EXPECT_EQ(h->numel(), 8u);
-    auto b = file->load("b", lfs::core::Device::CUDA);
+    auto b = file->load("b", lfs::core::Device::GPU);
     ASSERT_TRUE(b.has_value());
     EXPECT_TRUE(all_close(host_f32(*b), {0.5f, -1.25f, 3.0f}, kF32Rtol, kF32Atol));
 }
@@ -1075,7 +1176,7 @@ TEST_F(NnOpsTest, FourierPe) {
     EXPECT_TRUE(all_close(host_f32(pe), peref, 1e-5f, 1e-5f));
 
     auto grid = lfs::core::nn::fourier_pe_grid(2, 3, G, lfs::core::DataType::Float32,
-                                               lfs::core::Device::CUDA, 0);
+                                               lfs::core::Device::GPU, 0);
     EXPECT_EQ(grid.shape()[1], 6u);
     EXPECT_EQ(grid.shape()[2], 2u);
     EXPECT_EQ(grid.shape()[3], 3u);

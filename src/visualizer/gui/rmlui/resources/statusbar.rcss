@@ -37,6 +37,20 @@ body {
     font-weight: bold;
 }
 
+#input-device-toggle {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 3dp;
+    margin-right: 10dp;
+    cursor: pointer;
+}
+
+.input-device {
+    width: 14dp;
+    height: 14dp;
+}
+
 #mcp-chip {
     position: relative;
     display: flex;
@@ -349,23 +363,6 @@ body {
     text-align: left;
 }
 
-#account-chip {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    height: 16dp;
-    margin-right: 12dp;
-    padding: 0 6dp;
-    border-width: 1dp;
-    border-radius: 8dp;
-    cursor: pointer;
-}
-
-#account-tier {
-    margin-left: 4dp;
-    font-size: 10dp;
-}
-
 #gpu-icon {
     width: 14dp;
     height: 14dp;
@@ -459,8 +456,7 @@ body.fit-1 #status-message-section > .separator:first-child {
     margin-left: 10dp;
 }
 
-body.fit-2 #gpu-model,
-body.fit-2 #account-tier {
+body.fit-2 #gpu-model {
     display: none;
 }
 

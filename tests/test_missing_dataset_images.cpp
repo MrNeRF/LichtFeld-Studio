@@ -9,7 +9,6 @@
 #include "io/loaders/colmap_loader.hpp"
 #include "training/dataset.hpp"
 
-#include <cuda_runtime.h>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
@@ -21,11 +20,6 @@
 namespace fs = std::filesystem;
 
 namespace {
-
-    bool has_cuda_device() {
-        int device_count = 0;
-        return cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0;
-    }
 
     class MissingDatasetImagesTest : public ::testing::Test {
     protected:
@@ -219,10 +213,6 @@ namespace {
 } // namespace
 
 TEST_F(MissingDatasetImagesTest, ColmapTextLoadsWhenOneImageIsMissing) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
-
     const fs::path dataset_dir = temp_dir_ / "colmap_text";
     write_colmap_text(dataset_dir, {"present.png", "missing.png"});
     write_png(dataset_dir / "images" / "present.png");
@@ -270,10 +260,6 @@ TEST_F(MissingDatasetImagesTest, ColmapTextStillFailsWhenImagesFolderIsMissing) 
 }
 
 TEST_F(MissingDatasetImagesTest, ColmapTextResolvesMissingAgainstLoadResolutionFolder) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
-
     const fs::path dataset_dir = temp_dir_ / "colmap_text_images_2";
     write_colmap_text(dataset_dir, {"present.png", "missing.png"});
     // images_2 applies scale_factor 2; 1x1 cameras become 0x0 and are skipped.
@@ -297,10 +283,6 @@ TEST_F(MissingDatasetImagesTest, ColmapTextResolvesMissingAgainstLoadResolutionF
 }
 
 TEST_F(MissingDatasetImagesTest, ColmapBinaryLoadsWhenOneImageIsMissing) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
-
     const fs::path dataset_dir = temp_dir_ / "colmap_bin";
     write_colmap_binary(dataset_dir, {"present.png", "missing.png"});
     write_png(dataset_dir / "images" / "present.png");
@@ -328,10 +310,6 @@ TEST_F(MissingDatasetImagesTest, ColmapBinaryAllMissingFails) {
 }
 
 TEST_F(MissingDatasetImagesTest, ColmapLoaderReportsMissingSet) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
-
     const fs::path dataset_dir = temp_dir_ / "colmap_loader";
     write_colmap_text(dataset_dir, {"present.png", "missing.png"});
     write_png(dataset_dir / "images" / "present.png");
@@ -345,10 +323,6 @@ TEST_F(MissingDatasetImagesTest, ColmapLoaderReportsMissingSet) {
 }
 
 TEST_F(MissingDatasetImagesTest, TransformsLoadsWhenOneImageIsMissing) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
-
     const fs::path dataset_dir = temp_dir_ / "transforms";
     write_transforms(dataset_dir, {"present.png", "missing.png"});
     write_png(dataset_dir / "present.png");
@@ -398,10 +372,6 @@ TEST_F(MissingDatasetImagesTest, TransformsRawReaderKeepsMissingCameraRecords) {
 }
 
 TEST_F(MissingDatasetImagesTest, RevalidateMarksDeletedImageMissing) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
-
     write_png(temp_dir_ / "present.png");
     write_png(temp_dir_ / "missing.png");
 
@@ -436,10 +406,6 @@ TEST_F(MissingDatasetImagesTest, RevalidateMarksDeletedImageMissing) {
 }
 
 TEST_F(MissingDatasetImagesTest, RevalidateIncludesRestoredImage) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
-
     write_png(temp_dir_ / "present.png");
 
     lfs::core::Scene scene;
@@ -471,10 +437,6 @@ TEST_F(MissingDatasetImagesTest, RevalidateIncludesRestoredImage) {
 }
 
 TEST_F(MissingDatasetImagesTest, RevalidateAllMissingExcludesEveryCamera) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
-
     lfs::core::Scene scene;
     const auto group = scene.addCameraGroup("Training", scene.addGroup("Cameras"), 2);
     ASSERT_NE(group, lfs::core::NULL_NODE);

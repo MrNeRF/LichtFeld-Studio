@@ -6,11 +6,11 @@
 
 #include "core/error.hpp"
 
+#include "visualizer/core/training_manager.hpp"
 #include <cstdint>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <string>
-#include <visualizer/training/training_manager.hpp>
 #include <zmq.hpp>
 
 namespace lfs::tcp {

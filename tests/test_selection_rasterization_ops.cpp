@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
 using lfs::core::DataType;
@@ -15,24 +14,22 @@ using lfs::core::Tensor;
 
 namespace {
 
-    constexpr size_t LOCKED_GROUPS_SIZE = 8;
-
     Tensor make_bool_mask(const std::vector<uint8_t>& values) {
-        return Tensor::from_vector(std::vector<bool>(values.begin(), values.end()), {values.size()}, Device::CUDA);
+        return Tensor::from_vector(std::vector<bool>(values.begin(), values.end()), {values.size()}, Device::GPU);
     }
 
     Tensor make_uint8_mask(const std::vector<uint8_t>& values) {
         auto tensor = Tensor::empty({values.size()}, Device::CPU, DataType::UInt8);
         std::copy(values.begin(), values.end(), tensor.ptr<uint8_t>());
-        return tensor.cuda();
+        return tensor.gpu();
     }
 
     Tensor make_int32_values(const std::vector<int>& values) {
-        return Tensor::from_vector(values, {values.size()}, Device::CUDA).to(DataType::Int32);
+        return Tensor::from_vector(values, {values.size()}, Device::GPU).to(DataType::Int32);
     }
 
     Tensor make_float32_values(const std::vector<float>& values, const lfs::core::TensorShape& shape) {
-        return Tensor::from_vector(values, shape, Device::CUDA).to(DataType::Float32);
+        return Tensor::from_vector(values, shape, Device::GPU).to(DataType::Float32);
     }
 
     std::vector<uint8_t> run_group_apply(const std::vector<uint8_t>& selection_values,
@@ -50,23 +47,12 @@ namespace {
 
         const auto selection = make_bool_mask(selection_values);
         const auto existing = make_uint8_mask(existing_values);
-        auto output = Tensor::empty({selection_values.size()}, Device::CUDA, DataType::UInt8);
+        auto output = Tensor::empty({selection_values.size()}, Device::GPU, DataType::UInt8);
 
-        std::array<uint32_t, LOCKED_GROUPS_SIZE> locked_bitmask{};
-        for (const auto locked_group : locked_groups) {
-            locked_bitmask[locked_group / 32] |= (1u << (locked_group % 32));
-        }
-
-        uint32_t* d_locked = nullptr;
-        if (cudaMalloc(&d_locked, sizeof(locked_bitmask)) != cudaSuccess) {
-            ADD_FAILURE() << "cudaMalloc failed for locked group mask";
-            return {};
-        }
-        if (cudaMemcpy(d_locked, locked_bitmask.data(), sizeof(locked_bitmask), cudaMemcpyHostToDevice) != cudaSuccess) {
-            cudaFree(d_locked);
-            ADD_FAILURE() << "cudaMemcpy failed for locked group mask";
-            return {};
-        }
+        std::vector<bool> flags(256, false);
+        for (const auto group : locked_groups)
+            flags[group] = true;
+        const Tensor locked_mask = Tensor::from_vector(flags, {flags.size()}, Device::GPU);
 
         Tensor transform_indices_tensor;
         const Tensor* transform_indices_ptr = nullptr;
@@ -80,15 +66,11 @@ namespace {
             existing,
             output,
             group_id,
-            d_locked,
+            locked_mask,
             add_mode,
             transform_indices_ptr,
             valid_nodes,
             replace_mode);
-        if (cudaFree(d_locked) != cudaSuccess) {
-            ADD_FAILURE() << "cudaFree failed for locked group mask";
-            return {};
-        }
 
         return output.cpu().to_vector_uint8();
     }
@@ -110,23 +92,12 @@ namespace {
         const auto selection = make_bool_mask(selection_values);
         const auto indices = make_int32_values(visible_indices);
         const auto existing = make_uint8_mask(existing_values);
-        auto output = Tensor::empty({existing_values.size()}, Device::CUDA, DataType::UInt8);
+        auto output = Tensor::empty({existing_values.size()}, Device::GPU, DataType::UInt8);
 
-        std::array<uint32_t, LOCKED_GROUPS_SIZE> locked_bitmask{};
-        for (const auto locked_group : locked_groups) {
-            locked_bitmask[locked_group / 32] |= (1u << (locked_group % 32));
-        }
-
-        uint32_t* d_locked = nullptr;
-        if (cudaMalloc(&d_locked, sizeof(locked_bitmask)) != cudaSuccess) {
-            ADD_FAILURE() << "cudaMalloc failed for locked group mask";
-            return {};
-        }
-        if (cudaMemcpy(d_locked, locked_bitmask.data(), sizeof(locked_bitmask), cudaMemcpyHostToDevice) != cudaSuccess) {
-            cudaFree(d_locked);
-            ADD_FAILURE() << "cudaMemcpy failed for locked group mask";
-            return {};
-        }
+        std::vector<bool> flags(256, false);
+        for (const auto group : locked_groups)
+            flags[group] = true;
+        const Tensor locked_mask = Tensor::from_vector(flags, {flags.size()}, Device::GPU);
 
         Tensor transform_indices_tensor;
         const Tensor* transform_indices_ptr = nullptr;
@@ -141,15 +112,11 @@ namespace {
             existing,
             output,
             group_id,
-            d_locked,
+            locked_mask,
             add_mode,
             transform_indices_ptr,
             valid_nodes,
             replace_mode);
-        if (cudaFree(d_locked) != cudaSuccess) {
-            ADD_FAILURE() << "cudaFree failed for locked group mask";
-            return {};
-        }
 
         return output.cpu().to_vector_uint8();
     }
@@ -159,7 +126,7 @@ namespace {
 class SelectionRasterizationOpsTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        ASSERT_TRUE(Tensor::zeros({1}, Device::CUDA).is_valid());
+        ASSERT_TRUE(Tensor::zeros({1}, Device::GPU).is_valid());
     }
 };
 

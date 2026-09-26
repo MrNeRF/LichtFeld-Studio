@@ -59,6 +59,8 @@ def new_project_module(monkeypatch, tmp_path):
         scheduled_event=threading.Event(),
         registered_classes=[],
         registered_panels={},
+        create_result=True,
+        create_pending=False,
     )
 
     def schedule_on_ui_thread(callback):
@@ -79,6 +81,8 @@ def new_project_module(monkeypatch, tmp_path):
         get_project_location=lambda: str(state.location),
         get_default_project_location=lambda: str(location),
         set_panel_enabled=lambda panel_id, enabled: state.enabled.append((panel_id, enabled)),
+        is_panel_enabled=lambda panel_id: next((enabled for identifier, enabled in reversed(state.enabled)
+                                               if identifier == panel_id), False),
         tr=lambda key: key,
         confirm_dialog=confirm,
         open_dataset_folder_dialog=lambda: str(dataset),
@@ -98,7 +102,12 @@ def new_project_module(monkeypatch, tmp_path):
     lf_stub.project_is_dirty = lambda: state.dirty
     lf_stub.project_has_path = lambda: True
     lf_stub.is_training_active = lambda: state.training
-    lf_stub.project_create = lambda *args, **kwargs: state.calls.append(("create", args, kwargs))
+    def project_create(*args, **kwargs):
+        state.calls.append(("create", args, kwargs))
+        return state.create_result
+
+    lf_stub.project_create = project_create
+    lf_stub.project_create_pending = lambda: state.create_pending
     lf_stub.load_file = lambda *args, **kwargs: state.calls.append(("load", args, kwargs))
     lf_stub.project_embed_dataset = lambda: state.calls.append(("embed", (), {}))
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
@@ -111,6 +120,60 @@ def _panel(module):
     panel._handle = _Handle()
     panel._dialog_mounted = True
     return panel
+
+
+def test_choose_project_folder_creates_there_without_changing_default(new_project_module, tmp_path):
+    module, state = new_project_module
+    panel = _panel(module)
+    panel.show("")
+    destination = tmp_path / "自定义 projects"
+    destination.mkdir()
+    state.lf.ui.open_folder_dialog = lambda *_: str(destination)
+    panel._on_browse_destination()
+    panel._set_name("Garden")
+    panel._on_do_create()
+    assert state.calls[0][1] == (str(destination / "Garden.licht"),)
+    assert state.lf.ui.get_project_location() == str(state.location)
+    panel.show("")
+    assert panel._target_path().parent == state.location
+
+
+def test_custom_folder_overwrite_and_cancel(new_project_module, tmp_path):
+    module, state = new_project_module
+    panel = _panel(module)
+    panel.show("")
+    destination = tmp_path / "custom"
+    destination.mkdir()
+    existing = destination / "Garden.licht"
+    existing.write_bytes(b"existing project")
+    panel._set_name("Garden")
+    state.lf.ui.open_folder_dialog = lambda *_: str(destination)
+    panel._on_browse_destination()
+    state.lf.ui.open_folder_dialog = lambda *_: ""
+    panel._on_browse_destination()
+    assert panel._target_path() == existing
+    panel._on_do_create()
+    assert not state.calls
+    assert existing.read_bytes() == b"existing project"
+    state.prompts[-1][3]("new_project.overwrite")
+    assert state.calls[0][1] == (str(existing),)
+    assert state.calls[0][2]["overwrite"] is True
+
+
+def test_changing_destination_invalidates_pending_overwrite(new_project_module, tmp_path):
+    module, state = new_project_module
+    panel = _panel(module)
+    panel.show("")
+    panel._set_name("Garden")
+    (state.location / "Garden.licht").write_bytes(b"existing")
+    panel._on_do_create()
+    confirm = state.prompts[-1][3]
+    destination = tmp_path / "custom"
+    destination.mkdir()
+    state.lf.ui.open_folder_dialog = lambda *_: str(destination)
+    panel._on_browse_destination()
+    confirm("new_project.overwrite")
+    assert not state.calls
 
 
 def _run_scheduled(state, timeout=2.0):
@@ -247,7 +310,149 @@ def test_exists_check_and_dedupe(new_project_module):
     panel.on_update(None)
     _run_scheduled(state)
     assert panel._target_exists() is True
-    assert panel._can_create() is False
+    assert panel._can_create() is True
+
+
+def test_existing_name_prompts_overwrite_cancel_keeps_form(new_project_module):
+    module, state = new_project_module
+    (state.location / "garden.licht").write_bytes(b"existing")
+    panel = _panel(module)
+    panel.show(str(state.dataset))
+    _run_scheduled(state)
+    panel._set_name("garden")
+    panel._on_do_create()
+
+    assert state.calls == []
+    assert len(state.prompts) == 1
+    title, message, buttons, callback = state.prompts[0]
+    assert title == "new_project.overwrite_title"
+    assert message == "new_project.overwrite_message"
+    assert buttons == ["new_project.overwrite", "common.cancel"]
+    callback("common.cancel")
+    assert state.calls == []
+    assert state.enabled[-1] == ("lfs.new_project", True)
+    assert panel._name == "garden"
+    assert panel._source_path == str(state.dataset)
+
+
+def test_overwrite_message_substitutes_project_name(new_project_module):
+    module, state = new_project_module
+    originals = {}
+
+    def tr(key):
+        if key == "new_project.overwrite_message":
+            return 'A project named "{name}" already exists.'
+        return key
+
+    originals["tr"] = module.lf.ui.tr
+    module.lf.ui.tr = tr
+    (state.location / "garden.licht").write_bytes(b"existing")
+    panel = _panel(module)
+    panel.show(str(state.dataset))
+    _run_scheduled(state)
+    panel._set_name("garden")
+    panel._on_do_create()
+    assert 'A project named "garden" already exists.' == state.prompts[0][1]
+    module.lf.ui.tr = originals["tr"]
+
+
+def test_existing_name_overwrite_creates_and_loads_dataset(new_project_module):
+    module, state = new_project_module
+    (state.location / "garden.licht").write_bytes(b"existing")
+    panel = _panel(module)
+    panel.show(str(state.dataset))
+    _run_scheduled(state)
+    panel._set_name("garden")
+    panel._on_do_create()
+    state.prompts[0][3]("new_project.overwrite")
+
+    assert [call[0] for call in state.calls] == ["create", "load"]
+    assert state.calls[0][2]["overwrite"] is True
+    assert state.calls[0][2]["discard_changes"] is True
+    assert state.enabled[-1] == ("lfs.new_project", False)
+
+
+def test_rapid_create_before_exists_probe_still_prompts(new_project_module):
+    module, state = new_project_module
+    (state.location / "garden.licht").write_bytes(b"existing")
+    panel = _panel(module)
+    panel.show(str(state.dataset))
+    _run_scheduled(state)
+    panel._set_name("garden")
+    assert panel._target_exists() is False
+    assert panel._can_create() is True
+    panel._on_do_create()
+    assert state.calls == []
+    assert state.prompts[0][0] == "new_project.overwrite_title"
+    assert panel._name == "garden"
+    assert state.enabled[-1] == ("lfs.new_project", True)
+
+
+def test_late_collision_after_create_click_prompts_overwrite(new_project_module):
+    module, state = new_project_module
+    state.dirty = True
+    panel = _panel(module)
+    panel.show(str(state.dataset))
+    _run_scheduled(state)
+    panel._on_do_create()
+    assert state.calls == []
+    assert state.prompts[0][0] == "new_project.title"
+    (state.location / "garden.licht").write_bytes(b"late")
+    state.prompts[0][3]("unsaved_work.continue_without_saving")
+    assert state.calls == []
+    assert state.prompts[-1][0] == "new_project.overwrite_title"
+    state.prompts[-1][3]("common.cancel")
+    assert state.calls == []
+    assert state.enabled[-1] == ("lfs.new_project", True)
+    assert panel._name == "garden"
+
+
+def test_failed_create_keeps_form_and_skips_load(new_project_module):
+    module, state = new_project_module
+    state.create_result = False
+    panel = _panel(module)
+    panel.show(str(state.dataset))
+    _run_scheduled(state)
+    panel._on_do_create()
+    assert [call[0] for call in state.calls] == ["create"]
+    assert state.enabled[-1] == ("lfs.new_project", True)
+
+
+def test_deferred_create_still_issues_dependent_load(new_project_module):
+    module, state = new_project_module
+    state.create_result = False
+    state.create_pending = True
+    panel = _panel(module)
+    panel.show(str(state.dataset))
+    _run_scheduled(state)
+    panel._on_do_create()
+    assert [call[0] for call in state.calls] == ["create", "load"]
+    assert state.enabled[-1] == ("lfs.new_project", False)
+
+
+def test_blank_and_splat_overwrite_authorization(new_project_module):
+    module, state = new_project_module
+    (state.location / "untitled.licht").write_bytes(b"existing")
+    panel = _panel(module)
+    panel.show("")
+    panel._set_name("untitled")
+    panel._on_do_create()
+    state.prompts[0][3]("new_project.overwrite")
+    assert len(state.calls) == 1
+    assert state.calls[0][0] == "create"
+    assert state.calls[0][2]["overwrite"] is True
+
+    state.calls.clear()
+    state.prompts.clear()
+    (state.location / "model.licht").write_bytes(b"existing")
+    panel.show(str(state.splat))
+    _run_scheduled(state)
+    panel._set_name("model")
+    panel._on_do_create()
+    state.prompts[0][3]("new_project.overwrite")
+    assert [call[0] for call in state.calls] == ["create", "load"]
+    assert state.calls[0][2]["overwrite"] is True
+    assert state.calls[1][2]["is_dataset"] is False
 
 
 def test_min_track_length_and_keyboard_boundaries(new_project_module):
@@ -280,3 +485,72 @@ def test_source_probe_is_debounced_until_idle(new_project_module, monkeypatch):
     panel.on_update(None)
     _run_scheduled(state)
     assert calls == [str(state.dataset)]
+
+
+def test_creation_does_not_save_the_open_dialog(new_project_module):
+    module, state = new_project_module
+    panel = _panel(module)
+    panel.show("")
+    original_create = state.lf.project_create
+
+    def create(*args, **kwargs):
+        assert state.enabled[-1] == ("lfs.new_project", False)
+        return original_create(*args, **kwargs)
+
+    state.lf.project_create = create
+    panel._on_do_create()
+    assert state.calls[0][0] == "create"
+
+
+def test_failed_creation_restores_the_dialog(new_project_module):
+    module, state = new_project_module
+    panel = _panel(module)
+    panel.show("")
+
+    def fail(*args, **kwargs):
+        assert state.enabled[-1] == ("lfs.new_project", False)
+        raise RuntimeError("write failed")
+
+    state.lf.project_create = fail
+    with pytest.raises(RuntimeError, match="write failed"):
+        panel._on_do_create()
+    assert state.enabled[-1] == ("lfs.new_project", True)
+
+
+def test_restored_panel_visibility_does_not_request_a_new_project(new_project_module):
+    module, state = new_project_module
+    panel = _panel(module)
+    assert not panel.poll(None)
+    panel.show("")
+    assert panel.poll(None)
+    panel._on_do_cancel()
+    # Old projects may contain enabled=True for this command dialog.
+    state.lf.ui.set_panel_enabled(panel.id, True)
+    from lfs_plugins.panels import apply_panel_chrome
+    apply_panel_chrome(panel, {})
+    assert state.enabled[-1] == (panel.id, False)
+    assert not panel.poll(None)
+    panel.show("")
+    assert panel.poll(None)
+
+
+@pytest.mark.parametrize("deferred_unmount", [False, True])
+def test_failed_creation_keeps_requested_dialog_after_unmount(new_project_module, deferred_unmount):
+    module, state = new_project_module
+    panel = _panel(module)
+    panel.show("")
+
+    def fail(*args, **kwargs):
+        if not deferred_unmount:
+            panel.on_unmount(None)
+        raise RuntimeError("write failed")
+
+    state.lf.project_create = fail
+    with pytest.raises(RuntimeError, match="write failed"):
+        panel._on_do_create()
+    if deferred_unmount:
+        panel.on_unmount(None)
+    panel.apply_chrome({})
+    assert panel.poll(None)
+    assert state.enabled[-1] == (panel.id, True)
+    assert panel._can_create()

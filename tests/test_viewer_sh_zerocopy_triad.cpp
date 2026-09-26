@@ -8,6 +8,7 @@
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 
@@ -36,12 +37,12 @@ namespace {
         const auto rest = lfs::core::sh_rest_coefficients_for_degree(3);
         const size_t floats = lfs::core::sh_swizzled_float_count(n, rest);
 
-        Tensor means = Tensor::zeros({n, 3}, Device::CUDA);
-        Tensor sh0 = Tensor::zeros({n, 1, 3}, Device::CUDA);
-        Tensor shN = Tensor::zeros_direct(TensorShape({floats}), floats, Device::CUDA);
-        Tensor scaling = Tensor::zeros({n, 3}, Device::CUDA);
-        Tensor rotation = Tensor::zeros({n, 4}, Device::CUDA);
-        Tensor opacity = Tensor::zeros({n, 1}, Device::CUDA);
+        Tensor means = Tensor::zeros({n, 3}, Device::GPU);
+        Tensor sh0 = Tensor::zeros({n, 1, 3}, Device::GPU);
+        Tensor shN = Tensor::zeros_direct(TensorShape({floats}), floats, Device::GPU);
+        Tensor scaling = Tensor::zeros({n, 3}, Device::GPU);
+        Tensor rotation = Tensor::zeros({n, 4}, Device::GPU);
+        Tensor opacity = Tensor::zeros({n, 1}, Device::GPU);
 
         std::vector<float> host(floats);
         for (size_t i = 0; i < floats; ++i) {
@@ -96,7 +97,9 @@ namespace {
 
 } // namespace
 
-TEST(ViewerShZerocopyTriad, Fp32VsF16VsQ16MeanAbs) {
+class ViewerShZerocopyTriad : public lfs::test::CudaBackendTest {};
+
+TEST_F(ViewerShZerocopyTriad, Fp32VsF16VsQ16MeanAbs) {
     auto splat_fp32 = make_random_sh3(kN, 0xF16A016u);
     const auto ref = splat_fp32.shN_canonical().cpu().contiguous();
 

@@ -453,7 +453,7 @@ namespace spz {
         packed.version = o.version;
         packed.numPoints = g.numPoints;
         packed.shDegree = g.shDegree;
-        packed.fractionalBits = 12;
+        packed.fractionalBits = o.fractionalBits;
         packed.antialiased = g.antialiased;
         // Turn off quaternion-smallest-three for backward compatibility, since version 2 does not
         // support it.

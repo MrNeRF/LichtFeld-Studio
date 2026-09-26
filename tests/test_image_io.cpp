@@ -421,3 +421,49 @@ TEST(ImageIoTest, FloatTiffInferenceRangeNormalization) {
     EXPECT_FLOAT_EQ(decoded[1], 64.0f / 255.0f);
     lfs::core::free_image_float(decoded);
 }
+
+TEST(ImageIoTest, GalleryEnvironmentValidatesBeforeAllocationAndPreservesFloats) {
+    const auto path = unique_temp_path("gallery", ".lfsenv");
+    std::vector<std::uint8_t> bytes{'L', 'F', 'S', 'E', 'N', 'V', '1', 0};
+    append_u32(bytes, 1);
+    append_u32(bytes, 1);
+    append_u32(bytes, 0xbe800000); // -0.25
+    append_u32(bytes, 0x3f800000); // 1
+    append_u32(bytes, 0x41200000); // 10
+    const auto write = [&](const std::vector<std::uint8_t>& value) {
+        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+        file.write(reinterpret_cast<const char*>(value.data()), value.size());
+    };
+    write(bytes);
+    auto [pixels, width, height, channels] = lfs::core::load_image_float(path);
+    ASSERT_NE(pixels, nullptr);
+    EXPECT_EQ(width, 1);
+    EXPECT_EQ(height, 1);
+    EXPECT_EQ(channels, 3);
+    EXPECT_FLOAT_EQ(pixels[0], -0.25f);
+    EXPECT_FLOAT_EQ(pixels[1], 1.0f);
+    EXPECT_FLOAT_EQ(pixels[2], 10.0f);
+    lfs::core::free_image_float(pixels);
+    for (int fault = 0; fault < 5; ++fault) {
+        auto invalid = bytes;
+        if (fault == 0)
+            invalid.pop_back();
+        if (fault == 1)
+            invalid.push_back(0);
+        if (fault == 2)
+            invalid[0] = '?';
+        if (fault == 3) {
+            invalid[8] = 0xff;
+            invalid[9] = 0xff;
+        }
+        if (fault == 4) {
+            invalid[18] = 0xc0;
+            invalid[19] = 0x7f;
+        } // NaN
+        write(invalid);
+        auto [bad, w, h, c] = lfs::core::load_image_float(path);
+        EXPECT_EQ(bad, nullptr) << fault;
+        lfs::core::free_image_float(bad);
+    }
+    std::filesystem::remove(path);
+}

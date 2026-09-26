@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "../src/io/cuda/splat_decimate_internal.hpp"
+#include "core/tensor_backend.hpp"
+#include "core/tensor_export.hpp"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -12,6 +14,7 @@
 #include <io/splat_decimate.hpp>
 #include <iostream>
 #include <random>
+#include <stdexcept>
 
 namespace {
     using namespace lfs::core;
@@ -98,6 +101,28 @@ TEST(SplatDecimate, ExactTargetCount) {
     }
 }
 
+TEST(SplatDecimate, VulkanInputStaysOnVulkan) {
+    if (!gpu_backend_available(GpuBackend::Vulkan))
+        GTEST_SKIP() << "Vulkan backend unavailable";
+    const GpuBackendScope vulkan_scope(GpuBackend::Vulkan);
+    auto input = splats(make_decimate_data(256, 1), 1);
+    ASSERT_EQ(gpu_backend_of(input.means()), GpuBackend::Vulkan);
+    for (const bool use_gpu : {false, true}) {
+        for (const size_t target : {size_t{128}, size_t{256}}) {
+            DecimateOptions options;
+            options.target_count = target;
+            options.use_gpu = use_gpu;
+            auto result = decimate_splats(input, options);
+            ASSERT_TRUE(result) << result.error().message;
+            EXPECT_EQ(result->size(), target);
+            EXPECT_EQ(gpu_backend_of(result->means()), GpuBackend::Vulkan);
+            finite(*result);
+        }
+    }
+    EXPECT_EQ(gpu_backend_of(input.means()), GpuBackend::Vulkan);
+    EXPECT_EQ(input.size(), 256);
+}
+
 TEST(SplatDecimate, GpuMatchesCpuReference) {
     for (int degree : {0, 2})
         for (size_t target : {2500u, 700u}) {
@@ -138,6 +163,36 @@ TEST(SplatDecimate, GpuMatchesCpuReference) {
             std::cout << "Final ordered mean parity " << 100.0 * matches / target << "%\n";
             EXPECT_GE(matches, target * 99 / 100);
         }
+}
+
+TEST(SplatDecimate, AnisotropicCovarianceCostMatchesDouble) {
+    std::mt19937 rng(572);
+    std::uniform_real_distribution<float> uniform(-1, 1);
+    double max_error = 0;
+    for (int sample = 0; sample < 64; ++sample) {
+        SCOPED_TRACE(sample);
+        auto host = allocate(2, 0, Device::CPU);
+        auto v = host.view();
+        std::fill_n(v.pos, 6, 0.f);
+        std::fill_n(v.dc, 6, 0.f);
+        for (int axis = 0; axis < 4; ++axis)
+            v.rot[axis] = uniform(rng);
+        std::fill_n(v.rot + 4, 4, 0.f);
+        v.rot[4] = 1.f;
+        v.scale[0] = 1 + uniform(rng);
+        v.scale[1] = uniform(rng);
+        v.scale[2] = -10 + uniform(rng);
+        std::fill_n(v.scale + 3, 3, -8.f);
+        v.opacity[0] = v.opacity[1] = 0.f;
+        const auto reference = cpu_candidates(host);
+        const auto actual = gpu_candidates(transfer(host, Device::GPU));
+        for (const size_t edge : {0u, 4u}) {
+            EXPECT_EQ(actual.idx[edge], reference.idx[edge]);
+            EXPECT_NEAR(actual.cost[edge], reference.cost[edge], 1e-4);
+            max_error = std::max(max_error, std::abs(double(actual.cost[edge]) - reference.cost[edge]));
+        }
+    }
+    std::cout << "Anisotropic pair maximum cost error: " << max_error << '\n';
 }
 
 TEST(SplatDecimate, BucketSelectionChainCaps) {
@@ -294,8 +349,154 @@ TEST(SplatDecimate, ExactNeighboursAcrossDistributionsAndScales) {
                 v.pos[i] *= scale;
             auto cpu = cpu_candidates(host);
             auto gpu = gpu_candidates(transfer(host, Device::CUDA));
-            EXPECT_EQ(cpu.idx, gpu.idx) << "distribution=" << distribution << " scale=" << scale;
-            EXPECT_EQ(cpu.cost, gpu.cost) << "distribution=" << distribution << " scale=" << scale;
+            // CUDA keeps dev's double kernel, so the tables match bit for bit.
+            // Vulkan distances are float-float; the neighbour set is the gate.
+            if (default_gpu_backend() == GpuBackend::Vulkan) {
+                size_t idx_miss = 0, class_miss = 0;
+                double max_cost = 0;
+                for (size_t e = 0; e < cpu.idx.size(); ++e) {
+                    if (cpu.idx[e] != gpu.idx[e])
+                        ++idx_miss;
+                    if (std::isfinite(cpu.cost[e]) != std::isfinite(gpu.cost[e]) ||
+                        std::isinf(cpu.cost[e]) != std::isinf(gpu.cost[e]))
+                        ++class_miss;
+                    else if (std::isfinite(cpu.cost[e]))
+                        max_cost = std::max(max_cost, std::abs(double(cpu.cost[e]) - gpu.cost[e]));
+                }
+                EXPECT_EQ(idx_miss, 0u) << "distribution=" << distribution << " scale=" << scale << " max cost " << max_cost;
+                EXPECT_EQ(class_miss, 0u) << "distribution=" << distribution << " scale=" << scale;
+                EXPECT_LT(max_cost, 1e-2) << "distribution=" << distribution << " scale=" << scale;
+            } else {
+                EXPECT_EQ(cpu.idx, gpu.idx) << "distribution=" << distribution << " scale=" << scale;
+                EXPECT_EQ(cpu.cost, gpu.cost) << "distribution=" << distribution << " scale=" << scale;
+            }
         }
     }
+}
+
+TEST(SplatDecimate, ExtremeInputsMatchCpuReference) {
+    const auto compare_candidates = [](const Data& host, const char* label) {
+        const auto cpu = cpu_candidates(host);
+        const auto gpu = gpu_candidates(transfer(host, Device::CUDA));
+        ASSERT_EQ(cpu.idx.size(), gpu.idx.size()) << label;
+        for (size_t e = 0; e < cpu.idx.size(); ++e) {
+            EXPECT_EQ(cpu.idx[e], gpu.idx[e]) << label << " entry " << e;
+            EXPECT_EQ(std::isfinite(cpu.cost[e]), std::isfinite(gpu.cost[e])) << label << " entry " << e;
+            if (std::isfinite(cpu.cost[e]) && std::isfinite(gpu.cost[e]))
+                EXPECT_NEAR(gpu.cost[e], cpu.cost[e], 1e-3 * std::max(1.0f, std::abs(cpu.cost[e]))) << label << " entry " << e;
+        }
+    };
+    const auto base = [](size_t n) {
+        auto d = allocate(n, 0, Device::CPU);
+        auto v = d.view();
+        for (size_t i = 0; i < n; ++i) {
+            for (int a = 0; a < 3; ++a) {
+                v.pos[i * 3 + a] = 0;
+                v.scale[i * 3 + a] = -2;
+                v.dc[i * 3 + a] = 0.1f * float(a);
+            }
+            v.rot[i * 4] = 1;
+            v.rot[i * 4 + 1] = v.rot[i * 4 + 2] = v.rot[i * 4 + 3] = 0;
+            v.opacity[i] = 0;
+        }
+        return d;
+    };
+    {
+        // One distant outlier must not collapse the local neighbour order.
+        auto d = base(34);
+        auto v = d.view();
+        for (size_t i = 0; i < 33; ++i)
+            v.pos[i * 3] = float(i);
+        v.pos[33 * 3] = 1e30f;
+        compare_candidates(d, "outlier");
+    }
+    {
+        // Finite costs above 1e30 stay candidates.
+        auto d = base(2);
+        auto v = d.view();
+        v.pos[3] = 0.5f;
+        v.dc[3] = 1e16f;
+        const auto cpu = cpu_candidates(d);
+        ASSERT_TRUE(std::isfinite(cpu.cost[0]));
+        ASSERT_GT(cpu.cost[0], 1e30f);
+        compare_candidates(d, "large cost");
+    }
+    {
+        // Strongly negative opacity keeps a finite mass.
+        auto d = base(34);
+        auto v = d.view();
+        for (size_t i = 0; i < 34; ++i) {
+            v.pos[i * 3] = float(i) * 0.1f;
+            v.opacity[i] = i % 2 ? -100.0f : 100.0f;
+        }
+        compare_candidates(d, "negative opacity");
+    }
+    for (const float at : {1e20f, 0.5f}) {
+        // Merge intermediates at wide coordinates match the double reference.
+        auto d = base(2);
+        auto v = d.view();
+        v.pos[0] = -at;
+        v.pos[3] = at;
+        v.opacity[0] = at > 1 ? 0.0f : -100.0f;
+        Selection s;
+        s.member_group = {0, 0};
+        s.members = {0, 1};
+        s.offsets = {0, 2};
+        s.minimum = {0};
+        s.removed = 1;
+        const auto want = transfer(cpu_merge(d, s), Device::CPU);
+        const auto got = transfer(gpu_merge(transfer(d, Device::CUDA), s), Device::CPU);
+        const auto w = want.view(), g = got.view();
+        for (int c = 0; c < 3; ++c) {
+            ASSERT_TRUE(std::isfinite(g.pos[c]) && std::isfinite(g.scale[c])) << "at=" << at;
+            EXPECT_NEAR(g.pos[c], w.pos[c], 1e-5 * std::max(1.0f, std::abs(w.pos[c]))) << "at=" << at;
+            EXPECT_NEAR(g.scale[c], w.scale[c], 1e-4 * std::max(1.0f, std::abs(w.scale[c]))) << "at=" << at;
+        }
+        double dot = 0;
+        for (int c = 0; c < 4; ++c)
+            dot += double(g.rot[c]) * w.rot[c];
+        EXPECT_NEAR(std::abs(dot), 1.0, 1e-5) << "at=" << at;
+        EXPECT_NEAR(g.opacity[0], w.opacity[0], 1e-4 * std::max(1.0f, std::abs(w.opacity[0]))) << "at=" << at;
+    }
+}
+
+TEST(SplatDecimate, ExportOperationsRejectMalformedInputs) {
+    const auto tiny = Tensor::zeros({1}, Device::GPU);
+    auto [palette, labels] = kmeans_sh(tiny, 2, 15, 1, 1, false);
+    EXPECT_FALSE(palette.is_valid());
+    EXPECT_FALSE(labels.is_valid());
+    EXPECT_THROW((void)morton_sort_indices(Tensor::zeros({4, 2}, Device::GPU)), std::invalid_argument);
+
+    auto host = make_decimate_data(8, 0);
+    const auto d = transfer(host, Device::CUDA);
+    const std::vector<uint32_t> members{0, 1, 2, 3, 4};
+    std::vector<int> group(8, -1);
+    for (uint32_t m : members)
+        group[m] = 0;
+    EXPECT_THROW((void)decimate_merge(d.pos, d.rot, d.scale, d.opacity, d.dc, d.sh, 0, group, {0}, members, {0, 5}, 4),
+                 std::invalid_argument);
+    EXPECT_THROW((void)decimate_merge(d.pos, d.rot, d.scale, d.opacity, d.dc, d.sh, 0, {0, 0}, {0}, {0, 1}, {0, 2}, 1),
+                 std::invalid_argument);
+    std::vector<uint32_t> idx;
+    std::vector<float> cost;
+    EXPECT_THROW(decimate_candidates(d.pos, d.rot.slice(0, 0, 4), d.scale, d.opacity, d.dc, d.sh, 0, idx, cost),
+                 std::invalid_argument);
+}
+
+TEST(SplatDecimate, RetainedTensorsKeepTheirBackend) {
+    if (!gpu_backend_available(GpuBackend::CUDA) || !gpu_backend_available(GpuBackend::Vulkan))
+        GTEST_SKIP() << "needs CUDA and Vulkan";
+    auto host = make_decimate_data(300, 0);
+    Tensor positions;
+    {
+        const GpuBackendScope cuda(GpuBackend::CUDA);
+        positions = host.pos.to(Device::GPU);
+    }
+    const GpuBackendScope vulkan(GpuBackend::Vulkan);
+    Tensor keys;
+    const auto order = morton_sort_indices(positions, &keys);
+    EXPECT_EQ(gpu_backend_of(order), GpuBackend::CUDA);
+    EXPECT_EQ(gpu_backend_of(keys), GpuBackend::CUDA);
+    const auto cpu_order = morton_sort_indices(host.pos);
+    EXPECT_EQ(order.cpu().to_vector_int(), cpu_order.to_vector_int());
 }

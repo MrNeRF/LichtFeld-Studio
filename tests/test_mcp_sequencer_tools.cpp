@@ -28,7 +28,7 @@ namespace {
 
     using json = nlohmann::json;
 
-    constexpr std::array<const char*, 12> kSequencerToolNames = {
+    constexpr std::array<const char*, 14> kSequencerToolNames = {
         "sequencer.get",
         "sequencer.add_keyframe",
         "sequencer.update_keyframe",
@@ -41,6 +41,8 @@ namespace {
         "sequencer.save_path",
         "sequencer.load_path",
         "sequencer.set_playback_speed",
+        "sequencer.load_ply_sequence",
+        "sequencer.scrub",
     };
 
     class FakeVisualizer final : public lfs::vis::Visualizer {
@@ -93,7 +95,8 @@ namespace {
         }
         lfs::Result<void> projectCreateAt(
             const std::filesystem::path&,
-            lfs::vis::ProjectSwitchDisposition) override {
+            lfs::vis::ProjectSwitchDisposition,
+            bool = false) override {
             return {};
         }
         lfs::Result<lfs::vis::ProjectOpenOutcome> projectOpen(
@@ -170,6 +173,16 @@ namespace {
                 .set_playback_speed = [this](const float speed) {
                     controller.setPlaybackSpeed(speed);
                     ui_state.playback_speed = controller.playbackSpeed(); },
+                .scrub_to_time = [this](const float time, const bool update_camera) {
+                    controller.seek(time);
+                    if (!update_camera || controller.timeline().realKeyframeCount() == 0)
+                        return false;
+                    const auto state = controller.currentCameraState();
+                    camera.eye = state.position;
+                    camera.target = state.position + state.rotation * glm::vec3(0.0f, 0.0f, -1.0f);
+                    camera.up = state.rotation * glm::vec3(0.0f, 1.0f, 0.0f);
+                    camera.fov_degrees = state.focal_length_mm;
+                    return true; },
             };
         }
 
@@ -497,6 +510,64 @@ TEST_F(McpSequencerToolsTest, AddUpdateAndGoToUseCurrentCameraAndStableIds) {
     EXPECT_EQ(go_to_result["selected_keyframe_id"], keyframe_id);
     EXPECT_EQ(go_to_result["camera"]["eye"], json::array({7.0f, 8.0f, 9.0f}));
     EXPECT_FLOAT_EQ(go_to_result["camera"]["fov_degrees"].get<float>(), 42.0f);
+}
+
+TEST_F(McpSequencerToolsTest, ScrubPreservesCameraByDefault) {
+    backend_.add_manual_keyframe(0.0f, {0.0f, 0.0f, 0.0f});
+    backend_.add_manual_keyframe(2.0f, {10.0f, 0.0f, 0.0f});
+    const auto camera_before = backend_.camera;
+
+    const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
+        "sequencer.scrub",
+        json{{"time", 1.0f}});
+
+    ASSERT_TRUE(result["success"].get<bool>());
+    EXPECT_FLOAT_EQ(backend_.controller.playhead(), 1.0f);
+    EXPECT_FALSE(result["camera_updated"].get<bool>());
+    EXPECT_EQ(backend_.camera.eye, camera_before.eye);
+    EXPECT_EQ(backend_.camera.target, camera_before.target);
+    EXPECT_FLOAT_EQ(backend_.camera.fov_degrees, camera_before.fov_degrees);
+}
+
+TEST_F(McpSequencerToolsTest, ScrubCanUpdateCameraWhilePanelIsHidden) {
+    const auto first = backend_.add_manual_keyframe(0.0f, {0.0f, 0.0f, 0.0f});
+    const auto second = backend_.add_manual_keyframe(2.0f, {10.0f, 0.0f, 0.0f});
+    ASSERT_TRUE(backend_.controller.updateKeyframeById(
+        first, {0.0f, 0.0f, 0.0f}, lfs::sequencer::IDENTITY_ROTATION, 40.0f));
+    ASSERT_TRUE(backend_.controller.updateKeyframeById(
+        second, {10.0f, 0.0f, 0.0f}, lfs::sequencer::IDENTITY_ROTATION, 80.0f));
+    backend_.visible = false;
+    backend_.ui_state.follow_playback = false;
+
+    const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
+        "sequencer.scrub",
+        json{{"time", 1.0f}, {"update_camera", true}});
+
+    ASSERT_TRUE(result["success"].get<bool>());
+    EXPECT_TRUE(result["camera_updated"].get<bool>());
+    EXPECT_FALSE(backend_.visible);
+    EXPECT_FALSE(backend_.ui_state.follow_playback);
+    EXPECT_FLOAT_EQ(backend_.camera.eye.x, 5.0f);
+    EXPECT_FLOAT_EQ(backend_.camera.eye.y, 0.0f);
+    EXPECT_FLOAT_EQ(backend_.camera.eye.z, 0.0f);
+    EXPECT_FLOAT_EQ(backend_.camera.target.x, 5.0f);
+    EXPECT_FLOAT_EQ(backend_.camera.target.y, 0.0f);
+    EXPECT_FLOAT_EQ(backend_.camera.target.z, -1.0f);
+    EXPECT_FLOAT_EQ(backend_.camera.fov_degrees, 60.0f);
+}
+
+TEST_F(McpSequencerToolsTest, ScrubDoesNotInventCameraWithoutCameraKeyframes) {
+    const auto camera_before = backend_.camera;
+
+    const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
+        "sequencer.scrub",
+        json{{"time", 1.0f}, {"update_camera", true}});
+
+    ASSERT_TRUE(result["success"].get<bool>());
+    EXPECT_FALSE(result["camera_updated"].get<bool>());
+    EXPECT_EQ(backend_.camera.eye, camera_before.eye);
+    EXPECT_EQ(backend_.camera.target, camera_before.target);
+    EXPECT_FLOAT_EQ(backend_.camera.fov_degrees, camera_before.fov_degrees);
 }
 
 TEST_F(McpSequencerToolsTest, PlaybackAndPersistenceToolsRoundTripState) {

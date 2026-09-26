@@ -793,6 +793,12 @@ namespace lfs::core::nn::kernels {
         int major = 0;
         LFS_CUDA_CHECK(cudaGetDevice(&device));
         LFS_CUDA_CHECK(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device));
+        // WMMA kernels compile to no-op branches before Volta. Do not benchmark
+        // or honor a forced WMMA/MMA path when the device cannot execute them.
+        if (major < 7) {
+            launch_simt();
+            return;
+        }
         static std::once_flag auto_once[16];
         static std::atomic<int> auto_choice[16] = {};
         if (!force_wmma && !force_mma && (auto75 || major < 8) && device >= 0 && device < 16) {

@@ -14,6 +14,15 @@ body {
     height: 100%;
 }
 
+#viewport-content {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    overflow: hidden;
+}
+
 .viewport-split-divider {
     position: absolute;
     pointer-events: none;
@@ -39,8 +48,54 @@ body {
     z-index: 12;
 }
 
+/* Centered in the viewport; the side padding keeps the wrapped lines clear of
+   the docked tool rail. */
+.empty-state-hint {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    padding: 0 72dp;
+    text-align: center;
+    pointer-events: none;
+}
+
+/* viewport-cramped is set from the viewport size: the hint shows whole or not at all. */
+#viewport-content.viewport-cramped .empty-state-hint {
+    display: none;
+}
+
+.empty-state-icon {
+    width: 48dp;
+    height: 48dp;
+    margin-bottom: 16dp;
+}
+
+.empty-state-title {
+    font-size: 15dp;
+}
+
+.empty-state-subtitle {
+    max-width: 480dp;
+    margin-top: 10dp;
+    font-size: 13dp;
+}
+
+.empty-state-import {
+    margin-top: 10dp;
+    font-size: 12dp;
+}
+
 .project-drop-overlay {
     position: absolute;
+    left: 0;
+    right: 0;
     top: 0;
     bottom: 0;
     display: flex;
@@ -108,10 +163,6 @@ body {
     align-items: center;
     pointer-events: auto;
     overflow: hidden;
-}
-
-.toolbar-position-top .toolbar-vertical {
-    margin-top: 12dp;
 }
 
 .toolbar-drag-handle {
@@ -347,6 +398,7 @@ body {
 .crop-roi-setting-row > .setting-row__label-col {
     width: 180dp;
     min-width: 180dp;
+    max-width: 180dp;
 }
 
 .crop-roi-setting-row .setting-slider {
@@ -362,7 +414,7 @@ body {
 .viewport-selection-overlay {
     position: absolute;
     top: 5dp;
-    left: 52dp;
+    left: 12dp;
     right: 12dp;
     display: flex;
     justify-content: center;
@@ -373,7 +425,7 @@ body {
 .viewport-depth-overlay {
     position: absolute;
     top: 5dp;
-    left: 52dp;
+    left: 12dp;
     right: 12dp;
     display: flex;
     justify-content: center;
@@ -384,7 +436,7 @@ body {
 .viewport-transform-overlay {
     position: absolute;
     top: 5dp;
-    left: 52dp;
+    left: 12dp;
     right: 12dp;
     display: flex;
     justify-content: center;
@@ -511,9 +563,11 @@ body {
     flex-shrink: 1;
 }
 
-/* Narrow-width behavior, breakpoint style: sliders and number inputs
-   compress first; below ~1150dp the row wraps to two lines; below ~700dp
-   the slider row hides, leaving the icon toolbar. */
+/* Depth toolbar width tiers:
+   >1480dp: Near/Far and Size/X/Y on one line.
+   >960dp through 1480dp: Near/Far above Size/X/Y.
+   <=960dp: icons only; depth fields hidden. No taller stack.
+   Breakpoints derive from the effective cascade; see calculations above each @media. */
 #selection-block .viewport-selection-depth-axis {
     flex-grow: 1;
     flex-shrink: 1;
@@ -541,21 +595,58 @@ body {
     min-width: 50dp;
 }
 
+/* The chip labels the depth sliders' target panel in independent-dual only.
+   Keep it inside Near/Far to avoid an extra wrapped line with the sync toggle.
+   Keep this selector a descendant match so styling applies at every width. */
+#selection-block .viewport-selection-depth-panel-chip {
+    flex-grow: 0;
+    flex-shrink: 0;
+    width: 20dp;
+    height: 20dp;
+    line-height: 20dp;
+    text-align: center;
+    font-size: 12dp;
+    font-weight: bold;
+    border-radius: 4dp;
+    /* Palette fill belongs in viewport_overlay.theme.rcss; see
+       docs/docs/development/rmlui-styling.md, Theme Tokens. */
+}
+
 #selection-block .depth-axis-size > .number-input.viewport-selection-depth-input {
     /* Wide enough for the anisotropic "63x45%" Size readout at 1.5x UI scale. */
     width: 104dp;
     min-width: 104dp;
 }
 
-@media (max-width: 1150dp) {
-    /* Deterministic 2+3 wrap: the Near/Far group takes the first line, the
-       Size/X/Y group the second, each centered, with UNIFORM slider lengths
-       on both lines. The viz-mode button is pinned to the top-right
-       (document order would put it on the last line; this RmlUi has no
-       flex `order`). */
+/* Wrap uses context width M (viewport + left dock), in every split mode.
+   RmlUi media queries use context dimensions; top-level #selection-block has
+   left 52dp/right 12dp, so its panel content width is A(M) = .65 * (M - 64).
+
+   One-line minimum, with in-flow buttons (all dimensions in dp):
+     Near/Far/X/Y axis = label 24 + gap 6 + slider 56 + gap 6 + input 50 = 142
+     Size axis        = 24 + 6 + 56 + 6 + input 104                    = 196
+     Near/Far group   = chip 20 + 10 + 142 + 10 + 142                  = 324
+     Size/X/Y group   = 196 + 10 + 142 + 10 + 142                      = 500
+     Full row         = 324 + 10 + 500 + 10 + button 30 + 10 + 30      = 914
+
+   Fit requires M >= 914/.65 + 64 = 1470.154; 1471dp is the first whole dp.
+   Wrap at 1480dp gives A=920.4dp, with 6.4dp spare. Without chip and sync
+   (Primary/Secondary comparison), the 844dp row needs M>=1362.462, so this
+   breakpoint covers it too. */
+@media (max-width: 1480dp) {
+    /* Center Near/Far above Size/X/Y with equal slider lengths.
+       Pin one action button to the right of each line; this RmlUi has no flex
+       `order`, so flow would place both on the last line.
+       Sync shares the chip's independent-dual visibility and sits beside Near/Far.
+       Viz stays beside Size/X/Y whenever the depth row is shown. */
     #selection-block .viewport-selection-depth-fields {
         flex-wrap: wrap;
+        /* Reserve 36dp on the right for one 30dp button plus 6dp clearance.
+           Mirror it on the left to keep both lines centered. Buttons use the padding
+           box (right: 0), while flex-basis:100% uses the content box. Include both
+           reserves (72dp total) when calculating line width and the hide breakpoint. */
         padding-right: 36dp;
+        padding-left: 36dp;
     }
     #selection-block .depth-axis-group {
         flex-basis: 100%;
@@ -568,14 +659,60 @@ body {
     }
     #selection-block .viewport-selection-depth-fields > .viewport-transform-action {
         position: absolute;
-        top: 0;
         right: 0;
+    }
+    /* Keep one button per line on the same right edge. Center each 30dp button
+       on its 24dp line with -3dp outer offsets. The 58dp row (24 + 10 + 24)
+       then has a 4dp button gap; flush top/bottom placement would overlap by 2dp.
+       The 3dp overhang fits inside the 4dp upper gap and 5dp bottom padding,
+       leaving row height and panel-bottom clearance unchanged. */
+    #selection-block .viewport-selection-depth-fields > .viewport-selection-sync-action {
+        top: -3dp;
+    }
+    #selection-block .viewport-selection-depth-fields > .viewport-selection-viz-action {
+        bottom: -3dp;
+    }
+    /* With depth fields visible, the panel (z-index 9, pointer-events auto)
+       can cover the viewport gizmos (z-index 8). The 72dp row reserve protects
+       only its own buttons. A split divider can put primary gizmos at any x,
+       so horizontal clearance cannot protect them.
+
+       Panel bottom = top 5 + border 1 + padding 5 + icon row 32 + gap 4
+                      + fields height + padding 5 + border 1 = 53 + fields.
+       One line: max(axis 24, in-flow button 30) = 30; bottom 83, leaving 25dp
+       below the stock gizmo top 108. Two lines: 24 + gap 10 + 24 = 58; bottom
+       111, so top 120 leaves 9dp. Three lines cannot clear stock top 108.
+       Absolute buttons add no row height; the lower button ends at 108,
+       inside the panel. Move gizmos in this tier and restore top when fields
+       hide. These width rules also move gizmos when depth/GT state hides fields. */
+    .viewport-gizmo-controls {
+        top: 120dp;
     }
 }
 
-@media (max-width: 650dp) {
+/* Hide is the final tier: widths that cannot fit two lines hide the row.
+   Size/X/Y is the binding line at 500dp. Two 36dp reserves leave
+     L(M) = .65 * (M - 64) - 72.
+   Each reserve is button 30 + clearance 6; the buttons occupy one line
+   each, and matching left padding centers the groups.
+   The exact fit is M = (500 + 72)/.65 + 64 = 944dp. At 960dp, L=510.4dp
+   leaves 10.4dp spare. Sliders are already at their 56dp floor, so
+   332 + 3*56 = 500dp cannot shrink further.
+
+   Near/Far needs 324dp, fitting at M=(324+72)/.65+64=673.231dp. These
+   minima use #selection-block's ID-qualified axis rules: gap 6dp and
+   flex-shrink 1, overriding generic gap 3dp/shrink 0. The chosen 960dp
+   clears both lines. Above 1480dp buttons return to flow; reserves no
+   longer apply. */
+@media (max-width: 960dp) {
     #selection-block .viewport-selection-depth-fields {
         display: none;
+    }
+    /* The wrap query also matches here, so restore the controls' top from 120dp
+       to 108dp. With only the icon row, the panel bottom is
+       5 + 1 + 5 + 32 + 5 + 1 = 49dp, leaving 59dp clearance. */
+    .viewport-gizmo-controls {
+        top: 108dp;
     }
 }
 
@@ -871,7 +1008,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     gap: 5dp;
     min-width: 0;
 }
@@ -1191,13 +1328,13 @@ body {
 
 #transform-block .viewport-transform-fields,
 #transform-block .viewport-transform-group {
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     gap: 4dp;
 }
 
 #transform-block .viewport-transform-fields {
     justify-content: flex-start;
-    flex-shrink: 0;
+    flex-shrink: 1;
 }
 
 .viewport-transform-axis-label {
@@ -1294,16 +1431,48 @@ body {
     margin: 0 5dp;
 }
 
-.viewport-status-overlay {
+.viewport-transfer-queue {
     position: absolute;
-    left: 0;
-    right: 0;
-    top: 0;
-    bottom: 0;
+    right: 8dp;
+    bottom: 8dp;
+    width: 352dp;
+    max-width: 90%;
+    max-height: 65%;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 8dp;
+    padding: 8dp;
+    border-width: 1dp;
+    border-radius: 8dp;
+    pointer-events: auto;
+    z-index: 22;
+}
+
+.viewport-transfer-header, .viewport-transfer-title, .viewport-transfer-status,
+.viewport-transfer-actions, .viewport-transfer-footer {
     display: flex;
     align-items: center;
-    justify-content: center;
+    gap: 8dp;
+    flex-shrink: 0;
 }
+.viewport-transfer-heading { flex: 1; font-size: 13dp; font-weight: bold; }
+.viewport-transfer-toggle { width: 24dp; min-width: 24dp; padding: 0; }
+.viewport-transfer-summary { font-size: 11dp; flex-shrink: 0; }
+.viewport-transfer-list { min-height: 0; max-height: 320dp; overflow-y: auto; }
+.viewport-transfer-row { display: flex; flex-direction: column; gap: 8dp; padding: 8dp 0; border-top-width: 1dp; }
+.viewport-transfer-title { font-size: 12dp; font-weight: bold; }
+.viewport-transfer-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viewport-transfer-status { flex-wrap: wrap; justify-content: space-between; font-size: 11dp; }
+.viewport-transfer-detail { font-size: 11dp; }
+.viewport-transfer-progress { height: 8dp; flex-shrink: 0; width: 100%; border-radius: 2dp; overflow: hidden; }
+.viewport-transfer-fill { height: 100%; }
+.viewport-transfer-footer { padding-top: 8dp; border-top-width: 1dp; flex-wrap: wrap; }
+.viewport-transfer-queue .btn { box-sizing: border-box; height: 24dp; min-height: 24dp; max-height: 24dp; padding: 0 8dp; line-height: 22dp; font-size: 11dp; white-space: nowrap; }
+.viewport-transfer-queue .viewport-transfer-toggle { padding: 0; width: 24dp; text-align: center; }
+.viewport-transfer-queue.hidden, .viewport-transfer-queue .hidden { display: none; }
+@keyframes transfer-progress-pulse { from { opacity: 1; } to { opacity: 0.35; } }
+.viewport-transfer-fill.is-indeterminate { animation: transfer-progress-pulse 0.8s quadratic-in-out infinite alternate; }
 
 .viewport-metrics-overlay {
     position: absolute;
@@ -1989,54 +2158,6 @@ body {
     font-size: 11dp;
 }
 
-.viewport-status-backdrop {
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: 0;
-    bottom: 0;
-}
-
-.viewport-status-panel {
-    position: relative;
-    min-width: 320dp;
-    max-width: 420dp;
-    padding: 16dp 18dp;
-    border-width: 1dp;
-    display: flex;
-    flex-direction: column;
-    gap: 8dp;
-}
-
-.viewport-status-title {
-    font-size: 13dp;
-    font-weight: bold;
-}
-
-.viewport-status-path,
-.viewport-status-stage,
-.viewport-status-panel .status-success,
-.viewport-status-panel .status-error {
-    line-height: 1.3;
-    min-width: 0;
-    word-break: break-word;
-}
-
-.viewport-status-progress {
-    position: relative;
-    width: 100%;
-}
-
-.viewport-status-progress progress {
-    width: 100%;
-}
-
-.viewport-status-actions {
-    display: flex;
-    justify-content: center;
-    margin-top: 4dp;
-}
-
 .hidden {
     display: none;
 }
@@ -2116,6 +2237,52 @@ body {
     height: 0%;
 }
 
+.vram-hud-timeline-toolbar, .vram-hud-timeline-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4dp;
+    margin-bottom: 5dp;
+}
+
+.vram-hud-timeline-toolbar button, .vram-hud-timeline-legend button {
+    font-size: 10dp;
+    padding: 3dp 6dp;
+    cursor: pointer;
+}
+
+.vram-hud-timeline { display: block; width: 100%; height: 100%; }
+.vram-hud-timeline-frame { position: relative; width: 100%; height: 48%; min-height: 220dp; flex-shrink: 0; margin-bottom: 0dp; overflow: hidden; }
+.vram-hud-timeline-axis { position: absolute; top: 0; bottom: 0; left: 3dp; display: flex; flex-direction: column; justify-content: space-between; pointer-events: none; font-family: "JetBrains Mono"; font-size: 9dp; }
+.vram-hud-timeline-capacity { position: absolute; top: 16dp; right: 5dp; pointer-events: none; font-family: "JetBrains Mono"; font-size: 9dp; }
+.vram-hud-timeline-x-axis { width: 100%; display: flex; justify-content: space-between; height: 15dp; font-family: "JetBrains Mono"; font-size: 9dp; }
+.vram-hud-timeline-markers { position: absolute; top: 0; left: 0; right: 0; height: 16dp; pointer-events: none; }
+.vram-hud-marker { position: absolute; top: 0; font-size: 8dp; font-family: "JetBrains Mono"; opacity: .55; pointer-events: auto; }
+#vram-hud-panel-overview > * { flex-shrink: 0; }
+.vram-hud-crosshair { position: absolute; display: none; top: 0; bottom: 0; width: 1dp; pointer-events: none; }
+.vram-hud-crosshair.active { display: block; }
+.vram-hud-mini-timeline { display: block; width: 100%; height: 28dp; }
+.vram-hud-health { font-size: 10dp; margin-right: 7dp; }
+.vram-hud-timeline-tooltip { min-height: 16dp; font-family: "JetBrains Mono"; font-size: 10dp; white-space: normal; }
+.vram-hud-timeline-legend button { display: flex; align-items: center; gap: 4dp; }
+.vram-hud-timeline-legend button.muted { opacity: .42; }
+.vram-hud-legend-swatch { display: inline-block; width: 8dp; height: 8dp; border-radius: 2dp; }
+.vram-hud-legend-chip b { font-family: "JetBrains Mono"; font-weight: normal; margin-left: 3dp; }
+.vram-hud-section-title { font-size: 11dp; font-weight: bold; cursor: pointer; margin-top: 7dp; }
+.vram-hud-peak { display: flex; flex-direction: column; gap: 3dp; }
+.vram-hud-peak-bar { display: flex; width: 100%; height: 11dp; overflow: hidden; }
+.vram-hud-peak-segment { height: 100%; }
+.vram-hud-peak-row { display: flex; justify-content: space-between; align-items: center; gap: 6dp; font-size: 10dp; }
+.vram-hud-peak-value { min-width: 155dp; text-align: right; font-family: "JetBrains Mono"; }
+.vram-hud-movers { max-height: 130dp; overflow-y: auto; font-family: "JetBrains Mono"; font-size: 10dp; }
+.vram-hud-mover-row { display: flex; align-items: center; gap: 6dp; padding: 2dp; cursor: pointer; }
+.vram-hud-mover-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vram-hud-mover-number { width: 76dp; min-width: 76dp; text-align: right; }
+.vram-hud-mover-spark { display: flex; align-items: flex-end; width: 62dp; min-width: 62dp; height: 14dp; gap: 1dp; }
+.vram-hud-mover-spark span { flex: 1 1 0; min-width: 1dp; }
+.vram-hud-export-path { font-size: 10dp; margin-top: 4dp; }
+.vram-hud-overlay .vram-hud-mini-timeline { display: none; }
+.vram-hud-overlay.perf-hud-compact .vram-hud-mini-timeline { display: block; }
+
 .perf-hud-ledger-allocated,
 .perf-hud-ledger-disclosure,
 .perf-hud-ledger-badge,
@@ -2135,4 +2302,31 @@ body {
 .vram-hud-breakdown-pct {
     font-family: "JetBrains Mono";
     font-weight: normal;
+}
+
+/* Leave room for the tool strip and corner axis control in each pane. */
+.toolbar-hcenter.align-active {
+    padding-left: 44dp;
+    padding-right: 90dp;
+    box-sizing: border-box;
+}
+
+/* Keep labeled alignment options inside narrow viewport panes. */
+.toolbar-hcenter .align-toolbar {
+    max-width: 100%;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+/* Alignment options need names as well as icons. */
+.toolbar-hcenter .align-toolbar .icon-btn.has-label {
+    width: auto;
+    padding-left: 7dp;
+    padding-right: 7dp;
+    gap: 5dp;
+}
+
+.align-button-label {
+    white-space: nowrap;
+    font-size: 13dp;
 }

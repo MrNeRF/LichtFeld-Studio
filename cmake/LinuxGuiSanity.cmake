@@ -102,11 +102,11 @@ function(lfs_linux_preflight_gui_backends)
         xext
     )
     set(_wayland_modules
-        "wayland-client>=1.18"
+        "wayland-client >= 1.18"
         wayland-egl
         wayland-cursor
         egl
-        "xkbcommon>=0.5.0"
+        "xkbcommon >= 0.5.0"
     )
 
     _lfs_check_pkg_modules(_have_x11 _missing_x11 ${_x11_modules})

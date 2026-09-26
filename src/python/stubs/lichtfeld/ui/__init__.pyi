@@ -413,6 +413,14 @@ def reset_window_state() -> str:
 def is_panel_enabled(panel_id: str) -> bool:
     """Check if a panel is enabled"""
 
+def get_left_dock_width() -> float:
+    """
+    Get the left dock width the user chose, in logical pixels. The dock is narrower while the window is too small to fit it.
+    """
+
+def set_left_dock_width(width: float) -> None:
+    """Set the left dock width in logical pixels"""
+
 def get_main_panel_tabs() -> list[PanelSummary]:
     """Get all main panel tabs as typed panel summaries"""
 
@@ -957,7 +965,17 @@ def poll_operator(id: str) -> bool:
 def get_operator_ids() -> list[str]:
     """Get list of registered operator ids"""
 
-def confirm_dialog(title: str, message: str, buttons: Sequence[str] = ['OK', 'Cancel'], callback: object | None = None) -> None:
+def form_dialog(key: str, title: str, body_rml: str, buttons: list, callback: object, on_change: object | None = None, width: int = 640) -> bool:
+    """
+    Show a form in the shared modal overlay. Escape user text in body_rml; callbacks receive native form values.
+    """
+
+def form_dialog_update(key: str, buttons: list, body_rml: str | None = None) -> bool:
+    """
+    Update a matching live or queued form. Omit body_rml to preserve input focus and values.
+    """
+
+def confirm_dialog(title: str, message: str, buttons: Sequence[str] = ['OK', 'Cancel'], callback: object | None = None, style: str = 'info') -> None:
     """Show a confirmation dialog with custom buttons"""
 
 def input_dialog(title: str, message: str, default_value: str = '', callback: object | None = None) -> None:
@@ -1909,6 +1927,11 @@ def open_project_file_dialog(start_dir: str = '') -> str:
     Open a file dialog to select a LichtFeld project (.licht). Returns empty string if cancelled.
     """
 
+def save_project_file_dialog(default_name: str = 'project.licht', start_dir: str = '') -> str:
+    """
+    Choose a destination for a new LichtFeld project. Returns empty string if cancelled.
+    """
+
 def open_ply_file_dialog(start_dir: str = '') -> str:
     """
     Open a file dialog to select a splat file (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz). Returns empty string if cancelled.
@@ -1992,6 +2015,11 @@ def save_ssog_file_dialog(default_name: str = 'export') -> str:
 def save_spz_file_dialog(default_name: str = 'export') -> str:
     """
     Open a save file dialog for SPZ files. Returns empty string if cancelled.
+    """
+
+def save_glb_file_dialog(default_name: str = 'export') -> str:
+    """
+    Open a save file dialog for GLB (SPZ glTF) files. Returns empty string if cancelled.
     """
 
 def save_usd_file_dialog(default_name: str = 'export') -> str:
@@ -2266,6 +2294,33 @@ def apply_crop_tool() -> None:
     Apply the active crop tool primitive through the node-backed crop command path
     """
 
+def can_apply_align() -> bool:
+    """True when the align tool has 3 non-degenerate points ready to apply"""
+
+def apply_align() -> bool:
+    """Request the running align modal to apply the current triangle"""
+
+def clear_align_points() -> None:
+    """Request the running align modal to clear all picked points"""
+
+def get_align_preview() -> bool:
+    """Whether the alignment result is being previewed"""
+
+def toggle_align_preview() -> None:
+    """Switch between the original scene and the alignment preview"""
+
+def get_align_axis_snap() -> bool:
+    """Whether align plane-normal axis snap is enabled"""
+
+def set_align_axis_snap(enabled: bool) -> None:
+    """Enable or disable align plane-normal axis snap (session lifetime)"""
+
+def get_align_edge_to_axis() -> bool:
+    """Whether align edge-to-+X in-plane yaw is enabled"""
+
+def set_align_edge_to_axis(enabled: bool) -> None:
+    """Enable or disable align edge-to-+X in-plane yaw (session lifetime)"""
+
 def fit_crop_tool(use_percentile: bool = False) -> None:
     """
     Fit the active crop tool primitive through the node-backed crop command path
@@ -2380,6 +2435,9 @@ def get_import_state() -> dict:
 def dismiss_import() -> None:
     """Dismiss the import completion overlay"""
 
+def cancel_gallery_import() -> bool:
+    """Request gallery import cancellation without waiting for its worker"""
+
 def get_video_export_state() -> dict:
     """Get current video export progress state"""
 
@@ -2458,6 +2516,14 @@ def get_sequencer_state() -> SequencerUIState:
 
 def has_keyframes() -> bool:
     """Check if sequencer has any keyframes"""
+
+def get_camera_path() -> object:
+    """
+    Get the native camera path with clip duration, loop mode and playback speed
+    """
+
+def set_camera_path(value: dict) -> bool:
+    """Restore a native camera path including loop mode and playback speed"""
 
 def save_camera_path(path: str) -> bool:
     """Save camera path to JSON file"""
@@ -2675,6 +2741,37 @@ def set_navigation_speed_preference(speed: float) -> None:
 def get_navigation_speed_preference() -> float:
     """Get the default WASD navigation speed"""
 
+def get_trackpad_preferences() -> dict:
+    """Get trackpad navigation preferences"""
+
+def set_trackpad_preferences(device: str, swipe_pans: bool, swipe_speed: float, zoom_speed: float) -> None:
+    """
+    Persist and apply trackpad navigation preferences (device 'mouse', 'trackpad' or 'automatic'; speeds 1-100, 50 is the default)
+    """
+
+def get_project_manager_preferences() -> dict:
+    """
+    Get Project Manager preferences from the canonical user preferences store
+    """
+
+def set_project_manager_default_view(view: str) -> None:
+    """Set the default Project Manager view"""
+
+def set_project_manager_open_at_startup(enabled: bool) -> None:
+    """Set whether Project Manager opens at application startup"""
+
+def set_project_manager_remember_state(enabled: bool) -> None:
+    """Set whether Project Manager layout state is remembered"""
+
+def get_project_manager_state() -> str:
+    """Get remembered Project Manager layout state as JSON"""
+
+def set_project_manager_state(state: str) -> None:
+    """Set remembered Project Manager layout state from JSON"""
+
+def reset_project_manager_preferences() -> None:
+    """Reset Project Manager preferences and remembered layout state"""
+
 def get_scene_reconstruction_options() -> list:
     """Get registered scene reconstruction backends and their presets"""
 
@@ -2687,8 +2784,17 @@ def set_scene_reconstruction(backend_id: str, preset_id: str) -> bool:
 def reset_scene_reconstruction_preferences() -> None:
     """Clear all saved scene reconstruction backend and preset preferences"""
 
+def get_tensor_backend_preferences() -> dict:
+    """Get saved tensor backend preferences; changes apply after restart"""
+
+def set_tensor_backend_preferences(backend: str = 'auto', vulkan_device: str = '', vulkan_validation: int = 0, force_fp32_half: bool = False, force_no_atomic_float: bool = False) -> None:
+    """Save tensor backend preferences for the next application start"""
+
 def get_mcp_preferences() -> dict:
     """Get effective MCP HTTP server preferences"""
+
+def get_mcp_access_token() -> str:
+    """Get the local MCP network access token"""
 
 def set_mcp_preferences(enabled: bool, expose_network: bool, port: int, request_logging: bool = False) -> bool:
     """Persist and immediately apply MCP HTTP server preferences"""
@@ -2744,6 +2850,9 @@ def set_mouse_cursor_hand() -> None:
 
 def set_language(lang_code: str) -> None:
     """Set language by code (e.g., 'en', 'de')"""
+
+def resource_directory() -> str:
+    """Directory containing the bundled UI resources"""
 
 def get_current_language() -> str:
     """Get current language code"""
@@ -2849,6 +2958,70 @@ def get_git_commit() -> str:
 
 def get_split_view_info() -> dict:
     """Get split view info"""
+
+def get_focused_split_panel() -> str:
+    """
+    Get the focused split-view panel ('left' or 'right').
+    Outside independent-dual split this reports the panel the depth
+    toolbar would address; it is 'left' with no rendering manager.
+    """
+
+def get_depth_window_sync() -> bool:
+    """
+    Is the per-panel depth-window sync flag on? While on, a depth-window
+    edit in either split panel writes both panels.
+    """
+
+def get_depth_window_collapse_source() -> str:
+    """
+    Which panel the last LINEAGE EVENT took its surviving window from
+    ('left' or 'right') -- not only a collapse. Leaving independent-dual
+    copies the PRE-transition focused panel's depth window into the
+    single remaining one, and the split service resets the observable
+    focus to Left in the same transition, so a poller cannot recover
+    that panel from get_focused_split_panel(). A sync-ON copy and a
+    project or sync-undo restore overwrite this field too, so it names
+    the source of whichever write stamped LAST; use
+    get_depth_window_collapse_record() to learn which kind that was.
+    Only meaningful once such a write has happened; it reports 'left'
+    before the first one and with no rendering manager.
+    """
+
+def get_depth_window_collapse_record() -> tuple:
+    """
+    The last depth-window reference-lineage stamp, as
+    ('left'|'right', generation, kind).
+    kind is 'leave_collapse', 'sync_copy', 'project_restore' or
+    'retained_pair_discard'. These invalidate slot-derived references;
+    sync undo/redo also reports 'project_restore'. A retained-pair discard
+    requires fresh baselines from live windows, not from source. The
+    generation counts them, so a poller whose delta exceeds the
+    transitions it observed slept through boundaries and cannot replay
+    anything it cached; the kind says how to recover from the ones it
+    missed. 'leave_collapse' and 'sync_copy' leave ONE window, so every
+    cached reference recovers from it; 'project_restore' means
+    'fresh-baseline required' and can leave the two panel windows
+    DIFFERING, so a per-panel consumer must re-read each panel with
+    selection.get_depth_filter_window(panel=...) rather than reuse the
+    projection. source is the panel the surviving window came from and
+    is meaningful for 'leave_collapse' (the PRE-transition focus, which
+    get_focused_split_panel() can no longer report) and for 'sync_copy'
+    (the panel copied FROM); a 'project_restore' takes its windows from
+    the restored state, not from a panel. The generation is 0 before
+    the first such write and with no rendering manager.
+    """
+
+def set_depth_window_sync(sync: bool) -> bool:
+    """
+    Set the per-panel depth-window sync flag. Turning it on with
+    differing panels copies the focused panel's window to the other as
+    one undo step. Both ON and OFF changes are silently ignored while a
+    depth-window drag owns a panel, including subthreshold presses, or
+    while an independent pair is parked in GT. GT without a parked pair
+    is unaffected. In a retained Disabled interval an actual flag change
+    discards the pair before applying; a same-value request preserves it.
+    Returns the flag's actual state after the call, not the requested one.
+    """
 
 def get_current_camera_id() -> int:
     """Get current camera ID for GT comparison"""

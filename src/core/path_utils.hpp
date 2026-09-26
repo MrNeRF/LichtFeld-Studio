@@ -13,6 +13,7 @@
 #include <vector>
 
 #ifdef _WIN32
+#include <share.h>
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -375,7 +376,11 @@ namespace lfs::core {
     inline std::FILE* open_file(const std::filesystem::path& path, const char* mode) {
 #ifdef _WIN32
         const auto wide_mode = utf8_to_wstring(mode != nullptr ? std::string(mode) : std::string{});
-        return wide_mode.empty() ? nullptr : _wfopen(path.wstring().c_str(), wide_mode.c_str());
+        if (wide_mode.empty()) {
+            return nullptr;
+        }
+        // Preserve fopen's read/write sharing without the deprecated CRT API.
+        return _wfsopen(path.c_str(), wide_mode.c_str(), _SH_DENYNO);
 #else
         return std::fopen(path.c_str(), mode);
 #endif

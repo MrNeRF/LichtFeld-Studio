@@ -10,6 +10,7 @@
 #include "core/tensor.hpp"
 #include "operation/undo_history.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/rendering_types.hpp"
 #include "scene/scene_manager.hpp"
 #include "selection/selection_service.hpp"
 #include <filesystem>
@@ -28,27 +29,27 @@ namespace {
     Tensor make_uint8_mask(const std::vector<uint8_t>& values) {
         auto tensor = Tensor::empty({values.size()}, Device::CPU, DataType::UInt8);
         std::copy(values.begin(), values.end(), tensor.ptr<uint8_t>());
-        return tensor.cuda();
+        return tensor.gpu();
     }
 
     std::shared_ptr<Tensor> make_screen_positions(const std::vector<float>& xy) {
         return std::make_shared<Tensor>(
-            Tensor::from_vector(xy, {xy.size() / 2, size_t{2}}, Device::CUDA).to(DataType::Float32));
+            Tensor::from_vector(xy, {xy.size() / 2, size_t{2}}, Device::GPU).to(DataType::Float32));
     }
 
     std::unique_ptr<lfs::core::SplatData> make_test_splat(const std::vector<float>& xyz) {
         const size_t count = xyz.size() / 3;
-        auto means = Tensor::from_vector(xyz, {count, size_t{3}}, Device::CUDA).to(DataType::Float32);
-        auto sh0 = Tensor::zeros({count, size_t{1}, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto shN = Tensor::zeros({count, size_t{3}, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto scaling = Tensor::zeros({count, size_t{3}}, Device::CUDA, DataType::Float32);
+        auto means = Tensor::from_vector(xyz, {count, size_t{3}}, Device::GPU).to(DataType::Float32);
+        auto sh0 = Tensor::zeros({count, size_t{1}, size_t{3}}, Device::GPU, DataType::Float32);
+        auto shN = Tensor::zeros({count, size_t{3}, size_t{3}}, Device::GPU, DataType::Float32);
+        auto scaling = Tensor::zeros({count, size_t{3}}, Device::GPU, DataType::Float32);
 
         std::vector<float> rotation_data(count * 4, 0.0f);
         for (size_t i = 0; i < count; ++i) {
             rotation_data[i * 4] = 1.0f;
         }
-        auto rotation = Tensor::from_vector(rotation_data, {count, size_t{4}}, Device::CUDA).to(DataType::Float32);
-        auto opacity = Tensor::zeros({count, size_t{1}}, Device::CUDA, DataType::Float32);
+        auto rotation = Tensor::from_vector(rotation_data, {count, size_t{4}}, Device::GPU).to(DataType::Float32);
+        auto opacity = Tensor::zeros({count, size_t{1}}, Device::GPU, DataType::Float32);
 
         return std::make_unique<lfs::core::SplatData>(
             1,
@@ -118,12 +119,12 @@ TEST(SelectionMaskNormalizationTest, MatchesReferenceForSoftDeletedGroupedMillio
     auto* const node = scene.getNode("synthetic");
     ASSERT_NE(node, nullptr);
     ASSERT_NE(node->model, nullptr);
-    ASSERT_TRUE(node->model->soft_delete(deleted_cpu.cuda()).is_valid());
+    ASSERT_TRUE(node->model->soft_delete(deleted_cpu.gpu()).is_valid());
 
-    const auto input = mask_cpu.cuda();
-    const auto live = node->model->deleted().logical_not().to(Device::CUDA).to(DataType::UInt8);
+    const auto input = mask_cpu.gpu();
+    const auto live = node->model->deleted().logical_not().to(Device::GPU).to(DataType::UInt8);
     const auto expected = input.where(
-        live.ne(0), Tensor::zeros({kRows}, Device::CUDA, DataType::UInt8));
+        live.ne(0), Tensor::zeros({kRows}, Device::GPU, DataType::UInt8));
     const auto expected_count = expected.count_nonzero();
 
     scene.setSelectionMask(std::make_shared<Tensor>(input));
@@ -1162,4 +1163,86 @@ TEST_F(SelectionServiceInteractionsTest, DepthWindowChangeInvalidatesInteractive
     const auto brush_result = service_->finishInteractiveSelection();
     ASSERT_TRUE(brush_result.success) << brush_result.error;
     EXPECT_EQ(selection_values(*scene_manager_), fresh_left_values);
+}
+
+TEST_F(SelectionServiceInteractionsTest, ComparisonSelectAllFilteredStillAppliesDepthFilter) {
+    ASSERT_NE(scene_manager_->getScene().addSplat(
+                  "right",
+                  make_test_splat({
+                      5.0f,
+                      0.0f,
+                      0.0f,
+                  })),
+              lfs::core::NULL_NODE);
+    EXPECT_FALSE(scene_manager_->getScene().hasPreparedCombinedModel());
+
+    auto settings = rendering_manager_->getSettings();
+    settings.split_view_mode = lfs::vis::SplitViewMode::PLYComparison;
+    settings.crop_filter_for_selection = false;
+    rendering_manager_->updateSettings(settings);
+    // Dev's depth filter is a camera-space window. The default camera sees
+    // the origin at depth 8.5442; the x=1 and x=5 points lie outside this band.
+    arm_viewer_camera_depth_band(*rendering_manager_);
+    ASSERT_TRUE(rendering_manager_->isPLYComparisonActive());
+
+    const auto result = service_->selectAllFiltered();
+    ASSERT_TRUE(result.success) << result.error;
+    EXPECT_EQ(result.affected_count, 1u);
+    // A silent comparison no-op would keep every gaussian. The depth window
+    // only contains the origin point of the first node.
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0, 0}));
+    EXPECT_TRUE(scene_manager_->getScene().hasPreparedCombinedModel());
+}
+
+TEST_F(SelectionServiceInteractionsTest, ComparisonHoverKeepsOwnedPanelPositionsWithoutCombinedModel) {
+    scene_manager_->getScene().addSplat("right", make_test_splat({0.0f, 0.0f, 0.0f}));
+    auto settings = rendering_manager_->getSettings();
+    settings.split_view_mode = lfs::vis::SplitViewMode::PLYComparison;
+    rendering_manager_->updateSettings(settings);
+    const auto positions = service_->getScreenPositions();
+    ASSERT_NE(positions, nullptr);
+    ASSERT_EQ(positions->numel(), 6u);
+    const auto values = positions->cpu().to_vector();
+    EXPECT_GT(values[0], -1.0e7f);
+    EXPECT_GT(values[1], -1.0e7f);
+    EXPECT_LT(values[4], -1.0e7f);
+    EXPECT_LT(values[5], -1.0e7f);
+    EXPECT_FALSE(scene_manager_->getScene().hasPreparedCombinedModel());
+}
+
+TEST_F(SelectionServiceInteractionsTest, RingsStrokeKeepsEveryHoveredGaussian) {
+    service_->setTestingHoveredGaussianId(0);
+    ASSERT_TRUE(service_->beginInteractiveSelection(
+        lfs::vis::SelectionShape::Rings, lfs::vis::SelectionMode::Replace,
+        {10.0f, 10.0f}, 0.0f));
+    service_->setTestingHoveredGaussianId(1);
+    service_->updateInteractiveSelection({80.0f, 80.0f});
+    service_->refreshInteractivePreview();
+    const auto result = service_->finishInteractiveSelection();
+    ASSERT_TRUE(result.success);
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 1}));
+    EXPECT_EQ(result.affected_count, 2u);
+}
+
+TEST_F(SelectionServiceInteractionsTest, RingsStrokeCanRemoveSeveralGaussians) {
+    set_initial_selection({1, 1});
+    service_->setTestingHoveredGaussianId(0);
+    ASSERT_TRUE(service_->beginInteractiveSelection(
+        lfs::vis::SelectionShape::Rings, lfs::vis::SelectionMode::Remove,
+        {10.0f, 10.0f}, 0.0f));
+    service_->setTestingHoveredGaussianId(1);
+    service_->updateInteractiveSelection({80.0f, 80.0f});
+    service_->refreshInteractivePreview();
+    ASSERT_TRUE(service_->finishInteractiveSelection().success);
+    EXPECT_TRUE(selection_values(*scene_manager_).empty());
+}
+
+TEST_F(SelectionServiceInteractionsTest, CancelingRingsStrokePreservesTheOriginalSelection) {
+    set_initial_selection({0, 1});
+    service_->setTestingHoveredGaussianId(0);
+    ASSERT_TRUE(service_->beginInteractiveSelection(
+        lfs::vis::SelectionShape::Rings, lfs::vis::SelectionMode::Replace,
+        {10.0f, 10.0f}, 0.0f));
+    service_->cancelInteractiveSelection();
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 1}));
 }

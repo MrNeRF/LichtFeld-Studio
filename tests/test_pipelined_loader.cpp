@@ -1,16 +1,21 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/pipelined_image_loader.hpp"
+#include "licht_test_support.hpp"
 #include "training/dataset.hpp"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <tuple>
 #include <vector>
 
 #ifdef _WIN32
@@ -24,7 +29,7 @@ using namespace lfs::io;
 
 namespace {
 
-    class PipelinedImageLoaderTest : public ::testing::Test {
+    class PipelinedImageLoaderTest : public lfs::test::CudaBackendTest {
     protected:
         static std::uint64_t process_id() {
 #ifdef _WIN32
@@ -35,6 +40,9 @@ namespace {
         }
 
         static void SetUpTestSuite() {
+            if (!gpu_backend_available(GpuBackend::CUDA)) {
+                GTEST_SKIP() << "Image decoding requires an available CUDA device";
+            }
             image_path_ = std::filesystem::path(TEST_DATA_DIR) /
                           "bicycle/images_4/_DSC8744.JPG";
             ASSERT_TRUE(std::filesystem::is_regular_file(image_path_)) << image_path_;
@@ -72,6 +80,7 @@ namespace {
         }
 
         void SetUp() override {
+            LFS_CUDA_BACKEND_OR_RETURN();
             ASSERT_TRUE(std::filesystem::is_regular_file(image_path_)) << image_path_;
             ASSERT_TRUE(std::filesystem::is_regular_file(mask_path_)) << mask_path_;
         }
@@ -127,19 +136,123 @@ TEST_F(PipelinedImageLoaderTest, LoadsRealImageAndMaskWithExpectedContract) {
     EXPECT_TRUE(ready.error.empty()) << ready.error;
     EXPECT_EQ(ready.sequence_id, 7u);
     ASSERT_TRUE(ready.tensor.is_valid());
-    EXPECT_EQ(ready.tensor.device(), Device::CUDA);
+    EXPECT_EQ(gpu_backend_of(ready.tensor), GpuBackend::CUDA);
+    EXPECT_EQ(ready.tensor.device(), Device::GPU);
     EXPECT_EQ(ready.tensor.dtype(), DataType::Float32);
     ASSERT_EQ(ready.tensor.shape().rank(), 3u);
     EXPECT_EQ(ready.tensor.shape()[0], 3u);
     EXPECT_LE(std::max(ready.tensor.shape()[1], ready.tensor.shape()[2]), 128u);
 
     ASSERT_TRUE(ready.mask.has_value());
-    EXPECT_EQ(ready.mask->device(), Device::CUDA);
+    EXPECT_EQ(ready.mask->device(), Device::GPU);
     EXPECT_EQ(ready.mask->dtype(), DataType::Float32);
     EXPECT_EQ(ready.mask->shape(),
               TensorShape({ready.tensor.shape()[1], ready.tensor.shape()[2]}));
     EXPECT_GE(ready.mask->min().item<float>(), 0.0f);
     EXPECT_LE(ready.mask->max().item<float>(), 1.0f);
+}
+
+TEST_F(PipelinedImageLoaderTest, OriginalJpegUsesDirectDecodeWithoutColdReencoding) {
+    for (const bool high_precision : {false, true}) {
+        SCOPED_TRACE(high_precision);
+        auto settings = config();
+        settings.use_16bit_color = high_precision;
+        PipelinedImageLoader loader(settings);
+        auto input = request(0, 0, false);
+        input.params.resize_factor = 1;
+        input.params.output_uint8 = !high_precision;
+        loader.prefetch({input});
+        const auto ready = loader.get();
+        ASSERT_TRUE(ready.tensor.is_valid());
+        EXPECT_EQ(ready.tensor.dtype(), high_precision ? DataType::Float32 : DataType::UInt8);
+        const auto stats = loader.get_stats();
+        EXPECT_EQ(stats.cold_path_misses, 0u);
+        EXPECT_EQ(stats.cpu_decode_calls, 0u);
+        EXPECT_EQ(stats.hot_path_hits, 1u);
+        input.sequence_id = 1;
+        loader.prefetch({input});
+        const auto repeated = loader.get();
+        EXPECT_EQ(ready.tensor.to(DataType::Float32).cpu().to_vector(),
+                  repeated.tensor.to(DataType::Float32).cpu().to_vector());
+    }
+}
+
+// Fails if a release frees nothing, spills a newer image before the oldest, or
+// loses pixels on the way through the spill.
+TEST_F(PipelinedImageLoaderTest, ReleaseHostCacheSpillsLeastRecentImagesFirst) {
+    std::vector<std::filesystem::path> paths;
+    for (const auto& entry : std::filesystem::directory_iterator(image_path_.parent_path())) {
+        if (entry.path().extension() == ".JPG")
+            paths.push_back(entry.path());
+    }
+    std::ranges::sort(paths);
+    ASSERT_GE(paths.size(), 3u);
+    paths.resize(3);
+
+    PipelinedImageLoader loader(config());
+    const auto load = [&loader](const size_t sequence_id, const std::filesystem::path& path) {
+        ImageRequest input;
+        input.sequence_id = sequence_id;
+        input.path = path;
+        input.params.resize_factor = 1;
+        input.params.max_width = 0;
+        input.params.output_uint8 = true;
+        loader.prefetch({input});
+        const auto ready = loader.get();
+        EXPECT_TRUE(ready.error.empty()) << ready.error;
+        return ready.tensor.to(DataType::Float32).cpu().to_vector();
+    };
+
+    std::vector<std::vector<float>> first_pass;
+    for (size_t i = 0; i < paths.size(); ++i)
+        first_pass.push_back(load(i, paths[i]));
+
+    const auto cached = loader.get_stats();
+    ASSERT_EQ(cached.jpeg_cache_entries, paths.size());
+    const auto oldest_bytes = static_cast<size_t>(std::filesystem::file_size(paths.front()));
+
+    EXPECT_EQ(loader.release_host_cache(1), oldest_bytes);
+    const auto after_one = loader.get_stats();
+    EXPECT_EQ(after_one.jpeg_cache_entries, paths.size() - 1);
+    EXPECT_EQ(after_one.jpeg_cache_bytes, cached.jpeg_cache_bytes - oldest_bytes);
+    EXPECT_EQ(after_one.spill_cache_entries, cached.spill_cache_entries + 1);
+
+    EXPECT_EQ(loader.release_host_cache(cached.jpeg_cache_bytes), after_one.jpeg_cache_bytes);
+    const auto after_all = loader.get_stats();
+    EXPECT_EQ(after_all.jpeg_cache_entries, 0u);
+    EXPECT_EQ(after_all.jpeg_cache_bytes, 0u);
+    EXPECT_EQ(after_all.spill_cache_entries, cached.spill_cache_entries + paths.size());
+    EXPECT_EQ(loader.release_host_cache(1), 0u);
+
+    for (size_t i = 0; i < paths.size(); ++i)
+        EXPECT_EQ(load(paths.size() + i, paths[i]), first_pass[i]) << paths[i];
+}
+
+TEST_F(PipelinedImageLoaderTest, TrainingStartupOnlyPrefetchesBoundedBatch) {
+    const auto empty = Tensor::zeros({0}, Device::CPU);
+    const auto camera = std::make_shared<Camera>(
+        Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU),
+        1.f, 1.f, .5f, .5f, empty, empty, CameraModelType::PINHOLE,
+        image_path_.filename().string(), image_path_, std::filesystem::path{}, 1, 1, 0);
+    for (const size_t count : {128u, 5114u}) {
+        SCOPED_TRACE(count);
+        std::vector<std::shared_ptr<Camera>> cameras(count, camera);
+        lfs::training::DatasetConfig dataset_config;
+        dataset_config.resize_factor = 1;
+        dataset_config.max_width = 32;
+        auto dataset = std::make_shared<lfs::training::CameraDataset>(std::move(cameras), dataset_config);
+        const auto started = std::chrono::steady_clock::now();
+        lfs::training::PipelinedDataLoader<lfs::training::InfiniteRandomSampler> loader(
+            dataset, lfs::training::InfiniteRandomSampler(count, 42), config());
+        const auto stats = loader.get_stats();
+        EXPECT_LE(stats.accepted_sequences, config().prefetch_count);
+        EXPECT_GT(stats.accepted_sequences, 0u);
+        auto first = loader.next();
+        ASSERT_TRUE(first);
+        EXPECT_TRUE(first->data.image.is_valid());
+        const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+        std::cout << "Startup for " << count << " cameras: " << elapsed << " s; accepted " << stats.accepted_sequences << " requests\n";
+    }
 }
 
 TEST_F(PipelinedImageLoaderTest, PngMaxWidthUsesOneDecode) {
@@ -236,6 +349,78 @@ TEST_F(PipelinedImageLoaderTest, MultipleRequestsPreserveIdsAndOptionalMask) {
     EXPECT_EQ(mask_by_sequence,
               (std::map<size_t, bool>{{11u, false}, {12u, true}}));
 }
+
+class PipelinedMaskUndistortTest : public lfs::test::CudaBackendTest,
+                                   public ::testing::WithParamInterface<std::tuple<bool, bool>> {};
+
+TEST_P(PipelinedMaskUndistortTest, ProcessesEntireOutputMaskOnColdAndRepeatedLoad) {
+    const auto [alpha_mask, enlarge] = GetParam();
+    const lfs::test::licht::TemporaryDirectory temp("lfs-mask-undistort");
+    constexpr int src_w = 128;
+    constexpr int src_h = 96;
+    const int dst_w = enlarge ? src_w * 2 : src_w / 2;
+    const int dst_h = enlarge ? src_h * 2 : src_h / 2;
+    const auto image_path = temp.path / "image.png";
+    const auto mask_path = temp.path / "mask.png";
+    const std::vector<uint8_t> rgba(src_w * src_h * 4, 64);
+    const std::vector<uint8_t> mask(src_w * src_h, 64);
+    ASSERT_TRUE(save_png(image_path, rgba.data(), src_w, src_h, 4, 8, 1));
+    ASSERT_TRUE(save_png(mask_path, mask.data(), src_w, src_h, 1, 8, 1));
+
+    UndistortParams undistort{};
+    undistort.src_width = src_w;
+    undistort.src_height = src_h;
+    undistort.dst_width = dst_w;
+    undistort.dst_height = dst_h;
+    undistort.src_fx = undistort.src_fy = src_w;
+    undistort.src_cx = src_w / 2.0f;
+    undistort.src_cy = src_h / 2.0f;
+    undistort.dst_fx = undistort.dst_fy = static_cast<float>(dst_w);
+    undistort.dst_cx = dst_w / 2.0f;
+    undistort.dst_cy = dst_h / 2.0f;
+    undistort.model_type = CameraModelType::PINHOLE;
+
+    PipelinedLoaderConfig config;
+    config.jpeg_batch_size = 1;
+    config.prefetch_count = 1;
+    config.output_queue_size = 1;
+    config.decoder_pool_size = 1;
+    config.io_threads = 1;
+    config.cold_process_threads = 1;
+    PipelinedImageLoader loader(config);
+    ImageRequest request{};
+    request.path = image_path;
+    request.params.resize_factor = 1;
+    request.params.max_width = 0;
+    request.params.undistort = &undistort;
+    request.undistort = &undistort;
+    request.extract_alpha_as_mask = alpha_mask;
+    request.mask_params = {.invert = true, .threshold = 0.5f};
+    request.alpha_mask_params = request.mask_params;
+    if (!alpha_mask)
+        request.mask_path = mask_path;
+
+    for (size_t sequence = 0; sequence < 2; ++sequence) {
+        SCOPED_TRACE(sequence);
+        request.sequence_id = sequence;
+        loader.prefetch({request});
+        const auto ready = loader.try_get_for(std::chrono::seconds(20));
+        ASSERT_TRUE(ready.has_value());
+        ASSERT_TRUE(ready->error.empty()) << ready->error;
+        ASSERT_TRUE(ready->mask.has_value());
+        EXPECT_EQ(ready->tensor.shape(), TensorShape({3, static_cast<size_t>(dst_h), static_cast<size_t>(dst_w)}));
+        EXPECT_EQ(ready->mask->shape(), TensorShape({static_cast<size_t>(dst_h), static_cast<size_t>(dst_w)}));
+        // All source values are below 0.5, including undistortion's zero border.
+        // Invert then threshold must keep every output pixel, including the
+        // tail beyond the source pixel count when undistortion enlarges it.
+        const auto values = ready->mask->cpu().to_vector();
+        ASSERT_FALSE(values.empty());
+        EXPECT_TRUE(std::all_of(values.begin(), values.end(), [](const float value) { return value == 1.0f; }));
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(AlphaAndSidecar, PipelinedMaskUndistortTest,
+                         ::testing::Combine(::testing::Bool(), ::testing::Bool()));
 
 TEST(SidecarResumeSampler, DeterministicCameraStreamContinuesAtCheckpointOffset) {
     constexpr std::uint64_t seed = 0x4c46535f73616d70ULL;

@@ -4,31 +4,65 @@
 
 #include "app/application.hpp"
 #include "app/converter.hpp"
+#include "app/gpu_preflight.hpp"
 #include "core/abi.hpp"
-#include "core/argument_parser.hpp"
 #include "core/crash_handler.hpp"
 #include "core/cuda_error.hpp"
 #include "core/environment.hpp"
+#include "core/error.hpp"
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/session_breadcrumb.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/user_paths.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "git_version.h"
+#include "io/argument_parser.hpp"
 #include "lfs_core_abi_stamp.h"
+#include "preferences.hpp"
 #include "preprocessing/preprocess.hpp"
 #include "python/plugin_runner.hpp"
 #include "python/runner.hpp"
 
 #include <cstdlib>
+#if LFS_HAS_CUDA
 #include <cuda_runtime.h>
+#endif
 #include <filesystem>
 #include <print>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace {
+#ifdef __APPLE__
+    void configureHomebrewVulkanDriver() {
+        // The vcpkg Vulkan loader does not always discover Homebrew's MoltenVK
+        // manifest. Keep an explicit Vulkan driver selection from the caller.
+        if (std::getenv("VK_DRIVER_FILES") || std::getenv("VK_ICD_FILENAMES") ||
+            std::getenv("VK_ADD_DRIVER_FILES"))
+            return;
+
+        const auto try_prefix = [](const std::filesystem::path& prefix) {
+            const auto manifest = prefix / "etc/vulkan/icd.d/MoltenVK_icd.json";
+            std::error_code error;
+            if (!std::filesystem::is_regular_file(manifest, error))
+                return false;
+            return lfs::core::environment::set_value("VK_DRIVER_FILES", manifest.string());
+        };
+
+        if (const char* const prefix = std::getenv("HOMEBREW_PREFIX")) {
+            if (try_prefix(prefix))
+                return;
+        }
+        if (try_prefix("/opt/homebrew"))
+            return;
+        (void)try_prefix("/usr/local");
+    }
+#endif
+
+#if LFS_HAS_CUDA
     // Apply CUDA driver-level VRAM-reduction knobs BEFORE the primary context exists.
     // Setting these after cudaFree(nullptr) is too late — the driver has already
     // committed defaults (1 KiB/thread stack reserve × SMs × max-threads = ~192 MiB on
@@ -40,6 +74,7 @@ namespace {
         setenv("CUDA_MODULE_LOADING", "LAZY", /*overwrite=*/0);
 #endif
     }
+#endif
 
     void publishResolvedUserPaths() {
         // Publish canonical paths for Python plugins; native code calls UserPaths directly.
@@ -63,13 +98,14 @@ namespace {
     // Every mode that touches CUDA gates here, before the primary context exists: with
     // CUDA_MODULE_LOADING=EAGER pre-set in the environment, context creation itself loads
     // modules the card cannot run, which would beat the check to the crash.
-    void preflightGpuOrExit(const bool show_dialog) {
-        if (!lfs::app::preflightGpu(show_dialog)) {
+    void preflightGpuOrExit(const bool show_dialog, const bool viewer_only = false) {
+        if (!lfs::app::preflightGpu(show_dialog, viewer_only)) {
             lfs::core::teardown_gpu_before_exit();
             lfs::core::flush_and_exit(1);
         }
     }
 
+#if LFS_HAS_CUDA
     // Probe what the CUDA driver allocates during context creation, *attributed to this
     // process* (NVML per-PID, not device-wide cudaMemGetInfo). Each phase is the delta
     // against the previous probe so the sum reconstructs the total context cost.
@@ -128,49 +164,98 @@ namespace {
         // measurements and libcurand probe are completed by the warmup worker.
         p.captureCudaDeviceBaseline();
     }
+#endif
 
-    int run_mode(lfs::core::args::ParsedArgs args) {
+    int run_mode(lfs::io::args::ParsedArgs args) {
         return std::visit([](auto&& mode) -> int {
             using T = std::decay_t<decltype(mode)>;
 
-            if constexpr (std::is_same_v<T, lfs::core::args::HelpMode>) {
+            if constexpr (std::is_same_v<T, lfs::io::args::HelpMode>) {
                 return 0;
-            } else if constexpr (std::is_same_v<T, lfs::core::args::VersionMode>) {
+            } else if constexpr (std::is_same_v<T, lfs::io::args::VersionMode>) {
                 std::println("LichtFeld Studio {} ({})", GIT_TAGGED_VERSION, GIT_COMMIT_HASH_SHORT);
                 return 0;
-            } else if constexpr (std::is_same_v<T, lfs::core::args::WarmupMode>) {
-                applyCudaContextTuning();
+            } else if constexpr (std::is_same_v<T, lfs::io::args::WarmupMode>) {
+#if LFS_HAS_CUDA
+                if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA) {
+                    applyCudaContextTuning();
+                }
+#endif
                 preflightGpuOrExit(false);
-                analyzeCudaContextDistribution();
+#if LFS_HAS_CUDA
+                if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA) {
+                    analyzeCudaContextDistribution();
+                }
+#endif
                 return 0;
-            } else if constexpr (std::is_same_v<T, lfs::core::args::ConvertMode>) {
-                preflightGpuOrExit(false);
+            } else if constexpr (std::is_same_v<T, lfs::io::args::TensorBackendSelftestMode>) {
+                const char* name = mode.backend == lfs::core::GpuBackend::Vulkan  ? "vulkan"
+                                   : mode.backend == lfs::core::GpuBackend::Metal ? "metal"
+                                                                                  : "cuda";
+                const lfs::Status status = lfs::core::tensor_backend_selftest(mode.backend);
+                if (status) {
+                    std::println("tensor backend selftest {}: ok", name);
+                    return 0;
+                }
+                std::println("tensor backend selftest {}: failed: {}",
+                             name, lfs::format_for_developer(status.error()));
+                return 1;
+            } else if constexpr (std::is_same_v<T, lfs::io::args::ConvertMode>) {
+                // Converting trains nothing, so any tensor backend can run it.
+                preflightGpuOrExit(false, true);
                 return lfs::app::run_converter(mode.params);
-            } else if constexpr (std::is_same_v<T, lfs::core::args::Mesh2SplatMode>) {
+            } else if constexpr (std::is_same_v<T, lfs::io::args::Mesh2SplatMode>) {
                 preflightGpuOrExit(false);
                 return lfs::app::run_mesh2splat(mode.params);
-            } else if constexpr (std::is_same_v<T, lfs::core::args::PreprocessMode>) {
-                preflightGpuOrExit(false);
+            } else if constexpr (std::is_same_v<T, lfs::io::args::PreprocessMode>) {
+                // Native inference validates the selected tensor backend. Only
+                // CUDA execution needs the CUDA driver/SM gate; weight downloads
+                // and Vulkan inference must also work without a CUDA device.
+                if (!mode.params.download_only &&
+                    lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA) {
+                    preflightGpuOrExit(false);
+                }
                 return lfs::preprocessing::run_preprocess(mode.params);
-            } else if constexpr (std::is_same_v<T, lfs::core::args::PluginMode>) {
+            } else if constexpr (std::is_same_v<T, lfs::io::args::PluginMode>) {
                 return lfs::python::run_plugin_command(mode);
-            } else if constexpr (std::is_same_v<T, lfs::core::args::TrainingMode>) {
+            } else if constexpr (std::is_same_v<T, lfs::io::args::TrainingMode>) {
+                if constexpr (!LFS_BUILD_TRAINER) {
+                    if (mode.params->optimization.headless && !mode.params->render_path) {
+                        std::println(stderr, "Training is not included in this build.");
+                        return 1;
+                    }
+                }
                 LOG_INFO("LichtFeld Studio");
                 LOG_INFO("version {} | tag {}", GIT_TAGGED_VERSION, GIT_COMMIT_HASH_SHORT);
 
-                // Driver-level tuning must precede *any* CUDA call, including the pre-flight
-                // gate and the cudaFree(nullptr) inside analyzeCudaContextDistribution.
-                applyCudaContextTuning();
-
                 const bool interactive =
                     !mode.params->optimization.headless && !mode.params->render_path;
-                preflightGpuOrExit(interactive);
+                // A Vulkan viewer still constructs a CUDA trainer when a dataset opens.
+                // The primary context has to exist before that open.
+#if LFS_HAS_CUDA
+                const bool warm_cuda_context =
+                    lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA) &&
+                    (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA || interactive);
+
+                // Driver-level tuning must precede *any* CUDA call, including the pre-flight
+                // gate and the cudaFree(nullptr) inside analyzeCudaContextDistribution.
+                if (warm_cuda_context) {
+                    applyCudaContextTuning();
+                }
+#endif
+
+                const bool viewer_only = lfs::app::training_params_are_viewer_only(*mode.params);
+                preflightGpuOrExit(interactive, viewer_only);
 
                 // Probe and decompose the CUDA driver's context-creation cost only for the
                 // GPU app path. CLI-only modes such as --help, convert, preprocess,
                 // plugin, and mesh2splat must not create a CUDA primary context just
                 // for HUD metrics.
-                analyzeCudaContextDistribution();
+#if LFS_HAS_CUDA
+                if (warm_cuda_context) {
+                    analyzeCudaContextDistribution();
+                }
+#endif
                 if (mode.params->optimization.debug_python) {
                     lfs::python::start_debugpy(mode.params->optimization.debug_python_port);
                 }
@@ -212,18 +297,46 @@ int main(int argc, char* argv[]) {
         return 2;
     }
 
+#ifdef __APPLE__
+    configureHomebrewVulkanDriver();
+#endif
+
     lfs::core::install_crash_handlers();
     lfs::core::record_session_start();
+#if LFS_HAS_CUDA
     lfs::core::initialize_cuda_diagnostics();
+#endif
 
-    auto result = lfs::core::args::parse_args(argc, argv);
+    auto result = lfs::io::args::parse_args(argc, argv);
     if (!result) {
         std::println(stderr, "Error: {}", result.error());
         return 1;
     }
 
+    bool use_default_preferences = false;
+    if (const auto* training = std::get_if<lfs::io::args::TrainingMode>(&*result)) {
+        use_default_preferences = training->params->safe_mode || training->params->reset_preferences ||
+                                  training->params->reset_all_settings;
+    }
+    const auto tensor_preferences = use_default_preferences
+                                        ? lfs::vis::TensorPreferenceState{}
+                                        : lfs::vis::UserPreferences::instance().tensorBackend();
+    const auto options_status = lfs::core::set_tensor_backend_options(tensor_preferences.options);
+    // An automatic preference leaves the choice to default_gpu_backend().
+    const auto backend_status = tensor_preferences.backend
+                                    ? lfs::core::set_default_gpu_backend(*tensor_preferences.backend)
+                                    : lfs::Status{};
+    if (!options_status || !backend_status) {
+        std::println(stderr, "Could not apply tensor backend preferences before startup");
+        return 1;
+    }
+
     publishResolvedUserPaths();
 
-    return lfs::core::run_with_exception_firewall(
+    const int exit_code = lfs::core::run_with_exception_firewall(
         [&result] { return run_mode(std::move(*result)); });
+    // CLI modes return here without the viewer's explicit GPU teardown. Drain
+    // their backends before validation layers and driver libraries are unloaded.
+    lfs::core::teardown_gpu_before_exit();
+    return exit_code;
 }

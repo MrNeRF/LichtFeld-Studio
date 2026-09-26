@@ -11,8 +11,9 @@
 #include "core/logger.hpp"
 #include "core/sh_value_quant_kernels.hpp"
 #include "core/splat_exportable_storage.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "gsplat/Ops.h"
+#include "training/kernels/densification_kernels.hpp"
 #include "training/kernels/grad_alpha.hpp"
 #include <algorithm>
 #include <array>
@@ -73,7 +74,7 @@ namespace lfs::training {
                 std::memcpy(slot, src, n * sizeof(float));
                 if (!dest.is_valid() || dest.numel() < n) {
                     dest = core::Tensor::empty(
-                        {n}, core::Device::CUDA, core::DataType::Float32);
+                        {n}, core::Device::GPU, core::DataType::Float32);
                 }
                 if (dest.stream() != stream) {
                     dest.set_stream(stream);
@@ -127,7 +128,7 @@ namespace lfs::training {
             const uint32_t image_width = (tile_width > 0) ? static_cast<uint32_t>(tile_width) : full_image_width;
             const uint32_t image_height = (tile_height > 0) ? static_cast<uint32_t>(tile_height) : full_image_height;
 
-            const float* viewmat_ptr = viewpoint_camera.world_view_transform_ptr();
+            auto world_view_transform = viewpoint_camera.world_view_transform();
 
             // Prepared undistortion already supplies pinhole intrinsics and undistorted images.
             // Ignore the retained camera model and coefficients to avoid applying distortion twice.
@@ -178,13 +179,10 @@ namespace lfs::training {
 
             core::pin_operands({&means, &opacities, &scales, &quats, &sh0, &shN});
 
-            // Current-stream-first (the caller's guard), tensor stream as
-            // fallback — matches the lib-wide rule and the begin_frame stream,
-            // so a metrics-thread render lands its kernels and consumers on the
-            // same stream as the arena frame.
-            const cudaStream_t fwd_stream = core::getCurrentCUDAStream()
-                                                ? core::getCurrentCUDAStream()
-                                                : means.stream();
+            // Camera and model inputs share the forward execution queue.
+            const cudaStream_t fwd_stream = core::getCurrentCUDAStream();
+            core::prepare_inputs_for_stream({&means, &opacities, &scales, &quats, &sh0, &shN, &world_view_transform}, fwd_stream);
+            const float* viewmat_ptr = world_view_transform.ptr<float>();
 
             const std::array<float, 9> K_host = {
                 k00, 0.0f, k02,
@@ -215,7 +213,7 @@ namespace lfs::training {
                     auto& dequant = gsplat_thread_caches.shN_dequant;
                     if (!dequant.is_valid() || dequant.numel() < n_floats) {
                         dequant = core::Tensor::empty(
-                            core::TensorShape({n_floats}), core::Device::CUDA,
+                            core::TensorShape({n_floats}), core::Device::GPU,
                             core::DataType::Float32);
                     }
                     if (dequant.stream() != fwd_stream) {
@@ -252,9 +250,11 @@ namespace lfs::training {
 
             if (use_bg_image) {
                 // Use per-pixel background image - passed directly to gsplat kernel
+                bg_image.sync_to_stream(fwd_stream);
                 core::pin_operands({&bg_image});
                 bg_image_ptr = bg_image.ptr<float>();
             } else if (bg_color.is_valid() && bg_color.numel() > 0) {
+                bg_color.sync_to_stream(fwd_stream);
                 core::pin_operands({&bg_color});
                 bg_color_ptr = bg_color.ptr<float>();
             }
@@ -284,7 +284,7 @@ namespace lfs::training {
                     return;
                 }
                 const size_t copy_n = std::min(n, static_cast<size_t>(src.numel()));
-                if (src.device() == core::Device::CUDA && src.is_contiguous() &&
+                if (src.device() == core::Device::GPU && src.is_contiguous() &&
                     src.numel() == copy_n) {
                     dest = src;
                     if (dest.stream() != fwd_stream) {
@@ -433,14 +433,14 @@ namespace lfs::training {
             const core::TensorShape image_shape = {
                 static_cast<size_t>(channels), static_cast<size_t>(H), static_cast<size_t>(W)};
             if (!cached_image_chw.is_valid() || cached_image_chw.shape() != image_shape) {
-                cached_image_chw = core::Tensor::empty(image_shape, core::Device::CUDA, core::DataType::Float32);
+                cached_image_chw = core::Tensor::empty(image_shape, core::Device::GPU, core::DataType::Float32);
             }
             if (cached_image_chw.stream() != fwd_stream) {
                 cached_image_chw.set_stream(fwd_stream);
             }
             const core::TensorShape alpha_shape = {1UL, static_cast<size_t>(H), static_cast<size_t>(W)};
             if (!cached_alpha_chw.is_valid() || cached_alpha_chw.shape() != alpha_shape) {
-                cached_alpha_chw = core::Tensor::empty(alpha_shape, core::Device::CUDA, core::DataType::Float32);
+                cached_alpha_chw = core::Tensor::empty(alpha_shape, core::Device::GPU, core::DataType::Float32);
             }
             if (cached_alpha_chw.stream() != fwd_stream) {
                 cached_alpha_chw.set_stream(fwd_stream);
@@ -519,7 +519,7 @@ namespace lfs::training {
                 const core::TensorShape depth_shape = {1UL, static_cast<size_t>(H), static_cast<size_t>(W)};
                 if (!cached_depth_chw.is_valid() || cached_depth_chw.shape() != depth_shape ||
                     cached_depth_chw.stream() != fwd_stream) {
-                    cached_depth_chw = core::Tensor::empty(depth_shape, core::Device::CUDA, core::DataType::Float32);
+                    cached_depth_chw = core::Tensor::empty(depth_shape, core::Device::GPU, core::DataType::Float32);
                     if (cached_depth_chw.stream() != fwd_stream)
                         cached_depth_chw.set_stream(fwd_stream);
                 }
@@ -563,6 +563,8 @@ namespace lfs::training {
             ctx.isect_ids_ptr = result.isect_ids;
             ctx.flatten_ids_ptr = result.flatten_ids;
             ctx.n_isects = result.n_isects;
+            ctx.batches = std::move(result.batches);
+            ctx.tiles_per_gauss_ptr = tiles_per_gauss_ptr;
             ctx.n_sort = result.n_sort;
 
             // Save input tensors for backward (these are references, not copies)
@@ -577,6 +579,7 @@ namespace lfs::training {
             ctx.shN = shN_dequant_temp.is_valid() ? shN_dequant_temp : shN;
 
             // Store camera pointers
+            ctx.world_view_transform = std::move(world_view_transform);
             ctx.viewmat_ptr = viewmat_ptr;
             ctx.K_ptr = K_ptr;
             ctx.K_tensor = K_tensor;
@@ -617,6 +620,13 @@ namespace lfs::training {
             ctx.render_tile_height = tile_height;
 
             return std::pair{render_output, ctx};
+        } catch (const lfs::Exception& exception) {
+            arena.end_frame(frame_id, core::getCurrentCUDAStream());
+            auto error = exception.error();
+            lfs::SmallFields fields;
+            fields.add("camera", viewpoint_camera.image_name());
+            throw lfs::Exception(std::move(error).with_context(
+                "gsplat_rasterize_forward", LFS_SOURCE_SITE_CURRENT(), std::move(fields)));
         } catch (...) {
             // Isect buffers belong to the TLS VMM cache; only unwind the arena.
             // End on the same stream begin_frame used (same guard → same value),
@@ -640,15 +650,18 @@ namespace lfs::training {
         // Get arena for temporary allocations
         auto& arena = core::GlobalArenaManager::instance().get_arena();
         auto arena_allocator = arena.get_allocator(ctx.frame_id, "gsplat.backward");
-        // Run the backward work + arena frame release on the exact stream the
-        // forward began the frame on (ctx.stream), so begin_frame and end_frame
-        // chain on the same stream rather than relying on the caller's guard
-        // matching. Falls back to the current/tensor stream only if unset.
-        const cudaStream_t stream = ctx.stream
-                                        ? ctx.stream
-                                        : (core::getCurrentCUDAStream()
-                                               ? core::getCurrentCUDAStream()
-                                               : ctx.means.stream());
+        const cudaStream_t stream = core::getCurrentCUDAStream();
+        core::bridgeStreams(ctx.stream, stream);
+        for (const auto* input : std::initializer_list<const core::Tensor*>{&grad_image, &grad_alpha, &ctx.means, &ctx.quats,
+                                                                            &ctx.scales, &ctx.opacities, &ctx.sh0, &ctx.shN,
+                                                                            &ctx.bg_image, &ctx.bg_color, &ctx.world_view_transform, &pixel_error_map, &edge_weight_map}) {
+            if (input->is_valid())
+                input->sync_to_stream(stream);
+        }
+        if (edge_score_out.is_valid())
+            edge_score_out.set_stream(stream);
+        if (gaussian_model._densification_info.is_valid())
+            gaussian_model._densification_info.set_stream(stream);
         try {
 
             const uint32_t N = ctx.N;
@@ -745,8 +758,8 @@ namespace lfs::training {
                        static_cast<uint32_t>(error_map_2d.shape()[0]) == H &&
                        static_cast<uint32_t>(error_map_2d.shape()[1]) == W &&
                        "pixel_error_map must have shape [H, W] or [1, H, W]");
-                if (error_map_2d.device() != core::Device::CUDA) {
-                    error_map_2d = error_map_2d.cuda();
+                if (error_map_2d.device() != core::Device::GPU) {
+                    error_map_2d = error_map_2d.gpu();
                 }
                 if (!error_map_2d.is_contiguous()) {
                     error_map_2d = error_map_2d.contiguous();
@@ -760,8 +773,8 @@ namespace lfs::training {
                                                          : nullptr;
             const bool edge_scoring =
                 edge_weight_map.is_valid() && edge_score_out.is_valid() &&
-                edge_weight_map.device() == core::Device::CUDA &&
-                edge_score_out.device() == core::Device::CUDA &&
+                edge_weight_map.device() == core::Device::GPU &&
+                edge_score_out.device() == core::Device::GPU &&
                 edge_weight_map.dtype() == core::DataType::Float32 &&
                 edge_score_out.dtype() == core::DataType::Float32 &&
                 edge_weight_map.ndim() == 2 && edge_score_out.ndim() == 1 &&
@@ -811,8 +824,8 @@ namespace lfs::training {
                 ctx.last_ids_ptr,
                 ctx.tile_offsets_ptr,
                 ctx.flatten_ids_ptr,
-                ctx.n_sort > 0 ? static_cast<uint32_t>(ctx.n_sort)
-                               : static_cast<uint32_t>(ctx.n_isects),
+                // Batched contexts have no retained list; backward replays each leaf.
+                static_cast<uint32_t>(ctx.n_sort),
                 ctx.colors_ptr,
                 ctx.dirs_ptr,
                 ctx.radii_ptr,
@@ -830,7 +843,7 @@ namespace lfs::training {
                 pixel_error_map_ptr,
                 edge_weight_map_ptr,
                 edge_score_out_ptr,
-                stream);
+                stream, ctx.batches, ctx.tiles_per_gauss_ptr);
 
             // ============ Accumulate gradients into optimizer using CUDA kernels ============
             // This avoids any tensor operations that might allocate from memory pool
@@ -894,7 +907,6 @@ namespace lfs::training {
 
             // Accumulate gradient norms when pixel-error map is not provided
             if (update_densification_info && pixel_error_map_ptr == nullptr) {
-                gaussian_model._densification_info.set_stream(stream);
                 kernels::launch_grad_norm_accumulate(
                     gaussian_model._densification_info.ptr<float>(),
                     v_means_ptr,
@@ -902,10 +914,26 @@ namespace lfs::training {
                     stream);
             }
 
+            // Projection is shared by all tile batches. Publish only after the
+            // complete backward succeeds, while its full-frame radii are alive.
+            // Inference and strategies that do not request this metric do no work.
+            auto& shares = gaussian_model._max_screen_share;
+            if (optimizer.collect_projected_screen_share() &&
+                shares.is_valid() && shares.numel() == N && N > 0) {
+                shares.sync_to_stream(stream);
+                kernels::launch_accumulate_projected_screen_share(
+                    ctx.radii_ptr, ctx.means2d_ptr, shares.ptr<float>(), N, W, H, stream);
+                shares.set_stream(stream);
+            }
+
             // Isect/flatten ids stay in the TLS VMM cache for the next forward.
             // Arena still ends with the frame.
+            // The intersection cache and camera staging are reused by forward.
+            core::bridgeStreams(stream, ctx.stream);
             arena.end_frame(ctx.frame_id, stream);
         } catch (...) {
+            // The intersection cache and camera staging are reused by forward.
+            core::bridgeStreams(stream, ctx.stream);
             arena.end_frame(ctx.frame_id, stream);
             throw;
         }

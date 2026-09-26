@@ -8,6 +8,8 @@
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "core/training_manager.hpp"
+#include "cuda_backend_test.hpp"
 #include "gui/gizmo_manager.hpp"
 #include "gui/gizmo_transform.hpp"
 #include "operation/ops/select_ops.hpp"
@@ -21,7 +23,6 @@
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "training/trainer.hpp"
-#include "training/training_manager.hpp"
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
@@ -41,17 +42,17 @@ namespace {
 
     std::unique_ptr<lfs::core::SplatData> make_test_splat(const std::vector<float>& xyz) {
         const size_t count = xyz.size() / 3;
-        auto means = Tensor::from_vector(xyz, {count, size_t{3}}, Device::CUDA).to(DataType::Float32);
-        auto sh0 = Tensor::zeros({count, size_t{1}, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto shN = Tensor::zeros({count, size_t{3}, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto scaling = Tensor::zeros({count, size_t{3}}, Device::CUDA, DataType::Float32);
+        auto means = Tensor::from_vector(xyz, {count, size_t{3}}, Device::GPU).to(DataType::Float32);
+        auto sh0 = Tensor::zeros({count, size_t{1}, size_t{3}}, Device::GPU, DataType::Float32);
+        auto shN = Tensor::zeros({count, size_t{3}, size_t{3}}, Device::GPU, DataType::Float32);
+        auto scaling = Tensor::zeros({count, size_t{3}}, Device::GPU, DataType::Float32);
 
         std::vector<float> rotation_data(count * 4, 0.0f);
         for (size_t i = 0; i < count; ++i) {
             rotation_data[i * 4] = 1.0f;
         }
-        auto rotation = Tensor::from_vector(rotation_data, {count, size_t{4}}, Device::CUDA).to(DataType::Float32);
-        auto opacity = Tensor::zeros({count, size_t{1}}, Device::CUDA, DataType::Float32);
+        auto rotation = Tensor::from_vector(rotation_data, {count, size_t{4}}, Device::GPU).to(DataType::Float32);
+        auto opacity = Tensor::zeros({count, size_t{1}}, Device::GPU, DataType::Float32);
 
         return std::make_unique<lfs::core::SplatData>(
             1,
@@ -75,7 +76,7 @@ namespace {
     Tensor make_uint8_mask(const std::vector<uint8_t>& values) {
         auto tensor = Tensor::empty({values.size()}, Device::CPU, DataType::UInt8);
         std::copy(values.begin(), values.end(), tensor.ptr<uint8_t>());
-        return tensor.cuda();
+        return tensor.gpu();
     }
 
     void expect_matrix_near(const glm::mat4& actual, const glm::mat4& expected, const float epsilon = 1e-4f) {
@@ -108,7 +109,7 @@ namespace {
 
 } // namespace
 
-class OperatorRegistryPropsTest : public ::testing::Test {
+class OperatorRegistryPropsTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
         lfs::event::EventBridge::instance().clear_all();
@@ -226,6 +227,7 @@ TEST_F(OperatorRegistryPropsTest, DeleteOperatorDeletesMultipleSelectedNodes) {
 }
 
 TEST_F(OperatorRegistryPropsTest, DeleteOperatorRejectsMixedTrainingBatchWithoutPartialRemoval) {
+    LFS_CUDA_BACKEND_OR_RETURN();
     auto trainer_manager = std::make_unique<lfs::vis::TrainerManager>();
     lfs::vis::services().set(trainer_manager.get());
 

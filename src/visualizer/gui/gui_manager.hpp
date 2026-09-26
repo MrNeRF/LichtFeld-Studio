@@ -18,6 +18,7 @@
 #include "gui/rml_bottom_dock.hpp"
 #include "gui/rml_menu_bar.hpp"
 #include "gui/rml_modal_overlay.hpp"
+#include "gui/rml_progress_overlay.hpp"
 #include "gui/rml_right_panel.hpp"
 #include "gui/rml_shell_frame.hpp"
 #include "gui/rml_status_bar.hpp"
@@ -56,6 +57,7 @@ struct SDL_Cursor;
 namespace lfs::vis {
     class VisualizerImpl;
     class WindowManager;
+    class InputControllerFocusTest_FreshLeftDockEdgePressUsesOneOwnershipVerdict_Test;
     class VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
     class VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
     class VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;
@@ -136,7 +138,7 @@ namespace lfs::vis {
             [[nodiscard]] GlobalContextMenu& globalContextMenu() { return *global_context_menu_; }
 
             // State queries
-            bool needsAnimationFrame() const;
+            bool needsAnimationFrame(bool include_export_progress = true) const;
             [[nodiscard]] std::string describeAnimationDemand() const;
             [[nodiscard]] bool needsImmediateAnimationFrame() const;
             // Min finite scheduled GUI animation/update delay (seconds). Used by the
@@ -158,6 +160,8 @@ namespace lfs::vis {
             bool isPositionInViewport(double x, double y) const;
             bool isPositionOverFloatingPanel(double x, double y) const;
             [[nodiscard]] GuiHitTestResult hitTestPointer(double x, double y) const;
+            // Event-time press hit shared by input routing and frame ownership.
+            [[nodiscard]] GuiHitTestResult hitTestMouseButton(double x, double y) const;
             [[nodiscard]] GuiInputState inputState() const;
 
             bool isForceExit() const { return force_exit_; }
@@ -239,6 +243,7 @@ namespace lfs::vis {
             void renderViewportDecorations();
 
         private:
+            friend class lfs::vis::InputControllerFocusTest_FreshLeftDockEdgePressUsesOneOwnershipVerdict_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
             friend class lfs::vis::VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;
@@ -312,7 +317,6 @@ namespace lfs::vis {
             };
             void initDevResourceHotReload();
             void pollDevResourceHotReload();
-            DevResourceScanResult scanDevResourceFiles(bool detect_changes);
             static DevResourceScanResult scanDevResourceFilesSnapshot(
                 std::filesystem::path rml_dir,
                 std::filesystem::path locale_dir,
@@ -373,6 +377,7 @@ namespace lfs::vis {
 
             // Owned components
             std::unique_ptr<RmlModalOverlay> rml_modal_overlay_;
+            std::unique_ptr<RmlProgressOverlay> rml_progress_overlay_;
             std::unique_ptr<RmlToastOverlay> rml_toast_overlay_;
             std::unique_ptr<lfs::gui::IVideoExtractorWidget> video_widget_;
 
@@ -441,6 +446,7 @@ namespace lfs::vis {
             RmlViewportOverlay rml_viewport_overlay_;
             RmlMenuBar rml_menu_bar_;
             bool menu_pointer_capture_active_ = false;
+            bool startup_overlay_pointer_capture_active_ = false;
             RmlStatusBar rml_status_bar_;
             std::unique_ptr<GlobalContextMenu> global_context_menu_;
             bool deferred_startup_work_pending_ = false;

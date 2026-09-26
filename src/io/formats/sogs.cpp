@@ -17,9 +17,11 @@
 #include "core/sh_value_quant_kernels.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor_backend.hpp"
+#include "core/tensor_completion.hpp"
+#include "core/tensor_export.hpp"
+#include "core/tensor_sh.hpp"
 #include "cuda/kmeans.hpp"
-#include "cuda/morton_encoding.hpp"
 #include "io/atomic_output.hpp"
 #include "io/error.hpp"
 #include <algorithm>
@@ -939,12 +941,12 @@ namespace lfs::io {
 
             {
                 LOG_TIMER_DEBUG("SOG load: upload");
-                means = host_means.cuda();
-                scales = host_scales.cuda();
-                rotations = host_rotations.cuda();
-                opacity = host_opacity.cuda();
-                sh0 = host_sh0.cuda();
-                shN = host_shN.cuda();
+                means = host_means.gpu();
+                scales = host_scales.gpu();
+                rotations = host_rotations.gpu();
+                opacity = host_opacity.gpu();
+                sh0 = host_sh0.gpu();
+                shN = host_shN.gpu();
             }
 
             // Calculate SH degree
@@ -970,7 +972,8 @@ namespace lfs::io {
         }
 
         std::expected<SplatData, std::string> read_sog_bundle(
-            const std::filesystem::path& path) {
+            const std::filesystem::path& path,
+            std::optional<std::vector<uint8_t>>* license_bytes) {
 
             LOG_INFO("Reading SOG bundle: {}", lfs::core::path_to_utf8(path));
 
@@ -1081,7 +1084,9 @@ namespace lfs::io {
                                           filename == "sh0.webp" ||
                                           filename == "shN_centroids.webp" ||
                                           filename == "shN_labels.webp";
-                    if (!is_metadata && !is_image) {
+                    const bool is_license = license_bytes && !license_bytes->has_value() &&
+                                            is_sog_license_member(filename) && size <= 64 * 1024;
+                    if (!is_metadata && !is_image && !is_license) {
                         if (archive_read_data_skip(a) != ARCHIVE_OK) {
                             const char* detail = archive_error_string(a);
                             return std::unexpected(std::format(
@@ -1118,6 +1123,10 @@ namespace lfs::io {
 
                     if (is_metadata) {
                         metadata_json.assign(reinterpret_cast<const char*>(data.get()), size);
+                    } else if (is_license) {
+                        license_bytes->emplace();
+                        if (size)
+                            license_bytes->value().assign(data.get(), data.get() + size);
                     } else {
                         encoded_images.emplace(
                             filename, EncodedImage{std::move(data), size});
@@ -1222,8 +1231,9 @@ namespace lfs::io {
             if (!images) {
                 return std::unexpected(images.error());
             }
-            return SogDirectoryReconstruct([meta = std::move(meta), images = std::move(*images)]() -> Result<SplatData> {
-                auto result = reconstruct_splat_data(meta, images);
+            auto shared_images = std::make_shared<DecodedImages>(std::move(*images));
+            return SogDirectoryReconstruct([meta = std::move(meta), images = std::move(shared_images)]() -> Result<SplatData> {
+                auto result = reconstruct_splat_data(meta, *images);
                 if (!result)
                     return make_error(ErrorCode::DECODING_FAILED, result.error());
                 return Result<SplatData>(std::move(*result));
@@ -1233,7 +1243,30 @@ namespace lfs::io {
         }
     }
 
-    static Result<SplatData> read_sog_directory(const std::filesystem::path& path) {
+    static Result<SplatData> read_sog_directory(
+        const std::filesystem::path& path,
+        std::optional<std::vector<uint8_t>>* license_bytes) {
+        if (license_bytes) {
+            std::vector<std::filesystem::path> candidates;
+            for (const auto& entry : std::filesystem::directory_iterator(path)) {
+                if (is_sog_license_member(core::path_to_utf8(entry.path().filename())) &&
+                    std::filesystem::is_regular_file(entry.symlink_status()))
+                    candidates.push_back(entry.path());
+            }
+            std::sort(candidates.begin(), candidates.end());
+            for (const auto& candidate : candidates) {
+                const auto size = std::filesystem::file_size(candidate);
+                if (size > 64 * 1024)
+                    continue;
+                std::vector<uint8_t> bytes(static_cast<size_t>(size));
+                std::ifstream file(candidate, std::ios::binary);
+                if (size && !file.read(reinterpret_cast<char*>(bytes.data()),
+                                       static_cast<std::streamsize>(size)))
+                    return make_error(ErrorCode::READ_FAILURE, "Cannot read complete SOG license", candidate);
+                *license_bytes = std::move(bytes);
+                break;
+            }
+        }
         auto ready = prepare_sog_entries([&](const std::string& name, size_t limit) -> Result<std::vector<uint8_t>> {
             const auto file_path = path / core::utf8_to_path(name);
             std::error_code ec;
@@ -1254,20 +1287,23 @@ namespace lfs::io {
         return (*ready)();
     }
 
-    Result<SplatData> load_sog(const std::filesystem::path& path) {
+    Result<SplatData> load_sog(const std::filesystem::path& path,
+                               std::optional<std::vector<uint8_t>>* license_bytes) {
         try {
+            if (license_bytes)
+                license_bytes->reset();
             if (!std::filesystem::exists(path))
                 return make_error(ErrorCode::PATH_NOT_FOUND, "SOG file/directory does not exist", path);
             if (path.extension() == ".sog") {
-                auto result = read_sog_bundle(path);
+                auto result = read_sog_bundle(path, license_bytes);
                 if (!result)
                     return make_error(ErrorCode::DECODING_FAILED, result.error(), path);
                 return std::move(*result);
             }
             if (path.filename() == "meta.json")
-                return read_sog_directory(path.parent_path());
+                return read_sog_directory(path.parent_path(), license_bytes);
             if (std::filesystem::is_directory(path))
-                return read_sog_directory(path);
+                return read_sog_directory(path, license_bytes);
             return make_error(ErrorCode::UNSUPPORTED_FORMAT, "Unknown SOG format", path);
         } catch (const std::bad_alloc&) {
             return make_error(ErrorCode::RESOURCE_EXHAUSTED, "SOG input exceeds available memory", path);
@@ -1291,46 +1327,10 @@ namespace lfs::io {
         }
 
         Tensor as_cuda_contiguous(const Tensor& tensor) {
-            if (tensor.device() == Device::CUDA) {
+            if (tensor.device() == Device::GPU) {
                 return tensor.is_contiguous() ? tensor : tensor.contiguous();
             }
-            return tensor.cuda().contiguous();
-        }
-
-        int nearest_centroid_1d(const std::vector<float>& centroids, float value, int hint = -1) {
-            auto it = centroids.begin();
-            if (hint < 0 || !std::isfinite(value)) {
-                it = std::lower_bound(centroids.begin(), centroids.end(), value);
-            } else {
-                // Lloyd updates usually move a label only a few bins. Recover
-                // the same lower_bound (including duplicate-centroid ties)
-                // from its previous label instead of restarting binary search.
-                it += hint;
-                while (it != centroids.begin() && *(it - 1) >= value)
-                    --it;
-                while (it != centroids.end() && *it < value)
-                    ++it;
-            }
-            int best = static_cast<int>(std::distance(centroids.begin(), it));
-            if (best >= static_cast<int>(centroids.size())) {
-                best = static_cast<int>(centroids.size()) - 1;
-            }
-
-            float best_dist = std::abs(value - centroids[best]);
-            if (best > 0) {
-                const float prev_dist = std::abs(value - centroids[best - 1]);
-                if (prev_dist < best_dist) {
-                    best = best - 1;
-                    best_dist = prev_dist;
-                }
-            }
-            if (best + 1 < static_cast<int>(centroids.size())) {
-                const float next_dist = std::abs(value - centroids[best + 1]);
-                if (next_dist < best_dist) {
-                    best = best + 1;
-                }
-            }
-            return best;
+            return tensor.gpu().contiguous();
         }
 
         class SogArchive final : public SogSink {
@@ -1463,137 +1463,34 @@ namespace lfs::io {
             }
         };
 
-        struct Cluster1dResult {
-            std::vector<float> centroids;
-            std::vector<uint8_t> labels;
-        };
-
-        Cluster1dResult cluster1d(const float* data, int num_rows, int num_columns, int iterations, bool pooled = false) {
-            constexpr int K = 256;
-            const size_t total_points = static_cast<size_t>(num_rows) * static_cast<size_t>(num_columns);
-
-            float min_val = std::numeric_limits<float>::infinity();
-            float max_val = -std::numeric_limits<float>::infinity();
-            for (int col = 0; col < num_columns; ++col) {
-                for (int row = 0; row < num_rows; ++row) {
-                    const float value = data[row * num_columns + col];
-                    min_val = std::min(min_val, value);
-                    max_val = std::max(max_val, value);
-                }
-            }
-
-            std::vector<float> centroid_vals(K);
-            const float step = (K > 1) ? (max_val - min_val) / (K - 1) : 0.0f;
-            for (int i = 0; i < K; ++i) {
-                centroid_vals[i] = min_val + i * step;
-            }
-
-            Cluster1dResult result;
-            result.labels.assign(total_points, 0);
-
-            struct LocalAccum {
-                std::array<double, K> sums{};
-                std::array<int64_t, K> counts{};
-            };
-
-            const unsigned int hw_threads = std::max(1u, std::thread::hardware_concurrency());
-            const size_t worker_count = std::max<size_t>(
-                1, std::min<size_t>(hw_threads, (total_points + 65535) / 65536));
-
-            bool use_hints = false;
-            auto accumulate_range = [&](size_t begin, size_t end, const bool write_labels, LocalAccum& accum) {
-                for (size_t linear = begin; linear < end; ++linear) {
-                    const int col = static_cast<int>(linear / static_cast<size_t>(num_rows));
-                    const int row = static_cast<int>(linear - static_cast<size_t>(col) * static_cast<size_t>(num_rows));
-                    const float value = data[row * num_columns + col];
-                    const int label = nearest_centroid_1d(centroid_vals, value,
-                                                          use_hints ? result.labels[linear] : -1);
-
-                    if (write_labels || pooled) {
-                        result.labels[linear] = static_cast<uint8_t>(label);
-                    }
-                    accum.sums[label] += static_cast<double>(value);
-                    accum.counts[label]++;
-                }
-            };
-
-            const int effective_iterations = std::max(0, iterations);
-            for (int iter = 0; iter < effective_iterations; ++iter) {
-                std::vector<LocalAccum> accumulators(worker_count);
-                const bool write_labels = (iter == effective_iterations - 1);
-
-                if (worker_count == 1) {
-                    accumulate_range(0, total_points, write_labels, accumulators[0]);
-                } else if (pooled) {
-                    // Preserve the reference reduction ranges and order, while
-                    // sharing existing workers across simultaneous SSOG units.
-                    tbb::parallel_for(size_t{0}, worker_count, [&](size_t worker) {
-                        accumulate_range(total_points * worker / worker_count,
-                                         total_points * (worker + 1) / worker_count,
-                                         write_labels, accumulators[worker]);
-                    });
-                } else {
-                    std::vector<std::thread> workers;
-                    workers.reserve(worker_count);
-                    for (size_t worker = 0; worker < worker_count; ++worker) {
-                        const size_t begin = total_points * worker / worker_count;
-                        const size_t end = total_points * (worker + 1) / worker_count;
-                        workers.emplace_back(accumulate_range, begin, end, write_labels, std::ref(accumulators[worker]));
-                    }
-                    for (auto& worker : workers) {
-                        worker.join();
-                    }
-                }
-
-                for (int c = 0; c < K; ++c) {
-                    double sum = 0.0;
-                    int64_t count = 0;
-                    for (const auto& accum : accumulators) {
-                        sum += accum.sums[c];
-                        count += accum.counts[c];
-                    }
-                    if (count > 0) {
-                        centroid_vals[c] = static_cast<float>(sum / static_cast<double>(count));
-                    }
-                }
-                use_hints = pooled && std::is_sorted(centroid_vals.begin(), centroid_vals.end()) &&
-                            std::all_of(centroid_vals.begin(), centroid_vals.end(), [](float v) { return std::isfinite(v); });
-            }
-
-            std::vector<int> order(K);
-            for (int i = 0; i < K; ++i)
-                order[i] = i;
-            std::sort(order.begin(), order.end(), [&](int a, int b) {
-                return centroid_vals[a] < centroid_vals[b];
-            });
-
-            std::vector<float> ordered_centroids(K);
-            for (int i = 0; i < K; ++i) {
-                ordered_centroids[i] = centroid_vals[order[i]];
-            }
-
-            std::vector<int> inv_order(K);
-            for (int i = 0; i < K; ++i) {
-                inv_order[order[i]] = i;
-            }
-
-            result.centroids = ordered_centroids;
-            for (uint8_t& label : result.labels) {
-                label = static_cast<uint8_t>(inv_order[label]);
-            }
-
-            return result;
-        }
-
     } // anonymous namespace
 
     Result<void> encode_sog(const SplatData& splat_data, const SogEncodeOptions& options_in, SogSink& archive) {
+        if (splat_data.has_deleted_mask()) {
+            const auto visible_count = static_cast<size_t>(splat_data.visible_count());
+            if (visible_count == 0) {
+                return make_error(ErrorCode::EMPTY_DATASET, "No visible splats to write", options_in.output_path);
+            }
+            if (visible_count < splat_data.size()) {
+                auto compacted = splat_data.clone();
+                compacted.apply_deleted();
+                if (compacted.size() != visible_count) {
+                    return make_error(ErrorCode::INVALID_DATASET,
+                                      "Failed to prepare visible splats for SOG export",
+                                      options_in.output_path);
+                }
+                return encode_sog(compacted, options_in, archive);
+            }
+        }
+
         SogEncodeOptions options = options_in;
         if (!options.provenance) {
             options.provenance = core::make_minimal_provenance_stamp();
         }
 
         try {
+            const lfs::core::GpuBackendScope backend_scope(
+                lfs::core::gpu_backend_of(splat_data.means_raw()).value_or(lfs::core::default_gpu_backend()));
             const auto export_started = std::chrono::steady_clock::now();
             const bool debug_logging_enabled =
                 lfs::core::Logger::get().is_enabled(lfs::core::LogLevel::Debug);
@@ -1690,7 +1587,7 @@ namespace lfs::io {
                 palette_size = std::clamp(palette_size, 1, num_rows_int);
 
                 // k-means expects 1D float32 swizzled layout. Resident shN may be:
-                //  - Float32 swizzled (training default / legacy)
+                //  - Float32 swizzled
                 //  - Float16 pad-dropped q16 — must dequant+reswizzle first
                 //  - any other dtype/layout is rejected
                 const auto& shN_raw = splat_data.shN_raw();
@@ -1709,33 +1606,14 @@ namespace lfs::io {
                     const size_t n = static_cast<size_t>(num_rows);
                     const uint32_t k = static_cast<uint32_t>(splat_data.max_sh_coeffs_rest());
                     const size_t float_count = lfs::core::sh_swizzled_float_count(n, k);
+                    const lfs::core::GpuBackendScope scope(*lfs::core::gpu_backend_of(shN_raw));
                     shN_float_swizzled = Tensor::empty(
-                        {float_count}, Device::CUDA, lfs::core::DataType::Float32);
-
-                    const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
-                    if (shN_float_swizzled.stream() != stream)
-                        shN_float_swizzled.set_stream(stream);
-                    const auto q16 = lfs::core::resolve_q16_bind_ptrs(splat_data);
-                    if (q16.codes == nullptr || q16.bounds == nullptr) {
-                        return make_error(ErrorCode::INVALID_DATASET,
-                                          "Invalid q16 SH codes or bounds for SOG export",
-                                          options.output_path);
-                    }
-                    lfs::core::sh_value_quant::decode_shN_u16_to_float4(
-                        reinterpret_cast<const std::uint16_t*>(q16.codes),
-                        q16.bounds,
-                        shN_float_swizzled.ptr<float>(),
-                        n,
-                        k,
-                        stream);
-                    const cudaError_t sync_status = cudaStreamSynchronize(stream);
-                    if (sync_status != cudaSuccess) {
-                        return make_error(
-                            ErrorCode::ENCODING_FAILED,
-                            std::format("Failed to decode quantized SH tensor for SOG export: {}",
-                                        cudaGetErrorString(sync_status)),
-                            options.output_path);
-                    }
+                        {float_count}, Device::GPU, lfs::core::DataType::Float32);
+                    lfs::core::sh_codec(splat_data.shN_raw(), shN_float_swizzled,
+                                        {.source_format = lfs::core::ShFormat::Q16, .source_rows = n, .destination_rows = n, .count = n, .source_rest = k, .destination_rest = k}, nullptr, &splat_data.shN_value_bounds());
+                    lfs::core::TensorCompletion completion;
+                    completion.include(shN_float_swizzled);
+                    completion.wait();
                 } else {
                     // Fallback for IEEE-f16 without q16 bounds and any other layout:
                     // materialise canonical [N,K,3], then re-swizzle to float1D.
@@ -1746,23 +1624,34 @@ namespace lfs::io {
                                           "Failed to materialise float SH for SOG export",
                                           options.output_path);
                     }
-                    if (shN_canon.device() != Device::CUDA) {
-                        shN_canon = shN_canon.cuda();
+                    if (shN_canon.device() != Device::GPU) {
+                        shN_canon = shN_canon.gpu();
                     }
                     const size_t n = static_cast<size_t>(num_rows);
                     const uint32_t k = static_cast<uint32_t>(shN_canon.size(1));
                     const size_t float_count = lfs::core::sh_swizzled_float_count(n, k);
-                    shN_float_swizzled = Tensor::zeros({float_count}, Device::CUDA, lfs::core::DataType::Float32);
-                    lfs::core::reorder_sh_to_swizzled(
-                        shN_canon.ptr<float>(),
-                        shN_float_swizzled.ptr<float>(),
-                        n, k, k);
+                    const lfs::core::GpuBackendScope scope(*lfs::core::gpu_backend_of(shN_canon));
+                    shN_float_swizzled = Tensor::empty({float_count}, Device::GPU, lfs::core::DataType::Float32);
+                    lfs::core::sh_codec(shN_canon, shN_float_swizzled,
+                                        {.source_format = lfs::core::ShFormat::Canonical,
+                                         .destination_format = lfs::core::ShFormat::Float32,
+                                         .source_rows = n,
+                                         .destination_rows = n,
+                                         .count = n,
+                                         .source_rest = k,
+                                         .destination_rest = k});
                 }
+            }
 
+            const auto start_sh_kmeans = [&]() {
+                if (sh_degree == 0)
+                    return;
                 sh_kmeans_future = std::async(
                     std::launch::async,
                     [shN_float_swizzled, num_rows, sh_coeffs, palette_size,
                      iterations = options.kmeans_iterations, fast = options.fast_webp, export_started]() mutable {
+                        const lfs::core::GpuBackendScope backend_scope(
+                            *lfs::core::gpu_backend_of(shN_float_swizzled));
                         const auto started = std::chrono::steady_clock::now();
                         auto [centroids, labels] = lfs::io::kmeans_sh_swizzled(
                             shN_float_swizzled, static_cast<int>(num_rows), sh_coeffs,
@@ -1781,11 +1670,13 @@ namespace lfs::io {
                             std::chrono::duration<double, std::milli>(finished - export_started).count()};
                     });
                 t_kmeans_launch_ms = milliseconds(export_started, std::chrono::steady_clock::now());
-            }
+            };
+            if (options.presorted)
+                start_sh_kmeans();
 
             const auto morton_started = std::chrono::steady_clock::now();
             auto means_cuda = as_cuda_contiguous(splat_data.means_raw());
-            auto sort_indices_tensor = options.presorted ? Tensor{} : morton_sort_indices_for_positions(means_cuda);
+            auto sort_indices_tensor = options.presorted ? Tensor{} : core::morton_sort_indices(means_cuda);
             if (!options.presorted && !sort_indices_tensor.is_valid()) {
                 join_sh_kmeans_if_started();
                 return make_error(ErrorCode::ENCODING_FAILED,
@@ -1924,6 +1815,9 @@ namespace lfs::io {
             const auto* sh0_ptr = sh0.ptr<float>();
             auto opacity = splat_data.opacity_raw().to_pageable_host();
             const auto* opacity_ptr = opacity.ptr<float>();
+            // Single-file host inputs precede palette submissions on the compute queue.
+            if (!options.presorted)
+                start_sh_kmeans();
 
             if (!report_progress(0.10f, "Positions")) {
                 join_sh_kmeans_if_started();
@@ -2126,7 +2020,7 @@ namespace lfs::io {
             }
 
             const auto cluster_scales_started = std::chrono::steady_clock::now();
-            auto scale_result = cluster1d(scales_ptr, static_cast<int>(num_rows), 3, options.kmeans_iterations, options.fast_webp);
+            auto scale_result = lfs::core::cluster_scalar(scales_ptr, static_cast<int>(num_rows), 3, options.kmeans_iterations, options.fast_webp);
             cluster_scales_ms = milliseconds(cluster_scales_started, std::chrono::steady_clock::now());
             std::vector<uint8_t> scales_data(width * height * CHANNELS, 0);
             const auto scales_pack_started = std::chrono::steady_clock::now();
@@ -2152,7 +2046,7 @@ namespace lfs::io {
             }
 
             const auto cluster_sh0_started = std::chrono::steady_clock::now();
-            auto color_result = cluster1d(sh0_ptr, static_cast<int>(num_rows), 3, options.kmeans_iterations, options.fast_webp);
+            auto color_result = lfs::core::cluster_scalar(sh0_ptr, static_cast<int>(num_rows), 3, options.kmeans_iterations, options.fast_webp);
             cluster_sh0_ms = milliseconds(cluster_sh0_started, std::chrono::steady_clock::now());
 
             std::vector<uint8_t> sh0_data(width * height * CHANNELS, 0);
@@ -2229,7 +2123,7 @@ namespace lfs::io {
                 }
 
                 const auto codebook_started = std::chrono::steady_clock::now();
-                auto codebook_result = cluster1d(sh_centroids_grouped.data(), actual_palette_size, sh_dims, options.kmeans_iterations, options.fast_webp);
+                auto codebook_result = lfs::core::cluster_scalar(sh_centroids_grouped.data(), actual_palette_size, sh_dims, options.kmeans_iterations, options.fast_webp);
                 kmeans_sh_ms = sh_kmeans_data.milliseconds +
                                milliseconds(codebook_started, std::chrono::steady_clock::now());
 
@@ -2410,7 +2304,6 @@ namespace lfs::io {
                               options.output_path);
         }
     }
-
     std::unique_ptr<SogSink> make_sog_archive(const std::filesystem::path& path) {
         return std::make_unique<SogArchive>(path);
     }

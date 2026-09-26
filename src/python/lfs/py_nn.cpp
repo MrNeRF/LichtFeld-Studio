@@ -4,13 +4,14 @@
 
 #include "py_nn.hpp"
 
+#include "core/nn/models/romav1.hpp"
 #include "core/nn/models/sam2.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 #include "preprocessing/preprocess.hpp"
 #include "py_error.hpp"
 #include "py_tensor.hpp"
 
-#include <cuda_runtime.h>
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/optional.h>
@@ -37,6 +38,8 @@ namespace lfs::python {
         using lfs::core::Device;
         using lfs::core::Tensor;
         using lfs::core::TensorShape;
+        using lfs::core::nn::models::RomaV1;
+        using lfs::core::nn::models::RomaV1Image;
         using lfs::core::nn::models::Sam2;
         using lfs::core::nn::models::Sam2PointPrompt;
 
@@ -71,15 +74,9 @@ namespace lfs::python {
             return text;
         }
 
-        void require_cuda() {
-            int devices = 0;
-            const cudaError_t status = cudaGetDeviceCount(&devices);
-            if (status != cudaSuccess) {
-                throw std::runtime_error(
-                    std::format("SAM2 requires CUDA ({})", cudaGetErrorString(status)));
-            }
-            if (devices <= 0) {
-                throw std::runtime_error("SAM2 requires CUDA; no CUDA device is available");
+        void require_gpu() {
+            if (!lfs::core::gpu_backend_available(lfs::core::default_gpu_backend())) {
+                throw std::runtime_error("this model requires an available GPU backend");
             }
         }
 
@@ -110,6 +107,17 @@ namespace lfs::python {
             const size_t bytes = h * w * 3 * (is_u8 ? size_t{1} : sizeof(float));
             std::memcpy(out.data_ptr(), arr.data(), bytes);
             return out;
+        }
+
+        // Images reach the matcher as lichtfeld tensors, which is what a dataset
+        // camera hands out. A caller holding an array from somewhere else wraps
+        // it with Tensor.from_numpy first.
+        Tensor matcher_image(const PyTensor& image) {
+            const Tensor& t = image.tensor();
+            if (!t.is_valid()) {
+                throw std::invalid_argument("image tensor is empty");
+            }
+            return t.device() == Device::GPU ? t : t.gpu();
         }
 
         float as_number(nb::handle value, std::string_view what) {
@@ -214,7 +222,7 @@ namespace lfs::python {
                 {
                     nb::gil_scoped_release release;
                     ensure_loaded();
-                    Tensor gpu = hwc.cuda();
+                    Tensor gpu = hwc.gpu();
                     if (gpu.dtype() == DataType::UInt8) {
                         gpu = gpu.to(DataType::Float32).mul(1.0f / 255.0f);
                     }
@@ -260,19 +268,114 @@ namespace lfs::python {
                 if (model_) {
                     return;
                 }
-                require_cuda();
+                require_gpu();
                 std::filesystem::path path;
                 if (weights_) {
                     path = *weights_;
                 } else {
                     path = lfs::preprocessing::ensure_sam2_weights();
                 }
-                auto loaded = unwrap(Sam2::load(path, Device::CUDA));
+                auto loaded = unwrap(Sam2::load(path, Device::GPU));
                 model_ = std::make_unique<Sam2>(std::move(loaded));
             }
 
             std::optional<std::filesystem::path> weights_;
             std::unique_ptr<Sam2> model_;
+        };
+
+        // --------------------------------------------------- RoMa v1 matcher
+
+        // The cached weight file, if it is already there. Callers use this to
+        // tell whether the next matcher will have to download first.
+        std::optional<std::string> romav1_weights_path() {
+            const std::filesystem::path path = lfs::preprocessing::romav1_weights_cache_path();
+            if (!std::filesystem::is_regular_file(path)) {
+                return std::nullopt;
+            }
+            return path.string();
+        }
+
+        class PyRomaV1Image {
+        public:
+            explicit PyRomaV1Image(std::shared_ptr<RomaV1Image> image) : image_(std::move(image)) {}
+            [[nodiscard]] const RomaV1Image& get() const { return *image_; }
+
+        private:
+            std::shared_ptr<RomaV1Image> image_;
+        };
+
+        class PyRomaV1 {
+        public:
+            PyRomaV1(const PyRomaV1&) = delete;
+            PyRomaV1& operator=(const PyRomaV1&) = delete;
+
+            explicit PyRomaV1(std::optional<std::filesystem::path> weights = std::nullopt,
+                              int resolution = RomaV1::default_resolution())
+                : weights_(std::move(weights)), resolution_(resolution) {}
+
+            PyRomaV1Image prepare(const PyTensor& image) {
+                Tensor gpu = matcher_image(image);
+                std::shared_ptr<RomaV1Image> prepared;
+                {
+                    nb::gil_scoped_release release;
+                    ensure_loaded();
+                    prepared = unwrap(model_->prepare(gpu));
+                }
+                return PyRomaV1Image(std::move(prepared));
+            }
+
+            // The [H, W, 4] warp the densification pipeline consumes, kept on
+            // the GPU as lichtfeld tensors.
+            nb::tuple match_grid(const PyRomaV1Image& a, const PyRomaV1Image& b) {
+                Tensor warp;
+                Tensor overlap;
+                {
+                    nb::gil_scoped_release release;
+                    ensure_loaded();
+                    auto out = unwrap(model_->match_with_grid(a.get(), b.get()));
+                    warp = std::move(out.warp);
+                    overlap = std::move(out.overlap);
+                }
+                return nb::make_tuple(PyTensor(std::move(warp)), PyTensor(std::move(overlap)));
+            }
+
+            nb::tuple match_gpu(const PyRomaV1Image& a, const PyRomaV1Image& b) {
+                Tensor warp;
+                Tensor overlap;
+                {
+                    nb::gil_scoped_release release;
+                    ensure_loaded();
+                    auto out = unwrap(model_->match(a.get(), b.get()));
+                    warp = std::move(out.warp);
+                    overlap = std::move(out.overlap);
+                }
+                return nb::make_tuple(PyTensor(std::move(warp)), PyTensor(std::move(overlap)));
+            }
+
+            // Drop the weights and their device memory. The next call reloads.
+            void close() {
+                nb::gil_scoped_release release;
+                model_.reset();
+            }
+
+            [[nodiscard]] int resolution() const { return resolution_; }
+            [[nodiscard]] bool is_loaded() const { return model_ != nullptr; }
+
+        private:
+            void ensure_loaded() {
+                if (model_) {
+                    return;
+                }
+                require_gpu();
+                const std::filesystem::path path =
+                    weights_ ? *weights_ : lfs::preprocessing::ensure_romav1_weights();
+                auto loaded = unwrap(RomaV1::load(path, Device::GPU, std::nullopt, resolution_));
+                model_ = std::make_unique<RomaV1>(std::move(loaded));
+            }
+
+            std::optional<std::filesystem::path> weights_;
+            int resolution_ = RomaV1::default_resolution();
+            std::unique_ptr<RomaV1> model_;
         };
 
     } // namespace
@@ -292,6 +395,37 @@ namespace lfs::python {
                  nb::arg("multimask") = true,
                  "Predict masks from point and/or box prompts. Returns (masks [N,H,W] float32 logits, "
                  "scores [N] float32).");
+
+        nb::class_<PyRomaV1Image>(m, "RomaV1Image",
+                                  "An image prepared for RoMa v1 matching.");
+
+        nb::class_<PyRomaV1>(m, "RomaV1",
+                             "RoMa v1 dense feature matcher (MIT, on an Apache-2.0 DINOv2 "
+                             "backbone)")
+            .def(nb::init<std::optional<std::filesystem::path>, int>(),
+                 nb::arg("weights") = nb::none(),
+                 nb::arg("resolution") = RomaV1::default_resolution(),
+                 "Create a RoMa v1 matcher. weights=None resolves the default cached .lfw via "
+                 "ensure_romav1_weights (downloads on first use). resolution must be one the "
+                 "weight file baked a position embedding for.")
+            .def("prepare", &PyRomaV1::prepare, nb::arg("image"),
+                 "Prepare one image for matching. A lichtfeld Tensor: [1,3,H,W] or [3,H,W] "
+                 "float, or [H,W,3] uint8/float. A camera's load_image() already has that shape.")
+            .def("match_gpu", &PyRomaV1::match_gpu, nb::arg("a"), nb::arg("b"),
+                 "Match two prepared images, returning GPU lichtfeld tensors.")
+            .def("match_grid", &PyRomaV1::match_grid, nb::arg("a"), nb::arg("b"),
+                 "Match two prepared images and prepend the reference pixel grid. Returns GPU "
+                 "lichtfeld tensors (warp [R,R,4] of (x_a, y_a, x_b, y_b), certainty [R,R]).")
+            .def("close", &PyRomaV1::close,
+                 "Release the weights and their device memory. The next call reloads them.")
+            .def_prop_ro("resolution", &PyRomaV1::resolution,
+                         "Working resolution of the matcher (square, in pixels).")
+            .def_prop_ro("is_loaded", &PyRomaV1::is_loaded,
+                         "Whether the weights are currently resident on the device.");
+
+        m.def("romav1_weights_path", &romav1_weights_path,
+              "Path to the cached RoMa v1 weight file, or None if it has not been downloaded "
+              "yet. Building a matcher downloads it.");
     }
 
 } // namespace lfs::python

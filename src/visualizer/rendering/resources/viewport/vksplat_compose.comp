@@ -1,4 +1,10 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#define LFS_COLOR_INLINE
+#define LFS_COLOR_VEC3 vec3
+#define LFS_COLOR_UINT uint
+#define LFS_COLOR_MIX mix
+#include "../../../../rendering/rasterizer/vulkan/shader/src/slang/display_color.inc"
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
@@ -12,6 +18,10 @@ layout(push_constant) uniform PushConstants {
     float depth_max;
     uint depth_visualization_mode;
     float pad2;
+    float color_exposure;
+    uint color_tonemapping;
+    uint splat_render_profile;
+    uint color_padding;
 } pc;
 
 layout(set = 0, binding = 0) readonly buffer PixelStateBuffer {
@@ -110,11 +120,17 @@ void main() {
             imageStore(out_image, ivec2(gid), vec4(0.0));
             return;
         }
-        const vec3 straight_rgb = alpha > 1e-6 ? state.rgb / alpha : vec3(0.0);
+        vec3 straight_rgb = alpha > 1e-6 ? state.rgb / alpha : vec3(0.0);
+        if (pc.splat_render_profile == 0u) {
+            straight_rgb = lfsDisplayTone(max(straight_rgb,vec3(0.0)),pc.color_tonemapping,pc.color_exposure);
+        }
         imageStore(out_image, ivec2(gid), vec4(clamp(straight_rgb, vec3(0.0), vec3(1.0)), alpha));
         return;
     }
 
-    const vec3 rgb = clamp(state.rgb + transmittance * pc.background.rgb, vec3(0.0), vec3(1.0));
-    imageStore(out_image, ivec2(gid), vec4(rgb, 1.0));
+    vec3 rgb = max(state.rgb + transmittance * pc.background.rgb, vec3(0.0));
+    if (pc.splat_render_profile == 0u) {
+        rgb = lfsDisplayTone(rgb,pc.color_tonemapping,pc.color_exposure);
+    }
+    imageStore(out_image, ivec2(gid), vec4(clamp(rgb,vec3(0.0),vec3(1.0)),1.0));
 }

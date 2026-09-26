@@ -5,10 +5,18 @@
 <body id="overlay-body">
     <div id="left-frame-border" class="viewport-frame-border"></div>
     <div id="left-dock-resize-indicator" class="left-dock-resize-indicator hidden"></div>
+    <div id="viewport-content">
     <div id="split-divider-overlay" class="viewport-split-divider hidden"></div>
+    <div id="empty-state-hint" class="empty-state-hint" data-if="show_empty_state">
+        <img class="empty-state-icon" src="../icon/archive.png" />
+        <div class="empty-state-title">{{empty_state_title}}</div>
+        <div class="empty-state-subtitle">{{empty_state_subtitle}}</div>
+        <div class="empty-state-import">{{empty_state_import_hint}}</div>
+    </div>
     <div id="project-drop-overlay" class="project-drop-overlay hidden">
         <div class="project-drop-card">
-            <div class="project-drop-title">@tr:asset_manager.drag.open_project</div>
+            <div id="project-drop-title" class="project-drop-title">@tr:projects.drag.open_project</div>
+            <div id="gallery-drop-title" class="project-drop-title hidden">@tr:projects.gallery.action.pull_open</div>
             <div id="project-drop-label" class="project-drop-label"></div>
         </div>
     </div>
@@ -27,7 +35,6 @@
                          data-class-selected="button.selected"
                          data-attr-id="button.button_id"
                          data-attr-data-action="button.action_id"
-                         data-attr-data-shortcut="button.shortcut_text"
                          data-attr-title="button.tooltip_text"
                          data-attrif-disabled="!button.enabled"
                          data-class-disabled="!button.enabled"
@@ -39,7 +46,6 @@
                          data-class-selected="button.selected"
                          data-attr-id="button.button_id"
                          data-attr-data-action="button.action_id"
-                         data-attr-data-shortcut="button.shortcut_text"
                          data-attr-title="button.tooltip_text"
                          data-attrif-disabled="!button.enabled"
                          data-class-disabled="!button.enabled"
@@ -51,7 +57,6 @@
                          data-class-selected="button.selected"
                          data-attr-id="button.button_id"
                          data-attr-data-action="button.action_id"
-                         data-attr-data-shortcut="button.shortcut_text"
                          data-attr-title="button.tooltip_text"
                          data-attrif-disabled="!button.enabled"
                          data-class-disabled="!button.enabled"
@@ -63,7 +68,6 @@
                          data-class-selected="button.selected"
                          data-attr-id="button.button_id"
                          data-attr-data-action="button.action_id"
-                         data-attr-data-shortcut="button.shortcut_text"
                          data-attr-title="button.tooltip_text"
                          data-attrif-disabled="!button.enabled"
                          data-class-disabled="!button.enabled"
@@ -75,7 +79,6 @@
                          data-attr-id="button.button_id"
                          data-class-selected="button.selected"
                          data-attr-data-action="button.action_id"
-                         data-attr-data-shortcut="button.shortcut_text"
                          data-attr-title="button.tooltip_text"
                          data-attrif-disabled="!button.enabled"
                          data-class-disabled="!button.enabled"
@@ -111,6 +114,7 @@
             </div>
         </div>
 
+        <!-- Primary gizmo buttons address Left regardless of focus. -->
         <div id="primary-viewport-gizmo-controls" class="viewport-gizmo-controls">
             <div class="viewport-gizmo-control-row">
                 <div class="icon-btn"
@@ -121,13 +125,13 @@
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-class-disabled="!button.enabled"
-                     data-event-click="toolbar_action(button.action, button.value)">
+                     data-event-click="toolbar_action(button.action, button.value, 'left')">
                     <img data-attr-src="button.icon_src" />
                 </div>
             </div>
         </div>
 
-        <div class="toolbar-hcenter toolbar-layer-primary">
+        <div class="toolbar-hcenter toolbar-layer-primary" data-class-align-active="show_align_toolbar">
             <div id="primary-transform-toolbar" class="toolbar-container hidden"
                  data-class-hidden="!show_transform_toolbar">
                 <div class="icon-btn"
@@ -135,7 +139,6 @@
                      data-attr-id="button.button_id"
                      data-class-selected="button.selected"
                      data-attr-data-action="button.action_id"
-                     data-attr-data-shortcut="button.shortcut_text"
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-class-disabled="!button.enabled"
@@ -150,12 +153,27 @@
                      data-attr-id="button.button_id"
                      data-class-selected="button.selected"
                      data-attr-data-action="button.action_id"
-                     data-attr-data-shortcut="button.shortcut_text"
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-class-disabled="!button.enabled"
                      data-event-click="toolbar_action(button.action, button.value)">
                     <img data-attr-src="button.icon_src" />
+                </div>
+            </div>
+            <div id="primary-align-toolbar" class="toolbar-container align-toolbar hidden"
+                 data-class-hidden="!show_align_toolbar">
+                <div class="icon-btn"
+                     data-for="button : align_action_buttons"
+                     data-attr-id="button.button_id"
+                     data-class-selected="button.selected"
+                     data-class-has-label="button.label != ''"
+                     data-attr-data-action="button.action_id"
+                     data-attr-title="button.tooltip_text"
+                     data-attrif-disabled="!button.enabled"
+                     data-class-disabled="!button.enabled"
+                     data-event-click="toolbar_action(button.action, button.value)">
+                    <img data-attr-src="button.icon_src" />
+                    <span class="align-button-label" data-if="button.label != ''">{{button.label}}</span>
                 </div>
             </div>
             <div id="primary-crop-toolbar" class="toolbar-container hidden"
@@ -165,7 +183,6 @@
                      data-attr-id="button.button_id"
                      data-class-selected="button.selected"
                      data-attr-data-action="button.action_id"
-                     data-attr-data-shortcut="button.shortcut_text"
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-class-disabled="!button.enabled"
@@ -177,7 +194,6 @@
                      data-attr-id="button.button_id"
                      data-class-selected="button.selected"
                      data-attr-data-action="button.action_id"
-                     data-attr-data-shortcut="button.shortcut_text"
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-class-disabled="!button.enabled"
@@ -192,7 +208,6 @@
                      data-attr-id="button.button_id"
                      data-class-selected="button.selected"
                      data-attr-data-action="button.action_id"
-                     data-attr-data-shortcut="button.shortcut_text"
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-class-disabled="!button.enabled"
@@ -207,7 +222,6 @@
                      data-attr-id="button.button_id"
                      data-class-selected="button.selected"
                      data-attr-data-action="button.action_id"
-                     data-attr-data-shortcut="button.shortcut_text"
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-class-disabled="!button.enabled"
@@ -221,7 +235,7 @@
                      data-class-hidden="!show_crop_edit_controls"
                      data-attr-id="button.button_id"
                      data-attr-data-action="button.action_id"
-                     data-attr-data-shortcut="button.shortcut_text"
+                     data-keymap-mode="crop_box"
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-class-disabled="!button.enabled"
@@ -282,7 +296,6 @@
                          data-attr-id="button.button_id"
                          data-class-selected="button.selected"
                          data-attr-data-action="button.action_id"
-                         data-attr-data-shortcut="button.shortcut_text"
                          data-attr-title="button.tooltip_text"
                          data-attrif-disabled="!button.enabled"
                          data-class-disabled="!button.enabled"
@@ -294,7 +307,6 @@
                          data-attr-id="button.button_id"
                          data-class-selected="button.selected"
                          data-attr-data-action="button.action_id"
-                         data-attr-data-shortcut="button.shortcut_text"
                          data-attr-title="button.tooltip_text"
                          data-attrif-disabled="!button.enabled"
                          data-class-disabled="!button.enabled"
@@ -306,7 +318,6 @@
                          data-attr-id="button.button_id"
                          data-class-selected="button.selected"
                          data-attr-data-action="button.action_id"
-                         data-attr-data-shortcut="button.shortcut_text"
                          data-attr-title="button.tooltip_text"
                          data-attrif-disabled="!button.enabled"
                          data-class-disabled="!button.enabled"
@@ -318,7 +329,6 @@
                          data-attr-id="button.button_id"
                          data-class-selected="button.selected"
                          data-attr-data-action="button.action_id"
-                         data-attr-data-shortcut="button.shortcut_text"
                          data-attr-title="button.tooltip_text"
                          data-attrif-disabled="!button.enabled"
                          data-class-disabled="!button.enabled"
@@ -330,7 +340,6 @@
                          data-attr-id="button.button_id"
                          data-class-selected="button.selected"
                          data-attr-data-action="button.action_id"
-                         data-attr-data-shortcut="button.shortcut_text"
                          data-attr-title="button.tooltip_text"
                          data-attrif-disabled="!button.enabled"
                          data-class-disabled="!button.enabled"
@@ -366,6 +375,8 @@
             </div>
         </div>
 
+        <!-- Secondary gizmo buttons address Right; outside independent-dual,
+             Right resolves to the shared camera. -->
         <div id="secondary-viewport-gizmo-controls" class="viewport-gizmo-controls">
             <div class="viewport-gizmo-control-row">
                 <div class="icon-btn"
@@ -376,13 +387,13 @@
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-class-disabled="!button.enabled"
-                     data-event-click="toolbar_action(button.action, button.value)">
+                     data-event-click="toolbar_action(button.action, button.value, 'right')">
                     <img data-attr-src="button.icon_src" />
                 </div>
             </div>
         </div>
 
-        <div class="toolbar-hcenter toolbar-layer-primary">
+        <div class="toolbar-hcenter toolbar-layer-primary" data-class-align-active="show_align_toolbar">
             <div id="secondary-transform-toolbar" class="toolbar-container hidden"
                  data-class-hidden="!show_transform_toolbar">
                 <div class="icon-btn"
@@ -390,7 +401,6 @@
                      data-attr-id="button.button_id"
                      data-class-selected="button.selected"
                      data-attr-data-action="button.action_id"
-                     data-attr-data-shortcut="button.shortcut_text"
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-class-disabled="!button.enabled"
@@ -405,12 +415,27 @@
                      data-attr-id="button.button_id"
                      data-class-selected="button.selected"
                      data-attr-data-action="button.action_id"
-                     data-attr-data-shortcut="button.shortcut_text"
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-class-disabled="!button.enabled"
                      data-event-click="toolbar_action(button.action, button.value)">
                     <img data-attr-src="button.icon_src" />
+                </div>
+            </div>
+            <div id="secondary-align-toolbar" class="toolbar-container align-toolbar hidden"
+                 data-class-hidden="!show_align_toolbar">
+                <div class="icon-btn"
+                     data-for="button : align_action_buttons"
+                     data-attr-id="button.button_id"
+                     data-class-selected="button.selected"
+                     data-class-has-label="button.label != ''"
+                     data-attr-data-action="button.action_id"
+                     data-attr-title="button.tooltip_text"
+                     data-attrif-disabled="!button.enabled"
+                     data-class-disabled="!button.enabled"
+                     data-event-click="toolbar_action(button.action, button.value)">
+                    <img data-attr-src="button.icon_src" />
+                    <span class="align-button-label" data-if="button.label != ''">{{button.label}}</span>
                 </div>
             </div>
             <div id="secondary-crop-toolbar" class="toolbar-container hidden"
@@ -420,7 +445,6 @@
                      data-attr-id="button.button_id"
                      data-class-selected="button.selected"
                      data-attr-data-action="button.action_id"
-                     data-attr-data-shortcut="button.shortcut_text"
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-class-disabled="!button.enabled"
@@ -432,7 +456,6 @@
                      data-attr-id="button.button_id"
                      data-class-selected="button.selected"
                      data-attr-data-action="button.action_id"
-                     data-attr-data-shortcut="button.shortcut_text"
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-class-disabled="!button.enabled"
@@ -447,7 +470,6 @@
                      data-attr-id="button.button_id"
                      data-class-selected="button.selected"
                      data-attr-data-action="button.action_id"
-                     data-attr-data-shortcut="button.shortcut_text"
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-class-disabled="!button.enabled"
@@ -462,7 +484,6 @@
                      data-attr-id="button.button_id"
                      data-class-selected="button.selected"
                      data-attr-data-action="button.action_id"
-                     data-attr-data-shortcut="button.shortcut_text"
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-class-disabled="!button.enabled"
@@ -476,7 +497,7 @@
                      data-class-hidden="!show_crop_edit_controls"
                      data-attr-id="button.button_id"
                      data-attr-data-action="button.action_id"
-                     data-attr-data-shortcut="button.shortcut_text"
+                     data-keymap-mode="crop_box"
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-class-disabled="!button.enabled"
@@ -594,7 +615,6 @@
                             data-attr-id="button.button_id"
                             data-class-selected="button.selected"
                             data-attr-data-action="button.action_id"
-                            data-attr-data-shortcut="button.shortcut_text"
                             data-attr-title="button.tooltip_text"
                             data-attrif-disabled="!button.enabled"
                             data-class-disabled="!button.enabled"
@@ -612,7 +632,6 @@
                             data-attr-id="button.button_id"
                             data-class-selected="button.selected"
                             data-attr-data-action="button.action_id"
-                            data-attr-data-shortcut="button.shortcut_text"
                             data-attr-title="button.tooltip_text"
                             data-attrif-disabled="!button.enabled"
                             data-class-disabled="!button.enabled"
@@ -625,6 +644,7 @@
                     <button class="icon-btn viewport-transform-action"
                             data-tooltip="tooltip.selection_depth_mode"
                             data-action="toggle_selection_depth_filter"
+                            data-keymap-mode="selection"
                             data-attr-title="selection_depth_toggle_label"
                             data-class-selected="selection_depth_mode_active"
                             data-attrif-disabled="!selection_has_scene"
@@ -634,6 +654,7 @@
                     <button class="icon-btn viewport-transform-action"
                             data-tooltip="tooltip.selection_delete"
                             data-action="delete_selected"
+                            data-keymap-mode="selection"
                             data-attr-title="selection_delete_label"
                             data-attrif-disabled="!selection_can_delete"
                             data-event-click="selection_action('delete')">
@@ -686,6 +707,13 @@
                  data-if="selection_depth_mode_active"
                  data-tooltip="tooltip.selection_depth_range">
                 <div class="depth-axis-group depth-axis-group-nf">
+                <!-- Keep the chip first in the centered Near/Far group at every width.
+                     As a direct child of the wrapping row, it would take a separate line
+                     before the flex-basis:100% group, with the pinned sync toggle beside it.
+                     Keep the chip in flow, not pinned to the row's left edge. -->
+                <span class="viewport-selection-depth-panel-chip"
+                      data-if="selection_panel_chip_visible"
+                      data-tooltip="tooltip.selection_depth_panel_chip">{{selection_panel_chip_label}}</span>
                 <div class="viewport-transform-axis viewport-selection-depth-axis depth-axis-near" data-tooltip="tooltip.selection_depth_near">
                     <span class="viewport-transform-axis-label">{{ui_near_label}}</span>
                     <input type="range"
@@ -779,8 +807,17 @@
                            data-attrif-disabled="!selection_has_scene" />
                 </div>
                 </div>
-                <button class="icon-btn viewport-transform-action"
+                <button class="icon-btn viewport-transform-action viewport-selection-sync-action"
+                        data-if="selection_panel_chip_visible"
+                        data-attr-title="selection_depth_sync_label"
+                        data-tooltip="tooltip.selection_depth_sync"
+                        data-attrif-disabled="!selection_has_scene"
+                        data-event-click="selection_action('toggle_sync')">
+                    <img data-attr-src="selection_depth_sync_icon" />
+                </button>
+                <button class="icon-btn viewport-transform-action viewport-selection-viz-action"
                         data-attr-title="selection_viz_mode_label"
+                        data-tooltip="tooltip.selection_viz_mode"
                         data-attrif-disabled="!selection_has_scene"
                         data-event-click="selection_action('cycle_viz')">
                     <img data-attr-src="selection_viz_mode_icon" />
@@ -993,7 +1030,6 @@
                             data-attr-id="button.button_id"
                             data-class-selected="button.selected"
                             data-attr-data-action="button.action_id"
-                            data-attr-data-shortcut="button.shortcut_text"
                             data-attr-title="button.tooltip_text"
                             data-attrif-disabled="!button.enabled"
                             data-class-disabled="!button.enabled"
@@ -1010,7 +1046,6 @@
                                 data-attr-id="button.button_id"
                                 data-class-selected="button.selected"
                                 data-attr-data-action="button.action_id"
-                                data-attr-data-shortcut="button.shortcut_text"
                                 data-attr-title="button.tooltip_text"
                                 data-attrif-disabled="!button.enabled"
                                 data-class-disabled="!button.enabled"
@@ -1025,7 +1060,6 @@
                                 data-attr-id="button.button_id"
                                 data-class-selected="button.selected"
                                 data-attr-data-action="button.action_id"
-                                data-attr-data-shortcut="button.shortcut_text"
                                 data-attr-title="button.tooltip_text"
                                 data-attrif-disabled="!button.enabled"
                                 data-class-disabled="!button.enabled"
@@ -1143,6 +1177,7 @@
             <div class="perf-hud-strip-header" data-perf-toggle-expanded="true">
                 <span class="perf-hud-strip-title">@tr:ui.perf_hud_title</span>
                 <span id="perf-hud-strip-rate" class="perf-hud-strip-rate"></span>
+                <span id="vram-hud-strip-health" class="vram-hud-health"></span>
                 <span class="perf-hud-strip-chevron" title="@tr:ui.perf_expand">⌄</span>
             </div>
             <div class="perf-hud-strip-meter" data-perf-tab="ledger" title="@tr:ui.perf_this_process">
@@ -1155,6 +1190,7 @@
                 <span id="perf-hud-vram-value" class="perf-hud-strip-value"></span>
                 <span id="perf-hud-vram-badge" class="perf-hud-strip-badge"></span>
             </div>
+            <vram-timeline id="vram-hud-mini-timeline" class="vram-hud-mini-timeline" />
             <div class="perf-hud-strip-meter" title="@tr:ui.perf_this_process">
                 <span class="perf-hud-strip-label">RAM</span>
                 <div class="perf-hud-meter-track">
@@ -1180,6 +1216,7 @@
             <div id="vram-hud-header" class="vram-hud-header">
                 <span class="vram-hud-title">@tr:ui.perf_hud_title</span>
                 <span class="vram-hud-header-meta">
+                    <span id="vram-hud-health" class="vram-hud-health"></span>
                     <span id="vram-hud-throughput" class="vram-hud-throughput hidden"></span>
                     <span id="vram-hud-iteration" class="vram-hud-iteration"></span>
                     <span class="perf-hud-card-chevron" data-perf-toggle-expanded="true" title="@tr:ui.perf_collapse">⌃</span>
@@ -1197,6 +1234,33 @@
                 <button class="perf-hud-enable-tracking" data-perf-enable-tracking="true">@tr:ui.perf_enable_tracking</button>
             </div>
             <div id="vram-hud-panel-overview" class="vram-hud-panel">
+                <div class="vram-hud-timeline-toolbar">
+                    <button data-vram-window="60">@tr:ui.vram_window_1m</button>
+                    <button data-vram-window="300">@tr:ui.vram_window_5m</button>
+                    <button data-vram-window="1800">@tr:ui.vram_window_30m</button>
+                    <button data-vram-window="0">@tr:ui.vram_window_all</button>
+                    <button data-vram-axis="true">@tr:ui.vram_axis_toggle</button>
+                    <button id="vram-hud-scale-toggle" data-vram-scale="true">@tr:ui.vram_scale_fit</button>
+                    <button data-vram-baseline="true">@tr:ui.vram_set_baseline</button>
+                    <button data-vram-export="true">@tr:ui.vram_export_csv</button>
+                    <button data-vram-opacity="true">@tr:ui.vram_opacity</button>
+                </div>
+                <div id="vram-hud-timeline-frame" class="vram-hud-timeline-frame">
+                    <vram-timeline id="vram-hud-timeline" class="vram-hud-timeline" />
+                    <div id="vram-hud-timeline-axis" class="vram-hud-timeline-axis"></div>
+                    <span id="vram-hud-timeline-capacity" class="vram-hud-timeline-capacity"></span>
+                    <div id="vram-hud-timeline-markers" class="vram-hud-timeline-markers"></div>
+                    <span id="vram-hud-crosshair" class="vram-hud-crosshair"></span>
+                </div>
+                <div id="vram-hud-timeline-x-axis" class="vram-hud-timeline-x-axis"></div>
+                <div id="vram-hud-timeline-tooltip" class="vram-hud-timeline-tooltip"></div>
+                <div id="vram-hud-timeline-legend" class="vram-hud-timeline-legend"></div>
+                <div class="vram-hud-section-title" data-vram-section="peak">@tr:ui.vram_peak_breakdown</div>
+                <div id="vram-hud-peak" class="vram-hud-peak"></div>
+                <div class="vram-hud-section-title" data-vram-section="movers">@tr:ui.vram_top_movers</div>
+                <input id="vram-hud-mover-filter" class="vram-hud-filter-input" type="text" placeholder="@tr:ui.vram_filter_movers" />
+                <div id="vram-hud-movers" class="vram-hud-movers"></div>
+                <div id="vram-hud-export-path" class="vram-hud-export-path"></div>
                 <div id="vram-hud-summary" class="vram-hud-summary"></div>
                 <div class="perf-hud-overview-meters">
                     <div class="perf-hud-sparkline-row">
@@ -1289,46 +1353,34 @@
         </div>
     </div>
 
-    <div id="import-status-overlay"
-         class="viewport-status-overlay hidden"
-         data-class-hidden="!show_import_overlay">
-        <div class="viewport-status-backdrop"
-             data-class-hidden="!show_import_backdrop"></div>
-        <div class="viewport-status-panel">
-            <span class="viewport-status-title"
-                  data-attr-class="'viewport-status-title ' + import_title_class">{{ import_title }}</span>
-            <span class="viewport-status-path text-disabled" data-if="show_import_path">{{ import_path }}</span>
-            <div class="viewport-status-progress" data-if="show_import_progress">
-                <progress max="1" data-attr-value="import_progress_value"></progress>
-                <span class="progress__text">{{ import_progress_pct }}</span>
-            </div>
-            <span class="viewport-status-stage text-disabled" data-if="show_import_stage">{{ import_stage }}</span>
-            <span class="status-success" data-if="show_import_counts">{{ import_counts }}</span>
-            <span class="status-error" data-if="show_import_error">{{ import_error }}</span>
-            <div class="viewport-status-actions" data-if="show_import_dismiss">
-                <button class="btn btn--primary"
-                        data-event-click="overlay_action('dismiss_import')">{{ import_dismiss_label }}</button>
+    <div id="gallery-transfer-queue" class="viewport-transfer-queue hidden" data-class-hidden="!gallery_transfer_visible">
+        <div class="viewport-transfer-header">
+            <span class="viewport-transfer-heading">@tr:gallery.transfer.title</span>
+            <button class="btn btn--secondary viewport-transfer-toggle" data-event-click="gallery_transfer_action('toggle')" data-attr-title="gallery_transfer_toggle_label">{{gallery_transfer_toggle_icon}}</button>
+            <button class="btn btn--secondary viewport-transfer-toggle" data-event-click="gallery_transfer_action('close')" data-attr-title="gallery_transfer_close_label">×</button>
+        </div>
+        <span class="text-muted viewport-transfer-summary">{{gallery_transfer_header}}</span>
+        <div class="viewport-transfer-list" data-class-hidden="!gallery_transfer_expanded">
+            <span class="text-muted" data-if="gallery_transfer_empty">{{gallery_transfer_empty_label}}</span>
+            <div class="viewport-transfer-row" data-for="job : gallery_transfer_rows" data-attr-data-transfer-id="job.id">
+                <div class="viewport-transfer-title"><span>{{job.direction}}</span><span class="viewport-transfer-name" data-attr-title="job.title">{{job.title}}</span></div>
+                <div class="viewport-transfer-status"><span class="status-info">{{job.phase}}</span><span class="text-muted">{{job.bytes}}</span></div>
+                <div class="viewport-transfer-progress"><div class="viewport-transfer-fill" data-class-is-indeterminate="job.indeterminate" data-style-width="job.progress_width"></div></div>
+                <span class="viewport-transfer-detail" data-if="job.detail != ''">{{job.detail}}</span>
+                <span class="status-error" data-if="job.reason != ''">{{job.reason}}</span>
+                <div class="viewport-transfer-actions">
+                    <button class="btn btn--secondary" data-if="job.can_pause" data-event-click="gallery_transfer_action('pause', job.id)">{{gallery_transfer_pause_label}}</button>
+                    <button class="btn btn--success" data-if="job.can_resume" data-event-click="gallery_transfer_action('resume', job.id)">{{gallery_transfer_resume_label}}</button>
+                    <button class="btn btn--secondary" data-if="job.can_cancel" data-event-click="gallery_transfer_action('cancel', job.id)">{{gallery_transfer_cancel_label}}</button>
+                </div>
             </div>
         </div>
+        <div class="viewport-transfer-footer" data-class-hidden="!gallery_transfer_expanded">
+            <button class="btn btn--secondary" data-event-click="gallery_transfer_action('clear_finished')">{{gallery_transfer_clear_finished_label}}</button>
+        </div>
+        <span class="viewport-transfer-detail" data-class-status-error="gallery_transfer_message_error" data-if="gallery_transfer_message != ''">{{gallery_transfer_message}}</span>
     </div>
 
-    <div id="video-status-overlay"
-         class="viewport-status-overlay hidden"
-         data-class-hidden="!show_video_overlay">
-        <div class="viewport-status-backdrop"></div>
-        <div class="viewport-status-panel">
-            <span class="viewport-status-title">{{ video_title }}</span>
-            <div class="viewport-status-progress">
-                <progress max="1" data-attr-value="video_progress_value"></progress>
-                <span class="progress__text">{{ video_progress_pct }}</span>
-            </div>
-            <span class="viewport-status-stage">{{ video_frame_text }}</span>
-            <span class="viewport-status-stage text-disabled" data-if="show_video_stage">{{ video_stage }}</span>
-            <div class="viewport-status-actions">
-                <button class="btn btn--secondary"
-                        data-event-click="overlay_action('cancel_video_export')">{{ video_cancel_label }}</button>
-            </div>
-        </div>
     </div>
 </body>
 </rml>

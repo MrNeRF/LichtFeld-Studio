@@ -53,6 +53,10 @@ namespace lfs::vis {
             return position == "top" || position == "centered" || position == "free";
         }
 
+        [[nodiscard]] bool knownProjectManagerView(std::string_view view) {
+            return view == "remember" || view == "gallery" || view == "list";
+        }
+
         constexpr float kDefaultZoomSpeed = 11.0f;
         constexpr float kDefaultNavigationSpeed = 8.0f;
         constexpr float kMinNavigationSpeed = 1.0f;
@@ -223,7 +227,7 @@ namespace lfs::vis {
                     iterator.increment(error);
                     continue;
                 }
-                const auto name = iterator->path().filename().string();
+                const auto name = lfs::core::path_to_utf8(iterator->path().filename());
                 if (iterator->is_directory(error)) {
                     if (name.starts_with('.') || iterator.depth() >= max_depth)
                         iterator.disable_recursion_pending();
@@ -250,7 +254,7 @@ namespace lfs::vis {
         void saveValuesLocked() {
             if (!paths || !writable)
                 return;
-            values["schema_version"] = 1;
+            values["schema_version"] = 2;
             if (const auto result = paths->writePreferencesAtomically(values.dump(2) + '\n'); !result)
                 LOG_WARN("Unable to save user preferences: {}",
                          lfs::format_for_developer(result.error()));
@@ -293,6 +297,22 @@ namespace lfs::vis {
             }
             if (changed)
                 saveValuesLocked();
+        }
+
+        // Before schema 2 the panel saved its default back on every start, so on
+        // a Mac, where Vulkan was the only backend, "vulkan" was never chosen:
+        // it becomes automatic, which picks Metal where the GPU supports it.
+        void migrateTensorBackendLocked() {
+#ifdef __APPLE__
+            const auto tensor = values.find("tensor_backend");
+            if (tensor == values.end() || !tensor->is_object())
+                return;
+            const auto backend = tensor->find("backend");
+            if (backend != tensor->end() && *backend == "vulkan") {
+                *backend = "auto";
+                saveValuesLocked();
+            }
+#endif
         }
 
         void loadLocked() {
@@ -340,7 +360,13 @@ namespace lfs::vis {
                     throw std::runtime_error("root value is not an object");
                 values = std::move(parsed);
                 input.close();
+                // Migrations save the current schema, so read the loaded one first.
+                const auto schema = values.find("schema_version");
+                const bool before_schema_2 = schema == values.end() || !schema->is_number_integer() ||
+                                             schema->get<int>() < 2;
                 migrateProjectLocationLocked();
+                if (before_schema_2)
+                    migrateTensorBackendLocked();
             } catch (const std::exception& error) {
                 // Windows does not allow the malformed file to be moved while
                 // this reader still holds it open.
@@ -523,6 +549,35 @@ namespace lfs::vis {
         impl_->loadLocked();
         return impl_->values.value("scene_graph_selection_markers", false);
     }
+    void UserPreferences::setTrackpad(const TrackpadPreferenceState& state) {
+        const TrackpadPreferenceState defaults;
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["trackpad"] = {
+            {"device", navigationDeviceName(state.device)},
+            {"swipe_pans", state.swipe_pans},
+            {"swipe_speed", clampNavigationSpeed(state.swipe_speed, defaults.swipe_speed)},
+            {"zoom_speed", clampNavigationSpeed(state.zoom_speed, defaults.zoom_speed)},
+        };
+        impl_->saveLocked();
+    }
+    TrackpadPreferenceState UserPreferences::trackpad() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        TrackpadPreferenceState result;
+        const auto it = impl_->values.find("trackpad");
+        if (it == impl_->values.end() || !it->is_object())
+            return result;
+        if (const auto device = it->find("device"); device != it->end() && device->is_string())
+            result.device = parseNavigationDevice(device->get<std::string>()).value_or(result.device);
+        if (const auto pans = it->find("swipe_pans"); pans != it->end() && pans->is_boolean())
+            result.swipe_pans = pans->get<bool>();
+        if (const auto speed = it->find("swipe_speed"); speed != it->end() && speed->is_number())
+            result.swipe_speed = clampNavigationSpeed(speed->get<float>(), result.swipe_speed);
+        if (const auto speed = it->find("zoom_speed"); speed != it->end() && speed->is_number())
+            result.zoom_speed = clampNavigationSpeed(speed->get<float>(), result.zoom_speed);
+        return result;
+    }
     void UserPreferences::setProgressBarStyle(const std::string_view value) {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
@@ -586,6 +641,165 @@ namespace lfs::vis {
             return 0.5f;
         const float value = it->get<float>();
         return std::clamp(std::isfinite(value) ? value : 0.5f, 0.0f, 1.0f);
+    }
+
+    void UserPreferences::setTensorBackend(const TensorPreferenceState& state) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const char* backend = state.backend ? "vulkan" : "auto";
+#if LFS_HAS_CUDA
+        if (state.backend == core::GpuBackend::CUDA)
+            backend = "cuda";
+#endif
+#ifdef __APPLE__
+        if (state.backend == core::GpuBackend::Metal)
+            backend = "metal";
+#endif
+        impl_->values["tensor_backend"] = {
+            {"backend", backend},
+            {"vulkan_device", state.options.vulkan_device},
+            {"vulkan_validation", std::clamp(state.options.vulkan_validation, 0, 2)},
+            {"force_fp32_half", state.options.force_fp32_half},
+            {"force_no_atomic_float", state.options.force_no_atomic_float},
+        };
+        impl_->saveLocked();
+    }
+
+    TensorPreferenceState UserPreferences::tensorBackend() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        TensorPreferenceState result;
+        const auto it = impl_->values.find("tensor_backend");
+        if (it == impl_->values.end() || !it->is_object())
+            return result;
+        if (const auto backend = it->find("backend"); backend != it->end() && backend->is_string()) {
+            if (*backend == "vulkan")
+                result.backend = core::GpuBackend::Vulkan;
+#if LFS_HAS_CUDA
+            else if (*backend == "cuda")
+                result.backend = core::GpuBackend::CUDA;
+#endif
+#ifdef __APPLE__
+            else if (*backend == "metal")
+                result.backend = core::GpuBackend::Metal;
+#endif
+        }
+        if (const auto device = it->find("vulkan_device"); device != it->end() && device->is_string())
+            result.options.vulkan_device = device->get<std::string>();
+        if (const auto mode = it->find("vulkan_validation"); mode != it->end() && mode->is_number_integer()) {
+            const auto value = mode->get<std::int64_t>();
+            if (value >= 0 && value <= 2)
+                result.options.vulkan_validation = static_cast<int>(value);
+        }
+        const auto read_bool = [&](const char* key, bool& value) {
+            const auto field = it->find(key);
+            if (field != it->end() && field->is_boolean())
+                value = field->get<bool>();
+        };
+        read_bool("force_fp32_half", result.options.force_fp32_half);
+        read_bool("force_no_atomic_float", result.options.force_no_atomic_float);
+        return result;
+    }
+
+    void UserPreferences::setProjectManagerDefaultView(const std::string_view value) {
+        if (!knownProjectManagerView(value))
+            throw std::invalid_argument("Unsupported Project Manager default view");
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        auto& project_manager = impl_->values["project_manager"];
+        if (!project_manager.is_object())
+            project_manager = json::object();
+        project_manager["default_view"] = std::string(value);
+        impl_->saveLocked();
+    }
+
+    std::string UserPreferences::projectManagerDefaultView() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto project_manager = impl_->values.find("project_manager");
+        if (project_manager == impl_->values.end() || !project_manager->is_object())
+            return "remember";
+        const auto view = project_manager->find("default_view");
+        if (view == project_manager->end() || !view->is_string())
+            return "remember";
+        const auto value = view->get<std::string>();
+        return knownProjectManagerView(value) ? value : "remember";
+    }
+
+    void UserPreferences::setOpenProjectManagerAtStartup(const bool enabled) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        auto& project_manager = impl_->values["project_manager"];
+        if (!project_manager.is_object())
+            project_manager = json::object();
+        project_manager["open_at_startup"] = enabled;
+        impl_->saveLocked();
+    }
+
+    bool UserPreferences::openProjectManagerAtStartup() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto project_manager = impl_->values.find("project_manager");
+        if (project_manager == impl_->values.end() || !project_manager->is_object())
+            return true;
+        const auto open = project_manager->find("open_at_startup");
+        return open == project_manager->end() || !open->is_boolean()
+                   ? true
+                   : open->get<bool>();
+    }
+
+    void UserPreferences::setRememberProjectManagerState(const bool enabled) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        auto& project_manager = impl_->values["project_manager"];
+        if (!project_manager.is_object())
+            project_manager = json::object();
+        project_manager["remember_state"] = enabled;
+        impl_->saveLocked();
+    }
+
+    bool UserPreferences::rememberProjectManagerState() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto project_manager = impl_->values.find("project_manager");
+        if (project_manager == impl_->values.end() || !project_manager->is_object())
+            return true;
+        const auto remember = project_manager->find("remember_state");
+        return remember == project_manager->end() || !remember->is_boolean()
+                   ? true
+                   : remember->get<bool>();
+    }
+
+    void UserPreferences::setProjectManagerState(const std::string_view serialized_state) {
+        const auto state = json::parse(serialized_state.begin(), serialized_state.end());
+        if (!state.is_object())
+            throw std::invalid_argument("Project Manager state must be an object");
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        auto& project_manager = impl_->values["project_manager"];
+        if (!project_manager.is_object())
+            project_manager = json::object();
+        project_manager["state"] = state;
+        impl_->saveLocked();
+    }
+
+    std::string UserPreferences::projectManagerState() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto project_manager = impl_->values.find("project_manager");
+        if (project_manager == impl_->values.end() || !project_manager->is_object())
+            return "{}";
+        const auto state = project_manager->find("state");
+        return state != project_manager->end() && state->is_object()
+                   ? state->dump()
+                   : "{}";
+    }
+
+    void UserPreferences::resetProjectManagerPreferences() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values.erase("project_manager");
+        impl_->saveLocked();
     }
 
     void UserPreferences::setMcp(const McpPreferenceState& state) {
@@ -697,6 +911,10 @@ namespace lfs::vis {
     bool loadSceneGraphSelectionMarkersPreference() {
         return UserPreferences::instance().sceneGraphSelectionMarkers();
     }
+    void saveTrackpadPreferences(const TrackpadPreferenceState& state) {
+        UserPreferences::instance().setTrackpad(state);
+    }
+    TrackpadPreferenceState loadTrackpadPreferences() { return UserPreferences::instance().trackpad(); }
     void saveProgressBarStylePreference(const std::string_view style) {
         UserPreferences::instance().setProgressBarStyle(style);
     }

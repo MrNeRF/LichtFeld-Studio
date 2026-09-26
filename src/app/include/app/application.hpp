@@ -14,8 +14,9 @@ namespace lfs::app {
 
     // Refuses drivers and GPUs this build cannot run on. Returns false after reporting the
     // reason; callers must not continue. show_dialog is for the interactive GUI path only —
-    // a modal in a CLI or CI run blocks the process forever.
-    bool preflightGpu(bool show_dialog);
+    // a modal in a CLI or CI run blocks the process forever. viewer_only lets the GUI
+    // continue on the Vulkan tensor backend when CUDA is unusable.
+    bool preflightGpu(bool show_dialog, bool viewer_only = false);
 
     class Application {
     public:

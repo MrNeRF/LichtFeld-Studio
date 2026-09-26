@@ -4,6 +4,7 @@
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"
+#include "cuda_backend_test.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "training/training_setup.hpp"
@@ -35,12 +36,12 @@ namespace {
 
     SplatData make_random_model(const size_t n, const int sh_degree, const uint32_t seed = 42) {
         const size_t rest = rest_coeffs_for_degree(sh_degree);
-        auto means = Tensor::zeros({n, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto sh0 = Tensor::zeros({n, size_t{1}, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto shN_can = Tensor::zeros({n, rest, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto scaling = Tensor::zeros({n, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto rotation = Tensor::zeros({n, size_t{4}}, Device::CUDA, DataType::Float32);
-        auto opacity = Tensor::zeros({n, size_t{1}}, Device::CUDA, DataType::Float32);
+        auto means = Tensor::zeros({n, size_t{3}}, Device::GPU, DataType::Float32);
+        auto sh0 = Tensor::zeros({n, size_t{1}, size_t{3}}, Device::GPU, DataType::Float32);
+        auto shN_can = Tensor::zeros({n, rest, size_t{3}}, Device::GPU, DataType::Float32);
+        auto scaling = Tensor::zeros({n, size_t{3}}, Device::GPU, DataType::Float32);
+        auto rotation = Tensor::zeros({n, size_t{4}}, Device::GPU, DataType::Float32);
+        auto opacity = Tensor::zeros({n, size_t{1}}, Device::GPU, DataType::Float32);
 
         {
             std::mt19937 rng(seed);
@@ -50,14 +51,14 @@ namespace {
                 auto* p = cpu.ptr<float>();
                 for (size_t i = 0; i < n * rest * 3; ++i)
                     p[i] = nd(rng);
-                shN_can = cpu.to(Device::CUDA);
+                shN_can = cpu.to(Device::GPU);
             }
 
             auto rcpu = rotation.cpu();
             auto* r = rcpu.ptr<float>();
             for (size_t i = 0; i < n; ++i)
                 r[i * 4] = 1.0f;
-            rotation = rcpu.to(Device::CUDA);
+            rotation = rcpu.to(Device::GPU);
         }
 
         return SplatData(sh_degree, means, sh0, shN_can, scaling, rotation, opacity, 1.0f);
@@ -89,7 +90,9 @@ namespace {
     };
 } // namespace
 
-TEST(SplatDataCloneTest, Q16CloneCarriesBounds) {
+class SplatDataCloneTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(SplatDataCloneTest, Q16CloneCarriesBounds) {
     const ShValueQuantGuard quant_guard{true};
     auto model = make_random_sh3(kN);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(model));
@@ -116,7 +119,7 @@ TEST(SplatDataCloneTest, Q16CloneCarriesBounds) {
     EXPECT_FLOAT_EQ(model.means_raw().cpu().ptr<float>()[0], src_mean0);
 }
 
-TEST(SplatDataCloneTest, Fp32CloneUnchangedBehavior) {
+TEST_F(SplatDataCloneTest, Fp32CloneUnchangedBehavior) {
     const ShValueQuantGuard quant_guard{false};
     auto model = make_random_sh3(kN);
     ASSERT_FALSE(model.shN_value_quantized());
@@ -131,13 +134,13 @@ TEST(SplatDataCloneTest, Fp32CloneUnchangedBehavior) {
     EXPECT_TRUE(tensors_equal(copy.shN_canonical(), canonical_before));
 }
 
-TEST(SplatDataCloneTest, CloneCarriesDeletedMask) {
+TEST_F(SplatDataCloneTest, CloneCarriesDeletedMask) {
     auto model = make_random_sh3(64);
     std::vector<bool> deleted(64, false);
     deleted[1] = true;
     deleted[17] = true;
     deleted[63] = true;
-    model.deleted() = Tensor::from_vector(deleted, {deleted.size()}, Device::CPU).to(Device::CUDA);
+    model.deleted() = Tensor::from_vector(deleted, {deleted.size()}, Device::CPU).to(Device::GPU);
     model.refresh_deleted_count();
     ASSERT_TRUE(model.has_deleted_mask());
     ASSERT_EQ(model.deleted_count(), 3u);
@@ -149,7 +152,7 @@ TEST(SplatDataCloneTest, CloneCarriesDeletedMask) {
     EXPECT_EQ(copy.deleted().cpu().to_vector_bool(), model.deleted().cpu().to_vector_bool());
 }
 
-TEST(SplatDataCloneTest, Q16CloneMigratesToExportableAllocator) {
+TEST_F(SplatDataCloneTest, Q16CloneMigratesToExportableAllocator) {
     const ShValueQuantGuard quant_guard{true};
     auto model = make_random_sh3(kN);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(model));
@@ -174,7 +177,7 @@ TEST(SplatDataCloneTest, Q16CloneMigratesToExportableAllocator) {
     EXPECT_TRUE(tensors_equal(copy.shN_canonical(), canonical_before));
 }
 
-TEST(SplatDataCloneTest, WritebackClearsQ16Pair) {
+TEST_F(SplatDataCloneTest, WritebackClearsQ16Pair) {
     const ShValueQuantGuard quant_guard{true};
 
     // Degree 2: q16 cell count equals ieee-f16 swizzle count. Degree 3 does not.
@@ -199,14 +202,14 @@ TEST(SplatDataCloneTest, WritebackClearsQ16Pair) {
     }
 }
 
-TEST(SplatDataCloneTest, ReserveCapacityRebuildsCudaDirect) {
+TEST_F(SplatDataCloneTest, ReserveCapacityRebuildsCudaDirect) {
     const size_t n = 64;
-    auto means = Tensor::zeros_direct({n, size_t{3}}, n, Device::CUDA, DataType::Float32);
-    auto sh0 = Tensor::zeros_direct({n, size_t{1}, size_t{3}}, n, Device::CUDA, DataType::Float32);
-    auto shN_can = Tensor::zeros_direct({n, size_t{15}, size_t{3}}, n, Device::CUDA, DataType::Float32);
-    auto scaling = Tensor::zeros_direct({n, size_t{3}}, n, Device::CUDA, DataType::Float32);
-    auto rotation = Tensor::zeros_direct({n, size_t{4}}, n, Device::CUDA, DataType::Float32);
-    auto opacity = Tensor::zeros_direct({n, size_t{1}}, n, Device::CUDA, DataType::Float32);
+    auto means = Tensor::zeros_direct({n, size_t{3}}, n, Device::GPU, DataType::Float32);
+    auto sh0 = Tensor::zeros_direct({n, size_t{1}, size_t{3}}, n, Device::GPU, DataType::Float32);
+    auto shN_can = Tensor::zeros_direct({n, size_t{15}, size_t{3}}, n, Device::GPU, DataType::Float32);
+    auto scaling = Tensor::zeros_direct({n, size_t{3}}, n, Device::GPU, DataType::Float32);
+    auto rotation = Tensor::zeros_direct({n, size_t{4}}, n, Device::GPU, DataType::Float32);
+    auto opacity = Tensor::zeros_direct({n, size_t{1}}, n, Device::GPU, DataType::Float32);
     means.fill_(1.25f);
     shN_can.fill_(0.05f);
 
@@ -229,7 +232,7 @@ TEST(SplatDataCloneTest, ReserveCapacityRebuildsCudaDirect) {
     EXPECT_TRUE(tensors_equal(model.shN_canonical(), shN_before));
 }
 
-TEST(SplatDataCloneTest, ReserveCapacitySkipsRendererStorage) {
+TEST_F(SplatDataCloneTest, ReserveCapacitySkipsRendererStorage) {
     const ShValueQuantGuard quant_guard{true};
     auto model = make_random_sh3(kN);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(model));

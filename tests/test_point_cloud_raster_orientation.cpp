@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
-#include "rendering/point_cloud_raster.cuh"
+#include "cuda_backend_test.hpp"
+#include "rendering/rasterizer/cuda/point_cloud_raster.cuh"
 #include "rendering/render_constants.hpp"
 #include "rendering/rendering.hpp"
 #include "visualizer/rendering/viewport_artifact_service.hpp"
@@ -28,16 +29,8 @@ namespace {
                             Orthographic,
                             Equirectangular };
 
-    class PointCloudRasterOrientationTest : public ::testing::TestWithParam<std::tuple<Projection, bool>> {
-    protected:
-        void SetUp() override {
-            int device_count = 0;
-            const auto status = cudaGetDeviceCount(&device_count);
-            if (status != cudaSuccess || device_count == 0) {
-                GTEST_SKIP() << "CUDA device unavailable: " << cudaGetErrorString(status);
-            }
-        }
-    };
+    class PointCloudRasterOrientationTest : public lfs::test::CudaBackendTest,
+                                            public ::testing::WithParamInterface<std::tuple<Projection, bool>> {};
 
     TEST_P(PointCloudRasterOrientationTest, ColorAndDepthUseTopDownRows) {
         const auto [projection_type, transparent] = GetParam();

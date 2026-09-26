@@ -10,13 +10,13 @@
 #include "core/property_registry.hpp"
 #include "io/loader.hpp"
 #include "python/python_runtime.hpp"
+#include "visualizer/core/training_manager.hpp"
+#include "visualizer/core/training_state.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/operation/undo_entry.hpp"
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/rendering/vulkan_external_tensor.hpp"
 #include "visualizer/scene/scene_manager.hpp"
-#include "visualizer/training/training_manager.hpp"
-#include "visualizer/training/training_state.hpp"
 #include <algorithm>
 #include <nanobind/ndarray.h>
 #include <stdexcept>
@@ -264,8 +264,8 @@ namespace lfs::python {
         assert(cols.shape().rank() == 2 && cols.shape()[1] == 3);
         assert(pts.shape()[0] == cols.shape()[0]);
 
-        pc_->means = pts.to(core::Device::CUDA);
-        pc_->colors = cols.to(core::Device::CUDA);
+        pc_->means = pts.to(core::Device::GPU);
+        pc_->colors = cols.to(core::Device::GPU);
 
         const int64_t n = pc_->size();
         if (node_) {
@@ -286,7 +286,7 @@ namespace lfs::python {
         const auto& cols = colors.tensor();
         assert(cols.shape().rank() == 2 && cols.shape()[1] == 3);
         assert(cols.shape()[0] == pc_->size());
-        pc_->colors = cols.to(core::Device::CUDA);
+        pc_->colors = cols.to(pc_->means.device());
         if (scene_) {
             scene_->setPointCloudModified(true);
             scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
@@ -297,7 +297,7 @@ namespace lfs::python {
         const auto& pts = points.tensor();
         assert(pts.shape().rank() == 2 && pts.shape()[1] == 3);
         assert(pts.shape()[0] == pc_->size());
-        pc_->means = pts.to(core::Device::CUDA);
+        pc_->means = pts.to(pc_->colors.device());
         if (node_ && pc_->size() > 0) {
             auto centroid = pc_->means.mean(0).cpu();
             auto acc = centroid.accessor<float, 1>();
@@ -350,6 +350,13 @@ namespace lfs::python {
 
     uint64_t PyScene::generation() const {
         return generation_;
+    }
+
+    uint64_t PyScene::render_generation() const {
+        if (!is_valid()) {
+            throw std::runtime_error("Scene reference is no longer valid");
+        }
+        return scene_->renderGeneration();
     }
 
     int32_t PyScene::add_group(const std::string& name, int32_t parent) {
@@ -466,7 +473,7 @@ namespace lfs::python {
         assert(cols.shape().rank() == 2 && cols.shape()[1] == 3);
         assert(pts.shape()[0] == cols.shape()[0]);
 
-        auto pc = std::make_shared<core::PointCloud>(pts.to(core::Device::CUDA), cols.to(core::Device::CUDA));
+        auto pc = std::make_shared<core::PointCloud>(pts.to(core::Device::GPU), cols.to(core::Device::GPU));
         const int32_t node_id = scene_->addPointCloud(name, std::move(pc), parent);
         if (node_id == core::NULL_NODE) {
             return core::NULL_NODE;
@@ -712,6 +719,14 @@ namespace lfs::python {
         return result;
     }
 
+    std::vector<PySceneSplatSnapshot> PyScene::snapshot_visible_splats() {
+        std::vector<PySceneSplatSnapshot> result;
+        for (auto& snapshot : scene_->snapshotVisibleSplats()) {
+            result.emplace_back(std::move(snapshot));
+        }
+        return result;
+    }
+
     std::vector<PySceneNode> PyScene::get_active_cameras() {
         std::vector<PySceneNode> result;
         for (const auto* node : scene_->getNodes()) {
@@ -751,7 +766,7 @@ namespace lfs::python {
     void PyScene::set_node_transform_tensor(const std::string& name, const PyTensor& transform) {
         const auto& t = transform.tensor();
         assert(t.ndim() == 2 && t.size(0) == 4 && t.size(1) == 4);
-        auto cpu_t = t.device() == core::Device::CUDA ? t.cpu() : t;
+        auto cpu_t = t.device() == core::Device::GPU ? t.cpu() : t;
         auto contiguous = cpu_t.contiguous();
         const float* data = contiguous.ptr<float>();
         glm::mat4 m;
@@ -1037,6 +1052,20 @@ namespace lfs::python {
     }
 
     void register_scene(nb::module_& m) {
+        nb::class_<PySceneSplatSnapshot>(m, "SceneSplatSnapshot")
+            .def_prop_ro("transform", [](const PySceneSplatSnapshot& value) {
+                return mat4_to_tuple(value.snapshot().world_transform);
+            })
+            .def_prop_ro("sh_degree", [](const PySceneSplatSnapshot& value) {
+                return value.snapshot().active_sh_degree;
+            })
+            .def("splat_data", [](const PySceneSplatSnapshot& value) {
+                std::shared_ptr<core::SplatData> data;
+                {
+                    nb::gil_scoped_release release;
+                    data = value.snapshot().materialize();
+                }
+                return PySplatData(std::move(data)); }, "Materialize this owned node's local geometry. May run on an export worker.");
         register_scene_node_properties();
         register_cropbox_properties();
         register_ellipsoid_properties();
@@ -1235,6 +1264,8 @@ namespace lfs::python {
                  "Check if scene reference is still valid (thread-safe)")
             .def_prop_ro("generation", &PyScene::generation,
                          "Generation counter when scene was acquired")
+            .def_prop_ro("render_generation", &PyScene::render_generation,
+                         "Scene content revision, excluding Gaussian selection changes")
             // Node CRUD
             .def("add_group", &PyScene::add_group,
                  nb::arg("name"), nb::arg("parent") = core::NULL_NODE,
@@ -1355,6 +1386,7 @@ Returns:
                 },
                 nb::arg("type") = nb::none(), "Get nodes, optionally filtered by NodeType")
             .def("get_visible_nodes", &PyScene::get_visible_nodes, "Get all visible nodes in the scene")
+            .def("snapshot_visible_splats", &PyScene::snapshot_visible_splats, "Copy visible splats and world transforms at a UI safe point. Returned data owns its storage and supports worker-side export after scene edits or deletion.")
             .def("is_node_effectively_visible", &PyScene::is_node_effectively_visible, nb::arg("id"), "Check if a node is visible considering parent visibility")
             // Transforms
             .def("get_world_transform", &PyScene::get_world_transform, nb::arg("node_id"), "Get world-space transform as 4x4 row-major tuple")

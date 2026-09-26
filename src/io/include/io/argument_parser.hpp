@@ -1,0 +1,76 @@
+/* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#pragma once
+
+#include "core/export.hpp"
+#include "core/gpu_backend_fwd.hpp"
+
+#include "core/parameters.hpp"
+#include <expected>
+#include <memory>
+#include <span>
+#include <string>
+#include <string_view>
+#include <variant>
+
+namespace lfs::io::args {
+
+    enum class OptimizationCliParseType {
+        Bool,
+        Integer,
+        Float,
+        String,
+        Enum,
+    };
+
+    struct OptimizationCliBinding {
+        std::string_view flag;
+        std::string_view property_id;
+        OptimizationCliParseType parse_type;
+        bool inverted = false;
+        std::string_view help_suffix;
+        std::string_view registry_default_alias;
+        std::string_view cli_default_alias;
+    };
+
+    LFS_IO_API std::span<const OptimizationCliBinding> optimization_cli_bindings();
+    LFS_IO_API std::string optimization_cli_help(std::string_view flag);
+
+    // Parsed argument modes
+    struct TrainingMode {
+        std::unique_ptr<core::param::TrainingParameters> params;
+    };
+    struct ConvertMode {
+        core::param::ConvertParameters params;
+    };
+    struct Mesh2SplatMode {
+        core::param::Mesh2SplatParameters params;
+    };
+    struct PreprocessMode {
+        core::param::PreprocessParameters params;
+    };
+    struct HelpMode {};
+    struct VersionMode {};
+    struct WarmupMode {}; // JIT compile PTX kernels and exit
+    struct TensorBackendSelftestMode {
+        core::GpuBackend backend;
+    };
+    struct PluginMode {
+        enum class Command { CREATE,
+                             CHECK,
+                             LIST };
+        Command command;
+        std::string name;
+    };
+
+    using ParsedArgs = std::variant<TrainingMode, ConvertMode, Mesh2SplatMode, PreprocessMode, HelpMode, VersionMode, WarmupMode, TensorBackendSelftestMode, PluginMode>;
+
+    LFS_IO_API std::expected<ParsedArgs, std::string> parse_args(int argc, const char* const argv[]);
+
+    // Legacy interface - prefer parse_args()
+    LFS_IO_API std::expected<std::unique_ptr<core::param::TrainingParameters>, std::string>
+    parse_args_and_params(int argc, const char* const argv[]);
+
+} // namespace lfs::io::args

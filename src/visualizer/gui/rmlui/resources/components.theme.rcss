@@ -131,7 +131,7 @@ input[type="text"] {
     color: @{text};
     background-color: @{surface};
     border-color: @{border};
-    padding: @{num(size.frame_padding_y)}dp @{num(size.frame_padding_x)}dp;
+    padding: 1dp 4dp;
 }
 
 input[type="text"]:focus {
@@ -164,7 +164,11 @@ select {
     color: @{text};
     background-color: @{surface};
     border-color: @{border};
-    padding: @{num(size.frame_padding_y)}dp @{num(size.frame_padding_x)}dp;
+    padding: 0;
+}
+
+select selectvalue {
+    padding-left: 4dp;
 }
 
 select:hover {

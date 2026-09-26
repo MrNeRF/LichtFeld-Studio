@@ -107,6 +107,19 @@ namespace lfs::io::project::detail {
         std::filesystem::path path_;
     };
 
+    struct ProjectPathIdentity {
+        std::filesystem::path path;
+        std::filesystem::path canonical_path;
+        std::optional<std::vector<std::byte>> superblock;
+
+        [[nodiscard]] static lfs::Result<ProjectPathIdentity> capture(const std::filesystem::path& path);
+        [[nodiscard]] lfs::Result<void> validate() const;
+    };
+
+    [[nodiscard]] lfs::Result<void> validate_project_operation_identity();
+    [[nodiscard]] const ProjectPathIdentity* active_operation_identity() noexcept;
+    const ProjectPathIdentity* set_active_operation_identity(const ProjectPathIdentity* identity) noexcept;
+
     class WriterLock {
     public:
         WriterLock(const WriterLock&) = delete;

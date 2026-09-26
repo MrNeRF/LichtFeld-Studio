@@ -3,21 +3,29 @@
 #pragma once
 
 #include "core/alloc_counter.hpp"
+#include "core/cuda_types.hpp"
+
+#if LFS_HAS_CUDA
 #include "core/cuda_error.hpp"
 
 #include <nvtx3/nvToolsExt.h>
+#endif
 
 #include <cstdio>
 #include <cstdlib>
-#include <cuda_runtime.h>
 #include <string>
 #include <vector>
 
 namespace lfs::core::nn {
 
     struct NvtxRange {
+#if LFS_HAS_CUDA
         explicit NvtxRange(const char* name) { nvtxRangePushA(name); }
         ~NvtxRange() { nvtxRangePop(); }
+#else
+        explicit NvtxRange(const char*) {}
+        ~NvtxRange() = default;
+#endif
         NvtxRange(const NvtxRange&) = delete;
         NvtxRange& operator=(const NvtxRange&) = delete;
     };
@@ -26,9 +34,9 @@ namespace lfs::core::nn {
     // ordered on `stream`; dump() synchronizes once at the end.
     class StageProfile {
     public:
-        explicit StageProfile(cudaStream_t stream) : stream_(stream) {
+        explicit StageProfile(cudaStream_t stream, bool cuda_backend = true) : stream_(stream) {
             const char* env = std::getenv("LFS_NN_PROFILE");
-            on_ = env != nullptr && env[0] != '\0' && env[0] != '0';
+            on_ = LFS_HAS_CUDA && cuda_backend && env != nullptr && env[0] != '\0' && env[0] != '0';
             alloc0_ = alloc_counter::snapshot();
             if (on_) {
                 mark("start");
@@ -36,9 +44,11 @@ namespace lfs::core::nn {
         }
 
         ~StageProfile() {
+#if LFS_HAS_CUDA
             for (auto& e : events_) {
                 LFS_CUDA_CHECK(cudaEventDestroy(e));
             }
+#endif
         }
 
         StageProfile(const StageProfile&) = delete;
@@ -50,11 +60,13 @@ namespace lfs::core::nn {
             if (!on_) {
                 return;
             }
+#if LFS_HAS_CUDA
             cudaEvent_t ev = nullptr;
             LFS_CUDA_CHECK(cudaEventCreateWithFlags(&ev, cudaEventDefault));
             LFS_CUDA_CHECK(cudaEventRecord(ev, stream_));
             names_.emplace_back(name);
             events_.push_back(ev);
+#endif
         }
 
         void dump() {
@@ -66,6 +78,7 @@ namespace lfs::core::nn {
                 }
                 return;
             }
+#if LFS_HAS_CUDA
             LFS_CUDA_CHECK(cudaEventSynchronize(events_.back()));
             std::size_t free_b = 0;
             std::size_t total_b = 0;
@@ -83,6 +96,7 @@ namespace lfs::core::nn {
                 std::fprintf(stderr, "  %7.3f  %s\n", static_cast<double>(ms), names_[i].c_str());
             }
             std::fprintf(stderr, "  %7.3f  TOTAL\n", static_cast<double>(total));
+#endif
         }
 
     private:

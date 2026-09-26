@@ -6,8 +6,9 @@
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
 #include "core/source_site.hpp"
-#include "internal/cuda_stream_context.hpp"
-#include "internal/memory_pool.hpp"
+#include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "nn_nvtx.hpp"
 
 #include <algorithm>
@@ -41,7 +42,9 @@ namespace lfs::core::nn::models {
         }
 
         void configure_nn_mempool() {
-#if CUDART_VERSION >= 11020
+            if (default_gpu_backend() != GpuBackend::CUDA)
+                return;
+#if LFS_HAS_CUDA && CUDART_VERSION >= 11020
             int device = 0;
             LFS_CUDA_CHECK(cudaGetDevice(&device));
             cudaMemPool_t pool = nullptr;
@@ -57,11 +60,19 @@ namespace lfs::core::nn::models {
                 slot = src.clone();
                 return;
             }
+            if (gpu_backend_of(src) != GpuBackend::CUDA) {
+                slot.copy_from(src);
+                return;
+            }
             slot.set_stream(src.stream());
+#if LFS_HAS_CUDA
             if (src.bytes() > 0) {
                 LFS_CUDA_CHECK(cudaMemcpyAsync(slot.data_ptr(), src.data_ptr(), src.bytes(),
                                                cudaMemcpyDeviceToDevice, src.stream()));
             }
+#else
+            throw std::runtime_error("CUDA tensor recapture is unavailable in this build");
+#endif
         }
 
         Tensor concat_contiguous(const Tensor& a, const Tensor& b, int dim) {
@@ -89,16 +100,23 @@ namespace lfs::core::nn::models {
             }
             LFS_ASSERT_MSG(leading == 1,
                            "concat_contiguous requires unit leading dims (batch=1)");
+            if (gpu_backend_of(a) != GpuBackend::CUDA) {
+                return Tensor::cat({a, b}, dim);
+            }
             auto a_c = a.contiguous();
             auto b_c = b.contiguous();
             auto out = Tensor::empty(TensorShape(out_dims), a_c.device(), a_c.dtype());
             out.set_stream(a_c.stream());
             const cudaStream_t stream = out.stream();
+#if LFS_HAS_CUDA
             LFS_CUDA_CHECK(cudaMemcpyAsync(out.data_ptr(), a_c.data_ptr(), a_c.bytes(),
                                            cudaMemcpyDeviceToDevice, stream));
             LFS_CUDA_CHECK(cudaMemcpyAsync(static_cast<char*>(out.data_ptr()) + a_c.bytes(),
                                            b_c.data_ptr(), b_c.bytes(), cudaMemcpyDeviceToDevice,
                                            stream));
+#else
+            throw std::runtime_error("CUDA tensor concatenation is unavailable in this build");
+#endif
             return out;
         }
 
@@ -140,8 +158,8 @@ namespace lfs::core::nn::models {
 
     lfs::Result<Sam2> Sam2::load(const std::filesystem::path& weights, Device device,
                                  std::optional<DataType> compute) {
-        if (device != Device::CUDA) {
-            return sam_error(lfs::ErrorCode::InvalidArgument, "SAM2 requires a CUDA device");
+        if (device != Device::GPU) {
+            return sam_error(lfs::ErrorCode::InvalidArgument, "SAM2 requires a GPU device");
         }
         auto file = WeightFile::open(weights);
         if (!file) {
@@ -561,9 +579,9 @@ namespace lfs::core::nn::models {
                 sam_error(lfs::ErrorCode::InvalidArgument,
                           "SAM2 image must be NCHW with 3 channels"));
         }
-        if (image.device() != Device::CUDA) {
+        if (image.device() != Device::GPU) {
             return lfs::Result<void>::failure(
-                sam_error(lfs::ErrorCode::InvalidArgument, "SAM2 image must be on CUDA"));
+                sam_error(lfs::ErrorCode::InvalidArgument, "SAM2 image must be on the GPU"));
         }
         if (image.shape()[0] != 1) {
             return lfs::Result<void>::failure(
@@ -576,6 +594,9 @@ namespace lfs::core::nn::models {
         encoder_taps_valid_ = false;
 
         NvtxRange forward_nvtx("sam2/set_image");
+        if (gpu_backend_of(image) != gpu_backend_of(weights_.begin()->second))
+            return lfs::Result<void>::failure(sam_error(lfs::ErrorCode::InvalidArgument, "Image and model weights must use the same GPU backend"));
+        GpuBackendScope backend_scope(*gpu_backend_of(image));
         const cudaStream_t fwd_stream = image.stream();
         lfs::core::CUDAStreamGuard stream_guard(fwd_stream);
         if (!weights_on_stream_) {
@@ -600,7 +621,7 @@ namespace lfs::core::nn::models {
                 }
             }
         } arena_closer{arena_, mempool_trimmed_};
-        StageProfile profile(fwd_stream);
+        StageProfile profile(fwd_stream, default_gpu_backend() == GpuBackend::CUDA);
 
         Tensor img;
         {
@@ -753,6 +774,7 @@ namespace lfs::core::nn::models {
         }
 
         NvtxRange forward_nvtx("sam2/predict");
+        GpuBackendScope backend_scope(*gpu_backend_of(image_embed_hold_));
         const cudaStream_t fwd_stream = image_embed_hold_.stream();
         lfs::core::CUDAStreamGuard stream_guard(fwd_stream);
         ActivationArenaGuard arena_guard(arena_);
@@ -768,7 +790,7 @@ namespace lfs::core::nn::models {
                 }
             }
         } arena_closer{arena_, mempool_trimmed_};
-        StageProfile profile(fwd_stream);
+        StageProfile profile(fwd_stream, default_gpu_backend() == GpuBackend::CUDA);
 
         Tensor sparse;
         Tensor dense;

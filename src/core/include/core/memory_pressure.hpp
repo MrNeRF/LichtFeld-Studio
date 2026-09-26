@@ -3,6 +3,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "core/gpu_backend_fwd.hpp"
 #include "core/source_site.hpp"
 
 #include <cstddef>
@@ -20,18 +21,22 @@ namespace lfs {
 
 namespace lfs::core {
 
-    // Physical backing of an allocation. CudaDevice, CudaVmm, and VulkanDevice
-    // all draw from the same physical VRAM heap and must never be summed; the
-    // two host domains are separate system RAM.
+    // Physical backing of an allocation. CudaDevice, CudaVmm, VulkanDevice and
+    // MetalDevice all draw from the same physical device heap and must never
+    // be summed; the two host domains are separate system RAM.
     enum class MemoryDomain : uint8_t {
         CudaDevice,
         CudaVmm,
         VulkanDevice,
+        MetalDevice,
         PinnedHost,
         PageableHost,
     };
 
     LFS_CORE_API const char* to_string(MemoryDomain domain) noexcept;
+
+    // The device-heap domain a tensor backend allocates from.
+    LFS_CORE_API MemoryDomain device_memory_domain(GpuBackend backend) noexcept;
 
     // True for domains backed by the physical device heap. A reclaim client for
     // any device-heap domain can relieve a failure in any other device-heap
@@ -160,7 +165,7 @@ namespace lfs::core {
                                   MemoryDomain domain = MemoryDomain::CudaDevice) const;
 
         // LFS_VRAM_RESERVE_MB, default 512 MiB, clamped to [128 MiB, device VRAM/4].
-        size_t reserve_bytes() const noexcept;
+        size_t reserve_bytes(MemoryDomain domain) const noexcept;
 
         // Pressure lease: true while the last episode has not been observed to
         // recover. Degradation clients stay degraded while active.

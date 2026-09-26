@@ -97,4 +97,9 @@ namespace lfs::core {
     // Extract gaussians where mask is non-zero
     LFS_CORE_API SplatData extract_by_mask(const SplatData& splat_data, const Tensor& mask);
 
+    // Copy a model's full SH layout into a float swizzled destination, retaining
+    // inactive coefficients and decoding half/q16 storage on its own backend.
+    LFS_CORE_API void copy_sh_coefficients(const SplatData& model, Tensor& destination,
+                                           size_t destination_offset, uint32_t destination_rest);
+
 } // namespace lfs::core

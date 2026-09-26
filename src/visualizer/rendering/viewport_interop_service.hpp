@@ -5,7 +5,7 @@
 #pragma once
 
 #include "core/tensor.hpp"
-#include "rendering/cuda_vulkan_interop.hpp"
+#include "core/tensor_vulkan_interop.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -19,7 +19,7 @@ namespace lfs::vis {
     class VulkanContext;
     struct VulkanViewportPassParams;
 
-    // Pure early-path decision for per-slot interop prepare. No Vulkan/CUDA calls.
+    // Pure early-path decision for per-slot interop prepare. No Vulkan/tensor calls.
     // Used by ViewportInteropService::prepareChannel and unit tests.
     //
     // target_size_matches: bucket/alloc match (ceil64 source vs target alloc).
@@ -103,7 +103,7 @@ namespace lfs::vis {
         return {.action = ViewportInteropAction::SlowPath};
     }
 
-    // Owns CUDA/Vulkan viewport interop lifecycle for scene, split-right, and depth-blit
+    // Owns Vulkan viewport interop lifecycle for scene, split-right, and depth-blit
     // channels. Visualizer presentation concern (namespace lfs::vis).
     class ViewportInteropService {
     public:
@@ -139,8 +139,6 @@ namespace lfs::vis {
         void clearDepthBlitImage();
 
         // Throws std::runtime_error on hard interop failure (callers catch).
-        // #1575: coalesces transitions to GENERAL and CUDA uploads, then defers
-        // transitions to READ_ONLY until recordFrameBarriers.
         void prepareFrame(VulkanContext& context, bool resize_deferring);
 
         // Roll back layout commits and discard unrecorded frame barriers on
@@ -148,9 +146,6 @@ namespace lfs::vis {
         // skip prepareFrame uploads. prepareFrame calls this at its head.
         void syncUnsubmittedLayoutCommits(VulkanContext& context);
 
-        // #1575: record GENERAL→SHADER_READ_ONLY barriers into the open
-        // frame CB and attach CUDA S2 timeline waits to the frame submit. Call
-        // immediately after beginFrame succeeds, before any sampling of interop images.
         void recordFrameBarriers(VkCommandBuffer frame_cb, VulkanContext& context);
 
         void bindViewportParams(VulkanViewportPassParams& params,
@@ -178,10 +173,8 @@ namespace lfs::vis {
         struct ChannelPolicy {
             ChannelId id = ChannelId::Scene;
             VkFormat vk_format = VK_FORMAT_R8G8B8A8_UNORM;
-            lfs::rendering::CudaVulkanImageFormat cuda_format =
-                lfs::rendering::CudaVulkanImageFormat::Rgba8Unorm;
             const char* debug_name_prefix = "scene";
-            const char* failure_log_prefix = "Required Vulkan/CUDA viewport interop failed";
+            const char* failure_log_prefix = "Required Vulkan/tensor viewport interop failed";
             bool external_handle_early_out = false;
             bool publishes_published = false;
             bool log_timer_perf = false;
@@ -196,12 +189,11 @@ namespace lfs::vis {
             Channel* channel = nullptr;
             VulkanSceneInteropTarget* target = nullptr;
         };
-        // After CUDA signal S2: defer GENERAL→READ_ONLY + publish to the frame CB.
+        // After tensor signal S2: defer GENERAL→READ_ONLY + publish to the frame CB.
         struct PendingFrameBarrier {
             PooledInteropUnit* unit = nullptr;
             VulkanSceneInteropTarget* target = nullptr;
             Channel* channel = nullptr;
-            std::uint64_t cuda_signal_value = 0;
             std::uint64_t source_generation = 0;
         };
         // Layout committed to READ_ONLY at record time; marker is lastSuccessful
@@ -210,6 +202,8 @@ namespace lfs::vis {
             PooledInteropUnit* unit = nullptr;
             Channel* channel = nullptr;
             std::uint64_t frame_submit_marker = 0;
+            VulkanSceneInteropTarget* target = nullptr;
+            VkImageLayout old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
         };
 
         // Performs decision and setup only; may append to pending_uploads_.
@@ -217,21 +211,18 @@ namespace lfs::vis {
         void resetChannel(Channel& channel);
         void clearPublished(Channel& channel);
         void publishFromTarget(Channel& channel, const VulkanSceneInteropTarget& target);
-        void ensureUploadStream();
         void drainInteropPool(VulkanContext& context, bool force);
         void releaseSlotTarget(VulkanContext& context, VulkanSceneInteropTarget& target);
         void rollbackUnsubmittedLayoutCommits(VulkanContext& context);
         [[nodiscard]] bool sourceOk(const Channel& channel) const;
         [[nodiscard]] static ChannelPolicy policyFor(ChannelId id);
 
-        lfs::rendering::CudaVulkanUploadStream upload_stream_;
-        bool upload_stream_init_attempted_ = false;
         VulkanContext* teardown_context_ = nullptr;
         bool shut_down_ = false;
 
         // Built and consumed within prepareFrame.
         std::vector<ChannelUploadPlan> pending_uploads_;
-        // After CUDA signal: GENERAL→READ_ONLY + publish deferred to recordFrameBarriers.
+        // After tensor signal: GENERAL→READ_ONLY + publish deferred to recordFrameBarriers.
         std::vector<PendingFrameBarrier> pending_frame_barriers_;
         // Layout set to READ_ONLY at record time; rolled back if endFrame never submitted.
         std::vector<PendingLayoutCommit> pending_layout_commits_;

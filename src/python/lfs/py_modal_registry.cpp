@@ -17,7 +17,8 @@ namespace lfs::python {
     }
 
     void PyModalRegistry::show_confirm(const std::string& title, const std::string& message,
-                                       const std::vector<std::string>& buttons, nb::object callback) {
+                                       const std::vector<std::string>& buttons, nb::object callback,
+                                       MessageStyle style) {
         std::lock_guard lock(mutex_);
         PyModalDialog modal;
         modal.id = "modal_" + std::to_string(next_id_++);
@@ -26,6 +27,7 @@ namespace lfs::python {
         modal.buttons = buttons.empty() ? std::vector<std::string>{"OK", "Cancel"} : buttons;
         modal.callback = callback;
         modal.type = ModalDialogType::Confirm;
+        modal.style = style;
         modal.is_open = true;
         modal.needs_open = true;
         modals_.push_back(std::move(modal));
@@ -34,7 +36,8 @@ namespace lfs::python {
 
     void PyModalRegistry::show_confirm(const std::string& title, const std::string& message,
                                        const std::vector<std::string>& buttons,
-                                       std::function<void(const std::string&)> callback) {
+                                       std::function<void(const std::string&)> callback,
+                                       MessageStyle style) {
         std::lock_guard lock(mutex_);
         PyModalDialog modal;
         modal.id = "modal_" + std::to_string(next_id_++);
@@ -43,6 +46,7 @@ namespace lfs::python {
         modal.buttons = buttons.empty() ? std::vector<std::string>{"OK", "Cancel"} : buttons;
         modal.cpp_callback = std::move(callback);
         modal.type = ModalDialogType::Confirm;
+        modal.style = style;
         modal.is_open = true;
         modal.needs_open = true;
         modals_.push_back(std::move(modal));

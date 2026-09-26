@@ -20,8 +20,63 @@ body {
     background-color: transparent;
 }
 
+#project-title {
+    color: @{text_dim};
+}
+
+#project-title .project-dirty {
+    color: @{text};
+}
+
 #menu-toolbar {
     background-color: transparent;
+}
+
+.menu-portal-connection:hover,
+.menu-gallery-progress:hover {
+    background-color: @{menu.hover};
+}
+
+.menu-portal-connection.connected {
+    color: @{success};
+}
+
+.menu-portal-connection.connected img {
+    image-color: @{success};
+}
+
+.menu-portal-connection.connecting,
+.menu-portal-connection.transferring {
+    color: @{info};
+}
+
+.menu-portal-connection.connecting img,
+.menu-portal-connection.transferring img {
+    image-color: @{info};
+}
+
+.menu-portal-connection.disconnected {
+    color: @{text_dim};
+}
+
+.menu-portal-connection.disconnected img {
+    image-color: @{text_dim};
+}
+
+.menu-portal-connection.error {
+    color: @{error};
+}
+
+.menu-portal-connection.error img {
+    image-color: @{error};
+}
+
+.menu-gallery-progress-track {
+    background-color: @{border};
+}
+
+.menu-gallery-progress-fill {
+    background-color: @{primary};
 }
 
 .menu-label:hover {

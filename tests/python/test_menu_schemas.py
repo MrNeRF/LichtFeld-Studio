@@ -39,6 +39,8 @@ def _install_lichtfeld_stub(monkeypatch):
         "has_gaussian_selection": True,
         "has_gaussian_clipboard": False,
         "active_tool": "builtin.select",
+        "panel_enabled": [],
+        "panels": {},
     }
 
     ui = SimpleNamespace(
@@ -106,7 +108,8 @@ def _install_lichtfeld_stub(monkeypatch):
         toggle_system_console=lambda: state.__setitem__("python_console_shown", state["python_console_shown"] + 1),
         toggle_vram_hud=lambda: state.__setitem__("vram_hud_toggled", True),
         is_perf_hud_visible=lambda: False,
-        set_panel_enabled=lambda _panel_id, _enabled: None,
+        set_panel_enabled=lambda panel_id, enabled: state["panel_enabled"].append((panel_id, enabled)),
+        get_panel_object=lambda panel_id: state["panels"].get(panel_id),
         is_windows_platform=lambda: False,
         are_file_associations_registered=lambda: False,
         can_edit_gaussian_selection=lambda: state["can_edit_gaussian_selection"],
@@ -131,6 +134,7 @@ def _install_lichtfeld_stub(monkeypatch):
             SELECT_ALL="select_all",
             DESELECT_ALL="deselect_all",
             OPEN_PREFERENCES="open_preferences",
+            TOGGLE_PERFORMANCE_HUD="toggle_performance_hud",
         ),
         ToolMode=SimpleNamespace(GLOBAL="global"),
         is_bound=lambda _action, _mode: True,
@@ -144,6 +148,7 @@ def _install_lichtfeld_stub(monkeypatch):
             "select_all": "Ctrl+A",
             "deselect_all": "Ctrl+D",
             "open_preferences": "Ctrl+,",
+            "toggle_performance_hud": "F10",
         }.get(action, "Unbound"),
     )
 
@@ -159,6 +164,25 @@ def _install_lichtfeld_stub(monkeypatch):
     )
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
     return state
+
+
+def test_keymap_shortcut_bound_unbound_and_unavailable(monkeypatch):
+    _install_lichtfeld_stub(monkeypatch)
+    monkeypatch.delitem(sys.modules, "lfs_plugins.layouts.menus", raising=False)
+    package_stub = ModuleType("lfs_plugins")
+    package_stub.__path__ = [str(PROJECT_ROOT / "src" / "python" / "lfs_plugins")]
+    package_stub.__package__ = "lfs_plugins"
+    monkeypatch.setitem(sys.modules, "lfs_plugins", package_stub)
+
+    menus_mod = import_module("lfs_plugins.layouts.menus")
+    keymap = sys.modules["lichtfeld"].keymap
+    assert menus_mod.keymap_shortcut(keymap.Action.UNDO) == "Ctrl+Z"
+
+    keymap.is_bound = lambda _action, _mode: False
+    assert menus_mod.keymap_shortcut(keymap.Action.UNDO) == ""
+
+    del sys.modules["lichtfeld"].keymap
+    assert menus_mod.keymap_shortcut("undo") == ""
 
 
 def test_menu_helpers_and_builtin_schemas(monkeypatch):
@@ -216,7 +240,7 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert edit_mod.EditMenu.order < select_mod.SelectMenu.order < tools_mod.ToolsMenu.order
 
     select_items = select_mod.SelectMenu().menu_items()
-    assert len(select_items) == 7
+    assert len(select_items) == 9
     assert select_items[0]["label"] == "tr:menu.select.copy_selection"
     assert select_items[0]["shortcut"] == "Ctrl+C"
     assert select_items[0]["enabled"] is True
@@ -244,6 +268,11 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert select_items[6]["enabled"] is True
     select_items[6]["callback"]()
     assert state["deselect_all_called"] is True
+    assert select_items[7]["type"] == "separator"
+    assert select_items[8]["label"] == "tr:menu.select.selection_groups"
+    assert select_items[8]["enabled"] is True
+    assert select_items[8]["callback"]() is True
+    assert state["panel_enabled"] == [("lfs.selection_groups", True)]
 
     state["has_gaussian_selection"] = False
     state["has_gaussian_clipboard"] = True
@@ -257,11 +286,16 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     select_items = select_mod.SelectMenu().menu_items()
     assert select_items[4]["enabled"] is True
     assert select_items[5]["enabled"] is False
+    activated = []
+    monkeypatch.setattr(select_mod, "_activate_select_tool", lambda: activated.append("select") or True)
+    assert select_items[8]["callback"]() is True
+    assert activated == ["select"]
+    assert state["panel_enabled"][-1] == ("lfs.selection_groups", True)
 
     state["active_tool"] = "builtin.select"
     state["can_edit_gaussian_selection"] = False
     select_items = select_mod.SelectMenu().menu_items()
-    assert [item.get("enabled") for item in select_items if item["type"] == "item"] == [False] * 6
+    assert [item.get("enabled") for item in select_items if item["type"] == "item"] == [False] * 7
 
     view_items = view_mod.ViewMenu().menu_items()
     assert view_items[0]["type"] == "submenu"
@@ -314,3 +348,95 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert view_items[5]["label"] == "tr:main_panel.console"
     view_items[5]["callback"]()
     assert state["python_console_shown"] == 1
+
+    keymap = sys.modules["lichtfeld"].keymap
+    keymap.get_trigger_description = lambda action, _mode: {
+        "toggle_performance_hud": "Ctrl+F10",
+        "open_preferences": "Alt+P",
+        "copy_selection": "Alt+C",
+    }.get(action, "")
+    assert view_mod.ViewMenu().menu_items()[3]["shortcut"] == "Ctrl+F10"
+    assert edit_mod.EditMenu().menu_items()[3]["shortcut"] == "Alt+P"
+    assert select_mod.SelectMenu().menu_items()[0]["shortcut"] == "Alt+C"
+    keymap.is_bound = lambda _action, _mode: False
+    assert view_mod.ViewMenu().menu_items()[3]["shortcut"] == ""
+    assert edit_mod.EditMenu().menu_items()[3]["shortcut"] == ""
+    assert select_mod.SelectMenu().menu_items()[0]["shortcut"] == ""
+
+
+def _import_tools_menu(monkeypatch):
+    monkeypatch.delitem(sys.modules, "lfs_plugins", raising=False)
+    monkeypatch.delitem(sys.modules, "lfs_plugins.layouts", raising=False)
+    monkeypatch.delitem(sys.modules, "lfs_plugins.layouts.menus", raising=False)
+    monkeypatch.delitem(sys.modules, "lfs_plugins.tools_menu", raising=False)
+
+    package_stub = ModuleType("lfs_plugins")
+    package_stub.__path__ = [str(PROJECT_ROOT / "src" / "python" / "lfs_plugins")]
+    package_stub.__package__ = "lfs_plugins"
+    monkeypatch.setitem(sys.modules, "lfs_plugins", package_stub)
+    return import_module("lfs_plugins.tools_menu")
+
+
+def test_tools_menu_includes_gallery_entries(monkeypatch):
+    state = _install_lichtfeld_stub(monkeypatch)
+    tools_mod = _import_tools_menu(monkeypatch)
+
+    items = tools_mod.ToolsMenu().menu_items()
+    labels = [item.get("label") for item in items]
+    assert labels[:2] == [
+        "tr:menu.tools.asset_manager",
+        "tr:menu.tools.gallery",
+    ]
+    assert items[2]["type"] == "separator"
+
+    items[1]["callback"]()
+    assert state["panel_enabled"] == [("lfs.asset_manager", True)]
+
+
+def test_tools_menu_projects_selects_scope_when_available(monkeypatch):
+    state = _install_lichtfeld_stub(monkeypatch)
+    selected = []
+    state["panels"]["lfs.asset_manager"] = SimpleNamespace(
+        select_projects_scope=lambda: selected.append(True),
+    )
+    tools_mod = _import_tools_menu(monkeypatch)
+
+    items = tools_mod.ToolsMenu().menu_items()
+    items[0]["callback"]()
+    assert state["panel_enabled"] == [("lfs.asset_manager", True)]
+    assert selected == [True]
+
+
+def test_tools_menu_projects_skips_missing_select_projects_scope(monkeypatch):
+    state = _install_lichtfeld_stub(monkeypatch)
+    state["panels"]["lfs.asset_manager"] = SimpleNamespace()
+    tools_mod = _import_tools_menu(monkeypatch)
+
+    items = tools_mod.ToolsMenu().menu_items()
+    items[0]["callback"]()
+    assert state["panel_enabled"] == [("lfs.asset_manager", True)]
+
+
+
+def test_tools_menu_gallery_selects_scope_when_available(monkeypatch):
+    state = _install_lichtfeld_stub(monkeypatch)
+    selected = []
+    state["panels"]["lfs.asset_manager"] = SimpleNamespace(
+        select_gallery_scope=lambda: selected.append(True),
+    )
+    tools_mod = _import_tools_menu(monkeypatch)
+
+    items = tools_mod.ToolsMenu().menu_items()
+    items[1]["callback"]()
+    assert state["panel_enabled"] == [("lfs.asset_manager", True)]
+    assert selected == [True]
+
+
+def test_tools_menu_gallery_skips_missing_select_gallery_scope(monkeypatch):
+    state = _install_lichtfeld_stub(monkeypatch)
+    state["panels"]["lfs.asset_manager"] = SimpleNamespace()
+    tools_mod = _import_tools_menu(monkeypatch)
+
+    items = tools_mod.ToolsMenu().menu_items()
+    items[1]["callback"]()
+    assert state["panel_enabled"] == [("lfs.asset_manager", True)]

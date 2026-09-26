@@ -40,6 +40,12 @@ namespace lfs::io {
         Custom
     };
 
+    enum class ExtractionOutcome {
+        Completed,
+        Cancelled,
+        Failed,
+    };
+
     enum class SharpnessAlgorithm {
         LAPLACIAN, // Laplacian variance — fast, blur detection
         TENENGRAD, // Sobel energy — directional blur detection
@@ -98,6 +104,7 @@ namespace lfs::io {
                                                  int source_height, double stream_time_base,
                                                  ValidatedLayout& layout, std::string& error);
         bool extract(const Params& params, std::string& error);
+        [[nodiscard]] ExtractionOutcome lastOutcome() const;
 
     private:
         class Impl;

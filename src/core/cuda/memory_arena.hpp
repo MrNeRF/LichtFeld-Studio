@@ -191,6 +191,10 @@ namespace lfs::core {
         uint64_t pending_render_frames_ = 0;
         uint64_t active_training_frames_ = 0;
         uint64_t last_handoff_frame_id_ = 0;
+        uint64_t render_handoff_token_ = 0;
+        uint64_t next_render_handoff_token_ = 1;
+        std::chrono::steady_clock::time_point render_handoff_deadline_{};
+        uint32_t render_handoff_training_frames_ = 0;
 
         // Completion event of the most recent stream-aware frame. Invalid when
         // the last frame was legacy (no stream) — the next begin then falls back
@@ -248,6 +252,33 @@ namespace lfs::core {
         }
         std::optional<uint64_t> try_begin_frame_for(uint32_t timeout_ms, cudaStream_t stream,
                                                     bool from_rendering = false);
+        using RenderHandoffToken = uint64_t;
+        static constexpr uint32_t kRenderHandoffLeaseMs = 100;
+        // Keeps the next idle arena window for a renderer after an ordinary
+        // bounded timeout. The short lease survives the caller unwinding model
+        // locks, but expires on its own if the viewport is minimized, paused, or
+        // otherwise abandons the retry. Supplying the current token renews only
+        // that request; an old token can never replace or cancel a newer owner.
+        // A new reservation lets `training_frames_first` training frames begin
+        // before it holds training back; renewing keeps what is left of them.
+        [[nodiscard]] RenderHandoffToken request_render_handoff(
+            RenderHandoffToken current_token = 0, uint32_t training_frames_first = 0);
+        void cancel_render_handoff(RenderHandoffToken token);
+        [[nodiscard]] bool has_render_handoff(RenderHandoffToken token) const;
+        // True while this live reservation still lets training frames begin first.
+        [[nodiscard]] bool render_handoff_owes_training(RenderHandoffToken token) const;
+        // Stops this reservation from letting any further training frame begin.
+        void withdraw_render_handoff_training_frames(RenderHandoffToken token);
+        // Host-waits for GPU work only within timeout_ms: while the previous
+        // CUDA frame is still running on the GPU it polls that frame, then
+        // declines like a busy arena, and the caller's reservation keeps the
+        // next training frame out until it retries.
+        std::optional<uint64_t> try_begin_render_frame_for(
+            uint32_t timeout_ms, RenderHandoffToken token = 0);
+        // True when a render holding this reservation could begin now without
+        // waiting: no frame is active, no other reservation is live, and the
+        // previous CUDA frame has finished on the GPU.
+        [[nodiscard]] bool render_frame_ready(RenderHandoffToken token = 0) const;
         void end_frame(uint64_t frame_id, bool from_rendering = false) { end_frame(frame_id, nullptr, from_rendering); }
         void end_frame(uint64_t frame_id, cudaStream_t stream, bool from_rendering = false);
 
@@ -326,8 +357,13 @@ namespace lfs::core {
         Arena& get_or_create_arena(int device);
         // wait_timeout: nullopt = non-blocking try; 0 = wait forever; else bounded.
         std::optional<uint64_t> begin_frame_impl(cudaStream_t stream, bool from_rendering,
-                                                 std::optional<uint32_t> wait_timeout_ms);
+                                                 std::optional<uint32_t> wait_timeout_ms,
+                                                 RenderHandoffToken render_handoff_token = 0,
+                                                 bool decline_while_previous_frame_runs = false);
         cudaError_t wait_for_previous_frame(cudaStream_t stream);
+        // True while the last stream-ordered frame's completion event is still
+        // pending on the GPU. Caller holds sync_mutex_.
+        [[nodiscard]] bool previous_frame_still_running() const;
         // Host-blocks on a pending Vulkan release fence (note_external_release)
         // and clears it. Must run before any path that frees or replaces arena
         // backing — a device sync cannot observe the in-flight Vulkan batch.

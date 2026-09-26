@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "command_api.hpp"
+#include "core/event_bridge/command_api.hpp"
 
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -192,85 +192,6 @@ namespace lfs::training {
             loss_history_.push_back({ctx.iteration, ctx.loss});
             last_recorded_iteration_ = ctx.iteration;
         }
-    }
-
-    void CommandCenter::overlay_stored_session(std::string strategy, bool hydrated) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        snapshot_.strategy = std::move(strategy);
-        snapshot_.session_hydrated = hydrated;
-    }
-
-    void CommandCenter::reset_snapshot_locked() {
-        snapshot_ = {};
-        pending_commands_.clear();
-        phase_.store(TrainingPhase::Idle, std::memory_order_relaxed);
-    }
-
-    void CommandCenter::clear_snapshot(const Trainer* trainer) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (snapshot_.trainer != trainer) {
-            return;
-        }
-        reset_snapshot_locked();
-    }
-
-    void CommandCenter::reset_snapshot() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        reset_snapshot_locked();
-    }
-
-    TrainingSnapshot CommandCenter::snapshot() const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        TrainingSnapshot snap = snapshot_;
-        snap.phase = phase_.load(std::memory_order_relaxed);
-        return snap;
-    }
-
-    std::vector<LossHistoryPoint> CommandCenter::loss_history() const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return loss_history_;
-    }
-
-    void CommandCenter::clear_loss_history() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        loss_history_.clear();
-        last_recorded_iteration_ = -1;
-    }
-
-    void CommandCenter::replace_loss_history(
-        std::vector<LossHistoryPoint> history) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        loss_history_ = std::move(history);
-        last_recorded_iteration_ =
-            loss_history_.empty()
-                ? -1
-                : loss_history_.back().iteration;
-    }
-
-    std::vector<OperationInfo> CommandCenter::operations(std::optional<CommandTarget> target) const {
-        if (!target) {
-            return ops_;
-        }
-        std::vector<OperationInfo> filtered;
-        for (const auto& op : ops_) {
-            if (op.target == *target) {
-                filtered.push_back(op);
-            }
-        }
-        return filtered;
-    }
-
-    std::vector<MutableFieldInfo> CommandCenter::mutables(std::optional<CommandTarget> target) const {
-        if (!target) {
-            return mutable_fields_;
-        }
-        std::vector<MutableFieldInfo> filtered;
-        for (const auto& f : mutable_fields_) {
-            if (f.target == *target) {
-                filtered.push_back(f);
-            }
-        }
-        return filtered;
     }
 
     void CommandCenter::drain_enqueued(TrainingSnapshot& view) {

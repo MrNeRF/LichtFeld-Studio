@@ -447,52 +447,52 @@ namespace lfs::io::usd_flat {
 
             if (name == "positions" || name == "positionsh" || name == "scales" || name == "scalesh" ||
                 name == "radiance:sphericalHarmonicsCoefficients" || name == "radiance:sphericalHarmonicsCoefficientsh") {
-                if (const auto* values = raw.as<std::vector<tinyusdz::value::point3f>>()) {
-                    append_vec3(*values, output);
-                } else if (const auto* values = raw.as<std::vector<tinyusdz::value::float3>>()) {
-                    append_vec3(*values, output);
-                } else if (const auto* values = raw.as<std::vector<tinyusdz::value::point3h>>()) {
-                    append_vec3_half(*values, output);
-                } else if (const auto* values = raw.as<std::vector<tinyusdz::value::half3>>()) {
+                if (const auto* point3f_values = raw.as<std::vector<tinyusdz::value::point3f>>()) {
+                    append_vec3(*point3f_values, output);
+                } else if (const auto* float3_values = raw.as<std::vector<tinyusdz::value::float3>>()) {
+                    append_vec3(*float3_values, output);
+                } else if (const auto* point3h_values = raw.as<std::vector<tinyusdz::value::point3h>>()) {
+                    append_vec3_half(*point3h_values, output);
+                } else if (const auto* half3_values = raw.as<std::vector<tinyusdz::value::half3>>()) {
                     output.components = 3;
-                    output.values.resize(values->size() * 3);
-                    for (std::size_t index = 0; index < values->size(); ++index) {
+                    output.values.resize(half3_values->size() * 3);
+                    for (std::size_t index = 0; index < half3_values->size(); ++index) {
                         for (std::size_t component = 0; component < 3; ++component) {
-                            output.values[index * 3 + component] = half_to_float((*values)[index][component].value);
+                            output.values[index * 3 + component] = half_to_float((*half3_values)[index][component].value);
                         }
                     }
                     output.authored = true;
                 }
             } else if (name == "orientations" || name == "orientationsh") {
-                if (const auto* values = raw.as<std::vector<tinyusdz::value::quatf>>()) {
-                    append_quat(*values, output);
-                } else if (const auto* values = raw.as<std::vector<tinyusdz::value::quath>>()) {
-                    append_quat_half(*values, output);
+                if (const auto* quatf_values = raw.as<std::vector<tinyusdz::value::quatf>>()) {
+                    append_quat(*quatf_values, output);
+                } else if (const auto* quath_values = raw.as<std::vector<tinyusdz::value::quath>>()) {
+                    append_quat_half(*quath_values, output);
                 }
             } else if (name == "opacities" || name == "opacitiesh") {
-                if (const auto* values = raw.as<std::vector<float>>()) {
-                    append_scalar(*values, output);
-                } else if (const auto* values = raw.as<std::vector<tinyusdz::value::half>>()) {
-                    append_scalar_half(*values, output);
+                if (const auto* float_values = raw.as<std::vector<float>>()) {
+                    append_scalar(*float_values, output);
+                } else if (const auto* half_values = raw.as<std::vector<tinyusdz::value::half>>()) {
+                    append_scalar_half(*half_values, output);
                 }
             } else if (name == "radiance:sphericalHarmonicsDegree") {
-                if (const auto* value = raw.as<std::int32_t>()) {
-                    output.values = {static_cast<float>(*value)};
+                if (const auto* int32_value = raw.as<std::int32_t>()) {
+                    output.values = {static_cast<float>(*int32_value)};
                     output.authored = true;
-                } else if (const auto* value = raw.as<int64_t>()) {
-                    output.values = {static_cast<float>(*value)};
+                } else if (const auto* int64_value = raw.as<int64_t>()) {
+                    output.values = {static_cast<float>(*int64_value)};
                     output.authored = true;
                 }
             } else if (name == "extent") {
-                if (const auto* values = raw.as<tinyusdz::Extent>()) {
+                if (const auto* extent_values = raw.as<tinyusdz::Extent>()) {
                     output.components = 3;
-                    output.values = {values->lower[0], values->lower[1], values->lower[2],
-                                     values->upper[0], values->upper[1], values->upper[2]};
+                    output.values = {extent_values->lower[0], extent_values->lower[1], extent_values->lower[2],
+                                     extent_values->upper[0], extent_values->upper[1], extent_values->upper[2]};
                     output.authored = true;
-                } else if (const auto* values = raw.as<std::vector<tinyusdz::value::float3>>()) {
-                    append_vec3(*values, output);
-                } else if (const auto* values = raw.as<std::vector<tinyusdz::value::point3f>>()) {
-                    append_vec3(*values, output);
+                } else if (const auto* float3_values = raw.as<std::vector<tinyusdz::value::float3>>()) {
+                    append_vec3(*float3_values, output);
+                } else if (const auto* point3f_values = raw.as<std::vector<tinyusdz::value::point3f>>()) {
+                    append_vec3(*point3f_values, output);
                 }
             }
             if (output.authored) {
@@ -575,10 +575,10 @@ namespace lfs::io::usd_flat {
         output.up_axis = metas.upAxis.get_value() == tinyusdz::Axis::Y ? "Y" : metas.upAxis.get_value() == tinyusdz::Axis::Z ? "Z"
                                                                                                                              : "X";
         for (const auto& item : metas.customLayerData) {
-            if (const auto value = item.second.get_value<std::string>()) {
-                output.custom_layer_data[item.first] = *value;
-            } else if (const auto value = item.second.get_value<tinyusdz::value::StringData>()) {
-                output.custom_layer_data[item.first] = value->value;
+            if (const auto string_value = item.second.get_value<std::string>()) {
+                output.custom_layer_data[item.first] = *string_value;
+            } else if (const auto string_data_value = item.second.get_value<tinyusdz::value::StringData>()) {
+                output.custom_layer_data[item.first] = string_data_value->value;
             }
         }
         for (const auto& prim : reader.get_stage().root_prims()) {

@@ -64,10 +64,13 @@ def log(message: str) -> None:
 
 
 def post_json(payload: Any, timeout_s: float = 5.0) -> Any:
+    headers = {"content-type": "application/json"}
+    if token := os.environ.get("LFS_MCP_TOKEN"):
+        headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(
         DEFAULT_ENDPOINT,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"content-type": "application/json"},
+        headers=headers,
     )
     with urllib.request.urlopen(request, timeout=timeout_s) as response:
         return json.loads(response.read().decode("utf-8"))
@@ -432,7 +435,7 @@ def initialize_response(message: dict[str, Any]) -> dict[str, Any]:
         message,
         {
             "protocolVersion": protocol_version,
-            "capabilities": {"tools": {}},
+            "capabilities": {"tools": {}, "resources": {}},
             "serverInfo": {
                 "name": BRIDGE_NAME,
                 "version": BRIDGE_VERSION,
@@ -492,7 +495,21 @@ def write_tools_cache(response: Any) -> None:
 
 
 def forward_message(message: Any) -> Any:
-    return post_json(message, timeout_s=30.0)
+    response = post_json(message, timeout_s=30.0)
+    # Initialization is served locally to keep discovery lazy. A newly launched
+    # HTTP server still needs its own handshake before resources or tools work.
+    error = response.get("error", {}) if isinstance(response, dict) else {}
+    if error.get("code") == -32600 and "not initialized" in error.get("message", "").lower():
+        initialized = post_json({
+            "jsonrpc": "2.0", "id": 0, "method": "initialize",
+            "params": {"protocolVersion": DEFAULT_PROTOCOL_VERSION,
+                       "capabilities": {},
+                       "clientInfo": {"name": BRIDGE_NAME, "version": BRIDGE_VERSION}},
+        })
+        if isinstance(initialized, dict) and initialized.get("error") is not None:
+            raise RuntimeError(f"LichtFeld initialization failed: {initialized['error']}")
+        response = post_json(message, timeout_s=30.0)
+    return response
 
 
 def main() -> int:

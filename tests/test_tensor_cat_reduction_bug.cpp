@@ -13,8 +13,10 @@
  */
 
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 #include <gtest/gtest.h>
 #include <numeric>
+#include <optional>
 #include <random>
 #include <torch/torch.h>
 #include <vector>
@@ -24,7 +26,6 @@ using namespace lfs::core;
 class TensorCatReductionBugTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        ASSERT_TRUE(torch::cuda::is_available()) << "CUDA is not available for testing";
         torch::manual_seed(42);
         Tensor::manual_seed(42);
     }
@@ -60,6 +61,19 @@ protected:
     }
 };
 
+class TensorCatReductionCudaTest : public TensorCatReductionBugTest {
+protected:
+    void SetUp() override {
+        if (!gpu_backend_available(GpuBackend::CUDA))
+            GTEST_SKIP() << "CUDA device unavailable";
+        backend_scope_.emplace(GpuBackend::CUDA);
+        TensorCatReductionBugTest::SetUp();
+    }
+
+private:
+    std::optional<GpuBackendScope> backend_scope_;
+};
+
 // ============================================================================
 // PART 1: Basic cat + reduction tests at different scales
 // ============================================================================
@@ -68,8 +82,8 @@ TEST_F(TensorCatReductionBugTest, Cat_1D_Small) {
     std::vector<float> d1 = {100.0f, 200.0f, 300.0f};
     std::vector<float> d2 = {1.0f, 2.0f, 3.0f};
 
-    auto t1 = Tensor::from_vector(d1, {3}, Device::CUDA);
-    auto t2 = Tensor::from_vector(d2, {3}, Device::CUDA);
+    auto t1 = Tensor::from_vector(d1, {3}, Device::GPU);
+    auto t2 = Tensor::from_vector(d2, {3}, Device::GPU);
     auto cat = Tensor::cat({t1, t2}, 0);
 
     verifyMinMax(cat, "Cat_1D_Small");
@@ -85,8 +99,8 @@ TEST_F(TensorCatReductionBugTest, Cat_1D_Medium_1000) {
         d2[i] = -500.0f + static_cast<float>(i); // [-500, 499]
     }
 
-    auto t1 = Tensor::from_vector(d1, {N}, Device::CUDA);
-    auto t2 = Tensor::from_vector(d2, {N}, Device::CUDA);
+    auto t1 = Tensor::from_vector(d1, {N}, Device::GPU);
+    auto t2 = Tensor::from_vector(d2, {N}, Device::GPU);
     auto cat = Tensor::cat({t1, t2}, 0);
 
     verifyMinMax(cat, "Cat_1D_Medium_1000");
@@ -102,8 +116,8 @@ TEST_F(TensorCatReductionBugTest, Cat_1D_Large_100K) {
         d2[i] = -1000.0f + static_cast<float>(i % 1000); // [-1000, -1]
     }
 
-    auto t1 = Tensor::from_vector(d1, {N}, Device::CUDA);
-    auto t2 = Tensor::from_vector(d2, {N}, Device::CUDA);
+    auto t1 = Tensor::from_vector(d1, {N}, Device::GPU);
+    auto t2 = Tensor::from_vector(d2, {N}, Device::GPU);
     auto cat = Tensor::cat({t1, t2}, 0);
 
     verifyMinMax(cat, "Cat_1D_Large_100K");
@@ -122,8 +136,8 @@ TEST_F(TensorCatReductionBugTest, Cat_1D_VeryLarge_1M) {
         p2[i] = -100.0f + static_cast<float>(i % 50); // [-100, -51]
     }
 
-    auto t1 = cpu1.to(Device::CUDA);
-    auto t2 = cpu2.to(Device::CUDA);
+    auto t1 = cpu1.to(Device::GPU);
+    auto t2 = cpu2.to(Device::GPU);
     auto cat = Tensor::cat({t1, t2}, 0);
 
     verifyMinMax(cat, "Cat_1D_VeryLarge_1M");
@@ -143,8 +157,8 @@ TEST_F(TensorCatReductionBugTest, Cat_1D_Huge_2_6M) {
         p2[i] = -14.0f + static_cast<float>(i % 36); // [-14, 21]
     }
 
-    auto t1 = cpu1.to(Device::CUDA);
-    auto t2 = cpu2.to(Device::CUDA);
+    auto t1 = cpu1.to(Device::GPU);
+    auto t2 = cpu2.to(Device::GPU);
     auto cat = Tensor::cat({t1, t2}, 0);
 
     verifyMinMax(cat, "Cat_1D_Huge_2_6M");
@@ -160,8 +174,8 @@ TEST_F(TensorCatReductionBugTest, Cat_2D_SliceColumn_Small) {
     std::vector<float> d1 = {100.0f, 1.0f, 200.0f, 2.0f, 300.0f, 3.0f}; // [3, 2]
     std::vector<float> d2 = {-50.0f, 4.0f, -60.0f, 5.0f};               // [2, 2]
 
-    auto t1 = Tensor::from_vector(d1, {3, 2}, Device::CUDA);
-    auto t2 = Tensor::from_vector(d2, {2, 2}, Device::CUDA);
+    auto t1 = Tensor::from_vector(d1, {3, 2}, Device::GPU);
+    auto t2 = Tensor::from_vector(d2, {2, 2}, Device::GPU);
     auto cat = Tensor::cat({t1, t2}, 0); // [5, 2]
 
     ASSERT_EQ(cat.size(0), 5);
@@ -198,8 +212,8 @@ TEST_F(TensorCatReductionBugTest, Cat_2D_SliceColumn_Medium) {
         p2[i * 3 + 2] = 0.0f;
     }
 
-    auto t1 = cpu1.to(Device::CUDA);
-    auto t2 = cpu2.to(Device::CUDA);
+    auto t1 = cpu1.to(Device::GPU);
+    auto t2 = cpu2.to(Device::GPU);
     auto cat = Tensor::cat({t1, t2}, 0);
 
     auto col0 = cat.slice(1, 0, 1).squeeze(1);
@@ -229,8 +243,8 @@ TEST_F(TensorCatReductionBugTest, Cat_2D_SliceColumn_Large_Exact) {
         p2[i * 3 + 2] = -16.0f + static_cast<float>(i % 28);
     }
 
-    auto t1 = cpu1.to(Device::CUDA);
-    auto t2 = cpu2.to(Device::CUDA);
+    auto t1 = cpu1.to(Device::GPU);
+    auto t2 = cpu2.to(Device::GPU);
     auto cat = Tensor::cat({t1, t2}, 0);
 
     // This is the EXACT pattern from compute_bounds
@@ -250,7 +264,7 @@ TEST_F(TensorCatReductionBugTest, Cat_2D_SliceColumn_Large_Exact) {
 
 TEST_F(TensorCatReductionBugTest, Slice_1D_Range_Small) {
     std::vector<float> data = {1.0f, 2.0f, 3.0f, 100.0f, 200.0f, 300.0f};
-    auto t = Tensor::from_vector(data, {6}, Device::CUDA);
+    auto t = Tensor::from_vector(data, {6}, Device::GPU);
 
     auto slice1 = t.slice(0, 0, 3); // [1, 2, 3]
     auto slice2 = t.slice(0, 3, 6); // [100, 200, 300]
@@ -275,7 +289,7 @@ TEST_F(TensorCatReductionBugTest, Slice_1D_Range_Large) {
         p[i] = -1000.0f - static_cast<float>(i - N / 2); // [-1000, -50999]
     }
 
-    auto t = cpu.to(Device::CUDA);
+    auto t = cpu.to(Device::GPU);
 
     auto slice1 = t.slice(0, 0, N / 2);
     auto slice2 = t.slice(0, N / 2, N);
@@ -295,7 +309,7 @@ TEST_F(TensorCatReductionBugTest, Slice_2D_Column_Small) {
         2.0f, 20.0f, 200.0f,
         3.0f, 30.0f, 300.0f,
         4.0f, 40.0f, 400.0f};
-    auto t = Tensor::from_vector(data, {4, 3}, Device::CUDA);
+    auto t = Tensor::from_vector(data, {4, 3}, Device::GPU);
 
     for (int c = 0; c < 3; ++c) {
         auto col = t.slice(1, c, c + 1).squeeze(1);
@@ -324,7 +338,7 @@ TEST_F(TensorCatReductionBugTest, Slice_2D_Column_Large) {
         p[i * 3 + 2] = 1000.0f;                // constant
     }
 
-    auto t = cpu.to(Device::CUDA);
+    auto t = cpu.to(Device::GPU);
 
     auto col0 = t.slice(1, 0, 1).squeeze(1);
     auto col1 = t.slice(1, 1, 2).squeeze(1);
@@ -347,7 +361,7 @@ TEST_F(TensorCatReductionBugTest, Slice_2D_Row_Small) {
         1.0f, 2.0f, 3.0f,
         100.0f, 200.0f, 300.0f,
         10.0f, 20.0f, 30.0f};
-    auto t = Tensor::from_vector(data, {3, 3}, Device::CUDA);
+    auto t = Tensor::from_vector(data, {3, 3}, Device::GPU);
 
     auto row0 = t.slice(0, 0, 1).squeeze(0);
     auto row1 = t.slice(0, 1, 2).squeeze(0);
@@ -369,7 +383,7 @@ TEST_F(TensorCatReductionBugTest, Slice_2D_Row_Small) {
 
 TEST_F(TensorCatReductionBugTest, StorageOffset_SliceMiddle) {
     std::vector<float> data = {1.0f, 2.0f, 3.0f, 100.0f, 200.0f, 300.0f, 10.0f, 20.0f, 30.0f};
-    auto t = Tensor::from_vector(data, {9}, Device::CUDA);
+    auto t = Tensor::from_vector(data, {9}, Device::GPU);
 
     // Slice middle portion
     auto middle = t.slice(0, 3, 6); // Should be [100, 200, 300]
@@ -383,7 +397,7 @@ TEST_F(TensorCatReductionBugTest, StorageOffset_SliceMiddle) {
 
 TEST_F(TensorCatReductionBugTest, StorageOffset_SliceEnd) {
     std::vector<float> data = {1000.0f, 2000.0f, 3000.0f, 1.0f, 2.0f, 3.0f};
-    auto t = Tensor::from_vector(data, {6}, Device::CUDA);
+    auto t = Tensor::from_vector(data, {6}, Device::GPU);
 
     auto end = t.slice(0, 3, 6); // Should be [1, 2, 3]
 
@@ -396,8 +410,8 @@ TEST_F(TensorCatReductionBugTest, StorageOffset_CatThenSlice) {
     std::vector<float> d1 = {10.0f, 20.0f, 30.0f};
     std::vector<float> d2 = {1.0f, 2.0f, 3.0f};
 
-    auto t1 = Tensor::from_vector(d1, {3}, Device::CUDA);
-    auto t2 = Tensor::from_vector(d2, {3}, Device::CUDA);
+    auto t1 = Tensor::from_vector(d1, {3}, Device::GPU);
+    auto t2 = Tensor::from_vector(d2, {3}, Device::GPU);
     auto cat = Tensor::cat({t1, t2}, 0);
 
     // Cat should be contiguous with offset 0
@@ -418,7 +432,7 @@ TEST_F(TensorCatReductionBugTest, StorageOffset_2D_ColumnSlice) {
         1.0f, 100.0f,
         2.0f, 200.0f,
         3.0f, 300.0f};
-    auto t = Tensor::from_vector(data, {3, 2}, Device::CUDA);
+    auto t = Tensor::from_vector(data, {3, 2}, Device::GPU);
 
     auto col0 = t.slice(1, 0, 1).squeeze(1); // [1, 2, 3]
     auto col1 = t.slice(1, 1, 2).squeeze(1); // [100, 200, 300]
@@ -441,7 +455,7 @@ TEST_F(TensorCatReductionBugTest, Contiguous_ColumnSlice_Small) {
         1.0f, 10.0f, 100.0f,
         2.0f, 20.0f, 200.0f,
         3.0f, 30.0f, 300.0f};
-    auto t = Tensor::from_vector(data, {3, 3}, Device::CUDA);
+    auto t = Tensor::from_vector(data, {3, 3}, Device::GPU);
 
     auto col0 = t.slice(1, 0, 1).squeeze(1);
 
@@ -471,7 +485,7 @@ TEST_F(TensorCatReductionBugTest, Contiguous_ColumnSlice_Large) {
         p[i * 3 + 2] = 0.0f;
     }
 
-    auto t = cpu.to(Device::CUDA);
+    auto t = cpu.to(Device::GPU);
     auto col0 = t.slice(1, 0, 1).squeeze(1);
     auto col0_contig = col0.contiguous();
 
@@ -499,8 +513,8 @@ TEST_F(TensorCatReductionBugTest, Contiguous_AfterCatSlice) {
         p2[i * 3] = -100.0f - static_cast<float>(i % 100);
     }
 
-    auto t1 = cpu1.to(Device::CUDA);
-    auto t2 = cpu2.to(Device::CUDA);
+    auto t1 = cpu1.to(Device::GPU);
+    auto t2 = cpu2.to(Device::GPU);
     auto cat = Tensor::cat({t1, t2}, 0);
 
     auto col0 = cat.slice(1, 0, 1).squeeze(1);
@@ -519,8 +533,8 @@ TEST_F(TensorCatReductionBugTest, Sum_Cat_1D) {
     std::vector<float> d1 = {1.0f, 2.0f, 3.0f};    // sum = 6
     std::vector<float> d2 = {10.0f, 20.0f, 30.0f}; // sum = 60
 
-    auto t1 = Tensor::from_vector(d1, {3}, Device::CUDA);
-    auto t2 = Tensor::from_vector(d2, {3}, Device::CUDA);
+    auto t1 = Tensor::from_vector(d1, {3}, Device::GPU);
+    auto t2 = Tensor::from_vector(d2, {3}, Device::GPU);
     auto cat = Tensor::cat({t1, t2}, 0);
 
     float sum = cat.sum_scalar();
@@ -531,8 +545,8 @@ TEST_F(TensorCatReductionBugTest, Sum_Cat_2D_Column) {
     std::vector<float> d1 = {1.0f, 10.0f, 2.0f, 20.0f, 3.0f, 30.0f}; // [3, 2]
     std::vector<float> d2 = {4.0f, 40.0f, 5.0f, 50.0f};              // [2, 2]
 
-    auto t1 = Tensor::from_vector(d1, {3, 2}, Device::CUDA);
-    auto t2 = Tensor::from_vector(d2, {2, 2}, Device::CUDA);
+    auto t1 = Tensor::from_vector(d1, {3, 2}, Device::GPU);
+    auto t2 = Tensor::from_vector(d2, {2, 2}, Device::GPU);
     auto cat = Tensor::cat({t1, t2}, 0);
 
     auto col0 = cat.slice(1, 0, 1).squeeze(1); // [1, 2, 3, 4, 5]
@@ -556,7 +570,7 @@ TEST_F(TensorCatReductionBugTest, Sum_Slice_Large) {
         expected_second += 2.0f;
     }
 
-    auto t = cpu.to(Device::CUDA);
+    auto t = cpu.to(Device::GPU);
     auto slice1 = t.slice(0, 0, N / 2);
     auto slice2 = t.slice(0, N / 2, N);
 
@@ -572,8 +586,8 @@ TEST_F(TensorCatReductionBugTest, Mean_Cat_1D) {
     std::vector<float> d1 = {2.0f, 4.0f, 6.0f};    // mean = 4
     std::vector<float> d2 = {10.0f, 20.0f, 30.0f}; // mean = 20, combined mean = 12
 
-    auto t1 = Tensor::from_vector(d1, {3}, Device::CUDA);
-    auto t2 = Tensor::from_vector(d2, {3}, Device::CUDA);
+    auto t1 = Tensor::from_vector(d1, {3}, Device::GPU);
+    auto t2 = Tensor::from_vector(d2, {3}, Device::GPU);
     auto cat = Tensor::cat({t1, t2}, 0);
 
     float mean = cat.mean_scalar();
@@ -585,7 +599,7 @@ TEST_F(TensorCatReductionBugTest, Mean_Slice_Column) {
         1.0f, 10.0f,
         3.0f, 30.0f,
         5.0f, 50.0f};
-    auto t = Tensor::from_vector(data, {3, 2}, Device::CUDA);
+    auto t = Tensor::from_vector(data, {3, 2}, Device::GPU);
 
     auto col0 = t.slice(1, 0, 1).squeeze(1);
     auto col1 = t.slice(1, 1, 2).squeeze(1);
@@ -598,12 +612,12 @@ TEST_F(TensorCatReductionBugTest, Mean_Slice_Column) {
 // PART 8: torch comparison (ground truth)
 // ============================================================================
 
-TEST_F(TensorCatReductionBugTest, VsTorch_Cat_1D) {
+TEST_F(TensorCatReductionCudaTest, VsTorch_Cat_1D) {
     std::vector<float> d1 = {100.0f, 200.0f, 300.0f};
     std::vector<float> d2 = {1.0f, 2.0f, 3.0f};
 
-    auto our_t1 = Tensor::from_vector(d1, {3}, Device::CUDA);
-    auto our_t2 = Tensor::from_vector(d2, {3}, Device::CUDA);
+    auto our_t1 = Tensor::from_vector(d1, {3}, Device::GPU);
+    auto our_t2 = Tensor::from_vector(d2, {3}, Device::GPU);
     auto our_cat = Tensor::cat({our_t1, our_t2}, 0);
 
     auto torch_t1 = torch::tensor(d1, torch::kCUDA);
@@ -613,12 +627,12 @@ TEST_F(TensorCatReductionBugTest, VsTorch_Cat_1D) {
     verifyVsTorch(our_cat, torch_cat, "VsTorch_Cat_1D");
 }
 
-TEST_F(TensorCatReductionBugTest, VsTorch_Cat_2D_SliceColumn) {
+TEST_F(TensorCatReductionCudaTest, VsTorch_Cat_2D_SliceColumn) {
     std::vector<float> d1 = {31.0f, 1.0f, 66.0f, 2.0f};  // [2, 2]
     std::vector<float> d2 = {-14.0f, 3.0f, 21.0f, 4.0f}; // [2, 2]
 
-    auto our_t1 = Tensor::from_vector(d1, {2, 2}, Device::CUDA);
-    auto our_t2 = Tensor::from_vector(d2, {2, 2}, Device::CUDA);
+    auto our_t1 = Tensor::from_vector(d1, {2, 2}, Device::GPU);
+    auto our_t2 = Tensor::from_vector(d2, {2, 2}, Device::GPU);
     auto our_cat = Tensor::cat({our_t1, our_t2}, 0);
     auto our_col0 = our_cat.slice(1, 0, 1).squeeze(1);
 
@@ -634,10 +648,10 @@ TEST_F(TensorCatReductionBugTest, VsTorch_Cat_2D_SliceColumn) {
     EXPECT_FLOAT_EQ(torch_col0.max().item<float>(), 66.0f);
 }
 
-TEST_F(TensorCatReductionBugTest, VsTorch_Slice_Range) {
+TEST_F(TensorCatReductionCudaTest, VsTorch_Slice_Range) {
     std::vector<float> data = {1.0f, 2.0f, 3.0f, 100.0f, 200.0f, 300.0f};
 
-    auto our_t = Tensor::from_vector(data, {6}, Device::CUDA);
+    auto our_t = Tensor::from_vector(data, {6}, Device::GPU);
     auto our_slice = our_t.slice(0, 3, 6);
 
     auto torch_t = torch::tensor(data, torch::kCUDA);
@@ -646,7 +660,7 @@ TEST_F(TensorCatReductionBugTest, VsTorch_Slice_Range) {
     verifyVsTorch(our_slice, torch_slice, "VsTorch_Slice_Range");
 }
 
-TEST_F(TensorCatReductionBugTest, VsTorch_Large_Cat_Column) {
+TEST_F(TensorCatReductionCudaTest, VsTorch_Large_Cat_Column) {
     const size_t N = 100000;
     std::vector<float> d1(N * 3), d2(N * 3);
 
@@ -659,8 +673,8 @@ TEST_F(TensorCatReductionBugTest, VsTorch_Large_Cat_Column) {
         d2[i * 3 + 2] = 0.0f;
     }
 
-    auto our_t1 = Tensor::from_vector(d1, {N, 3}, Device::CUDA);
-    auto our_t2 = Tensor::from_vector(d2, {N, 3}, Device::CUDA);
+    auto our_t1 = Tensor::from_vector(d1, {N, 3}, Device::GPU);
+    auto our_t2 = Tensor::from_vector(d2, {N, 3}, Device::GPU);
     auto our_cat = Tensor::cat({our_t1, our_t2}, 0);
     auto our_col0 = our_cat.slice(1, 0, 1).squeeze(1);
 
@@ -682,10 +696,10 @@ TEST_F(TensorCatReductionBugTest, Cat_Multiple_Tensors) {
     std::vector<float> d3 = {-50.0f, -60.0f};
     std::vector<float> d4 = {500.0f, 600.0f};
 
-    auto t1 = Tensor::from_vector(d1, {2}, Device::CUDA);
-    auto t2 = Tensor::from_vector(d2, {2}, Device::CUDA);
-    auto t3 = Tensor::from_vector(d3, {2}, Device::CUDA);
-    auto t4 = Tensor::from_vector(d4, {2}, Device::CUDA);
+    auto t1 = Tensor::from_vector(d1, {2}, Device::GPU);
+    auto t2 = Tensor::from_vector(d2, {2}, Device::GPU);
+    auto t3 = Tensor::from_vector(d3, {2}, Device::GPU);
+    auto t4 = Tensor::from_vector(d4, {2}, Device::GPU);
 
     auto cat = Tensor::cat({t1, t2, t3, t4}, 0);
 
@@ -699,9 +713,9 @@ TEST_F(TensorCatReductionBugTest, Cat_Then_Cat) {
     std::vector<float> d2 = {1.0f, 2.0f};
     std::vector<float> d3 = {-50.0f, -60.0f};
 
-    auto t1 = Tensor::from_vector(d1, {2}, Device::CUDA);
-    auto t2 = Tensor::from_vector(d2, {2}, Device::CUDA);
-    auto t3 = Tensor::from_vector(d3, {2}, Device::CUDA);
+    auto t1 = Tensor::from_vector(d1, {2}, Device::GPU);
+    auto t2 = Tensor::from_vector(d2, {2}, Device::GPU);
+    auto t3 = Tensor::from_vector(d3, {2}, Device::GPU);
 
     auto cat1 = Tensor::cat({t1, t2}, 0);
     auto cat2 = Tensor::cat({cat1, t3}, 0);
@@ -722,8 +736,8 @@ TEST_F(TensorCatReductionBugTest, Cat_3D_Dim0) {
         d2[i] = -100.0f - static_cast<float>(i);
     }
 
-    auto t1 = Tensor::from_vector(d1, {2, 3, 4}, Device::CUDA);
-    auto t2 = Tensor::from_vector(d2, {2, 3, 4}, Device::CUDA);
+    auto t1 = Tensor::from_vector(d1, {2, 3, 4}, Device::GPU);
+    auto t2 = Tensor::from_vector(d2, {2, 3, 4}, Device::GPU);
     auto cat = Tensor::cat({t1, t2}, 0);
 
     ASSERT_EQ(cat.size(0), 4);
@@ -739,7 +753,7 @@ TEST_F(TensorCatReductionBugTest, Slice_3D_Dim1) {
         data[i] = static_cast<float>(i);
     }
 
-    auto t = Tensor::from_vector(data, {4, 5, 6}, Device::CUDA);
+    auto t = Tensor::from_vector(data, {4, 5, 6}, Device::GPU);
 
     // Slice along dim 1
     auto slice = t.slice(1, 2, 4); // [4, 2, 6]
@@ -758,8 +772,8 @@ TEST_F(TensorCatReductionBugTest, Cat_SingleElement) {
     std::vector<float> d1 = {100.0f};
     std::vector<float> d2 = {-50.0f};
 
-    auto t1 = Tensor::from_vector(d1, {1}, Device::CUDA);
-    auto t2 = Tensor::from_vector(d2, {1}, Device::CUDA);
+    auto t1 = Tensor::from_vector(d1, {1}, Device::GPU);
+    auto t2 = Tensor::from_vector(d2, {1}, Device::GPU);
     auto cat = Tensor::cat({t1, t2}, 0);
 
     verifyMinMax(cat, "Cat_SingleElement");
@@ -769,7 +783,7 @@ TEST_F(TensorCatReductionBugTest, Cat_SingleElement) {
 
 TEST_F(TensorCatReductionBugTest, Slice_SingleElement) {
     std::vector<float> data = {100.0f, 200.0f, 300.0f};
-    auto t = Tensor::from_vector(data, {3}, Device::CUDA);
+    auto t = Tensor::from_vector(data, {3}, Device::GPU);
 
     auto slice = t.slice(0, 1, 2); // Just [200.0f]
     EXPECT_FLOAT_EQ(slice.min().item(), 200.0f);
@@ -780,8 +794,8 @@ TEST_F(TensorCatReductionBugTest, NegativeValues) {
     std::vector<float> d1 = {-100.0f, -200.0f, -300.0f};
     std::vector<float> d2 = {-1.0f, -2.0f, -3.0f};
 
-    auto t1 = Tensor::from_vector(d1, {3}, Device::CUDA);
-    auto t2 = Tensor::from_vector(d2, {3}, Device::CUDA);
+    auto t1 = Tensor::from_vector(d1, {3}, Device::GPU);
+    auto t2 = Tensor::from_vector(d2, {3}, Device::GPU);
     auto cat = Tensor::cat({t1, t2}, 0);
 
     verifyMinMax(cat, "NegativeValues");
@@ -793,8 +807,8 @@ TEST_F(TensorCatReductionBugTest, MixedSignValues) {
     std::vector<float> d1 = {-100.0f, 100.0f};
     std::vector<float> d2 = {-200.0f, 200.0f};
 
-    auto t1 = Tensor::from_vector(d1, {2}, Device::CUDA);
-    auto t2 = Tensor::from_vector(d2, {2}, Device::CUDA);
+    auto t1 = Tensor::from_vector(d1, {2}, Device::GPU);
+    auto t2 = Tensor::from_vector(d2, {2}, Device::GPU);
     auto cat = Tensor::cat({t1, t2}, 0);
 
     verifyMinMax(cat, "MixedSignValues");
@@ -808,7 +822,7 @@ TEST_F(TensorCatReductionBugTest, MixedSignValues) {
 
 TEST_F(TensorCatReductionBugTest, IsContiguous_Fresh) {
     std::vector<float> data = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
-    auto t = Tensor::from_vector(data, {2, 3}, Device::CUDA);
+    auto t = Tensor::from_vector(data, {2, 3}, Device::GPU);
 
     EXPECT_TRUE(t.is_contiguous()) << "Fresh tensor should be contiguous";
 }
@@ -817,8 +831,8 @@ TEST_F(TensorCatReductionBugTest, IsContiguous_AfterCat) {
     std::vector<float> d1 = {1.0f, 2.0f, 3.0f};
     std::vector<float> d2 = {4.0f, 5.0f, 6.0f};
 
-    auto t1 = Tensor::from_vector(d1, {3}, Device::CUDA);
-    auto t2 = Tensor::from_vector(d2, {3}, Device::CUDA);
+    auto t1 = Tensor::from_vector(d1, {3}, Device::GPU);
+    auto t2 = Tensor::from_vector(d2, {3}, Device::GPU);
     auto cat = Tensor::cat({t1, t2}, 0);
 
     EXPECT_TRUE(cat.is_contiguous()) << "Cat result should be contiguous";
@@ -826,7 +840,7 @@ TEST_F(TensorCatReductionBugTest, IsContiguous_AfterCat) {
 
 TEST_F(TensorCatReductionBugTest, IsContiguous_RowSlice) {
     std::vector<float> data = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
-    auto t = Tensor::from_vector(data, {2, 3}, Device::CUDA);
+    auto t = Tensor::from_vector(data, {2, 3}, Device::GPU);
 
     auto row0 = t.slice(0, 0, 1); // [1, 3]
     // Row slice should be contiguous (consecutive memory)
@@ -835,7 +849,7 @@ TEST_F(TensorCatReductionBugTest, IsContiguous_RowSlice) {
 
 TEST_F(TensorCatReductionBugTest, IsContiguous_ColumnSlice) {
     std::vector<float> data = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
-    auto t = Tensor::from_vector(data, {2, 3}, Device::CUDA);
+    auto t = Tensor::from_vector(data, {2, 3}, Device::GPU);
 
     auto col0 = t.slice(1, 0, 1); // [2, 1] - elements at positions 0 and 3
     EXPECT_FALSE(col0.is_contiguous());
@@ -859,8 +873,8 @@ TEST_F(TensorCatReductionBugTest, Random_Cat_Reduction_Small) {
         for (auto& v : d2)
             v = dist(gen);
 
-        auto t1 = Tensor::from_vector(d1, {N1}, Device::CUDA);
-        auto t2 = Tensor::from_vector(d2, {N2}, Device::CUDA);
+        auto t1 = Tensor::from_vector(d1, {N1}, Device::GPU);
+        auto t2 = Tensor::from_vector(d2, {N2}, Device::GPU);
         auto cat = Tensor::cat({t1, t2}, 0);
 
         verifyMinMax(cat, "Random_Cat_Reduction_Small trial " + std::to_string(trial));
@@ -885,8 +899,8 @@ TEST_F(TensorCatReductionBugTest, Random_Cat_Reduction_Large) {
         for (size_t i = 0; i < N2; ++i)
             p2[i] = dist(gen);
 
-        auto t1 = cpu1.to(Device::CUDA);
-        auto t2 = cpu2.to(Device::CUDA);
+        auto t1 = cpu1.to(Device::GPU);
+        auto t2 = cpu2.to(Device::GPU);
         auto cat = Tensor::cat({t1, t2}, 0);
 
         verifyMinMax(cat, "Random_Cat_Reduction_Large trial " + std::to_string(trial));
@@ -908,7 +922,7 @@ TEST_F(TensorCatReductionBugTest, Random_2D_Column_Reduction) {
             p[i] = dist(gen);
         }
 
-        auto t = cpu.to(Device::CUDA);
+        auto t = cpu.to(Device::GPU);
 
         for (size_t c = 0; c < C; ++c) {
             auto col = t.slice(1, c, c + 1).squeeze(1);
@@ -939,7 +953,7 @@ TEST_F(TensorCatReductionBugTest, SizeThresholdsPreserveReductionAcrossKernelBou
 
 TEST_F(TensorCatReductionBugTest, Clone_After_Slice) {
     std::vector<float> data = {1.0f, 2.0f, 3.0f, 100.0f, 200.0f, 300.0f};
-    auto t = Tensor::from_vector(data, {6}, Device::CUDA);
+    auto t = Tensor::from_vector(data, {6}, Device::GPU);
 
     auto slice = t.slice(0, 3, 6);
     auto cloned = slice.clone();
@@ -957,7 +971,7 @@ TEST_F(TensorCatReductionBugTest, Clone_After_ColumnSlice) {
         1.0f, 100.0f,
         2.0f, 200.0f,
         3.0f, 300.0f};
-    auto t = Tensor::from_vector(data, {3, 2}, Device::CUDA);
+    auto t = Tensor::from_vector(data, {3, 2}, Device::GPU);
 
     auto col1 = t.slice(1, 1, 2).squeeze(1);
     auto cloned = col1.clone();
@@ -976,13 +990,13 @@ TEST_F(TensorCatReductionBugTest, Clone_After_ColumnSlice) {
 
 TEST_F(TensorCatReductionBugTest, ToDevice_After_Slice) {
     std::vector<float> data = {1.0f, 2.0f, 3.0f, 100.0f, 200.0f, 300.0f};
-    auto t = Tensor::from_vector(data, {6}, Device::CUDA);
+    auto t = Tensor::from_vector(data, {6}, Device::GPU);
 
     auto slice = t.slice(0, 3, 6);
 
     // Transfer to CPU and back
     auto cpu = slice.to(Device::CPU);
-    auto back_to_gpu = cpu.to(Device::CUDA);
+    auto back_to_gpu = cpu.to(Device::GPU);
 
     verifyMinMax(back_to_gpu, "ToDevice_After_Slice");
     EXPECT_FLOAT_EQ(back_to_gpu.min().item(), 100.0f);
@@ -996,9 +1010,9 @@ TEST_F(TensorCatReductionBugTest, CatTrimmedRowsWithZeroInitializedGrowth) {
                            7.0f, 8.0f, 9.0f,
                            10.0f, 11.0f, 12.0f,
                            13.0f, 14.0f, 15.0f},
-        {5, 3}, Device::CUDA);
+        {5, 3}, Device::GPU);
     const auto trimmed = storage.slice(0, 0, 3).contiguous();
-    const auto result = Tensor::cat({trimmed, Tensor::zeros({2, 3}, Device::CUDA)}, 0);
+    const auto result = Tensor::cat({trimmed, Tensor::zeros({2, 3}, Device::GPU)}, 0);
 
     EXPECT_EQ(result.shape(), TensorShape({5, 3}));
     EXPECT_EQ(result.cpu().to_vector(),
@@ -1012,8 +1026,8 @@ TEST_F(TensorCatReductionBugTest, CatTrimmedRowsWithZeroInitializedGrowth) {
 TEST_F(TensorCatReductionBugTest, CatShCoefficientsAlongMiddleDimension) {
     const auto sh0 = Tensor::from_vector(
         std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f},
-        {2, 1, 3}, Device::CUDA);
-    const auto shn = Tensor::zeros({2, 2, 3}, Device::CUDA);
+        {2, 1, 3}, Device::GPU);
+    const auto shn = Tensor::zeros({2, 2, 3}, Device::GPU);
     const auto result = Tensor::cat({sh0, shn}, 1);
 
     EXPECT_EQ(result.shape(), TensorShape({2, 3, 3}));

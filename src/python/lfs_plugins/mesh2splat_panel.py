@@ -220,7 +220,7 @@ class Mesh2SplatPanel(Panel):
     def _mesh_stats_text(self, mesh_info) -> str:
         vertex_count = int(getattr(mesh_info, "vertex_count", 0))
         face_count = int(getattr(mesh_info, "face_count", 0))
-        return f"{vertex_count}v / {face_count}f"
+        return f"{vertex_count:,}v / {face_count:,}f"
 
     def _rebuild_mesh_records(self, mesh_nodes):
         if not self._handle:
@@ -377,9 +377,6 @@ class Mesh2SplatPanel(Panel):
         self._resolution_index = next_index
         self._rebuild_resolution_records()
         self._dirty_model("effective_resolution")
-        self._request_reconvert_if_needed()
-
-    def _on_parameter_commit(self, _event=None):
         self._request_reconvert_if_needed()
 
     def _request_reconvert_if_needed(self):

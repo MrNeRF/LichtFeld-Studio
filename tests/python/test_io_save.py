@@ -16,6 +16,7 @@ def _read_ply_header(path):
     return "\n".join(header_lines)
 
 
+@pytest.mark.integration
 class TestSavePLY:
     """Tests for PLY save functionality."""
 
@@ -223,6 +224,7 @@ class TestSavePLY:
         assert "property float confidence" in header
 
 
+@pytest.mark.integration
 class TestSaveSPZ:
     """Tests for SPZ (Niantic compressed) save functionality."""
 

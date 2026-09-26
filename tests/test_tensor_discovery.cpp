@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <gtest/gtest.h>
 #include <torch/torch.h>
@@ -86,7 +87,9 @@ namespace {
 
 } // namespace
 
-TEST(DiscoverySweep, PartialStdAndVarWithoutKeepdimMatchTorch) {
+class DiscoverySweep : public lfs::test::CudaDeviceTest {};
+
+TEST_F(DiscoverySweep, PartialStdAndVarWithoutKeepdimMatchTorch) {
     const std::vector<float> data = {0.0f, 1.0f, 2.0f,
                                      3.0f, 4.0f, 5.0f};
     const auto input = Tensor::from_vector(data, {2, 3}, Device::CPU);
@@ -111,7 +114,7 @@ TEST(DiscoverySweep, PartialStdAndVarWithoutKeepdimMatchTorch) {
     }
 }
 
-TEST(DiscoverySweep, UnbiasedSingletonStdAndVarProduceNaN) {
+TEST_F(DiscoverySweep, UnbiasedSingletonStdAndVarProduceNaN) {
     const auto input = Tensor::from_vector({5.0f}, {1}, Device::CPU);
     const auto reference = torch::tensor({5.0f}, torch::kFloat32);
 
@@ -126,7 +129,7 @@ TEST(DiscoverySweep, UnbiasedSingletonStdAndVarProduceNaN) {
         << "Torch's correction=1 estimate is undefined for one sample";
 }
 
-TEST(DiscoverySweep, EmptyReductionSemanticsMatchTorch) {
+TEST_F(DiscoverySweep, EmptyReductionSemanticsMatchTorch) {
     const auto input = Tensor::empty({0}, Device::CPU, DataType::Float32);
     const auto reference = torch::empty({0}, torch::kFloat32);
     ASSERT_TRUE(std::isnan(reference.mean().item<float>()));
@@ -141,7 +144,7 @@ TEST(DiscoverySweep, EmptyReductionSemanticsMatchTorch) {
         (void)ignored; }, std::runtime_error);
 }
 
-TEST(DiscoverySweep, BoolReductionDtypesAndDomainsMatchTorch) {
+TEST_F(DiscoverySweep, BoolReductionDtypesAndDomainsMatchTorch) {
     const auto input = Tensor::from_vector(
         std::vector<bool>{true, false, true}, {3}, Device::CPU);
     const auto reference = torch::tensor(
@@ -163,7 +166,7 @@ TEST(DiscoverySweep, BoolReductionDtypesAndDomainsMatchTorch) {
     EXPECT_EQ(input.min().dtype(), DataType::Bool);
 }
 
-TEST(DiscoverySweep, AccessorRejectsDtypeMismatchLikeTorch) {
+TEST_F(DiscoverySweep, AccessorRejectsDtypeMismatchLikeTorch) {
     auto input = Tensor::from_vector(
         std::vector<int>{1, 2, 3}, {3}, Device::CPU);
     auto reference = torch::tensor(
@@ -174,7 +177,7 @@ TEST(DiscoverySweep, AccessorRejectsDtypeMismatchLikeTorch) {
         << "accessor<T> must not reinterpret storage of a different dtype";
 }
 
-TEST(DiscoverySweep, ScalarNormZeroAndNegativeInfinityMatchTorch) {
+TEST_F(DiscoverySweep, ScalarNormZeroAndNegativeInfinityMatchTorch) {
     const std::vector<float> data = {0.0f, 2.0f, -3.0f};
     const auto input = Tensor::from_vector(data, {3}, Device::CPU);
     const auto reference = torch::tensor(data, torch::kFloat32);
@@ -188,7 +191,7 @@ TEST(DiscoverySweep, ScalarNormZeroAndNegativeInfinityMatchTorch) {
                     expected_negative_infinity);
 }
 
-TEST(DiscoverySweep, SortOrdersNaNsLikeTorch) {
+TEST_F(DiscoverySweep, SortOrdersNaNsLikeTorch) {
     const float nan = std::numeric_limits<float>::quiet_NaN();
     const std::vector<float> data = {nan, -2.0f};
     const auto input = Tensor::from_vector(data, {2}, Device::CPU);
@@ -200,26 +203,26 @@ TEST(DiscoverySweep, SortOrdersNaNsLikeTorch) {
     expect_int64_tensor(actual_indices, expected_indices, "ascending sort indices with NaN");
 }
 
-TEST(DiscoverySweep, RoundUsesTiesToEvenLikeTorch) {
+TEST_F(DiscoverySweep, RoundUsesTiesToEvenLikeTorch) {
     const std::vector<float> data = {0.5f, 1.5f, 2.5f, -0.5f, -1.5f, -2.5f};
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         const auto input = Tensor::from_vector(data, {data.size()}, device);
         auto reference = torch::tensor(data, torch::kFloat32);
-        if (device == Device::CUDA)
+        if (device == Device::GPU)
             reference = reference.cuda();
         expect_float_tensor(input.round(), reference.round(),
                             "round must use IEEE ties-to-even");
     }
 }
 
-TEST(DiscoverySweep, NumericCastsToUInt8MatchTorch) {
+TEST_F(DiscoverySweep, NumericCastsToUInt8MatchTorch) {
     const std::vector<float> data = {-1.2f, 0.9f, 1.9f, 255.9f, 256.0f};
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         const auto input = Tensor::from_vector(data, {data.size()}, device);
         auto reference = torch::tensor(data, torch::kFloat32);
-        if (device == Device::CUDA)
+        if (device == Device::GPU)
             reference = reference.cuda();
 
         const auto actual = input.to(DataType::UInt8).cpu().to_vector_uint8();
@@ -229,7 +232,7 @@ TEST(DiscoverySweep, NumericCastsToUInt8MatchTorch) {
     }
 }
 
-TEST(DiscoverySweep, SortAcceptsAnEmptyDimension) {
+TEST_F(DiscoverySweep, SortAcceptsAnEmptyDimension) {
     const auto input = Tensor::empty({0}, Device::CPU, DataType::Float32);
     const auto reference = torch::empty({0}, torch::kFloat32);
 
@@ -240,7 +243,7 @@ TEST(DiscoverySweep, SortAcceptsAnEmptyDimension) {
     expect_int64_tensor(actual->second, expected_indices, "empty sort indices");
 }
 
-TEST(DiscoverySweep, MinMaxWithIndicesAcceptEmptyOuterDimensions) {
+TEST_F(DiscoverySweep, MinMaxWithIndicesAcceptEmptyOuterDimensions) {
     const auto input = Tensor::empty({0, 3}, Device::CPU, DataType::Float32);
     const auto reference = torch::empty({0, 3}, torch::kFloat32);
 
@@ -263,7 +266,7 @@ TEST(DiscoverySweep, MinMaxWithIndicesAcceptEmptyOuterDimensions) {
     }
 }
 
-TEST(DiscoverySweep, SortUsesLogicalViewValues) {
+TEST_F(DiscoverySweep, SortUsesLogicalViewValues) {
     const std::vector<float> data = {4.0f, 1.0f, 3.0f,
                                      2.0f, 6.0f, 5.0f};
     const auto input = Tensor::from_vector(data, {2, 3}, Device::CPU).transpose(0, 1);
@@ -278,7 +281,7 @@ TEST(DiscoverySweep, SortUsesLogicalViewValues) {
                         "sort indices from a transposed view");
 }
 
-TEST(DiscoverySweep, NonzeroSplitReturnsOneCoordinateTensorPerAxis) {
+TEST_F(DiscoverySweep, NonzeroSplitReturnsOneCoordinateTensorPerAxis) {
     const std::vector<float> data = {1.0f, 0.0f,
                                      0.0f, 2.0f};
     const auto input = Tensor::from_vector(data, {2, 2}, Device::CPU);
@@ -293,7 +296,7 @@ TEST(DiscoverySweep, NonzeroSplitReturnsOneCoordinateTensorPerAxis) {
     }
 }
 
-TEST(DiscoverySweep, NoOpViewTransformsPreserveAliasing) {
+TEST_F(DiscoverySweep, NoOpViewTransformsPreserveAliasing) {
     {
         const std::vector<float> data = {1.0f, 2.0f,
                                          3.0f, 4.0f};
@@ -322,7 +325,7 @@ TEST(DiscoverySweep, NoOpViewTransformsPreserveAliasing) {
     }
 }
 
-TEST(DiscoverySweep, RowProxyTensorConversionPreservesAliasing) {
+TEST_F(DiscoverySweep, RowProxyTensorConversionPreservesAliasing) {
     const std::vector<float> data = {1.0f, 2.0f,
                                      3.0f, 4.0f};
     auto actual_base = Tensor::from_vector(data, {2, 2}, Device::CPU);
@@ -337,7 +340,7 @@ TEST(DiscoverySweep, RowProxyTensorConversionPreservesAliasing) {
                         "Tensor converted from tensor[row] must alias the parent row");
 }
 
-TEST(DiscoverySweep, CdistMaterializesTheLeftView) {
+TEST_F(DiscoverySweep, CdistMaterializesTheLeftView) {
     const std::vector<float> lhs_data = {1.0f, 2.0f, 3.0f,
                                          4.0f, 5.0f, 6.0f};
     const std::vector<float> rhs_data = {0.0f, 0.0f};
@@ -356,7 +359,7 @@ TEST(DiscoverySweep, CdistMaterializesTheLeftView) {
                         "cdist with a non-contiguous left input");
 }
 
-TEST(DiscoverySweep, CdistSupportsZeroAndInfinityNorms) {
+TEST_F(DiscoverySweep, CdistSupportsZeroAndInfinityNorms) {
     const std::vector<float> lhs_data = {0.0f, 2.0f, 3.0f};
     const std::vector<float> rhs_data = {0.0f, 5.0f, 1.0f};
     const auto lhs = Tensor::from_vector(lhs_data, {1, 3}, Device::CPU);
@@ -373,14 +376,14 @@ TEST(DiscoverySweep, CdistSupportsZeroAndInfinityNorms) {
     }
 }
 
-TEST(DiscoverySweep, MaxPool2dPreservesNonFiniteMaxima) {
+TEST_F(DiscoverySweep, MaxPool2dPreservesNonFiniteMaxima) {
     const float nan = std::numeric_limits<float>::quiet_NaN();
     const std::vector<float> data = {1.0f, nan, 2.0f, 3.0f};
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         const auto input = Tensor::from_vector(data, {1, 1, 2, 2}, device);
         auto reference = torch::tensor(data, torch::kFloat32).reshape({1, 1, 2, 2});
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             reference = reference.cuda();
         }
         expect_float_tensor(input.max_pool2d(2, 2),
@@ -392,7 +395,7 @@ TEST(DiscoverySweep, MaxPool2dPreservesNonFiniteMaxima) {
         const auto inf_input = Tensor::from_vector(negative_infinity, {1, 1, 1, 1}, device);
         auto inf_reference = torch::tensor(negative_infinity, torch::kFloat32)
                                  .reshape({1, 1, 1, 1});
-        if (device == Device::CUDA)
+        if (device == Device::GPU)
             inf_reference = inf_reference.cuda();
         expect_float_tensor(inf_input.max_pool2d(1, 1),
                             torch::max_pool2d(inf_reference, {1, 1}, {1, 1}),
@@ -400,13 +403,13 @@ TEST(DiscoverySweep, MaxPool2dPreservesNonFiniteMaxima) {
     }
 }
 
-TEST(DiscoverySweep, MaxPool2dRejectsZeroSizedOutput) {
+TEST_F(DiscoverySweep, MaxPool2dRejectsZeroSizedOutput) {
     const std::vector<float> data = {1.0f, 2.0f, 3.0f, 4.0f};
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         const auto input = Tensor::from_vector(data, {1, 1, 2, 2}, device);
         auto reference = torch::tensor(data, torch::kFloat32).reshape({1, 1, 2, 2});
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             reference = reference.cuda();
         }
 
@@ -415,7 +418,7 @@ TEST(DiscoverySweep, MaxPool2dRejectsZeroSizedOutput) {
     }
 }
 
-TEST(DiscoverySweep, ClampMaterializesItsInputView) {
+TEST_F(DiscoverySweep, ClampMaterializesItsInputView) {
     const std::vector<float> data = {1.0f, 2.0f, 3.0f,
                                      4.0f, 5.0f, 6.0f};
     const auto input = Tensor::from_vector(data, {2, 3}, Device::CPU).transpose(0, 1);
@@ -427,17 +430,17 @@ TEST(DiscoverySweep, ClampMaterializesItsInputView) {
                         "clamp on a transposed view");
 }
 
-TEST(DiscoverySweep, LazyPointwiseOnOffsetSliceMatchesTorch) {
+TEST_F(DiscoverySweep, LazyPointwiseOnOffsetSliceMatchesTorch) {
     const std::vector<float> data = {0.0f, 0.0f, 0.0f, 0.0f,
                                      0.0f, 0.0f, 0.0f, 0.0f,
                                      0.0f, 3.0f, 0.0f, 0.0f};
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         const auto input = Tensor::from_vector(data, {1, 3, 4}, device).slice(2, 1, 2);
         auto reference = torch::tensor(data, torch::kFloat32)
                              .reshape({1, 3, 4})
                              .slice(2, 1, 2);
-        if (device == Device::CUDA)
+        if (device == Device::GPU)
             reference = reference.cuda();
 
         const auto actual_pointwise = input.mul(3.0f);
@@ -453,21 +456,21 @@ TEST(DiscoverySweep, LazyPointwiseOnOffsetSliceMatchesTorch) {
     }
 }
 
-TEST(DiscoverySweep, InPlaceMatchesOutOfPlaceOnContiguousInputs) {
+TEST_F(DiscoverySweep, InPlaceMatchesOutOfPlaceOnContiguousInputs) {
     const std::vector<float> data = {-2.0f, 0.0f, 3.0f, 5.0f};
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         auto actual = Tensor::from_vector(data, {2, 2}, device);
         actual.add_(2.0f);
         auto reference = torch::tensor(data, torch::kFloat32).reshape({2, 2});
-        if (device == Device::CUDA)
+        if (device == Device::GPU)
             reference = reference.cuda();
         expect_float_tensor(actual, reference.add(2.0f),
                             "in-place add equals out-of-place add");
     }
 }
 
-TEST(DiscoverySweep, NonzeroUsesLogicalViewOrder) {
+TEST_F(DiscoverySweep, NonzeroUsesLogicalViewOrder) {
     const std::vector<float> data = {0.0f, 1.0f, 0.0f,
                                      0.0f, 0.0f, 2.0f};
     const auto input = Tensor::from_vector(data, {2, 3}, Device::CPU).transpose(0, 1);
@@ -479,7 +482,7 @@ TEST(DiscoverySweep, NonzeroUsesLogicalViewOrder) {
                         "nonzero on a transposed view");
 }
 
-TEST(DiscoverySweep, MinMaxWithIndicesPropagateNaNs) {
+TEST_F(DiscoverySweep, MinMaxWithIndicesPropagateNaNs) {
     const float nan = std::numeric_limits<float>::quiet_NaN();
     const std::vector<float> data = {1.0f, nan, -1.0f};
     const auto input = Tensor::from_vector(data, {1, 3}, Device::CPU);
@@ -496,7 +499,7 @@ TEST(DiscoverySweep, MinMaxWithIndicesPropagateNaNs) {
     expect_int64_tensor(actual_max_index, expected_max_index, "max_with_indices NaN index");
 }
 
-TEST(DiscoverySweep, ReassigningLazyPointwiseOnExpandedSliceMatchesTorch) {
+TEST_F(DiscoverySweep, ReassigningLazyPointwiseOnExpandedSliceMatchesTorch) {
     const std::vector<float> data = {0.0f, 5.0f};
     const auto input = Tensor::from_vector(data, {2}, Device::CPU)
                            .unsqueeze(1)
@@ -519,7 +522,7 @@ TEST(DiscoverySweep, ReassigningLazyPointwiseOnExpandedSliceMatchesTorch) {
     expect_float_tensor(actual, expected, "reassigned pointwise result on an expanded slice");
 }
 
-TEST(DiscoverySweep, ArgMinAndArgMaxPublicApisMatchTorch) {
+TEST_F(DiscoverySweep, ArgMinAndArgMaxPublicApisMatchTorch) {
     const std::vector<float> data = {3.0f, -2.0f, 7.0f, 1.0f};
     const auto input = Tensor::from_vector(data, {4}, Device::CPU);
     const auto reference = torch::tensor(data, torch::kFloat32);
@@ -536,13 +539,13 @@ TEST(DiscoverySweep, ArgMinAndArgMaxPublicApisMatchTorch) {
     }
 }
 
-TEST(DiscoverySweep, IntegerClampBoundsMatchTorch) {
+TEST_F(DiscoverySweep, IntegerClampBoundsMatchTorch) {
     const std::vector<int> data = {-3, -1, 0, 1, 3};
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         auto input = Tensor::from_vector(data, {data.size()}, Device::CPU);
         auto reference = torch::tensor(data, torch::kInt32);
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             input = input.cuda();
             reference = reference.cuda();
         }
@@ -567,7 +570,7 @@ TEST(DiscoverySweep, IntegerClampBoundsMatchTorch) {
     }
 }
 
-TEST(DiscoverySweep, FullShapeBooleanIndexingMatchesTorch) {
+TEST_F(DiscoverySweep, FullShapeBooleanIndexingMatchesTorch) {
     const std::vector<float> data = {1.0f, 2.0f, 3.0f,
                                      4.0f, 5.0f, 6.0f};
     const std::vector<bool> mask_data = {true, false, true,
@@ -600,7 +603,7 @@ TEST(DiscoverySweep, FullShapeBooleanIndexingMatchesTorch) {
     }
 }
 
-TEST(DiscoverySweep, MaskedOpsBroadcastMasksLikeTorch) {
+TEST_F(DiscoverySweep, MaskedOpsBroadcastMasksLikeTorch) {
     const std::vector<float> data = {1.0f, 2.0f, 3.0f,
                                      4.0f, 5.0f, 6.0f};
     const std::vector<bool> mask_data = {true, false, true};
@@ -610,13 +613,13 @@ TEST(DiscoverySweep, MaskedOpsBroadcastMasksLikeTorch) {
                                     .reshape({1, 3})
                                     .to(torch::kBool);
 
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         auto input = Tensor::from_vector(data, {2, 3}, Device::CPU);
         auto mask = Tensor::from_vector(mask_data, {1, 3}, Device::CPU);
         auto torch_input = reference;
         auto torch_mask = reference_mask;
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             input = input.cuda();
             mask = mask.cuda();
             torch_input = torch_input.cuda();
@@ -643,10 +646,10 @@ TEST(DiscoverySweep, MaskedOpsBroadcastMasksLikeTorch) {
     }
 }
 
-TEST(DiscoverySweep, MaskedFillAcceptsNonFiniteFloatValues) {
+TEST_F(DiscoverySweep, MaskedFillAcceptsNonFiniteFloatValues) {
     const std::vector<float> data = {1.0f, 2.0f, 3.0f};
     const std::vector<bool> mask_data = {false, true, false};
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         auto input = Tensor::from_vector(data, {3}, Device::CPU);
         auto mask = Tensor::from_vector(mask_data, {3}, Device::CPU);
@@ -654,7 +657,7 @@ TEST(DiscoverySweep, MaskedFillAcceptsNonFiniteFloatValues) {
         auto reference_mask = torch::tensor(
                                   std::vector<int>{0, 1, 0}, torch::kInt32)
                                   .to(torch::kBool);
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             input = input.cuda();
             mask = mask.cuda();
             reference = reference.cuda();
@@ -678,9 +681,9 @@ TEST(DiscoverySweep, MaskedFillAcceptsNonFiniteFloatValues) {
     }
 }
 
-TEST(DiscoverySweep, BoolMaskedFillUsesScalarTruthiness) {
+TEST_F(DiscoverySweep, BoolMaskedFillUsesScalarTruthiness) {
     const std::vector<bool> mask_data = {true, false, true};
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         const auto mask = Tensor::from_vector(mask_data, {3}, device);
         const auto input = Tensor::zeros_bool({3}, device);
@@ -688,7 +691,7 @@ TEST(DiscoverySweep, BoolMaskedFillUsesScalarTruthiness) {
                                   std::vector<int>{1, 0, 1}, torch::kInt32)
                                   .to(torch::kBool);
         auto reference = torch::zeros({3}, torch::kBool);
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             reference_mask = reference_mask.cuda();
             reference = reference.cuda();
         }
@@ -706,11 +709,11 @@ TEST(DiscoverySweep, BoolMaskedFillUsesScalarTruthiness) {
     }
 }
 
-TEST(DiscoverySweep, NormalAllowsZeroStandardDeviation) {
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+TEST_F(DiscoverySweep, NormalAllowsZeroStandardDeviation) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         auto options = torch::TensorOptions().dtype(torch::kFloat32);
-        if (device == Device::CUDA)
+        if (device == Device::GPU)
             options = options.device(torch::kCUDA);
         auto expected = torch::empty({4}, options);
         ASSERT_NO_THROW(expected.normal_(2.5, 0.0));
@@ -732,7 +735,7 @@ TEST(DiscoverySweep, NormalAllowsZeroStandardDeviation) {
     }
 }
 
-TEST(DiscoverySweep, MixedNormalApisAdvanceCudaGenerator) {
+TEST_F(DiscoverySweep, MixedNormalApisAdvanceCudaGenerator) {
     constexpr uint64_t seed = 0x12345;
     constexpr size_t count = 8;
 
@@ -745,14 +748,14 @@ TEST(DiscoverySweep, MixedNormalApisAdvanceCudaGenerator) {
         << "Torch's sequential normal APIs must advance their shared generator";
 
     Tensor::manual_seed(seed);
-    const auto first = Tensor::normal({count}, 0.0f, 1.0f, Device::CUDA);
-    auto second = Tensor::empty({count}, Device::CUDA, DataType::Float32);
+    const auto first = Tensor::normal({count}, 0.0f, 1.0f, Device::GPU);
+    auto second = Tensor::empty({count}, Device::GPU, DataType::Float32);
     second.normal_(0.0f, 1.0f);
     EXPECT_NE(lfs_float_values(first), lfs_float_values(second))
         << "static normal followed by normal_ reused the same CUDA subsequence";
 }
 
-TEST(DiscoverySweep, BatchedMatmulBroadcastsSingletonBatch) {
+TEST_F(DiscoverySweep, BatchedMatmulBroadcastsSingletonBatch) {
     const std::vector<float> left_data = {1.0f, 2.0f, 3.0f,
                                           4.0f, 5.0f, 6.0f};
     std::vector<float> right_data(4 * 3 * 2);
@@ -760,13 +763,13 @@ TEST(DiscoverySweep, BatchedMatmulBroadcastsSingletonBatch) {
         right_data[i] = static_cast<float>(static_cast<int>(i % 5) - 2);
     }
 
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         auto left = Tensor::from_vector(left_data, {1, 2, 3}, Device::CPU);
         auto right = Tensor::from_vector(right_data, {4, 3, 2}, Device::CPU);
         auto torch_left = torch::tensor(left_data, torch::kFloat32).reshape({1, 2, 3});
         auto torch_right = torch::tensor(right_data, torch::kFloat32).reshape({4, 3, 2});
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             left = left.cuda();
             right = right.cuda();
             torch_left = torch_left.cuda();
@@ -784,14 +787,14 @@ TEST(DiscoverySweep, BatchedMatmulBroadcastsSingletonBatch) {
     }
 }
 
-TEST(DiscoverySweep, FullMinMaxReductionsPropagateNaNs) {
+TEST_F(DiscoverySweep, FullMinMaxReductionsPropagateNaNs) {
     const std::vector<float> data = {1.0f, std::numeric_limits<float>::quiet_NaN(), -2.0f};
 
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         auto input = Tensor::from_vector(data, {3}, Device::CPU);
         auto reference = torch::tensor(data, torch::kFloat32);
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             input = input.cuda();
             reference = reference.cuda();
         }
@@ -801,13 +804,13 @@ TEST(DiscoverySweep, FullMinMaxReductionsPropagateNaNs) {
     }
 }
 
-TEST(DiscoverySweep, UniformFactoryAllowsDegenerateInterval) {
+TEST_F(DiscoverySweep, UniformFactoryAllowsDegenerateInterval) {
     constexpr float value = 2.5f;
 
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         auto expected = torch::empty({4}, torch::TensorOptions().dtype(torch::kFloat32));
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             expected = expected.cuda();
         }
         expected.uniform_(value, value);
@@ -825,7 +828,7 @@ TEST(DiscoverySweep, UniformFactoryAllowsDegenerateInterval) {
     }
 }
 
-TEST(DiscoverySweep, ArangeDoesNotIncludeFloatingEndpoint) {
+TEST_F(DiscoverySweep, ArangeDoesNotIncludeFloatingEndpoint) {
     const auto actual = Tensor::arange(0.0f, 0.3f, 0.1f);
     const auto expected = torch::arange(
         0.0f, 0.3f, 0.1f,
@@ -833,13 +836,13 @@ TEST(DiscoverySweep, ArangeDoesNotIncludeFloatingEndpoint) {
     expect_float_tensor(actual, expected, "floating-point arange endpoint exclusion");
 }
 
-TEST(DiscoverySweep, SplitBatchPreservesEmptyInput) {
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+TEST_F(DiscoverySweep, SplitBatchPreservesEmptyInput) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         const auto input = Tensor::empty({0, 3}, device, DataType::Float32);
         const auto actual = Tensor::split_batch(input, 2);
         const auto reference = torch::empty(
-            {0, 3}, torch::TensorOptions().dtype(torch::kFloat32).device(device == Device::CUDA ? torch::kCUDA : torch::kCPU));
+            {0, 3}, torch::TensorOptions().dtype(torch::kFloat32).device(device == Device::GPU ? torch::kCUDA : torch::kCPU));
         const auto expected = reference.split(2, 0);
 
         EXPECT_EQ(actual.size(), expected.size());
@@ -849,12 +852,12 @@ TEST(DiscoverySweep, SplitBatchPreservesEmptyInput) {
     }
 }
 
-TEST(DiscoverySweep, AdaptiveAvgPoolRejectsEmptySpatialInput) {
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+TEST_F(DiscoverySweep, AdaptiveAvgPoolRejectsEmptySpatialInput) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         auto input = Tensor::empty({1, 1, 0, 3}, device, DataType::Float32);
         auto reference = torch::empty({1, 1, 0, 3}, torch::TensorOptions().dtype(torch::kFloat32));
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             reference = reference.cuda();
         }
 
@@ -863,8 +866,8 @@ TEST(DiscoverySweep, AdaptiveAvgPoolRejectsEmptySpatialInput) {
     }
 }
 
-TEST(DiscoverySweep, FullUInt8ScalarDomainMatchesTorch) {
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+TEST_F(DiscoverySweep, FullUInt8ScalarDomainMatchesTorch) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         for (const float value : {-1.0f, -0.5f, 255.5f, 256.0f}) {
             SCOPED_TRACE(value);
@@ -873,7 +876,7 @@ TEST(DiscoverySweep, FullUInt8ScalarDomainMatchesTorch) {
             try {
                 auto reference = torch::full(
                     {1}, value,
-                    torch::TensorOptions().dtype(torch::kUInt8).device(device == Device::CUDA ? torch::kCUDA : torch::kCPU));
+                    torch::TensorOptions().dtype(torch::kUInt8).device(device == Device::GPU ? torch::kCUDA : torch::kCPU));
                 expected = torch_uint8_values(reference);
             } catch (const std::exception&) {
                 torch_threw = true;
@@ -897,17 +900,17 @@ TEST(DiscoverySweep, FullUInt8ScalarDomainMatchesTorch) {
     }
 }
 
-TEST(DiscoverySweep, MaximumMinimumPreserveSignedZero) {
+TEST_F(DiscoverySweep, MaximumMinimumPreserveSignedZero) {
     const std::vector<float> left_data = {-0.0f, 0.0f};
     const std::vector<float> right_data = {0.0f, -0.0f};
 
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         auto left = Tensor::from_vector(left_data, {2}, device);
         auto right = Tensor::from_vector(right_data, {2}, device);
         auto torch_left = torch::tensor(left_data, torch::kFloat32);
         auto torch_right = torch::tensor(right_data, torch::kFloat32);
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             torch_left = torch_left.cuda();
             torch_right = torch_right.cuda();
         }
@@ -938,18 +941,18 @@ TEST(DiscoverySweep, MaximumMinimumPreserveSignedZero) {
     }
 }
 
-TEST(DiscoverySweep, ElementwiseMaximumMinimumPropagateNaNs) {
+TEST_F(DiscoverySweep, ElementwiseMaximumMinimumPropagateNaNs) {
     const float nan = std::numeric_limits<float>::quiet_NaN();
     const std::vector<float> left_data = {1.0f, nan};
     const std::vector<float> right_data = {nan, 1.0f};
 
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         const auto left = Tensor::from_vector(left_data, {2}, device);
         const auto right = Tensor::from_vector(right_data, {2}, device);
         auto torch_left = torch::tensor(left_data, torch::kFloat32);
         auto torch_right = torch::tensor(right_data, torch::kFloat32);
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             torch_left = torch_left.cuda();
             torch_right = torch_right.cuda();
         }
@@ -963,15 +966,15 @@ TEST(DiscoverySweep, ElementwiseMaximumMinimumPropagateNaNs) {
     }
 }
 
-TEST(DiscoverySweep, RowProxyAssignmentAcceptsNonFiniteFloatValues) {
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+TEST_F(DiscoverySweep, RowProxyAssignmentAcceptsNonFiniteFloatValues) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         for (const float value : {std::numeric_limits<float>::infinity(),
                                   std::numeric_limits<float>::quiet_NaN()}) {
             auto actual = Tensor::zeros({1}, device, DataType::Float32);
             auto expected = torch::full(
                 {1}, value,
-                torch::TensorOptions().dtype(torch::kFloat32).device(device == Device::CUDA ? torch::kCUDA : torch::kCPU));
+                torch::TensorOptions().dtype(torch::kFloat32).device(device == Device::GPU ? torch::kCUDA : torch::kCPU));
             try {
                 actual[0] = value;
                 expect_float_tensor(actual, expected, "row-proxy non-finite scalar assignment");
@@ -983,14 +986,14 @@ TEST(DiscoverySweep, RowProxyAssignmentAcceptsNonFiniteFloatValues) {
     }
 }
 
-TEST(DiscoverySweep, FillAcceptsNonFiniteFloatValues) {
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+TEST_F(DiscoverySweep, FillAcceptsNonFiniteFloatValues) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         for (const float value : {-std::numeric_limits<float>::infinity(),
                                   std::numeric_limits<float>::quiet_NaN()}) {
             auto actual = Tensor::zeros({3}, device, DataType::Float32);
             auto expected = torch::zeros(
-                {3}, torch::TensorOptions().dtype(torch::kFloat32).device(device == Device::CUDA ? torch::kCUDA : torch::kCPU));
+                {3}, torch::TensorOptions().dtype(torch::kFloat32).device(device == Device::GPU ? torch::kCUDA : torch::kCPU));
             expected.fill_(value);
             try {
                 actual.fill_(value);
@@ -1003,29 +1006,29 @@ TEST(DiscoverySweep, FillAcceptsNonFiniteFloatValues) {
     }
 }
 
-TEST(DiscoverySweep, IntegerFillRejectsOutOfRangeValuesLikeTorch) {
+TEST_F(DiscoverySweep, IntegerFillRejectsOutOfRangeValuesLikeTorch) {
     constexpr float out_of_range = std::numeric_limits<float>::max();
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         auto actual = Tensor::zeros({2}, device, DataType::Int32);
         auto expected = torch::zeros(
-            {2}, torch::TensorOptions().dtype(torch::kInt32).device(device == Device::CUDA ? torch::kCUDA : torch::kCPU));
+            {2}, torch::TensorOptions().dtype(torch::kInt32).device(device == Device::GPU ? torch::kCUDA : torch::kCPU));
 
         EXPECT_THROW(expected.fill_(out_of_range), std::exception);
         EXPECT_THROW(actual.fill_(out_of_range), std::exception);
     }
 }
 
-TEST(DiscoverySweep, ScalarMathAcceptsNonFiniteOperands) {
+TEST_F(DiscoverySweep, ScalarMathAcceptsNonFiniteOperands) {
     const std::vector<float> data = {0.0f, 1.0f};
     const float infinity = std::numeric_limits<float>::infinity();
     const float nan = std::numeric_limits<float>::quiet_NaN();
 
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         auto input = Tensor::from_vector(data, {2}, device);
         auto reference = torch::tensor(data, torch::kFloat32);
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             reference = reference.cuda();
         }
 
@@ -1049,8 +1052,8 @@ TEST(DiscoverySweep, ScalarMathAcceptsNonFiniteOperands) {
     }
 }
 
-TEST(DiscoverySweep, ScalarWhereSupportsZeroDimensionalInputs) {
-    for (const auto device : {Device::CPU, Device::CUDA}) {
+TEST_F(DiscoverySweep, ScalarWhereSupportsZeroDimensionalInputs) {
+    for (const auto device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
 
         const auto condition = Tensor::full_bool({}, true, device);
@@ -1072,8 +1075,8 @@ TEST(DiscoverySweep, ScalarWhereSupportsZeroDimensionalInputs) {
     }
 }
 
-TEST(DiscoverySweep, CatAndStackPromoteMixedDtypesLikeTorch) {
-    for (const auto device : {Device::CPU, Device::CUDA}) {
+TEST_F(DiscoverySweep, CatAndStackPromoteMixedDtypesLikeTorch) {
+    for (const auto device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
 
         const auto ints = Tensor::from_vector(
@@ -1109,8 +1112,8 @@ TEST(DiscoverySweep, CatAndStackPromoteMixedDtypesLikeTorch) {
     }
 }
 
-TEST(DiscoverySweep, ScalarReductionsAcceptDimZeroLikeTorch) {
-    for (const auto device : {Device::CPU, Device::CUDA}) {
+TEST_F(DiscoverySweep, ScalarReductionsAcceptDimZeroLikeTorch) {
+    for (const auto device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
 
         const auto input = Tensor::full({}, 6.0f, device);
@@ -1140,8 +1143,8 @@ TEST(DiscoverySweep, ScalarReductionsAcceptDimZeroLikeTorch) {
     }
 }
 
-TEST(DiscoverySweep, IntegerPowScalarOverloadRejectsNegativeIntegerExponent) {
-    for (const auto device : {Device::CPU, Device::CUDA}) {
+TEST_F(DiscoverySweep, IntegerPowScalarOverloadRejectsNegativeIntegerExponent) {
+    for (const auto device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
 
         const auto input = Tensor::from_vector(
@@ -1158,7 +1161,7 @@ TEST(DiscoverySweep, IntegerPowScalarOverloadRejectsNegativeIntegerExponent) {
     }
 }
 
-TEST(DiscoverySweep, IntegerModuloByZeroThrowsInsteadOfCrashing) {
+TEST_F(DiscoverySweep, IntegerModuloByZeroThrowsInsteadOfCrashing) {
     const auto reference = torch::tensor({7}, torch::kInt32);
     const auto zero = torch::tensor({0}, torch::kInt32);
     EXPECT_THROW(static_cast<void>(torch::remainder(reference, zero)), c10::Error);
@@ -1181,16 +1184,16 @@ TEST(DiscoverySweep, IntegerModuloByZeroThrowsInsteadOfCrashing) {
         "");
 }
 
-TEST(DiscoverySweep, LargeNormalInplaceCallsDoNotReuseSubsequence) {
+TEST_F(DiscoverySweep, LargeNormalInplaceCallsDoNotReuseSubsequence) {
     constexpr size_t offset_step = 1'000'000;
     constexpr size_t tail_size = 8;
     constexpr uint64_t seed = 0x12345678ULL;
 
     Tensor::manual_seed(seed);
     auto first = Tensor::empty(
-        {offset_step + tail_size}, Device::CUDA, DataType::Float32);
+        {offset_step + tail_size}, Device::GPU, DataType::Float32);
     auto second = Tensor::empty(
-        {offset_step + tail_size}, Device::CUDA, DataType::Float32);
+        {offset_step + tail_size}, Device::GPU, DataType::Float32);
     first.normal_();
     second.normal_();
 
@@ -1214,7 +1217,7 @@ TEST(DiscoverySweep, LargeNormalInplaceCallsDoNotReuseSubsequence) {
         << "consecutive normal_ calls reused the first call's millionth-value subsequence";
 }
 
-TEST(DiscoverySweep, ScatterMinMaxPropagateNaNsLikeTorch) {
+TEST_F(DiscoverySweep, ScatterMinMaxPropagateNaNsLikeTorch) {
     const float nan = std::numeric_limits<float>::quiet_NaN();
     const auto indices = Tensor::from_vector(
         std::vector<int>{0}, {1}, Device::CPU);
@@ -1239,14 +1242,14 @@ TEST(DiscoverySweep, ScatterMinMaxPropagateNaNsLikeTorch) {
     }
 }
 
-TEST(DiscoverySweep, MaxPool2dRejectsInvalidStrideAndPaddingLikeTorch) {
+TEST_F(DiscoverySweep, MaxPool2dRejectsInvalidStrideAndPaddingLikeTorch) {
     const std::vector<float> values = {
         1.0f, 2.0f, 3.0f, 4.0f,
         5.0f, 6.0f, 7.0f, 8.0f,
         9.0f, 10.0f, 11.0f, 12.0f,
         13.0f, 14.0f, 15.0f, 16.0f};
 
-    for (const auto device : {Device::CPU, Device::CUDA}) {
+    for (const auto device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         const auto input = Tensor::from_vector(values, {1, 1, 4, 4}, device);
         const auto torch_device = device == Device::CPU ? torch::kCPU : torch::kCUDA;
@@ -1268,8 +1271,8 @@ TEST(DiscoverySweep, MaxPool2dRejectsInvalidStrideAndPaddingLikeTorch) {
     }
 }
 
-TEST(DiscoverySweep, SqueezeProducesZeroDimensionalScalarsLikeTorch) {
-    for (const auto device : {Device::CPU, Device::CUDA}) {
+TEST_F(DiscoverySweep, SqueezeProducesZeroDimensionalScalarsLikeTorch) {
+    for (const auto device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         const auto input = Tensor::full({1, 1}, 7.0f, device);
         const auto torch_device = device == Device::CPU ? torch::kCPU : torch::kCUDA;
@@ -1299,8 +1302,8 @@ TEST(DiscoverySweep, SqueezeProducesZeroDimensionalScalarsLikeTorch) {
     }
 }
 
-TEST(DiscoverySweep, FlattenAcceptsZeroDimensionalScalarsLikeTorch) {
-    for (const auto device : {Device::CPU, Device::CUDA}) {
+TEST_F(DiscoverySweep, FlattenAcceptsZeroDimensionalScalarsLikeTorch) {
+    for (const auto device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         const auto input = Tensor::full({}, 7.0f, device);
         const auto torch_device = device == Device::CPU ? torch::kCPU : torch::kCUDA;
@@ -1319,8 +1322,8 @@ TEST(DiscoverySweep, FlattenAcceptsZeroDimensionalScalarsLikeTorch) {
     }
 }
 
-TEST(DiscoverySweep, IntegerListReshapeCanProduceScalarsLikeTorch) {
-    for (const auto device : {Device::CPU, Device::CUDA}) {
+TEST_F(DiscoverySweep, IntegerListReshapeCanProduceScalarsLikeTorch) {
+    for (const auto device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         const auto input = Tensor::full({1}, 7.0f, device);
         const auto torch_device = device == Device::CPU ? torch::kCPU : torch::kCUDA;
@@ -1340,8 +1343,8 @@ TEST(DiscoverySweep, IntegerListReshapeCanProduceScalarsLikeTorch) {
     }
 }
 
-TEST(DiscoverySweep, TransposeAcceptsScalarDimensionAliasesLikeTorch) {
-    for (const auto device : {Device::CPU, Device::CUDA}) {
+TEST_F(DiscoverySweep, TransposeAcceptsScalarDimensionAliasesLikeTorch) {
+    for (const auto device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         const auto input = Tensor::full({}, 7.0f, device);
         const auto torch_device = device == Device::CPU ? torch::kCPU : torch::kCUDA;
@@ -1359,7 +1362,7 @@ TEST(DiscoverySweep, TransposeAcceptsScalarDimensionAliasesLikeTorch) {
     }
 }
 
-TEST(DiscoverySweep, SerializationRoundTripsSupportedHighRankTensor) {
+TEST_F(DiscoverySweep, SerializationRoundTripsSupportedHighRankTensor) {
     const auto input = Tensor::full(
         {1, 1, 1, 1, 1, 1, 1, 1}, 3.0f,
         Device::CPU, DataType::Float32);
@@ -1388,15 +1391,15 @@ TEST(DiscoverySweep, SerializationRoundTripsSupportedHighRankTensor) {
         Device::CPU, DataType::Float32));
 }
 
-TEST(DiscoverySweep, UnaryOnViewMatchesMaterializedLogicalValues) {
+TEST_F(DiscoverySweep, UnaryOnViewMatchesMaterializedLogicalValues) {
     const float nan = std::numeric_limits<float>::quiet_NaN();
     const std::vector<float> values = {0.0f, 0.0f, 0.0f, 0.0f,
                                        0.0f, 0.0f, nan, 0.0f};
-    for (const auto device : {Device::CPU, Device::CUDA}) {
+    for (const auto device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         const auto input = Tensor::from_vector(values, {4, 2}, device).transpose(0, 1);
         auto reference = torch::tensor(values, torch::kFloat32).reshape({4, 2}).transpose(0, 1);
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             reference = reference.cuda();
         }
         expect_float_tensor(input.neg(), reference.neg(),
@@ -1404,9 +1407,9 @@ TEST(DiscoverySweep, UnaryOnViewMatchesMaterializedLogicalValues) {
     }
 }
 
-TEST(DiscoverySweep, CatAcceptsZeroElementCudaInputsLikeTorch) {
+TEST_F(DiscoverySweep, CatAcceptsZeroElementCudaInputsLikeTorch) {
     const auto input = Tensor::empty(
-        {0, 1, 1}, Device::CUDA, DataType::Float32);
+        {0, 1, 1}, Device::GPU, DataType::Float32);
     const auto reference = torch::empty(
         {0, 1, 1},
         torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
@@ -1428,19 +1431,19 @@ TEST(DiscoverySweep, CatAcceptsZeroElementCudaInputsLikeTorch) {
     }
 }
 
-TEST(DiscoverySweep, SquareThenCumsumOnSliceMatchesMaterializedValues) {
+TEST_F(DiscoverySweep, SquareThenCumsumOnSliceMatchesMaterializedValues) {
     const std::vector<float> values = {
         4.0f, 1.0f,
         -3.0f, -3.0f,
         5.0f, 0.0f,
         -1.0f, 4.0f};
-    for (const auto device : {Device::CPU, Device::CUDA}) {
+    for (const auto device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         const auto input = Tensor::from_vector(values, {4, 2}, device).slice(1, 1, 2);
         auto reference = torch::tensor(values, torch::kFloat32)
                              .reshape({4, 2})
                              .slice(1, 1, 2);
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             reference = reference.cuda();
         }
 
@@ -1453,8 +1456,8 @@ TEST(DiscoverySweep, SquareThenCumsumOnSliceMatchesMaterializedValues) {
     }
 }
 
-TEST(DiscoverySweep, CudaColumnReductionsAcceptZeroWidthOutputsLikeTorch) {
-    const auto input = Tensor::empty({1, 0}, Device::CUDA, DataType::Float32);
+TEST_F(DiscoverySweep, CudaColumnReductionsAcceptZeroWidthOutputsLikeTorch) {
+    const auto input = Tensor::empty({1, 0}, Device::GPU, DataType::Float32);
     const auto reference = torch::empty(
         {1, 0}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 
@@ -1485,11 +1488,11 @@ TEST(DiscoverySweep, CudaColumnReductionsAcceptZeroWidthOutputsLikeTorch) {
         [&] { return std::get<0>(reference.min(0)); });
 }
 
-TEST(DiscoverySweep, LinspacePreservesSubnormalEndpointLikeTorch) {
+TEST_F(DiscoverySweep, LinspacePreservesSubnormalEndpointLikeTorch) {
     constexpr float low = 0.0f;
     const float high = std::numeric_limits<float>::denorm_min();
 
-    for (const auto device : {Device::CPU, Device::CUDA}) {
+    for (const auto device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         const auto actual = Tensor::linspace(low, high, 3, device);
         const auto torch_device = device == Device::CPU ? torch::kCPU : torch::kCUDA;
@@ -1506,8 +1509,8 @@ TEST(DiscoverySweep, LinspacePreservesSubnormalEndpointLikeTorch) {
     }
 }
 
-TEST(DiscoverySweep, ScalarCumsumAcceptsDimZeroLikeTorch) {
-    for (const auto device : {Device::CPU, Device::CUDA}) {
+TEST_F(DiscoverySweep, ScalarCumsumAcceptsDimZeroLikeTorch) {
+    for (const auto device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         const auto input = Tensor::full({}, 7.0f, device);
         const auto torch_device = device == Device::CPU ? torch::kCPU : torch::kCUDA;
@@ -1523,8 +1526,8 @@ TEST(DiscoverySweep, ScalarCumsumAcceptsDimZeroLikeTorch) {
     }
 }
 
-TEST(DiscoverySweep, ScalarAdvancedOpsAcceptDimZeroLikeTorch) {
-    for (const auto device : {Device::CPU, Device::CUDA}) {
+TEST_F(DiscoverySweep, ScalarAdvancedOpsAcceptDimZeroLikeTorch) {
+    for (const auto device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         const auto input = Tensor::full({}, 7.0f, device);
         const auto torch_device = device == Device::CPU ? torch::kCPU : torch::kCUDA;
@@ -1566,8 +1569,8 @@ TEST(DiscoverySweep, ScalarAdvancedOpsAcceptDimZeroLikeTorch) {
     }
 }
 
-TEST(DiscoverySweep, ScalarDimensionalNormAcceptsDimZeroLikeTorch) {
-    for (const auto device : {Device::CPU, Device::CUDA}) {
+TEST_F(DiscoverySweep, ScalarDimensionalNormAcceptsDimZeroLikeTorch) {
+    for (const auto device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
         const auto input = Tensor::full({}, -7.0f, device);
         const auto torch_device = device == Device::CPU ? torch::kCPU : torch::kCUDA;
@@ -1587,7 +1590,7 @@ TEST(DiscoverySweep, ScalarDimensionalNormAcceptsDimZeroLikeTorch) {
     }
 }
 
-TEST(DiscoverySweep, StackWritesContiguousInputsAlongInnerDimensions) {
+TEST_F(DiscoverySweep, StackWritesContiguousInputsAlongInnerDimensions) {
     const auto input = Tensor::from_vector(
         std::vector<float>{4.0f}, {1, 1}, Device::CPU);
     const auto reference = torch::tensor(

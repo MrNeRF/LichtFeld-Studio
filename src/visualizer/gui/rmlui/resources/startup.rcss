@@ -12,6 +12,11 @@ body {
     height: 100%;
 }
 
+#startup-card {
+    display: block;
+    position: relative;
+}
+
 #overlay-box {
     display: flex;
     flex-direction: column;
@@ -21,6 +26,8 @@ body {
     border-width: 1dp;
     background-color: rgba(0, 0, 0, 0);
     border-color: rgba(0, 0, 0, 0);
+    position: relative;
+    z-index: 1;
 }
 
 #supported-text {

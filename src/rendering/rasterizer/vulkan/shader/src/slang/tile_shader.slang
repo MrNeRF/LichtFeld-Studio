@@ -100,6 +100,16 @@ void main(
     float2 xy = read_t2_float2(primitive_idx, xy_vs);
     float4 inv_cov_opac = read_t4_float4(primitive_idx, inv_cov_vs_opacity);
 
+    if (uniforms.splat_render_profile == 1u &&
+        is_gut_projection_mode(uniforms.camera_model) && (uniforms.lod_enabled & 4u) == 0u) {
+        // The vertex pass counts tiles using an ellipse enclosing the capped
+        // portal quad. Emit that same ellipse; the stored inverse covariance
+        // remains uncapped for the fragment shader's ray and quad evaluation.
+        const uint camera_height = uniforms.camera_height == 0 ? image_height : uniforms.camera_height;
+        const uint camera_width = uniforms.camera_width == 0 ? image_width : uniforms.camera_width;
+        inv_cov_opac.xyz = portal_gut_bin_inverse(inv_cov_opac.xyz, camera_width, camera_height);
+    }
+
     float extend = extend_from_opacity(inv_cov_opac.w);
     float3 inv_cov = inv_cov_opac.xyz / (extend*extend);
 #endif  // TILE_CULLING_MODE > 0
@@ -114,6 +124,15 @@ void main(
     rectangle rect = reinterpret<rectangle>(rect_tile_space[primitive_idx]);
   #endif
 
+    // Preserve the full image's ellipse scan direction. Clipping the rectangle
+    // first can switch axes and change which boundary tiles survive rounding.
+    const bool scan_rows = rect.max_y - rect.min_y <= rect.max_x - rect.min_x;
+    const uint2 tile_origin = full_frame_binning(uniforms)
+        ? uint2(uniforms.render_origin_x / TILE_WIDTH, uniforms.render_origin_y / TILE_HEIGHT)
+        : uint2(0u);
+    if (full_frame_binning(uniforms))
+        rect = clip_to_render_grid(rect, uniforms);
+
 #if TILE_CULLING_MODE == 0 || TILE_CULLING_MODE == 1
 
     for (uint16_t y = rect.min_y; y < rect.max_y; y++) {
@@ -121,7 +140,7 @@ void main(
             if (offset >= offset_max)
                 return;
             uint32_t key_x = wrap_x ? uint32_t(x) % grid_width : uint32_t(x);
-            uint32_t key = uint32_t(y) * grid_width + key_x;
+            uint32_t key = (uint32_t(y) - tile_origin.y) * grid_width + key_x - tile_origin.x;
             out_unsorted_keys[offset] = sortingKey_t(key);
             out_unsorted_gauss_idx[offset] = primitive_idx;
             offset++;
@@ -144,7 +163,7 @@ void main(
         return;
     }
 
-    if (rect.max_y-rect.min_y <= rect.max_x-rect.min_x) {
+    if (scan_rows) {
         for (uint16_t y = rect.min_y; y < rect.max_y; y++) {
             float y0 = y * TILE_HEIGHT - xy.y;
             float y1 = y0 + TILE_HEIGHT;
@@ -159,7 +178,7 @@ void main(
                 rect.min_x, rect.max_x
             ));
             for (uint16_t x = min_x; x < max_x && offset < offset_max; x++) {
-                uint32_t key = uint32_t(y) * grid_width + uint32_t(x);
+                uint32_t key = (uint32_t(y) - tile_origin.y) * grid_width + uint32_t(x) - tile_origin.x;
                 out_unsorted_keys[offset] = sortingKey_t(key);
                 out_unsorted_gauss_idx[offset] = primitive_idx;
                 offset++;
@@ -181,7 +200,7 @@ void main(
                 rect.min_y, rect.max_y
             ));
             for (uint16_t y = min_y; y < max_y && offset < offset_max; y++) {
-                uint32_t key = uint32_t(y) * grid_width + uint32_t(x);
+                uint32_t key = (uint32_t(y) - tile_origin.y) * grid_width + uint32_t(x) - tile_origin.x;
                 out_unsorted_keys[offset] = sortingKey_t(key);
                 out_unsorted_gauss_idx[offset] = primitive_idx;
                 offset++;

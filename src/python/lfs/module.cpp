@@ -49,9 +49,8 @@
 #include "visualizer/operation/undo_entry.hpp"
 #include "visualizer/operation/undo_history.hpp"
 
-#include "control/command_api.hpp"
-#include "control/control_boundary.hpp"
 #include "core/error.hpp"
+#include "core/event_bridge/command_api.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
@@ -62,6 +61,8 @@
 #include "core/path_utils.hpp"
 #include "core/scene.hpp"
 #include "core/session_breadcrumb.hpp"
+#include "core/tensor_backend.hpp"
+#include "diagnostics/vram_owner_model.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/rmlui/elements/loss_graph_element.hpp"
 #include "gui/utils/file_association.hpp"
@@ -71,6 +72,7 @@
 #include "io/project_recovery.hpp"
 #include "py_rml.hpp"
 #include "python/python_runtime.hpp"
+#include "training/control/control_boundary.hpp"
 
 #include "config.h"
 #include "core/checkpoint_format.hpp"
@@ -79,13 +81,19 @@
 #include "python/runner.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "theme/theme.hpp"
+#if LFS_BUILD_TRAINER
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/strategies/istrategy.hpp"
+#endif
+#include "core/camera_metrics.hpp"
+#if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
-#include "training/training_state.hpp"
+#endif
+#include "core/training_state.hpp"
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/core/parameter_manager.hpp"
 #include "visualizer/core/services.hpp"
+#include "visualizer/core/training_manager.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/ipc/view_context.hpp"
@@ -93,7 +101,6 @@
 #include "visualizer/post_work_utils.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
-#include "visualizer/training/training_manager.hpp"
 #include "visualizer/visualizer.hpp"
 #include "visualizer/window/vulkan_context.hpp"
 #include "visualizer/window/window_manager.hpp"
@@ -106,6 +113,7 @@
 #include <functional>
 #include <future>
 #include <memory>
+#include <span>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -306,6 +314,53 @@ namespace {
             python_viewer_shutdown_error());
     }
 
+    lfs::Result<void> post_project_preview_set_to_viewer(
+        lfs::vis::Visualizer& viewer,
+        std::vector<std::byte> png_bytes,
+        std::filesystem::path expected_path,
+        std::string expected_project_uuid) {
+        if (viewer.isOnViewerThread()) {
+            return viewer.projectSetPreview(
+                png_bytes, expected_path, expected_project_uuid);
+        }
+        const lfs::core::TaskContext context{
+            .name = "python.project_set_preview",
+            .domain = lfs::ErrorDomain::Python,
+            .operation_id = lfs::OperationId::generate(),
+            .site = LFS_SOURCE_SITE_CURRENT(),
+        };
+        return lfs::vis::post_guarded_and_wait<void>(
+            viewer, context,
+            [&viewer, png_bytes = std::move(png_bytes),
+             expected_path = std::move(expected_path),
+             expected_project_uuid =
+                 std::move(expected_project_uuid)]() mutable {
+                return viewer.projectSetPreview(
+                    png_bytes, expected_path, expected_project_uuid);
+            },
+            python_viewer_shutdown_error());
+    }
+
+    lfs::Result<lfs::vis::ProjectWritePoll> post_project_write_poll_to_viewer(
+        lfs::vis::Visualizer& viewer, const bool wait = false) {
+        const lfs::core::TaskContext context{
+            .name = "python.project_poll_write",
+            .domain = lfs::ErrorDomain::Python,
+            .operation_id = lfs::OperationId::generate(),
+            .site = LFS_SOURCE_SITE_CURRENT(),
+        };
+        return lfs::vis::post_guarded_and_wait<lfs::vis::ProjectWritePoll>(
+            viewer, context,
+            [&viewer, wait]() -> lfs::Result<lfs::vis::ProjectWritePoll> {
+                if (wait) {
+                    viewer.projectWaitWrite();
+                }
+                // Polling settles completed writes and mutates the session.
+                return viewer.projectPollWrite();
+            },
+            python_viewer_shutdown_error());
+    }
+
     lfs::Error python_viewer_shutdown_error() {
         return lfs::make_error(lfs::ErrorInit{
             .code = lfs::ErrorCode::Cancelled,
@@ -335,7 +390,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -589,7 +644,11 @@ namespace {
         PyContextView() {
             snapshot_ = current_training_snapshot();
             if (snapshot_.trainer) {
+#if LFS_BUILD_TRAINER
                 strategy_ = snapshot_.trainer->getParams().optimization.strategy;
+#else
+                strategy_ = snapshot_.strategy;
+#endif
             }
         }
 
@@ -618,7 +677,11 @@ namespace {
         void refresh() {
             snapshot_ = current_training_snapshot();
             if (snapshot_.trainer) {
+#if LFS_BUILD_TRAINER
                 strategy_ = snapshot_.trainer->getParams().optimization.strategy;
+#else
+                strategy_ = snapshot_.strategy;
+#endif
             } else {
                 strategy_ = "none";
             }
@@ -634,21 +697,33 @@ namespace {
             const auto snap = current_training_snapshot();
             if (!snap.trainer)
                 return 0;
+#if LFS_BUILD_TRAINER
             return snap.trainer->get_strategy_mutable().get_model().size();
+#else
+            return 0;
+#endif
         }
 
         int sh_degree() const {
             const auto snap = current_training_snapshot();
             if (!snap.trainer)
                 return 0;
+#if LFS_BUILD_TRAINER
             return snap.trainer->get_strategy_mutable().get_model().get_active_sh_degree();
+#else
+            return 0;
+#endif
         }
 
         int max_sh_degree() const {
             const auto snap = current_training_snapshot();
             if (!snap.trainer)
                 return 0;
+#if LFS_BUILD_TRAINER
             return snap.trainer->get_strategy_mutable().get_model().get_max_sh_degree();
+#else
+            return 0;
+#endif
         }
     };
 
@@ -682,7 +757,11 @@ namespace {
             const auto snap = get_command_center().snapshot();
             if (!snap.trainer)
                 return 0.0f;
+#if LFS_BUILD_TRAINER
             return snap.trainer->get_strategy_mutable().get_optimizer().get_lr();
+#else
+            return 0;
+#endif
         }
     };
 
@@ -788,9 +867,11 @@ namespace {
             return app_scene;
         }
         // Priority 2: Current trainer (headless mode during hooks)
+#if LFS_BUILD_TRAINER
         if (g_current_trainer) {
             return g_current_trainer->getScene();
         }
+#endif
         // Priority 3: Operation context (short-lived, for capability invocations)
         return lfs::python::get_scene_for_python();
     }
@@ -802,6 +883,47 @@ namespace {
             return {};
         }
         return viewer->projectTrainingSessionState();
+    }
+
+    // Keyword-only panel= matches depth-window actions: None uses the legacy path;
+    // main explicitly requests focus; left/right name a panel. None and main
+    // coincide for focus_selection. For reset_camera, panel=None targets the
+    // primary viewport; panel='main' targets the focused panel.
+    [[nodiscard]] std::optional<lfs::vis::SplitViewPanelId>
+    parseGizmoPanelArg(const std::string& panel) {
+        if (panel == "left")
+            return lfs::vis::SplitViewPanelId::Left;
+        if (panel == "right")
+            return lfs::vis::SplitViewPanelId::Right;
+        if (panel == "main")
+            return std::nullopt; // resolved to the focused panel by the caller
+        throw std::invalid_argument("panel must be 'main', 'left', or 'right'");
+    }
+
+    // Resolve main on the viewer thread: focused_panel_ is unprotected and
+    // main-thread-owned. Without a manager, use Left as get_focused_split_panel does.
+    [[nodiscard]] lfs::vis::SplitViewPanelId focusedGizmoPanel() {
+        const auto read = [] {
+            auto* const rm = lfs::python::get_rendering_manager();
+            return rm ? rm->getFocusedSplitPanel() : lfs::vis::SplitViewPanelId::Left;
+        };
+        auto* const viewer = lfs::python::get_visualizer();
+        if (!viewer || viewer->isOnViewerThread())
+            return read();
+        if (!viewer->acceptsPostedWork())
+            return lfs::vis::SplitViewPanelId::Left;
+
+        nb::gil_scoped_release release;
+        return lfs::vis::post_work_and_wait(
+            [viewer](lfs::vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
+            read,
+            [] { return lfs::vis::SplitViewPanelId::Left; });
+    }
+
+    // Raise ValueError for unknown tokens before state access or partial application.
+    [[nodiscard]] lfs::vis::SplitViewPanelId resolveGizmoPanelArg(const std::string& panel) {
+        const auto parsed = parseGizmoPanelArg(panel);
+        return parsed ? *parsed : focusedGizmoPanel();
     }
 
     int scene_training_gaussian_count() {
@@ -948,7 +1070,7 @@ NB_MODULE(lichtfeld, m) {
         "trainer_state",
         []() -> const char* {
             const auto* const tm = lfs::python::get_trainer_manager();
-            if (!tm || !tm->hasTrainer()) {
+            if (!tm || (!tm->hasTrainer() && !tm->isFinished())) {
                 const auto session = stored_training_session();
                 if (session.available) {
                     return session.completed ? "completed" : "paused";
@@ -972,7 +1094,11 @@ NB_MODULE(lichtfeld, m) {
         "trainer_saving_model",
         []() {
             const auto* const tm = lfs::python::get_trainer_manager();
+#if LFS_BUILD_TRAINER
             return tm && tm->getTrainer() && tm->getTrainer()->is_saving_model();
+#else
+            return false;
+#endif
         },
         "Whether the terminal stop/completion model save is in progress");
 
@@ -1189,22 +1315,43 @@ NB_MODULE(lichtfeld, m) {
         "project_create",
         [](const std::string& path,
            const bool discard_changes,
-           const bool stop_training) {
+           const bool stop_training,
+           const bool overwrite) {
             nb::gil_scoped_release release;
             const auto project_path = python_utf8_path(path);
+            auto* const viewer = lfs::python::get_visualizer();
+            bool created = false;
             emit_project_cmd_marshaled(
                 "python.project_create",
-                [project_path, discard_changes, stop_training] {
+                [project_path, discard_changes, stop_training,
+                 overwrite, viewer, &created] {
                     lfs::core::events::cmd::ProjectCreate{
                         .path = project_path,
                         .discard_changes = discard_changes,
-                        .stop_training = stop_training}
+                        .stop_training = stop_training,
+                        .allow_existing_destination_replacement =
+                            overwrite}
                         .emit();
+                    created = !viewer || viewer->consumeProjectCreateSucceeded();
                 });
+            return created;
         },
         nb::arg("path"), nb::arg("discard_changes") = false,
         nb::arg("stop_training") = false,
+        nb::arg("overwrite") = false,
         "Create and bind a new .licht project at path");
+    m.def(
+        "project_create_pending",
+        []() {
+            nb::gil_scoped_release release;
+            bool pending = false;
+            emit_project_cmd_marshaled("python.project_create_pending", [&pending] {
+                const auto* const viewer = lfs::python::get_visualizer();
+                pending = viewer && viewer->projectCreatePending();
+            });
+            return pending;
+        },
+        "Whether a stop-then-create is queued and has not bound yet");
     m.def(
         "project_embed_dataset",
         []() {
@@ -1238,7 +1385,7 @@ NB_MODULE(lichtfeld, m) {
             if (!started || !wait) {
                 return started;
             }
-            auto poll = viewer->projectPollWrite();
+            auto poll = post_project_write_poll_to_viewer(*viewer);
             if (!poll) {
                 return false;
             }
@@ -1337,6 +1484,51 @@ NB_MODULE(lichtfeld, m) {
         },
         "Clear the license metadata for the active project");
     m.def(
+        "project_set_preview",
+        [](const nb::bytes& png, const bool wait,
+           const std::string& path, const std::string& project_uuid) {
+            auto* const viewer = lfs::python::get_visualizer();
+            if (!viewer) {
+                throw std::runtime_error(
+                    "project_set_preview failed: no visualizer is available");
+            }
+            std::vector<std::byte> png_bytes(
+                static_cast<const std::byte*>(png.data()),
+                static_cast<const std::byte*>(png.data()) + png.size());
+            auto result = [&] {
+                nb::gil_scoped_release release;
+                return post_project_preview_set_to_viewer(
+                    *viewer, std::move(png_bytes),
+                    python_utf8_path(path), project_uuid);
+            }();
+            if (!result) {
+                throw std::runtime_error(std::format(
+                    "project_set_preview failed: {}",
+                    lfs::format_for_developer(result.error())));
+            }
+            if (!wait) {
+                return true;
+            }
+            auto poll = [&] {
+                nb::gil_scoped_release release;
+                return post_project_write_poll_to_viewer(*viewer, true);
+            }();
+            if (!poll) {
+                throw std::runtime_error(std::format(
+                    "project_set_preview wait failed: {}",
+                    lfs::format_for_developer(poll.error())));
+            }
+            if (!poll->error.empty()) {
+                throw std::runtime_error(poll->error);
+            }
+            return true;
+        },
+        nb::arg("png_bytes"),
+        nb::arg("wait") = false,
+        nb::arg("path") = "",
+        nb::arg("project_uuid") = "",
+        "Write a thumbnail onto the active project without saving unsaved edits");
+    m.def(
         "project_poll_write", []() {
             nb::dict result;
             auto* const viewer =
@@ -1344,7 +1536,10 @@ NB_MODULE(lichtfeld, m) {
             if (!viewer) {
                 return result;
             }
-            auto poll = viewer->projectPollWrite();
+            auto poll = [&] {
+                nb::gil_scoped_release release;
+                return post_project_write_poll_to_viewer(*viewer);
+            }();
             if (!poll) {
                 throw std::runtime_error(
                     std::format(
@@ -1432,6 +1627,25 @@ NB_MODULE(lichtfeld, m) {
                 });
         },
         "Compact the active .licht project in the background");
+    m.def("project_cancel_cleanup", [] {
+        nb::gil_scoped_release release;
+        emit_project_cmd_marshaled("python.project_cancel_cleanup", [] {
+            lfs::core::events::cmd::ProjectCompact{.cancel_clean = true}.emit();
+        });
+    });
+    m.def("project_clean", [](const std::string& destination, const std::string& expected_commit) {
+        if (!expected_commit.empty() && !lfs::core::Uuid::from_string(expected_commit))
+            throw std::invalid_argument("Invalid cleanup commit identity");
+        nb::gil_scoped_release release;
+        std::string error = "No project is open.";
+        emit_project_cmd_marshaled("python.project_clean", [&] {
+            lfs::core::events::cmd::ProjectCompact{
+                .clean = true, .destination = lfs::core::utf8_to_path(destination), .expected_commit = expected_commit,
+                .on_started = [&error](const std::string& message) { error = message; }}.emit();
+        });
+        if (!error.empty())
+            throw std::runtime_error(error);
+        return true; }, nb::arg("destination") = "", nb::arg("expected_commit") = "", "Clean the active saved project in the background, preserving its current resume point");
     m.def(
         "project_is_dirty", []() {
             auto* const viewer =
@@ -1860,10 +2074,95 @@ NB_MODULE(lichtfeld, m) {
         "Explicitly discard unsaved changes and exit.");
 
     m.def(
+        "load_gallery_scene",
+        [](const nb::list& nodes, const std::string& name, const bool hidden) {
+            if (nodes.size() == 0 || nodes.size() > 4096 || name.empty() || name.size() > 200)
+                throw std::invalid_argument("Invalid gallery scene import.");
+            lfs::core::events::cmd::LoadGalleryScene command;
+            command.group_name = name;
+            command.hidden = hidden;
+            for (const auto item : nodes) {
+                const auto node = nb::cast<nb::dict>(item);
+                const auto rows = nb::cast<std::vector<std::vector<float>>>(node["transform"]);
+                if (rows.size() != 4 || std::any_of(rows.begin(), rows.end(), [](const auto& row) { return row.size() != 4; }))
+                    throw std::invalid_argument("Invalid gallery node transform.");
+                glm::mat4 matrix{1.0f};
+                for (int row = 0; row < 4; ++row)
+                    for (int column = 0; column < 4; ++column) {
+                        if (!std::isfinite(rows[row][column]))
+                            throw std::invalid_argument("Invalid gallery node transform.");
+                        matrix[column][row] = rows[row][column];
+                    }
+                if (rows[3] != std::vector<float>{0, 0, 0, 1})
+                    throw std::invalid_argument("Gallery node transform must be affine.");
+                const int degree = nb::cast<int>(node["shDegree"]);
+                if (degree < 0 || degree > 3)
+                    throw std::invalid_argument("Invalid gallery SH degree.");
+                const auto node_name = node.contains("name") ? nb::cast<std::string>(node["name"]) : std::string{};
+                if (node_name.size() > 4096 || node_name.find('\0') != std::string::npos)
+                    throw std::invalid_argument("Invalid gallery node name.");
+                command.paths.push_back(python_utf8_path(nb::cast<std::string>(node["path"])));
+                command.names.push_back(node_name);
+                command.transforms.push_back(matrix);
+                command.sh_degrees.push_back(degree);
+            }
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled("python.load_gallery_scene", [command = std::move(command)] { command.emit(); });
+        },
+        nb::arg("nodes"), nb::arg("name"), nb::arg("hidden") = false,
+        "Load verified gallery nodes on the managed import worker, then attach a complete group. "
+        "Nodes contain path, affine transform and shDegree. A failed or canceled batch adds no group.");
+
+    m.def(
+        "prepare_gallery_scene",
+        [](const std::string& path, const std::string& payload_format) {
+            const int format = payload_format == "ply" ? 9 : payload_format == "sog" ? 10
+                                                         : payload_format == "ssog"  ? 11
+                                                         : payload_format == "spz"   ? 12
+                                                                                     : -1;
+            if (format < 0)
+                throw std::invalid_argument("Choose PLY, SOG, SSOG or SPZ compression.");
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled("python.prepare_gallery_scene", [path, format] {
+                lfs::python::invoke_export(format, path, {}, 3, false, true, 4, false);
+            });
+        },
+        nb::arg("path"), nb::arg("payload_format") = "ply",
+        "Publish visible splats and appearance into a fresh native .licht file. "
+        "The selected PLY, SOG, SSOG or SPZ v4 data and HDR assets are embedded; training and editor state are excluded.");
+
+    m.def(
+        "prepare_gallery_project",
+        [](const std::string& source_path, const std::string& destination,
+           const std::string& payload_format, const std::string& expected_commit_uuid) {
+            using lfs::core::ExportFormat;
+            const auto format = (payload_format == "ply" || payload_format == "studio") ? ExportFormat::GALLERY_SCENE
+                                : payload_format == "sog"                               ? ExportFormat::GALLERY_SOG
+                                : payload_format == "ssog"                              ? ExportFormat::GALLERY_SSOG
+                                : payload_format == "spz"                               ? ExportFormat::GALLERY_SPZ
+                                                                                        : throw std::invalid_argument("Choose .licht, SOG, SSOG or SPZ.");
+            if (!expected_commit_uuid.empty() && !lfs::core::Uuid::from_string(expected_commit_uuid))
+                throw std::invalid_argument("Invalid expected project commit UUID.");
+            lfs::core::events::cmd::PrepareGalleryProject command{
+                .source_path = python_utf8_path(source_path),
+                .destination = python_utf8_path(destination),
+                .payload_format = format,
+                .expected_commit_uuid = expected_commit_uuid};
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled("python.prepare_gallery_project", [command = std::move(command)] { command.emit(); });
+        },
+        nb::arg("source_path"), nb::arg("destination"), nb::arg("payload_format") = "sog",
+        nb::arg("expected_commit_uuid") = "",
+        "Prepare a saved .licht project on the managed export worker without opening it in the editor. "
+        "Destination must be a fresh staging directory. Poll ui.get_export_state() for progress, errors and commit_uuid.");
+
+    m.def(
         "export_scene",
         [](int format, const std::string& path, const std::vector<std::string>& node_names, int sh_degree,
            bool rad_flip_y, bool rad_streamable, int spz_version, bool include_provenance,
            int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
+            if (format >= 9 && format <= 12)
+                throw std::runtime_error("Use prepare_gallery_scene() to prepare a gallery upload.");
             lfs::python::invoke_export(format, path, node_names, sh_degree, rad_flip_y, rad_streamable,
                                        spz_version, include_provenance, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations);
         },
@@ -1879,7 +2178,7 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("chunk_extent") = 16.0f,
         nb::arg("chunk_min_k") = 8,
         nb::arg("kmeans_iterations") = 10,
-        "Export scene nodes to file or directory. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP, 8=SSOG. "
+        "Export scene nodes to file or directory. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP, 8=SSOG, 13=GLB. "
         "For SSOG, path names a .ssog bundle or directory; lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k and kmeans_iterations control its LODs and chunks. "
         "spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. "
         "include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. "
@@ -2037,6 +2336,33 @@ NB_MODULE(lichtfeld, m) {
             return lfs::diagnostics::VramProfiler::instance().enabled();
         },
         "Return whether the live VRAM diagnostics profiler is enabled");
+
+    m.def(
+        "vram_owner_breakdown", []() {
+            const auto snapshot = lfs::diagnostics::VramProfiler::instance().snapshot();
+            const auto owners = lfs::diagnostics::buildVramOwnerBreakdown(
+                snapshot, snapshot.process.shared_scratch_bytes > 0);
+            nb::dict categories;
+            for (std::size_t i = 0; i < lfs::diagnostics::kVramOwnerCount; ++i)
+                categories[lfs::diagnostics::vramOwnerName(
+                    static_cast<lfs::diagnostics::VramOwner>(i))] = owners.bytes[i];
+            nb::dict result;
+            result["iteration"] = snapshot.iteration;
+            result["splats"] = snapshot.training_state.live_splats;
+            result["process_bytes"] = owners.process_bytes;
+            result["process_valid"] = owners.process_valid;
+            result["signed_residual_bytes"] = owners.signed_residual_bytes;
+            result["context_inferred_bytes"] = owners.context_inferred_bytes;
+            result["categories"] = categories;
+            nb::dict unexplained;
+            constexpr std::array<std::string_view, 5> names{
+                "cuda_slab", "hooked_direct", "tensor_direct", "vulkan_vma", "process_balance"};
+            for (std::size_t i = 0; i < names.size(); ++i)
+                unexplained[names[i].data()] = owners.unattributed_roots[i];
+            result["unattributed_roots"] = unexplained;
+            return result;
+        },
+        "Return a sampled process VRAM breakdown by owner category");
 
     // Scene manipulation
     m.def(
@@ -2536,14 +2862,47 @@ NB_MODULE(lichtfeld, m) {
 
     // Camera commands
     m.def(
-        "reset_camera", []() { lfs::core::events::cmd::ResetCamera{}.emit(); },
-        "Reset camera to default position and orientation");
-    m.def(
-        "focus_selection", []() -> bool {
-            auto* const controller = lfs::vis::InputController::instance();
-            return controller ? controller->focusSelection() : false;
+        "reset_camera", [](const std::optional<std::string>& panel) {
+            if (!panel.has_value()) {
+                lfs::core::events::cmd::ResetCamera{}.emit();
+                return;
+            }
+            const auto panel_id = resolveGizmoPanelArg(*panel);
+            if (auto* const controller = lfs::vis::InputController::instance())
+                controller->resetCameraForPanel(panel_id);
         },
-        "Focus the active viewport on the selection, or the whole scene when nothing is selected");
+        nb::kw_only(), nb::arg("panel") = nb::none(), "Reset the primary camera by default, even when another panel has focus.\n"
+                                                      "Use panel=\"main\" to reset the focused camera. Reset restores the camera's\n"
+                                                      "default position and orientation.\n"
+                                                      "\n"
+                                                      "Unlike focus_selection(), omitting panel (or passing None) does not follow focus.\n"
+                                                      "\n"
+                                                      "panel (keyword-only):\n"
+                                                      "- None (default): primary camera.\n"
+                                                      "- 'main': focused camera.\n"
+                                                      "- 'left' / 'right': named panel's camera.\n"
+                                                      "\n"
+                                                      "Outside independent-dual split, all choices target the primary camera.\n"
+                                                      "Addressing a panel never changes focus.");
+    m.def(
+        "focus_selection", [](const std::optional<std::string>& panel) -> bool {
+            if (!panel.has_value()) {
+                auto* const controller = lfs::vis::InputController::instance();
+                return controller ? controller->focusSelection() : false;
+            }
+            const auto panel_id = resolveGizmoPanelArg(*panel);
+            auto* const controller = lfs::vis::InputController::instance();
+            return controller ? controller->focusSelectionForPanel(panel_id) : false;
+        },
+        nb::kw_only(), nb::arg("panel") = nb::none(), "Focus the active viewport on the selection, or the whole scene when nothing is selected.\n"
+                                                      "\n"
+                                                      "panel (keyword-only) selects which split panel's camera is moved:\n"
+                                                      "- None (default): the focused panel, exactly as before.\n"
+                                                      "- 'main': the panel that currently has focus, requested explicitly.\n"
+                                                      "  Same panel as None here, reached through the panel-addressed path.\n"
+                                                      "- 'left' / 'right': that panel's own camera. Outside independent-dual\n"
+                                                      "  split every token resolves to the primary camera, because there is\n"
+                                                      "  only one. Addressing a panel never changes which panel has focus.");
     m.def(
         "get_camera_navigation_mode", []() -> std::string {
             const auto* controller = lfs::vis::InputController::instance();
@@ -2632,6 +2991,9 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "toggle_vram_hud", []() { lfs::core::events::ui::ToggleVramHud{}.emit(); },
         "Toggle the VRAM diagnostics HUD overlay (requires vram profiler enabled)");
+    m.def(
+        "toggle_perf_hud_expanded", []() { lfs::core::events::ui::TogglePerfHudExpanded{}.emit(); },
+        "Toggle the performance HUD between its full and compact views");
     m.def(
         "is_perf_hud_visible",
         []() -> bool { return lfs::vis::app_store().perf_hud.get().visible; },
@@ -2760,7 +3122,9 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("mode"), "Set depth-map visualization mode");
 
     m.def(
-        "set_orthographic", [](bool ortho) {
+        "set_orthographic", [](bool ortho, std::optional<double> extent_world) {
+            if (extent_world && (!ortho || !std::isfinite(*extent_world) || *extent_world <= 0.0))
+                throw nb::value_error("Orthographic extent must be positive and finite, with orthographic projection enabled");
             auto* rm = lfs::python::get_rendering_manager();
             if (!rm)
                 return;
@@ -2774,9 +3138,21 @@ NB_MODULE(lichtfeld, m) {
                 distance_to_pivot = glm::length(pivot - eye);
             }
 
-            rm->setOrthographic(ortho, viewport_height, distance_to_pivot);
+            if (extent_world) {
+                const float scale = static_cast<float>(viewport_height / *extent_world);
+                if (!std::isfinite(scale) || scale <= 0.0f)
+                    throw nb::value_error("Open a viewport with a representable orthographic extent");
+                auto settings = rm->getSettings();
+                settings.orthographic = true;
+                settings.ortho_scale = scale;
+                rm->updateSettings(settings, lfs::vis::DirtyFlag::ALL);
+                lfs::vis::apply_set_ortho_scale(std::nullopt);
+            } else {
+                rm->setOrthographic(ortho, viewport_height, distance_to_pivot);
+                lfs::vis::apply_set_ortho_scale(std::nullopt);
+            }
         },
-        nb::arg("ortho"), "Enable or disable orthographic projection");
+        nb::arg("ortho"), nb::arg("extent_world") = nb::none(), "Enable or disable orthographic projection, optionally setting its vertical world extent");
 
     // Hook registration functions (decorator-style)
     m.def(
@@ -2816,6 +3192,31 @@ NB_MODULE(lichtfeld, m) {
 
     m.def("_clear_training_hooks", []() { ControlBoundary::instance().clear_all(); });
     nb::module_::import_("atexit").attr("register")(m.attr("_clear_training_hooks"));
+
+    m.def(
+        "tensor_backend_selftest",
+        [](const std::string& backend) {
+            lfs::core::GpuBackend selected;
+            if (backend == "cuda") {
+                selected = lfs::core::GpuBackend::CUDA;
+            } else if (backend == "vulkan") {
+                selected = lfs::core::GpuBackend::Vulkan;
+            } else if (backend == "metal") {
+                selected = lfs::core::GpuBackend::Metal;
+            } else {
+                throw lfs::Exception(lfs::make_error({
+                    .code = lfs::ErrorCode::InvalidArgument,
+                    .domain = lfs::ErrorDomain::Python,
+                    .user_message =
+                        "tensor_backend_selftest backend must be \"cuda\", \"vulkan\" or \"metal\"",
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }));
+            }
+            nb::gil_scoped_release release;
+            lfs::python::unwrap(lfs::core::tensor_backend_selftest(selected));
+        },
+        nb::arg("backend"),
+        "Allocate, dispatch a small corpus, read back, shut the backend down, and reinitialize");
 
     // Register Tensor class
     lfs::python::register_tensor(m);
@@ -2871,6 +3272,7 @@ NB_MODULE(lichtfeld, m) {
 
     // Build info submodule
     auto build_info = m.def_submodule("build_info", "Build configuration and version information");
+    build_info.attr("training_enabled") = bool(LFS_BUILD_TRAINER);
     build_info.attr("version") = GIT_TAGGED_VERSION;
     build_info.attr("commit") = GIT_COMMIT_HASH_SHORT;
 #ifdef DEBUG_BUILD

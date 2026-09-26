@@ -150,7 +150,7 @@
     transform: rotate(0deg);
 }
 
-.impdlg-advanced-header.expanded .section-arrow {
+.impdlg-advanced-header.is-expanded .section-arrow {
     transform: rotate(90deg);
 }
 

@@ -9,7 +9,6 @@
 
   <div class="bugreport-auth hidden" data-class-hidden="!show_auth_required">
     <span class="description">{{ auth_description }}</span>
-    <button type="button" class="btn btn--primary" data-event-click="open_account">@tr:bugreport.open_account</button>
   </div>
 
   <div class="bugreport-success hidden" data-class-hidden="!show_success">

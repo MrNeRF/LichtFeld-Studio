@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "select_ops.hpp"
-#include "core/cuda/selection_ops.hpp"
 #include "core/logger.hpp"
 #include "core/scene.hpp"
+#include "core/selection_ops.hpp"
 #include "core/tensor.hpp"
 #include "scene/scene_manager.hpp"
 
@@ -23,14 +23,14 @@ namespace lfs::vis::op {
         auto group_id = scene.getScene().getActiveSelectionGroup();
 
         auto mask = lfs::core::Tensor::full({count}, static_cast<float>(group_id),
-                                            lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                                            lfs::core::Device::GPU, lfs::core::DataType::UInt8);
         scene.getScene().setSelectionMask(std::make_shared<lfs::core::Tensor>(std::move(mask)));
 
         return OperationResult::success();
     }
 
     bool SelectAll::poll(SceneManager& scene) const {
-        return scene.getScene().getCombinedModel() != nullptr;
+        return scene.getScene().getTotalGaussianCount() > 0;
     }
 
     OperationResult SelectNone::execute(SceneManager& scene,
@@ -51,7 +51,7 @@ namespace lfs::vis::op {
             }
             auto group_id = scene.getScene().getActiveSelectionGroup();
             auto new_mask = lfs::core::Tensor::full({model->size()}, static_cast<float>(group_id),
-                                                    lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                                                    lfs::core::Device::GPU, lfs::core::DataType::UInt8);
             scene.getScene().setSelectionMask(std::make_shared<lfs::core::Tensor>(std::move(new_mask)));
             return OperationResult::success();
         }
@@ -65,7 +65,7 @@ namespace lfs::vis::op {
         auto is_selected = mask->gt(0.0f);
         auto inverted = is_selected.logical_not();
 
-        auto new_mask = lfs::core::Tensor::zeros({model->size()}, lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+        auto new_mask = lfs::core::Tensor::zeros({model->size()}, lfs::core::Device::GPU, lfs::core::DataType::UInt8);
         new_mask.masked_fill_(inverted, static_cast<float>(group_id));
 
         scene.getScene().setSelectionMask(std::make_shared<lfs::core::Tensor>(std::move(new_mask)));
@@ -74,7 +74,7 @@ namespace lfs::vis::op {
     }
 
     bool SelectInvert::poll(SceneManager& scene) const {
-        return scene.getScene().getCombinedModel() != nullptr;
+        return scene.getScene().getTotalGaussianCount() > 0;
     }
 
     OperationResult SelectGrow::execute(SceneManager& scene,
@@ -98,7 +98,7 @@ namespace lfs::vis::op {
 
         auto current = *mask;
         for (int i = 0; i < iterations; ++i) {
-            current = core::cuda::selection_grow(current, model->means(), radius, group_id);
+            current = core::selection_grow(current, model->means(), radius, group_id);
         }
 
         scene.getScene().setSelectionMask(std::make_shared<core::Tensor>(std::move(current)));
@@ -129,7 +129,7 @@ namespace lfs::vis::op {
 
         auto current = *mask;
         for (int i = 0; i < iterations; ++i) {
-            current = core::cuda::selection_shrink(current, model->means(), radius);
+            current = core::selection_shrink(current, model->means(), radius);
         }
 
         scene.getScene().setSelectionMask(std::make_shared<core::Tensor>(std::move(current)));
@@ -152,14 +152,14 @@ namespace lfs::vis::op {
         const float max_opacity = props.get_or<float>("max_opacity", 1.0f);
         const auto group_id = scene.getScene().getActiveSelectionGroup();
 
-        auto new_mask = core::cuda::select_by_opacity(model->opacity_raw(), min_opacity, max_opacity, group_id);
+        auto new_mask = core::select_by_opacity(model->opacity_raw(), min_opacity, max_opacity, group_id);
         scene.getScene().setSelectionMask(std::make_shared<core::Tensor>(std::move(new_mask)));
 
         return OperationResult::success();
     }
 
     bool SelectByOpacity::poll(SceneManager& scene) const {
-        return scene.getScene().getCombinedModel() != nullptr;
+        return scene.getScene().getTotalGaussianCount() > 0;
     }
 
     OperationResult SelectByScale::execute(SceneManager& scene,
@@ -173,14 +173,14 @@ namespace lfs::vis::op {
         const float max_scale = props.get_or<float>("max_scale", 1.0f);
         const auto group_id = scene.getScene().getActiveSelectionGroup();
 
-        auto new_mask = core::cuda::select_by_scale(model->scaling_raw(), max_scale, group_id);
+        auto new_mask = core::select_by_scale(model->scaling_raw(), max_scale, group_id);
         scene.getScene().setSelectionMask(std::make_shared<core::Tensor>(std::move(new_mask)));
 
         return OperationResult::success();
     }
 
     bool SelectByScale::poll(SceneManager& scene) const {
-        return scene.getScene().getCombinedModel() != nullptr;
+        return scene.getScene().getTotalGaussianCount() > 0;
     }
 
 } // namespace lfs::vis::op

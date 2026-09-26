@@ -4,6 +4,7 @@
 
 #include "core/splat_simplify.hpp"
 #include "core/splat_simplify_history.hpp"
+#include "core/tensor_sh.hpp"
 
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
@@ -112,39 +113,16 @@ namespace lfs::core {
                         keep_indices = keep_indices.squeeze(1);
                     const size_t keep_count = static_cast<size_t>(keep_indices.numel());
                     const size_t layout_rest = input.max_sh_coeffs_rest();
-                    // q16 / IEEE-f16: dequant to [N,K,3] then index_select (no ptr<float> on codes).
-                    if (input.shN_raw().dtype() != DataType::Float32) {
-                        Tensor canon = input.shN_canonical();
-                        if (keep_indices.device() != canon.device())
-                            keep_indices = keep_indices.to(canon.device());
-                        if (keep_indices.dtype() != DataType::Int32 &&
-                            keep_indices.dtype() != DataType::Int64) {
-                            keep_indices = keep_indices.to(DataType::Int32);
-                        }
-                        shN = canon.index_select(0, keep_indices).contiguous();
-                    } else {
-                        shN = Tensor::empty({keep_count, layout_rest, 3}, input.shN_raw().device());
-                        if (keep_indices.dtype() == DataType::Int64) {
-                            shN_swizzled_gather_to_linear_i64(
-                                input.shN_raw().ptr<float>(),
-                                keep_indices.ptr<int64_t>(),
-                                shN.ptr<float>(),
-                                keep_count,
-                                static_cast<uint32_t>(layout_rest),
-                                static_cast<uint32_t>(layout_rest));
-                        } else {
-                            auto keep_i32 = keep_indices.dtype() == DataType::Int32
-                                                ? keep_indices
-                                                : keep_indices.to(DataType::Int32);
-                            shN_swizzled_gather_to_linear(
-                                input.shN_raw().ptr<float>(),
-                                keep_i32.ptr<int>(),
-                                shN.ptr<float>(),
-                                keep_count,
-                                static_cast<uint32_t>(layout_rest),
-                                static_cast<uint32_t>(layout_rest));
-                        }
-                    }
+                    shN = Tensor::empty_like(input.shN_raw(), {keep_count, layout_rest, 3}, DataType::Float32);
+                    sh_codec(input.shN_raw(), shN,
+                             {.source_format = sh_storage_format(input.shN_raw(), input.shN_value_bounds()),
+                              .destination_format = ShFormat::Canonical,
+                              .source_rows = size_t(input.size()),
+                              .destination_rows = keep_count,
+                              .count = keep_count,
+                              .source_rest = uint32_t(layout_rest),
+                              .destination_rest = uint32_t(layout_rest)},
+                             &keep_indices, input.shN_value_quantized() ? &input.shN_value_bounds() : nullptr);
                     shN = shN.to(device).contiguous();
                 } else {
                     shN = input.shN_canonical().to(device).contiguous();
@@ -267,20 +245,6 @@ namespace lfs::core {
         [[nodiscard]] float strict_mul(const float a, const float b) {
             volatile float out = a * b;
             return out;
-        }
-
-        [[nodiscard]] float strict_add(const float a, const float b) {
-            volatile float out = a + b;
-            return out;
-        }
-
-        [[nodiscard]] float strict_sub(const float a, const float b) {
-            volatile float out = a - b;
-            return out;
-        }
-
-        [[nodiscard]] float strict_prod3(const float a, const float b, const float c) {
-            return strict_mul(strict_mul(a, b), c);
         }
 
         [[nodiscard]] float fma_dot3(const float a0,
@@ -1211,7 +1175,7 @@ namespace lfs::core {
             auto result = simplify_workset(workset, options, std::move(progress));
             if (!result)
                 return std::unexpected(result.error());
-            return make_splat_from_workset(*result, Device::CUDA);
+            return make_splat_from_workset(*result, Device::GPU);
         } catch (const std::exception& e) {
             LOG_ERROR("simplify_splats failed: {}", e.what());
             return std::unexpected(e.what());
@@ -1233,7 +1197,7 @@ namespace lfs::core {
                 return std::unexpected(result.error());
 
             SplatSimplifyResult out;
-            out.splat = make_splat_from_workset(*result, Device::CUDA);
+            out.splat = make_splat_from_workset(*result, Device::GPU);
             out.merge_tree = std::move(history.tree);
             return out;
         } catch (const std::exception& e) {

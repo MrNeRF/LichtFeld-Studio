@@ -7,6 +7,7 @@
 #include "core/path_utils.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
+#include "core/tensor_backend.hpp"
 #include "io/error.hpp"
 #include "io/formats/rad.hpp"
 #include "io/loaders/blender_loader.hpp"
@@ -50,7 +51,8 @@ namespace lfs::io {
             if (!tensor.is_valid() || tensor.numel() == 0) {
                 return true; // empty/absent — nothing to migrate
             }
-            // Match what the Vulkan splat renderer actually binds (vksplat requires this kind).
+            // Plain device tensors are not the renderer's pool. Both backends
+            // are ready only once the caller allocator has supplied them.
             return tensor.is_external_storage() &&
                    tensor.external_storage_kind() == "vulkan_external_buffer";
         }
@@ -84,12 +86,24 @@ namespace lfs::io {
                      model.lod_tree->chunk_count());
             return {};
         }
-        if (splatTensorsRendererReady(model)) {
-            model.set_tensor_allocator(allocator);
-            return {};
-        }
-
         try {
+            const bool shN_is_float16 = model.shN_raw().is_valid() &&
+                                        model.shN_raw().dtype() == lfs::core::DataType::Float16;
+            if (!lfs::core::sh_value_quant::enabled() && shN_is_float16) {
+                const size_t capacity = model.means_raw().is_valid()
+                                            ? std::max(model.means_raw().capacity(), static_cast<size_t>(model.size()))
+                                            : static_cast<size_t>(model.size());
+                if (model.shN_value_quantized()) {
+                    model.shN_set_from_canonical(model.shN_canonical(), capacity);
+                } else {
+                    model.shN_raw() = model.shN_raw().to(lfs::core::DataType::Float32);
+                }
+            }
+            if (splatTensorsRendererReady(model)) {
+                model.set_tensor_allocator(allocator);
+                return {};
+            }
+
             const auto copy_to_allocator =
                 [&](const lfs::core::Tensor& source, const std::string_view name) -> lfs::core::Tensor {
                 lfs::core::Tensor source_contiguous = source.is_contiguous() ? source : source.contiguous();

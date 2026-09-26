@@ -27,7 +27,8 @@ struct Uniforms {
     uint32_t logical_chunk_count;
     uint32_t current_frame;
     uint32_t fade_frames;
-    uint32_t pad0;
+    // 0: initial selection; 1..16: budget gate; 17: indirect retry.
+    uint32_t budget_pass;
 };
 
 // Quantized sidecar records: bounds 2 words/node (RadMetaBoundsQ u16 x4),
@@ -233,7 +234,40 @@ void append_node(uint32_t physical, uint32_t logical, float weight, uint32_t lev
     main(
         uint3 dispatchThreadID
         : SV_DispatchThreadID,
-          uniform Uniforms uniforms) {
+          uniform Uniforms input_uniforms) {
+        Uniforms uniforms = input_uniforms;
+        // counts: candidate count, overflow count, threshold multiplier, then
+        // VkDispatchIndirectCommand. A failed cut is never sent to projection.
+        if (uniforms.budget_pass >= 1u && uniforms.budget_pass <= 16u) {
+            if (dispatchThreadID.x != 0u)
+                return;
+            const uint32_t count = out_counts[0];
+            const bool retry = count > uniforms.output_capacity;
+            out_counts[3] = retry ? (uniforms.physical_node_count + 127u) / 128u : 0u;
+            out_counts[4] = 1u;
+            out_counts[5] = 1u;
+            if (retry) {
+                // Interests from the discarded selection must not pin pages
+                // that its replacement no longer uses.
+                for (uint32_t chunk = 0u; chunk < uniforms.logical_chunk_count; ++chunk)
+                    chunk_touch[chunk] = 0u;
+                const float ratio = float(count) / float(max(uniforms.output_capacity, 1u));
+                const float scale = asfloat(out_counts[2]) * clamp(pow(ratio / 0.9f, 0.85f), 1.25f, 4.0f);
+                // The final retry stops at the root, even for pathological
+                // non-monotone trees. All preceding attempts retain detail.
+                out_counts[2] = asuint(uniforms.budget_pass == 16u ? 3.402823e38f : scale);
+                out_counts[0] = 0u;
+                out_counts[1] = 0u;
+            }
+            return;
+        }
+        if (uniforms.budget_pass == 0u) {
+            if (dispatchThreadID.x == 0u)
+                out_counts[2] = asuint(1.0f);
+        } else {
+            const float scale = asfloat(out_counts[2]);
+            uniforms.pixel_scale_limit = scale >= 3.402823e38f ? 3.402823e38f : uniforms.pixel_scale_limit * scale;
+        }
         const uint32_t physical = dispatchThreadID.x;
         if (physical >= uniforms.physical_node_count)
             return;
@@ -255,6 +289,12 @@ void append_node(uint32_t physical, uint32_t logical, float weight, uint32_t lev
         const uint32_t child_count = packed & 0xffffu;
         const uint32_t level = (packed >> 16u) & 0xffu;
         const uint32_t parent_logical = node_links[links_base + 2u];
+
+        if (uniforms.budget_pass == 17u && asfloat(out_counts[2]) >= 3.402823e38f) {
+            if (parent_logical == uniforms.invalid_page)
+                append_node(physical, logical, 1.0f, level, uniforms);
+            return;
+        }
 
         const float pixel_scale = node_pixel_scale(physical, uniforms);
 
@@ -283,6 +323,39 @@ void append_node(uint32_t physical, uint32_t logical, float weight, uint32_t lev
 
         if (!parent_above_limit || parent_waiting_for_residency)
             return;
+
+        // A flat dispatch must enforce the same root-to-node reachability as
+        // tree traversal. Projected size is not monotone along a branch (the
+        // centers, view depth and foveation differ), so checking just the
+        // immediate parent also selects descendants below an already stopped
+        // ancestor. Those disconnected cuts overdraw the ancestor and exhaust
+        // the output budget, leaving holes elsewhere in the scene.
+        uint32_t ancestor = parent_logical;
+        while (ancestor != uniforms.invalid_page) {
+            const uint32_t ancestor_physical = physical_index_for_logical(ancestor, uniforms);
+            if (ancestor_physical == uniforms.invalid_page) {
+                touch_chunk(ancestor, touch_priority(pixel_scale), uniforms);
+                return;
+            }
+            const uint32_t ancestor_links = ancestor_physical * 3u;
+            const uint32_t next = node_links[ancestor_links + 2u];
+            if (next == uniforms.invalid_page)
+                break;
+            // RAD trees are ordered parent before child. Reject malformed
+            // links instead of permitting an unbounded shader loop.
+            if (next >= ancestor)
+                return;
+            const uint32_t next_physical = physical_index_for_logical(next, uniforms);
+            if (next_physical == uniforms.invalid_page) {
+                touch_chunk(next, touch_priority(pixel_scale), uniforms);
+                return;
+            }
+            const uint32_t next_links = next_physical * 3u;
+            if (node_pixel_scale(next_physical, uniforms) <= uniforms.pixel_scale_limit ||
+                !child_range_resident(node_links[next_links], node_links[next_links + 1u] & 0xffffu, uniforms))
+                return;
+            ancestor = next;
+        }
 
         const bool leaf = child_count == 0u;
         const bool children_resident =

@@ -1,9 +1,10 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-#include "../src/io/cuda/morton_encoding.hpp"
 #include "app/include/app/converter.hpp"
-#include "core/argument_parser.hpp"
+#include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
+#include "core/tensor_export.hpp"
+#include "io/argument_parser.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/sogs.hpp"
 #include "io/formats/ssog.hpp"
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <archive.h>
 #include <archive_entry.h>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -340,9 +342,9 @@ TEST(SsogFormat, CliOptions) {
     const char* argv[] = {"LichtFeld-Studio", "convert", input.c_str(), "-f", "ssog",
                           "--lod-levels", "2", "--lod-ratio", "0.25", "--lod-chunk-count", "32",
                           "--lod-chunk-extent", "8", "--lod-chunk-min", "2", "-o", "result_ssog"};
-    auto parsed = lfs::core::args::parse_args(std::size(argv), argv);
+    auto parsed = lfs::io::args::parse_args(std::size(argv), argv);
     ASSERT_TRUE(parsed) << parsed.error();
-    const auto* mode = std::get_if<lfs::core::args::ConvertMode>(&*parsed);
+    const auto* mode = std::get_if<lfs::io::args::ConvertMode>(&*parsed);
     ASSERT_NE(mode, nullptr);
     EXPECT_EQ(mode->params.format, lfs::core::param::OutputFormat::SSOG);
     EXPECT_EQ(mode->params.output_path, fs::path("result_ssog"));
@@ -352,10 +354,10 @@ TEST(SsogFormat, CliOptions) {
     EXPECT_FLOAT_EQ(mode->params.lod_chunk_extent, 8);
     EXPECT_EQ(mode->params.lod_chunk_min, 2);
     const char* bad[] = {"LichtFeld-Studio", "convert", input.c_str(), "-f", "ssog", "--lod-ratio", "1"};
-    EXPECT_FALSE(lfs::core::args::parse_args(std::size(bad), bad));
+    EXPECT_FALSE(lfs::io::args::parse_args(std::size(bad), bad));
     for (const auto* levels : {"0", "1", "8", "9"}) {
         const char* args[] = {"LichtFeld-Studio", "convert", input.c_str(), "-f", ".ssog", "--lod-levels", levels};
-        auto result = lfs::core::args::parse_args(std::size(args), args);
+        auto result = lfs::io::args::parse_args(std::size(args), args);
         EXPECT_EQ(result.has_value(), std::string_view(levels) == "1" || std::string_view(levels) == "8");
         auto o = options(dir.path, std::stoi(levels));
         EXPECT_EQ(o.validate(), result.has_value());
@@ -451,7 +453,7 @@ TEST(SsogFormat, CpuLeafMortonMatchesCudaIncludingStableTies) {
             std::vector<int> rows(n);
             std::iota(rows.begin(), rows.end(), 0);
             sort_ssog_leaf(positions.ptr<float>(), rows);
-            auto gpu = morton_sort_indices_for_positions(positions.cuda()).cpu();
+            auto gpu = lfs::core::morton_sort_indices(positions.cuda()).cpu();
             ASSERT_TRUE(gpu.is_valid());
             EXPECT_TRUE(std::equal(rows.begin(), rows.end(), gpu.ptr<int>())) << "n=" << n << " mode=" << mode;
         }
@@ -555,6 +557,144 @@ TEST(SsogFormat, RejectsInvalidBundle) {
     EXPECT_FALSE(validate_ssog(bundle));
 }
 
+TEST(SsogFormat, GalleryWrapperAndBundledUnitsPreserveDecodedSplats) {
+    ScopedSsogDirectory dir;
+    const auto source = dir.path / "source";
+    ASSERT_TRUE(save_ssog(synthetic(256, 0), options(source)));
+    auto expected = load_ssog(source);
+    ASSERT_TRUE(expected) << expected.error().format();
+    for (const bool bundled_units : {false, true}) {
+        auto manifest = read(source / "lod-meta.json");
+        const auto output = dir.path / (bundled_units ? "bundled.ssog" : "wrapped.ssog");
+        auto outer = make_sog_archive(output);
+        ASSERT_TRUE(outer->open());
+        if (bundled_units) {
+            for (size_t i = 0; i < manifest["filenames"].size(); ++i) {
+                const fs::path relative = manifest["filenames"][i].get<std::string>();
+                const auto unit_path = dir.path / std::format("unit{}.sog", i);
+                auto unit = make_sog_archive(unit_path);
+                ASSERT_TRUE(unit->open());
+                for (const auto& entry : fs::directory_iterator(source / relative.parent_path())) {
+                    if (!entry.is_regular_file())
+                        continue;
+                    std::ifstream file(entry.path(), std::ios::binary);
+                    const std::string bytes(std::istreambuf_iterator<char>{file}, {});
+                    ASSERT_TRUE(unit->add_file(entry.path().filename().generic_string(), bytes.data(), bytes.size()));
+                }
+                ASSERT_TRUE(unit->close());
+                std::ifstream file(unit_path, std::ios::binary);
+                const std::string bytes(std::istreambuf_iterator<char>{file}, {});
+                const auto name = unit_path.filename().generic_string();
+                ASSERT_TRUE(outer->add_file("scene/" + name, bytes.data(), bytes.size()));
+                manifest["filenames"][i] = name;
+            }
+        } else {
+            for (const auto& entry : fs::recursive_directory_iterator(source)) {
+                if (!entry.is_regular_file() || entry.path().filename() == "lod-meta.json")
+                    continue;
+                std::ifstream file(entry.path(), std::ios::binary);
+                const std::string bytes(std::istreambuf_iterator<char>{file}, {});
+                ASSERT_TRUE(outer->add_file("scene/" + entry.path().lexically_relative(source).generic_string(), bytes.data(), bytes.size()));
+            }
+        }
+        const auto metadata = manifest.dump();
+        const std::string license = "Author: Example Author\nLicense: All Rights Reserved";
+        ASSERT_TRUE(outer->add_file("scene/license.txt", license.data(), license.size()));
+        ASSERT_TRUE(outer->add_file("scene/LICENSE.md", nullptr, 0));
+        ASSERT_TRUE(outer->add_file("scene/\xF0\x9F\x98\x80.txt", "x", 1));
+        ASSERT_TRUE(outer->add_file("scene/lod-meta.json", metadata.data(), metadata.size()));
+        ASSERT_TRUE(outer->close());
+        ASSERT_TRUE(validate_ssog(output));
+        std::optional<std::vector<uint8_t>> license_bytes;
+        auto loaded = load_ssog(output, {}, &license_bytes);
+        ASSERT_TRUE(loaded) << loaded.error().format();
+        ASSERT_TRUE(license_bytes);
+        EXPECT_EQ(std::string(license_bytes->begin(), license_bytes->end()), license);
+        EXPECT_EQ(loaded->size(), expected->size());
+        EXPECT_EQ(loaded->means().cpu().to_vector(), expected->means().cpu().to_vector());
+        EXPECT_EQ(loaded->scaling_raw().cpu().to_vector(), expected->scaling_raw().cpu().to_vector());
+        EXPECT_EQ(loaded->sh0().cpu().to_vector(), expected->sh0().cpu().to_vector());
+    }
+    const std::string folder_license = "License: Example terms";
+    std::ofstream(source / "license.txt", std::ios::binary) << folder_license;
+    std::optional<std::vector<uint8_t>> folder_license_bytes;
+    auto folder_loaded = load_ssog(source, {}, &folder_license_bytes);
+    ASSERT_TRUE(folder_loaded) << folder_loaded.error().format();
+    ASSERT_TRUE(folder_license_bytes);
+    EXPECT_EQ(std::string(folder_license_bytes->begin(), folder_license_bytes->end()), folder_license);
+}
+
+TEST(SsogFormat, GalleryBundlesRejectAmbiguousRootsAndUnsafeNestedEntries) {
+    ScopedSsogDirectory dir;
+    const std::string metadata = R"({"version":1,"lodLevels":1,"filenames":["unit.sog"]})";
+    {
+        const auto path = dir.path / "ambiguous.ssog";
+        auto outer = make_sog_archive(path);
+        ASSERT_TRUE(outer->open());
+        for (const auto* name : {"lod-meta.json", "other/lod-meta.json"})
+            ASSERT_TRUE(outer->add_file(name, metadata.data(), metadata.size()));
+        ASSERT_TRUE(outer->close());
+        auto valid = validate_ssog(path);
+        ASSERT_FALSE(valid);
+        EXPECT_NE(valid.error().message.find("exactly one"), std::string::npos);
+    }
+    for (const bool bomb : {false, true}) {
+        const auto unit_path = dir.path / "unit.sog";
+        auto unit = make_sog_archive(unit_path);
+        ASSERT_TRUE(unit->open());
+        const std::string meta = R"({"count":1})";
+        ASSERT_TRUE(unit->add_file("meta.json", meta.data(), meta.size()));
+        const std::string data(bomb ? 17 * 1024 * 1024 : 8, 'x');
+        ASSERT_TRUE(unit->add_file(bomb ? "payload.bin" : "../escape.json", data.data(), data.size()));
+        ASSERT_TRUE(unit->close());
+        std::ifstream file(unit_path, std::ios::binary);
+        const std::string bytes(std::istreambuf_iterator<char>{file}, {});
+        const auto path = dir.path / (bomb ? "bomb.ssog" : "traversal.ssog");
+        auto outer = make_sog_archive(path);
+        ASSERT_TRUE(outer->open());
+        ASSERT_TRUE(outer->add_file("lod-meta.json", metadata.data(), metadata.size()));
+        ASSERT_TRUE(outer->add_file("unit.sog", bytes.data(), bytes.size()));
+        ASSERT_TRUE(outer->close());
+        auto valid = validate_ssog(path);
+        ASSERT_FALSE(valid);
+        EXPECT_NE(valid.error().message.find(bomb ? "size limit" : "escapes archive root"), std::string::npos)
+            << valid.error().format();
+        EXPECT_FALSE(fs::exists(dir.path / "escape.json"));
+    }
+}
+
+TEST(SsogFormat, NestedChunksCannotMultiplyOuterExpansionAllowance) {
+    ScopedSsogDirectory dir;
+    const auto unit_path = dir.path / "unit.sog";
+    auto unit = make_sog_archive(unit_path);
+    ASSERT_TRUE(unit->open());
+    const std::string meta = R"({"count":1})";
+    ASSERT_TRUE(unit->add_file("meta.json", meta.data(), meta.size()));
+    // Repeated independently compressed entries compress again in the outer ZIP.
+    // Each layer alone has a modest ratio, but together they exceed its allowance.
+    std::mt19937 random(42);
+    std::string payload(8192, '\0');
+    for (size_t i = 0; i < 4096; ++i)
+        payload[i] = static_cast<char>(random() & 255);
+    for (int i = 0; i < 2300; ++i)
+        ASSERT_TRUE(unit->add_file(std::format("extra{}.bin", i), payload.data(), payload.size()));
+    ASSERT_TRUE(unit->close());
+    std::ifstream file(unit_path, std::ios::binary);
+    const std::string bytes(std::istreambuf_iterator<char>{file}, {});
+    ASSERT_LT(bytes.size(), 16 * 1024 * 1024);
+    const auto path = dir.path / "nested.ssog";
+    auto outer = make_sog_archive(path);
+    ASSERT_TRUE(outer->open());
+    const std::string manifest = R"({"version":1,"lodLevels":1,"filenames":["unit.sog"]})";
+    ASSERT_TRUE(outer->add_file("lod-meta.json", manifest.data(), manifest.size()));
+    ASSERT_TRUE(outer->add_file("unit.sog", bytes.data(), bytes.size()));
+    ASSERT_TRUE(outer->close());
+    ASSERT_LT(fs::file_size(path) * 20, 16 * 1024 * 1024);
+    auto valid = validate_ssog(path);
+    ASSERT_FALSE(valid);
+    EXPECT_NE(valid.error().message.find("size limit"), std::string::npos) << valid.error().format();
+}
+
 TEST(SsogFormat, ConvertBundleDirectoryDefaultAndBack) {
     ScopedSsogDirectory dir;
     const auto input = dir.path / "input.ply";
@@ -567,9 +707,9 @@ TEST(SsogFormat, ConvertBundleDirectoryDefaultAndBack) {
             argv.push_back("-o");
             argv.push_back(output_string.c_str());
         }
-        auto parsed = lfs::core::args::parse_args(static_cast<int>(argv.size()), argv.data());
+        auto parsed = lfs::io::args::parse_args(static_cast<int>(argv.size()), argv.data());
         ASSERT_TRUE(parsed) << parsed.error();
-        const auto* mode = std::get_if<lfs::core::args::ConvertMode>(&*parsed);
+        const auto* mode = std::get_if<lfs::io::args::ConvertMode>(&*parsed);
         ASSERT_NE(mode, nullptr);
         ASSERT_EQ(lfs::app::run_converter(mode->params), 0);
         const auto actual = destination.empty() ? dir.path / "input.ssog" : destination;
@@ -587,4 +727,71 @@ TEST(SsogFormat, ConvertBundleDirectoryDefaultAndBack) {
     auto loaded = Loader::create()->load(back.output_path);
     ASSERT_TRUE(loaded) << loaded.error().format();
     EXPECT_EQ(std::get<std::shared_ptr<SplatData>>(loaded->data)->size(), 128);
+}
+
+TEST(SsogFormat, ConverterPreservesUnicodeOutputNames) {
+    ScopedSsogDirectory dir;
+    const auto single_input =
+        dir.path / lfs::core::utf8_to_path("模型_日本語.ply");
+    ASSERT_TRUE(save_ply(
+        synthetic(128, 0), {.output_path = single_input}));
+
+    lfs::core::param::ConvertParameters single;
+    single.input_path = single_input;
+    single.format = lfs::core::param::OutputFormat::SSOG;
+    single.overwrite = true;
+    single.lod_levels = 2;
+    ASSERT_EQ(lfs::app::run_converter(single), 0);
+
+    auto single_output = single_input;
+    single_output.replace_extension(".ssog");
+    EXPECT_TRUE(fs::is_regular_file(single_output));
+    ASSERT_TRUE(load_ssog(single_output));
+
+    const auto converted_directory =
+        dir.path / lfs::core::utf8_to_path("変換先");
+    fs::create_directories(converted_directory);
+    lfs::core::param::ConvertParameters converted;
+    converted.input_path = single_input;
+    converted.output_path = converted_directory;
+    converted.format = lfs::core::param::OutputFormat::PLY;
+    converted.overwrite = true;
+    ASSERT_EQ(lfs::app::run_converter(converted), 0);
+    EXPECT_TRUE(fs::is_regular_file(
+        converted_directory /
+        lfs::core::utf8_to_path("模型_日本語_converted.ply")));
+
+    const auto input_directory =
+        dir.path / lfs::core::utf8_to_path("入力");
+    const auto output_directory =
+        dir.path / lfs::core::utf8_to_path("出力");
+    fs::create_directories(input_directory);
+    fs::create_directories(output_directory);
+    const std::array names{
+        "сцена_кириллица",
+        "场景_中文",
+    };
+    for (const auto* name : names) {
+        const auto input = input_directory /
+                           lfs::core::utf8_to_path(
+                               std::string(name) + ".ply");
+        ASSERT_TRUE(save_ply(
+            synthetic(128, 0), {.output_path = input}));
+    }
+
+    lfs::core::param::ConvertParameters batch;
+    batch.input_path = input_directory;
+    batch.output_path = output_directory;
+    batch.format = lfs::core::param::OutputFormat::SSOG;
+    batch.overwrite = true;
+    batch.lod_levels = 2;
+    ASSERT_EQ(lfs::app::run_converter(batch), 0);
+
+    for (const auto* name : names) {
+        const auto output = output_directory /
+                            lfs::core::utf8_to_path(
+                                std::string(name) + ".ssog");
+        EXPECT_TRUE(fs::is_regular_file(output));
+        ASSERT_TRUE(load_ssog(output));
+    }
 }

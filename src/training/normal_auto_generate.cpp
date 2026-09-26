@@ -162,10 +162,6 @@ namespace lfs::training {
 
     } // namespace
 
-    bool training_normal_priors_enabled(const lfs::core::param::OptimizationParameters& opt) {
-        return !opt.gut && opt.use_normal_loss && opt.normal_loss_weight > 0.0f;
-    }
-
     bool normal_auto_generate_needed(
         const bool use_normal_loss,
         const bool normal_auto_generate,

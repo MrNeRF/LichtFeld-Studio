@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include <cuda_runtime.h>
 
 namespace lfs {

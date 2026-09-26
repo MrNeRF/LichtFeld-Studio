@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "cuda_backend_test.hpp"
+
 #include "core/alloc_counter.hpp"
 #include "core/nn.hpp"
 
@@ -49,7 +51,7 @@ namespace {
             chw,
             lfs::core::TensorShape(std::vector<std::size_t>{
                 1, 3, static_cast<std::size_t>(height), static_cast<std::size_t>(width)}),
-            lfs::core::Device::CUDA);
+            lfs::core::Device::GPU);
         if (dtype != lfs::core::DataType::Float32) {
             return t.to(dtype);
         }
@@ -143,7 +145,9 @@ TEST(Moge2Test, CommittedFixtureIsSmall) {
     EXPECT_TRUE(payload["full"].contains("normal"));
 }
 
-TEST(Moge2Test, FullModelParityIsOptIn) {
+class Moge2CudaTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(Moge2CudaTest, FullModelParityIsOptIn) {
     const char* weights = std::getenv("LFS_MOGE2_WEIGHTS");
     if (weights == nullptr || weights[0] == '\0') {
         GTEST_SKIP() << "set LFS_MOGE2_WEIGHTS to run full-model parity";
@@ -152,7 +156,7 @@ TEST(Moge2Test, FullModelParityIsOptIn) {
     ASSERT_EQ(cudaGetDeviceCount(&devices), cudaSuccess);
     ASSERT_GT(devices, 0);
 
-    auto model = lfs::core::nn::models::Moge2::load(weights, lfs::core::Device::CUDA,
+    auto model = lfs::core::nn::models::Moge2::load(weights, lfs::core::Device::GPU,
                                                     lfs::core::DataType::Float32);
     ASSERT_TRUE(model.has_value()) << std::string(model.error().detail());
 
@@ -227,7 +231,7 @@ TEST(Moge2Test, FullModelParityIsOptIn) {
     if (!weights16.empty()) {
         std::ifstream probe(weights16, std::ios::binary);
         if (probe.good()) {
-            auto model16 = lfs::core::nn::models::Moge2::load(weights16, lfs::core::Device::CUDA,
+            auto model16 = lfs::core::nn::models::Moge2::load(weights16, lfs::core::Device::GPU,
                                                               lfs::core::DataType::Float16);
             ASSERT_TRUE(model16.has_value()) << std::string(model16.error().detail());
             auto ran16 = model16->forward(image, num_tokens);
@@ -252,7 +256,7 @@ TEST(Moge2Test, FullModelParityIsOptIn) {
     EXPECT_EQ(driver_allocs, 0u);
 }
 
-TEST(Moge2Test, DeviceFootprintStaysUnderBudget) {
+TEST_F(Moge2CudaTest, DeviceFootprintStaysUnderBudget) {
     const char* weights = std::getenv("LFS_MOGE2_WEIGHTS");
     if (weights == nullptr || weights[0] == '\0') {
         GTEST_SKIP() << "set LFS_MOGE2_WEIGHTS to run the VRAM budget check";
@@ -278,7 +282,7 @@ TEST(Moge2Test, DeviceFootprintStaysUnderBudget) {
     std::size_t total = 0;
     ASSERT_EQ(cudaMemGetInfo(&free0, &total), cudaSuccess);
 
-    auto model = lfs::core::nn::models::Moge2::load(path, lfs::core::Device::CUDA,
+    auto model = lfs::core::nn::models::Moge2::load(path, lfs::core::Device::GPU,
                                                     lfs::core::DataType::Float16);
     ASSERT_TRUE(model.has_value()) << std::string(model.error().detail());
     auto image = make_test_image(518, 518, lfs::core::DataType::Float32);

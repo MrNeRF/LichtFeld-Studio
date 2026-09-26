@@ -1,5 +1,34 @@
 /* Training panel theme overrides. */
 
+.training-toolbar-action img {
+    image-color: @{text};
+}
+
+.training-status-badge {
+    color: @{text_dim};
+}
+
+.training-status-badge.is-ready {
+    color: @{primary};
+}
+
+.training-status-badge.is-active,
+.training-status-badge.is-complete {
+    color: @{success};
+}
+
+.training-status-badge.is-paused {
+    color: @{warning};
+}
+
+.training-status-badge.is-error {
+    color: @{error};
+}
+
+.training-panel-block > .section-header {
+    border-top-color: @{panel.primary_border_faint};
+}
+
 .training-panel-title {
     color: @{text};
     border-top-color: @{panel.primary_border_soft};

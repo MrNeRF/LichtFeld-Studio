@@ -135,19 +135,20 @@ namespace lfs::vis::gui {
         void removeSaveStep(size_t step);
         void clearSaveStepHover();
         void attachElementListeners();
-        void bindReactiveStore();
+        LFS_VIS_API void bindReactiveStore();
         void markModelDirty();
 
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
+        bool document_registered_ = false;
         Rml::DataModelHandle model_handle_;
         Rml::EventListener* git_commit_listener_ = nullptr;
         Rml::EventListener* gpu_icon_listener_ = nullptr;
-        Rml::EventListener* account_listener_ = nullptr;
         Rml::EventListener* mcp_toggle_listener_ = nullptr;
         Rml::EventListener* mcp_power_listener_ = nullptr;
         Rml::EventListener* mcp_preferences_listener_ = nullptr;
+        Rml::EventListener* input_device_listener_ = nullptr;
 
         std::size_t last_theme_signature_ = 0;
         bool has_theme_signature_ = false;
@@ -247,16 +248,13 @@ namespace lfs::vis::gui {
             std::string zoom_text;
             std::string zoom_color;
             std::string zoom_sep_color;
-            std::string account_label;
-            std::string account_tier;
-            std::string account_tooltip;
-            std::string account_color;
-            bool account_show_tier = false;
-            bool account_membership_required = false;
             std::string lfs_mem_text;
             std::string lfs_mem_color;
+            bool show_lfs_memory = true;
             bool show_gpu_model = false;
             bool gpu_panel_active = false;
+            std::string input_device = "mouse";
+            std::string input_device_tooltip;
             std::string gpu_model_text;
             std::string gpu_mem_text;
             std::string gpu_mem_color;

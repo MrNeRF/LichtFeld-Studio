@@ -6,6 +6,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/user_paths.hpp"
+#include <algorithm>
 #include <atomic>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -81,6 +82,14 @@ namespace lfs::vis::gui {
             vram_hud["height"] = vram_hud_height;
             vram_hud["active_tab"] = vram_hud_active_tab;
             vram_hud["collapsed"] = vram_hud_collapsed_paths;
+            vram_hud["opacity"] = vram_hud_opacity;
+            vram_hud["snap_corner"] = vram_hud_snap_corner;
+            vram_hud["window_seconds"] = vram_hud_window_seconds;
+            vram_hud["iteration_axis"] = vram_hud_iteration_axis;
+            vram_hud["device_scale"] = vram_hud_device_scale;
+            vram_hud["visible_categories"] = vram_hud_visible_categories;
+            vram_hud["movers_collapsed"] = vram_hud_movers_collapsed;
+            vram_hud["peak_collapsed"] = vram_hud_peak_collapsed;
             j["vram_hud"] = vram_hud;
 
             nlohmann::json perf_hud;
@@ -162,6 +171,14 @@ namespace lfs::vis::gui {
                         vram_hud_active_tab = vh.value(
                             "active_tab",
                             vram_hud_active_tab);
+                        vram_hud_opacity = std::clamp(vh.value("opacity", vram_hud_opacity), 0.4f, 1.0f);
+                        vram_hud_snap_corner = std::clamp(vh.value("snap_corner", vram_hud_snap_corner), 0, 4);
+                        vram_hud_window_seconds = vh.value("window_seconds", vram_hud_window_seconds);
+                        vram_hud_iteration_axis = vh.value("iteration_axis", vram_hud_iteration_axis);
+                        vram_hud_device_scale = vh.value("device_scale", vram_hud_device_scale);
+                        vram_hud_visible_categories = vh.value("visible_categories", vram_hud_visible_categories) & 1023u;
+                        vram_hud_movers_collapsed = vh.value("movers_collapsed", vram_hud_movers_collapsed);
+                        vram_hud_peak_collapsed = vh.value("peak_collapsed", vram_hud_peak_collapsed);
                         if (vh.contains("collapsed") &&
                             vh["collapsed"].is_array()) {
                             vram_hud_collapsed_paths.clear();

@@ -10,6 +10,7 @@
 #include "input/input_bindings.hpp"
 #include "internal/viewport.hpp"
 #include "rendering/rendering_types.hpp"
+#include "visualizer/preferences.hpp"
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -104,6 +105,10 @@ namespace lfs::vis {
         void applyNavigationSpeedPreferences(float zoom_speed, float navigation_speed);
         [[nodiscard]] bool cameraViewSnapEnabled() const { return camera_view_snap_enabled_; }
         void setCameraViewSnapEnabled(bool enabled) { camera_view_snap_enabled_ = enabled; }
+        // Trackpad navigation reads two-finger swipes over the viewport as
+        // orbit/pan/zoom. Mouse drags and pinch zoom work in both modes.
+        [[nodiscard]] const TrackpadPreferenceState& trackpadPreferences() const { return trackpad_; }
+        void setTrackpadPreferences(const TrackpadPreferenceState& state) { trackpad_ = state; }
         void restoreProjectNavigation(
             CameraNavigationMode mode,
             bool view_snap_enabled) {
@@ -141,6 +146,9 @@ namespace lfs::vis {
             return movement_active || camera_drag || orbit_coasting || pan_coasting ||
                    keyboard_camera.isGliding() || wasd_coasting || drone_settling;
         }
+        [[nodiscard]] bool isCameraNavigating() const {
+            return camera_is_moving_ || isContinuousInputActive();
+        }
         [[nodiscard]] bool hasViewportKeyboardFocus() const;
         [[nodiscard]] bool isViewportPoint(double x, double y) const { return isInViewport(x, y); }
         [[nodiscard]] int currentModifierKeys() const { return getModifierKeys(); }
@@ -157,11 +165,21 @@ namespace lfs::vis {
         void handleMouseButton(int button, int action, double x, double y);
         void handleMouseMove(double x, double y);
         void handleScroll(double xoff, double yoff);
+        // scale: change since the previous pinch update, > 1 zooms in.
+        void handlePinch(float scale);
+        // A finger touched (down) or left the trackpad.
+        void handleTrackpadTouch(bool down);
         void handleKey(int key, int action, int mods);
         void handleKey(int physical_key, int logical_key, int scancode, int action, int mods);
         void handleFileDrop(const std::vector<std::string>& paths);
         void onWindowFocusLost();
         bool focusSelection();
+
+        // Toolbar actions target their named panel's camera without moving focus.
+        // Outside independent-dual mode, resolvePanelViewport returns the primary
+        // viewport for either panel.
+        void resetCameraForPanel(SplitViewPanelId panel);
+        bool focusSelectionForPanel(SplitViewPanelId panel);
 
     private:
         struct PanelInteractionState {
@@ -176,7 +194,17 @@ namespace lfs::vis {
         };
 
         void handleGoToCamView(const lfs::core::events::cmd::GoToCamView& event);
-        bool handleFocusSelection(Viewport& target_viewport);
+        // Optional action identity guards only the shared-anchor side effect in
+        // publishCameraMove; panel-less paths pass nullopt. It never selects a viewport.
+        bool handleFocusSelection(Viewport& target_viewport,
+                                  std::optional<SplitViewPanelId> acted_panel = std::nullopt);
+        // Shared home reset: the legacy event passes viewport_; explicit-panel
+        // callers pass the resolved panel viewport.
+        void handleResetCameraHome(Viewport& target_viewport,
+                                   std::optional<SplitViewPanelId> acted_panel = std::nullopt);
+        // The panel's viewport, or the primary one when rendering is unavailable
+        // or the mode is not independent-dual. Reads no focus state.
+        Viewport& panelViewport(SplitViewPanelId panel);
         bool computeWholeSceneBounds(glm::vec3& out_min, glm::vec3& out_max,
                                      bool use_percentile = false) const;
         float sceneExtent();
@@ -193,7 +221,20 @@ namespace lfs::vis {
         void selectCameraByUid(int uid, bool toggle_selection);
         void updateCameraSpeed(bool increase);
         void updateZoomSpeed(bool increase);
-        void publishCameraMove(Viewport* target_viewport = nullptr);
+        // Wheel zoom by delta notches at the mouse zoom speed.
+        void zoomViewport(Viewport& target_viewport, float delta);
+        // Trackpad zoom: a factor above 1 zooms in, independent of the wheel speed.
+        void zoomViewportBy(Viewport& target_viewport, float factor);
+        // Orthographic views zoom by scaling ortho_scale; false for perspective views.
+        bool scaleOrthographicView(Viewport& target_viewport, float factor);
+        // Middle-drag style orbit/look by drag pixels, without release momentum.
+        void orbitViewport(Viewport& target_viewport, const glm::vec2& drag);
+        void publishCameraMove(Viewport* target_viewport = nullptr,
+                               std::optional<SplitViewPanelId> acted_panel = std::nullopt);
+        // Suppress shared transform/x-y re-anchoring only for an explicitly addressed,
+        // off-focus panel in independent-dual mode. Home/Eye still move that panel's
+        // camera; this predicate neither selects a viewport nor changes focus.
+        [[nodiscard]] bool shouldSkipDepthAnchorSync(std::optional<SplitViewPanelId> acted_panel) const;
         bool isNearSplitter(double x, double y) const;
         void refreshSplitDividerCache() const;
         int getModifierKeys() const;
@@ -253,6 +294,8 @@ namespace lfs::vis {
         DragMode drag_mode_ = DragMode::None;
         CameraNavigationMode camera_navigation_mode_ = CameraNavigationMode::Orbit;
         bool camera_view_snap_enabled_ = false;
+        TrackpadPreferenceState trackpad_{};
+        int trackpad_touches_ = 0;
         int drag_button_ = -1;
         glm::dvec2 last_mouse_pos_{0, 0};
         float splitter_start_pos_ = 0.5f;

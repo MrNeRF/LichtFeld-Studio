@@ -4,7 +4,7 @@
 
 #include "core/cuda_error.hpp"
 #include "core/cuda_safe_format.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "lfs/kernels/loss_tensor_contract.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "lfs/kernels/ssim_reduction.cuh"
@@ -1474,7 +1474,7 @@ namespace lfs::training::kernels {
         void validate_ssim_context(const SSIMContext& ctx) {
             validate_loss_context_images(ctx.img1, ctx.img2, ctx.original_h, ctx.original_w);
             const auto validate_derivative = [&](const lfs::core::Tensor& tensor, const std::string_view name) {
-                LFS_ASSERT_MSG(tensor.is_valid() && tensor.device() == lfs::core::Device::CUDA &&
+                LFS_ASSERT_MSG(tensor.is_valid() && tensor.device() == lfs::core::Device::GPU &&
                                    tensor.dtype() == lfs::core::DataType::Float16 &&
                                    tensor.is_contiguous() && tensor.shape() == ctx.img1.shape(),
                                lfs::core::detail::format_cuda_safe(
@@ -1511,13 +1511,13 @@ namespace lfs::training::kernels {
         dim3 block(BLOCK_X, BLOCK_Y);
 
         // Output SSIM map
-        auto ssim_map = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA);
+        auto ssim_map = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::GPU);
 
-        auto dm_dmu1 = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA,
+        auto dm_dmu1 = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::GPU,
                                                 lfs::core::DataType::Float16);
-        auto dm_dsigma1_sq = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA,
+        auto dm_dsigma1_sq = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::GPU,
                                                       lfs::core::DataType::Float16);
-        auto dm_dsigma12 = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA,
+        auto dm_dsigma12 = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::GPU,
                                                     lfs::core::DataType::Float16);
 
         dispatch_target_ptr(img2, [&](auto* img2_ptr) {
@@ -1583,14 +1583,14 @@ namespace lfs::training::kernels {
         const dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, N);
         const dim3 block(BLOCK_X, BLOCK_Y);
 
-        auto ssim_map = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA);
-        auto cs_map = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA);
+        auto ssim_map = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::GPU);
+        auto cs_map = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::GPU);
         // dm_* fp16 (map path still materializes them for SSIMContext).
-        auto dm_dmu1 = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA,
+        auto dm_dmu1 = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::GPU,
                                                 lfs::core::DataType::Float16);
-        auto dm_dsigma1_sq = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA,
+        auto dm_dsigma1_sq = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::GPU,
                                                       lfs::core::DataType::Float16);
-        auto dm_dsigma12 = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::CUDA,
+        auto dm_dsigma12 = lfs::core::Tensor::zeros(img1.shape(), lfs::core::Device::GPU,
                                                     lfs::core::DataType::Float16);
 
         dispatch_target_ptr(img2, [&](auto* img2_ptr) {
@@ -1665,118 +1665,18 @@ namespace lfs::training::kernels {
         });
 
         if (!error_map.is_valid() ||
-            error_map.device() != lfs::core::Device::CUDA ||
+            error_map.device() != lfs::core::Device::GPU ||
             error_map.dtype() != lfs::core::DataType::Float32 ||
             !error_map.is_contiguous() ||
             error_map.ndim() != 2 ||
             error_map.shape()[0] != static_cast<size_t>(H) ||
             error_map.shape()[1] != static_cast<size_t>(W)) {
             error_map = lfs::core::Tensor::empty({static_cast<size_t>(H), static_cast<size_t>(W)},
-                                                 lfs::core::Device::CUDA);
+                                                 lfs::core::Device::GPU);
         }
 
         launch_ssim_to_error_map(
             contrast_structure_only ? workspace.cs_map : workspace.ssim_map, error_map);
-    }
-
-    lfs::core::Tensor ssim_backward(
-        const SSIMContext& ctx,
-        float grad_loss) {
-
-        validate_ssim_context(ctx);
-        LFS_ASSERT_MSG(std::isfinite(grad_loss), "SSIM loss gradient must be finite");
-
-        const float C1 = 0.01f * 0.01f;
-        const float C2 = 0.03f * 0.03f;
-
-        // Compute gradient map size (after cropping if applicable)
-        int grad_h = ctx.original_h;
-        int grad_w = ctx.original_w;
-        size_t N = ctx.img1.shape()[0];
-        size_t C = ctx.img1.shape()[1];
-        size_t numel = N * C * grad_h * grad_w;
-
-        if (ctx.apply_valid_padding && grad_h > 10 && grad_w > 10) {
-            grad_h -= 10; // Remove 5 pixels from each side
-            grad_w -= 10;
-            numel = N * C * grad_h * grad_w;
-        }
-
-        // Create gradient map: d(loss)/d(ssim_scalar) = grad_loss
-        // d(ssim_scalar)/d(ssim_map[i]) = 1/numel
-        // So: d(loss)/d(ssim_map[i]) = grad_loss / numel
-        float grad_per_pixel = grad_loss / static_cast<float>(numel);
-
-        // Create gradient tensor for cropped region
-        auto dL_dmap = lfs::core::Tensor::zeros(ctx.img1.shape(), lfs::core::Device::CUDA);
-
-        if (ctx.apply_valid_padding && ctx.original_h > 10 && ctx.original_w > 10) {
-            // Fill cropped region with gradient (use stream-aware version to avoid sync)
-            auto cropped_view = dL_dmap.slice(2, 5, ctx.original_h - 5).slice(3, 5, ctx.original_w - 5);
-            cropped_view.fill_(grad_per_pixel, nullptr); // stream-aware version, no sync
-        } else {
-            // No cropping - fill entire map (use stream-aware version to avoid sync)
-            dL_dmap.fill_(grad_per_pixel, nullptr);
-        }
-
-        // Allocate output gradient
-        auto dL_dimg1 = lfs::core::Tensor::zeros(ctx.img1.shape(), lfs::core::Device::CUDA);
-
-        // Launch backward kernel
-        dim3 grid((ctx.original_w + BLOCK_X - 1) / BLOCK_X,
-                  (ctx.original_h + BLOCK_Y - 1) / BLOCK_Y,
-                  N);
-        dim3 block(BLOCK_X, BLOCK_Y);
-
-        dispatch_target_ptr(ctx.img2, [&](auto* img2_ptr) {
-            using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(img2_ptr)>>;
-            fusedssim_backwardCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
-                ctx.original_h, ctx.original_w, static_cast<int>(C), C1, C2,
-                ctx.img1.ptr<float>(),
-                img2_ptr,
-                dL_dmap.ptr<float>(),
-                dL_dimg1.ptr<float>(),
-                ctx.dm_dmu1.ptr<__half>(),
-                ctx.dm_dsigma1_sq.ptr<__half>(),
-                ctx.dm_dsigma12.ptr<__half>());
-            LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.backward");
-        });
-
-        return dL_dimg1;
-    }
-
-    lfs::core::Tensor ssim_backward_with_grad_map(
-        const SSIMContext& ctx,
-        const lfs::core::Tensor& dL_dmap) {
-
-        validate_ssim_context(ctx);
-        auto gradient_map = prepare_loss_prediction(dL_dmap, "SSIM gradient map");
-        LFS_ASSERT_MSG(gradient_map.shape() == ctx.img1.shape(),
-                       lfs::core::detail::format_cuda_safe(
-                           "SSIM gradient map must match the context image (gradient={}, image={})",
-                           gradient_map.shape().str(), ctx.img1.shape().str()));
-
-        constexpr float C1 = 0.01f * 0.01f;
-        constexpr float C2 = 0.03f * 0.03f;
-        const size_t N = ctx.img1.shape()[0];
-        const size_t C = ctx.img1.shape()[1];
-
-        auto dL_dimg1 = lfs::core::Tensor::zeros(ctx.img1.shape(), lfs::core::Device::CUDA);
-        const dim3 grid((ctx.original_w + BLOCK_X - 1) / BLOCK_X,
-                        (ctx.original_h + BLOCK_Y - 1) / BLOCK_Y, N);
-        const dim3 block(BLOCK_X, BLOCK_Y);
-
-        dispatch_target_ptr(ctx.img2, [&](auto* img2_ptr) {
-            using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(img2_ptr)>>;
-            fusedssim_backwardCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
-                ctx.original_h, ctx.original_w, static_cast<int>(C), C1, C2,
-                ctx.img1.ptr<float>(), img2_ptr, gradient_map.ptr<float>(),
-                dL_dimg1.ptr<float>(), ctx.dm_dmu1.ptr<__half>(),
-                ctx.dm_dsigma1_sq.ptr<__half>(), ctx.dm_dsigma12.ptr<__half>());
-            LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.backward_grad_map");
-        });
-
-        return dL_dimg1;
     }
 
     // Version with pre-allocated workspace
@@ -1837,7 +1737,7 @@ namespace lfs::training::kernels {
             workspace.reduction_result.ptr<float>(),
             N, C, H, W,
             apply_valid_padding,
-            workspace.ssim_map.stream());
+            lfs::core::getCurrentCUDAStream());
         // The returned scalar aliases the workspace and must be consumed before
         // the next forward using this workspace.
         lfs::core::Tensor ssim_value_tensor = workspace.reduction_result;
@@ -1884,18 +1784,21 @@ namespace lfs::training::kernels {
 
         float grad_per_pixel = grad_loss / static_cast<float>(numel);
 
-        // Use pre-allocated workspace buffer
-        workspace.dL_dmap.zero_();
+        // Keep workspace initialization, the fill and backward on the execution stream.
+        const auto stream = lfs::core::getCurrentCUDAStream();
+        workspace.dL_dmap.set_stream(stream);
+        workspace.dL_dimg1.set_stream(stream);
+        workspace.dL_dmap.fill_(0.0f, stream);
 
         if (ctx.apply_valid_padding && ctx.original_h > 10 && ctx.original_w > 10) {
             auto cropped_view = workspace.dL_dmap.slice(2, 5, ctx.original_h - 5).slice(3, 5, ctx.original_w - 5);
-            cropped_view.fill_(grad_per_pixel, nullptr); // stream-aware version, no sync
+            cropped_view.fill_(grad_per_pixel, stream);
         } else {
-            workspace.dL_dmap.fill_(grad_per_pixel, nullptr);
+            workspace.dL_dmap.fill_(grad_per_pixel, stream);
         }
 
         // Use pre-allocated output buffer
-        workspace.dL_dimg1.zero_();
+        workspace.dL_dimg1.fill_(0.0f, stream);
 
         // Launch backward kernel
         dim3 grid((ctx.original_w + BLOCK_X - 1) / BLOCK_X,
@@ -1970,7 +1873,7 @@ namespace lfs::training::kernels {
                 workspace.reduction_result.ptr<float>(),
                 N, C, H, W,
                 apply_valid_padding,
-                workspace.ssim_map.stream());
+                lfs::core::getCurrentCUDAStream());
         });
         lfs::core::Tensor loss_scalar = workspace.reduction_result;
 
@@ -2086,7 +1989,7 @@ namespace lfs::training::kernels {
                 workspace.reduction_result.ptr<float>(),
                 N, C, H, W,
                 apply_valid_padding,
-                workspace.ssim_map.stream());
+                lfs::core::getCurrentCUDAStream());
         });
         lfs::core::Tensor loss_scalar = workspace.reduction_result;
 
@@ -2193,7 +2096,7 @@ namespace lfs::training::kernels {
         const dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, N);
         const dim3 block(BLOCK_X, BLOCK_Y);
 
-        const auto stream = workspace.ssim_map.stream();
+        const auto stream = lfs::core::getCurrentCUDAStream();
         dispatch_target_ptr(img2, [&](auto* img2_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(img2_ptr)>>;
             maskedFusedL1SSIMForwardCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
@@ -2310,7 +2213,7 @@ namespace lfs::training::kernels {
         const dim3 grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, N);
         const dim3 block(BLOCK_X, BLOCK_Y);
 
-        const auto stream = workspace.ssim_map.stream();
+        const auto stream = lfs::core::getCurrentCUDAStream();
         dispatch_target_ptr(gt, [&](auto* gt_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(gt_ptr)>>;
             decoupledFusedL1SSIMForwardCUDA<TargetT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
@@ -2439,7 +2342,7 @@ namespace lfs::training::kernels {
         const lfs::core::Tensor& ssim_map,
         lfs::core::Tensor& error_map) {
 
-        LFS_ASSERT_MSG(ssim_map.is_valid() && ssim_map.device() == lfs::core::Device::CUDA &&
+        LFS_ASSERT_MSG(ssim_map.is_valid() && ssim_map.device() == lfs::core::Device::GPU &&
                            ssim_map.dtype() == lfs::core::DataType::Float32 &&
                            ssim_map.is_contiguous() && ssim_map.ndim() == 4 &&
                            ssim_map.shape()[0] == 1 && ssim_map.shape()[1] > 0 &&
@@ -2453,7 +2356,7 @@ namespace lfs::training::kernels {
         const int W = static_cast<int>(ssim_map.shape()[3]);
         const int HW = H * W;
 
-        LFS_ASSERT_MSG(error_map.is_valid() && error_map.device() == lfs::core::Device::CUDA &&
+        LFS_ASSERT_MSG(error_map.is_valid() && error_map.device() == lfs::core::Device::GPU &&
                            error_map.dtype() == lfs::core::DataType::Float32 &&
                            error_map.is_contiguous() && error_map.ndim() == 2 &&
                            error_map.shape()[0] == static_cast<size_t>(H) &&
@@ -2512,11 +2415,18 @@ namespace lfs::training::kernels {
                 cs_map.is_contiguous()) {
                 return;
             }
-            cs_map = lfs::core::Tensor::empty(ssim_map.shape(), ssim_map.device(), ssim_map.dtype());
+            cs_map = ssim_map.device() == lfs::core::Device::CUDA
+                         ? lfs::core::Tensor::empty_exact(ssim_map.shape(), ssim_map.dtype())
+                         : lfs::core::Tensor::empty(ssim_map.shape(), ssim_map.device(), ssim_map.dtype());
         }
     } // namespace
 
     void SSIMWorkspace::ensure_size(const std::vector<size_t>& shape) {
+        for (auto* tensor : {&ssim_map, &dm_dmu1, &dm_dsigma1_sq, &dm_dsigma12, &dL_dmap, &dL_dimg1, &reduction_temp, &reduction_result, &cs_map}) {
+            if (tensor->is_valid())
+                tensor->set_stream(lfs::core::getCurrentCUDAStream());
+        }
+
         if (arena) {
             arena->ensure_pure_ssim(shape);
             ensure_independent_cs_map(cs_map, ssim_map);
@@ -2524,20 +2434,25 @@ namespace lfs::training::kernels {
         }
         if (allocated_shape != shape) {
             lfs::core::TensorShape tshape(shape);
-            ssim_map = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
-            dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
-            dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
-            dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
-            dL_dmap = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
-            dL_dimg1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
-            reduction_temp = lfs::core::Tensor::empty({1024}, lfs::core::Device::CUDA);
-            reduction_result = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
+            ssim_map = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU);
+            dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU, lfs::core::DataType::Float16);
+            dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU, lfs::core::DataType::Float16);
+            dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU, lfs::core::DataType::Float16);
+            dL_dmap = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU);
+            dL_dimg1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU);
+            reduction_temp = lfs::core::Tensor::empty({1024}, lfs::core::Device::GPU);
+            reduction_result = lfs::core::Tensor::empty({1}, lfs::core::Device::GPU);
             allocated_shape = shape;
         }
         ensure_independent_cs_map(cs_map, ssim_map);
     }
 
     void FusedL1SSIMWorkspace::ensure_size(const std::vector<size_t>& shape) {
+        for (auto* tensor : {&ssim_map, &dm_dmu1, &dm_dsigma1_sq, &dm_dsigma12, &grad_img, &reduction_temp, &reduction_result, &cs_map}) {
+            if (tensor->is_valid())
+                tensor->set_stream(lfs::core::getCurrentCUDAStream());
+        }
+
         if (arena) {
             arena->ensure_fused(shape);
             ensure_independent_cs_map(cs_map, ssim_map);
@@ -2547,19 +2462,24 @@ namespace lfs::training::kernels {
             lfs::core::TensorShape tshape(shape);
             std::vector<size_t> map_shape = shape;
             map_shape[1] = 1;
-            ssim_map = lfs::core::Tensor::empty(lfs::core::TensorShape(map_shape), lfs::core::Device::CUDA);
-            dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
-            dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
-            dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
-            grad_img = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
-            reduction_temp = lfs::core::Tensor::empty({1024}, lfs::core::Device::CUDA);
-            reduction_result = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
+            ssim_map = lfs::core::Tensor::empty(lfs::core::TensorShape(map_shape), lfs::core::Device::GPU);
+            dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU, lfs::core::DataType::Float16);
+            dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU, lfs::core::DataType::Float16);
+            dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU, lfs::core::DataType::Float16);
+            grad_img = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU);
+            reduction_temp = lfs::core::Tensor::empty({1024}, lfs::core::Device::GPU);
+            reduction_result = lfs::core::Tensor::empty({1}, lfs::core::Device::GPU);
             allocated_shape = shape;
         }
         ensure_independent_cs_map(cs_map, ssim_map);
     }
 
     void DecoupledFusedL1SSIMWorkspace::ensure_size(const std::vector<size_t>& shape) {
+        for (auto* tensor : {&ssim_map, &app_dm_dmu1, &raw_dm_dmu1, &raw_dm_dsigma1_sq, &raw_dm_dsigma12, &grad_corrected, &grad_raw, &reduction_temp, &reduction_result, &cs_map}) {
+            if (tensor->is_valid())
+                tensor->set_stream(lfs::core::getCurrentCUDAStream());
+        }
+
         if (arena) {
             arena->ensure_decoupled(shape);
             ensure_independent_cs_map(cs_map, ssim_map);
@@ -2569,21 +2489,26 @@ namespace lfs::training::kernels {
             lfs::core::TensorShape tshape(shape);
             std::vector<size_t> map_shape = shape;
             map_shape[1] = 1;
-            ssim_map = lfs::core::Tensor::empty(lfs::core::TensorShape(map_shape), lfs::core::Device::CUDA);
-            app_dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
-            raw_dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
-            raw_dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
-            raw_dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
-            grad_corrected = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
-            grad_raw = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
-            reduction_temp = lfs::core::Tensor::empty({1024}, lfs::core::Device::CUDA);
-            reduction_result = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
+            ssim_map = lfs::core::Tensor::empty(lfs::core::TensorShape(map_shape), lfs::core::Device::GPU);
+            app_dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU, lfs::core::DataType::Float16);
+            raw_dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU, lfs::core::DataType::Float16);
+            raw_dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU, lfs::core::DataType::Float16);
+            raw_dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU, lfs::core::DataType::Float16);
+            grad_corrected = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU);
+            grad_raw = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU);
+            reduction_temp = lfs::core::Tensor::empty({1024}, lfs::core::Device::GPU);
+            reduction_result = lfs::core::Tensor::empty({1}, lfs::core::Device::GPU);
             allocated_shape = shape;
         }
         ensure_independent_cs_map(cs_map, ssim_map);
     }
 
     void MaskedFusedL1SSIMWorkspace::ensure_size(const std::vector<size_t>& shape) {
+        for (auto* tensor : {&ssim_map, &dm_dmu1, &dm_dsigma1_sq, &dm_dsigma12, &grad_img, &reduction_temp, &masked_loss, &mask_sum, &cs_map}) {
+            if (tensor->is_valid())
+                tensor->set_stream(lfs::core::getCurrentCUDAStream());
+        }
+
         if (arena) {
             arena->ensure_masked_fused(shape);
             ensure_independent_cs_map(cs_map, ssim_map);
@@ -2593,20 +2518,25 @@ namespace lfs::training::kernels {
             lfs::core::TensorShape tshape(shape);
             std::vector<size_t> map_shape = shape;
             map_shape[1] = 1;
-            ssim_map = lfs::core::Tensor::empty(lfs::core::TensorShape(map_shape), lfs::core::Device::CUDA);
-            dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
-            dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
-            dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
-            grad_img = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
-            reduction_temp = lfs::core::Tensor::empty({2048}, lfs::core::Device::CUDA);
-            masked_loss = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
-            mask_sum = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
+            ssim_map = lfs::core::Tensor::empty(lfs::core::TensorShape(map_shape), lfs::core::Device::GPU);
+            dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU, lfs::core::DataType::Float16);
+            dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU, lfs::core::DataType::Float16);
+            dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU, lfs::core::DataType::Float16);
+            grad_img = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU);
+            reduction_temp = lfs::core::Tensor::empty({2048}, lfs::core::Device::GPU);
+            masked_loss = lfs::core::Tensor::empty({1}, lfs::core::Device::GPU);
+            mask_sum = lfs::core::Tensor::empty({1}, lfs::core::Device::GPU);
             allocated_shape = shape;
         }
         ensure_independent_cs_map(cs_map, ssim_map);
     }
 
     void MaskedDecoupledFusedL1SSIMWorkspace::ensure_size(const std::vector<size_t>& shape) {
+        for (auto* tensor : {&ssim_map, &app_dm_dmu1, &raw_dm_dmu1, &raw_dm_dsigma1_sq, &raw_dm_dsigma12, &grad_corrected, &grad_raw, &reduction_temp, &masked_loss, &mask_sum, &cs_map}) {
+            if (tensor->is_valid())
+                tensor->set_stream(lfs::core::getCurrentCUDAStream());
+        }
+
         if (arena) {
             arena->ensure_masked_decoupled(shape);
             ensure_independent_cs_map(cs_map, ssim_map);
@@ -2616,16 +2546,16 @@ namespace lfs::training::kernels {
             lfs::core::TensorShape tshape(shape);
             std::vector<size_t> map_shape = shape;
             map_shape[1] = 1;
-            ssim_map = lfs::core::Tensor::empty(lfs::core::TensorShape(map_shape), lfs::core::Device::CUDA);
-            app_dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
-            raw_dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
-            raw_dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
-            raw_dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
-            grad_corrected = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
-            grad_raw = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
-            reduction_temp = lfs::core::Tensor::empty({2048}, lfs::core::Device::CUDA);
-            masked_loss = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
-            mask_sum = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
+            ssim_map = lfs::core::Tensor::empty(lfs::core::TensorShape(map_shape), lfs::core::Device::GPU);
+            app_dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU, lfs::core::DataType::Float16);
+            raw_dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU, lfs::core::DataType::Float16);
+            raw_dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU, lfs::core::DataType::Float16);
+            raw_dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU, lfs::core::DataType::Float16);
+            grad_corrected = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU);
+            grad_raw = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU);
+            reduction_temp = lfs::core::Tensor::empty({2048}, lfs::core::Device::GPU);
+            masked_loss = lfs::core::Tensor::empty({1}, lfs::core::Device::GPU);
+            mask_sum = lfs::core::Tensor::empty({1}, lfs::core::Device::GPU);
             allocated_shape = shape;
         }
         ensure_independent_cs_map(cs_map, ssim_map);
@@ -2742,8 +2672,7 @@ namespace lfs::training::kernels {
         LFS_ASSERT_MSG(required_capacity > 0,
                        "LossWorkspaceArena cannot allocate an empty active layout");
 
-        auto new_storage = lfs::core::Tensor::empty(
-            {required_capacity}, lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+        auto new_storage = lfs::core::Tensor::empty_exact({required_capacity}, lfs::core::DataType::UInt8);
         // Stamp the home stream so from_blob views inherit a valid producer stream.
         if (new_storage.stream() != lfs::core::getCurrentCUDAStream()) {
             new_storage.set_stream(lfs::core::getCurrentCUDAStream());
@@ -2757,6 +2686,8 @@ namespace lfs::training::kernels {
     }
 
     void LossWorkspaceArena::ensure_capacity_for(const Kind kind, const size_t bytes) {
+        if (storage_.is_valid())
+            storage_.set_stream(lfs::core::getCurrentCUDAStream());
         const size_t required_capacity = align_up_bytes(bytes);
         const bool variant_changed = active_kind_ != Kind::None && active_kind_ != kind;
         const bool must_allocate = !storage_.is_valid() || variant_changed ||
@@ -2850,13 +2781,10 @@ namespace lfs::training::kernels {
                            offset, nbytes, capacity_bytes_));
         void* ptr = static_cast<char*>(storage_.data_ptr()) + offset;
         offset += nbytes;
-        // Prefer current stream (matches training step); fall back to storage home.
-        cudaStream_t home = lfs::core::getCurrentCUDAStream();
-        if (home == nullptr) {
-            home = storage_.stream();
-        }
+        const auto home = lfs::core::getCurrentCUDAStream();
+        storage_.set_stream(home);
         return lfs::core::Tensor::from_blob(ptr, lfs::core::TensorShape(shape),
-                                            lfs::core::Device::CUDA, dtype, home);
+                                            lfs::core::Device::GPU, dtype, home);
     }
 
     void LossWorkspaceArena::bind_fused(const std::vector<size_t>& shape) {

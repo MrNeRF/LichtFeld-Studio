@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/event_bridge/command_api.hpp"
 #include "core/events.hpp"
-#include "training/control/command_api.hpp"
 
 namespace lfs::training {
 
@@ -94,4 +94,114 @@ namespace lfs::training {
             });
     }
 
+    void CommandCenter::overlay_stored_session(std::string strategy, bool hydrated) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        snapshot_.strategy = std::move(strategy);
+        snapshot_.session_hydrated = hydrated;
+    }
+
+    void CommandCenter::reset_snapshot_locked() {
+        snapshot_ = {};
+        pending_commands_.clear();
+        phase_.store(TrainingPhase::Idle, std::memory_order_relaxed);
+    }
+
+    void CommandCenter::clear_snapshot(const Trainer* trainer) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (snapshot_.trainer != trainer) {
+            return;
+        }
+        reset_snapshot_locked();
+    }
+
+    void CommandCenter::reset_snapshot() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        reset_snapshot_locked();
+    }
+
+    TrainingSnapshot CommandCenter::snapshot() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        TrainingSnapshot snap = snapshot_;
+        snap.phase = phase_.load(std::memory_order_relaxed);
+        return snap;
+    }
+
+    std::vector<LossHistoryPoint> CommandCenter::loss_history() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return loss_history_;
+    }
+
+    void CommandCenter::clear_loss_history() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        loss_history_.clear();
+        last_recorded_iteration_ = -1;
+    }
+
+    void CommandCenter::replace_loss_history(
+        std::vector<LossHistoryPoint> history) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        loss_history_ = std::move(history);
+        last_recorded_iteration_ =
+            loss_history_.empty()
+                ? -1
+                : loss_history_.back().iteration;
+    }
+
+    std::vector<OperationInfo> CommandCenter::operations(std::optional<CommandTarget> target) const {
+        if (!target) {
+            return ops_;
+        }
+        std::vector<OperationInfo> filtered;
+        for (const auto& op : ops_) {
+            if (op.target == *target) {
+                filtered.push_back(op);
+            }
+        }
+        return filtered;
+    }
+
+    std::vector<MutableFieldInfo> CommandCenter::mutables(std::optional<CommandTarget> target) const {
+        if (!target) {
+            return mutable_fields_;
+        }
+        std::vector<MutableFieldInfo> filtered;
+        for (const auto& f : mutable_fields_) {
+            if (f.target == *target) {
+                filtered.push_back(f);
+            }
+        }
+        return filtered;
+    }
+
+#if !LFS_BUILD_TRAINER
+    void CommandCenter::set_phase(TrainingPhase phase) { phase_.store(phase, std::memory_order_relaxed); }
+    std::expected<void, std::string> CommandCenter::execute(const Command&) {
+        return std::unexpected("Training is not included in this build");
+    }
+#endif
+
 } // namespace lfs::training
+
+#if !LFS_BUILD_TRAINER
+
+namespace lfs::training {
+    void CommandCenter::update_snapshot(const HookContext& ctx, int max_iterations, bool is_paused, bool is_running, bool stop_requested, TrainingPhase phase) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        snapshot_.iteration = ctx.iteration;
+        snapshot_.max_iterations = max_iterations;
+        snapshot_.loss = ctx.loss;
+        snapshot_.num_gaussians = ctx.num_gaussians;
+        snapshot_.is_refining = ctx.is_refining;
+        snapshot_.trainer = ctx.trainer;
+        snapshot_.is_paused = is_paused;
+        snapshot_.is_running = is_running;
+        snapshot_.stop_requested = stop_requested;
+        snapshot_.phase = phase;
+        if (ctx.iteration > last_recorded_iteration_ && ctx.loss > 0.0f) {
+            loss_history_.push_back({ctx.iteration, ctx.loss});
+            last_recorded_iteration_ = ctx.iteration;
+        }
+    }
+
+} // namespace lfs::training
+#endif

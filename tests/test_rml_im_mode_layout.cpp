@@ -320,4 +320,36 @@ namespace {
         EXPECT_EQ(text->GetText(), "Literal <tag> & value");
     }
 
+    TEST_F(RmlImModeLayoutTest, ControlEventsRequestAFrameForImmediateStateConsumption) {
+        layout_.begin_frame(&document_);
+        EXPECT_FALSE(layout_.button("Apply"));
+        EXPECT_EQ(layout_.checkbox("Enabled", false), std::make_tuple(false, false));
+        layout_.end_frame();
+
+        Rml::ElementList buttons;
+        document_.GetElementsByTagName(buttons, "button");
+        ASSERT_EQ(buttons.size(), 1u);
+        buttons.front()->DispatchEvent("click", {});
+
+        EXPECT_TRUE(document_.HasAttribute("data-immediate-input-pending"));
+        document_.RemoveAttribute("data-immediate-input-pending");
+
+        layout_.begin_frame(&document_);
+        EXPECT_TRUE(layout_.button("Apply"));
+        EXPECT_EQ(layout_.checkbox("Enabled", false), std::make_tuple(false, false));
+        layout_.end_frame();
+        EXPECT_FALSE(document_.HasAttribute("data-immediate-input-pending"));
+
+        Rml::ElementList inputs;
+        document_.GetElementsByTagName(inputs, "input");
+        ASSERT_EQ(inputs.size(), 1u);
+        inputs.front()->DispatchEvent("click", {});
+
+        EXPECT_TRUE(document_.HasAttribute("data-immediate-input-pending"));
+        layout_.begin_frame(&document_);
+        EXPECT_FALSE(layout_.button("Apply"));
+        EXPECT_EQ(layout_.checkbox("Enabled", false), std::make_tuple(true, true));
+        layout_.end_frame();
+    }
+
 } // namespace

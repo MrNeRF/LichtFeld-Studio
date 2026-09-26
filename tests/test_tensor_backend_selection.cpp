@@ -1,0 +1,216 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#include <gtest/gtest.h>
+
+#include "core/tensor.hpp"
+#include "core/tensor/internal/lazy_executor.hpp"
+#include "core/tensor_backend.hpp"
+
+#include <atomic>
+#include <cstdlib>
+#include <cuda_runtime.h>
+#include <string>
+#include <thread>
+#include <vector>
+
+namespace {
+
+    using namespace lfs::core;
+
+    class TensorBackendSelection : public testing::Test {
+    protected:
+        void SetUp() override {
+            original_backend = default_gpu_backend();
+            internal::gpu_backend_reset_for_testing();
+        }
+        void TearDown() override {
+            internal::gpu_backend_reset_for_testing();
+            EXPECT_TRUE(set_default_gpu_backend(original_backend));
+        }
+        GpuBackend original_backend;
+    };
+
+    TEST_F(TensorBackendSelection, AProcessDefaultFreezesAfterFirstResolution) {
+        internal::gpu_backend_reset_for_testing();
+
+        // Catches a missing CUDA fallback when no selector is set.
+        EXPECT_EQ(default_gpu_backend(), GpuBackend::CUDA);
+        internal::gpu_backend_reset_for_testing();
+
+        // Catches a thread scope freezing the otherwise untouched process default.
+        if (gpu_backend_available(GpuBackend::Vulkan)) {
+            GpuBackendScope scope(GpuBackend::Vulkan);
+            const Tensor tensor = Tensor::empty({1}, Device::GPU);
+            EXPECT_EQ(gpu_backend_of(tensor), GpuBackend::Vulkan);
+        }
+
+        // Checks an explicit pre-resolution setter.
+        const lfs::Status accepted = set_default_gpu_backend(GpuBackend::CUDA);
+        ASSERT_TRUE(accepted.has_value());
+        EXPECT_EQ(default_gpu_backend(), GpuBackend::CUDA);
+
+        // Catches a mutable process default after its first resolution.
+        const lfs::Status rejected = set_default_gpu_backend(GpuBackend::Vulkan);
+        ASSERT_FALSE(rejected.has_value());
+        const std::string message(rejected.error().user_message());
+        EXPECT_NE(message.find("CUDA"), std::string::npos);
+        EXPECT_NE(message.find("Vulkan"), std::string::npos);
+        EXPECT_EQ(default_gpu_backend(), GpuBackend::CUDA);
+    }
+
+    TEST_F(TensorBackendSelection, ConfiguredDefaultCanChangeBeforeResolution) {
+        internal::gpu_backend_reset_for_testing();
+        ASSERT_TRUE(set_default_gpu_backend(GpuBackend::Vulkan));
+
+        // Catches a configuration query that resolves the default.
+        EXPECT_EQ(configured_gpu_backend(), GpuBackend::Vulkan);
+
+        // The last explicit configuration wins until the first resolution.
+        const lfs::Status accepted = set_default_gpu_backend(GpuBackend::CUDA);
+        EXPECT_TRUE(accepted.has_value());
+        EXPECT_EQ(default_gpu_backend(), GpuBackend::CUDA);
+
+        internal::gpu_backend_reset_for_testing();
+    }
+
+    TEST_F(TensorBackendSelection, ScopeNestsRestoresAndIsThreadLocal) {
+        if (!gpu_backend_available(GpuBackend::CUDA))
+            GTEST_SKIP() << "CUDA backend unavailable";
+        // Catches a scope implemented as a process-global mutable selector.
+        if (!gpu_backend_available(GpuBackend::Vulkan)) {
+            GTEST_SKIP() << "Vulkan backend unavailable";
+        }
+        std::atomic<bool> other_thread_used_cuda = false;
+        {
+            GpuBackendScope outer(GpuBackend::Vulkan);
+            std::thread other_thread([&] {
+                Tensor tensor = Tensor::empty({1}, Device::GPU);
+                other_thread_used_cuda = gpu_backend_of(tensor) == GpuBackend::CUDA;
+            });
+            other_thread.join();
+
+            const Tensor outer_tensor = Tensor::empty({1}, Device::GPU);
+            EXPECT_EQ(gpu_backend_of(outer_tensor), GpuBackend::Vulkan);
+
+            {
+                GpuBackendScope inner(GpuBackend::CUDA);
+                const Tensor tensor = Tensor::empty({1}, Device::GPU);
+                EXPECT_EQ(gpu_backend_of(tensor), GpuBackend::CUDA);
+            }
+
+            const Tensor restored_tensor = Tensor::empty({1}, Device::GPU);
+            EXPECT_EQ(gpu_backend_of(restored_tensor), GpuBackend::Vulkan);
+        }
+
+        EXPECT_TRUE(other_thread_used_cuda.load());
+        const Tensor after_scope = Tensor::empty({1}, Device::GPU);
+        EXPECT_EQ(gpu_backend_of(after_scope), GpuBackend::CUDA);
+    }
+
+    TEST_F(TensorBackendSelection, StorageIdentityCoversCpuGpuAndViews) {
+        if (!gpu_backend_available(GpuBackend::CUDA))
+            GTEST_SKIP() << "CUDA backend unavailable";
+        // Catches backend identity stored on tensor handles instead of shared storage.
+        const Tensor cpu = Tensor::zeros({2, 2}, Device::CPU);
+        EXPECT_EQ(gpu_backend_of(cpu), std::nullopt);
+        EXPECT_EQ(gpu_backend_of(Tensor{}), std::nullopt);
+
+        const Tensor gpu = Tensor::zeros({2, 2}, Device::GPU);
+        const Tensor view = gpu.slice(0, 0, 1);
+        EXPECT_EQ(gpu_backend_of(gpu), GpuBackend::CUDA);
+        EXPECT_EQ(gpu_backend_of(view), gpu_backend_of(gpu));
+    }
+
+    TEST_F(TensorBackendSelection, CudaFromBlobIgnoresVulkanScope) {
+        if (!gpu_backend_available(GpuBackend::CUDA))
+            GTEST_SKIP() << "CUDA backend unavailable";
+        // Catches from_blob incorrectly consulting the no-input factory selector.
+        void* pointer = nullptr;
+        ASSERT_EQ(cudaMalloc(&pointer, sizeof(float)), cudaSuccess);
+        {
+            GpuBackendScope scope(GpuBackend::Vulkan);
+            const Tensor tensor = Tensor::from_blob(
+                pointer, {1}, Device::GPU, DataType::Float32);
+            EXPECT_EQ(gpu_backend_of(tensor), GpuBackend::CUDA);
+        }
+        ASSERT_EQ(cudaFree(pointer), cudaSuccess);
+    }
+
+    TEST_F(TensorBackendSelection, VulkanFactorySucceedsWithoutChangingDefault) {
+        // Catches a Vulkan scope falling through to a CUDA allocation.
+        if (!gpu_backend_available(GpuBackend::Vulkan)) {
+            GTEST_SKIP() << "Vulkan backend unavailable";
+        }
+        {
+            GpuBackendScope scope(GpuBackend::Vulkan);
+            const Tensor tensor = Tensor::zeros({2}, Device::GPU);
+            EXPECT_EQ(gpu_backend_of(tensor), GpuBackend::Vulkan);
+            EXPECT_EQ(tensor.to_vector(), std::vector<float>({0.0f, 0.0f}));
+        }
+        EXPECT_EQ(default_gpu_backend(), GpuBackend::CUDA);
+    }
+
+    TEST_F(TensorBackendSelection, OperationsInheritInputBackendAgainstScope) {
+        if (!gpu_backend_available(GpuBackend::CUDA))
+            GTEST_SKIP() << "CUDA backend unavailable";
+        // Catches output, reduction, and lazy allocations that consult the active scope.
+        const Tensor a = Tensor::full({8}, 2.0f, Device::GPU);
+        const Tensor b = Tensor::full({8}, 3.0f, Device::GPU);
+
+        internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
+        internal::lazy_executor_set_size_heuristic_override_for_testing(false);
+        internal::lazy_executor_set_size_threshold_override_for_testing(0);
+        {
+            GpuBackendScope scope(GpuBackend::Vulkan);
+            const Tensor added = a.add(b);
+            const Tensor reduced = a.sum();
+            const Tensor lazy = a.mul(b).add(a);
+            EXPECT_EQ(gpu_backend_of(added), GpuBackend::CUDA);
+            EXPECT_EQ(gpu_backend_of(reduced), GpuBackend::CUDA);
+            EXPECT_EQ(gpu_backend_of(lazy), GpuBackend::CUDA);
+            EXPECT_TRUE(lazy.has_lazy_expr());
+            EXPECT_FLOAT_EQ(reduced.item<float>(), 16.0f);
+            EXPECT_FLOAT_EQ(lazy.sum().item<float>(), 64.0f);
+        }
+        internal::lazy_executor_set_size_threshold_override_for_testing(std::nullopt);
+        internal::lazy_executor_set_size_heuristic_override_for_testing(std::nullopt);
+        internal::lazy_executor_set_pointwise_fusion_override_for_testing(std::nullopt);
+    }
+
+    TEST_F(TensorBackendSelection, CopyToBackendClonesAndConvertsCleanly) {
+        if (!gpu_backend_available(GpuBackend::CUDA))
+            GTEST_SKIP() << "CUDA backend unavailable";
+        // Catches same-backend aliasing and cross-backend CUDA fallthrough.
+        const Tensor source = Tensor::full({4}, 7.0f, Device::GPU);
+        const Tensor clone = source.to(GpuBackend::CUDA);
+        ASSERT_EQ(gpu_backend_of(clone), GpuBackend::CUDA);
+        EXPECT_NE(clone.data_ptr(), source.data_ptr());
+        EXPECT_EQ(clone.to_vector(), source.to_vector());
+
+        if (!gpu_backend_available(GpuBackend::Vulkan)) {
+            return;
+        }
+        const Tensor vulkan =
+            source.to(GpuBackend::Vulkan);
+        EXPECT_EQ(gpu_backend_of(vulkan), GpuBackend::Vulkan);
+        EXPECT_EQ(vulkan.to_vector(), source.to_vector());
+    }
+
+    TEST_F(TensorBackendSelection, BackendMemoryAndShutdownAreDefinedForBothBackends) {
+        // Catches placeholder Vulkan services leaking CUDA statistics or errors.
+        if (gpu_backend_available(GpuBackend::CUDA))
+            EXPECT_GT(gpu_backend_memory_info(GpuBackend::CUDA).total_bytes, 0u);
+        const MemoryInfo vulkan = gpu_backend_memory_info(GpuBackend::Vulkan);
+        if (gpu_backend_available(GpuBackend::Vulkan)) {
+            EXPECT_GT(vulkan.total_bytes, 0u);
+            EXPECT_GT(vulkan.free_bytes, 0u);
+            EXPECT_GE(vulkan.device_id, 0);
+        } else {
+            EXPECT_EQ(vulkan.total_bytes, 0u);
+        }
+        EXPECT_TRUE(shutdown_gpu_backend(GpuBackend::CUDA).has_value());
+        EXPECT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan).has_value());
+    }
+
+} // namespace

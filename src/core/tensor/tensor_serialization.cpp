@@ -143,7 +143,7 @@ namespace lfs::core {
             throw std::runtime_error(
                 "Alternate tensor encoding requires a serialization sink");
         }
-        const Tensor host = tensor.device() == Device::CUDA ? tensor.to_pageable_host() : tensor;
+        const Tensor host = tensor.device() == Device::GPU ? tensor.to_pageable_host() : tensor;
         const Tensor src = host.is_contiguous() ? host : host.contiguous();
         if (src.dtype() != descriptor.dtype ||
             src.shape() != descriptor.serialized_shape) {
@@ -194,7 +194,7 @@ namespace lfs::core {
             if (header.dtype > static_cast<uint8_t>(DataType::Bool)) {
                 throw std::runtime_error("Invalid tensor file: unsupported dtype");
             }
-            if (header.device > static_cast<uint8_t>(Device::CUDA)) {
+            if (header.device > static_cast<uint8_t>(Device::GPU)) {
                 throw std::runtime_error("Invalid tensor file: unsupported device");
             }
 
@@ -266,7 +266,7 @@ namespace lfs::core {
             const bool use_pinned) {
             auto* const timing = active_tensor_load_timing;
             const auto run_timed =
-                [timing](double serialization_detail::TensorLoadTiming::*member,
+                [timing](double serialization_detail::TensorLoadTiming::* member,
                          auto&& fn) {
                     if (timing == nullptr) {
                         fn();
@@ -322,7 +322,7 @@ namespace lfs::core {
                 }
                 auto* const timing = active_tensor_load_timing;
                 const auto run_timed =
-                    [timing](double TensorLoadTiming::*member, auto&& fn) {
+                    [timing](double TensorLoadTiming::* member, auto&& fn) {
                         if (timing == nullptr) {
                             fn();
                             return;
@@ -336,23 +336,22 @@ namespace lfs::core {
                     };
                 Tensor loaded;
                 run_timed(&TensorLoadTiming::alloc_ms, [&] {
-                    loaded = Tensor::empty(parsed.shape, Device::CUDA,
+                    loaded = Tensor::empty(parsed.shape, Device::GPU,
                                            parsed.dtype);
                     loaded.set_stream(stream);
                 });
                 if (parsed.payload_bytes > 0) {
                     run_timed(&TensorLoadTiming::read_ms, [&] {
-                        LFS_CUDA_CHECK_MSG_STREAM_ARGS(
-                            cudaMemcpyAsync(
-                                loaded.data_ptr(), remaining.data(),
-                                static_cast<std::size_t>(parsed.payload_bytes),
-                                cudaMemcpyHostToDevice, stream),
-                            stream,
-                            reinterpret_cast<uintptr_t>(loaded.data_ptr()),
-                            reinterpret_cast<uintptr_t>(remaining.data()),
-                            static_cast<std::size_t>(parsed.payload_bytes),
-                            "while uploading serialized tensor payload shape={} dtype={} to CUDA",
-                            parsed.shape.str(), dtype_name(parsed.dtype));
+                        internal::backend_ops_for(loaded).copy_host_to_device(
+                            internal::CopyRequest{
+                                .src = internal::raw_storage_ref(
+                                    const_cast<void*>(static_cast<const void*>(remaining.data())),
+                                    parsed.dtype),
+                                .dst = internal::storage_ref(loaded),
+                                .bytes = static_cast<std::size_t>(parsed.payload_bytes),
+                                .synchronous = false,
+                                .context = internal::ExecContext{stream},
+                            });
                         loaded.record_stream(stream);
                     });
                 }
@@ -365,6 +364,49 @@ namespace lfs::core {
             load_parsed_serialized_tensor(is, tensor, parsed, use_pinned);
         }
     } // namespace serialization_detail
+
+    struct TensorArchiveReader::Impl {
+        explicit Impl(std::istream& source)
+            : stream(source), upload_stream(getCurrentCUDAStream()) {}
+        std::istream& stream;
+        cudaStream_t upload_stream;
+        serialization_detail::TensorLoadTiming timing;
+    };
+
+    TensorArchiveReader::TensorArchiveReader(std::istream& stream)
+        : impl_(std::make_unique<Impl>(stream)) {}
+
+    TensorArchiveReader::~TensorArchiveReader() = default;
+
+    void TensorArchiveReader::read_exact(void* destination, const std::size_t bytes,
+                                         const std::string_view field) {
+        serialization_detail::read_exact(impl_->stream, destination, bytes, field);
+    }
+
+    void TensorArchiveReader::require_remaining_bytes(const std::uint64_t bytes,
+                                                      const std::string_view field) {
+        serialization_detail::require_remaining_bytes(impl_->stream, bytes, field);
+    }
+
+    void TensorArchiveReader::skip_tensor() {
+        serialization_detail::skip_serialized_tensor(impl_->stream);
+    }
+
+    void TensorArchiveReader::read_tensor(Tensor& tensor) {
+        serialization_detail::TensorLoadTimingScope timing_scope(impl_->timing);
+        serialization_detail::read_serialized_tensor_device_from_span_or_host(
+            impl_->stream, tensor, impl_->upload_stream);
+    }
+
+    void TensorArchiveReader::read_host_tensor(Tensor& tensor, const bool pin_memory) {
+        serialization_detail::TensorLoadTimingScope timing_scope(impl_->timing);
+        serialization_detail::read_serialized_tensor(impl_->stream, tensor, pin_memory);
+    }
+
+    TensorArchiveReader::Timing TensorArchiveReader::timing() const noexcept {
+        return {.allocation_ms = impl_->timing.alloc_ms,
+                .read_ms = impl_->timing.read_ms};
+    }
 
     std::istream& operator>>(std::istream& is, Tensor& tensor) {
         serialization_detail::read_serialized_tensor(is, tensor, true);

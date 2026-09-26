@@ -7,6 +7,8 @@
 #include <concepts>
 #include <functional>
 #include <mutex>
+#include <string_view>
+#include <type_traits>
 #include <typeindex>
 #include <unordered_map>
 #include <vector>
@@ -48,7 +50,7 @@ namespace lfs::event {
         EventBridge& operator=(const EventBridge&) = delete;
 
         mutable std::mutex mutex_;
-        std::unordered_map<std::type_index, std::vector<std::pair<HandlerId, Handler>>> handlers_;
+        std::unordered_map<std::string_view, std::vector<std::pair<HandlerId, Handler>>> handlers_;
         std::atomic<HandlerId> next_id_{1};
     };
 

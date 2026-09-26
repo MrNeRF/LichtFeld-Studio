@@ -34,7 +34,7 @@ function(compile_shader target source output symbol)
                 --input "${_source}"
                 --output "${_output}"
                 --symbol "${symbol}"
-        DEPENDS "${_source}" lfs_shader_compiler
+        DEPENDS "${_source}" ${ARGN} lfs_shader_compiler
         COMMENT "Compiling shader ${source}"
         VERBATIM)
 

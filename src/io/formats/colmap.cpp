@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
+#include <external/fast_float/include/fast_float/fast_float.h>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -36,6 +37,7 @@
 #include <system_error>
 #include <tbb/parallel_for.h>
 #include <tbb/task_group.h>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -300,7 +302,13 @@ namespace lfs::io {
                 return false;
             }
 
-            const auto parsed = std::from_chars(cur, end, value);
+            // Floating-point std::from_chars needs macOS 26; fast_float parses decimals identically.
+            const auto parsed = [&] {
+                if constexpr (std::is_floating_point_v<T>)
+                    return fast_float::from_chars(cur, end, value);
+                else
+                    return std::from_chars(cur, end, value);
+            }();
             if (parsed.ec != std::errc{}) {
                 return false;
             }
@@ -778,51 +786,6 @@ namespace lfs::io {
         return formatted;
     }
 
-    static std::unordered_map<std::string, BasenameLayoutInfo>
-    scan_image_basename_layout(const fs::path& images_path,
-                               const LoadOptions& options = {}) {
-        std::unordered_map<std::string, BasenameLayoutInfo> layout;
-
-        if (!safe_is_directory(images_path)) {
-            return layout;
-        }
-
-        std::error_code ec;
-        size_t scanned_entries = 0;
-        for (fs::recursive_directory_iterator it(
-                 images_path,
-                 fs::directory_options::skip_permission_denied,
-                 ec),
-             end;
-             !ec && it != end;
-             it.increment(ec)) {
-            if (should_poll_cancel(scanned_entries)) {
-                throw_if_load_cancel_requested(options, "COLMAP image layout scan cancelled");
-            }
-            ++scanned_entries;
-
-            const auto& entry = *it;
-            std::error_code file_ec;
-            if (!entry.is_regular_file(file_ec) || file_ec || !is_image_file(entry.path())) {
-                continue;
-            }
-
-            const fs::path relative_path = entry.path().lexically_relative(images_path);
-            if (relative_path.empty()) {
-                continue;
-            }
-
-            const std::string basename_key = detail::normalize_lookup_key(entry.path().filename());
-            auto& info = layout[basename_key];
-            ++info.file_count;
-            if (info.sample_relative_paths.size() < 2) {
-                info.sample_relative_paths.push_back(relative_path);
-            }
-        }
-
-        return layout;
-    }
-
     static std::unexpected<Error> make_nested_image_contract_error(
         const fs::path& images_path,
         const std::string& image_name,
@@ -891,11 +854,23 @@ namespace lfs::io {
     static ColmapDatasetCaches build_colmap_dataset_caches(
         const fs::path& base,
         const fs::path& images_path,
-        const LoadOptions& options) {
+        const LoadOptions& options,
+        std::unordered_map<std::string, BasenameLayoutInfo>& basename_layout) {
         ColmapDatasetCaches caches;
         tbb::task_group tasks;
         tasks.run([&] {
-            caches.images = std::make_unique<RecursiveFileCache>(images_path, options.cancel_requested);
+            caches.images = std::make_unique<RecursiveFileCache>(
+                images_path, options.cancel_requested, [&](const fs::path& relative_path) {
+                    if (!is_image_file(relative_path)) {
+                        return;
+                    }
+                    const std::string basename_key = detail::normalize_lookup_key(relative_path.filename());
+                    auto& info = basename_layout[basename_key];
+                    ++info.file_count;
+                    if (info.sample_relative_paths.size() < 2) {
+                        info.sample_relative_paths.push_back(relative_path);
+                    }
+                });
         });
         tasks.run([&] {
             caches.masks = std::make_unique<MaskDirCache>(base, options.cancel_requested);
@@ -926,11 +901,11 @@ namespace lfs::io {
         }
 
         log_unused_sidecars(base, options);
-        const auto basename_layout = scan_image_basename_layout(images_path, options);
+        std::unordered_map<std::string, BasenameLayoutInfo> basename_layout;
         ColmapDatasetCaches caches;
         {
             LOG_TIMER_DEBUG("COLMAP assemble: caches");
-            caches = build_colmap_dataset_caches(base, images_path, options);
+            caches = build_colmap_dataset_caches(base, images_path, options, basename_layout);
         }
 
         std::unordered_map<std::string, size_t> basename_only_metadata_counts;
@@ -1436,7 +1411,7 @@ namespace lfs::io {
         if (cur != end) {
             throw_colmap_error(lfs::ErrorCode::DataLoss,
                                "images.bin: trailing bytes",
-                               lfs::SmallFields{}.add("images_read", images.size()));
+                               lfs::SmallFields{}.add("images_read", static_cast<std::uint64_t>(images.size())));
         }
         if (images.empty()) {
             throw_colmap_error(
@@ -1444,7 +1419,7 @@ namespace lfs::io {
                 "images.bin contains no usable images",
                 lfs::SmallFields{}
                     .add("declared_count", n_images)
-                    .add("skipped_count", pose_tally ? pose_tally->count() : 0));
+                    .add("skipped_count", static_cast<std::uint64_t>(pose_tally ? pose_tally->count() : 0)));
         }
         return images;
     }
@@ -1557,7 +1532,7 @@ namespace lfs::io {
         if (cur != end) {
             throw_colmap_error(lfs::ErrorCode::DataLoss,
                                "cameras.bin: trailing bytes",
-                               lfs::SmallFields{}.add("cameras_read", cams.size()));
+                               lfs::SmallFields{}.add("cameras_read", static_cast<std::uint64_t>(cams.size())));
         }
         if (cams.empty()) {
             throw_colmap_error(
@@ -1565,7 +1540,7 @@ namespace lfs::io {
                 "cameras.bin contains no usable cameras",
                 lfs::SmallFields{}
                     .add("declared_count", n_cams)
-                    .add("skipped_count", tally ? tally->count() : 0));
+                    .add("skipped_count", static_cast<std::uint64_t>(tally ? tally->count() : 0)));
         }
         return cams;
     }
@@ -1713,7 +1688,7 @@ namespace lfs::io {
         if (cur != end) {
             throw_colmap_error(lfs::ErrorCode::DataLoss,
                                "points3D.bin: trailing bytes",
-                               lfs::SmallFields{}.add("points_read", points.size()));
+                               lfs::SmallFields{}.add("points_read", static_cast<std::uint64_t>(points.size())));
         }
         return points;
     }
@@ -1736,10 +1711,9 @@ namespace lfs::io {
             colors[i * 3 + 2] = points[i].color[2];
         }
 
-        Tensor means = Tensor::from_vector(positions, {N, 3}, Device::CUDA);
-        Tensor colors_tensor = Tensor::from_blob(colors.data(), {N, 3}, Device::CPU, DataType::UInt8)
-                                   .to(Device::CUDA)
-                                   .contiguous();
+        Tensor means = Tensor::from_vector(positions, {N, 3}, Device::CPU);
+        Tensor colors_tensor = Tensor::empty({N, 3}, Device::CPU, DataType::UInt8);
+        std::memcpy(colors_tensor.data_ptr(), colors.data(), colors.size());
 
         PointCloud cloud(std::move(means), std::move(colors_tensor));
         return cloud;
@@ -1864,21 +1838,6 @@ namespace lfs::io {
                  lines.size(),
                  elapsed_ms(start));
         return lines;
-    }
-
-    std::vector<std::string> split_string(const std::string& s, char delimiter) {
-        std::vector<std::string> tokens;
-        size_t start = 0;
-        size_t end = s.find(delimiter);
-
-        while (end != std::string::npos) {
-            tokens.push_back(s.substr(start, end - start));
-            start = end + 1;
-            end = s.find(delimiter, start);
-        }
-        tokens.push_back(s.substr(start));
-
-        return tokens;
     }
 
     bool parse_image_metadata_line(const std::string& line, ImageData& img) {
@@ -2505,9 +2464,9 @@ namespace lfs::io {
             return {};
         }
 
-        Tensor means = Tensor::from_vector(data.positions, {data.point_count, 3}, Device::CUDA);
+        Tensor means = Tensor::from_vector(data.positions, {data.point_count, 3}, Device::GPU);
         Tensor colors_tensor = Tensor::from_blob(data.colors.data(), {data.point_count, 3}, Device::CPU, DataType::UInt8)
-                                   .to(Device::CUDA)
+                                   .to(Device::GPU)
                                    .contiguous();
 
         PointCloud cloud(std::move(means), std::move(colors_tensor));

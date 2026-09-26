@@ -4,7 +4,9 @@
 
 #include "core/training_snapshot.hpp"
 #include "core/path_utils.hpp"
+#if LFS_HAS_CUDA
 #include <cuda_runtime.h>
+#endif
 #include <fstream>
 #include <sstream>
 
@@ -13,12 +15,14 @@ namespace lfs::core::debug {
     MemorySnapshot get_memory_snapshot() {
         MemorySnapshot snapshot;
 
+#if LFS_HAS_CUDA
         size_t free_bytes = 0, total_bytes = 0;
         if (cudaMemGetInfo(&free_bytes, &total_bytes) == cudaSuccess) {
             snapshot.gpu_free_bytes = free_bytes;
             snapshot.gpu_total_bytes = total_bytes;
             snapshot.gpu_used_bytes = total_bytes - free_bytes;
         }
+#endif
 
         return snapshot;
     }

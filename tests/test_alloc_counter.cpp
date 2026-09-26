@@ -3,6 +3,8 @@
 
 #include "core/alloc_counter.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/backend/gpu_backend_ops.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
@@ -16,7 +18,7 @@ namespace {
     constexpr size_t kBucketElems = 1024 * 1024; // 4 MiB of float32
 
     void cuda_warmup() {
-        auto warm = Tensor::zeros({256}, Device::CUDA, DataType::Float32);
+        auto warm = Tensor::zeros({256}, Device::GPU, DataType::Float32);
         ASSERT_TRUE(warm.is_valid());
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
         (void)warm;
@@ -38,11 +40,15 @@ TEST(AllocCounterTest, SnapshotAndDeltaApiExists) {
     EXPECT_GE(alloc_counter::total(), snap);
 }
 
-TEST(AllocCounterTest, FreshLargeTensorIncrementsCounter) {
+class AllocCounterCudaTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(AllocCounterCudaTest, FreshLargeTensorIncrementsCounter) {
     cuda_warmup();
+    // Earlier tests can leave a cached block of this bucket in the pool.
+    internal::backend_ops(GpuBackend::CUDA).trim();
 
     const auto snap = alloc_counter::snapshot();
-    auto t = Tensor::zeros({kBucketElems}, Device::CUDA, DataType::Float32);
+    auto t = Tensor::zeros({kBucketElems}, Device::GPU, DataType::Float32);
     ASSERT_TRUE(t.is_valid());
     ASSERT_EQ(t.bytes(), kBucketElems * sizeof(float));
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
@@ -51,12 +57,12 @@ TEST(AllocCounterTest, FreshLargeTensorIncrementsCounter) {
     EXPECT_GE(delta, 1u) << "fresh large CUDA tensor must issue a real driver alloc";
 }
 
-TEST(AllocCounterTest, PoolCacheHitDoesNotIncrement) {
+TEST_F(AllocCounterCudaTest, PoolCacheHitDoesNotIncrement) {
     cuda_warmup();
 
     // Seed the bucketed cache with a free of this exact size.
     {
-        auto seed = Tensor::zeros({kBucketElems}, Device::CUDA, DataType::Float32);
+        auto seed = Tensor::zeros({kBucketElems}, Device::GPU, DataType::Float32);
         ASSERT_TRUE(seed.is_valid());
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     }
@@ -64,7 +70,7 @@ TEST(AllocCounterTest, PoolCacheHitDoesNotIncrement) {
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
     const auto snap = alloc_counter::snapshot();
-    auto hit = Tensor::zeros({kBucketElems}, Device::CUDA, DataType::Float32);
+    auto hit = Tensor::zeros({kBucketElems}, Device::GPU, DataType::Float32);
     ASSERT_TRUE(hit.is_valid());
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
@@ -72,12 +78,12 @@ TEST(AllocCounterTest, PoolCacheHitDoesNotIncrement) {
     EXPECT_EQ(delta, 0u) << "re-allocation of a pool-cached size must not call the driver";
 }
 
-TEST(AllocCounterTest, ZerosDirectIncrementsCounter) {
+TEST_F(AllocCounterCudaTest, ZerosDirectIncrementsCounter) {
     cuda_warmup();
 
     // zeros_direct always uses CudaStorageMode::Direct (cudaMalloc), never the pool.
     const auto snap = alloc_counter::snapshot();
-    auto t = Tensor::zeros_direct({4096, 3}, /*capacity=*/4096, Device::CUDA, DataType::Float32);
+    auto t = Tensor::zeros_direct({4096, 3}, /*capacity=*/4096, Device::GPU, DataType::Float32);
     ASSERT_TRUE(t.is_valid());
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 

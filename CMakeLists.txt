@@ -24,7 +24,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${LFS_VCPKG_OVERL
 # cache values are visible before project(), when the vcpkg toolchain resolves
 # manifest features.
 list(REMOVE_ITEM VCPKG_MANIFEST_FEATURES tests vulkan-validation)
-if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS OR BUILD_TEMPORAL_CPU_TESTS)
+if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS OR BUILD_TEMPORAL_CPU_TESTS OR BUILD_PANEL_LAYOUT_TESTS OR BUILD_VISUALIZER_TESTS)
     list(APPEND VCPKG_MANIFEST_FEATURES tests)
 endif()
 
@@ -94,7 +94,20 @@ endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/VcpkgProfiles.cmake")
 lfs_validate_vcpkg_profile()
 
-project(LichtFeld-Studio VERSION 0.5.3 LANGUAGES CUDA CXX C)
+# APPLE is only defined after project(); the host variable exists before it.
+if(CMAKE_HOST_APPLE)
+    # Objective-C++ builds the Metal tensor backend.
+    project(LichtFeld-Studio VERSION 0.5.3 LANGUAGES CXX C OBJCXX)
+    set(LFS_HAS_CUDA OFF)
+else()
+    project(LichtFeld-Studio VERSION 0.5.3 LANGUAGES CUDA CXX C)
+    set(LFS_HAS_CUDA ON)
+endif()
+
+if(WIN32)
+    enable_language(RC)
+endif()
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/WindowsVersionResource.cmake")
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/SelectFastLinker.cmake")
 
@@ -165,9 +178,15 @@ add_custom_target(lfs_git_version ALL
     VERBATIM
 )
 
+include(CMakeDependentOption)
+cmake_dependent_option(LFS_BUILD_TRAINER
+    "Include training in the full LichtFeld Studio application" ON
+    "NOT APPLE" OFF)
 option(BUILD_TESTS "Build tests" OFF)
+option(BUILD_PANEL_LAYOUT_TESTS "Build focused panel layout and registry tests" OFF)
+option(BUILD_VISUALIZER_TESTS "Build CPU-only visualizer tests without LibTorch" OFF)
 option(BUILD_FORMAT_TESTS "Build only the CPU-only .licht format tests (no CUDA)" OFF)
-option(BUILD_UNICODE_TEST_ONLY "Build only Unicode path test (no CUDA)" OFF)
+option(BUILD_UNICODE_TEST_ONLY "Build only Unicode path tests (no CUDA runtime linkage)" OFF)
 option(BUILD_LOCALIZATION_TESTS "Register headless localization contract tests without LibTorch" OFF)
 option(BUILD_TEMPORAL_CPU_TESTS "Build standalone temporal reconstruction contract tests without GPU execution" OFF)
 option(LFS_FAST_COMPILE "Optimize measured slow C++ components for build speed instead of runtime speed (WIN32 only)" OFF)
@@ -330,12 +349,24 @@ else()
     message(STATUS "Compiler cache: disabled")
 endif()
 
-# Minimum SM for PTX-only (75=Turing, 80=Ampere, 86=GA102, 89=Ada, 90=Hopper)
-set(BUILD_CUDA_MIN_SM "75" CACHE STRING "Minimum SM for PTX-only builds")
+if(MSVC)
+    foreach(_lfs_language IN ITEMS C CXX CUDA)
+        set(CMAKE_${_lfs_language}_COMPILER_LAUNCHER
+            "${CMAKE_COMMAND}"
+            -P "${CMAKE_SOURCE_DIR}/cmake/NormalizeMsvcFlags.cmake"
+            --
+            ${CMAKE_${_lfs_language}_COMPILER_LAUNCHER})
+    endforeach()
+    unset(_lfs_language)
+endif()
 
 set(CMAKE_CXX_STANDARD 23)
-set(CMAKE_CUDA_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+if(LFS_HAS_CUDA)
+# Minimum SM for PTX-only (75=Turing, 80=Ampere, 86=GA102, 89=Ada, 90=Hopper)
+set(BUILD_CUDA_MIN_SM "75" CACHE STRING "Minimum SM for PTX-only builds")
+set(CMAKE_CUDA_STANDARD 20)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
 # CUDA setup
@@ -379,7 +410,7 @@ if(NVIDIA_SMI)
         set(LichtFeld-Studio_CUDA_ARCH "native")
     endif()
 else()
-    message(WARNING "nvidia-smi not found! We are likely in CI, default to 8.6.")
+    message(STATUS "nvidia-smi not found; using CUDA architecture 8.6 for this build")
     set(DETECTED_COMPUTE_CAP 8.6)
     set(LichtFeld-Studio_CUDA_ARCH "86")
 endif()
@@ -454,6 +485,7 @@ if(NOT TARGET CUDA::nvToolsExt)
 endif()
 
 message(STATUS "CUDA Toolkit ${CUDAToolkit_VERSION} found at ${CUDAToolkit_TARGET_DIR}")
+endif()
 
 # Find packages
 find_package(TBB REQUIRED)
@@ -529,6 +561,8 @@ add_custom_target(lfs_core_abi_stamp ALL
         "-DLFS_CUDA_COMPILER_VERSION=${CMAKE_CUDA_COMPILER_VERSION}"
         "-DLFS_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES}"
         "-DLFS_VCPKG_TARGET_TRIPLET=${VCPKG_TARGET_TRIPLET}"
+        "-DLFS_BUILD_TRAINER=${LFS_BUILD_TRAINER}"
+        "-DLFS_HAS_CUDA=${LFS_HAS_CUDA}"
         -P "${CMAKE_SOURCE_DIR}/cmake/GenerateCoreAbiStamp.cmake"
     COMMENT "Refreshing lfs_core ABI stamp"
     VERBATIM
@@ -559,9 +593,15 @@ endif()
 
 if(LFS_ENABLE_CUDA_DEVICE_DEBUG)
     add_compile_options($<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-G>)
+else()
+    # Device debug already includes line information; passing both flags makes
+    # nvcc and ptxas warn about the redundant, overridden -lineinfo option.
+    add_compile_options($<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-lineinfo>)
 endif()
 
 add_compile_definitions(
+    LFS_HAS_CUDA=$<BOOL:${LFS_HAS_CUDA}>
+    LFS_BUILD_TRAINER=$<BOOL:${LFS_BUILD_TRAINER}>
     $<$<CONFIG:Debug>:DEBUG_BUILD>
     $<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:RELEASE_BUILD>
 )
@@ -571,7 +611,19 @@ add_compile_definitions(
 # =============================================================================
 add_subdirectory(src/diagnostics) # Shared diagnostics/profiling module
 add_subdirectory(src/core)       # Core module (lfs::core namespace)
-add_subdirectory(src/training)   # Training module (lfs::training namespace)
+if(LFS_BUILD_TRAINER)
+    add_subdirectory(src/training)
+    add_subdirectory(src/tcp)
+    # Trainer targets keep the private tensor headers. fastlfs and the training
+    # kernels included them through lfs_core_cuda's former public src/ directory.
+    foreach(_lfs_tensor_private IN ITEMS
+            lfs_training lfs_training_kernels fastlfs_backend gsplat_backend_lfs lfs_depth_anchor)
+        if(TARGET ${_lfs_tensor_private})
+            target_include_directories(${_lfs_tensor_private} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+            target_compile_definitions(${_lfs_tensor_private} PRIVATE LFS_TENSOR_PRIVATE_ACCESS)
+        endif()
+    endforeach()
+endif()
 add_subdirectory(src/io)         # I/O module (lfs::io namespace)
 add_subdirectory(src/rendering)  # Rendering module (lfs::rendering namespace)
 add_subdirectory(src/sequencer)  # Sequencer module (lfs::sequencer namespace)
@@ -583,7 +635,6 @@ endif()
 if(LFS_AMD_FSR3_AVAILABLE)
     add_subdirectory(src/scene_upscalers/amd_fsr3)
 endif()
-add_subdirectory(src/tcp)        # TCP event server (ZMQ responder + publisher)
 add_subdirectory(src/geometry)   # Geometry utilities
 add_subdirectory(src/mcp)        # MCP server (AI agent integration)
 add_subdirectory(src/python)
@@ -606,6 +657,8 @@ add_executable(${PROJECT_NAME}
     src/app/mcp_sequencer_tools.cpp
     src/app/mcp_ui_registry_tools.cpp
     src/app/converter.cpp
+    src/app/converter_output_paths.cpp
+    src/app/converter_overwrite.cpp
     resources/lichtfeld-studio.rc
     resources/lichtfeld-studio.manifest
 )
@@ -620,6 +673,18 @@ add_dependencies(${PROJECT_NAME} lfs_core_abi_stamp)
 target_include_directories(${PROJECT_NAME} BEFORE PRIVATE
     "${LFS_CORE_ABI_INCLUDE_DIR}"
 )
+
+# Give every first-party Windows binary a consistent product identity. This
+# also covers lfs_core.dll, which Defender has flagged in local source builds.
+lfs_add_windows_version_resource(${PROJECT_NAME} "LichtFeld Studio")
+lfs_add_windows_version_resource(lfs_core "LichtFeld Studio core and tensor runtime")
+lfs_add_windows_version_resource(lfs_diagnostics "LichtFeld Studio diagnostics")
+lfs_add_windows_version_resource(lfs_logger "LichtFeld Studio logging")
+lfs_add_windows_version_resource(lfs_event_bridge "LichtFeld Studio event bridge")
+lfs_add_windows_version_resource(lfs_visualizer "LichtFeld Studio visualizer")
+lfs_add_windows_version_resource(lfs_mcp "LichtFeld Studio MCP server")
+lfs_add_windows_version_resource(lfs_python_runtime "LichtFeld Studio Python runtime")
+lfs_add_windows_version_resource(lfs_py "LichtFeld Studio Python module")
 
 # The binary only carries code for these architectures; the app refuses to start on anything
 # lower instead of dying inside the first kernel launch (#1540).
@@ -656,38 +721,38 @@ target_include_directories(${PROJECT_NAME}
         ${CUDAToolkit_INCLUDE_DIRS}
 )
 
+set(LFS_APP_INTERNAL_LINK_LIBS
+    lfs_visualizer
+    lfs_mcp
+    lfs_sequencer
+    lfs_rendering_tensor
+    lfs_preprocessing
+    lfs_geometry
+    lfs_core
+    lfs_io
+    lfs_video
+    lfs_python_utils
+)
+if(LFS_BUILD_TRAINER)
+    list(APPEND LFS_APP_INTERNAL_LINK_LIBS lfs_training lfs_tcp fastlfs_backend)
+endif()
 if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
-    set(LFS_APP_INTERNAL_LINK_LIBS
-        "$<LINK_GROUP:RESCAN,lfs_visualizer,lfs_mcp,lfs_sequencer,lfs_rendering_tensor,lfs_training,lfs_preprocessing,lfs_geometry,lfs_core,lfs_io,lfs_video,fastlfs_backend,lfs_python_utils,lfs_tcp>"
-    )
-else()
-    set(LFS_APP_INTERNAL_LINK_LIBS
-        lfs_visualizer
-        lfs_tcp
-        lfs_mcp
-        lfs_sequencer
-        lfs_rendering_tensor
-        lfs_training
-        lfs_preprocessing
-        lfs_geometry
-        lfs_core
-        lfs_io
-        lfs_video
-        fastlfs_backend
-        lfs_python_utils
-    )
+    list(JOIN LFS_APP_INTERNAL_LINK_LIBS "," _lfs_app_link_group)
+    set(LFS_APP_INTERNAL_LINK_LIBS "$<LINK_GROUP:RESCAN,${_lfs_app_link_group}>")
 endif()
 
 target_link_libraries(${PROJECT_NAME}
         PRIVATE
         ${LFS_APP_INTERNAL_LINK_LIBS}
-
-        CUDA::cudart
-        CUDA::curand
+        $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::cudart>
+        $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::curand>
         spdlog::spdlog
         taywee::args
-        SDL3::SDL3
+        $<$<NOT:$<PLATFORM_ID:Darwin>>:SDL3::SDL3>
 )
+if(APPLE)
+    target_link_libraries(${PROJECT_NAME} PRIVATE lfs_python_embed)
+endif()
 
 target_link_libraries(${PROJECT_NAME}
         PRIVATE
@@ -1084,16 +1149,21 @@ endif()
 
 # Platform-specific settings
 if(UNIX)
+    if(APPLE)
+        set(_lichtfeld_origin "@executable_path")
+    else()
+        set(_lichtfeld_origin "$ORIGIN")
+    endif()
     if(BUILD_PORTABLE)
         set_target_properties(${PROJECT_NAME} PROPERTIES
-                INSTALL_RPATH "$ORIGIN:$ORIGIN/lib:$ORIGIN/../lib"
+                INSTALL_RPATH "${_lichtfeld_origin};${_lichtfeld_origin}/lib;${_lichtfeld_origin}/../lib"
                 BUILD_WITH_INSTALL_RPATH TRUE
                 INSTALL_RPATH_USE_LINK_PATH FALSE
         )
     else()
         set(_lichtfeld_runtime_rpath_common
-                "$ORIGIN"
-                "$ORIGIN/lib"
+                "${_lichtfeld_origin}"
+                "${_lichtfeld_origin}/lib"
                 "${CUDAToolkit_LIBRARY_DIR}"
         )
         if(TARGET OpenMeshCore)
@@ -1116,16 +1186,28 @@ if(UNIX)
 
         list(REMOVE_DUPLICATES _lichtfeld_runtime_rpath_release)
         list(REMOVE_DUPLICATES _lichtfeld_runtime_rpath_debug)
-        list(JOIN _lichtfeld_runtime_rpath_release ":" _lichtfeld_runtime_rpath_release_string)
-        list(JOIN _lichtfeld_runtime_rpath_debug ":" _lichtfeld_runtime_rpath_debug_string)
-
-        if(CMAKE_CONFIGURATION_TYPES)
-            set(_lichtfeld_runtime_rpath_string
-                    "$<$<CONFIG:Debug>:${_lichtfeld_runtime_rpath_debug_string}>$<$<NOT:$<CONFIG:Debug>>:${_lichtfeld_runtime_rpath_release_string}>")
-        elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
-            set(_lichtfeld_runtime_rpath_string "${_lichtfeld_runtime_rpath_debug_string}")
+        if(APPLE)
+            if(CMAKE_CONFIGURATION_TYPES)
+                set(_lichtfeld_runtime_rpath_string
+                    ${_lichtfeld_runtime_rpath_release}
+                    ${_lichtfeld_runtime_rpath_debug})
+                list(REMOVE_DUPLICATES _lichtfeld_runtime_rpath_string)
+            elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
+                set(_lichtfeld_runtime_rpath_string ${_lichtfeld_runtime_rpath_debug})
+            else()
+                set(_lichtfeld_runtime_rpath_string ${_lichtfeld_runtime_rpath_release})
+            endif()
         else()
-            set(_lichtfeld_runtime_rpath_string "${_lichtfeld_runtime_rpath_release_string}")
+            list(JOIN _lichtfeld_runtime_rpath_release ":" _lichtfeld_runtime_rpath_release_string)
+            list(JOIN _lichtfeld_runtime_rpath_debug ":" _lichtfeld_runtime_rpath_debug_string)
+            if(CMAKE_CONFIGURATION_TYPES)
+                set(_lichtfeld_runtime_rpath_string
+                        "$<$<CONFIG:Debug>:${_lichtfeld_runtime_rpath_debug_string}>$<$<NOT:$<CONFIG:Debug>>:${_lichtfeld_runtime_rpath_release_string}>")
+            elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
+                set(_lichtfeld_runtime_rpath_string "${_lichtfeld_runtime_rpath_debug_string}")
+            else()
+                set(_lichtfeld_runtime_rpath_string "${_lichtfeld_runtime_rpath_release_string}")
+            endif()
         endif()
 
         set_target_properties(${PROJECT_NAME} PROPERTIES
@@ -1134,6 +1216,7 @@ if(UNIX)
                 INSTALL_RPATH_USE_LINK_PATH TRUE
         )
     endif()
+    unset(_lichtfeld_origin)
 
 elseif(WIN32)
     # On Windows, DLLs in the same directory as the .exe are automatically found.
@@ -1195,7 +1278,7 @@ endif()
 # =============================================================================
 # TESTING (Optional)
 # =============================================================================
-if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS OR BUILD_LOCALIZATION_TESTS OR BUILD_TEMPORAL_CPU_TESTS)
+if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS OR BUILD_LOCALIZATION_TESTS OR BUILD_TEMPORAL_CPU_TESTS OR BUILD_PANEL_LAYOUT_TESTS OR BUILD_VISUALIZER_TESTS)
     enable_testing()
     add_subdirectory(tests)
     if(BUILD_UNICODE_TEST_ONLY)
@@ -1204,6 +1287,10 @@ if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS OR BUILD_LOCALIZ
         message(STATUS "Headless localization tests enabled. Build with 'ninja test_localization_contracts' and run with 'ctest -R LocalizationContracts'")
     elseif(BUILD_TEMPORAL_CPU_TESTS AND NOT BUILD_TESTS)
         message(STATUS "Temporal CPU tests enabled. Build with 'ninja lichtfeld_temporal_cpu_tests' and run with 'ctest -R lichtfeld.temporal.cpu'")
+    elseif(BUILD_PANEL_LAYOUT_TESTS AND NOT BUILD_TESTS)
+        message(STATUS "Panel layout tests enabled. Build target panel_layout_tests to run them")
+    elseif(BUILD_VISUALIZER_TESTS AND NOT BUILD_TESTS)
+        message(STATUS "CPU-only visualizer tests enabled. Build target lichtfeld_visualizer_tests and run with 'ctest -R lichtfeld_visualizer_tests'")
     elseif(NOT BUILD_TESTS)
         message(STATUS "Format tests enabled. Build with 'ninja lichtfeld_format_tests' and run with 'ctest -L format'")
     else()
@@ -1226,6 +1313,7 @@ message(STATUS "  LibArchive Found: ${LibArchive_FOUND}")
 message(STATUS "  Build Type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "  C++ Standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "  CUDA Standard: ${CMAKE_CUDA_STANDARD}")
+message(STATUS "  Trainer: ${LFS_BUILD_TRAINER}")
 message(STATUS "  Tests: ${BUILD_TESTS}")
 message(STATUS "  Temporal CPU Tests: ${BUILD_TEMPORAL_CPU_TESTS}")
 message(STATUS "  Unicode Test Only: ${BUILD_UNICODE_TEST_ONLY}")
@@ -1318,6 +1406,9 @@ if(TARGET nvimgcodec)
     install(TARGETS nvimgcodec
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        # Keep SDK headers out of the application's default runtime install.
+        PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+            COMPONENT Development EXCLUDE_FROM_ALL
     )
     if(TARGET nvjpeg_ext)
         install(TARGETS nvjpeg_ext

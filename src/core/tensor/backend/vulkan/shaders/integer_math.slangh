@@ -1,0 +1,11 @@
+// SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// Remainders have the dividend's sign, including INT_MIN operands.
+int signedRemainder(int lhs, int rhs)
+{
+    const uint a = lhs < 0 ? 0u - uint(lhs) : uint(lhs);
+    const uint b = rhs < 0 ? 0u - uint(rhs) : uint(rhs);
+    const uint remainder = b != 0u ? a % b : 0u;
+    return int(lhs < 0 ? 0u - remainder : remainder);
+}

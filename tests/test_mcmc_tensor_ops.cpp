@@ -43,7 +43,7 @@ using namespace lfs::core;
 TEST(MCMCTensorOps, NonzeroBasicBool) {
     // Test nonzero() with boolean mask - basic MCMC dead mask scenario
     std::vector<unsigned char> mask_data = {1, 0, 1, 0, 1, 1, 0, 1, 0, 0};
-    auto mask = Tensor::from_blob(mask_data.data(), {10}, Device::CPU, DataType::Bool).to(Device::CUDA);
+    auto mask = Tensor::from_blob(mask_data.data(), {10}, Device::CPU, DataType::Bool).to(Device::GPU);
 
     auto indices = mask.nonzero().squeeze(-1).cpu();
 
@@ -71,7 +71,7 @@ TEST(MCMCTensorOps, NonzeroRealisticMCMCSize) {
             expected_alive++;
     }
 
-    auto alive_mask = Tensor::from_blob(mask_data.data(), {N}, Device::CPU, DataType::Bool).to(Device::CUDA);
+    auto alive_mask = Tensor::from_blob(mask_data.data(), {N}, Device::CPU, DataType::Bool).to(Device::GPU);
     auto alive_indices = alive_mask.nonzero().squeeze(-1).cpu();
 
     ASSERT_EQ(alive_indices.dtype(), DataType::Int64);
@@ -91,11 +91,11 @@ TEST(MCMCTensorOps, NonzeroRealisticMCMCSize) {
 TEST(MCMCTensorOps, IndexSelectInt64Basic) {
     // Create int64 source data: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
     std::vector<int64_t> source_data = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
-    auto source = Tensor::from_blob(source_data.data(), {10}, Device::CPU, DataType::Int64).to(Device::CUDA);
+    auto source = Tensor::from_blob(source_data.data(), {10}, Device::CPU, DataType::Int64).to(Device::GPU);
 
     // Create int64 indices: [2, 5, 8]
     std::vector<int64_t> index_data = {2, 5, 8};
-    auto indices = Tensor::from_blob(index_data.data(), {3}, Device::CPU, DataType::Int64).to(Device::CUDA);
+    auto indices = Tensor::from_blob(index_data.data(), {3}, Device::CPU, DataType::Int64).to(Device::GPU);
 
     // Perform index_select
     auto result = source.index_select(0, indices).cpu();
@@ -119,11 +119,11 @@ TEST(MCMCTensorOps, IndexSelectInt64MCMCScenario) {
     for (size_t i = 0; i < N; ++i) {
         alive_data[i] = static_cast<int64_t>(i);
     }
-    auto alive_indices = Tensor::from_blob(alive_data.data(), {N}, Device::CPU, DataType::Int64).to(Device::CUDA);
+    auto alive_indices = Tensor::from_blob(alive_data.data(), {N}, Device::CPU, DataType::Int64).to(Device::GPU);
 
     // Create sampled_local indices (int64): [5, 10, 15, 20, 25]
     std::vector<int64_t> sampled_data = {5, 10, 15, 20, 25};
-    auto sampled_local = Tensor::from_blob(sampled_data.data(), {5}, Device::CPU, DataType::Int64).to(Device::CUDA);
+    auto sampled_local = Tensor::from_blob(sampled_data.data(), {5}, Device::CPU, DataType::Int64).to(Device::GPU);
 
     // This is the operation that was failing before:
     // sampled_idxs = alive_indices.index_select(0, sampled_local)
@@ -152,11 +152,11 @@ TEST(MCMCTensorOps, IndexSelectInt64LargeIndices) {
     for (size_t i = 0; i < N; ++i) {
         source_data[i] = static_cast<int64_t>(i);
     }
-    auto source = Tensor::from_blob(source_data.data(), {N}, Device::CPU, DataType::Int64).to(Device::CUDA);
+    auto source = Tensor::from_blob(source_data.data(), {N}, Device::CPU, DataType::Int64).to(Device::GPU);
 
     // Select some large indices: [50000, 75000, 99999]
     std::vector<int64_t> index_data = {50000, 75000, 99999};
-    auto indices = Tensor::from_blob(index_data.data(), {3}, Device::CPU, DataType::Int64).to(Device::CUDA);
+    auto indices = Tensor::from_blob(index_data.data(), {3}, Device::CPU, DataType::Int64).to(Device::GPU);
 
     // Perform index_select
     auto result = source.index_select(0, indices).cpu();
@@ -178,10 +178,10 @@ TEST(MCMCTensorOps, IndexSelectInt64LargeIndices) {
 TEST(MCMCTensorOps, IndexSelectInt32Basic) {
     // Test Int32 index_select (needed for MCMC ratios tensor)
     std::vector<int32_t> source_data = {10, 20, 30, 40, 50, 60, 70, 80, 90, 100};
-    auto source = Tensor::from_blob(source_data.data(), {10}, Device::CPU, DataType::Int32).to(Device::CUDA);
+    auto source = Tensor::from_blob(source_data.data(), {10}, Device::CPU, DataType::Int32).to(Device::GPU);
 
     std::vector<int64_t> index_data = {1, 3, 5, 7};
-    auto indices = Tensor::from_blob(index_data.data(), {4}, Device::CPU, DataType::Int64).to(Device::CUDA);
+    auto indices = Tensor::from_blob(index_data.data(), {4}, Device::CPU, DataType::Int64).to(Device::GPU);
 
     // This was throwing "unsupported dtype for CUDA" before the fix
     auto result = source.index_select(0, indices).cpu();
@@ -206,14 +206,14 @@ TEST(MCMCTensorOps, IndexSelectInt32RatiosExact) {
     // Create ratios tensor (Int32) - counts of how many times each gaussian was sampled
     // Initialize to 1 (like ones_like)
     std::vector<int32_t> ratios_data(N, 1);
-    auto ratios = Tensor::from_blob(ratios_data.data(), {N}, Device::CPU, DataType::Int32).to(Device::CUDA);
+    auto ratios = Tensor::from_blob(ratios_data.data(), {N}, Device::CPU, DataType::Int32).to(Device::GPU);
 
     // Create sampled_idxs (Int64) - indices of alive gaussians that were sampled
     std::vector<int64_t> sampled_data(n_dead);
     for (size_t i = 0; i < n_dead; ++i) {
         sampled_data[i] = static_cast<int64_t>(i * 30 % N); // Some pattern
     }
-    auto sampled_idxs = Tensor::from_blob(sampled_data.data(), {n_dead}, Device::CPU, DataType::Int64).to(Device::CUDA);
+    auto sampled_idxs = Tensor::from_blob(sampled_data.data(), {n_dead}, Device::CPU, DataType::Int64).to(Device::GPU);
 
     // This is the exact operation that was failing:
     // "index_select: unsupported dtype for CUDA"
@@ -241,14 +241,14 @@ TEST(MCMCTensorOps, IndexSelectInt32RatiosCounting) {
     for (size_t i = 0; i < N; ++i) {
         ratios_data[i] = 1 + (i % 5); // 1, 2, 3, 4, 5, 1, 2, ...
     }
-    auto ratios = Tensor::from_blob(ratios_data.data(), {N}, Device::CPU, DataType::Int32).to(Device::CUDA);
+    auto ratios = Tensor::from_blob(ratios_data.data(), {N}, Device::CPU, DataType::Int32).to(Device::GPU);
 
     // Sampled indices
     std::vector<int64_t> sampled_data(n_samples);
     for (size_t i = 0; i < n_samples; ++i) {
         sampled_data[i] = static_cast<int64_t>((i * 17) % N);
     }
-    auto sampled_idxs = Tensor::from_blob(sampled_data.data(), {n_samples}, Device::CPU, DataType::Int64).to(Device::CUDA);
+    auto sampled_idxs = Tensor::from_blob(sampled_data.data(), {n_samples}, Device::CPU, DataType::Int64).to(Device::GPU);
 
     // Select ratios for sampled gaussians
     auto sampled_ratios = ratios.index_select(0, sampled_idxs).cpu();

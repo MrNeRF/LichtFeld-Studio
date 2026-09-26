@@ -15,7 +15,6 @@
 #include "undo_history.hpp"
 #include <algorithm>
 #include <array>
-#include <cuda_runtime.h>
 #include <limits>
 #include <set>
 #include <stdexcept>
@@ -326,7 +325,7 @@ namespace lfs::vis::op {
             if (!tensor.is_valid()) {
                 return {};
             }
-            if (tensor.device() == lfs::core::Device::CUDA) {
+            if (tensor.device() == lfs::core::Device::GPU) {
                 return UndoMemoryBreakdown{
                     .cpu_bytes = 0,
                     .gpu_bytes = tensor.bytes(),
@@ -2230,7 +2229,7 @@ namespace lfs::vis::op {
                 ? selection_after->device()
                 : ((selection_before_.mask && selection_before_.mask->is_valid())
                        ? selection_before_.mask->device()
-                       : lfs::core::Device::CUDA);
+                       : lfs::core::Device::GPU);
         if (selection_change_known_ && !selection_changed_) {
             selection_mask_storage_ = {};
         } else if (selection_change_known_ &&
@@ -2452,6 +2451,10 @@ namespace lfs::vis::op {
             } else {
                 node->model->deleted() = lfs::core::Tensor{};
             }
+            // Sparse replay can write the existing allocation in place. Every
+            // renderer ring slot must observe a new mask version after replay.
+            node->model->notify_deleted_mask_changed();
+            node->model->refresh_deleted_count();
             restored_any = true;
         }
 
@@ -2487,6 +2490,8 @@ namespace lfs::vis::op {
             } else {
                 combined->deleted() = lfs::core::Tensor{};
             }
+            combined->notify_deleted_mask_changed();
+            combined->refresh_deleted_count();
             restored_any = true;
         }
 

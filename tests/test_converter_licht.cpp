@@ -4,14 +4,18 @@
 
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
+#include <iostream>
 #include <sstream>
+#include <streambuf>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "app/include/app/converter.hpp"
 #include "core/parameters.hpp"
+#include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
 #include "io/formats/ply.hpp"
 #include "io/project_document.hpp"
@@ -33,6 +37,20 @@ using lfs::test::licht::require_status;
 namespace {
 
     constexpr std::uint32_t kUuidNamespace = 0x7c000000;
+
+    class ScopedInputBuffer {
+    public:
+        explicit ScopedInputBuffer(std::streambuf* replacement)
+            : previous_(std::cin.rdbuf(replacement)) {}
+
+        ~ScopedInputBuffer() { std::cin.rdbuf(previous_); }
+
+        ScopedInputBuffer(const ScopedInputBuffer&) = delete;
+        ScopedInputBuffer& operator=(const ScopedInputBuffer&) = delete;
+
+    private:
+        std::streambuf* previous_;
+    };
 
     Uuid test_uuid(const std::uint64_t tag) {
         return fixed_uuid_in_namespace(kUuidNamespace, tag);
@@ -292,6 +310,33 @@ namespace {
         auto loaded = load_ply(output);
         ASSERT_TRUE(loaded) << lfs::format_for_developer(loaded.error());
         EXPECT_EQ(loaded->value.size(), kCount);
+    }
+
+    TEST_F(ConverterLichtTest, OverwritePromptPreservesUnicodeFilename) {
+        const auto project = temp_dir / "input.licht";
+        const auto output = temp_dir / lfs::core::utf8_to_path("出力_é.ply");
+        write_empty_project(project);
+        {
+            std::ofstream existing(output, std::ios::binary);
+            ASSERT_TRUE(existing.is_open());
+        }
+
+        auto params = make_convert_params(project, output);
+        params.overwrite = false;
+        int rc = 1;
+        std::string stdout_text;
+        {
+            std::istringstream input("n\n");
+            const ScopedInputBuffer redirect_input(input.rdbuf());
+            testing::internal::CaptureStdout();
+            rc = lfs::app::run_converter(params);
+            stdout_text = testing::internal::GetCapturedStdout();
+        }
+
+        EXPECT_EQ(rc, 0);
+        EXPECT_NE(stdout_text.find(lfs::core::path_to_utf8(output.filename())),
+                  std::string::npos);
+        EXPECT_NE(stdout_text.find("1 skipped"), std::string::npos);
     }
 
 } // namespace

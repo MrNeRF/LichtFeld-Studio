@@ -2,22 +2,28 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "video_encoder.hpp"
-#include "color_convert.cuh"
 #include "core/error.hpp"
 #include "core/error_reporter.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
+#include "core/tensor_backend.hpp"
 #include <algorithm>
+#include <array>
+#if LFS_HAS_CUDA
 #include <cuda_runtime.h>
+#endif
 #include <format>
+#include <string_view>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/dict.h>
 #include <libavutil/hwcontext.h>
+#if LFS_HAS_CUDA
 #include <libavutil/hwcontext_cuda.h>
+#endif
 #include <libavutil/opt.h>
 }
 
@@ -27,6 +33,49 @@ namespace lfs::io::video {
         constexpr int DEFAULT_FRAMERATE = 30;
         constexpr int NVENC_FRAME_POOL_SIZE = 4;
         constexpr int NVENC_QP_OFFSET = 3;
+
+        struct YuvPlanes {
+            core::Tensor y;
+            core::Tensor u;
+            core::Tensor v;
+        };
+
+        YuvPlanes rgbToYuv420p(const core::Tensor& rgb) {
+            const int height = static_cast<int>(rgb.size(0));
+            const int width = static_cast<int>(rgb.size(1));
+            const auto bytes = (rgb.clamp(0.0f, 1.0f) * 255.0f + 0.5f).floor();
+            const auto channel = [](const core::Tensor& image, const size_t c) {
+                return image.slice(2, c, c + 1).reshape({static_cast<int>(image.size(0)), static_cast<int>(image.size(1))});
+            };
+            const auto y = ((channel(bytes, 0) * 66.0f +
+                             channel(bytes, 1) * 129.0f +
+                             channel(bytes, 2) * 25.0f + 128.0f) /
+                            256.0f)
+                               .floor()
+                               .add(16.0f)
+                               .to(core::DataType::UInt8);
+            const auto chroma = (bytes.reshape({height / 2, 2, width / 2, 2, 3})
+                                     .sum({1, 3}) /
+                                 4.0f)
+                                    .floor();
+            const auto u = ((channel(chroma, 0) * -38.0f +
+                             channel(chroma, 1) * -74.0f +
+                             channel(chroma, 2) * 112.0f + 128.0f) /
+                            256.0f)
+                               .floor()
+                               .add(128.0f)
+                               .clamp(0.0f, 255.0f)
+                               .to(core::DataType::UInt8);
+            const auto v = ((channel(chroma, 0) * 112.0f +
+                             channel(chroma, 1) * -94.0f +
+                             channel(chroma, 2) * -18.0f + 128.0f) /
+                            256.0f)
+                               .floor()
+                               .add(128.0f)
+                               .clamp(0.0f, 255.0f)
+                               .to(core::DataType::UInt8);
+            return {y, u, v};
+        }
 
         void applyProvenanceMetadata(AVFormatContext* fmt_ctx, const VideoExportOptions& opts) {
             if (!fmt_ctx || !opts.provenance)
@@ -62,13 +111,17 @@ namespace lfs::io::video {
             width_ = opts.width;
             height_ = opts.height;
             framerate_ = opts.framerate;
-            y_plane_bytes_ = width * height;
-            uv_plane_bytes_ = y_plane_bytes_ / 4;
-
-            if (!tryInitNvenc(path, opts)) {
+#if LFS_HAS_CUDA
+            const bool hardware = core::default_gpu_backend() == core::GpuBackend::CUDA && tryInitNvenc(path, opts);
+#elif defined(__APPLE__)
+            const bool hardware = tryInitVideoToolbox(path, opts);
+#else
+            const bool hardware = false;
+#endif
+            if (!hardware) {
                 cleanup();
-                LOG_INFO("NVENC unavailable, falling back to software H.264");
-                if (const auto result = initSoftwareH264(path, opts); !result) {
+                LOG_INFO("Hardware H.264 encoding unavailable, falling back to software H.264");
+                if (const auto result = initH264(path, opts, avcodec_find_encoder(AV_CODEC_ID_H264)); !result) {
                     cleanup();
                     return result;
                 }
@@ -79,29 +132,31 @@ namespace lfs::io::video {
             return {};
         }
 
-        std::expected<void, std::string> writeFrameGpu(
-            const void* const rgb_gpu_ptr,
-            const int width,
-            const int height,
-            const cudaStream_t stream) {
+        std::expected<void, std::string> writeFrame(const core::Tensor& rgb_hwc) {
 
             if (!is_open_) {
                 return std::unexpected("Encoder not open");
             }
-            if (!rgb_gpu_ptr) {
-                return std::unexpected("GPU frame pointer is null");
+            if (!rgb_hwc.is_valid() || rgb_hwc.dtype() != core::DataType::Float32 ||
+                rgb_hwc.ndim() != 3 || rgb_hwc.size(2) != 3) {
+                return std::unexpected("Video frame must be an HWC float32 RGB tensor");
             }
-            if (width != width_ || height != height_) {
+            if (rgb_hwc.size(1) != static_cast<size_t>(width_) ||
+                rgb_hwc.size(0) != static_cast<size_t>(height_)) {
                 return std::unexpected("Frame size mismatch");
             }
 
-            // Boundary for CUDA launches that now throw lfs::Exception
-            // (rgbToNv12Cuda / rgbToYuv420pCuda via LFS_CUDA_LAUNCH_CHECK).
-            // Keep the expected-based API non-throwing so the GUI export
-            // jthread is not terminate-on-exception (Phase 6B-3c-2).
             try {
-                return use_nvenc_ ? writeFrameNvenc(rgb_gpu_ptr, stream)
-                                  : writeFrameSoftwareH264Gpu(rgb_gpu_ptr, stream);
+                const auto frame = use_nvenc_ && rgb_hwc.device() == core::Device::CPU
+                                       ? rgb_hwc.gpu()
+                                       : rgb_hwc;
+                const auto planes = rgbToYuv420p(frame.contiguous());
+#if LFS_HAS_CUDA
+                return use_nvenc_ ? writeFrameNvenc(planes)
+                                  : writeFrameSoftwareH264(planes);
+#else
+                return writeFrameSoftwareH264(planes);
+#endif
             } catch (const lfs::Exception& e) {
                 lfs::Error error = lfs::Error(e.error())
                                        .with_context("write video frame", LFS_SOURCE_SITE_CURRENT(),
@@ -145,6 +200,7 @@ namespace lfs::io::video {
         [[nodiscard]] bool isOpen() const { return is_open_; }
 
     private:
+#if LFS_HAS_CUDA
         bool tryInitNvenc(const std::filesystem::path& path, const VideoExportOptions& opts) {
             const AVCodec* const codec = avcodec_find_encoder_by_name("h264_nvenc");
             if (!codec) {
@@ -265,10 +321,31 @@ namespace lfs::io::video {
             LOG_INFO("NVENC: {}x{} @ {} fps", width_, height_, framerate_);
             return true;
         }
+#endif
 
-        std::expected<void, std::string> initSoftwareH264(
+#ifdef __APPLE__
+        // The Mac's media engine encodes the same YUV420P frames as the
+        // software path, from system memory.
+        bool tryInitVideoToolbox(const std::filesystem::path& path, const VideoExportOptions& opts) {
+            const AVCodec* const codec = avcodec_find_encoder_by_name("h264_videotoolbox");
+            if (!codec) {
+                LOG_DEBUG("VideoToolbox H.264 encoder not available");
+                return false;
+            }
+            if (const auto result = initH264(path, opts, codec); !result) {
+                LOG_DEBUG("VideoToolbox H.264 encoder failed: {}", result.error());
+                return false;
+            }
+            return true;
+        }
+#endif
+
+        // An H.264 encoder fed YUV420P frames from system memory: the software
+        // encoder, or VideoToolbox on Macs.
+        std::expected<void, std::string> initH264(
             const std::filesystem::path& path,
-            const VideoExportOptions& opts) {
+            const VideoExportOptions& opts,
+            const AVCodec* const codec) {
 
             const std::string path_utf8 = lfs::core::path_to_utf8(path);
 
@@ -277,10 +354,10 @@ namespace lfs::io::video {
                 return std::unexpected("MP4 context creation failed");
             }
 
-            const AVCodec* const codec = avcodec_find_encoder(AV_CODEC_ID_H264);
             if (!codec) {
                 return std::unexpected("H.264 encoder not found");
             }
+            const bool hardware = std::string_view(codec->name) == "h264_videotoolbox";
 
             stream_ = avformat_new_stream(fmt_ctx_, nullptr);
             if (!stream_) {
@@ -299,14 +376,20 @@ namespace lfs::io::video {
             codec_ctx_->framerate = AVRational{framerate_, 1};
             codec_ctx_->pix_fmt = AV_PIX_FMT_YUV420P;
             codec_ctx_->gop_size = framerate_;
-            codec_ctx_->max_b_frames = 2;
+            codec_ctx_->max_b_frames = hardware ? 0 : 2;
             codec_ctx_->thread_count = 0;
 
             // Map CRF 18 to 0.1 bits per pixel per frame, with a 250 kbps floor and linear quality scaling.
             const int64_t crf_scale = 51 - opts.crf;
             codec_ctx_->bit_rate = std::max<int64_t>(
                 250'000, static_cast<int64_t>(width_) * height_ * framerate_ * crf_scale / 330);
-            av_opt_set(codec_ctx_->priv_data, "rc_mode", "bitrate", 0);
+            if (hardware) {
+                // Fail rather than fall back to Apple's own software encoder.
+                av_opt_set_int(codec_ctx_->priv_data, "allow_sw", 0, 0);
+                av_opt_set(codec_ctx_->priv_data, "profile", "high", 0);
+            } else {
+                av_opt_set(codec_ctx_->priv_data, "rc_mode", "bitrate", 0);
+            }
 
             if (fmt_ctx_->oformat->flags & AVFMT_GLOBALHEADER) {
                 codec_ctx_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
@@ -361,26 +444,12 @@ namespace lfs::io::video {
                 return std::unexpected("Packet allocation failed");
             }
 
-            if (const auto allocation = allocateGpuBuffers(); !allocation)
-                return allocation;
-            LOG_INFO("Software H.264: {}x{} @ {} fps, bitrate {} bps", width_, height_, framerate_, codec_ctx_->bit_rate);
+            LOG_INFO("{} H.264 ({}): {}x{} @ {} fps, bitrate {} bps", hardware ? "Hardware" : "Software", codec->name,
+                     width_, height_, framerate_, codec_ctx_->bit_rate);
             return {};
         }
 
-        [[nodiscard]] std::expected<void, std::string> allocateGpuBuffers() {
-            if (auto result = checkCuda(cudaMalloc(&y_gpu_, y_plane_bytes_), "Video Y-plane GPU allocation"); !result)
-                return result;
-            if (auto result = checkCuda(cudaMalloc(&u_gpu_, uv_plane_bytes_), "Video U-plane GPU allocation"); !result)
-                return result;
-            if (auto result = checkCuda(cudaMalloc(&v_gpu_, uv_plane_bytes_), "Video V-plane GPU allocation"); !result)
-                return result;
-            if (auto result = checkCuda(cudaMallocHost(&y_pinned_, y_plane_bytes_), "Video Y-plane pinned allocation"); !result)
-                return result;
-            if (auto result = checkCuda(cudaMallocHost(&u_pinned_, uv_plane_bytes_), "Video U-plane pinned allocation"); !result)
-                return result;
-            return checkCuda(cudaMallocHost(&v_pinned_, uv_plane_bytes_), "Video V-plane pinned allocation");
-        }
-
+#if LFS_HAS_CUDA
         [[nodiscard]] static std::expected<void, std::string> checkCuda(
             const cudaError_t status,
             const char* const operation) {
@@ -390,21 +459,23 @@ namespace lfs::io::video {
                 "{} failed: {} ({})", operation, cudaGetErrorString(status), cudaGetErrorName(status)));
         }
 
-        std::expected<void, std::string> writeFrameNvenc(
-            const void* const rgb_gpu_ptr,
-            const cudaStream_t stream) {
-
-            rgbToNv12Cuda(
-                static_cast<const float*>(rgb_gpu_ptr),
-                frame_->data[0], frame_->data[1],
-                width_, height_,
-                frame_->linesize[0], frame_->linesize[1],
-                stream);
-            if (auto result = checkCuda(cudaGetLastError(), "RGB-to-NV12 kernel launch"); !result)
-                return result;
-
+        std::expected<void, std::string> writeFrameNvenc(const YuvPlanes& planes) {
+            if (core::gpu_backend_of(planes.y) != core::GpuBackend::CUDA) {
+                return std::unexpected("NVENC requires a CUDA tensor frame");
+            }
+            const auto stream = planes.y.stream();
+            auto y = core::Tensor::from_blob(frame_->data[0],
+                                             {static_cast<size_t>(height_),
+                                              static_cast<size_t>(frame_->linesize[0])},
+                                             core::Device::GPU, core::DataType::UInt8, stream);
+            auto uv = core::Tensor::from_blob(frame_->data[1],
+                                              {static_cast<size_t>(height_ / 2),
+                                               static_cast<size_t>(frame_->linesize[1])},
+                                              core::Device::GPU, core::DataType::UInt8, stream);
+            y.slice(1, 0, width_).copy_from(planes.y);
+            uv.slice(1, 0, width_).copy_from(core::Tensor::stack({planes.u, planes.v}, 2).reshape({height_ / 2, width_}));
             const auto sync_status = stream ? cudaStreamSynchronize(stream) : cudaDeviceSynchronize();
-            if (auto result = checkCuda(sync_status, "RGB-to-NV12 synchronization"); !result)
+            if (auto result = checkCuda(sync_status, "NVENC frame synchronization"); !result)
                 return result;
 
             frame_->pts = frame_count_;
@@ -413,55 +484,24 @@ namespace lfs::io::video {
             ++frame_count_;
             return {};
         }
+#endif
 
-        std::expected<void, std::string> writeFrameSoftwareH264Gpu(
-            const void* const rgb_gpu_ptr,
-            const cudaStream_t stream) {
-
-            rgbToYuv420pCuda(
-                static_cast<const float*>(rgb_gpu_ptr),
-                y_gpu_, u_gpu_, v_gpu_,
-                width_, height_, stream);
-            if (auto result = checkCuda(cudaGetLastError(), "RGB-to-YUV420P kernel launch"); !result)
-                return result;
-
-            if (auto result = checkCuda(
-                    cudaMemcpyAsync(y_pinned_, y_gpu_, y_plane_bytes_, cudaMemcpyDeviceToHost, stream),
-                    "Video Y-plane copy");
-                !result)
-                return result;
-            if (auto result = checkCuda(
-                    cudaMemcpyAsync(u_pinned_, u_gpu_, uv_plane_bytes_, cudaMemcpyDeviceToHost, stream),
-                    "Video U-plane copy");
-                !result)
-                return result;
-            if (auto result = checkCuda(
-                    cudaMemcpyAsync(v_pinned_, v_gpu_, uv_plane_bytes_, cudaMemcpyDeviceToHost, stream),
-                    "Video V-plane copy");
-                !result)
-                return result;
-
-            const auto sync_status = stream ? cudaStreamSynchronize(stream) : cudaDeviceSynchronize();
-            if (auto result = checkCuda(sync_status, "Video frame copy synchronization"); !result)
-                return result;
-
+        std::expected<void, std::string> writeFrameSoftwareH264(const YuvPlanes& planes) {
             const int ret = av_frame_make_writable(frame_);
             if (ret < 0) {
                 return std::unexpected("Frame not writable");
             }
 
-            const int half_width = width_ / 2;
-            const int half_height = height_ / 2;
-
-            for (int row = 0; row < height_; ++row) {
-                memcpy(frame_->data[0] + row * frame_->linesize[0],
-                       y_pinned_ + row * width_, width_);
-            }
-            for (int row = 0; row < half_height; ++row) {
-                memcpy(frame_->data[1] + row * frame_->linesize[1],
-                       u_pinned_ + row * half_width, half_width);
-                memcpy(frame_->data[2] + row * frame_->linesize[2],
-                       v_pinned_ + row * half_width, half_width);
+            const auto source = std::array{planes.y.to_pageable_host(),
+                                           planes.u.to_pageable_host(),
+                                           planes.v.to_pageable_host()};
+            for (int plane = 0; plane < 3; ++plane) {
+                const size_t rows = plane == 0 ? height_ : height_ / 2;
+                const size_t columns = plane == 0 ? width_ : width_ / 2;
+                auto target = core::Tensor::from_blob(frame_->data[plane],
+                                                      {rows, static_cast<size_t>(frame_->linesize[plane])},
+                                                      core::Device::CPU, core::DataType::UInt8);
+                target.slice(1, 0, columns).copy_from(source[plane]);
             }
 
             frame_->pts = frame_count_;
@@ -489,6 +529,8 @@ namespace lfs::io::video {
                     return std::unexpected(std::string("Receive packet error: ") + err);
                 }
 
+                if (packet_->duration <= 0)
+                    packet_->duration = 1;
                 av_packet_rescale_ts(packet_, codec_ctx_->time_base, stream_->time_base);
                 packet_->stream_index = stream_->index;
 
@@ -531,32 +573,6 @@ namespace lfs::io::video {
         }
 
         void cleanup() {
-            if (y_gpu_) {
-                cudaFree(y_gpu_);
-                y_gpu_ = nullptr;
-            }
-            if (u_gpu_) {
-                cudaFree(u_gpu_);
-                u_gpu_ = nullptr;
-            }
-            if (v_gpu_) {
-                cudaFree(v_gpu_);
-                v_gpu_ = nullptr;
-            }
-
-            if (y_pinned_) {
-                cudaFreeHost(y_pinned_);
-                y_pinned_ = nullptr;
-            }
-            if (u_pinned_) {
-                cudaFreeHost(u_pinned_);
-                u_pinned_ = nullptr;
-            }
-            if (v_pinned_) {
-                cudaFreeHost(v_pinned_);
-                v_pinned_ = nullptr;
-            }
-
             if (packet_) {
                 av_packet_free(&packet_);
                 packet_ = nullptr;
@@ -579,20 +595,10 @@ namespace lfs::io::video {
         AVBufferRef* hw_device_ctx_ = nullptr;
         AVBufferRef* hw_frames_ctx_ = nullptr;
 
-        uint8_t* y_gpu_ = nullptr;
-        uint8_t* u_gpu_ = nullptr;
-        uint8_t* v_gpu_ = nullptr;
-
-        uint8_t* y_pinned_ = nullptr;
-        uint8_t* u_pinned_ = nullptr;
-        uint8_t* v_pinned_ = nullptr;
-
         int width_ = 0;
         int height_ = 0;
         int framerate_ = DEFAULT_FRAMERATE;
         int64_t frame_count_ = 0;
-        size_t y_plane_bytes_ = 0;
-        size_t uv_plane_bytes_ = 0;
         bool is_open_ = false;
         bool use_nvenc_ = false;
     };
@@ -608,13 +614,20 @@ namespace lfs::io::video {
     }
 
     std::expected<void, std::string> VideoEncoder::writeFrame(
-        std::span<const uint8_t> /*rgba_data*/, const int /*width*/, const int /*height*/) {
-        return std::unexpected("CPU path not implemented - use writeFrameGpu");
+        std::span<const uint8_t> rgba_data, const int width, const int height) {
+        if (width <= 0 || height <= 0 ||
+            rgba_data.size() != static_cast<size_t>(width) * height * 4) {
+            return std::unexpected("CPU RGBA frame size mismatch");
+        }
+        auto rgba = core::Tensor::from_blob(const_cast<uint8_t*>(rgba_data.data()),
+                                            {static_cast<size_t>(height), static_cast<size_t>(width), 4},
+                                            core::Device::CPU, core::DataType::UInt8);
+        auto rgb = rgba.slice(2, 0, 3).to(core::DataType::Float32).div(255.0f);
+        return impl_->writeFrame(rgb);
     }
 
-    std::expected<void, std::string> VideoEncoder::writeFrameGpu(
-        const void* const rgb_gpu_ptr, const int width, const int height, void* const stream) {
-        return impl_->writeFrameGpu(rgb_gpu_ptr, width, height, static_cast<cudaStream_t>(stream));
+    std::expected<void, std::string> VideoEncoder::writeFrame(const core::Tensor& rgb_hwc) {
+        return impl_->writeFrame(rgb_hwc);
     }
 
     std::expected<void, std::string> VideoEncoder::close() {

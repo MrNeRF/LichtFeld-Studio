@@ -8,6 +8,7 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "core/uuid.hpp"
+#include "cuda_backend_test.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
@@ -76,32 +77,32 @@ namespace {
         auto shN_tensor =
             rest == 0
                 ? lfs::core::Tensor::zeros(
-                      {0}, lfs::core::Device::CUDA,
+                      {0}, lfs::core::Device::GPU,
                       lfs::core::DataType::Float32)
                 : lfs::core::Tensor::from_vector(
                       shN,
                       {count, rest, std::size_t{3}},
-                      lfs::core::Device::CUDA);
+                      lfs::core::Device::GPU);
         auto result =
             std::make_unique<lfs::core::SplatData>(
                 sh_degree,
                 lfs::core::Tensor::from_vector(
                     means, {count, 3},
-                    lfs::core::Device::CUDA),
+                    lfs::core::Device::GPU),
                 lfs::core::Tensor::from_vector(
                     sh0, {count, 1, 3},
-                    lfs::core::Device::CUDA),
+                    lfs::core::Device::GPU),
                 std::move(shN_tensor),
                 lfs::core::Tensor::zeros(
                     {count, 3},
-                    lfs::core::Device::CUDA,
+                    lfs::core::Device::GPU,
                     lfs::core::DataType::Float32),
                 lfs::core::Tensor::from_vector(
                     rotations, {count, 4},
-                    lfs::core::Device::CUDA),
+                    lfs::core::Device::GPU),
                 lfs::core::Tensor::zeros(
                     {count, 1},
-                    lfs::core::Device::CUDA,
+                    lfs::core::Device::GPU,
                     lfs::core::DataType::Float32),
                 1.0f);
         EXPECT_EQ(result->means().shape(),
@@ -170,12 +171,6 @@ namespace {
         return camera;
     }
 
-    bool cuda_device_available() {
-        int count = 0;
-        return cudaGetDeviceCount(&count) == cudaSuccess &&
-               count > 0;
-    }
-
     class ScopedEnvironmentVariable {
     public:
         ScopedEnvironmentVariable(const char* name, const std::string& value)
@@ -227,12 +222,10 @@ namespace {
             std::invalid_argument);
     }
 
-    TEST(TrainingSnapshotServiceTest,
-         ExplicitSavesUseRelaxedHostMemoryGate) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+    class TrainingSnapshotServiceTest : public lfs::test::CudaBackendTest {};
 
+    TEST_F(TrainingSnapshotServiceTest,
+           ExplicitSavesUseRelaxedHostMemoryGate) {
         constexpr std::size_t GAUSSIAN_COUNT = 8192;
         constexpr std::uint64_t GIB = 1024ull * 1024 * 1024;
         constexpr std::uint64_t MIB = 1024ull * 1024;
@@ -285,11 +278,64 @@ namespace {
             std::string::npos);
     }
 
-    TEST(TrainingSnapshotServiceTest,
-         CapturesByteExactLfkpAndOwnsPostResumeBytes) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+    // Fails if the gate defers without asking for memory, asks for the wrong
+    // amount, or ignores memory the callback released.
+    TEST_F(TrainingSnapshotServiceTest,
+           HostMemoryGateAsksForTheShortfallBeforeDeferring) {
+        constexpr std::size_t GAUSSIAN_COUNT = 8192;
+        constexpr std::uint64_t GIB = 1024ull * 1024 * 1024;
+        auto params = make_snapshot_test_params(GAUSSIAN_COUNT);
+        auto model = make_snapshot_test_splat(GAUSSIAN_COUNT);
+        lfs::training::MCMC strategy(*model);
+        strategy.initialize(params.optimization);
+
+        std::ostringstream reference_stream(std::ios::binary | std::ios::out);
+        const auto reference = lfs::training::serialize_checkpoint(
+            reference_stream, 500, strategy, params, nullptr, nullptr, nullptr, nullptr);
+        ASSERT_TRUE(reference.has_value())
+            << lfs::format_for_developer(reference.error());
+
+        const auto checkpoint_bytes = reference->bytes;
+        const ScopedEnvironmentVariable total_memory(
+            "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_TOTAL_BYTES", std::to_string(16 * GIB));
+        ScopedEnvironmentVariable available_memory(
+            "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
+            std::to_string(checkpoint_bytes + GIB));
+
+        lfs::training::TrainingSnapshotService service({
+            .ring_slots = 4,
+            .band_bytes = 64 * 1024,
+            .calibration_bytes = 64,
+            .calibration_iterations = 4,
+        });
+        lfs::training::TrainingSnapshotCaptureRequest request{
+            .iteration = 500,
+            .strategy = strategy,
+            .params = params,
+        };
+        ASSERT_TRUE(service.initialize(request));
+
+        std::uint64_t requested_bytes = 0;
+        request.release_host_memory = [&](const std::uint64_t bytes) -> std::uint64_t {
+            requested_bytes = bytes;
+            available_memory.set(std::to_string(checkpoint_bytes + 4 * GIB));
+            return bytes;
+        };
+        auto released_autosave = service.prepare(request);
+        ASSERT_TRUE(released_autosave.has_value())
+            << lfs::format_for_developer(released_autosave.error());
+        EXPECT_EQ(requested_bytes, 3 * GIB);
+
+        available_memory.set(std::to_string(checkpoint_bytes + GIB));
+        request.release_host_memory = [](std::uint64_t) -> std::uint64_t { return 0; };
+        auto deferred_autosave = service.prepare(request);
+        ASSERT_FALSE(deferred_autosave.has_value());
+        EXPECT_NE(lfs::format_for_developer(deferred_autosave.error()).find("deferred"),
+                  std::string::npos);
+    }
+
+    TEST_F(TrainingSnapshotServiceTest,
+           CapturesByteExactLfkpAndOwnsPostResumeBytes) {
         const ScopedEnvironmentVariable pinned_host_memory(
             "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
             std::to_string(64ull * 1024 * 1024 * 1024));
@@ -531,12 +577,8 @@ namespace {
                 target_strategy.get_optimizer());
     }
 
-    TEST(TrainingSnapshotServiceTest,
-         Q16Sh3ChunkedCaptureMatchesHostSerializeBitIdentical) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
-
+    TEST_F(TrainingSnapshotServiceTest,
+           Q16Sh3ChunkedCaptureMatchesHostSerializeBitIdentical) {
         lfs::training::sh_value::
             set_sh_value_quant_enabled_for_testing(true);
         struct QuantGuard {
@@ -653,11 +695,8 @@ namespace {
         EXPECT_TRUE(captured->metrics.consistency_proven);
     }
 
-    TEST(TrainingSnapshotServiceTest,
-         CpuChaptersCaptureExactSaveIterationInsideSafePoint) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+    TEST_F(TrainingSnapshotServiceTest,
+           CpuChaptersCaptureExactSaveIterationInsideSafePoint) {
         const ScopedEnvironmentVariable pinned_host_memory(
             "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
             std::to_string(64ull * 1024 * 1024 * 1024));
@@ -870,11 +909,8 @@ namespace {
                 .pause_within_rig_gate);
     }
 
-    TEST(TrainingSnapshotServiceTest,
-         CapturesRepresentativeSceneValuesInSafePoint) {
-        if (!cuda_device_available()) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
+    TEST_F(TrainingSnapshotServiceTest,
+           CapturesRepresentativeSceneValuesInSafePoint) {
         const ScopedEnvironmentVariable pinned_host_memory(
             "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
             std::to_string(64ull * 1024 * 1024 * 1024));

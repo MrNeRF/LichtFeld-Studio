@@ -4,6 +4,7 @@
 #include "depth_anchor_cache.hpp"
 
 #include "core/camera.hpp"
+#include "core/gpu_device_runtime.hpp"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
 #include "io/atomic_output.hpp"
@@ -101,9 +102,9 @@ namespace lfs::training {
         if (!means_in.is_valid() || means_in.ndim() != 2 || means_in.shape()[0] == 0) {
             return anchors;
         }
-        const auto means = means_in.device() == lfs::core::Device::CUDA
+        const auto means = means_in.device() == lfs::core::Device::GPU
                                ? means_in
-                               : means_in.to(lfs::core::Device::CUDA);
+                               : means_in.to(lfs::core::Device::GPU);
         const auto num_points = static_cast<std::size_t>(means.shape()[0]);
 
         // Robust world-space bounds of the anchor cloud: sparse reconstructions
@@ -233,7 +234,7 @@ namespace lfs::training {
             // The prior's lazy ops materialize on their own stream; the collect
             // kernel reads raw pointers, so settle the device first (startup only).
             prior.ptr<float>();
-            cudaDeviceSynchronize();
+            lfs::core::gpu_device_barrier(lfs::core::GpuBackend::CUDA);
 
             auto samples = lfs::training::kernels::collect_depth_anchor_samples(
                 means.ptr<float>(),

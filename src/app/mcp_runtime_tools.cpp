@@ -8,12 +8,12 @@
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/path_utils.hpp"
+#include "visualizer/core/training_manager.hpp"
+#include "visualizer/core/training_state.hpp"
 #include "visualizer/gui/async_task_manager.hpp"
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panels/python_console_panel.hpp"
 #include "visualizer/operator/operator_registry.hpp"
-#include "visualizer/training/training_manager.hpp"
-#include "visualizer/training/training_state.hpp"
 #include "visualizer/visualizer.hpp"
 #include "visualizer/visualizer_impl.hpp"
 
@@ -227,6 +227,11 @@ namespace lfs::app {
                 return "rad";
             case core::ExportFormat::COLMAP:
                 return "colmap";
+            case core::ExportFormat::GALLERY_SCENE:
+            case core::ExportFormat::GALLERY_SOG:
+            case core::ExportFormat::GALLERY_SSOG:
+            case core::ExportFormat::GALLERY_SPZ:
+                return "licht";
             }
             return "unknown";
         }
@@ -473,6 +478,7 @@ namespace lfs::app {
             const std::string stage = tasks.getImportStage();
             const std::string outcome = tasks.getImportOutcome();
             const bool success = tasks.getImportSuccess();
+            const bool cancellable = tasks.canCancelGalleryImport();
 
             std::string status = "idle";
             if (active) {
@@ -485,21 +491,21 @@ namespace lfs::app {
 
             json payload{
                 {"id", "import.dataset"},
-                {"label", "Dataset Import"},
+                {"label", "Scene Import"},
                 {"kind", "import"},
                 {"active", active},
                 {"status", status},
                 {"stage", stage},
                 {"outcome", outcome},
                 {"progress", tasks.getImportProgress()},
-                {"cancel_supported", false},
+                {"cancel_supported", cancellable},
                 {"dismiss_supported", show_completion},
                 {"actions",
                  json{
                      {"start", false},
                      {"pause", false},
                      {"resume", false},
-                     {"cancel", false},
+                     {"cancel", cancellable},
                      {"dismiss", show_completion},
                  }},
                 {"details",
@@ -1003,6 +1009,8 @@ namespace lfs::app {
             }
 
             if (job_id == "import.dataset") {
+                if (action == "cancel" && gui && gui->asyncTasks().requestGalleryImportCancel())
+                    return {};
                 if (action != "dismiss") {
                     return std::unexpected("Action '" + action + "' is not supported for import.dataset");
                 }

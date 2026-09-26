@@ -214,7 +214,10 @@ input[type="text"] {
     background-color: #313244;
     border-width: 1dp;
     border-color: #45475a;
-    padding: 2dp 4dp;
+    height: 18dp;
+    min-height: 18dp;
+    padding: 1dp 4dp;
+    box-sizing: border-box;
     transition: border-color 0.12s quadratic-out;
 }
 
@@ -251,7 +254,9 @@ select:focus-visible,
 button:focus-visible,
 .btn:focus-visible,
 .context-menu-item:focus-visible,
-.section-header:focus-visible {
+.section-header:focus-visible,
+.asset-filter-row:focus-visible,
+.asset-sidebar-title:focus-visible {
     border-color: #89b4fa;
     box-shadow: 0 0 0 1dp rgba(137, 180, 250, 160);
 }
@@ -282,12 +287,14 @@ selectbox {
     border-color: #45475a;
     position: absolute;
     z-index: 10000;
+    min-width: 100%;
 }
 
 selectbox option {
     display: block;
     padding: 2dp 6dp;
     font-size: 12dp;
+    white-space: nowrap;
     transition: background-color 0.1s quadratic-out;
 }
 
@@ -304,10 +311,11 @@ select selectvalue {
     height: 16dp;
     line-height: 16dp;
     margin-right: 18dp;
-    padding: 0 0 0 6dp;
+    padding: 0 0 0 4dp;
     box-sizing: border-box;
     position: relative;
-    top: -4dp;
+    top: 50%;
+    transform: translateY(-50%);
 }
 
 select selectarrow {
@@ -317,7 +325,8 @@ select selectarrow {
     text-align: center;
     box-sizing: border-box;
     position: relative;
-    top: -4dp;
+    top: 50%;
+    transform: translateY(-50%);
 }
 
 /* ── Progress ───────────────────────────────────────────── */
@@ -381,10 +390,13 @@ progress fill {
     margin: 0;
 }
 
+/* One label column for every row: on a narrow panel it narrows as a whole, so the
+   fields stay aligned and number fields keep space for their digits. */
 .prop-label,
 .setting-row__label-col {
-    width: 120dp;
-    min-width: 120dp;
+    width: 40%;
+    max-width: 120dp;
+    min-width: 64dp;
     color: #cdd6f4;
     font-size: 12dp;
     white-space: nowrap;
@@ -764,6 +776,7 @@ progress fill {
     display: none;
     position: absolute;
     z-index: 100;
+    box-sizing: border-box;
     background-color: #313244;
     border-width: 1dp;
     border-color: #45475a;
@@ -785,6 +798,7 @@ progress fill {
     font-size: 12dp;
     width: 100%;
     text-align: left;
+    white-space: normal;
     background-color: transparent;
     border-width: 0;
     transition: background-color 0.1s quadratic-out;
@@ -1115,6 +1129,11 @@ crf-curve {
     transition: background-color 0.12s quadratic-out, border-color 0.12s quadratic-out;
 }
 
+/* Steppers sit against their field: the row gap stays between columns. */
+.setting-row > .num-step-btn {
+    margin-left: -4dp;
+}
+
 /* ── Full-width button ─────────────────────────────────── */
 
 .btn--full {
@@ -1122,6 +1141,13 @@ crf-curve {
     width: 100%;
     margin-bottom: 2dp;
     box-sizing: border-box;
+}
+
+.asset-button--toolbar24 {
+    box-sizing: border-box;
+    height: 24dp;
+    min-height: 24dp;
+    max-height: 24dp;
 }
 
 /* ── Disabled overlay ──────────────────────────────────── */
@@ -1199,6 +1225,8 @@ crf-curve {
     padding: 4dp 8dp;
     font-size: 12dp;
     max-width: 320dp;
+    white-space: pre-line;
+    word-break: break-word;
     pointer-events: none;
 }
 

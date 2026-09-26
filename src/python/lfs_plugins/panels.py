@@ -33,7 +33,7 @@ PANEL_SPECS = {
     "new_project": _PanelSpec(
         "lfs_plugins.import_panels", "NewProjectPanel", "lfs.new_project",
         "New Project", "FLOATING", 11, "rmlui/new_project_panel.rml",
-        "CONTENT", (560, 0), update_policy="dirty",
+        "CONTENT", (560, 0), update_policy="dirty", has_poll=True,
     ),
     "resume_checkpoint": _PanelSpec(
         "lfs_plugins.import_panels", "ResumeCheckpointPanel", "lfs.resume_checkpoint",
@@ -50,9 +50,10 @@ PANEL_SPECS = {
         "FLOATING", 100, "rmlui/about.rml", "CONTENT", (400, 0),
         update_policy="dirty",
     ),
-    "account": _PanelSpec(
-        "lfs_plugins.account_panel", "AccountPanel", "lfs.account", "Account",
-        "FLOATING", 95, "rmlui/account_panel.rml", "CONTENT", (440, 0),
+    "gallery_file": _PanelSpec(
+        "lfs_plugins.gallery_file_panel", "GalleryFilePanel", "lfs.gallery_file", "Gallery",
+        "FLOATING", 94, "rmlui/gallery_file_panel.rml", "CONTENT", (680, 0),
+        update_policy="dirty", has_poll=True,
     ),
     "bug_report": _PanelSpec(
         "lfs_plugins.bug_report_panel", "BugReportPanel", "lfs.bug_report",
@@ -96,8 +97,8 @@ PANEL_SPECS = {
     ),
     "asset_manager": _PanelSpec(
         "lfs_plugins.asset_manager_panel", "AssetManagerPanel", "lfs.asset_manager",
-        "Asset Manager", "LEFT_DOCK", 20, "rmlui/asset_manager.rml", "FILL",
-        (980, 620), update_policy="dirty",
+        "Projects", "LEFT_DOCK", 20, "rmlui/asset_manager.rml", "FILL",
+        (1100, 700), update_policy="dirty",
     ),
 }
 
@@ -171,6 +172,7 @@ def _register_lazy_panel(lf, name):
         _delegated_instance_methods = frozenset({
             "poll", "draw", "show", "on_bind_model", "on_mount", "on_unmount",
             "on_update", "on_scene_changed", "capture_chrome", "apply_chrome",
+            "on_host_geometry_changed",
         })
 
         def _load(self):
@@ -229,6 +231,8 @@ def _build_builtin_panel_steps(lf):
         lf.register_class(RenderingPanel)
 
     def training_panel():
+        if not getattr(getattr(lf, "build_info", None), "training_enabled", True):
+            return
         from .training_panel import TrainingPanel
 
         lf.register_class(TrainingPanel)
@@ -272,9 +276,6 @@ def _build_builtin_panel_steps(lf):
     def about_panel():
         _register_lazy_panel(lf, "about")
 
-    def account_panel():
-        _register_lazy_panel(lf, "account")
-
     def bug_report_panel():
         _register_lazy_panel(lf, "bug_report")
 
@@ -284,6 +285,11 @@ def _build_builtin_panel_steps(lf):
         from .portal_account import initialize_portal_account
 
         initialize_portal_account()
+        from .gallery_controller import get_gallery_controller
+
+        gallery = get_gallery_controller()
+        if gallery.service.snapshot().get("signed_in"):
+            gallery.refresh()
 
     def getting_started_panel():
         _register_lazy_panel(lf, "getting_started")
@@ -320,6 +326,12 @@ def _build_builtin_panel_steps(lf):
 
     def asset_manager_panel():
         _register_lazy_panel(lf, "asset_manager")
+        _register_lazy_panel(lf, "gallery_file")
+        from .project_manager_preferences import read_preferences
+
+        preferences = read_preferences()
+        if preferences["openAtStartup"]:
+            lf.ui.set_panel_enabled("lfs.asset_manager", True)
 
     def overlays():
         from .overlays import register as register_overlays
@@ -337,7 +349,6 @@ def _build_builtin_panel_steps(lf):
         ("menus", menus),
         ("export_panel", export_panel),
         ("about_panel", about_panel),
-        ("account_panel", account_panel),
         ("bug_report_panel", bug_report_panel),
         ("portal_account", portal_account),
         ("getting_started_panel", getting_started_panel),

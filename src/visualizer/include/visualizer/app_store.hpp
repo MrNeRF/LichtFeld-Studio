@@ -6,6 +6,7 @@
 #include "core/export.hpp"
 #include "core/reactive/observable.hpp"
 #include "core/reactive/store.hpp"
+#include "rendering/rendering_types.hpp"
 
 #include <cmath>
 #include <cstddef>
@@ -105,13 +106,36 @@ namespace lfs::vis {
 
         struct LFS_VIS_API AccountState {
             bool signed_in = false;
+            bool authorized = false;
             bool linking = false;
+            bool disconnecting = false;
             bool membership_required = false;
+            std::string error;
             std::string label;
+            std::string email;
+            std::string connected_since;
+            std::string display_name;
             std::string tier;
             std::string tooltip;
 
             bool operator==(const AccountState&) const = default;
+        };
+
+        struct LFS_VIS_API GalleryState {
+            bool signed_in = false;
+            bool relink_required = false;
+            int active_uploads = 0;
+            int active_downloads = 0;
+            int paused = 0;
+            int attention = 0;
+            int percent = -1;
+            std::string label;
+            std::string detail;
+            std::string tooltip;
+            std::string tone{"idle"};
+            std::uint64_t epoch = 0;
+
+            bool operator==(const GalleryState&) const = default;
         };
 
         struct LFS_VIS_API VideoExportOverlayState {
@@ -162,6 +186,13 @@ namespace lfs::vis {
             }
         };
 
+        struct DepthWindowDrawCommit {
+            std::uint64_t generation = 0;
+            SplitViewPanelId panel = SplitViewPanelId::Left;
+
+            [[nodiscard]] bool operator==(const DepthWindowDrawCommit&) const = default;
+        };
+
         enum Field : std::uint32_t {
             Iteration = 1,
             TotalIterations,
@@ -197,7 +228,9 @@ namespace lfs::vis {
             LanguageGeneration,
             RenderSettingsGeneration,
             ViewportToolbarGeneration,
+            GalleryStateValue,
             DepthWindowDrawGeneration,
+            DepthWindowDrawCommitValue,
         };
 
         AppStore();
@@ -231,6 +264,7 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<int> multi_transform_mode;
         lfs::core::reactive::Observable<ImportOverlayState> import_overlay_state;
         lfs::core::reactive::Observable<AccountState> account_state;
+        lfs::core::reactive::Observable<GalleryState> gallery_state;
         lfs::core::reactive::Observable<VideoExportOverlayState> video_export_overlay_state;
         lfs::core::reactive::Observable<ExportProgressState> export_progress_state;
         lfs::core::reactive::Observable<TaskProgressState> mesh2splat_state;
@@ -240,6 +274,7 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<std::uint64_t> render_settings_generation;
         lfs::core::reactive::Observable<std::uint64_t> viewport_toolbar_generation;
         lfs::core::reactive::Observable<std::uint64_t> depth_window_draw_generation;
+        lfs::core::reactive::Observable<DepthWindowDrawCommit> depth_window_draw_commit;
 
     private:
         lfs::core::reactive::Store store_;
@@ -248,6 +283,6 @@ namespace lfs::vis {
     LFS_VIS_API AppStore& app_store();
     LFS_VIS_API void publish_language_generation();
     LFS_VIS_API void publish_viewport_toolbar_generation();
-    LFS_VIS_API void publish_depth_window_draw_commit();
+    LFS_VIS_API void publish_depth_window_draw_commit(SplitViewPanelId panel = SplitViewPanelId::Left);
 
 } // namespace lfs::vis

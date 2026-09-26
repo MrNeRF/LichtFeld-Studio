@@ -1,37 +1,17 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
-#include <core/tensor.hpp>
-#include <cstdint>
-#include <vector>
+#include "core/decimate/types.hpp"
 
 namespace lfs::io::decimate {
-    constexpr uint32_t invalid = 0xffffffffu;
-    constexpr int knn_k = 16;
-    constexpr int candidates_k = 4;
-    struct View {
-        float *pos, *rot, *scale, *opacity, *dc, *sh;
-        int rest;
-    };
-    struct Data {
-        core::Tensor pos, rot, scale, opacity, dc, sh;
-        size_t n;
-        int rest;
-        View view() const {
-            auto ptr = [](const core::Tensor& t) { return const_cast<float*>(t.ptr<float>()); };
-            return {ptr(pos), ptr(rot), ptr(scale), ptr(opacity), ptr(dc), rest ? ptr(sh) : nullptr, rest};
-        }
-    };
-    struct Candidates {
-        std::vector<uint32_t> idx;
-        std::vector<float> cost;
-    };
-    struct Selection {
-        std::vector<int> member_group;
-        std::vector<uint32_t> members, offsets, minimum;
-        size_t removed = 0;
-    };
-    Data allocate(size_t n, int rest, core::Device device);
+    using core::decimate::allocate;
+    using core::decimate::Candidates;
+    using core::decimate::candidates_k;
+    using core::decimate::Data;
+    using core::decimate::invalid;
+    using core::decimate::knn_k;
+    using core::decimate::Selection;
+    using core::decimate::View;
     Selection select(const Candidates&, size_t n, int k, size_t needed);
     Candidates cpu_candidates(const Data&);
     Candidates gpu_candidates(const Data&);

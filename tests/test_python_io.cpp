@@ -28,6 +28,7 @@
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/ply.hpp"
 #include "io/formats/rad.hpp"
@@ -46,7 +47,8 @@ namespace fs = std::filesystem;
 using namespace lfs::core;
 using namespace lfs::io;
 
-class PythonIOTest : public ::testing::Test {
+template <class Base>
+class PythonIOFixture : public Base {
 protected:
     static constexpr float EPSILON = 1e-5f;
     static constexpr float PLY_TOLERANCE = 1e-4f;
@@ -56,6 +58,10 @@ protected:
     const fs::path temp_dir = fs::temp_directory_path() / "lfs_py_io_test";
 
     void SetUp() override {
+        Base::SetUp();
+        if (this->IsSkipped()) {
+            return;
+        }
         fs::create_directories(temp_dir);
     }
 
@@ -482,6 +488,9 @@ protected:
 };
 
 // Test Loader creation
+using PythonIOTest = PythonIOFixture<::testing::Test>;
+using PythonIOCudaTest = PythonIOFixture<lfs::test::CudaBackendTest>;
+
 TEST_F(PythonIOTest, LoaderCreation) {
     auto loader = Loader::create();
     ASSERT_NE(loader, nullptr);
@@ -1652,10 +1661,14 @@ TEST_F(PythonIOTest, HtmlExport) {
         << "Should be valid HTML";
     EXPECT_TRUE(content.find("window.__lfsInitMeasureTool") != std::string::npos)
         << "Should embed the measure tool init hook";
+    EXPECT_TRUE(content.find("window.__lfsInitLabelTool") != std::string::npos)
+        << "Should embed the label tool init hook";
     EXPECT_TRUE(content.find("export { Gizmo, TranslateGizmo };") == std::string::npos)
         << "Gizmo export statement should be stripped";
     EXPECT_TRUE(content.find("export { initMeasureTool };") == std::string::npos)
         << "Measure-tool export statement should be stripped";
+    EXPECT_TRUE(content.find("export { initLabelTool };") == std::string::npos)
+        << "Label-tool export statement should be stripped";
 }
 
 TEST_F(PythonIOTest, HtmlExportCancellationKeepsExistingTarget) {
@@ -2101,7 +2114,7 @@ TEST_F(PythonIOTest, PlySaveRejectsEmptyExtraAttributesWhenDeletedMaskPresent) {
     EXPECT_NE(result.error().format().find("must be valid"), std::string::npos);
 }
 
-TEST_F(PythonIOTest, PipelinedLoaderStatsRemainResponsiveDuringCompletions) {
+TEST_F(PythonIOCudaTest, PipelinedLoaderStatsRemainResponsiveDuringCompletions) {
     const auto image_path = temp_dir / "stats_source.png";
     write_png(image_path);
 
@@ -2160,7 +2173,7 @@ TEST_F(PythonIOTest, PipelinedLoaderReportsPrimaryImageFailure) {
     EXPECT_EQ(loader.in_flight_count(), 0u);
 }
 
-TEST_F(PythonIOTest, PipelinedLoaderShutdownReleasesQueuedGpuTensorsBeforeDecodeStream) {
+TEST_F(PythonIOCudaTest, PipelinedLoaderShutdownReleasesQueuedGpuTensorsBeforeDecodeStream) {
     if (!NvCodecImageLoader::is_available()) {
         GTEST_SKIP() << "nvImageCodec is unavailable";
     }

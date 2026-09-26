@@ -30,6 +30,8 @@ namespace lichtfeld::Strings {
             inline constexpr const char* MENU = "menu.tools";
             inline constexpr const char* PYTHON_CONSOLE = "menu.tools.python_console";
             inline constexpr const char* PLUGIN_MARKETPLACE = "menu.tools.plugin_marketplace";
+            inline constexpr const char* GALLERY = "menu.tools.gallery";
+            inline constexpr const char* GALLERY_TRANSFERS = "menu.tools.gallery_transfers";
         } // namespace Tools
 
         namespace View {
@@ -286,6 +288,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* FORMAT_PLY_STANDARD = "export.format.ply_standard";
         inline constexpr const char* FORMAT_SOG_SUPERSPLAT = "export.format.sog_supersplat";
         inline constexpr const char* FORMAT_SPZ_NIANTIC = "export.format.spz_niantic";
+        inline constexpr const char* FORMAT_GLB_GLTF = "export.format.glb_gltf";
         inline constexpr const char* FORMAT_USD_OPENUSD = "export.format.usd_openusd";
         inline constexpr const char* FORMAT_HTML_VIEWER = "export.format.html_viewer";
         inline constexpr const char* ALL = "export.all";
@@ -449,6 +452,20 @@ namespace lichtfeld::Strings {
         inline constexpr const char* NODES_SELECTED = "transform.nodes_selected";
     } // namespace Transform
 
+    namespace Align {
+        inline constexpr const char* CLICK_1ST = "align.click_1st";
+        inline constexpr const char* CLICK_2ND = "align.click_2nd";
+        inline constexpr const char* CLICK_3RD = "align.click_3rd";
+        inline constexpr const char* POINTS_COUNT = "align.points_count";
+        inline constexpr const char* UP = "align.up";
+        inline constexpr const char* SNAPPED = "align.snapped";
+        inline constexpr const char* HINT_PICKING = "align.hint_picking";
+        inline constexpr const char* HINT_REVIEW = "align.hint_review";
+        inline constexpr const char* STATUS_COLINEAR = "align.status_colinear";
+        inline constexpr const char* STATUS_NO_SURFACE = "align.status_no_surface";
+        inline constexpr const char* STATUS_NO_TARGET = "align.status_no_target";
+    } // namespace Align
+
     namespace Ellipsoid {
         inline constexpr const char* TITLE = "ellipsoid.title";
         inline constexpr const char* NOT_VISIBLE = "ellipsoid.not_visible";
@@ -461,6 +478,17 @@ namespace lichtfeld::Strings {
         inline constexpr const char* LINE_WIDTH = "ellipsoid.line_width";
         inline constexpr const char* INSTRUCTIONS = "ellipsoid.instructions";
     } // namespace Ellipsoid
+
+    namespace Selection {
+        // Undo-history entry labels: rendered verbatim in the history panel and
+        // on the Undo/Redo buttons (scene_panel_native.cpp), so they localize.
+        inline constexpr const char* HISTORY_DEPTH_WINDOW_EXPIRED =
+            "selection.history_depth_window_expired";
+        inline constexpr const char* HISTORY_DEPTH_WINDOW_DRAG =
+            "selection.history_depth_window_drag";
+        inline constexpr const char* HISTORY_DEPTH_WINDOW_SYNC =
+            "selection.history_depth_window_sync";
+    } // namespace Selection
 
     namespace TrainingPanel {
         inline constexpr const char* START_TRAINING = "training_panel.start_training";
@@ -543,7 +571,11 @@ namespace lichtfeld::Strings {
 
     namespace Progress {
         inline constexpr const char* EXPORTING = "progress.exporting";
+        inline constexpr const char* EXPORTING_VIDEO = "progress.exporting_video";
         inline constexpr const char* IMPORTING = "progress.importing";
+        inline constexpr const char* PATH = "progress.path";
+        inline constexpr const char* IMPORT_COUNTS = "progress.import_counts";
+        inline constexpr const char* VIDEO_FRAME = "progress.video_frame";
         inline constexpr const char* OPENING_PROJECT = "progress.opening_project";
         inline constexpr const char* IMPORT_COMPLETE = "progress.import_complete";
         inline constexpr const char* IMPORT_FAILED = "progress.import_failed";
@@ -840,6 +872,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* OUT_OF_GPU_MEMORY = "error_modal.out_of_gpu_memory";
         inline constexpr const char* DATASET_LOAD_FAILED = "error_modal.dataset_load_failed";
         inline constexpr const char* EXPORT_FAILED = "error_modal.export_failed";
+        inline constexpr const char* EXPORT_WARNING = "error_modal.export_warning";
         inline constexpr const char* VIDEO_EXPORT_FAILED = "error_modal.video_export_failed";
         inline constexpr const char* MESH2SPLAT_FAILED = "error_modal.mesh2splat_failed";
         inline constexpr const char* CONFIG_INVALID = "error_modal.config_invalid";

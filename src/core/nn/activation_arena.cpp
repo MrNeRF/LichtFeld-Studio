@@ -5,7 +5,7 @@
 
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
-#include "internal/memory_pool.hpp"
+#include "core/tensor_cuda_interop.hpp"
 
 namespace lfs::core::nn {
     namespace {
@@ -42,7 +42,7 @@ namespace lfs::core::nn {
             high_water_ = used_;
         }
         if (high_water_ > cap_ && high_water_ > 0) {
-            lfs::core::CudaMemoryPool::instance().trim();
+            lfs::core::trim_cuda_memory_pool();
             commit();
         }
     }

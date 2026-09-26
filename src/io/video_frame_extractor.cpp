@@ -7,21 +7,28 @@
 #include "core/path_utils.hpp"
 #include "hdr_libplacebo.hpp"
 #include "hdr_tonemap.hpp"
+#if LFS_HAS_CUDA
 #include "nvcodec_image_loader.hpp"
 #include "video/color_convert.cuh"
+#include "video/cuda_frame_handoff.hpp"
+#endif
 
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/dovi_meta.h>
 #include <libavutil/hwcontext.h>
+#if LFS_HAS_CUDA
 #include <libavutil/hwcontext_cuda.h>
+#endif
 #include <libavutil/imgutils.h>
 #include <libavutil/pixdesc.h>
 #include <libswscale/swscale.h>
 }
 
+#if LFS_HAS_CUDA
 #include <cuda_runtime.h>
+#endif
 #include <stb_image_write.h>
 
 #include <nlohmann/json.hpp>
@@ -44,18 +51,20 @@ namespace lfs::io {
     namespace {
         constexpr std::size_t MAX_JPEG_BATCH_FRAMES = 32;
         constexpr std::size_t JPEG_BATCH_BYTE_BUDGET = 256ULL * 1024ULL * 1024ULL;
+#if LFS_HAS_CUDA
         constexpr std::size_t MIN_CUDA_MEMORY_HEADROOM = 256ULL * 1024ULL * 1024ULL;
+#endif
         // Extraction runs off the UI thread and benefits from more parallel
         // HEVC decoding than the latency-sensitive preview path.
         constexpr int MAX_SW_DECODE_THREADS = 8;
 
+#if LFS_HAS_CUDA
         void requireCudaSuccess(const cudaError_t result, const char* const operation) {
             if (result != cudaSuccess) {
                 throw std::runtime_error(std::string(operation) + ": " +
                                          cudaGetErrorString(result));
             }
         }
-
         template <typename T>
         void freeCudaBuffer(T*& buffer, const char* const name) {
             if (!buffer)
@@ -66,6 +75,7 @@ namespace lfs::io {
             }
             buffer = nullptr;
         }
+#endif
 
         [[nodiscard]] double elapsedSeconds(const std::chrono::steady_clock::time_point started) {
             return std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
@@ -406,11 +416,31 @@ namespace lfs::io {
             }
         }
 
-        AVPixelFormat get_hw_format(AVCodecContext*, const AVPixelFormat* pix_fmts) {
-            for (const AVPixelFormat* p = pix_fmts; *p != -1; p++) {
-                if (*p == AV_PIX_FMT_CUDA)
+        struct HwDecoderState {
+            AVPixelFormat pixel_format = AV_PIX_FMT_NONE;
+        };
+
+        AVPixelFormat get_hw_format(AVCodecContext* context, const AVPixelFormat* pix_fmts) {
+            const auto* const state = static_cast<const HwDecoderState*>(context->opaque);
+            if (!state)
+                return AV_PIX_FMT_NONE;
+            for (const AVPixelFormat* p = pix_fmts; *p != AV_PIX_FMT_NONE; ++p) {
+                if (*p == state->pixel_format)
                     return *p;
             }
+#if defined(__APPLE__)
+            // A decoder can advertise VideoToolbox yet reject a particular stream profile.
+            // Keep FFmpeg's software decoder usable when no hardware format is offered.
+            if (state->pixel_format == AV_PIX_FMT_VIDEOTOOLBOX) {
+                for (const AVPixelFormat* p = pix_fmts; *p != AV_PIX_FMT_NONE; ++p) {
+                    const AVPixFmtDescriptor* const descriptor = av_pix_fmt_desc_get(*p);
+                    if (descriptor && !(descriptor->flags & AV_PIX_FMT_FLAG_HWACCEL)) {
+                        LOG_WARN("VideoToolbox format unavailable for this stream; using FFmpeg software decode");
+                        return *p;
+                    }
+                }
+            }
+#endif
             return AV_PIX_FMT_NONE;
         }
 
@@ -771,6 +801,8 @@ namespace lfs::io {
     class VideoFrameExtractor::Impl {
     public:
         bool extract(const Params& params, std::string& error) {
+            outcome_ = ExtractionOutcome::Failed;
+            error.clear();
             const auto extraction_started = std::chrono::steady_clock::now();
             AVFormatContext* fmt_ctx = nullptr;
             AVCodecContext* codec_ctx = nullptr;
@@ -786,8 +818,32 @@ namespace lfs::io {
             uint8_t* gpu_rotated_buffer = nullptr;
             uint8_t* cpu_contiguous_buffer = nullptr;
             std::vector<uint8_t> rot_buf;
+#if LFS_HAS_CUDA
             std::unique_ptr<NvCodecImageLoader> nvcodec;
+#endif
             bool using_hw_decode = false;
+            AVHWDeviceType hw_device_type = AV_HWDEVICE_TYPE_NONE;
+            HwDecoderState hw_decoder_state;
+            const char* decoder_backend = "ffmpeg_software";
+
+            const auto cleanup = [&]() {
+                if (sws_ctx)
+                    sws_freeContext(sws_ctx);
+                av_frame_free(&frame);
+                av_frame_free(&sw_frame);
+                av_frame_free(&sparse_previous_frame);
+                av_packet_free(&packet);
+                avcodec_free_context(&codec_ctx);
+                av_buffer_unref(&hw_device_ctx);
+                avformat_close_input(&fmt_ctx);
+                delete[] cpu_contiguous_buffer;
+                cpu_contiguous_buffer = nullptr;
+#if LFS_HAS_CUDA
+                freeCudaBuffer(gpu_rgb_buffer, "CUDA RGB buffer");
+                freeCudaBuffer(gpu_batch_buffer, "CUDA JPEG batch buffer");
+                freeCudaBuffer(gpu_rotated_buffer, "CUDA rotation buffer");
+#endif
+            };
 
             try {
                 const std::string video_path_utf8 = lfs::core::path_to_utf8(params.video_path);
@@ -875,15 +931,18 @@ namespace lfs::io {
                 }
 
                 // Decode Dolby Vision in software to preserve per-frame RPU metadata.
-                const char* hw_decoder_name = dv_profile > 0 ? nullptr : get_hw_decoder_name(codec_id);
                 const AVCodec* codec = nullptr;
-
+#if LFS_HAS_CUDA
+                const char* hw_decoder_name = dv_profile > 0 ? nullptr : get_hw_decoder_name(codec_id);
                 if (hw_decoder_name) {
                     codec = avcodec_find_decoder_by_name(hw_decoder_name);
                     if (codec) {
                         if (av_hwdevice_ctx_create(&hw_device_ctx, AV_HWDEVICE_TYPE_CUDA, nullptr,
                                                    nullptr, 0) == 0) {
                             using_hw_decode = true;
+                            hw_device_type = AV_HWDEVICE_TYPE_CUDA;
+                            hw_decoder_state.pixel_format = AV_PIX_FMT_CUDA;
+                            decoder_backend = "nvdec";
                             LOG_INFO("Using NVDEC hardware decoder: {}", hw_decoder_name);
                         } else {
                             codec = nullptr;
@@ -891,6 +950,37 @@ namespace lfs::io {
                         }
                     }
                 }
+#endif
+#if defined(__APPLE__)
+                if (dv_profile == 0 && !codec) {
+                    const AVCodec* const software_codec = avcodec_find_decoder(codec_id);
+                    if (software_codec) {
+                        for (int i = 0;; ++i) {
+                            const AVCodecHWConfig* const config =
+                                avcodec_get_hw_config(software_codec, i);
+                            if (!config)
+                                break;
+                            if (!(config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) ||
+                                config->device_type != AV_HWDEVICE_TYPE_VIDEOTOOLBOX)
+                                continue;
+                            if (av_hwdevice_ctx_create(&hw_device_ctx,
+                                                       AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
+                                                       nullptr, nullptr, 0) == 0) {
+                                codec = software_codec;
+                                using_hw_decode = true;
+                                hw_device_type = AV_HWDEVICE_TYPE_VIDEOTOOLBOX;
+                                hw_decoder_state.pixel_format = config->pix_fmt;
+                                decoder_backend = "videotoolbox";
+                                LOG_INFO("Using VideoToolbox hardware decoder: {}",
+                                         software_codec->name);
+                            } else {
+                                LOG_WARN("Failed to create VideoToolbox device context; falling back to software");
+                            }
+                            break;
+                        }
+                    }
+                }
+#endif
 
                 if (!codec) {
                     codec = avcodec_find_decoder(codec_id);
@@ -928,12 +1018,13 @@ namespace lfs::io {
                     if (using_hw_decode) {
                         codec_ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
                         if (!codec_ctx->hw_device_ctx) {
-                            error = "Failed to retain CUDA video decoder context";
+                            error = "Failed to retain hardware video decoder context";
                             avcodec_free_context(&codec_ctx);
                             av_buffer_unref(&hw_device_ctx);
                             avformat_close_input(&fmt_ctx);
                             return false;
                         }
+                        codec_ctx->opaque = &hw_decoder_state;
                         codec_ctx->get_format = get_hw_format;
                     } else {
                         const unsigned int hardware_threads = std::max(1U, std::thread::hardware_concurrency());
@@ -958,10 +1049,14 @@ namespace lfs::io {
                         return false;
                     }
 
-                    LOG_WARN("Failed to open NVDEC hardware decoder {}, falling back to CPU", hw_decoder_name);
+                    LOG_WARN("Failed to open {} hardware decoder, falling back to software",
+                             av_hwdevice_get_type_name(hw_device_type));
                     avcodec_free_context(&codec_ctx);
                     av_buffer_unref(&hw_device_ctx);
                     using_hw_decode = false;
+                    hw_device_type = AV_HWDEVICE_TYPE_NONE;
+                    hw_decoder_state.pixel_format = AV_PIX_FMT_NONE;
+                    decoder_backend = "ffmpeg_software";
                     codec = avcodec_find_decoder(codec_id);
                     if (!codec) {
                         error = "Unsupported codec";
@@ -1127,10 +1222,15 @@ namespace lfs::io {
 
                 cpu_contiguous_buffer = new uint8_t[frame_size];
 
+#if LFS_HAS_CUDA
                 const bool use_gpu_jpeg =
                     params.format == ImageFormat::JPG && NvCodecImageLoader::is_available();
+#else
+                constexpr bool use_gpu_jpeg = false;
+#endif
                 std::size_t jpeg_batch_size = 0;
 
+#if LFS_HAS_CUDA
                 if (use_gpu_jpeg) {
                     std::size_t cuda_free_bytes = 0;
                     std::size_t cuda_total_bytes = 0;
@@ -1185,7 +1285,7 @@ namespace lfs::io {
                             gpu_batch_buffer = nullptr;
                             jpeg_batch_size = 0;
                         }
-                    } else {
+                    } else if (memory_info_result == cudaSuccess) {
                         LOG_WARN(
                             "Insufficient CUDA memory headroom for JPEG batching; "
                             "falling back to CPU");
@@ -1217,6 +1317,7 @@ namespace lfs::io {
                         }
                     }
                 }
+#endif
 
                 const bool gpu_encoding_enabled = use_gpu_jpeg && gpu_batch_buffer != nullptr;
                 const bool full_gpu_pipeline_available =
@@ -1297,7 +1398,8 @@ namespace lfs::io {
                     LOG_INFO("HDR hybrid pipeline: {} decode -> libplacebo Vulkan tone map -> host readback -> CUDA JPEG batch",
                              dv_profile > 0 ? "FFmpeg Dolby Vision" : "CPU");
                 } else if (using_hw_decode) {
-                    LOG_INFO("Hybrid pipeline: NVDEC decode → CPU transfer → {}",
+                    LOG_INFO("Hybrid pipeline: {} decode → CPU transfer → {}",
+                             decoder_backend,
                              gpu_encoding_enabled ? "GPU encode" : "CPU encode");
                 } else if (gpu_encoding_enabled) {
                     LOG_INFO("Using GPU batch JPEG encoding (batch size: {})",
@@ -1367,6 +1469,7 @@ namespace lfs::io {
                 }
 
                 auto flush_jpeg_batch = [&]() {
+#if LFS_HAS_CUDA
                     if (batch_gpu_ptrs.empty())
                         return;
                     if (batch_encode_w <= 0 || batch_encode_h <= 0) {
@@ -1407,6 +1510,7 @@ namespace lfs::io {
                     batch_encode_h = 0;
                     batch_idx = 0;
                     throw_if_cancelled();
+#endif
                 };
 
                 auto generate_filename = [&](int frame_num) {
@@ -1520,7 +1624,9 @@ namespace lfs::io {
                     window_skip_counter = 0;
                 };
 
+                bool saw_hardware_frame = false;
                 auto process_frame_hw = [&](AVFrame* hw_frame) {
+                    saw_hardware_frame = true;
                     throw_if_cancelled();
                     std::filesystem::path filename = generate_filename(current_src_frame);
 
@@ -1540,6 +1646,8 @@ namespace lfs::io {
                     }
 
                     if (use_full_gpu_pipeline) {
+#if LFS_HAS_CUDA
+                        video::CudaFrameHandoff frame_handoff(hw_frame);
                         const uint8_t* y_plane = hw_frame->data[0];
                         const uint8_t* uv_plane = hw_frame->data[1];
                         const int y_pitch = hw_frame->linesize[0];
@@ -1609,6 +1717,7 @@ namespace lfs::io {
                             cudaMemcpy(dst_ptr, batch_src, frame_size,
                                        cudaMemcpyDeviceToDevice),
                             "CUDA JPEG batch copy failed");
+                        frame_handoff.finish();
 
                         batch_gpu_ptrs.push_back(dst_ptr);
                         batch_filenames.push_back(filename);
@@ -1618,6 +1727,7 @@ namespace lfs::io {
                         if (batch_idx >= jpeg_batch_size) {
                             flush_jpeg_batch();
                         }
+#endif
                     } else {
                         av_frame_unref(sw_frame);
                         const int transfer_result =
@@ -1705,6 +1815,7 @@ namespace lfs::io {
                         }
                         // --- End rotation ---
 
+#if LFS_HAS_CUDA
                         if (gpu_encoding_enabled) {
                             if (batch_encode_w == 0) {
                                 batch_encode_w = (hw_rot_w > 0) ? hw_rot_w : out_width;
@@ -1726,9 +1837,11 @@ namespace lfs::io {
                             if (batch_idx >= jpeg_batch_size) {
                                 flush_jpeg_batch();
                             }
-                        } else if (write_image_file(filename, hw_rot_w, hw_rot_h,
-                                                    cpu_contiguous_buffer, params.format,
-                                                    params.jpg_quality)) {
+                        } else
+#endif
+                            if (write_image_file(filename, hw_rot_w, hw_rot_h,
+                                                 cpu_contiguous_buffer, params.format,
+                                                 params.jpg_quality)) {
                             ++written_count;
                             if (params.generate_metadata) {
                                 saved_frames.push_back({lfs::core::path_to_utf8(filename.filename()),
@@ -1825,6 +1938,7 @@ namespace lfs::io {
                     }
                     // --- End rotation ---
 
+#if LFS_HAS_CUDA
                     if (gpu_encoding_enabled) {
                         if (batch_encode_w == 0) {
                             batch_encode_w = (sw_rot_w > 0) ? sw_rot_w : out_width;
@@ -1846,9 +1960,11 @@ namespace lfs::io {
                         if (batch_idx >= jpeg_batch_size) {
                             flush_jpeg_batch();
                         }
-                    } else if (write_image_file(filename, sw_rot_w, sw_rot_h,
-                                                cpu_contiguous_buffer, params.format,
-                                                params.jpg_quality)) {
+                    } else
+#endif
+                        if (write_image_file(filename, sw_rot_w, sw_rot_h,
+                                             cpu_contiguous_buffer, params.format,
+                                             params.jpg_quality)) {
                         ++written_count;
                         if (params.generate_metadata) {
                             saved_frames.push_back({lfs::core::path_to_utf8(filename.filename()),
@@ -1893,7 +2009,8 @@ namespace lfs::io {
                                                         const double frame_time) {
                     current_frame_time = frame_time;
                     current_src_frame = source_frame_for_time(frame_time);
-                    if (using_hw_decode)
+                    if (using_hw_decode &&
+                        selected_frame->format == hw_decoder_state.pixel_format)
                         process_frame_hw(selected_frame);
                     else
                         process_frame_sw(selected_frame);
@@ -1961,12 +2078,14 @@ namespace lfs::io {
                                 return false;
                         }
 
-                        if (using_hw_decode)
+                        if (using_hw_decode &&
+                            decoded_frame->format == hw_decoder_state.pixel_format)
                             process_frame_hw(decoded_frame);
                         else
                             process_frame_sw(decoded_frame);
                     } else if (should_extract_frame(frame_time)) {
-                        if (using_hw_decode)
+                        if (using_hw_decode &&
+                            decoded_frame->format == hw_decoder_state.pixel_format)
                             process_frame_hw(decoded_frame);
                         else
                             process_frame_sw(decoded_frame);
@@ -2187,7 +2306,7 @@ namespace lfs::io {
                         };
                         root["processing"] = {
                             {"decoder", {
-                                            {"backend", using_hw_decode ? "nvdec" : "ffmpeg_software"},
+                                            {"backend", saw_hardware_frame ? decoder_backend : "ffmpeg_software"},
                                             {"name", codec && codec->name ? codec->name : "unknown"},
                                             {"threads", using_hw_decode ? 0 : codec_ctx->thread_count},
                                         }},
@@ -2315,50 +2434,27 @@ namespace lfs::io {
                              cuda_upload_seconds, jpeg_encode_seconds, jpeg_write_seconds);
                 }
 
-                // Cleanup
-                if (sws_ctx)
-                    sws_freeContext(sws_ctx);
-                av_frame_free(&frame);
-                av_frame_free(&sw_frame);
-                av_frame_free(&sparse_previous_frame);
-                av_packet_free(&packet);
-                avcodec_free_context(&codec_ctx);
-                if (hw_device_ctx)
-                    av_buffer_unref(&hw_device_ctx);
-                avformat_close_input(&fmt_ctx);
-                delete[] cpu_contiguous_buffer;
-                freeCudaBuffer(gpu_rgb_buffer, "CUDA RGB buffer");
-                freeCudaBuffer(gpu_batch_buffer, "CUDA JPEG batch buffer");
-                freeCudaBuffer(gpu_rotated_buffer, "CUDA rotation buffer");
+                cleanup();
 
+                outcome_ = ExtractionOutcome::Completed;
                 return true;
 
+            } catch (const ExtractionCancelled& e) {
+                cleanup();
+                outcome_ = ExtractionOutcome::Cancelled;
+                error = e.what();
+                return false;
             } catch (const std::exception& e) {
-                if (sws_ctx)
-                    sws_freeContext(sws_ctx);
-                if (frame)
-                    av_frame_free(&frame);
-                if (sw_frame)
-                    av_frame_free(&sw_frame);
-                if (sparse_previous_frame)
-                    av_frame_free(&sparse_previous_frame);
-                if (packet)
-                    av_packet_free(&packet);
-                if (codec_ctx)
-                    avcodec_free_context(&codec_ctx);
-                if (hw_device_ctx)
-                    av_buffer_unref(&hw_device_ctx);
-                if (fmt_ctx)
-                    avformat_close_input(&fmt_ctx);
-                delete[] cpu_contiguous_buffer;
-                freeCudaBuffer(gpu_rgb_buffer, "CUDA RGB buffer");
-                freeCudaBuffer(gpu_batch_buffer, "CUDA JPEG batch buffer");
-                freeCudaBuffer(gpu_rotated_buffer, "CUDA rotation buffer");
-
+                cleanup();
                 error = e.what();
                 return false;
             }
         }
+
+        [[nodiscard]] ExtractionOutcome lastOutcome() const { return outcome_; }
+
+    private:
+        ExtractionOutcome outcome_ = ExtractionOutcome::Failed;
     };
 
     VideoFrameExtractor::VideoFrameExtractor() : impl_(new Impl()) {}
@@ -2366,6 +2462,10 @@ namespace lfs::io {
 
     bool VideoFrameExtractor::extract(const Params& params, std::string& error) {
         return impl_->extract(params, error);
+    }
+
+    ExtractionOutcome VideoFrameExtractor::lastOutcome() const {
+        return impl_->lastOutcome();
     }
 
 } // namespace lfs::io

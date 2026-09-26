@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "depth_window_state.hpp"
 #include "dirty_flags.hpp"
 #include "internal/viewport.hpp"
 #include "rendering_types.hpp"
@@ -87,6 +88,7 @@ namespace lfs::vis {
         float selection_flash_intensity = 0;
         std::vector<FrameViewPanel> view_panels;
         glm::vec2 scene_jitter_pixels{0.0f};
+        std::array<DepthWindowState, 2> panel_depth_windows{};
 
         [[nodiscard]] const FrameViewPanel* findViewPanel(const SplitViewPanelId panel_id) const {
             for (const auto& panel : view_panels) {

@@ -112,6 +112,18 @@ class SplatData:
         Reserve capacity for Gaussians (for densification). Raises if the model is renderer-backed.
         """
 
+class SceneSplatSnapshot:
+    @property
+    def transform(self) -> tuple: ...
+
+    @property
+    def sh_degree(self) -> int: ...
+
+    def splat_data(self) -> SplatData:
+        """
+        Materialize this owned node's local geometry. May run on an export worker.
+        """
+
 class NodeType(enum.Enum):
     SPLAT = 0
 
@@ -461,6 +473,10 @@ class Scene:
     def generation(self) -> int:
         """Generation counter when scene was acquired"""
 
+    @property
+    def render_generation(self) -> int:
+        """Scene content revision, excluding Gaussian selection changes"""
+
     def add_group(self, name: str, parent: int = -1) -> int:
         """Add an empty group node, returns node ID"""
 
@@ -551,6 +567,11 @@ class Scene:
 
     def get_visible_nodes(self) -> list[SceneNode]:
         """Get all visible nodes in the scene"""
+
+    def snapshot_visible_splats(self) -> list[SceneSplatSnapshot]:
+        """
+        Copy visible splats and world transforms at a UI safe point. Returned data owns its storage and supports worker-side export after scene edits or deletion.
+        """
 
     def is_node_effectively_visible(self, id: int) -> bool:
         """Check if a node is visible considering parent visibility"""

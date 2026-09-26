@@ -5,6 +5,7 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "training/kernels/grad_alpha.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
@@ -23,15 +24,15 @@ namespace {
     Camera make_camera(int w, int h) {
         std::vector<float> R_data = {1, 0, 0, 0, 1, 0, 0, 0, 1};
         std::vector<float> T_data = {0, 0, 4};
-        auto R = Tensor::from_blob(R_data.data(), {3, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-        auto T = Tensor::from_blob(T_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+        auto R = Tensor::from_blob(R_data.data(), {3, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+        auto T = Tensor::from_blob(T_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::GPU);
         return Camera(R, T, /*fx=*/100.f, /*fy=*/100.f, /*cx=*/w * 0.5f, /*cy=*/h * 0.5f,
                       Tensor(), Tensor(), CameraModelType::PINHOLE, "test", "",
                       std::filesystem::path{}, w, h, 0);
     }
 
     std::unique_ptr<SplatData> make_splat(int n) {
-        auto means = Tensor::zeros({static_cast<size_t>(n), 3}, Device::CUDA);
+        auto means = Tensor::zeros({static_cast<size_t>(n), 3}, Device::GPU);
         if (n > 0) {
             auto cpu = means.to(Device::CPU);
             float* p = cpu.ptr<float>();
@@ -40,18 +41,18 @@ namespace {
                 p[i * 3 + 1] = (i / 5) * 0.3f - 0.6f;
                 p[i * 3 + 2] = 0.0f;
             }
-            means = cpu.to(Device::CUDA);
+            means = cpu.to(Device::GPU);
         }
-        auto sh0 = Tensor::full({static_cast<size_t>(n), 1, 3}, 0.5f, Device::CUDA);
-        auto shN = Tensor::zeros({static_cast<size_t>(n), 0, 3}, Device::CUDA);
-        auto scaling = Tensor::full({static_cast<size_t>(n), 3}, -2.0f, Device::CUDA);
+        auto sh0 = Tensor::full({static_cast<size_t>(n), 1, 3}, 0.5f, Device::GPU);
+        auto shN = Tensor::zeros({static_cast<size_t>(n), 0, 3}, Device::GPU);
+        auto scaling = Tensor::full({static_cast<size_t>(n), 3}, -2.0f, Device::GPU);
         std::vector<float> rot(static_cast<size_t>(n) * 4, 0.f);
         for (int i = 0; i < n; ++i) {
             rot[static_cast<size_t>(i) * 4] = 1.f;
         }
         auto rotation = Tensor::from_blob(rot.data(), {static_cast<size_t>(n), 4}, Device::CPU, DataType::Float32)
-                            .to(Device::CUDA);
-        auto opacity = Tensor::full({static_cast<size_t>(n)}, 2.0f, Device::CUDA);
+                            .to(Device::GPU);
+        auto opacity = Tensor::full({static_cast<size_t>(n)}, 2.0f, Device::GPU);
         return std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
     }
 
@@ -74,19 +75,23 @@ namespace {
 
 } // namespace
 
-class FusedBgBlendTest : public ::testing::Test {
+class FusedBgBlendTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
-        black_bg_ = Tensor::zeros({3}, Device::CUDA);
+        LFS_CUDA_BACKEND_OR_RETURN();
+        black_bg_ = Tensor::zeros({3}, Device::GPU);
         std::vector<float> bg_host = {0.2f, 0.4f, 0.6f};
         color_bg_ = Tensor::from_blob(bg_host.data(), {3}, Device::CPU, DataType::Float32)
-                        .to(Device::CUDA)
+                        .to(Device::GPU)
                         .contiguous();
         camera_ = std::make_unique<Camera>(make_camera(32, 32));
         splat_ = make_splat(16);
     }
 
     void TearDown() override {
+        if (IsSkipped()) {
+            return;
+        }
         splat_.reset();
         camera_.reset();
         cleanup_arena();
@@ -104,16 +109,7 @@ TEST_F(FusedBgBlendTest, ForwardBlendedMatchesExternalCompose) {
     ASSERT_TRUE(raw_fwd.has_value()) << std::string(raw_fwd.error().user_message());
     auto raw_image = raw_fwd->first.image.clone();
     auto alpha = raw_fwd->first.alpha.clone();
-    const int H = static_cast<int>(raw_image.shape()[1]);
-    const int W = static_cast<int>(raw_image.shape()[2]);
-    auto expected = Tensor::empty_like(raw_image);
-    kernels::launch_fused_background_blend(
-        raw_image.ptr<float>(),
-        alpha.ptr<float>(),
-        color_bg_.ptr<float>(),
-        expected.ptr<float>(),
-        H, W,
-        nullptr);
+    auto expected = raw_image + (Tensor::ones_like(alpha) - alpha) * color_bg_.reshape({3, 1, 1});
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     raw_fwd->second.release_forward_context();
 
@@ -126,8 +122,7 @@ TEST_F(FusedBgBlendTest, ForwardBlendedMatchesExternalCompose) {
     fused_fwd->second.release_forward_context();
 }
 
-// Backward: grad_alpha and param updates bit-equal / <1e-6 whether or not the
-// context image is "raw" (unblend is dead — blend_backward ignores image).
+// Backward: grad_alpha and parameter updates agree for raw and blended context images.
 TEST_F(FusedBgBlendTest, BackwardGradsMatchWithBlendedImage) {
     constexpr float kLr = 0.01f;
 

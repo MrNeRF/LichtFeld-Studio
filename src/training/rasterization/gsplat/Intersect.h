@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "TileBatch.h"
 #include <cstdint>
 #include <cuda_runtime.h>
 
@@ -29,7 +30,7 @@ namespace gsplat_lfs {
         int64_t* isect_ids,       // [n_isects] optional (for second pass)
         int32_t* flatten_ids,     // [n_isects] optional (for second pass)
         cudaStream_t stream = nullptr,
-        int64_t max_isects = -1);
+        int64_t max_isects = -1, TileRange tiles = {});
 
     void launch_fill_isect_sentinels_kernel(
         int64_t* isect_ids,

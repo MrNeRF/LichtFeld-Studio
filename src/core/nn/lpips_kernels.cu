@@ -40,6 +40,7 @@ namespace lfs::core::nn::kernels {
                                      const __half* __restrict__ bias, __half* __restrict__ Y,
                                      const float3 shift, const float3 scale,
                                      const bool official, const int h, const int w) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
             __shared__ __align__(128) unsigned char smem_raw[kRgbSmemBytes];
             auto* tile = reinterpret_cast<__half*>(smem_raw);
             auto* As = tile + kRgbTileHalves;
@@ -149,6 +150,56 @@ namespace lfs::core::nn::kernels {
                     Yn[n * plane + static_cast<long long>(oh) * w + ow] = __float2half_rn(v);
                 }
             }
+#else
+            // Pascal and earlier GPUs have no WMMA support. Keep the launch
+            // geometry, but calculate the same fp16-input/fp16-weight product
+            // directly so every thread owns independent output elements.
+            const int tid = static_cast<int>(threadIdx.x);
+            const int ni = static_cast<int>(blockIdx.z);
+            const int tiles_w = (w + kRgbTileW - 1) / kRgbTileW;
+            const int oh0 = (static_cast<int>(blockIdx.y) / tiles_w) * kRgbTileH;
+            const int ow0 = (static_cast<int>(blockIdx.y) % tiles_w) * kRgbTileW;
+            const long long plane = static_cast<long long>(h) * w;
+            const float* Xn = X + static_cast<long long>(ni) * 3 * plane;
+            __half* Yn = Y + static_cast<long long>(ni) * kRgbCout * plane;
+
+            for (int i = tid; i < kRgbCout * kRgbTileM; i += kRgbThreads) {
+                const int oc = i / kRgbTileM;
+                const int m = i - oc * kRgbTileM;
+                const int oh = oh0 + m / kRgbTileW;
+                const int ow = ow0 + (m - (m / kRgbTileW) * kRgbTileW);
+                if (oh >= h || ow >= w) {
+                    continue;
+                }
+
+                float sum = 0.0f;
+#pragma unroll
+                for (int ic = 0; ic < 3; ++ic) {
+                    const float s = ic == 0 ? shift.x : (ic == 1 ? shift.y : shift.z);
+                    const float d = ic == 0 ? scale.x : (ic == 1 ? scale.y : scale.z);
+#pragma unroll
+                    for (int kh = 0; kh < 3; ++kh) {
+#pragma unroll
+                        for (int kw = 0; kw < 3; ++kw) {
+                            const int ih = oh + kh - 1;
+                            const int iw = ow + kw - 1;
+                            if (static_cast<unsigned>(ih) < static_cast<unsigned>(h) &&
+                                static_cast<unsigned>(iw) < static_cast<unsigned>(w)) {
+                                float x = Xn[ic * plane + static_cast<long long>(ih) * w + iw];
+                                if (official) {
+                                    x = x * 2.0f - 1.0f;
+                                }
+                                const __half xh = __float2half_rn((x - s) / d);
+                                const __half wh = W[oc * kRgbK + ic * 9 + kh * 3 + kw];
+                                sum += __half2float(xh) * __half2float(wh);
+                            }
+                        }
+                    }
+                }
+                const float v = fmaxf(sum + __half2float(bias[oc]), 0.0f);
+                Yn[oc * plane + static_cast<long long>(oh) * w + ow] = __float2half_rn(v);
+            }
+#endif
         }
 
         constexpr int kReduceWarps = 8;

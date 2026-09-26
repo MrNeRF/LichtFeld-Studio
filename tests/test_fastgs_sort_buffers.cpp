@@ -8,8 +8,8 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
-#include "training/rasterization/fastgs/rasterization/include/forward.h"
 #include "training/rasterization/fastgs/rasterization/include/rasterization_api.h"
 
 #include <algorithm>
@@ -28,15 +28,15 @@ namespace {
     Camera make_camera(int w, int h) {
         std::vector<float> R_data = {1, 0, 0, 0, 1, 0, 0, 0, 1};
         std::vector<float> T_data = {0, 0, 4};
-        auto R = Tensor::from_blob(R_data.data(), {3, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-        auto T = Tensor::from_blob(T_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+        auto R = Tensor::from_blob(R_data.data(), {3, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+        auto T = Tensor::from_blob(T_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::GPU);
         return Camera(R, T, /*fx=*/100.f, /*fy=*/100.f, /*cx=*/w * 0.5f, /*cy=*/h * 0.5f,
                       Tensor(), Tensor(), CameraModelType::PINHOLE, "test", "",
                       std::filesystem::path{}, w, h, 0);
     }
 
     std::unique_ptr<SplatData> make_splat(int n) {
-        auto means = Tensor::zeros({static_cast<size_t>(n), 3}, Device::CUDA);
+        auto means = Tensor::zeros({static_cast<size_t>(n), 3}, Device::GPU);
         // Place a few gaussians in front of the camera so n_instances > 0.
         if (n > 0) {
             auto cpu = means.to(Device::CPU);
@@ -46,18 +46,18 @@ namespace {
                 p[i * 3 + 1] = (i / 5) * 0.3f - 0.6f;
                 p[i * 3 + 2] = 0.0f;
             }
-            means = cpu.to(Device::CUDA);
+            means = cpu.to(Device::GPU);
         }
-        auto sh0 = Tensor::full({static_cast<size_t>(n), 1, 3}, 0.5f, Device::CUDA);
-        auto shN = Tensor::zeros({static_cast<size_t>(n), 0, 3}, Device::CUDA);
-        auto scaling = Tensor::full({static_cast<size_t>(n), 3}, -2.0f, Device::CUDA);
+        auto sh0 = Tensor::full({static_cast<size_t>(n), 1, 3}, 0.5f, Device::GPU);
+        auto shN = Tensor::zeros({static_cast<size_t>(n), 0, 3}, Device::GPU);
+        auto scaling = Tensor::full({static_cast<size_t>(n), 3}, -2.0f, Device::GPU);
         std::vector<float> rot(static_cast<size_t>(n) * 4, 0.f);
         for (int i = 0; i < n; ++i) {
             rot[static_cast<size_t>(i) * 4] = 1.f; // identity quat
         }
         auto rotation = Tensor::from_blob(rot.data(), {static_cast<size_t>(n), 4}, Device::CPU, DataType::Float32)
-                            .to(Device::CUDA);
-        auto opacity = Tensor::full({static_cast<size_t>(n)}, 2.0f, Device::CUDA);
+                            .to(Device::GPU);
+        auto opacity = Tensor::full({static_cast<size_t>(n)}, 2.0f, Device::GPU);
         return std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
     }
 
@@ -67,18 +67,20 @@ namespace {
 
 } // namespace
 
-class FastGSSortBufferTest : public ::testing::Test {
+class FastGSSortBufferTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
-        bg_ = Tensor::zeros({3}, Device::CUDA);
+        LFS_CUDA_BACKEND_OR_RETURN();
+        bg_ = Tensor::zeros({3}, Device::GPU);
         camera_ = std::make_unique<Camera>(make_camera(64, 64));
         splat_ = make_splat(32);
     }
 
     void TearDown() override {
+        if (IsSkipped())
+            return;
         splat_.reset();
         camera_.reset();
-        release_fastgs_sort_workspace_buffers();
         cleanup_arena();
     }
 
@@ -88,8 +90,6 @@ protected:
 };
 
 TEST_F(FastGSSortBufferTest, SortWorkspaceIsExactAndArenaOwned) {
-    using fast_lfs::rasterization::sort_workspace_allocated_bytes;
-    using fast_lfs::rasterization::sort_workspace_required_bytes;
 
     auto warm = fast_rasterize_forward(*camera_, *splat_, bg_, 0, 0, 0, 0, false);
     ASSERT_TRUE(warm.has_value()) << lfs::format_for_developer(warm.error());
@@ -97,8 +97,6 @@ TEST_F(FastGSSortBufferTest, SortWorkspaceIsExactAndArenaOwned) {
         << "fixture must produce visible instances so the sort path runs";
     const auto sort_bytes = warm->second.forward_ctx.per_instance_sort_total_size;
     ASSERT_GT(sort_bytes, 0u);
-    EXPECT_EQ(sort_workspace_required_bytes(), 0u);
-    EXPECT_EQ(sort_workspace_allocated_bytes(), 0u);
 
     const auto frame_buffers = GlobalArenaManager::instance().get_arena().get_frame_buffers(
         warm->second.forward_ctx.frame_id);
@@ -187,22 +185,19 @@ TEST_F(FastGSSortBufferTest, ReleasePreflightPointerAttrsAreSkipped) {
 // release the remaining renderer caches, then join.
 // cudaMemGetInfo free must return near the pre-spawn baseline.
 // ---------------------------------------------------------------------------
-TEST(FastGSThreadLocalCacheTest, SpawnRenderJoinReturnsVram) {
-    int device_count = 0;
-    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-        GTEST_SKIP() << "CUDA device unavailable";
-    }
+class FastGSThreadLocalCacheTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(FastGSThreadLocalCacheTest, SpawnRenderJoinReturnsVram) {
 
     // Warm primary thread caches so first-touch noise is outside the measurement.
     {
         auto cam = make_camera(64, 64);
         auto splat = make_splat(64);
-        auto bg = Tensor::zeros({3}, Device::CUDA);
+        auto bg = Tensor::zeros({3}, Device::GPU);
         auto r = fast_rasterize_forward(cam, *splat, bg, 0, 0, 0, 0, false);
         ASSERT_TRUE(r.has_value()) << lfs::format_for_developer(r.error());
         r->second.release_forward_context();
         release_fast_rasterizer_thread_local_caches();
-        release_fastgs_sort_workspace_buffers();
         cleanup_arena();
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     }
@@ -215,6 +210,7 @@ TEST(FastGSThreadLocalCacheTest, SpawnRenderJoinReturnsVram) {
     std::atomic<int> failures{0};
 
     auto worker = [&]() {
+        const GpuBackendScope backend_scope(GpuBackend::CUDA);
         if (cudaSetDevice(0) != cudaSuccess) {
             failures.fetch_add(1);
             return;
@@ -222,7 +218,7 @@ TEST(FastGSThreadLocalCacheTest, SpawnRenderJoinReturnsVram) {
         try {
             auto cam = make_camera(96, 96);
             auto splat = make_splat(128);
-            auto bg = Tensor::zeros({3}, Device::CUDA);
+            auto bg = Tensor::zeros({3}, Device::GPU);
             for (int i = 0; i < kForwardsPerThread; ++i) {
                 auto r = fast_rasterize_forward(cam, *splat, bg, 0, 0, 0, 0, false);
                 if (!r.has_value()) {
@@ -234,7 +230,6 @@ TEST(FastGSThreadLocalCacheTest, SpawnRenderJoinReturnsVram) {
             // Explicit TLS release (mirrors training-thread shutdown). Without
             // this, join relies solely on TLS destructors — which must also free.
             release_fast_rasterizer_thread_local_caches();
-            release_fastgs_sort_workspace_buffers();
             if (cudaDeviceSynchronize() != cudaSuccess) {
                 failures.fetch_add(1);
             }

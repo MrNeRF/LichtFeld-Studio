@@ -331,10 +331,8 @@ namespace lfs::python {
             collect_target_ = target;
             collect_callback_index_ = 0;
         }
-        bool isCollecting() const { return collecting_; }
 
         void setExecuteAtIndex(int index) { execute_at_index_ = index; }
-        int executeAtIndex() const { return execute_at_index_; }
 
         // Text
         void label(const std::string& text);
@@ -578,13 +576,6 @@ namespace lfs::python {
         bool prop_enum(nb::object data, const std::string& prop_id,
                        const std::string& value, const std::string& text = "");
 
-        int next_box_id() { return box_id_counter_++; }
-        int next_grid_id() { return grid_id_counter_++; }
-        void reset_frame_state() {
-            box_id_counter_ = 0;
-            grid_id_counter_ = 0;
-        }
-
         nb::object operator_(const std::string& operator_id, const std::string& text = "",
                              const std::string& icon = "");
 
@@ -671,8 +662,6 @@ namespace lfs::python {
         [[nodiscard]] bool isDrawHook() const { return mode_ == Mode::DrawHook; }
 
         int menu_depth_;
-        int box_id_counter_ = 0;
-        int grid_id_counter_ = 0;
 
         bool collecting_ = false;
         vis::gui::MenuDropdownContent* collect_target_ = nullptr;
@@ -926,10 +915,12 @@ namespace lfs::python {
         void set_enqueue_callback(EnqueueCallback cb);
 
         void show_confirm(const std::string& title, const std::string& message,
-                          const std::vector<std::string>& buttons, nb::object callback);
+                          const std::vector<std::string>& buttons, nb::object callback,
+                          MessageStyle style = MessageStyle::Info);
         void show_confirm(const std::string& title, const std::string& message,
                           const std::vector<std::string>& buttons,
-                          std::function<void(const std::string&)> callback);
+                          std::function<void(const std::string&)> callback,
+                          MessageStyle style = MessageStyle::Info);
         void show_input(const std::string& title, const std::string& message,
                         const std::string& default_value, nb::object callback);
         void show_message(const std::string& title, const std::string& message,

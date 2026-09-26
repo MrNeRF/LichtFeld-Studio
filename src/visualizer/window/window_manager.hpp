@@ -85,6 +85,7 @@ namespace lfs::vis {
         void setTitlebarDragRegion(int height_px, std::vector<HitTestRect> excluded_rects);
         void clearTitlebarDragRegion();
         [[nodiscard]] bool isTitlebarDragPoint(int x, int y) const;
+        [[nodiscard]] bool usesWayland() const { return is_wayland_; }
         [[nodiscard]] bool usesEventDrivenTitlebarDrag() const { return native_titlebar_move_available_; }
         void setFullscreen(bool fullscreen);
         GraphicsBackend graphicsBackend() const { return graphics_backend_; }
@@ -111,6 +112,7 @@ namespace lfs::vis {
 
         SDL_Window* window_ = nullptr;
         std::unique_ptr<VulkanContext> vulkan_context_;
+        bool tensor_backend_adopted_ = false;
         GraphicsBackend graphics_backend_ = GraphicsBackend::Vulkan;
         std::string title_;
         glm::ivec2 window_size_;
@@ -126,6 +128,7 @@ namespace lfs::vis {
         int titlebar_drag_height_px_ = 0;
         std::vector<HitTestRect> titlebar_drag_excluded_rects_;
         bool native_titlebar_move_available_ = false;
+        bool is_wayland_ = false;
         bool pending_titlebar_double_click_ = false;
         bool titlebar_drag_active_ = false;
         bool titlebar_drag_started_maximized_ = false;
@@ -172,6 +175,8 @@ namespace lfs::vis {
         [[nodiscard]] bool titlebarDragMovedEnough() const;
         [[nodiscard]] bool isTitlebarDragAtDisplayTop() const;
         void flushPendingTitlebarDoubleClick();
+        void adoptTensorBackendDevice();
+        void releaseTensorBackendDevice();
     };
 
 } // namespace lfs::vis

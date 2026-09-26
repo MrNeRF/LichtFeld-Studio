@@ -8,16 +8,29 @@
 # ============================================================================
 
 set(LFS_TENSOR_CUDA_SOURCES
-    tensor_ops.cu
-    tensor_warp_reduce.cu
-    tensor_matrix_ops.cu
-    tensor_broadcast_ops.cu
-    tensor_masking_ops.cu
-    tensor_random_ops.cu
-    tensor_strided_ops.cu
-    tensor_dot_optimized.cu
-    tensor_nn_ops.cu
-    tensor_fused_pointwise.cu
+    backend/cuda/kernels/tensor_ops.cu
+    backend/cuda/kernels/tensor_uint32.cu
+    backend/cuda/kernels/tensor_warp_reduce.cu
+    backend/cuda/kernels/tensor_matrix_ops.cu
+    backend/cuda/kernels/tensor_broadcast_ops.cu
+    backend/cuda/kernels/tensor_masking_ops.cu
+    tensor_mask_compaction.cu
+    backend/cuda/kernels/tensor_random_ops.cu
+    backend/cuda/kernels/tensor_strided_ops.cu
+    backend/cuda/kernels/tensor_dot_optimized.cu
+    backend/cuda/kernels/tensor_nn_ops.cu
+    backend/cuda/kernels/tensor_fused_pointwise.cu
+    backend/cuda/kernels/tensor_spatial.cu
+    backend/cuda/kernels/tensor_histogram.cu
+    backend/cuda/kernels/tensor_ppisp.cu
+    backend/cuda/kernels/tensor_environment.cu
+    backend/cuda/kernels/tensor_labels.cu
+    backend/cuda/kernels/tensor_projection.cu
+    backend/cuda/kernels/tensor_point_region.cu
+    backend/cuda/kernels/tensor_filters.cu
+    backend/cuda/kernels/export_morton.cu
+    backend/cuda/kernels/export_kmeans.cu
+    backend/cuda/kernels/export_decimate.cu
 )
 
 if(LFS_TENSOR_CUDA_SOURCES)
@@ -37,6 +50,7 @@ if(LFS_TENSOR_CUDA_SOURCES)
             ${CMAKE_BINARY_DIR}/include
             PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_SOURCE_DIR}/src
             ${CUDAToolkit_INCLUDE_DIRS}
     )
 
@@ -49,13 +63,13 @@ if(LFS_TENSOR_CUDA_SOURCES)
     )
 
     target_compile_options(lfs_tensor_kernels PRIVATE
-            $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:-O0 -g -lineinfo --extended-lambda --expt-relaxed-constexpr -Xcompiler=/Od -Xcompiler=/Z7 -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS -Xcompiler=/bigobj --diag-suppress=27>
-            $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:-O3 -use_fast_math --extended-lambda --expt-relaxed-constexpr -Xcompiler=/O2 -Xcompiler=/DNDEBUG -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS -Xcompiler=/bigobj --diag-suppress=27>
-            $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<NOT:$<CXX_COMPILER_ID:MSVC>>,$<CONFIG:Debug>>:-O0 -g -lineinfo --extended-lambda --expt-relaxed-constexpr>
+            $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:-O0 -g --extended-lambda --expt-relaxed-constexpr -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS -Xcompiler=/bigobj --diag-suppress=27>
+            $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:-O3 -use_fast_math --extended-lambda --expt-relaxed-constexpr -Xcompiler=/DNDEBUG -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS -Xcompiler=/bigobj --diag-suppress=27>
+            $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<NOT:$<CXX_COMPILER_ID:MSVC>>,$<CONFIG:Debug>>:-O0 -g --extended-lambda --expt-relaxed-constexpr>
             $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<NOT:$<CXX_COMPILER_ID:MSVC>>,$<CONFIG:Release>>:-O3 -use_fast_math --extended-lambda --expt-relaxed-constexpr>
     )
 
-    target_compile_definitions(lfs_tensor_kernels PRIVATE LFS_CORE_EXPORTS)
+    target_compile_definitions(lfs_tensor_kernels PRIVATE LFS_CORE_EXPORTS LFS_TENSOR_PRIVATE_ACCESS)
 
     if(MSVC)
         target_compile_definitions(lfs_tensor_kernels PRIVATE
@@ -63,13 +77,17 @@ if(LFS_TENSOR_CUDA_SOURCES)
         )
     endif()
 
-    # Windows nvcc 12.8 ICE workarounds: tensor_broadcast_ops.cu keeps the legacy
-    # -O0 pin; tensor_ops.cu ICEs at -O0 (aggregate codegen) and must build at -O3.
+    # Windows nvcc 12.8 requires -O0 for tensor_broadcast_ops.cu;
+    # tensor_ops.cu requires -O3 to avoid an aggregate-codegen ICE.
     if(WIN32)
         set_source_files_properties(
-            tensor_broadcast_ops.cu
+            backend/cuda/kernels/tensor_broadcast_ops.cu
             PROPERTIES
             COMPILE_FLAGS "-O0"
         )
     endif()
+    # Edge costs are double and compared to the host oracle. use_fast_math on
+    # this library must not flush or contract those operations.
+    set_source_files_properties(backend/cuda/kernels/export_decimate.cu PROPERTIES
+        COMPILE_OPTIONS "--fmad=false;--ftz=false;--prec-div=true;--prec-sqrt=true")
 endif()

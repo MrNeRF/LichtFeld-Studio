@@ -9,7 +9,10 @@
 
 namespace lfs::vis {
     class InputController;
-}
+    namespace gui {
+        struct GuiHitTestResult;
+    }
+} // namespace lfs::vis
 
 namespace lfs::vis::input {
 
@@ -36,6 +39,8 @@ namespace lfs::vis::input {
         void reset();
         void onWindowFocusLost();
         void beginMouseButton(int action, double x, double y);
+        // Reuse the event-time GUI hit recorded by the window's frame buffer.
+        void beginMouseButton(int action, double x, double y, const gui::GuiHitTestResult& hit);
         void endMouseButton(int action);
         void syncPressedMouseButtons(bool any_buttons_pressed);
         void focusViewportKeyboard();

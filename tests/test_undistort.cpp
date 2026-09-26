@@ -2,11 +2,16 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
+#include "core/tensor_backend.hpp"
 #include "io/formats/colmap.hpp"
+#include <cmath>
+#include <cstdint>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <limits>
 
 using namespace lfs::core;
 
@@ -33,7 +38,7 @@ namespace {
     void run_image_undistort(const UndistortParams& params) {
         auto src = Tensor::randn(
             {3, static_cast<size_t>(params.src_height), static_cast<size_t>(params.src_width)},
-            Device::CUDA);
+            Device::GPU);
 
         auto dst = undistort_image(src, params, nullptr);
         cudaDeviceSynchronize();
@@ -47,7 +52,7 @@ namespace {
     void run_mask_undistort(const UndistortParams& params) {
         auto src = Tensor::ones(
             {static_cast<size_t>(params.src_height), static_cast<size_t>(params.src_width)},
-            Device::CUDA);
+            Device::GPU);
 
         auto dst = undistort_mask(src, params, nullptr);
         cudaDeviceSynchronize();
@@ -55,6 +60,34 @@ namespace {
         ASSERT_EQ(dst.ndim(), 2u);
         EXPECT_EQ(static_cast<int>(dst.shape()[0]), params.dst_height);
         EXPECT_EQ(static_cast<int>(dst.shape()[1]), params.dst_width);
+    }
+
+    UndistortParams make_expanding_undistort_params() {
+        const auto radial = Tensor::from_vector({-0.3f, 0.1f, -0.02f}, TensorShape({3}), Device::CPU);
+        return compute_undistort_params(
+            TEST_FX, TEST_FY, TEST_CX, TEST_CY, TEST_W, TEST_H,
+            radial, Tensor(), CameraModelType::PINHOLE);
+    }
+
+    void expect_params_equal(const UndistortParams& actual, const UndistortParams& expected) {
+        EXPECT_FLOAT_EQ(actual.src_fx, expected.src_fx);
+        EXPECT_FLOAT_EQ(actual.src_fy, expected.src_fy);
+        EXPECT_FLOAT_EQ(actual.src_cx, expected.src_cx);
+        EXPECT_FLOAT_EQ(actual.src_cy, expected.src_cy);
+        EXPECT_FLOAT_EQ(actual.dst_fx, expected.dst_fx);
+        EXPECT_FLOAT_EQ(actual.dst_fy, expected.dst_fy);
+        EXPECT_FLOAT_EQ(actual.dst_cx, expected.dst_cx);
+        EXPECT_FLOAT_EQ(actual.dst_cy, expected.dst_cy);
+        EXPECT_EQ(actual.src_width, expected.src_width);
+        EXPECT_EQ(actual.src_height, expected.src_height);
+        EXPECT_EQ(actual.dst_width, expected.dst_width);
+        EXPECT_EQ(actual.dst_height, expected.dst_height);
+        EXPECT_EQ(actual.model_type, expected.model_type);
+        EXPECT_EQ(actual.num_distortion, expected.num_distortion);
+        EXPECT_EQ(actual.crop_solve_failed, expected.crop_solve_failed);
+        for (int i = 0; i < 12; ++i) {
+            EXPECT_FLOAT_EQ(actual.distortion[i], expected.distortion[i]);
+        }
     }
 
 } // namespace
@@ -417,6 +450,85 @@ TEST(ScaleUndistortParams, PreservesPrincipalPointOffset) {
     EXPECT_EQ(scaled.dst_height, 12);
 }
 
+TEST(ScaleUndistortParams, CapsOutputAndScalesDestinationIntrinsics) {
+    const auto params = make_expanding_undistort_params();
+    ASSERT_GT(std::max(params.dst_width, params.dst_height),
+              std::max(params.src_width, params.src_height));
+
+    constexpr int actual_src_width = TEST_W / 2;
+    constexpr int actual_src_height = TEST_H / 2;
+    const auto uncapped = scale_undistort_params(params, actual_src_width, actual_src_height);
+    const int max_width = std::max(uncapped.dst_width, uncapped.dst_height) / 2;
+    ASSERT_GT(max_width, 0);
+
+    const auto capped = scale_undistort_params(
+        params, actual_src_width, actual_src_height, max_width);
+
+    int expected_width;
+    int expected_height;
+    if (uncapped.dst_width > uncapped.dst_height) {
+        expected_width = max_width;
+        expected_height = std::max(
+            1, static_cast<int>(static_cast<std::int64_t>(uncapped.dst_height) * max_width /
+                                uncapped.dst_width));
+    } else {
+        expected_height = max_width;
+        expected_width = std::max(
+            1, static_cast<int>(static_cast<std::int64_t>(uncapped.dst_width) * max_width /
+                                uncapped.dst_height));
+    }
+
+    EXPECT_EQ(std::max(capped.dst_width, capped.dst_height), max_width);
+    EXPECT_EQ(capped.dst_width, expected_width);
+    EXPECT_EQ(capped.dst_height, expected_height);
+    const float dst_sx = static_cast<float>(expected_width) / static_cast<float>(uncapped.dst_width);
+    const float dst_sy = static_cast<float>(expected_height) / static_cast<float>(uncapped.dst_height);
+    EXPECT_FLOAT_EQ(capped.dst_fx, uncapped.dst_fx * dst_sx);
+    EXPECT_FLOAT_EQ(capped.dst_fy, uncapped.dst_fy * dst_sy);
+    EXPECT_FLOAT_EQ(capped.dst_cx, uncapped.dst_cx * dst_sx);
+    EXPECT_FLOAT_EQ(capped.dst_cy, uncapped.dst_cy * dst_sy);
+    EXPECT_FLOAT_EQ(capped.src_fx, uncapped.src_fx);
+    EXPECT_FLOAT_EQ(capped.src_fy, uncapped.src_fy);
+    EXPECT_FLOAT_EQ(capped.src_cx, uncapped.src_cx);
+    EXPECT_FLOAT_EQ(capped.src_cy, uncapped.src_cy);
+    EXPECT_EQ(capped.src_width, uncapped.src_width);
+    EXPECT_EQ(capped.src_height, uncapped.src_height);
+
+    run_image_undistort(capped);
+    run_mask_undistort(capped);
+}
+
+TEST(ScaleUndistortParams, CapsOutputWhenSourceSizeMatches) {
+    const auto params = make_expanding_undistort_params();
+    const int max_width = std::max(params.src_width, params.src_height);
+    ASSERT_GT(std::max(params.dst_width, params.dst_height), max_width);
+
+    const auto capped = scale_undistort_params(
+        params, params.src_width, params.src_height, max_width);
+
+    EXPECT_EQ(std::max(capped.dst_width, capped.dst_height), max_width);
+    EXPECT_LT(capped.dst_width, params.dst_width);
+    EXPECT_LT(capped.dst_height, params.dst_height);
+}
+
+TEST(ScaleUndistortParams, NonRestrictiveCapsMatchUncappedResult) {
+    const auto params = make_expanding_undistort_params();
+    ASSERT_GT(std::max(params.dst_width, params.dst_height),
+              std::max(params.src_width, params.src_height));
+
+    constexpr int actual_src_width = TEST_W / 2;
+    constexpr int actual_src_height = TEST_H / 2;
+    const auto uncapped = scale_undistort_params(params, actual_src_width, actual_src_height);
+    const int output_max = std::max(uncapped.dst_width, uncapped.dst_height);
+
+    for (const int max_width : {output_max, output_max + 1, 0, -1}) {
+        SCOPED_TRACE(max_width);
+        const auto actual = scale_undistort_params(
+            params, actual_src_width, actual_src_height, max_width);
+        expect_params_equal(actual, uncapped);
+    }
+}
+
 // ====================== Mask-image consistency ======================
 
 TEST(UndistortConsistency, MaskAndImageSameDimensions) {
@@ -426,8 +538,8 @@ TEST(UndistortConsistency, MaskAndImageSameDimensions) {
         TEST_FX, TEST_FY, TEST_CX, TEST_CY, TEST_W, TEST_H,
         radial, tangential, CameraModelType::PINHOLE);
 
-    auto img_src = Tensor::randn({3, static_cast<size_t>(TEST_H), static_cast<size_t>(TEST_W)}, Device::CUDA);
-    auto mask_src = Tensor::ones({static_cast<size_t>(TEST_H), static_cast<size_t>(TEST_W)}, Device::CUDA);
+    auto img_src = Tensor::randn({3, static_cast<size_t>(TEST_H), static_cast<size_t>(TEST_W)}, Device::GPU);
+    auto mask_src = Tensor::ones({static_cast<size_t>(TEST_H), static_cast<size_t>(TEST_W)}, Device::GPU);
 
     auto img_dst = undistort_image(img_src, params, nullptr);
     auto mask_dst = undistort_mask(mask_src, params, nullptr);
@@ -447,13 +559,13 @@ TEST(UndistortCenter, CenterPixelPreserved) {
         Tensor::from_vector({-0.1f, 0.01f}, TensorShape({2}), Device::CPU),
         Tensor(), CameraModelType::PINHOLE);
 
-    auto src = Tensor::zeros({1, static_cast<size_t>(TEST_H), static_cast<size_t>(TEST_W)}, Device::CUDA);
+    auto src = Tensor::zeros({1, static_cast<size_t>(TEST_H), static_cast<size_t>(TEST_W)}, Device::GPU);
     auto src_cpu = src.cpu();
     auto acc = src_cpu.accessor<float, 3>();
     int cx = static_cast<int>(TEST_CX);
     int cy = static_cast<int>(TEST_CY);
     acc(0, cy, cx) = 1.0f;
-    src = src_cpu.to(Device::CUDA);
+    src = src_cpu.to(Device::GPU);
 
     auto dst = undistort_image(src, params, nullptr);
     cudaDeviceSynchronize();
@@ -634,4 +746,118 @@ TEST(UndistortScale, ScaleUndistortParams) {
 
     run_image_undistort(scaled);
     run_mask_undistort(scaled);
+}
+
+namespace {
+    void expectImageNear(const Tensor& actual, const Tensor& expected, const float tolerance) {
+        const auto a = actual.cpu().contiguous();
+        const auto e = expected.cpu().contiguous();
+        ASSERT_EQ(a.shape(), e.shape());
+        for (size_t i = 0; i < a.numel(); ++i) {
+            ASSERT_TRUE(std::isfinite(a.ptr<float>()[i])) << i;
+            ASSERT_NEAR(a.ptr<float>()[i], e.ptr<float>()[i], tolerance) << i;
+        }
+    }
+} // namespace
+
+TEST(ImageTensorBackends, UndistortionMatchesCudaAcrossBandsAndCameraModels) {
+    if (!gpu_backend_available(GpuBackend::CUDA) || !gpu_backend_available(GpuBackend::Vulkan)) {
+        GTEST_SKIP() << "Both tensor backends required";
+    }
+    constexpr int width = 513, height = 131;
+    auto cpu = Tensor::empty({3, height, width}, Device::CPU);
+    for (size_t i = 0; i < cpu.numel(); ++i) {
+        cpu.ptr<float>()[i] = std::sin(static_cast<float>(i) * 0.003f) * 0.4f + 0.5f;
+    }
+    for (const auto model : {CameraModelType::PINHOLE, CameraModelType::FISHEYE, CameraModelType::THIN_PRISM_FISHEYE}) {
+        SCOPED_TRACE(static_cast<int>(model));
+        UndistortParams p{};
+        p.src_width = p.dst_width = width;
+        p.src_height = p.dst_height = height;
+        p.src_fx = 320.0f;
+        p.src_fy = 319.0f;
+        p.dst_fx = 300.0f;
+        p.dst_fy = 290.0f;
+        p.src_cx = 257.2f;
+        p.src_cy = 67.1f;
+        p.dst_cx = 258.0f;
+        p.dst_cy = 64.0f;
+        p.model_type = model;
+        p.num_distortion = 10;
+        const float coefficients[] = {-0.15f, 0.01f, 0.002f, -0.001f, 0.003f, -0.002f, 0.001f, 0.0002f, -0.001f, -0.0002f};
+        std::copy(std::begin(coefficients), std::end(coefficients), p.distortion);
+        Tensor expected_image, expected_mask;
+        {
+            GpuBackendScope scope(GpuBackend::CUDA);
+            const auto source = cpu.gpu();
+            expected_image = undistort_image(source, p, nullptr).cpu();
+            expected_mask = undistort_mask(source.slice(0, 1, 2).squeeze(0).contiguous(), p, nullptr).cpu();
+        }
+        expectImageNear(undistort_image(cpu, p, nullptr), expected_image, 0.00015f);
+        expectImageNear(undistort_mask(cpu.slice(0, 1, 2).squeeze(0).contiguous(), p, nullptr), expected_mask, 0.00015f);
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        const auto source = cpu.gpu();
+        // Factory selection on the calling thread must not move resident data.
+        GpuBackendScope other_default(GpuBackend::CUDA);
+        auto image = undistort_image(source, p, nullptr);
+        EXPECT_EQ(gpu_backend_of(image), GpuBackend::Vulkan);
+        expectImageNear(image, expected_image, 0.00015f);
+        expectImageNear(undistort_mask(source.slice(0, 1, 2).squeeze(0).contiguous(), p, nullptr), expected_mask, 0.00015f);
+    }
+}
+
+TEST(ImageTensorBackends, PriorResizePreservesInvalidPixelsAndNormalDirections) {
+    if (!gpu_backend_available(GpuBackend::CUDA) || !gpu_backend_available(GpuBackend::Vulkan)) {
+        GTEST_SKIP() << "Both tensor backends required";
+    }
+    constexpr size_t width = 7, height = 5, plane = width * height;
+    auto depth = Tensor::empty({height, width}, Device::CPU);
+    auto normal = Tensor::empty({3, height, width}, Device::CPU);
+    for (size_t i = 0; i < plane; ++i) {
+        depth.ptr<float>()[i] = static_cast<float>(i) * 0.15f;
+        normal.ptr<float>()[i] = 0.4f;
+        normal.ptr<float>()[plane + i] = 0.5f;
+        normal.ptr<float>()[2 * plane + i] = 0.7f;
+    }
+    const float invalid[] = {0.0f, -1.0f, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity()};
+    for (size_t i = 0; i < 4; ++i) {
+        depth.ptr<float>()[i * 5] = invalid[i];
+        normal.ptr<float>()[i * 5] = i < 2 ? 0.001f : invalid[i];
+        normal.ptr<float>()[plane + i * 5] = 0.002f;
+        normal.ptr<float>()[2 * plane + i * 5] = 0.003f;
+    }
+    for (auto size : {std::pair{13, 9}, std::pair{3, 2}, std::pair{7, 5}}) {
+        SCOPED_TRACE(size.first);
+        Tensor expected_depth, expected_normal;
+        {
+            GpuBackendScope scope(GpuBackend::CUDA);
+            expected_depth = resize_depth_prior(depth.gpu(), size.second, size.first).cpu();
+            expected_normal = resize_normal_prior(normal.gpu(), size.second, size.first).cpu();
+        }
+        expectImageNear(resize_depth_prior(depth, size.second, size.first), expected_depth, 0.00001f);
+        expectImageNear(resize_normal_prior(normal, size.second, size.first), expected_normal, 0.00001f);
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        expectImageNear(resize_depth_prior(depth.gpu(), size.second, size.first), expected_depth, 0.00001f);
+        expectImageNear(resize_normal_prior(normal.gpu(), size.second, size.first), expected_normal, 0.00001f);
+    }
+}
+
+TEST(ImageTensorBackends, LargePhotoKeepsAdjacentPixelIndicesDistinct) {
+    constexpr int width = 6001, height = 3001;
+    auto mask = Tensor::zeros({height, width}, Device::CPU);
+    mask.ptr<float>()[static_cast<size_t>(height - 1) * width + width - 2] = 0.75f;
+    UndistortParams params{};
+    params.model_type = CameraModelType::PINHOLE;
+    params.src_width = width;
+    params.src_height = height;
+    params.dst_width = params.dst_height = 1;
+    params.src_fx = params.src_fy = params.dst_fx = params.dst_fy = 1.0f;
+    params.dst_cx = params.dst_cy = 0.5f;
+    params.src_cx = width - 1.5f;
+    params.src_cy = height - 0.5f;
+    EXPECT_FLOAT_EQ(undistort_mask(mask, params, nullptr).cpu().ptr<float>()[0], 0.75f);
+    if (gpu_backend_available(GpuBackend::Vulkan)) {
+        const GpuBackendScope scope(GpuBackend::Vulkan);
+        EXPECT_FLOAT_EQ(undistort_mask(mask.gpu(), params, nullptr).cpu().ptr<float>()[0], 0.75f);
+    }
 }

@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "cuda_backend_test.hpp"
 #include "lfs/kernels/ssim.cuh"
 
 #include <cmath>
@@ -19,8 +20,8 @@ namespace {
         constexpr int C = 3;
         constexpr int H = 64;
         constexpr int W = 64;
-        pred = Tensor::zeros({1, C, H, W}, Device::CUDA);
-        gt = Tensor::zeros({1, C, H, W}, Device::CUDA);
+        pred = Tensor::zeros({1, C, H, W}, Device::GPU);
+        gt = Tensor::zeros({1, C, H, W}, Device::GPU);
 
         auto pred_cpu = Tensor::zeros({1, C, H, W}, Device::CPU);
         auto gt_cpu = Tensor::zeros({1, C, H, W}, Device::CPU);
@@ -43,23 +44,14 @@ namespace {
                 }
             }
         }
-        pred = pred_cpu.cuda();
-        gt = gt_cpu.cuda();
+        pred = pred_cpu.gpu();
+        gt = gt_cpu.gpu();
         return pred;
     }
 
 } // namespace
 
-class DensifyErrorMapTest : public ::testing::Test {
-protected:
-    void SetUp() override {
-        int device_count = 0;
-        cudaGetDeviceCount(&device_count);
-        if (device_count == 0) {
-            GTEST_SKIP() << "No CUDA device available";
-        }
-    }
-};
+class DensifyErrorMapTest : public lfs::test::CudaBackendTest {};
 
 TEST_F(DensifyErrorMapTest, ContrastStructureIgnoresUniformLuminanceMismatch) {
     Tensor pred, gt;
@@ -73,8 +65,8 @@ TEST_F(DensifyErrorMapTest, ContrastStructureIgnoresUniformLuminanceMismatch) {
     ASSERT_EQ(maps.ssim_map.shape()[1], static_cast<size_t>(3));
     ASSERT_EQ(maps.cs_map.shape()[1], static_cast<size_t>(3));
 
-    auto ssim_err = Tensor::empty({64, 64}, Device::CUDA);
-    auto cs_err = Tensor::empty({64, 64}, Device::CUDA);
+    auto ssim_err = Tensor::empty({64, 64}, Device::GPU);
+    auto cs_err = Tensor::empty({64, 64}, Device::GPU);
     launch_ssim_to_error_map(maps.ssim_map, ssim_err);
     launch_ssim_to_error_map(maps.cs_map, cs_err);
 

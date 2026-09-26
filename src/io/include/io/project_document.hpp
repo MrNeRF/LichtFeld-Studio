@@ -59,6 +59,9 @@ namespace lfs::io::project {
         [[nodiscard]] static lfs::Result<LazyChunkValue>
         from_owned(std::vector<std::byte> bytes,
                    const lfs::core::Uuid& snapshot_uuid);
+        // Independent owner of the same file-backed or owned bytes. Safe to
+        // retain after the source ProjectDocument is closed or replaced.
+        [[nodiscard]] lfs::Result<LazyChunkValue> share() const;
 
         [[nodiscard]] std::uint64_t size() const noexcept;
         [[nodiscard]] const lfs::core::Uuid& snapshot_uuid() const noexcept;
@@ -85,8 +88,8 @@ namespace lfs::io::project {
     };
 
     struct ProjectDocumentOpenOptions {
-        ReaderOptions reader;
-        GeometryDecodeOptions geometry;
+        ReaderOptions reader = {};
+        GeometryDecodeOptions geometry = {};
         // Decode the KB-scale shell chapters only. Embedded scene payloads
         // remain clean source spans until stage_hydration() consumes them.
         bool defer_geometry_payloads = false;
@@ -101,13 +104,23 @@ namespace lfs::io::project {
         // A titled-project Save As uses a new catalog identity. Leave null
         // for ordinary saves, recovery publication, and first save.
         lfs::core::Uuid save_as_project_uuid = {};
+        std::optional<WriterLockLease> save_as_source_lock_lease = std::nullopt;
+        std::vector<lfs::core::Uuid> save_as_excluded_checkpoints = {};
+        std::function<void(float, const std::string&)> save_as_progress = {};
+        std::function<bool()> save_as_cancel = {};
         IndexCompression index_compression = IndexCompression::Zstd;
         std::uint64_t disk_reserve_bytes = 64ull * 1024 * 1024;
-        // Only a file-dialog-confirmed Save As may replace a first-save destination.
+        // First-save replacement requires explicit caller authorization
+        // (file-dialog Save As, or New Project overwrite consent).
         bool allow_existing_destination_replacement = false;
-        // Explicit GUI saves may replace THMB. An empty span means carry the
-        // current preview forward without regenerating it.
+        // Explicit callers may replace THMB. An empty span means carry the
+        // current preview forward; automatic preview generation only fills a
+        // missing THMB.
         std::span<const std::byte> preview_png;
+        bool remove_preview = false;
+        // When enabled, an ordinary explicit save creates a dataset preview
+        // only when the opened source has no THMB.
+        bool regenerate_dataset_preview = true;
         // Optional deterministic seam for Save As's internal compaction
         // generation. Normal callers leave these unset.
         lfs::core::Uuid save_as_compaction_commit_uuid = {};
@@ -122,6 +135,15 @@ namespace lfs::io::project {
         // the live document to that app-private path.
         bool leave_unbound = false;
     };
+
+    // Inspect a first-save destination without creating, truncating, or
+    // unlinking it. Unauthorized collisions return AlreadyExists. Authorized
+    // replacement still refuses unreadable or writer-incompatible files so
+    // the previous bytes stay in place.
+    [[nodiscard]] LFS_IO_API lfs::Result<void>
+    preflight_first_save_destination(
+        const std::filesystem::path& path,
+        bool allow_existing_destination_replacement);
 
     [[nodiscard]] LFS_IO_API lfs::Result<std::vector<std::byte>>
     dataset_preview_png(const std::filesystem::path& first_image,
@@ -257,6 +279,8 @@ namespace lfs::io::project {
         [[nodiscard]] ProjectChapter& edit_project() noexcept;
         [[nodiscard]] lfs::Result<void> set_license(const ProjectLicense& value);
         [[nodiscard]] lfs::Result<void> clear_license();
+        [[nodiscard]] lfs::Result<void> adopt_import_license(
+            const std::optional<std::vector<uint8_t>>& license_bytes);
         [[nodiscard]] const ReferencesChapter& references() const noexcept;
         [[nodiscard]] ReferencesChapter& edit_references() noexcept;
         [[nodiscard]] const SceneGraphChapter& scene_graph() const noexcept;
@@ -294,6 +318,9 @@ namespace lfs::io::project {
 
         [[nodiscard]] const LazyChunkValue*
         find_dataset_source(const lfs::core::Uuid& instance_uuid) const noexcept;
+        [[nodiscard]] lfs::Result<std::filesystem::path> embedded_asset_directory() const;
+        [[nodiscard]] lfs::Result<std::filesystem::path>
+        materialize_embedded_asset(const lfs::core::Uuid& uuid, std::string_view extension) const;
         [[nodiscard]] std::vector<lfs::core::Uuid>
         dataset_source_uuids() const;
         [[nodiscard]] lfs::Result<ProjectDocumentSaveReport>
@@ -360,7 +387,12 @@ namespace lfs::io::project {
         save_autosave(
             const std::filesystem::path& sidecar_path,
             const ProjectDocumentAutosaveOptions& options);
-
+        // Append THMB onto the current source generation without encoding
+        // dirty chapters or payloads. Clean proofs are rebound to the new
+        // head so a later save can carry the thumbnail forward.
+        [[nodiscard]] lfs::Result<ProjectDocumentSaveReport>
+        save_preview(std::span<const std::byte> png_bytes,
+                     const ProjectDocumentSaveOptions& options = {});
         // Phase-A interactive shell. Heavy geometry and selection masks stay
         // deferred, while nodes and selection-group metadata are coherent.
         [[nodiscard]] lfs::Result<std::unique_ptr<lfs::core::Scene>>

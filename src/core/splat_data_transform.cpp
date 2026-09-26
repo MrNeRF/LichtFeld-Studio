@@ -9,6 +9,9 @@
 #include "core/point_cloud.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
+#include "core/tensor_backend.hpp"
+#include "core/tensor_sh.hpp"
+#include "core/tensor_splat.hpp"
 #include "geometry/bounding_box.hpp"
 
 #include <algorithm>
@@ -29,7 +32,6 @@ namespace lfs::core {
 
         constexpr double SH_C1 = 0.48860251190291987;
         constexpr double SH_C2_0 = 1.0925484305920792;
-        constexpr double SH_C2_1 = 0.94617469575755997;
         constexpr double SH_C2_2 = 0.31539156525251999;
         constexpr double SH_C2_3 = 0.54627421529603959;
 
@@ -80,22 +82,24 @@ namespace lfs::core {
             const double zz = z * z;
 
             switch (band) {
+            case 0:
+                return {0.28209479177387814};
             case 1:
                 return {-SH_C1 * y, SH_C1 * z, -SH_C1 * x};
             case 2:
                 return {
                     SH_C2_0 * x * y,
                     -SH_C2_0 * y * z,
-                    SH_C2_1 * zz - SH_C2_2,
+                    SH_C2_2 * (2.0 * zz - xx - yy),
                     -SH_C2_0 * x * z,
                     SH_C2_3 * (xx - yy)};
             case 3:
                 return {
                     SH_C3_0 * y * (-3.0 * xx + yy),
                     SH_C3_1 * x * y * z,
-                    SH_C3_2 * y * (1.0 - 5.0 * zz),
-                    SH_C3_3 * z * (5.0 * zz - 3.0),
-                    SH_C3_2 * x * (1.0 - 5.0 * zz),
+                    SH_C3_2 * y * (xx + yy - 4.0 * zz),
+                    SH_C3_3 * z * (2.0 * zz - 3.0 * xx - 3.0 * yy),
+                    SH_C3_2 * x * (xx + yy - 4.0 * zz),
                     SH_C3_4 * z * (xx - yy),
                     SH_C3_0 * x * (-xx + 3.0 * yy)};
             default:
@@ -156,24 +160,36 @@ namespace lfs::core {
 
         [[nodiscard]] std::optional<std::vector<float>> compute_sh_coeff_rotation_matrix(
             const glm::mat3& rotation_local_to_world,
-            const int band) {
+            const int band,
+            const bool mix_bands = false) {
             if (band < 1 || band > 3) {
                 return std::nullopt;
             }
 
-            const int basis_count = 2 * band + 1;
+            const int basis_count = mix_bands ? (band + 1) * (band + 1) : 2 * band + 1;
             const auto sample_dirs = fibonacci_sphere_dirs(SH_FIT_SAMPLE_COUNT);
 
             const glm::dmat3 rot(rotation_local_to_world);
-            const glm::dmat3 rot_inv = glm::inverse(rot);
+            const glm::dmat3 direction_pull = mix_bands ? glm::transpose(rot) : glm::inverse(rot);
+            const auto evaluate_basis = [band, mix_bands](const glm::dvec3& dir) {
+                if (!mix_bands)
+                    return eval_sh_band_basis(band, dir);
+                std::vector<double> result;
+                for (int degree = 0; degree <= band; ++degree) {
+                    const auto part = eval_sh_band_basis(degree, dir);
+                    result.insert(result.end(), part.begin(), part.end());
+                }
+                return result;
+            };
 
             std::vector<double> wtw(static_cast<size_t>(basis_count * basis_count), 0.0);
             std::vector<double> wtl(static_cast<size_t>(basis_count * basis_count), 0.0);
 
             for (const auto& world_dir : sample_dirs) {
-                const glm::dvec3 local_dir = glm::normalize(rot_inv * world_dir);
-                const std::vector<double> basis_world = eval_sh_band_basis(band, world_dir);
-                const std::vector<double> basis_local = eval_sh_band_basis(band, local_dir);
+                const glm::dvec3 pulled = direction_pull * world_dir;
+                const glm::dvec3 local_dir = mix_bands ? pulled : glm::normalize(pulled);
+                const std::vector<double> basis_world = evaluate_basis(world_dir);
+                const std::vector<double> basis_local = evaluate_basis(local_dir);
 
                 for (int r = 0; r < basis_count; ++r) {
                     for (int c = 0; c < basis_count; ++c) {
@@ -218,6 +234,25 @@ namespace lfs::core {
             const int max_band = std::min(3, splat_data.get_max_sh_degree());
             const auto device = shN_canon.device();
 
+            const bool orthogonal = std::abs(glm::dot(rotation_local_to_world[0], rotation_local_to_world[1])) <= 1e-6f &&
+                                    std::abs(glm::dot(rotation_local_to_world[0], rotation_local_to_world[2])) <= 1e-6f &&
+                                    std::abs(glm::dot(rotation_local_to_world[1], rotation_local_to_world[2])) <= 1e-6f;
+            if (!orthogonal) {
+                // Native rendering does not normalize the pulled direction.
+                // Its polynomial remains in bands 0..degree, but shear mixes
+                // those bands, including DC. A per-band rotation cannot match.
+                const auto matrix = compute_sh_coeff_rotation_matrix(rotation_local_to_world, max_band, true);
+                if (!matrix)
+                    return false;
+                const size_t count = (max_band + 1) * (max_band + 1);
+                const auto coefficients = Tensor::cat({splat_data.sh0_raw(), shN_canon}, 1);
+                const auto operator_tensor = Tensor::from_vector(*matrix, {count, count}, device);
+                const auto transformed = coefficients.permute({2, 0, 1}).matmul(operator_tensor).permute({1, 2, 0});
+                splat_data.sh0_raw() = transformed.slice(1, 0, 1).contiguous();
+                splat_data.shN_set_from_canonical(transformed.slice(1, 1, count).contiguous(), splat_data.means().capacity());
+                return true;
+            }
+
             for (int band = 1; band <= max_band; ++band) {
                 const int coeff_count = 2 * band + 1;
                 const int offset = sh_band_offset_in_rest(band);
@@ -258,6 +293,7 @@ namespace lfs::core {
             return splat_data;
         }
 
+        const GpuBackendScope backend_scope(gpu_backend_of(splat_data._means).value_or(default_gpu_backend()));
         const int num_points = splat_data._means.size(0);
         auto device = splat_data._means.device();
 
@@ -290,47 +326,79 @@ namespace lfs::core {
         glm::quat rotation_quat = glm::quat_cast(rot_mat);
 
         const bool has_rotation = has_significant_rotation(rotation_quat);
+        const float largest_scale = std::max({scale.x, scale.y, scale.z});
+        const bool similarity = largest_scale > 0.0f && glm::determinant(rot_mat) > 0.0f &&
+                                std::abs(scale.x - scale.y) <= 1e-6f * largest_scale &&
+                                std::abs(scale.x - scale.z) <= 1e-6f * largest_scale &&
+                                std::abs(glm::dot(rot_mat[0], rot_mat[1])) <= 1e-6f &&
+                                std::abs(glm::dot(rot_mat[0], rot_mat[2])) <= 1e-6f &&
+                                std::abs(glm::dot(rot_mat[1], rot_mat[2])) <= 1e-6f;
+
+        if (!similarity) {
+            // Preserve the full affine covariance instead of averaging node
+            // scale. Work from the original quaternion and log scales.
+            splat_transform::LinearTransform linear;
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    linear.rows[3 * i + j] = transform_matrix[j][i];
+            auto scales = splat_data._scaling.contiguous();
+            auto rotations = splat_data._rotation.contiguous();
+            auto out_scales = Tensor::empty(scales.shape(), device, DataType::Float32);
+            auto out_rotations = Tensor::empty(rotations.shape(), device, DataType::Float32);
+            affine_splat_geometry(linear, scales, rotations, out_scales, out_rotations);
+            splat_data._scaling = std::move(out_scales);
+            splat_data._rotation = std::move(out_rotations);
+        }
 
         // 3. Transform rotations (quaternions) and SH orientation if there's rotation
         if (has_rotation) {
-            std::vector<float> rot_data = {rotation_quat.w, rotation_quat.x, rotation_quat.y, rotation_quat.z};
-            auto rot_tensor = Tensor::from_vector(rot_data, TensorShape({4}), device);
+            if (similarity) {
+                std::vector<float> rot_data = {rotation_quat.w, rotation_quat.x, rotation_quat.y, rotation_quat.z};
+                auto rot_tensor = Tensor::from_vector(rot_data, TensorShape({4}), device);
 
-            auto q = splat_data._rotation;
-            std::vector<int> expand_shape = {num_points, 4};
-            auto q_rot = rot_tensor.unsqueeze(0).expand(std::span<const int>(expand_shape));
+                auto q = splat_data._rotation;
+                std::vector<int> expand_shape = {num_points, 4};
+                auto q_rot = rot_tensor.unsqueeze(0).expand(std::span<const int>(expand_shape));
 
-            auto w1 = q_rot.slice(1, 0, 1).squeeze(1);
-            auto x1 = q_rot.slice(1, 1, 2).squeeze(1);
-            auto y1 = q_rot.slice(1, 2, 3).squeeze(1);
-            auto z1 = q_rot.slice(1, 3, 4).squeeze(1);
+                auto w1 = q_rot.slice(1, 0, 1).squeeze(1);
+                auto x1 = q_rot.slice(1, 1, 2).squeeze(1);
+                auto y1 = q_rot.slice(1, 2, 3).squeeze(1);
+                auto z1 = q_rot.slice(1, 3, 4).squeeze(1);
 
-            auto w2 = q.slice(1, 0, 1).squeeze(1);
-            auto x2 = q.slice(1, 1, 2).squeeze(1);
-            auto y2 = q.slice(1, 2, 3).squeeze(1);
-            auto z2 = q.slice(1, 3, 4).squeeze(1);
+                auto w2 = q.slice(1, 0, 1).squeeze(1);
+                auto x2 = q.slice(1, 1, 2).squeeze(1);
+                auto y2 = q.slice(1, 2, 3).squeeze(1);
+                auto z2 = q.slice(1, 3, 4).squeeze(1);
 
-            auto w_new = w1.mul(w2).sub(x1.mul(x2)).sub(y1.mul(y2)).sub(z1.mul(z2));
-            auto x_new = w1.mul(x2).add(x1.mul(w2)).add(y1.mul(z2)).sub(z1.mul(y2));
-            auto y_new = w1.mul(y2).sub(x1.mul(z2)).add(y1.mul(w2)).add(z1.mul(x2));
-            auto z_new = w1.mul(z2).add(x1.mul(y2)).sub(y1.mul(x2)).add(z1.mul(w2));
+                auto w_new = w1.mul(w2).sub(x1.mul(x2)).sub(y1.mul(y2)).sub(z1.mul(z2));
+                auto x_new = w1.mul(x2).add(x1.mul(w2)).add(y1.mul(z2)).sub(z1.mul(y2));
+                auto y_new = w1.mul(y2).sub(x1.mul(z2)).add(y1.mul(w2)).add(z1.mul(x2));
+                auto z_new = w1.mul(z2).add(x1.mul(y2)).sub(y1.mul(x2)).add(z1.mul(w2));
 
-            std::vector<Tensor> components = {
-                w_new.unsqueeze(1),
-                x_new.unsqueeze(1),
-                y_new.unsqueeze(1),
-                z_new.unsqueeze(1)};
-            splat_data._rotation = Tensor::cat(components, 1);
-
-            if (!rotate_sh_coefficients(splat_data, rot_mat)) {
-                throw std::runtime_error("SH rotation during transform is only supported up to degree 3.");
+                std::vector<Tensor> components = {
+                    w_new.unsqueeze(1),
+                    x_new.unsqueeze(1),
+                    y_new.unsqueeze(1),
+                    z_new.unsqueeze(1)};
+                splat_data._rotation = Tensor::cat(components, 1);
             }
         }
 
+        // Match extract_rotation_rows: a degenerate node axis skips the SH
+        // direction pull. Compare the matrix itself, not quat_cast(shear).
+        bool changes_sh = false;
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j)
+                changes_sh |= std::abs(rot_mat[i][j] - (i == j ? 1.0f : 0.0f)) > ROTATION_EPS;
+        if (changes_sh && scale.x > 1e-8f && scale.y > 1e-8f && scale.z > 1e-8f &&
+            !rotate_sh_coefficients(splat_data, rot_mat)) {
+            throw std::runtime_error("SH transformation is only supported up to degree 3.");
+        }
+
         // 4. Transform scaling
-        if (std::abs(scale.x - 1.0f) > 1e-6f ||
-            std::abs(scale.y - 1.0f) > 1e-6f ||
-            std::abs(scale.z - 1.0f) > 1e-6f) {
+        if (similarity && (std::abs(scale.x - 1.0f) > 1e-6f ||
+                           std::abs(scale.y - 1.0f) > 1e-6f ||
+                           std::abs(scale.z - 1.0f) > 1e-6f)) {
 
             float avg_scale = (scale.x + scale.y + scale.z) / 3.0f;
             splat_data._scaling = splat_data._scaling.add(std::log(avg_scale));
@@ -430,45 +498,17 @@ namespace lfs::core {
         auto cropped_sh0 = splat_data._sh0.index_select(0, indices).contiguous();
         Tensor cropped_shN;
         const size_t layout_rest = splat_data.max_sh_coeffs_rest();
-        const bool use_canonical_shN =
-            splat_data._shN.is_valid() && splat_data._shN.numel() > 0 && layout_rest > 0 &&
-            (splat_data._shN.dtype() != DataType::Float32 || splat_data.shN_value_quantized() ||
-             splat_data.shN_ieee_f16());
-        if (use_canonical_shN) {
-            // q16 / IEEE-f16: dequant to [N,K,3] then index_select (no ptr<float> on codes).
-            Tensor canon = splat_data.shN_canonical();
-            if (canon.device() != splat_data._means.device()) {
-                canon = canon.to(splat_data._means.device());
-            }
-            auto indices_for_select = indices;
-            if (indices_for_select.dtype() != DataType::Int32 &&
-                indices_for_select.dtype() != DataType::Int64) {
-                indices_for_select = indices_for_select.to(DataType::Int32);
-            }
-            cropped_shN = canon.index_select(0, indices_for_select).contiguous();
-        } else if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0 && layout_rest > 0) {
-            cropped_shN = Tensor::empty({static_cast<size_t>(points_selected), layout_rest, 3},
-                                        splat_data._shN.device());
-            if (indices.dtype() == DataType::Int64) {
-                shN_swizzled_gather_to_linear_i64(
-                    splat_data._shN.ptr<float>(),
-                    indices.ptr<int64_t>(),
-                    cropped_shN.ptr<float>(),
-                    static_cast<size_t>(points_selected),
-                    static_cast<uint32_t>(layout_rest),
-                    static_cast<uint32_t>(layout_rest));
-            } else {
-                auto indices_i32 = indices.dtype() == DataType::Int32
-                                       ? indices
-                                       : indices.to(DataType::Int32);
-                shN_swizzled_gather_to_linear(
-                    splat_data._shN.ptr<float>(),
-                    indices_i32.ptr<int>(),
-                    cropped_shN.ptr<float>(),
-                    static_cast<size_t>(points_selected),
-                    static_cast<uint32_t>(layout_rest),
-                    static_cast<uint32_t>(layout_rest));
-            }
+        if (splat_data._shN.is_valid() && splat_data._shN.numel() && layout_rest) {
+            cropped_shN = Tensor::empty_like(splat_data._shN, {size_t(points_selected), layout_rest, 3}, DataType::Float32);
+            sh_codec(splat_data._shN, cropped_shN,
+                     {.source_format = sh_storage_format(splat_data._shN, splat_data._shN_value_bounds),
+                      .destination_format = ShFormat::Canonical,
+                      .source_rows = size_t(num_points),
+                      .destination_rows = size_t(points_selected),
+                      .count = size_t(points_selected),
+                      .source_rest = uint32_t(layout_rest),
+                      .destination_rest = uint32_t(layout_rest)},
+                     &indices, splat_data.shN_value_quantized() ? &splat_data._shN_value_bounds : nullptr);
         }
         auto cropped_scaling = splat_data._scaling.index_select(0, indices).contiguous();
         auto cropped_rotation = splat_data._rotation.index_select(0, indices).contiguous();
@@ -667,11 +707,10 @@ namespace lfs::core {
             (splat_data._shN.dtype() != DataType::Float32 || splat_data.shN_value_quantized() ||
              splat_data.shN_ieee_f16());
         if (q16_or_f16) {
-            Tensor canon = splat_data.shN_canonical();
-            if (canon.device() != splat_data._means.device()) {
-                canon = canon.to(splat_data._means.device());
-            }
-            shN_selected_canonical = canon.index_select(0, indices_tensor).contiguous();
+            shN_selected_canonical = Tensor::empty_like(splat_data._shN, {size_t(num_required_splat), size_t(layout_rest), 3}, DataType::Float32);
+            sh_codec(splat_data._shN, shN_selected_canonical,
+                     {.source_format = sh_storage_format(splat_data._shN, splat_data._shN_value_bounds), .destination_format = ShFormat::Canonical, .source_rows = size_t(splat_data.size()), .destination_rows = size_t(num_required_splat), .count = size_t(num_required_splat), .source_rest = layout_rest, .destination_rest = layout_rest},
+                     &indices_tensor, splat_data.shN_value_quantized() ? &splat_data._shN_value_bounds : nullptr);
         } else if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0 &&
                    layout_rest > 0) {
             shN_selected_swizzled = Tensor::zeros_direct(
@@ -681,13 +720,8 @@ namespace lfs::core {
             auto indices_i32 = indices_tensor.dtype() == DataType::Int32
                                    ? indices_tensor
                                    : indices_tensor.to(DataType::Int32);
-            shN_swizzled_gather_self(
-                splat_data._shN.ptr<float>(),
-                shN_selected_swizzled.ptr<float>(),
-                indices_i32.ptr<int>(),
-                static_cast<size_t>(num_required_splat),
-                0,
-                layout_rest);
+            sh_codec(splat_data._shN, shN_selected_swizzled,
+                     {.source_rows = size_t(splat_data.size()), .destination_rows = size_t(num_required_splat), .count = size_t(num_required_splat), .source_rest = layout_rest, .destination_rest = layout_rest}, &indices_i32);
         }
 
         splat_data._means = splat_data._means.index_select(0, indices_tensor).contiguous();
@@ -764,8 +798,8 @@ namespace lfs::core {
                 if (gathered.dtype() != DataType::Bool) {
                     gathered = gathered.to(DataType::Bool);
                 }
-                if (gathered.device() != Device::CUDA) {
-                    gathered = gathered.cuda();
+                if (gathered.device() != Device::GPU) {
+                    gathered = gathered.gpu();
                 }
                 gathered.set_name("splat.deleted_mask");
                 splat_data.deleted() = std::move(gathered);
@@ -866,6 +900,23 @@ namespace lfs::core {
         return true;
     }
 
+    void copy_sh_coefficients(const SplatData& model, Tensor& destination,
+                              size_t destination_offset, uint32_t destination_rest) {
+        const auto count = static_cast<size_t>(model.size());
+        const auto rest = static_cast<uint32_t>(model.max_sh_coeffs_rest());
+        if (!count || !rest || !destination_rest)
+            return;
+        sh_codec(model.shN_raw(), destination,
+                 {.source_format = sh_storage_format(model.shN_raw(), model.shN_value_bounds()),
+                  .source_rows = count,
+                  .destination_rows = destination.numel() / (((destination_rest * 3 + 3) / 4) * 4),
+                  .count = count,
+                  .source_rest = rest,
+                  .destination_rest = destination_rest,
+                  .destination_offset = destination_offset},
+                 nullptr, model.shN_value_quantized() ? &model.shN_value_bounds() : nullptr);
+    }
+
     SplatData extract_by_mask(const SplatData& splat_data, const Tensor& mask) {
         if (!splat_data._means.is_valid() || splat_data._means.size(0) == 0) {
             return SplatData();
@@ -873,6 +924,9 @@ namespace lfs::core {
         if (!mask.is_valid() || mask.size(0) != splat_data._means.size(0)) {
             return SplatData();
         }
+        std::optional<GpuBackendScope> backend_scope;
+        if (const auto backend = gpu_backend_of(splat_data._means))
+            backend_scope.emplace(*backend);
 
         const auto selection_mask = mask.to(DataType::Bool);
         const int count = selection_mask.sum_scalar();
@@ -885,46 +939,23 @@ namespace lfs::core {
             indices = indices.squeeze(1);
         }
 
-        Tensor shN_selected;
-        const size_t layout_rest = splat_data.max_sh_coeffs_rest();
-        const bool use_canonical_shN =
-            splat_data._shN.is_valid() && splat_data._shN.numel() > 0 && layout_rest > 0 &&
-            (splat_data._shN.dtype() != DataType::Float32 || splat_data.shN_value_quantized() ||
-             splat_data.shN_ieee_f16());
-        if (use_canonical_shN) {
-            Tensor canon = splat_data.shN_canonical();
-            if (canon.device() != splat_data._means.device()) {
-                canon = canon.to(splat_data._means.device());
-            }
-            auto indices_for_select = indices;
-            if (indices_for_select.dtype() != DataType::Int32 &&
-                indices_for_select.dtype() != DataType::Int64) {
-                indices_for_select = indices_for_select.to(DataType::Int32);
-            }
-            shN_selected = canon.index_select(0, indices_for_select).contiguous();
-        } else if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0 && layout_rest > 0) {
-            shN_selected = Tensor::empty({static_cast<size_t>(count), layout_rest, 3},
-                                         splat_data._shN.device());
-            if (indices.dtype() == DataType::Int64) {
-                shN_swizzled_gather_to_linear_i64(
-                    splat_data._shN.ptr<float>(),
-                    indices.ptr<int64_t>(),
-                    shN_selected.ptr<float>(),
-                    static_cast<size_t>(count),
-                    static_cast<uint32_t>(layout_rest),
-                    static_cast<uint32_t>(layout_rest));
-            } else {
-                auto indices_i32 = indices.dtype() == DataType::Int32
-                                       ? indices
-                                       : indices.to(DataType::Int32);
-                shN_swizzled_gather_to_linear(
-                    splat_data._shN.ptr<float>(),
-                    indices_i32.ptr<int>(),
-                    shN_selected.ptr<float>(),
-                    static_cast<size_t>(count),
-                    static_cast<uint32_t>(layout_rest),
-                    static_cast<uint32_t>(layout_rest));
-            }
+        Tensor shN_selected, selected_bounds;
+        const uint32_t layout_rest = static_cast<uint32_t>(splat_data.max_sh_coeffs_rest());
+        const bool resident_output = splat_data._shN.is_valid() && splat_data._shN.device() == Device::GPU;
+        const bool quantized_output = resident_output && sh_value_quant::enabled();
+        if (splat_data._shN.is_valid() && splat_data._shN.numel() && layout_rest) {
+            const auto format = quantized_output ? ShFormat::Q16 : resident_output ? ShFormat::Float32
+                                                                                   : ShFormat::Canonical;
+            const auto shape = resident_output ? TensorShape({quantized_output ? sh_value_quant::sh_value_u16_count(count, layout_rest)
+                                                                               : sh_swizzled_float_count(count, layout_rest)})
+                                               : TensorShape({size_t(count), size_t(layout_rest), size_t{3}});
+            shN_selected = Tensor::empty(shape, splat_data._shN.device(), quantized_output ? DataType::Float16 : DataType::Float32);
+            if (quantized_output)
+                selected_bounds = Tensor::empty({sh_value_quant::n_bounds_for_prims(count) * 2}, splat_data._shN.device());
+            sh_codec(splat_data._shN, shN_selected,
+                     {.source_format = sh_storage_format(splat_data._shN, splat_data._shN_value_bounds), .destination_format = format, .source_rows = size_t(splat_data.size()), .destination_rows = size_t(count), .count = size_t(count), .source_rest = layout_rest, .destination_rest = layout_rest},
+                     &indices, splat_data.shN_value_quantized() ? &splat_data._shN_value_bounds : nullptr,
+                     quantized_output ? &selected_bounds : nullptr);
         }
 
         SplatData result(
@@ -935,8 +966,8 @@ namespace lfs::core {
             splat_data._scaling.index_select(0, indices).contiguous(),
             splat_data._rotation.index_select(0, indices).contiguous(),
             splat_data._opacity.index_select(0, indices).contiguous(),
-            splat_data._scene_scale);
-        result.set_active_sh_degree(splat_data._active_sh_degree);
+            splat_data._scene_scale, resident_output ? SplatData::ShNLayout::Swizzled : SplatData::ShNLayout::Canonical);
+        result.set_active_sh_degree(splat_data._active_sh_degree, std::move(selected_bounds));
 
         // If the mask keeps every gaussian, preserve the LOD tree unchanged.
         if (count == static_cast<int>(splat_data.size()) && splat_data.lod_tree) {

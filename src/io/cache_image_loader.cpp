@@ -3,16 +3,22 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "io/cache_image_loader.hpp"
+#if LFS_HAS_CUDA
+#include "image_execution.hpp"
+#endif
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
+#if LFS_HAS_CUDA
 #include "io/cuda/image_format_kernels.cuh"
 #include "io/nvcodec_image_loader.hpp"
+#include <cuda_runtime.h>
+#endif
 
 #include <algorithm>
-#include <cuda_runtime.h>
 #include <fstream>
 
 #ifdef __linux__
@@ -322,11 +328,16 @@ namespace lfs::io {
     lfs::core::Tensor CacheLoader::load_cached_image(const std::filesystem::path& path, const LoadParams& params) {
         using namespace lfs::core;
 
-        determine_nv_image_codec();
-
-        if (nv_image_codec_available_ == NvImageCodecMode::Available && is_jpeg_format(path)) {
-            return load_jpeg_with_hardware_decode(path, params);
+        // Hardware decode and its layout kernels write CUDA storage. Viewer
+        // image loading on another tensor backend uses the existing CPU cache.
+#if LFS_HAS_CUDA
+        if (default_gpu_backend() == GpuBackend::CUDA) {
+            determine_nv_image_codec();
+            if (nv_image_codec_available_ == NvImageCodecMode::Available && is_jpeg_format(path)) {
+                return load_jpeg_with_hardware_decode(path, params);
+            }
         }
+#endif
 
         determine_cache_mode(path, params);
 
@@ -380,6 +391,7 @@ namespace lfs::io {
         }
     }
 
+#if LFS_HAS_CUDA
     namespace {
 
         NvCodecImageLoader& get_nvcodec_loader() {
@@ -399,6 +411,9 @@ namespace lfs::io {
         }
 
         lfs::core::Tensor decode_with_cpu_fallback(const std::filesystem::path& path, const LoadParams& params) {
+            const auto stream = image_execution_stream(params.cuda_stream);
+            const lfs::core::CUDAStreamGuard execution_scope(stream);
+
             using namespace lfs::core;
 
             auto [img_data, width, height, channels] = load_image(path, params.resize_factor, params.max_width);
@@ -412,23 +427,23 @@ namespace lfs::io {
             std::memcpy(cpu_tensor.data_ptr(), img_data, static_cast<size_t>(height) * width * channels);
             free_image(img_data);
 
-            auto gpu_uint8 = cpu_tensor.cuda();
+            auto gpu_uint8 = cpu_tensor.gpu();
             const auto H = static_cast<size_t>(height);
             const auto W = static_cast<size_t>(width);
             const auto C = static_cast<size_t>(channels);
 
             if (params.output_uint8) {
-                auto output = Tensor::empty(TensorShape({C, H, W}), Device::CUDA, DataType::UInt8);
+                auto output = Tensor::empty(TensorShape({C, H, W}), Device::GPU, DataType::UInt8);
                 lfs::io::cuda::launch_uint8_hwc_to_uint8_chw(
                     gpu_uint8.ptr<uint8_t>(), output.ptr<uint8_t>(), H, W, C,
-                    static_cast<cudaStream_t>(params.cuda_stream));
+                    stream);
                 return output;
             }
 
-            auto output = Tensor::empty(TensorShape({C, H, W}), Device::CUDA, DataType::Float32);
+            auto output = Tensor::empty(TensorShape({C, H, W}), Device::GPU, DataType::Float32);
             lfs::io::cuda::launch_uint8_hwc_to_float32_chw(
                 gpu_uint8.ptr<uint8_t>(), output.ptr<float>(), H, W, C,
-                static_cast<cudaStream_t>(params.cuda_stream));
+                stream);
             return output;
         }
 
@@ -440,6 +455,9 @@ namespace lfs::io {
 
     lfs::core::Tensor CacheLoader::load_jpeg_with_hardware_decode(
         const std::filesystem::path& path, const LoadParams& params) {
+        const auto stream = image_execution_stream(params.cuda_stream);
+        const lfs::core::CUDAStreamGuard execution_scope(stream);
+
         using namespace lfs::core;
 
         const std::string cache_key = generate_cache_key(path, params, false);
@@ -492,18 +510,19 @@ namespace lfs::io {
                     const auto scaled = lfs::core::scale_undistort_params(
                         *params.undistort,
                         static_cast<int>(tensor.shape()[2]),
-                        static_cast<int>(tensor.shape()[1]));
+                        static_cast<int>(tensor.shape()[1]),
+                        params.max_width);
                     tensor = lfs::core::undistort_image(
-                        tensor, scaled, static_cast<cudaStream_t>(params.cuda_stream));
+                        tensor, scaled, stream);
                     if (restore_uint8) {
-                        auto uint8_tensor = Tensor::empty(tensor.shape(), Device::CUDA, DataType::UInt8);
+                        auto uint8_tensor = Tensor::empty(tensor.shape(), Device::GPU, DataType::UInt8);
                         lfs::io::cuda::launch_float32_chw_to_uint8_chw(
                             tensor.ptr<float>(),
                             uint8_tensor.ptr<uint8_t>(),
                             tensor.shape()[1],
                             tensor.shape()[2],
                             tensor.shape()[0],
-                            static_cast<cudaStream_t>(params.cuda_stream));
+                            stream);
                         tensor = std::move(uint8_tensor);
                     }
                 }
@@ -585,5 +604,6 @@ namespace lfs::io {
             LOG_WARN("[CacheLoader] Check diagnostic logs above for details on why nvImageCodec is unavailable");
         }
     }
+#endif
 
 } // namespace lfs::io

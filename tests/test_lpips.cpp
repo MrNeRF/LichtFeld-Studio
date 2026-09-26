@@ -3,6 +3,7 @@
 
 #include "core/image_io.hpp"
 #include "core/nn.hpp"
+#include "cuda_backend_test.hpp"
 #include "metrics/metrics.hpp"
 
 #include <cuda_runtime.h>
@@ -42,7 +43,7 @@ namespace {
     }
 
     Tensor chw_tensor(const std::vector<float>& values, int height, int width,
-                      Device device = Device::CUDA) {
+                      Device device = Device::GPU) {
         return Tensor::from_vector(
             values, lfs::core::TensorShape(std::vector<std::size_t>{1, 3, static_cast<std::size_t>(height), static_cast<std::size_t>(width)}),
             device);
@@ -115,18 +116,26 @@ namespace {
         const auto path = weights_path();
         if (path.empty() || !fs::is_regular_file(path))
             return std::nullopt;
-        auto loaded = lfs::core::nn::models::Lpips::load(path, Device::CUDA, dtype);
+        auto loaded = lfs::core::nn::models::Lpips::load(path, Device::GPU, dtype);
         if (!loaded)
             throw std::runtime_error(std::string(loaded.error().detail()));
         return std::move(*loaded);
     }
 
-    class LpipsTest : public ::testing::Test {
+    template <class Base>
+    class LpipsFixture : public Base {
         void SetUp() override {
+            Base::SetUp();
+            if (this->IsSkipped()) {
+                return;
+            }
             if (!fs::is_regular_file(weights_path()))
                 GTEST_SKIP() << "LPIPS weights absent: " << weights_path();
         }
     };
+
+    using LpipsTest = LpipsFixture<::testing::Test>;
+    using LpipsCudaTest = LpipsFixture<lfs::test::CudaBackendTest>;
 
     class ScopedConvPath {
     public:
@@ -233,7 +242,7 @@ TEST_F(LpipsTest, TiledMatchesUntiled) {
     auto untiled = load_model();
     constexpr std::size_t small_budget = 64ULL * 1024ULL * 1024ULL;
     auto tiled_loaded = Lpips::load(
-        weights_path(), Device::CUDA, DataType::Float32,
+        weights_path(), Device::GPU, DataType::Float32,
         lfs::core::nn::models::InputScaling::Identity, small_budget);
     ASSERT_TRUE(untiled.has_value());
     ASSERT_TRUE(tiled_loaded.has_value()) << tiled_loaded.error().detail();
@@ -251,7 +260,7 @@ TEST_F(LpipsTest, TiledMatchesUntiled) {
 TEST_F(LpipsTest, FastTilingCoversOddSyntheticImage) {
     auto [a, b] = synthetic_pair(257, 319);
     auto untiled = load_model(DataType::Float16);
-    auto tiled = Lpips::load(weights_path(), Device::CUDA, DataType::Float16,
+    auto tiled = Lpips::load(weights_path(), Device::GPU, DataType::Float16,
                              lfs::core::nn::models::InputScaling::Identity, 24ULL * 1024 * 1024);
     ASSERT_TRUE(untiled);
     ASSERT_TRUE(tiled);
@@ -266,7 +275,7 @@ TEST_F(LpipsTest, FastTilingCoversOddSyntheticImage) {
     }
 }
 
-TEST_F(LpipsTest, WideImageEstimateCoversNewDeviceAllocations) {
+TEST_F(LpipsCudaTest, WideImageEstimateCoversNewDeviceAllocations) {
     auto model = load_model(DataType::Float16);
     ASSERT_TRUE(model);
     auto [a, b] = synthetic_pair(512, 6000);
@@ -296,7 +305,7 @@ TEST_F(LpipsTest, RejectsInputsThatCannotReachAllVggStages) {
         for (const auto shape : {lfs::core::TensorShape({1, 3, 8, 32}),
                                  lfs::core::TensorShape({1, 3, 32, 8}),
                                  lfs::core::TensorShape({2, 3, 32, 32})}) {
-            auto image = Tensor::zeros(shape, Device::CUDA);
+            auto image = Tensor::zeros(shape, Device::GPU);
             auto result = model->forward(image, image);
             ASSERT_FALSE(result);
             EXPECT_EQ(result.error().code(), lfs::ErrorCode::InvalidArgument);
@@ -310,7 +319,7 @@ TEST_F(LpipsTest, TiledRealPairMatchesUntiled) {
         auto real_b = load_rgb(bicycle_b());
         constexpr std::size_t real_budget = 1024ULL * 1024ULL * 1024ULL;
         auto real_tiled_loaded = Lpips::load(
-            weights_path(), Device::CUDA, DataType::Float32,
+            weights_path(), Device::GPU, DataType::Float32,
             lfs::core::nn::models::InputScaling::Identity, real_budget);
         ASSERT_TRUE(real_tiled_loaded.has_value()) << real_tiled_loaded.error().detail();
         auto real_tiled = std::move(*real_tiled_loaded);
@@ -339,7 +348,7 @@ TEST_F(LpipsTest, TiledFastMatchesUntiled) {
     auto untiled_loaded = load_model(DataType::Float16);
     constexpr std::size_t tiled_budget = 512ULL * 1024ULL * 1024ULL;
     auto tiled_loaded = Lpips::load(
-        weights_path(), Device::CUDA, DataType::Float16,
+        weights_path(), Device::GPU, DataType::Float16,
         lfs::core::nn::models::InputScaling::Identity, tiled_budget);
     ASSERT_TRUE(untiled_loaded.has_value());
     ASSERT_TRUE(tiled_loaded.has_value()) << tiled_loaded.error().detail();
@@ -401,7 +410,7 @@ TEST_F(LpipsTest, BlurIsMonotonic) {
                 }
             }
         }
-        auto value = model->forward(original.to(Device::CUDA), chw_tensor(blurred, height, width));
+        auto value = model->forward(original.to(Device::GPU), chw_tensor(blurred, height, width));
         ASSERT_TRUE(value.has_value()) << value.error().detail();
         values[static_cast<std::size_t>(out_index++)] = *value;
     }
@@ -505,13 +514,13 @@ TEST(LpipsKernelTest, ConvKernelShapeSweep) {
         };
         const auto input = Tensor::randn(shape({static_cast<std::size_t>(c.n), static_cast<std::size_t>(c.cin),
                                                 static_cast<std::size_t>(c.h), static_cast<std::size_t>(c.w)}),
-                                         Device::CUDA)
+                                         Device::GPU)
                                .to(DataType::Float16);
         const auto weight = Tensor::randn(shape({static_cast<std::size_t>(c.cout), static_cast<std::size_t>(c.cin), 3, 3}),
-                                          Device::CUDA)
+                                          Device::GPU)
                                 .mul(0.05f)
                                 .to(DataType::Float16);
-        const auto bias = Tensor::randn(shape({static_cast<std::size_t>(c.cout)}), Device::CUDA).to(DataType::Float16);
+        const auto bias = Tensor::randn(shape({static_cast<std::size_t>(c.cout)}), Device::GPU).to(DataType::Float16);
         lfs::core::nn::Conv2dParams params;
         params.pad_h = 1;
         params.pad_w = 1;

@@ -4,6 +4,7 @@
 #include "core/alloc_counter.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "lfs/training/perf_bench.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
@@ -41,7 +42,9 @@ TEST(PerfBenchPeakCover, UsesOneSnapshotAndLiveIoBytes) {
         << "historical per-row peaks are not a concurrent I/O cover";
 }
 
-TEST(SteadyAllocInvariant, JointDensifySteadyLoopWithinBudget) {
+class SteadyAllocInvariant : public lfs::test::CudaBackendTest {};
+
+TEST_F(SteadyAllocInvariant, JointDensifySteadyLoopWithinBudget) {
     alloc_counter::reset_site_counts();
 
     // Fifteen refinements across six bounds tables must remain within the
@@ -51,7 +54,7 @@ TEST(SteadyAllocInvariant, JointDensifySteadyLoopWithinBudget) {
     constexpr int kSteadySteps = 1800;
     std::array<Tensor, 6> bounds{};
     for (auto& b : bounds) {
-        ensure_joint_bounds_capacity(b, 50000, kCap, Device::CUDA, false);
+        ensure_joint_bounds_capacity(b, 50000, kCap, Device::GPU, false);
     }
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
@@ -60,8 +63,8 @@ TEST(SteadyAllocInvariant, JointDensifySteadyLoopWithinBudget) {
         alloc_counter::ScopedSite densify("densify");
         const size_t n = 50000 + static_cast<size_t>(r) * 25000;
         for (auto& b : bounds) {
-            ensure_joint_bounds_capacity(b, n, kCap, Device::CUDA, false);
-            ensure_joint_bounds_capacity(b, n, kCap, Device::CUDA, true);
+            ensure_joint_bounds_capacity(b, n, kCap, Device::GPU, false);
+            ensure_joint_bounds_capacity(b, n, kCap, Device::GPU, true);
         }
     }
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);

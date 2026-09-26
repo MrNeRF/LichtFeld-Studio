@@ -47,14 +47,6 @@ float4 update_pixel_state(float4 pixel_state_t_nm1, float4 gauss_rgba_t_n)
     return float4(color_t_n, transmittance_t_n);
 }
 
-[ForceInline]
-float4 undo_pixel_state(float4 pixel_state_t_n, float4 gauss_rgba_t_n)
-{
-    float transmittance_t_nm1 = pixel_state_t_n.a / (float(1) - gauss_rgba_t_n.a);
-    float3 color_t_nm1 = pixel_state_t_n.rgb - gauss_rgba_t_n.rgb * transmittance_t_nm1;
-    return float4(color_t_nm1, transmittance_t_nm1);
-}
-
 static const float FAR_DEPTH = 1.0e10f;
 
 #if SUBTILE_SIZE > 0
@@ -106,7 +98,6 @@ uint32_t computeTileOverlapBitmask(bool exact, float2 g_xy, float4 g_inv_cov_opa
 
 
 // forward
-#if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
 
 #if SHARED_STRUCT
 #if LFS_3DGUT_RASTERIZE
@@ -202,7 +193,8 @@ Splat_3D_GUT_AlphaBlend load_transformed_splat_gut_alphablend(
     Uniforms uniforms)
 {
     Splat_3D_GUT_AlphaBlend g =
-        load_splat_gut_alphablend(g_idx, xyz_ws, rotations, scaling_raw, opacity_raw, rgb);
+        load_splat_gut_alphablend(g_idx, xyz_ws, rotations, scaling_raw, opacity_raw, rgb,
+                                  (uniforms.lod_enabled & 4u) == 0u ? uniforms.splat_render_profile : 0u);
 
     if (uniforms.step == 0u)
         return g;
@@ -299,7 +291,12 @@ void main(
     }
     bool thread_active = is_inside && curr_pixel_state.a >= 0.0001f;
 
-    float2 center_pix_coord = pix_coord;
+    const uint2 projection_origin = full_frame_binning(uniforms)
+        ? uint2(uniforms.render_origin_x, uniforms.render_origin_y) : uint2(0u);
+    float2 center_pix_coord = pix_coord + projection_origin;
+  #if SUBTILE_SIZE > 0
+    pix_coord_base += projection_origin;
+  #endif
     const bool spark_rad_opacity_path = (uniforms.lod_enabled & 4u) != 0u;
 #if LFS_3DGUT_RASTERIZE
     float3 ray_origin = float3(0.0);
@@ -417,7 +414,12 @@ void main(
               #endif
               #if LFS_3DGUT_RASTERIZE
                     Splat_3D_GUT_AlphaBlend g = collected_gut_splats[j];
-                    gauss_rgba = evaluate_gut_splat(g, ray_origin, ray_direction);
+                    if (uniforms.splat_render_profile == 1u && !spark_rad_opacity_path && !portal_gut_quad_contains(
+                            center_pix_coord, xy_vs[splat_id], inv_cov_vs_opacity[splat_id].xyz,
+                            g.opacity, cam))
+                        continue;
+                    gauss_rgba = evaluate_gut_splat_for_profile(g, ray_origin, ray_direction,
+                                                               spark_rad_opacity_path ? 0u : uniforms.splat_render_profile);
                   #if LFS_RASTER_OVERLAYS
                     overlay_splat = load_splat_alphablend(splat_id, xy_vs, inv_cov_vs_opacity, rgb);
                   #endif
@@ -425,7 +427,7 @@ void main(
                     Splat_2D_AlphaBlend g = collected_splats[j];
                     gauss_rgba = spark_rad_opacity_path
                                       ? evaluate_splat_spark_rad(g, center_pix_coord)
-                                      : evaluate_splat(g, center_pix_coord);
+                                      : evaluate_splat_for_profile(g, center_pix_coord, uniforms.splat_render_profile);
                   #if LFS_RASTER_OVERLAYS
                     overlay_splat = g;
                   #endif
@@ -446,7 +448,7 @@ void main(
 
                 float alpha = spark_rad_opacity_path
                                   ? evaluate_splat_alpha_spark_rad(g_xy, g_opacity, g_inv_cov, center_pix_coord)
-                                  : evaluate_splat_alpha(g_xy, g_opacity, g_inv_cov, center_pix_coord);
+                                  : evaluate_splat_alpha_for_profile(g_xy, g_opacity, g_inv_cov, center_pix_coord, uniforms.splat_render_profile);
                 if (alpha < ALPHA_THRESHOLD)
                     continue;
 
@@ -551,28 +553,6 @@ void main(
     }
 }
 
-#endif // #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
 
 
 // backward
-#if EXPORT_MODE != EXPORT_MODE_VULKAN_FORWARD
-
-#define BACKWARD_MODE_PER_PIXEL 0
-#define BACKWARD_MODE_PER_SPLAT 1
-#define BACKWARD_MODE_TENSOR 2
-
-#ifndef BACKWARD_MODE
-    // #define BACKWARD_MODE BACKWARD_MODE_TENSOR
-    #define BACKWARD_MODE BACKWARD_MODE_PER_SPLAT
-    // #define BACKWARD_MODE BACKWARD_MODE_PER_PIXEL
-#endif // #ifndef BACKWARD_MODE
-
-#if BACKWARD_MODE == BACKWARD_MODE_PER_PIXEL
-    #include "alphablend_shader_bwd_per_pixel.slang"
-#elif BACKWARD_MODE == BACKWARD_MODE_PER_SPLAT
-    #include "alphablend_shader_bwd_per_splat.slang"
-#elif BACKWARD_MODE == BACKWARD_MODE_TENSOR
-    #include "alphablend_shader_bwd_tensor.slang"
-#endif
-
-#endif

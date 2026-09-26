@@ -4,6 +4,7 @@
 #include "core/error.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "visualizer/gui_capabilities.hpp"
@@ -33,12 +34,12 @@ namespace {
     };
 
     SplatData make_random_sh3(const size_t n, const uint32_t seed = 42) {
-        auto means = Tensor::zeros({n, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto sh0 = Tensor::zeros({n, size_t{1}, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto shN_can = Tensor::zeros({n, size_t{15}, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto scaling = Tensor::zeros({n, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto rotation = Tensor::zeros({n, size_t{4}}, Device::CUDA, DataType::Float32);
-        auto opacity = Tensor::zeros({n, size_t{1}}, Device::CUDA, DataType::Float32);
+        auto means = Tensor::zeros({n, size_t{3}}, Device::GPU, DataType::Float32);
+        auto sh0 = Tensor::zeros({n, size_t{1}, size_t{3}}, Device::GPU, DataType::Float32);
+        auto shN_can = Tensor::zeros({n, size_t{15}, size_t{3}}, Device::GPU, DataType::Float32);
+        auto scaling = Tensor::zeros({n, size_t{3}}, Device::GPU, DataType::Float32);
+        auto rotation = Tensor::zeros({n, size_t{4}}, Device::GPU, DataType::Float32);
+        auto opacity = Tensor::zeros({n, size_t{1}}, Device::GPU, DataType::Float32);
 
         std::mt19937 rng(seed);
         std::uniform_real_distribution<float> sh_dist(-1.0f, 1.0f);
@@ -50,28 +51,28 @@ namespace {
             auto* p = cpu.ptr<float>();
             for (size_t i = 0; i < n * 3; ++i)
                 p[i] = mean_dist(rng);
-            means = cpu.to(Device::CUDA);
+            means = cpu.to(Device::GPU);
         }
         {
             auto cpu = shN_can.cpu();
             auto* p = cpu.ptr<float>();
             for (size_t i = 0; i < n * 15 * 3; ++i)
                 p[i] = sh_dist(rng);
-            shN_can = cpu.to(Device::CUDA);
+            shN_can = cpu.to(Device::GPU);
         }
         {
             auto cpu = scaling.cpu();
             auto* p = cpu.ptr<float>();
             for (size_t i = 0; i < n * 3; ++i)
                 p[i] = scale_dist(rng);
-            scaling = cpu.to(Device::CUDA);
+            scaling = cpu.to(Device::GPU);
         }
         {
             auto cpu = rotation.cpu();
             auto* r = cpu.ptr<float>();
             for (size_t i = 0; i < n; ++i)
                 r[i * 4] = 1.0f;
-            rotation = cpu.to(Device::CUDA);
+            rotation = cpu.to(Device::GPU);
         }
 
         return SplatData(kShDegree, means, sh0, shN_can, scaling, rotation, opacity, 1.0f);
@@ -103,9 +104,11 @@ namespace {
 
 } // namespace
 
+class TransformBakeQ16 : public lfs::test::CudaBackendTest {};
+
 // Catches the pre-#1620 bake, which cloned raw q16 codes without bounds and
 // failed the shN copy-back on shape/dtype (and silently corrupted SH2 colors).
-TEST(TransformBakeQ16, RotationBakeRoundTripsQ16) {
+TEST_F(TransformBakeQ16, RotationBakeRoundTripsQ16) {
     const ShValueQuantGuard quant_guard{true};
     auto reference = make_random_sh3(kN, 42);
     auto quantized = reference.clone();
@@ -131,7 +134,7 @@ TEST(TransformBakeQ16, RotationBakeRoundTripsQ16) {
 
 // Catches a bake that decodes+re-encodes SH on non-rotating transforms, which
 // would drift codes lossily on every translate/scale bake.
-TEST(TransformBakeQ16, TranslationOnlyBakeKeepsQ16CodesBitExact) {
+TEST_F(TransformBakeQ16, TranslationOnlyBakeKeepsQ16CodesBitExact) {
     const ShValueQuantGuard quant_guard{true};
     auto model = make_random_sh3(kN, 7);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(model));
@@ -152,7 +155,7 @@ TEST(TransformBakeQ16, TranslationOnlyBakeKeepsQ16CodesBitExact) {
 
 // Catches the q16 path leaking into fp32 models (e.g. an unconditional
 // canonical round-trip that would quantize a previously-fp32 model).
-TEST(TransformBakeQ16, Fp32BakeUnchanged) {
+TEST_F(TransformBakeQ16, Fp32BakeUnchanged) {
     auto model = make_random_sh3(kN, 99);
     ASSERT_EQ(model.shN_raw().dtype(), DataType::Float32);
 

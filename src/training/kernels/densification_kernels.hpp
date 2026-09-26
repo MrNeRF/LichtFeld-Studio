@@ -7,10 +7,6 @@
 #include <cstdint>
 #include <cuda_runtime.h>
 
-namespace lfs::training {
-    struct PositiveMedianScratch;
-}
-
 namespace lfs::training::kernels {
 
     /**
@@ -71,14 +67,12 @@ namespace lfs::training::kernels {
      * fused free-slot write.
      *
      * For each i in [0, n_fill): writes child row i into param row target_indices[i]
-     * (means/rot/scale/sh0/opacity), zeros up to 12 Adam per-primitive scale buffers
-     * at that index, and sets free_mask[target]=false.
+     * (means/rot/scale/sh0/opacity) and sets free_mask[target]=false.
      *
      * sh0 layout: source is always 3 floats per row (flat). Destination is either
      * [N,3] (sh0_dst_stride3=true) or [N,1,3] contiguous (false → write 3 floats at
      * index*3 still works for [N,1,3] since middle dim is 1).
      * opacity_dim: 0 → [N], 1 → [N,1].
-     * adam_scale_ptrs: nullable array of length n_adam_scales; each is [N] float.
      */
     void launch_fill_free_slots_fused(
         const int64_t* target_indices,
@@ -94,21 +88,7 @@ namespace lfs::training::kernels {
         float* dst_sh0,
         float* dst_opacities,
         int opacity_dim,
-        float* const* adam_scale_ptrs,
-        int n_adam_scales,
         bool* free_mask,
-        size_t N,
-        cudaStream_t stream = nullptr);
-
-    /**
-     * Zero Adam per-primitive scales at indices (quantized moments dequant to 0).
-     * Used for parent-split reset without a full free-slot write.
-     */
-    void launch_zero_adam_scales_at_indices(
-        const int64_t* indices,
-        size_t n_indices,
-        float* const* adam_scale_ptrs,
-        int n_adam_scales,
         size_t N,
         cudaStream_t stream = nullptr);
 
@@ -131,16 +111,26 @@ namespace lfs::training::kernels {
         cudaStream_t stream = nullptr);
 
     /**
-     * positive-median normalize without full-tensor sort.
-     * Compact positives → radix-sort the compact buffer → median at count/2 →
-     * divide data in-place by max(median, 1e-9). NaN/non-positive left as-is
-     * after a pre-pass that zeros NaNs (caller may pre-masked_fill).
+     * Zero NaNs, then divide data in-place by max(median, 1e-9) where the
+     * median is the (count/2)-th smallest positive value, found by an exact
+     * radix select (no sort, no per-element scratch). All-zero when no value
+     * is positive.
      */
     void launch_normalize_by_positive_median(
         float* data,
         size_t n,
-        cudaStream_t stream = nullptr,
-        lfs::training::PositiveMedianScratch* scratch = nullptr);
+        cudaStream_t stream = nullptr);
+
+    /// Exact (n/2)-th smallest of all n values in cub::DeviceRadixSort float
+    /// order. Synchronizes the stream to return the value.
+    [[nodiscard]] float launch_select_median(const float* values, size_t n, cudaStream_t stream);
+
+    /// Accumulate the image-clipped projected bounding rectangle area / image area.
+    /// radii and means2d are [N, 2]; zero radii exclude culled splats. Call once
+    /// per completed training frame, independently of tile batching.
+    void launch_accumulate_projected_screen_share(
+        const int32_t* radii, const float* means2d,
+        float* shares, size_t n, uint32_t width, uint32_t height, cudaStream_t stream);
 
     /// Subtract min(log(share/limit), log(1.5)) from the longest log-scale axis
     /// when share > limit. The other two axes are left unchanged.

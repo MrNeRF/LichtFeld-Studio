@@ -60,12 +60,12 @@ namespace {
     }
 
     SplatData make_sh3_splat(const size_t n) {
-        auto means = Tensor::zeros({n, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto sh0 = Tensor::zeros({n, size_t{1}, size_t{3}}, Device::CUDA, DataType::Float32);
+        auto means = Tensor::zeros({n, size_t{3}}, Device::GPU, DataType::Float32);
+        auto sh0 = Tensor::zeros({n, size_t{1}, size_t{3}}, Device::GPU, DataType::Float32);
         // Canonical empty rest — constructor swizzles to degree-3 layout.
-        auto shN = Tensor::zeros({n, size_t{15}, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto scaling = Tensor::zeros({n, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto rotation = Tensor::zeros({n, size_t{4}}, Device::CUDA, DataType::Float32);
+        auto shN = Tensor::zeros({n, size_t{15}, size_t{3}}, Device::GPU, DataType::Float32);
+        auto scaling = Tensor::zeros({n, size_t{3}}, Device::GPU, DataType::Float32);
+        auto rotation = Tensor::zeros({n, size_t{4}}, Device::GPU, DataType::Float32);
         // Unit quaternion w=1
         {
             auto cpu = rotation.cpu();
@@ -73,14 +73,14 @@ namespace {
             for (size_t i = 0; i < n; ++i) {
                 r[i * 4] = 1.0f;
             }
-            rotation = cpu.to(Device::CUDA);
+            rotation = cpu.to(Device::GPU);
         }
-        auto opacity = Tensor::zeros({n, size_t{1}}, Device::CUDA, DataType::Float32);
+        auto opacity = Tensor::zeros({n, size_t{1}}, Device::GPU, DataType::Float32);
 
         SplatData splat(kShDegree, means, sh0, shN, scaling, rotation, opacity, 1.0f);
         // Densify aux: [2, N] fp32 → 8 B/splat (mcmc densification_info layout).
         splat._densification_info =
-            Tensor::zeros({size_t{2}, n}, Device::CUDA, DataType::Float32);
+            Tensor::zeros({size_t{2}, n}, Device::GPU, DataType::Float32);
         return splat;
     }
 

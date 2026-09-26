@@ -168,14 +168,19 @@ class Viewport {
         void translate(const glm::vec2& pos) { applyPanDrag(pos); }
 
         void zoom(float delta, bool carry_pivot = false) {
-            const glm::vec3 forward = lfs::rendering::cameraForward(R);
-            const float distToPivot = glm::length(pivot - t);
             // zoomSpeed is a 0..100 level (default 11) mapped linearly to the
             // fraction of the camera-to-pivot distance covered per scroll unit;
             // level 100 matches the previous fastest setting (full distance).
             constexpr float kZoomFractionPerLevel = 0.01f;
-            const float adaptiveSpeed = zoomSpeed * kZoomFractionPerLevel * distToPivot;
-            const glm::vec3 movement = delta * adaptiveSpeed * forward;
+            dolly(delta * zoomSpeed * kZoomFractionPerLevel, carry_pivot);
+        }
+
+        // Moves toward the pivot by `fraction` of the camera-to-pivot distance;
+        // a negative fraction moves away.
+        void dolly(float fraction, bool carry_pivot = false) {
+            const glm::vec3 forward = lfs::rendering::cameraForward(R);
+            const float distToPivot = glm::length(pivot - t);
+            const glm::vec3 movement = fraction * distToPivot * forward;
 
             t += movement;
             if (carry_pivot) {
@@ -188,7 +193,7 @@ class Viewport {
             // stopping. This also recovers a pivot that ended up behind the
             // camera.
             constexpr float kMinDistance = 0.1f;
-            if (delta > 0.0f && glm::dot(pivot - t, forward) < kMinDistance) {
+            if (fraction > 0.0f && glm::dot(pivot - t, forward) < kMinDistance) {
                 pivot = t + forward * kMinDistance;
             }
         }

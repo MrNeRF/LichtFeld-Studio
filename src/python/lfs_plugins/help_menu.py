@@ -47,12 +47,38 @@ class AboutOperator(Operator):
         return {"FINISHED"}
 
 
-class AccountOperator(Operator):
-    label = "account.menu"
-    description = "Open portal account"
+class GalleryTransfersOperator(Operator):
+    label = "gallery.transfer.action.details"
+    description = "Show gallery transfers"
 
     def execute(self, context) -> set:
-        lf.ui.set_panel_enabled("lfs.account", True)
+        from .overlays import show_gallery_transfers
+        show_gallery_transfers()
+        return {"FINISHED"}
+
+
+class PortalConnectionOperator(Operator):
+    label = "portal.status.connect"
+    description = "Connect or disconnect the LichtFeld Portal account"
+
+    def execute(self, context) -> set:
+        from .portal_account import get_portal_account_service
+
+        account = get_portal_account_service()
+        state = account.snapshot()
+        if state.disconnecting:
+            return {"FINISHED"}
+        if state.linking:
+            account.cancel_device_flow()
+        elif state.signed_in:
+            from .gallery_sync import get_gallery_sync
+
+            if get_gallery_sync().snapshot().get("relink_required"):
+                account.start_device_flow(reauthorize=True)
+            else:
+                account.disconnect_async()
+        else:
+            account.start_device_flow()
         return {"FINISHED"}
 
 
@@ -80,17 +106,17 @@ class HelpMenu:
             items.append(menu_separator())
             items.append(menu_operator(SetDefaultAppOperator))
         items.append(menu_separator())
-        items.append(menu_operator(AccountOperator))
         items.append(menu_operator(BugReportOperator))
         items.append(menu_operator(AboutOperator))
         return items
 
 
 _operator_classes = [
+    GalleryTransfersOperator,
     GettingStartedOperator,
     SetDefaultAppOperator,
     UnsetDefaultAppOperator,
-    AccountOperator,
+    PortalConnectionOperator,
     BugReportOperator,
     AboutOperator,
 ]

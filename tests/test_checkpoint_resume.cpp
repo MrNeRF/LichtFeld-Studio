@@ -35,6 +35,7 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "core/uuid.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/embedded_dataset.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
@@ -53,6 +54,12 @@
 #include "training/training_setup.hpp"
 
 namespace lfs::training {
+    struct TrainerBilateralGridTestAccess {
+        static BilateralGrid& grid(Trainer& trainer) {
+            return *trainer.bilateral_grid_;
+        }
+    };
+
     struct TrainerRetryTestAccess {
         static bool should_retry(const lfs::Error& error, const unsigned attempts) {
             const Trainer::MutationStamp stamp{
@@ -67,7 +74,10 @@ namespace lfs::training {
 
         static lfs::Status recover_with_sync_status(
             Trainer& trainer, const lfs::Error& cause, const cudaError_t sync_status) {
-            trainer.recovery_sync_for_testing_ = [sync_status] { return sync_status; };
+            trainer.recovery_sync_for_testing_ = [sync_status] {
+                if (sync_status != cudaSuccess)
+                    throw std::runtime_error("injected device barrier failure");
+            };
             auto result = trainer.recover_forward_oom(cause);
             trainer.recovery_sync_for_testing_ = {};
             return result;
@@ -105,7 +115,9 @@ namespace {
         EXPECT_FALSE(lfs::training::TrainerRetryTestAccess::should_retry(invalid, 1));
     }
 
-    TEST(TrainerRetrySemantics, InvalidDimensionsAreNotResourceExhaustion) {
+    class TrainerRetryCudaTest : public lfs::test::CudaBackendTest {};
+
+    TEST_F(TrainerRetryCudaTest, InvalidDimensionsAreNotResourceExhaustion) {
         const auto context = fast_lfs::rasterization::forward_raw(
             nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
             nullptr, nullptr, nullptr, nullptr,
@@ -119,7 +131,7 @@ namespace {
         EXPECT_FALSE(lfs::training::TrainerRetryTestAccess::should_retry(typed, 1));
     }
 
-    TEST(TrainerRetrySemantics, UninitializedTrainErrorCarriesCompleteMutationStamp) {
+    TEST_F(TrainerRetryCudaTest, UninitializedTrainErrorCarriesCompleteMutationStamp) {
         lfs::core::Scene scene;
         const auto cameras = scene.addGroup("Cameras");
         auto camera = std::make_shared<lfs::core::Camera>(
@@ -148,7 +160,7 @@ namespace {
         EXPECT_FALSE(std::get<bool>(find_field(frame, "persistent_commit")->value));
     }
 
-    TEST(TrainerRetrySemantics, GlobalArenaCanBeReconfiguredForCapacityInjection) {
+    TEST_F(TrainerRetryCudaTest, GlobalArenaCanBeReconfiguredForCapacityInjection) {
         lfs::core::RasterizerMemoryArena::Config config;
         config.virtual_size = 128ULL << 20;
         config.max_physical = 64ULL << 20;
@@ -161,7 +173,7 @@ namespace {
         manager.reset();
     }
 
-    TEST(TrainerRetrySemantics, CapacityFailureIsRetryableOnlyOnFirstAttempt) {
+    TEST_F(TrainerRetryCudaTest, CapacityFailureIsRetryableOnlyOnFirstAttempt) {
         void* storage = nullptr;
         ASSERT_EQ(cudaMalloc(&storage, 4096), cudaSuccess);
 
@@ -200,7 +212,7 @@ namespace {
         EXPECT_EQ(cudaFree(storage), cudaSuccess);
     }
 
-    TEST(TrainerRetrySemantics, RecoveryAsyncFailureKeepsExactlyOneSuppressedOom) {
+    TEST_F(TrainerRetryCudaTest, RecoveryAsyncFailureKeepsExactlyOneSuppressedOom) {
         lfs::core::Scene scene;
         const auto cameras = scene.addGroup("Cameras");
         auto camera = std::make_shared<lfs::core::Camera>(
@@ -224,7 +236,7 @@ namespace {
                   lfs::ErrorCode::ResourceExhausted);
     }
 
-    TEST(TrainerRetrySemantics, RecoverySuccessCompletesTheForwardRetryPreparation) {
+    TEST_F(TrainerRetryCudaTest, RecoverySuccessCompletesTheForwardRetryPreparation) {
         lfs::core::Scene scene;
         const auto cameras = scene.addGroup("Cameras");
         auto camera = std::make_shared<lfs::core::Camera>(
@@ -482,7 +494,9 @@ namespace {
         ASSERT_FALSE(result.has_value());
         EXPECT_NE(result.error().find("unknown feature flags"), std::string::npos);
     }
-    TEST(TrainingSetupRegressionTest, ApplyLoadedDatasetKeepsFullInitPointCloudUntilTrainingStarts) {
+    class TrainingSetupRegressionTest : public lfs::test::CudaBackendTest {};
+
+    TEST_F(TrainingSetupRegressionTest, ApplyLoadedDatasetKeepsFullInitPointCloudUntilTrainingStarts) {
         constexpr size_t initial_points = 12;
 
         const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_training_setup_full_init_regression";
@@ -517,7 +531,7 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
-    TEST(TrainingSetupRegressionTest, ApplyLoadedDatasetKeepsGaussianInitAsPointCloudUntilTrainingStarts) {
+    TEST_F(TrainingSetupRegressionTest, ApplyLoadedDatasetKeepsGaussianInitAsPointCloudUntilTrainingStarts) {
         constexpr size_t initial_splats = 8;
 
         const auto temp_dir =
@@ -565,7 +579,9 @@ namespace {
 
     // joint Adam + optional q16 shN must survive save→load resume with both
     // codec modes. Round-trips moments (joint_bits/packed) and dequantised shN.
-    TEST(CheckpointResumeRoundtripTest, JointCodecAndQ16ShN) {
+    class CheckpointResumeRoundtripTest : public lfs::test::CudaBackendTest {};
+
+    TEST_F(CheckpointResumeRoundtripTest, JointCodecAndQ16ShN) {
         namespace sh_value = lfs::training::sh_value;
 
         sh_value::set_sh_value_quant_enabled_for_testing(true);
@@ -585,7 +601,7 @@ namespace {
         params.optimization.max_cap = static_cast<int>(max_cap);
         params.freeze_lr_scale = 0.25f;
 
-        auto source_model = make_checkpoint_test_splat(count, lfs::core::Device::CUDA, sh_degree);
+        auto source_model = make_checkpoint_test_splat(count, lfs::core::Device::GPU, sh_degree);
         ASSERT_TRUE(sh_value::apply_shN_value_quant(*source_model));
         EXPECT_TRUE(source_model->shN_value_quantized() ||
                     source_model->shN_raw().dtype() == lfs::core::DataType::Float16);
@@ -610,12 +626,12 @@ namespace {
             auto* bytes = packed_cpu.ptr<uint8_t>();
             for (size_t i = 0; i < packed_cpu.numel(); ++i)
                 bytes[i] = static_cast<uint8_t>((i * 17 + 3) & 0xff);
-            means_state->exp_avg = packed_cpu.cuda();
+            means_state->exp_avg = packed_cpu.gpu();
             auto bounds_cpu = means_state->joint_bounds.cpu();
             auto* b = bounds_cpu.ptr<float>();
             for (size_t i = 0; i < bounds_cpu.numel(); ++i)
                 b[i] = (i % 2 == 0) ? -0.5f : 0.5f;
-            means_state->joint_bounds = bounds_cpu.cuda();
+            means_state->joint_bounds = bounds_cpu.gpu();
         }
 
         auto shN_before = source_model->shN_canonical_cpu();
@@ -625,7 +641,7 @@ namespace {
                         nullptr, nullptr, nullptr, nullptr)
                         .has_value());
 
-        auto target_model = make_checkpoint_test_splat(1, lfs::core::Device::CUDA, sh_degree);
+        auto target_model = make_checkpoint_test_splat(1, lfs::core::Device::GPU, sh_degree);
         lfs::training::MCMC target_strategy(*target_model);
         target_strategy.initialize(params.optimization);
         auto load_params = params;
@@ -708,7 +724,7 @@ namespace {
                      const std::string_view name) -> lfs::core::Tensor {
             calls.push_back({std::string{name}, capacity});
             EXPECT_EQ(dtype, lfs::core::DataType::Float32);
-            auto tensor = lfs::core::Tensor::zeros_direct(std::move(shape), capacity, lfs::core::Device::CUDA);
+            auto tensor = lfs::core::Tensor::zeros_direct(std::move(shape), capacity, lfs::core::Device::GPU);
             tensor.set_name(std::string{name});
             return tensor;
         };
@@ -732,7 +748,9 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
-    TEST(CheckpointInputValidationTest, RejectsInvalidTensorDtypeAndPreservesLiveModel) {
+    class CheckpointInputValidationTest : public lfs::test::CudaBackendTest {};
+
+    TEST_F(CheckpointInputValidationTest, RejectsInvalidTensorDtypeAndPreservesLiveModel) {
         const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_invalid_tensor_dtype";
         std::error_code ec;
         std::filesystem::remove_all(temp_dir, ec);
@@ -774,7 +792,7 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
-    TEST(CheckpointInputValidationTest, RejectsLateStrategyCorruptionWithoutPartialCommit) {
+    TEST_F(CheckpointInputValidationTest, RejectsLateStrategyCorruptionWithoutPartialCommit) {
         const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_late_corruption";
         std::error_code ec;
         std::filesystem::remove_all(temp_dir, ec);
@@ -820,7 +838,7 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
-    TEST(CheckpointInputValidationTest, RejectsJsonRangeOutsideFileBeforeStateMutation) {
+    TEST_F(CheckpointInputValidationTest, RejectsJsonRangeOutsideFileBeforeStateMutation) {
         const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_invalid_json_range";
         std::error_code ec;
         std::filesystem::remove_all(temp_dir, ec);
@@ -904,7 +922,8 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
-    class CheckpointStrategyStateRoundTripTest : public ::testing::TestWithParam<std::string> {};
+    class CheckpointStrategyStateRoundTripTest : public lfs::test::CudaBackendTest,
+                                                 public ::testing::WithParamInterface<std::string> {};
 
     TEST_P(CheckpointStrategyStateRoundTripTest, ModelOptimizerAndStrategyState) {
         const auto& strategy_name = GetParam();
@@ -922,7 +941,7 @@ namespace {
         params.optimization.max_cap = 16;
 
         const auto model_device = strategy_name == "igs+"
-                                      ? lfs::core::Device::CUDA
+                                      ? lfs::core::Device::GPU
                                       : lfs::core::Device::CPU;
         auto source_model = make_checkpoint_test_splat(4, model_device);
         auto source_result = lfs::training::StrategyFactory::instance().create(
@@ -1056,6 +1075,86 @@ namespace {
         return params;
     }
 
+    class TrainerBilateralGridTest : public lfs::test::CudaBackendTest {};
+
+    TEST_F(TrainerBilateralGridTest, PreservesSparseCameraSlotsAcrossFilteringAndCheckpoint) {
+        using lfs::core::Camera;
+        using lfs::core::DataType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+        using lfs::training::TrainerBilateralGridTestAccess;
+
+        for (const bool exposure : {false, true}) {
+            for (const int excluded_uid : {0, 7, 19}) {
+                for (const int filter : {0, 1, 2}) {
+                    SCOPED_TRACE(std::format("exposure={} excluded={} filter={}", exposure, excluded_uid, filter));
+                    const auto root = std::filesystem::temp_directory_path() /
+                                      ("lfs_grid_slots_" + lfs::core::generate_uuid_v4().to_string());
+                    std::filesystem::create_directories(root);
+                    auto params = make_params_json_test_params(root);
+                    params.dataset.data_path = root;
+                    params.optimization.enable_eval = filter == 2;
+                    params.optimization.use_bilateral_grid = !exposure;
+                    params.optimization.use_exposure_correction = exposure;
+                    params.optimization.bilateral_grid_X = 2;
+                    params.optimization.bilateral_grid_Y = 2;
+                    params.optimization.bilateral_grid_W = 2;
+
+                    lfs::core::Scene scene;
+                    const auto group = scene.addGroup("Cameras");
+                    for (const int uid : {0, 7, 19}) {
+                        const auto name = std::format("camera_{}.png", uid);
+                        auto camera = std::make_shared<Camera>(
+                            Tensor::eye(3, Device::CPU), Tensor::zeros({3}, Device::CPU),
+                            100.0f, 100.0f, 32.0f, 32.0f, Tensor{}, Tensor{},
+                            lfs::core::CameraModelType::PINHOLE, name,
+                            std::filesystem::path{}, std::filesystem::path{}, 64, 64, uid);
+                        camera->set_has_image(filter != 1 || uid != excluded_uid);
+                        camera->set_split(filter == 2 && uid == excluded_uid
+                                              ? lfs::core::CameraSplit::Eval
+                                              : lfs::core::CameraSplit::Train);
+                        scene.addCamera(name, group, std::move(camera));
+                        scene.setCameraTrainingEnabled(name, filter != 0 || uid != excluded_uid);
+                    }
+                    scene.addSplat("Model", make_checkpoint_test_splat(4, Device::CUDA));
+                    scene.setTrainingModelNode("Model");
+                    lfs::training::Trainer trainer(scene);
+                    const auto initialized = trainer.initialize(params);
+                    ASSERT_TRUE(initialized.has_value()) << initialized.error();
+                    auto& grid = TrainerBilateralGridTestAccess::grid(trainer);
+                    EXPECT_EQ(grid.num_images(), 20);
+
+                    const auto rgb = Tensor::full({3, 4, 4}, 0.4f, Device::CUDA);
+                    const auto grad = Tensor::full({3, 4, 4}, 0.01f, Device::CUDA);
+                    for (const auto& camera : scene.getActiveCameras()) {
+                        const int uid = camera->uid();
+                        EXPECT_TRUE(grid.apply(rgb, uid).is_valid());
+                        EXPECT_TRUE(grid.backward(rgb, grad, uid).is_valid());
+                        EXPECT_TRUE(grid.tv_loss_gpu(uid).is_valid());
+                        grid.step_image(uid, 0.01f);
+                    }
+                    const auto before = grid.apply(rgb, 19).cpu().to_vector();
+                    const auto stored_grids = grid.grids().cpu().to_vector();
+                    std::stringstream checkpoint(std::ios::in | std::ios::out | std::ios::binary);
+                    grid.serialize(checkpoint);
+                    lfs::training::BilateralGrid loaded(1, 1, 1, 1, 1);
+                    loaded.deserialize(checkpoint);
+                    grid.adopt_checkpoint_state(loaded);
+                    EXPECT_EQ(grid.num_images(), 20);
+                    EXPECT_EQ(grid.grids().cpu().to_vector(), stored_grids);
+                    const auto after = grid.apply(rgb, 19).cpu().to_vector();
+                    ASSERT_EQ(after.size(), before.size());
+                    // Deserialization recomputes the floating-point projection state.
+                    for (size_t i = 0; i < after.size(); ++i) {
+                        EXPECT_NEAR(after[i], before[i], 1e-6f);
+                    }
+                    trainer.shutdown();
+                    std::filesystem::remove_all(root);
+                }
+            }
+        }
+    }
+
     TEST(CheckpointFrozenRangesRoundTripTest, EmbeddedSplatRangesSurviveFullCheckpoint) {
         const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_frozen_ranges";
         std::error_code ec;
@@ -1093,7 +1192,9 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
-    TEST(TrainerCheckpointFrozenMaskTest, LoadedRangesReplacePreexistingOptimizerMask) {
+    class TrainerCheckpointFrozenMaskTest : public lfs::test::CudaBackendTest {};
+
+    TEST_F(TrainerCheckpointFrozenMaskTest, LoadedRangesReplacePreexistingOptimizerMask) {
         const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_trainer_checkpoint_frozen_mask";
         std::error_code ec;
         std::filesystem::remove_all(temp_dir, ec);
@@ -1101,7 +1202,7 @@ namespace {
 
         auto params = make_params_json_test_params(temp_dir);
         params.dataset.data_path = temp_dir;
-        auto source_model = make_checkpoint_test_splat(4, lfs::core::Device::CUDA);
+        auto source_model = make_checkpoint_test_splat(4, lfs::core::Device::GPU);
         source_model->set_frozen_ranges({{1, 2}});
         lfs::training::MCMC source_strategy(*source_model);
         source_strategy.initialize(params.optimization);
@@ -1111,7 +1212,7 @@ namespace {
 
         lfs::core::Scene scene;
         add_checkpoint_test_camera(scene);
-        auto target_model = make_checkpoint_test_splat(4, lfs::core::Device::CUDA);
+        auto target_model = make_checkpoint_test_splat(4, lfs::core::Device::GPU);
         target_model->set_frozen_ranges({{0, 1}});
         scene.addSplat("Model", std::move(target_model));
         scene.setTrainingModelNode("Model");
@@ -1135,7 +1236,7 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
-    TEST(TrainerCheckpointFrozenMaskTest, EmptyLoadedRangesClearPreexistingOptimizerMask) {
+    TEST_F(TrainerCheckpointFrozenMaskTest, EmptyLoadedRangesClearPreexistingOptimizerMask) {
         const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_trainer_checkpoint_empty_frozen_mask";
         std::error_code ec;
         std::filesystem::remove_all(temp_dir, ec);
@@ -1143,7 +1244,7 @@ namespace {
 
         auto params = make_params_json_test_params(temp_dir);
         params.dataset.data_path = temp_dir;
-        auto source_model = make_checkpoint_test_splat(4, lfs::core::Device::CUDA);
+        auto source_model = make_checkpoint_test_splat(4, lfs::core::Device::GPU);
         lfs::training::MCMC source_strategy(*source_model);
         source_strategy.initialize(params.optimization);
         ASSERT_TRUE(lfs::test::write_checkpoint_fixture(
@@ -1152,7 +1253,7 @@ namespace {
 
         lfs::core::Scene scene;
         add_checkpoint_test_camera(scene);
-        auto target_model = make_checkpoint_test_splat(4, lfs::core::Device::CUDA);
+        auto target_model = make_checkpoint_test_splat(4, lfs::core::Device::GPU);
         target_model->set_frozen_ranges({{0, 1}});
         scene.addSplat("Model", std::move(target_model));
         scene.setTrainingModelNode("Model");
@@ -1316,7 +1417,7 @@ namespace {
         lfs::training::ADMMSparsityOptimizer source_admm(kAdmmTestConfig);
         const auto opacities = lfs::core::Tensor::from_vector(
             std::vector<float>{-1.0f, 0.5f, 2.0f, -0.25f},
-            {size_t{4}, size_t{1}}, lfs::core::Device::CUDA);
+            {size_t{4}, size_t{1}}, lfs::core::Device::GPU);
         ASSERT_TRUE(source_admm.initialize(opacities).has_value());
         ASSERT_TRUE(source_admm.update_state(opacities).has_value());
 
@@ -1376,7 +1477,7 @@ namespace {
         lfs::training::MCMC target_strategy(*target_model);
         lfs::training::ADMMSparsityOptimizer target_admm(kAdmmTestConfig);
         const auto target_opacity = lfs::core::Tensor::zeros(
-            {size_t{1}, size_t{1}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            {size_t{1}, size_t{1}}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
         ASSERT_TRUE(target_admm.initialize(target_opacity).has_value());
         ASSERT_TRUE(target_admm.is_initialized());
         auto loaded_params = params;
@@ -1404,7 +1505,7 @@ namespace {
         lfs::training::MCMC source_strategy(*source_model);
         lfs::training::ADMMSparsityOptimizer source_admm(kAdmmTestConfig);
         const auto opacities = lfs::core::Tensor::zeros(
-            {size_t{4}, size_t{1}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            {size_t{4}, size_t{1}}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
         ASSERT_TRUE(source_admm.initialize(opacities).has_value());
         ASSERT_TRUE(lfs::test::write_checkpoint_fixture(
                         temp_dir, 7, source_strategy, params, nullptr, nullptr, nullptr, &source_admm)
@@ -1436,7 +1537,7 @@ namespace {
         lfs::training::MCMC source_strategy(*source_model);
         lfs::training::ADMMSparsityOptimizer source_admm(kAdmmTestConfig);
         const auto wrong_size_opacities = lfs::core::Tensor::zeros(
-            {size_t{3}, size_t{1}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            {size_t{3}, size_t{1}}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
         ASSERT_TRUE(source_admm.initialize(wrong_size_opacities).has_value());
 
         const auto saved = lfs::test::write_checkpoint_fixture(
@@ -1447,9 +1548,11 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
-    class CheckpointResumeTest : public ::testing::TestWithParam<std::tuple<std::string, int, int, int>> {
+    class CheckpointResumeTest : public lfs::test::CudaBackendTest,
+                                 public ::testing::WithParamInterface<std::tuple<std::string, int, int, int>> {
     protected:
         void SetUp() override {
+            LFS_CUDA_BACKEND_OR_RETURN();
             const auto& [strategy, sh_degree, checkpoint_iteration, total_iterations] = GetParam();
             strategy_ = strategy;
             sh_degree_ = sh_degree;
@@ -1753,7 +1856,7 @@ namespace {
         TestName);
 
     TEST(CheckpointSplatSkipTest, SkipSerializedMatchesDeserializeStreamPosition) {
-        auto splat = make_checkpoint_test_splat(17, lfs::core::Device::CUDA, 3);
+        auto splat = make_checkpoint_test_splat(17, lfs::core::Device::GPU, 3);
         ASSERT_NE(splat, nullptr);
         splat->set_frozen_ranges({{3, 2}, {10, 1}});
 
@@ -1780,7 +1883,7 @@ namespace {
     }
 
     class ProjectCheckpointTrainerInstall
-        : public ::testing::Test {
+        : public lfs::test::CudaBackendTest {
     protected:
         void TearDown() override {
             lfs::training::TrainingSnapshotService::
@@ -2471,11 +2574,6 @@ namespace {
 
     TEST_F(ProjectCheckpointTrainerInstall,
            HeadlessRedirectPreservesEmbeddedDatasetForDatasetAndResume) {
-        int device_count = 0;
-        const auto cuda_status = cudaGetDeviceCount(&device_count);
-        if (cuda_status != cudaSuccess || device_count == 0) {
-            GTEST_SKIP() << "Requires CUDA: " << cudaGetErrorString(cuda_status);
-        }
         using namespace lfs::io::project;
         using namespace lfs::test::licht;
         TemporaryDirectory temporary;

@@ -56,6 +56,8 @@ namespace lfs::training {
 
         // Forward context (contains buffer pointers, frame_id, etc.)
         fast_lfs::rasterization::ForwardContext forward_ctx = {};
+        // Last queue using the frame, retained beyond execution-scope lifetime.
+        cudaStream_t completion_stream = nullptr;
 
         int active_sh_bases = 0;
         int width = 0;
@@ -80,6 +82,7 @@ namespace lfs::training {
         void set_forward_context(fast_lfs::rasterization::ForwardContext ctx) noexcept {
             release_forward_context();
             forward_ctx = ctx;
+            completion_stream = ctx.stream;
             owns_forward_context_ = ctx.success;
         }
 
@@ -88,13 +91,15 @@ namespace lfs::training {
                 return;
             }
             owns_forward_context_ = false;
-            fast_lfs::rasterization::release_forward_context(forward_ctx);
+            fast_lfs::rasterization::release_forward_context(forward_ctx, completion_stream);
             forward_ctx = {};
+            completion_stream = nullptr;
         }
 
         void mark_forward_context_released() noexcept {
             owns_forward_context_ = false;
             forward_ctx = {};
+            completion_stream = nullptr;
         }
 
     private:
@@ -114,6 +119,7 @@ namespace lfs::training {
             w2c_ptr = std::exchange(other.w2c_ptr, nullptr);
             cam_position_ptr = std::exchange(other.cam_position_ptr, nullptr);
             forward_ctx = std::exchange(other.forward_ctx, {});
+            completion_stream = std::exchange(other.completion_stream, nullptr);
             active_sh_bases = std::exchange(other.active_sh_bases, 0);
             width = std::exchange(other.width, 0);
             height = std::exchange(other.height, 0);
@@ -171,7 +177,8 @@ namespace lfs::training {
         int tile_height = 0,
         bool mip_filter = false,
         const lfs::core::Tensor& bg_image = {},
-        bool render_normal = false);
+        bool render_normal = false,
+        bool render_depth = true);
 
     // Backward pass with optional extra alpha gradient for masked training
     void fast_rasterize_backward(
@@ -189,9 +196,6 @@ namespace lfs::training {
 
     // Release per-thread renderer caches before the owning CUDA stream is torn down.
     bool release_fast_rasterizer_thread_local_caches() noexcept;
-
-    // Compatibility no-op for callers of the removed FastGS sort TLS cache.
-    void release_fastgs_sort_workspace_buffers() noexcept;
 
     // Convenience wrapper for inference (no backward needed)
     inline RenderOutput fast_rasterize(

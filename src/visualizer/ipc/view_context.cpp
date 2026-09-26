@@ -18,6 +18,7 @@ namespace lfs::vis {
         SetViewCallback set_view_callback;
         SetViewForPanelCallback set_view_for_panel_callback;
         SetFovCallback set_fov_callback;
+        SetOrthoScaleCallback set_ortho_scale_callback;
     };
 
     static ViewContextState& state() {
@@ -87,6 +88,10 @@ namespace lfs::vis {
         state().set_fov_callback = std::move(callback);
     }
 
+    void set_set_ortho_scale_callback(SetOrthoScaleCallback callback) {
+        state().set_ortho_scale_callback = std::move(callback);
+    }
+
     void apply_set_view(const SetViewParams& params) {
         const auto& s = state();
         if (s.set_view_callback) {
@@ -110,6 +115,12 @@ namespace lfs::vis {
         if (s.set_fov_callback) {
             s.set_fov_callback(fov_degrees);
         }
+    }
+
+    void apply_set_ortho_scale(std::optional<float> scale) {
+        const auto& s = state();
+        if (s.set_ortho_scale_callback)
+            s.set_ortho_scale_callback(scale);
     }
 
     void set_render_settings_callbacks(GetRenderSettingsCallback get_cb, SetRenderSettingsCallback set_cb) {

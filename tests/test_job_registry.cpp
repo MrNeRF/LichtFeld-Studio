@@ -11,6 +11,25 @@
 
 namespace {
 
+    TEST(JobRegistryTest, PublishedWriteWinsOverLateCancellation) {
+        lfs::vis::JobRegistry registry;
+        const auto handle = registry.init(lfs::vis::JobType::ProjectWrite, "Cleaning");
+        ASSERT_TRUE(handle);
+        // The file has already been atomically published when Cancel arrives.
+        registry.requestCancel(*handle);
+        std::jthread worker([&] {
+            registry.work(*handle);
+            registry.finishWork(*handle, false, {}, std::nullopt, std::nullopt, true);
+        });
+        worker.join();
+        const auto snapshot = registry.update(*handle);
+        ASSERT_TRUE(snapshot);
+        EXPECT_FALSE(snapshot->worker_canceled);
+        EXPECT_TRUE(snapshot->error.empty());
+        registry.completed(*handle);
+        EXPECT_EQ(registry.update(*handle)->status, lfs::vis::JobStatus::Completed);
+    }
+
     TEST(JobRegistryTest,
          EnforcesTypeExclusivityAndMainThreadCompletion) {
         lfs::vis::JobRegistry registry;

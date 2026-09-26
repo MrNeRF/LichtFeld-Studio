@@ -4,7 +4,7 @@
 #include "components/bilateral_grid.hpp"
 #include "components/ppisp.hpp"
 #include "core/tensor.hpp"
-#include "tensor_hardening_test_utils.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <cmath>
 #include <gtest/gtest.h>
@@ -24,12 +24,12 @@ namespace {
         for (size_t i = 0; i < values.size(); ++i) {
             values[i] = base + 0.01f * static_cast<float>(i);
         }
-        return Tensor::from_vector(values, {3, 4, 4}, Device::CUDA);
+        return Tensor::from_vector(values, {3, 4, 4}, Device::GPU);
     }
 
     Tensor make_grad(float value) {
         std::vector<float> values(3 * 4 * 4, value);
-        return Tensor::from_vector(values, {3, 4, 4}, Device::CUDA);
+        return Tensor::from_vector(values, {3, 4, 4}, Device::GPU);
     }
 
     void register_test_frames(PPISP& ppisp) {
@@ -60,13 +60,13 @@ namespace {
     float expect_loss_contract(PPISP& ppisp) {
         const auto loss = ppisp.reg_loss_gpu();
         EXPECT_TRUE(loss.is_valid());
-        EXPECT_EQ(loss.device(), Device::CUDA);
+        EXPECT_EQ(loss.device(), Device::GPU);
         EXPECT_EQ(loss.ndim(), 1u);
         EXPECT_EQ(loss.numel(), 1u);
         return loss.cpu().item<float>();
     }
 
-    class PPISPCheckpointRoundtripTest : public tensor_hardening::CudaTest {};
+    class PPISPCheckpointRoundtripTest : public lfs::test::CudaBackendTest {};
 
     TEST_F(PPISPCheckpointRoundtripTest, AdoptCheckpointStatePreservesColorMeanRegularizer) {
         PPISPConfig config;

@@ -8,6 +8,7 @@ import logging
 import os
 from functools import lru_cache
 from typing import Optional
+from .portal_security import redact
 
 _log = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ def _load_ca_bundle_from_certifi() -> Optional[str]:
         try:
             cafile = where()
         except Exception as exc:
-            _log.debug("Failed to resolve CA bundle from %s: %s", module_name, exc)
+            _log.debug("Failed to resolve CA bundle from %s: %s", module_name, redact(exc))
             continue
 
         if cafile and os.path.exists(cafile):
@@ -56,7 +57,7 @@ def _fallback_ssl_context() -> Optional[object]:
     try:
         return ssl.create_default_context(cafile=cafile)
     except Exception as exc:
-        _log.warning("Failed to create fallback SSL context from '%s': %s", cafile, exc)
+        _log.warning("Failed to create fallback SSL context from '%s': %s", cafile, redact(exc))
         return None
 
 
@@ -79,12 +80,24 @@ def _is_cert_verify_error(exc: BaseException) -> bool:
     return False
 
 
-def urlopen(url, *, timeout: float, **kwargs):
+def urlopen(url, *, timeout: float, no_redirect: bool = False, **kwargs):
     """Open a URL and retry certificate failures with a certifi CA bundle if available."""
     import urllib.request
 
+    def open_request(**options):
+        if not no_redirect:
+            return urllib.request.urlopen(url, timeout=timeout, **options)
+
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+
+        context = options.pop("context", None)
+        opener = urllib.request.build_opener(NoRedirect(), urllib.request.HTTPSHandler(context=context))
+        return opener.open(url, timeout=timeout, **options)
+
     try:
-        return urllib.request.urlopen(url, timeout=timeout, **kwargs)
+        return open_request(**kwargs)
     except Exception as exc:
         if not _is_cert_verify_error(exc):
             raise
@@ -94,5 +107,5 @@ def urlopen(url, *, timeout: float, **kwargs):
     if context is None:
         raise first_error
 
-    _log.info("Retrying HTTPS request with fallback CA bundle: %s", getattr(url, "full_url", url))
-    return urllib.request.urlopen(url, timeout=timeout, context=context, **kwargs)
+    _log.info("Retrying HTTPS request with fallback CA bundle")
+    return open_request(context=context, **kwargs)

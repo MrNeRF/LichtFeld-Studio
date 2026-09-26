@@ -152,12 +152,13 @@ struct VulkanGSPipelineBuffers {
 
     // Raw split SplatData projection inputs used by the Vulkan viewer. These can
     // directly alias Vulkan-external tensor storage during training.
-    Buffer<float> sh0;         // (N, 1, 3) flattened
-    Buffer<float> shN;         // swizzled rest-only SH: [ceil(N/32), active slots, 32] float4
-    Buffer<float> scaling_raw; // (N, 3), log-scale
-    Buffer<float> opacity_raw; // (N, 1), logits
+    Buffer<float> sh0;            // (N, 1, 3) flattened
+    Buffer<float> shN;            // swizzled rest-only SH: [ceil(N/32), active slots, 32] float4
+    Buffer<float> scaling_raw;    // (N, 3), log-scale
+    Buffer<float> opacity_raw;    // (N, 1), logits
+    Buffer<uint8_t> deleted_mask; // (N,), optional soft-delete mask
 
-    // Canonical quantized LOD pool (lod_pool_quant.hpp). When quant_pool is
+    // Canonical quantized LOD pool (core/rad_pool_quant.hpp). When quant_pool is
     // set, sh0/shN/rotations/scaling_raw/opacity_raw hold the packed formats
     // (f16 / s8 slots) and projection uses the *_quant pipeline with the
     // per-page dequant frames bound last.
@@ -280,7 +281,7 @@ struct VulkanGSPipelineBuffers {
     Buffer<uint32_t> lod_gpu_indices;         // [M] GPU-produced physical splat indices
     Buffer<uint32_t> lod_gpu_logical_indices; // [M] GPU-produced logical/model splat indices
     Buffer<float> lod_gpu_weights;            // [M] GPU-produced transition opacity weights
-    Buffer<uint32_t> lod_gpu_counts;          // [0]=selected, [1]=overflow
+    Buffer<uint32_t> lod_gpu_counts;          // selected, overflow, threshold scale, indirect dispatch xyz
     Buffer<uint32_t> lod_chunk_touch;         // [C] per-chunk traversal priority (0xffffffff = in use)
     // GPU-compacted chunk_touch (Phase D): counts[4], protected ids, miss pairs.
     Buffer<uint32_t> lod_compact_counts;

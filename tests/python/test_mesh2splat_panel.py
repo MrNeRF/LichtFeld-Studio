@@ -138,7 +138,7 @@ def test_mesh2splat_panel_builds_mesh_and_resolution_records(mesh2splat_module):
     assert panel._refresh_scene_state(force=True) is True
     assert panel._selected_mesh_name == "Hull"
     assert panel._handle.records["meshes"] == [
-        {"name": "Hull", "selected": True, "stats_text": "1024v / 2048f"},
+        {"name": "Hull", "selected": True, "stats_text": "1,024v / 2,048f"},
         {"name": "Wheel", "selected": False, "stats_text": "256v / 512f"},
     ]
     assert panel._handle.records["resolutions"][3]["selected"] is True

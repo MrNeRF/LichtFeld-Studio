@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/gpu_backend_fwd.hpp"
 #include "core/tensor.hpp"
 #include <cassert>
 #include <vector>
@@ -54,15 +55,27 @@ namespace lfs::rendering {
         }
 
         const int height = imageHeight(image, layout);
+        if (height <= 0) {
+            return {};
+        }
         std::vector<int> row_indices(static_cast<size_t>(height));
         for (int row = 0; row < height; ++row) {
             row_indices[static_cast<size_t>(row)] = height - 1 - row;
         }
 
-        const Tensor indices = Tensor::from_vector(
-            row_indices, {static_cast<size_t>(height)}, image.device());
         const int dim = (layout == ImageLayout::HWC) ? 0 : 1;
-        return image.index_select(dim, indices).contiguous();
+        const auto select_rows = [&]() {
+            // from_vector/empty use the active GPU backend; pin it to the source so a
+            // CUDA image is not paired with Vulkan indices (or the reverse).
+            const Tensor indices = Tensor::from_vector(
+                row_indices, {static_cast<size_t>(height)}, image.device());
+            return image.index_select(dim, indices).contiguous();
+        };
+        if (const auto backend = lfs::core::gpu_backend_of(image)) {
+            lfs::core::GpuBackendScope scope(*backend);
+            return select_rows();
+        }
+        return select_rows();
     }
 
 } // namespace lfs::rendering

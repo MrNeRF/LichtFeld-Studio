@@ -12,6 +12,7 @@
 #include "core/scene.hpp"
 #include "core/services.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 #include "input/key_codes.hpp"
 #include "io/cache_image_loader.hpp"
 #include "operation/undo_history.hpp"
@@ -34,6 +35,7 @@
 #include "visualizer/rendering/viewport_frame_lifecycle_service.hpp"
 #include "visualizer/rendering/viewport_request_builder.hpp"
 #include "visualizer/scene/scene_manager.hpp"
+#include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
 
 #include <array>
@@ -41,11 +43,11 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <cuda_runtime.h>
 #include <filesystem>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace lfs::vis {
@@ -93,16 +95,16 @@ namespace lfs::vis {
     }
 
     namespace {
-        std::unique_ptr<lfs::core::SplatData> makeTestSplat(const float x) {
+        std::unique_ptr<lfs::core::SplatData> makeTestSplat(const float x, const int sh_degree = 0) {
             using lfs::core::DataType;
             using lfs::core::Device;
             using lfs::core::Tensor;
 
             return std::make_unique<lfs::core::SplatData>(
-                0,
+                sh_degree,
                 Tensor::from_vector({x, 0.0f, 2.0f}, {size_t{1}, size_t{3}}, Device::CPU),
                 Tensor::from_vector({1.0f, 1.0f, 1.0f}, {size_t{1}, size_t{1}, size_t{3}}, Device::CPU),
-                Tensor::zeros({size_t{1}, size_t{0}, size_t{3}}, Device::CPU, DataType::Float32),
+                Tensor::zeros({size_t{1}, static_cast<size_t>((sh_degree + 1) * (sh_degree + 1) - 1), size_t{3}}, Device::CPU, DataType::Float32),
                 Tensor::from_vector({0.0f, 0.0f, 0.0f}, {size_t{1}, size_t{3}}, Device::CPU),
                 Tensor::from_vector({1.0f, 0.0f, 0.0f, 0.0f}, {size_t{1}, size_t{4}}, Device::CPU),
                 Tensor::from_vector({8.0f}, {size_t{1}, size_t{1}}, Device::CPU),
@@ -193,10 +195,6 @@ namespace lfs::vis {
             initialized = true;
         }
 
-        bool has_cuda_device() {
-            int device_count = 0;
-            return cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0;
-        }
     } // namespace
 
     class RenderingManagerEventsTest : public ::testing::Test {
@@ -327,10 +325,6 @@ namespace lfs::vis {
     }
 
     TEST(GTComparisonCache, DisplayConversionCopiesCudaUInt8ChwToCpu) {
-        if (!has_cuda_device()) {
-            GTEST_SKIP() << "CUDA device required";
-        }
-
         using lfs::core::DataType;
         using lfs::core::Device;
         using lfs::core::Tensor;
@@ -981,13 +975,22 @@ namespace lfs::vis {
         EXPECT_FLOAT_EQ(acc(1, 2), 9.0f);
     }
 
-    TEST_F(SceneManagerRenderStateTest, PlyComparisonBuildsFullFrameWipeFromCombinedSceneMasks) {
+    TEST_F(SceneManagerRenderStateTest, PlyComparisonRendersFromOwnedNodeModelsWithoutCombinedPrep) {
         SceneManager manager;
         manager.changeContentType(SceneManager::ContentType::SplatFiles);
 
         auto& scene = manager.getScene();
-        const auto left_id = scene.addSplat("left", makeTestSplat(0.0f));
-        const auto right_id = scene.addSplat("right", makeTestSplat(1.0f));
+        const auto left_id = scene.addSplat("left", makeTestSplat(0.0f, 3));
+        const auto right_id = scene.addSplat("right", makeTestSplat(1.0f, 3));
+        scene.getNodeById(left_id)->model->set_active_sh_degree(1);
+        scene.getNodeById(right_id)->model->set_active_sh_degree(2);
+        scene.setNodeTransform(
+            left_id, glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f)));
+        scene.setNodeTransform(
+            right_id, glm::translate(glm::mat4(1.0f), glm::vec3(-4.0f, 5.0f, 6.0f)));
+
+        EXPECT_FALSE(scene.hasPreparedCombinedModel());
+        EXPECT_FALSE(scene.combinedModelBuildPending());
 
         RenderSettings settings;
         settings.split_view_mode = SplitViewMode::PLYComparison;
@@ -998,13 +1001,17 @@ namespace lfs::vis {
         settings.depth_filter_max = {1.0f, 1.0f, 1.0f};
 
         Viewport viewport(640, 480);
-        const auto scene_state = manager.buildRenderState();
-        ASSERT_NE(scene_state.combined_model, nullptr);
+        const auto scene_state = manager.buildRenderState({.metadata_only = true});
+        EXPECT_EQ(scene_state.combined_model, nullptr);
+        EXPECT_EQ(scene_state.transform_indices, nullptr);
+        EXPECT_EQ(scene_state.selection_mask, nullptr);
+        EXPECT_FALSE(scene.hasPreparedCombinedModel());
+        EXPECT_FALSE(scene.combinedModelBuildPending());
 
         const FrameContext ctx{
             .viewport = viewport,
             .scene_manager = &manager,
-            .model = manager.getModelForRendering(),
+            .model = nullptr,
             .scene_state = scene_state,
             .settings = settings,
             .render_size = {640, 480},
@@ -1015,29 +1022,64 @@ namespace lfs::vis {
         ASSERT_TRUE(plan.has_value());
         ASSERT_EQ(plan->panels.size(), 2u);
 
-        EXPECT_EQ(plan->panels[0].panel.content.model, ctx.model);
-        EXPECT_EQ(plan->panels[1].panel.content.model, ctx.model);
-        EXPECT_EQ(plan->panels[0].panel.content.model_transform, glm::mat4(1.0f));
-        EXPECT_EQ(plan->panels[1].panel.content.model_transform, glm::mat4(1.0f));
+        const auto* const left_node = scene.getNodeById(left_id);
+        const auto* const right_node = scene.getNodeById(right_id);
+        ASSERT_NE(left_node, nullptr);
+        ASSERT_NE(right_node, nullptr);
+        ASSERT_NE(left_node->model, nullptr);
+        ASSERT_NE(right_node->model, nullptr);
+
+        EXPECT_EQ(plan->panels[0].panel.content.model, left_node->model.get());
+        EXPECT_EQ(plan->panels[1].panel.content.model, right_node->model.get());
+        EXPECT_EQ(
+            plan->panels[0].panel.content.model_transform,
+            scene_coords::nodeVisualizerWorldTransform(scene, left_id));
+        EXPECT_EQ(
+            plan->panels[1].panel.content.model_transform,
+            scene_coords::nodeVisualizerWorldTransform(scene, right_id));
 
         for (size_t i = 0; i < plan->panels.size(); ++i) {
             const auto& panel = plan->panels[i].panel;
             ASSERT_TRUE(panel.content.gaussian_render.has_value());
             EXPECT_EQ(panel.content.gaussian_render->frame_view.size, ctx.render_size);
             EXPECT_FALSE(panel.presentation.normalize_x_to_panel);
-            EXPECT_EQ(panel.content.gaussian_render->scene.model_transforms, &ctx.scene_state.model_transforms);
-            EXPECT_EQ(panel.content.gaussian_render->scene.transform_indices, ctx.scene_state.transform_indices);
-            ASSERT_EQ(panel.content.gaussian_render->scene.node_visibility_mask.size(), 2u);
-            EXPECT_EQ(panel.content.gaussian_render->scene.node_visibility_mask[0], i == 0);
-            EXPECT_EQ(panel.content.gaussian_render->scene.node_visibility_mask[1], i == 1);
+            EXPECT_EQ(panel.content.gaussian_render->scene.transform_indices, nullptr);
+            EXPECT_TRUE(panel.content.gaussian_render->scene.node_visibility_mask.empty());
+            EXPECT_TRUE(panel.content.gaussian_render->scene.node_active_sh_degrees.empty());
             EXPECT_TRUE(panel.content.gaussian_render->filters.view_volume.has_value());
             EXPECT_TRUE(panel.content.gaussian_render->overlay.markers.show_rings);
-            EXPECT_EQ(panel.content.gaussian_render->overlay.emphasis.mask, ctx.scene_state.selection_mask);
             EXPECT_FALSE(panel.content.gaussian_render->overlay.cursor.enabled);
             EXPECT_EQ(panel.content.gaussian_render->overlay.emphasis.transient_mask.mask, nullptr);
             EXPECT_EQ(panel.content.gaussian_render->overlay.emphasis.focused_gaussian_id, -1);
+
+            auto scoped_state = scene_state;
+            const auto& node = i == 0 ? *left_node : *right_node;
+            // The Vulkan path starts with the full scene request, then replaces
+            // its transform array with the owned node's single world transform.
+            // Aggregate SH limits must not survive that replacement.
+            auto request = buildViewportRenderRequest(
+                ctx, {320, 480}, &viewport,
+                i == 0 ? SplitViewPanelId::Left : SplitViewPanelId::Right,
+                {static_cast<int>(i) * 320, 0}, ctx.render_size);
+            ASSERT_EQ(request.scene.node_active_sh_degrees, (std::vector<int>{1, 2}));
+            ASSERT_EQ(request.scene.model_transforms->size(), 2u);
+            applyPlyComparisonNodeScope(
+                request.scene, request.filters, request.overlay, ctx, node, static_cast<int>(i));
+            const std::vector<glm::mat4> transforms{panel.content.model_transform};
+            request.scene.model_transforms = &transforms;
+            EXPECT_EQ(request.scene.model_transforms->size(), 1u);
+            EXPECT_EQ(request.scene.transform_indices, nullptr);
+            EXPECT_TRUE(request.scene.node_visibility_mask.empty());
+            EXPECT_TRUE(request.scene.node_active_sh_degrees.empty());
+            EXPECT_EQ(node.model->get_active_sh_degree(), static_cast<int>(i) + 1);
+            EXPECT_EQ(scene_state.node_active_sh_degrees, (std::vector<int>{1, 2}));
+            scopeSceneRenderStateToVisibleSplatNode(
+                scoped_state, scene, node, static_cast<int>(i), panel.content.model_transform);
+            EXPECT_EQ(scoped_state.node_active_sh_degrees,
+                      std::vector<int>{static_cast<int>(i) + 1});
         }
 
+        EXPECT_FALSE(scene.hasPreparedCombinedModel());
         EXPECT_EQ(scene.getVisibleNodeIndex(left_id), 0);
         EXPECT_EQ(scene.getVisibleNodeIndex(right_id), 1);
     }
@@ -1074,7 +1116,7 @@ namespace lfs::vis {
         EXPECT_FALSE(observe().changed);
     }
 
-    TEST_F(SceneManagerRenderStateTest, SwitchToEditModePlyComparisonUsesCombinedSceneMasks) {
+    TEST_F(SceneManagerRenderStateTest, SwitchToEditModePlyComparisonScopesCropAndSelectionToOwnedNodes) {
         using lfs::core::DataType;
         using lfs::core::Device;
         using lfs::core::Tensor;
@@ -1088,7 +1130,7 @@ namespace lfs::vis {
 
         manager.switchToEditMode();
         const auto trained_id = scene.getNodeIdByName("Trained Model");
-        const auto bike_id = scene.addSplat("bike", makeTestSplat(1.0f));
+        const auto bike_id = scene.addSplat("bike", makeTwoPointTestSplat(1.0f, 1.5f));
 
         const auto cropbox_id = scene.getOrCreateCropBoxForSplat(trained_id);
         auto* cropbox = scene.getCropBoxData(cropbox_id);
@@ -1097,13 +1139,16 @@ namespace lfs::vis {
         cropbox->max = {1.0f, 1.0f, 1.0f};
         cropbox->enabled = true;
 
-        auto scene_state = manager.buildRenderState();
-        scene_state.selection_mask = std::make_shared<Tensor>(
-            Tensor::zeros({size_t{2}}, Device::CPU, DataType::UInt8));
+        scene.setSelection({0});
+
+        auto scene_state = manager.buildRenderState({.metadata_only = true});
+        EXPECT_EQ(scene_state.combined_model, nullptr);
+        EXPECT_EQ(scene_state.transform_indices, nullptr);
+        EXPECT_TRUE(scene_state.has_selection);
         scene_state.selected_node_mask = {true, false};
 
         Tensor transient_selection =
-            Tensor::zeros({size_t{2}}, Device::CPU, DataType::Bool);
+            Tensor::zeros({size_t{3}}, Device::CPU, DataType::Bool);
 
         RenderSettings settings;
         settings.split_view_mode = SplitViewMode::PLYComparison;
@@ -1118,7 +1163,7 @@ namespace lfs::vis {
         const FrameContext ctx{
             .viewport = viewport,
             .scene_manager = &manager,
-            .model = manager.getModelForRendering(),
+            .model = nullptr,
             .scene_state = std::move(scene_state),
             .settings = settings,
             .render_size = {640, 480},
@@ -1131,39 +1176,242 @@ namespace lfs::vis {
                  .add_mode = true,
                  .selection_tensor = &transient_selection,
                  .preview_selection = &transient_selection,
-                 .focused_gaussian_id = 0},
+                 .focused_gaussian_id = 0,
+                 .selection_mode = SelectionPreviewMode::Rings},
         };
 
         const auto plan = buildSplitViewCompositionPlan(ctx, FrameResources{});
         ASSERT_TRUE(plan.has_value());
         ASSERT_EQ(plan->panels.size(), 2u);
 
-        for (size_t i = 0; i < plan->panels.size(); ++i) {
-            const auto& panel = plan->panels[i].panel;
-            ASSERT_TRUE(panel.content.gaussian_render.has_value());
-            EXPECT_EQ(panel.content.model, ctx.model);
-            EXPECT_EQ(panel.content.model_transform, glm::mat4(1.0f));
-            EXPECT_EQ(panel.content.gaussian_render->scene.model_transforms, &ctx.scene_state.model_transforms);
-            EXPECT_EQ(panel.content.gaussian_render->scene.transform_indices, ctx.scene_state.transform_indices);
-            ASSERT_EQ(panel.content.gaussian_render->scene.node_visibility_mask.size(), 2u);
-            EXPECT_EQ(panel.content.gaussian_render->scene.node_visibility_mask[0], i == 0);
-            EXPECT_EQ(panel.content.gaussian_render->scene.node_visibility_mask[1], i == 1);
+        const auto* const trained = scene.getNodeById(trained_id);
+        const auto* const bike = scene.getNodeById(bike_id);
+        ASSERT_NE(trained, nullptr);
+        ASSERT_NE(bike, nullptr);
+        EXPECT_EQ(plan->panels[0].panel.content.model, trained->model.get());
+        EXPECT_EQ(plan->panels[1].panel.content.model, bike->model.get());
 
-            EXPECT_TRUE(panel.content.gaussian_render->filters.crop_region.has_value());
-            EXPECT_EQ(panel.content.gaussian_render->filters.crop_region->parent_node_index, 0);
-            EXPECT_TRUE(panel.content.gaussian_render->filters.view_volume.has_value());
-            EXPECT_TRUE(panel.content.gaussian_render->overlay.markers.show_rings);
-            EXPECT_EQ(panel.content.gaussian_render->overlay.emphasis.mask, ctx.scene_state.selection_mask);
-            EXPECT_EQ(panel.content.gaussian_render->overlay.emphasis.emphasized_node_mask,
-                      ctx.scene_state.selected_node_mask);
-            EXPECT_TRUE(panel.content.gaussian_render->overlay.emphasis.dim_non_emphasized);
-            EXPECT_FALSE(panel.content.gaussian_render->overlay.cursor.enabled);
-            EXPECT_EQ(panel.content.gaussian_render->overlay.emphasis.transient_mask.mask, nullptr);
-            EXPECT_EQ(panel.content.gaussian_render->overlay.emphasis.focused_gaussian_id, -1);
-        }
+        const auto& left = plan->panels[0].panel.content;
+        const auto& right = plan->panels[1].panel.content;
+        ASSERT_TRUE(left.gaussian_render.has_value());
+        ASSERT_TRUE(right.gaussian_render.has_value());
+
+        ASSERT_TRUE(left.gaussian_render->filters.crop_region.has_value());
+        EXPECT_EQ(left.gaussian_render->filters.crop_region->parent_node_index, 0);
+        EXPECT_FALSE(right.gaussian_render->filters.crop_region.has_value());
+
+        ASSERT_NE(left.gaussian_render->overlay.emphasis.mask, nullptr);
+        EXPECT_EQ(left.gaussian_render->overlay.emphasis.mask->numel(), 1u);
+        ASSERT_NE(right.gaussian_render->overlay.emphasis.mask, nullptr);
+        EXPECT_EQ(right.gaussian_render->overlay.emphasis.mask->numel(), 2u);
+
+        ASSERT_EQ(left.gaussian_render->overlay.emphasis.emphasized_node_mask.size(), 1u);
+        EXPECT_TRUE(left.gaussian_render->overlay.emphasis.emphasized_node_mask[0]);
+        ASSERT_EQ(right.gaussian_render->overlay.emphasis.emphasized_node_mask.size(), 1u);
+        EXPECT_FALSE(right.gaussian_render->overlay.emphasis.emphasized_node_mask[0]);
+        EXPECT_TRUE(left.gaussian_render->overlay.emphasis.dim_non_emphasized);
+        EXPECT_TRUE(right.gaussian_render->overlay.emphasis.dim_non_emphasized);
+        EXPECT_TRUE(left.gaussian_render->overlay.cursor.enabled);
+        ASSERT_NE(left.gaussian_render->overlay.emphasis.transient_mask.mask, nullptr);
+        EXPECT_EQ(left.gaussian_render->overlay.emphasis.transient_mask.mask->numel(), 1u);
+        ASSERT_NE(right.gaussian_render->overlay.emphasis.transient_mask.mask, nullptr);
+        EXPECT_EQ(right.gaussian_render->overlay.emphasis.transient_mask.mask->numel(), 2u);
+        EXPECT_EQ(left.gaussian_render->overlay.emphasis.focused_gaussian_id, 0);
+        EXPECT_EQ(right.gaussian_render->overlay.emphasis.focused_gaussian_id, -1);
 
         EXPECT_EQ(scene.getVisibleNodeIndex(trained_id), 0);
         EXPECT_EQ(scene.getVisibleNodeIndex(bike_id), 1);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, VisibleCountDoesNotBuildAnAggregate) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        const auto left = scene.addSplat("left", makeTestSplat(0.0f));
+        const auto right = scene.addSplat("right", makeTwoPointTestSplat(1.0f, 2.0f));
+        scene.getNodeById(right)->model->deleted() =
+            lfs::core::Tensor::from_vector({1.0f, 0.0f}, {size_t{2}}, lfs::core::Device::CUDA)
+                .to(lfs::core::DataType::Bool);
+        EXPECT_EQ(scene.getVisibleGaussianCount(), 2u);
+        EXPECT_FALSE(scene.hasPreparedCombinedModel());
+        EXPECT_FALSE(scene.combinedModelBuildPending());
+        scene.setNodeVisibility(left, false);
+        EXPECT_EQ(scene.getVisibleGaussianCount(), 1u);
+        EXPECT_FALSE(scene.hasPreparedCombinedModel());
+    }
+
+    TEST_F(SceneManagerRenderStateTest, ComparisonReleasesRedundantAggregateAndPreservesOwnedModels) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        const auto left = scene.addSplat("left", makeTestSplat(0.0f));
+        const auto right = scene.addSplat("right", makeTestSplat(1.0f));
+        scene.setSelection({1});
+        ASSERT_NE(scene.getCombinedModel(), nullptr);
+        ASSERT_NE(scene.peekTransformIndices(), nullptr);
+        scene.discardUnconsolidatedModelCache();
+        EXPECT_EQ(scene.peekCombinedModel(), nullptr);
+        EXPECT_EQ(scene.peekTransformIndices(), nullptr);
+        ASSERT_NE(scene.getNodeById(left)->model, nullptr);
+        ASSERT_NE(scene.getNodeById(right)->model, nullptr);
+        ASSERT_NE(scene.selectionMaskSliceForNode(right), nullptr);
+        EXPECT_TRUE(scene.hasSelection());
+        // Returning to a mode that needs the aggregate can reconstruct it.
+        ASSERT_NE(scene.getCombinedModel(), nullptr);
+        EXPECT_EQ(scene.getCombinedModel()->size(), 2u);
+        scene.consolidateNodeModels();
+        const auto* consolidated = scene.peekCombinedModel();
+        ASSERT_NE(consolidated, nullptr);
+        scene.discardUnconsolidatedModelCache();
+        EXPECT_EQ(scene.peekCombinedModel(), consolidated);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, PlyComparisonMetadataCacheIsDistinctFromFullCombinedState) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        scene.addSplat("left", makeTestSplat(0.0f));
+        scene.addSplat("right", makeTestSplat(1.0f));
+
+        const auto metadata = manager.buildRenderState({.metadata_only = true});
+        EXPECT_EQ(metadata.combined_model, nullptr);
+        EXPECT_EQ(metadata.transform_indices, nullptr);
+        EXPECT_FALSE(scene.hasPreparedCombinedModel());
+
+        const auto full = manager.buildRenderState();
+        ASSERT_NE(full.combined_model, nullptr);
+        EXPECT_NE(full.transform_indices, nullptr);
+        EXPECT_TRUE(scene.hasPreparedCombinedModel());
+
+        const auto metadata_again = manager.buildRenderState({.metadata_only = true});
+        EXPECT_EQ(metadata_again.combined_model, nullptr);
+        EXPECT_EQ(metadata_again.transform_indices, nullptr);
+        EXPECT_EQ(metadata_again.selection_mask, nullptr);
+        EXPECT_TRUE(scene.hasPreparedCombinedModel());
+        EXPECT_FALSE(scene.combinedModelBuildPending());
+    }
+
+    TEST_F(SceneManagerRenderStateTest, ActiveShChangesRefreshFullAndMetadataSnapshots) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        const auto id = scene.addSplat("model", makeTestSplat(0.0f, 3));
+        auto* model = scene.getNodeById(id)->model.get();
+        for (const bool metadata_only : {false, true}) {
+            model->set_active_sh_degree(1);
+            const auto before = manager.buildRenderState({.metadata_only = metadata_only});
+            EXPECT_EQ(before.node_active_sh_degrees, std::vector<int>{1});
+            model->set_active_sh_degree(2);
+            const auto after = manager.buildRenderState({.metadata_only = metadata_only});
+            EXPECT_EQ(after.node_active_sh_degrees, std::vector<int>{2});
+            EXPECT_EQ(after.combined_model, metadata_only ? nullptr : model);
+        }
+    }
+
+    TEST_F(SceneManagerRenderStateTest, PlyComparisonPivotSamplesClickedOwnedNode) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        const auto left_id = scene.addSplat("left", makeTestSplat(0.0f));
+        const auto right_id = scene.addSplat("right", makeTestSplat(1.0f));
+
+        const auto left = resolvePlyComparisonDepthSample(scene, 0, SplitViewPanelId::Left);
+        const auto right = resolvePlyComparisonDepthSample(scene, 0, SplitViewPanelId::Right);
+        ASSERT_NE(left.node, nullptr);
+        ASSERT_NE(right.node, nullptr);
+        EXPECT_EQ(left.node->id, left_id);
+        EXPECT_EQ(right.node->id, right_id);
+        EXPECT_TRUE(left.uses_owned_node_model);
+        EXPECT_TRUE(right.uses_owned_node_model);
+        EXPECT_EQ(left.model, scene.getNodeById(left_id)->model.get());
+        EXPECT_EQ(right.model, scene.getNodeById(right_id)->model.get());
+        EXPECT_EQ(left.visible_index, 0);
+        EXPECT_EQ(right.visible_index, 1);
+
+        auto state = manager.buildRenderState({.metadata_only = true});
+        const auto cropbox_id = scene.getOrCreateCropBoxForSplat(right_id);
+        auto* cropbox = scene.getCropBoxData(cropbox_id);
+        ASSERT_NE(cropbox, nullptr);
+        cropbox->enabled = true;
+        state = manager.buildRenderState({.metadata_only = true});
+        ASSERT_FALSE(state.cropboxes.empty());
+
+        scopeSceneRenderStateToVisibleSplatNode(
+            state,
+            scene,
+            *right.node,
+            right.visible_index,
+            scene_coords::nodeVisualizerWorldTransform(scene, right_id));
+        EXPECT_EQ(state.combined_model, right.model);
+        ASSERT_EQ(state.model_transforms.size(), 1u);
+        EXPECT_EQ(
+            state.model_transforms.front(),
+            scene_coords::nodeVisualizerWorldTransform(scene, right_id));
+        EXPECT_EQ(state.transform_indices, nullptr);
+        ASSERT_EQ(state.cropboxes.size(), 1u);
+        EXPECT_EQ(state.cropboxes.front().parent_node_index, 0);
+        EXPECT_FALSE(scene.hasPreparedCombinedModel());
+    }
+
+    TEST_F(SceneManagerRenderStateTest, PlyComparisonConsolidatedUsesPreparedCombinedWithoutRebuild) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+        auto& scene = manager.getScene();
+        const auto left_id = scene.addSplat("left", makeTestSplat(0.0f));
+        const auto right_id = scene.addSplat("right", makeTestSplat(1.0f));
+
+        ASSERT_EQ(scene.consolidateNodeModels(), 2u);
+        ASSERT_TRUE(scene.isConsolidated());
+        ASSERT_TRUE(scene.hasPreparedCombinedModel());
+        EXPECT_EQ(scene.getNodeById(left_id)->model, nullptr);
+        EXPECT_EQ(scene.getNodeById(right_id)->model, nullptr);
+        const auto* const prepared = scene.peekCombinedModel();
+        ASSERT_NE(prepared, nullptr);
+        EXPECT_NE(scene.peekTransformIndices(), nullptr);
+
+        const auto metadata = manager.buildRenderState({.metadata_only = true});
+        EXPECT_EQ(metadata.combined_model, nullptr);
+        EXPECT_EQ(metadata.transform_indices, nullptr);
+        EXPECT_EQ(scene.peekCombinedModel(), prepared);
+        EXPECT_FALSE(scene.combinedModelBuildPending());
+
+        Viewport viewport(640, 480);
+        RenderSettings settings;
+        settings.split_view_mode = SplitViewMode::PLYComparison;
+        const FrameContext ctx{
+            .viewport = viewport,
+            .scene_manager = &manager,
+            .model = prepared,
+            .scene_state = metadata,
+            .settings = settings,
+            .render_size = {640, 480},
+        };
+        const auto plan = buildSplitViewCompositionPlan(ctx, FrameResources{});
+        ASSERT_TRUE(plan.has_value());
+        EXPECT_EQ(plan->panels[0].panel.content.model, prepared);
+        EXPECT_EQ(plan->panels[1].panel.content.model, prepared);
+        ASSERT_TRUE(plan->panels[0].panel.content.gaussian_render.has_value());
+        ASSERT_EQ(plan->panels[0].panel.content.gaussian_render->scene.node_visibility_mask.size(), 2u);
+        EXPECT_TRUE(plan->panels[0].panel.content.gaussian_render->scene.node_visibility_mask[0]);
+        EXPECT_FALSE(plan->panels[0].panel.content.gaussian_render->scene.node_visibility_mask[1]);
+        EXPECT_FALSE(plan->panels[1].panel.content.gaussian_render->scene.node_visibility_mask[0]);
+        EXPECT_TRUE(plan->panels[1].panel.content.gaussian_render->scene.node_visibility_mask[1]);
+
+        const auto left = resolvePlyComparisonDepthSample(scene, 0, SplitViewPanelId::Left);
+        EXPECT_FALSE(left.uses_owned_node_model);
+        EXPECT_EQ(left.model, prepared);
+        EXPECT_EQ(left.node->id, left_id);
+    }
+
+    TEST(SplitViewServiceTest, PlyComparisonPairOffsetWalksUniquePairs) {
+        EXPECT_FALSE(plyComparisonPairForOffset(0, 0).has_value());
+        EXPECT_FALSE(plyComparisonPairForOffset(1, 0).has_value());
+        ASSERT_TRUE(plyComparisonPairForOffset(2, 0).has_value());
+        EXPECT_EQ(*plyComparisonPairForOffset(2, 0), (std::pair<size_t, size_t>{0, 1}));
+        EXPECT_EQ(*plyComparisonPairForOffset(3, 0), (std::pair<size_t, size_t>{0, 1}));
+        EXPECT_EQ(*plyComparisonPairForOffset(3, 1), (std::pair<size_t, size_t>{0, 2}));
+        EXPECT_EQ(*plyComparisonPairForOffset(3, 2), (std::pair<size_t, size_t>{1, 2}));
+        EXPECT_EQ(*plyComparisonPairForOffset(3, 3), (std::pair<size_t, size_t>{0, 1}));
     }
 
     TEST_F(SceneManagerRenderStateTest, HiddenEnabledCropBoxStillFiltersRender) {
@@ -2208,6 +2456,25 @@ namespace lfs::vis {
         EXPECT_EQ(request.render.voxel_size, settings.voxel_size);
     }
 
+    // Catches a preview timer that never reports the next refresh (the idle loop
+    // then refreshes only on unrelated redraws), reports it as due right away
+    // (the loop spins), or leaves the last training state unshown after a pause.
+    TEST(ViewportFrameLifecycleServiceTest, TrainingRefreshRunsOnItsOwnIntervalAndOnceAfterStopping) {
+        ViewportFrameLifecycleService service;
+        constexpr float interval = 0.05f;
+        EXPECT_EQ(service.handleTrainingRefresh(true, interval), DirtyFlag::SPLATS);
+        EXPECT_EQ(service.handleTrainingRefresh(true, interval), 0u);
+        const double wait = service.secondsUntilTrainingRefresh(interval);
+        EXPECT_GT(wait, 0.0);
+        EXPECT_LE(wait, static_cast<double>(interval));
+        std::this_thread::sleep_for(std::chrono::duration<double>(wait + 0.005));
+        EXPECT_EQ(service.secondsUntilTrainingRefresh(interval), 0.0);
+        EXPECT_EQ(service.handleTrainingRefresh(true, interval), DirtyFlag::SPLATS);
+
+        EXPECT_EQ(service.handleTrainingRefresh(false, interval), DirtyFlag::SPLATS);
+        EXPECT_EQ(service.handleTrainingRefresh(false, interval), 0u);
+    }
+
     TEST(ViewportFrameLifecycleServiceTest, ResizeActiveDefersFullRefreshUntilDebounceCompletes) {
         ViewportFrameLifecycleService service;
 
@@ -2347,6 +2614,49 @@ namespace lfs::vis {
         EXPECT_TRUE(service.handleModelChange(0x1234, artifacts, Source::Training).changed);
     }
 
+    enum class DepthStorage { CPU,
+                              CUDA,
+                              Vulkan };
+    class ViewportDepthBackendTest : public ::testing::TestWithParam<DepthStorage> {};
+
+    TEST_P(ViewportDepthBackendTest, SamplesStridedDepthOnTheStorageBackend) {
+        const bool on_cpu = GetParam() == DepthStorage::CPU;
+        const auto backend = GetParam() == DepthStorage::Vulkan ? core::GpuBackend::Vulkan
+                                                                : core::GpuBackend::CUDA;
+        if (!on_cpu && !core::gpu_backend_available(backend)) {
+            GTEST_SKIP() << "Requested GPU backend unavailable";
+        }
+        core::GpuBackendScope scope(backend);
+        auto depth = core::Tensor::from_vector(
+            {99.0f, 2.0f, 3.0f, 99.0f, 99.0f, 4.0f, 5.0f, 99.0f},
+            {1, 2, 4}, core::Device::CPU);
+        if (!on_cpu) {
+            depth = depth.gpu();
+        }
+        depth = depth.slice(2, 1, 3);
+        ASSERT_FALSE(depth.is_contiguous());
+        const auto original_backend = core::gpu_backend_of(depth);
+
+        lfs::rendering::FrameMetadata metadata{};
+        metadata.valid = true;
+        metadata.depth_panel_count = 1;
+        metadata.depth_panels[0].depth = std::make_shared<core::Tensor>(std::move(depth));
+        ViewportArtifactService artifacts;
+        artifacts.updateFromImageOutput({}, metadata, {4, 4}, true);
+
+        // The selected default is independent of the storage being sampled.
+        core::GpuBackendScope other(backend == core::GpuBackend::CUDA ? core::GpuBackend::Vulkan
+                                                                      : core::GpuBackend::CUDA);
+        EXPECT_FLOAT_EQ(artifacts.sampleLinearDepthAt(0, 0, {4, 4}), 2.0f);
+        EXPECT_FLOAT_EQ(artifacts.sampleLinearDepthAt(3, 0, {4, 4}), 3.0f);
+        EXPECT_FLOAT_EQ(artifacts.sampleLinearDepthAt(0, 3, {4, 4}), 4.0f);
+        EXPECT_FLOAT_EQ(artifacts.sampleLinearDepthAt(3, 3, {4, 4}), 5.0f);
+        EXPECT_EQ(core::gpu_backend_of(*metadata.depth_panels[0].depth), original_backend);
+    }
+
+    INSTANTIATE_TEST_SUITE_P(StorageBackends, ViewportDepthBackendTest,
+                             ::testing::Values(DepthStorage::CPU, DepthStorage::CUDA, DepthStorage::Vulkan));
+
     TEST(ViewportArtifactServiceTest, ExplicitSplitPanelSamplingUsesPanelLocalCoordinates) {
         ViewportArtifactService artifacts;
 
@@ -2354,14 +2664,14 @@ namespace lfs::vis {
                               std::vector<float>(512, 1.0f),
                               {size_t{1}, size_t{1}, size_t{512}},
                               lfs::core::Device::CPU)
-                              .cuda();
+                              .gpu();
         auto right_values = std::vector<float>(512, 2.0f);
         right_values[256] = 42.0f;
         auto right_depth = lfs::core::Tensor::from_vector(
                                right_values,
                                {size_t{1}, size_t{1}, size_t{512}},
                                lfs::core::Device::CPU)
-                               .cuda();
+                               .gpu();
 
         FrameResources resources;
         resources.cached_metadata = CachedRenderMetadata{
@@ -2848,12 +3158,12 @@ namespace lfs::vis {
 
             const std::vector<float> means_data{0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
             const std::vector<float> rotation_data{1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f};
-            auto means = lfs::core::Tensor::from_vector(means_data, {size_t{2}, size_t{3}}, lfs::core::Device::CUDA).to(lfs::core::DataType::Float32);
-            auto sh0 = lfs::core::Tensor::zeros({size_t{2}, size_t{1}, size_t{3}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-            auto shN = lfs::core::Tensor::zeros({size_t{2}, size_t{3}, size_t{3}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-            auto scaling = lfs::core::Tensor::zeros({size_t{2}, size_t{3}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-            auto rotation = lfs::core::Tensor::from_vector(rotation_data, {size_t{2}, size_t{4}}, lfs::core::Device::CUDA).to(lfs::core::DataType::Float32);
-            auto opacity = lfs::core::Tensor::zeros({size_t{2}, size_t{1}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            auto means = lfs::core::Tensor::from_vector(means_data, {size_t{2}, size_t{3}}, lfs::core::Device::GPU).to(lfs::core::DataType::Float32);
+            auto sh0 = lfs::core::Tensor::zeros({size_t{2}, size_t{1}, size_t{3}}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
+            auto shN = lfs::core::Tensor::zeros({size_t{2}, size_t{3}, size_t{3}}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
+            auto scaling = lfs::core::Tensor::zeros({size_t{2}, size_t{3}}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
+            auto rotation = lfs::core::Tensor::from_vector(rotation_data, {size_t{2}, size_t{4}}, lfs::core::Device::GPU).to(lfs::core::DataType::Float32);
+            auto opacity = lfs::core::Tensor::zeros({size_t{2}, size_t{1}}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
             viewer_->getSceneManager()->getScene().addSplat(
                 "depth_window_test",
                 std::make_unique<lfs::core::SplatData>(1, std::move(means), std::move(sh0), std::move(shN), std::move(scaling), std::move(rotation), std::move(opacity), 1.0f));

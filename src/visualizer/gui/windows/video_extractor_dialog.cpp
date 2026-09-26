@@ -5,6 +5,7 @@
 #include "video_extractor_dialog.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/include/core/logger.hpp"
+#include "core/number_format.hpp"
 #include "core/path_utils.hpp"
 #include "gui/panel_height_mode.hpp"
 #include "gui/panel_registry.hpp"
@@ -395,7 +396,7 @@ namespace lfs::gui {
 
             std::string error;
             if (!extractor.extract(extract_params, error)) {
-                if (stop_extraction_requested_.load()) {
+                if (extractor.lastOutcome() == io::ExtractionOutcome::Cancelled) {
                     LOG_INFO("Video frame extraction stopped");
                     setExtractionStopped();
                 } else {
@@ -1132,7 +1133,7 @@ namespace lfs::gui {
 
         changed |= setCachedControlValue(trim_start_input_el_, std::format("{:.1f}", start));
         changed |= setCachedControlValue(trim_end_input_el_, std::format("{:.1f}", end));
-        changed |= setCachedText(estimated_frames_el_, LOCF(VideoExtractor::ESTIMATED_FRAMES, frame_count));
+        changed |= setCachedText(estimated_frames_el_, LOCF(VideoExtractor::ESTIMATED_FRAMES, lfs::core::format_count(frame_count)));
 
         if (changed)
             markContentDirty();
@@ -1209,7 +1210,7 @@ namespace lfs::gui {
                 candidates = std::min(window_candidates_target_, std::max(1, est_window));
             }
             changed |= setCachedText(window_candidates_readout_el_,
-                                     LOCF(VideoExtractor::CANDIDATES_READOUT_FMT, candidates, est_window));
+                                     LOCF(VideoExtractor::CANDIDATES_READOUT_FMT, lfs::core::format_count(candidates), lfs::core::format_count(est_window)));
         }
 
         if (sharpness_threshold_slider_el_ && sharpness_threshold_value_el_) {
@@ -1255,10 +1256,10 @@ namespace lfs::gui {
             if (total > 0) {
                 const int discarded = discarded_frames_.load();
                 const std::string discard_str = discarded > 0
-                                                    ? LOCF(VideoExtractor::DISCARDED_FORMAT, discarded)
+                                                    ? LOCF(VideoExtractor::DISCARDED_FORMAT, lfs::core::format_count(discarded))
                                                     : "";
                 changed |= setCachedText(progress_text_el_,
-                                         std::format("{}/{}{}", current, total, discard_str));
+                                         std::format("{}/{}{}", lfs::core::format_count(current), lfs::core::format_count(total), discard_str));
             } else {
                 changed |= setCachedText(progress_text_el_, LOC(VideoExtractor::STARTING));
             }
@@ -1274,9 +1275,9 @@ namespace lfs::gui {
             const int discarded = discarded_frames_.load();
             std::string complete_msg = std::format("{} {}",
                                                    LOC(VideoExtractor::COMPLETE),
-                                                   LOCF(VideoExtractor::EXTRACTED, saved));
+                                                   LOCF(VideoExtractor::EXTRACTED, lfs::core::format_count(saved)));
             if (discarded > 0)
-                complete_msg += LOCF(VideoExtractor::DISCARDED_FORMAT, discarded);
+                complete_msg += LOCF(VideoExtractor::DISCARDED_FORMAT, lfs::core::format_count(discarded));
             changed |= setCachedText(complete_text_el_, complete_msg);
         }
 

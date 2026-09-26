@@ -3,21 +3,19 @@
 """Regression tests for .licht discovery in real Asset Manager folders."""
 
 import json
-import logging
 import os
-import stat
-import sys
 import threading
 import time
 import uuid
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
+
+import pytest
 
 from lfs_plugins.asset_index import AssetIndex
 from lfs_plugins import asset_watch
 from lfs_plugins.asset_watch import (
     AssetFolderScanProgress,
-    discover_licht_projects,
     scan_all_asset_folders,
     scan_asset_folder,
     verify_catalog_projects,
@@ -39,88 +37,6 @@ def _inspection(project_uuid: str):
     )
 
 
-class _FakeDirEntry:
-    def __init__(self, path, *, is_dir=False, is_file=False):
-        self.path = str(path)
-        self.name = Path(path).name
-        self._is_dir = is_dir
-        self._is_file = is_file
-
-    def is_dir(self, follow_symlinks=False):
-        del follow_symlinks
-        return self._is_dir
-
-    def is_file(self, follow_symlinks=False):
-        del follow_symlinks
-        return self._is_file
-
-
-class _FakeScandir:
-    def __init__(self, entries):
-        self._entries = entries
-
-    def __enter__(self):
-        return self
-
-    def __iter__(self):
-        return iter(self._entries)
-
-    def __exit__(self, *_args):
-        return False
-
-
-def test_discovery_recurses_and_returns_only_licht_files(tmp_path: Path):
-    nested = tmp_path / "nested"
-    nested.mkdir()
-    first = tmp_path / "first.licht"
-    second = nested / "SECOND.LICHT"
-    first.write_bytes(b"first")
-    second.write_bytes(b"second")
-    (tmp_path / "directory.licht").mkdir()
-
-    discovered = discover_licht_projects(str(tmp_path))
-
-    assert discovered == [str(first.resolve()), str(second.resolve())]
-
-
-def test_scan_registers_projects_from_one_real_folder(tmp_path: Path):
-    nested = tmp_path / "nested"
-    nested.mkdir()
-    first = tmp_path / "first.licht"
-    second = nested / "second.licht"
-    first.write_bytes(b"first")
-    second.write_bytes(b"second")
-
-    class _Index:
-        def __init__(self):
-            self.paths = []
-
-        def register_licht_asset(self, path, *, folder_id, adopt_existing, save):
-            assert adopt_existing is False
-            assert save is False
-            self.paths.append((path, folder_id))
-            return SimpleNamespace(id=path), len(self.paths) == 1
-
-        def save(self):
-            return True
-
-    index = _Index()
-    result = scan_asset_folder(
-        index,
-        "projects",
-        str(tmp_path),
-    )
-
-    assert index.paths == [
-        (str(first.resolve()), "projects"),
-        (str(second.resolve()), "projects"),
-    ]
-    assert result.discovered == 2
-    assert result.added == 1
-    assert result.already_cataloged == 1
-    assert result.failed == 0
-
-
 def test_real_folder_mapping_is_normalized_and_persisted(tmp_path: Path):
     default = tmp_path / "default"
     selected = tmp_path / "selected"
@@ -128,7 +44,7 @@ def test_real_folder_mapping_is_normalized_and_persisted(tmp_path: Path):
     selected.mkdir()
     library_path = tmp_path / "library.json"
     index = AssetIndex(library_path=library_path, default_folder_path=default)
-    index.ensure_default_catalog()
+    index.load()
 
     folder = index.add_folder(str(selected))
     assert folder is not None
@@ -137,6 +53,64 @@ def test_real_folder_mapping_is_normalized_and_persisted(tmp_path: Path):
     reloaded = AssetIndex(library_path=library_path, default_folder_path=default)
     assert reloaded.load() is True
     assert reloaded.folders[folder.id]["path"] == str(selected.resolve())
+
+
+def test_non_recursive_folder_policy_is_persisted_and_reloaded(tmp_path: Path):
+    default = tmp_path / "default"
+    selected = tmp_path / "selected"
+    default.mkdir()
+    selected.mkdir()
+    library_path = tmp_path / "library.json"
+    index = AssetIndex(library_path=library_path, default_folder_path=default)
+    index.load()
+
+    folder = index.add_folder(str(selected), recursive=False)
+
+    assert folder is not None
+    stored = json.loads(library_path.read_text(encoding="utf-8"))
+    assert stored["folders"][folder.id]["recursive"] is False
+    reloaded = AssetIndex(library_path=library_path, default_folder_path=default)
+    assert reloaded.load() is True
+    assert reloaded.folders[folder.id]["recursive"] is False
+
+
+def test_global_scan_respects_non_recursive_folder_policy(
+    monkeypatch, tmp_path: Path
+):
+    default = tmp_path / "default"
+    selected = tmp_path / "selected"
+    nested = selected / "nested"
+    default.mkdir()
+    nested.mkdir(parents=True)
+    top_level = selected / "top-level.licht"
+    nested_project = nested / "nested.licht"
+    top_level.write_bytes(b"top")
+    nested_project.write_bytes(b"nested")
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(
+        AssetIndex,
+        "_inspect_path",
+        staticmethod(lambda _path: inspection),
+    )
+    index = AssetIndex(
+        library_path=tmp_path / "library.json",
+        default_folder_path=default,
+    )
+    index.load()
+    folder = index.add_folder(str(selected), recursive=False)
+    assert folder is not None
+
+    reloaded = AssetIndex(
+        library_path=tmp_path / "library.json",
+        default_folder_path=default,
+    )
+    assert reloaded.load() is True
+    result = scan_all_asset_folders(reloaded)
+
+    assert result.discovered == 1
+    assert {project["path"] for project in reloaded.assets.values()} == {
+        str(top_level)
+    }
 
 
 def test_global_scan_assigns_new_project_to_most_specific_root(tmp_path: Path):
@@ -170,46 +144,206 @@ def test_global_scan_assigns_new_project_to_most_specific_root(tmp_path: Path):
     assert result.failed == 0
 
 
-def test_missing_asset_folder_discovers_nothing(tmp_path: Path):
-    assert discover_licht_projects(str(tmp_path / "missing")) == []
+def _age_directories(*directories: Path) -> None:
+    timestamp = time.time() - 10.0
+    for directory in directories:
+        os.utime(directory, ns=(int(timestamp * 1_000_000_000),) * 2)
 
 
-def test_discovery_does_not_find_licht_directly_inside_hidden_or_pruned_directory_names(
+@pytest.mark.parametrize(
+    ("initial_recursive", "updated_recursive", "initial_names", "updated_names"),
+    [
+        (False, True, {"top-level.licht"}, {"top-level.licht", "nested.licht"}),
+        (True, False, {"top-level.licht", "nested.licht"}, {"top-level.licht"}),
+    ],
+)
+def test_scan_cache_refreshes_when_folder_depth_changes_after_reload(
+    monkeypatch,
+    tmp_path: Path,
+    initial_recursive: bool,
+    updated_recursive: bool,
+    initial_names: set[str],
+    updated_names: set[str],
+):
+    default = tmp_path / "default"
+    selected = tmp_path / "selected"
+    nested = selected / "nested"
+    default.mkdir()
+    nested.mkdir(parents=True)
+    top_level = selected / "top-level.licht"
+    nested_project = nested / "nested.licht"
+    top_level.write_bytes(b"top")
+    nested_project.write_bytes(b"nested")
+    _age_directories(default, selected, nested)
+
+    inspections = {
+        top_level.name: _inspection(str(uuid.uuid4())),
+        nested_project.name: _inspection(str(uuid.uuid4())),
+    }
+    monkeypatch.setattr(
+        AssetIndex,
+        "_inspect_path",
+        staticmethod(lambda path: inspections[Path(path).name]),
+    )
+    storage = tmp_path / "storage"
+    monkeypatch.setenv("LFS_ASSET_MANAGER_DIR", str(storage))
+    library_path = tmp_path / "library.json"
+    index = AssetIndex(library_path=library_path, default_folder_path=default)
+    index.load()
+    folder = index.add_folder(str(selected), recursive=initial_recursive)
+    assert folder is not None
+
+    first = scan_all_asset_folders(index)
+
+    assert first.failed == 0
+    assert {Path(project["path"]).name for project in index.assets.values()} == initial_names
+    cache_path = storage / asset_watch.SCAN_CACHE_FILENAME
+    first_cache = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert first_cache[asset_watch._directory_key(selected)]["recursive"] is initial_recursive
+
+    assert index.add_folder(str(selected), recursive=updated_recursive) is not None
+    reloaded = AssetIndex(library_path=library_path, default_folder_path=default)
+    assert reloaded.load() is True
+
+    second = scan_all_asset_folders(reloaded)
+
+    assert second.failed == 0
+    assert {Path(project["path"]).name for project in reloaded.assets.values()} == updated_names
+    second_cache = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert second_cache[asset_watch._directory_key(selected)]["recursive"] is updated_recursive
+
+
+def test_scan_cache_rejects_entries_without_a_saved_depth_policy(
+    monkeypatch,
     tmp_path: Path,
 ):
-    visible = tmp_path / "visible.licht"
-    visible.write_bytes(b"visible")
-    hidden = tmp_path / ".cache"
-    hidden.mkdir()
-    (hidden / "nested.licht").write_bytes(b"hidden")
-    for directory_name in (
-        "node_modules",
-        "CMakeFiles",
-        "vcpkg_installed",
-        "site-packages",
-        "__pycache__",
-    ):
-        directory = tmp_path / directory_name
-        directory.mkdir()
-        (directory / "hidden.licht").write_bytes(b"hidden")
+    default = tmp_path / "default"
+    selected = tmp_path / "selected"
+    nested = selected / "nested"
+    default.mkdir()
+    nested.mkdir(parents=True)
+    nested_project = nested / "nested.licht"
+    nested_project.write_bytes(b"nested")
+    _age_directories(default, selected, nested)
 
-    assert discover_licht_projects(str(tmp_path)) == [str(visible.resolve())]
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(
+        AssetIndex,
+        "_inspect_path",
+        staticmethod(lambda _path: inspection),
+    )
+    storage = tmp_path / "storage"
+    storage.mkdir()
+    monkeypatch.setenv("LFS_ASSET_MANAGER_DIR", str(storage))
+    cache_path = storage / asset_watch.SCAN_CACHE_FILENAME
+    cache_path.write_text(
+        json.dumps(
+            {
+                asset_watch._directory_key(selected): {
+                    "mtime_ns": selected.stat().st_mtime_ns,
+                    "dirs": [],
+                    "licht": [],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    index = AssetIndex(
+        library_path=tmp_path / "library.json",
+        default_folder_path=default,
+    )
+    index.load()
+    assert index.add_folder(str(selected), recursive=True) is not None
+
+    result = scan_all_asset_folders(index)
+
+    assert result.failed == 0
+    assert {project["path"] for project in index.assets.values()} == {
+        str(nested_project)
+    }
+    rewritten_cache = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert rewritten_cache[asset_watch._directory_key(selected)]["recursive"] is True
 
 
-def test_discovery_reports_progress_counters(tmp_path: Path):
-    nested = tmp_path / "keep"
-    nested.mkdir()
-    project = nested / "project.licht"
-    project.write_bytes(b"project")
-    progress = AssetFolderScanProgress()
+def test_nonrecursive_parent_preserves_projects_owned_by_a_nested_folder(
+    monkeypatch,
+    tmp_path: Path,
+):
+    default = tmp_path / "default"
+    parent = tmp_path / "parent"
+    nested = parent / "nested"
+    default.mkdir()
+    nested.mkdir(parents=True)
+    nested_project = nested / "nested.licht"
+    nested_project.write_bytes(b"nested")
+    _age_directories(default, parent, nested)
 
-    discovered = discover_licht_projects(str(tmp_path), progress=progress)
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(
+        AssetIndex,
+        "_inspect_path",
+        staticmethod(lambda _path: inspection),
+    )
+    monkeypatch.setenv("LFS_ASSET_MANAGER_DIR", str(tmp_path / "storage"))
+    library_path = tmp_path / "library.json"
+    index = AssetIndex(library_path=library_path, default_folder_path=default)
+    index.load()
+    parent_folder = index.add_folder(str(parent), recursive=True)
+    nested_folder = index.add_folder(str(nested), recursive=True)
+    assert parent_folder is not None
+    assert nested_folder is not None
+    assert scan_all_asset_folders(index).failed == 0
+    assert index.get_asset(inspection.project_uuid).folder_id == nested_folder.id
 
-    directories, projects, root = progress.snapshot()
-    assert discovered == [str(project.resolve())]
-    assert projects == 1
-    assert directories >= 2
-    assert Path(root).resolve() == tmp_path.resolve()
+    assert index.add_folder(str(parent), recursive=False) is not None
+    reloaded = AssetIndex(library_path=library_path, default_folder_path=default)
+    assert reloaded.load() is True
+
+    result = scan_all_asset_folders(reloaded)
+
+    assert result.failed == 0
+    project = reloaded.get_asset(inspection.project_uuid)
+    assert project is not None
+    assert project.folder_id == nested_folder.id
+
+
+def test_cached_scan_reinspects_in_place_overwrite_with_cleared_status(
+    monkeypatch, tmp_path: Path
+):
+    root = tmp_path / "watched"
+    root.mkdir()
+    project_path = root / "project.licht"
+    project_path.write_bytes(b"old")
+    old_uuid = str(uuid.uuid4())
+    new_uuid = str(uuid.uuid4())
+    new_inspection = _inspection(new_uuid)
+    storage = tmp_path / "storage"
+    old_inspection = _inspection(old_uuid)
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda _path: old_inspection))
+    monkeypatch.setenv("LFS_ASSET_MANAGER_DIR", str(storage))
+    index = AssetIndex(
+        library_path=tmp_path / "library.json",
+        default_folder_path=root,
+    )
+    index.load()
+    project, created = index.register_licht_asset(
+        str(project_path), inspection=_inspection(old_uuid)
+    )
+    assert created is True
+    _age_directories(root)
+    assert scan_asset_folder(index, "default", str(root)).already_cataloged == 1
+
+    project_path.write_bytes(b"new")
+    index._clear_runtime(project, "IDENTITY_MISMATCH", "stale project")
+    monkeypatch.setattr(
+        AssetIndex, "_inspect_path", staticmethod(lambda _path: new_inspection)
+    )
+
+    result = scan_asset_folder(index, "default", str(root))
+
+    assert result.added == 1
+    assert old_uuid not in index.assets
+    assert new_uuid in index.assets
 
 
 def test_single_folder_scan_does_not_steal_projects_from_more_specific_folder(
@@ -239,7 +373,7 @@ def test_single_folder_scan_does_not_steal_projects_from_more_specific_folder(
         library_path=tmp_path / "library.json",
         default_folder_path=tmp_path / "default",
     )
-    index.ensure_default_catalog()
+    index.load()
     nested_folder = index.add_folder(str(nested))
     parent_folder = index.add_folder(str(parent))
     owned, created = index.register_licht_asset(str(nested_owned))
@@ -256,151 +390,41 @@ def test_single_folder_scan_does_not_steal_projects_from_more_specific_folder(
     assert by_name["parent.licht"]["folder_id"] == parent_folder.id
 
 
-def test_discovery_prunes_dataset_directories(tmp_path: Path):
-    visible = tmp_path / "visible.licht"
-    visible.write_bytes(b"visible")
-    for directory_name in (
-        "sparse",
-        "dense",
-        "masks",
-        "stereo",
-        "depth",
-        "images",
-        "__pycache__",
-    ):
-        directory = tmp_path / directory_name
-        directory.mkdir()
-        (directory / "hidden.licht").write_bytes(b"hidden")
-
-    assert discover_licht_projects(str(tmp_path)) == [str(visible.resolve())]
-
-
-def test_discovery_prunes_user_root_tmp_and_recovery_by_exact_path(monkeypatch, tmp_path: Path):
-    user_root = tmp_path / "user"
-    projects = user_root / "projects"
-    projects.mkdir(parents=True)
-    for name in ("tmp", "recovery"):
-        directory = user_root / name
-        directory.mkdir()
-        (directory / "scratch.licht").write_bytes(b"scratch")
-    similarly_named = tmp_path / "selected" / "tmp"
-    similarly_named.mkdir(parents=True)
-    (similarly_named / "kept.licht").write_bytes(b"kept")
-
-    lf_stub = ModuleType("lichtfeld")
-    lf_stub.ui = SimpleNamespace(
-        get_default_project_location=lambda: str(projects),
-    )
-    monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
-
-    assert discover_licht_projects(str(user_root)) == []
-    assert discover_licht_projects(str(similarly_named)) == [str((similarly_named / "kept.licht").resolve())]
-
-
-def test_scan_skips_inspection_for_unchanged_cataloged_path(tmp_path: Path):
+def test_scan_reregisters_identity_mismatch_with_cleared_metadata(
+    monkeypatch, tmp_path: Path
+):
     project = tmp_path / "project.licht"
     project.write_bytes(b"container")
-
-    class _Index:
-        def find_asset_by_path(self, path):
-            assert path == str(project.resolve())
-            return SimpleNamespace(status="AVAILABLE")
-
-        def register_licht_asset(self, *_args, **_kwargs):
-            raise AssertionError("unchanged cataloged path must not be inspected")
-
-        def save(self):
-            raise AssertionError("unchanged catalog must not be saved")
-
-    result = scan_asset_folder(_Index(), "projects", str(tmp_path))
-
-    assert result.discovered == 1
-    assert result.already_cataloged == 1
-    assert result.added == 0
-
-
-def test_cancelled_scan_rolls_back_discovered_projects(tmp_path: Path):
-    first = tmp_path / "first.licht"
-    second = tmp_path / "second.licht"
-    first.write_bytes(b"first")
-    second.write_bytes(b"second")
-    cancel_event = threading.Event()
-
-    class _Index:
-        def __init__(self):
-            self.paths = []
-
-        def _snapshot_state(self):
-            return list(self.paths)
-
-        def _restore_state(self, snapshot):
-            self.paths = snapshot
-
-        def register_licht_asset(self, path, **_kwargs):
-            self.paths.append(path)
-            cancel_event.set()
-            return SimpleNamespace(id=path), True
-
-        def save(self):
-            raise AssertionError("cancelled scan must not save")
-
-    index = _Index()
-    result = scan_asset_folder(
-        index,
-        "projects",
-        str(tmp_path),
-        cancel_event,
-    )
-
-    assert result.cancelled is True
-    assert index.paths == []
-
-
-def test_discovery_warns_once_when_folder_has_more_than_10000_directories(
-    monkeypatch, tmp_path: Path, caplog
-):
-    scanned = []
-
-    def fake_scandir(current):
-        index = len(scanned)
-        scanned.append(current)
-        if index >= 10000:
-            return _FakeScandir([])
-        return _FakeScandir(
-            [_FakeDirEntry(Path(current) / f"dir-{index}", is_dir=True)]
-        )
-
-    monkeypatch.setattr(asset_watch.os, "scandir", fake_scandir)
+    old_uuid = str(uuid.uuid4())
+    new_uuid = str(uuid.uuid4())
+    new_inspection = _inspection(new_uuid)
     monkeypatch.setattr(
-        asset_watch.Path,
-        "stat",
-        lambda _path, *args, **kwargs: SimpleNamespace(
-            st_mtime_ns=1,
-            st_mode=stat.S_IFDIR,
-        ),
+        AssetIndex,
+        "_inspect_path",
+        staticmethod(lambda _path: _inspection(old_uuid)),
     )
 
-    with caplog.at_level(logging.WARNING, logger="lfs_plugins.asset_watch"):
-        discovered = discover_licht_projects(str(tmp_path))
+    index = AssetIndex(
+        library_path=tmp_path / "library.json",
+        default_folder_path=tmp_path,
+    )
+    index.load()
+    old_project, created = index.register_licht_asset(
+        str(project), inspection=_inspection(old_uuid)
+    )
+    assert created is True
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda _path: new_inspection))
+    index._clear_runtime(old_project, "IDENTITY_MISMATCH", "stale project")
+    assert old_project.path_size_bytes == 0
+    assert old_project.path_mtime_ns == 0
 
-    assert discovered == []
-    warnings = [
-        record
-        for record in caplog.records
-        if record.levelno == logging.WARNING
-        and "very large (>10000 directories)" in record.getMessage()
-    ]
-    assert len(warnings) == 1
-    assert str(tmp_path) in warnings[0].getMessage()
+    result = scan_asset_folder(index, "default", str(tmp_path))
 
-
-def _wait_until(predicate, timeout=2.0):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if predicate():
-            return True
-        time.sleep(0.01)
-    return False
+    assert result.added == 1
+    assert result.already_cataloged == 0
+    assert old_uuid not in index.assets
+    assert new_uuid in index.assets
+    assert index.assets[new_uuid]["status"] == "AVAILABLE"
 
 
 def _write_licht_tree(tmp_path: Path, count: int):
@@ -414,127 +438,52 @@ def _write_licht_tree(tmp_path: Path, count: int):
     return paths, inspections
 
 
-def test_scan_streams_first_batch_before_walk_finishes(monkeypatch, tmp_path: Path):
-    monkeypatch.setattr(asset_watch, "SCAN_BATCH_SIZE", 2)
-    monkeypatch.setattr(asset_watch, "SCAN_BATCH_INTERVAL_S", 60.0)
-    paths, inspections = _write_licht_tree(tmp_path, 8)
-    monkeypatch.setattr(
-        AssetIndex,
-        "_inspect_path",
-        staticmethod(lambda path: inspections[Path(path).name]),
-    )
-    walk_finished = threading.Event()
-    past_first_batch = threading.Event()
-
-    def fake_scandir(_root):
-        def entries():
-            for index, path in enumerate(paths):
-                yield _FakeDirEntry(path, is_file=True)
-                if index == 1:
-                    past_first_batch.set()
-                time.sleep(0.03)
-            walk_finished.set()
-
-        return _FakeScandir(entries())
-
-    monkeypatch.setattr(asset_watch.os, "scandir", fake_scandir)
-    index = AssetIndex(
-        library_path=tmp_path / "library.json",
-        default_folder_path=tmp_path,
-    )
-    index.ensure_default_catalog()
-    result_holder = {}
-
-    def run_scan():
-        result_holder["result"] = scan_asset_folder(
-            index, "default", str(tmp_path)
-        )
-
-    thread = threading.Thread(target=run_scan)
-    thread.start()
-    assert past_first_batch.wait(timeout=2.0)
-    assert _wait_until(lambda: len(index.list_projects()) >= 2)
-    assert walk_finished.is_set() is False
-    thread.join(timeout=2.0)
-    assert thread.is_alive() is False
-    assert len(index.list_projects()) == 8
-    assert result_holder["result"].added == 8
-    assert result_holder["result"].cancelled is False
-
-
-def test_cancelled_scan_keeps_committed_batches(monkeypatch, tmp_path: Path):
-    monkeypatch.setattr(asset_watch, "SCAN_BATCH_SIZE", 2)
-    monkeypatch.setattr(asset_watch, "SCAN_BATCH_INTERVAL_S", 60.0)
-    paths, inspections = _write_licht_tree(tmp_path, 6)
-    monkeypatch.setattr(
-        AssetIndex,
-        "_inspect_path",
-        staticmethod(lambda path: inspections[Path(path).name]),
-    )
+def test_precancelled_scan_keeps_catalog_and_disk_unchanged(monkeypatch, tmp_path: Path):
+    (tmp_path / "project.licht").write_bytes(b"container")
     cancel_event = threading.Event()
-
-    def fake_scandir(_root):
-        def entries():
-            for index, path in enumerate(paths):
-                yield _FakeDirEntry(path, is_file=True)
-                if index == 3:
-                    cancel_event.wait(timeout=2.0)
-
-        return _FakeScandir(entries())
-
-    monkeypatch.setattr(asset_watch.os, "scandir", fake_scandir)
     index = AssetIndex(
         library_path=tmp_path / "library.json",
         default_folder_path=tmp_path,
     )
-    index.ensure_default_catalog()
+    index.load()
+    original = index.library_path.read_bytes()
+    monkeypatch.setattr(asset_watch.os, "scandir", lambda _root: pytest.fail("Canceled scan enumerated files"))
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda _path: pytest.fail("Canceled scan inspected a file")))
 
-    def cancel_after_two_batches():
-        if _wait_until(lambda: len(index.list_projects()) >= 4):
-            cancel_event.set()
-
-    waiter = threading.Thread(target=cancel_after_two_batches)
-    waiter.start()
+    cancel_event.set()
     result = scan_asset_folder(index, "default", str(tmp_path), cancel_event)
-    waiter.join(timeout=2.0)
 
     assert result.cancelled is True
-    assert len(index.list_projects()) == 4
+    assert len(index.list_projects()) == 0
+    assert index.library_path.read_bytes() == original
     reloaded = AssetIndex(
         library_path=tmp_path / "library.json",
         default_folder_path=tmp_path,
     )
     assert reloaded.load() is True
-    assert len(reloaded.list_projects()) == 4
+    assert len(reloaded.list_projects()) == 0
 
 
-def test_scan_progress_updates_while_batching(monkeypatch, tmp_path: Path):
-    monkeypatch.setattr(asset_watch, "SCAN_BATCH_SIZE", 2)
-    monkeypatch.setattr(asset_watch, "SCAN_BATCH_INTERVAL_S", 60.0)
-    paths, inspections = _write_licht_tree(tmp_path, 4)
+def test_scan_reports_discovery_progress_before_reconciliation(monkeypatch, tmp_path: Path):
+    _, inspections = _write_licht_tree(tmp_path, 4)
     monkeypatch.setattr(
         AssetIndex,
         "_inspect_path",
         staticmethod(lambda path: inspections[Path(path).name]),
     )
     snapshots = []
-
-    def fake_walk(_root, topdown=True, onerror=None, followlinks=False):
-        names = [path.name for path in paths]
-        for name in names:
-            yield str(tmp_path), [], [name]
-
-    monkeypatch.setattr(os, "walk", fake_walk)
+    before_commit = []
     index = AssetIndex(
         library_path=tmp_path / "library.json",
         default_folder_path=tmp_path,
     )
-    index.ensure_default_catalog()
+    index.load()
     progress = AssetFolderScanProgress()
     original_commit = asset_watch._commit_registration_batch
 
-    def tracked_commit(index_arg, batch, cancel_event):
-        result = original_commit(index_arg, batch, cancel_event)
+    def tracked_commit(index_arg, batch, cancel_event, **kwargs):
+        before_commit.append(progress.snapshot())
+        result = original_commit(index_arg, batch, cancel_event, **kwargs)
         snapshots.append(progress.snapshot())
         return result
 
@@ -544,6 +493,7 @@ def test_scan_progress_updates_while_batching(monkeypatch, tmp_path: Path):
     )
 
     assert result.added == 4
+    assert before_commit and before_commit[0][1] == 4
     assert snapshots
     assert snapshots[-1][1] == 4
     directories, projects, root = progress.snapshot()
@@ -580,7 +530,7 @@ def test_verify_catalog_projects_runs_in_batches(monkeypatch, tmp_path: Path):
     )
     index = AssetIndex(library_path=library_path, default_folder_path=tmp_path)
     assert index.load() is True
-    assert {project.status for project in index.list_projects()} == {"UNVERIFIED"}
+    assert {project.status for project in index.list_projects()} == {"READING"}
 
     batch_sizes = []
     original = index.verify_projects_batch
@@ -612,3 +562,77 @@ def test_verify_catalog_projects_prioritizes_visible_window():
         Index(), visible_asset_ids=["3", "1"], batch_size=1, interval_s=0
     ) == 5
     assert order == ["3", "1", "0", "2", "4"]
+
+
+@pytest.mark.parametrize("scan_all", [False, True])
+@pytest.mark.parametrize("remaining", [0, 1])
+def test_rescan_persists_removed_files_without_new_projects(tmp_path, monkeypatch, scan_all, remaining):
+    root = tmp_path / "watched"
+    root.mkdir()
+    paths = [root / "first.licht", root / "second.licht"]
+    inspections = {path.name: _inspection(str(uuid.uuid4())) for path in paths}
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda path: inspections[Path(path).name]))
+    monkeypatch.setenv("LFS_ASSET_MANAGER_DIR", str(tmp_path / "cache"))
+    index = AssetIndex(library_path=tmp_path / "library.json", default_folder_path=root)
+    index.load()
+    for path in paths:
+        path.write_bytes(b"project")
+    assert scan_asset_folder(index, "default", str(root)).added == 2
+    for path in paths[remaining:]:
+        path.unlink()
+    result = scan_all_asset_folders(index) if scan_all else scan_asset_folder(index, "default", str(root))
+    assert result.failed == 0
+    for path in paths[remaining:]:
+        assert index.get_asset(inspections[path.name].project_uuid).status == "MISSING"
+    reloaded = AssetIndex(library_path=tmp_path / "library.json", default_folder_path=root)
+    assert reloaded.load()
+    for path in paths[remaining:]:
+        assert reloaded.get_asset(inspections[path.name].project_uuid).status == "MISSING"
+
+
+@pytest.mark.parametrize("scan_all", [False, True])
+def test_scan_save_failure_restores_catalog(tmp_path, monkeypatch, scan_all):
+    root = tmp_path / "watched"
+    root.mkdir()
+    path = root / "new.licht"
+    path.write_bytes(b"project")
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda path: inspection))
+    monkeypatch.setenv("LFS_ASSET_MANAGER_DIR", str(tmp_path / "cache"))
+    index = AssetIndex(library_path=tmp_path / "library.json", default_folder_path=root)
+    index.load()
+    monkeypatch.setattr(index, "save", lambda: False)
+    result = scan_all_asset_folders(index) if scan_all else scan_asset_folder(index, "default", str(root))
+    assert result.failed > 0 and result.added == 0
+    assert index.get_asset(inspection.project_uuid) is None
+
+
+@pytest.mark.parametrize("scan_all", [False, True])
+def test_cancel_during_discovery_does_not_commit_partial_scan(tmp_path, monkeypatch, scan_all):
+    root = tmp_path / "watched"
+    root.mkdir()
+    path = root / "new.licht"
+    path.write_bytes(b"project")
+    inspection = _inspection(str(uuid.uuid4()))
+    monkeypatch.setattr(AssetIndex, "_inspect_path", staticmethod(lambda path: inspection))
+    monkeypatch.setenv("LFS_ASSET_MANAGER_DIR", str(tmp_path / "cache"))
+    index = AssetIndex(library_path=tmp_path / "library.json", default_folder_path=root)
+    index.load()
+    cancel = threading.Event()
+    def discover(*args, **kwargs):
+        yield str(path)
+        cancel.set()
+    monkeypatch.setattr(asset_watch, "iter_licht_projects", discover)
+    result = scan_all_asset_folders(index, cancel) if scan_all else scan_asset_folder(index, "default", str(root), cancel)
+    assert result.cancelled
+    assert result.added == 0
+    assert index.get_asset(inspection.project_uuid) is None
+
+
+def test_scan_without_folder_roots_does_not_reconcile_unrelated_projects():
+    index = SimpleNamespace(
+        folders={"legacy": {"path": ""}},
+        _inspect_path=lambda path: None,
+        reconcile_observations=lambda *args, **kwargs: pytest.fail("No folder was scanned"),
+    )
+    assert scan_all_asset_folders(index) == asset_watch.AssetFolderScanResult()

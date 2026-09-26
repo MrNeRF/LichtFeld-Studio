@@ -2,7 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
-#include "core/tensor/internal/cub_workspace.hpp"
+#include "core/tensor/backend/cuda/kernels/cub_workspace.hpp"
+#include "cuda_backend_test.hpp"
 #include <chrono>
 #include <cmath>
 #include <cuda_runtime.h>
@@ -67,10 +68,10 @@ namespace {
 
 } // anonymous namespace
 
-class TensorReductionTest : public ::testing::Test {
+class TensorReductionTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
-        ASSERT_TRUE(torch::cuda::is_available()) << "CUDA is not available for testing";
+        LFS_CUDA_BACKEND_OR_RETURN();
         torch::manual_seed(42);
         Tensor::manual_seed(42);
         gen.seed(42);
@@ -89,7 +90,7 @@ protected:
 TEST_F(TensorReductionTest, Sum) {
     std::vector<float> data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
 
-    auto custom_tensor = Tensor::from_vector(data, {10}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {10}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     float custom_sum = custom_tensor.sum_scalar();
@@ -100,7 +101,7 @@ TEST_F(TensorReductionTest, Sum) {
 }
 
 TEST_F(TensorReductionTest, CubWorkspaceFailureThrowsBeforeExecution) {
-    auto input = Tensor::ones({4096}, Device::CUDA);
+    auto input = Tensor::ones({4096}, Device::GPU);
     tensor_ops::set_cub_workspace_failure_for_testing(true);
 
     EXPECT_THROW((void)input.sum_scalar(), std::runtime_error);
@@ -113,7 +114,7 @@ TEST_F(TensorReductionTest, SumMultiDim) {
     std::vector<float> data(24);
     std::iota(data.begin(), data.end(), 1.0f);
 
-    auto custom_tensor = Tensor::from_vector(data, {2, 3, 4}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {2, 3, 4}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                             .reshape({2, 3, 4});
 
@@ -130,7 +131,7 @@ TEST_F(TensorReductionTest, SumLargeTensor) {
         data[i] = dist(gen);
     }
 
-    auto custom_tensor = Tensor::from_vector(data, {10000}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {10000}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     float custom_sum = custom_tensor.sum_scalar();
@@ -143,7 +144,7 @@ TEST_F(TensorReductionTest, SumLargeTensor) {
 TEST_F(TensorReductionTest, Mean) {
     std::vector<float> data = {2, 4, 6, 8, 10};
 
-    auto custom_tensor = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {5}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     float custom_mean = custom_tensor.mean_scalar();
@@ -154,7 +155,7 @@ TEST_F(TensorReductionTest, Mean) {
 }
 
 TEST_F(TensorReductionTest, Int32MeanRejectsLikeTorch) {
-    for (const auto device : {Device::CPU, Device::CUDA}) {
+    for (const auto device : {Device::CPU, Device::GPU}) {
         const auto values = Tensor::from_vector(
                                 std::vector<int>{1, 2, 3, 4}, {4}, Device::CPU)
                                 .to(device);
@@ -167,7 +168,7 @@ TEST_F(TensorReductionTest, MeanMultiDim) {
     std::vector<float> data(24);
     std::iota(data.begin(), data.end(), 1.0f);
 
-    auto custom_tensor = Tensor::from_vector(data, {2, 3, 4}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {2, 3, 4}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                             .reshape({2, 3, 4});
 
@@ -181,7 +182,7 @@ TEST_F(TensorReductionTest, MeanMultiDim) {
 TEST_F(TensorReductionTest, MinMax) {
     std::vector<float> data = {5, 2, 8, 1, 9, 3, 7, 4, 6};
 
-    auto custom_tensor = Tensor::from_vector(data, {9}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {9}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     float custom_min = custom_tensor.min_scalar();
@@ -207,7 +208,7 @@ TEST_F(TensorReductionTest, MinMaxMultiDim) {
         data[i] = dist(gen);
     }
 
-    auto custom_tensor = Tensor::from_vector(data, {10, 10}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {10, 10}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                             .reshape({10, 10});
 
@@ -223,7 +224,7 @@ TEST_F(TensorReductionTest, MinMaxMultiDim) {
 TEST_F(TensorReductionTest, StandardDeviation) {
     std::vector<float> data = {2, 4, 4, 4, 5, 5, 7, 9};
 
-    auto custom_tensor = Tensor::from_vector(data, {8}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {8}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     float custom_std = custom_tensor.std_scalar(/*unbiased=*/false);
@@ -236,7 +237,7 @@ TEST_F(TensorReductionTest, StdMultiDim) {
     std::vector<float> data(120);
     std::iota(data.begin(), data.end(), 1.0f);
 
-    auto custom_tensor = Tensor::from_vector(data, {2, 3, 4, 5}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {2, 3, 4, 5}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                             .reshape({2, 3, 4, 5});
 
@@ -249,7 +250,7 @@ TEST_F(TensorReductionTest, StdMultiDim) {
 TEST_F(TensorReductionTest, Variance) {
     std::vector<float> data = {1, 2, 3, 4, 5};
 
-    auto custom_tensor = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {5}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     float custom_var = custom_tensor.var_scalar(/*unbiased=*/false);
@@ -265,7 +266,7 @@ TEST_F(TensorReductionTest, VarMultiDim) {
         data[i] = dist(gen);
     }
 
-    auto custom_tensor = Tensor::from_vector(data, {3, 4, 5}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {3, 4, 5}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                             .reshape({3, 4, 5});
 
@@ -280,7 +281,7 @@ TEST_F(TensorReductionTest, VarMultiDim) {
 TEST_F(TensorReductionTest, L2Norm) {
     std::vector<float> data = {3, 4}; // 3-4-5 triangle
 
-    auto custom_tensor = Tensor::from_vector(data, {2}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {2}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     float custom_norm = custom_tensor.norm(2.0f);
@@ -293,7 +294,7 @@ TEST_F(TensorReductionTest, L2Norm) {
 TEST_F(TensorReductionTest, L1Norm) {
     std::vector<float> data = {-3, 4, -2, 1};
 
-    auto custom_tensor = Tensor::from_vector(data, {4}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {4}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     float custom_norm = custom_tensor.norm(1.0f);
@@ -306,7 +307,7 @@ TEST_F(TensorReductionTest, L1Norm) {
 TEST_F(TensorReductionTest, InfinityNorm) {
     std::vector<float> data = {-3, 4, -7, 1};
 
-    auto custom_tensor = Tensor::from_vector(data, {4}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {4}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     float custom_norm = custom_tensor.norm(std::numeric_limits<float>::infinity());
@@ -321,7 +322,7 @@ TEST_F(TensorReductionTest, InfinityNorm) {
 TEST_F(TensorReductionTest, ItemScalar) {
     std::vector<float> data = {3.14159f};
 
-    auto custom_tensor = Tensor::from_vector(data, {1}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {1}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     float custom_item = custom_tensor.item();
@@ -333,7 +334,7 @@ TEST_F(TensorReductionTest, ItemScalar) {
 TEST_F(TensorReductionTest, ItemMultiElement) {
     // item() should fail for multi-element tensors
     std::vector<float> vec_data = {1.0f, 2.0f, 3.0f};
-    auto custom_tensor = Tensor::from_vector(vec_data, {3}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(vec_data, {3}, Device::GPU);
 
     EXPECT_THROW((void)custom_tensor.item(), std::runtime_error);
 }
@@ -344,7 +345,7 @@ TEST_F(TensorReductionTest, SumAlongAxis) {
     std::vector<float> data(24);
     std::iota(data.begin(), data.end(), 1.0f);
 
-    auto custom_tensor = Tensor::from_vector(data, {2, 3, 4}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {2, 3, 4}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                             .reshape({2, 3, 4});
 
@@ -374,7 +375,7 @@ TEST_F(TensorReductionTest, MeanAlongAxis) {
     std::vector<float> data(24);
     std::iota(data.begin(), data.end(), 1.0f);
 
-    auto custom_tensor = Tensor::from_vector(data, {2, 3, 4}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {2, 3, 4}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                             .reshape({2, 3, 4});
 
@@ -397,7 +398,7 @@ TEST_F(TensorReductionTest, KeepDim) {
     std::vector<float> data(24);
     std::iota(data.begin(), data.end(), 1.0f);
 
-    auto custom_tensor = Tensor::from_vector(data, {2, 3, 4}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {2, 3, 4}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                             .reshape({2, 3, 4});
 
@@ -443,7 +444,7 @@ TEST_F(TensorReductionTest, MultiAxisReduction) {
     std::vector<float> data(120);
     std::iota(data.begin(), data.end(), 1.0f);
 
-    auto custom_tensor = Tensor::from_vector(data, {2, 3, 4, 5}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {2, 3, 4, 5}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                             .reshape({2, 3, 4, 5});
 
@@ -461,7 +462,7 @@ TEST_F(TensorReductionTest, MaxAlongAxis) {
         data[i] = dist(gen);
     }
 
-    auto custom_tensor = Tensor::from_vector(data, {2, 3, 4}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {2, 3, 4}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                             .reshape({2, 3, 4});
 
@@ -478,7 +479,7 @@ TEST_F(TensorReductionTest, MinAlongAxis) {
         data[i] = dist(gen);
     }
 
-    auto custom_tensor = Tensor::from_vector(data, {2, 3, 4}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {2, 3, 4}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                             .reshape({2, 3, 4});
 
@@ -492,7 +493,7 @@ TEST_F(TensorReductionTest, MinAlongAxis) {
 // ============= Edge Cases =============
 
 TEST_F(TensorReductionTest, EmptyTensor) {
-    auto custom_empty = Tensor::empty({0}, Device::CUDA);
+    auto custom_empty = Tensor::empty({0}, Device::GPU);
     auto torch_empty = torch::empty({0}, torch::TensorOptions().device(torch::kCUDA));
 
     // Sum of empty tensor should be 0
@@ -505,7 +506,7 @@ TEST_F(TensorReductionTest, EmptyTensor) {
 TEST_F(TensorReductionTest, SingleElement) {
     std::vector<float> data = {5.0f};
 
-    auto custom_tensor = Tensor::from_vector(data, {1}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {1}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     compare_scalars(custom_tensor.sum_scalar(), torch_tensor.sum().item<float>(), 1e-5f, "SingleSum");
@@ -519,7 +520,7 @@ TEST_F(TensorReductionTest, SingleElement) {
 TEST_F(TensorReductionTest, NegativeValues) {
     std::vector<float> data = {-5, -3, -1, 0, 1, 3, 5};
 
-    auto custom_tensor = Tensor::from_vector(data, {7}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {7}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     compare_scalars(custom_tensor.sum_scalar(), torch_tensor.sum().item<float>(), 1e-4f, "NegSum");
@@ -530,7 +531,7 @@ TEST_F(TensorReductionTest, NegativeValues) {
 }
 
 TEST_F(TensorReductionTest, AllZeros) {
-    auto custom_tensor = Tensor::zeros({100}, Device::CUDA);
+    auto custom_tensor = Tensor::zeros({100}, Device::GPU);
     auto torch_tensor = torch::zeros({100}, torch::TensorOptions().device(torch::kCUDA));
 
     compare_scalars(custom_tensor.sum_scalar(), 0.0f, 1e-5f, "ZeroSum");
@@ -542,7 +543,7 @@ TEST_F(TensorReductionTest, AllZeros) {
 }
 
 TEST_F(TensorReductionTest, AllOnes) {
-    auto custom_tensor = Tensor::ones({100}, Device::CUDA);
+    auto custom_tensor = Tensor::ones({100}, Device::GPU);
     auto torch_tensor = torch::ones({100}, torch::TensorOptions().device(torch::kCUDA));
 
     compare_scalars(custom_tensor.sum_scalar(), torch_tensor.sum().item<float>(), 1e-4f, "OnesSum");
@@ -556,7 +557,7 @@ TEST_F(TensorReductionTest, LargeValues) {
     // Test numerical stability with large values
     std::vector<float> data = {1e6f, 1e6f + 1, 1e6f + 2, 1e6f + 3};
 
-    auto custom_tensor = Tensor::from_vector(data, {4}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {4}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     float custom_sum = custom_tensor.sum_scalar();
@@ -570,7 +571,7 @@ TEST_F(TensorReductionTest, SmallValues) {
     // Test numerical stability with small values
     std::vector<float> data = {1e-6f, 2e-6f, 3e-6f, 4e-6f};
 
-    auto custom_tensor = Tensor::from_vector(data, {4}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {4}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     float custom_sum = custom_tensor.sum_scalar();
@@ -584,7 +585,7 @@ TEST_F(TensorReductionTest, SmallValues) {
 TEST_F(TensorReductionTest, CountNonzero) {
     std::vector<float> data = {0, 1, 0, 2, 0, 3, 0, 4, 0, 5};
 
-    auto custom_tensor = Tensor::from_vector(data, {10}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {10}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     size_t custom_count = custom_tensor.count_nonzero();
@@ -595,7 +596,7 @@ TEST_F(TensorReductionTest, CountNonzero) {
 }
 
 TEST_F(TensorReductionTest, CountNonzeroAllZeros) {
-    auto custom_tensor = Tensor::zeros({100}, Device::CUDA);
+    auto custom_tensor = Tensor::zeros({100}, Device::GPU);
     auto torch_tensor = torch::zeros({100}, torch::TensorOptions().device(torch::kCUDA));
 
     size_t custom_count = custom_tensor.count_nonzero();
@@ -606,7 +607,7 @@ TEST_F(TensorReductionTest, CountNonzeroAllZeros) {
 }
 
 TEST_F(TensorReductionTest, CountNonzeroAllNonzero) {
-    auto custom_tensor = Tensor::ones({100}, Device::CUDA);
+    auto custom_tensor = Tensor::ones({100}, Device::GPU);
     auto torch_tensor = torch::ones({100}, torch::TensorOptions().device(torch::kCUDA));
 
     size_t custom_count = custom_tensor.count_nonzero();
@@ -625,7 +626,7 @@ TEST_F(TensorReductionTest, RandomDataConsistency) {
             val = dist(gen);
         }
 
-        auto custom_tensor = Tensor::from_vector(data, {100}, Device::CUDA);
+        auto custom_tensor = Tensor::from_vector(data, {100}, Device::GPU);
         auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
         compare_scalars(custom_tensor.sum_scalar(), torch_tensor.sum().item<float>(),
@@ -648,7 +649,7 @@ TEST_F(TensorReductionTest, RandomMultiDimConsistency) {
             val = dist(gen);
         }
 
-        auto custom_tensor = Tensor::from_vector(data, {2, 3, 4, 5}, Device::CUDA);
+        auto custom_tensor = Tensor::from_vector(data, {2, 3, 4, 5}, Device::GPU);
         auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                                 .reshape({2, 3, 4, 5});
 
@@ -676,7 +677,7 @@ TEST_F(TensorReductionTest, ReductionsCPU) {
 TEST_F(TensorReductionTest, NonTrailingMultiAxisMatchesCpuAndIsFast) {
     // Kept axis in the middle: previously the generic one-thread-per-output path.
     const std::vector<int64_t> big_shape{194, 12, 8, 16, 16};
-    auto custom_big = Tensor::randn({194, 12, 8, 16, 16}, Device::CUDA);
+    auto custom_big = Tensor::randn({194, 12, 8, 16, 16}, Device::GPU);
     const auto host = custom_big.cpu().contiguous().to_vector();
     auto torch_big = torch::from_blob(const_cast<float*>(host.data()), big_shape,
                                       torch::TensorOptions().dtype(torch::kFloat32))
@@ -692,7 +693,7 @@ TEST_F(TensorReductionTest, NonTrailingMultiAxisMatchesCpuAndIsFast) {
     compare_tensors(custom_big.max(big_axes), torch_big.amax(torch_big_axes),
                     1e-5f, 1e-5f, "max{0,2,3,4}");
 
-    auto custom_mid = Tensor::randn({7, 5, 3, 4}, Device::CUDA);
+    auto custom_mid = Tensor::randn({7, 5, 3, 4}, Device::GPU);
     const auto mid_host = custom_mid.cpu().contiguous().to_vector();
     auto torch_mid = torch::from_blob(const_cast<float*>(mid_host.data()), {7, 5, 3, 4},
                                       torch::TensorOptions().dtype(torch::kFloat32))

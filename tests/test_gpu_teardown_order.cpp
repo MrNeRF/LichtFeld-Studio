@@ -5,7 +5,6 @@
 // shuts down the pool needed by later tests. CUDA death tests are also avoided
 // because forked CUDA processes are unreliable.
 
-#include "components/ppisp_controller.hpp"
 #include "core/tensor.hpp"
 #include "training/strategies/strategy_utils.hpp"
 
@@ -13,23 +12,12 @@
 
 namespace {
 
-    TEST(GpuTeardownOrderTest, ReleaseSharedBuffersIsIdempotent) {
-        using lfs::training::PPISPController;
-        PPISPController::preallocate_shared_buffers(32, 32);
-        PPISPController::release_shared_buffers();
-        PPISPController::release_shared_buffers();
-        // Re-allocate after release must work (pool still alive in-process).
-        PPISPController::preallocate_shared_buffers(32, 32);
-        PPISPController::release_shared_buffers();
-        SUCCEED();
-    }
-
     TEST(GpuTeardownOrderTest, DensifyNScratchReleaseDropsStorage) {
         using lfs::core::Device;
         using lfs::training::DensifyNScratch;
 
         DensifyNScratch scratch;
-        scratch.ensure_n(128, Device::CUDA);
+        scratch.ensure_n(128, Device::GPU);
         ASSERT_GT(scratch.n_capacity, 0u);
         ASSERT_TRUE(scratch.f32_a.is_valid());
 
@@ -47,8 +35,8 @@ namespace {
         using lfs::training::DensifyNScratch;
 
         DensifyNScratch scratch;
-        scratch.ensure_n(4096, Device::CUDA);
-        Tensor pooled = Tensor::empty({1024}, Device::CUDA);
+        scratch.ensure_n(4096, Device::GPU);
+        Tensor pooled = Tensor::empty({1024}, Device::GPU);
         ASSERT_TRUE(pooled.is_valid());
 
         scratch.release();

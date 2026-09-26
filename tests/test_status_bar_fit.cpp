@@ -5,6 +5,7 @@
 
 #include "gui/rml_status_bar.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
+#include "visualizer/app_store.hpp"
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
@@ -58,6 +59,12 @@ namespace lfs::vis::gui {
             status_bar.model_.mcp_details_expanded = expanded;
         }
 
+        static void bindStore(RmlStatusBar& status_bar) { status_bar.bindReactiveStore(); }
+        static void clearRedraw(RmlStatusBar& status_bar) { status_bar.model_dirty_ = false; }
+        [[nodiscard]] static bool redrawPending(const RmlStatusBar& status_bar) {
+            return status_bar.model_dirty_;
+        }
+
         static void trackRenderedFrame(RmlStatusBar& status_bar,
                                        RmlUIManager& manager,
                                        const float bar_x,
@@ -101,6 +108,7 @@ namespace {
         void SetScissorRegion(Rml::Rectanglei) override {}
     };
 
+    // Keep this test model in sync with RmlStatusBar::ModelState in rml_status_bar.hpp.
     struct StatusBarModel {
         bool safe_mode = false;
         std::string safe_mode_text = "Safe Mode";
@@ -109,8 +117,17 @@ namespace {
         bool show_training = true;
         bool progress_miner = false;
         bool miner_raised = false;
+        bool miner_step_a = false;
         bool miner_strike = false;
+        bool miner_step_b = false;
+        bool miner_smoke_1 = false;
+        bool miner_smoke_2 = false;
+        bool miner_smoke_3 = false;
+        bool miner_smoke_4 = false;
+        bool miner_smoke_5 = false;
+        bool miner_smoke_6 = false;
         std::string progress_width = "50%";
+        std::string progress_text_left = "0dp";
         std::string progress_text = "50%";
         std::string step_label = "Step:";
         std::string step_value = "15000/30000";
@@ -138,12 +155,6 @@ namespace {
         std::string zoom_text = "Zoom: 100";
         std::string zoom_color = "#ffffff";
         std::string zoom_sep_color = "#ffffff";
-        std::string account_label = "LichtFeld Account";
-        std::string account_tier = "Professional";
-        std::string account_tooltip;
-        std::string account_color = "#ffffff";
-        bool account_show_tier = true;
-        bool account_membership_required = false;
         std::string lfs_mem_text = "LFS 12.34 GiB";
         std::string lfs_mem_color = "#ffffff";
         bool show_gpu_model = true;
@@ -238,8 +249,17 @@ namespace {
             bound &= constructor.Bind("show_training", &model_.show_training);
             bound &= constructor.Bind("progress_miner", &model_.progress_miner);
             bound &= constructor.Bind("miner_raised", &model_.miner_raised);
+            bound &= constructor.Bind("miner_step_a", &model_.miner_step_a);
             bound &= constructor.Bind("miner_strike", &model_.miner_strike);
+            bound &= constructor.Bind("miner_step_b", &model_.miner_step_b);
+            bound &= constructor.Bind("miner_smoke_1", &model_.miner_smoke_1);
+            bound &= constructor.Bind("miner_smoke_2", &model_.miner_smoke_2);
+            bound &= constructor.Bind("miner_smoke_3", &model_.miner_smoke_3);
+            bound &= constructor.Bind("miner_smoke_4", &model_.miner_smoke_4);
+            bound &= constructor.Bind("miner_smoke_5", &model_.miner_smoke_5);
+            bound &= constructor.Bind("miner_smoke_6", &model_.miner_smoke_6);
             bound &= constructor.Bind("progress_width", &model_.progress_width);
+            bound &= constructor.Bind("progress_text_left", &model_.progress_text_left);
             bound &= constructor.Bind("progress_text", &model_.progress_text);
             bound &= constructor.Bind("step_label", &model_.step_label);
             bound &= constructor.Bind("step_value", &model_.step_value);
@@ -267,12 +287,6 @@ namespace {
             bound &= constructor.Bind("zoom_text", &model_.zoom_text);
             bound &= constructor.Bind("zoom_color", &model_.zoom_color);
             bound &= constructor.Bind("zoom_sep_color", &model_.zoom_sep_color);
-            bound &= constructor.Bind("account_label", &model_.account_label);
-            bound &= constructor.Bind("account_tier", &model_.account_tier);
-            bound &= constructor.Bind("account_tooltip", &model_.account_tooltip);
-            bound &= constructor.Bind("account_color", &model_.account_color);
-            bound &= constructor.Bind("account_show_tier", &model_.account_show_tier);
-            bound &= constructor.Bind("account_membership_required", &model_.account_membership_required);
             bound &= constructor.Bind("lfs_mem_text", &model_.lfs_mem_text);
             bound &= constructor.Bind("lfs_mem_color", &model_.lfs_mem_color);
             bound &= constructor.Bind("show_gpu_model", &model_.show_gpu_model);
@@ -396,6 +410,28 @@ namespace {
 
         lfs::vis::gui::RmlStatusBarTestAccess::setMcpExpanded(status_bar_, false);
         EXPECT_EQ(status_bar_.overlayHeight(), 0.0f);
+    }
+
+    // Catches a status bar that redraws on every training step or every frame:
+    // step, loss, splat count and FPS arrive through its periodic refresh, while
+    // a training state change still redraws at once.
+    TEST(StatusBarRefreshTest, TrainingTelemetryWaitsForThePeriodicRefresh) {
+        lfs::vis::gui::RmlStatusBar status_bar;
+        lfs::vis::gui::RmlStatusBarTestAccess::bindStore(status_bar);
+        auto& store = lfs::vis::app_store();
+        (void)store.store().drain_dirty_into_frame();
+        lfs::vis::gui::RmlStatusBarTestAccess::clearRedraw(status_bar);
+
+        store.iteration.set(store.iteration.get() + 1);
+        store.loss.set(store.loss.get() + 0.5f);
+        store.num_gaussians.set(store.num_gaussians.get() + 1);
+        store.fps.set(store.fps.get() + 1.0f);
+        (void)store.store().drain_dirty_into_frame();
+        EXPECT_FALSE(lfs::vis::gui::RmlStatusBarTestAccess::redrawPending(status_bar));
+
+        store.training_state.set(store.training_state.get() + "_changed");
+        (void)store.store().drain_dirty_into_frame();
+        EXPECT_TRUE(lfs::vis::gui::RmlStatusBarTestAccess::redrawPending(status_bar));
     }
 
     TEST(RuntimeServiceControlsTest, DispatchesMcpActionsThroughVisualizerBoundary) {

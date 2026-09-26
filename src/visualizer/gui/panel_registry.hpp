@@ -162,6 +162,12 @@ namespace lfs::vis::gui {
     class IPanel {
     public:
         virtual ~IPanel() = default;
+        // Called on the GUI thread only after a native viewport drop hit test.
+        virtual bool onViewportDrop(const std::string& type, const std::string& data) {
+            (void)type;
+            (void)data;
+            return false;
+        }
         virtual void draw(const PanelDrawContext& ctx) = 0;
         virtual bool poll(const PanelDrawContext& ctx) {
             (void)ctx;
@@ -173,6 +179,10 @@ namespace lfs::vis::gui {
         virtual void setPollVisibility(bool visible) { (void)visible; }
         virtual bool isVisibleForAnimation() const { return true; }
         virtual void on_visibility_changed(bool visible) { (void)visible; }
+        // GUI-thread notifications. Retained panels schedule work only when
+        // their host geometry or an external data producer changes.
+        virtual void on_layout_changed() {}
+        virtual void on_content_changed() {}
         virtual void preload(const PanelDrawContext& ctx) { (void)ctx; }
         virtual PanelRenderCapabilities renderCapabilities() const { return {}; }
         virtual PanelDirectRenderResult renderDirect(

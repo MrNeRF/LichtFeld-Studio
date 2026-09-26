@@ -14,9 +14,20 @@ namespace lfs::vis {
     class StaleFrameGuard {
     public:
         static constexpr std::uint32_t kMaxCachedDeferrals = 30;
+        enum class DeferralKind : std::uint8_t {
+            ArenaContention,
+            RecoverableFailure,
+        };
 
         // True exactly once, on the attempt that exhausts the cache budget.
-        [[nodiscard]] bool onDeferral() {
+        [[nodiscard]] bool onDeferral(
+            const DeferralKind kind = DeferralKind::RecoverableFailure) {
+            // An arena handoff request reserves the next idle window for
+            // ordinary trainer contention. The displayed publication remains
+            // valid while ownership changes, so it must not age out here.
+            if (kind == DeferralKind::ArenaContention) {
+                return false;
+            }
             if (deferrals_ == kMaxCachedDeferrals) {
                 return false;
             }

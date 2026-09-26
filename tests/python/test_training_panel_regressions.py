@@ -30,9 +30,13 @@ def _install_lf_stub(monkeypatch):
         tr=lambda key: key,
     )
     lf_stub.optimization_params = lambda: None
+    lf_stub.training_backends = lambda: [
+        {"id": "3dgs", "label": "3DGS"}, {"id": "3dgut", "label": "3DGUT"},
+    ]
     lf_stub.dataset_params = lambda: None
     lf_stub.get_scene = lambda: None
     lf_stub.start_training = lambda: None
+    lf_stub.trainer_saving_model = lambda: False
     lf_stub.training_start_overwrite_conflict = lambda: None
     lf_stub.loss_buffer = lambda: []
     lf_stub.push_loss_to_element = lambda _element, _data: (0.0, 0.0)
@@ -45,6 +49,285 @@ def _install_lf_stub(monkeypatch):
     return lf_stub
 
 
+def test_start_feedback_tracks_actual_conflicts_without_mutating(training_panel_module, monkeypatch):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    params = SimpleNamespace(
+        has_params=lambda: True, validate=lambda: "invalid combination",
+        raster_backend="3dgut", strategy="igs+", undistort=True, mip_filter=False,
+        use_depth_loss=True, use_normal_loss=False,
+        backend_capabilities=dict.fromkeys(
+            ("igs_plus", "mip_filter", "depth_supervision", "normal_supervision"), "unsupported"),
+    )
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(module.RuntimeState.trainer_state, "value", "ready")
+    params.backend_capabilities["undistort"] = "supported"
+    dirty = []
+    panel._handle = SimpleNamespace(dirty=dirty.append)
+    before = vars(params).copy()
+    assert panel._start_error() == "invalid combination"
+    notice = panel._backend_notice(selected_only=True)
+    assert notice.startswith("Not available with 3DGUT: ")
+    assert "IGS+" in notice and "use_depth_loss" in notice
+    assert "undistort" not in notice
+    assert "mip_filter" not in notice and "use_normal_loss" not in notice
+    assert panel._sync_start_feedback()
+    assert set(dirty) == {"start_error", "start_blocked", "start_conflicts"}
+    assert not panel._sync_start_feedback()
+    assert vars(params) == before
+    params.validate = lambda: ""
+    assert panel._sync_start_feedback()
+    assert panel._start_error() == ""
+    params.backend_capabilities = dict.fromkeys(params.backend_capabilities, "supported")
+    assert panel._backend_notice() == ""
+
+
+def test_backend_notice_uses_descriptor_label_and_localized_template(training_panel_module, monkeypatch):
+    module = training_panel_module
+    params = SimpleNamespace(
+        has_params=lambda: True, raster_backend="test_backend",
+        mip_filter=False, backend_capabilities={"mip_filter": "unsupported"},
+    )
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(module.lf, "training_backends", lambda: [
+        {"id": "test_backend", "label": "Test Renderer"},
+    ])
+    translations = {
+        "training.backend_unsupported": "{backend} unavailable: {features}",
+        "training_params.mip_filter": "Mip Filter:",
+    }
+    monkeypatch.setattr(module.lf.ui, "tr", lambda key: translations.get(key, key))
+    panel = module.TrainingPanel()
+    assert panel._backend_notice() == "Test Renderer unavailable: Mip Filter"
+    assert panel._backend_notice(selected_only=True) == ""
+    params.mip_filter = True
+    assert panel._backend_notice(selected_only=True) == "Test Renderer unavailable: Mip Filter"
+    params.backend_capabilities["mip_filter"] = "supported"
+    assert panel._backend_notice() == ""
+
+
+def test_backend_notice_locale_placeholders():
+    from string import Formatter
+
+    locales = Path(__file__).resolve().parents[2] / "src/visualizer/gui/resources/locales"
+    for path in locales.glob("*.json"):
+        catalog = json.loads(path.read_text(encoding="utf-8"))
+        if "training" not in catalog:
+            continue
+        template = catalog["training"]["backend_unsupported"]
+        fields = {field for _, field, _, _ in Formatter().parse(template) if field is not None}
+        assert fields == {"backend", "features"}, path.name
+
+
+@pytest.mark.parametrize("state", ["paused", "running", "idle", "completed", "error"])
+def test_next_run_validation_does_not_gate_resume(training_panel_module, monkeypatch, state):
+    panel = training_panel_module.TrainingPanel()
+    monkeypatch.setattr(training_panel_module.RuntimeState.trainer_state, "value", state)
+    monkeypatch.setattr(panel, "_validation_error", lambda: pytest.fail("Not a new Start"))
+    assert panel._start_error() == ""
+
+
+def test_invalid_start_is_rejected_before_overwrite_consent(training_panel_module, monkeypatch):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    monkeypatch.setattr(module, "_restore_stored_session_if_needed", lambda **_kw: False)
+    monkeypatch.setattr(module, "_training_session_state", lambda: {})
+    monkeypatch.setattr(panel, "_validation_error", lambda: "invalid numeric parameter")
+    monkeypatch.setattr(module.lf, "training_start_overwrite_conflict",
+                        lambda: pytest.fail("Must reject before consent"))
+    errors = []
+    monkeypatch.setattr(module.lf.ui, "message_dialog", lambda *args, **kwargs: errors.append(args), raising=False)
+    panel._action_start()
+    assert errors[0][1] == "invalid numeric parameter"
+
+
+def test_only_start_is_disabled_and_feedback_is_outside_search():
+    """Invalid start settings must not disable Resume or hide the reason Start is blocked."""
+    from xml.etree import ElementTree as ET
+    root = ET.parse(Path(__file__).parents[2] / "src/visualizer/gui/rmlui/resources/training.rml")
+    controls = root.find(".//*[@id='controls']")
+    buttons = {node.get("data-event-click"): node for node in controls.iter("button")}
+    assert buttons["action('start')"].get("data-attrif-disabled") == "start_blocked"
+    assert buttons["action('resume')"].get("data-attrif-disabled") is None
+    feedback = controls.find(".//*[@data-if='start_blocked']")
+    assert "{{start_error}}" in "".join(feedback.itertext())
+    assert "{{start_conflicts}}" in "".join(feedback.itertext())
+
+
+
+@pytest.mark.parametrize("state,iteration,actions", [
+    ("ready", 0, ["start", "clear"]),
+    ("ready", 12, ["start", "reset", "clear"]),
+    ("starting", 0, ["pause", "stop"]),
+    ("running", 12, ["pause", "save_project"]),
+    ("paused", 12, ["resume", "save_project", "reset", "stop"]),
+    ("completed", 12, ["start", "switch_edit", "reset", "clear"]),
+    ("stopped", 12, ["switch_edit", "reset", "clear"]),
+    ("error", 12, ["reset", "clear"]),
+    ("stopping", 12, []),
+])
+def test_compact_toolbar_preserves_visible_actions_by_state(
+    training_panel_module, monkeypatch, state, iteration, actions
+):
+    from xml.etree import ElementTree as ET
+    module = training_panel_module
+    monkeypatch.setattr(module, "_training_session_state", lambda: {})
+    monkeypatch.setattr(module.RuntimeState.trainer_state, "value", state)
+    monkeypatch.setattr(module.RuntimeState.iteration, "value", iteration)
+    panel = module.TrainingPanel()
+    model = _ModelStub()
+    panel._bind_visibility(model, lambda: None, lambda: None)
+    root = ET.parse(Path(__file__).parents[2] / "src/visualizer/gui/rmlui/resources/training.rml")
+    controls = root.find(".//*[@id='controls']")
+    visible = []
+
+    def visit(node):
+        condition = node.get("data-if")
+        # Error text is independent of the action visibility matrix.
+        if condition == "start_blocked":
+            return
+        if condition and not model.bindings[condition][0]():
+            return
+        if node.tag == "button":
+            visible.append(node.get("data-event-click"))
+        for child in node:
+            visit(child)
+
+    visit(controls)
+    assert visible == [f"action('{action}')" for action in actions]
+
+
+@pytest.mark.parametrize("iteration,key", [(0, "training.action_start"), (12, "training_panel.resume")])
+def test_toolbar_uses_short_primary_labels(training_panel_module, monkeypatch, iteration, key):
+    module = training_panel_module
+    monkeypatch.setattr(module, "_training_session_state", lambda: {})
+    monkeypatch.setattr(module.RuntimeState.iteration, "value", iteration)
+    model = _ModelStub()
+    module.TrainingPanel()._bind_labels(model)
+    assert model.bindings["btn_start"][0]() == key
+    assert model.bindings["label_toolbar_edit"][0]() == "common.edit"
+
+
+def test_toolbar_starting_status_is_not_unknown(training_panel_module, monkeypatch):
+    module = training_panel_module
+    monkeypatch.setattr(module, "_training_session_state", lambda: {})
+    monkeypatch.setattr(module.RuntimeState.trainer_state, "value", "starting")
+    model = _ModelStub()
+    module.TrainingPanel()._bind_status(model, lambda: None)
+    assert "runtime.task_starting" in model.bindings["status_mode"][0]()
+
+
+def test_restore_failure_keeps_detail_below_error_badge(training_panel_module, monkeypatch):
+    module = training_panel_module
+    monkeypatch.setattr(module, "_training_session_state", lambda: {"error": "bad checkpoint"})
+    monkeypatch.setattr(module.RuntimeState.has_trainer, "value", False)
+    model = _ModelStub()
+    panel = module.TrainingPanel()
+    panel._bind_status(model, lambda: None)
+    panel._bind_visibility(model, lambda: None, lambda: None)
+    assert "status.error" in model.bindings["status_mode"][0]()
+    assert "bad checkpoint" in model.bindings["error_message"][0]()
+    assert model.bindings["show_ctrl_error"][0]()
+    assert not model.bindings["show_ctrl_paused"][0]()
+    monkeypatch.setattr(module.RuntimeState.has_trainer, "value", True)
+    monkeypatch.setattr(module.RuntimeState.trainer_state, "value", "error")
+    monkeypatch.setattr(module.lf, "trainer_error", lambda: "new training error", raising=False)
+    assert model.bindings["error_message"][0]() == "new training error"
+    monkeypatch.setattr(module, "_training_session_state", lambda: {"restoring": True})
+    assert model.bindings["show_ctrl_restoring"][0]()
+    assert not model.bindings["show_ctrl_error"][0]()
+
+
+@pytest.mark.parametrize("scale", [1.0, 1.5, 2.0])
+@pytest.mark.parametrize("state,actions", [
+    ("ready", ("start", "clear")),
+    ("completed", ("switch_edit", "reset", "clear")),
+    ("paused", ("resume", "save_project", "reset", "stop")),
+])
+def test_toolbar_fit_uses_measured_width_and_can_restore_captions(training_panel_module, monkeypatch, scale, state, actions):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    scheduled = []
+    monkeypatch.setattr(panel, "_schedule_deferred_update", scheduled.append)
+    monkeypatch.setattr(module, "_training_session_state", lambda: {})
+    monkeypatch.setattr(module.RuntimeState.trainer_state, "value", state)
+    monkeypatch.setattr(module.RuntimeState.has_trainer, "value", True)
+    monkeypatch.setattr(module.RuntimeState.iteration, "value", 0)
+    classes = set()
+    toolbar = SimpleNamespace(
+        client_width=1000 * scale,
+        is_class_set=lambda name: name in classes,
+        set_class=lambda name, enabled: classes.add(name) if enabled else classes.discard(name),
+    )
+    elements = {
+        "training-toolbar": toolbar,
+        "measure-action-gap": SimpleNamespace(absolute_width=4 * scale),
+        "measure-action-max": SimpleNamespace(absolute_width=96 * scale),
+    }
+    elements.update({"measure-" + action: SimpleNamespace(absolute_width=90 * scale) for action in actions})
+    panel._doc = SimpleNamespace(get_element_by_id=elements.get)
+    required = (90 * len(actions) + 4 * (len(actions) - 1)) * scale
+    toolbar.client_width = required - 1
+    assert panel._sync_toolbar_fit()
+    assert "is-compact" in classes
+    assert scheduled == [0.01]
+    assert not panel._sync_toolbar_fit()
+    assert scheduled == [0.01]
+    toolbar.client_width = required + 1
+    assert panel._sync_toolbar_fit()
+    assert "is-compact" not in classes
+    elements["measure-" + actions[0]].absolute_width += 20 * scale
+    assert panel._sync_toolbar_fit()
+    assert "is-compact" in classes
+
+
+def test_sparsity_is_a_collapsible_advanced_group():
+    """Keep the sparsity activation outside the collapsed parameter section so it remains usable."""
+    from xml.etree import ElementTree as ET
+    root = ET.parse(Path(__file__).parents[2] / "src/visualizer/gui/rmlui/resources/training.rml")
+    advanced = root.find(".//*[@id='sec-advanced-params']")
+    header = advanced.find(".//*[@id='hdr-sparsity']")
+    assert header.get("data-event-click") == "toggle_section('sparsity')"
+    assert header.find(".//*[@id='arrow-sparsity']") is not None
+    content = advanced.find(".//*[@id='sec-sparsity']")
+    assert "collapsed" in content.get("class")
+    assert content.find(".//*[@data-for='row : pv_basic_sparsity_toggle_rows']") is None
+    activation = advanced.find(".//*[@data-for='row : pv_basic_sparsity_toggle_rows']")
+    assert activation is not None
+    nodes = list(advanced.iter())
+    assert nodes.index(activation) < nodes.index(header)
+    assert content.find(".//*[@data-if='dep_sparsity']") is not None
+    assert content.find(".//*[@data-for='row : pv_sparsity_rows']") is not None
+    assert content.find(".//*[@id='sec-save-steps']") is None
+
+
+
+def test_advanced_has_single_real_activation_for_each_optional_feature():
+    """Feature checkboxes must have one live value-change binding and remain outside their details."""
+    from xml.etree import ElementTree as ET
+    root = ET.parse(Path(__file__).parents[2] / "src/visualizer/gui/rmlui/resources/training.rml")
+    advanced = root.find(".//*[@id='sec-advanced-params']")
+    assert root.find(".//*[@id='advanced-feature-activations']") is None
+    for run in ("basic_depth_toggle", "basic_normal_toggle", "basic_bilateral_toggle",
+                "basic_ppisp_toggle", "basic_sparsity_toggle", "dataset_eval", "feature_random"):
+        rows = root.findall(f".//*[@data-for='row : pv_{run}_rows']")
+        assert len(rows) == 1
+        assert advanced.find(f".//*[@data-for='row : pv_{run}_rows']") is rows[0]
+        checkbox = rows[0].find("input")
+        assert checkbox.get("data-checked") == "row.checked"
+        assert checkbox.get("data-event-click") == "pv_value_change(row.id, !row.checked)"
+    positions = list(advanced.iter())
+    for run, section in {
+        "basic_depth_toggle": "depth", "basic_normal_toggle": "normal",
+        "basic_ppisp_toggle": "ppisp", "basic_bilateral_toggle": "bilateral",
+        "dataset_eval": "evaluation", "feature_random": "random-init",
+        "basic_sparsity_toggle": "sparsity",
+    }.items():
+        activation = advanced.find(f".//*[@data-for='row : pv_{run}_rows']")
+        details = advanced.find(f".//*[@id='sec-{section}']")
+        assert positions.index(activation) < positions.index(details)
+
+
 def test_bundled_locales_define_training_panel_strategy_and_color_keys():
     project_root = Path(__file__).parent.parent.parent
     locale_dir = project_root / "src" / "visualizer" / "gui" / "resources" / "locales"
@@ -52,6 +335,12 @@ def test_bundled_locales_define_training_panel_strategy_and_color_keys():
     for locale_path in locale_dir.glob("*.json"):
         data = json.loads(locale_path.read_text())
         assert data["training"]["options.strategy.igs_plus"] == "IGS+"
+        assert data["training"]["start_fix_settings"]
+        assert data["training"]["action_start"]
+        assert data["training"]["action_stop"]
+        assert data["training"]["action_save"]
+        assert data["training"]["status_restoring"]
+        assert data["training"]["status_saving"]
         assert "refinement.grow_until_iter" in data["training"]
         assert "tooltip.grow_until_iter" in data["training"]
         assert data["training"]["overwrite.btn_save_as_start"]
@@ -280,9 +569,9 @@ def test_native_backend_rollback_republishes_bound_controls(training_panel_modul
         mip_filter=True, use_depth_loss=False, use_normal_loss=False,
     )
     published, dirty = [], []
-    panel._pv_bindings = [SimpleNamespace(publish=lambda: published.append(True))]
+    panel._pv_bindings = [SimpleNamespace(publish=lambda: published.append(True), sync_text_bufs=lambda **_: False)]
     panel._handle = SimpleNamespace(dirty_all=lambda: dirty.append(True))
-    monkeypatch.setattr(panel, "_sync_text_bufs", lambda: None)
+    monkeypatch.setattr(panel, "_sync_text_bufs", lambda **_kwargs: None)
     monkeypatch.setattr(training_panel_module.lf, "optimization_params", lambda: params)
     assert panel._refresh_native_backend_controls()
     assert not panel._refresh_native_backend_controls()
@@ -299,10 +588,10 @@ def test_native_rollback_between_publication_and_update_is_not_missed(training_p
         mip_filter=False, use_depth_loss=False, use_normal_loss=False,
     )
     published = []
-    binding = SimpleNamespace(publish=lambda: published.append(params.mip_filter))
+    binding = SimpleNamespace(publish=lambda: published.append(params.mip_filter), sync_text_bufs=lambda **_: False)
     panel._pv_bindings = [binding]
     panel._handle = SimpleNamespace(dirty_all=lambda: None)
-    monkeypatch.setattr(panel, "_sync_text_bufs", lambda: None)
+    monkeypatch.setattr(panel, "_sync_text_bufs", lambda **_kwargs: None)
     monkeypatch.setattr(panel, "_dirty_property_search_models", lambda: None)
     monkeypatch.setattr(panel, "_sync_section_states", lambda: None)
     monkeypatch.setattr(training_panel_module.lf, "optimization_params", lambda: params)
@@ -313,6 +602,106 @@ def test_native_rollback_between_publication_and_update_is_not_missed(training_p
     params.mip_filter = False
     assert panel._refresh_native_backend_controls()
     assert published == [False, True, False]
+
+
+@pytest.mark.parametrize("rollback_timing", ["before_refresh", "after_refresh"])
+@pytest.mark.parametrize("prop,initial,draft,is_int", [
+    ("max_cap", 5_000_000, "4000000", True),
+    ("iterations", 30_000, "20000", True),
+    ("means_lr", 0.00016, "0.00012", False),
+])
+def test_numeric_draft_survives_refresh_and_publication_settles(
+    training_panel_module, monkeypatch, prop, initial, draft, is_int, rollback_timing
+):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    params = SimpleNamespace(
+        has_params=lambda: True, strategy="mrnf", gut=False, mip_filter=False,
+        use_depth_loss=False, use_normal_loss=False, ppisp_controller_activation_step=0,
+        bg_color=(0.0, 0.0, 0.0),
+    )
+    setattr(params, prop, initial)
+    params.set = lambda name, value: setattr(params, name, value)
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(module.lf, "dataset_params", lambda: None)
+    scheduled = []
+    monkeypatch.setattr(module.lf.ui, "schedule_on_ui_thread", scheduled.append, raising=False)
+    monkeypatch.setattr(panel, "_dirty_property_search_models", lambda: None)
+    monkeypatch.setattr(panel, "_sync_section_states", lambda: None)
+    records = {}
+    panel._handle = SimpleNamespace(
+        dirty_all=lambda: None,
+        update_record_list=lambda name, values: records.update({name: values}),
+    )
+    row = dict(id=prop, kind="number", name=prop, label_key="", tooltip_key="",
+               is_int=is_int, precision=0 if is_int else 6, step=1 if is_int else 0.00001,
+               min=0, max=None, items=[])
+    binding = module.property_view.SectionBinding(
+        "basic_struct", [row], lambda: params, panel._text_bufs, panel._queue_pv_publish)
+    binding.attach_handle(panel._handle)
+    panel._pv_bindings = (binding,)
+    panel._pv_binding_by_prop = {prop: binding}
+    assert panel._refresh_native_backend_controls()
+    assert not panel._pv_publish_pending
+    binding.begin_edit(prop)
+    change = SimpleNamespace(get_bool_parameter=lambda *_: False)
+    panel._on_pv_number_input_change(None, change, [prop, draft])
+    # Exercise the real queue -> flush -> native-refresh -> buffer-sync chain.
+    panel._queue_pv_publish(binding)
+    assert panel._flush_pv_publish()
+    assert panel._refresh_native_backend_controls()
+    assert records[binding.model_key][0]["text"] == draft
+    assert getattr(params, prop) == initial
+    assert not panel._pv_publish_pending
+    assert not panel._flush_pv_publish()
+    assert not panel._refresh_native_backend_controls()
+    panel._on_pv_number_input_blur(None, None, [prop, draft])
+    assert getattr(params, prop) == pytest.approx(float(draft))
+    assert panel._flush_pv_publish()
+    if rollback_timing == "after_refresh":
+        assert panel._refresh_native_backend_controls()
+        assert not panel._refresh_native_backend_controls()
+    # A worker may roll back before OR after the first post-edit refresh.
+    setattr(params, prop, initial)
+    assert panel._refresh_native_backend_controls()
+    assert records[binding.model_key][0]["text"] == binding.canonical_text(prop)
+    assert not panel._pv_publish_pending
+    assert not panel._refresh_native_backend_controls()
+
+
+def test_saving_badge_tracks_transition_without_restarting_training(training_panel_module, monkeypatch):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    model = _ModelStub()
+    monkeypatch.setattr(module, "_training_session_state", lambda: {})
+    monkeypatch.setattr(module.RuntimeState.has_trainer, "value", True)
+    monkeypatch.setattr(module.RuntimeState.trainer_state, "value", "stopping")
+    saving = {"value": False}
+    monkeypatch.setattr(module.lf, "trainer_saving_model", lambda: saving["value"])
+    dirty, scheduled = [], []
+    panel._handle = SimpleNamespace(dirty=dirty.append)
+    monkeypatch.setattr(panel, "_schedule_deferred_update", scheduled.append)
+    panel._bind_visibility(model, lambda: None, lambda: None)
+    panel._bind_status(model, lambda: None)
+    assert not panel._sync_saving_status()
+    assert scheduled == [0.1]
+    assert model.bindings["show_ctrl_stopping"][0]()
+    assert not model.bindings["show_ctrl_saving"][0]()
+    saving["value"] = True
+    assert panel._sync_saving_status()
+    assert set(dirty) == {"status_mode", "show_ctrl_stopping", "show_ctrl_saving"}
+    assert model.bindings["show_ctrl_saving"][0]()
+    assert not model.bindings["show_ctrl_stopping"][0]()
+    assert "training.status_saving" in model.bindings["status_mode"][0]()
+    dirty.clear()
+    assert not panel._sync_saving_status()
+    assert not dirty
+    monkeypatch.setattr(module.RuntimeState.trainer_state, "value", "completed")
+    scheduled.clear()
+    assert panel._sync_saving_status()
+    assert not scheduled
+    assert not model.bindings["show_ctrl_saving"][0]()
+    assert model.bindings["show_ctrl_completed"][0]()
 
 
 @pytest.mark.parametrize("offer_save", [False, True])
@@ -365,6 +754,223 @@ class _HandleStub:
 
     def request_update(self):
         self.request_update_count += 1
+
+
+def _configuration_panel(module, monkeypatch):
+    panel = module.TrainingPanel()
+    params = SimpleNamespace(
+        has_params=lambda: True, raster_backend="3dgs",
+        use_exposure_correction=False, use_bilateral_grid=False, ppisp=False,
+        ppisp_use_controller=False, ppisp_freeze_from_sidecar=False,
+        ppisp_controller_lr=0.003, ppisp_sidecar_path="saved.ppisp",
+    )
+    params.set = lambda key, value: setattr(params, key, value)
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(panel, "_can_edit_configuration", lambda: True)
+    monkeypatch.setattr(panel, "_refresh_strategy_values", lambda: None)
+    return panel, params
+
+
+def test_backend_selector_uses_available_descriptors_and_syncs_viewer(training_panel_module, monkeypatch):
+    panel, params = _configuration_panel(training_panel_module, monkeypatch)
+    updates = []
+    monkeypatch.setattr(training_panel_module.lf, "training_backends", lambda: [
+        {"id": "3dgs", "label": "3DGS", "viewer_backend": "3dgs"},
+        {"id": "3dgut", "label": "3DGUT", "viewer_backend": "3dgut"},
+    ], raising=False)
+    monkeypatch.setattr(training_panel_module.lf, "get_render_settings",
+                        lambda: SimpleNamespace(set=lambda *args: updates.append(args)))
+    panel._set_training_backend("3dgut")
+    assert params.raster_backend == "3dgut"
+    assert updates == [("raster_backend", "3dgut")]
+    panel._set_training_backend("nonexistent")
+    assert params.raster_backend == "3dgut"
+    assert len(updates) == 1
+    panel._set_training_backend("3dgs")
+    assert updates[-1] == ("raster_backend", "3dgs")
+    monkeypatch.setattr(panel, "_can_edit_configuration", lambda: False)
+    panel._set_training_backend("3dgut")
+    assert params.raster_backend == "3dgs"
+    assert len(updates) == 2
+
+
+def test_advanced_enable_flags_are_real_and_preserve_tuning(training_panel_module, monkeypatch):
+    panel, params = _configuration_panel(training_panel_module, monkeypatch)
+    flags = ("use_depth_loss", "use_normal_loss", "enable_sparsity", "random", "enable_eval",
+             "use_bilateral_grid", "ppisp", "use_exposure_correction",
+             "ppisp_use_controller", "ppisp_freeze_from_sidecar")
+    declared = {prop for spec in training_panel_module.property_view.SECTIONS for run in spec.runs for prop in run.prop_ids}
+    assert set(flags) <= declared
+    aliases = {}
+    def set_flag(prop, value):
+        setattr(params, aliases.get(prop, prop), value)
+        return True
+    panel._pv_binding_by_prop = {prop: SimpleNamespace(set_value=set_flag) for prop in flags}
+    monkeypatch.setattr(panel, "_sync_section_states", lambda: None)
+    for prop in flags:
+        panel._on_pv_value_change(None, None, [prop, True])
+        assert getattr(params, aliases.get(prop, prop)) is True
+        panel._on_pv_value_change(None, None, [prop, False])
+        assert getattr(params, aliases.get(prop, prop)) is False
+    panel._on_pv_value_change(None, None, ["use_bilateral_grid", True])
+    panel._on_pv_value_change(None, None, ["ppisp", True])
+    panel._on_pv_value_change(None, None, ["ppisp_use_controller", True])
+    panel._on_pv_value_change(None, None, ["ppisp_freeze_from_sidecar", True])
+    assert params.use_bilateral_grid and params.ppisp
+    panel._on_pv_value_change(None, None, ["use_exposure_correction", True])
+    assert params.use_exposure_correction
+    assert not params.ppisp and not params.use_bilateral_grid
+    assert not params.ppisp_use_controller and not params.ppisp_freeze_from_sidecar
+    assert params.ppisp_controller_lr == 0.003
+    assert params.ppisp_sidecar_path == "saved.ppisp"
+    assert "advanced_params" not in panel._collapsed
+
+
+def test_rejected_enable_does_not_change_other_features(training_panel_module, monkeypatch):
+    panel, params = _configuration_panel(training_panel_module, monkeypatch)
+    params.use_exposure_correction = True
+    panel._pv_binding_by_prop = {
+        "ppisp": SimpleNamespace(set_value=lambda *_: False),
+        "use_exposure_correction": SimpleNamespace(set_value=lambda *_: pytest.fail("Rejected toggle changed another flag")),
+    }
+    panel._on_pv_value_change(None, None, ["ppisp", True])
+    assert params.use_exposure_correction
+
+
+@pytest.mark.parametrize("query,section,field", [
+    ("3DGS", "basic_params", "backend"),
+    ("strategy", "basic_params", "strategy"),
+    ("SH_degree", "basic_params", "sh_degree"),
+    ("bg_image", "background", "background_fields"),
+    ("ppisp", "ppisp", "appearance"),
+    ("resize_factor", "dataset", "dataset_fields"),
+    ("save_steps", "save_steps", "save_steps"),
+])
+def test_search_keeps_bespoke_controls_reachable(training_panel_module, query, section, field):
+    panel = training_panel_module.TrainingPanel()
+    panel._pv_search_query = query
+    assert panel._bespoke_matches(field)
+    assert panel._bespoke_section_visible(section)
+    assert training_panel_module.property_view.section_is_visible(
+        (), section, panel._bespoke_section_visible)
+    panel._pv_search_query = "no-such-setting"
+    assert not panel._bespoke_matches(field)
+    assert not panel._bespoke_section_visible(section)
+
+
+def test_dataset_default_open_preserves_saved_chrome(training_panel_module):
+    panel = training_panel_module.TrainingPanel()
+    assert "dataset" not in panel._collapsed
+    assert "advanced_params" in panel._collapsed
+    panel.apply_chrome({"collapsed": ["dataset", "advanced_params"], "steps_scaling_lock": False})
+    assert "dataset" in panel._collapsed
+    saved = panel.capture_chrome()
+    restored = training_panel_module.TrainingPanel()
+    restored.apply_chrome(saved)
+    assert restored.capture_chrome() == saved
+    panel.apply_chrome({})
+    assert "dataset" not in panel._collapsed
+    assert "advanced_params" in panel._collapsed
+
+
+def test_dataset_is_a_main_section_before_advanced(training_panel_module):
+    """Dataset controls must remain available when the advanced section is collapsed."""
+    from xml.etree import ElementTree as ET
+
+    root = Path(__file__).resolve().parents[2]
+    document = ET.parse(root / "src/visualizer/gui/rmlui/resources/training.rml")
+    parents = {child: parent for parent in document.iter() for child in parent}
+    dataset = document.find(".//*[@data-if='pv_section_dataset_visible']")
+    advanced = document.find(".//*[@id='hdr-advanced-params']")
+    assert parents[dataset] is parents[advanced]
+    siblings = list(parents[advanced])
+    assert siblings.index(dataset) + 1 == siblings.index(advanced)
+    assert dataset.get("class") == "training-panel-block"
+    assert dataset.find(".//*[@id='hdr-dataset']").get("data-event-click") == "toggle_section('dataset')"
+    assert dataset.find(".//*[@id='sec-dataset']") is not None
+    assert "collapsed" not in dataset.find(".//*[@id='sec-dataset']").get("class").split()
+    assert dataset.find(".//*[@id='arrow-dataset']").text == "\u25bc"
+    assert dataset.find(".//*[@data-class-disabled-overlay='dataset_disabled']") is not None
+    assert dataset.find(".//select[@data-value='resize_factor_str']") is not None
+    assert dataset.find(".//input[@data-value='max_width_str']") is not None
+    for name in ("use_cpu_cache", "use_16bit_color"):
+        assert dataset.find(f".//input[@data-checked='{name}']") is not None
+    assert "dataset" not in training_panel_module.property_view.ADVANCED_SECTIONS
+
+
+
+@pytest.mark.parametrize("query", ["resize_factor", "max_width", "dataset path"])
+def test_dataset_search_does_not_open_advanced(training_panel_module, query):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    panel._pv_search_query = query
+    panel._collapsed = {"advanced_params", "dataset"}
+    assert panel._bespoke_section_visible("dataset")
+    assert not panel._bespoke_section_visible("advanced_params")
+    assert module.property_view.section_is_visible((), "dataset", panel._bespoke_section_visible)
+    assert not module.property_view.section_is_visible((), "advanced_params", panel._bespoke_section_visible)
+    assert panel._collapsed == {"advanced_params", "dataset"}
+
+
+def test_redesigned_rml_preserves_locks_and_groups_all_controls():
+    from xml.etree import ElementTree
+    root = Path(__file__).resolve().parents[2]
+    document = ElementTree.parse(root / "src/visualizer/gui/rmlui/resources/training.rml").getroot()
+    ids = [node.attrib["id"] for node in document.iter() if "id" in node.attrib]
+    assert len(ids) == len(set(ids))
+    by_id = {node.attrib["id"]: node for node in document.iter() if "id" in node.attrib}
+    assert by_id["training-backend"].attrib["data-value"] == "training_backend"
+    assert "appearance-mode" not in by_id
+    assert "advanced-feature-activations" not in by_id
+    assert any(node.attrib.get("data-event-click") == "toggle_step_scaling_lock"
+               for node in document.iter("button"))
+    assert any(node.attrib.get("data-class-disabled-overlay") == "step_scaling_params_locked"
+               for node in document.iter("div"))
+    for section, runs in {
+        "camera": ("basic_undistort", "basic_mip_filter"),
+        "appearance": ("basic_exposure_correction",),
+        "masking": ("basic_live_start", "mask_invert", "mask_threshold", "mask_alpha", "mask_penalties"),
+        "depth": ("basic_depth_weight",),
+        "normal": ("basic_normal_weights",),
+        "background": ("basic_background", "bg_mode"),
+        "ppisp": ("appearance_tuning",),
+        "bilateral": ("bilateral",),
+        "random-init": ("init_random",),
+    }.items():
+        mounted = {node.attrib.get("data-for") for node in by_id[f"sec-{section}"].iter()}
+        assert all(f"row : pv_{run}_rows" in mounted for run in runs)
+
+    for run, condition in {
+        "basic_mip_filter": "gut_mip_filter_disabled",
+        "basic_depth_toggle": "gut_depth_supervision_disabled",
+        "basic_normal_toggle": "gut_normal_supervision_disabled",
+    }.items():
+        rows = [node for node in document.iter("div")
+                if node.attrib.get("data-for") == f"row : pv_{run}_rows"]
+        assert len(rows) == 1
+        assert rows[0].attrib.get("data-class-disabled-overlay") == condition
+
+
+@pytest.mark.parametrize("state,iteration,editable", [
+    ("ready", 0, True), ("ready", 20, False), ("running", 20, False),
+    ("paused", 20, False), ("starting", 0, False), ("completed", 20, False),
+    ("error", 0, False), ("stopping", 20, False),
+])
+def test_new_selectors_follow_training_edit_lock(training_panel_module, monkeypatch, state, iteration, editable):
+    monkeypatch.setattr(training_panel_module, "RuntimeState", SimpleNamespace(
+        trainer_state=SimpleNamespace(value=state),
+        iteration=SimpleNamespace(value=iteration),
+    ))
+    assert training_panel_module.TrainingPanel._can_edit_configuration() is editable
+
+
+def test_bespoke_search_models_are_bound(training_panel_module):
+    panel = training_panel_module.TrainingPanel()
+    model = _ModelStub()
+    panel._bind_property_search(model)
+    panel._pv_search_query = "3dgut"
+    assert model.bindings["pv_show_backend"][0]()
+    assert not model.bindings["pv_show_sh_degree"][0]()
 
 
 def _make_signal(value):
@@ -491,6 +1097,25 @@ class _ModelStub:
 
     def bind_string_list(self, name):
         self.bindings[name] = (None, None)
+
+
+def test_loaded_feature_flags_drive_detail_visibility(training_panel_module):
+    params = SimpleNamespace(has_params=lambda: True, use_depth_loss=True,
+                             use_normal_loss=True, ppisp=True, use_bilateral_grid=True,
+                             use_exposure_correction=False, enable_sparsity=True,
+                             enable_eval=True, random=True)
+    model = _ModelStub()
+    panel = training_panel_module.TrainingPanel()
+    panel._bind_visibility(model, lambda: params, lambda: None)
+    for condition, prop in (("dep_depth_loss", "use_depth_loss"),
+                            ("dep_normal_loss", "use_normal_loss"),
+                            ("dep_ppisp", "ppisp"), ("dep_bilateral", "use_bilateral_grid"),
+                            ("dep_sparsity", "enable_sparsity"), ("dep_eval", "enable_eval"),
+                            ("dep_random", "random")):
+        getter = model.bindings[condition][0]
+        assert getter() is True
+        setattr(params, prop, False)
+        assert getter() is False
 
 
 def test_backend_disabled_conditions_prevent_new_conflicts_but_allow_correction(
@@ -1560,6 +2185,52 @@ def test_overwrite_and_start_still_starts_without_save_as(
     assert starts == [True]
 
 
+def test_finished_run_overwrite_resets_before_the_new_run_starts(
+    training_panel_module, monkeypatch
+):
+    """A completed run is a new training, so Overwrite must leave the finished trainer first."""
+    panel, dialogs, _starts, _save_as_calls, _scheduled, _state = _overwrite_dialog_harness(
+        training_panel_module, monkeypatch
+    )
+    runtime = training_panel_module.RuntimeState
+    order = []
+
+    def reset_training():
+        order.append(("reset", runtime.trainer_state.value))
+        runtime.trainer_state.value = "ready"
+        runtime.iteration.value = 0
+
+    def start_training():
+        order.append(("start", runtime.trainer_state.value))
+
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "training_start_overwrite_conflict",
+        lambda: 40,
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf, "reset_training", reset_training, raising=False
+    )
+    monkeypatch.setattr(training_panel_module.lf, "start_training", start_training)
+
+    try:
+        runtime.trainer_state.value = "completed"
+        runtime.iteration.value = 40
+        panel._action_start()
+
+        assert len(dialogs) == 1
+        title, _message, buttons, callback = dialogs[0]
+        assert title == "training.overwrite.title"
+        assert buttons[0] == OVERWRITE_BTN
+        assert order == []
+
+        callback(OVERWRITE_BTN)
+        assert order == [("reset", "completed"), ("start", "ready")]
+    finally:
+        runtime.iteration._fallback = 0
+        runtime.training_state._fallback = "idle"
+
+
 def test_action_start_opens_overwrite_dialog_instead_of_starting(
     training_panel_module, monkeypatch
 ):
@@ -1830,6 +2501,44 @@ def test_paused_stored_session_shows_paused_mode_and_resume(
         runtime.total_iterations._fallback = 0
 
 
+def test_stopped_stored_session_keeps_stopped_mode_and_edit_controls(
+    training_panel_module, monkeypatch
+):
+    _stub_stored_session(
+        training_panel_module,
+        monkeypatch,
+        iteration=7000,
+        max_iterations=30000,
+        completed=False,
+    )
+    panel = training_panel_module.TrainingPanel()
+    model = _ModelStub()
+    params = _ParamsStub()
+    dataset = _DatasetStub()
+    runtime = training_panel_module.RuntimeState
+
+    panel._bind_visibility(model, lambda: params, lambda: dataset)
+    panel._bind_status(model, lambda: params)
+    try:
+        runtime.has_trainer.value = False
+        runtime.trainer_state.value = "stopped"
+        runtime.iteration.value = 7000
+        runtime.max_iterations.value = 30000
+
+        assert model.bindings["show_ctrl_paused"][0]() is False
+        assert model.bindings["show_ctrl_stopped"][0]() is True
+        assert model.bindings["show_ctrl_completed"][0]() is False
+        assert model.bindings["show_ctrl_ready"][0]() is False
+        assert "status.stopped" in model.bindings["status_mode"][0]()
+        assert "7,000/30,000" in model.bindings["progress_text"][0]()
+        assert "session_at_iteration" not in model.bindings["status_mode"][0]()
+    finally:
+        runtime.has_trainer._fallback = False
+        runtime.training_state._fallback = "idle"
+        runtime.iteration._fallback = 0
+        runtime.total_iterations._fallback = 0
+
+
 def test_resume_on_stored_session_restores_before_resuming(
     training_panel_module, monkeypatch
 ):
@@ -1990,3 +2699,60 @@ def test_show_save_pc_dialog_message_depends_on_project_binding(
         "training.save_pc.btn_start_without",
         "training.conflict.btn_cancel",
     ]
+
+
+def test_enabled_features_have_independent_parameter_sections():
+    """Collapsing one feature must not hide another feature or expose incompatible PPISP controls."""
+    from xml.etree import ElementTree as ET
+
+    root = Path(__file__).resolve().parents[2]
+    document = ET.parse(root / "src/visualizer/gui/rmlui/resources/training.rml")
+    advanced = document.find(".//*[@id='sec-advanced-params']")
+    sections = {name: advanced.find(f".//*[@id='sec-{name}']") for name in (
+        "depth", "normal", "ppisp", "bilateral", "exposure", "evaluation", "random-init", "sparsity")}
+    for name, section in sections.items():
+        assert section is not None, name
+        for other in sections:
+            if name != other:
+                assert section.find(f".//*[@id='sec-{other}']") is None
+    assert sections["depth"].find(".//*[@data-for='row : pv_basic_normal_weights_rows']") is None
+    assert sections["normal"].find(".//*[@data-for='row : pv_basic_depth_weight_rows']") is None
+    assert sections["evaluation"].find(".//*[@data-value='test_every_str']") is not None
+    eval_all = sections["evaluation"].find(".//*[@data-for='row : pv_dataset_eval_train_rows']")
+    assert eval_all is not None
+    holdout = sections["evaluation"].find(".//*[@data-tooltip='training.tooltip.test_every']")
+    assert "dep_eval_holdout" in holdout.get("data-if")
+    assert sections["random-init"].find(".//*[@data-for='row : pv_init_random_rows']") is not None
+    basic_params = document.find(
+        ".//div[@class='training-panel-block'][@data-if='pv_section_basic_params_visible']"
+    )
+    assert basic_params is not None
+    assert basic_params.find(".//*[@data-value='sh_degree_str']") is not None
+    assert advanced.find(".//*[@data-value='sh_degree_str']") is None
+    for name in ("ppisp", "bilateral"):
+        parent = next(node for node in advanced.iter() if sections[name] in list(node))
+        assert "!dep_exposure_correction" in parent.get("data-if")
+    for run in ("ppisp_exif", "appearance_tuning", "bilateral", "exposure_grid_start"):
+        assert sections["exposure"].find(f".//*[@data-for='row : pv_{run}_rows']") is not None
+
+
+
+def test_error_details_do_not_participate_in_toolbar_layout():
+    """Long training errors must remain outside the action row so recovery buttons stay usable."""
+    from xml.etree import ElementTree as ET
+
+    root = Path(__file__).resolve().parents[2]
+    document = ET.parse(root / "src/visualizer/gui/rmlui/resources/training.rml")
+    controls = document.find(".//*[@id='controls']")
+    toolbar = controls.find("div[@class='training-toolbar']")
+    assert all(node.text != "{{error_message}}" for node in toolbar.iter())
+    feedback = controls.find("div[@id='training-error-feedback']")
+    assert feedback is not None
+    assert feedback.get("data-if") == "show_ctrl_error"
+    assert feedback.get("class") == "training-start-feedback"
+    assert feedback.find("span").text == "{{error_message}}"
+    assert list(controls).index(feedback) > list(controls).index(toolbar)
+    error_actions = toolbar.find("div[@data-if='show_ctrl_error']")
+    assert len(error_actions.findall(".//button")) == 2
+    assert toolbar.find(".//*[@class='training-status-badge is-error']") is None
+    assert controls.find(".//*[@class='training-status-badge is-error']") is not None

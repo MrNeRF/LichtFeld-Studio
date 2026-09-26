@@ -7,10 +7,12 @@
 #include "core/cuda_error.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
+#include "core/tensor/backend/cuda/runtime/gpu_slab_allocator.hpp"
 #include "core/tensor/internal/lazy_config.hpp"
 #include "core/tensor/internal/lazy_executor.hpp"
 #include "core/tensor/internal/lazy_ir.hpp"
-#include "core/tensor/internal/tensor_ops.hpp"
+#include "cuda_backend_test.hpp"
 #include "io/formats/colmap.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/gsplat/Ops.h"
@@ -32,9 +34,10 @@
 
 namespace {
 
-    class DeferredD3PinTest : public ::testing::Test {
+    class DeferredD3PinTest : public lfs::test::CudaBackendTest {
     protected:
         void SetUp() override {
+            LFS_CUDA_BACKEND_OR_RETURN();
             using namespace lfs::core;
 
             reset_cuda_diagnostics_for_testing();
@@ -44,30 +47,35 @@ namespace {
             internal::lazy_executor_set_size_threshold_override_for_testing(std::nullopt);
 
             constexpr size_t count = 64;
-            means_ = Tensor::randn({count, 3}, Device::CUDA, DataType::Float32);
-            sh0_ = Tensor::randn({count, 1, 3}, Device::CUDA, DataType::Float32).mul(0.3f);
-            shN_ = Tensor::zeros({count, 0, 3}, Device::CUDA, DataType::Float32);
-            scaling_ = Tensor::randn({count, 3}, Device::CUDA, DataType::Float32).mul(0.2f).sub(3.0f);
-            rotation_ = Tensor::randn({count, 4}, Device::CUDA, DataType::Float32);
+            means_ = Tensor::randn({count, 3}, Device::GPU, DataType::Float32);
+            sh0_ = Tensor::randn({count, 1, 3}, Device::GPU, DataType::Float32).mul(0.3f);
+            shN_ = Tensor::zeros({count, 0, 3}, Device::GPU, DataType::Float32);
+            scaling_ = Tensor::randn({count, 3}, Device::GPU, DataType::Float32).mul(0.2f).sub(3.0f);
+            rotation_ = Tensor::randn({count, 4}, Device::GPU, DataType::Float32);
             rotation_ = rotation_.div(rotation_.pow(2.0f).sum(-1, true).sqrt());
-            opacity_ = Tensor::randn({count}, Device::CUDA, DataType::Float32);
+            opacity_ = Tensor::randn({count}, Device::GPU, DataType::Float32);
             splat_ = std::make_unique<SplatData>(
                 0, means_, sh0_, shN_, scaling_, rotation_, opacity_, 1.0f);
 
-            auto rotation = Tensor::eye(3, Device::CUDA);
+            auto rotation = Tensor::eye(3, Device::GPU);
             std::vector<float> translation_values{0.0f, 0.0f, 4.0f};
             auto translation = Tensor::from_blob(
                                    translation_values.data(), {3}, Device::CPU, DataType::Float32)
-                                   .cuda();
+                                   .gpu();
             camera_ = std::make_unique<Camera>(
                 rotation, translation,
                 100.0f, 100.0f, 32.0f, 32.0f,
                 Tensor{}, Tensor{}, lfs::core::CameraModelType::PINHOLE,
                 "deferred-d3", "", std::filesystem::path{}, 64, 64, 0);
-            background_ = Tensor::zeros({3}, Device::CUDA, DataType::Float32);
+            background_ = Tensor::zeros({3}, Device::GPU, DataType::Float32);
         }
 
         void TearDown() override {
+            if (IsSkipped()) {
+                return;
+            }
+            lfs::core::tensor_ops::set_nan_check_host_allocation_failure_for_testing(false);
+            (void)lfs::core::tensor_ops::release_nan_check_thread_buffers();
             lfs::core::reset_cuda_diagnostics_for_testing();
             lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
             lfs::core::internal::clear_lazy_ir_for_testing();
@@ -133,12 +141,12 @@ namespace {
     TEST_F(DeferredD3PinTest, MultiOperandLaunchWithDeferredInputs) {
         using namespace lfs::core;
 
-        for (const Device device : {Device::CPU, Device::CUDA}) {
+        for (const Device device : {Device::CPU, Device::GPU}) {
             SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
             auto base = Tensor::from_vector(
                 std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f}, {4}, Device::CPU);
-            if (device == Device::CUDA) {
-                base = base.cuda();
+            if (device == Device::GPU) {
+                base = base.gpu();
             }
 
             auto input = base.add(10.0f);
@@ -205,7 +213,7 @@ namespace {
                            return static_cast<float>(value) / 255.0f;
                        });
 
-        auto colors = colors_u8.to(DataType::Float32).div(255.0f).cuda();
+        auto colors = colors_u8.to(DataType::Float32).div(255.0f).gpu();
         auto [sorted_positions, sorted_indices] = positions.flatten().sort();
         (void)sorted_indices;
         ASSERT_GT(sorted_positions.numel(), 0u);
@@ -243,7 +251,7 @@ namespace {
         EXPECT_FALSE(cuda_is_unavailable());
 
         {
-            auto allocation = Tensor::zeros({16}, Device::CUDA, DataType::Float32);
+            auto allocation = Tensor::zeros({16}, Device::GPU, DataType::Float32);
             EXPECT_TRUE(allocation.is_valid());
             EXPECT_NE(allocation.data_ptr(), nullptr);
         }
@@ -266,6 +274,7 @@ namespace {
         std::exception_ptr worker_error;
 
         std::thread worker([&] {
+            const lfs::core::GpuBackendScope backend_scope(lfs::core::GpuBackend::CUDA);
             try {
                 {
                     auto output = lfs::training::gsplat_rasterize(
@@ -305,6 +314,26 @@ namespace {
         EXPECT_TRUE(gsplat_released);
         EXPECT_TRUE(intersect_released);
         EXPECT_TRUE(nan_check_released);
+    }
+
+    TEST_F(DeferredD3PinTest, NaNCheckPinnedAllocationFailureRollsBackDeviceBuffer) {
+        using lfs::core::GPUSlabAllocator;
+        using namespace lfs::core::tensor_ops;
+
+        ASSERT_TRUE(release_nan_check_thread_buffers());
+        const auto& stats = GPUSlabAllocator::instance().stats();
+        const auto allocations_before = stats.alloc_count.load(std::memory_order_relaxed);
+        const auto frees_before = stats.free_count.load(std::memory_order_relaxed);
+
+        set_nan_check_host_allocation_failure_for_testing(true);
+        EXPECT_THROW(
+            (void)has_nan_gpu(means_.ptr<float>(), means_.numel(), means_.stream()),
+            std::runtime_error);
+        set_nan_check_host_allocation_failure_for_testing(false);
+
+        EXPECT_EQ(stats.alloc_count.load(std::memory_order_relaxed), allocations_before + 1);
+        EXPECT_EQ(stats.free_count.load(std::memory_order_relaxed), frees_before + 1);
+        EXPECT_FALSE(has_nan_gpu(means_.ptr<float>(), means_.numel(), means_.stream()));
     }
 
 } // namespace

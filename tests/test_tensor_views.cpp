@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include <array>
 #include <gtest/gtest.h>
 #include <numeric>
@@ -13,71 +14,6 @@ using namespace lfs::core;
 // ============= Helper Functions =============
 
 namespace {
-
-    torch::Tensor to_torch(const Tensor& t) {
-        auto options = torch::TensorOptions()
-                           .dtype([&]() {
-                               switch (t.dtype()) {
-                               case DataType::Float32: return torch::kFloat32;
-                               case DataType::Float16: return torch::kFloat16;
-                               case DataType::Int32: return torch::kInt32;
-                               case DataType::Int64: return torch::kInt64;
-                               case DataType::UInt8: return torch::kUInt8;
-                               case DataType::Bool: return torch::kBool;
-                               default: return torch::kFloat32;
-                               }
-                           }())
-                           .device(t.device() == Device::CPU ? torch::kCPU : torch::kCUDA);
-
-        std::vector<int64_t> shape;
-        for (size_t i = 0; i < t.ndim(); ++i) {
-            shape.push_back(static_cast<int64_t>(t.size(i)));
-        }
-
-        torch::Tensor result = torch::empty(shape, options);
-
-        if (t.device() == Device::CPU) {
-            std::memcpy(result.data_ptr(), t.data_ptr(), t.bytes());
-        } else {
-            cudaMemcpy(result.data_ptr(), t.data_ptr(), t.bytes(), cudaMemcpyDeviceToDevice);
-        }
-
-        return result;
-    }
-
-    Tensor from_torch(const torch::Tensor& t, Device device = Device::CPU) {
-        auto t_cont = t.contiguous();
-
-        DataType dtype;
-        switch (t_cont.scalar_type()) {
-        case torch::kFloat32: dtype = DataType::Float32; break;
-        case torch::kFloat16: dtype = DataType::Float16; break;
-        case torch::kInt32: dtype = DataType::Int32; break;
-        case torch::kInt64: dtype = DataType::Int64; break;
-        case torch::kUInt8: dtype = DataType::UInt8; break;
-        case torch::kBool: dtype = DataType::Bool; break;
-        default: dtype = DataType::Float32; break;
-        }
-
-        std::vector<size_t> shape;
-        for (int64_t i = 0; i < t_cont.dim(); ++i) {
-            shape.push_back(static_cast<size_t>(t_cont.size(i)));
-        }
-
-        Tensor result = Tensor::empty(TensorShape(shape), device, dtype);
-
-        if (device == Device::CPU) {
-            std::memcpy(result.data_ptr(), t_cont.data_ptr(), result.bytes());
-        } else {
-            if (t_cont.is_cpu()) {
-                cudaMemcpy(result.data_ptr(), t_cont.data_ptr(), result.bytes(), cudaMemcpyHostToDevice);
-            } else {
-                cudaMemcpy(result.data_ptr(), t_cont.data_ptr(), result.bytes(), cudaMemcpyDeviceToDevice);
-            }
-        }
-
-        return result;
-    }
 
     void compare_tensors(const Tensor& custom, const torch::Tensor& reference,
                          float rtol = 1e-5f, float atol = 1e-7f, const std::string& msg = "") {
@@ -112,7 +48,7 @@ namespace {
     }
 
     // Create test tensor with sequential values for both implementations
-    std::pair<Tensor, torch::Tensor> create_test_tensors(const std::vector<int64_t>& shape, Device device = Device::CUDA) {
+    std::pair<Tensor, torch::Tensor> create_test_tensors(const std::vector<int64_t>& shape, Device device = Device::GPU) {
         size_t total = 1;
         for (auto dim : shape) {
             total *= dim;
@@ -129,7 +65,7 @@ namespace {
         }
 
         auto tensor_custom = Tensor::from_vector(data, TensorShape(shape_custom), device);
-        auto tensor_torch = torch::tensor(data, device == Device::CUDA ? torch::kCUDA : torch::kCPU)
+        auto tensor_torch = torch::tensor(data, device == Device::GPU ? torch::kCUDA : torch::kCPU)
                                 .reshape(shape);
 
         return {std::move(tensor_custom), tensor_torch};
@@ -137,9 +73,13 @@ namespace {
 
 } // anonymous namespace
 
-class TensorViewTest : public ::testing::Test {
+class TensorViewTest : public lfs::test::CudaDeviceTest {
 protected:
     void SetUp() override {
+        CudaDeviceTest::SetUp();
+        if (IsSkipped()) {
+            return;
+        }
         torch::manual_seed(42);
         Tensor::manual_seed(42);
     }
@@ -404,7 +344,7 @@ TEST_F(TensorViewTest, TransposeBasic) {
 }
 
 TEST_F(TensorViewTest, ViewMetadataAndMaterializationOwnership) {
-    const auto base = Tensor::arange(120.0f).to(Device::CUDA).reshape({4, 5, 6});
+    const auto base = Tensor::arange(120.0f).to(Device::GPU).reshape({4, 5, 6});
     const auto transposed = base.transpose(0, 1);
 
     EXPECT_EQ(base.strides(), (std::vector<size_t>{30, 6, 1}));
@@ -435,12 +375,12 @@ TEST_F(TensorViewTest, BroadcastPointwiseMaterializationDoesNotMutateViewSource)
     const auto make_channels = [](const std::array<float, 3>& channels) {
         return Tensor::from_vector(
             std::vector<float>(channels.begin(), channels.end()),
-            TensorShape({1, 3, 1, 1}), Device::CUDA);
+            TensorShape({1, 3, 1, 1}), Device::GPU);
     };
     const auto shift = make_channels({0.25f, -0.5f, 1.25f});
     const auto scale = make_channels({0.5f, 2.0f, 4.0f});
     const auto expected_source = values;
-    const auto base = Tensor::from_vector(values, TensorShape({3, height, width}), Device::CUDA);
+    const auto base = Tensor::from_vector(values, TensorShape({3, height, width}), Device::GPU);
 
     auto run_case = [&](const char* name, const Tensor& input, const Tensor& expected_input,
                         const Tensor& result) {
@@ -459,7 +399,7 @@ TEST_F(TensorViewTest, BroadcastPointwiseMaterializationDoesNotMutateViewSource)
 
     const auto view = base.unsqueeze(0);
     const auto direct_result = view.sub(shift).div(scale).contiguous();
-    run_case("unsqueeze view sub-div", base, Tensor::from_vector(expected_source, TensorShape({3, height, width}), Device::CUDA),
+    run_case("unsqueeze view sub-div", base, Tensor::from_vector(expected_source, TensorShape({3, height, width}), Device::GPU),
              direct_result.squeeze(0));
 
     auto materialized_view = view.sub(shift).div(scale).contiguous();
@@ -477,7 +417,7 @@ TEST_F(TensorViewTest, BroadcastPointwiseMaterializationDoesNotMutateViewSource)
     EXPECT_EQ(base.to_vector(), write_through_source.squeeze(0).to_vector());
 
     const auto batched = Tensor::from_vector(
-        values, TensorShape({1, 3, height, width}), Device::CUDA);
+        values, TensorShape({1, 3, height, width}), Device::GPU);
     const auto batched_before = batched.to_vector();
     const auto batched_result = batched.sub(shift).div(scale).contiguous();
     ASSERT_EQ(batched.to_vector(), batched_before);
@@ -618,7 +558,7 @@ TEST_F(TensorViewTest, ViewOnCPUTensor) {
 // ============= Edge Cases =============
 
 TEST_F(TensorViewTest, EmptyTensor) {
-    auto empty_custom = Tensor::empty({0}, Device::CUDA);
+    auto empty_custom = Tensor::empty({0}, Device::GPU);
     auto empty_torch = torch::empty({0}, torch::kCUDA);
 
     auto view_custom = empty_custom.view({0});

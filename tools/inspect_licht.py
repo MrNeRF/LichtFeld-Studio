@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Inspect a .licht file, or restore an older generation to a new file."""
+"""Inspect a .licht file, or restore an older generation to a new file.
+
+Normal inspection uses the native ``lichtfeld.io`` binding. Run it with the
+worktree's Python interpreter and ``PYTHONPATH=src/python:build/src/python``;
+for this repository that is ``build/vcpkg_installed/x64-linux/tools/python3/python3.12``.
+The restore mode remains the historical pure-Python implementation and needs
+the system interpreter's ``zstandard`` package. No GUI is initialized.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +21,6 @@ import sys
 import uuid
 from pathlib import Path
 
-import zstandard
 
 HEAD_SLOTS = (4096, 8192)
 HEAD_BYTES = 4096
@@ -133,6 +139,8 @@ def scan_commits(data: bytes):
 
 
 def decode_index(data: bytes, commit):
+    import zstandard
+
     stored = bytes(
         data[commit["index_offset"] : commit["index_offset"] + commit["index_stored_bytes"]]
     )
@@ -167,6 +175,8 @@ def decode_index(data: bytes, commit):
 
 
 def _iter_uncompressed_chunks(payload: bytes, stop_after: int):
+    import zstandard
+
     dctx = zstandard.ZstdDecompressor()
     produced = 0
 
@@ -719,26 +729,138 @@ def inspect_summary(path: Path, mm, superblock, selected, lineage) -> None:
 
 
 def inspect(path: Path, full: bool) -> None:
-    with path.open("rb") as handle, mmap.mmap(
-        handle.fileno(), 0, access=mmap.ACCESS_READ
-    ) as mm:
-        superblock = mm[:256]
-        heads = [
-            parse_head(mm[offset : offset + HEAD_BYTES], slot)
-            for slot, offset in enumerate(HEAD_SLOTS)
-        ]
-        valid_heads = [head for head in heads if head]
-        selected = (
-            max(valid_heads, key=lambda item: item["head_sequence"])
-            if valid_heads
-            else None
+    try:
+        import lichtfeld.io as native_io
+    except ImportError as error:
+        raise RuntimeError(
+            "native inspection is unavailable: import lichtfeld.io failed. "
+            "Use build/vcpkg_installed/x64-linux/tools/python3/python3.12 "
+            "with PYTHONPATH=src/python:build/src/python. "
+            f"{error}"
+        ) from error
+
+    card = native_io.inspect_project_card(path)
+    state = card.open_state.name
+    print(f"{path.name}: {state} (validation scope: {card.validation_scope})")
+    if card.diagnostic:
+        print(f"Diagnostic: {card.diagnostic}")
+    print_table(
+        ["File", "Size", "Role", "Generation", "Project", "Min reader"],
+        [[
+            path.name,
+            format_bytes(card.physical_file_size),
+            card.role.name.lower().replace("_", " "),
+            card.generation,
+            card.project_uuid,
+            f"{card.min_reader_version.major}.{card.min_reader_version.minor}",
+        ]],
+        right={3},
+    )
+    if state != "OPEN":
+        return
+
+    details = native_io.inspect_project_details(path)
+    print()
+    print("Current snapshot")
+    candidates = [checkpoint for checkpoint in details.retained_checkpoints if checkpoint.retained]
+    bound = [checkpoint for checkpoint in candidates if checkpoint.binds_scene_graph]
+    checkpoint = (bound[0] if bound else max(candidates, key=lambda item: item.iteration, default=None))
+    current_rows = [
+        ["Generation", card.generation],
+        ["Kind", card.commit_kind.name.title()],
+        ["Saved", format_time(card.saved_at_unix_ns)],
+        ["Checkpoint", checkpoint.iteration if checkpoint else "-"],
+        ["Gaussians", format_count(checkpoint.gaussians) if checkpoint else "-"],
+        ["SH degree", checkpoint.sh_degree if checkpoint else "-"],
+        ["Min reader", f"{card.min_reader_version.major}.{card.min_reader_version.minor}"],
+    ]
+    print_table(["Field", "Value"], current_rows)
+    print()
+    print("Storage")
+    print_table(
+        ["Physical", "Live estimate", "Reclaimable", "Dead ratio"],
+        [[
+            format_bytes(details.storage.physical_bytes),
+            format_bytes(details.storage.estimated_live_bytes),
+            format_bytes(details.storage.dead_bytes),
+            f"{details.storage.dead_ratio * 100:.1f}%",
+        ]],
+        right={0, 1, 2, 3},
+    )
+    print()
+    print("Generations")
+    print_table(
+        ["Gen", "Kind", "Saved", "Added", "Checkpoint", "Status"],
+        [[
+            save.generation,
+            save.kind.name.title(),
+            format_time(save.saved_at_unix_ns),
+            format_bytes(save.bytes_added),
+            save.checkpoint_iteration if save.holds_checkpoint else "-",
+            "current" if save.generation == card.generation else "superseded",
+        ] for save in details.save_history],
+        right={0, 3, 4},
+    )
+    print()
+    print("Retained checkpoints")
+    retained_rows = [[
+        checkpoint.source_generation,
+        checkpoint.iteration if checkpoint.header_reachable else "?",
+        format_count(checkpoint.gaussians) if checkpoint.header_reachable else "?",
+        checkpoint.sh_degree if checkpoint.header_reachable else "?",
+        "bound" if checkpoint.binds_scene_graph else "retained",
+    ] for checkpoint in details.retained_checkpoints if checkpoint.retained]
+    if retained_rows:
+        print_table(["Source gen", "Iteration", "Gaussians", "SH", "Binding"], retained_rows)
+    else:
+        print("none")
+    print()
+    print("Embedded dataset")
+    parameters = details.parameters
+    if parameters.embedded_dataset_present:
+        print(
+            f"{parameters.embedded_images:,} images, "
+            f"{parameters.embedded_normals:,} normals, "
+            f"{parameters.embedded_sparse:,} sparse files, "
+            f"{'complete' if parameters.embedded_dataset_complete else 'incomplete'}"
         )
-        commits = scan_commits(mm)
-        lineage = walk_lineage(mm, selected)
-        if full:
-            inspect_full(path, mm, superblock, heads, selected, commits, lineage)
-        else:
-            inspect_summary(path, mm, superblock, selected, lineage)
+    else:
+        print("not embedded")
+    if full:
+        print()
+        print("Chapters")
+        print_table(
+            ["Fourcc", "Row", "Compression", "Stored", "Uncompressed", "Source gen"],
+            [[
+                chapter.fourcc,
+                chapter.row_kind.name,
+                chapter.compression.name,
+                format_bytes(chapter.stored_bytes),
+                format_bytes(chapter.uncompressed_bytes),
+                chapter.source_generation,
+            ] for chapter in details.chapters],
+            right={3, 4, 5},
+        )
+        print()
+        print("PROJ manifest", details.manifest)
+        print("License", details.license.identifier if details.license else "-")
+        print("Scene graph", dict(details.scene_graph.node_counts_by_type))
+        print("Strategy", details.parameters.active_strategy or "-")
+        print("References", [
+            {
+                "key": reference.key,
+                "kind": reference.kind,
+                "path": str(reference.path),
+                "reachable": reference.reachable,
+            }
+            for reference in details.references
+        ])
+        print("Metrics", {
+            "loss_samples": details.metrics.loss_samples,
+            "psnr_samples": details.metrics.psnr_samples,
+        })
+        print("Autosave sidecar", "present" if details.autosave_sidecar_present else "absent")
+        print("Full-read chapters", details.chapters_requiring_full_read)
 
 
 def generation_iteration(data: bytes, commit) -> int | None:
@@ -859,6 +981,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Dump raw heads, index rows, UUIDs, and chapter payloads",
     )
     parser.add_argument(
+        "--restore",
+        action="store_true",
+        help="Use the pure-Python restore path (requires --output and a target)",
+    )
+    parser.add_argument(
         "--output",
         "-o",
         type=Path,
@@ -878,10 +1005,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    restoring = args.output is not None or args.generation is not None or args.iteration is not None
+    restoring = (
+        args.restore
+        or args.output is not None
+        or args.generation is not None
+        or args.iteration is not None
+    )
     if restoring:
         if args.output is None:
-            parser.error("--generation/--iteration requires --output")
+            parser.error("--restore/--generation/--iteration requires --output")
         if args.generation is None and args.iteration is None:
             parser.error("--output requires --generation or --iteration")
         if args.full:

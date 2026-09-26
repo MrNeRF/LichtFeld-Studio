@@ -12,6 +12,7 @@ from pathlib import Path
 import lichtfeld as lf
 
 from .rml_keys import KI_ESCAPE
+from .asset_index import display_name
 from .training_confirm import _project_has_path
 from .types import Panel
 
@@ -36,19 +37,18 @@ def elide_middle(path: str, max_len: int = _PATH_DISPLAY_MAX) -> str:
 
 
 def display_name_for_path(path: str) -> str:
-    stem = Path(path).stem
-    return stem or Path(path).name or path
+    return display_name({"path": str(path), "name": "", "name_origin": "stem"}) or str(path)
 
 
 def format_mtime(path: str) -> str:
     try:
         mtime = os.path.getmtime(path)
     except OSError:
-        return "—"
+        return "?"
     try:
         return time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime))
     except (OverflowError, ValueError, OSError):
-        return "—"
+        return "?"
 
 
 def recovery_disposition(path: str) -> str:
@@ -285,7 +285,7 @@ class StartupRecentPanel(Panel):
                 if cached is None:
                     cached = {
                         "cache_key": cache_key,
-                        "last_opened": format_mtime(path) if mtime_ns else "—",
+                        "last_opened": format_mtime(path) if mtime_ns else "?",
                         "disposition": recovery_disposition(path) if mtime_ns else "none",
                     }
                 result = (path, cached)

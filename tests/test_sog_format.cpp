@@ -25,11 +25,15 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_export.hpp"
+#include "core/uuid.hpp"
 #include "io/cuda/kmeans.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/ply.hpp"
 #include "io/formats/sogs.hpp"
 #include "io/loader.hpp"
+#include "io/project_chapters.hpp"
+#include "io/project_document.hpp"
 
 #include <algorithm>
 #include <random>
@@ -393,6 +397,77 @@ TEST_F(SogFormatTest, LoadsValidatedMinimalDirectory) {
     EXPECT_EQ(result->size(), 1);
 }
 
+TEST_F(SogFormatTest, RootLicenseTravelsThroughNativeLoader) {
+    ScopedSogDirectory input;
+    ASSERT_TRUE(write_json(input.path() / "meta.json", minimal_sog_metadata(1)));
+    ASSERT_TRUE(write_base_textures(input.path(), 4, 4));
+    const std::string license =
+        "Title: Example scene.\n"
+        "Author: Example Author (https://example.invalid/user/example)\n"
+        "Source: https://example.invalid/scene/0001\n"
+        "License: CC Attribution (Creative Commons Attribution)\n"
+        "License URL: http://creativecommons.org/licenses/by/4.0/\n"
+        "Requirements: Author must be credited. Commercial use is allowed.";
+    const std::string oversized(64 * 1024 + 1, 'x');
+    std::ofstream(input.path() / "LICENSE.md", std::ios::binary) << oversized;
+    std::ofstream(input.path() / "license.txt", std::ios::binary) << license;
+
+    const auto archive_path = input.path() / "example.sog";
+    auto archive = lfs::io::make_sog_archive(archive_path);
+    ASSERT_TRUE(archive->open());
+    ASSERT_TRUE(archive->add_file("LICENSE.md", oversized.data(), oversized.size()));
+    ASSERT_TRUE(archive->add_file("license.txt", license.data(), license.size()));
+    for (const auto* name : {"meta.json", "means_l.webp", "means_u.webp", "scales.webp", "quats.webp", "sh0.webp"}) {
+        std::ifstream file(input.path() / name, std::ios::binary);
+        const std::string bytes(std::istreambuf_iterator<char>{file}, {});
+        ASSERT_TRUE(archive->add_file(name, bytes.data(), bytes.size()));
+    }
+    ASSERT_TRUE(archive->close());
+
+    for (const auto& path : {input.path(), archive_path}) {
+        std::optional<std::vector<uint8_t>> bytes;
+        auto loaded = lfs::io::load_sog(path, &bytes);
+        ASSERT_TRUE(loaded) << loaded.error().format();
+        ASSERT_TRUE(bytes);
+        EXPECT_EQ(std::string(bytes->begin(), bytes->end()), license);
+        EXPECT_EQ(lfs::io::project::map_sog_license(*bytes),
+                  (lfs::io::project::ProjectLicense{
+                      "CC-BY-4.0", license + "\nCredit: Example Author (https://example.invalid/user/example)"}));
+    }
+
+    auto loader = lfs::io::Loader::create();
+    auto result = loader->load(archive_path);
+    ASSERT_TRUE(result) << result.error().format();
+    ASSERT_TRUE(result->license_bytes);
+    EXPECT_EQ(std::string(result->license_bytes->begin(), result->license_bytes->end()), license);
+
+    auto document = lfs::io::project::ProjectDocument::create(lfs::core::generate_uuid_v4());
+    ASSERT_TRUE(document);
+    const auto project_path = input.path() / "import.licht";
+    ASSERT_TRUE(document->save(project_path));
+    EXPECT_FALSE(document->dirty());
+    ASSERT_TRUE(document->adopt_import_license(result->license_bytes));
+    const auto expected = lfs::io::project::ProjectLicense{
+        "CC-BY-4.0", license + "\nCredit: Example Author (https://example.invalid/user/example)"};
+    EXPECT_EQ(document->project().license().value(), expected);
+    EXPECT_TRUE(document->dirty());
+    ASSERT_TRUE(document->save(project_path));
+    auto reopened = lfs::io::project::ProjectDocument::open(project_path);
+    ASSERT_TRUE(reopened);
+    EXPECT_EQ(reopened->project().license().value(), expected);
+
+    const std::optional<std::vector<uint8_t>> second_bytes = std::vector<uint8_t>{'L', 'i', 'c', 'e', 'n', 's', 'e', ':', ' ', 'O', 't', 'h', 'e', 'r'};
+    ASSERT_TRUE(document->adopt_import_license(second_bytes));
+    EXPECT_EQ(document->project().license().value(), expected);
+
+    auto prelicensed = lfs::io::project::ProjectDocument::create(lfs::core::generate_uuid_v4());
+    ASSERT_TRUE(prelicensed);
+    const lfs::io::project::ProjectLicense authored{"LicenseRef-Existing", "Existing notice"};
+    ASSERT_TRUE(prelicensed->set_license(authored));
+    ASSERT_TRUE(prelicensed->adopt_import_license(result->license_bytes));
+    EXPECT_EQ(prelicensed->project().license().value(), authored);
+}
+
 TEST_F(SogFormatTest, RejectsShortMeansBoundsBeforeReadingTextures) {
     ScopedSogDirectory input;
     auto metadata = minimal_sog_metadata(1);
@@ -591,12 +666,12 @@ TEST_F(SogFormatTest, SyntheticExportRoundtripWithShN) {
 
     auto splat = lfs::core::SplatData(
         sh_degree,
-        lfs::core::Tensor::from_vector(means, {N, size_t{3}}, lfs::core::Device::CUDA),
-        lfs::core::Tensor::from_vector(sh0, {N, size_t{1}, size_t{3}}, lfs::core::Device::CUDA),
-        lfs::core::Tensor::from_vector(shN, {N, size_t{3}, size_t{3}}, lfs::core::Device::CUDA),
-        lfs::core::Tensor::from_vector(scales, {N, size_t{3}}, lfs::core::Device::CUDA),
-        lfs::core::Tensor::from_vector(rots, {N, size_t{4}}, lfs::core::Device::CUDA),
-        lfs::core::Tensor::from_vector(opac, {N, size_t{1}}, lfs::core::Device::CUDA),
+        lfs::core::Tensor::from_vector(means, {N, size_t{3}}, lfs::core::Device::GPU),
+        lfs::core::Tensor::from_vector(sh0, {N, size_t{1}, size_t{3}}, lfs::core::Device::GPU),
+        lfs::core::Tensor::from_vector(shN, {N, size_t{3}, size_t{3}}, lfs::core::Device::GPU),
+        lfs::core::Tensor::from_vector(scales, {N, size_t{3}}, lfs::core::Device::GPU),
+        lfs::core::Tensor::from_vector(rots, {N, size_t{4}}, lfs::core::Device::GPU),
+        lfs::core::Tensor::from_vector(opac, {N, size_t{1}}, lfs::core::Device::GPU),
         1.0f);
 
     ScopedSogDirectory out_dir;
@@ -642,12 +717,12 @@ TEST_F(SogFormatTest, LoaderRoutesSogThroughSplatAllocator) {
     }
     auto source_splat = lfs::core::SplatData(
         0,
-        lfs::core::Tensor::from_vector(means, {N, size_t{3}}, lfs::core::Device::CUDA),
-        lfs::core::Tensor::from_vector(sh0, {N, size_t{1}, size_t{3}}, lfs::core::Device::CUDA),
-        lfs::core::Tensor::zeros({size_t{0}}, lfs::core::Device::CUDA),
-        lfs::core::Tensor::from_vector(scales, {N, size_t{3}}, lfs::core::Device::CUDA),
-        lfs::core::Tensor::from_vector(rots, {N, size_t{4}}, lfs::core::Device::CUDA),
-        lfs::core::Tensor::from_vector(opac, {N, size_t{1}}, lfs::core::Device::CUDA),
+        lfs::core::Tensor::from_vector(means, {N, size_t{3}}, lfs::core::Device::GPU),
+        lfs::core::Tensor::from_vector(sh0, {N, size_t{1}, size_t{3}}, lfs::core::Device::GPU),
+        lfs::core::Tensor::zeros({size_t{0}}, lfs::core::Device::GPU),
+        lfs::core::Tensor::from_vector(scales, {N, size_t{3}}, lfs::core::Device::GPU),
+        lfs::core::Tensor::from_vector(rots, {N, size_t{4}}, lfs::core::Device::GPU),
+        lfs::core::Tensor::from_vector(opac, {N, size_t{1}}, lfs::core::Device::GPU),
         1.0f);
 
     ScopedSogDirectory out_dir;
@@ -663,7 +738,7 @@ TEST_F(SogFormatTest, LoaderRoutesSogThroughSplatAllocator) {
                                          lfs::core::DataType dtype,
                                          std::string_view name) {
         allocated_names.emplace_back(name);
-        return lfs::core::Tensor::empty(std::move(shape), lfs::core::Device::CUDA, dtype);
+        return lfs::core::Tensor::empty(std::move(shape), lfs::core::Device::GPU, dtype);
     };
 
     auto loader = lfs::io::Loader::create();
@@ -751,7 +826,7 @@ TEST_F(SogFormatTest, StreamedSh3AssignmentMatchesReferenceTiles) {
     using namespace lfs::io;
     std::mt19937 rng(42);
     std::uniform_real_distribution<float> value(-1.0f, 1.0f);
-    for (const size_t n : {1, 127, 128, 129, 4097}) {
+    for (const size_t n : {1, 63, 64, 65, 127, 128, 129, 4097}) {
         for (const size_t k : {1, 31, 32, 33, 4097, 65536}) {
             SCOPED_TRACE(std::format("n={} k={}", n, k));
             auto points = Tensor::zeros({sh_swizzled_float_count(n, 15)}, Device::CPU);
@@ -827,5 +902,77 @@ TEST_F(SogFormatTest, StreamedSh3ScreeningMatchesReferenceNearTiesAndHalfLimits)
         assign_sh3_labels(points, centroids, norms, screened, true, true);
         const auto seeded = screened.cpu();
         EXPECT_TRUE(std::equal(expected.ptr<int>(), expected.ptr<int>() + n, seeded.ptr<int>()));
+    }
+}
+
+TEST_F(SogFormatTest, StreamedSh3NormRangesMatchCpuReference) {
+    using namespace lfs::core;
+    using namespace lfs::io;
+    constexpr size_t n = 257, k = 1025;
+    std::mt19937 rng(517);
+    std::uniform_real_distribution<float> random(-1.0f, 1.0f);
+    auto points = Tensor::zeros({sh_swizzled_float_count(n, 15)}, Device::CPU);
+    auto centroids = Tensor::empty({k, 45}, Device::CPU);
+    auto norms = Tensor::zeros({k}, Device::CPU);
+    for (size_t i = 0; i < k; ++i) {
+        const float scale = std::ldexp(1.0f, int(i % 21) - 10);
+        for (size_t d = 0; d < 45; ++d) {
+            const float v = i == 0 || i % 113 == 0 ? 0.0f : scale * random(rng);
+            centroids.ptr<float>()[i * 45 + d] = v;
+            norms.ptr<float>()[i] = std::fma(v, v, norms.ptr<float>()[i]);
+        }
+    }
+    std::vector<int> seeds(n), expected(n, int(k));
+    for (size_t i = 0; i < n; ++i) {
+        const size_t source = (i * 37) % k;
+        seeds[i] = int(source);
+        const float scale = std::ldexp(1.0f, int(source % 21) - 10);
+        for (size_t d = 0; d < 45; ++d)
+            points.ptr<float>()[sh_swizzled_index(i, d / 4, 15) * 4 + d % 4] =
+                i ? centroids.ptr<float>()[source * 45 + d] + 0.001f * scale * random(rng) : 0.0f;
+        float best = 1e30f;
+        for (size_t j = 0; j < k; ++j) {
+            float dot = 0;
+            for (size_t d = 0; d < 45; ++d)
+                dot = std::fma(points.ptr<float>()[sh_swizzled_index(i, d / 4, 15) * 4 + d % 4],
+                               centroids.ptr<float>()[j * 45 + d], dot);
+            const float score = std::fma(-2.0f, dot, norms.ptr<float>()[j]);
+            if (score < best) {
+                best = score;
+                expected[i] = int(j);
+            }
+        }
+    }
+    points = points.gpu();
+    centroids = centroids.gpu();
+    norms = norms.gpu();
+    for (const bool have_seed : {false, true}) {
+        auto labels = Tensor::from_vector(seeds, {n}, Device::GPU);
+        assign_sh3_labels(points, centroids, norms, labels, true, have_seed);
+        EXPECT_EQ(labels.to_vector_int(), expected) << "seeded=" << have_seed;
+    }
+}
+
+TEST_F(SogFormatTest, HierarchicalSh3KeepsSeparatedGroups) {
+    using namespace lfs::core;
+    constexpr size_t n = 8193, k = 4096;
+    auto points = Tensor::zeros({sh_swizzled_float_count(n, 15)}, Device::CPU);
+    const auto value = [](size_t row, size_t dim) {
+        return ((row % 16) & (size_t{1} << (dim % 4))) ? 0.125f * float(dim % 5 + 1)
+                                                       : -0.125f * float(dim % 5 + 1);
+    };
+    for (size_t row = 0; row < n; ++row)
+        for (size_t dim = 0; dim < 45; ++dim)
+            points.ptr<float>()[sh_swizzled_index(row, dim / 4, 15) * 4 + dim % 4] = value(row, dim);
+    auto [palette, labels] = kmeans_sh(points.gpu(), int(n), 15, int(k), 3, true);
+    const auto host = palette.cpu();
+    const auto ids = labels.to_vector_int();
+    ASSERT_EQ(ids.size(), n);
+    for (size_t row = 0; row < n; ++row) {
+        ASSERT_GE(ids[row], 0);
+        ASSERT_LT(ids[row], int(k));
+        for (size_t dim = 0; dim < 45; ++dim)
+            ASSERT_FLOAT_EQ(host.ptr<float>()[size_t(ids[row]) * 45 + dim], value(row, dim))
+                << "row=" << row << " dim=" << dim;
     }
 }

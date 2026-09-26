@@ -42,7 +42,7 @@ namespace lfs::core {
             case DataType::Float32:
                 return tensor.ptr<float>()[index];
             case DataType::Float16:
-                return __half2float(tensor.ptr<__half>()[index]);
+                return detail::tensor_half_to_float(tensor.ptr<detail::tensor_half_t>()[index]);
             case DataType::Int32:
                 return tensor.ptr<std::int32_t>()[index];
             case DataType::Int64:
@@ -61,8 +61,8 @@ namespace lfs::core {
                 tensor.ptr<float>()[index] = static_cast<float>(value);
                 return;
             case DataType::Float16:
-                tensor.ptr<__half>()[index] =
-                    __float2half(static_cast<float>(value));
+                tensor.ptr<detail::tensor_half_t>()[index] =
+                    detail::tensor_float_to_half(static_cast<float>(value));
                 return;
             case DataType::Int32:
                 tensor.ptr<std::int32_t>()[index] =

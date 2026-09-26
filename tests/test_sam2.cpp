@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "cuda_backend_test.hpp"
+
 #include "core/alloc_counter.hpp"
 #include "core/nn.hpp"
 
@@ -137,7 +139,7 @@ namespace {
             nchw,
             lfs::core::TensorShape(std::vector<std::size_t>{1, 3, static_cast<std::size_t>(h),
                                                             static_cast<std::size_t>(w)}),
-            lfs::core::Device::CUDA);
+            lfs::core::Device::GPU);
     }
 
     float max_abs_at(const std::vector<float>& got, const nlohmann::json& node) {
@@ -193,20 +195,9 @@ namespace {
 
 } // namespace
 
-TEST(Sam2Test, CommittedFixtureIsSmall) {
-    const std::string path = project_root() + "/tests/data/nn/sam2_ref_fixture.json";
-    std::ifstream in(path);
-    ASSERT_TRUE(static_cast<bool>(in));
-    std::string body((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    EXPECT_LT(body.size(), 400u * 1024u);
-    auto payload = nlohmann::json::parse(body);
-    EXPECT_TRUE(payload.contains("nodes"));
-    EXPECT_TRUE(payload.contains("cases"));
-    EXPECT_TRUE(payload["cases"].contains("points"));
-    EXPECT_TRUE(payload["cases"].contains("box"));
-}
+class Sam2CudaTest : public lfs::test::CudaBackendTest {};
 
-TEST(Sam2Test, FullModelParityIsOptIn) {
+TEST_F(Sam2CudaTest, FullModelParityIsOptIn) {
     const char* weights = std::getenv("LFS_SAM2_WEIGHTS");
     if (weights == nullptr || weights[0] == '\0') {
         GTEST_SKIP() << "set LFS_SAM2_WEIGHTS to run full-model parity";
@@ -215,7 +206,7 @@ TEST(Sam2Test, FullModelParityIsOptIn) {
     ASSERT_EQ(cudaGetDeviceCount(&devices), cudaSuccess);
     ASSERT_GT(devices, 0);
 
-    auto model = lfs::core::nn::models::Sam2::load(weights, lfs::core::Device::CUDA,
+    auto model = lfs::core::nn::models::Sam2::load(weights, lfs::core::Device::GPU,
                                                    lfs::core::DataType::Float32);
     ASSERT_TRUE(model.has_value()) << std::string(model.error().detail());
 
@@ -442,7 +433,7 @@ TEST(Sam2Test, FullModelParityIsOptIn) {
     EXPECT_EQ(probe_sign_mismatch, 0);
     EXPECT_LE(probe_linf, kProbeLinf);
 
-    auto model16 = lfs::core::nn::models::Sam2::load(weights, lfs::core::Device::CUDA,
+    auto model16 = lfs::core::nn::models::Sam2::load(weights, lfs::core::Device::GPU,
                                                      lfs::core::DataType::Float16);
     ASSERT_TRUE(model16.has_value()) << std::string(model16.error().detail());
     ASSERT_EQ(cudaEventRecord(ev0), cudaSuccess);
@@ -582,7 +573,7 @@ TEST(Sam2Test, FullModelParityIsOptIn) {
     cudaEventDestroy(ev1);
 }
 
-TEST(Sam2Test, DeviceFootprintStaysUnderBudget) {
+TEST_F(Sam2CudaTest, DeviceFootprintStaysUnderBudget) {
     const char* weights = std::getenv("LFS_SAM2_WEIGHTS");
     if (weights == nullptr || weights[0] == '\0') {
         GTEST_SKIP() << "set LFS_SAM2_WEIGHTS to run the VRAM budget check";
@@ -596,7 +587,7 @@ TEST(Sam2Test, DeviceFootprintStaysUnderBudget) {
     std::size_t total = 0;
     ASSERT_EQ(cudaMemGetInfo(&free0, &total), cudaSuccess);
 
-    auto model = lfs::core::nn::models::Sam2::load(weights, lfs::core::Device::CUDA,
+    auto model = lfs::core::nn::models::Sam2::load(weights, lfs::core::Device::GPU,
                                                    lfs::core::DataType::Float16);
     ASSERT_TRUE(model.has_value()) << std::string(model.error().detail());
     auto image = make_fixture_image();

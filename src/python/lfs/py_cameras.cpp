@@ -99,11 +99,11 @@ namespace lfs::python {
     int PyCamera::uid() const { return cam_->uid(); }
 
     PyTensor PyCamera::rotation() const {
-        return PyTensor(tensor_from_mat3_row_major(visualizer_pose_from_camera(*cam_).rotation).cuda(), true);
+        return PyTensor(tensor_from_mat3_row_major(visualizer_pose_from_camera(*cam_).rotation).gpu(), true);
     }
 
     PyTensor PyCamera::translation() const {
-        return PyTensor(tensor_from_vec3(visualizer_pose_from_camera(*cam_).translation).cuda(), true);
+        return PyTensor(tensor_from_vec3(visualizer_pose_from_camera(*cam_).translation).gpu(), true);
     }
 
     PyTensor PyCamera::K() const { return PyTensor(cam_->K(), true); }
@@ -112,7 +112,7 @@ namespace lfs::python {
         const auto pose = visualizer_pose_from_camera(*cam_);
         return PyTensor(tensor_from_mat4_row_major(
                             lfs::rendering::makeViewMatrix(pose.rotation, pose.translation))
-                            .cuda(),
+                            .gpu(),
                         true);
     }
 

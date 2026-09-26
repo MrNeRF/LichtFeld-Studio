@@ -3,8 +3,8 @@
 
 #include "components/ppisp.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "lfs/kernels/ppisp.cuh"
-#include "tensor_hardening_test_utils.hpp"
 
 #include <cmath>
 #include <cuda_runtime.h>
@@ -17,7 +17,7 @@ namespace {
     using lfs::core::Tensor;
     using lfs::training::PPISP;
 
-    class PPISPProjectionTest : public tensor_hardening::CudaTest {};
+    class PPISPProjectionTest : public lfs::test::CudaBackendTest {};
 
     std::vector<float> cpu_copy(const Tensor& tensor) {
         return tensor.cpu().contiguous().to_vector();
@@ -42,9 +42,9 @@ namespace {
             }
         }
         ppisp.exposure_params().copy_from(
-            Tensor::from_vector(exposure, lfs::core::TensorShape({3}), Device::CUDA));
+            Tensor::from_vector(exposure, lfs::core::TensorShape({3}), Device::GPU));
         ppisp.color_params().copy_from(
-            Tensor::from_vector(color, lfs::core::TensorShape({24}), Device::CUDA));
+            Tensor::from_vector(color, lfs::core::TensorShape({24}), Device::GPU));
 
         std::vector<float> exp_diffs = {exposure[1] - exposure[0], exposure[2] - exposure[1]};
         std::vector<float> color_diffs(2 * 8);
@@ -116,9 +116,9 @@ namespace {
             vig[i] = 0.15f * std::sin(0.37f * static_cast<float>(i + 1)) - 0.04f;
         }
         auto vig_gpu = Tensor::from_vector(
-            vig, lfs::core::TensorShape({vig.size()}), Device::CUDA);
-        auto grad_gpu = Tensor::zeros({vig.size()}, Device::CUDA);
-        auto loss_gpu = Tensor::zeros({1}, Device::CUDA);
+            vig, lfs::core::TensorShape({vig.size()}), Device::GPU);
+        auto grad_gpu = Tensor::zeros({vig.size()}, Device::GPU);
+        auto loss_gpu = Tensor::zeros({1}, Device::GPU);
 
         lfs::training::kernels::launch_ppisp_vignetting_reg(
             vig_gpu.ptr<float>(), grad_gpu.ptr<float>(), loss_gpu.ptr<float>(),

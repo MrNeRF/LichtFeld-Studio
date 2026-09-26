@@ -3,13 +3,12 @@
 
 #include "selection_service.hpp"
 #include "core/camera.hpp"
-#include "core/cuda/selection_ops.hpp"
-#include "core/cuda_error_typed.hpp"
 #include "core/logger.hpp"
+#include "core/selection_ops.hpp"
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
-#include "core/tensor/internal/cuda_event_pool.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor_backend.hpp"
+#include "core/training_manager.hpp"
 #include "gui/gui_manager.hpp"
 #include "internal/viewport.hpp"
 #include "operation/undo_entry.hpp"
@@ -18,9 +17,10 @@
 #include "rendering/model_renderability.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/selection_ops.hpp"
+#include "rendering/viewport_request_builder.hpp"
 #include "scene/scene_manager.hpp"
 #include "selection_group_mask.hpp"
-#include "training/training_manager.hpp"
+#include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
 #include <algorithm>
 #include <array>
@@ -28,7 +28,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <cuda_runtime.h>
 #include <exception>
 #include <expected>
 #include <functional>
@@ -111,7 +110,7 @@ namespace lfs::vis {
             return render_points;
         }
 
-        // CPU inverse/forward of filterSelectionByScreenWindowKernel's equirect
+        // CPU inverse/forward of core::filter_points's equirect
         // branch. Not a fifth KEEP-IN-SYNC copy: used by the GT path and by the
         // CPU fallback of projectGaussianScreenPositions.
         constexpr float kEquirectPi = 3.14159265358979323846f;
@@ -264,25 +263,50 @@ namespace lfs::vis {
             return seed;
         }
 
+        [[nodiscard]] std::optional<core::GpuBackend> gpuBackendOf(const core::Tensor& tensor) {
+            if (!tensor.is_valid() || tensor.device() != core::Device::GPU) {
+                return std::nullopt;
+            }
+            return core::gpu_backend_of(tensor);
+        }
+
+        [[nodiscard]] core::GpuBackend resolveGpuBackend(const core::Tensor* const affinity) {
+            if (affinity) {
+                if (const auto backend = gpuBackendOf(*affinity)) {
+                    return *backend;
+                }
+            }
+            return core::default_gpu_backend();
+        }
+
+        [[nodiscard]] bool bufferMatchesBackend(const core::Tensor& buffer, const core::GpuBackend backend) {
+            const auto got = gpuBackendOf(buffer);
+            return got.has_value() && *got == backend;
+        }
+
         [[nodiscard]] core::Tensor& uploadFloat2PointsToBuffer(
             const std::vector<glm::vec2>& points,
             std::vector<float>& host_buffer,
-            core::Tensor& device_buffer) {
+            core::Tensor& device_buffer,
+            const core::Tensor* const affinity = nullptr) {
             host_buffer.resize(points.size() * 2);
             for (size_t i = 0; i < points.size(); ++i) {
                 host_buffer[i * 2] = points[i].x;
                 host_buffer[i * 2 + 1] = points[i].y;
             }
 
+            const auto backend = resolveGpuBackend(affinity);
             const bool needs_realloc = !device_buffer.is_valid() ||
-                                       device_buffer.device() != core::Device::CUDA ||
+                                       device_buffer.device() != core::Device::GPU ||
                                        device_buffer.dtype() != core::DataType::Float32 ||
                                        device_buffer.shape().rank() != 2 ||
                                        device_buffer.size(0) != points.size() ||
-                                       device_buffer.size(1) != 2;
+                                       device_buffer.size(1) != 2 ||
+                                       !bufferMatchesBackend(device_buffer, backend);
             if (needs_realloc) {
+                core::GpuBackendScope scope(backend);
                 device_buffer = core::Tensor::empty({points.size(), size_t{2}},
-                                                    core::Device::CUDA,
+                                                    core::Device::GPU,
                                                     core::DataType::Float32);
             }
 
@@ -297,11 +321,13 @@ namespace lfs::vis {
         [[nodiscard]] std::optional<std::shared_lock<std::shared_mutex>> acquireLiveModelRenderLock(
             const SceneManager* const scene_manager) {
             std::optional<std::shared_lock<std::shared_mutex>> lock;
+#if LFS_BUILD_TRAINER
             if (const auto* tm = scene_manager ? scene_manager->getTrainerManager() : nullptr) {
                 if (const auto* trainer = tm->getTrainer()) {
                     lock.emplace(trainer->getRenderMutex());
                 }
             }
+#endif
             return lock;
         }
 
@@ -326,19 +352,22 @@ namespace lfs::vis {
 
         [[nodiscard]] core::Tensor ensureCudaBoolMask(const core::Tensor& mask) {
             auto result = (mask.dtype() == core::DataType::Bool) ? mask : mask.to(core::DataType::Bool);
-            if (result.device() != core::Device::CUDA) {
-                result = result.cuda();
+            if (result.device() != core::Device::GPU) {
+                result = result.gpu();
             }
             return result;
         }
 
         [[nodiscard]] core::Tensor& ensureCudaByteScratchBuffer(core::Tensor& buffer, const size_t size) {
+            const auto backend = core::default_gpu_backend();
             const bool needs_realloc = !buffer.is_valid() ||
-                                       buffer.device() != core::Device::CUDA ||
+                                       buffer.device() != core::Device::GPU ||
                                        buffer.dtype() != core::DataType::UInt8 ||
-                                       buffer.numel() != size;
+                                       buffer.numel() != size ||
+                                       !bufferMatchesBackend(buffer, backend);
             if (needs_realloc) {
-                buffer = core::Tensor::empty({size}, core::Device::CUDA, core::DataType::UInt8);
+                core::GpuBackendScope scope(backend);
+                buffer = core::Tensor::empty({size}, core::Device::GPU, core::DataType::UInt8);
             }
             return buffer;
         }
@@ -373,10 +402,12 @@ namespace lfs::vis {
             if (!scene_manager) {
                 return 0;
             }
-            if (const auto* const model = scene_manager->getModelForRendering()) {
+            // A count query can use an existing aggregate without starting one.
+            const auto& scene = scene_manager->getScene();
+            if (const auto* model = scene.peekCombinedModel()) {
                 return static_cast<size_t>(model->size());
             }
-            return scene_manager->getScene().getTotalGaussianCount();
+            return scene.getTotalGaussianCount();
         }
 
         [[nodiscard]] const core::Tensor* selectionMaskForSize(
@@ -405,37 +436,16 @@ namespace lfs::vis {
             if (!source.is_valid() || !output.is_valid() || source.numel() != output.numel()) {
                 return false;
             }
-            if (source.device() == core::Device::CUDA &&
-                output.device() == core::Device::CUDA &&
-                source.dtype() == output.dtype() &&
-                source.is_contiguous() &&
-                output.is_contiguous()) {
-                const cudaStream_t source_stream = source.stream();
-                const cudaStream_t output_stream = output.stream();
-
-                // Pooled event edges both ways: copy on the source stream after
-                // the output's pending work, then hand the result back to the
-                // output stream. record_stream keeps the allocator from
-                // recycling the output before the cross-stream write retires.
-                lfs::core::bridgeStreams(output_stream, source_stream);
-
-                if (const cudaError_t status = cudaMemcpyAsync(output.data_ptr(),
-                                                               source.data_ptr(),
-                                                               source.bytes(),
-                                                               cudaMemcpyDeviceToDevice,
-                                                               source_stream);
-                    status != cudaSuccess) {
-                    LOG_WARN("SelectionService: async selection copy failed: {} ({})",
-                             cudaGetErrorName(status),
-                             cudaGetErrorString(status));
-                    return false;
-                }
-                output.record_stream(source_stream);
-
-                lfs::core::bridgeStreams(source_stream, output_stream);
+            const auto src_backend = lfs::core::gpu_backend_of(source);
+            const auto dst_backend = lfs::core::gpu_backend_of(output);
+            const bool same_backend = src_backend == dst_backend;
+            if (same_backend ||
+                source.device() == core::Device::CPU ||
+                output.device() == core::Device::CPU) {
+                output.copy_from(source);
                 return true;
             }
-            output.copy_from(source);
+            output.copy_from(source.cpu());
             return true;
         }
 
@@ -443,7 +453,7 @@ namespace lfs::vis {
             lfs::core::Scene& scene,
             const size_t visible_count,
             const std::vector<bool>& node_mask) {
-            auto scope = core::Tensor::ones({visible_count}, core::Device::CUDA, core::DataType::Bool);
+            auto scope = core::Tensor::ones({visible_count}, core::Device::GPU, core::DataType::Bool);
             if (!nodeMaskRestrictsSelection(node_mask)) {
                 return scope;
             }
@@ -486,8 +496,8 @@ namespace lfs::vis {
                             return {};
                         }
                         auto active_group = existing_mask->eq(group_id);
-                        if (active_group.device() != core::Device::CUDA) {
-                            active_group = active_group.cuda();
+                        if (active_group.device() != core::Device::GPU) {
+                            active_group = active_group.gpu();
                         }
                         return selection.where(scope, active_group);
                     }
@@ -509,11 +519,11 @@ namespace lfs::vis {
             core::Tensor expanded;
             if (preserves_active_group) {
                 expanded = existing_mask->eq(group_id);
-                if (expanded.device() != core::Device::CUDA) {
-                    expanded = expanded.cuda();
+                if (expanded.device() != core::Device::GPU) {
+                    expanded = expanded.gpu();
                 }
             } else {
-                expanded = core::Tensor::zeros({full_count}, core::Device::CUDA, core::DataType::Bool);
+                expanded = core::Tensor::zeros({full_count}, core::Device::GPU, core::DataType::Bool);
             }
 
             const core::Tensor* visible_selection = &selection;
@@ -543,14 +553,14 @@ namespace lfs::vis {
 
             const size_t selection_count = selection.numel();
             if (!existing_mask || !existing_mask->is_valid()) {
-                return core::Tensor::zeros({selection_count}, core::Device::CUDA, core::DataType::Bool);
+                return core::Tensor::zeros({selection_count}, core::Device::GPU, core::DataType::Bool);
             }
 
             auto& scene = scene_manager->getScene();
             const size_t full_count = scene.getSelectionGaussianCount();
             auto active_group = existing_mask->eq(group_id);
-            if (active_group.device() != core::Device::CUDA) {
-                active_group = active_group.cuda();
+            if (active_group.device() != core::Device::GPU) {
+                active_group = active_group.gpu();
             }
 
             if (selection_count == full_count) {
@@ -651,7 +661,9 @@ namespace lfs::vis {
             };
         }
 
-        [[nodiscard]] core::Tensor uploadModelTransformsToCuda(const std::vector<glm::mat4>& model_transforms) {
+        [[nodiscard]] core::Tensor uploadModelTransformsToGpu(
+            const std::vector<glm::mat4>& model_transforms,
+            const core::GpuBackend backend) {
             std::vector<float> transform_data(model_transforms.size() * 16);
             for (size_t i = 0; i < model_transforms.size(); ++i) {
                 const auto& transform = model_transforms[i];
@@ -661,11 +673,12 @@ namespace lfs::vis {
                     }
                 }
             }
+            core::GpuBackendScope scope(backend);
             return core::Tensor::from_vector(
                        transform_data,
                        {model_transforms.size(), size_t{4}, size_t{4}},
                        core::Device::CPU)
-                .cuda();
+                .gpu();
         }
 
         // Single source for the effective orthographic scale: the per-panel override when a
@@ -833,35 +846,38 @@ namespace lfs::vis {
                 if (means.dtype() != core::DataType::Float32) {
                     means = means.to(core::DataType::Float32);
                 }
-                if (means.device() == core::Device::CUDA) {
+                if (means.device() == core::Device::GPU) {
                     try {
                         if (!means.is_valid() || means.numel() == 0 ||
                             means.storage_ptr() == nullptr) {
                             return nullptr;
                         }
+                        const auto backend = resolveGpuBackend(&means);
+                        core::GpuBackendScope scope(backend);
 
-                        core::Tensor model_transforms_cuda;
+                        core::Tensor model_transforms_gpu;
                         const core::Tensor* model_transforms_ptr = nullptr;
                         if (scene.model_transforms && !scene.model_transforms->empty()) {
-                            model_transforms_cuda = uploadModelTransformsToCuda(*scene.model_transforms);
-                            model_transforms_ptr = &model_transforms_cuda;
+                            model_transforms_gpu = uploadModelTransformsToGpu(*scene.model_transforms, backend);
+                            model_transforms_ptr = &model_transforms_gpu;
                         }
 
-                        core::Tensor transform_indices_cuda;
+                        core::Tensor transform_indices_gpu;
                         const core::Tensor* transform_indices_ptr = nullptr;
                         if (scene.transform_indices && scene.transform_indices->is_valid() &&
                             scene.transform_indices->numel() >= count) {
-                            transform_indices_cuda = *scene.transform_indices;
-                            if (transform_indices_cuda.dtype() != core::DataType::Int32) {
-                                transform_indices_cuda = transform_indices_cuda.to(core::DataType::Int32);
+                            transform_indices_gpu = *scene.transform_indices;
+                            if (transform_indices_gpu.dtype() != core::DataType::Int32) {
+                                transform_indices_gpu = transform_indices_gpu.to(core::DataType::Int32);
                             }
-                            if (transform_indices_cuda.device() != core::Device::CUDA) {
-                                transform_indices_cuda = transform_indices_cuda.cuda();
+                            if (transform_indices_gpu.device() != core::Device::GPU ||
+                                !bufferMatchesBackend(transform_indices_gpu, backend)) {
+                                transform_indices_gpu = transform_indices_gpu.cpu().to(core::Device::GPU);
                             }
-                            if (!transform_indices_cuda.is_contiguous()) {
-                                transform_indices_cuda = transform_indices_cuda.contiguous();
+                            if (!transform_indices_gpu.is_contiguous()) {
+                                transform_indices_gpu = transform_indices_gpu.contiguous();
                             }
-                            transform_indices_ptr = &transform_indices_cuda;
+                            transform_indices_ptr = &transform_indices_gpu;
                         }
 
                         const auto [derived_focal_x, derived_focal_y] =
@@ -889,10 +905,10 @@ namespace lfs::vis {
                             viewport.translation.z,
                         };
                         const auto camera_model = equirectangular
-                                                      ? rendering::ScreenWindowCameraModel::Equirectangular
+                                                      ? core::PointProjectionModel::Equirectangular
                                                   : viewport.orthographic
-                                                      ? rendering::ScreenWindowCameraModel::Orthographic
-                                                      : rendering::ScreenWindowCameraModel::Pinhole;
+                                                      ? core::PointProjectionModel::Orthographic
+                                                      : core::PointProjectionModel::Pinhole;
 
                         return std::make_shared<core::Tensor>(
                             rendering::project_screen_positions_tensor(
@@ -911,7 +927,7 @@ namespace lfs::vis {
                                 transform_indices_ptr,
                                 scene.node_visibility_mask));
                     } catch (const std::exception& e) {
-                        LOG_DEBUG("SelectionService: CUDA screen-position projection unavailable, falling back to CPU: {}",
+                        LOG_DEBUG("SelectionService: GPU screen-position projection unavailable, falling back to CPU: {}",
                                   e.what());
                     }
                 }
@@ -993,7 +1009,7 @@ namespace lfs::vis {
                         positions,
                         {count, size_t{2}},
                         core::Device::CPU)
-                        .cuda()
+                        .gpu()
                         .contiguous());
             } catch (const std::exception& e) {
                 LOG_WARN("SelectionService: failed to project Gaussian screen positions: {}", e.what());
@@ -1010,14 +1026,14 @@ namespace lfs::vis {
                 return std::nullopt;
             }
 
-            if (screen_positions.device() == core::Device::CUDA &&
+            if (screen_positions.device() == core::Device::GPU &&
                 screen_positions.dtype() == core::DataType::Float32) {
                 try {
                     const int picked = rendering::pick_projected_gaussian_tensor(
                         screen_positions, cursor_pos.x, cursor_pos.y, radius_px);
                     return picked >= 0 ? std::optional<int>{picked} : std::nullopt;
                 } catch (const std::exception& e) {
-                    LOG_DEBUG("SelectionService: CUDA projected pick unavailable, falling back to CPU scan: {}",
+                    LOG_DEBUG("SelectionService: GPU projected pick unavailable, falling back to CPU scan: {}",
                               e.what());
                 }
             }
@@ -1066,50 +1082,9 @@ namespace lfs::vis {
           rendering_manager_(rendering_manager) {
         assert(scene_manager_);
         assert(rendering_manager_);
-        for (auto& pending : pending_selection_counts_) {
-            if (cudaHostAlloc(reinterpret_cast<void**>(&pending.host_counts),
-                              (selection::kSelectionGroupCount + 1) * sizeof(int),
-                              cudaHostAllocPortable) != cudaSuccess ||
-                cudaEventCreateWithFlags(&pending.ready_event, cudaEventDisableTiming) != cudaSuccess) {
-                throw std::runtime_error("SelectionService: failed to allocate async count staging");
-            }
-        }
-        if (cudaHostAlloc(reinterpret_cast<void**>(&pending_passive_ring_count_.host_counts),
-                          (selection::kSelectionGroupCount + 1) * sizeof(int),
-                          cudaHostAllocPortable) != cudaSuccess ||
-            cudaEventCreateWithFlags(&pending_passive_ring_count_.ready_event, cudaEventDisableTiming) != cudaSuccess) {
-            throw std::runtime_error("SelectionService: failed to allocate passive ring staging");
-        }
     }
 
-    SelectionService::~SelectionService() {
-        for (auto& pending : pending_selection_counts_) {
-            if (pending.ready_event) {
-                if (pending.pending) {
-                    LFS_CUDA_LOG_TEARDOWN(cudaEventSynchronize(pending.ready_event), nullptr,
-                                          "selection count teardown: synchronize ready event");
-                }
-                LFS_CUDA_LOG_TEARDOWN(cudaEventDestroy(pending.ready_event), nullptr,
-                                      "selection count teardown: destroy ready event");
-            }
-            if (pending.host_counts) {
-                LFS_CUDA_LOG_TEARDOWN(cudaFreeHost(pending.host_counts), nullptr,
-                                      "selection count teardown: free pinned counts");
-            }
-        }
-        if (pending_passive_ring_count_.ready_event) {
-            if (pending_passive_ring_count_.pending) {
-                LFS_CUDA_LOG_TEARDOWN(cudaEventSynchronize(pending_passive_ring_count_.ready_event), nullptr,
-                                      "passive ring teardown: synchronize ready event");
-            }
-            LFS_CUDA_LOG_TEARDOWN(cudaEventDestroy(pending_passive_ring_count_.ready_event), nullptr,
-                                  "passive ring teardown: destroy ready event");
-        }
-        if (pending_passive_ring_count_.host_counts) {
-            LFS_CUDA_LOG_TEARDOWN(cudaFreeHost(pending_passive_ring_count_.host_counts), nullptr,
-                                  "passive ring teardown: free pinned counts");
-        }
-    }
+    SelectionService::~SelectionService() = default;
 
     void SelectionService::completePendingSelectionCount(
         PendingSelectionCounts& pending, const bool wait) const {
@@ -1117,17 +1092,16 @@ namespace lfs::vis {
             return;
         }
 
-        const cudaError_t status = wait ? cudaEventSynchronize(pending.ready_event)
-                                        : cudaEventQuery(pending.ready_event);
-        if (status == cudaErrorNotReady) {
-            return;
-        }
-        if (status != cudaSuccess) {
-            LOG_WARN("SelectionService: async selection count failed: {}",
-                     cudaGetErrorString(status));
-            pending.pending = false;
-            pending.mask.reset();
-            pending.undo_entry.reset();
+        try {
+            auto destination = std::as_writable_bytes(std::span(pending.host_counts));
+            if (wait) {
+                pending.readback.wait(destination);
+            } else if (!pending.readback.poll(destination)) {
+                return;
+            }
+        } catch (const std::exception& error) {
+            LOG_ERROR("Selection count readback failed: {}", error.what());
+            pending = PendingSelectionCounts{};
             return;
         }
 
@@ -1170,7 +1144,7 @@ namespace lfs::vis {
         const std::shared_ptr<core::Tensor>& mask,
         std::unique_ptr<op::SceneSnapshot>& undo_entry,
         const core::Scene::SelectionStateMetadata& after_metadata) const {
-        if (!mask || !mask->is_valid() || mask->device() != core::Device::CUDA) {
+        if (!mask || !mask->is_valid() || mask->device() != core::Device::GPU) {
             return false;
         }
 
@@ -1191,9 +1165,14 @@ namespace lfs::vis {
             completePendingSelectionCount(*slot, true);
         }
 
-        rendering::count_selection_groups_async(*mask, slot->scratch);
-        rendering::enqueue_selection_group_count_read(
-            slot->scratch, slot->host_counts, slot->ready_event);
+        try {
+            rendering::count_selection_groups_async(*mask, slot->scratch);
+            slot->readback.enqueue(slot->scratch);
+        } catch (const std::exception& error) {
+            LOG_ERROR("Selection count enqueue failed: {}", error.what());
+            *slot = PendingSelectionCounts{};
+            return false;
+        }
         slot->mask = mask;
         slot->undo_entry = std::move(undo_entry);
         slot->after_metadata = after_metadata;
@@ -1252,7 +1231,8 @@ namespace lfs::vis {
             return {false, 0, "No screen positions"};
         }
 
-        auto& selection = resetBoolScratchBuffer(command_selection_buffer_, screen_positions->size(0));
+        auto& selection = resetBoolScratchBuffer(command_selection_buffer_, screen_positions->size(0),
+                                                 screen_positions.get());
         rendering::brush_select_tensor(*screen_positions, x, y, radius, selection);
         return commitSelection(selection, mode, effectiveNodeMask(true), filters, projection_context, "selection.brush");
     }
@@ -1290,7 +1270,8 @@ namespace lfs::vis {
             return {false, 0, "No screen positions"};
         }
 
-        auto& selection = resetBoolScratchBuffer(command_selection_buffer_, screen_positions->size(0));
+        auto& selection = resetBoolScratchBuffer(command_selection_buffer_, screen_positions->size(0),
+                                                 screen_positions.get());
         {
             LOG_TIMER_THRESHOLD("SelectionService::selectRect.rect_select_kernel", 1.0);
             rendering::rect_select_tensor(*screen_positions,
@@ -1332,8 +1313,10 @@ namespace lfs::vis {
             return {false, 0, "No screen positions"};
         }
 
-        auto& selection = resetBoolScratchBuffer(command_selection_buffer_, screen_positions->size(0));
-        auto& polygon = uploadFloat2PointsToBuffer(vertices, polygon_vertex_host_buffer_, polygon_vertex_device_buffer_);
+        auto& selection = resetBoolScratchBuffer(command_selection_buffer_, screen_positions->size(0),
+                                                 screen_positions.get());
+        auto& polygon = uploadFloat2PointsToBuffer(
+            vertices, polygon_vertex_host_buffer_, polygon_vertex_device_buffer_, screen_positions.get());
         rendering::polygon_select_tensor(*screen_positions, polygon, selection);
         return commitSelection(selection, mode, effectiveNodeMask(true), filters, projection_context, "selection.polygon");
     }
@@ -1374,7 +1357,7 @@ namespace lfs::vis {
             const int hovered_id = *testing_hovered_gaussian_id_;
             if (hovered_id >= 0 && static_cast<size_t>(hovered_id) < total) {
                 auto& selection = resetBoolScratchBuffer(command_selection_buffer_, total);
-                rendering::set_selection_element(selection.ptr<bool>(), hovered_id, true);
+                rendering::set_selection_element(selection, hovered_id, true);
                 return commitSelection(selection, mode, effectiveNodeMask(true), filters, projection_context,
                                        "selection.ring");
             }
@@ -1405,7 +1388,7 @@ namespace lfs::vis {
         const auto hovered_id = resolveCommandHoveredGaussianId(x, y, camera_index, filters, projection_context);
         if (hovered_id && *hovered_id >= 0 && static_cast<size_t>(*hovered_id) < total) {
             auto& selection = resetBoolScratchBuffer(command_selection_buffer_, total);
-            rendering::set_selection_element(selection.ptr<bool>(), *hovered_id, true);
+            rendering::set_selection_element(selection, *hovered_id, true);
             return commitSelection(selection, mode, effectiveNodeMask(true), filters, projection_context, "selection.ring");
         }
 
@@ -1435,7 +1418,7 @@ namespace lfs::vis {
         }
 
         auto& scene = scene_manager_->getScene();
-        auto* const model = scene.getCombinedModel();
+        const auto* const model = scene.getCombinedModel();
         if (!model) {
             return {false, 0, "No model"};
         }
@@ -1461,7 +1444,7 @@ namespace lfs::vis {
 
         constexpr float COLOR_THRESHOLD = 0.2f;
         const auto group_id = scene.getActiveSelectionGroup();
-        auto mask = core::cuda::select_by_color(sh0, ref_r, ref_g, ref_b, COLOR_THRESHOLD, group_id);
+        auto mask = core::select_by_color(sh0, ref_r, ref_g, ref_b, COLOR_THRESHOLD, group_id);
 
         return commitSelection(mask,
                                mode,
@@ -1495,7 +1478,7 @@ namespace lfs::vis {
         const auto crop_max =
             core::Tensor::from_vector({gizmo.cropbox_max.x, gizmo.cropbox_max.y, gizmo.cropbox_max.z}, {3});
 
-        auto selection = core::Tensor::ones({total}, core::Device::CUDA, core::DataType::Bool);
+        auto selection = core::Tensor::ones({total}, core::Device::GPU, core::DataType::Bool);
         applyCropFilter(selection, &crop_t, &crop_min, &crop_max, nullptr, nullptr, false);
 
         const auto viewer_context = resolveViewerViewportContext();
@@ -1545,7 +1528,7 @@ namespace lfs::vis {
         const auto ellip_radii = core::Tensor::from_vector(
             {gizmo.ellipsoid_radii.x, gizmo.ellipsoid_radii.y, gizmo.ellipsoid_radii.z}, {3});
 
-        auto selection = core::Tensor::ones({total}, core::Device::CUDA, core::DataType::Bool);
+        auto selection = core::Tensor::ones({total}, core::Device::GPU, core::DataType::Bool);
         applyCropFilter(selection, nullptr, nullptr, nullptr, &ellip_t, &ellip_radii, false);
 
         const auto viewer_context = resolveViewerViewportContext();
@@ -1592,7 +1575,7 @@ namespace lfs::vis {
         const SelectionProjectionContext projection_context =
             projection_context_opt.value_or(SelectionProjectionContext{});
 
-        auto selection = core::Tensor::ones({total}, core::Device::CUDA, core::DataType::Bool);
+        auto selection = core::Tensor::ones({total}, core::Device::GPU, core::DataType::Bool);
         return commitSelection(selection,
                                SelectionMode::Replace,
                                effectiveNodeMask(filters.restrict_to_selected_nodes),
@@ -1626,7 +1609,7 @@ namespace lfs::vis {
             projection_context_opt.value_or(SelectionProjectionContext{});
 
         const auto node_mask = effectiveNodeMask(filters.restrict_to_selected_nodes);
-        auto filter_mask = core::Tensor::ones({total}, core::Device::CUDA, core::DataType::Bool);
+        auto filter_mask = core::Tensor::ones({total}, core::Device::GPU, core::DataType::Bool);
         if (!applyFilters(filter_mask, filters, node_mask, projection_context)) {
             LOG_WARN("SelectionService: invertFiltered failed: projection filter could not be applied");
             return {false, 0, "Invalid projection context"};
@@ -1638,10 +1621,10 @@ namespace lfs::vis {
         const auto* existing = selectionMaskForSize(existing_mask, total);
         const auto current_active = existing
                                         ? existing->eq(group_id)
-                                        : core::Tensor::zeros({total}, core::Device::CUDA, core::DataType::Bool);
+                                        : core::Tensor::zeros({total}, core::Device::GPU, core::DataType::Bool);
         const auto any_selected = existing
                                       ? existing->gt(0.0f)
-                                      : core::Tensor::zeros({total}, core::Device::CUDA, core::DataType::Bool);
+                                      : core::Tensor::zeros({total}, core::Device::GPU, core::DataType::Bool);
         const auto other_selected = any_selected.logical_and(current_active.logical_not());
         const auto toggle_mask = filter_mask.logical_and(other_selected.logical_not());
         const auto inverted = current_active.logical_xor(toggle_mask);
@@ -1840,6 +1823,10 @@ namespace lfs::vis {
         testing_hovered_gaussian_id_ = hovered_gaussian_id;
     }
 
+    void SelectionService::setTestingPanel(const SplitViewPanelId panel) {
+        testing_panel_ = panel;
+    }
+
     bool SelectionService::hasTestingScreenPositionsForCamera(const int camera_index) const {
         if (camera_index < 0) {
             return false;
@@ -2000,7 +1987,90 @@ namespace lfs::vis {
         }
 
         auto render_lock = acquireLiveModelRenderLock(scene_manager_);
-        auto scene_state = scene_manager_->buildRenderState();
+        SceneRenderState scene_state;
+        std::shared_ptr<core::Tensor> screen_positions;
+        if (viewer_derived &&
+            projection_context.panel.has_value() &&
+            rendering_manager_->isPLYComparisonActive()) {
+            scene_state = scene_manager_->buildRenderState({.metadata_only = true});
+            const auto& scene = scene_manager_->getScene();
+            const auto settings = rendering_manager_->getSettings();
+            const auto sample = resolvePlyComparisonDepthSample(
+                scene, settings.split_view_offset, *projection_context.panel);
+            const size_t panel_index = splitViewPanelIndex(*projection_context.panel);
+            ScreenPositionCacheKey key{
+                .valid = true,
+                .signature = makeScreenPositionCacheSignature(
+                    scene_state,
+                    projection_context.viewport,
+                    projection_context.equirectangular,
+                    rendering_manager_->getViewportProjectionGeneration(),
+                    projection_context.containment_intrinsics),
+            };
+            hashCombine(
+                key.signature,
+                sample.uses_owned_node_model ? reinterpret_cast<std::size_t>(sample.model) : 0u);
+            if (viewport_screen_position_keys_[panel_index] == key &&
+                viewport_screen_positions_[panel_index] &&
+                viewport_screen_positions_[panel_index]->is_valid()) {
+                return viewport_screen_positions_[panel_index];
+            }
+
+            if (sample.uses_owned_node_model && sample.node &&
+                hasRenderableGaussians(sample.model)) {
+                std::vector<glm::mat4> node_transforms{
+                    scene_coords::nodeVisualizerWorldTransform(scene, sample.node->id)};
+                auto local_positions = projectGaussianScreenPositions(
+                    *sample.model,
+                    projection_context.viewport,
+                    projection_context.equirectangular,
+                    {.model_transforms = &node_transforms,
+                     .transform_indices = nullptr,
+                     .node_visibility_mask = {},
+                     .node_active_sh_degrees = {}},
+                    projection_context.containment_intrinsics);
+                const size_t visible_count = scene.getTotalGaussianCount();
+                const size_t local_count =
+                    local_positions && local_positions->is_valid()
+                        ? static_cast<size_t>(local_positions->size(0))
+                        : 0;
+                size_t gaussian_offset = 0;
+                bool found_node = false;
+                for (const auto& slot : scene.getVisibleSplatNodeSlots()) {
+                    if (!slot.node) {
+                        continue;
+                    }
+                    if (slot.node->id == sample.node->id) {
+                        found_node = true;
+                        break;
+                    }
+                    const size_t slot_count =
+                        slot.node->model
+                            ? static_cast<size_t>(slot.node->model->size())
+                            : slot.node->gaussian_count.load(std::memory_order_acquire);
+                    gaussian_offset += slot_count;
+                }
+                if (found_node && local_count > 0 &&
+                    gaussian_offset + local_count <= visible_count &&
+                    local_positions->ndim() == 2 && local_positions->size(1) == 2) {
+                    auto expanded = core::Tensor::full(
+                        {visible_count, size_t{2}},
+                        INVALID_SCREEN_POSITION,
+                        local_positions->device(),
+                        core::DataType::Float32);
+                    expanded.slice(0, gaussian_offset, gaussian_offset + local_count).copy_(*local_positions);
+                    screen_positions = std::make_shared<core::Tensor>(std::move(expanded));
+                    viewport_screen_positions_[panel_index] = screen_positions;
+                    viewport_screen_position_keys_[panel_index] = key;
+                    return screen_positions;
+                }
+            }
+            // Owned-panel projection was not possible (consolidated nodes, empty
+            // panel, or a projection failure). Hover must still work, so fall
+            // through to the production combined-model path.
+        }
+
+        scene_state = scene_manager_->buildRenderState();
         if (!hasRenderableGaussians(scene_state.combined_model)) {
             if (viewer_derived) {
                 const size_t panel_index = projection_context.panel.has_value()
@@ -2031,7 +2101,7 @@ namespace lfs::vis {
                 return viewport_screen_positions_[panel_index];
             }
 
-            auto screen_positions = projectGaussianScreenPositions(
+            screen_positions = projectGaussianScreenPositions(
                 *scene_state.combined_model,
                 projection_context.viewport,
                 projection_context.equirectangular,
@@ -2094,6 +2164,7 @@ namespace lfs::vis {
 
         if (testing_viewport_ && testing_viewport_->valid()) {
             static Viewport testing_viewport_source(1, 1);
+            context.panel = testing_panel_.value_or(SplitViewPanelId::Left);
             context.info = *testing_viewport_;
             context.viewport = &testing_viewport_source;
             return context;
@@ -2173,6 +2244,7 @@ namespace lfs::vis {
 
         cancelInteractiveSelection();
 
+        passive_hover_suppressed_ = false;
         interactive_selection_ = {};
         interactive_selection_.active = true;
         interactive_selection_.shape = shape;
@@ -2443,6 +2515,8 @@ namespace lfs::vis {
         if (!scene_manager_ || !rendering_manager_ || interactive_selection_.active) {
             return;
         }
+        if (!allowPassiveHoverPreview(cursor_pos))
+            return;
 
         const auto context = resolveViewerViewportContext(cursor_pos);
         if (!context || !context->valid()) {
@@ -2521,7 +2595,7 @@ namespace lfs::vis {
         if (!exact_hit.has_value()) {
             const auto hovered_id = renderHoveredGaussianIdForViewerContext(*context, cursor_pos, filters, *projection_context);
             if (hovered_id && *hovered_id >= 0 && static_cast<size_t>(*hovered_id) < selection.numel()) {
-                rendering::set_selection_element(selection.ptr<bool>(), *hovered_id, true);
+                rendering::set_selection_element(selection, *hovered_id, true);
                 picked_ring_id = *hovered_id;
                 hit = true;
             }
@@ -2530,15 +2604,18 @@ namespace lfs::vis {
             picked_ring_id = -1;
             hit = false;
         } else {
-            rendering::count_selection_groups_async(selection, pending_passive_ring_count_.scratch);
-            rendering::enqueue_selection_group_count_read(
-                pending_passive_ring_count_.scratch,
-                pending_passive_ring_count_.host_counts,
-                pending_passive_ring_count_.ready_event);
-            pending_passive_ring_count_.mask = std::make_shared<core::Tensor>(selection);
-            pending_passive_ring_count_.apply_to_scene = false;
-            pending_passive_ring_count_.sequence = ++selection_count_sequence_;
-            pending_passive_ring_count_.pending = true;
+            try {
+                rendering::count_selection_groups_async(selection, pending_passive_ring_count_.scratch);
+                pending_passive_ring_count_.readback.enqueue(pending_passive_ring_count_.scratch);
+                pending_passive_ring_count_.mask = std::make_shared<core::Tensor>(selection);
+                pending_passive_ring_count_.apply_to_scene = false;
+                pending_passive_ring_count_.sequence = ++selection_count_sequence_;
+                pending_passive_ring_count_.pending = true;
+            } catch (const std::exception& error) {
+                LOG_ERROR("Selection preview count enqueue failed: {}", error.what());
+                pending_passive_ring_count_ = PendingSelectionCounts{};
+                passive_ring_has_hit_ = false;
+            }
             passive_ring_preview_key_ = preview_key;
             passive_ring_preview_key_valid_ = true;
 
@@ -2569,6 +2646,8 @@ namespace lfs::vis {
                                                           const SelectionMode mode) {
         if (!scene_manager_ || !rendering_manager_ || interactive_selection_.active)
             return;
+        if (!allowPassiveHoverPreview(cursor_pos))
+            return;
 
         const auto context = resolveViewerViewportContext(cursor_pos);
         if (!context || !context->valid()) {
@@ -2583,6 +2662,21 @@ namespace lfs::vis {
         rendering_manager_->setCursorPreviewState(
             true, render_cursor.x, render_cursor.y, render_radius,
             mode != SelectionMode::Remove, nullptr, false, 0.0f, context->panel, -1, false);
+    }
+
+    void SelectionService::suppressPassiveHoverPreview() {
+        passive_hover_suppressed_ = last_passive_hover_position_.has_value();
+        if (rendering_manager_) {
+            rendering_manager_->clearCursorPreviewState();
+            rendering_manager_->clearPreviewSelection();
+        }
+    }
+
+    bool SelectionService::allowPassiveHoverPreview(const glm::vec2 cursor_pos) {
+        if (last_passive_hover_position_ != cursor_pos)
+            passive_hover_suppressed_ = false;
+        last_passive_hover_position_ = cursor_pos;
+        return !passive_hover_suppressed_;
     }
 
     void SelectionService::refreshInteractivePreview() {
@@ -2725,7 +2819,7 @@ namespace lfs::vis {
             return {false, 0, "Invalid selection mask"};
         }
 
-        if (selection_mask.device() == core::Device::CUDA) {
+        if (selection_mask.device() == core::Device::GPU) {
             LOG_TIMER_THRESHOLD("SelectionService::commitSelection.sync_selection_stream", 1.0);
             try {
                 selection_mask.sync_to_stream(core::getCurrentCUDAStream());
@@ -2813,13 +2907,16 @@ namespace lfs::vis {
         }
         const size_t n = use_indexed_commit ? full_count : scene_selection_mask.numel();
 
-        auto locked_groups = [&] {
-            LOG_TIMER_THRESHOLD("SelectionService::commitSelection.upload_locked_group_mask", 1.0);
-            return selection::upload_locked_group_mask(
-                scene, locked_groups_device_mask_, locked_groups_host_mask_, locked_groups_host_mask_valid_);
-        }();
-        if (!locked_groups) {
-            return {false, 0, locked_groups.error()};
+        core::Tensor locked_groups;
+        {
+            LOG_TIMER_THRESHOLD("SelectionService::commitSelection.update_locked_group_mask", 1.0);
+            try {
+                locked_groups = selection::update_locked_group_mask(
+                    scene, selection_mask, locked_groups_device_mask_, locked_groups_host_mask_, locked_groups_host_mask_valid_);
+            } catch (const std::exception& error) {
+                LOG_ERROR("Could not update selection group locks: {}", error.what());
+                return {false, 0, error.what()};
+            }
         }
 
         const core::Tensor empty_mask;
@@ -2836,14 +2933,13 @@ namespace lfs::vis {
         if (use_indexed_commit) {
             LOG_TIMER_THRESHOLD("SelectionService::commitSelection.apply_selection_group_indexed_tensor_mask", 1.0);
             rendering::apply_selection_group_indexed_tensor_mask(
-                selection_mask, *visible_indices, existing_ref, output_mask_tensor, group_id, *locked_groups,
+                selection_mask, *visible_indices, existing_ref, output_mask_tensor, group_id, locked_groups,
                 add_mode, commit_transform_indices.get(), final_node_mask, replace_mode);
         } else {
             LOG_TIMER_THRESHOLD("SelectionService::commitSelection.apply_selection_group_tensor_mask", 1.0);
             rendering::apply_selection_group_tensor_mask(
-                scene_selection_mask, existing_ref, output_mask_tensor, group_id, *locked_groups,
-                add_mode, commit_transform_indices.get(), final_node_mask, replace_mode,
-                nullptr);
+                scene_selection_mask, existing_ref, output_mask_tensor, group_id, locked_groups,
+                add_mode, commit_transform_indices.get(), final_node_mask, replace_mode);
         }
 
         std::unique_ptr<op::SceneSnapshot> entry;
@@ -2864,7 +2960,7 @@ namespace lfs::vis {
         auto new_selection = std::move(output_mask);
         {
             LOG_TIMER_THRESHOLD("SelectionService::commitSelection.install_selection_mask", 1.0);
-            // The mask is installed immediately; its 257-word group histogram
+            // The mask is installed immediately; its 256-word group histogram
             // is copied to pinned host memory and applied by pollPending...
             // once the GPU has completed. No selection command waits for D2H.
             scene.setSelectionMaskDeferred(new_selection, true, scene.selectedCount());
@@ -3000,9 +3096,9 @@ namespace lfs::vis {
         if (filters.crop_filter || filters.depth_filter || filters.restrict_to_selected_nodes) {
             auto candidate = core::Tensor::zeros(
                 {activeSelectionGaussianCount(scene_manager_)},
-                core::Device::CUDA,
+                core::Device::GPU,
                 core::DataType::Bool);
-            rendering::set_selection_element(candidate.ptr<bool>(), hovered_id, true);
+            rendering::set_selection_element(candidate, hovered_id, true);
             if (!applyFilters(candidate, filters, effectiveNodeMask(filters.restrict_to_selected_nodes), projection_context)) {
                 return std::nullopt;
             }
@@ -3015,13 +3111,17 @@ namespace lfs::vis {
         return hovered_id;
     }
 
-    core::Tensor& SelectionService::resetBoolScratchBuffer(core::Tensor& buffer, const size_t size) {
+    core::Tensor& SelectionService::resetBoolScratchBuffer(core::Tensor& buffer, const size_t size,
+                                                           const core::Tensor* const affinity) {
+        const auto backend = resolveGpuBackend(affinity);
         const bool needs_realloc = !buffer.is_valid() ||
-                                   buffer.device() != core::Device::CUDA ||
+                                   buffer.device() != core::Device::GPU ||
                                    buffer.dtype() != core::DataType::Bool ||
-                                   buffer.numel() != size;
+                                   buffer.numel() != size ||
+                                   !bufferMatchesBackend(buffer, backend);
         if (needs_realloc) {
-            buffer = core::Tensor::zeros({size}, core::Device::CUDA, core::DataType::Bool);
+            core::GpuBackendScope scope(backend);
+            buffer = core::Tensor::zeros({size}, core::Device::GPU, core::DataType::Bool);
             return buffer;
         }
 
@@ -3042,17 +3142,20 @@ namespace lfs::vis {
             return false;
         }
 
+        const auto preview_backend = core::default_gpu_backend();
         const bool needs_working_realloc =
             !session.working_selection.is_valid() ||
-            session.working_selection.device() != core::Device::CUDA ||
+            session.working_selection.device() != core::Device::GPU ||
             session.working_selection.dtype() != core::DataType::Bool ||
-            session.working_selection.numel() != total;
+            session.working_selection.numel() != total ||
+            !bufferMatchesBackend(session.working_selection, preview_backend);
         const auto node_mask = effectiveNodeMask(session.filters.restrict_to_selected_nodes);
         const bool node_scope_changed =
             session.preview_brush_point_count > 0 &&
             node_mask != session.live_preview_node_mask;
         if (needs_working_realloc) {
-            session.working_selection = core::Tensor::zeros({total}, core::Device::CUDA, core::DataType::Bool);
+            core::GpuBackendScope scope(preview_backend);
+            session.working_selection = core::Tensor::zeros({total}, core::Device::GPU, core::DataType::Bool);
             session.preview_brush_point_count = 0;
         } else if (session.preview_brush_point_count > session.points.size() || node_scope_changed) {
             session.working_selection.zero_();
@@ -3093,11 +3196,13 @@ namespace lfs::vis {
 
         const bool needs_delta_realloc =
             !session.live_delta_selection.is_valid() ||
-            session.live_delta_selection.device() != core::Device::CUDA ||
+            session.live_delta_selection.device() != core::Device::GPU ||
             session.live_delta_selection.dtype() != core::DataType::Bool ||
-            session.live_delta_selection.numel() != total;
+            session.live_delta_selection.numel() != total ||
+            !bufferMatchesBackend(session.live_delta_selection, preview_backend);
         if (needs_delta_realloc) {
-            session.live_delta_selection = core::Tensor::zeros({total}, core::Device::CUDA, core::DataType::Bool);
+            core::GpuBackendScope scope(preview_backend);
+            session.live_delta_selection = core::Tensor::zeros({total}, core::Device::GPU, core::DataType::Bool);
         }
         auto& delta_selection = session.live_delta_selection;
         delta_selection.fill_(0.0f, delta_selection.stream());
@@ -3130,14 +3235,6 @@ namespace lfs::vis {
         session.preview_brush_point_count = session.points.size();
         session.live_preview_node_mask = node_mask;
         return true;
-    }
-
-    std::optional<SelectionService::ViewportInfo> SelectionService::resolveViewportInfo() const {
-        const auto context = resolveViewerViewportContext();
-        if (!context || !context->info.valid()) {
-            return std::nullopt;
-        }
-        return context->info;
     }
 
     bool SelectionService::buildSelectionMaskForInteractiveSession(core::Tensor& selection_out,
@@ -3196,11 +3293,27 @@ namespace lfs::vis {
             selection_out = resetBoolScratchBuffer(session.working_selection, total);
             success = buildPolygonSelection(session.points, selection_out, projection_context);
             break;
-        case SelectionShape::Rings:
-            selection_out = resetBoolScratchBuffer(session.working_selection, total);
-            success = buildRingSelection(session.cursor_pos, selection_out, projection_context, true,
-                                         !include_polygon_cursor, picked_ring_id_out);
+        case SelectionShape::Rings: {
+            if (!session.working_selection.is_valid() || session.working_selection.numel() != total) {
+                (void)resetBoolScratchBuffer(session.working_selection, total);
+                session.ring_has_hit = false;
+            }
+            auto& hit = resetBoolScratchBuffer(session.live_delta_selection, total);
+            int picked_ring_id = -1;
+            if (buildRingSelection(session.cursor_pos, hit, projection_context, true, false, &picked_ring_id)) {
+                if (!applyFilters(hit, session.filters, effectiveNodeMask(session.filters.restrict_to_selected_nodes), projection_context)) {
+                    return false;
+                }
+                rendering::merge_selection_mask_or(session.working_selection, hit);
+                session.ring_has_hit |= picked_ring_id >= 0;
+            }
+            if (picked_ring_id_out) {
+                *picked_ring_id_out = picked_ring_id;
+            }
+            selection_out = session.working_selection;
+            success = session.ring_has_hit;
             break;
+        }
         case SelectionShape::Box:
         case SelectionShape::Sphere:
             selection_out = resetBoolScratchBuffer(session.working_selection, total);
@@ -3259,6 +3372,8 @@ namespace lfs::vis {
         constexpr float STEP_FACTOR = 0.5f;
         constexpr int MAX_BRUSH_STEPS = 128;
 
+        std::vector<float> disk_xy;
+        disk_xy.reserve(points.size() * 4);
         for (size_t i = 0; i < points.size(); ++i) {
             const glm::vec2 from = (i == 0) ? points[i] : points[i - 1];
             const glm::vec2 to = points[i];
@@ -3272,9 +3387,11 @@ namespace lfs::vis {
                                                  : static_cast<float>(step + 1) / static_cast<float>(num_steps);
                 const glm::vec2 sample = from + delta * t;
                 const auto render = screenToRender(sample, info);
-                rendering::brush_select_tensor(*screen_positions, render.x, render.y, scaled_radius, selection_out);
+                disk_xy.push_back(render.x);
+                disk_xy.push_back(render.y);
             }
         }
+        rendering::brush_select_disks_tensor(*screen_positions, disk_xy, scaled_radius, selection_out);
 
         return true;
     }
@@ -3355,8 +3472,8 @@ namespace lfs::vis {
             return false;
         }
 
-        auto& polygon =
-            uploadFloat2PointsToBuffer(render_points, polygon_vertex_host_buffer_, polygon_vertex_device_buffer_);
+        auto& polygon = uploadFloat2PointsToBuffer(
+            render_points, polygon_vertex_host_buffer_, polygon_vertex_device_buffer_, screen_positions.get());
         rendering::polygon_select_tensor(*screen_positions, polygon, selection_out);
         return true;
     }
@@ -3407,8 +3524,8 @@ namespace lfs::vis {
             return false;
         }
 
-        auto& polygon =
-            uploadFloat2PointsToBuffer(render_points, polygon_vertex_host_buffer_, polygon_vertex_device_buffer_);
+        auto& polygon = uploadFloat2PointsToBuffer(
+            render_points, polygon_vertex_host_buffer_, polygon_vertex_device_buffer_, screen_positions.get());
         rendering::polygon_select_tensor(*screen_positions, polygon, selection_out);
         return true;
     }
@@ -3428,7 +3545,7 @@ namespace lfs::vis {
         const auto& session = interactive_selection_;
         int hovered_id = testing_hovered_gaussian_id_.value_or(-1);
         if (hovered_id >= 0 && static_cast<size_t>(hovered_id) < selection_out.numel()) {
-            rendering::set_selection_element(selection_out.ptr<bool>(), hovered_id, true);
+            rendering::set_selection_element(selection_out, hovered_id, true);
             if (picked_ring_id_out) {
                 *picked_ring_id_out = hovered_id;
             }
@@ -3460,7 +3577,7 @@ namespace lfs::vis {
             return !require_exact_ring_hit;
         }
 
-        rendering::set_selection_element(selection_out.ptr<bool>(), hovered_id, true);
+        rendering::set_selection_element(selection_out, hovered_id, true);
         if (picked_ring_id_out) {
             *picked_ring_id_out = hovered_id;
         }
@@ -3742,7 +3859,7 @@ namespace lfs::vis {
         if (const auto gt = rendering_manager_->gtComparisonSelectionContext()) {
             // Equirect GT has empty intrinsics by construction (split_view_service.cpp:78-103).
             // Falling through would unproject through the interactive camera — the path the
-            // STOP-3 comment below forbids. Inverse of filterSelectionByScreenWindowKernel.
+            // STOP-3 comment below forbids. Inverse of core::filter_points.
             if (gt->camera.equirectangular) {
                 projection_viewport.camera.R = gt->camera.rotation;
                 projection_viewport.camera.t = gt->camera.translation;
@@ -3840,7 +3957,7 @@ namespace lfs::vis {
         const float ortho_scale = effectiveOrthoScale(projection_viewport, settings);
 
         if (const auto gt = rendering_manager_->gtComparisonSelectionContext()) {
-            // Forward of filterSelectionByScreenWindowKernel's equirect branch. Must
+            // Forward of core::filter_points's equirect branch. Must
             // not fall through to projectWorldPoint's interactive-camera pinhole.
             if (gt->camera.equirectangular) {
                 const glm::vec3 view =
@@ -4026,8 +4143,9 @@ namespace lfs::vis {
         core::Tensor model_transforms_cuda;
         const core::Tensor* model_transforms_ptr = nullptr;
         if (!render_state.model_transforms.empty()) {
-            LOG_TIMER("applyCropFilter.uploadModelTransformsToCuda");
-            model_transforms_cuda = uploadModelTransformsToCuda(render_state.model_transforms);
+            LOG_TIMER("applyCropFilter.uploadModelTransformsToGpu");
+            model_transforms_cuda = uploadModelTransformsToGpu(
+                render_state.model_transforms, resolveGpuBackend(&selection));
             model_transforms_ptr = &model_transforms_cuda;
         }
 
@@ -4035,11 +4153,12 @@ namespace lfs::vis {
         const core::Tensor* transform_indices_ptr = nullptr;
         if (render_state.transform_indices && render_state.transform_indices->is_valid() &&
             render_state.transform_indices->numel() == means.size(0)) {
-            if (render_state.transform_indices->device() == core::Device::CUDA) {
+            if (render_state.transform_indices->device() == core::Device::GPU) {
                 transform_indices_ptr = render_state.transform_indices.get();
             } else {
-                LOG_TIMER("applyCropFilter.transform_indices_to_cuda");
-                transform_indices_cuda = render_state.transform_indices->cuda();
+                LOG_TIMER("applyCropFilter.transform_indices_to_gpu");
+                core::GpuBackendScope scope(resolveGpuBackend(&selection));
+                transform_indices_cuda = render_state.transform_indices->cpu().to(core::Device::GPU);
                 transform_indices_ptr = &transform_indices_cuda;
             }
         }
@@ -4093,8 +4212,9 @@ namespace lfs::vis {
         core::Tensor model_transforms_cuda;
         const core::Tensor* model_transforms_ptr = nullptr;
         if (!render_state.model_transforms.empty()) {
-            LOG_TIMER("applyDepthFilter.uploadModelTransformsToCuda");
-            model_transforms_cuda = uploadModelTransformsToCuda(render_state.model_transforms);
+            LOG_TIMER("applyDepthFilter.uploadModelTransformsToGpu");
+            model_transforms_cuda = uploadModelTransformsToGpu(
+                render_state.model_transforms, resolveGpuBackend(&selection));
             model_transforms_ptr = &model_transforms_cuda;
         }
 
@@ -4102,11 +4222,12 @@ namespace lfs::vis {
         const core::Tensor* transform_indices_ptr = nullptr;
         if (render_state.transform_indices && render_state.transform_indices->is_valid() &&
             render_state.transform_indices->numel() == means.size(0)) {
-            if (render_state.transform_indices->device() == core::Device::CUDA) {
+            if (render_state.transform_indices->device() == core::Device::GPU) {
                 transform_indices_ptr = render_state.transform_indices.get();
             } else {
-                LOG_TIMER("applyDepthFilter.transform_indices_to_cuda");
-                transform_indices_cuda = render_state.transform_indices->cuda();
+                LOG_TIMER("applyDepthFilter.transform_indices_to_gpu");
+                core::GpuBackendScope scope(resolveGpuBackend(&selection));
+                transform_indices_cuda = render_state.transform_indices->cpu().to(core::Device::GPU);
                 transform_indices_ptr = &transform_indices_cuda;
             }
         }
@@ -4144,10 +4265,10 @@ namespace lfs::vis {
                 viewport.translation.z,
             };
             const auto camera_model = projection_context.equirectangular
-                                          ? rendering::ScreenWindowCameraModel::Equirectangular
+                                          ? core::PointProjectionModel::Equirectangular
                                       : viewport.orthographic
-                                          ? rendering::ScreenWindowCameraModel::Orthographic
-                                          : rendering::ScreenWindowCameraModel::Pinhole;
+                                          ? core::PointProjectionModel::Orthographic
+                                          : core::PointProjectionModel::Pinhole;
             // Same substitution the Vulkan lane applies before handing the scale
             // to the shader (vksplat_viewport_renderer.cpp), so the selection the
             // kernel computes matches the window the viewport draws. The invalid
@@ -4157,6 +4278,25 @@ namespace lfs::vis {
                 (std::isfinite(viewport.ortho_scale) && viewport.ortho_scale > 1.0e-5f)
                     ? viewport.ortho_scale
                     : lfs::rendering::DEFAULT_ORTHO_SCALE;
+            const bool use_panel_depth_window =
+                settings.split_view_mode == SplitViewMode::IndependentDual &&
+                projection_context.panel.has_value();
+            float depth_near = -settings.depth_filter_max.z;
+            float depth_far = -settings.depth_filter_min.z;
+            float scale_x = settings.depth_filter_scale_x;
+            float scale_y = settings.depth_filter_scale_y;
+            float offset_x = settings.depth_filter_offset_x;
+            float offset_y = settings.depth_filter_offset_y;
+            if (use_panel_depth_window) {
+                const auto panel_window =
+                    rendering_manager_->getDepthWindowForPanel(*projection_context.panel);
+                depth_near = panel_window.near_plane;
+                depth_far = panel_window.far_plane;
+                scale_x = panel_window.scale_x;
+                scale_y = panel_window.scale_y;
+                offset_x = panel_window.offset_x;
+                offset_y = panel_window.offset_y;
+            }
             rendering::filter_selection_by_screen_window(
                 selection,
                 means,
@@ -4170,12 +4310,12 @@ namespace lfs::vis {
                 center_x,
                 center_y,
                 sanitized_ortho_scale,
-                -settings.depth_filter_max.z,
-                -settings.depth_filter_min.z,
-                settings.depth_filter_scale_x,
-                settings.depth_filter_scale_y,
-                settings.depth_filter_offset_x,
-                settings.depth_filter_offset_y,
+                depth_near,
+                depth_far,
+                scale_x,
+                scale_y,
+                offset_x,
+                offset_y,
                 model_transforms_ptr,
                 transform_indices_ptr);
         }

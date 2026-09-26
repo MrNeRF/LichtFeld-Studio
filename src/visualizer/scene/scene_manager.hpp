@@ -15,10 +15,9 @@
 #include "scene/scene_render_state.hpp"
 #include "scene/selection_state.hpp"
 #include "selection/selection_service.hpp"
-#include "training/components/ppisp.hpp"
-#include "training/components/ppisp_controller_pool.hpp"
 #include <expected>
 #include <filesystem>
+#include <functional>
 #include <glm/vec2.hpp>
 #include <mutex>
 #include <optional>
@@ -26,6 +25,8 @@
 #include <unordered_map>
 
 namespace lfs::vis {
+
+    class AppearanceTensorModel;
 
     namespace op {
         class SceneSnapshot;
@@ -106,16 +107,23 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<lfs::io::LoadResult, std::string> stageSplatFile(
             const std::filesystem::path& path,
             lfs::io::ProgressCallback progress = {},
-            lfs::io::CancelCallback cancel_requested = {});
+            lfs::io::CancelCallback cancel_requested = {}, bool preserve_raw = false);
         [[nodiscard]] std::string attachLoadedSplatFile(const std::filesystem::path& path,
                                                         const std::string& name_hint,
                                                         bool is_visible,
                                                         lfs::io::LoadResult load_result,
-                                                        bool replace_scene);
+                                                        bool replace_scene,
+                                                        bool defer_import_license = false);
         [[nodiscard]] std::string attachLoadedSplatNode(const std::filesystem::path& path,
                                                         const std::string& name_hint,
                                                         bool is_visible,
-                                                        lfs::io::LoadResult load_result);
+                                                        lfs::io::LoadResult load_result,
+                                                        bool preserve_raw = false,
+                                                        core::NodeId parent = core::NULL_NODE,
+                                                        bool defer_import_license = false);
+        void setImportLicenseCallback(std::function<void(const std::optional<std::vector<uint8_t>>&)> callback) {
+            import_license_callback_ = std::move(callback);
+        }
         std::string addSplatFile(const std::filesystem::path& path, const std::string& name = "", bool is_visible = true);
         std::string addGeneratedSplatNode(std::unique_ptr<core::SplatData> model,
                                           const std::string& source_name,
@@ -176,7 +184,7 @@ namespace lfs::vis {
 
         // Multi-selection support
         [[nodiscard]] glm::vec3 getSelectionCenter() const;
-        [[nodiscard]] glm::vec3 getSelectionWorldCenter() const; // Deprecated legacy data-world center for compatibility
+        [[nodiscard]] glm::vec3 getSelectionWorldCenter() const;
         [[nodiscard]] glm::vec3 getSelectionVisualizerWorldCenter() const;
 
         // Cropbox operations for selected node
@@ -217,8 +225,10 @@ namespace lfs::vis {
         const lfs::core::SplatData* getModelForRendering() const;
 
         // Build complete render state from scene graph
-        // This is the single source of truth for all rendering data
-        SceneRenderState buildRenderState() const;
+        // This is the single source of truth for all rendering data.
+        // metadata_only skips combined-model concatenation and per-gaussian
+        // transform/selection aggregates; the two caches are distinct.
+        SceneRenderState buildRenderState(SceneRenderStateOptions options = {}) const;
 
         // Direct info queries
         struct SceneInfo {
@@ -298,15 +308,11 @@ namespace lfs::vis {
         [[nodiscard]] SelectionService* getSelectionService() { return selection_service_.get(); }
         void completePendingSelectionCounts() const;
 
-        void setAppearanceModel(std::unique_ptr<lfs::training::PPISP> ppisp,
-                                std::unique_ptr<lfs::training::PPISPControllerPool> controller_pool = nullptr);
+        void setAppearanceModel(std::unique_ptr<AppearanceTensorModel> model);
         void clearAppearanceModel();
-        [[nodiscard]] lfs::training::PPISP* getAppearancePPISP() { return appearance_ppisp_.get(); }
-        [[nodiscard]] const lfs::training::PPISP* getAppearancePPISP() const { return appearance_ppisp_.get(); }
-        [[nodiscard]] lfs::training::PPISPControllerPool* getAppearanceControllerPool() { return appearance_controller_pool_.get(); }
-        [[nodiscard]] const lfs::training::PPISPControllerPool* getAppearanceControllerPool() const { return appearance_controller_pool_.get(); }
-        [[nodiscard]] bool hasAppearanceController() const { return appearance_controller_pool_ != nullptr; }
-        [[nodiscard]] bool hasAppearanceModel() const { return appearance_ppisp_ != nullptr; }
+        [[nodiscard]] const AppearanceTensorModel* getAppearanceTensorModel() const { return appearance_tensor_model_.get(); }
+        [[nodiscard]] bool hasAppearanceController() const;
+        [[nodiscard]] bool hasAppearanceModel() const { return appearance_tensor_model_ != nullptr; }
 
         // Drop the GUI's borrowed scene-image tensor and drain the GPU so no
         // in-flight Vulkan work references model tensors that are about to be
@@ -354,6 +360,8 @@ namespace lfs::vis {
                                                                       HistoryMode history_mode,
                                                                       TrainingRemovalImpact impact);
         void setupEventHandlers();
+        [[nodiscard]] lfs::Status prepareDatasetTrainer(
+            const lfs::core::param::TrainingParameters& params);
         void finalizeDatasetSceneLoad(const std::filesystem::path& dataset_path,
                                       const std::filesystem::path& scene_path,
                                       lfs::core::events::state::SceneLoaded::Type type,
@@ -427,8 +435,7 @@ namespace lfs::vis {
         ClipboardEntry::HierarchyNode copyNodeHierarchy(const core::SceneNode* node);
         void pasteNodeHierarchy(const ClipboardEntry::HierarchyNode& src, core::NodeId parent_id);
 
-        std::unique_ptr<lfs::training::PPISP> appearance_ppisp_;
-        std::unique_ptr<lfs::training::PPISPControllerPool> appearance_controller_pool_;
+        std::unique_ptr<AppearanceTensorModel> appearance_tensor_model_;
 
         void beginSelectionPreview();
 
@@ -438,6 +445,7 @@ namespace lfs::vis {
         std::optional<core::Scene::SelectionStateSnapshot> selection_preview_before_;
         std::mutex consolidated_compaction_mutex_;
         std::jthread consolidated_compaction_thread_;
+        std::function<void(const std::optional<std::vector<uint8_t>>&)> import_license_callback_;
         bool consolidated_compaction_running_ = false;
         bool consolidated_compaction_pending_ = false;
 
@@ -448,6 +456,7 @@ namespace lfs::vis {
         mutable std::uint64_t cached_render_scene_generation_local_ = 0;
         mutable const lfs::core::SplatData* cached_render_model_ = nullptr;
         mutable ContentType cached_render_content_type_ = ContentType::Empty;
+        mutable bool cached_render_metadata_only_ = false;
     };
 
 } // namespace lfs::vis

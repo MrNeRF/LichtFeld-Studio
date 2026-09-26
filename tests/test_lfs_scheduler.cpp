@@ -4,6 +4,7 @@
 
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "optimizer/scheduler.hpp"
 #include <cmath>
@@ -14,14 +15,16 @@ using namespace lfs::training;
 
 namespace {
 
+    class LfsSchedulerTest : public lfs::test::CudaBackendTest {};
+
     // Helper function to create a simple SplatData for testing
     SplatData create_test_splat_data(size_t n_points = 10) {
-        auto means = Tensor::randn({n_points, 3}, Device::CUDA);
-        auto sh0 = Tensor::randn({n_points, 1, 3}, Device::CUDA);
-        auto shN = Tensor::randn({n_points, 15, 3}, Device::CUDA);
-        auto scaling = Tensor::randn({n_points, 3}, Device::CUDA);
-        auto rotation = Tensor::randn({n_points, 4}, Device::CUDA);
-        auto opacity = Tensor::randn({n_points, 1}, Device::CUDA);
+        auto means = Tensor::randn({n_points, 3}, Device::GPU);
+        auto sh0 = Tensor::randn({n_points, 1, 3}, Device::GPU);
+        auto shN = Tensor::randn({n_points, 15, 3}, Device::GPU);
+        auto scaling = Tensor::randn({n_points, 3}, Device::GPU);
+        auto rotation = Tensor::randn({n_points, 4}, Device::GPU);
+        auto opacity = Tensor::randn({n_points, 1}, Device::GPU);
 
         SplatData splat_data(3, means, sh0, shN, scaling, rotation, opacity, 1.0f);
         // Note: gradients are allocated by AdamOptimizer, not SplatData
@@ -32,7 +35,7 @@ namespace {
     // ExponentialLR Tests
     // ===================================================================================
 
-    TEST(LfsSchedulerTest, ExponentialLR_Basic) {
+    TEST_F(LfsSchedulerTest, ExponentialLR_Basic) {
         // Create optimizer with initial LR
         auto splat_data = create_test_splat_data(10);
         AdamConfig config;
@@ -59,7 +62,7 @@ namespace {
         EXPECT_NEAR(optimizer.get_lr(), 0.729f, 1e-5f);
     }
 
-    TEST(LfsSchedulerTest, ExponentialLR_MultipleSteps) {
+    TEST_F(LfsSchedulerTest, ExponentialLR_MultipleSteps) {
         auto splat_data = create_test_splat_data(10);
         AdamConfig config;
         config.lr = 0.001f;
@@ -79,7 +82,7 @@ namespace {
         EXPECT_NEAR(optimizer.get_lr(), expected_lr, 1e-7f);
     }
 
-    TEST(LfsSchedulerTest, ExponentialLR_RapidDecay) {
+    TEST_F(LfsSchedulerTest, ExponentialLR_RapidDecay) {
         auto splat_data = create_test_splat_data(10);
         AdamConfig config;
         config.lr = 1.0f;
@@ -98,7 +101,7 @@ namespace {
         EXPECT_NEAR(optimizer.get_lr(), expected_lr, 1e-6f);
     }
 
-    TEST(LfsSchedulerTest, ExponentialLR_NoDecay) {
+    TEST_F(LfsSchedulerTest, ExponentialLR_NoDecay) {
         auto splat_data = create_test_splat_data(10);
         AdamConfig config;
         config.lr = 0.001f;
@@ -121,7 +124,7 @@ namespace {
     // WarmupExponentialLR Tests - Basic Functionality
     // ===================================================================================
 
-    TEST(LfsSchedulerTest, WarmupExponentialLR_NoWarmup) {
+    TEST_F(LfsSchedulerTest, WarmupExponentialLR_NoWarmup) {
         auto splat_data = create_test_splat_data(10);
         AdamConfig config;
         config.lr = 1.0f;
@@ -141,7 +144,7 @@ namespace {
         EXPECT_NEAR(optimizer.get_lr(), 0.81f, 1e-5f);
     }
 
-    TEST(LfsSchedulerTest, WarmupExponentialLR_LinearWarmup) {
+    TEST_F(LfsSchedulerTest, WarmupExponentialLR_LinearWarmup) {
         auto splat_data = create_test_splat_data(10);
         AdamConfig config;
         config.lr = 1.0f;
@@ -180,7 +183,7 @@ namespace {
         EXPECT_NEAR(optimizer.get_lr(), 1.0f, 1e-5f);
     }
 
-    TEST(LfsSchedulerTest, WarmupExponentialLR_WarmupThenDecay) {
+    TEST_F(LfsSchedulerTest, WarmupExponentialLR_WarmupThenDecay) {
         auto splat_data = create_test_splat_data(10);
         AdamConfig config;
         config.lr = 1.0f;
@@ -215,7 +218,7 @@ namespace {
         EXPECT_NEAR(optimizer.get_lr(), expected_lr, 1e-5f);
     }
 
-    TEST(LfsSchedulerTest, WarmupExponentialLR_FullStartFactor) {
+    TEST_F(LfsSchedulerTest, WarmupExponentialLR_FullStartFactor) {
         auto splat_data = create_test_splat_data(10);
         AdamConfig config;
         config.lr = 0.001f;
@@ -240,7 +243,7 @@ namespace {
         EXPECT_NEAR(optimizer.get_lr(), initial_lr * 0.95f, 1e-7f);
     }
 
-    TEST(LfsSchedulerTest, WarmupExponentialLR_ZeroStartFactor) {
+    TEST_F(LfsSchedulerTest, WarmupExponentialLR_ZeroStartFactor) {
         auto splat_data = create_test_splat_data(10);
         AdamConfig config;
         config.lr = 1.0f;
@@ -273,7 +276,7 @@ namespace {
     // WarmupExponentialLR Tests - Edge Cases
     // ===================================================================================
 
-    TEST(LfsSchedulerTest, WarmupExponentialLR_SingleStepWarmup) {
+    TEST_F(LfsSchedulerTest, WarmupExponentialLR_SingleStepWarmup) {
         auto splat_data = create_test_splat_data(10);
         AdamConfig config;
         config.lr = 1.0f;
@@ -293,7 +296,7 @@ namespace {
         EXPECT_NEAR(optimizer.get_lr(), 0.9f, 1e-5f);
     }
 
-    TEST(LfsSchedulerTest, WarmupExponentialLR_LongWarmup) {
+    TEST_F(LfsSchedulerTest, WarmupExponentialLR_LongWarmup) {
         auto splat_data = create_test_splat_data(10);
         AdamConfig config;
         config.lr = 0.01f;
@@ -327,7 +330,7 @@ namespace {
     // Integration Tests - Scheduler with Optimizer
     // ===================================================================================
 
-    TEST(LfsSchedulerTest, Integration_ExponentialLR_WithOptimization) {
+    TEST_F(LfsSchedulerTest, Integration_ExponentialLR_WithOptimization) {
         auto splat_data = create_test_splat_data(10);
         AdamConfig config;
         config.lr = 0.1f;
@@ -340,7 +343,7 @@ namespace {
         // Simulate training loop
         for (int iter = 0; iter < 10; iter++) {
             // Simulate gradients
-            optimizer.get_grad(lfs::training::ParamType::Means) = Tensor::ones(splat_data.means().shape(), Device::CUDA);
+            optimizer.get_grad(lfs::training::ParamType::Means) = Tensor::ones(splat_data.means().shape(), Device::GPU);
 
             // Optimize
             optimizer.step(iter);
@@ -357,7 +360,7 @@ namespace {
         }
     }
 
-    TEST(LfsSchedulerTest, Integration_WarmupExponentialLR_WithOptimization) {
+    TEST_F(LfsSchedulerTest, Integration_WarmupExponentialLR_WithOptimization) {
         auto splat_data = create_test_splat_data(10);
         AdamConfig config;
         config.lr = 0.01f;
@@ -372,7 +375,7 @@ namespace {
         // Simulate training loop
         for (int iter = 0; iter < 20; iter++) {
             // Simulate gradients
-            optimizer.get_grad(lfs::training::ParamType::Means) = Tensor::randn(splat_data.means().shape(), Device::CUDA);
+            optimizer.get_grad(lfs::training::ParamType::Means) = Tensor::randn(splat_data.means().shape(), Device::GPU);
 
             // Optimize
             optimizer.step(iter);
@@ -404,7 +407,7 @@ namespace {
     // Stress Tests
     // ===================================================================================
 
-    TEST(LfsSchedulerTest, StressTest_ManySteps) {
+    TEST_F(LfsSchedulerTest, StressTest_ManySteps) {
         auto splat_data = create_test_splat_data(10);
         AdamConfig config;
         config.lr = 1.0f;
@@ -427,7 +430,7 @@ namespace {
         EXPECT_LT(optimizer.get_lr(), 1.0f);
     }
 
-    TEST(LfsSchedulerTest, StressTest_VerySmallLR) {
+    TEST_F(LfsSchedulerTest, StressTest_VerySmallLR) {
         auto splat_data = create_test_splat_data(10);
         AdamConfig config;
         config.lr = 1e-10f;
@@ -445,7 +448,7 @@ namespace {
         EXPECT_NEAR(optimizer.get_lr(), expected_lr, 1e-16f);
     }
 
-    TEST(LfsSchedulerTest, StressTest_MultipleSchedulers) {
+    TEST_F(LfsSchedulerTest, StressTest_MultipleSchedulers) {
         auto splat_data = create_test_splat_data(10);
         AdamConfig config;
         config.lr = 1.0f;
@@ -479,7 +482,7 @@ namespace {
     // Realistic Training Scenario Tests
     // ===================================================================================
 
-    TEST(LfsSchedulerTest, RealisticScenario_GaussianSplatting) {
+    TEST_F(LfsSchedulerTest, RealisticScenario_GaussianSplatting) {
         // Simulate a realistic Gaussian Splatting training scenario
         auto splat_data = create_test_splat_data(1000);
         AdamConfig config;

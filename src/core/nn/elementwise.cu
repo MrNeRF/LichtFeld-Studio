@@ -41,36 +41,33 @@ namespace lfs::core::nn::kernels {
                 sum += v;
                 sumsq += v * v;
             }
-            __shared__ float red[32];
-            float w = warp_sum(sum);
+            // Reduce the sum and the sum of squares into separate shared slots.
+            // Sharing one buffer would need a barrier between reading the mean
+            // and refilling it, and without that barrier a fast warp overwrites
+            // the block sum while a slow warp is still reading it.
+            __shared__ float red_sum[32];
+            __shared__ float red_sq[32];
+            const int warps = (nthreads + 31) / 32;
+            float w_sum = warp_sum(sum);
+            float w_sq = warp_sum(sumsq);
             if ((tid & 31) == 0) {
-                red[tid / 32] = w;
+                red_sum[tid / 32] = w_sum;
+                red_sq[tid / 32] = w_sq;
             }
             __syncthreads();
             if (tid < 32) {
-                const float v = (tid < (nthreads + 31) / 32) ? red[tid] : 0.0f;
-                w = warp_sum(v);
+                const float v_sum = (tid < warps) ? red_sum[tid] : 0.0f;
+                const float v_sq = (tid < warps) ? red_sq[tid] : 0.0f;
+                w_sum = warp_sum(v_sum);
+                w_sq = warp_sum(v_sq);
                 if (tid == 0) {
-                    red[0] = w;
+                    red_sum[0] = w_sum;
+                    red_sq[0] = w_sq;
                 }
             }
             __syncthreads();
-            const float mean = red[0] / static_cast<float>(cols);
-
-            w = warp_sum(sumsq);
-            if ((tid & 31) == 0) {
-                red[tid / 32] = w;
-            }
-            __syncthreads();
-            if (tid < 32) {
-                const float v = (tid < (nthreads + 31) / 32) ? red[tid] : 0.0f;
-                w = warp_sum(v);
-                if (tid == 0) {
-                    red[0] = w;
-                }
-            }
-            __syncthreads();
-            const float var = red[0] / static_cast<float>(cols) - mean * mean;
+            const float mean = red_sum[0] / static_cast<float>(cols);
+            const float var = red_sq[0] / static_cast<float>(cols) - mean * mean;
             const float inv = rsqrtf(var + eps);
 
             for (int c = tid; c < cols; c += nthreads) {

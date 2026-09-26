@@ -8,10 +8,8 @@
 #include "core/path_utils.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_exportable_storage.hpp"
-#include "core/tensor/internal/tensor_serialization.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "training/kernels/grad_alpha.hpp"
-#include "training/rasterization/fastgs/rasterization/include/forward.h"
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -97,11 +95,8 @@ namespace lfs::training {
             core::Tensor alpha;
             core::Tensor depth;
             core::Tensor normal;
-            core::Tensor grad_alpha;
             int width = -1;
             int height = -1;
-            int grad_alpha_height = 0;
-            int grad_alpha_width = 0;
         };
 
         thread_local FastRasterizerThreadLocalCaches fast_rasterizer_thread_caches;
@@ -117,56 +112,6 @@ namespace lfs::training {
             return bg_image.is_valid() && !bg_image.is_empty();
         }
 
-        void compose_background_in_place(
-            core::Tensor& image,
-            const core::Tensor& alpha,
-            const core::Tensor& bg_color,
-            const core::Tensor& bg_image,
-            int height,
-            int width,
-            cudaStream_t stream,
-            bool subtract_background) {
-            if (has_background_image(bg_image)) {
-                if (subtract_background) {
-                    kernels::launch_fused_background_unblend_with_image(
-                        image.ptr<float>(),
-                        alpha.ptr<float>(),
-                        bg_image.ptr<float>(),
-                        height,
-                        width,
-                        stream);
-                } else {
-                    kernels::launch_fused_background_blend_with_image(
-                        image.ptr<float>(),
-                        alpha.ptr<float>(),
-                        bg_image.ptr<float>(),
-                        image.ptr<float>(),
-                        height,
-                        width,
-                        stream);
-                }
-                return;
-            }
-
-            if (subtract_background) {
-                kernels::launch_fused_background_unblend(
-                    image.ptr<float>(),
-                    alpha.ptr<float>(),
-                    bg_color.ptr<float>(),
-                    height,
-                    width,
-                    stream);
-            } else {
-                kernels::launch_fused_background_blend(
-                    image.ptr<float>(),
-                    alpha.ptr<float>(),
-                    bg_color.ptr<float>(),
-                    image.ptr<float>(),
-                    height,
-                    width,
-                    stream);
-            }
-        }
     } // namespace
 
     /**
@@ -267,7 +212,7 @@ namespace lfs::training {
         try {
             // Dump tensors as binary .tensor files
             // Each file contains: header + shape dims + raw float32 data
-            // Tensors are copied to CPU before saving if they're on CUDA
+            // Tensors are copied to CPU before saving if they're on GPU
             if (means.is_valid())
                 core::save_tensor(means, dump_dir + "/means.tensor"); // [N, 3]
             if (raw_scales.is_valid())
@@ -359,7 +304,8 @@ namespace lfs::training {
         int tile_height,
         bool mip_filter,
         const core::Tensor& bg_image,
-        bool render_normal) {
+        bool render_normal,
+        bool render_depth) {
         // Get camera parameters
         const int full_width = viewpoint_camera.image_width();
         const int full_height = viewpoint_camera.image_height();
@@ -391,7 +337,7 @@ namespace lfs::training {
         constexpr float near_plane = 0.01f;
         constexpr float far_plane = 1e10f;
 
-        // Get direct GPU pointers (tensors are already contiguous on CUDA)
+        // Get direct GPU pointers (tensors are already contiguous on GPU)
         const float* w2c_ptr = viewpoint_camera.world_view_transform_ptr();
         const float* cam_position_ptr = viewpoint_camera.cam_position_ptr();
 
@@ -406,6 +352,12 @@ namespace lfs::training {
             }));
         }
 
+        for (const auto* input : std::initializer_list<const core::Tensor*>{&means, &raw_scales, &raw_rotations, &raw_opacities, &sh0, &shN,
+                                                                            &bg_color, &bg_image, &viewpoint_camera.world_view_transform(),
+                                                                            &viewpoint_camera.cam_position()}) {
+            if (input->is_valid())
+                input->sync_to_stream(lfs::core::getCurrentCUDAStream());
+        }
         // Pre-allocate output tensors (reused across iterations)
         auto& image = fast_rasterizer_thread_caches.image;
         auto& alpha = fast_rasterizer_thread_caches.alpha;
@@ -417,38 +369,43 @@ namespace lfs::training {
         // Thread-local outputs can survive a Trainer. A same-sized render on the
         // next Trainer must not reuse tensors whose stream handle was destroyed
         // during the previous Trainer's shutdown.
-        const cudaStream_t raster_stream = lfs::core::getCurrentCUDAStream()
-                                               ? lfs::core::getCurrentCUDAStream()
-                                               : means.stream();
+        const cudaStream_t raster_stream = lfs::core::getCurrentCUDAStream();
 
         // Reallocate when either the shape or owning stream changes. Calling
         // Tensor::set_stream on a cache backed by a destroyed stream would try
         // to bridge from that dead handle before re-homing it.
-        if (!image.is_valid() || !alpha.is_valid() || !depth.is_valid() ||
+        if (!image.is_valid() || !alpha.is_valid() ||
             last_width != width || last_height != height ||
-            image.stream() != raster_stream || alpha.stream() != raster_stream ||
-            depth.stream() != raster_stream) {
-            image = core::Tensor::empty({3, static_cast<size_t>(height), static_cast<size_t>(width)});
-            alpha = core::Tensor::empty({1, static_cast<size_t>(height), static_cast<size_t>(width)});
-            depth = core::Tensor::empty({1, static_cast<size_t>(height), static_cast<size_t>(width)});
+            image.stream() != raster_stream || alpha.stream() != raster_stream) {
+            image = core::Tensor::empty_exact({3, static_cast<size_t>(height), static_cast<size_t>(width)});
+            alpha = core::Tensor::empty_exact({1, static_cast<size_t>(height), static_cast<size_t>(width)});
+            depth = core::Tensor();
             normal = core::Tensor();
             if (image.stream() != raster_stream)
                 image.set_stream(raster_stream);
             if (alpha.stream() != raster_stream)
                 alpha.set_stream(raster_stream);
-            if (depth.stream() != raster_stream)
-                depth.set_stream(raster_stream);
             last_width = width;
             last_height = height;
+        }
+        if (!render_depth) {
+            depth = core::Tensor();
+        } else if (!depth.is_valid() || depth.stream() != raster_stream) {
+            depth = core::Tensor::empty_exact({1, static_cast<size_t>(height), static_cast<size_t>(width)});
+            if (depth.stream() != raster_stream)
+                depth.set_stream(raster_stream);
         }
         if (render_normal &&
             (!normal.is_valid() ||
              normal.shape() != core::TensorShape({3, static_cast<size_t>(height), static_cast<size_t>(width)}) ||
              normal.stream() != raster_stream)) {
-            normal = core::Tensor::empty({3, static_cast<size_t>(height), static_cast<size_t>(width)});
+            normal = core::Tensor::empty_exact({3, static_cast<size_t>(height), static_cast<size_t>(width)});
             if (normal.stream() != raster_stream)
                 normal.set_stream(raster_stream);
         }
+
+        if (gaussian_model._max_screen_share.is_valid())
+            gaussian_model._max_screen_share.set_stream(raster_stream);
 
         // Call forward_raw with raw pointers (no PyTorch wrappers)
         // Use adjusted cx/cy for tile rendering
@@ -492,7 +449,7 @@ namespace lfs::training {
                 cam_position_ptr,
                 image.ptr<float>(),
                 alpha.ptr<float>(),
-                depth.ptr<float>(),
+                render_depth ? depth.ptr<float>() : nullptr,
                 render_normal ? normal.ptr<float>() : nullptr,
                 bg_color_ptr,
                 bg_image_ptr,
@@ -602,7 +559,7 @@ namespace lfs::training {
 
         // Prepare render output
         RenderOutput render_output;
-        const cudaStream_t stream = image.stream();
+        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
 
         // background is composed inside blend_cu (single write).
         // No separate full-image compose pass.
@@ -670,61 +627,42 @@ namespace lfs::training {
         const core::Tensor& grad_depth,
         const core::Tensor& grad_normal) {
 
-        // Compute grad_alpha from background blending: output = image + (1 - alpha) * bg
-        int H, W;
-        bool is_chw_layout;
-
-        if (grad_image.shape()[0] == 3) {
-            is_chw_layout = true;
-            H = checked_dim_to_int(grad_image.shape()[1], "grad_image height");
-            W = checked_dim_to_int(grad_image.shape()[2], "grad_image width");
-        } else if (grad_image.shape()[2] == 3) {
-            is_chw_layout = false;
-            H = checked_dim_to_int(grad_image.shape()[0], "grad_image height");
-            W = checked_dim_to_int(grad_image.shape()[1], "grad_image width");
-        } else {
-            throw std::runtime_error("Unexpected grad_image shape");
+        if (grad_image.ndim() != 3 || grad_image.shape()[0] != 3) {
+            throw std::runtime_error("FastGS backward expects a [3, H, W] image gradient");
+        }
+        const int H = checked_dim_to_int(grad_image.shape()[1], "grad_image height");
+        const int W = checked_dim_to_int(grad_image.shape()[2], "grad_image width");
+        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+        ctx.completion_stream = stream;
+        for (const auto* input : std::initializer_list<const core::Tensor*>{&grad_image, &grad_alpha_extra, &grad_depth, &grad_normal,
+                                                                            &ctx.bg_image, &ctx.bg_color, &ctx.image, &ctx.alpha, &pixel_error_map}) {
+            if (input->is_valid())
+                input->sync_to_stream(stream);
         }
 
-        auto& cached_grad_alpha = fast_rasterizer_thread_caches.grad_alpha;
-        auto& cached_ga_h = fast_rasterizer_thread_caches.grad_alpha_height;
-        auto& cached_ga_w = fast_rasterizer_thread_caches.grad_alpha_width;
-        const cudaStream_t stream = grad_image.stream();
-        if (!cached_grad_alpha.is_valid() || cached_ga_h != H || cached_ga_w != W ||
-            cached_grad_alpha.stream() != stream) {
-            cached_grad_alpha = core::Tensor::empty({static_cast<size_t>(H), static_cast<size_t>(W)}, core::Device::CUDA);
-            if (cached_grad_alpha.stream() != stream)
-                cached_grad_alpha.set_stream(stream);
-            cached_ga_h = H;
-            cached_ga_w = W;
-        }
-        auto& grad_alpha = cached_grad_alpha;
-
-        // Use background image kernel if available, otherwise use solid color kernel
-        if (has_background_image(ctx.bg_image) && is_chw_layout) {
+        // The blend backward derives the background alpha gradient per pixel
+        // from grad_image and the background; no [H, W] map is materialized.
+        fast_lfs::rasterization::BackgroundAlphaGradient background_grad;
+        if (has_background_image(ctx.bg_image)) {
             core::pin_operands({&grad_image, &ctx.bg_image});
-            kernels::launch_fused_grad_alpha_with_image(
-                grad_image.ptr<float>(),
-                ctx.bg_image.ptr<float>(),
-                grad_alpha.ptr<float>(),
-                H, W,
-                stream);
-        } else {
+            background_grad.bg_image = ctx.bg_image.ptr<float>();
+        } else if (ctx.bg_color.is_valid() && ctx.bg_color.numel() >= 3) {
             core::pin_operands({&grad_image, &ctx.bg_color});
-            kernels::launch_fused_grad_alpha(
-                grad_image.ptr<float>(),
-                ctx.bg_color.ptr<float>(),
-                grad_alpha.ptr<float>(),
-                H, W,
-                is_chw_layout,
-                stream);
+            background_grad.bg_color = ctx.bg_color.ptr<float>();
         }
-
+        core::Tensor grad_alpha_extra_2d;
         if (grad_alpha_extra.is_valid() && grad_alpha_extra.numel() > 0) {
-            auto extra = (grad_alpha_extra.ndim() == 3 && grad_alpha_extra.shape()[0] == 1)
-                             ? grad_alpha_extra.squeeze(0)
-                             : grad_alpha_extra;
-            grad_alpha.add_(extra);
+            grad_alpha_extra_2d = (grad_alpha_extra.ndim() == 3 && grad_alpha_extra.shape()[0] == 1)
+                                      ? grad_alpha_extra.squeeze(0)
+                                      : grad_alpha_extra;
+            if (!(grad_alpha_extra_2d.ndim() == 2 &&
+                  checked_dim_to_int(grad_alpha_extra_2d.shape()[0], "grad_alpha_extra height") == H &&
+                  checked_dim_to_int(grad_alpha_extra_2d.shape()[1], "grad_alpha_extra width") == W &&
+                  grad_alpha_extra_2d.dtype() == core::DataType::Float32)) {
+                throw std::runtime_error("grad_alpha_extra must have shape [H, W] or [1, H, W]");
+            }
+            grad_alpha_extra_2d = grad_alpha_extra_2d.contiguous();
+            background_grad.grad_alpha_extra = grad_alpha_extra_2d.ptr<float>();
         }
 
         core::Tensor grad_depth_2d;
@@ -734,12 +672,13 @@ namespace lfs::training {
             if (grad_depth_2d.ndim() == 3 && grad_depth_2d.shape()[0] == 1) {
                 grad_depth_2d = grad_depth_2d.squeeze(0);
             }
-            assert(grad_depth_2d.ndim() == 2 &&
-                   checked_dim_to_int(grad_depth_2d.shape()[0], "grad_depth height") == H &&
-                   checked_dim_to_int(grad_depth_2d.shape()[1], "grad_depth width") == W &&
-                   "grad_depth must have shape [H, W] or [1, H, W]");
-            if (grad_depth_2d.device() != core::Device::CUDA) {
-                grad_depth_2d = grad_depth_2d.cuda();
+            if (!(grad_depth_2d.ndim() == 2 &&
+                  checked_dim_to_int(grad_depth_2d.shape()[0], "grad_depth height") == H &&
+                  checked_dim_to_int(grad_depth_2d.shape()[1], "grad_depth width") == W)) {
+                throw std::runtime_error("grad_depth must have shape [H, W] or [1, H, W]");
+            }
+            if (grad_depth_2d.device() != core::Device::GPU) {
+                grad_depth_2d = grad_depth_2d.gpu();
             }
             if (!grad_depth_2d.is_contiguous()) {
                 grad_depth_2d = grad_depth_2d.contiguous();
@@ -751,13 +690,14 @@ namespace lfs::training {
         const float* grad_normal_ptr = nullptr;
         if (grad_normal.is_valid() && grad_normal.numel() > 0) {
             grad_normal_chw = grad_normal;
-            assert(grad_normal_chw.ndim() == 3 &&
-                   grad_normal_chw.shape()[0] == 3 &&
-                   checked_dim_to_int(grad_normal_chw.shape()[1], "grad_normal height") == H &&
-                   checked_dim_to_int(grad_normal_chw.shape()[2], "grad_normal width") == W &&
-                   "grad_normal must have shape [3, H, W]");
-            if (grad_normal_chw.device() != core::Device::CUDA) {
-                grad_normal_chw = grad_normal_chw.cuda();
+            if (!(grad_normal_chw.ndim() == 3 &&
+                  grad_normal_chw.shape()[0] == 3 &&
+                  checked_dim_to_int(grad_normal_chw.shape()[1], "grad_normal height") == H &&
+                  checked_dim_to_int(grad_normal_chw.shape()[2], "grad_normal width") == W)) {
+                throw std::runtime_error("grad_normal must have shape [3, H, W]");
+            }
+            if (grad_normal_chw.device() != core::Device::GPU) {
+                grad_normal_chw = grad_normal_chw.gpu();
             }
             if (!grad_normal_chw.is_contiguous()) {
                 grad_normal_chw = grad_normal_chw.contiguous();
@@ -783,8 +723,8 @@ namespace lfs::training {
                    checked_dim_to_int(error_map_2d.shape()[0], "error_map height") == H &&
                    checked_dim_to_int(error_map_2d.shape()[1], "error_map width") == W &&
                    "pixel_error_map must have shape [H, W] or [1, H, W]");
-            if (error_map_2d.device() != core::Device::CUDA) {
-                error_map_2d = error_map_2d.cuda();
+            if (error_map_2d.device() != core::Device::GPU) {
+                error_map_2d = error_map_2d.gpu();
             }
             if (!error_map_2d.is_contiguous()) {
                 error_map_2d = error_map_2d.contiguous();
@@ -829,11 +769,13 @@ namespace lfs::training {
         } else if (ctx.shN.is_valid()) {
             bwd_shN_ptr = ctx.shN.ptr<float>();
         }
+        if (update_densification_info)
+            gaussian_model._densification_info.set_stream(stream);
         auto backward_result = fast_lfs::rasterization::backward_raw(
             update_densification_info ? gaussian_model._densification_info.ptr<float>() : nullptr,
             use_pixel_error_densification ? error_map_2d.ptr<float>() : nullptr,
             grad_image.ptr<float>(),
-            grad_alpha.ptr<float>(),
+            background_grad,
             grad_depth_ptr,
             grad_normal_ptr,
             raw_image.ptr<float>(),
@@ -883,21 +825,12 @@ namespace lfs::training {
         fast_rasterizer_thread_caches.alpha = {};
         fast_rasterizer_thread_caches.depth = {};
         fast_rasterizer_thread_caches.normal = {};
-        fast_rasterizer_thread_caches.grad_alpha = {};
         fast_rasterizer_thread_caches.width = -1;
         fast_rasterizer_thread_caches.height = -1;
-        fast_rasterizer_thread_caches.grad_alpha_height = 0;
-        fast_rasterizer_thread_caches.grad_alpha_width = 0;
         return !fast_rasterizer_thread_caches.image.is_valid() &&
                !fast_rasterizer_thread_caches.alpha.is_valid() &&
                !fast_rasterizer_thread_caches.depth.is_valid() &&
-               !fast_rasterizer_thread_caches.normal.is_valid() &&
-               !fast_rasterizer_thread_caches.grad_alpha.is_valid();
-    }
-
-    void release_fastgs_sort_workspace_buffers() noexcept {
-        // Kept for source compatibility; FastGS sort storage is arena-owned.
-        fast_lfs::rasterization::release_sort_workspace_buffers();
+               !fast_rasterizer_thread_caches.normal.is_valid();
     }
 
     namespace {

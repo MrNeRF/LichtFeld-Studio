@@ -9,6 +9,7 @@
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/strategies/strategy_utils.hpp"
 #include "training/trainer.hpp"
@@ -35,12 +36,12 @@ namespace {
             rot[i * 4] = 1.f;
         return std::make_unique<SplatData>(
             0,
-            Tensor::from_vector(means, {n, size_t{3}}, Device::CUDA),
-            Tensor::zeros({n, size_t{1}, size_t{3}}, Device::CUDA),
-            Tensor::zeros({n, size_t{0}, size_t{3}}, Device::CUDA),
-            Tensor::zeros({n, size_t{3}}, Device::CUDA),
-            Tensor::from_vector(rot, {n, size_t{4}}, Device::CUDA),
-            Tensor::zeros({n, size_t{1}}, Device::CUDA),
+            Tensor::from_vector(means, {n, size_t{3}}, Device::GPU),
+            Tensor::zeros({n, size_t{1}, size_t{3}}, Device::GPU),
+            Tensor::zeros({n, size_t{0}, size_t{3}}, Device::GPU),
+            Tensor::zeros({n, size_t{3}}, Device::GPU),
+            Tensor::from_vector(rot, {n, size_t{4}}, Device::GPU),
+            Tensor::zeros({n, size_t{1}}, Device::GPU),
             1.0f);
     }
 
@@ -56,37 +57,39 @@ namespace {
 
 } // namespace
 
-TEST(PersistentMasksTest, FrozenMaskRebuiltOnceAcrossUnchangedCalls) {
+class PersistentMasksTest : public lfs::test::CudaBackendTest {};
+
+TEST_F(PersistentMasksTest, FrozenMaskRebuiltOnceAcrossUnchangedCalls) {
     auto splat = make_splat(32);
     splat->set_frozen_ranges({{.start = 0, .count = 8}});
 
     reset_frozen_mask_rebuild_count();
-    auto m1 = make_frozen_mask(*splat, 32, Device::CUDA);
+    auto m1 = make_frozen_mask(*splat, 32, Device::GPU);
     ASSERT_TRUE(m1.is_valid());
     EXPECT_EQ(frozen_mask_rebuild_count(), 1u);
 
     for (int i = 0; i < 10; ++i) {
-        auto m = make_frozen_mask(*splat, 32, Device::CUDA);
+        auto m = make_frozen_mask(*splat, 32, Device::GPU);
         ASSERT_TRUE(m.is_valid());
         EXPECT_EQ(m.ptr<bool>(), m1.ptr<bool>()) << "must reuse same device buffer";
     }
     EXPECT_EQ(frozen_mask_rebuild_count(), 1u);
 
     // Topology change (N) forces rebuild.
-    auto m2 = make_frozen_mask(*splat, 16, Device::CUDA);
+    auto m2 = make_frozen_mask(*splat, 16, Device::GPU);
     ASSERT_TRUE(m2.is_valid());
     EXPECT_EQ(frozen_mask_rebuild_count(), 2u);
 
     // Range change forces rebuild.
     splat->set_frozen_ranges({{.start = 4, .count = 4}});
-    auto m3 = make_frozen_mask(*splat, 16, Device::CUDA);
+    auto m3 = make_frozen_mask(*splat, 16, Device::GPU);
     ASSERT_TRUE(m3.is_valid());
     EXPECT_EQ(frozen_mask_rebuild_count(), 3u);
 }
 
 // Cropbox damping: rebuild exactly once across N unchanged installs; again on
 // topology (N) change. Geometry fingerprint also invalidates (cropbox move).
-TEST(PersistentMasksTest, CropboxDampingRebuiltOnceAcrossUnchangedSteps) {
+TEST_F(PersistentMasksTest, CropboxDampingRebuiltOnceAcrossUnchangedSteps) {
     Scene scene;
     // Trainer(scene) requires cameras (hasTrainingData).
     const auto cameras = scene.addGroup("Cameras");
@@ -107,7 +110,7 @@ TEST(PersistentMasksTest, CropboxDampingRebuiltOnceAcrossUnchangedSteps) {
         p[6] = 0;
         p[7] = 0;
         p[8] = 0;
-        model->means() = cpu.to(Device::CUDA);
+        model->means() = cpu.to(Device::GPU);
     }
     auto* model_ptr = model.get();
     const auto model_id = scene.addSplat("Model", std::move(model));

@@ -25,7 +25,7 @@ target_link_libraries(lfs_preprocessing
         lfs_core
     PRIVATE
         lfs_io                  # Scene import (Loader) for depth-anchor precompute
-        lfs_depth_anchor        # Shared depth-anchor fit + sidecar cache
+        $<$<BOOL:${LFS_BUILD_TRAINER}>:lfs_depth_anchor>
         CURL::libcurl
         OpenSSL::Crypto
 )

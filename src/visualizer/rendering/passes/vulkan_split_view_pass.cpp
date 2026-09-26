@@ -166,7 +166,9 @@ namespace lfs::vis {
             VkImageView view = VK_NULL_HANDLE;
             std::uint32_t width = 0;
             std::uint32_t height = 0;
-            const lfs::core::Tensor* uploaded_tensor = nullptr;
+            // Retain the cached source object so a new image cannot reuse its
+            // address and be mistaken for an already-uploaded camera preview.
+            std::shared_ptr<const lfs::core::Tensor> uploaded_tensor;
             // Persistent staging: kept alive between frames so identical-size uploads
             // don't repeatedly allocate / map / unmap an 8 MB buffer at 1080p.
             VkBuffer staging_buffer = VK_NULL_HANDLE;
@@ -864,7 +866,8 @@ namespace lfs::vis {
             return true;
         }
 
-        bool uploadPanel(PanelImage& panel, const lfs::core::Tensor& tensor) {
+        bool uploadPanel(PanelImage& panel, const std::shared_ptr<const lfs::core::Tensor>& source) {
+            const auto& tensor = *source;
             const char* const side = &panel == &left ? "left" : "right";
             // Probe size from the tensor; resize the persistent pack buffer only when
             // the tensor's resolution exceeds the current capacity.
@@ -1049,7 +1052,7 @@ namespace lfs::vis {
             // The viewport pass that consumes this image runs on the same queue right
             // after, so submission order alone makes the upload visible — no fence wait
             // here. We only block on the fence on the NEXT upload to this panel.
-            panel.uploaded_tensor = &tensor;
+            panel.uploaded_tensor = source;
             return true;
         }
 
@@ -1117,8 +1120,8 @@ namespace lfs::vis {
             if (spec.external_image_view != VK_NULL_HANDLE) {
                 return spec.external_image_view;
             }
-            if (spec.image && spec.image.get() != panel.uploaded_tensor) {
-                if (!uploadPanel(panel, *spec.image)) {
+            if (spec.image && spec.image.get() != panel.uploaded_tensor.get()) {
+                if (!uploadPanel(panel, spec.image)) {
                     return VK_NULL_HANDLE;
                 }
             }

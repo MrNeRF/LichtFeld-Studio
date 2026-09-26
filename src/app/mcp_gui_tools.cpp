@@ -11,8 +11,8 @@
 #include "app/mcp_sequencer_tools.hpp"
 #include "app/mcp_ui_registry_tools.hpp"
 #include "app/view_info_json.hpp"
+#include "core/tensor_sh.hpp"
 
-#include "core/cuda/sh_layout.cuh"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
@@ -24,6 +24,8 @@
 #include "core/scene.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
+#include "core/training_manager.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
 #include "mcp/llm_client.hpp"
@@ -35,7 +37,6 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/render_constants.hpp"
 #include "sequencer/keyframe.hpp"
-#include "training/training_manager.hpp"
 #include "visualizer/gui/html_viewer_export.hpp"
 #include "visualizer/gui/panels/python_console_panel.hpp"
 #include "visualizer/gui_capabilities.hpp"
@@ -1654,12 +1655,14 @@ namespace lfs::app {
                     stamp.iteration = iteration;
             }
             const auto* const trainer = trainer_manager ? trainer_manager->getTrainer() : nullptr;
+#if LFS_BUILD_TRAINER
             if (trainer) {
                 const auto strategy = core::param::canonical_strategy_name(
                     trainer->getParams().optimization.strategy);
                 if (!strategy.empty())
                     stamp.strategy = std::string(strategy);
             }
+#endif
             return stamp;
         }
 
@@ -1677,6 +1680,7 @@ namespace lfs::app {
             if (node->model->has_deleted_mask())
                 return plan;
 
+#if LFS_BUILD_TRAINER
             if (node->uuid == scene.getTrainingModelNodeUuid()) {
                 const auto* const trainer_manager = scene_manager.getTrainerManager();
                 const auto* const trainer = trainer_manager ? trainer_manager->getTrainer() : nullptr;
@@ -1685,6 +1689,7 @@ namespace lfs::app {
                 if (trainer)
                     plan.model_lock.emplace(trainer->getRenderMutex());
             }
+#endif
 
             plan.storage_mode = core::Scene::MergeStorageMode::BorrowSingleIdentity;
             return plan;
@@ -1776,6 +1781,11 @@ namespace lfs::app {
             }
             case core::ExportFormat::COLMAP:
                 return std::unexpected("COLMAP export uses scene_export_colmap");
+            case core::ExportFormat::GALLERY_SCENE:
+            case core::ExportFormat::GALLERY_SOG:
+            case core::ExportFormat::GALLERY_SSOG:
+            case core::ExportFormat::GALLERY_SPZ:
+                return std::unexpected("Use prepare_gallery_scene() to prepare a gallery upload.");
             }
 
             return {};
@@ -4840,7 +4850,7 @@ namespace lfs::app {
                     result["total_chars"] = static_cast<int64_t>(code.size());
                     result["modified"] = console.isModified();
                     if (!console.getScriptPath().empty())
-                        result["path"] = console.getScriptPath().string();
+                        result["path"] = core::path_to_utf8(console.getScriptPath());
                     return result;
                 });
             });
@@ -5108,6 +5118,7 @@ namespace lfs::app {
                             return json{{"error", "Gaussian index out of range: " + std::to_string(index)}};
                     }
 
+                    const core::GpuBackendScope backend_scope(core::gpu_backend_of(node->model->means_raw()).value_or(core::default_gpu_backend()));
                     const auto index_tensor = core::Tensor::from_vector(
                         resolved_indices,
                         {resolved_indices.size()},
@@ -5122,34 +5133,23 @@ namespace lfs::app {
                                 node->model->max_sh_coeffs_rest() == 0) {
                                 field_payloads[field_name] = tensor_payload_json(
                                     core::Tensor::zeros({static_cast<size_t>(resolved_indices.size()), 0, 3},
-                                                        core::Device::CUDA));
+                                                        core::Device::GPU));
                                 continue;
                             }
                             const auto rest_coefficients =
                                 static_cast<uint32_t>(node->model->max_sh_coeffs_rest());
-                            core::Tensor selected_sh;
-                            // q16 / IEEE-f16: dequant to [N,K,3] then index_select (no ptr<float> on codes).
-                            if (node->model->shN_raw().dtype() != core::DataType::Float32) {
-                                core::Tensor canon = node->model->shN_canonical();
-                                auto indices_for_select = index_tensor;
-                                if (indices_for_select.device() != canon.device())
-                                    indices_for_select = indices_for_select.to(canon.device());
-                                if (indices_for_select.dtype() != core::DataType::Int32 &&
-                                    indices_for_select.dtype() != core::DataType::Int64) {
-                                    indices_for_select = indices_for_select.to(core::DataType::Int32);
-                                }
-                                selected_sh = canon.index_select(0, indices_for_select).contiguous();
-                            } else {
-                                selected_sh = core::Tensor::empty(
-                                    {resolved_indices.size(), static_cast<size_t>(rest_coefficients), size_t{3}},
-                                    node->model->shN_raw().device());
-                                core::shN_swizzled_gather_to_linear(
-                                    node->model->shN_raw().ptr<float>(),
-                                    index_tensor.ptr<int>(),
-                                    selected_sh.ptr<float>(),
-                                    resolved_indices.size(),
-                                    rest_coefficients);
-                            }
+                            core::Tensor selected_sh = core::Tensor::empty(
+                                {resolved_indices.size(), size_t(rest_coefficients), size_t{3}},
+                                node->model->shN_raw().device(), core::DataType::Float32);
+                            core::sh_codec(node->model->shN_raw(), selected_sh,
+                                           {.source_format = core::sh_storage_format(node->model->shN_raw(), node->model->shN_value_bounds()),
+                                            .destination_format = core::ShFormat::Canonical,
+                                            .source_rows = size_t(node->model->size()),
+                                            .destination_rows = resolved_indices.size(),
+                                            .count = resolved_indices.size(),
+                                            .source_rest = rest_coefficients,
+                                            .destination_rest = rest_coefficients},
+                                           &index_tensor, node->model->shN_value_quantized() ? &node->model->shN_value_bounds() : nullptr);
                             field_payloads[field_name] = tensor_payload_json(selected_sh);
                             continue;
                         }
@@ -5269,10 +5269,10 @@ namespace lfs::app {
                         core::events::cmd::SequencerLoadPlySequence{.directory = directory, .fps = fps}.emit();
                     },
                 .scrub_to_time =
-                    [viewer_impl](const float time) {
+                    [viewer_impl](const float time, const bool update_camera) {
                         auto* const gui_manager = viewer_impl ? viewer_impl->getGuiManager() : nullptr;
-                        if (gui_manager)
-                            gui_manager->sequencer().seek(time);
+                        return gui_manager &&
+                               gui_manager->sequencerUI().scrubToTime(time, update_camera);
                     },
                 .ply_sequence_status =
                     [viewer_impl]() -> std::string {
@@ -5552,7 +5552,7 @@ namespace lfs::app {
                         {"output_total_chars", static_cast<int64_t>(console.getOutputText().size())},
                     };
                     if (!console.getScriptPath().empty())
-                        payload["path"] = console.getScriptPath().string();
+                        payload["path"] = core::path_to_utf8(console.getScriptPath());
 
                     return single_json_resource(uri, std::move(payload));
                 });

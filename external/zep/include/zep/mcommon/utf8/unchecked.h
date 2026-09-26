@@ -29,6 +29,8 @@ DEALINGS IN THE SOFTWARE.
 
 #include "core.h"
 
+#include <cstddef>
+
 namespace utf8 {
     namespace unchecked {
         template <typename octet_iterator>
@@ -200,10 +202,16 @@ namespace utf8 {
 
         // The iterator class
         template <typename octet_iterator>
-        class iterator : public std::iterator<std::bidirectional_iterator_tag, uint32_t> {
+        class iterator {
             octet_iterator it;
 
         public:
+            using iterator_category = std::bidirectional_iterator_tag;
+            using value_type = uint32_t;
+            using difference_type = std::ptrdiff_t;
+            using pointer = uint32_t*;
+            using reference = uint32_t&;
+
             iterator() {}
             explicit iterator(const octet_iterator& octet_it) : it(octet_it) {}
             // the default "big three" are OK

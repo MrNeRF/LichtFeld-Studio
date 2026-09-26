@@ -15,7 +15,14 @@
 
 namespace lfs::vis {
 
-    // Snapshot of scene state for rendering
+    // Snapshot of scene state for rendering.
+    // metadata_only skips combined-model concatenation and per-gaussian
+    // transform/selection aggregates. Overlay and comparison paths use it so a
+    // split view cannot hide a second full-scene GPU copy behind GUI work.
+    struct SceneRenderStateOptions {
+        bool metadata_only = false;
+    };
+
     struct SceneRenderState {
         const lfs::core::SplatData* combined_model = nullptr;
         const lfs::core::PointCloud* point_cloud = nullptr;             // For pre-training point cloud rendering
@@ -23,6 +30,7 @@ namespace lfs::vis {
         glm::mat4 point_cloud_transform{1.0f};
         std::vector<core::Scene::VisibleMesh> meshes; // Visible mesh nodes with transforms
         std::vector<glm::mat4> model_transforms;
+        std::vector<int> node_active_sh_degrees;
         std::vector<glm::mat4> camera_scene_transforms;
         std::shared_ptr<lfs::core::Tensor> transform_indices; // Per-Gaussian index into model_transforms
         std::shared_ptr<lfs::core::Tensor> selection_mask;    // Per-Gaussian selection group ID

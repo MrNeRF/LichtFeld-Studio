@@ -226,3 +226,154 @@ TEST(PreferencesMigration, CameraSpeedPreferencesPersistAndClamp) {
     EXPECT_FLOAT_EQ(preferences.zoomSpeed(), 1.0f);
     EXPECT_FLOAT_EQ(preferences.navigationSpeed(), 100.0f);
 }
+
+TEST(PreferencesMigration, TensorBackendOptionsPersistWithoutChangingTheRunningBackend) {
+    const auto home = makeHome("lfs_preferences_tensor_backend");
+    const ScopedLfsHome scoped_home(home);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    ASSERT_TRUE(paths->ensureDirectories());
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    const auto active_backend = lfs::core::default_gpu_backend();
+    const lfs::vis::TensorPreferenceState selected{
+        .backend = lfs::core::GpuBackend::Vulkan,
+        .options = {.vulkan_device = "0", .vulkan_validation = 2, .force_fp32_half = true, .force_no_atomic_float = true},
+    };
+    preferences.setTensorBackend(selected);
+    const auto saved = readPreferences(*paths).at("tensor_backend");
+    EXPECT_EQ(saved.at("backend"), "vulkan");
+    EXPECT_EQ(saved.at("vulkan_device"), "0");
+    EXPECT_EQ(saved.at("vulkan_validation"), 2);
+    EXPECT_TRUE(saved.at("force_fp32_half").get<bool>());
+    EXPECT_TRUE(saved.at("force_no_atomic_float").get<bool>());
+    EXPECT_EQ(preferences.tensorBackend().backend, lfs::core::GpuBackend::Vulkan);
+    EXPECT_EQ(lfs::core::default_gpu_backend(), active_backend);
+}
+
+TEST(PreferencesMigration, TensorBackendDefaultsToAutomaticAndRoundTrips) {
+    const auto home = makeHome("lfs_preferences_tensor_auto");
+    const ScopedLfsHome scoped_home(home);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    ASSERT_TRUE(paths->ensureDirectories());
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    EXPECT_FALSE(preferences.tensorBackend().backend.has_value());
+    preferences.setTensorBackend({});
+    EXPECT_EQ(readPreferences(*paths).at("tensor_backend").at("backend"), "auto");
+    EXPECT_FALSE(preferences.tensorBackend().backend.has_value());
+    preferences.setTensorBackend({.backend = lfs::core::GpuBackend::Vulkan});
+    EXPECT_EQ(preferences.tensorBackend().backend, lfs::core::GpuBackend::Vulkan);
+}
+
+TEST(PreferencesMigration, LegacyMacVulkanPreferenceBecomesAutomatic) {
+    const auto home = makeHome("lfs_preferences_tensor_legacy");
+    const ScopedLfsHome scoped_home(home);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    ASSERT_TRUE(paths->ensureDirectories());
+    writePreferences(*paths, {{"schema_version", 1}, {"tensor_backend", {{"backend", "vulkan"}}}});
+    const auto legacy = lfs::vis::UserPreferences::instance().tensorBackend();
+#ifdef __APPLE__
+    // Before schema 2 the panel saved the default, so a Mac never chose Vulkan.
+    EXPECT_FALSE(legacy.backend.has_value());
+    EXPECT_EQ(readPreferences(*paths).at("tensor_backend").at("backend"), "auto");
+#else
+    EXPECT_EQ(legacy.backend, lfs::core::GpuBackend::Vulkan);
+#endif
+
+    // A choice saved under schema 2 is explicit.
+    const auto current = makeHome("lfs_preferences_tensor_current");
+    const ScopedLfsHome scoped_current(current);
+    const auto current_paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(current_paths);
+    ASSERT_TRUE(current_paths->ensureDirectories());
+    writePreferences(*current_paths, {{"schema_version", 2}, {"tensor_backend", {{"backend", "vulkan"}}}});
+    EXPECT_EQ(lfs::vis::UserPreferences::instance().tensorBackend().backend, lfs::core::GpuBackend::Vulkan);
+}
+
+TEST(PreferencesMigration, MalformedTensorPreferencesKeepSafeDefaults) {
+    const auto home = makeHome("lfs_preferences_tensor_invalid");
+    const ScopedLfsHome scoped_home(home);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    ASSERT_TRUE(paths->ensureDirectories());
+    writePreferences(*paths, {{"tensor_backend", {
+                                                     {"backend", "unknown"},
+                                                     {"vulkan_device", 42},
+                                                     {"vulkan_validation", -8},
+                                                     {"force_fp32_half", "yes"},
+                                                     {"force_no_atomic_float", 1},
+                                                 }}});
+    const auto state = lfs::vis::UserPreferences::instance().tensorBackend();
+    EXPECT_EQ(state.backend, lfs::vis::TensorPreferenceState{}.backend);
+    EXPECT_TRUE(state.options.vulkan_device.empty());
+    EXPECT_EQ(state.options.vulkan_validation, 0);
+    EXPECT_FALSE(state.options.force_fp32_half);
+    EXPECT_FALSE(state.options.force_no_atomic_float);
+}
+
+TEST(PreferencesMigration, ProjectManagerPreferencesUseCanonicalStoreAndResetInIsolation) {
+    const auto home = makeHome("lfs_preferences_project_manager");
+    const ScopedLfsHome scoped_home(home);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    ASSERT_TRUE(paths->ensureDirectories());
+    writePreferences(*paths, {{"theme", "light"}});
+
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    EXPECT_EQ(preferences.projectManagerDefaultView(), "remember");
+    EXPECT_TRUE(preferences.openProjectManagerAtStartup());
+    EXPECT_TRUE(preferences.rememberProjectManagerState());
+    EXPECT_EQ(json::parse(preferences.projectManagerState()), json::object());
+
+    preferences.setProjectManagerDefaultView("gallery");
+    preferences.setOpenProjectManagerAtStartup(false);
+    preferences.setRememberProjectManagerState(false);
+    preferences.setProjectManagerState(R"({"view_mode":"list","navigator_width":312.5})");
+
+    EXPECT_EQ(preferences.projectManagerDefaultView(), "gallery");
+    EXPECT_FALSE(preferences.openProjectManagerAtStartup());
+    EXPECT_FALSE(preferences.rememberProjectManagerState());
+    EXPECT_EQ(json::parse(preferences.projectManagerState()).at("view_mode"), "list");
+    const auto persisted = readPreferences(*paths);
+    ASSERT_TRUE(persisted.at("project_manager").is_object());
+    EXPECT_EQ(persisted.at("project_manager").at("default_view"), "gallery");
+    EXPECT_EQ(persisted.at("project_manager").at("open_at_startup"), false);
+    EXPECT_EQ(persisted.at("project_manager").at("remember_state"), false);
+    EXPECT_EQ(persisted.at("theme"), "light");
+
+    preferences.resetProjectManagerPreferences();
+
+    const auto reset = readPreferences(*paths);
+    EXPECT_FALSE(reset.contains("project_manager"));
+    EXPECT_EQ(reset.at("theme"), "light");
+    EXPECT_EQ(preferences.projectManagerDefaultView(), "remember");
+    EXPECT_TRUE(preferences.openProjectManagerAtStartup());
+    EXPECT_TRUE(preferences.rememberProjectManagerState());
+}
+
+TEST(PreferencesMigration, InvalidProjectManagerPreferencesFallBackWithoutContamination) {
+    const auto home = makeHome("lfs_preferences_project_manager_invalid");
+    const ScopedLfsHome scoped_home(home);
+    const auto paths = lfs::core::UserPaths::resolve();
+    ASSERT_TRUE(paths);
+    ASSERT_TRUE(paths->ensureDirectories());
+    writePreferences(*paths, {
+                                 {"theme", "dark"},
+                                 {"project_manager", {
+                                                         {"default_view", "tiles"},
+                                                         {"open_at_startup", "yes"},
+                                                         {"remember_state", "yes"},
+                                                         {"state", json::array({1, 2, 3})},
+                                                     }},
+                             });
+
+    auto& preferences = lfs::vis::UserPreferences::instance();
+    EXPECT_EQ(preferences.projectManagerDefaultView(), "remember");
+    EXPECT_TRUE(preferences.openProjectManagerAtStartup());
+    EXPECT_TRUE(preferences.rememberProjectManagerState());
+    EXPECT_EQ(json::parse(preferences.projectManagerState()), json::object());
+    EXPECT_THROW(preferences.setProjectManagerDefaultView("tiles"), std::invalid_argument);
+    EXPECT_THROW(preferences.setProjectManagerState("[]"), std::invalid_argument);
+    EXPECT_EQ(readPreferences(*paths).at("theme"), "dark");
+}

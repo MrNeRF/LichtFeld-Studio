@@ -34,6 +34,7 @@ namespace lfs::python {
         size_t ndim() const;
         size_t numel() const;
         std::string device() const;
+        std::string backend() const;
         std::string dtype() const;
         bool is_contiguous() const;
         bool is_cuda() const;
@@ -43,6 +44,7 @@ namespace lfs::python {
         PyTensor clone() const;
         PyTensor cpu() const;
         PyTensor cuda() const;
+        PyTensor gpu() const;
         PyTensor contiguous() const;
         void sync() const;
 

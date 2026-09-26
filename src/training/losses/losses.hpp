@@ -18,5 +18,4 @@
  */
 
 #include "mask_loss.hpp"
-#include "photometric_loss.hpp"
 #include "regularization.hpp"

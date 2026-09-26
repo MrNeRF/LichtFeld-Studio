@@ -84,6 +84,8 @@ namespace {
     struct PreviewTextureRequest {
         std::filesystem::path path;
         int max_size = 0;
+        int width = 0;
+        int height = 0;
         bool embedded_project_preview = false;
     };
 
@@ -214,6 +216,10 @@ namespace {
                     preview_size = ParseIntParam(value);
                 } else if (key == "mw") {
                     dataset_size = ParseIntParam(value);
+                } else if (key == "w") {
+                    request.width = ParseIntParam(value);
+                } else if (key == "h") {
+                    request.height = ParseIntParam(value);
                 }
             }
 
@@ -306,15 +312,24 @@ RenderInterface_VK::~RenderInterface_VK() {
 }
 
 std::string RenderInterface_VK::MakeExternalTextureSource(VkImageView image_view, VkSampler sampler,
-                                                          int width, int height) {
+                                                          int width, int height, std::uint64_t incarnation) {
     if (image_view == VK_NULL_HANDLE || sampler == VK_NULL_HANDLE || width <= 0 || height <= 0)
         return {};
-    char buf[160];
-    std::snprintf(buf, sizeof(buf),
-                  "lfs-vk://?v=%llx&s=%llx&w=%d&h=%d",
-                  static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(image_view)),
-                  static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(sampler)),
-                  width, height);
+    char buf[192];
+    if (incarnation == 0) {
+        std::snprintf(buf, sizeof(buf),
+                      "lfs-vk://?v=%llx&s=%llx&w=%d&h=%d",
+                      static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(image_view)),
+                      static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(sampler)),
+                      width, height);
+    } else {
+        std::snprintf(buf, sizeof(buf),
+                      "lfs-vk://?v=%llx&s=%llx&w=%d&h=%d&g=%llx",
+                      static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(image_view)),
+                      static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(sampler)),
+                      width, height,
+                      static_cast<unsigned long long>(incarnation));
+    }
     return std::string(buf);
 }
 
@@ -1146,8 +1161,15 @@ Rml::TextureHandle RenderInterface_VK::LoadAsyncPreviewTexture(Rml::Vector2i& te
         return 0;
 
     static constexpr Rml::byte transparent_pixel[4] = {0, 0, 0, 0};
-    texture_dimensions = {1, 1};
-    const Rml::TextureHandle handle = CreateTexture({transparent_pixel, sizeof(transparent_pixel)}, texture_dimensions, source);
+    const Rml::Vector2i placeholder_dimensions{1, 1};
+    // RmlUi builds and caches cover/contain geometry from the dimensions returned
+    // here. Report the decoded aspect ratio up front, while keeping the temporary
+    // GPU allocation at one transparent pixel until the asynchronous upload lands.
+    texture_dimensions = request->width > 0 && request->height > 0
+                             ? Rml::Vector2i{request->width, request->height}
+                             : placeholder_dimensions;
+    const Rml::TextureHandle handle = CreateTexture(
+        {transparent_pixel, sizeof(transparent_pixel)}, placeholder_dimensions, source);
     auto* texture = reinterpret_cast<texture_data_t*>(handle);
     if (!texture)
         return 0;
@@ -2207,6 +2229,7 @@ void RenderInterface_VK::Initialize_Allocator() noexcept {
     info.instance = m_p_instance;
     info.physicalDevice = m_p_physical_device;
     info.pVulkanFunctions = &vulkanFunctions;
+    info.preferredLargeHeapBlockSize = VkDeviceSize{8} << 20;
 
     if (vmaCreateAllocator(&info, &m_p_allocator) != VK_SUCCESS)
         m_p_allocator = VK_NULL_HANDLE;
@@ -3536,19 +3559,6 @@ void RenderInterface_VK::MemoryPool::Free_GeometryHandle(geometry_handle_t* p_va
     p_valid_geometry_handle->m_p_shader_allocation = nullptr;
     p_valid_geometry_handle->m_p_index_allocation = nullptr;
     p_valid_geometry_handle->m_num_indices = 0;
-}
-
-void RenderInterface_VK::MemoryPool::Free_GeometryHandle_ShaderDataOnly(geometry_handle_t* p_valid_geometry_handle) noexcept {
-    RMLUI_VK_ASSERTMSG(p_valid_geometry_handle,
-                       "you must pass a VALID pointer to geometry_handle_t, otherwise something is wrong and debug your code");
-    RMLUI_VK_ASSERTMSG(p_valid_geometry_handle->m_p_vertex_allocation, "you must have a VALID pointer of VmaAllocation for vertex buffer");
-    RMLUI_VK_ASSERTMSG(p_valid_geometry_handle->m_p_index_allocation, "you must have a VALID pointer of VmaAllocation for index buffer");
-    RMLUI_VK_ASSERTMSG(p_valid_geometry_handle->m_p_shader_allocation,
-                       "you must have a VALID pointer of VmaAllocation for shader operations (like uniforms and etc)");
-    RMLUI_VK_ASSERTMSG(m_p_block, "you have to allocate the virtual block before do this operation...");
-
-    Free_Allocation(p_valid_geometry_handle->m_p_shader_allocation);
-    p_valid_geometry_handle->m_p_shader_allocation = nullptr;
 }
 
 #include <vk_mem_alloc.h>

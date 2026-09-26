@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <optional>
 #include <sstream>
@@ -801,6 +802,129 @@ namespace lfs::mcp {
         server.stop();
     }
 
+    TEST(McpHttpServerTest, ValidatesRequestsAndKeepsLocalJsonClientsWorking) {
+        const int port = availableLoopbackPort();
+        ASSERT_GT(port, 0);
+        McpHttpServer server;
+        ASSERT_TRUE(server.start(port));
+        httplib::Client client("127.0.0.1", port);
+        const std::string request = R"({"jsonrpc":"2.0","id":1,"method":"ping"})";
+
+        const auto normal = client.Post("/mcp", request, "application/json");
+        ASSERT_TRUE(normal);
+        EXPECT_EQ(normal->status, 200);
+        EXPECT_TRUE(json::parse(normal->body).contains("result"));
+
+        const auto charset = client.Post("/mcp", request, "application/json; charset=utf-8");
+        ASSERT_TRUE(charset);
+        EXPECT_EQ(charset->status, 200);
+
+        const auto media = client.Post("/mcp", request, "text/plain");
+        ASSERT_TRUE(media);
+        EXPECT_EQ(media->status, 415);
+
+        const httplib::Headers no_content_type{{"Content-Type", ""}};
+        const auto missing_media = client.Post("/mcp", no_content_type, request, "");
+        ASSERT_TRUE(missing_media);
+        EXPECT_EQ(missing_media->status, 415);
+
+        const httplib::Headers foreign_origin{{"Origin", "https://example.invalid"}};
+        const auto origin = client.Post("/mcp", foreign_origin, request, "application/json");
+        ASSERT_TRUE(origin);
+        EXPECT_EQ(origin->status, 403);
+
+        const httplib::Headers local_origin{{"Origin", std::format("http://localhost:{}", port)}};
+        const auto accepted_origin = client.Post("/mcp", local_origin, request, "application/json");
+        ASSERT_TRUE(accepted_origin);
+        EXPECT_EQ(accepted_origin->status, 200);
+
+        const httplib::Headers foreign_host{{"Host", std::format("other.invalid:{}", port)}};
+        const auto host = client.Post("/mcp", foreign_host, request, "application/json");
+        ASSERT_TRUE(host);
+        EXPECT_EQ(host->status, 421);
+        server.stop();
+    }
+
+    TEST(McpHttpServerTest, NetworkBindingRequiresItsSavedAccessToken) {
+        const auto root = std::filesystem::temp_directory_path() /
+                          "lfs_mcp_http_request_checks";
+        std::error_code error;
+        std::filesystem::remove_all(root, error);
+        const ScopedEnvironmentVariable home("LFS_HOME", root.string());
+        const int port = availableLoopbackPort();
+        ASSERT_GT(port, 0);
+        McpHttpServer server;
+        ASSERT_TRUE(server.start(McpHttpConfig{
+            .enabled = true,
+            .expose_network = true,
+            .port = port,
+        }));
+        const auto token_file = root / "config" / "mcp_token";
+        EXPECT_TRUE(std::filesystem::is_regular_file(token_file));
+        std::ifstream token_input(token_file);
+        std::string token;
+        token_input >> token;
+        ASSERT_EQ(token.size(), 64u);
+#ifndef _WIN32
+        EXPECT_EQ(std::filesystem::status(token_file).permissions() &
+                      (std::filesystem::perms::group_all |
+                       std::filesystem::perms::others_all),
+                  std::filesystem::perms::none);
+#endif
+        httplib::Client client("127.0.0.1", port);
+        const std::string request = R"({"jsonrpc":"2.0","id":1,"method":"ping"})";
+        const httplib::Headers remote_authority{{"Host", std::format("client.invalid:{}", port)}};
+        const auto missing = client.Post("/mcp", remote_authority, request, "application/json");
+        ASSERT_TRUE(missing);
+        EXPECT_EQ(missing->status, 401);
+
+        const httplib::Headers wrong_token{
+            {"Host", std::format("client.invalid:{}", port)},
+            {"Authorization", "Bearer wrong"},
+        };
+        const auto wrong = client.Post("/mcp", wrong_token, request, "application/json");
+        ASSERT_TRUE(wrong);
+        EXPECT_EQ(wrong->status, 401);
+
+        const httplib::Headers local_origin{{"Origin", std::format("http://localhost:{}", port)}};
+        const auto browser_origin = client.Post("/mcp", local_origin, request, "application/json");
+        ASSERT_TRUE(browser_origin);
+        EXPECT_EQ(browser_origin->status, 401);
+
+        const httplib::Headers authorized{
+            {"Host", std::format("client.invalid:{}", port)},
+            {"Authorization", std::format("Bearer {}", token)},
+        };
+        const auto accepted = client.Post("/mcp", authorized, request, "application/json");
+        ASSERT_TRUE(accepted);
+        EXPECT_EQ(accepted->status, 200);
+
+        const httplib::Headers foreign_origin{
+            {"Host", std::format("client.invalid:{}", port)},
+            {"Origin", "https://example.invalid"},
+            {"Authorization", std::format("Bearer {}", token)},
+        };
+        const auto refused_origin = client.Post("/mcp", foreign_origin, request, "application/json");
+        ASSERT_TRUE(refused_origin);
+        EXPECT_EQ(refused_origin->status, 403);
+
+        const auto local = client.Post("/mcp", request, "application/json");
+        ASSERT_TRUE(local);
+        EXPECT_EQ(local->status, 200);
+        server.stop();
+
+        ASSERT_TRUE(server.start(McpHttpConfig{
+            .enabled = true,
+            .expose_network = true,
+            .port = port,
+        }));
+        std::ifstream saved_token_input(token_file);
+        std::string saved_token;
+        saved_token_input >> saved_token;
+        EXPECT_EQ(saved_token, token);
+        server.stop();
+    }
+
     TEST(McpHttpServerTest, DisabledAndInvalidConfigurationsReportTruthfulStatus) {
         McpHttpServer server;
         EXPECT_TRUE(server.start(McpHttpConfig{
@@ -1285,6 +1409,58 @@ namespace lfs::mcp {
         EXPECT_EQ(missing["error"]["code"], "InvalidArgument");
         EXPECT_EQ(missing["error"]["details"]["parameter"], "value");
         EXPECT_EQ(missing["error_message"], "Missing required parameter: value");
+    }
+
+    TEST(McpProtocolTest, MistypedArgumentsAreRejectedBeforeTheHandler) {
+        static constexpr const char* tool_name = "test.typed_params";
+        ScopedToolRegistration cleanup(tool_name);
+        int handler_calls = 0;
+        json last_arguments;
+        ToolRegistry::instance().register_tool(
+            McpTool{
+                .name = tool_name,
+                .description = "Typed parameters",
+                .input_schema = {.type = "object",
+                                 .properties = json{{"label", {{"type", "string"}}},
+                                                    {"count", {{"type", "integer"}}},
+                                                    {"scale", {{"type", "number"}}},
+                                                    {"parent", {{"type", "string"}}}},
+                                 .required = {"label"}},
+                .metadata = McpToolMetadata{.category = "test", .kind = "command"}},
+            [&](const json& args) -> json {
+                ++handler_calls;
+                last_arguments = args;
+                return json{{"success", true}};
+            });
+        auto& registry = ToolRegistry::instance();
+
+        const auto mistyped = registry.call_tool(tool_name, json{{"label", json::array({1})}});
+        EXPECT_EQ(mistyped["error"]["code"], "InvalidArgument");
+        EXPECT_EQ(mistyped["error"]["details"]["parameter"], "label");
+        const auto word_count = registry.call_tool(tool_name, json{{"label", "x"}, {"count", "seven"}});
+        EXPECT_EQ(word_count["error"]["details"]["parameter"], "count");
+        const auto null_required = registry.call_tool(tool_name, json{{"label", nullptr}});
+        EXPECT_EQ(null_required["error_message"], "Missing required parameter: label");
+        const auto not_an_object = registry.call_tool(tool_name, json::array({1, 2}));
+        EXPECT_EQ(not_an_object["error"]["code"], "InvalidArgument");
+        EXPECT_EQ(handler_calls, 0) << "a rejected call reached the handler";
+
+        EXPECT_EQ(registry.call_tool(tool_name, json{{"label", "x"}, {"count", 3.0}, {"parent", nullptr}})["success"],
+                  true);
+        EXPECT_EQ(handler_calls, 1);
+        EXPECT_TRUE(last_arguments.contains("parent") && last_arguments["parent"].is_null())
+            << "an explicit null lost its meaning before the handler";
+
+        EXPECT_EQ(registry.call_tool(tool_name, json{{"label", 5}, {"count", "7"}})["success"], true);
+        EXPECT_EQ(handler_calls, 2);
+        EXPECT_EQ(last_arguments["label"], "5") << "a number for a string parameter was not spelled as text";
+        EXPECT_EQ(last_arguments["count"], 7) << "a numeric string for an integer parameter was not converted";
+
+        EXPECT_EQ(registry.call_tool(tool_name, json{{"label", "x"}, {"scale", "2.5"}})["success"], true);
+        EXPECT_EQ(last_arguments["scale"], 2.5) << "a numeric string for a number parameter was not converted";
+        EXPECT_EQ(registry.call_tool(tool_name, json{{"label", "x"}, {"scale", "2.5x"}})["error"]["details"]["parameter"],
+                  "scale");
+        EXPECT_EQ(handler_calls, 3);
     }
 
     TEST(McpProtocolTest, TypedEnvelopeHandlerResultIsPassedThroughWithMirror) {

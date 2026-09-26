@@ -4,6 +4,7 @@
 
 #include "buffer_utils.h"
 #include "core/crash_handler.hpp"
+#include "core/cuda_error.hpp"
 #include "forward.h"
 #include "helper_math.h"
 #include "kernels_forward.cuh"
@@ -69,10 +70,6 @@ namespace {
             return reinterpret_cast<uint*>(base + 3 * per_buffer_bytes());
         }
 
-        [[nodiscard]] uint* retained_indices() const noexcept {
-            return reinterpret_cast<uint*>(base);
-        }
-
         [[nodiscard]] void* cub_workspace() const noexcept {
             return base ? base + cub_workspace_offset_bytes : nullptr;
         }
@@ -106,26 +103,6 @@ namespace {
 
 } // namespace
 
-void fast_lfs::rasterization::release_sorted_primitive_indices(
-    void* ptr,
-    cudaStream_t /*stream*/) noexcept {
-    // Sorted indices are part of the owning arena frame. The frame release
-    // returns the whole bump allocation after backward has finished.
-    (void)ptr;
-}
-
-void fast_lfs::rasterization::release_sort_workspace_buffers() noexcept {
-    // Kept as a source-compatible no-op for callers that used to release the
-    // removed thread-local sort cache. Arena frames own this storage now.
-}
-
-std::uint64_t fast_lfs::rasterization::n_instances_fallback_sync_count() noexcept {
-    return 0;
-}
-
-void fast_lfs::rasterization::reset_n_instances_fallback_sync_count() noexcept {
-}
-
 void fast_lfs::rasterization::set_warp_cull_mode_for_testing(int mode) noexcept {
     g_warp_cull_mode.store(mode, std::memory_order_relaxed);
 }
@@ -140,25 +117,6 @@ void fast_lfs::rasterization::set_blend_batch_size_for_testing(int batch_size) n
 
 int fast_lfs::rasterization::blend_batch_size_for_testing() noexcept {
     return g_blend_batch_size_override.load(std::memory_order_relaxed);
-}
-
-void fast_lfs::rasterization::set_force_n_instances_sync_for_testing(bool force) noexcept {
-    (void)force;
-}
-
-void fast_lfs::rasterization::reset_sort_capacity_for_testing() noexcept {
-}
-
-std::size_t fast_lfs::rasterization::sort_workspace_required_bytes() noexcept {
-    return 0;
-}
-
-std::size_t fast_lfs::rasterization::sort_workspace_allocated_bytes() noexcept {
-    return 0;
-}
-
-int fast_lfs::rasterization::sort_workspace_capacity_n_instances() noexcept {
-    return 0;
 }
 
 fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
@@ -566,8 +524,8 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     // Production: warp cull ON (mode 0), blend_batch_size from config (or test hook).
     const int warp_cull_mode = g_warp_cull_mode.load(std::memory_order_relaxed);
     const int blend_batch_override = g_blend_batch_size_override.load(std::memory_order_relaxed);
-    auto launch_blend = [&]<bool RENDER_NORMAL>() {
-        kernels::forward::blend_cu<RENDER_NORMAL><<<grid, dim3(config::block_size_blend_forward), 0, stream>>>(
+    auto launch_blend = [&]<bool RENDER_NORMAL, bool RENDER_DEPTH>() {
+        kernels::forward::blend_cu<RENDER_NORMAL, RENDER_DEPTH><<<grid, dim3(config::block_size_blend_forward), 0, stream>>>(
             per_tile_buffers.instance_ranges,
             sorted_primitive_indices,
             visibility_buffers.primitive_work_indices,
@@ -592,9 +550,15 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.blend");
     };
     if (normal != nullptr) {
-        launch_blend.template operator()<true>();
+        if (depth != nullptr)
+            launch_blend.template operator()<true, true>();
+        else
+            launch_blend.template operator()<true, false>();
     } else {
-        launch_blend.template operator()<false>();
+        if (depth != nullptr)
+            launch_blend.template operator()<false, true>();
+        else
+            launch_blend.template operator()<false, false>();
     }
     check_cuda_with_fastgs_status(cudaGetLastError(), "blend", forward_status, "blend", static_cast<uint64_t>(n_primitives), n_tiles_u64);
     sync_fastgs_phase_if_requested("blend", forward_status, "blend", static_cast<uint64_t>(n_primitives), n_tiles_u64);

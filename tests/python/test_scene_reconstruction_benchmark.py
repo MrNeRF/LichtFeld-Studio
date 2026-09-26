@@ -87,26 +87,6 @@ def test_performance_rounds_preserve_total_samples_and_vary_case_order():
     ]
 
 
-def test_command_help_documents_all_benchmark_controls():
-    help_text = MODULE.build_parser().format_help()
-    for option in (
-        "--url",
-        "--width",
-        "--height",
-        "--frames",
-        "--quality-frames",
-        "--warmup-frames",
-        "--performance-rounds",
-        "--orbit-degrees",
-        "--backends",
-        "--timeout",
-        "--output",
-    ):
-        assert option in help_text
-    assert "tools/benchmark_scene_reconstruction.py --help" in help_text
-    assert "before any PNG capture" in help_text
-
-
 def test_capture_sends_presented_true_to_render_capture(monkeypatch):
     recorded = {}
 
@@ -401,15 +381,6 @@ def test_failed_preflight_replaces_stale_report_without_mutating_state(monkeypat
         "success": True,
         "reason": "preflight failed before any benchmark mutation",
     }
-
-
-def test_progress_checkpoints_are_bounded_and_include_completion():
-    checkpoints = [
-        current for current in range(1, 25) if MODULE.should_report_progress(current, 24)
-    ]
-    assert checkpoints == [1, 6, 12, 18, 24]
-    assert MODULE.format_duration(0.2) == "0s"
-    assert MODULE.format_duration(65.0) == "1m 05s"
 
 
 def test_completed_report_survives_final_restoration_failure(monkeypatch, tmp_path):

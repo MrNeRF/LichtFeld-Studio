@@ -8,8 +8,8 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
 #include "core/sh_value_quant.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
-#include "core/tensor/internal/tensor_impl.hpp"
+#include "core/tensor.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "diagnostics/vram_profiler.hpp"
 
 #include <cuda_runtime.h>
@@ -496,7 +496,7 @@ namespace lfs::core {
             }
             Tensor t = Tensor::from_external_owner(data,
                                                    std::move(shape),
-                                                   Device::CUDA,
+                                                   Device::GPU,
                                                    dtype,
                                                    std::move(owner),
                                                    clamped,
@@ -599,38 +599,6 @@ namespace lfs::core {
         return live;
     }
 
-    Q16BindPtrs resolve_q16_bind_ptrs(const SplatData& model) {
-        Q16BindPtrs out{};
-        if (!model.shN_value_quantized()) {
-            return out;
-        }
-        const Tensor& codes = model.shN_raw();
-        const Tensor& bounds = model.shN_value_bounds();
-        if (!codes.is_valid() || codes.numel() == 0) {
-            return out;
-        }
-        out.codes = static_cast<const float*>(resolve_exportable_device_ptr(codes));
-        if (bounds.is_valid() && bounds.numel() > 0) {
-            out.bounds = static_cast<const float*>(resolve_exportable_device_ptr(bounds));
-        }
-        out.n_cells_per_prim = static_cast<unsigned>(
-            sh_value_quant::n_value_cells_per_prim(
-                static_cast<std::uint32_t>(model.max_sh_coeffs_rest())));
-        if (codes.has_exportable_provenance()) {
-            out.generation = codes.exportable_bound_generation();
-            out.generation_checked = true;
-            // Codes + bounds must share the same live generation (0.15 alt).
-            if (bounds.is_valid() && bounds.has_exportable_provenance() &&
-                bounds.exportable_bound_generation() != codes.exportable_bound_generation()) {
-                LOG_ERROR(
-                    "q16 codes/bounds generation pair mismatch: codes_gen={} bounds_gen={}",
-                    codes.exportable_bound_generation(),
-                    bounds.exportable_bound_generation());
-            }
-        }
-        return out;
-    }
-
     std::expected<void, std::string>
     SplatExportableStorage::rebindSplatData(SplatData& model,
                                             SplatTensorAllocator allocator) const {
@@ -667,7 +635,7 @@ namespace lfs::core {
                     dtype = source.dtype();
                     if (!aliases) {
                         source_cuda =
-                            source.device() == Device::CUDA ? source : source.cuda();
+                            source.device() == Device::GPU ? source : source.gpu();
                         if (!source_cuda.is_contiguous()) {
                             source_cuda = source_cuda.contiguous();
                         }
@@ -710,74 +678,93 @@ namespace lfs::core {
                 static_cast<std::uint32_t>(model.max_sh_coeffs_rest());
             const size_t n_live = static_cast<size_t>(model.size());
             if (layout_rest > 0 && model.shN_raw().is_valid() && model.shN_raw().numel() > 0) {
-                // Pad-dropped q16 codes + per-256 float2 bounds live in the block.
-                // Same-block rebind only re-views. Cross-allocator install
-                // copies q16 codes when the source is already quantized.
-                // Float densify temps (ensure_shN_fp32) are kept outside the block —
-                // commit_shN_after_mutation re-encodes into exportable after mutation.
-                const size_t shN_cap = sh_value_quant::sh_value_u16_count(capacity_, layout_rest);
-                const size_t shN_logical = sh_value_quant::sh_value_u16_count(n_live, layout_rest);
-                const size_t bounds_cap = sh_value_quant::n_bounds_for_prims(capacity_) * 2u;
-                const size_t bounds_logical = sh_value_quant::n_bounds_for_prims(n_live) * 2u;
+                const bool quant_enabled = sh_value_quant::enabled();
+                const bool shN_is_float16 = model.shN_raw().dtype() == DataType::Float16;
+                if (!quant_enabled && shN_is_float16) {
+                    if (model.shN_value_quantized()) {
+                        model.shN_set_from_canonical(model.shN_canonical(), capacity_);
+                    } else {
+                        model.shN_raw() = model.shN_raw().to(DataType::Float32);
+                    }
+                }
 
                 const Tensor& shN_src = model.shN_raw();
                 const bool aliases = tensor_aliases_exportable_block(shN_src, block_ref);
                 const bool src_is_q16 = model.shN_value_quantized();
 
-                if (!aliases && !src_is_q16) {
-                    // Densify expand path: preserve float/f16 temp; do not zero-fill.
-                    shN = shN_src;
-                    if (shN.device() != Device::CUDA) {
-                        shN = shN.cuda();
-                    }
-                    if (!shN.is_contiguous()) {
-                        shN = shN.contiguous();
-                    }
-                    // Bounds stay empty until commit re-encodes.
-                    shN_bounds = Tensor{};
+                if (!quant_enabled) {
+                    const size_t shN_cap = sh_swizzled_float_count(capacity_, layout_rest);
+                    const size_t shN_logical = sh_swizzled_float_count(n_live, layout_rest);
+                    shN = install_param(shN_src,
+                                        TensorShape({shN_logical}),
+                                        shN_cap,
+                                        "SplatData.shN");
                 } else {
-                    Tensor dst = allocator(
-                        TensorShape({shN_logical}),
-                        shN_cap,
-                        DataType::Float16,
-                        "SplatData.shN");
-                    dst.set_name("SplatData.shN");
-                    if (!aliases && src_is_q16 && shN_src.is_valid() && shN_src.numel() > 0) {
-                        Tensor src = shN_src;
-                        if (src.device() != Device::CUDA) {
-                            src = src.cuda();
-                        }
-                        if (!src.is_contiguous()) {
-                            src = src.contiguous();
-                        }
-                        dst.copy_from(src);
-                    }
-                    shN = std::move(dst);
+                    // Pad-dropped q16 codes + per-256 float2 bounds live in the block.
+                    // Same-block rebind only re-views. Cross-allocator install
+                    // copies q16 codes when the source is already quantized.
+                    // Float densify temps (ensure_shN_fp32) are kept outside the block —
+                    // commit_shN_after_mutation re-encodes into exportable after mutation.
+                    const size_t shN_cap = sh_value_quant::sh_value_u16_count(capacity_, layout_rest);
+                    const size_t shN_logical = sh_value_quant::sh_value_u16_count(n_live, layout_rest);
+                    const size_t bounds_cap = sh_value_quant::n_bounds_for_prims(capacity_) * 2u;
+                    const size_t bounds_logical = sh_value_quant::n_bounds_for_prims(n_live) * 2u;
 
-                    Tensor bounds_dst = allocator(
-                        TensorShape({bounds_logical}),
-                        bounds_cap,
-                        DataType::Float32,
-                        "SplatData.shN_value_bounds");
-                    bounds_dst.set_name("SplatData.shN_value_bounds");
-                    const Tensor& bounds_src = model.shN_value_bounds();
-                    const bool bounds_alias =
-                        bounds_src.is_valid() &&
-                        tensor_aliases_exportable_block(bounds_src, block_ref);
-                    if (!bounds_alias && bounds_src.is_valid() && bounds_src.numel() > 0) {
-                        Tensor bsrc = bounds_src;
-                        if (bsrc.device() != Device::CUDA) {
-                            bsrc = bsrc.cuda();
+                    if (!aliases && !src_is_q16) {
+                        // Densify expand path: preserve float/f16 temp; do not zero-fill.
+                        shN = shN_src;
+                        if (shN.device() != Device::GPU) {
+                            shN = shN.gpu();
                         }
-                        if (!bsrc.is_contiguous()) {
-                            bsrc = bsrc.contiguous();
+                        if (!shN.is_contiguous()) {
+                            shN = shN.contiguous();
                         }
-                        if (bsrc.dtype() != DataType::Float32) {
-                            bsrc = bsrc.to(DataType::Float32);
+                        // Bounds stay empty until commit re-encodes.
+                        shN_bounds = Tensor{};
+                    } else {
+                        Tensor dst = allocator(
+                            TensorShape({shN_logical}),
+                            shN_cap,
+                            DataType::Float16,
+                            "SplatData.shN");
+                        dst.set_name("SplatData.shN");
+                        if (!aliases && src_is_q16 && shN_src.is_valid() && shN_src.numel() > 0) {
+                            Tensor src = shN_src;
+                            if (src.device() != Device::GPU) {
+                                src = src.gpu();
+                            }
+                            if (!src.is_contiguous()) {
+                                src = src.contiguous();
+                            }
+                            dst.copy_from(src);
                         }
-                        bounds_dst.copy_from(bsrc);
+                        shN = std::move(dst);
+
+                        Tensor bounds_dst = allocator(
+                            TensorShape({bounds_logical}),
+                            bounds_cap,
+                            DataType::Float32,
+                            "SplatData.shN_value_bounds");
+                        bounds_dst.set_name("SplatData.shN_value_bounds");
+                        const Tensor& bounds_src = model.shN_value_bounds();
+                        const bool bounds_alias =
+                            bounds_src.is_valid() &&
+                            tensor_aliases_exportable_block(bounds_src, block_ref);
+                        if (!bounds_alias && bounds_src.is_valid() && bounds_src.numel() > 0) {
+                            Tensor bsrc = bounds_src;
+                            if (bsrc.device() != Device::GPU) {
+                                bsrc = bsrc.gpu();
+                            }
+                            if (!bsrc.is_contiguous()) {
+                                bsrc = bsrc.contiguous();
+                            }
+                            if (bsrc.dtype() != DataType::Float32) {
+                                bsrc = bsrc.to(DataType::Float32);
+                            }
+                            bounds_dst.copy_from(bsrc);
+                        }
+                        shN_bounds = std::move(bounds_dst);
                     }
-                    shN_bounds = std::move(bounds_dst);
                 }
             }
 

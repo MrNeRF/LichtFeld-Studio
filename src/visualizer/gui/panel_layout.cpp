@@ -36,6 +36,7 @@ namespace lfs::vis::gui {
             return;
         bottom_dock_active_tab_id_ = id;
         lfs::vis::publish_viewport_toolbar_generation();
+        lfs::python::request_redraw();
     }
 
     void PanelLayoutManager::setShowSequencer(const bool visible) {
@@ -61,11 +62,11 @@ namespace lfs::vis::gui {
     PanelLayoutProjectState
     PanelLayoutManager::captureProjectState() const {
         return {
-            .right_panel_width = right_panel_width_,
+            .right_panel_width = right_panel_preferred_width_,
             .scene_panel_ratio = scene_panel_ratio_,
             .python_console_width = python_console_width_,
             .bottom_dock_height = bottom_dock_height_,
-            .left_dock_width = left_dock_width_,
+            .left_dock_width = left_dock_preferred_width_,
             .show_sequencer = show_sequencer_,
             .active_tab_id = active_tab_id_,
             .bottom_dock_active_tab_id = bottom_dock_active_tab_id_,
@@ -77,7 +78,7 @@ namespace lfs::vis::gui {
         const PanelLayoutProjectState& state) {
         if (std::isfinite(state.right_panel_width) &&
             state.right_panel_width > 0.0f)
-            right_panel_width_ = state.right_panel_width;
+            right_panel_width_ = right_panel_preferred_width_ = state.right_panel_width;
         if (std::isfinite(state.scene_panel_ratio))
             scene_panel_ratio_ =
                 std::clamp(state.scene_panel_ratio, 0.01f, 0.99f);
@@ -88,7 +89,7 @@ namespace lfs::vis::gui {
             bottom_dock_height_ = state.bottom_dock_height;
         if (std::isfinite(state.left_dock_width) &&
             state.left_dock_width > 0.0f)
-            left_dock_width_ = state.left_dock_width;
+            left_dock_width_ = left_dock_preferred_width_ = state.left_dock_width;
         setShowSequencer(state.show_sequencer);
         active_tab_id_ = state.active_tab_id;
         setBottomDockActiveTab(state.bottom_dock_active_tab_id);
@@ -101,7 +102,7 @@ namespace lfs::vis::gui {
 
     void PanelLayoutManager::setLeftDockWidth(const float width) {
         if (std::isfinite(width) && width > 0.0f)
-            left_dock_width_ = width;
+            left_dock_width_ = left_dock_preferred_width_ = width;
     }
 
     bool PanelLayoutManager::syncActiveTab(const std::vector<PanelSummary>& main_tabs,
@@ -155,7 +156,7 @@ namespace lfs::vis::gui {
         const float max_w = maxRightPanelWidth(show_main_panel, ui_hidden, screen);
         const float min_w = std::min(RIGHT_PANEL_MIN_VISIBLE_WIDTH * dpi, max_w);
 
-        right_panel_width_ = std::clamp(right_panel_width_, min_w, max_w);
+        right_panel_width_ = std::clamp(right_panel_preferred_width_, min_w, max_w);
 
         auto& reg = PanelRegistry::instance();
         const bool float_blocks_right_panel =
@@ -210,11 +211,9 @@ namespace lfs::vis::gui {
 
         const float splitter_h = SPLITTER_H * dpi;
         const float tab_bar_h = TAB_BAR_H * dpi;
-        constexpr float MIN_H = 80.0f;
-        const float min_h = MIN_H * dpi;
         const float avail_h = panel_h - 2.0f * PAD;
 
-        const float scene_h = std::max(min_h, avail_h * scene_panel_ratio_ - splitter_h * 0.5f);
+        const float scene_h = scenePanelHeight(avail_h, dpi);
 
         if (demand.scene_header_live) {
             {
@@ -419,7 +418,7 @@ namespace lfs::vis::gui {
         const float max_w = maxRightPanelWidth(show_main_panel, ui_hidden, screen);
         const float min_w = std::min(RIGHT_PANEL_MIN_VISIBLE_WIDTH * dpi, max_w);
 
-        right_panel_width_ = std::clamp(right_panel_width_, min_w, max_w);
+        right_panel_width_ = std::clamp(right_panel_preferred_width_, min_w, max_w);
 
         const bool python_console_visible = window_states["python_console"];
         const float available_for_split = screen.work_size.x - right_panel_width_ - PANEL_GAP;
@@ -451,10 +450,8 @@ namespace lfs::vis::gui {
 
         const float splitter_h = SPLITTER_H * dpi;
         const float tab_bar_h = TAB_BAR_H * dpi;
-        constexpr float MIN_H = 80.0f;
-        const float min_h = MIN_H * dpi;
         const float avail_h = panel_h - 2.0f * PAD;
-        const float scene_h = std::max(min_h, avail_h * scene_panel_ratio_ - splitter_h * 0.5f);
+        const float scene_h = scenePanelHeight(avail_h, dpi);
 
         auto& reg = PanelRegistry::instance();
         {
@@ -546,7 +543,6 @@ namespace lfs::vis::gui {
             bottom_dock_visible_ = false;
             bottom_dock_top_y_ = -1.0f;
             bottom_dock_tab_bar_rect_ = {};
-            prev_mouse_y_ = input.mouse_y;
             return;
         }
 
@@ -587,7 +583,6 @@ namespace lfs::vis::gui {
             bottom_dock_visible_ = false;
             bottom_dock_top_y_ = -1.0f;
             bottom_dock_tab_bar_rect_ = {};
-            prev_mouse_y_ = input.mouse_y;
             return;
         }
 
@@ -606,7 +601,6 @@ namespace lfs::vis::gui {
             bottom_dock_visible_ = false;
             bottom_dock_top_y_ = -1.0f;
             bottom_dock_tab_bar_rect_ = {};
-            prev_mouse_y_ = input.mouse_y;
             return;
         }
 
@@ -636,15 +630,11 @@ namespace lfs::vis::gui {
         const bool float_blocks_bottom_dock =
             reg.isPositionOverFloatingPanel(input.mouse_x, input.mouse_y);
         const PanelInputState dock_input =
-            float_blocks_bottom_dock ? mask_mouse_input(input) : input;
-
-        const float delta_y = input.mouse_y - prev_mouse_y_;
-        prev_mouse_y_ = input.mouse_y;
+            float_blocks_bottom_dock && !bottom_dock_resizing_ ? mask_mouse_input(input) : input;
 
         if (bottom_dock_resizing_ && !dock_input.mouse_down[0])
             bottom_dock_resizing_ = false;
 
-        const float edge_grab_h = std::max(SPLITTER_H * dpi, 8.0f * dpi);
         const float grip_h = DOCK_GRIP_H * dpi;
         float panel_h = bottom_dock_height_;
         float panel_y = screen.work_pos.y + screen.work_size.y - panel_h;
@@ -653,13 +643,15 @@ namespace lfs::vis::gui {
             !float_blocks_bottom_dock &&
             dock_input.mouse_x >= panel_x &&
             dock_input.mouse_x <= panel_x + panel_w &&
-            dock_input.mouse_y >= panel_y - edge_grab_h &&
-            dock_input.mouse_y <= panel_y + grip_h + 4.0f * dpi;
+            bottomDockResizeHitZone(panel_y, dpi, grip_h).contains(dock_input.mouse_y);
 
         if (bottom_dock_resizing_) {
-            bottom_dock_height_ = std::clamp(bottom_dock_height_ - delta_y, min_panel_h, max_panel_h);
+            const float bottom_y = screen.work_pos.y + screen.work_size.y;
+            bottom_dock_height_ = bottom_y - bottom_dock_drag_.edgeAt(
+                                                 input.mouse_y, bottom_y - max_panel_h, bottom_y - min_panel_h);
         } else if (bottom_dock_hovering_edge_ && dock_input.mouse_clicked[0]) {
             bottom_dock_resizing_ = true;
+            bottom_dock_drag_ = {panel_y, input.mouse_y};
         }
 
         if (bottom_dock_hovering_edge_ || bottom_dock_resizing_)
@@ -723,7 +715,6 @@ namespace lfs::vis::gui {
             bottom_dock_visible_ = false;
             bottom_dock_top_y_ = -1.0f;
             bottom_dock_tab_bar_rect_ = {};
-            prev_mouse_y_ = input.mouse_y;
             return;
         }
 
@@ -742,7 +733,6 @@ namespace lfs::vis::gui {
             bottom_dock_visible_ = false;
             bottom_dock_top_y_ = -1.0f;
             bottom_dock_tab_bar_rect_ = {};
-            prev_mouse_y_ = input.mouse_y;
             return;
         }
 
@@ -756,14 +746,12 @@ namespace lfs::vis::gui {
         const float panel_h = bottom_dock_height_;
         const float panel_y = screen.work_pos.y + screen.work_size.y - panel_h;
         const float grip_h = DOCK_GRIP_H * dpi;
-        const float edge_grab_h = std::max(SPLITTER_H * dpi, 8.0f * dpi);
         const bool float_blocks_bottom_dock = reg.isPositionOverFloatingPanel(input.mouse_x, input.mouse_y);
         bottom_dock_hovering_edge_ =
             !float_blocks_bottom_dock &&
             input.mouse_x >= panel_x &&
             input.mouse_x <= panel_x + panel_w &&
-            input.mouse_y >= panel_y - edge_grab_h &&
-            input.mouse_y <= panel_y + grip_h + 4.0f * dpi;
+            bottomDockResizeHitZone(panel_y, dpi, grip_h).contains(input.mouse_y);
         if (bottom_dock_hovering_edge_ || bottom_dock_resizing_)
             cursor_request_ = CursorRequest::ResizeNS;
         const float tab_bar_h = TAB_BAR_H * dpi;
@@ -789,7 +777,17 @@ namespace lfs::vis::gui {
         (void)drawn_h;
         bottom_dock_visible_ = true;
         bottom_dock_top_y_ = panel_y;
-        prev_mouse_y_ = input.mouse_y;
+    }
+
+    bool PanelLayoutManager::isPositionOverLeftDockResizeEdge(const float x, const float y,
+                                                              const float work_x,
+                                                              const float work_y,
+                                                              const float work_h) const {
+        if (!left_dock_visible_ || left_dock_width_ <= 0.0f || work_h <= 0.0f)
+            return false;
+
+        const float dpi = lfs::python::get_shared_dpi_scale();
+        return leftDockResizeRect(work_x, work_y, work_h, dpi, left_dock_width_).contains(x, y);
     }
 
     void PanelLayoutManager::renderLeftDock(const PanelDrawContext& draw_ctx,
@@ -804,19 +802,17 @@ namespace lfs::vis::gui {
             left_dock_hovering_edge_ = false;
             left_dock_resizing_ = false;
             left_dock_visible_ = false;
-            prev_mouse_x_ = input.mouse_x;
             return;
         }
 
         const float dpi = lfs::python::get_shared_dpi_scale();
-        const float icon_bar_w = ICON_BAR_WIDTH * dpi;
         const float panel_h = screen.work_size.y;
         const float max_panel_w = maxLeftDockPanelWidth(show_main_panel, ui_hidden, screen);
 
         const float min_panel_w = std::min(LEFT_DOCK_MIN_WIDTH * dpi, max_panel_w);
         const float default_panel_w = LEFT_DOCK_DEFAULT_WIDTH * dpi;
         left_dock_width_ = std::clamp(
-            left_dock_width_ > 0.0f ? left_dock_width_ : default_panel_w,
+            left_dock_preferred_width_ > 0.0f ? left_dock_preferred_width_ : default_panel_w,
             min_panel_w,
             max_panel_w);
 
@@ -839,37 +835,38 @@ namespace lfs::vis::gui {
         const bool float_blocks_left_dock =
             reg.isPositionOverFloatingPanel(input.mouse_x, input.mouse_y);
         const PanelInputState dock_input =
-            float_blocks_left_dock ? mask_mouse_input(input) : input;
-
-        const float delta_x = input.mouse_x - prev_mouse_x_;
-        prev_mouse_x_ = input.mouse_x;
+            float_blocks_left_dock && !left_dock_resizing_ ? mask_mouse_input(input) : input;
 
         if (left_dock_resizing_ && !dock_input.mouse_down[0])
             left_dock_resizing_ = false;
 
-        const float edge_grab_w = std::max(SPLITTER_H * dpi, 8.0f * dpi);
+        const auto dock_layout = computeLeftDockLayout(show_main_panel, ui_hidden, screen);
         float panel_w = left_dock_width_;
-        float panel_x = screen.work_pos.x + icon_bar_w;
-        float panel_right_x = panel_x + panel_w;
+        const float panel_x = dock_layout.panel_x;
 
+        // Same rectangle the press-time predicate uses -- one definition only.
         left_dock_hovering_edge_ =
             !float_blocks_left_dock &&
-            dock_input.mouse_x >= panel_right_x - edge_grab_w &&
-            dock_input.mouse_x <= panel_right_x + edge_grab_w &&
-            dock_input.mouse_y >= screen.work_pos.y &&
-            dock_input.mouse_y <= screen.work_pos.y + panel_h;
+            leftDockResizeRect(screen.work_pos.x, screen.work_pos.y, panel_h, dpi,
+                               left_dock_width_)
+                .contains(dock_input.mouse_x, dock_input.mouse_y);
 
         if (left_dock_resizing_) {
-            left_dock_width_ = std::clamp(left_dock_width_ + delta_x, min_panel_w, max_panel_w);
+            left_dock_width_ = left_dock_drag_.edgeAt(
+                                   input.mouse_x, screen.work_pos.x + min_panel_w,
+                                   screen.work_pos.x + max_panel_w) -
+                               screen.work_pos.x;
+            left_dock_preferred_width_ = left_dock_width_;
         } else if (left_dock_hovering_edge_ && dock_input.mouse_clicked[0]) {
             left_dock_resizing_ = true;
+            left_dock_drag_ = {dock_layout.panel_x + panel_w, input.mouse_x};
         }
 
         if (left_dock_hovering_edge_ || left_dock_resizing_)
             cursor_request_ = CursorRequest::ResizeEW;
 
         panel_w = left_dock_width_;
-        panel_right_x = panel_x + panel_w;
+        const float content_w = resizeContentWidth(panel_w, dpi);
 
         float preloaded_h = 0.0f;
         {
@@ -877,7 +874,7 @@ namespace lfs::vis::gui {
             preloaded_h = reg.render_panels({
                                                 .target = PanelRenderTarget::for_space(PanelSpace::LeftDock),
                                                 .mode = PanelRenderMode::DirectPreload,
-                                                .width = panel_w,
+                                                .width = content_w,
                                                 .height = panel_h,
                                                 .clip_y_min = screen.work_pos.y,
                                                 .clip_y_max = screen.work_pos.y + panel_h,
@@ -885,24 +882,23 @@ namespace lfs::vis::gui {
                                             },
                                             draw_ctx);
         }
-        left_dock_visible_ = preloaded_h > 0.0f;
-        if (!left_dock_visible_) {
-            drawLeftDockResizeIndicator(draw_ctx, dpi, false, false);
-            return;
-        }
-
+        // A live resize can enter this path before the Rml host has a
+        // measured height. Do not hide the dock just because preload returned
+        // zero; the live draw below establishes visibility after laying out at
+        // the new width.
         {
             LOG_TIMER_THRESHOLD("gui_render.panel_layout.left_dock.draw", 0.25);
-            reg.render_panels({
-                                  .target = PanelRenderTarget::for_space(PanelSpace::LeftDock),
-                                  .mode = PanelRenderMode::Direct,
-                                  .x = panel_x,
-                                  .y = screen.work_pos.y,
-                                  .width = panel_w,
-                                  .height = panel_h,
-                                  .input = &dock_input,
-                              },
-                              draw_ctx);
+            const float drawn_h = reg.render_panels({
+                                                        .target = PanelRenderTarget::for_space(PanelSpace::LeftDock),
+                                                        .mode = PanelRenderMode::Direct,
+                                                        .x = panel_x,
+                                                        .y = screen.work_pos.y,
+                                                        .width = content_w,
+                                                        .height = panel_h,
+                                                        .input = &dock_input,
+                                                    },
+                                                    draw_ctx);
+            left_dock_visible_ = preloaded_h > 0.0f || drawn_h > 0.0f;
         }
 
         drawLeftDockResizeIndicator(
@@ -923,50 +919,54 @@ namespace lfs::vis::gui {
             left_dock_hovering_edge_ = false;
             left_dock_resizing_ = false;
             left_dock_visible_ = false;
-            prev_mouse_x_ = input.mouse_x;
             return;
         }
 
         const float dpi = lfs::python::get_shared_dpi_scale();
-        const float icon_bar_w = ICON_BAR_WIDTH * dpi;
         const float panel_h = screen.work_size.y;
         const float max_panel_w = maxLeftDockPanelWidth(show_main_panel, ui_hidden, screen);
 
         const float min_panel_w = std::min(LEFT_DOCK_MIN_WIDTH * dpi, max_panel_w);
         const float default_panel_w = LEFT_DOCK_DEFAULT_WIDTH * dpi;
         left_dock_width_ = std::clamp(
-            left_dock_width_ > 0.0f ? left_dock_width_ : default_panel_w,
+            left_dock_preferred_width_ > 0.0f ? left_dock_preferred_width_ : default_panel_w,
             min_panel_w,
             max_panel_w);
 
         const float panel_w = left_dock_width_;
-        const float panel_x = screen.work_pos.x + icon_bar_w;
+        const float panel_x = computeLeftDockLayout(show_main_panel, ui_hidden, screen).panel_x;
         const float drawn_h = reg.render_panels({
                                                     .target = PanelRenderTarget::for_space(PanelSpace::LeftDock),
                                                     .mode = PanelRenderMode::DirectCached,
                                                     .x = panel_x,
                                                     .y = screen.work_pos.y,
-                                                    .width = panel_w,
+                                                    .width = resizeContentWidth(panel_w, dpi),
                                                     .height = panel_h,
                                                     .input = &input,
                                                 },
                                                 draw_ctx);
         left_dock_visible_ = drawn_h > 0.0f;
-        prev_mouse_x_ = input.mouse_x;
     }
 
-    void PanelLayoutManager::adjustScenePanelRatio(float delta_y, const ScreenState& screen) {
-        const float panel_h = screen.work_size.y;
+    float PanelLayoutManager::scenePanelHeight(const float avail_h, const float dpi) const {
+        // Never more than half the panel, so the properties below keep space on short windows.
+        const float min_h = std::min(SCENE_PANEL_MIN_HEIGHT * dpi, avail_h * 0.5f);
+        return std::max(min_h, avail_h * scene_panel_ratio_ - SPLITTER_H * dpi * 0.5f);
+    }
+
+    void PanelLayoutManager::setScenePanelHeight(float height, float panel_h) {
         const float padding = 16.0f;
         const float avail_h = panel_h - padding;
         if (avail_h > 0)
-            scene_panel_ratio_ = std::clamp(scene_panel_ratio_ + delta_y / avail_h, 0.15f, 0.85f);
+            scene_panel_ratio_ = std::clamp(
+                (height - 8.0f + SPLITTER_H * lfs::python::get_shared_dpi_scale() * 0.5f) / avail_h,
+                0.15f, 0.85f);
     }
 
-    void PanelLayoutManager::applyResizeDelta(float dx, const ScreenState& screen) {
+    void PanelLayoutManager::setRightPanelWidth(float width, const ScreenState& screen) {
         const float max_w = maxRightPanelWidth(true, false, screen);
         const float min_w = std::min(RIGHT_PANEL_MIN_VISIBLE_WIDTH * lfs::python::get_shared_dpi_scale(), max_w);
-        right_panel_width_ = std::clamp(right_panel_width_ - dx, min_w, max_w);
+        right_panel_width_ = right_panel_preferred_width_ = std::clamp(width, min_w, max_w);
     }
 
     float PanelLayoutManager::maxRightPanelWidth(const bool show_main_panel,
@@ -976,15 +976,14 @@ namespace lfs::vis::gui {
             return screen.work_size.x;
 
         const float dpi = lfs::python::get_shared_dpi_scale();
-        const float icon_bar_w = ICON_BAR_WIDTH * dpi;
         const float viewport_min_w = MIN_VIEWPORT_WIDTH * dpi;
         const float right_min_w = RIGHT_PANEL_MIN_VISIBLE_WIDTH * dpi;
-        const float panel_budget = std::max(0.0f, screen.work_size.x - icon_bar_w - viewport_min_w - PANEL_GAP);
+        const float panel_budget = std::max(0.0f, screen.work_size.x - viewport_min_w - PANEL_GAP);
         const float left_w = shouldReserveLeftDockWidth()
                                  ? std::min(std::max(0.0f, left_dock_width_),
                                             std::max(0.0f, panel_budget - right_min_w))
                                  : 0.0f;
-        const float reserved_w = icon_bar_w + left_w + viewport_min_w + PANEL_GAP;
+        const float reserved_w = left_w + viewport_min_w + PANEL_GAP;
         const float effective_min_w = std::min(right_min_w, panel_budget);
         return std::max(effective_min_w,
                         std::min(screen.work_size.x * RIGHT_PANEL_MAX_RATIO,
@@ -998,9 +997,8 @@ namespace lfs::vis::gui {
             return 0.0f;
 
         const float dpi = lfs::python::get_shared_dpi_scale();
-        const float icon_bar_w = ICON_BAR_WIDTH * dpi;
         const float viewport_min_w = MIN_VIEWPORT_WIDTH * dpi;
-        const float panel_budget = std::max(0.0f, screen.work_size.x - icon_bar_w - viewport_min_w - PANEL_GAP);
+        const float panel_budget = std::max(0.0f, screen.work_size.x - viewport_min_w - PANEL_GAP);
         const float right_min_w = std::min(RIGHT_PANEL_MIN_VISIBLE_WIDTH * dpi, panel_budget);
         const float right_w = std::clamp(right_panel_width_,
                                          right_min_w,
@@ -1015,14 +1013,13 @@ namespace lfs::vis::gui {
             return;
 
         const float dpi = lfs::python::get_shared_dpi_scale();
-        const float icon_bar_w = ICON_BAR_WIDTH * dpi;
         const float viewport_min_w = MIN_VIEWPORT_WIDTH * dpi;
-        const float panel_budget = std::max(0.0f, screen.work_size.x - icon_bar_w - viewport_min_w - PANEL_GAP);
+        const float panel_budget = std::max(0.0f, screen.work_size.x - viewport_min_w - PANEL_GAP);
         const float right_min_w = std::min(RIGHT_PANEL_MIN_VISIBLE_WIDTH * dpi, panel_budget);
-        const float right_pref_w = std::max(right_panel_width_, right_min_w);
+        const float right_pref_w = std::max(right_panel_preferred_width_, right_min_w);
 
         if (shouldReserveLeftDockWidth()) {
-            const float left_pref_w = std::max(0.0f, left_dock_width_);
+            const float left_pref_w = std::max(0.0f, left_dock_preferred_width_);
             const float left_soft_min_w = std::min(LEFT_DOCK_MIN_VISIBLE_WIDTH * dpi,
                                                    std::max(0.0f, panel_budget - right_min_w));
             float left_max_w = std::max(0.0f, panel_budget - right_min_w);
@@ -1116,6 +1113,23 @@ namespace lfs::vis::gui {
         return std::clamp(current_h, 0.0f, max_panel_h);
     }
 
+    LeftDockLayout PanelLayoutManager::computeLeftDockLayout(
+        const bool show_main_panel, const bool ui_hidden, const ScreenState& screen) const {
+        const float dpi = lfs::python::get_shared_dpi_scale();
+        const float panel_w = computeLeftDockReservedWidth(show_main_panel, ui_hidden, screen);
+        const float edge_x = screen.work_pos.x + panel_w;
+        const float toolbar_inset = TOOLBAR_INSET * dpi;
+        const auto resize_rect = leftDockResizeRect(screen.work_pos.x, screen.work_pos.y,
+                                                    screen.work_size.y, dpi, panel_w);
+        return {
+            .panel_x = screen.work_pos.x,
+            .panel_width = panel_w,
+            .toolbar_x = edge_x + toolbar_inset,
+            .edge_min_x = resize_rect.x0,
+            .edge_max_x = resize_rect.x1,
+        };
+    }
+
     float PanelLayoutManager::computeLeftDockReservedWidth(const bool show_main_panel,
                                                            const bool ui_hidden,
                                                            const ScreenState& screen) const {
@@ -1123,12 +1137,11 @@ namespace lfs::vis::gui {
             return 0.0f;
 
         const float dpi = lfs::python::get_shared_dpi_scale();
-        const float icon_bar_w = ICON_BAR_WIDTH * dpi;
         const float max_panel_w = maxLeftDockPanelWidth(show_main_panel, ui_hidden, screen);
         const float min_panel_w = std::min(LEFT_DOCK_MIN_WIDTH * dpi, max_panel_w);
         const float default_panel_w = LEFT_DOCK_DEFAULT_WIDTH * dpi;
         const float current_w = left_dock_width_ > 0.0f ? left_dock_width_ : default_panel_w;
-        return std::clamp(current_w, min_panel_w, max_panel_w) + icon_bar_w;
+        return std::clamp(current_w, min_panel_w, max_panel_w);
     }
 
     ViewportLayout PanelLayoutManager::computeViewportLayout(bool show_main_panel, bool ui_hidden,
@@ -1152,13 +1165,9 @@ namespace lfs::vis::gui {
 
     void PanelLayoutManager::renderDockedPythonConsole(const UIContext& ctx, float panel_x, float panel_h,
                                                        const PanelInputState& input, const ScreenState& screen) {
-        constexpr float EDGE_GRAB_W = 8.0f;
+        const float dpi = lfs::python::get_shared_dpi_scale();
 
-        const float delta_x = input.mouse_x - prev_mouse_x_;
-        prev_mouse_x_ = input.mouse_x;
-
-        python_console_hovering_edge_ = input.mouse_x >= panel_x - EDGE_GRAB_W &&
-                                        input.mouse_x <= panel_x + EDGE_GRAB_W &&
+        python_console_hovering_edge_ = resizeHitZone(panel_x, dpi).contains(input.mouse_x) &&
                                         input.mouse_y >= screen.work_pos.y &&
                                         input.mouse_y <= screen.work_pos.y + panel_h;
 
@@ -1167,10 +1176,14 @@ namespace lfs::vis::gui {
 
         if (python_console_resizing_) {
             const float max_console_w = screen.work_size.x * PYTHON_CONSOLE_MAX_RATIO;
-            python_console_width_ = std::clamp(python_console_width_ - delta_x,
-                                               PYTHON_CONSOLE_MIN_WIDTH, max_console_w);
+            const float min_console_w = std::min(PYTHON_CONSOLE_MIN_WIDTH, max_console_w);
+            const float right_x = panel_x + python_console_width_;
+            python_console_width_ = right_x - python_console_drag_.edgeAt(
+                                                  input.mouse_x, right_x - max_console_w,
+                                                  right_x - min_console_w);
         } else if (python_console_hovering_edge_ && input.mouse_clicked[0]) {
             python_console_resizing_ = true;
+            python_console_drag_ = {panel_x, input.mouse_x};
         }
 
         if (python_console_hovering_edge_ || python_console_resizing_)

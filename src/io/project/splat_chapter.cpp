@@ -6,19 +6,18 @@
 #include "io/splat_chapter.hpp"
 #include "span_streambuf.hpp"
 
-#include "core/cuda/sh_layout.cuh"
-#include "core/cuda_error_typed.hpp"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
-#include "core/pinned_memory_allocator.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
+#include "core/tensor_backend.hpp"
+#include "core/tensor_completion.hpp"
+#include "core/tensor_cuda_interop.hpp"
+#include "core/tensor_readback.hpp"
+#include "core/tensor_sh.hpp"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstring>
-#include <cuda_runtime_api.h>
 #include <exception>
 #include <format>
 #include <functional>
@@ -26,6 +25,7 @@
 #include <limits>
 #include <optional>
 #include <ranges>
+#include <stdexcept>
 #include <string_view>
 #include <utility>
 
@@ -303,24 +303,16 @@ namespace lfs::io::project {
 
     struct AsyncSplatCapture::Impl {
         std::unique_ptr<lfs::core::SplatData> snapshot;
-        cudaStream_t stream = nullptr;
-        cudaEvent_t ready = nullptr;
+        std::unique_ptr<lfs::core::TensorCudaStream> stream;
+        std::unique_ptr<lfs::core::TensorCompletion> ready;
         SplatSourceKind source_kind = SplatSourceKind::Generated;
         bool is_training_model = false;
         std::chrono::steady_clock::time_point clone_started;
 
         ~Impl() {
-            if (stream) {
-                cudaStreamSynchronize(stream);
-            }
+            ready.reset();
             snapshot.reset();
-            if (ready) {
-                cudaEventDestroy(ready);
-            }
-            if (stream) {
-                lfs::core::CudaMemoryPool::instance().release_stream(stream);
-                cudaStreamDestroy(stream);
-            }
+            stream.reset();
         }
     };
 
@@ -338,13 +330,14 @@ namespace lfs::io::project {
                 "The asynchronous splat capture is no longer available.",
                 "capture completion was requested more than once");
         }
-        if (const auto status = cudaEventSynchronize(impl_->ready);
-            status != cudaSuccess) {
+        try {
+            if (impl_->ready)
+                impl_->ready->wait();
+        } catch (const std::exception& failure) {
             auto error = splat_error(
-                lfs::core::cuda_status_to_error_code(status),
+                lfs::ErrorCode::Internal,
                 "The asynchronous splat snapshot could not be completed.",
-                std::format("CUDA snapshot synchronization failed: {}",
-                            cudaGetErrorString(status)));
+                std::format("Snapshot synchronization failed: {}", failure.what()));
             impl_.reset();
             return error;
         }
@@ -457,12 +450,14 @@ namespace lfs::io::project {
             &model.rotation_raw(), &model.opacity_raw(), &model.deleted(),
             &model._densification_info, &model._max_screen_share};
         std::size_t device_bytes = 0;
-        bool has_cuda_tensor = false;
+        bool needs_cuda_stream = false;
+        bool has_gpu_tensor = false;
         for (const auto* tensor : tensors) {
-            if (!tensor->is_valid() || tensor->device() != lfs::core::Device::CUDA) {
+            if (!tensor->is_valid() || tensor->device() != lfs::core::Device::GPU) {
                 continue;
             }
-            has_cuda_tensor = true;
+            has_gpu_tensor = true;
+            needs_cuda_stream |= lfs::core::tensor_uses_cuda_storage(*tensor);
             if (tensor->bytes() > std::numeric_limits<std::size_t>::max() - device_bytes) {
                 return splat_error(
                     lfs::ErrorCode::ResourceExhausted,
@@ -471,7 +466,7 @@ namespace lfs::io::project {
             }
             device_bytes += tensor->bytes();
         }
-        if (!has_cuda_tensor) {
+        if (!has_gpu_tensor) {
             return std::unique_ptr<AsyncSplatCapture>{};
         }
 
@@ -498,20 +493,20 @@ namespace lfs::io::project {
         impl->clone_started = std::chrono::steady_clock::now();
         impl->source_kind = source_kind;
         impl->is_training_model = is_training_model;
-        const auto status = splat_capture_stream_creation_failure_override.value_or(false)
-                                ? cudaErrorUnknown
-                                : cudaStreamCreateWithFlags(
-                                      &impl->stream, cudaStreamNonBlocking);
-        if (status != cudaSuccess) {
+        try {
+            if (splat_capture_stream_creation_failure_override.value_or(false))
+                throw std::runtime_error("forced stream creation failure");
+            if (needs_cuda_stream)
+                impl->stream = std::make_unique<lfs::core::TensorCudaStream>();
+        } catch (const std::exception& failure) {
             return splat_error(
                 lfs::ErrorCode::ResourceExhausted,
                 "The splat snapshot stream could not be created.",
-                std::format("CUDA stream creation failed: {}",
-                            cudaGetErrorString(status)));
+                std::format("Snapshot stream creation failed: {}", failure.what()));
         }
         lfs::core::SplatData cloned;
         try {
-            cloned = model.clone_async(impl->stream);
+            cloned = model.clone_async(impl->stream ? impl->stream->get() : nullptr);
         } catch (const std::bad_alloc& error) {
             LOG_WARN(
                 "SPLT async capture falling back to synchronous capture: "
@@ -526,23 +521,14 @@ namespace lfs::io::project {
         try {
             impl->snapshot = std::make_unique<lfs::core::SplatData>(
                 std::move(cloned));
-            if (const auto status = cudaEventCreateWithFlags(
-                    &impl->ready, cudaEventDisableTiming);
-                status != cudaSuccess) {
-                return splat_error(
-                    lfs::ErrorCode::ResourceExhausted,
-                    "The splat snapshot event could not be created.",
-                    std::format("CUDA event creation failed: {}",
-                                cudaGetErrorString(status)));
-            }
-            if (const auto status = cudaEventRecord(impl->ready, impl->stream);
-                status != cudaSuccess) {
-                return splat_error(
-                    lfs::core::cuda_status_to_error_code(status),
-                    "The splat snapshot could not be queued.",
-                    std::format("CUDA event record failed: {}",
-                                cudaGetErrorString(status)));
-            }
+            impl->ready = std::make_unique<lfs::core::TensorCompletion>();
+            for (const auto* tensor : {&impl->snapshot->means(), &impl->snapshot->sh0(),
+                                       &impl->snapshot->shN(), &impl->snapshot->shN_value_bounds(),
+                                       &impl->snapshot->scaling_raw(), &impl->snapshot->rotation_raw(),
+                                       &impl->snapshot->opacity_raw(), &impl->snapshot->deleted(),
+                                       &impl->snapshot->_densification_info,
+                                       &impl->snapshot->_max_screen_share})
+                impl->ready->include(*tensor);
         } catch (const std::bad_alloc& error) {
             return splat_error(
                 lfs::ErrorCode::ResourceExhausted,
@@ -576,17 +562,6 @@ namespace lfs::io::project {
                 "Live RAD nodes remain external REFS records until explicitly baked");
         }
         try {
-            struct StreamGuard {
-                cudaStream_t stream = nullptr;
-
-                ~StreamGuard() {
-                    if (!stream)
-                        return;
-                    lfs::core::CudaMemoryPool::instance().release_stream(stream);
-                    cudaStreamDestroy(stream);
-                }
-            } stream_guard;
-
             struct SourceTensor {
                 std::uint32_t id;
                 lfs::core::Tensor tensor;
@@ -608,7 +583,7 @@ namespace lfs::io::project {
             source.push_back(describe(0, model.means().contiguous()));
             source.push_back(describe(1, model.sh0().contiguous()));
             const auto& resident_sh = model.shN();
-            if (resident_sh.device() == lfs::core::Device::CUDA &&
+            if (resident_sh.device() == lfs::core::Device::GPU &&
                 resident_sh.dtype() == lfs::core::DataType::Float32) {
                 SourceTensor item;
                 item.id = 2;
@@ -672,129 +647,60 @@ namespace lfs::io::project {
             }
 
             constexpr std::size_t window_bytes = 64ull * 1024ull * 1024ull;
-            const bool has_cuda_source = std::ranges::any_of(
-                source, [](const SourceTensor& item) {
-                    return item.tensor.device() == lfs::core::Device::CUDA;
-                });
-            if (has_cuda_source) {
-                const auto status = cudaStreamCreateWithFlags(
-                    &stream_guard.stream, cudaStreamNonBlocking);
-                if (status != cudaSuccess) {
-                    return splat_error(
-                        lfs::ErrorCode::ResourceExhausted,
-                        "The splat payload could not be serialized.",
-                        std::format("CUDA transfer stream creation failed: {}",
-                                    cudaGetErrorString(status)));
-                }
-            }
             struct StagingSlot {
-                void* ptr = nullptr;
-                cudaEvent_t ready = nullptr;
+                lfs::core::TensorReadback readback;
                 std::byte* destination = nullptr;
                 std::size_t count = 0;
                 bool pending = false;
             };
             std::array<StagingSlot, 2> staging{};
-            struct StagingGuard {
-                std::array<StagingSlot, 2>& slots;
-                const bool enabled;
-                cudaStream_t stream;
-                ~StagingGuard() {
-                    if (enabled)
-                        cudaStreamSynchronize(stream);
-                    for (auto& slot : slots) {
-                        if (slot.ready)
-                            cudaEventDestroy(slot.ready);
-                        if (slot.ptr)
-                            lfs::core::PinnedMemoryAllocator::instance().deallocate(
-                                slot.ptr);
-                    }
-                }
-            } staging_guard{staging, has_cuda_source, stream_guard.stream};
-            if (has_cuda_source) {
-                for (auto& slot : staging) {
-                    slot.ptr = lfs::core::PinnedMemoryAllocator::instance().allocate(
-                        window_bytes);
-                    if (!slot.ptr || cudaEventCreateWithFlags(
-                                         &slot.ready, cudaEventDisableTiming) !=
-                                         cudaSuccess) {
-                        return splat_error(
-                            lfs::ErrorCode::ResourceExhausted,
-                            "The splat payload could not be serialized.",
-                            "pinned staging allocation failed");
-                    }
-                    lfs::core::PinnedMemoryAllocator::instance().record_stream(
-                        slot.ptr, stream_guard.stream);
-                }
-            }
             lfs::core::Tensor sh_scratch;
-            if (std::ranges::any_of(source, &SourceTensor::sh_range)) {
-                sh_scratch = lfs::core::Tensor::empty(
-                    {window_bytes}, lfs::core::Device::CUDA,
-                    lfs::core::DataType::UInt8, false);
-            }
-            const auto flush_slot = [&](StagingSlot& slot) -> lfs::Result<void> {
+            const auto flush_slot = [&](StagingSlot& slot) {
                 if (!slot.pending)
-                    return {};
-                if (const auto status = cudaEventSynchronize(slot.ready);
-                    status != cudaSuccess) {
-                    return lfs::Result<void>::failure(splat_error(
-                        lfs::core::cuda_status_to_error_code(status),
-                        "The splat payload could not be serialized.",
-                        std::format("CUDA transfer synchronization failed: {}",
-                                    cudaGetErrorString(status))));
-                }
-                std::memcpy(slot.destination, slot.ptr, slot.count);
+                    return;
+                slot.readback.wait({slot.destination, slot.count});
                 slot.pending = false;
-                return {};
             };
             data_offset = data_start;
             std::size_t staging_index = 0;
             for (const auto& item : source) {
+                const auto row_bytes = item.sh_range
+                                           ? item.shape[1] * 3 * sizeof(float)
+                                           : 0;
                 for (std::uint64_t offset = 0; offset < item.bytes;) {
                     auto count = static_cast<std::size_t>(std::min<std::uint64_t>(
                         window_bytes, item.bytes - offset));
-                    if (item.sh_range && count % sizeof(float) != 0)
-                        count -= count % sizeof(float);
-                    auto* const destination =
-                        result.data() + data_offset + offset;
-                    if (item.tensor.device() == lfs::core::Device::CUDA) {
+                    if (item.sh_range && row_bytes)
+                        count -= count % row_bytes;
+                    auto* const destination = result.data() + data_offset + offset;
+                    if (item.tensor.device() == lfs::core::Device::GPU) {
                         auto& slot = staging[staging_index++ % staging.size()];
-                        if (auto flushed = flush_slot(slot); !flushed)
-                            return std::move(flushed).error();
-                        lfs::core::prepare_inputs_for_stream(
-                            {&item.tensor}, stream_guard.stream);
-                        const void* source_ptr = item.tensor.data_ptr();
+                        flush_slot(slot);
                         if (item.sh_range) {
-                            lfs::core::undo_reorder_sh_range_from_swizzled(
-                                static_cast<const float*>(source_ptr),
-                                static_cast<float*>(sh_scratch.data_ptr()),
-                                offset / sizeof(float),
-                                count / sizeof(float), item.shape[0],
-                                static_cast<std::uint32_t>(item.shape[1]),
-                                static_cast<std::uint32_t>(item.shape[1]),
-                                stream_guard.stream);
-                            source_ptr = sh_scratch.data_ptr();
+                            const auto rows = count / row_bytes;
+                            const auto capacity_rows = window_bytes / row_bytes;
+                            if (!sh_scratch.is_valid()) {
+                                const lfs::core::GpuBackendScope backend_scope(
+                                    *lfs::core::gpu_backend_of(item.tensor));
+                                sh_scratch = lfs::core::Tensor::empty(
+                                    {capacity_rows, item.shape[1], 3},
+                                    lfs::core::Device::GPU,
+                                    lfs::core::DataType::Float32, false);
+                            }
+                            lfs::core::sh_codec(
+                                item.tensor, sh_scratch,
+                                {.source_format = lfs::core::ShFormat::Float32,
+                                 .destination_format = lfs::core::ShFormat::Canonical,
+                                 .source_rows = item.shape[0],
+                                 .destination_rows = capacity_rows,
+                                 .count = rows,
+                                 .source_rest = static_cast<std::uint32_t>(item.shape[1]),
+                                 .destination_rest = static_cast<std::uint32_t>(item.shape[1]),
+                                 .source_offset = offset / row_bytes});
+                            slot.readback.enqueue_range(sh_scratch, 0, count);
                         } else {
-                            source_ptr = static_cast<const std::byte*>(source_ptr) + offset;
+                            slot.readback.enqueue_range(item.tensor, offset, count);
                         }
-                        const auto status = cudaMemcpyAsync(
-                            slot.ptr, source_ptr, count,
-                            cudaMemcpyDeviceToHost, stream_guard.stream);
-                        if (status != cudaSuccess)
-                            return splat_error(
-                                lfs::core::cuda_status_to_error_code(status),
-                                "The splat payload could not be serialized.",
-                                std::format("CUDA tensor copy failed: {}",
-                                            cudaGetErrorString(status)));
-                        if (const auto recorded = cudaEventRecord(
-                                slot.ready, stream_guard.stream);
-                            recorded != cudaSuccess)
-                            return splat_error(
-                                lfs::core::cuda_status_to_error_code(recorded),
-                                "The splat payload could not be serialized.",
-                                std::format("CUDA transfer synchronization failed: {}",
-                                            cudaGetErrorString(recorded)));
                         slot.destination = destination;
                         slot.count = count;
                         slot.pending = true;
@@ -807,10 +713,8 @@ namespace lfs::io::project {
                 }
                 data_offset += item.bytes;
             }
-            for (auto& slot : staging) {
-                if (auto flushed = flush_slot(slot); !flushed)
-                    return std::move(flushed).error();
-            }
+            for (auto& slot : staging)
+                flush_slot(slot);
             const auto finished = std::chrono::steady_clock::now();
             LOG_DEBUG(
                 "Project SPLT serialization stages: tensors={} bytes={} source_prepare={:.3f} ms manifest_memcpy={:.3f} ms total={:.3f} ms",

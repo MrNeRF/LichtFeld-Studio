@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "core/tensor.hpp"
 #include "io/video/video_export_options.hpp"
 
 #include <expected>
@@ -19,8 +20,8 @@ namespace lfs::io::video {
             const std::filesystem::path& output_path,
             const VideoExportOptions& options) = 0;
 
-        [[nodiscard]] virtual std::expected<void, std::string> writeFrameGpu(
-            const void* rgba_gpu_ptr, int width, int height, void* cuda_stream = nullptr) = 0;
+        [[nodiscard]] virtual std::expected<void, std::string> writeFrame(
+            const core::Tensor& rgb_hwc) = 0;
 
         [[nodiscard]] virtual std::expected<void, std::string> close() = 0;
     };

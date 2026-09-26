@@ -363,6 +363,7 @@ namespace lfs::io {
                         normal_path);
 
                     cam->set_has_image(info._has_image);
+                    cam->precompute_undistortion();
                     cameras.push_back(cam);
                 } catch (const std::exception& e) {
                     LOG_ERROR("Failed to create camera {}: {}", i, e.what());

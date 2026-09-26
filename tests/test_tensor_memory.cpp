@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <memory>
@@ -48,10 +49,10 @@ namespace {
 
 } // anonymous namespace
 
-class TensorMemoryTest : public ::testing::Test {
+class TensorMemoryTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
-        ASSERT_TRUE(torch::cuda::is_available()) << "CUDA is not available for testing";
+        LFS_CUDA_BACKEND_OR_RETURN();
 
         torch::manual_seed(42);
         Tensor::manual_seed(42);
@@ -63,7 +64,7 @@ protected:
 TEST_F(TensorMemoryTest, MemoryOwnership) {
     // Test owning memory - compare with PyTorch behavior
     {
-        auto custom_t = Tensor::zeros({100, 100}, Device::CUDA);
+        auto custom_t = Tensor::zeros({100, 100}, Device::GPU);
         auto torch_t = torch::zeros({100, 100}, torch::TensorOptions().device(torch::kCUDA));
 
         EXPECT_TRUE(custom_t.owns_memory());
@@ -80,7 +81,7 @@ TEST_F(TensorMemoryTest, MemoryOwnership) {
     cudaMemset(cuda_data, 0, 100 * sizeof(float));
 
     {
-        auto custom_t = Tensor::from_blob(cuda_data, {10, 10}, Device::CUDA, DataType::Float32);
+        auto custom_t = Tensor::from_blob(cuda_data, {10, 10}, Device::GPU, DataType::Float32);
         auto torch_t = torch::from_blob(cuda_data, {10, 10},
                                         torch::TensorOptions().device(torch::kCUDA));
 
@@ -98,7 +99,7 @@ TEST_F(TensorMemoryTest, MoveSemantics) {
     // Test move constructor
     void* original_ptr = nullptr;
     {
-        auto custom_t1 = Tensor::ones({50, 50}, Device::CUDA);
+        auto custom_t1 = Tensor::ones({50, 50}, Device::GPU);
         EXPECT_TRUE(custom_t1.owns_memory());
         original_ptr = custom_t1.data_ptr();
 
@@ -114,8 +115,8 @@ TEST_F(TensorMemoryTest, MoveSemantics) {
 
     // Test move assignment
     {
-        auto custom_t1 = Tensor::zeros({30, 30}, Device::CUDA);
-        auto custom_t2 = Tensor::ones({20, 20}, Device::CUDA);
+        auto custom_t1 = Tensor::zeros({30, 30}, Device::GPU);
+        auto custom_t2 = Tensor::ones({20, 20}, Device::GPU);
 
         void* ptr1 = custom_t1.data_ptr();
         void* ptr2 = custom_t2.data_ptr();
@@ -134,7 +135,7 @@ TEST_F(TensorMemoryTest, MoveSemantics) {
 // ============= View and Slice Tests =============
 
 TEST_F(TensorMemoryTest, ViewDoesNotOwnMemory) {
-    auto custom_original = Tensor::ones({4, 5, 6}, Device::CUDA);
+    auto custom_original = Tensor::ones({4, 5, 6}, Device::GPU);
     auto torch_original = torch::ones({4, 5, 6}, torch::TensorOptions().device(torch::kCUDA));
 
     EXPECT_TRUE(custom_original.owns_memory());
@@ -161,7 +162,7 @@ TEST_F(TensorMemoryTest, ViewDoesNotOwnMemory) {
 }
 
 TEST_F(TensorMemoryTest, SliceDoesNotOwnMemory) {
-    auto custom_original = Tensor::full({10, 10}, 3.0f, Device::CUDA);
+    auto custom_original = Tensor::full({10, 10}, 3.0f, Device::GPU);
     auto torch_original = torch::full({10, 10}, 3.0f,
                                       torch::TensorOptions().device(torch::kCUDA));
 
@@ -181,7 +182,7 @@ TEST_F(TensorMemoryTest, SliceDoesNotOwnMemory) {
 }
 
 TEST_F(TensorMemoryTest, CloneOwnsMemory) {
-    auto custom_original = Tensor::ones({3, 3}, Device::CUDA);
+    auto custom_original = Tensor::ones({3, 3}, Device::GPU);
     auto torch_original = torch::ones({3, 3}, torch::TensorOptions().device(torch::kCUDA));
 
     EXPECT_TRUE(custom_original.owns_memory());
@@ -217,7 +218,7 @@ TEST_F(TensorMemoryTest, CloneOwnsMemory) {
 // ============= Device Transfer Tests =============
 
 TEST_F(TensorMemoryTest, DeviceTransferOwnsMemory) {
-    auto custom_cuda = Tensor::full({5, 5}, 2.5f, Device::CUDA);
+    auto custom_cuda = Tensor::full({5, 5}, 2.5f, Device::GPU);
     auto torch_cuda = torch::full({5, 5}, 2.5f,
                                   torch::TensorOptions().device(torch::kCUDA));
 
@@ -232,7 +233,7 @@ TEST_F(TensorMemoryTest, DeviceTransferOwnsMemory) {
 
     compare_tensors(custom_cpu, torch_cpu, 1e-6f, 1e-7f, "CPUTransfer");
 
-    auto custom_cuda2 = custom_cpu.to(Device::CUDA);
+    auto custom_cuda2 = custom_cpu.to(Device::GPU);
     auto torch_cuda2 = torch_cpu.to(torch::kCUDA);
 
     EXPECT_TRUE(custom_cuda2.owns_memory());
@@ -303,7 +304,7 @@ TEST_F(TensorMemoryTest, BoolFromBlobCloneResultOwnsStorage) {
 }
 
 TEST_F(TensorMemoryTest, DeviceTransferRoundtrip) {
-    auto custom_original = Tensor::randn({10, 10}, Device::CUDA);
+    auto custom_original = Tensor::randn({10, 10}, Device::GPU);
     auto custom_data = custom_original.to_vector(); // Save original data
 
     auto torch_original = torch::from_blob(custom_data.data(), {10, 10},
@@ -333,7 +334,7 @@ TEST_F(TensorMemoryTest, LargeTensorAllocation) {
     const size_t large_size = 1024 * 1024; // 1M elements = 4MB for float32
 
     {
-        auto custom_t = Tensor::zeros({large_size}, Device::CUDA);
+        auto custom_t = Tensor::zeros({large_size}, Device::GPU);
         auto torch_t = torch::zeros({static_cast<long>(large_size)},
                                     torch::TensorOptions().device(torch::kCUDA));
 
@@ -362,7 +363,7 @@ TEST_F(TensorMemoryTest, VeryLargeTensor) {
     }
 
     {
-        auto custom_t = Tensor::ones({size}, Device::CUDA);
+        auto custom_t = Tensor::ones({size}, Device::GPU);
         auto torch_t = torch::ones({static_cast<long>(size)},
                                    torch::TensorOptions().device(torch::kCUDA));
 
@@ -379,7 +380,7 @@ TEST_F(TensorMemoryTest, VeryLargeTensor) {
 // ============= Multiple Views Tests =============
 
 TEST_F(TensorMemoryTest, MultipleViewsOfSameMemory) {
-    auto custom_original = Tensor::ones({24}, Device::CUDA);
+    auto custom_original = Tensor::ones({24}, Device::GPU);
     auto torch_original = torch::ones({24}, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_view1 = custom_original.view({2, 12});
@@ -414,7 +415,7 @@ TEST_F(TensorMemoryTest, MultipleViewsOfSameMemory) {
 }
 
 TEST_F(TensorMemoryTest, NestedViews) {
-    auto custom_t = Tensor::ones({120}, Device::CUDA);
+    auto custom_t = Tensor::ones({120}, Device::GPU);
     auto torch_t = torch::ones({120}, torch::TensorOptions().device(torch::kCUDA));
 
     // Create nested views
@@ -437,8 +438,8 @@ TEST_F(TensorMemoryTest, NestedViews) {
 // ============= Copy Operations Tests =============
 
 TEST_F(TensorMemoryTest, CopyFromPreservesOwnership) {
-    auto custom_t1 = Tensor::ones({3, 3}, Device::CUDA);
-    auto custom_t2 = Tensor::zeros({3, 3}, Device::CUDA);
+    auto custom_t1 = Tensor::ones({3, 3}, Device::GPU);
+    auto custom_t2 = Tensor::zeros({3, 3}, Device::GPU);
 
     auto torch_t1 = torch::ones({3, 3}, torch::TensorOptions().device(torch::kCUDA));
     auto torch_t2 = torch::zeros({3, 3}, torch::TensorOptions().device(torch::kCUDA));
@@ -465,7 +466,7 @@ TEST_F(TensorMemoryTest, CopyFromPreservesOwnership) {
 }
 
 TEST_F(TensorMemoryTest, CopyBetweenDevices) {
-    auto custom_cuda = Tensor::full({5, 5}, 7.0f, Device::CUDA);
+    auto custom_cuda = Tensor::full({5, 5}, 7.0f, Device::GPU);
     auto custom_cpu = Tensor::zeros({5, 5}, Device::CPU);
 
     auto torch_cuda = torch::full({5, 5}, 7.0f,
@@ -492,7 +493,7 @@ TEST_F(TensorMemoryTest, InvalidTensorOperations) {
 }
 
 TEST_F(TensorMemoryTest, EmptyTensor) {
-    auto custom_empty = Tensor::empty({0}, Device::CUDA);
+    auto custom_empty = Tensor::empty({0}, Device::GPU);
     auto torch_empty = torch::empty({0}, torch::TensorOptions().device(torch::kCUDA));
 
     EXPECT_TRUE(custom_empty.is_valid());
@@ -512,7 +513,7 @@ TEST_F(TensorMemoryTest, EmptyTensor) {
 
 TEST_F(TensorMemoryTest, MemoryAlignmentAndPadding) {
     // Test that memory is properly aligned
-    auto custom_t = Tensor::empty({17}, Device::CUDA); // Odd size
+    auto custom_t = Tensor::empty({17}, Device::GPU); // Odd size
 
     // CUDA memory should be aligned to at least 256 bytes
     uintptr_t addr = reinterpret_cast<uintptr_t>(custom_t.data_ptr());
@@ -532,7 +533,7 @@ TEST_F(TensorMemoryTest, StressTestManyAllocations) {
     std::vector<torch::Tensor> torch_tensors;
 
     for (int i = 0; i < 100; ++i) {
-        custom_tensors.emplace_back(Tensor::zeros({10, 10}, Device::CUDA));
+        custom_tensors.emplace_back(Tensor::zeros({10, 10}, Device::GPU));
         torch_tensors.push_back(torch::zeros({10, 10},
                                              torch::TensorOptions().device(torch::kCUDA)));
     }
@@ -557,7 +558,7 @@ TEST_F(TensorMemoryTest, StressTestManyAllocations) {
 TEST_F(TensorMemoryTest, StressTestRapidAllocDealloc) {
     // Rapid allocation and deallocation
     for (int i = 0; i < 1000; ++i) {
-        auto custom_t = Tensor::randn({100}, Device::CUDA);
+        auto custom_t = Tensor::randn({100}, Device::GPU);
         auto torch_t = torch::randn({100}, torch::TensorOptions().device(torch::kCUDA));
 
         EXPECT_TRUE(custom_t.is_valid());
@@ -571,7 +572,7 @@ TEST_F(TensorMemoryTest, MixedSizeAllocations) {
     std::vector<size_t> sizes = {10, 100, 1000, 10000, 100000};
 
     for (size_t size : sizes) {
-        auto custom_t = Tensor::ones({size}, Device::CUDA);
+        auto custom_t = Tensor::ones({size}, Device::GPU);
         auto torch_t = torch::ones({static_cast<long>(size)},
                                    torch::TensorOptions().device(torch::kCUDA));
 
@@ -598,7 +599,7 @@ TEST_F(TensorMemoryTest, ViewLifetimeSafety) {
     torch::Tensor torch_view;
 
     {
-        auto custom_original = Tensor::ones({100}, Device::CUDA);
+        auto custom_original = Tensor::ones({100}, Device::GPU);
         auto torch_original = torch::ones({100}, torch::TensorOptions().device(torch::kCUDA));
 
         custom_view = custom_original.view({10, 10});
@@ -616,7 +617,7 @@ TEST_F(TensorMemoryTest, ViewLifetimeSafety) {
 }
 
 TEST_F(TensorMemoryTest, CloneIndependence) {
-    auto custom_original = Tensor::randn({50}, Device::CUDA);
+    auto custom_original = Tensor::randn({50}, Device::GPU);
     auto custom_data = custom_original.to_vector();
 
     auto torch_original = torch::from_blob(custom_data.data(), {50},

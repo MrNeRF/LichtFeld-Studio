@@ -1,0 +1,34 @@
+static const uint LFS_LOCAL_SIZE_X = 256;
+static const uint LFS_PUSH_CONSTANT_SIZE = 64;
+[SpecializationConstant] const uint sourceFormat = 1;
+[SpecializationConstant] const uint destinationFormat = 1;
+[SpecializationConstant] const uint indexType = 0;
+[SpecializationConstant] const uint scatter = 0;
+[SpecializationConstant] const uint sourceRest = 15;
+[SpecializationConstant] const uint destinationRest = 15;
+struct Parameters {
+    uint64_t source, destination, indices, sourceBounds, destinationBounds;
+    uint sourceRows, destinationRows, count;
+    uint sourceOffset, destinationOffset, padding;
+};
+uint shOffset(uint row, uint cell, uint rest, bool q16) {
+    if(q16) return (row/32*(rest*3)+cell)*32+row%32;
+    return ((row/32*((rest*3+3)/4)+cell/4)*32+row%32)*4+cell%4;
+}
+uint indexAt(Parameters p, uint i) {
+    return indexType == 2 ? uint(((Ptr<int64_t, Access.Read>)p.indices)[i])
+                         : uint(((Ptr<int, Access.Read>)p.indices)[i]);
+}
+float readCell(Parameters p, uint row, uint c) {
+    uint width = sourceFormat == 1 || sourceFormat == 2 ? (sourceRest*3+3)/4*4 : sourceRest*3;
+    if(row>=p.sourceRows || c>=width) return 0;
+    uint offset = sourceFormat == 0 ? row*sourceRest*3+c : shOffset(row,c,sourceRest,sourceFormat==3);
+    if(sourceFormat==3) {
+        float lo=((Ptr<float, Access.Read>)p.sourceBounds)[row/256*2];
+        float hi=((Ptr<float, Access.Read>)p.sourceBounds)[row/256*2+1];
+        uint code=((Ptr<uint16_t, Access.Read>)p.source)[offset];
+        return fma(hi-lo,float(code)*(1.0f/65535.0f),lo);
+    }
+    if(sourceFormat==2) return f16tof32(((Ptr<uint16_t, Access.Read>)p.source)[offset]);
+    return ((Ptr<float, Access.Read>)p.source)[offset];
+}

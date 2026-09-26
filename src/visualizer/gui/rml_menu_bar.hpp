@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
@@ -23,7 +24,8 @@ namespace Rml {
 
 namespace lfs::vis {
     struct Theme;
-}
+    struct ProjectDisplayInfo;
+} // namespace lfs::vis
 namespace lfs::vis::gui {
 
     class RmlUIManager;
@@ -98,7 +100,7 @@ namespace lfs::vis::gui {
         bool has_children = false;
         bool submenu_open = false;
         int callback_index = -1;
-        std::vector<MenuDropdownLeafView> children;
+        std::vector<MenuDropdownLeafView> children = {};
     };
 
     struct MenuDropdownRootView {
@@ -119,15 +121,18 @@ namespace lfs::vis::gui {
         std::vector<MenuDropdownChildView> children;
     };
 
-    class RmlMenuBar {
+    class LFS_VIS_API RmlMenuBar {
     public:
         void init(RmlUIManager* mgr);
         void shutdown();
         void draw(int screen_w, int screen_h);
         void updateLabels(const std::vector<std::string>& labels,
                           const std::vector<std::string>& idnames);
+        void updateProjectDisplay(const ProjectDisplayInfo& project_display);
+        void updateProjectDisplay(std::string title, std::string tooltip, bool dirty);
         void reloadResources();
         void processInput(const PanelInputState& input);
+        void closeDropdown();
         void setViewportRightEdge(float x) { viewport_right_edge_ = x; }
         void setUiHidden(bool hidden);
         void suspend();
@@ -137,14 +142,17 @@ namespace lfs::vis::gui {
 
         // Keeps the render-on-demand loop ticking while a tooltip is counting
         // down so it reveals on time without needing a mouse jiggle.
-        [[nodiscard]] bool needsAnimationFrame() const { return tooltip_.revealDue(); }
+        [[nodiscard]] bool needsAnimationFrame() const {
+            return tooltip_.revealDue() || portal_transfer_animation_active_;
+        }
 
     private:
+        friend class RmlMenuBarTestAccess;
+        void bindModel();
         bool updateTheme();
         void rebuildLabels();
         void syncActiveLabelState();
         void openDropdown(int index);
-        void closeDropdown();
         void rebuildDropdownDOM();
         void sizeOpenDropdowns();
         void setOpenSubmenu(int root_index, int child_index);
@@ -152,8 +160,11 @@ namespace lfs::vis::gui {
         int submenuIndexForElement(Rml::Element* element) const;
         int childSubmenuIndexForElement(Rml::Element* element) const;
         void rebuildToolbarButtons();
+        void rebuildPortalStatus();
         void dispatchToolbarAction(const std::string& action, const std::string& value);
         Rml::Element* toolbarButtonAtPoint(float x, float y) const;
+        bool projectTitleAtPoint(float x, float y) const;
+        void updateProjectTitleLayout(int screen_w, float dp_ratio);
         void updateTitlebarDragRegion(int bar_height_px);
         void clearTitlebarDragRegion();
 
@@ -177,12 +188,28 @@ namespace lfs::vis::gui {
         std::uint64_t navigation_tooltip_language_generation_ = 0;
         bool has_navigation_tooltip_language_generation_ = false;
         int active_index_ = -1;
+        std::string portal_connection_label_;
+        std::string portal_connection_tooltip_;
+        std::string portal_connection_icon_;
+        std::string portal_connection_tone_;
+        bool portal_transfer_animation_active_ = false;
+        std::string gallery_progress_label_;
+        std::string gallery_progress_detail_;
+        std::string gallery_progress_tooltip_;
+        std::string gallery_progress_width_{"0%"};
+        bool gallery_has_progress_ = false;
+        bool gallery_progress_indeterminate_ = false;
+        std::string project_title_;
+        std::string project_tooltip_;
+        bool project_dirty_ = false;
 
         Rml::Element* menu_items_ = nullptr;
         Rml::Element* dropdown_container_ = nullptr;
         Rml::Element* dropdown_popup_ = nullptr;
         Rml::Element* dropdown_overlay_ = nullptr;
         Rml::Element* brand_logo_ = nullptr;
+        Rml::Element* project_title_container_ = nullptr;
+        Rml::Element* project_title_el_ = nullptr;
         Rml::Element* menu_toolbar_ = nullptr;
         Rml::Element* menu_window_controls_ = nullptr;
         Rml::Element* menu_window_split_view_ = nullptr;
@@ -192,6 +219,9 @@ namespace lfs::vis::gui {
         RmlTooltipController tooltip_;
         float viewport_right_edge_ = 0.0f;
         float applied_toolbar_right_ = -1.0f;
+        float applied_project_title_left_ = -1.0f;
+        float applied_project_title_width_ = -1.0f;
+        bool project_title_has_room_ = false;
         bool toolbar_fits_ = true;
         bool ui_hidden_ = false;
         bool last_window_split_view_ = false;

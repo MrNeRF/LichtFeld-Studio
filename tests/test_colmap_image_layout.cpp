@@ -1,17 +1,22 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "cuda_backend_test.hpp"
+
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/image_io.hpp"
+#include "core/image_loader.hpp"
+#include "core/tensor_backend.hpp"
+#include "io/cache_image_loader.hpp"
 #include "io/filesystem_utils.hpp"
 #include "io/formats/colmap.hpp"
 #include "io/loaders/blender_loader.hpp"
 #include "io/loaders/colmap_loader.hpp"
 #include "io/pipelined_image_loader.hpp"
+#include <algorithm>
 #include <cmath>
 
 #include <atomic>
-#include <cuda_runtime.h>
 #include <filesystem>
 #include <fstream>
 #include <glm/gtc/matrix_transform.hpp>
@@ -26,7 +31,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-    class ColmapImageLayoutTest : public ::testing::Test {
+    class ColmapImageLayoutTest : public lfs::test::CudaBackendTest {
     protected:
         void SetUp() override {
             temp_dir_ = fs::temp_directory_path() / "lfs_colmap_image_layout_test";
@@ -169,9 +174,23 @@ namespace {
         fs::path temp_dir_;
     };
 
-    bool has_cuda_device() {
-        int device_count = 0;
-        return cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0;
+    // Camera pixel loads require the process-wide CacheLoader callback.
+    void ensure_image_loader() {
+        static bool initialized = false;
+        if (initialized) {
+            return;
+        }
+        lfs::io::CacheLoader::getInstance(false);
+        lfs::core::set_image_loader([](const lfs::core::ImageLoadParams& p) {
+            return lfs::io::CacheLoader::getInstance().load_cached_image(
+                p.path,
+                {.resize_factor = p.resize_factor,
+                 .max_width = p.max_width,
+                 .cuda_stream = p.stream,
+                 .output_uint8 = p.output_uint8,
+                 .skip_blob_cache = p.skip_blob_cache});
+        });
+        initialized = true;
     }
 
     struct BicyclePixels {
@@ -323,10 +342,6 @@ TEST_F(ColmapImageLayoutTest, AcceptsZeroBasedColmapIds) {
 }
 
 TEST_F(ColmapImageLayoutTest, AcceptsZeroBasedPoint3DIds) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
-
     const fs::path dataset_dir = temp_dir_ / "dataset";
     write_text_file(dataset_dir / "points3D.txt",
                     "0 0 0 0 255 0 0 0.1 0 0\n");
@@ -341,10 +356,6 @@ TEST_F(ColmapImageLayoutTest, AcceptsZeroBasedPoint3DIds) {
 }
 
 TEST_F(ColmapImageLayoutTest, FiltersTextPointCloudByMinimumTrackLength) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required for COLMAP point cloud load";
-    }
-
     const fs::path dataset_dir = temp_dir_ / "dataset";
     write_text_file(dataset_dir / "points3D.txt",
                     "1 0 0 0 255 0 0 0.1 1 0\n"
@@ -449,10 +460,6 @@ TEST_F(ColmapImageLayoutTest, CaseVariantMaskResolvedByExactPathMatch) {
 }
 
 TEST_F(ColmapImageLayoutTest, AcceptsIntegerRatioDepthForScaledImages) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required for COLMAP camera load";
-    }
-
     const fs::path dataset_dir = temp_dir_ / "scaled_dataset";
     const fs::path image_path = dataset_dir / "images_2" / "frame.png";
     const fs::path depth_path = dataset_dir / "depth" / "frame.png";
@@ -475,10 +482,6 @@ TEST_F(ColmapImageLayoutTest, AcceptsIntegerRatioDepthForScaledImages) {
 }
 
 TEST_F(ColmapImageLayoutTest, RejectsAspectMismatchedDepthForScaledImages) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required for COLMAP camera load";
-    }
-
     const fs::path dataset_dir = temp_dir_ / "mismatched_scaled_dataset";
     const fs::path image_path = dataset_dir / "images_2" / "frame.png";
     const fs::path depth_path = dataset_dir / "depth" / "frame.png";
@@ -497,6 +500,50 @@ TEST_F(ColmapImageLayoutTest, RejectsAspectMismatchedDepthForScaledImages) {
     EXPECT_EQ(result.error().code, lfs::io::ErrorCode::DEPTH_SIZE_MISMATCH);
 }
 
+TEST_F(ColmapImageLayoutTest, TransformsPrecomputesViewerUndistortionWithoutChangingTrainingIntrinsics) {
+    const auto dataset = temp_dir_ / "distorted_transforms";
+    fs::create_directories(dataset / "images");
+    std::vector<unsigned char> pixels(64 * 48 * 3);
+    for (size_t i = 0; i < pixels.size(); ++i)
+        pixels[i] = static_cast<unsigned char>(i % 251);
+    ASSERT_TRUE(lfs::core::save_png(dataset / "images/frame.png", pixels.data(), 64, 48, 3, 8, 6));
+    write_text_file(dataset / "transforms.json",
+                    R"({"w":64,"h":48,"fl_x":50,"fl_y":51,"cx":31,"cy":23,"k1":-0.2,"frames":[{"file_path":"images/frame.png","transform_matrix":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]}]})");
+    write_ascii_double_ply(dataset / "pointcloud.ply", 3);
+    lfs::io::BlenderLoader loader;
+    auto result = loader.load(dataset, {});
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+    const auto& cameras = std::get<lfs::io::LoadedScene>(result->data).cameras;
+    ASSERT_EQ(cameras.size(), 1u);
+    const auto& camera = *cameras.front();
+    ASSERT_TRUE(camera.has_distortion());
+    EXPECT_TRUE(camera.is_undistort_precomputed());
+    EXPECT_FALSE(camera.is_undistort_prepared());
+    const auto [fx, fy, cx, cy] = camera.get_intrinsics();
+    EXPECT_FLOAT_EQ(fx, 50.0f);
+    EXPECT_FLOAT_EQ(fy, 51.0f);
+    EXPECT_FLOAT_EQ(cx, 31.0f);
+    EXPECT_FLOAT_EQ(cy, 23.0f);
+
+    ensure_image_loader();
+    for (const bool output_uint8 : {false, true}) {
+        auto image = cameras.front()->load_and_get_image(1, 0, output_uint8);
+        ASSERT_EQ(image.shape(), lfs::core::TensorShape({3, 48, 64}));
+        EXPECT_EQ(lfs::core::gpu_backend_of(image), lfs::core::default_gpu_backend());
+        auto host = image.cpu();
+        for (size_t pixel = 0; pixel < 64 * 48; ++pixel) {
+            for (size_t channel = 0; channel < 3; ++channel) {
+                const auto source = pixels[pixel * 3 + channel];
+                const auto index = channel * 64 * 48 + pixel;
+                if (output_uint8)
+                    ASSERT_EQ(host.ptr<unsigned char>()[index], source);
+                else
+                    ASSERT_NEAR(host.ptr<float>()[index], source / 255.0f, 1e-7f);
+            }
+        }
+    }
+}
+
 TEST(SidecarDimensionsContract, OriginalSizePassesForSmallerTrainingImage) {
     // Integer rounding in selected image folders stays inside the 1% tolerance.
     EXPECT_TRUE(lfs::io::sidecar_dimensions_match_contract(1237, 822, 154, 102));
@@ -511,8 +558,8 @@ TEST(SidecarDimensionsContract, OriginalSizePassesForSmallerTrainingImage) {
 }
 
 TEST_F(ColmapImageLayoutTest, HalfResolutionDepthAndNormalReachTrainingSize) {
-    if (!has_cuda_device())
-        GTEST_SKIP() << "CUDA device required";
+    LFS_CUDA_BACKEND_OR_RETURN();
+    ensure_image_loader();
     const auto source = read_bicycle_pixels();
     for (const bool blender : {false, true}) {
         for (const int bits : {8, 16}) {
@@ -604,10 +651,6 @@ TEST_F(ColmapImageLayoutTest, HalfResolutionDepthAndNormalReachTrainingSize) {
 }
 
 TEST_F(ColmapImageLayoutTest, AcceptsOriginalSizeNormalForScaledImages) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required for COLMAP camera load";
-    }
-
     const fs::path dataset_dir = temp_dir_ / "original_normal_dataset";
     const fs::path image_path = dataset_dir / "images_2" / "frame.png";
     const fs::path normal_path = dataset_dir / "normals" / "frame.png";
@@ -628,10 +671,6 @@ TEST_F(ColmapImageLayoutTest, AcceptsOriginalSizeNormalForScaledImages) {
 }
 
 TEST_F(ColmapImageLayoutTest, RejectsMismatchedNormalWithoutAutoGenerate) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required for COLMAP camera load";
-    }
-
     const fs::path dataset_dir = temp_dir_ / "mismatched_normal_dataset";
     const fs::path image_path = dataset_dir / "images_2" / "frame.png";
     const fs::path normal_path = dataset_dir / "normals" / "frame.png";
@@ -652,10 +691,6 @@ TEST_F(ColmapImageLayoutTest, RejectsMismatchedNormalWithoutAutoGenerate) {
 }
 
 TEST_F(ColmapImageLayoutTest, SkipsMismatchedNormalWhenAutoGenerate) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required for COLMAP camera load";
-    }
-
     const fs::path dataset_dir = temp_dir_ / "regen_normal_dataset";
     const fs::path image_path = dataset_dir / "images_2" / "frame.png";
     const fs::path normal_path = dataset_dir / "normals" / "frame.png";
@@ -808,6 +843,31 @@ TEST_F(ColmapImageLayoutTest, ValidationFailsWhenDuplicateBasenameWasCollapsedIn
     EXPECT_NE(result.error().message.find("flattened or dropped"), std::string::npos);
 }
 
+TEST_F(ColmapImageLayoutTest, RecursiveFileCacheObserverVisitsOnlyRegularFiles) {
+    const fs::path images_dir = temp_dir_ / "images";
+    const fs::path image = images_dir / "nested" / "frame_0001.png";
+    const fs::path duplicate_image = images_dir / "other" / "frame_0001.png";
+    const fs::path text_file = images_dir / "nested" / "notes.txt";
+    write_png(image);
+    write_png(duplicate_image);
+    write_text_file(text_file, "not an image");
+    fs::create_directories(images_dir / "other" / "directory.png");
+
+    std::vector<fs::path> visited;
+    lfs::io::RecursiveFileCache cache(images_dir, nullptr, [&](const fs::path& path) {
+        visited.push_back(path);
+    });
+
+    ASSERT_EQ(visited.size(), 3u);
+    EXPECT_NE(std::find(visited.begin(), visited.end(), image.lexically_relative(images_dir)),
+              visited.end());
+    EXPECT_NE(std::find(visited.begin(), visited.end(), duplicate_image.lexically_relative(images_dir)),
+              visited.end());
+    EXPECT_NE(std::find(visited.begin(), visited.end(), text_file.lexically_relative(images_dir)),
+              visited.end());
+    EXPECT_TRUE(cache.lookup("frame_0001.png").ambiguous());
+}
+
 TEST_F(ColmapImageLayoutTest, ValidationFailsWhenMasksDoNotMirrorRelativeImageLayout) {
     const fs::path dataset_dir = temp_dir_ / "dataset";
 
@@ -935,10 +995,6 @@ TEST_F(ColmapImageLayoutTest, DetectDatasetInfoCountsNestedImagesAndMasks) {
 }
 
 TEST_F(ColmapImageLayoutTest, WriteBackAppliesSceneTransformsToTextSparseModel) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required for Camera-backed COLMAP write-back";
-    }
-
     const fs::path dataset_dir = temp_dir_ / "dataset";
     const fs::path output_dir = temp_dir_ / "out_sparse";
 
@@ -1048,10 +1104,6 @@ TEST_F(ColmapImageLayoutTest, WriteBackAppliesSceneTransformsToTextSparseModel) 
 }
 
 TEST_F(ColmapImageLayoutTest, WriteBackRemovesStaleOppositeFormatSparseFiles) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required for Camera-backed COLMAP write-back";
-    }
-
     const fs::path dataset_dir = temp_dir_ / "dataset";
     const fs::path output_dir = temp_dir_ / "out_sparse";
 
@@ -1098,10 +1150,6 @@ TEST_F(ColmapImageLayoutTest, WriteBackRemovesStaleOppositeFormatSparseFiles) {
 }
 
 TEST_F(ColmapImageLayoutTest, WriteBackStagesAndPublishesOneValidatedGeneration) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required for Camera-backed COLMAP write-back";
-    }
-
     const fs::path sparse_dir = temp_dir_ / "sparse";
     write_text_file(sparse_dir / "cameras.txt",
                     "1 PINHOLE 640 480 500 500 320 240\n");
@@ -1154,10 +1202,6 @@ TEST_F(ColmapImageLayoutTest, WriteBackStagesAndPublishesOneValidatedGeneration)
 }
 
 TEST_F(ColmapImageLayoutTest, WriteBackDropsImagesForDeletedCamerasAndClearsTracks) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required for Camera-backed COLMAP write-back";
-    }
-
     const fs::path dataset_dir = temp_dir_ / "dataset";
     const fs::path output_dir = temp_dir_ / "out_sparse";
 
@@ -1264,18 +1308,16 @@ TEST_F(ColmapImageLayoutTest, WriteBackDropsImagesForDeletedCamerasAndClearsTrac
 }
 
 TEST(SidecarResampling, InvalidDepthAndNormalVectorsStayZero) {
-    if (!has_cuda_device())
-        GTEST_SKIP() << "CUDA device required";
     using namespace lfs::core;
     const std::vector<float> depth{0.0f, -1.0f, std::numeric_limits<float>::quiet_NaN(),
                                    std::numeric_limits<float>::infinity(), 0.75f, 0.75f};
-    auto d = Tensor::from_blob(const_cast<float*>(depth.data()), TensorShape({1, 6}), Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto d = Tensor::from_blob(const_cast<float*>(depth.data()), TensorShape({1, 6}), Device::CPU, DataType::Float32).to(Device::GPU);
     const auto result = resize_depth_prior(d, 2, 12).cpu().to_vector();
     for (size_t i = 0; i < result.size(); ++i)
         EXPECT_FLOAT_EQ(result[i], i % 12 < 8 ? 0.0f : 0.75f);
     // Opposing valid vectors cancel at the center: the epsilon guard yields zero.
     std::vector<float> normal{1, -1, 0, 0, 0, 0};
-    auto n = Tensor::from_blob(normal.data(), TensorShape({3, 1, 2}), Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto n = Tensor::from_blob(normal.data(), TensorShape({3, 1, 2}), Device::CPU, DataType::Float32).to(Device::GPU);
     const auto resized = resize_normal_prior(n, 1, 3).cpu().to_vector();
     EXPECT_FLOAT_EQ(resized[0], 1.0f);
     EXPECT_FLOAT_EQ(resized[1], 0.0f);

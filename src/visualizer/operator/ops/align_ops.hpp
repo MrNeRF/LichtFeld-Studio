@@ -4,13 +4,16 @@
 
 #pragma once
 
+#include "core/scene.hpp"
 #include "operator/operator.hpp"
+#include "rendering/rendering_types.hpp"
 #include <glm/glm.hpp>
+#include <optional>
 #include <vector>
 
 namespace lfs::vis::op {
 
-    class AlignPickPointOperator : public Operator {
+    class LFS_VIS_API AlignPickPointOperator : public Operator {
     public:
         static LFS_LOCAL_SYMBOL const OperatorDescriptor DESCRIPTOR;
 
@@ -21,14 +24,87 @@ namespace lfs::vis::op {
         void cancel(OperatorContext& ctx) override;
 
     private:
+        friend class AlignPreviewTest;
+
+        struct PreviewTarget {
+            core::NodeId id;
+            core::Uuid uuid;
+            glm::mat4 local;
+            glm::mat4 world;
+        };
+        std::vector<PreviewTarget> preview_targets_;
+        std::optional<glm::mat4> preview_snap_world_;
+        glm::vec3 preview_camera_{};
+        void restorePreview(OperatorContext& ctx);
+        [[nodiscard]] bool updatePreview(OperatorContext& ctx);
         std::vector<glm::vec3> picked_points_;
         int pick_button_ = 0;
+        bool press_active_ = false;
+        int press_button_ = -1;
+        glm::dvec2 press_pos_{0.0, 0.0};
+        std::optional<int> press_point_index_;
+        bool drag_active_ = false;
+        std::optional<int> selected_point_;
+        std::optional<SplitViewPanelId> pick_panel_;
 
-        glm::vec3 unprojectScreenPoint(const OperatorContext& ctx, double x, double y) const;
-        void applyAlignment(OperatorContext& ctx);
+        [[nodiscard]] glm::vec3 unprojectScreenPoint(double x, double y,
+                                                     SplitViewPanelId* out_panel = nullptr) const;
+        [[nodiscard]] std::optional<int> hitTestPoint(double x, double y) const;
+        [[nodiscard]] glm::vec3 resolvePickPanelCameraPosition() const;
+        void syncPickedPointsToServices();
+        void removeLastPoint();
+        void removeSelectedPoint();
+        void clearAllPoints();
+        [[nodiscard]] bool tryPlacePoint(double x, double y);
+        [[nodiscard]] bool applyAlignment(OperatorContext& ctx);
+        [[nodiscard]] OperatorResult handlePendingUiAction(OperatorContext& ctx);
+        void setStatus(const char* locale_key, double duration_seconds = 1.5) const;
     };
 
     void registerAlignOperators();
     void unregisterAlignOperators();
+
+    // Shared by apply path and overlay preview. Returns true if normal was snapped.
+    inline constexpr float kAlignAxisSnapDegrees = 3.0f;
+    [[nodiscard]] LFS_VIS_API bool snapAlignNormalToNodeAxes(glm::vec3& normal,
+                                                             const glm::mat4& node_world,
+                                                             float max_degrees = kAlignAxisSnapDegrees);
+
+    // Flip face normal so it points toward the camera (shared by apply + overlay preview).
+    LFS_VIS_API void faceNormalTowardCamera(glm::vec3& normal, const glm::vec3& center, const glm::vec3& camera_pos);
+
+    // True when exactly 3 points define a non-degenerate triangle (cross length > 1e-6).
+    [[nodiscard]] LFS_VIS_API bool pointsAreNonDegenerate(const std::vector<glm::vec3>& points);
+
+    // Optional in-plane yaw after normal→up: aligns projected (p1-p0) with world +X.
+    // Returns the yaw rotation to left-multiply onto the up-alignment rotation (identity if skipped).
+    [[nodiscard]] LFS_VIS_API glm::mat4 alignEdgeToWorldXRotation(const glm::mat4& up_rotation,
+                                                                  const glm::vec3& p0,
+                                                                  const glm::vec3& p1);
+
+    struct AlignTransformInputs {
+        glm::vec3 p0{};
+        glm::vec3 p1{};
+        glm::vec3 p2{};
+        glm::vec3 camera_pos{};
+        std::optional<glm::mat4> snap_node_world;
+        bool edge_to_world_x = false;
+    };
+
+    // Visualizer-world transform mapping the picked plane normal (camera-facing, optionally
+    // snapped) onto +Y with the triangle centroid moved to y = 0, or nullopt if degenerate.
+    [[nodiscard]] LFS_VIS_API std::optional<glm::mat4> computeAlignTransform(const AlignTransformInputs& in);
+
+    [[nodiscard]] LFS_VIS_API std::optional<glm::mat4> resolveAlignSnapTargetWorld(const SceneManager& scene);
+
+    inline constexpr float kAlignMarkerWorldRadius = 0.05f;
+    [[nodiscard]] float alignMarkerScreenRadius(const glm::vec3& world_pos,
+                                                const glm::mat4& view,
+                                                const glm::mat4& projection,
+                                                float window_height,
+                                                bool orthographic,
+                                                float ortho_scale,
+                                                float screen_scale_x,
+                                                float screen_scale_y);
 
 } // namespace lfs::vis::op

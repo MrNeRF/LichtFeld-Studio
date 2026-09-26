@@ -3,9 +3,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/rml_status_bar.hpp"
+#include "core/camera_metrics.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/number_format.hpp"
 #include "core/services.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/gpu_memory_query.hpp"
@@ -18,13 +20,17 @@
 #include "gui/status_bar_mining.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/ui_context.hpp"
+#include "input/input_controller.hpp"
 #include "internal/resource_paths.hpp"
 #include "preferences.hpp"
+#include "python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
+#if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
-#include "training/training_manager.hpp"
+#endif
+#include "core/training_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer_impl.hpp"
 
@@ -81,13 +87,6 @@ namespace lfs::vis::gui {
             }
         };
 
-        class AccountPanelOpenListener final : public Rml::EventListener {
-        public:
-            void ProcessEvent(Rml::Event& /*event*/) override {
-                PanelRegistry::instance().set_panel_enabled("lfs.account", true);
-            }
-        };
-
         class CallbackListener final : public Rml::EventListener {
         public:
             explicit CallbackListener(std::function<void()> callback)
@@ -139,8 +138,37 @@ namespace lfs::vis::gui {
             return s.substr(0, end + 1);
         }
 
+        // Automatic detection needs the trackpad touches only macOS reports.
+        NavigationDevice nextNavigationDevice(const NavigationDevice device) {
+            switch (device) {
+            case NavigationDevice::Mouse:
+                return NavigationDevice::Trackpad;
+            case NavigationDevice::Trackpad:
+#ifdef __APPLE__
+                return NavigationDevice::Automatic;
+#else
+                return NavigationDevice::Mouse;
+#endif
+            case NavigationDevice::Automatic:
+                break;
+            }
+            return NavigationDevice::Mouse;
+        }
+
+        const char* navigationDeviceTooltip(const NavigationDevice device) {
+            switch (device) {
+            case NavigationDevice::Trackpad:
+                return "ui.input_trackpad_tooltip";
+            case NavigationDevice::Automatic:
+                return "ui.input_automatic_tooltip";
+            case NavigationDevice::Mouse:
+                break;
+            }
+            return "ui.input_mouse_tooltip";
+        }
+
         std::string formatStepLabel(const size_t step) {
-            return std::format("{} {}", stripColon(LOC(lichtfeld::Strings::Status::STEP)), step);
+            return std::format("{} {}", stripColon(LOC(lichtfeld::Strings::Status::STEP)), lfs::core::format_count(step));
         }
 
         // Width the element's content box would need to show everything on one line.
@@ -383,7 +411,6 @@ namespace lfs::vis::gui {
         model_.wasd_sep_color = colorToRml(palette.text_dim);
         model_.zoom_color = colorToRml(palette.info);
         model_.zoom_sep_color = colorToRml(palette.text_dim);
-        model_.account_color = colorToRml(palette.text_dim);
         model_.mcp_color = colorToRml(palette.text_dim);
         model_.lfs_mem_color = colorToRml(palette.info);
         model_.gpu_mem_color = colorToRml(palette.text);
@@ -443,16 +470,13 @@ namespace lfs::vis::gui {
         ctor.Bind("zoom_text", &model_.zoom_text);
         ctor.Bind("zoom_color", &model_.zoom_color);
         ctor.Bind("zoom_sep_color", &model_.zoom_sep_color);
-        ctor.Bind("account_label", &model_.account_label);
-        ctor.Bind("account_tier", &model_.account_tier);
-        ctor.Bind("account_tooltip", &model_.account_tooltip);
-        ctor.Bind("account_color", &model_.account_color);
-        ctor.Bind("account_show_tier", &model_.account_show_tier);
-        ctor.Bind("account_membership_required", &model_.account_membership_required);
         ctor.Bind("lfs_mem_text", &model_.lfs_mem_text);
         ctor.Bind("lfs_mem_color", &model_.lfs_mem_color);
+        ctor.Bind("show_lfs_memory", &model_.show_lfs_memory);
         ctor.Bind("show_gpu_model", &model_.show_gpu_model);
         ctor.Bind("gpu_panel_active", &model_.gpu_panel_active);
+        ctor.Bind("input_device", &model_.input_device);
+        ctor.Bind("input_device_tooltip", &model_.input_device_tooltip);
         ctor.Bind("gpu_model_text", &model_.gpu_model_text);
         ctor.Bind("gpu_mem_text", &model_.gpu_mem_text);
         ctor.Bind("gpu_mem_color", &model_.gpu_mem_color);
@@ -514,6 +538,9 @@ namespace lfs::vis::gui {
     }
 
     void RmlStatusBar::shutdown() {
+        if (document_registered_)
+            lfs::python::unregister_rml_document("status_bar");
+        document_registered_ = false;
         if (pending_gpu_mem_.valid()) {
             pending_gpu_mem_.wait();
             try {
@@ -538,14 +565,14 @@ namespace lfs::vis::gui {
         git_commit_listener_ = nullptr;
         delete gpu_icon_listener_;
         gpu_icon_listener_ = nullptr;
-        delete account_listener_;
-        account_listener_ = nullptr;
         delete mcp_toggle_listener_;
         mcp_toggle_listener_ = nullptr;
         delete mcp_power_listener_;
         mcp_power_listener_ = nullptr;
         delete mcp_preferences_listener_;
         mcp_preferences_listener_ = nullptr;
+        delete input_device_listener_;
+        input_device_listener_ = nullptr;
     }
 
     void RmlStatusBar::reloadResources() {
@@ -556,6 +583,9 @@ namespace lfs::vis::gui {
             rml_manager_->releaseCachedVulkanContext(direct_cache_);
 
         if (document_) {
+            if (document_registered_)
+                lfs::python::unregister_rml_document("status_bar");
+            document_registered_ = false;
             rml_context_->UnloadDocument(document_);
             rml_context_->Update();
         }
@@ -608,10 +638,10 @@ namespace lfs::vis::gui {
             }));
         };
 
-        bind(store.iteration);
+        // Step, loss and splat count change with every training step and FPS with
+        // every frame. The periodic refresh reads them, so they never force a
+        // redraw of their own.
         bind(store.total_iterations);
-        bind(store.loss);
-        bind(store.num_gaussians);
         bind(store.max_gaussians);
         bind(store.training_running);
         bind(store.training_state);
@@ -624,10 +654,8 @@ namespace lfs::vis::gui {
         subscriptions_.push_back(store.fps.subscribe([this](const float& fps) {
             reactive_fps_available_ = true;
             reactive_fps_value_ = fps;
-            markModelDirty();
         }));
         bind(store.mode_text);
-        bind(store.account_state);
         subscriptions_.push_back(store.perf_hud.subscribe([this](const lfs::vis::AppStore::PerfHud& state) {
             setModelBool("gpu_panel_active", model_.gpu_panel_active, state.visible);
             markModelDirty();
@@ -800,11 +828,6 @@ namespace lfs::vis::gui {
         if (auto* el = document_->GetElementById("gpu-icon"))
             el->AddEventListener(Rml::EventId::Click, gpu_icon_listener_);
 
-        if (!account_listener_)
-            account_listener_ = new AccountPanelOpenListener();
-        if (auto* el = document_->GetElementById("account-chip"))
-            el->AddEventListener(Rml::EventId::Click, account_listener_);
-
         if (!mcp_toggle_listener_) {
             mcp_toggle_listener_ = new CallbackListener([this] {
                 model_.mcp_details_expanded = !model_.mcp_details_expanded;
@@ -833,6 +856,19 @@ namespace lfs::vis::gui {
         }
         if (auto* el = document_->GetElementById("mcp-toggle"))
             el->AddEventListener(Rml::EventId::Click, mcp_power_listener_);
+
+        if (!input_device_listener_) {
+            input_device_listener_ = new CallbackListener([this] {
+                auto trackpad = lfs::vis::loadTrackpadPreferences();
+                trackpad.device = nextNavigationDevice(trackpad.device);
+                if (auto* const ic = lfs::vis::InputController::instance())
+                    ic->setTrackpadPreferences(trackpad);
+                lfs::vis::saveTrackpadPreferences(trackpad);
+                markModelDirty();
+            });
+        }
+        if (auto* el = document_->GetElementById("input-device-toggle"))
+            el->AddEventListener(Rml::EventId::Click, input_device_listener_);
     }
 
     void RmlStatusBar::setModelString(const char* name, std::string& field, std::string value) {
@@ -1166,6 +1202,11 @@ namespace lfs::vis::gui {
         const auto& p = lfs::vis::theme().palette;
 
         setModelString("safe_mode_text", model_.safe_mode_text, LOC("status_bar.safe_mode"));
+        const auto* const input_controller = lfs::vis::InputController::instance();
+        const auto device = input_controller ? input_controller->trackpadPreferences().device
+                                             : NavigationDevice::Mouse;
+        setModelString("input_device", model_.input_device, std::string(navigationDeviceName(device)));
+        setModelString("input_device_tooltip", model_.input_device_tooltip, LOC(navigationDeviceTooltip(device)));
         setModelString("mcp_preferences_label", model_.mcp_preferences_label,
                        LOC("status_bar.mcp_preferences"));
         if (mcp_status_provider_) {
@@ -1233,13 +1274,13 @@ namespace lfs::vis::gui {
                                               : "status_bar.mcp_turn_on"));
             setModelBool("mcp_server_enabled", model_.mcp_server_enabled, status.enabled);
             setModelString("mcp_total_text", model_.mcp_total_text,
-                           std::format("{} {}", status.request_count,
+                           std::format("{} {}", lfs::core::format_count(status.request_count),
                                        LOC("status_bar.mcp_requests")));
             setModelString("mcp_success_text", model_.mcp_success_text,
-                           std::format("{} {}", status.success_count,
+                           std::format("{} {}", lfs::core::format_count(status.success_count),
                                        LOC("status_bar.mcp_successes")));
             setModelString("mcp_error_text", model_.mcp_error_text,
-                           std::format("{} {}", status.error_count,
+                           std::format("{} {}", lfs::core::format_count(status.error_count),
                                        LOC("status_bar.mcp_errors")));
         }
 
@@ -1280,8 +1321,12 @@ namespace lfs::vis::gui {
                                             : "default";
             const auto* trainer = tm ? tm->getTrainer() : nullptr;
             const auto method = trainingBackendStatusLabel(
+#if LFS_BUILD_TRAINER
                 trainer ? std::optional{trainer->getParams().optimization.raster_backend()}
                         : std::nullopt,
+#else
+                std::nullopt,
+#endif
                 stored_backend);
             std::string strat_name;
             const std::string_view strategy = strategy_raw ? std::string_view(strategy_raw) : std::string_view{};
@@ -1425,7 +1470,7 @@ namespace lfs::vis::gui {
             };
             setProgressMarkersRml(buildProgressMarkersRml(tm->getSaveSteps(), total, cur, marker_state,
                                                           progress_miner_pref_));
-            setModelString("step_value", model_.step_value, std::format("{}/{}", cur, total));
+            setModelString("step_value", model_.step_value, std::format("{}/{}", lfs::core::format_count(cur), lfs::core::format_count(total)));
             setModelString("loss_value", model_.loss_value, std::format("{:.4f}", loss));
             setModelString("gaussians_value", model_.gaussians_value,
                            std::format("{}/{}", fmtCount(num_splats), fmtCount(max_g)));
@@ -1574,72 +1619,52 @@ namespace lfs::vis::gui {
                            colorToRmlAlpha(status_col, status_msg.alpha));
         }
 
-        const auto account = lfs::vis::app_store().account_state.get();
-        std::string account_label = account.label;
-        if (account.linking) {
-            account_label = LOC("account.status.linking");
-        } else if (!account.signed_in) {
-            account_label = LOC("account.status.sign_in");
-        } else if (account_label.empty()) {
-            account_label = "LF";
-        }
-        setModelString("account_label", model_.account_label, std::move(account_label));
-        setModelString("account_tier", model_.account_tier, account.tier);
-        std::string account_tooltip;
-        if (account.membership_required) {
-            account_tooltip = LOC("account.status.membership_required");
-        } else if (account.linking) {
-            account_tooltip = LOC("account.status.linking");
-        } else if (!account.signed_in) {
-            account_tooltip = LOC("account.status.tooltip");
-        }
-        if (!account.tooltip.empty()) {
-            if (!account_tooltip.empty())
-                account_tooltip += " — ";
-            account_tooltip += account.tooltip;
-        }
-        if (account_tooltip.empty())
-            account_tooltip = LOC("account.status.tooltip");
-        setModelString("account_tooltip", model_.account_tooltip, std::move(account_tooltip));
-        setModelBool("account_show_tier", model_.account_show_tier,
-                     account.signed_in && !account.tier.empty());
-        setModelBool("account_membership_required", model_.account_membership_required,
-                     account.membership_required);
-        const ThemeColor& account_color = account.membership_required ? p.warning
-                                          : account.linking           ? p.info
-                                          : account.signed_in         ? p.text
-                                                                      : p.text_dim;
-        setModelString("account_color", model_.account_color, colorToRml(account_color));
-
         // Right section: GPU memory
         pollGpuMemoryQuery(now);
         const auto mem = cached_gpu_mem_;
-        constexpr float gib = 1024.0f * 1024.0f * 1024.0f;
-        float app_gib = mem.process_used / gib;
-        float used_gib = mem.total_used / gib;
-        float total_gib = mem.total / gib;
-        float pct = total_gib > 0.0f ? (used_gib / total_gib) * 100.0f : 0.0f;
+        const std::size_t shown_used = mem.uses_process_budget ? mem.process_budget_used : mem.total_used;
+        const std::size_t shown_total = mem.uses_process_budget ? mem.process_budget : mem.total;
+        float pct = shown_total > 0 ? 100.0f * static_cast<float>(shown_used) / static_cast<float>(shown_total)
+                                    : 0.0f;
 
         ThemeColor mem_color = pct < 50.0f ? p.success : (pct < 75.0f ? p.warning : p.error);
         setModelBool("gpu_panel_active", model_.gpu_panel_active,
                      lfs::vis::app_store().perf_hud.get().visible);
-        setModelString("lfs_mem_text", model_.lfs_mem_text, std::format("LFS {:.2f} GiB", app_gib));
+        setModelString("lfs_mem_text", model_.lfs_mem_text,
+                       std::format("LFS {}{} GiB", mem.process_estimated ? "≤" : "",
+                                   formatGpuGiB(mem.process_used)));
         setModelString("lfs_mem_color", model_.lfs_mem_color, colorToRml(p.info));
+        setModelBool("show_lfs_memory", model_.show_lfs_memory, !mem.uses_process_budget);
         setModelBool("show_gpu_model", model_.show_gpu_model, !mem.device_name.empty());
         setModelString("gpu_model_text", model_.gpu_model_text, mem.device_name);
         setModelString("gpu_mem_text", model_.gpu_mem_text,
-                       std::format("{} {:.2f}/{:.2f} GiB", LOC("status_bar.gpu"), used_gib, total_gib));
+                       shown_total > 0
+                           ? std::format("{} {}{}/{} GiB",
+                                         mem.uses_process_budget ? LOC("status_bar.gpu_budget") : LOC("status_bar.gpu"),
+                                         mem.device_estimated ? "≈" : "",
+                                         formatGpuGiB(shown_used), formatGpuGiB(shown_total))
+                           : std::format("{} —", LOC("status_bar.gpu")));
         setModelString("gpu_mem_color", model_.gpu_mem_color, colorToRml(mem_color));
+        if (document_) {
+            if (auto* element = document_->GetElementById("lfs-mem"))
+                element->SetAttribute("title", LOC(mem.process_estimated
+                                                       ? "ui.vram_process_estimate_tooltip"
+                                                       : "ui.vram_process_nvml_tooltip"));
+            if (auto* element = document_->GetElementById("gpu-mem"))
+                element->SetAttribute("title", LOC(mem.device_estimated
+                                                       ? "ui.vram_device_cuda_tooltip"
+                                                       : "ui.vram_device_nvml_tooltip"));
+        }
 
         // FPS: prefer scene-render rate when scene frames are in the measurement
         // window; when only GUI frames are presented, show that rate as ui-fps
-        // so a GUI-only spin is not invisible. True idle (no samples) stays 0.
+        // so a GUI-only spin is not invisible. True idle (no samples) stays a dim 0.
         const float scene_fps = reactive_fps_available_ ? reactive_fps_value_
                                                         : (rm ? rm->getAverageFPS() : 0.0f);
         const float presented_fps = rm ? rm->getPresentedAverageFPS() : 0.0f;
         const bool ui_only_fps = scene_fps <= 0.0f && presented_fps > 0.0f;
-        const float fps = ui_only_fps ? presented_fps : scene_fps;
-        ThemeColor fps_col = ui_only_fps
+        const float fps = std::round(ui_only_fps ? presented_fps : scene_fps);
+        ThemeColor fps_col = ui_only_fps || fps <= 0.0f
                                  ? p.text_dim
                                  : (fps >= 30.0f ? p.success : (fps >= 15.0f ? p.warning : p.error));
         setModelString("fps_value", model_.fps_value, std::format("{:.0f}", fps));
@@ -1657,8 +1682,7 @@ namespace lfs::vis::gui {
             (model_.show_wasd ? uint32_t{1} << 4 : 0) |
             (model_.show_zoom ? uint32_t{1} << 5 : 0) |
             (model_.show_status_message ? uint32_t{1} << 6 : 0) |
-            (model_.show_gpu_model ? uint32_t{1} << 7 : 0) |
-            (model_.account_show_tier ? uint32_t{1} << 8 : 0);
+            (model_.show_gpu_model ? uint32_t{1} << 7 : 0);
 
         // A paused trainer has a static progress display. Keep the miner's
         // periodic refresh armed only while its particles actually advance.
@@ -1846,6 +1870,11 @@ namespace lfs::vis::gui {
             rml_animation_active_ = false;
             animation_active_ = model_animation_active_;
             return;
+        }
+
+        if (!document_registered_) {
+            lfs::python::register_rml_document("status_bar", document_);
+            document_registered_ = true;
         }
 
         if (w_px <= 0.0f || h_px <= 0.0f || screen_w <= 0 || screen_h <= 0) {

@@ -6,12 +6,13 @@
 #include "core/export.hpp"
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_readback.hpp"
 #include "operation/undo_entry.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_types.hpp"
+#include "rendering/selection_ops.hpp"
 #include <array>
 #include <cstdint>
-#include <cuda_runtime.h>
 #include <expected>
 #include <glm/mat4x4.hpp>
 #include <glm/vec2.hpp>
@@ -194,6 +195,7 @@ namespace lfs::vis {
                                            SelectionFilterState filters = {});
         void updatePassiveBrushHoverPreview(glm::vec2 cursor_pos, float brush_radius,
                                             SelectionMode mode);
+        void suppressPassiveHoverPreview();
         void setInteractiveSelectionMode(SelectionMode mode) { interactive_selection_.mode = mode; }
         // Test-only observable for the incremental brush-preview cache: the number of
         // brush points already folded into the interactive preview. Zero after
@@ -206,12 +208,13 @@ namespace lfs::vis {
         void setTestingViewport(ViewportInfo viewport);
         void setTestingContainmentIntrinsics(std::optional<rendering::CameraIntrinsics> intrinsics);
         void setTestingHoveredGaussianId(std::optional<int> hovered_gaussian_id);
+        void setTestingPanel(SplitViewPanelId panel);
         // Applies completed GPU count readbacks without waiting. The scene
         // manager calls this once per render-state build; selection commands
         // also poll before starting a new commit.
         void pollPendingSelectionCounts() const;
         // MCP and history boundaries use this synchronous variant. The
-        // histogram is only 257 integers; the interactive path remains on the
+        // histogram is only 256 integers; the interactive path remains on the
         // non-blocking poll above.
         void completePendingSelectionCounts() const;
 
@@ -225,8 +228,8 @@ namespace lfs::vis {
             std::shared_ptr<core::Tensor> mask;
             std::unique_ptr<op::SceneSnapshot> undo_entry;
             core::Tensor scratch;
-            int* host_counts = nullptr;
-            cudaEvent_t ready_event = nullptr;
+            std::array<int, 256> host_counts{};
+            core::TensorReadback readback;
             bool pending = false;
             bool apply_to_scene = true;
             uint64_t sequence = 0;
@@ -264,6 +267,7 @@ namespace lfs::vis {
             bool preview_dirty = false;
             core::Tensor working_selection;
             core::Tensor live_delta_selection;
+            bool ring_has_hit = false;
             std::vector<bool> live_preview_node_mask;
             size_t preview_brush_point_count = 0;
             std::size_t preview_brush_projection_signature = 0;
@@ -292,11 +296,11 @@ namespace lfs::vis {
                                                       const SelectionProjectionContext& projection_context,
                                                       const char* undo_name,
                                                       SelectionCommitOptions options = {});
-        [[nodiscard]] core::Tensor& resetBoolScratchBuffer(core::Tensor& buffer, size_t size);
+        [[nodiscard]] core::Tensor& resetBoolScratchBuffer(core::Tensor& buffer, size_t size,
+                                                           const core::Tensor* affinity = nullptr);
         [[nodiscard]] std::optional<ViewerViewportContext> resolveViewerViewportContext(
             std::optional<glm::vec2> screen_point = std::nullopt,
             std::optional<SplitViewPanelId> panel_override = std::nullopt) const;
-        [[nodiscard]] std::optional<ViewportInfo> resolveViewportInfo() const;
         [[nodiscard]] std::optional<int> resolveCommandHoveredGaussianId(float x, float y, int camera_index,
                                                                          const SelectionFilterState& filters,
                                                                          const SelectionProjectionContext& projection_context);
@@ -386,6 +390,7 @@ namespace lfs::vis {
         [[nodiscard]] bool hasTestingScreenPositionsForCamera(int camera_index) const;
         [[nodiscard]] bool commandCameraValidationRequired(int camera_index) const;
         void clearInteractivePreviewState();
+        bool allowPassiveHoverPreview(glm::vec2 cursor_pos);
         [[nodiscard]] std::vector<bool> effectiveNodeMask(bool restrict_to_selected_nodes) const;
         [[nodiscard]] SelectionFilterState defaultFilterState() const;
 
@@ -393,11 +398,13 @@ namespace lfs::vis {
         RenderingManager* rendering_manager_;
 
         bool stroke_active_ = false;
+        std::optional<glm::vec2> last_passive_hover_position_;
+        bool passive_hover_suppressed_ = false;
         core::Tensor stroke_selection_;
         std::shared_ptr<core::Tensor> selection_before_stroke_;
         core::Tensor command_selection_buffer_;
         core::Tensor locked_groups_device_mask_;
-        std::array<uint32_t, 8> locked_groups_host_mask_{};
+        std::array<bool, 256> locked_groups_host_mask_{};
         bool locked_groups_host_mask_valid_ = false;
         mutable std::array<PendingSelectionCounts, 2> pending_selection_counts_{};
         mutable PendingSelectionCounts pending_passive_ring_count_{};
@@ -410,6 +417,7 @@ namespace lfs::vis {
         std::optional<ViewportInfo> testing_viewport_;
         std::optional<rendering::CameraIntrinsics> testing_containment_intrinsics_;
         std::optional<int> testing_hovered_gaussian_id_;
+        std::optional<SplitViewPanelId> testing_panel_;
         mutable bool passive_ring_preview_key_valid_ = false;
         mutable std::size_t passive_ring_preview_key_ = 0;
         mutable bool passive_ring_has_hit_ = false;

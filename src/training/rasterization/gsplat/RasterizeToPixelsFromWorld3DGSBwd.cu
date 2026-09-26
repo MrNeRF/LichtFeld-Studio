@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include <cooperative_groups.h>
 #include <cuda_runtime.h>
 
@@ -300,7 +301,7 @@ namespace gsplat_lfs {
         }
     }
 
-    template <typename scalar_t, bool kSharedOrigin, bool kPerfectPinhole, bool kEdgeScoring>
+    template <typename scalar_t, bool kSharedOrigin, bool kPerfectPinhole, bool kEdgeScoring, bool kBatched>
     __global__ void rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel(
         const uint32_t C,
         const uint32_t N,
@@ -342,11 +343,15 @@ namespace gsplat_lfs {
         float* __restrict__ densification_info,
         const scalar_t* __restrict__ densification_error_map,
         const float* __restrict__ edge_weight_map,
-        float* __restrict__ edge_score_out) {
+        float* __restrict__ edge_score_out, const TileRange tiles) {
         auto block = cg::this_thread_block();
         const uint32_t cid = block.group_index().x;
         const uint32_t tile_id =
             block.group_index().y * tile_width + block.group_index().z;
+        if constexpr (kBatched) {
+            if (tile_id < tiles.begin || tile_id >= tiles.end)
+                return;
+        }
         const uint32_t tx = block.thread_index().x;
         const uint32_t ty = block.thread_index().y;
         const uint32_t i = block.group_index().y * tile_size + ty;
@@ -532,7 +537,7 @@ namespace gsplat_lfs {
         }
     }
 
-    template <uint32_t CDIM, typename scalar_t, bool kPerfectPinhole, bool kEdgeScoring>
+    template <uint32_t CDIM, typename scalar_t, bool kPerfectPinhole, bool kEdgeScoring, bool kBatched>
     __global__ void rasterize_to_pixels_from_world_3dgs_bwd_kernel(
         const uint32_t C,
         const uint32_t N,
@@ -581,11 +586,15 @@ namespace gsplat_lfs {
         float* __restrict__ densification_info,               // [2, N] flattened or nullptr
         const scalar_t* __restrict__ densification_error_map, // [H, W] or nullptr
         const float* __restrict__ edge_weight_map,
-        float* __restrict__ edge_score_out) {
+        float* __restrict__ edge_score_out, const TileRange tiles) {
         auto block = cg::this_thread_block();
         uint32_t cid = block.group_index().x;
         uint32_t tile_id =
             block.group_index().y * tile_width + block.group_index().z;
+        if constexpr (kBatched) {
+            if (tile_id < tiles.begin || tile_id >= tiles.end)
+                return;
+        }
         uint32_t i = block.group_index().y * tile_size + block.thread_index().y;
         uint32_t j = block.group_index().z * tile_size + block.thread_index().x;
 
@@ -937,7 +946,7 @@ namespace gsplat_lfs {
         const float* densification_error_map,
         const float* edge_weight_map,
         float* edge_score_out,
-        cudaStream_t stream) {
+        cudaStream_t stream, TileRange tiles) {
         const bool packed = false; // Only support non-packed for now
         const uint32_t tile_width = (image_width + tile_size - 1) / tile_size;
         const uint32_t tile_height = (image_height + tile_size - 1) / tile_size;
@@ -995,93 +1004,99 @@ namespace gsplat_lfs {
                 densification_info,
                 densification_error_map,
                 edge_weight_map,
-                edge_score_out);
+                edge_score_out, tiles);
             LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.rasterize_to_pixels_bwd");
         };
 
-        if constexpr (CDIM == 3) {
-            if (tile_size == 16) {
-                dim3 threads = {8, 16, 1};
-                dim3 grid = {C, tile_height, tile_width};
-                int64_t shmem_size =
-                    int64_t(kBwdDualBatch) *
-                    (sizeof(int32_t) + sizeof(vec4) + sizeof(vec3) + sizeof(vec4) +
-                     sizeof(mat3) + sizeof(float) * CDIM);
-                const int64_t edge_shmem_size =
-                    shmem_size + int64_t(kBwdDualBatch) * sizeof(float);
-                if (global_shutter) {
-                    if (perfect_pinhole) {
-                        if (edge_weight_map != nullptr && edge_score_out != nullptr) {
-                            launch_args(
-                                rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, true, true, true>,
-                                grid, threads, edge_shmem_size);
+        auto dispatch = [&]<bool kBatched>() {
+            if constexpr (CDIM == 3) {
+                if (tile_size == 16) {
+                    dim3 threads = {8, 16, 1};
+                    dim3 grid = {C, tile_height, tile_width};
+                    int64_t shmem_size =
+                        int64_t(kBwdDualBatch) *
+                        (sizeof(int32_t) + sizeof(vec4) + sizeof(vec3) + sizeof(vec4) +
+                         sizeof(mat3) + sizeof(float) * CDIM);
+                    const int64_t edge_shmem_size =
+                        shmem_size + int64_t(kBwdDualBatch) * sizeof(float);
+                    if (global_shutter) {
+                        if (perfect_pinhole) {
+                            if (edge_weight_map != nullptr && edge_score_out != nullptr) {
+                                launch_args(
+                                    rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, true, true, true, kBatched>,
+                                    grid, threads, edge_shmem_size);
+                            } else {
+                                launch_args(
+                                    rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, true, true, false, kBatched>,
+                                    grid, threads, shmem_size);
+                            }
                         } else {
-                            launch_args(
-                                rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, true, true, false>,
-                                grid, threads, shmem_size);
+                            if (edge_weight_map != nullptr && edge_score_out != nullptr) {
+                                launch_args(
+                                    rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, true, false, true, kBatched>,
+                                    grid, threads, edge_shmem_size);
+                            } else {
+                                launch_args(
+                                    rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, true, false, false, kBatched>,
+                                    grid, threads, shmem_size);
+                            }
                         }
+                        return;
+                    }
+                    if (edge_weight_map != nullptr && edge_score_out != nullptr) {
+                        launch_args(
+                            rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, false, false, true, kBatched>,
+                            grid, threads, edge_shmem_size);
                     } else {
-                        if (edge_weight_map != nullptr && edge_score_out != nullptr) {
-                            launch_args(
-                                rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, true, false, true>,
-                                grid, threads, edge_shmem_size);
-                        } else {
-                            launch_args(
-                                rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, true, false, false>,
-                                grid, threads, shmem_size);
-                        }
+                        launch_args(
+                            rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, false, false, false, kBatched>,
+                            grid, threads, shmem_size);
                     }
                     return;
                 }
-                if (edge_weight_map != nullptr && edge_score_out != nullptr) {
-                    launch_args(
-                        rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, false, false, true>,
-                        grid, threads, edge_shmem_size);
-                } else {
-                    launch_args(
-                        rasterize_to_pixels_from_world_3dgs_bwd_dual_kernel<float, false, false, false>,
-                        grid, threads, shmem_size);
-                }
-                return;
             }
-        }
 
-        dim3 threads = {tile_size, tile_size, 1};
-        dim3 grid = {C, tile_height, tile_width};
-        int64_t shmem_size =
-            tile_size * tile_size *
-            (sizeof(int32_t) + sizeof(vec4) + sizeof(vec3) + sizeof(vec4) +
-             sizeof(mat3) + sizeof(float) * CDIM);
-        if constexpr (CDIM == 3) {
-            constexpr int64_t kOccCapBytes = 49152;
-            if (shmem_size < kOccCapBytes) {
-                shmem_size = kOccCapBytes;
-            }
-        }
-        const int64_t edge_shmem_size = shmem_size + tile_size * tile_size * sizeof(float);
-        if constexpr (CDIM == 3) {
-            if (global_shutter && perfect_pinhole) {
-                if (edge_weight_map != nullptr && edge_score_out != nullptr) {
-                    launch_args(
-                        rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float, true, true>,
-                        grid, threads, edge_shmem_size);
-                } else {
-                    launch_args(
-                        rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float, true, false>,
-                        grid, threads, shmem_size);
+            dim3 threads = {tile_size, tile_size, 1};
+            dim3 grid = {C, tile_height, tile_width};
+            int64_t shmem_size =
+                tile_size * tile_size *
+                (sizeof(int32_t) + sizeof(vec4) + sizeof(vec3) + sizeof(vec4) +
+                 sizeof(mat3) + sizeof(float) * CDIM);
+            if constexpr (CDIM == 3) {
+                constexpr int64_t kOccCapBytes = 49152;
+                if (shmem_size < kOccCapBytes) {
+                    shmem_size = kOccCapBytes;
                 }
-                return;
             }
-        }
-        if (edge_weight_map != nullptr && edge_score_out != nullptr) {
-            launch_args(
-                rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float, false, true>,
-                grid, threads, edge_shmem_size);
-        } else {
-            launch_args(
-                rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float, false, false>,
-                grid, threads, shmem_size);
-        }
+            const int64_t edge_shmem_size = shmem_size + tile_size * tile_size * sizeof(float);
+            if constexpr (CDIM == 3) {
+                if (global_shutter && perfect_pinhole) {
+                    if (edge_weight_map != nullptr && edge_score_out != nullptr) {
+                        launch_args(
+                            rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float, true, true, kBatched>,
+                            grid, threads, edge_shmem_size);
+                    } else {
+                        launch_args(
+                            rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float, true, false, kBatched>,
+                            grid, threads, shmem_size);
+                    }
+                    return;
+                }
+            }
+            if (edge_weight_map != nullptr && edge_score_out != nullptr) {
+                launch_args(
+                    rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float, false, true, kBatched>,
+                    grid, threads, edge_shmem_size);
+            } else {
+                launch_args(
+                    rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM, float, false, false, kBatched>,
+                    grid, threads, shmem_size);
+            }
+        };
+        if (tiles.end == UINT32_MAX)
+            dispatch.template operator()<false>();
+        else
+            dispatch.template operator()<true>();
     }
 
     ////////////////////////////////////////////////////////////////
@@ -1128,7 +1143,7 @@ namespace gsplat_lfs {
         const float* densification_error_map,                                  \
         const float* edge_weight_map,                                          \
         float* edge_score_out,                                                 \
-        cudaStream_t stream);
+        cudaStream_t stream, TileRange tiles);
 
     __INS__(1)
     __INS__(2)

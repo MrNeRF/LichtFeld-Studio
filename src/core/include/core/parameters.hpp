@@ -198,6 +198,7 @@ namespace lfs::core {
             std::vector<size_t> save_steps = {7'000, 30'000};  // Steps at which to save the project (project.licht)
             bool bg_modulation = false;                        // Enable sinusoidal background modulation
             bool enable_eval = false;                          // Only evaluate when explicitly enabled
+            bool eval_all = false;                             // Train on every image and evaluate all of them
             bool enable_save_eval_images = true;               // Save during evaluation images
             bool headless = false;                             // Disable visualization during training
             bool auto_train = false;                           // Start training immediately on startup
@@ -325,6 +326,8 @@ namespace lfs::core {
             void remove_step_scaling();
             [[nodiscard]] int resolved_total_iterations() const;
             [[nodiscard]] bool normal_supervision_active(int iter) const;
+            // Every test_every-th image is withheld from training for evaluation.
+            [[nodiscard]] bool holds_out_eval_images() const { return enable_eval && !eval_all; }
             [[nodiscard]] int resolved_ppisp_controller_activation_step(int total_iterations) const;
 
             nlohmann::json to_json() const;
@@ -525,7 +528,8 @@ namespace lfs::core {
                                   USDA,
                                   USDC,
                                   RAD,
-                                  SSOG };
+                                  SSOG,
+                                  GLB };
 
         // PLY -> RAD only: per-bucket LOD tree builder for the out-of-core
         // converter. BHATT is the quality-validated default; OCTREE trades

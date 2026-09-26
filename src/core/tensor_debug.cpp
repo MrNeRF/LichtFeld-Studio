@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor_debug.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/tensor_trace.hpp"
 #include <algorithm>
 #include <cmath>
@@ -47,7 +48,7 @@ namespace lfs::core::debug {
         }
 
         // Copy to CPU if needed
-        const Tensor cpu_tensor = tensor.device() == Device::CUDA ? tensor.cpu() : tensor;
+        const Tensor cpu_tensor = tensor.device() == Device::GPU ? tensor.cpu() : tensor;
         const float* data = cpu_tensor.ptr<float>();
         const size_t n = cpu_tensor.numel();
 
@@ -76,15 +77,19 @@ namespace lfs::core::debug {
         return result;
     }
 
-    // GPU validation is implemented in tensor_debug.cu
-    // Forward declaration - implemented in CUDA file
+#if LFS_HAS_CUDA
     extern TensorValidation validate_tensor_gpu_impl(const float* data, size_t n);
+#endif
 
     TensorValidation validate_tensor_gpu(const Tensor& tensor) {
-        if (tensor.is_empty() || tensor.dtype() != DataType::Float32 || tensor.device() != Device::CUDA) {
+        if (tensor.is_empty() || tensor.dtype() != DataType::Float32 || tensor.device() != Device::GPU) {
             return validate_tensor_cpu(tensor);
         }
-        return validate_tensor_gpu_impl(tensor.ptr<float>(), tensor.numel());
+#if LFS_HAS_CUDA
+        if (gpu_backend_of(tensor) == GpuBackend::CUDA)
+            return validate_tensor_gpu_impl(tensor.ptr<float>(), tensor.numel());
+#endif
+        return validate_tensor_cpu(tensor);
     }
 
     TensorDiff diff_tensors(const Tensor& expected, const Tensor& actual, float tolerance) {
@@ -106,8 +111,8 @@ namespace lfs::core::debug {
         }
 
         // Copy to CPU for comparison
-        const Tensor exp_cpu = expected.device() == Device::CUDA ? expected.cpu() : expected;
-        const Tensor act_cpu = actual.device() == Device::CUDA ? actual.cpu() : actual;
+        const Tensor exp_cpu = expected.device() == Device::GPU ? expected.cpu() : expected;
+        const Tensor act_cpu = actual.device() == Device::GPU ? actual.cpu() : actual;
 
         if (expected.dtype() == DataType::Float32) {
             const float* exp_data = exp_cpu.ptr<float>();
@@ -145,13 +150,13 @@ namespace lfs::core::debug {
         stats.shape = tensor.shape();
         stats.dtype = tensor.dtype();
         stats.numel = tensor.numel();
-        stats.is_cuda = tensor.device() == Device::CUDA;
+        stats.is_cuda = tensor.device() == Device::GPU;
 
         if (tensor.is_empty() || tensor.dtype() != DataType::Float32) {
             return stats;
         }
 
-        const Tensor cpu_tensor = tensor.device() == Device::CUDA ? tensor.cpu() : tensor;
+        const Tensor cpu_tensor = tensor.device() == Device::GPU ? tensor.cpu() : tensor;
         const float* data = cpu_tensor.ptr<float>();
         const size_t n = cpu_tensor.numel();
 

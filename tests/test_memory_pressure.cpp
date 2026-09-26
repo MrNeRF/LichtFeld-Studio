@@ -4,6 +4,9 @@
 #include "core/cuda_error.hpp"
 #include "core/memory_pressure.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
+#include "cuda_backend_test.hpp"
+#include <optional>
 
 #include <gtest/gtest.h>
 
@@ -30,9 +33,10 @@ namespace {
 
 } // namespace
 
-class MemoryPressureTest : public ::testing::Test {
+class MemoryPressureTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         MemoryPressureCoordinator::instance().reset_for_testing();
     }
     void TearDown() override {
@@ -56,6 +60,7 @@ protected:
 };
 
 TEST_F(MemoryPressureCudaUnavailableTest, LatchedAllocationFailsFastTyped) {
+    GpuBackendScope backend(GpuBackend::CUDA);
     int device_count = 0;
     if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
         GTEST_SKIP() << "no CUDA device";
@@ -67,7 +72,7 @@ TEST_F(MemoryPressureCudaUnavailableTest, LatchedAllocationFailsFastTyped) {
     ASSERT_TRUE(latch_cuda_unavailable(cudaErrorInitializationError));
     const uint64_t episodes_before = pressure.episode_count();
 
-    EXPECT_THROW(Tensor::zeros({1024}, Device::CUDA), MemoryAllocationError);
+    EXPECT_THROW(Tensor::zeros({1024}, Device::GPU), MemoryAllocationError);
     EXPECT_EQ(pressure.episode_count(), episodes_before);
 }
 
@@ -103,7 +108,7 @@ TEST_F(MemoryPressureTest, ClientsReclaimInPriorityOrder) {
 }
 
 TEST_F(MemoryPressureTest, StopsReclaimingOnceTargetIsMet) {
-    const size_t target = coordinator().reserve_bytes(); // requested == 0
+    const size_t target = coordinator().reserve_bytes(MemoryDomain::CudaDevice); // requested == 0
     std::atomic<size_t> fake_free{0};
     coordinator().set_free_memory_probe([&fake_free](MemoryDomain) { return fake_free.load(); });
 
@@ -157,7 +162,7 @@ TEST_F(MemoryPressureTest, NoProgressTerminatesAndReportsNoBytes) {
 }
 
 TEST_F(MemoryPressureTest, AbundantMemoryRecordsNoEpisode) {
-    const size_t target = coordinator().reserve_bytes();
+    const size_t target = coordinator().reserve_bytes(MemoryDomain::CudaDevice);
     coordinator().set_free_memory_probe([target](MemoryDomain) { return target + 1; });
     int calls = 0;
     coordinator().register_client(PressureClient{
@@ -277,7 +282,7 @@ TEST_F(MemoryPressureTest, ContextGatesRenderSafeClients) {
 }
 
 TEST_F(MemoryPressureTest, PreflightUsesReclaimableEstimates) {
-    const size_t reserve = coordinator().reserve_bytes();
+    const size_t reserve = coordinator().reserve_bytes(MemoryDomain::CudaDevice);
     coordinator().set_free_memory_probe([](MemoryDomain) -> size_t { return 100; });
     coordinator().register_client(PressureClient{
         .name = "estimator",
@@ -301,7 +306,7 @@ TEST_F(MemoryPressureTest, PreflightUsesReclaimableEstimates) {
 }
 
 TEST_F(MemoryPressureTest, PressureLeaseReleasesOnSustainedHeadroom) {
-    const size_t target = coordinator().reserve_bytes();
+    const size_t target = coordinator().reserve_bytes(MemoryDomain::CudaDevice);
     std::atomic<size_t> fake_free{0};
     coordinator().set_free_memory_probe([&fake_free](MemoryDomain) { return fake_free.load(); });
 
@@ -314,6 +319,7 @@ TEST_F(MemoryPressureTest, PressureLeaseReleasesOnSustainedHeadroom) {
 }
 
 TEST_F(MemoryPressureTest, InjectedFailureThrowsTypedErrorFromTensorPath) {
+    GpuBackendScope backend(GpuBackend::CUDA);
     int device_count = 0;
     if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
         GTEST_SKIP() << "no CUDA device";
@@ -327,11 +333,43 @@ TEST_F(MemoryPressureTest, InjectedFailureThrowsTypedErrorFromTensorPath) {
     // 128 MiB of Float32 storage: over the injected threshold, so both the
     // initial attempt and the post-reclaim retry fail, surfacing a typed error
     // with no null pointer reaching a kernel.
-    EXPECT_THROW(Tensor::zeros({32 * 1024 * 1024}, Device::CUDA), MemoryAllocationError);
+    EXPECT_THROW(Tensor::zeros({32 * 1024 * 1024}, Device::GPU), MemoryAllocationError);
 
     coordinator().set_allocation_probe(nullptr);
     EXPECT_NO_THROW({
-        Tensor recovered = Tensor::zeros({32 * 1024 * 1024}, Device::CUDA);
+        Tensor recovered = Tensor::zeros({32 * 1024 * 1024}, Device::GPU);
         EXPECT_EQ(recovered.numel(), 32u * 1024 * 1024);
     });
 }
+
+namespace {
+    class MemoryPressureBackends : public testing::TestWithParam<GpuBackend> {
+    protected:
+        void SetUp() override {
+            if (!gpu_backend_available(GetParam()))
+                GTEST_SKIP() << "Backend unavailable";
+            scope.emplace(GetParam());
+            MemoryPressureCoordinator::instance().reset_for_testing();
+        }
+        void TearDown() override {
+            MemoryPressureCoordinator::instance().reset_for_testing();
+        }
+        MemoryDomain domain() const {
+            return GetParam() == GpuBackend::CUDA ? MemoryDomain::CudaDevice : MemoryDomain::VulkanDevice;
+        }
+        std::optional<GpuBackendScope> scope;
+    };
+
+    TEST_P(MemoryPressureBackends, MemoryPreflightUsesRealBackendHeadroom) {
+        Tensor::ones({4}, Device::GPU);
+        const auto result = MemoryPressureCoordinator::instance().preflight(
+            {.operation = "Backend memory preflight", .persistent_device_bytes = 4 * 1024 * 1024}, domain());
+        EXPECT_GT(result.effective_free_bytes, 0u);
+        EXPECT_TRUE(result.ok) << "free=" << result.effective_free_bytes << " required=" << result.required_peak_bytes;
+        EXPECT_EQ(result.safety_reserve_bytes, MemoryPressureCoordinator::instance().reserve_bytes(domain()));
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Backends, MemoryPressureBackends,
+                             testing::ValuesIn(kGpuBackends),
+                             [](const auto& info) { return gpu_backend_name(info.param); });
+} // namespace

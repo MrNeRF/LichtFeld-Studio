@@ -4,20 +4,22 @@
 #include <algorithm>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <iostream>
 #include <thread>
 #include <vector>
 
 #include "core/tensor.hpp"
-#include "core/tensor/internal/cuda_event_pool.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
-#include "core/tensor/internal/stream_lifetime.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_event_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/stream_lifetime.hpp"
+#include "core/tensor_cuda_interop.hpp"
+#include "cuda_backend_test.hpp"
 
 using namespace lfs::core;
 
-class CudaEventPoolTest : public ::testing::Test {
+class CudaEventPoolTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
         ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
     }
 };
@@ -121,12 +123,12 @@ TEST_F(CudaEventPoolTest, FreshStreamHandlesReuseRetiredValuesUntilTheyEnterTheA
     std::vector<cudaStream_t> seeds(8);
     for (auto& seed : seeds) {
         ASSERT_EQ(cudaStreamCreateWithFlags(&seed, cudaStreamNonBlocking), cudaSuccess);
-        auto touched = Tensor::empty({64}, Device::CUDA);
+        auto touched = Tensor::empty({64}, Device::GPU);
         touched.set_stream(seed);
         touched.fill_(1.0f);
     }
     for (auto& seed : seeds) {
-        CudaMemoryPool::instance().release_stream(seed);
+        release_cuda_stream(seed);
         cudaStreamDestroy(seed);
     }
     cudaStream_t producer = nullptr;

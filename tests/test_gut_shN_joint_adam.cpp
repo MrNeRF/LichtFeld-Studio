@@ -6,6 +6,7 @@
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
@@ -55,8 +56,8 @@ namespace {
             opacity[i] = -1.0f + 0.0005f * static_cast<float>(i);
         }
         Tensor shN = rest == 0
-                         ? Tensor::zeros({size_t{0}}, Device::CUDA)
-                         : Tensor::zeros({n, rest, size_t{3}}, Device::CUDA);
+                         ? Tensor::zeros({size_t{0}}, Device::GPU)
+                         : Tensor::zeros({n, rest, size_t{3}}, Device::GPU);
         if (rest > 0) {
             auto cpu = shN.cpu();
             auto* p = cpu.ptr<float>();
@@ -64,16 +65,16 @@ namespace {
                 p[i] = 0.02f * static_cast<float>((i % 11) + 1) *
                        (1.0f + 0.001f * static_cast<float>(i / 3));
             }
-            shN = cpu.cuda();
+            shN = cpu.gpu();
         }
         return SplatData(
             sh_degree,
-            Tensor::from_vector(means, {n, size_t{3}}, Device::CUDA),
-            Tensor::from_vector(sh0, {n, size_t{1}, size_t{3}}, Device::CUDA),
+            Tensor::from_vector(means, {n, size_t{3}}, Device::GPU),
+            Tensor::from_vector(sh0, {n, size_t{1}, size_t{3}}, Device::GPU),
             std::move(shN),
-            Tensor::from_vector(scaling, {n, size_t{3}}, Device::CUDA),
-            Tensor::from_vector(rotation, {n, size_t{4}}, Device::CUDA),
-            Tensor::from_vector(opacity, {n, size_t{1}}, Device::CUDA),
+            Tensor::from_vector(scaling, {n, size_t{3}}, Device::GPU),
+            Tensor::from_vector(rotation, {n, size_t{4}}, Device::GPU),
+            Tensor::from_vector(opacity, {n, size_t{1}}, Device::GPU),
             1.0f);
     }
 
@@ -102,9 +103,67 @@ namespace {
         return {p, p + cpu.bytes()};
     }
 
+    void fill_contiguous_gradients(AdamOptimizer& optimizer, const float scale) {
+        optimizer.get_grad(ParamType::Means).fill_(scale);
+        optimizer.get_grad(ParamType::Sh0).fill_(scale * 2.0f);
+        optimizer.get_grad(ParamType::Scaling).fill_(scale * 3.0f);
+        optimizer.get_grad(ParamType::Rotation).fill_(scale * 4.0f);
+        optimizer.get_grad(ParamType::Opacity).fill_(scale * 5.0f);
+    }
+
+    void expect_contiguous_params_equal(const SplatData& actual, const SplatData& expected) {
+        EXPECT_EQ(tensor_bytes(actual.means_raw()), tensor_bytes(expected.means_raw()));
+        EXPECT_EQ(tensor_bytes(actual.sh0_raw()), tensor_bytes(expected.sh0_raw()));
+        EXPECT_EQ(tensor_bytes(actual.scaling_raw()), tensor_bytes(expected.scaling_raw()));
+        EXPECT_EQ(tensor_bytes(actual.rotation_raw()), tensor_bytes(expected.rotation_raw()));
+        EXPECT_EQ(tensor_bytes(actual.opacity_raw()), tensor_bytes(expected.opacity_raw()));
+    }
+
 } // namespace
 
-TEST(GutShNJointAdam, StandaloneStepMatchesFusedKernelQ16Sh3) {
+class GutJointAdamBatch : public lfs::test::CudaBackendTest {};
+
+TEST_F(GutJointAdamBatch, BackToBackLaunchesKeepTheirOwnParameters) {
+    CodecsOnGuard guard;
+    constexpr size_t n = 300;
+    constexpr size_t cap = 512;
+    constexpr int iteration = 1001;
+
+    auto splat_a = make_mixed_splat(n, 0);
+    auto splat_b = make_mixed_splat(n, 0);
+    auto expected_a = splat_a.clone();
+    auto expected_b = splat_b.clone();
+
+    AdamOptimizer optimizer_a(splat_a, make_cfg(cap));
+    AdamOptimizer optimizer_b(splat_b, make_cfg(cap));
+    AdamOptimizer reference_a(expected_a, make_cfg(cap));
+    AdamOptimizer reference_b(expected_b, make_cfg(cap));
+    optimizer_a.allocate_gradients(cap);
+    optimizer_b.allocate_gradients(cap);
+    reference_a.allocate_gradients(cap);
+    reference_b.allocate_gradients(cap);
+
+    fill_contiguous_gradients(optimizer_a, 0.01f);
+    fill_contiguous_gradients(optimizer_b, 0.02f);
+    fill_contiguous_gradients(reference_a, 0.01f);
+    fill_contiguous_gradients(reference_b, 0.02f);
+
+    ASSERT_NO_THROW(optimizer_a.step(iteration));
+    ASSERT_NO_THROW(optimizer_b.step(iteration));
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    ASSERT_NO_THROW(reference_a.step(iteration));
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    ASSERT_NO_THROW(reference_b.step(iteration));
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    expect_contiguous_params_equal(splat_a, expected_a);
+    expect_contiguous_params_equal(splat_b, expected_b);
+}
+
+class GutShNJointAdam : public lfs::test::CudaBackendTest {};
+
+TEST_F(GutShNJointAdam, StandaloneStepMatchesFusedKernelQ16Sh3) {
     CodecsOnGuard guard;
     constexpr size_t n = 300;
     constexpr size_t cap = 512;

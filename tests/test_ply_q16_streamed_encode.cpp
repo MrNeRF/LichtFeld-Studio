@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "cuda_backend_test.hpp"
+
 #include "core/error.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
@@ -23,11 +25,6 @@
 using namespace lfs::core;
 
 namespace {
-
-    [[nodiscard]] bool has_cuda_device() {
-        int device_count = 0;
-        return cudaGetDeviceCount(&device_count) == cudaSuccess && device_count != 0;
-    }
 
     Tensor retag_external(Tensor tensor, std::string kind) {
         const TensorShape shape = tensor.shape();
@@ -57,7 +54,7 @@ namespace {
                         const DataType dtype,
                         const std::string_view name) {
             calls.push_back(AllocCall{std::string{name}, dtype});
-            Tensor backing = Tensor::zeros_direct(shape, capacity, Device::CUDA, dtype);
+            Tensor backing = Tensor::zeros_direct(shape, capacity, Device::GPU, dtype);
             return retag_external(std::move(backing), "vulkan_external_buffer");
         };
     }
@@ -141,10 +138,9 @@ namespace {
 
 } // namespace
 
-TEST(PlyQ16StreamedEncode, GdPlyMatchesSingleShotAndSkipsFloatShN) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device unavailable";
-    }
+class PlyQ16StreamedEncode : public lfs::test::CudaBackendTest {};
+
+TEST_F(PlyQ16StreamedEncode, GdPlyMatchesSingleShotAndSkipsFloatShN) {
     if (!gd_ply_exists()) {
         GTEST_SKIP() << "Missing test asset: " << gd_ply_path();
     }
@@ -163,10 +159,7 @@ TEST(PlyQ16StreamedEncode, GdPlyMatchesSingleShotAndSkipsFloatShN) {
     expect_q16_byte_identical(single_shot, streamed);
 }
 
-TEST(PlyQ16StreamedEncode, BandBoundaryMatchesSingleShot) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device unavailable";
-    }
+TEST_F(PlyQ16StreamedEncode, BandBoundaryMatchesSingleShot) {
     if (!gd_ply_exists()) {
         GTEST_SKIP() << "Missing test asset: " << gd_ply_path();
     }

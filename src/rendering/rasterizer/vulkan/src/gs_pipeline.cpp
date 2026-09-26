@@ -1,4 +1,6 @@
 #include "gs_pipeline.h"
+#include "core/vulkan_helpers.hpp"
+#include "gs_renderer.h"
 #include "perf_timer.h"
 
 #include "core/error.hpp"
@@ -24,7 +26,7 @@
 #undef min
 #endif
 
-static const size_t MAX_UNIFORM_SIZE = 192;
+static constexpr size_t MAX_UNIFORM_SIZE = sizeof(VulkanGSRendererUniforms);
 
 // The pre-wave renderer fits in the legacy 96-query budget. Each armed depth
 // wave adds one independently accumulated cumsum interval (begin + end), and
@@ -598,6 +600,9 @@ void VulkanGSPipeline::cleanup() {
             destroyComputePipeline(*pipeline);
         all_compute_pipelines.clear();
         pending_compute_pipelines.clear();
+        banded_export_pipelines_.clear();
+        banded_export_initialized_ = false;
+        banded_export_active_ = false;
 
         if (fence != VK_NULL_HANDLE) {
             vkDestroyFence(device, fence, nullptr);
@@ -640,7 +645,6 @@ void VulkanGSPipeline::cleanup() {
     command_queue = VK_NULL_HANDLE;
     queue_family_index = UINT32_MAX;
     pending_timeline_waits_.clear();
-    last_timeline_wait_values_.clear();
     last_timeline_signal_values_.clear();
     for (CommandBatchSlot& slot : command_batch_slots_) {
         slot.pending_signal = VK_NULL_HANDLE;
@@ -659,6 +663,11 @@ void VulkanGSPipeline::cleanup() {
 }
 
 void VulkanGSPipeline::populateDeviceInfo(VkPhysicalDevice selected_physical_device) {
+    const auto feature_check = lfs::core::check_vulkan_feature_requirements(
+        selected_physical_device, {.viewer_shaders = true});
+    if (!feature_check.supported())
+        lfs::rendering::throw_renderer_contract("VkSplat device lacks required shader features: " + feature_check.missing,
+                                                LFS_SOURCE_SITE_CURRENT());
     VkPhysicalDeviceSubgroupProperties subgroupProperties{};
     subgroupProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
     VkPhysicalDeviceProperties2 deviceProperties2{};
@@ -1199,18 +1208,13 @@ void VulkanGSPipeline::addTimelineWait(
                 pending_timeline_waits_.size()),
             LFS_SOURCE_SITE_CURRENT());
     }
-    const std::uint64_t previous = last_timeline_wait_values_[semaphore];
-    if (value <= previous) {
-        lfs::rendering::throw_renderer_contract(
-            std::format(
-                "VkSplat Vulkan timeline waits must increase strictly (semaphore={:#x}, requested_value={}, previous_value={}, pending_waits={})",
-                lfs::rendering::vkHandleValue(semaphore),
-                value,
-                previous,
-                pending_timeline_waits_.size()),
-            LFS_SOURCE_SITE_CURRENT());
+    for (auto& wait : pending_timeline_waits_) {
+        if (wait.semaphore == semaphore) {
+            wait.value = std::max(wait.value, value);
+            wait.stage_mask |= stage_mask;
+            return;
+        }
     }
-    last_timeline_wait_values_[semaphore] = value;
     pending_timeline_waits_.push_back(PendingTimelineWait{
         .semaphore = semaphore,
         .value = value,
@@ -1220,9 +1224,7 @@ void VulkanGSPipeline::addTimelineWait(
 
 void VulkanGSPipeline::endCommandBatch(bool use_fence,
                                        VkSemaphore signal_semaphore,
-                                       std::uint64_t signal_value,
-                                       VkSemaphore secondary_signal_semaphore,
-                                       std::uint64_t secondary_signal_value) {
+                                       std::uint64_t signal_value) {
     if (!commandBatchInProgress) {
         lfs::rendering::throw_renderer_contract(
             std::format(
@@ -1261,28 +1263,6 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
                 active_command_batch_slot_),
             LFS_SOURCE_SITE_CURRENT());
     }
-    if ((secondary_signal_semaphore == VK_NULL_HANDLE) != (secondary_signal_value == 0)) {
-        lfs::rendering::throw_renderer_contract(
-            std::format(
-                "endCommandBatch secondary timeline signal handle/value must be supplied together (semaphore={:#x}, value={}, use_fence={}, active_slot={})",
-                lfs::rendering::vkHandleValue(secondary_signal_semaphore),
-                secondary_signal_value,
-                use_fence,
-                active_command_batch_slot_),
-            LFS_SOURCE_SITE_CURRENT());
-    }
-    if (signal_semaphore != VK_NULL_HANDLE &&
-        signal_semaphore == secondary_signal_semaphore) {
-        lfs::rendering::throw_renderer_contract(
-            std::format(
-                "endCommandBatch timeline signal handles must be distinct (primary={:#x}, secondary={:#x}, primary_value={}, secondary_value={}, active_slot={})",
-                lfs::rendering::vkHandleValue(signal_semaphore),
-                lfs::rendering::vkHandleValue(secondary_signal_semaphore),
-                signal_value,
-                secondary_signal_value,
-                active_command_batch_slot_),
-            LFS_SOURCE_SITE_CURRENT());
-    }
     if (use_fence && fence == VK_NULL_HANDLE) {
         lfs::rendering::throw_renderer_contract(
             std::format(
@@ -1300,20 +1280,6 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
                     "VkSplat Vulkan timeline signals must increase strictly (semaphore={:#x}, signal_value={}, previous_value={}, active_slot={})",
                     lfs::rendering::vkHandleValue(signal_semaphore),
                     signal_value,
-                    previous,
-                    active_command_batch_slot_),
-                LFS_SOURCE_SITE_CURRENT());
-        }
-    }
-    if (secondary_signal_semaphore != VK_NULL_HANDLE) {
-        const std::uint64_t previous =
-            last_timeline_signal_values_[secondary_signal_semaphore];
-        if (secondary_signal_value <= previous) {
-            lfs::rendering::throw_renderer_contract(
-                std::format(
-                    "VkSplat secondary Vulkan timeline signals must increase strictly (semaphore={:#x}, signal_value={}, previous_value={}, active_slot={})",
-                    lfs::rendering::vkHandleValue(secondary_signal_semaphore),
-                    secondary_signal_value,
                     previous,
                     active_command_batch_slot_),
                 LFS_SOURCE_SITE_CURRENT());
@@ -1386,10 +1352,6 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
     if (signal_semaphore != VK_NULL_HANDLE && signal_value != 0) {
         signal_semaphores.push_back(signal_semaphore);
         signal_values.push_back(signal_value);
-    }
-    if (secondary_signal_semaphore != VK_NULL_HANDLE && secondary_signal_value != 0) {
-        signal_semaphores.push_back(secondary_signal_semaphore);
-        signal_values.push_back(secondary_signal_value);
     }
 
     VkTimelineSemaphoreSubmitInfo timeline_submit_info{};
@@ -1511,9 +1473,6 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
     // T5 — publish once (host-side evidence map). Never host-signal.
     if (signal_semaphore != VK_NULL_HANDLE) {
         last_timeline_signal_values_[signal_semaphore] = signal_value;
-    }
-    if (secondary_signal_semaphore != VK_NULL_HANDLE) {
-        last_timeline_signal_values_[secondary_signal_semaphore] = secondary_signal_value;
     }
     if (signal_semaphore != VK_NULL_HANDLE && signal_value != 0) {
         using lfs::rendering::SubmissionFencePolicy;
@@ -1935,6 +1894,7 @@ void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline,
                                              const uint32_t expected_workgroup_size_x) {
 
     pipeline.diagnostic_name = spirvDiagnosticName(spirv_path);
+    pipeline.spirv_path = spirv_path;
     all_compute_pipelines.push_back(&pipeline);
     const auto spirv_code = loadSpirv(spirv_path);
     if (expected_workgroup_size_x != 0 &&
@@ -1991,6 +1951,56 @@ void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline,
     pending_compute_pipelines.push_back(&pipeline);
 }
 
+void VulkanGSPipeline::setBandedExport(const bool enabled) {
+    if (enabled == banded_export_active_)
+        return;
+
+    if (enabled && !banded_export_initialized_) {
+        const size_t count = all_compute_pipelines.size();
+        const size_t pending_count = pending_compute_pipelines.size();
+        try {
+            for (size_t i = 0; i < count; ++i) {
+                auto* const pipeline = all_compute_pipelines[i];
+                const std::filesystem::path path(pipeline->spirv_path);
+                const std::string name = path.stem().string();
+                if (!name.starts_with("projection_forward") &&
+                    !name.starts_with("rasterize_forward") &&
+                    !name.starts_with("macro_raster") &&
+                    !name.starts_with("macro_compose") && name != "generate_keys_wave") {
+                    continue;
+                }
+                auto variant = std::make_unique<_ComputePipeline>(pipeline->buffer_layouts);
+                auto* const variant_ptr = variant.get();
+                banded_export_pipelines_.emplace_back(pipeline, std::move(variant));
+                createComputePipeline(*variant_ptr,
+                                      (path.parent_path() / (name + "_banded.spv")).string(),
+                                      pipeline->compatible_subgroup_size,
+                                      pipeline->expected_workgroup_size_x);
+            }
+            createPendingComputePipelines();
+        } catch (...) {
+            // A failed first export must leave the viewer usable and retryable.
+            for (auto& entry : banded_export_pipelines_)
+                destroyComputePipeline(*entry.second);
+            all_compute_pipelines.resize(count);
+            pending_compute_pipelines.resize(pending_count);
+            banded_export_pipelines_.clear();
+            throw;
+        }
+        banded_export_initialized_ = true;
+    }
+
+    // Swap once at the boundary, keeping ordinary dispatch recording unchanged.
+    // Both sets stay alive until renderer teardown, including in-flight uses.
+    for (auto& [pipeline, variant] : banded_export_pipelines_) {
+        std::swap(pipeline->shader, variant->shader);
+        std::swap(pipeline->descriptor_set_layout, variant->descriptor_set_layout);
+        std::swap(pipeline->pipeline_layout, variant->pipeline_layout);
+        std::swap(pipeline->pipeline, variant->pipeline);
+    }
+    banded_export_active_ = enabled;
+}
+
 void VulkanGSPipeline::createPendingComputePipelines() {
     if (pending_compute_pipelines.empty())
         return;
@@ -2028,6 +2038,10 @@ void VulkanGSPipeline::createPendingComputePipelines() {
     const VkResult result = vkCreateComputePipelines(
         device, pipeline_cache, static_cast<uint32_t>(infos.size()), infos.data(), nullptr, pipelines.data());
     if (result != VK_SUCCESS) {
+        for (const auto pipeline : pipelines) {
+            if (pipeline != VK_NULL_HANDLE)
+                vkDestroyPipeline(device, pipeline, nullptr);
+        }
         lfs::rendering::throw_vk_result(
             result,
             "vkCreateComputePipelines",

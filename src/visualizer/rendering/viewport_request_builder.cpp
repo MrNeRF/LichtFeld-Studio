@@ -3,9 +3,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "viewport_request_builder.hpp"
-
+#include "rendering/model_renderability.hpp"
 #include "scene/scene_manager.hpp"
 #include "temporal_frame_tracker.hpp"
+#include <type_traits>
+#include <vector>
 
 namespace lfs::vis {
 
@@ -241,7 +243,9 @@ namespace lfs::vis {
                 filters.ellipsoid_region = filters.ellipsoid_regions.front();
             }
         }
-        void applyGaussianViewVolume(lfs::rendering::GaussianFilterState& filters, const FrameContext& ctx) {
+        void applyGaussianViewVolume(lfs::rendering::GaussianFilterState& filters,
+                                     const FrameContext& ctx,
+                                     const std::optional<SplitViewPanelId> render_panel) {
             // While GT comparison mode is active the depth filter's render effect
             // (dim/hide/containment, and the drag-preview lane with it) is fully
             // suspended. Settings are never mutated — dropping the filters from the
@@ -251,15 +255,38 @@ namespace lfs::vis {
                 return;
             }
 
+            const bool use_panel_slots =
+                splitViewUsesIndependentPanels(ctx.settings.split_view_mode) && render_panel;
+            float depth_near = -ctx.settings.depth_filter_max.z;
+            float depth_far = -ctx.settings.depth_filter_min.z;
+            float scale_x = ctx.settings.depth_filter_scale_x;
+            float scale_y = ctx.settings.depth_filter_scale_y;
+            float offset_x = ctx.settings.depth_filter_offset_x;
+            float offset_y = ctx.settings.depth_filter_offset_y;
+            if (use_panel_slots) {
+                const DepthWindowState& window =
+                    ctx.panel_depth_windows[splitViewPanelIndex(*render_panel)];
+                depth_near = window.near_plane;
+                depth_far = window.far_plane;
+                scale_x = window.scale_x;
+                scale_y = window.scale_y;
+                offset_x = window.offset_x;
+                offset_y = window.offset_y;
+            }
+
             filters.view_volume = lfs::rendering::BoundingBox{
-                .min = ctx.settings.depth_filter_min,
-                .max = ctx.settings.depth_filter_max,
+                .min = {ctx.settings.depth_filter_min.x,
+                        ctx.settings.depth_filter_min.y,
+                        -depth_far},
+                .max = {ctx.settings.depth_filter_max.x,
+                        ctx.settings.depth_filter_max.y,
+                        -depth_near},
                 .transform = ctx.settings.depth_filter_transform.inv().toMat4()};
             filters.screen_window = lfs::rendering::SelectionScreenWindow{
-                .scale_x = ctx.settings.depth_filter_scale_x,
-                .scale_y = ctx.settings.depth_filter_scale_y,
-                .offset_x = ctx.settings.depth_filter_offset_x,
-                .offset_y = ctx.settings.depth_filter_offset_y,
+                .scale_x = scale_x,
+                .scale_y = scale_y,
+                .offset_x = offset_x,
+                .offset_y = offset_y,
                 .drag_preview = ctx.depth_window_drag_preview};
             filters.cull_outside_view_volume = ctx.settings.depth_filter_viz_mode == 2;
             filters.dim_outside_view_volume = ctx.settings.depth_filter_viz_mode == 1;
@@ -316,6 +343,9 @@ namespace lfs::vis {
 
         lfs::rendering::ViewportRenderRequest request{
             .frame_view = frame_view,
+            .color_exposure = ctx.settings.color_exposure,
+            .color_tonemapping = ctx.settings.color_tonemapping,
+            .splat_render_profile = ctx.settings.splat_render_profile,
             .scaling_modifier = ctx.settings.scaling_modifier,
             .antialiasing = ctx.settings.antialiasing,
             .mip_filter = ctx.settings.mip_filter,
@@ -327,7 +357,8 @@ namespace lfs::vis {
             .scene =
                 {.model_transforms = &ctx.scene_state.model_transforms,
                  .transform_indices = ctx.scene_state.transform_indices,
-                 .node_visibility_mask = ctx.scene_state.node_visibility_mask},
+                 .node_visibility_mask = ctx.scene_state.node_visibility_mask,
+                 .node_active_sh_degrees = ctx.scene_state.node_active_sh_degrees},
             .filters = {},
             .overlay =
                 {.markers =
@@ -374,7 +405,7 @@ namespace lfs::vis {
 
         applyGaussianCropBox(request.filters, ctx);
         applyGaussianEllipsoid(request.filters, ctx);
-        applyGaussianViewVolume(request.filters, ctx);
+        applyGaussianViewVolume(request.filters, ctx, render_panel);
         request.frame_view.subregion_origin = subregion_origin;
         request.frame_view.subregion_full_size = subregion_full_size;
         return request;
@@ -458,6 +489,169 @@ namespace lfs::vis {
 
         applyPointCloudCropVolume(request.filters, ctx);
         return request;
+    }
+
+    const core::SceneNode* plyComparisonNodeForPanel(
+        const core::Scene& scene,
+        const size_t split_view_offset,
+        const SplitViewPanelId panel) {
+        const auto visible_nodes = scene.getVisibleSplatNodeSlots();
+        const auto pair = plyComparisonPairForOffset(visible_nodes.size(), split_view_offset);
+        if (!pair) {
+            return nullptr;
+        }
+        const size_t index = panel == SplitViewPanelId::Right ? pair->second : pair->first;
+        return visible_nodes[index].node;
+    }
+
+    void applyPlyComparisonNodeScope(
+        lfs::rendering::GaussianSceneState& scene,
+        lfs::rendering::GaussianFilterState& filters,
+        lfs::rendering::GaussianOverlayState& overlay,
+        const FrameContext& ctx,
+        const core::SceneNode& node,
+        const int visible_index) {
+        // An owned model has one transform slot. Discard aggregate indices,
+        // visibility and SH limits; the renderer uses this model's active SH
+        // degree. The caller supplies the node's world transform separately.
+        scene = {};
+        const auto keep_matching = [visible_index](auto& regions, auto& primary) {
+            using Filter = std::decay_t<decltype(regions[0])>;
+            std::vector<Filter> kept;
+            kept.reserve(regions.size());
+            for (auto& region : regions) {
+                if (region.parent_node_index == visible_index) {
+                    region.parent_node_index = 0;
+                    kept.push_back(std::move(region));
+                }
+            }
+            regions = std::move(kept);
+            if (!regions.empty()) {
+                primary = regions.front();
+            } else {
+                primary.reset();
+            }
+        };
+        keep_matching(filters.crop_regions, filters.crop_region);
+        keep_matching(filters.ellipsoid_regions, filters.ellipsoid_region);
+
+        overlay.emphasis.mask.reset();
+        overlay.has_selection = false;
+        if (ctx.scene_manager) {
+            overlay.emphasis.mask =
+                ctx.scene_manager->getScene().selectionMaskSliceForNode(node.id);
+            overlay.has_selection =
+                overlay.emphasis.mask && overlay.emphasis.mask->is_valid() &&
+                overlay.emphasis.mask->numel() > 0 && ctx.scene_state.has_selection;
+        }
+
+        const bool selected =
+            visible_index >= 0 &&
+            static_cast<size_t>(visible_index) < ctx.scene_state.selected_node_mask.size() &&
+            ctx.scene_state.selected_node_mask[static_cast<size_t>(visible_index)];
+        overlay.emphasis.emphasized_node_mask =
+            overlay.emphasis.dim_non_emphasized ? std::vector<bool>{selected} : std::vector<bool>{};
+        size_t offset = 0;
+        size_t count = 0;
+        if (ctx.scene_manager) {
+            for (const auto& slot : ctx.scene_manager->getScene().getVisibleSplatNodeSlots()) {
+                if (!slot.node || !slot.node->model) {
+                    continue;
+                }
+                const auto node_count = static_cast<size_t>(slot.node->model->size());
+                if (slot.node->id == node.id) {
+                    count = node_count;
+                    break;
+                }
+                offset += node_count;
+            }
+        }
+        auto& transient = overlay.emphasis.transient_mask;
+        if (transient.mask && transient.mask->is_valid() &&
+            transient.mask->ndim() == 1 && count > 0 &&
+            offset + count <= transient.mask->numel()) {
+            transient.owned_mask = std::make_shared<core::Tensor>(
+                transient.mask->slice(0, offset, offset + count));
+            transient.mask = transient.owned_mask.get();
+        } else {
+            transient = {};
+        }
+        const int focused = overlay.emphasis.focused_gaussian_id;
+        overlay.emphasis.focused_gaussian_id =
+            focused >= 0 && static_cast<size_t>(focused) >= offset &&
+                    static_cast<size_t>(focused) < offset + count
+                ? static_cast<int>(static_cast<size_t>(focused) - offset)
+                : -1;
+    }
+
+    PlyComparisonDepthSample resolvePlyComparisonDepthSample(
+        const core::Scene& scene,
+        const size_t split_view_offset,
+        const SplitViewPanelId panel) {
+        PlyComparisonDepthSample sample;
+        const auto visible_nodes = scene.getVisibleSplatNodeSlots();
+        const auto pair = plyComparisonPairForOffset(visible_nodes.size(), split_view_offset);
+        if (!pair) {
+            return sample;
+        }
+        const size_t index = panel == SplitViewPanelId::Right ? pair->second : pair->first;
+        const auto& slot = visible_nodes[index];
+        sample.node = slot.node;
+        sample.visible_index = static_cast<int>(slot.slot_index);
+        if (slot.node && hasRenderableGaussians(slot.node->model.get())) {
+            sample.model = slot.node->model.get();
+            sample.uses_owned_node_model = true;
+        } else {
+            sample.model = scene.peekCombinedModel();
+        }
+        return sample;
+    }
+
+    void scopeSceneRenderStateToVisibleSplatNode(
+        SceneRenderState& state,
+        const core::Scene& scene,
+        const core::SceneNode& node,
+        const int visible_index,
+        const glm::mat4& visualizer_world_transform) {
+        state.combined_model = node.model.get();
+        state.model_transforms = {visualizer_world_transform};
+        state.node_active_sh_degrees = node.model
+                                           ? std::vector<int>{node.model->get_active_sh_degree()}
+                                           : std::vector<int>{};
+        state.transform_indices.reset();
+        state.node_visibility_mask.clear();
+        state.visible_splat_count = hasRenderableGaussians(node.model.get()) ? 1 : 0;
+
+        const auto keep_matching = [visible_index](auto& items) {
+            using Item = std::decay_t<decltype(items[0])>;
+            std::vector<Item> kept;
+            kept.reserve(items.size());
+            for (auto& item : items) {
+                if (item.parent_node_index == visible_index) {
+                    item.parent_node_index = 0;
+                    kept.push_back(std::move(item));
+                }
+            }
+            items = std::move(kept);
+        };
+        keep_matching(state.cropboxes);
+        keep_matching(state.ellipsoids);
+        state.selected_cropbox_index = -1;
+        for (size_t i = 0; i < state.cropboxes.size(); ++i) {
+            if (state.cropboxes[i].data && state.cropboxes[i].data->enabled) {
+                state.selected_cropbox_index = static_cast<int>(i);
+                break;
+            }
+        }
+
+        state.selection_mask = scene.selectionMaskSliceForNode(node.id);
+        const bool selected =
+            visible_index >= 0 &&
+            static_cast<size_t>(visible_index) < state.selected_node_mask.size() &&
+            state.selected_node_mask[static_cast<size_t>(visible_index)];
+        state.selected_node_mask = {selected};
+        state.has_selection = scene.hasSelection() && state.selection_mask &&
+                              state.selection_mask->is_valid();
     }
 
 } // namespace lfs::vis

@@ -149,6 +149,10 @@ namespace lfs::vis::input {
         DEPTH_WINDOW_DRAG,
         GROUP_SELECTED_SCENE_NODES,
         UNGROUP_SELECTED_SCENE_NODE,
+        // Asset Manager consumes these only while its grid has focus.
+        ASSET_GALLERY_PRIMARY,
+        ASSET_GALLERY_COPY_LINK,
+        ASSET_REFRESH,
 
     };
 
@@ -396,6 +400,7 @@ namespace lfs::vis::input {
 
     [[nodiscard]] LFS_VIS_API std::string_view actionNameKey(Action action);
     [[nodiscard]] LFS_VIS_API std::optional<Action> actionFromName(std::string_view name);
+    [[nodiscard]] LFS_VIS_API ToolMode toolModeFromName(std::string_view name);
     [[nodiscard]] LFS_VIS_API std::string getLocalizedActionName(Action action);
     [[nodiscard]] LFS_VIS_API std::string getLocalizedToolModeName(ToolMode mode);
     [[nodiscard]] LFS_VIS_API std::string localizeTriggerDescription(std::string description);

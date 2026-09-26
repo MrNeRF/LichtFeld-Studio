@@ -250,9 +250,9 @@ namespace lfs::vis::project {
             const glm::mat3& value) {
             std::array<float, 9> result{};
             std::size_t index = 0;
-            for (std::size_t column = 0;
+            for (int column = 0;
                  column < 3; ++column) {
-                for (std::size_t row = 0;
+                for (int row = 0;
                      row < 3; ++row) {
                     result[index++] =
                         value[column][row];
@@ -265,9 +265,9 @@ namespace lfs::vis::project {
             const std::array<float, 9>& value) {
             glm::mat3 result{1.0f};
             std::size_t index = 0;
-            for (std::size_t column = 0;
+            for (int column = 0;
                  column < 3; ++column) {
-                for (std::size_t row = 0;
+                for (int row = 0;
                      row < 3; ++row) {
                     result[column][row] =
                         value[index++];
@@ -314,7 +314,7 @@ namespace lfs::vis::project {
         template <typename Owner, typename Member>
         JsonField<Owner> required_field(
             const std::string_view name,
-            Member Owner::*member) {
+            Member Owner::* member) {
             return {
                 .name = name,
                 .write = [member](const Owner& source) { return Json(source.*member); },
@@ -333,7 +333,7 @@ namespace lfs::vis::project {
         template <typename Owner, typename Member>
         JsonField<Owner> optional_field(
             const std::string_view name,
-            Member Owner::*member) {
+            Member Owner::* member) {
             return {
                 .name = name,
                 .write = [member](const Owner& source) { return Json(source.*member); },
@@ -351,7 +351,7 @@ namespace lfs::vis::project {
         template <typename Owner>
         JsonField<Owner> vec3_field(
             const std::string_view name,
-            glm::vec3 Owner::*member) {
+            glm::vec3 Owner::* member) {
             return {
                 .name = name,
                 .write = [member](const Owner& source) { return vec3_json(source.*member); },
@@ -375,7 +375,7 @@ namespace lfs::vis::project {
                   typename AfterAssign = std::nullptr_t>
         JsonField<Owner> enum_field(
             const std::string_view name,
-            Enum Owner::*member,
+            Enum Owner::* member,
             const int minimum,
             const int maximum,
             const std::string_view invalid_detail,
@@ -467,7 +467,7 @@ namespace lfs::vis::project {
         template <typename Owner, std::size_t Size>
         JsonField<Owner> array_field(
             const std::string_view name,
-            std::array<float, Size> Owner::*member) {
+            std::array<float, Size> Owner::* member) {
             return custom_field<Owner>(
                 name,
                 [member](const Owner& source) {
@@ -503,7 +503,7 @@ namespace lfs::vis::project {
         template <typename Owner>
         JsonField<Owner> nullable_positive_float_field(
             const std::string_view name,
-            std::optional<float> Owner::*member) {
+            std::optional<float> Owner::* member) {
             return custom_field<Owner>(
                 name,
                 [member](const Owner& source) {
@@ -708,6 +708,9 @@ namespace lfs::vis::project {
                             settings.environment_map_path = *value;
                         return lfs::Result<void>{};
                     }),
+                optional_field("color_exposure", &RenderSettings::color_exposure),
+                optional_field("color_tonemapping", &RenderSettings::color_tonemapping),
+                optional_field("splat_render_profile", &RenderSettings::splat_render_profile),
                 required_field("environment_exposure", &RenderSettings::environment_exposure),
                 required_field("environment_rotation_degrees", &RenderSettings::environment_rotation_degrees),
                 required_field("show_coord_axes", &RenderSettings::show_coord_axes),
@@ -934,8 +937,22 @@ namespace lfs::vis::project {
 
     PanelCameraProjectState
     capturePanelCameraProjectState(
-        const Viewport& viewport) {
+        const Viewport& viewport,
+        const std::optional<float> fallback_ortho_scale) {
         const auto& camera = viewport.camera;
+        // Same effective scale the renderer uses: per-viewport override, else
+        // RenderSettings.ortho_scale (lf.set_orthographic writes the latter).
+        std::optional<float> scale = viewport.ortho_scale_override;
+        if (!scale || !std::isfinite(*scale) || *scale <= 0.0f) {
+            if (fallback_ortho_scale && std::isfinite(*fallback_ortho_scale) &&
+                *fallback_ortho_scale > 0.0f)
+                scale = fallback_ortho_scale;
+            else
+                scale.reset();
+        }
+        std::optional<float> extent;
+        if (scale && viewport.windowSize.y > 0)
+            extent = static_cast<float>(viewport.windowSize.y) / *scale;
         return {
             .rotation = matrix_array(camera.R),
             .translation = vector_array(camera.t),
@@ -959,6 +976,7 @@ namespace lfs::vis::project {
             .max_wasd_speed = camera.maxWasdSpeed,
             .ortho_scale =
                 viewport.ortho_scale_override,
+            .ortho_extent_world = extent,
         };
     }
 
@@ -990,6 +1008,8 @@ namespace lfs::vis::project {
             state.max_wasd_speed;
         viewport.ortho_scale_override =
             state.ortho_scale;
+        if (state.ortho_extent_world && viewport.windowSize.y > 0)
+            viewport.ortho_scale_override = static_cast<float>(viewport.windowSize.y) / *state.ortho_extent_world;
         camera.clearTransientMotion();
     }
 
@@ -998,6 +1018,8 @@ namespace lfs::vis::project {
         const PanelCameraProjectState& state) {
         Json result{{"panel", panel}};
         append_fields(result, state, panel_camera_fields());
+        if (state.ortho_extent_world)
+            result["ortho_extent_world"] = *state.ortho_extent_world;
         return result;
     }
 
@@ -1019,6 +1041,13 @@ namespace lfs::vis::project {
                 panel_camera_fields());
             !status) {
             return std::move(status).error();
+        }
+
+        if (const auto extent = json.find("ortho_extent_world"); extent != json.end() && !extent->is_null()) {
+            if (!extent->is_number() || !std::isfinite(extent->get<float>()) || extent->get<float>() <= 0.0f)
+                return fail<PanelCameraProjectState>(lfs::ErrorCode::DataLoss,
+                                                     "Orthographic view extent must be positive and finite", "VIEW.panel_cameras.ortho_extent_world");
+            state.ortho_extent_world = extent->get<float>();
         }
 
         constexpr std::array positive_speeds = {
@@ -1232,6 +1261,13 @@ namespace lfs::vis::project {
 
         lfs::Result<void> validate_view_runtime(
             const Json& root) {
+            if (const auto fov = root.find("long_axis_fov_degrees"); fov != root.end() && !fov->is_null()) {
+                if (!fov->is_number() || !std::isfinite(fov->get<float>()) ||
+                    fov->get<float>() < 1.0f || fov->get<float>() > 179.0f)
+                    return fail<void>(lfs::ErrorCode::DataLoss,
+                                      "Long-axis field of view must be between 1 and 179 degrees",
+                                      "VIEW.long_axis_fov_degrees");
+            }
             const auto settings_it =
                 find_required_object(
                     root, "render_settings");
@@ -1657,7 +1693,7 @@ namespace lfs::vis::project {
             using Panel = gui::PanelProjectState;
             const auto nullable_float = [](
                                             const std::string_view name,
-                                            float Panel::*member) {
+                                            float Panel::* member) {
                 return custom_field<Panel>(
                     name,
                     [member](const Panel& panel) {
@@ -2274,11 +2310,12 @@ namespace lfs::vis::project {
 
         const auto primary =
             capturePanelCameraProjectState(
-                viewer.getViewport());
+                viewer.getViewport(), settings.ortho_scale);
         const auto secondary =
             capturePanelCameraProjectState(
                 rendering_manager
-                    ->projectSecondaryViewport());
+                    ->projectSecondaryViewport(),
+                settings.ortho_scale);
         const auto& tool_registry =
             UnifiedToolRegistry::instance();
         const auto& gizmo =
@@ -2340,6 +2377,9 @@ namespace lfs::vis::project {
         }
         const Json view_known{
             {"version", 1},
+            // Opening a browser-authored camera resolves its long-axis FOV
+            // against this viewport. Later saves keep the native vertical FOV.
+            {"long_axis_fov_degrees", nullptr},
             {"render_settings",
              std::move(project_render_settings)},
             {"panel_cameras",
@@ -2531,7 +2571,7 @@ namespace lfs::vis::project {
                 retained_uuid;
             if (retained_clips &&
                 retained_clips->is_array()) {
-                const auto retained =
+                const auto retained_clip =
                     std::ranges::find_if(
                         *retained_clips,
                         [&](const Json& item) {
@@ -2542,13 +2582,13 @@ namespace lfs::vis::project {
                                        clip->node_uuid
                                            .to_string();
                         });
-                if (retained !=
+                if (retained_clip !=
                     retained_clips->end()) {
                     const auto reference =
-                        retained->find(
+                        retained_clip->find(
                             "directory_reference_uuid");
                     if (reference !=
-                            retained->end() &&
+                            retained_clip->end() &&
                         reference->is_string()) {
                         retained_uuid =
                             lfs::core::Uuid::
@@ -3255,6 +3295,13 @@ namespace lfs::vis::project {
                     rendering->getSettings());
             if (!restored)
                 return;
+            if (const auto fov = scalar<float>(root, "long_axis_fov_degrees")) {
+                const auto& viewport = viewer.getViewport();
+                const auto aspect = std::max(1.0f, static_cast<float>(viewport.windowSize.x) /
+                                                       std::max(1.0f, static_cast<float>(viewport.windowSize.y)));
+                const float vertical = glm::degrees(2.0f * std::atan(std::tan(glm::radians(*fov) / 2.0f) / aspect));
+                restored->focal_length_mm = lfs::rendering::vFovToFocalLength(vertical);
+            }
             if (environment_map_path &&
                 !environment_map_path->empty()) {
                 restored->environment_map_path =
@@ -3472,6 +3519,9 @@ namespace lfs::vis::project {
             const bool sequencer_visible =
                 gui_manager->panelLayout().isShowSequencer();
             const auto finish = [&] {
+                // Seed both slots from final restored tool values with sync off on every exit.
+                rendering
+                    ->restoreDepthWindowStateFromProject();
                 viewer.getEditorContext()
                     .armToolRestoreGuard();
                 gui_manager->panelLayout()

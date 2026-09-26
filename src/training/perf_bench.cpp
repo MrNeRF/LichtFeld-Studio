@@ -4,11 +4,12 @@
 #include "lfs/training/perf_bench.hpp"
 
 #include "core/alloc_counter.hpp"
+#include "core/detail/tensor_impl.hpp"
+#include "core/gpu_device_runtime.hpp"
 #include "core/logger.hpp"
-#include "core/pinned_memory_allocator.hpp"
+#include "core/pinned_allocator_stats.hpp"
+#include "core/tensor_backend.hpp"
 #include "diagnostics/vram_ledger_model.hpp"
-
-#include <cuda_runtime.h>
 
 #include <algorithm>
 #include <array>
@@ -46,46 +47,22 @@ namespace lfs::training {
                 .count();
         }
 
-        void sample_cuda_used(std::size_t& used, std::size_t& total) {
-            std::size_t free_b = 0;
-            std::size_t total_b = 0;
-            if (cudaMemGetInfo(&free_b, &total_b) == cudaSuccess && total_b >= free_b) {
-                used = total_b - free_b;
-                total = total_b;
+        void sample_cuda_used(const lfs::core::MemoryInfo& stats,
+                              std::size_t& used, std::size_t& total) {
+            if (stats.total_bytes >= stats.free_bytes && stats.total_bytes != 0) {
+                used = stats.total_bytes - stats.free_bytes;
+                total = stats.total_bytes;
             }
         }
 
-        void sample_pool_hwm(std::size_t& used_high, std::size_t& reserved_high,
+        void sample_pool_hwm(const lfs::core::MemoryInfo& stats,
+                             std::size_t& used_high, std::size_t& reserved_high,
                              std::size_t& used_cur, std::size_t& reserved_cur) {
             used_high = reserved_high = used_cur = reserved_cur = 0;
-#if CUDART_VERSION >= 12080
-            int device = 0;
-            if (cudaGetDevice(&device) != cudaSuccess) {
-                return;
-            }
-            cudaMemPool_t pool = nullptr;
-            if (cudaDeviceGetDefaultMemPool(&pool, device) != cudaSuccess || !pool) {
-                return;
-            }
-            std::uint64_t u = 0;
-            std::uint64_t r = 0;
-            if (cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemHigh, &u) == cudaSuccess) {
-                used_high = static_cast<std::size_t>(u);
-            }
-            if (cudaMemPoolGetAttribute(pool, cudaMemPoolAttrReservedMemHigh, &r) ==
-                cudaSuccess) {
-                reserved_high = static_cast<std::size_t>(r);
-            }
-            u = r = 0;
-            if (cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemCurrent, &u) ==
-                cudaSuccess) {
-                used_cur = static_cast<std::size_t>(u);
-            }
-            if (cudaMemPoolGetAttribute(pool, cudaMemPoolAttrReservedMemCurrent, &r) ==
-                cudaSuccess) {
-                reserved_cur = static_cast<std::size_t>(r);
-            }
-#endif
+            used_high = stats.pool_used_high;
+            reserved_high = stats.pool_reserved_high;
+            used_cur = stats.pool_used_current;
+            reserved_cur = stats.pool_reserved_current;
         }
 
         struct MrnfTransientPeaks {
@@ -198,13 +175,7 @@ namespace lfs::training {
     }
 
     void PerfBenchCollector::destroy_phase_event_pool() {
-        for (auto& ev : phase_events_) {
-            if (ev) {
-                (void)cudaEventDestroy(ev);
-                ev = nullptr;
-            }
-        }
-        phase_events_.clear();
+        phase_timer_.reset();
         phase_pool_ready_ = false;
     }
 
@@ -215,16 +186,14 @@ namespace lfs::training {
         const std::size_t n =
             static_cast<std::size_t>(kPhaseSampleCap) *
             static_cast<std::size_t>(kPhaseBoundaryCount);
-        phase_events_.assign(n, nullptr);
-        phase_samples_.assign(static_cast<std::size_t>(kPhaseSampleCap), PhaseSample{});
-        for (std::size_t i = 0; i < n; ++i) {
-            if (cudaEventCreateWithFlags(&phase_events_[i], cudaEventDefault) != cudaSuccess) {
-                (void)cudaGetLastError();
-                destroy_phase_event_pool();
-                LOG_WARN("PerfBench: failed to allocate phase event pool; phase timings disabled");
-                return false;
-            }
+        phase_timer_ = std::make_unique<lfs::core::GpuElapsed>(
+            lfs::core::GpuBackend::CUDA, n);
+        if (!phase_timer_->ready()) {
+            destroy_phase_event_pool();
+            LOG_WARN("PerfBench: failed to allocate phase event pool; phase timings disabled");
+            return false;
         }
+        phase_samples_.assign(static_cast<std::size_t>(kPhaseSampleCap), PhaseSample{});
         phase_pool_ready_ = true;
         return true;
     }
@@ -251,8 +220,7 @@ namespace lfs::training {
             static_cast<std::size_t>(phase_current_index_) *
                 static_cast<std::size_t>(kPhaseBoundaryCount) +
             static_cast<std::size_t>(bi);
-        if (cudaEventRecord(phase_events_[ev_idx], timing_stream_) != cudaSuccess) {
-            (void)cudaGetLastError();
+        if (!phase_timer_->mark(ev_idx, timing_stream_)) {
             return;
         }
         sample.seen_mask |= (1u << bi);
@@ -278,7 +246,7 @@ namespace lfs::training {
             } else {
                 std::size_t used = 0;
                 std::size_t total = 0;
-                sample_cuda_used(used, total);
+                sample_cuda_used(lfs::core::gpu_backend_memory_info(lfs::core::GpuBackend::CUDA), used, total);
                 c.baseline_cuda_used_ = used;
                 (void)total;
             }
@@ -402,7 +370,8 @@ namespace lfs::training {
 
     void PerfBenchCollector::capture_peak_snapshot(const int iter,
                                                    const std::size_t used,
-                                                   const std::size_t total) {
+                                                   const std::size_t total,
+                                                   const lfs::core::MemoryInfo& memory) {
         peak_cuda_used_ = used;
         peak_cuda_total_ = total;
         peak_iter_ = iter;
@@ -411,7 +380,7 @@ namespace lfs::training {
         std::size_t reserved_high = 0;
         std::size_t used_cur = 0;
         std::size_t reserved_cur = 0;
-        sample_pool_hwm(used_high, reserved_high, used_cur, reserved_cur);
+        sample_pool_hwm(memory, used_high, reserved_high, used_cur, reserved_cur);
         peak_pool_used_ = std::max(peak_pool_used_, std::max(used_high, used_cur));
         peak_pool_reserved_ =
             std::max(peak_pool_reserved_, std::max(reserved_high, reserved_cur));
@@ -497,16 +466,17 @@ namespace lfs::training {
 
         std::size_t used = 0;
         std::size_t total = 0;
-        sample_cuda_used(used, total);
+        const auto memory = lfs::core::gpu_backend_memory_info(lfs::core::GpuBackend::CUDA, true);
+        sample_cuda_used(memory, used, total);
         if (used > peak_cuda_used_) {
-            capture_peak_snapshot(iter, used, total);
+            capture_peak_snapshot(iter, used, total, memory);
         } else {
             // Still track pool peaks when device-wide free dips.
             std::size_t used_high = 0;
             std::size_t reserved_high = 0;
             std::size_t used_cur = 0;
             std::size_t reserved_cur = 0;
-            sample_pool_hwm(used_high, reserved_high, used_cur, reserved_cur);
+            sample_pool_hwm(memory, used_high, reserved_high, used_cur, reserved_cur);
             peak_pool_used_ = std::max(peak_pool_used_, std::max(used_high, used_cur));
             peak_pool_reserved_ =
                 std::max(peak_pool_reserved_, std::max(reserved_high, reserved_cur));
@@ -524,7 +494,7 @@ namespace lfs::training {
             warmup_ms_sum_ += ms;
             ++warmup_steps_;
         } else {
-            const auto pinned_stats = lfs::core::PinnedMemoryAllocator::instance().get_stats();
+            const auto pinned_stats = lfs::core::pinned_allocator_stats();
             peak_steady_pinned_host_bytes_ = std::max(
                 peak_steady_pinned_host_bytes_,
                 pinned_stats.allocated_bytes + pinned_stats.cached_bytes);
@@ -759,16 +729,8 @@ namespace lfs::training {
         if (phase_pool_ready_ && phase_sample_count_ > 0) {
             // Bench-end only: the training loop has finished; make events readable.
             if (timing_stream_ != nullptr) {
-                if (cudaStreamSynchronize(timing_stream_) != cudaSuccess) {
-                    (void)cudaGetLastError();
-                }
+                static_cast<void>(phase_timer_->wait_queue(timing_stream_));
             }
-
-            const auto event_at = [this](const int sample, const int boundary) -> cudaEvent_t {
-                return phase_events_[static_cast<std::size_t>(sample) *
-                                         static_cast<std::size_t>(kPhaseBoundaryCount) +
-                                     static_cast<std::size_t>(boundary)];
-            };
 
             std::vector<char> sample_ok(static_cast<std::size_t>(phase_sample_count_), 0);
             for (int i = 0; i < phase_sample_count_; ++i) {
@@ -787,14 +749,14 @@ namespace lfs::training {
                         ok = false;
                         break;
                     }
-                    float elapsed_ms = 0.0f;
-                    if (cudaEventElapsedTime(&elapsed_ms, event_at(i, a), event_at(i, b)) !=
-                        cudaSuccess) {
-                        (void)cudaGetLastError();
+                    const auto elapsed_ms = phase_timer_->milliseconds(
+                        static_cast<std::size_t>(i) * kPhaseBoundaryCount + a,
+                        static_cast<std::size_t>(i) * kPhaseBoundaryCount + b);
+                    if (!elapsed_ms) {
                         ok = false;
                         break;
                     }
-                    gpu[p] = static_cast<double>(elapsed_ms);
+                    gpu[p] = static_cast<double>(*elapsed_ms);
                 }
                 if (!ok) {
                     continue;
@@ -821,14 +783,14 @@ namespace lfs::training {
                 const int begin_b = static_cast<int>(PhaseBoundary::StepBegin);
                 const double wall =
                     static_cast<double>(b.host_ns[begin_b] - a.host_ns[end_b]) / 1.0e6;
-                float elapsed_ms = 0.0f;
-                if (cudaEventElapsedTime(&elapsed_ms, event_at(i, end_b),
-                                         event_at(i + 1, begin_b)) != cudaSuccess) {
-                    (void)cudaGetLastError();
+                const auto elapsed_ms = phase_timer_->milliseconds(
+                    static_cast<std::size_t>(i) * kPhaseBoundaryCount + end_b,
+                    static_cast<std::size_t>(i + 1) * kPhaseBoundaryCount + begin_b);
+                if (!elapsed_ms) {
                     continue;
                 }
                 phase_wall[5].push_back(wall);
-                phase_gpu[5].push_back(static_cast<double>(elapsed_ms));
+                phase_gpu[5].push_back(static_cast<double>(*elapsed_ms));
             }
         }
 

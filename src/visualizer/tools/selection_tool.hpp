@@ -7,6 +7,7 @@
 #include "core/export.hpp"
 #include "tool_base.hpp"
 #include <algorithm>
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <optional>
 
@@ -81,6 +82,7 @@ namespace lfs::vis::tools {
         float depth_near_ = 0.0f;
         float depth_far_ = DEFAULT_DEPTH_FAR;
         int depth_window_drag_count_ = 0;
+        std::uint64_t depth_projection_generation_ = 0;
 
         // Crop filter
         bool crop_filter_enabled_ = false;
@@ -94,6 +96,7 @@ namespace lfs::vis::tools {
             const ToolContext& ctx,
             std::optional<float> informational_half_width = std::nullopt) const;
         void clearSelectionRenderState(const ToolContext& ctx) const;
+        void refreshDepthNearFarFromProjection(const ToolContext& ctx);
     };
 
 } // namespace lfs::vis::tools

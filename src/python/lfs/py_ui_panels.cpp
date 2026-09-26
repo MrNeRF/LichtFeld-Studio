@@ -713,6 +713,28 @@ namespace lfs::python {
             nb::arg("panel_id"), "Check if a panel is enabled");
 
         m.def(
+            "get_left_dock_width", []() {
+                return invoke_on_viewer(
+                    [] {
+                        if (auto* const gui_manager = get_gui_manager())
+                            return gui_manager->panelLayout().getLeftDockPreferredWidth();
+                        return 0.0f;
+                    },
+                    0.0f);
+            },
+            "Get the left dock width the user chose, in logical pixels. The dock is "
+            "narrower while the window is too small to fit it.");
+
+        m.def(
+            "set_left_dock_width", [](const float width) {
+                invoke_on_viewer([width] {
+                    if (auto* const gui_manager = get_gui_manager())
+                        gui_manager->panelLayout().setLeftDockWidth(width);
+                });
+            },
+            nb::arg("width"), "Set the left dock width in logical pixels");
+
+        m.def(
             "get_main_panel_tabs", []() {
                 return invoke_on_viewer(
                     [] {

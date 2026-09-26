@@ -8,13 +8,14 @@
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "core/training_manager.hpp"
+#include "cuda_backend_test.hpp"
 #include "operation/ops/edit_ops.hpp"
 #include "operation/pipeline.hpp"
 #include "operation/undo_history.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "training/trainer.hpp"
-#include "training/training_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui_capabilities.hpp"
 
@@ -120,7 +121,7 @@ namespace {
     public:
         explicit TensorResidencyEntry(std::string name, const size_t estimated_bytes = 0)
             : name_(std::move(name)),
-              tensor_(Tensor::ones({16}, Device::CUDA, DataType::Float32)),
+              tensor_(Tensor::ones({16}, Device::GPU, DataType::Float32)),
               estimated_bytes_(estimated_bytes == 0 ? tensor_.bytes() : estimated_bytes) {}
 
         void undo() override {
@@ -134,7 +135,7 @@ namespace {
         [[nodiscard]] std::string name() const override { return name_; }
         [[nodiscard]] size_t estimatedBytes() const override { return estimated_bytes_; }
         [[nodiscard]] lfs::vis::op::UndoMemoryBreakdown memoryBreakdown() const override {
-            return tensor_.device() == Device::CUDA
+            return tensor_.device() == Device::GPU
                        ? lfs::vis::op::UndoMemoryBreakdown{.cpu_bytes = 0, .gpu_bytes = tensor_.bytes()}
                        : lfs::vis::op::UndoMemoryBreakdown{.cpu_bytes = tensor_.bytes(), .gpu_bytes = 0};
         }
@@ -144,8 +145,8 @@ namespace {
             }
         }
         void restoreToPreferredDevice() override {
-            if (tensor_.device() != Device::CUDA) {
-                tensor_ = tensor_.to(Device::CUDA).contiguous();
+            if (tensor_.device() != Device::GPU) {
+                tensor_ = tensor_.to(Device::GPU).contiguous();
             }
         }
 
@@ -162,17 +163,17 @@ namespace {
 
     std::unique_ptr<lfs::core::SplatData> make_test_splat(const std::vector<float>& xyz) {
         const size_t count = xyz.size() / 3;
-        auto means = Tensor::from_vector(xyz, {count, size_t{3}}, Device::CUDA).to(DataType::Float32);
-        auto sh0 = Tensor::zeros({count, size_t{1}, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto shN = Tensor::zeros({count, size_t{3}, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto scaling = Tensor::zeros({count, size_t{3}}, Device::CUDA, DataType::Float32);
+        auto means = Tensor::from_vector(xyz, {count, size_t{3}}, Device::GPU).to(DataType::Float32);
+        auto sh0 = Tensor::zeros({count, size_t{1}, size_t{3}}, Device::GPU, DataType::Float32);
+        auto shN = Tensor::zeros({count, size_t{3}, size_t{3}}, Device::GPU, DataType::Float32);
+        auto scaling = Tensor::zeros({count, size_t{3}}, Device::GPU, DataType::Float32);
 
         std::vector<float> rotation_data(count * 4, 0.0f);
         for (size_t i = 0; i < count; ++i) {
             rotation_data[i * 4] = 1.0f;
         }
-        auto rotation = Tensor::from_vector(rotation_data, {count, size_t{4}}, Device::CUDA).to(DataType::Float32);
-        auto opacity = Tensor::zeros({count, size_t{1}}, Device::CUDA, DataType::Float32);
+        auto rotation = Tensor::from_vector(rotation_data, {count, size_t{4}}, Device::GPU).to(DataType::Float32);
+        auto opacity = Tensor::zeros({count, size_t{1}}, Device::GPU, DataType::Float32);
 
         return std::make_unique<lfs::core::SplatData>(
             1,
@@ -212,21 +213,21 @@ namespace {
             }
         }
 
-        auto sh0 = Tensor::zeros({count, size_t{1}, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto scaling = Tensor::zeros({count, size_t{3}}, Device::CUDA, DataType::Float32);
+        auto sh0 = Tensor::zeros({count, size_t{1}, size_t{3}}, Device::GPU, DataType::Float32);
+        auto scaling = Tensor::zeros({count, size_t{3}}, Device::GPU, DataType::Float32);
         std::vector<float> rotation_data(count * 4, 0.0f);
         for (size_t i = 0; i < count; ++i) {
             rotation_data[i * 4] = 1.0f;
         }
-        auto opacity = Tensor::zeros({count, size_t{1}}, Device::CUDA, DataType::Float32);
+        auto opacity = Tensor::zeros({count, size_t{1}}, Device::GPU, DataType::Float32);
 
         auto result = std::make_unique<lfs::core::SplatData>(
             1,
-            Tensor::from_vector(means, {count, size_t{3}}, Device::CUDA).to(DataType::Float32),
+            Tensor::from_vector(means, {count, size_t{3}}, Device::GPU).to(DataType::Float32),
             std::move(sh0),
-            Tensor::from_vector(shN, {count, size_t{3}, size_t{3}}, Device::CUDA).to(DataType::Float32),
+            Tensor::from_vector(shN, {count, size_t{3}, size_t{3}}, Device::GPU).to(DataType::Float32),
             std::move(scaling),
-            Tensor::from_vector(rotation_data, {count, size_t{4}}, Device::CUDA).to(DataType::Float32),
+            Tensor::from_vector(rotation_data, {count, size_t{4}}, Device::GPU).to(DataType::Float32),
             std::move(opacity),
             1.0f);
         result->set_active_sh_degree(1);
@@ -243,7 +244,7 @@ namespace {
     Tensor make_uint8_mask(const std::vector<uint8_t>& values) {
         auto tensor = Tensor::empty({values.size()}, Device::CPU, DataType::UInt8);
         std::copy(values.begin(), values.end(), tensor.ptr<uint8_t>());
-        return tensor.cuda();
+        return tensor.gpu();
     }
 
     std::vector<uint8_t> selection_mask_values(const lfs::core::Scene& scene) {
@@ -294,7 +295,7 @@ namespace {
 
 } // namespace
 
-class UndoHistoryTest : public ::testing::Test {
+class UndoHistoryTest : public lfs::test::CudaBackendTest {
 protected:
     void SetUp() override {
         lfs::event::EventBridge::instance().clear_all();
@@ -830,7 +831,7 @@ TEST_F(UndoHistoryTest, OlderTensorEntriesOffloadToCPUAndRestoreBeforePlayback) 
 
     ASSERT_EQ(history.undoCount(), lfs::vis::op::UndoHistory::HOT_ENTRIES + 2);
     EXPECT_EQ(entries.front()->device(), Device::CPU);
-    EXPECT_EQ(entries.back()->device(), Device::CUDA);
+    EXPECT_EQ(entries.back()->device(), Device::GPU);
 
     const auto memory = history.undoMemory();
     EXPECT_GT(memory.cpu_bytes, 0u);
@@ -844,7 +845,7 @@ TEST_F(UndoHistoryTest, OlderTensorEntriesOffloadToCPUAndRestoreBeforePlayback) 
 
     const auto result = history.undoMultiple(history.undoCount());
     EXPECT_TRUE(result.success);
-    EXPECT_EQ(entries.front()->undoDevice(), Device::CUDA);
+    EXPECT_EQ(entries.front()->undoDevice(), Device::GPU);
 }
 
 TEST_F(UndoHistoryTest, ShrinkToFitOffloadsHistoryToMeetGpuBudget) {
@@ -895,7 +896,7 @@ TEST_F(UndoHistoryTest, TensorUndoEntryRestoresTensorRoundTrip) {
         before.clone(),
         [&]() -> Tensor* { return &node->model->sh0(); });
 
-    node->model->sh0() = Tensor::ones({2, size_t{1}, size_t{3}}, Device::CUDA, DataType::Float32);
+    node->model->sh0() = Tensor::ones({2, size_t{1}, size_t{3}}, Device::GPU, DataType::Float32);
     const auto after = node->model->sh0().clone();
 
     entry->captureAfter();
@@ -934,7 +935,7 @@ TEST_F(UndoHistoryTest, TensorUndoEntryRejectsTopologyChangedReplayWithoutMutati
         scene_manager.get());
 
     node->model->sh0() =
-        Tensor::ones({2, size_t{1}, size_t{3}}, Device::CUDA, DataType::Float32);
+        Tensor::ones({2, size_t{1}, size_t{3}}, Device::GPU, DataType::Float32);
     entry->captureAfter();
     const auto tensor_before_replay = node->model->sh0().clone();
     ASSERT_NE(scene_manager->getScene().addGroup("unexpected"), lfs::core::NULL_NODE);
@@ -2130,6 +2131,36 @@ TEST_F(UndoHistoryTest, SceneSnapshotCompactsSparseDeletedMasksAndRestoresPresen
                                  false, false, false, false, false, false, false, false}));
 }
 
+TEST_F(UndoHistoryTest, SceneSnapshotInvalidatesExistingDeletedMaskOnUndoAndRedo) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    scene_manager->getScene().addSplat("model", make_linear_test_splat(16));
+    auto& model = *scene_manager->getScene().getMutableNode("model")->model;
+    // Training leaves a resident mask, even when no rows are currently deleted.
+    model.deleted() = Tensor::zeros({16}, Device::CUDA, DataType::Bool);
+    const auto* mask_ptr = model.deleted().data_ptr();
+    lfs::vis::op::SceneSnapshot snapshot(*scene_manager, "delete.existing_mask");
+    snapshot.captureTopology();
+    model.soft_delete(make_uint8_mask({0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}).to(DataType::Bool));
+    model.refresh_deleted_count();
+    snapshot.captureAfter();
+
+    for (int replay = 0; replay < 3; ++replay) {
+        const auto before_undo = model.deleted_mask_version();
+        snapshot.undo();
+        EXPECT_EQ(model.deleted().data_ptr(), mask_ptr);
+        EXPECT_EQ(model.visible_count(), 16u);
+        EXPECT_EQ(model.deleted_count(), 0u);
+        EXPECT_GT(model.deleted_mask_version(), before_undo);
+
+        const auto before_redo = model.deleted_mask_version();
+        snapshot.redo();
+        EXPECT_EQ(model.deleted().data_ptr(), mask_ptr);
+        EXPECT_EQ(model.visible_count(), 15u);
+        EXPECT_EQ(model.deleted_count(), 1u);
+        EXPECT_GT(model.deleted_mask_version(), before_redo);
+    }
+}
+
 TEST_F(UndoHistoryTest, SceneSnapshotTransformReplayUsesUuidAcrossRename) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
@@ -2765,6 +2796,7 @@ TEST_F(UndoHistoryTest, MergeGroupNodeHandlesNameReferenceFromGroupNode) {
 }
 
 TEST_F(UndoHistoryTest, DeleteResultHonorsTrainingRemovalPolicy) {
+    LFS_CUDA_BACKEND_OR_RETURN();
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
     auto trainer_manager = std::make_unique<lfs::vis::TrainerManager>();
@@ -2813,6 +2845,7 @@ TEST_F(UndoHistoryTest, DeleteResultHonorsTrainingRemovalPolicy) {
 }
 
 TEST_F(UndoHistoryTest, RemoveNodesWithResultValidatesAllBeforeDeletingAny) {
+    LFS_CUDA_BACKEND_OR_RETURN();
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
     auto trainer_manager = std::make_unique<lfs::vis::TrainerManager>();
@@ -2893,6 +2926,7 @@ TEST_F(UndoHistoryTest, RemoveNodesWithResultUsesStableIdsForDuplicateNames) {
 }
 
 TEST_F(UndoHistoryTest, RemoveNodesByIdValidatesWholeBatchBeforeDeletingAny) {
+    LFS_CUDA_BACKEND_OR_RETURN();
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
     auto trainer_manager = std::make_unique<lfs::vis::TrainerManager>();

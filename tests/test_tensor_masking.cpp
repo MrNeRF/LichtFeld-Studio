@@ -2,9 +2,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
+#include "cuda_backend_test.hpp"
 #include <array>
 #include <cstdint>
 #include <gtest/gtest.h>
+#include <optional>
 #include <random>
 #include <string>
 #include <torch/torch.h>
@@ -71,7 +74,16 @@ namespace {
 
 } // anonymous namespace
 
-class TensorMaskingTest : public ::testing::Test {
+class TensorMaskingTest : public lfs::test::CudaBackendTest {
+protected:
+    void SetUp() override {
+        LFS_CUDA_BACKEND_OR_RETURN();
+        Tensor::manual_seed(42);
+        torch::manual_seed(42);
+    }
+};
+
+class TensorMaskingNeutralTest : public ::testing::Test {
 protected:
     void SetUp() override {
         Tensor::manual_seed(42);
@@ -85,8 +97,8 @@ TEST_F(TensorMaskingTest, ComparisonEqual) {
     std::vector<float> a_data = {1, 2, 3, 4, 5};
     std::vector<float> b_data = {1, 0, 3, 0, 5};
 
-    auto a_custom = Tensor::from_vector(a_data, {5}, Device::CUDA);
-    auto b_custom = Tensor::from_vector(b_data, {5}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(a_data, {5}, Device::GPU);
+    auto b_custom = Tensor::from_vector(b_data, {5}, Device::GPU);
     auto t = Tensor::zeros({1, 2});
 
     auto a_torch = torch::tensor(a_data, torch::kCUDA);
@@ -106,7 +118,7 @@ TEST_F(TensorMaskingTest, ComparisonEqual) {
 
 TEST_F(TensorMaskingTest, ComparisonLessThan) {
     std::vector<float> a_data = {1, 2, 3, 4, 5};
-    auto a_custom = Tensor::from_vector(a_data, {5}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(a_data, {5}, Device::GPU);
     auto a_torch = torch::tensor(a_data, torch::kCUDA);
 
     auto mask_custom = a_custom.lt(3.0f);
@@ -116,7 +128,7 @@ TEST_F(TensorMaskingTest, ComparisonLessThan) {
 
     // Test with another tensor
     std::vector<float> b_data = {2, 2, 2, 6, 4};
-    auto b_custom = Tensor::from_vector(b_data, {5}, Device::CUDA);
+    auto b_custom = Tensor::from_vector(b_data, {5}, Device::GPU);
     auto b_torch = torch::tensor(b_data, torch::kCUDA);
 
     auto mask2_custom = a_custom.lt(b_custom);
@@ -127,7 +139,7 @@ TEST_F(TensorMaskingTest, ComparisonLessThan) {
 
 TEST_F(TensorMaskingTest, ComparisonGreaterThan) {
     std::vector<float> data = {1, 2, 3, 4, 5};
-    auto a_custom = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(data, {5}, Device::GPU);
     auto a_torch = torch::tensor(data, torch::kCUDA);
 
     auto mask_custom = a_custom.gt(3.0f);
@@ -138,7 +150,7 @@ TEST_F(TensorMaskingTest, ComparisonGreaterThan) {
 
 TEST_F(TensorMaskingTest, ComparisonChaining) {
     std::vector<float> data = {1, 2, 3, 4, 5};
-    auto a_custom = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(data, {5}, Device::GPU);
     auto a_torch = torch::tensor(data, torch::kCUDA);
 
     // Find elements between 2 and 4 (inclusive)
@@ -152,8 +164,8 @@ TEST_F(TensorMaskingTest, ComparisonWithBroadcasting) {
     std::vector<float> a_data = {1, 2, 3, 4, 5, 6};
     std::vector<float> b_data = {2, 3, 4};
 
-    auto a_custom = Tensor::from_vector(a_data, {2, 3}, Device::CUDA);
-    auto b_custom = Tensor::from_vector(b_data, {1, 3}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(a_data, {2, 3}, Device::GPU);
+    auto b_custom = Tensor::from_vector(b_data, {1, 3}, Device::GPU);
 
     auto a_torch = torch::tensor(a_data, torch::kCUDA).reshape({2, 3});
     auto b_torch = torch::tensor(b_data, torch::kCUDA).reshape({1, 3});
@@ -170,8 +182,8 @@ TEST_F(TensorMaskingTest, LogicalOperations) {
     std::vector<float> a_data = {1, 0, 1, 0};
     std::vector<float> b_data = {1, 1, 0, 0};
 
-    auto a_custom = Tensor::from_vector(a_data, {4}, Device::CUDA);
-    auto b_custom = Tensor::from_vector(b_data, {4}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(a_data, {4}, Device::GPU);
+    auto b_custom = Tensor::from_vector(b_data, {4}, Device::GPU);
 
     auto a_torch = torch::tensor(a_data, torch::kCUDA);
     auto b_torch = torch::tensor(b_data, torch::kCUDA);
@@ -202,7 +214,7 @@ TEST_F(TensorMaskingTest, LogicalOperations) {
 
 TEST_F(TensorMaskingTest, MaskedSelect) {
     std::vector<float> data = {1, 2, 3, 4, 5, 6};
-    auto tensor_custom = Tensor::from_vector(data, {2, 3}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {2, 3}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA).reshape({2, 3});
 
     auto mask_custom = tensor_custom.gt(3.0f);
@@ -216,7 +228,7 @@ TEST_F(TensorMaskingTest, MaskedSelect) {
 
 TEST_F(TensorMaskingTest, MaskedSelectEmpty) {
     std::vector<float> data = {1, 2, 3};
-    auto tensor_custom = Tensor::from_vector(data, {3}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {3}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA);
 
     auto mask_custom = tensor_custom.gt(10.0f);
@@ -229,7 +241,7 @@ TEST_F(TensorMaskingTest, MaskedSelectEmpty) {
     EXPECT_EQ(selected_torch.numel(), 0);
 }
 
-TEST_F(TensorMaskingTest, MaskedSelectInt64PreservesValues) {
+TEST_F(TensorMaskingNeutralTest, MaskedSelectInt64PreservesValues) {
     std::vector<int64_t> data = {
         4'294'967'297LL,
         -8'589'934'590LL,
@@ -239,13 +251,13 @@ TEST_F(TensorMaskingTest, MaskedSelectInt64PreservesValues) {
     const std::vector<bool> mask_data = {true, false, true, false};
     const std::vector<int64_t> expected = {data[0], data[2]};
 
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         SCOPED_TRACE(device_name(device));
         auto input = Tensor::from_blob(data.data(), {data.size()}, Device::CPU, DataType::Int64).clone();
         auto mask = Tensor::from_vector(mask_data, {mask_data.size()}, Device::CPU);
-        if (device == Device::CUDA) {
-            input = input.to(Device::CUDA);
-            mask = mask.to(Device::CUDA);
+        if (device == Device::GPU) {
+            input = input.to(Device::GPU);
+            mask = mask.to(Device::GPU);
         }
 
         const auto selected = input.masked_select(mask);
@@ -259,7 +271,7 @@ TEST_F(TensorMaskingTest, MaskedSelectInt64PreservesValues) {
 
 TEST_F(TensorMaskingTest, MaskedFillInplace) {
     std::vector<float> data = {1, 2, 3, 4, 5};
-    auto tensor_custom = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {5}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA);
 
     auto mask_custom = tensor_custom.gt(3.0f);
@@ -273,7 +285,7 @@ TEST_F(TensorMaskingTest, MaskedFillInplace) {
 
 TEST_F(TensorMaskingTest, MaskedFillNonInplace) {
     std::vector<float> data = {1, 2, 3, 4, 5};
-    auto tensor_custom = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {5}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA);
 
     auto mask_custom = tensor_custom.le(2.0f);
@@ -297,9 +309,9 @@ TEST_F(TensorMaskingTest, Where) {
     std::vector<float> x_data = {1, 2, 3, 4};
     std::vector<float> y_data = {5, 6, 7, 8};
 
-    auto cond_custom = Tensor::from_vector(cond_data, {4}, Device::CUDA).ne(0.0f);
-    auto x_custom = Tensor::from_vector(x_data, {4}, Device::CUDA);
-    auto y_custom = Tensor::from_vector(y_data, {4}, Device::CUDA);
+    auto cond_custom = Tensor::from_vector(cond_data, {4}, Device::GPU).ne(0.0f);
+    auto x_custom = Tensor::from_vector(x_data, {4}, Device::GPU);
+    auto y_custom = Tensor::from_vector(y_data, {4}, Device::GPU);
 
     auto cond_torch = torch::tensor(cond_data, torch::kCUDA).ne(0.0f);
     auto x_torch = torch::tensor(x_data, torch::kCUDA);
@@ -313,9 +325,9 @@ TEST_F(TensorMaskingTest, Where) {
 
 TEST_F(TensorMaskingTest, WhereWithBroadcasting) {
     std::vector<float> cond_data = {1, 0};
-    auto cond_custom = Tensor::from_vector(cond_data, {2, 1}, Device::CUDA).ne(0.0f);
-    auto x_custom = Tensor::full({2, 3}, 1.0f, Device::CUDA);
-    auto y_custom = Tensor::full({2, 3}, 0.0f, Device::CUDA);
+    auto cond_custom = Tensor::from_vector(cond_data, {2, 1}, Device::GPU).ne(0.0f);
+    auto x_custom = Tensor::full({2, 3}, 1.0f, Device::GPU);
+    auto y_custom = Tensor::full({2, 3}, 0.0f, Device::GPU);
 
     auto cond_torch = torch::tensor(cond_data, torch::kCUDA).reshape({2, 1}).ne(0.0f);
     auto x_torch = torch::full({2, 3}, 1.0f, torch::kCUDA);
@@ -327,14 +339,14 @@ TEST_F(TensorMaskingTest, WhereWithBroadcasting) {
     compare_tensors(result_custom, result_torch, 1e-5f, 1e-7f, "WhereBroadcast");
 }
 
-TEST_F(TensorMaskingTest, WhereDtypeMatrix) {
+TEST_F(TensorMaskingNeutralTest, WhereDtypeMatrix) {
     const std::vector<DataType> dtypes = {
         DataType::Bool, DataType::Int32, DataType::Int64, DataType::Float16, DataType::Float32};
     const std::vector<bool> cond_values = {true, false, false, true};
     const std::vector<float> x_values = {1.0f, 0.0f, 3.0f, 0.0f};
     const std::vector<float> y_values = {0.0f, 2.0f, 0.0f, 4.0f};
 
-    const auto cond = Tensor::from_vector(cond_values, {4}, Device::CUDA);
+    const auto cond = Tensor::from_vector(cond_values, {4}, Device::GPU);
 
     auto promote = [](DataType a, DataType b) -> DataType {
         if (a == b)
@@ -401,7 +413,7 @@ TEST_F(TensorMaskingTest, WhereDtypeMatrix) {
             for (float v : values) {
                 bool_values.push_back(v != 0.0f);
             }
-            return Tensor::from_vector(bool_values, {values.size()}, Device::CUDA);
+            return Tensor::from_vector(bool_values, {values.size()}, Device::GPU);
         }
         case DataType::Int32: {
             std::vector<int> int_values;
@@ -409,7 +421,7 @@ TEST_F(TensorMaskingTest, WhereDtypeMatrix) {
             for (float v : values) {
                 int_values.push_back(static_cast<int>(v));
             }
-            return Tensor::from_vector(int_values, {values.size()}, Device::CUDA);
+            return Tensor::from_vector(int_values, {values.size()}, Device::GPU);
         }
         case DataType::Int64: {
             std::vector<int> int_values;
@@ -417,12 +429,12 @@ TEST_F(TensorMaskingTest, WhereDtypeMatrix) {
             for (float v : values) {
                 int_values.push_back(static_cast<int>(v));
             }
-            return Tensor::from_vector(int_values, {values.size()}, Device::CUDA).to(DataType::Int64);
+            return Tensor::from_vector(int_values, {values.size()}, Device::GPU).to(DataType::Int64);
         }
         case DataType::Float16:
-            return Tensor::from_vector(values, {values.size()}, Device::CUDA).to(DataType::Float16);
+            return Tensor::from_vector(values, {values.size()}, Device::GPU).to(DataType::Float16);
         case DataType::Float32:
-            return Tensor::from_vector(values, {values.size()}, Device::CUDA);
+            return Tensor::from_vector(values, {values.size()}, Device::GPU);
         default:
             return Tensor();
         }
@@ -489,11 +501,11 @@ TEST_F(TensorMaskingTest, WhereDtypeMatrix) {
 
 TEST_F(TensorMaskingTest, IndexSelect) {
     std::vector<float> data = {1, 2, 3, 4, 5, 6};
-    auto tensor_custom = Tensor::from_vector(data, {2, 3}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {2, 3}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA).reshape({2, 3});
 
     std::vector<int> indices_data = {0, 2};
-    auto indices_custom = Tensor::from_vector(indices_data, {2}, Device::CUDA);
+    auto indices_custom = Tensor::from_vector(indices_data, {2}, Device::GPU);
     auto indices_torch = torch::tensor(indices_data, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
 
     auto selected_custom = tensor_custom.index_select(1, indices_custom);
@@ -504,11 +516,11 @@ TEST_F(TensorMaskingTest, IndexSelect) {
 
 TEST_F(TensorMaskingTest, IndexSelectWithBoundaryClamp) {
     std::vector<float> data = {1, 2, 3, 4};
-    auto tensor_custom = Tensor::from_vector(data, {4}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {4}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA);
 
     std::vector<int> indices_data = {-1, 0, 5, 2};
-    auto indices_custom = Tensor::from_vector(indices_data, {4}, Device::CUDA);
+    auto indices_custom = Tensor::from_vector(indices_data, {4}, Device::GPU);
 
     // Clamp indices for PyTorch
     std::vector<int64_t> clamped_indices;
@@ -525,11 +537,11 @@ TEST_F(TensorMaskingTest, IndexSelectWithBoundaryClamp) {
 
 TEST_F(TensorMaskingTest, IndexSelectWithBoundaryWrap) {
     std::vector<float> data = {1, 2, 3, 4};
-    auto tensor_custom = Tensor::from_vector(data, {4}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {4}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA);
 
     std::vector<int> indices_data = {-1, 0, 5, 2};
-    auto indices_custom = Tensor::from_vector(indices_data, {4}, Device::CUDA);
+    auto indices_custom = Tensor::from_vector(indices_data, {4}, Device::GPU);
 
     // Wrap indices for PyTorch
     std::vector<int64_t> wrapped_indices;
@@ -551,11 +563,11 @@ TEST_F(TensorMaskingTest, IndexSelectWithBoundaryWrap) {
 
 TEST_F(TensorMaskingTest, Gather) {
     std::vector<float> data = {1, 2, 3, 4, 5, 6};
-    auto tensor_custom = Tensor::from_vector(data, {2, 3}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {2, 3}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA).reshape({2, 3});
 
     std::vector<int> indices_data = {0, 2, 1, 0};
-    auto indices_custom = Tensor::from_vector(indices_data, {2, 2}, Device::CUDA);
+    auto indices_custom = Tensor::from_vector(indices_data, {2, 2}, Device::GPU);
     auto indices_torch = torch::tensor(indices_data, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA)).reshape({2, 2});
 
     auto gathered_custom = tensor_custom.gather(1, indices_custom);
@@ -568,11 +580,11 @@ TEST_F(TensorMaskingTest, Gather) {
 
 TEST_F(TensorMaskingTest, Take) {
     std::vector<float> data = {1, 2, 3, 4, 5, 6};
-    auto tensor_custom = Tensor::from_vector(data, {2, 3}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {2, 3}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA).reshape({2, 3});
 
     std::vector<int> indices_data = {0, 2, 5, 3};
-    auto indices_custom = Tensor::from_vector(indices_data, {4}, Device::CUDA);
+    auto indices_custom = Tensor::from_vector(indices_data, {4}, Device::GPU);
     auto indices_torch = torch::tensor(indices_data, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
 
     auto taken_custom = tensor_custom.take(indices_custom);
@@ -583,11 +595,11 @@ TEST_F(TensorMaskingTest, Take) {
 
 TEST_F(TensorMaskingTest, TakeNegativeIndices) {
     std::vector<float> data = {1, 2, 3, 4};
-    auto tensor_custom = Tensor::from_vector(data, {4}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {4}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA);
 
     std::vector<int> indices_data = {-1, -2, 0, 1};
-    auto indices_custom = Tensor::from_vector(indices_data, {4}, Device::CUDA);
+    auto indices_custom = Tensor::from_vector(indices_data, {4}, Device::GPU);
     auto indices_torch = torch::tensor(indices_data, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
 
     auto taken_custom = tensor_custom.take(indices_custom);
@@ -599,15 +611,15 @@ TEST_F(TensorMaskingTest, TakeNegativeIndices) {
 // ============= Scatter Tests =============
 
 TEST_F(TensorMaskingTest, Scatter) {
-    auto tensor_custom = Tensor::zeros({3, 4}, Device::CUDA);
+    auto tensor_custom = Tensor::zeros({3, 4}, Device::GPU);
     auto tensor_torch = torch::zeros({3, 4}, torch::kCUDA);
 
     std::vector<int> indices_data = {0, 2};
-    auto indices_custom = Tensor::from_vector(indices_data, {2}, Device::CUDA);
+    auto indices_custom = Tensor::from_vector(indices_data, {2}, Device::GPU);
     auto indices_torch = torch::tensor(indices_data, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
 
     std::vector<float> src_data = {1, 2, 3, 4, 5, 6, 7, 8};
-    auto src_custom = Tensor::from_vector(src_data, {2, 4}, Device::CUDA);
+    auto src_custom = Tensor::from_vector(src_data, {2, 4}, Device::GPU);
     auto src_torch = torch::tensor(src_data, torch::kCUDA).reshape({2, 4});
 
     // Expand indices for PyTorch
@@ -620,15 +632,15 @@ TEST_F(TensorMaskingTest, Scatter) {
 }
 
 TEST_F(TensorMaskingTest, ScatterWithAdd) {
-    auto tensor_custom = Tensor::ones({4}, Device::CUDA);
+    auto tensor_custom = Tensor::ones({4}, Device::GPU);
     auto tensor_torch = torch::ones({4}, torch::kCUDA);
 
     std::vector<int> indices_data = {0, 2, 0, 3};
-    auto indices_custom = Tensor::from_vector(indices_data, {4}, Device::CUDA);
+    auto indices_custom = Tensor::from_vector(indices_data, {4}, Device::GPU);
     auto indices_torch = torch::tensor(indices_data, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
 
     std::vector<float> src_data = {1, 2, 3, 4};
-    auto src_custom = Tensor::from_vector(src_data, {4}, Device::CUDA);
+    auto src_custom = Tensor::from_vector(src_data, {4}, Device::GPU);
     auto src_torch = torch::tensor(src_data, torch::kCUDA);
 
     tensor_custom.scatter_(0, indices_custom, src_custom, ScatterMode::Add);
@@ -641,11 +653,11 @@ TEST_F(TensorMaskingTest, ScatterWithAdd) {
 
 TEST_F(TensorMaskingTest, IndexFill) {
     std::vector<float> data = {1, 2, 3, 4, 5};
-    auto tensor_custom = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {5}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA);
 
     std::vector<int> indices_data = {1, 3};
-    auto indices_custom = Tensor::from_vector(indices_data, {2}, Device::CUDA);
+    auto indices_custom = Tensor::from_vector(indices_data, {2}, Device::GPU);
     auto indices_torch = torch::tensor(indices_data, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
 
     tensor_custom.index_fill_(0, indices_custom, -1.0f);
@@ -657,15 +669,15 @@ TEST_F(TensorMaskingTest, IndexFill) {
 // ============= Index Copy Tests =============
 
 TEST_F(TensorMaskingTest, IndexCopy) {
-    auto tensor_custom = Tensor::zeros({5}, Device::CUDA);
+    auto tensor_custom = Tensor::zeros({5}, Device::GPU);
     auto tensor_torch = torch::zeros({5}, torch::kCUDA);
 
     std::vector<int> indices_data = {0, 2, 4};
-    auto indices_custom = Tensor::from_vector(indices_data, {3}, Device::CUDA);
+    auto indices_custom = Tensor::from_vector(indices_data, {3}, Device::GPU);
     auto indices_torch = torch::tensor(indices_data, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
 
     std::vector<float> src_data = {1, 2, 3};
-    auto src_custom = Tensor::from_vector(src_data, {3}, Device::CUDA);
+    auto src_custom = Tensor::from_vector(src_data, {3}, Device::GPU);
     auto src_torch = torch::tensor(src_data, torch::kCUDA);
 
     tensor_custom.index_copy_(0, indices_custom, src_custom);
@@ -678,7 +690,7 @@ TEST_F(TensorMaskingTest, IndexCopy) {
 
 TEST_F(TensorMaskingTest, CountNonzero) {
     std::vector<float> data = {0, 1, 0, 2, 0, 3};
-    auto tensor_custom = Tensor::from_vector(data, {6}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {6}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA);
 
     auto count_custom = tensor_custom.count_nonzero();
@@ -701,7 +713,7 @@ TEST_F(TensorMaskingTest, RegressionDiagonalMaskBroadcast) {
     const size_t n = 5;
     std::vector<float> range_data = {0, 1, 2, 3, 4};
 
-    auto range_custom = Tensor::from_vector(range_data, {n}, Device::CUDA);
+    auto range_custom = Tensor::from_vector(range_data, {n}, Device::GPU);
     auto range_torch = torch::tensor(range_data, torch::kCUDA);
 
     auto col_custom = range_custom.reshape({n, 1});
@@ -733,7 +745,7 @@ TEST_F(TensorMaskingTest, RegressionBooleanTensorExpansion) {
         }
     }
 
-    auto mask_2d_custom = Tensor::from_vector(mask_data, {seq_len, seq_len}, Device::CUDA);
+    auto mask_2d_custom = Tensor::from_vector(mask_data, {seq_len, seq_len}, Device::GPU);
 
     std::vector<uint8_t> mask_data_torch;
     for (bool b : mask_data) {
@@ -758,8 +770,8 @@ TEST_F(TensorMaskingTest, RegressionBroadcastComparisonDifferentRanks) {
     std::vector<float> vec_data = {1, 2, 3};
     std::vector<float> mat_data = {1, 2, 3, 2, 3, 4};
 
-    auto vec_custom = Tensor::from_vector(vec_data, {3}, Device::CUDA);
-    auto mat_custom = Tensor::from_vector(mat_data, {2, 3}, Device::CUDA);
+    auto vec_custom = Tensor::from_vector(vec_data, {3}, Device::GPU);
+    auto mat_custom = Tensor::from_vector(mat_data, {2, 3}, Device::GPU);
 
     auto vec_torch = torch::tensor(vec_data, torch::kCUDA);
     auto mat_torch = torch::tensor(mat_data, torch::kCUDA).reshape({2, 3});
@@ -773,8 +785,8 @@ TEST_F(TensorMaskingTest, RegressionBroadcastComparisonDifferentRanks) {
     std::vector<float> scalar_data = {2};
     std::vector<float> matrix_data = {1, 2, 3, 4};
 
-    auto scalar_custom = Tensor::from_vector(scalar_data, {1, 1}, Device::CUDA);
-    auto matrix_custom = Tensor::from_vector(matrix_data, {2, 2}, Device::CUDA);
+    auto scalar_custom = Tensor::from_vector(scalar_data, {1, 1}, Device::GPU);
+    auto matrix_custom = Tensor::from_vector(matrix_data, {2, 2}, Device::GPU);
 
     auto scalar_torch = torch::tensor(scalar_data, torch::kCUDA).reshape({1, 1});
     auto matrix_torch = torch::tensor(matrix_data, torch::kCUDA).reshape({2, 2});
@@ -789,8 +801,8 @@ TEST_F(TensorMaskingTest, RegressionBooleanBroadcastLogical) {
     std::vector<bool> mask1_data = {true, false};
     std::vector<bool> mask2_data = {true, false, true};
 
-    auto mask1_custom = Tensor::from_vector(mask1_data, {2, 1}, Device::CUDA);
-    auto mask2_custom = Tensor::from_vector(mask2_data, {1, 3}, Device::CUDA);
+    auto mask1_custom = Tensor::from_vector(mask1_data, {2, 1}, Device::GPU);
+    auto mask2_custom = Tensor::from_vector(mask2_data, {1, 3}, Device::GPU);
 
     std::vector<uint8_t> mask1_torch_data = {1, 0};
     std::vector<uint8_t> mask2_torch_data = {1, 0, 1};
@@ -807,7 +819,7 @@ TEST_F(TensorMaskingTest, RegressionBooleanBroadcastLogical) {
 
 TEST_F(TensorMaskingTest, ComplexMaskingScenario) {
     std::vector<float> data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
-    auto tensor_custom = Tensor::from_vector(data, {3, 4}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {3, 4}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA).reshape({3, 4});
 
     // Find elements in range [5, 10]
@@ -829,12 +841,12 @@ TEST_F(TensorMaskingTest, ComplexMaskingScenario) {
 
 TEST_F(TensorMaskingTest, AdvancedIndexingScenario) {
     std::vector<float> data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
-    auto tensor_custom = Tensor::from_vector(data, {4, 3}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {4, 3}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA).reshape({4, 3});
 
     // Select specific rows
     std::vector<int> row_idx = {0, 2, 3};
-    auto row_indices_custom = Tensor::from_vector(row_idx, {3}, Device::CUDA);
+    auto row_indices_custom = Tensor::from_vector(row_idx, {3}, Device::GPU);
     auto row_indices_torch = torch::tensor(row_idx, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
 
     auto selected_rows_custom = tensor_custom.index_select(0, row_indices_custom);
@@ -844,7 +856,7 @@ TEST_F(TensorMaskingTest, AdvancedIndexingScenario) {
 
     // Select specific columns
     std::vector<int> col_idx = {1, 2};
-    auto col_indices_custom = Tensor::from_vector(col_idx, {2}, Device::CUDA);
+    auto col_indices_custom = Tensor::from_vector(col_idx, {2}, Device::GPU);
     auto col_indices_torch = torch::tensor(col_idx, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
 
     auto final_custom = selected_rows_custom.index_select(1, col_indices_custom);
@@ -857,7 +869,7 @@ TEST_F(TensorMaskingTest, AdvancedIndexingScenario) {
 
 TEST_F(TensorMaskingTest, BooleanExpansionSimple1D) {
     std::vector<bool> data = {true, false, true};
-    auto bool_1d_custom = Tensor::from_vector(data, {3}, Device::CUDA);
+    auto bool_1d_custom = Tensor::from_vector(data, {3}, Device::GPU);
 
     std::vector<uint8_t> data_torch = {1, 0, 1};
     auto bool_1d_torch = torch::tensor(data_torch, torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA));
@@ -870,7 +882,7 @@ TEST_F(TensorMaskingTest, BooleanExpansionSimple1D) {
 
 TEST_F(TensorMaskingTest, BooleanExpansion2Dto3D) {
     std::vector<bool> data_2d = {true, false, false, true};
-    auto bool_2d_custom = Tensor::from_vector(data_2d, {2, 2}, Device::CUDA);
+    auto bool_2d_custom = Tensor::from_vector(data_2d, {2, 2}, Device::GPU);
 
     std::vector<uint8_t> data_2d_torch = {1, 0, 0, 1};
     auto bool_2d_torch = torch::tensor(data_2d_torch, torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA)).reshape({2, 2});
@@ -893,7 +905,7 @@ TEST_F(TensorMaskingTest, SimpleCausalMask) {
         }
     }
 
-    auto mask_custom = Tensor::from_vector(mask_data, {seq_len, seq_len}, Device::CUDA);
+    auto mask_custom = Tensor::from_vector(mask_data, {seq_len, seq_len}, Device::GPU);
 
     std::vector<uint8_t> mask_data_torch;
     for (bool b : mask_data) {
@@ -902,7 +914,7 @@ TEST_F(TensorMaskingTest, SimpleCausalMask) {
     auto mask_torch = torch::tensor(mask_data_torch, torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA))
                           .reshape({static_cast<int64_t>(seq_len), static_cast<int64_t>(seq_len)});
 
-    auto scores_custom = Tensor::ones({seq_len, seq_len}, Device::CUDA);
+    auto scores_custom = Tensor::ones({seq_len, seq_len}, Device::GPU);
     auto scores_torch = torch::ones({static_cast<int64_t>(seq_len), static_cast<int64_t>(seq_len)}, torch::kCUDA);
 
     scores_custom.masked_fill_(mask_custom.logical_not(), -1e9f);
@@ -915,10 +927,10 @@ TEST_F(TensorMaskingTest, SimpleCausalMask) {
 
 TEST_F(TensorMaskingTest, EmptyMask) {
     std::vector<float> data = {1, 2, 3};
-    auto tensor_custom = Tensor::from_vector(data, {3}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {3}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA);
 
-    auto empty_mask_custom = Tensor::zeros_bool({3}, Device::CUDA);
+    auto empty_mask_custom = Tensor::zeros_bool({3}, Device::GPU);
     auto empty_mask_torch = torch::zeros({3}, torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA));
 
     auto selected_custom = tensor_custom.masked_select(empty_mask_custom);
@@ -930,10 +942,10 @@ TEST_F(TensorMaskingTest, EmptyMask) {
 
 TEST_F(TensorMaskingTest, FullMask) {
     std::vector<float> data = {1, 2, 3};
-    auto tensor_custom = Tensor::from_vector(data, {3}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {3}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA);
 
-    auto full_mask_custom = Tensor::ones_bool({3}, Device::CUDA);
+    auto full_mask_custom = Tensor::ones_bool({3}, Device::GPU);
     auto full_mask_torch = torch::ones({3}, torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA));
 
     auto selected_custom = tensor_custom.masked_select(full_mask_custom);
@@ -944,11 +956,11 @@ TEST_F(TensorMaskingTest, FullMask) {
 
 TEST_F(TensorMaskingTest, SingleElementIndexing) {
     std::vector<float> data = {42};
-    auto tensor_custom = Tensor::from_vector(data, {1}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {1}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA);
 
     std::vector<int> idx_data = {0};
-    auto indices_custom = Tensor::from_vector(idx_data, {1}, Device::CUDA);
+    auto indices_custom = Tensor::from_vector(idx_data, {1}, Device::GPU);
     auto indices_torch = torch::tensor(idx_data, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
 
     auto selected_custom = tensor_custom.index_select(0, indices_custom);
@@ -966,7 +978,7 @@ TEST_F(TensorMaskingTest, SpecialValueMasking) {
         -std::numeric_limits<float>::infinity(),
         std::numeric_limits<float>::quiet_NaN()};
 
-    auto tensor_custom = Tensor::from_vector(data, {6}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {6}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA);
 
     // Test comparisons with special values (NaN != NaN)
@@ -980,7 +992,7 @@ TEST_F(TensorMaskingTest, SpecialValueMasking) {
 
 TEST_F(TensorMaskingTest, BooleanToFloatConversion) {
     std::vector<bool> data = {true, false, true, false};
-    auto bool_custom = Tensor::from_vector(data, {2, 2}, Device::CUDA);
+    auto bool_custom = Tensor::from_vector(data, {2, 2}, Device::GPU);
 
     std::vector<uint8_t> data_torch = {1, 0, 1, 0};
     auto bool_torch = torch::tensor(data_torch, torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA)).reshape({2, 2});
@@ -1003,8 +1015,8 @@ TEST_F(TensorMaskingTest, BroadcastComparisonScalarLike) {
     std::vector<float> scalar_data = {5};
     std::vector<float> vector_data = {1, 2, 3, 4, 5, 6};
 
-    auto scalar_custom = Tensor::from_vector(scalar_data, {1}, Device::CUDA);
-    auto vector_custom = Tensor::from_vector(vector_data, {6}, Device::CUDA);
+    auto scalar_custom = Tensor::from_vector(scalar_data, {1}, Device::GPU);
+    auto vector_custom = Tensor::from_vector(vector_data, {6}, Device::GPU);
 
     auto scalar_torch = torch::tensor(scalar_data, torch::kCUDA);
     auto vector_torch = torch::tensor(vector_data, torch::kCUDA);
@@ -1019,8 +1031,8 @@ TEST_F(TensorMaskingTest, BroadcastComparison3D) {
     std::vector<float> a_data = {1, 2};
     std::vector<float> b_data = {1, 2, 3};
 
-    auto a_custom = Tensor::from_vector(a_data, {2, 1, 1}, Device::CUDA);
-    auto b_custom = Tensor::from_vector(b_data, {1, 1, 3}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(a_data, {2, 1, 1}, Device::GPU);
+    auto b_custom = Tensor::from_vector(b_data, {1, 1, 3}, Device::GPU);
 
     auto a_torch = torch::tensor(a_data, torch::kCUDA).reshape({2, 1, 1});
     auto b_torch = torch::tensor(b_data, torch::kCUDA).reshape({1, 1, 3});
@@ -1042,7 +1054,7 @@ TEST_F(TensorMaskingTest, AttentionMaskCreation) {
         range_data[i] = static_cast<float>(i);
     }
 
-    auto range_custom = Tensor::from_vector(range_data, {seq_len}, Device::CUDA);
+    auto range_custom = Tensor::from_vector(range_data, {seq_len}, Device::GPU);
     auto range_torch = torch::tensor(range_data, torch::kCUDA);
 
     auto row_idx_custom = range_custom.reshape({seq_len, 1});
@@ -1058,7 +1070,7 @@ TEST_F(TensorMaskingTest, AttentionMaskCreation) {
     compare_tensors(causal_mask_custom, causal_mask_torch, 1e-5f, 1e-7f, "AttentionCausalMask");
 
     // Apply mask to scores
-    auto scores_custom = Tensor::ones({seq_len, seq_len}, Device::CUDA);
+    auto scores_custom = Tensor::ones({seq_len, seq_len}, Device::GPU);
     auto scores_torch = torch::ones({static_cast<int64_t>(seq_len), static_cast<int64_t>(seq_len)}, torch::kCUDA);
 
     scores_custom.masked_fill_(causal_mask_custom.logical_not(), -1e9f);
@@ -1077,7 +1089,7 @@ TEST_F(TensorMaskingTest, PaddingMaskCreation) {
     std::vector<int> lengths = {7, 5, 9};
 
     // Create padding mask
-    auto mask_custom = Tensor::zeros({batch, seq_len}, Device::CUDA);
+    auto mask_custom = Tensor::zeros({batch, seq_len}, Device::GPU);
     auto mask_torch = torch::zeros({static_cast<int64_t>(batch), static_cast<int64_t>(seq_len)}, torch::kCUDA);
 
     // Set valid positions to 1
@@ -1091,7 +1103,7 @@ TEST_F(TensorMaskingTest, PaddingMaskCreation) {
         }
     }
 
-    mask_custom = cpu_mask_custom.to(Device::CUDA);
+    mask_custom = cpu_mask_custom.to(Device::GPU);
     mask_torch = cpu_mask_torch.cuda();
 
     compare_tensors(mask_custom, mask_torch, 1e-5f, 1e-7f, "PaddingMask");
@@ -1105,7 +1117,7 @@ TEST_F(TensorMaskingTest, MultiConditionMasking) {
         data.push_back(static_cast<float>(i) / 100.0f - 0.5f); // Range [-0.5, 0.49]
     }
 
-    auto tensor_custom = Tensor::from_vector(data, {100}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {100}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA);
 
     // Complex condition: values between -0.3 and 0.3 but not too close to 0
@@ -1140,7 +1152,7 @@ TEST_F(TensorMaskingTest, DiagonalMasking) {
         mask_data[i * size + i] = true;
     }
 
-    auto diag_mask_custom = Tensor::from_vector(mask_data, {size, size}, Device::CUDA);
+    auto diag_mask_custom = Tensor::from_vector(mask_data, {size, size}, Device::GPU);
 
     std::vector<uint8_t> mask_data_torch;
     for (bool b : mask_data) {
@@ -1150,7 +1162,7 @@ TEST_F(TensorMaskingTest, DiagonalMasking) {
                                .reshape({static_cast<int64_t>(size), static_cast<int64_t>(size)});
 
     // Apply to create identity matrix
-    auto data_custom = Tensor::zeros({size, size}, Device::CUDA);
+    auto data_custom = Tensor::zeros({size, size}, Device::GPU);
     auto data_torch = torch::zeros({static_cast<int64_t>(size), static_cast<int64_t>(size)}, torch::kCUDA);
 
     data_custom.masked_fill_(diag_mask_custom, 1.0f);
@@ -1182,7 +1194,7 @@ TEST_F(TensorMaskingTest, BlockSparsePattern) {
         }
     }
 
-    auto checkerboard_custom = Tensor::from_vector(mask_data, {size, size}, Device::CUDA);
+    auto checkerboard_custom = Tensor::from_vector(mask_data, {size, size}, Device::GPU);
 
     std::vector<uint8_t> mask_data_torch;
     for (bool b : mask_data) {
@@ -1192,7 +1204,7 @@ TEST_F(TensorMaskingTest, BlockSparsePattern) {
                                   .reshape({static_cast<int64_t>(size), static_cast<int64_t>(size)});
 
     // Apply sparsity
-    auto data_custom = Tensor::ones({size, size}, Device::CUDA);
+    auto data_custom = Tensor::ones({size, size}, Device::GPU);
     auto data_torch = torch::ones({static_cast<int64_t>(size), static_cast<int64_t>(size)}, torch::kCUDA);
 
     data_custom.masked_fill_(checkerboard_custom.logical_not(), 0.0f);
@@ -1209,7 +1221,7 @@ TEST_F(TensorMaskingTest, GradientClippingMask) {
         grad_data.push_back(static_cast<float>(i) / 10.0f - 5.0f); // Range [-5, 4.9]
     }
 
-    auto gradients_custom = Tensor::from_vector(grad_data, {100}, Device::CUDA);
+    auto gradients_custom = Tensor::from_vector(grad_data, {100}, Device::GPU);
     auto gradients_torch = torch::tensor(grad_data, torch::kCUDA);
 
     float clip_value = 1.0f;
@@ -1228,14 +1240,14 @@ TEST_F(TensorMaskingTest, StructuredDropout) {
     const size_t seq_len = 10;
     const size_t hidden_dim = 4;
 
-    auto data_custom = Tensor::ones({batch_size, seq_len, hidden_dim}, Device::CUDA);
+    auto data_custom = Tensor::ones({batch_size, seq_len, hidden_dim}, Device::GPU);
     auto data_torch = torch::ones({static_cast<int64_t>(batch_size),
                                    static_cast<int64_t>(seq_len),
                                    static_cast<int64_t>(hidden_dim)},
                                   torch::kCUDA);
 
     // Create deterministic dropout mask (drop specific tokens)
-    auto token_mask_custom = Tensor::ones({batch_size, seq_len, 1}, Device::CUDA);
+    auto token_mask_custom = Tensor::ones({batch_size, seq_len, 1}, Device::GPU);
     auto token_mask_torch = torch::ones({static_cast<int64_t>(batch_size),
                                          static_cast<int64_t>(seq_len), 1},
                                         torch::kCUDA);
@@ -1252,7 +1264,7 @@ TEST_F(TensorMaskingTest, StructuredDropout) {
     cpu_mask_torch[0][3][0] = 0.0f;
     cpu_mask_torch[1][2][0] = 0.0f;
 
-    token_mask_custom = cpu_mask_custom.to(Device::CUDA);
+    token_mask_custom = cpu_mask_custom.to(Device::GPU);
     token_mask_torch = cpu_mask_torch.cuda();
 
     // Expand and apply
@@ -1285,7 +1297,7 @@ TEST_F(TensorMaskingTest, SparseAttentionPattern) {
         }
     }
 
-    auto local_mask_custom = Tensor::from_vector(local_mask_data, {seq_len, seq_len}, Device::CUDA);
+    auto local_mask_custom = Tensor::from_vector(local_mask_data, {seq_len, seq_len}, Device::GPU);
 
     std::vector<uint8_t> local_mask_torch_data;
     for (bool b : local_mask_data) {
@@ -1307,7 +1319,7 @@ TEST_F(TensorMaskingTest, DynamicValueBasedMasking) {
         data.push_back(dist(gen));
     }
 
-    auto tensor_custom = Tensor::from_vector(data, {100}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {100}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA);
 
     // Compute statistics
@@ -1353,7 +1365,7 @@ TEST_F(TensorMaskingTest, ChainedBooleanOperations) {
         data.push_back(dist(gen));
     }
 
-    auto tensor_custom = Tensor::from_vector(data, {100}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {100}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA);
 
     // Create multiple conditions
@@ -1382,7 +1394,7 @@ TEST_F(TensorMaskingTest, BooleanReductionAcrossDimensions) {
         data.push_back(dist(gen));
     }
 
-    auto tensor_custom = Tensor::from_vector(data, {4, 5, 6}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {4, 5, 6}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA).reshape({4, 5, 6});
 
     auto mask_custom = tensor_custom.gt(0);
@@ -1401,7 +1413,7 @@ TEST_F(TensorMaskingTest, BooleanReductionAcrossDimensions) {
 
 TEST_F(TensorMaskingTest, MixedDtypeComparisons) {
     std::vector<float> data = {1.5, 2.5, 3.5};
-    auto float_custom = Tensor::from_vector(data, {3}, Device::CUDA);
+    auto float_custom = Tensor::from_vector(data, {3}, Device::GPU);
     auto float_torch = torch::tensor(data, torch::kCUDA);
 
     auto mask1_custom = float_custom.gt(2.0f);
@@ -1432,7 +1444,7 @@ TEST_F(TensorMaskingTest, BatchMaskProcessing) {
         data.push_back(dist(gen));
     }
 
-    auto tensor_custom = Tensor::from_vector(data, {batch, features}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {batch, features}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA).reshape({static_cast<int64_t>(batch), static_cast<int64_t>(features)});
 
     // Create different threshold per batch
@@ -1457,7 +1469,7 @@ TEST_F(TensorMaskingTest, BatchMaskProcessing) {
 
 TEST_F(TensorMaskingTest, PythonLikeMaskedIndexing) {
     std::vector<float> data = {1, 2, 3, 4, 5};
-    auto tensor_custom = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {5}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA);
 
     auto mask_custom = tensor_custom.gt(3.0f);
@@ -1472,7 +1484,7 @@ TEST_F(TensorMaskingTest, PythonLikeMaskedIndexing) {
 
 TEST_F(TensorMaskingTest, PythonLikeMaskedAssignment) {
     std::vector<float> data = {1, 2, 3, 4, 5};
-    auto tensor_custom = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {5}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA);
 
     auto mask_custom = tensor_custom.gt(3.0f);
@@ -1485,12 +1497,12 @@ TEST_F(TensorMaskingTest, PythonLikeMaskedAssignment) {
     compare_tensors(tensor_custom, tensor_torch, 1e-5f, 1e-7f, "PythonLikeMaskedAssignment");
 }
 
-TEST_F(TensorMaskingTest, MaskedTensorAssignmentSupportsEveryDtype) {
+TEST_F(TensorMaskingNeutralTest, MaskedTensorAssignmentSupportsEveryDtype) {
     const std::array dtypes = {
         DataType::Float32, DataType::Float16, DataType::Int32,
         DataType::Int64, DataType::UInt8, DataType::Bool};
 
-    for (const auto device : {Device::CPU, Device::CUDA}) {
+    for (const auto device : {Device::CPU, Device::GPU}) {
         const auto mask = Tensor::from_vector(
                               std::vector<float>{0.0f, 1.0f, 0.0f, 1.0f},
                               {4}, device)
@@ -1515,11 +1527,11 @@ TEST_F(TensorMaskingTest, MaskedTensorAssignmentSupportsEveryDtype) {
 
 TEST_F(TensorMaskingTest, PythonLikeIndexing) {
     std::vector<float> data = {1, 2, 3, 4, 5};
-    auto tensor_custom = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {5}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA);
 
     std::vector<int> idx_data = {0, 2, 4};
-    auto indices_custom = Tensor::from_vector(idx_data, {3}, Device::CUDA);
+    auto indices_custom = Tensor::from_vector(idx_data, {3}, Device::GPU);
     auto indices_torch = torch::tensor(idx_data, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
 
     // Get indexed values using [] operator
@@ -1531,11 +1543,11 @@ TEST_F(TensorMaskingTest, PythonLikeIndexing) {
 
 TEST_F(TensorMaskingTest, PythonLikeIndexAssignment) {
     std::vector<float> data = {1, 2, 3, 4, 5};
-    auto tensor_custom = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {5}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA);
 
     std::vector<int> idx_data = {1, 3};
-    auto indices_custom = Tensor::from_vector(idx_data, {2}, Device::CUDA);
+    auto indices_custom = Tensor::from_vector(idx_data, {2}, Device::GPU);
     auto indices_torch = torch::tensor(idx_data, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
 
     // Set indexed values using [] operator
@@ -1549,7 +1561,7 @@ TEST_F(TensorMaskingTest, PythonLikeIndexAssignment) {
 
 TEST_F(TensorMaskingTest, AnyAllOperations) {
     // Test all true
-    auto all_true_custom = Tensor::ones_bool({3, 3}, Device::CUDA);
+    auto all_true_custom = Tensor::ones_bool({3, 3}, Device::GPU);
     auto all_true_torch = torch::ones({3, 3}, torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA));
 
     auto all_true_float_custom = all_true_custom.to(DataType::Float32);
@@ -1559,7 +1571,7 @@ TEST_F(TensorMaskingTest, AnyAllOperations) {
     EXPECT_FLOAT_EQ(all_true_float_torch.min().item<float>(), 1.0f);
 
     // Test all false
-    auto all_false_custom = Tensor::zeros_bool({3, 3}, Device::CUDA);
+    auto all_false_custom = Tensor::zeros_bool({3, 3}, Device::GPU);
     auto all_false_torch = torch::zeros({3, 3}, torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA));
 
     auto all_false_float_custom = all_false_custom.to(DataType::Float32);
@@ -1570,7 +1582,7 @@ TEST_F(TensorMaskingTest, AnyAllOperations) {
 
     // Test mixed
     std::vector<bool> mixed_data = {true, false, true};
-    auto mixed_custom = Tensor::from_vector(mixed_data, {3}, Device::CUDA);
+    auto mixed_custom = Tensor::from_vector(mixed_data, {3}, Device::GPU);
 
     std::vector<uint8_t> mixed_torch_data = {1, 0, 1};
     auto mixed_torch = torch::tensor(mixed_torch_data, torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA));
@@ -1597,7 +1609,7 @@ TEST_F(TensorMaskingTest, TopKMasking) {
         data.push_back(dist(gen));
     }
 
-    auto tensor_custom = Tensor::from_vector(data, {n}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {n}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA);
 
     // Get top-k values using PyTorch
@@ -1629,7 +1641,7 @@ TEST_F(TensorMaskingTest, ImageRegionMasking) {
     const size_t height = 16;
     const size_t width = 16;
 
-    auto images_custom = Tensor::ones({batch_size, channels, height, width}, Device::CUDA);
+    auto images_custom = Tensor::ones({batch_size, channels, height, width}, Device::GPU);
     auto images_torch = torch::ones({static_cast<int64_t>(batch_size),
                                      static_cast<int64_t>(channels),
                                      static_cast<int64_t>(height),
@@ -1646,7 +1658,7 @@ TEST_F(TensorMaskingTest, ImageRegionMasking) {
         }
     }
 
-    auto mask_custom = Tensor::from_vector(mask_data, {height, width}, Device::CUDA);
+    auto mask_custom = Tensor::from_vector(mask_data, {height, width}, Device::GPU);
 
     std::vector<uint8_t> mask_torch_data;
     for (bool b : mask_data) {
@@ -1672,7 +1684,7 @@ TEST_F(TensorMaskingTest, ImageRegionMasking) {
 
 TEST_F(TensorMaskingTest, BooleanExpansionMultipleDims) {
     std::vector<bool> data = {true};
-    auto bool_custom = Tensor::from_vector(data, {1, 1}, Device::CUDA);
+    auto bool_custom = Tensor::from_vector(data, {1, 1}, Device::GPU);
 
     std::vector<uint8_t> data_torch = {1};
     auto bool_torch = torch::tensor(data_torch, torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA))
@@ -1687,7 +1699,7 @@ TEST_F(TensorMaskingTest, BooleanExpansionMultipleDims) {
 TEST_F(TensorMaskingTest, BooleanExpansionComplex) {
     // Test expansion with non-trivial patterns
     std::vector<bool> data = {true, false, true, false};
-    auto bool_2d_custom = Tensor::from_vector(data, {2, 2}, Device::CUDA);
+    auto bool_2d_custom = Tensor::from_vector(data, {2, 2}, Device::GPU);
 
     std::vector<uint8_t> data_torch = {1, 0, 1, 0};
     auto bool_2d_torch = torch::tensor(data_torch, torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA))
@@ -1706,8 +1718,8 @@ TEST_F(TensorMaskingTest, BroadcastComparisonMaxRank) {
     std::vector<float> a_data = {2};
     std::vector<float> b_data = {1, 2, 3, 4, 5, 6, 7, 8};
 
-    auto a_custom = Tensor::from_vector(a_data, {1}, Device::CUDA);
-    auto b_custom = Tensor::from_vector(b_data, {2, 2, 2}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(a_data, {1}, Device::GPU);
+    auto b_custom = Tensor::from_vector(b_data, {2, 2, 2}, Device::GPU);
 
     auto a_torch = torch::tensor(a_data, torch::kCUDA);
     auto b_torch = torch::tensor(b_data, torch::kCUDA).reshape({2, 2, 2});
@@ -1720,10 +1732,10 @@ TEST_F(TensorMaskingTest, BroadcastComparisonMaxRank) {
 
 // ============= Stress Tests =============
 
-TEST_F(TensorMaskingTest, StressTestLargeMasking) {
+TEST_F(TensorMaskingNeutralTest, StressTestLargeMasking) {
     const size_t size = 1000;
 
-    auto data_custom = Tensor::randn({size, size}, Device::CUDA);
+    auto data_custom = Tensor::randn({size, size}, Device::GPU);
 
     // Create complex mask
     auto mask_custom = data_custom.gt(0).logical_and(data_custom.lt(1));
@@ -1745,7 +1757,7 @@ TEST_F(TensorMaskingTest, StressTestManyDimensions) {
         data.push_back(dist(gen));
     }
 
-    auto data_custom = Tensor::from_vector(data, {2, 3, 4, 5}, Device::CUDA);
+    auto data_custom = Tensor::from_vector(data, {2, 3, 4, 5}, Device::GPU);
     auto data_torch = torch::tensor(data, torch::kCUDA).reshape({2, 3, 4, 5});
 
     auto mask_custom = data_custom.gt(0);
@@ -1763,7 +1775,7 @@ TEST_F(TensorMaskingTest, StressTestManyDimensions) {
 
 TEST_F(TensorMaskingTest, ContiguousVsNonContiguousMasking) {
     std::vector<float> data = {1, 2, 3, 4, 5, 6};
-    auto original_custom = Tensor::from_vector(data, {2, 3}, Device::CUDA);
+    auto original_custom = Tensor::from_vector(data, {2, 3}, Device::GPU);
     auto original_torch = torch::tensor(data, torch::kCUDA).reshape({2, 3});
 
     auto transposed_custom = original_custom.transpose(0, 1);
@@ -1785,8 +1797,8 @@ TEST_F(TensorMaskingTest, ContiguousVsNonContiguousMasking) {
 
 TEST_F(TensorMaskingTest, ErrorHandlingMismatchedShapes) {
     std::vector<float> data = {1.0f, 2.0f, 3.0f, 4.0f};
-    auto tensor_custom = Tensor::from_vector(data, {2, 2}, Device::CUDA);
-    auto wrong_mask_custom = Tensor::ones_bool({3, 3}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {2, 2}, Device::GPU);
+    auto wrong_mask_custom = Tensor::ones_bool({3, 3}, Device::GPU);
 
     EXPECT_THROW((void)tensor_custom.masked_select(wrong_mask_custom),
                  std::runtime_error);
@@ -1800,7 +1812,7 @@ TEST_F(TensorMaskingTest, ErrorHandlingMismatchedShapes) {
 
 TEST_F(TensorMaskingTest, ErrorHandlingWrongDevice) {
     std::vector<float> data = {1.0f, 2.0f, 3.0f, 4.0f};
-    auto cuda_tensor_custom = Tensor::from_vector(data, {2, 2}, Device::CUDA);
+    auto cuda_tensor_custom = Tensor::from_vector(data, {2, 2}, Device::GPU);
     auto cpu_mask_custom = Tensor::ones_bool({2, 2}, Device::CPU);
 
     EXPECT_THROW((void)cuda_tensor_custom.masked_select(cpu_mask_custom),
@@ -1816,10 +1828,10 @@ TEST_F(TensorMaskingTest, ErrorHandlingWrongDevice) {
 // ============= Additional Edge Cases =============
 
 TEST_F(TensorMaskingTest, EmptyTensorMasking) {
-    auto empty_custom = Tensor::empty({0}, Device::CUDA);
+    auto empty_custom = Tensor::empty({0}, Device::GPU);
     auto empty_torch = torch::empty({0}, torch::kCUDA);
 
-    auto empty_mask_custom = Tensor::empty({0}, Device::CUDA, DataType::Bool);
+    auto empty_mask_custom = Tensor::empty({0}, Device::GPU, DataType::Bool);
     auto empty_mask_torch = torch::empty({0}, torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA));
 
     auto selected_custom = empty_custom.masked_select(empty_mask_custom);
@@ -1838,7 +1850,7 @@ TEST_F(TensorMaskingTest, LargeScalarBroadcast) {
         data.push_back(dist(gen));
     }
 
-    auto tensor_custom = Tensor::from_vector(data, {1000, 1000}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {1000, 1000}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA).reshape({1000, 1000});
 
     auto mask_custom = tensor_custom.gt(0.5f);
@@ -1856,7 +1868,7 @@ TEST_F(TensorMaskingTest, CompoundMaskingOperations) {
     const size_t batch = 2;
     const size_t seq_len = 4;
 
-    auto scores_custom = Tensor::ones({batch, seq_len, seq_len}, Device::CUDA);
+    auto scores_custom = Tensor::ones({batch, seq_len, seq_len}, Device::GPU);
     auto scores_torch = torch::ones({static_cast<int64_t>(batch),
                                      static_cast<int64_t>(seq_len),
                                      static_cast<int64_t>(seq_len)},
@@ -1870,7 +1882,7 @@ TEST_F(TensorMaskingTest, CompoundMaskingOperations) {
         }
     }
 
-    auto causal_custom = Tensor::from_vector(causal_data, {seq_len, seq_len}, Device::CUDA);
+    auto causal_custom = Tensor::from_vector(causal_data, {seq_len, seq_len}, Device::GPU);
 
     std::vector<uint8_t> causal_torch_data;
     for (bool b : causal_data) {
@@ -1902,16 +1914,16 @@ TEST_F(TensorMaskingTest, AdvancedBooleanIndexing) {
         data.push_back(static_cast<float>(i));
     }
 
-    auto tensor_custom = Tensor::from_vector(data, {d0, d1, d2}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {d0, d1, d2}, Device::GPU);
     auto tensor_torch = torch::tensor(data, torch::kCUDA).reshape({static_cast<int64_t>(d0), static_cast<int64_t>(d1), static_cast<int64_t>(d2)});
 
     // Create boolean mask for middle dimension
     std::vector<bool> mask_data = {false, true, true, false};
-    auto mask_1d_custom = Tensor::from_vector(mask_data, {d1}, Device::CUDA);
+    auto mask_1d_custom = Tensor::from_vector(mask_data, {d1}, Device::GPU);
 
     // Select using mask - convert to indices
     std::vector<int> indices = {1, 2};
-    auto indices_custom = Tensor::from_vector(indices, {2}, Device::CUDA);
+    auto indices_custom = Tensor::from_vector(indices, {2}, Device::GPU);
     auto indices_torch = torch::tensor(indices, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
 
     auto selected_custom = tensor_custom.index_select(1, indices_custom);
@@ -1935,7 +1947,7 @@ TEST_F(TensorMaskingTest, IntegrationCompleteWorkflow) {
         input_data.push_back(dist(gen));
     }
 
-    auto inputs_custom = Tensor::from_vector(input_data, {batch, seq_len, hidden}, Device::CUDA);
+    auto inputs_custom = Tensor::from_vector(input_data, {batch, seq_len, hidden}, Device::GPU);
     auto inputs_torch = torch::tensor(input_data, torch::kCUDA).reshape({static_cast<int64_t>(batch), static_cast<int64_t>(seq_len), static_cast<int64_t>(hidden)});
 
     // 2. Create causal mask
@@ -1944,7 +1956,7 @@ TEST_F(TensorMaskingTest, IntegrationCompleteWorkflow) {
         range[i] = static_cast<float>(i);
     }
 
-    auto range_custom = Tensor::from_vector(range, {seq_len}, Device::CUDA);
+    auto range_custom = Tensor::from_vector(range, {seq_len}, Device::GPU);
     auto range_torch = torch::tensor(range, torch::kCUDA);
 
     auto causal_custom = range_custom.reshape({seq_len, 1}).ge(range_custom.reshape({1, seq_len}));
@@ -1957,7 +1969,7 @@ TEST_F(TensorMaskingTest, IntegrationCompleteWorkflow) {
     std::vector<bool> padding_data(seq_len, true);
     padding_data[seq_len - 1] = false; // Last token is padding
 
-    auto padding_1d_custom = Tensor::from_vector(padding_data, {seq_len}, Device::CUDA);
+    auto padding_1d_custom = Tensor::from_vector(padding_data, {seq_len}, Device::GPU);
 
     std::vector<uint8_t> padding_torch_data;
     for (bool b : padding_data) {
@@ -1975,3 +1987,72 @@ TEST_F(TensorMaskingTest, IntegrationCompleteWorkflow) {
 
     compare_tensors(combined_custom, combined_torch, 1e-5f, 1e-7f, "IntegrationCombinedMask");
 }
+
+namespace {
+    using namespace lfs::core;
+
+    class TensorWhereBroadcast : public testing::TestWithParam<GpuBackend> {
+    protected:
+        void SetUp() override {
+            if (!gpu_backend_available(GetParam()))
+                GTEST_SKIP() << "Backend unavailable";
+            scope_.emplace(GetParam());
+        }
+        std::optional<GpuBackendScope> scope_;
+    };
+
+    TEST_P(TensorWhereBroadcast, CompactBroadcastInputsPreserveStridesOffsetsAndPromotion) {
+        std::vector<float> source(24);
+        for (size_t i = 0; i < source.size(); ++i)
+            source[i] = static_cast<float>(i) / 7.0f;
+        const Tensor condition = Tensor::from_vector(std::vector<bool>{false, true, true, false, false, true, true, false, false, true},
+                                                     {5, 2}, Device::GPU)
+                                     .slice(1, 1, 2)
+                                     .unsqueeze(2);
+        const Tensor x = Tensor::from_vector(source, {4, 6}, Device::GPU)
+                             .slice(1, 1, 4)
+                             .transpose(0, 1)
+                             .unsqueeze(0);
+        const std::vector<float> other{-1.5f, 0.25f, 2.0f};
+        const Tensor y = Tensor::from_vector(other, {1, 3, 1}, Device::GPU).to(DataType::Float16);
+        std::vector<float> expected;
+        for (size_t row = 0; row < 5; ++row)
+            for (size_t channel = 0; channel < 3; ++channel)
+                for (size_t column = 0; column < 4; ++column)
+                    expected.push_back(row % 2 == 0 ? source[column * 6 + channel + 1] : other[channel]);
+        const GpuBackendScope opposite(GetParam() == GpuBackend::CUDA ? GpuBackend::Vulkan : GpuBackend::CUDA);
+        const Tensor result = Tensor::where(condition, x, y);
+        EXPECT_EQ(result.shape(), TensorShape({5, 3, 4}));
+        EXPECT_EQ(result.dtype(), DataType::Float32);
+        EXPECT_EQ(gpu_backend_of(result), GetParam());
+        EXPECT_EQ(result.to_vector(), expected);
+        EXPECT_EQ(y.to(DataType::Float32).to_vector(), other);
+    }
+
+    TEST_P(TensorWhereBroadcast, EqualShapesStillRespectEachInputsStrides) {
+        const Tensor condition = Tensor::from_vector(std::vector<bool>{true, false, false, true, true, false},
+                                                     {3, 2}, Device::GPU)
+                                     .t();
+        const Tensor x = Tensor::from_vector({1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}, {3, 2}, Device::GPU).t();
+        const Tensor y = Tensor::from_vector({-1.0f, -2.0f, -3.0f, -4.0f, -5.0f, -6.0f}, {3, 2}, Device::GPU).t();
+        const Tensor result = Tensor::where(condition, x, y);
+        EXPECT_EQ(result.shape(), TensorShape({2, 3}));
+        EXPECT_EQ(result.to_vector(), (std::vector<float>{1.0f, -3.0f, 5.0f, -2.0f, 4.0f, -6.0f}));
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Backends, TensorWhereBroadcast,
+                             testing::ValuesIn(kGpuBackends),
+                             [](const testing::TestParamInfo<GpuBackend>& info) {
+                                 return info.param == GpuBackend::CUDA ? "Cuda" : "Vulkan";
+                             });
+
+    TEST(TensorWhereCpu, EqualShapesStillRespectEachInputsStrides) {
+        const Tensor condition = Tensor::from_vector(std::vector<bool>{true, false, false, true, true, false},
+                                                     {3, 2}, Device::CPU)
+                                     .t();
+        const Tensor x = Tensor::from_vector({1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}, {3, 2}, Device::CPU).t();
+        const Tensor y = x.neg().contiguous();
+        const Tensor result = Tensor::where(condition, x, y);
+        EXPECT_EQ(result.to_vector(), (std::vector<float>{1.0f, -3.0f, 5.0f, -2.0f, 4.0f, -6.0f}));
+    }
+} // namespace

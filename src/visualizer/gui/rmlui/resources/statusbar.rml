@@ -76,6 +76,10 @@
         </div>
     </div>
     <div id="status-right">
+        <div id="input-device-toggle" data-attr-title="input_device_tooltip">
+            <img class="input-device" src="../icon/mouse.png" data-class-hidden="input_device == 'trackpad'"/>
+            <img class="input-device" src="../icon/device-laptop.png" data-class-hidden="input_device == 'mouse'"/>
+        </div>
         <div id="mcp-chip" data-attr-title="mcp_tooltip" data-style-color="mcp_color" data-class-expanded="mcp_details_expanded">
             <span>{{ mcp_summary }}</span>
             <div id="mcp-popup" class="hidden" data-class-hidden="!mcp_details_expanded">
@@ -96,13 +100,9 @@
                 </div>
             </div>
         </div>
-        <div id="account-chip" data-class-warning="account_membership_required" data-attr-title="account_tooltip" data-style-color="account_color">
-            <span id="account-label">{{ account_label }}</span>
-            <span id="account-tier" class="hidden" data-class-hidden="!account_show_tier">{{ account_tier }}</span>
-        </div>
         <span id="gpu-model" class="dim hidden" data-class-hidden="!show_gpu_model">{{ gpu_model_text }}</span>
         <img id="gpu-icon" data-class-active="gpu_panel_active" title="@tr:ui.perf_hud_tooltip" src="../icon/gpu.png" />
-        <div id="lfs-mem-group" class="status-item">
+        <div id="lfs-mem-group" class="status-item" data-class-hidden="!show_lfs_memory">
             <span id="lfs-mem" data-style-color="lfs_mem_color">{{ lfs_mem_text }}</span>
             <span class="separator thin">|</span>
         </div>

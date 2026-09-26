@@ -415,11 +415,14 @@ namespace lfs::python {
 
     // Overlay state callbacks for Python overlay panels
     struct OverlayExportState {
+        std::string commit_uuid;
         bool active = false;
         float progress = 0.0f;
         std::string stage;
         std::string outcome{"idle"};
         std::string format;
+        std::string path;
+        std::string error;
     };
 
     struct OverlayImportState {
@@ -476,6 +479,11 @@ namespace lfs::python {
     using LoadCameraPathCallback = bool (*)(const std::string&);
     using ClearKeyframesCallback = void (*)();
     using SetPlaybackSpeedCallback = void (*)(float);
+    using GetCameraPathDataCallback = std::string (*)();
+    using SetCameraPathDataCallback = bool (*)(const std::string&);
+    LFS_PYTHON_RUNTIME_API void set_camera_path_data_callbacks(GetCameraPathDataCallback get_cb, SetCameraPathDataCallback set_cb);
+    LFS_PYTHON_RUNTIME_API std::string get_camera_path_data();
+    LFS_PYTHON_RUNTIME_API bool set_camera_path_data(const std::string& value);
 
     LFS_PYTHON_RUNTIME_API void set_sequencer_timeline_callbacks(
         HasKeyframesCallback has_keyframes_cb,
@@ -721,11 +729,15 @@ namespace lfs::python {
 
     using RmlDocRegisterCallback = void (*)(const char* name, void* doc);
     using RmlDocUnregisterCallback = void (*)(const char* name);
+    using RmlDocPendingCallback = bool (*)(void* doc, bool consume);
 
     LFS_PYTHON_RUNTIME_API void set_rml_doc_registry_callbacks(RmlDocRegisterCallback reg_cb,
                                                                RmlDocUnregisterCallback unreg_cb);
     LFS_PYTHON_RUNTIME_API void register_rml_document(const char* name, void* doc);
     LFS_PYTHON_RUNTIME_API void unregister_rml_document(const char* name);
+    LFS_PYTHON_RUNTIME_API void set_rml_doc_pending_callback(RmlDocPendingCallback callback);
+    LFS_PYTHON_RUNTIME_API bool has_pending_rml_document_updates(void* doc);
+    LFS_PYTHON_RUNTIME_API bool consume_pending_rml_document_updates(void* doc);
 
     // Graphics-thread callback queue - schedule work that touches UI backend resources.
     LFS_PYTHON_RUNTIME_API void set_graphics_thread_id(std::thread::id id);

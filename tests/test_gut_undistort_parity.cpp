@@ -5,6 +5,7 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "cuda_backend_test.hpp"
 #include "training/rasterization/gsplat/Ops.h"
 #include "training/rasterization/gsplat_rasterizer.hpp"
 
@@ -17,9 +18,12 @@
 using namespace lfs::core;
 using namespace lfs::training;
 
-class GutUndistortParity : public ::testing::Test {
+class GutUndistortParity : public lfs::test::CudaBackendTest {
 protected:
     void TearDown() override {
+        if (IsSkipped()) {
+            return;
+        }
         (void)gsplat_lfs::release_intersect_thread_local_cache();
         (void)lfs::training::release_gsplat_rasterizer_thread_local_caches();
         lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
@@ -27,11 +31,6 @@ protected:
 };
 
 TEST_F(GutUndistortParity, PreparedCameraMatchesPinholeWithoutCoefficients) {
-    int device_count = 0;
-    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-        GTEST_SKIP() << "CUDA device unavailable";
-    }
-
     constexpr size_t n = 35;
     std::vector<float> means(n * 3);
     std::vector<float> rotations(n * 4, 0.0f);

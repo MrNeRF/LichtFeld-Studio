@@ -2,11 +2,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/event_bridge/command_api.hpp"
 #include "core/event_bridge/control_boundary.hpp"
 #include "core/events.hpp"
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
-#include "training/control/command_api.hpp"
+#include "cuda_backend_test.hpp"
 #include "training/trainer.hpp"
 
 #include <gtest/gtest.h>
@@ -28,9 +29,10 @@ namespace {
             64, 64, 0);
     }
 
-    class TrainingTerminalStateTest : public testing::Test {
+    class TrainingTerminalStateTest : public lfs::test::CudaBackendTest {
     protected:
         void SetUp() override {
+            LFS_CUDA_BACKEND_OR_RETURN();
             const auto cameras = scene_.addGroup("Cameras");
             scene_.addCamera("camera.png", cameras, make_command_camera());
             trainer_ = std::make_unique<lfs::training::Trainer>(scene_);
@@ -38,6 +40,9 @@ namespace {
         }
 
         void TearDown() override {
+            if (IsSkipped()) {
+                return;
+            }
             auto& command_center = lfs::training::CommandCenter::instance();
             command_center.clear_snapshot(command_center.snapshot().trainer);
             trainer_.reset();

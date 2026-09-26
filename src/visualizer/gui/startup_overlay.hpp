@@ -6,10 +6,12 @@
 
 #include "gui/panel_layout.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
+#include "gui/startup_overlay_geometry.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <string>
 
 namespace Rml {
@@ -32,11 +34,13 @@ namespace lfs::vis::gui {
         void shutdown();
         void setInput(const PanelInputState* input) { input_ = input; }
         void reloadResources();
-        void render(const ViewportLayout& viewport, bool drag_hovering);
+        void render(float window_x, float window_y, float window_width,
+                    float window_height, bool drag_hovering);
         void dismiss();
         void setPluginLoadState(bool started, bool active, float progress, std::string stage);
         [[nodiscard]] bool isVisible() const { return visible_; }
         [[nodiscard]] bool blocksUnderlayInput() const;
+        [[nodiscard]] bool blocksPointerInput(float window_x, float window_y) const;
         [[nodiscard]] bool isPluginLoadComplete() const;
         [[nodiscard]] bool needsAnimationFrame() const;
 
@@ -56,7 +60,11 @@ namespace lfs::vis::gui {
         void ensureLanguageDropdownFontsLoaded();
         [[nodiscard]] bool isLanguageSelectOpen() const;
         [[nodiscard]] bool isLanguageSelectHit(float local_x, float local_y) const;
+        [[nodiscard]] bool isLanguageDropdownHit(float local_x, float local_y) const;
         [[nodiscard]] bool isLinkHit(float local_x, float local_y) const;
+        [[nodiscard]] std::optional<StartupOverlayRect> elementBorderRect(Rml::Element* element) const;
+        [[nodiscard]] std::optional<StartupOverlayRect> languageDropdownRect() const;
+        bool applyFitRatio(int context_width, int context_height, float maximum_ratio);
         [[nodiscard]] bool hasInputActivity(const PanelInputState& input) const;
         InputForwardResult forwardInput(const PanelInputState& input, float overlay_x, float overlay_y,
                                         float overlay_w, float overlay_h);
@@ -82,6 +90,7 @@ namespace lfs::vis::gui {
         CachedVulkanContextRender direct_cache_;
         int width_ = 0;
         int height_ = 0;
+        float fitted_dp_ratio_ = 0.0f;
         bool content_dirty_ = true;
         bool last_mouse_valid_ = false;
         float last_mouse_x_ = 0.0f;

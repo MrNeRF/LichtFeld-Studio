@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include "core/camera_metrics.hpp"
 
 #include "checkpoint.hpp"
 #include "components/bilateral_grid.hpp"
@@ -13,13 +14,14 @@
 #include "core/error.hpp"
 #include "core/parameters.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_readback.hpp"
+#include "core/tensor_upload.hpp"
 #include "dataset.hpp"
 #include "io/project_recovery.hpp"
 #include "kernels/depth_loss.hpp"
-#include "lfs/kernels/ssim.cuh"
+#include "lfs/training/ops/registry.hpp"
 #include "lfs/training/refine_scratch.hpp"
 #include "losses/mask_loss.hpp"
-#include "losses/photometric_loss.hpp"
 #include "metrics/metrics.hpp"
 #include "optimizer/scheduler.hpp"
 #include "progress.hpp"
@@ -75,6 +77,7 @@ namespace lfs::vis {
     class VisualizerImplResetTest_SaveAsAfterAutoCreatedTrainingKeepsOriginalAndCheckpoint_Test;
     class VisualizerImplResetTest_CompletedAutoCreatedTrainingSavesRealMasterOnClose_Test;
     class VisualizerImplResetTest_SaveAsAfterUntitledTrainingRoutesThroughFinishedTrainer_Test;
+    class VisualizerImplResetTest_FinishedTrainingStartReportsOverwriteConflict_Test;
 } // namespace lfs::vis
 
 namespace lfs::vis::project {
@@ -83,44 +86,10 @@ namespace lfs::vis::project {
 
 namespace lfs::training {
     class AdamOptimizer;
+    struct TrainerBilateralGridTestAccess;
     struct TrainerRetryTestAccess;
     struct TrainerCropboxMaskTestAccess;
     struct PPISPFileMetadata;
-
-    struct PPISPViewportOverrides {
-        // Exposure
-        float exposure_offset = 0.0f;
-
-        // Vignetting
-        bool vignette_enabled = true;
-        float vignette_strength = 1.0f;
-
-        // Color correction
-        float wb_temperature = 0.0f;
-        float wb_tint = 0.0f;
-        float color_red_x = 0.0f;
-        float color_red_y = 0.0f;
-        float color_green_x = 0.0f;
-        float color_green_y = 0.0f;
-        float color_blue_x = 0.0f;
-        float color_blue_y = 0.0f;
-
-        // CRF
-        float gamma_multiplier = 1.0f;
-        float gamma_red = 0.0f;
-        float gamma_green = 0.0f;
-        float gamma_blue = 0.0f;
-        float crf_toe = 0.0f;
-        float crf_shoulder = 0.0f;
-
-        [[nodiscard]] bool isIdentity() const {
-            return exposure_offset == 0.0f && vignette_enabled && vignette_strength == 1.0f &&
-                   wb_temperature == 0.0f && wb_tint == 0.0f && color_red_x == 0.0f && color_red_y == 0.0f &&
-                   color_green_x == 0.0f && color_green_y == 0.0f && color_blue_x == 0.0f && color_blue_y == 0.0f &&
-                   gamma_multiplier == 1.0f && gamma_red == 0.0f && gamma_green == 0.0f && gamma_blue == 0.0f &&
-                   crf_toe == 0.0f && crf_shoulder == 0.0f;
-        }
-    };
 
     class Trainer {
     public:
@@ -130,17 +99,8 @@ namespace lfs::training {
             bool undistort = false;
         };
 
-        struct CameraMetricsAppearanceConfig {
-            bool enabled = false;
-            PPISPViewportOverrides overrides{};
-            bool use_controller = true;
-        };
-
-        struct CameraMetricsSnapshot {
-            float psnr = 0.0f;
-            std::optional<float> ssim;
-            bool used_mask = false;
-        };
+        using CameraMetricsAppearanceConfig = lfs::training::CameraMetricsAppearanceConfig;
+        using CameraMetricsSnapshot = lfs::training::CameraMetricsSnapshot;
 
         struct CameraMetricsInputCacheEntry {
             int camera_uid = -1;
@@ -293,16 +253,16 @@ namespace lfs::training {
         // on reader_stream: beginModelRead orders the reads after the last
         // consistent parameter state; endModelRead records the reads so the next
         // optimizer step waits for them (GPU-side, no CPU blocking).
-        void beginModelRead(cudaStream_t reader_stream);
-        void endModelRead(cudaStream_t reader_stream);
+        void beginModelRead(void* reader_stream);
+        void endModelRead(void* reader_stream);
 
-        cudaStream_t trainingStream() const { return training_stream_; }
+        void* trainingStream() const { return training_queue_ ? training_queue_->native_handle() : nullptr; }
 
         // Reverse edge for the zero-copy viewport: the viewer's render-complete
         // timeline imported into CUDA, plus the latest timeline value covering
         // submits that bound live training storage. The trainer waits the value
         // on its stream before the next step's in-place writes.
-        void setViewerReleaseFence(cudaExternalSemaphore_t semaphore);
+        void setViewerReleaseFence(void* device, lfs::core::VulkanTimelinePoint point);
         void publishViewerBorrow(uint64_t value);
 
         lfs::core::param::TrainingParameters getParams() const {
@@ -461,7 +421,9 @@ namespace lfs::training {
         friend class lfs::vis::VisualizerImplResetTest_SaveAsAfterAutoCreatedTrainingKeepsOriginalAndCheckpoint_Test;
         friend class lfs::vis::VisualizerImplResetTest_CompletedAutoCreatedTrainingSavesRealMasterOnClose_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsAfterUntitledTrainingRoutesThroughFinishedTrainer_Test;
+        friend class lfs::vis::VisualizerImplResetTest_FinishedTrainingStartReportsOverwriteConflict_Test;
         friend class lfs::vis::project::ProjectLifecycle;
+        friend struct TrainerBilateralGridTestAccess;
         friend struct TrainerRetryTestAccess;
         friend struct TrainerCropboxMaskTestAccess;
 
@@ -616,7 +578,6 @@ namespace lfs::training {
         std::expected<void, std::string> initialize_ppisp();
         std::expected<void, std::string> initialize_ppisp_controller();
         std::expected<void, std::string> apply_ppisp_sidecar_if_configured();
-        std::expected<PPISPFileMetadata, std::string> build_ppisp_sidecar_metadata() const;
         struct PPISPSidecarMappings {
             std::vector<int> frame_mapping;
             std::vector<int> camera_mapping;
@@ -641,6 +602,7 @@ namespace lfs::training {
         [[nodiscard]] PPISPControllerPool* controller_pool_for_save(int iteration) const;
         lfs::core::Tensor applyPPISPForEval(const lfs::core::Tensor& rgb, const lfs::core::Camera& cam) const;
         [[nodiscard]] lfs::core::param::TrainingParameters params_for_project_snapshot() const;
+        [[nodiscard]] std::function<std::uint64_t(std::uint64_t)> release_image_cache_for_snapshot() const;
         [[nodiscard]] TrainingProgress::Phase get_progress_phase(
             int iter,
             bool in_controller_phase = false) const;
@@ -696,12 +658,12 @@ namespace lfs::training {
             lfs::core::Tensor ema_loss_stage_cpu;
             std::vector<std::array<float, 3>> published_colors;
             std::vector<uint8_t> published_valid;
+            std::vector<std::array<float, 3>> staging_colors;
+            std::vector<uint8_t> staging_valid;
             std::uint64_t published_generation = 0;
             mutable std::shared_mutex snapshot_mutex;
-            cudaStream_t copy_stream = nullptr;
-            cudaEvent_t ready_event = nullptr;
-            cudaEvent_t done_event = nullptr;
-            cudaStream_t producer_stream = nullptr;
+            std::unique_ptr<lfs::core::TensorWorkQueue> copy_queue;
+            lfs::core::TensorReadback readback;
             bool copy_in_flight = false;
             bool dirty = false;
 
@@ -715,7 +677,6 @@ namespace lfs::training {
             std::string_view reason);
 
         lfs::core::Scene* scene_ = nullptr;
-        std::shared_ptr<CameraDataset> base_dataset_;
         std::shared_ptr<CameraDataset> train_dataset_;
         std::shared_ptr<CameraDataset> val_dataset_;
         std::shared_ptr<lfs::io::PipelinedImageLoader> active_image_loader_;
@@ -726,10 +687,11 @@ namespace lfs::training {
         lfs::core::param::TrainingParameters params_;
         std::optional<lfs::core::param::TrainingParameters> pending_params_;
         lfs::core::SplatTensorAllocator splat_tensor_allocator_;
-        std::optional<std::tuple<std::vector<std::string>, std::vector<std::string>>> provided_splits_;
 
         lfs::core::Tensor background_{};
+        static constexpr size_t BG_MIX_STAGING_SLOT_COUNT = 3;
         lfs::core::Tensor bg_mix_buffer_;
+        std::array<lfs::core::TensorUpload, BG_MIX_STAGING_SLOT_COUNT> bg_mix_uploads_{};
         lfs::core::Tensor bg_image_base_{}; // Original background image [C, H, W]
         struct BackgroundImageCacheEntry {
             lfs::core::Tensor tensor;
@@ -744,7 +706,6 @@ namespace lfs::training {
         lfs::core::Tensor random_bg_buffer_{}; // Reusable buffer for random background
         std::unique_ptr<TrainingProgress> progress_;
         size_t train_dataset_size_ = 0;
-        size_t total_cameras_count_ = 0;
         std::shared_ptr<CameraLossHeatmapState> camera_loss_heatmap_;
 
         // Pre-loaded mask from pipelined dataloader (used in train_step)
@@ -844,8 +805,15 @@ namespace lfs::training {
                 lfs::io::project::
                     TrainingFinishReason::None;
 
-        // Persistent photometric loss (workspace reuse across iterations)
-        lfs::training::losses::PhotometricLoss photometric_loss_;
+        // Resolved once at training start. Hot paths use this table.
+        const lfs::training::TrainingOps* training_ops_ = nullptr;
+        lfs::gpu_ops::PhotoSaved photo_saved_{};
+        // photo_mask_ stays empty. Loss handles are moved to the caller.
+        lfs::core::Tensor photo_mask_;
+        lfs::core::Tensor photo_loss_;
+        lfs::core::Tensor photo_grad_corrected_;
+        lfs::core::Tensor photo_grad_raw_;
+        void bind_training_ops();
 
         // Cached GPU scalar to avoid per-iteration allocation
         core::Tensor loss_accumulator_;
@@ -883,11 +851,6 @@ namespace lfs::training {
         lfs::training::kernels::DepthPriorType resolved_depth_prior_ =
             lfs::training::kernels::DepthPriorType::Auto;
 
-        // Pre-allocated SSIM-map workspace for densification error maps.
-        lfs::training::kernels::SSIMMapWorkspace densification_ssim_workspace_;
-        // masked / decoupled / fused / pure-SSIM workspaces live in
-        // photometric_loss_.arena() (mutually exclusive, single grow-only region).
-
         // Mask preprocess workspace: photometric weight / opacity penalty / alpha-consistent
         // (fused kernels; grow-only for allocation-free steady state when masks/ROI on).
         lfs::training::losses::MaskPreprocessWorkspace mask_preprocess_workspace_;
@@ -912,7 +875,6 @@ namespace lfs::training {
         uint64_t edge_weight_cache_clock_ = 0;
         uint64_t edge_weight_preprocessing_generation_ = 0;
         bool edge_weight_scoring_active_ = false;
-        PositiveMedianScratch edge_weight_median_scratch_;
 
         // Metrics evaluator - handles all evaluation logic
         std::unique_ptr<lfs::training::MetricsEvaluator> evaluator_;
@@ -953,17 +915,17 @@ namespace lfs::training {
         // Async callback system
         std::function<void()> callback_;
         std::atomic<bool> callback_busy_{false};
-        cudaStream_t callback_stream_ = nullptr;
+        std::unique_ptr<lfs::core::TensorWorkQueue> callback_queue_;
 
         // Dedicated stream for all training-thread GPU work, installed as the
         // thread's current stream in train().
-        cudaStream_t training_stream_ = nullptr;
+        std::unique_ptr<lfs::core::TensorWorkQueue> training_queue_;
 
         // Non-blocking stream for on-demand GUI metric renders
         // (computeCameraMetrics, called from the UI thread). Lets PSNR/SSIM
         // tensor work overlap training and keeps the metric render's arena
         // frame off a device-sync fallback.
-        cudaStream_t metrics_stream_ = nullptr;
+        std::unique_ptr<lfs::core::TensorWorkQueue> metrics_queue_;
 
         // Trainer↔viewer GPU handshake. Forward edge: params_ready_event_ marks
         // a consistent end-of-step parameter state; readers wait on it before
@@ -973,12 +935,12 @@ namespace lfs::training {
         // Lock order: render_mutex_ → stream_sync_mutex_ (leaf; only CUDA
         // record/wait calls under it).
         static constexpr size_t READER_DONE_RING = 4;
-        cudaEvent_t params_ready_event_ = nullptr;
+        std::unique_ptr<lfs::core::TensorFence> params_ready_event_;
         bool params_ready_recorded_ = false;
-        std::array<cudaEvent_t, READER_DONE_RING> reader_done_events_{};
+        std::array<std::unique_ptr<lfs::core::TensorFence>, READER_DONE_RING> reader_done_events_{};
         uint32_t reader_done_head_ = 0;
         uint32_t reader_done_pending_ = 0;
-        cudaExternalSemaphore_t viewer_release_semaphore_ = nullptr;
+        void* viewer_release_semaphore_ = nullptr;
         std::atomic<uint64_t> viewer_borrow_value_{0};
         uint64_t viewer_borrow_waited_ = 0;
         mutable std::mutex stream_sync_mutex_;
@@ -989,7 +951,7 @@ namespace lfs::training {
         // destroySyncPrimitives(), after shutdown() has synchronized
         // training_stream_. Only ever touched from the training thread (push)
         // and after it has joined (drain) — no lock needed.
-        std::vector<cudaEvent_t> orphaned_sidecar_events_;
+        std::vector<lfs::core::TensorFence> orphaned_sidecar_events_;
 
         void createCudaResources();
         void createSyncPrimitives();
@@ -998,24 +960,20 @@ namespace lfs::training {
         void waitForModelReaders();
         void fitDepthAnchors(size_t cameras_with_depth);
 
-        // Async loss readback: the periodic loss sample is copied D2H into a
-        // small pinned ring and polled on later iterations instead of stalling
-        // the pipeline with .item(). NaN/Inf detection lags by at most
-        // LOSS_RING * LOSS_SYNC_INTERVAL iterations.
+        // Async loss readback: periodic samples are polled on later iterations.
+        // NaN/Inf detection lags by at most LOSS_RING * LOSS_SYNC_INTERVAL iterations.
         static constexpr size_t LOSS_RING = 4;
         struct LossReadbackSlot {
-            float* pinned = nullptr;
-            cudaEvent_t done = nullptr;
+            lfs::core::TensorReadback readback;
+            std::array<float, 1> value{};
             int iter = 0;
             bool in_flight = false;
         };
         std::array<LossReadbackSlot, LOSS_RING> loss_slots_{};
         size_t loss_slot_head_ = 0;
 
-        // Always-compiled fault-injection seam used only by the OOM
-        // recovery tests. Empty in production, where cudaDeviceSynchronize is
-        // called directly.
-        std::function<cudaError_t()> recovery_sync_for_testing_;
+        // Fault-injection seam used only by OOM recovery tests.
+        std::function<void()> recovery_sync_for_testing_;
 
         void submitLossReadback(const lfs::core::Tensor& total_loss, int iter);
         std::expected<void, std::string> harvestLossReadbacks(bool drain, bool in_controller_phase);

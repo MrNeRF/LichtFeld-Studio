@@ -3,7 +3,6 @@
 
 #include "core/tensor.hpp"
 #include "core/tensor/internal/lazy_ir.hpp"
-#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <vector>
 
@@ -22,12 +21,6 @@ namespace {
             Tensor::reset_lazy_telemetry();
         }
     };
-
-    bool has_cuda_device() {
-        int device_count = 0;
-        const auto status = cudaGetDeviceCount(&device_count);
-        return status == cudaSuccess && device_count > 0;
-    }
 
 } // namespace
 
@@ -131,13 +124,9 @@ TEST(TensorLazyStatefulOpsTest, InterleavedRandomOpsReproducible) {
 }
 
 TEST(TensorLazyStatefulOpsTest, GpuRandIsEagerInLazyMode) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
-
     LazyTestGuard guard;
 
-    auto t = Tensor::rand({1000}, Device::CUDA, DataType::Float32);
+    auto t = Tensor::rand({1000}, Device::GPU, DataType::Float32);
     EXPECT_FALSE(t.has_lazy_expr());
     EXPECT_TRUE(t.is_valid());
 

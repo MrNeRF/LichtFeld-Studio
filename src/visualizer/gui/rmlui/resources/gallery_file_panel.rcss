@@ -1,0 +1,23 @@
+.gallery-file-content { display: flex; flex-direction: column; gap: 8dp; padding: 16dp; max-height: 880dp; overflow-y: auto; }
+.gallery-file-fields, .gallery-conflict, .gallery-replacement { display: flex; flex-direction: column; gap: 8dp; flex-shrink: 0; }
+.gallery-file-content > span, .gallery-file-fields > span, .gallery-file-content label { white-space: normal; }
+.gallery-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gallery-file-fields input, .gallery-file-fields textarea { width: 100%; box-sizing: border-box; }
+.gallery-file-fields input, .gallery-file-fields select { height: 24dp; min-height: 24dp; }
+.gallery-file-fields textarea { height: 64dp; }
+.gallery-file-fields .setting-row { display: flex; align-items: center; gap: 8dp; min-height: 24dp; }
+.gallery-file-fields .setting-row select { flex: 1; }
+.gallery-folder-row { display: flex; align-items: center; gap: 8dp; }
+.gallery-folder-row select { flex: 1; min-width: 0dp; }
+.gallery-file-actions { display: flex; justify-content: flex-end; gap: 8dp; padding-top: 8dp; flex-shrink: 0; }
+.gallery-file-content .btn { height: 24dp; padding: 0dp 8dp; box-sizing: border-box; flex: 0 0 auto; width: auto; min-width: 64dp; max-width: 400dp; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gallery-file-content .btn span { display: inline; width: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gallery-cover-option { display: flex; align-items: center; gap: 8dp; }
+.gallery-cover-option input { width: 16dp; height: 16dp; flex-shrink: 0; }
+.gallery-cover-option span { flex: 1; }
+.gallery-choice-row { display: flex; align-items: center; gap: 16dp; padding: 8dp 0dp; border-bottom-width: 1dp; border-bottom-color: #45475a; min-height: 40dp; }
+.gallery-choice-description { display: flex; flex-direction: column; gap: 4dp; flex: 1; min-width: 0dp; }
+.gallery-choice-difference { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gallery-segmented { display: flex; flex-shrink: 0; gap: 0dp; }
+.gallery-segmented .btn { border-radius: 0dp; }
+.gallery-segmented .is-active { background-color: #89b4fa; color: #1e1e2e; }

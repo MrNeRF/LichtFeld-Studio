@@ -10,6 +10,10 @@
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
+#include "core/tensor_cuda_interop.hpp"
+#include "core/tensor_serialization.hpp"
+#include <algorithm>
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
@@ -21,6 +25,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace lfs::training {
@@ -195,7 +200,7 @@ namespace lfs::training {
             const std::string_view operation) {
             if (!tensor.is_valid())
                 throw std::invalid_argument(std::string(operation) + ": image tensor is invalid");
-            if (tensor.device() != lfs::core::Device::CUDA || tensor.dtype() != lfs::core::DataType::Float32)
+            if (tensor.device() != lfs::core::Device::GPU || tensor.dtype() != lfs::core::DataType::Float32)
                 throw std::invalid_argument(std::string(operation) + ": image tensor must be CUDA Float32");
             if (tensor.ndim() != 3)
                 throw std::invalid_argument(std::string(operation) + ": image tensor must have rank 3");
@@ -244,24 +249,27 @@ namespace lfs::training {
         const size_t guidance = static_cast<size_t>(grid_L);
         const size_t height = static_cast<size_t>(grid_H);
         const size_t width = static_cast<size_t>(grid_W);
-        grids_ = lfs::core::Tensor::empty({n, c, guidance, height, width}, lfs::core::Device::CUDA);
-
+        grids_ = lfs::core::Tensor::zeros({n, c, guidance, height, width}, lfs::core::Device::CPU);
         if (parameterization_ == BilateralGridParameterization::Affine) {
-            kernels::launch_bilateral_grid_init_identity(
-                grids_.ptr<float>(), num_images, grid_L, grid_H, grid_W, nullptr);
-        } else {
-            grids_.zero_();
+            // Identity affine transform: diagonal entries of the 3x4 matrix are one.
+            const size_t spatial = guidance * height * width;
+            float* const data = grids_.ptr<float>();
+            for (size_t image = 0; image < n; ++image) {
+                for (const size_t channel : {size_t{0}, size_t{5}, size_t{10}}) {
+                    std::fill_n(data + (image * c + channel) * spatial, spatial, 1.0f);
+                }
+            }
         }
-
-        exp_avg_ = lfs::core::Tensor::zeros(grids_.shape(), lfs::core::Device::CUDA);
-        exp_avg_sq_ = lfs::core::Tensor::zeros(grids_.shape(), lfs::core::Device::CUDA);
+        exp_avg_ = lfs::core::Tensor::zeros(grids_.shape(), lfs::core::Device::CPU);
+        exp_avg_sq_ = lfs::core::Tensor::zeros(grids_.shape(), lfs::core::Device::CPU);
+        allocate_resident_slots();
         slice_grad_ = lfs::core::Tensor::zeros(
-            {c, guidance, height, width}, lfs::core::Device::CUDA);
+            {c, guidance, height, width}, lfs::core::Device::GPU);
 
         const size_t spatial = guidance * height * width;
         const size_t temp_size = std::max(size_t(2048), (spatial + 255) / 256);
-        tv_temp_buffer_ = lfs::core::Tensor::empty({temp_size}, lfs::core::Device::CUDA);
-        tv_loss_scalar_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+        tv_temp_buffer_ = lfs::core::Tensor::empty({temp_size}, lfs::core::Device::GPU);
+        tv_loss_scalar_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::GPU);
 
         last_step_.assign(n, 0);
 
@@ -280,12 +288,12 @@ namespace lfs::training {
         const ImageLayout layout = validate_image_tensor(rgb, "BilateralGrid::apply");
         const auto& shape = rgb.shape();
         const auto rgb_cont = rgb.contiguous();
-        const float* grid_ptr = slice_ptr(grids_, image_idx);
+        const float* grid_ptr = device_slice(resident_grids_, resident_slot(image_idx));
         const float* offset_ptr = shared_offset_.ptr<float>();
         assert(static_cast<int>(grids_.shape()[1]) == channels_);
 
         if (layout.chw) {
-            auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::CUDA);
+            auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::GPU);
             if (parameterization_ == BilateralGridParameterization::ExposureChroma) {
                 kernels::launch_bilateral_grid_slice_forward_exposure_chroma_chw(
                     grid_ptr, rgb_cont.ptr<float>(), output.ptr<float>(),
@@ -300,7 +308,7 @@ namespace lfs::training {
             return output;
         }
 
-        auto output = lfs::core::Tensor::empty({shape[0], shape[1], 3}, lfs::core::Device::CUDA);
+        auto output = lfs::core::Tensor::empty({shape[0], shape[1], 3}, lfs::core::Device::GPU);
         if (parameterization_ == BilateralGridParameterization::ExposureChroma) {
             kernels::launch_bilateral_grid_slice_forward_exposure_chroma(
                 grid_ptr, rgb_cont.ptr<float>(), output.ptr<float>(),
@@ -330,16 +338,15 @@ namespace lfs::training {
         const auto& shape = rgb.shape();
         const auto rgb_cont = rgb.contiguous();
         const auto grad_cont = grad_output.contiguous();
-        const float* grid_ptr = slice_ptr(grids_, image_idx);
+        const float* grid_ptr = device_slice(resident_grids_, resident_slot(image_idx));
         const float* offset_ptr = shared_offset_.ptr<float>();
         float* grad_grid_ptr = slice_grad_.ptr<float>();
         assert(static_cast<int>(grids_.shape()[1]) == channels_);
 
-        LFS_CUDA_CHECK(cudaMemsetAsync(
-            grad_grid_ptr, 0, slice_elements() * sizeof(float), nullptr));
+        slice_grad_.zero_();
 
         if (layout.chw) {
-            auto grad_rgb = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::CUDA);
+            auto grad_rgb = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::GPU);
             if (parameterization_ == BilateralGridParameterization::ExposureChroma) {
                 kernels::launch_bilateral_grid_slice_backward_exposure_chroma_chw(
                     grid_ptr, rgb_cont.ptr<float>(), grad_cont.ptr<float>(),
@@ -356,7 +363,7 @@ namespace lfs::training {
             return grad_rgb;
         }
 
-        auto grad_rgb = lfs::core::Tensor::empty({shape[0], shape[1], 3}, lfs::core::Device::CUDA);
+        auto grad_rgb = lfs::core::Tensor::empty({shape[0], shape[1], 3}, lfs::core::Device::GPU);
         if (parameterization_ == BilateralGridParameterization::ExposureChroma) {
             kernels::launch_bilateral_grid_slice_backward_exposure_chroma(
                 grid_ptr, rgb_cont.ptr<float>(), grad_cont.ptr<float>(),
@@ -375,23 +382,21 @@ namespace lfs::training {
 
     lfs::core::Tensor BilateralGrid::tv_loss_gpu() {
         assert(static_cast<int>(grids_.shape()[1]) == channels_);
-        LFS_CUDA_CHECK(cudaMemsetAsync(
-            tv_loss_scalar_.ptr<float>(), 0, sizeof(float), nullptr));
-        kernels::launch_bilateral_grid_tv_forward(
-            grids_.ptr<float>(), tv_loss_scalar_.ptr<float>(), tv_temp_buffer_.ptr<float>(),
-            num_images_, channels_, grid_guidance_, grid_height_, grid_width_,
-            num_images_, nullptr);
-        return tv_loss_scalar_;
+        auto total = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+        for (int i = 0; i < num_images_; ++i) {
+            total = total.add(tv_loss_gpu(i));
+        }
+        return total;
     }
 
     lfs::core::Tensor BilateralGrid::tv_loss_gpu(int image_idx) {
         if (image_idx < 0 || image_idx >= num_images_) {
             throw std::out_of_range("BilateralGrid::tv_loss_gpu: image_idx out of range");
         }
-        LFS_CUDA_CHECK(cudaMemsetAsync(
-            tv_loss_scalar_.ptr<float>(), 0, sizeof(float), nullptr));
+        tv_loss_scalar_.zero_();
         kernels::launch_bilateral_grid_tv_forward(
-            slice_ptr(grids_, image_idx), tv_loss_scalar_.ptr<float>(), tv_temp_buffer_.ptr<float>(),
+            device_slice(resident_grids_, resident_slot(image_idx)), tv_loss_scalar_.ptr<float>(),
+            tv_temp_buffer_.ptr<float>(),
             1, channels_, grid_guidance_, grid_height_, grid_width_,
             num_images_, nullptr);
         return tv_loss_scalar_;
@@ -399,8 +404,7 @@ namespace lfs::training {
 
     void BilateralGrid::tv_backward(float tv_weight) {
         for (int i = 0; i < num_images_; ++i) {
-            LFS_CUDA_CHECK(cudaMemsetAsync(
-                slice_grad_.ptr<float>(), 0, slice_elements() * sizeof(float), nullptr));
+            slice_grad_.zero_();
             tv_backward(tv_weight, i);
         }
     }
@@ -410,7 +414,7 @@ namespace lfs::training {
             throw std::out_of_range("BilateralGrid::tv_backward: image_idx out of range");
         }
         kernels::launch_bilateral_grid_tv_backward(
-            slice_ptr(grids_, image_idx), tv_weight, slice_grad_.ptr<float>(),
+            device_slice(resident_grids_, resident_slot(image_idx)), tv_weight, slice_grad_.ptr<float>(),
             1, channels_, grid_guidance_, grid_height_, grid_width_,
             num_images_, nullptr);
     }
@@ -419,26 +423,31 @@ namespace lfs::training {
         for (int i = 0; i < num_images_; ++i) {
             optimizer_step(i);
         }
+        flush_resident();
     }
 
     void BilateralGrid::optimizer_step(int image_idx) {
         if (image_idx < 0 || image_idx >= num_images_) {
             throw std::out_of_range("BilateralGrid::optimizer_step: image_idx out of range");
         }
+        const int slot = resident_slot(image_idx);
+        slots_[static_cast<size_t>(slot)].dirty = true;
+        float* const exp_avg = device_slice(resident_exp_avg_, slot);
+        float* const exp_avg_sq = device_slice(resident_exp_avg_sq_, slot);
         const int64_t K = step_ - last_step_[static_cast<size_t>(image_idx)];
         if (K > 1) {
             const double skipped = static_cast<double>(K - 1);
             const float scale_avg = static_cast<float>(std::pow(config_.beta1, skipped));
             const float scale_avg_sq = static_cast<float>(std::pow(config_.beta2, skipped));
             kernels::launch_bilateral_grid_scale_moments(
-                slice_ptr(exp_avg_, image_idx), slice_ptr(exp_avg_sq_, image_idx),
+                exp_avg, exp_avg_sq,
                 static_cast<int>(slice_elements()), scale_avg, scale_avg_sq, nullptr);
         }
         float bc1_rcp, bc2_sqrt_rcp;
         compute_bias_corrections(bc1_rcp, bc2_sqrt_rcp);
         kernels::launch_bilateral_grid_adam_update(
-            slice_ptr(grids_, image_idx), slice_ptr(exp_avg_, image_idx),
-            slice_ptr(exp_avg_sq_, image_idx), slice_grad_.ptr<float>(),
+            device_slice(resident_grids_, slot), exp_avg,
+            exp_avg_sq, slice_grad_.ptr<float>(),
             static_cast<int>(slice_elements()),
             static_cast<float>(current_lr_),
             static_cast<float>(config_.beta1), static_cast<float>(config_.beta2),
@@ -477,8 +486,7 @@ namespace lfs::training {
     }
 
     void BilateralGrid::zero_grad() {
-        LFS_CUDA_CHECK(cudaMemsetAsync(slice_grad_.ptr<float>(), 0,
-                                       slice_grad_.numel() * sizeof(float), nullptr));
+        slice_grad_.zero_();
     }
 
     void BilateralGrid::scheduler_step() {
@@ -505,12 +513,13 @@ namespace lfs::training {
         identity_mean_ = lfs::core::Tensor::from_vector(
             identity,
             {static_cast<size_t>(channels_)},
-            lfs::core::Device::CUDA);
+            lfs::core::Device::GPU);
     }
 
     void BilateralGrid::rebuild_projection_state() {
+        flush_resident();
         const int dataset_axes[] = {0, 2, 3, 4};
-        const auto mean = grids_.mean(std::span<const int>(dataset_axes), false);
+        const auto mean = grids_.mean(std::span<const int>(dataset_axes), false).cuda();
         const float spatial = static_cast<float>(grid_guidance_ * grid_height_ * grid_width_);
         // Sum over every image's cells: N * L * H * W, not the per-image spatial count.
         const float n_spatial = spatial * static_cast<float>(num_images_);
@@ -525,19 +534,110 @@ namespace lfs::training {
                static_cast<size_t>(grid_width_);
     }
 
-    float* BilateralGrid::slice_ptr(lfs::core::Tensor& tensor, int image_idx) {
-        return tensor.ptr<float>() + static_cast<size_t>(image_idx) * slice_elements();
+    void BilateralGrid::allocate_resident_slots() {
+        const lfs::core::TensorShape shape{
+            static_cast<size_t>(kResidentSlots), static_cast<size_t>(channels_),
+            static_cast<size_t>(grid_guidance_), static_cast<size_t>(grid_height_),
+            static_cast<size_t>(grid_width_)};
+        resident_grids_ = lfs::core::Tensor::empty(shape, lfs::core::Device::CUDA);
+        resident_exp_avg_ = lfs::core::Tensor::empty(shape, lfs::core::Device::CUDA);
+        resident_exp_avg_sq_ = lfs::core::Tensor::empty(shape, lfs::core::Device::CUDA);
+        slots_ = {};
+        slot_clock_ = 0;
     }
 
-    const float* BilateralGrid::slice_ptr(const lfs::core::Tensor& tensor, int image_idx) const {
-        return tensor.ptr<float>() + static_cast<size_t>(image_idx) * slice_elements();
+    float* BilateralGrid::device_slice(lfs::core::Tensor& resident, const int slot) const {
+        return resident.ptr<float>() + static_cast<size_t>(slot) * slice_elements();
     }
 
-    lfs::core::Tensor BilateralGrid::channel_mean_of_image(int image_idx) const {
-        auto slice = grids_.slice(0, static_cast<size_t>(image_idx), static_cast<size_t>(image_idx) + 1)
-                         .squeeze(0)
-                         .flatten(1);
-        return slice.mean(1);
+    int BilateralGrid::resident_slot(const int image_idx) {
+        assert(image_idx >= 0 && image_idx < num_images_);
+        size_t victim = 0;
+        for (size_t s = 0; s < slots_.size(); ++s) {
+            if (slots_[s].image == image_idx) {
+                slots_[s].last_use = ++slot_clock_;
+                return static_cast<int>(s);
+            }
+            if (slots_[s].last_use < slots_[victim].last_use) {
+                victim = s;
+            }
+        }
+        write_back(static_cast<int>(victim));
+
+        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+        if (copy_stream_ && *copy_stream_ != stream) {
+            LFS_CUDA_CHECK(cudaStreamSynchronize(*copy_stream_));
+        }
+        copy_stream_ = stream;
+        const size_t elements = slice_elements();
+        const size_t host_offset = static_cast<size_t>(image_idx) * elements;
+        const std::array<std::pair<lfs::core::Tensor*, lfs::core::Tensor*>, 3> tensors{{
+            {&grids_, &resident_grids_},
+            {&exp_avg_, &resident_exp_avg_},
+            {&exp_avg_sq_, &resident_exp_avg_sq_},
+        }};
+        for (const auto& [host, device] : tensors) {
+            LFS_CUDA_CHECK(cudaMemcpyAsync(device_slice(*device, static_cast<int>(victim)),
+                                           host->ptr<float>() + host_offset, elements * sizeof(float),
+                                           cudaMemcpyHostToDevice, stream));
+        }
+        slots_[victim] = {.image = image_idx, .dirty = false, .last_use = ++slot_clock_};
+        return static_cast<int>(victim);
+    }
+
+    void BilateralGrid::write_back(const int slot) const {
+        auto& state = slots_[static_cast<size_t>(slot)];
+        if (state.image < 0 || !state.dirty) {
+            return;
+        }
+        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+        if (copy_stream_ && *copy_stream_ != stream) {
+            LFS_CUDA_CHECK(cudaStreamSynchronize(*copy_stream_));
+        }
+        copy_stream_ = stream;
+        auto& self = const_cast<BilateralGrid&>(*this);
+        const size_t elements = slice_elements();
+        const size_t host_offset = static_cast<size_t>(state.image) * elements;
+        const std::array<std::pair<lfs::core::Tensor*, lfs::core::Tensor*>, 3> tensors{{
+            {&self.grids_, &self.resident_grids_},
+            {&self.exp_avg_, &self.resident_exp_avg_},
+            {&self.exp_avg_sq_, &self.resident_exp_avg_sq_},
+        }};
+        for (const auto& [host, device] : tensors) {
+            LFS_CUDA_CHECK(cudaMemcpyAsync(host->ptr<float>() + host_offset,
+                                           device_slice(*device, slot), elements * sizeof(float),
+                                           cudaMemcpyDeviceToHost, stream));
+        }
+        state.dirty = false;
+    }
+
+    void BilateralGrid::flush_resident() const {
+        for (int s = 0; s < kResidentSlots; ++s) {
+            write_back(s);
+        }
+        if (copy_stream_) {
+            LFS_CUDA_CHECK(cudaStreamSynchronize(*copy_stream_));
+        }
+    }
+
+    void BilateralGrid::drop_resident() {
+        flush_resident();
+        slots_ = {};
+    }
+
+    lfs::core::Tensor& BilateralGrid::grids() {
+        drop_resident();
+        return grids_;
+    }
+
+    const lfs::core::Tensor& BilateralGrid::grids() const {
+        flush_resident();
+        return grids_;
+    }
+
+    lfs::core::Tensor BilateralGrid::channel_mean_of_image(int image_idx) {
+        const auto slot = static_cast<size_t>(resident_slot(image_idx));
+        return resident_grids_.slice(0, slot, slot + 1).squeeze(0).flatten(1).mean(1);
     }
 
     void BilateralGrid::project_image(int image_idx) {
@@ -545,12 +645,14 @@ namespace lfs::training {
             throw std::out_of_range("BilateralGrid::project_image: image_idx out of range");
         }
         const auto mean = channel_mean_of_image(image_idx);
+        const int slot = resident_slot(image_idx);
+        slots_[static_cast<size_t>(slot)].dirty = true;
         kernels::launch_bilateral_grid_project_mean(
-            slice_ptr(grids_, image_idx), mean.ptr<float>(), identity_mean_.ptr<float>(),
+            device_slice(resident_grids_, slot), mean.ptr<float>(), identity_mean_.ptr<float>(),
             1, channels_, grid_guidance_, grid_height_, grid_width_, 1, nullptr);
         const float spatial = static_cast<float>(grid_guidance_ * grid_height_ * grid_width_);
         const float inv_n_spatial = 1.0f / (static_cast<float>(num_images_) * spatial);
-        auto zeros = lfs::core::Tensor::zeros({static_cast<size_t>(channels_)}, lfs::core::Device::CUDA);
+        auto zeros = lfs::core::Tensor::zeros({static_cast<size_t>(channels_)}, lfs::core::Device::GPU);
         kernels::launch_bilateral_grid_update_shared_offset(
             channel_sum_.ptr<float>(), shared_offset_.ptr<float>(),
             identity_mean_.ptr<float>(), mean.ptr<float>(), zeros.ptr<float>(),
@@ -568,6 +670,7 @@ namespace lfs::training {
             for (int i = 0; i < num_images_; ++i) {
                 project_image(i);
             }
+            flush_resident();
             return;
         }
         rebuild_projection_state();
@@ -611,6 +714,7 @@ namespace lfs::training {
         os.write(reinterpret_cast<const char*>(&initial_lr_), sizeof(initial_lr_));
         os.write(reinterpret_cast<const char*>(&total_iterations_), sizeof(total_iterations_));
 
+        flush_resident();
         os << grids_ << exp_avg_ << exp_avg_sq_;
         assert(last_step_.size() == static_cast<size_t>(num_images_));
         const size_t last_step_bytes = last_step_.size() * sizeof(int64_t);
@@ -710,19 +814,19 @@ namespace lfs::training {
             throw std::runtime_error("Invalid BilateralGrid checkpoint tensor schema");
         }
 
-        grids = grids.cuda();
-        exp_avg = exp_avg.cuda();
-        exp_avg_sq = exp_avg_sq.cuda();
+        grids = grids.cpu();
+        exp_avg = exp_avg.cpu();
+        exp_avg_sq = exp_avg_sq.cpu();
 
         const size_t spatial = static_cast<size_t>(grid_guidance) * static_cast<size_t>(grid_height) *
                                static_cast<size_t>(grid_width);
         const size_t temp_size = std::max(size_t(2048), (spatial + 255) / 256);
-        auto tv_temp_buffer = lfs::core::Tensor::empty({temp_size}, lfs::core::Device::CUDA);
-        auto tv_loss_scalar = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+        auto tv_temp_buffer = lfs::core::Tensor::empty({temp_size}, lfs::core::Device::GPU);
+        auto tv_loss_scalar = lfs::core::Tensor::zeros({1}, lfs::core::Device::GPU);
         auto slice_grad = lfs::core::Tensor::zeros(
             {static_cast<size_t>(channels), static_cast<size_t>(grid_guidance),
              static_cast<size_t>(grid_height), static_cast<size_t>(grid_width)},
-            lfs::core::Device::CUDA);
+            lfs::core::Device::GPU);
 
         num_images_ = num_images;
         grid_width_ = grid_width;
@@ -742,6 +846,7 @@ namespace lfs::training {
         tv_temp_buffer_ = std::move(tv_temp_buffer);
         tv_loss_scalar_ = std::move(tv_loss_scalar);
         last_step_ = std::move(last_step);
+        allocate_resident_slots();
         rebuild_identity_mean();
         rebuild_projection_state();
     }
@@ -757,6 +862,12 @@ namespace lfs::training {
         std::swap(grids_, loaded.grids_);
         std::swap(exp_avg_, loaded.exp_avg_);
         std::swap(exp_avg_sq_, loaded.exp_avg_sq_);
+        std::swap(resident_grids_, loaded.resident_grids_);
+        std::swap(resident_exp_avg_, loaded.resident_exp_avg_);
+        std::swap(resident_exp_avg_sq_, loaded.resident_exp_avg_sq_);
+        std::swap(slots_, loaded.slots_);
+        std::swap(slot_clock_, loaded.slot_clock_);
+        std::swap(copy_stream_, loaded.copy_stream_);
         std::swap(slice_grad_, loaded.slice_grad_);
         std::swap(tv_temp_buffer_, loaded.tv_temp_buffer_);
         std::swap(tv_loss_scalar_, loaded.tv_loss_scalar_);

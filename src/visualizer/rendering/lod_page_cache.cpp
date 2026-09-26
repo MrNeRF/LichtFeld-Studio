@@ -157,8 +157,11 @@ namespace lfs::vis {
         }
 
         void setSink(std::shared_ptr<const PageSink> sink) {
-            std::lock_guard lock(mutex_);
-            sink_ = std::move(sink);
+            {
+                std::lock_guard lock(mutex_);
+                sink_ = std::move(sink);
+            }
+            cv_.notify_all();
         }
 
     private:
@@ -169,7 +172,7 @@ namespace lfs::vis {
             std::vector<std::uint8_t> raw;
             std::unique_lock lock(mutex_);
             while (true) {
-                cv_.wait(lock, [this] { return stop_ || !queue_.empty(); });
+                cv_.wait(lock, [this] { return stop_ || (!queue_.empty() && sink_ && *sink_); });
                 if (stop_) {
                     return;
                 }
@@ -185,9 +188,7 @@ namespace lfs::vis {
                 if (!stream.is_open()) {
                     (void)lfs::core::open_file_for_read(source_.path, std::ios::binary, stream);
                 }
-                if (sink == nullptr || !(*sink)) {
-                    result.error = "page sink not installed";
-                } else if (!stream.is_open()) {
+                if (!stream.is_open()) {
                     result.error = "Failed to open RAD source for chunk decode";
                 } else {
                     raw.resize(entry.range.file_bytes);
@@ -323,8 +324,7 @@ namespace lfs::vis {
         }
         for (std::uint32_t chunk = 0;
              chunk < static_cast<std::uint32_t>(root_chunk_count_); ++chunk) {
-            // Self-healing: a failed stream (sink not yet installed, decode
-            // error) released the reservation; retry until the root is in.
+            // A failed decode releases the reservation; retry until the root is in.
             (void)requestResident(chunk, true,
                                   std::numeric_limits<std::uint32_t>::max());
         }

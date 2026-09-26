@@ -7,12 +7,14 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "gui/rmlui/rml_path_utils.hpp"
+#include "input/sdl_coordinate_utils.hpp"
 
 #include <SDL3/SDL_clipboard.h>
 #include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_rect.h>
 #include <SDL3/SDL_timer.h>
 
+#include <algorithm>
 #include <cmath>
 
 namespace lfs::vis::gui {
@@ -69,11 +71,19 @@ namespace lfs::vis::gui {
         const std::string_view view(input);
         if (!view.starts_with(kPrefix)) {
             translated = input;
-            return 0;
+        } else {
+            translated = lfs::event::LocalizationManager::getInstance().get(view.substr(kPrefix.size()));
         }
+        noteShownText(translated);
+        return view.starts_with(kPrefix) ? 1 : 0;
+    }
 
-        translated = lfs::event::LocalizationManager::getInstance().get(view.substr(kPrefix.size()));
-        return 1;
+    void RmlSystemInterface::noteShownText(const std::string_view text) {
+        // UTF-8 lead bytes 0xF0 and up start four-byte sequences, i.e. U+10000 and above.
+        if (!saw_astral_text_)
+            saw_astral_text_ = std::ranges::any_of(text, [](const char ch) {
+                return static_cast<unsigned char>(ch) >= 0xF0;
+            });
     }
 
     bool RmlSystemInterface::LogMessage(Rml::Log::Type type, const Rml::String& message) {
@@ -171,11 +181,13 @@ namespace lfs::vis::gui {
         if (!window_)
             return;
 
+        // RmlUi uses framebuffer pixels; SDL expects window coordinates for IME placement.
+        const auto scale = input::windowPixelScale(window_);
         SDL_Rect rect{};
-        rect.x = current_context_window_x_ + static_cast<int>(std::lround(caret_position.x));
-        rect.y = current_context_window_y_ + static_cast<int>(std::lround(caret_position.y));
+        rect.x = static_cast<int>(std::lround((current_context_window_x_ + caret_position.x) / scale.x));
+        rect.y = static_cast<int>(std::lround((current_context_window_y_ + caret_position.y) / scale.y));
         rect.w = 1;
-        rect.h = std::max(1, static_cast<int>(std::lround(line_height)));
+        rect.h = std::max(1, static_cast<int>(std::lround(line_height / scale.y)));
         SDL_SetTextInputArea(window_, &rect, 0);
     }
 

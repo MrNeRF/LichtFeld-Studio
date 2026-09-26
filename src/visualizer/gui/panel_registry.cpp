@@ -8,6 +8,7 @@
 #include "gui/panel_layout.hpp"
 #include "gui/ui_context.hpp"
 #include "gui/ui_widgets.hpp"
+#include "python/python_runtime.hpp"
 #include "theme/theme.hpp"
 #include "visualizer/app_store.hpp"
 
@@ -205,8 +206,8 @@ namespace lfs::vis::gui {
         }
 
         float clampedFloatingPanelWidth(const float initial_width, const float anchor_width,
-                                        const float dpi) {
-            const float min_panel_width = 320.0f * dpi;
+                                        const float dpi, const float minimum_width = 320.0f) {
+            const float min_panel_width = minimum_width * dpi;
             const float max_panel_width = std::max(min_panel_width, anchor_width);
             const float w = initial_width > 0.0f ? initial_width : 560.0f * dpi;
             return std::clamp(w, min_panel_width, max_panel_width);
@@ -227,8 +228,9 @@ namespace lfs::vis::gui {
                                                  const bool auto_center,
                                                  const bool park_at_bottom,
                                                  const float dpi,
-                                                 const float override_height = 0.0f) {
-            const float w = clampedFloatingPanelWidth(initial_width, anchor.width, dpi);
+                                                 const float override_height = 0.0f,
+                                                 const float minimum_width = 320.0f) {
+            const float w = clampedFloatingPanelWidth(initial_width, anchor.width, dpi, minimum_width);
             const float h = override_height > 0.0f
                                 ? override_height
                                 : (initial_height > 0.0f ? initial_height : 400.0f * dpi);
@@ -716,7 +718,8 @@ apply_registered_chrome:
             if (anchor.width <= 0.0f || anchor.height <= 0.0f)
                 return;
 
-            float w = clampedFloatingPanelWidth(snap.initial_width, anchor.width, dpi);
+            float w = clampedFloatingPanelWidth(snap.initial_width, anchor.width, dpi,
+                                                snap.id == "lfs.asset_manager" ? 260.0f : 320.0f);
             const float max_h = snap.initial_height > 0
                                     ? std::min(snap.initial_height, anchor.height)
                                     : anchor.height;
@@ -799,7 +802,8 @@ apply_registered_chrome:
                                                      auto_center,
                                                      in_viewport,
                                                      dpi,
-                                                     h);
+                                                     h,
+                                                     snap.id == "lfs.asset_manager" ? 260.0f : 320.0f);
             w = box.width;
             h = box.height;
             px = box.x;
@@ -822,14 +826,11 @@ apply_registered_chrome:
             layout.mouse_in_titlebar =
                 mouse_x >= px && mouse_x < px + w && mouse_y >= py && mouse_y < py + kTitleH;
 
-            const bool on_left =
-                mouse_x >= px - kResizeEdge && mouse_x < px + kResizeEdge;
-            const bool on_right =
-                mouse_x >= px + w - kResizeEdge && mouse_x < px + w + kResizeEdge;
-            const bool on_top =
-                mouse_y >= py - kResizeEdge && mouse_y < py + kResizeEdge;
-            const bool on_bottom =
-                mouse_y >= py + h - kResizeEdge && mouse_y < py + h + kResizeEdge;
+            const float resize_scale = floatingUiScale();
+            const bool on_left = resizeHitZone(px, resize_scale, 6.0f).contains(mouse_x);
+            const bool on_right = resizeHitZone(px + w, resize_scale, 6.0f).contains(mouse_x);
+            const bool on_top = resizeHitZone(py, resize_scale, 6.0f).contains(mouse_y);
+            const bool on_bottom = resizeHitZone(py + h, resize_scale, 6.0f).contains(mouse_y);
             const bool on_edge_x = on_left || on_right;
             const bool on_edge_y = on_top || on_bottom;
             const bool in_y_range =
@@ -910,8 +911,9 @@ apply_registered_chrome:
                         float py = layout.pos_y;
                         float drawn_h = layout.drawn_height;
                         bool has_user_height = layout.has_user_height;
+                        bool resize_owns_input = false;
 
-                        const float kMinPanelWidth = 320.0f * dpi;
+                        const float kMinPanelWidth = (snap.id == "lfs.asset_manager" ? 260.0f : 320.0f) * dpi;
                         const float kMinPanelHeight = 180.0f * dpi;
 
                         {
@@ -999,6 +1001,8 @@ apply_registered_chrome:
                                         interaction.resize_direction_y = 0;
                                     }
                                 }
+                                resize_owns_input = interaction.resizing ||
+                                                    (hovered_this_panel && layout.mouse_in_resize_grip);
 
                                 if (!interaction.resizing && interaction.user_height > 0 &&
                                     drawn_h <= 0) {
@@ -1045,6 +1049,23 @@ apply_registered_chrome:
                         }
 
                         const float forced = (has_user_height && drawn_h > 0 && h > drawn_h) ? h : 0.0f;
+                        PanelInputState masked_resize_input;
+                        const PanelInputState* panel_input = input;
+                        if (resize_owns_input && input) {
+                            masked_resize_input = *input;
+                            masked_resize_input.mouse_x = -1.0e9f;
+                            masked_resize_input.mouse_y = -1.0e9f;
+                            for (auto& down : masked_resize_input.mouse_down)
+                                down = false;
+                            for (auto& clicked : masked_resize_input.mouse_clicked)
+                                clicked = false;
+                            for (auto& released : masked_resize_input.mouse_released)
+                                released = false;
+                            masked_resize_input.mouse_button_events.clear();
+                            masked_resize_input.mouse_wheel = 0.0f;
+                            masked_resize_input.mouse_wheel_x = 0.0f;
+                            panel_input = &masked_resize_input;
+                        }
                         const auto result = snap.panel->renderDirect({
                                                                          .mode = PanelDirectRenderMode::Draw,
                                                                          .space = snap.space,
@@ -1053,7 +1074,7 @@ apply_registered_chrome:
                                                                          .width = w,
                                                                          .height = h,
                                                                          .forced_height = forced,
-                                                                         .input = input,
+                                                                         .input = panel_input,
                                                                      },
                                                                      ctx);
                         drawn_h = result.height;
@@ -1725,8 +1746,8 @@ apply_registered_chrome:
                             interaction.x = NAN;
                             interaction.y = NAN;
                             interaction.auto_center = true;
-                            resetFloatingPanelSize(
-                                p, interaction, floatingUiScale());
+                            // initial_width/height retain the last floating
+                            // size while a panel is temporarily hidden.
                             bring_floating_panel_to_front_locked(p);
                         }
                     } else if (!enabled) {
@@ -1743,8 +1764,10 @@ apply_registered_chrome:
             }
         }
 
-        if (changed)
+        if (changed) {
             lfs::vis::publish_viewport_toolbar_generation();
+            lfs::python::request_redraw();
+        }
         if (panel_to_notify) {
             try {
                 panel_to_notify->on_visibility_changed(enabled);
@@ -2074,20 +2097,24 @@ apply_registered_chrome:
                 if (!validatePanelContract(p, new_space))
                     return false;
                 const bool was_floating = p.space == PanelSpace::Floating;
+                const bool space_changed = p.space != new_space;
                 requested_project_floating_state_.erase(p.id);
                 p.space = new_space;
+                if (space_changed && p.panel)
+                    p.panel->on_layout_changed();
                 ++visibility_revision_;
                 if (!was_floating && new_space == PanelSpace::Floating) {
                     auto& interaction = ensure_floating_interaction_locked(p);
                     interaction.x = NAN;
                     interaction.y = NAN;
                     interaction.auto_center = true;
-                    resetFloatingPanelSize(p, interaction, floatingUiScale());
+                    // Keep a user's floating width when the panel is docked and
+                    // opened again. The original size is already present for a
+                    // panel that has never been resized.
+                    interaction.user_height = 0.0f;
                     writeProvisionalFloatingBounds(p, interaction);
                     bring_floating_panel_to_front_locked(p);
                 } else if (was_floating && new_space != PanelSpace::Floating) {
-                    p.initial_width = p.original_width;
-                    p.initial_height = p.original_height;
                     floating_interactions_.erase(p.id);
                 }
                 return true;

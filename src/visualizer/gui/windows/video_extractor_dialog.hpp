@@ -286,7 +286,6 @@ namespace lfs::gui {
         Rml::Element* overwrite_overlay_el_ = nullptr;
         int rotation_deg_ = 0;
         bool hdr_to_sdr_ = false;
-        std::vector<uint8_t> rotated_buf_;
         Rml::Element* rotation_cw_btn_el_ = nullptr;
         Rml::Element* rotation_ccw_btn_el_ = nullptr;
         Rml::Element* rotation_value_el_ = nullptr;

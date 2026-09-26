@@ -5,12 +5,16 @@
 
 #include "core/camera.hpp"
 #include "core/error_bus.hpp"
+#include "core/event_bridge/command_api.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/parameters.hpp"
 #include "core/scene.hpp"
+#include "core/training_manager.hpp"
+#include "core/training_state.hpp"
 #include "core/uuid.hpp"
+#include "cuda_backend_test.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/panels/python_console_panel.hpp"
@@ -25,11 +29,8 @@
 #include "rendering/rendering_types.hpp"
 #include "sequencer/timeline.hpp"
 #include "tools/unified_tool_registry.hpp"
-#include "training/control/command_api.hpp"
 #include "training/project_snapshot_chapters.hpp"
 #include "training/trainer.hpp"
-#include "training/training_manager.hpp"
-#include "training/training_state.hpp"
 #include "visualizer_impl.hpp"
 
 #include <gtest/gtest.h>
@@ -803,13 +804,90 @@ namespace {
         EXPECT_TRUE(restored->gut);
 
         Viewport viewport;
-        const auto expected = rolled_panel_camera(7.0f);
+        auto expected = rolled_panel_camera(7.0f);
+        expected.ortho_extent_world = static_cast<float>(viewport.windowSize.y) / *expected.ortho_scale;
         applyPanelCameraProjectState(
             viewport, expected);
         EXPECT_EQ(
             capturePanelCameraProjectState(
                 viewport),
             expected);
+    }
+
+    TEST(P5SessionChapterTest, GalleryOrthographicExtentSurvivesViewportSizes) {
+        auto state = rolled_panel_camera(7.0f);
+        state.ortho_extent_world = 6.25f;
+        auto json = panelCameraProjectStateToJson("primary", state);
+        auto restored = panelCameraProjectStateFromJson(json);
+        ASSERT_TRUE(restored);
+        EXPECT_EQ(restored->ortho_extent_world, state.ortho_extent_world);
+        for (const int height : {480, 1080}) {
+            Viewport viewport(1280, height);
+            applyPanelCameraProjectState(viewport, *restored);
+            ASSERT_TRUE(viewport.ortho_scale_override);
+            EXPECT_FLOAT_EQ(height / *viewport.ortho_scale_override, 6.25f);
+            const auto saved = capturePanelCameraProjectState(viewport);
+            ASSERT_TRUE(saved.ortho_extent_world);
+            EXPECT_FLOAT_EQ(*saved.ortho_extent_world, 6.25f);
+            Viewport reopened(1280, height * 2);
+            applyPanelCameraProjectState(reopened, saved);
+            EXPECT_FLOAT_EQ(reopened.windowSize.y / *reopened.ortho_scale_override, 6.25f);
+        }
+        json["ortho_extent_world"] = -1;
+        EXPECT_FALSE(panelCameraProjectStateFromJson(json));
+        json.erase("ortho_extent_world");
+        EXPECT_TRUE(panelCameraProjectStateFromJson(json));
+    }
+
+    TEST(P5SessionChapterTest, CaptureUsesRenderSettingsOrthoScaleWhenOverrideMissing) {
+        Viewport viewport(1280, 720);
+        const float fallback = 720.0f / 6.25f;
+        auto captured = capturePanelCameraProjectState(viewport, fallback);
+        EXPECT_FALSE(captured.ortho_scale.has_value());
+        ASSERT_TRUE(captured.ortho_extent_world.has_value());
+        EXPECT_FLOAT_EQ(*captured.ortho_extent_world, 6.25f);
+
+        viewport.ortho_scale_override = 720.0f / 5.0f;
+        captured = capturePanelCameraProjectState(viewport, fallback);
+        ASSERT_TRUE(captured.ortho_scale.has_value());
+        EXPECT_FLOAT_EQ(*captured.ortho_scale, 720.0f / 5.0f);
+        ASSERT_TRUE(captured.ortho_extent_world.has_value());
+        EXPECT_FLOAT_EQ(*captured.ortho_extent_world, 5.0f);
+
+        Viewport empty(1280, 0);
+        captured = capturePanelCameraProjectState(empty, fallback);
+        EXPECT_FALSE(captured.ortho_extent_world.has_value());
+
+        Viewport invalid(1280, 720);
+        captured = capturePanelCameraProjectState(invalid, -1.0f);
+        EXPECT_FALSE(captured.ortho_extent_world.has_value());
+        captured = capturePanelCameraProjectState(invalid, std::nullopt);
+        EXPECT_FALSE(captured.ortho_extent_world.has_value());
+    }
+
+    TEST(P5SessionChapterTest,
+         GalleryColorSettingsPersistAndOldProjectsKeepTheirAppearance) {
+        lfs::vis::RenderSettings settings;
+        settings.color_exposure = 2.5f;
+        settings.color_tonemapping = 5;
+        settings.splat_render_profile = 1;
+        auto json = renderSettingsToProjectJson(settings);
+        const auto restored = renderSettingsFromProjectJson(json);
+        ASSERT_TRUE(restored);
+        EXPECT_FLOAT_EQ(restored->color_exposure, 2.5f);
+        EXPECT_EQ(restored->color_tonemapping, 5);
+        EXPECT_EQ(restored->splat_render_profile, 1);
+
+        // Projects written before gallery color controls have no such fields.
+        // Loading them must preserve the existing untone-mapped display.
+        json.erase("color_exposure");
+        json.erase("color_tonemapping");
+        json.erase("splat_render_profile");
+        const auto legacy = renderSettingsFromProjectJson(json);
+        ASSERT_TRUE(legacy);
+        EXPECT_FLOAT_EQ(legacy->color_exposure, 1.0f);
+        EXPECT_EQ(legacy->color_tonemapping, 0);
+        EXPECT_EQ(legacy->splat_render_profile, 0);
     }
 
     TEST(P5SessionChapterTest,
@@ -1401,9 +1479,10 @@ namespace {
     }
 
     class P5MetricsRestoreTest
-        : public ::testing::Test {
+        : public lfs::test::CudaBackendTest {
     protected:
         void SetUp() override {
+            LFS_CUDA_BACKEND_OR_RETURN();
             lfs::event::EventBridge::instance()
                 .clear_all();
             auto& command_center =

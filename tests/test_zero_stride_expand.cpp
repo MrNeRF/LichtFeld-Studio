@@ -4,6 +4,7 @@
 #include "core/alloc_counter.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/tensor_zero_stride.hpp"
+#include "cuda_backend_test.hpp"
 
 #include <cmath>
 #include <cuda_runtime.h>
@@ -27,7 +28,7 @@ namespace {
     }
 
     Tensor cuda_f32(std::vector<float> v, std::vector<size_t> shape) {
-        return cpu_f32(std::move(v), std::move(shape)).cuda();
+        return cpu_f32(std::move(v), std::move(shape)).gpu();
     }
 
     void expect_allclose(const Tensor& a, const Tensor& b, float atol = 1e-5f,
@@ -46,7 +47,9 @@ namespace {
 // View metadata / alloc
 // ---------------------------------------------------------------------------
 
-TEST(ZeroStrideExpand, BroadcastToSameShapeDoesNotClone) {
+class ZeroStrideExpand : public lfs::test::CudaDeviceTest {};
+
+TEST_F(ZeroStrideExpand, BroadcastToSameShapeDoesNotClone) {
     auto base = cuda_f32({1, 2, 3, 4}, {2, 2});
     const auto snap = alloc_counter::snapshot();
     auto same = base.broadcast_to(TensorShape({2, 2}));
@@ -57,16 +60,16 @@ TEST(ZeroStrideExpand, BroadcastToSameShapeDoesNotClone) {
     EXPECT_EQ(same.shape(), base.shape());
 }
 
-TEST(ZeroStrideExpand, ExpandIsViewWithZeroStrideNoAlloc) {
+TEST_F(ZeroStrideExpand, ExpandIsViewWithZeroStrideNoAlloc) {
     // [1,4] -> [256,4]: expanded size 4 KiB floats if materialized would miss tiny slabs.
     // Use large expand so a materializing path would need a real driver alloc on cold pool.
     constexpr size_t rows = 4096;
-    auto base = Tensor::full({1, 64}, 3.25f, Device::CUDA);
+    auto base = Tensor::full({1, 64}, 3.25f, Device::GPU);
     cuda_ok();
 
     // Allocate and free a different size so the expand target is cold.
     {
-        auto poison = Tensor::empty({rows, 64}, Device::CUDA);
+        auto poison = Tensor::empty({rows, 64}, Device::GPU);
         (void)poison;
     }
     cuda_ok();
@@ -89,7 +92,7 @@ TEST(ZeroStrideExpand, ExpandIsViewWithZeroStrideNoAlloc) {
     EXPECT_EQ(exp.storage_ptr(), base.storage_ptr());
 }
 
-TEST(ZeroStrideExpand, BroadcastToIsViewWithZeroStride) {
+TEST_F(ZeroStrideExpand, BroadcastToIsViewWithZeroStride) {
     auto base = cuda_f32({10.f, 20.f, 30.f}, {1, 3});
     auto b = base.broadcast_to(TensorShape({4, 3}));
     cuda_ok();
@@ -107,7 +110,7 @@ TEST(ZeroStrideExpand, BroadcastToIsViewWithZeroStride) {
     }
 }
 
-TEST(ZeroStrideExpand, ContiguousMaterializesExpandedStorage) {
+TEST_F(ZeroStrideExpand, ContiguousMaterializesExpandedStorage) {
     auto base = cuda_f32({1.f, 2.f}, {1, 2});
     auto exp = base.expand(TensorShape({3, 2}));
     auto dense = exp.contiguous();
@@ -115,14 +118,14 @@ TEST(ZeroStrideExpand, ContiguousMaterializesExpandedStorage) {
     EXPECT_TRUE(dense.is_contiguous());
     EXPECT_FALSE(dense.has_zero_stride());
     EXPECT_EQ(dense.numel(), 6u);
-    expect_allclose(dense, cpu_f32({1, 2, 1, 2, 1, 2}, {3, 2}).cuda());
+    expect_allclose(dense, cpu_f32({1, 2, 1, 2, 1, 2}, {3, 2}).gpu());
 }
 
 // ---------------------------------------------------------------------------
 // Allowlisted consumers — view path == materialized path
 // ---------------------------------------------------------------------------
 
-TEST(ZeroStrideExpand, AllowlistedBinaryAddMatchesMaterialized) {
+TEST_F(ZeroStrideExpand, AllowlistedBinaryAddMatchesMaterialized) {
     auto a = cuda_f32({1.f, 2.f, 3.f}, {1, 3});
     auto b = cuda_f32({10.f, 20.f, 30.f, 40.f, 50.f, 60.f, 70.f, 80.f, 90.f}, {3, 3});
     auto a_view = a.expand(TensorShape({3, 3}));
@@ -135,7 +138,7 @@ TEST(ZeroStrideExpand, AllowlistedBinaryAddMatchesMaterialized) {
     EXPECT_TRUE(zero_stride::is_allowlisted(zero_stride::ConsumerKind::ElementwiseFirewall));
 }
 
-TEST(ZeroStrideExpand, AllowlistedMulScalarMatchesMaterialized) {
+TEST_F(ZeroStrideExpand, AllowlistedMulScalarMatchesMaterialized) {
     auto a = cuda_f32({2.f, 4.f}, {2, 1});
     auto v = a.expand(TensorShape({2, 5}));
     auto view_r = v.mul(3.0f);
@@ -144,7 +147,7 @@ TEST(ZeroStrideExpand, AllowlistedMulScalarMatchesMaterialized) {
     expect_allclose(view_r, mat_r, 1e-5f, "scalar mul");
 }
 
-TEST(ZeroStrideExpand, Stride0TimesStridedMix) {
+TEST_F(ZeroStrideExpand, Stride0TimesStridedMix) {
     // left: expand view; right: transpose (strided non-zero)
     auto left = cuda_f32({1.f, 2.f, 3.f}, {1, 3}).expand(TensorShape({3, 3}));
     auto right_base = cuda_f32({1, 2, 3, 4, 5, 6, 7, 8, 9}, {3, 3});
@@ -159,7 +162,7 @@ TEST(ZeroStrideExpand, Stride0TimesStridedMix) {
     expect_allclose(view_r, mat_r, 1e-5f, "stride0 x strided mix");
 }
 
-TEST(ZeroStrideExpand, AllowlistedBroadcastBinaryShapeIndexed) {
+TEST_F(ZeroStrideExpand, AllowlistedBroadcastBinaryShapeIndexed) {
     // No explicit expand: binary broadcast kernel (shape-indexed) is allowlisted.
     auto a = cuda_f32({1.f, 2.f, 3.f}, {1, 3});
     auto b = cuda_f32({10.f, 20.f, 30.f,
@@ -168,7 +171,7 @@ TEST(ZeroStrideExpand, AllowlistedBroadcastBinaryShapeIndexed) {
                       {3, 3});
     auto r = a.add(b); // internal broadcast
     cuda_ok();
-    auto expected = cpu_f32({11, 22, 33, 41, 52, 63, 71, 82, 93}, {3, 3}).cuda();
+    auto expected = cpu_f32({11, 22, 33, 41, 52, 63, 71, 82, 93}, {3, 3}).gpu();
     expect_allclose(r, expected, 1e-5f, "broadcast binary");
     EXPECT_TRUE(zero_stride::is_allowlisted(zero_stride::ConsumerKind::BroadcastBinary));
 }
@@ -177,27 +180,27 @@ TEST(ZeroStrideExpand, AllowlistedBroadcastBinaryShapeIndexed) {
 // In-place rejection
 // ---------------------------------------------------------------------------
 
-TEST(ZeroStrideExpand, InPlaceAddOnExpandViewThrows) {
+TEST_F(ZeroStrideExpand, InPlaceAddOnExpandViewThrows) {
     auto base = cuda_f32({1.f, 2.f, 3.f}, {1, 3});
     auto v = base.expand(TensorShape({2, 3}));
     ASSERT_TRUE(v.has_zero_stride());
     EXPECT_THROW(v.add_(1.0f), std::runtime_error);
 }
 
-TEST(ZeroStrideExpand, InPlaceBinaryOnExpandViewThrows) {
+TEST_F(ZeroStrideExpand, InPlaceBinaryOnExpandViewThrows) {
     auto base = cuda_f32({1.f, 2.f}, {1, 2});
     auto v = base.expand(TensorShape({2, 2}));
     auto other = cuda_f32({1, 1, 1, 1}, {2, 2});
     EXPECT_THROW(v.add_(other), std::runtime_error);
 }
 
-TEST(ZeroStrideExpand, InPlaceZeroOnExpandViewThrows) {
+TEST_F(ZeroStrideExpand, InPlaceZeroOnExpandViewThrows) {
     auto base = cuda_f32({1.f, 2.f}, {1, 2});
     auto v = base.expand(TensorShape({3, 2}));
     EXPECT_THROW(v.zero_(), std::runtime_error);
 }
 
-TEST(ZeroStrideExpand, NonAllowlistedCatMaterializesWithoutCorruption) {
+TEST_F(ZeroStrideExpand, NonAllowlistedCatMaterializesWithoutCorruption) {
     auto row = cuda_f32({1.f, 2.f, 3.f}, {1, 3});
     auto a = row.expand(TensorShape({2, 3})); // [[1,2,3],[1,2,3]]
     auto b = cuda_f32({4.f, 5.f, 6.f, 7.f, 8.f, 9.f}, {2, 3});
@@ -207,17 +210,17 @@ TEST(ZeroStrideExpand, NonAllowlistedCatMaterializesWithoutCorruption) {
     auto cat = Tensor::cat({a, b}, /*dim=*/0);
     cuda_ok();
     // Expected: 4x3 = [1,2,3, 1,2,3, 4,5,6, 7,8,9]
-    auto expected = cpu_f32({1, 2, 3, 1, 2, 3, 4, 5, 6, 7, 8, 9}, {4, 3}).cuda();
+    auto expected = cpu_f32({1, 2, 3, 1, 2, 3, 4, 5, 6, 7, 8, 9}, {4, 3}).gpu();
     expect_allclose(cat, expected, 1e-5f, "cat canary");
 }
 
-TEST(ZeroStrideExpand, NonAllowlistedMaskedSelectMaterializes) {
+TEST_F(ZeroStrideExpand, NonAllowlistedMaskedSelectMaterializes) {
     auto base = cuda_f32({1.f, 2.f, 3.f}, {1, 3});
     auto v = base.expand(TensorShape({2, 3}));
     auto mask = Tensor::from_vector(
                     std::vector<bool>{true, false, true, false, true, false},
                     TensorShape({2, 3}), Device::CPU)
-                    .cuda();
+                    .gpu();
     ASSERT_TRUE(v.has_zero_stride());
     ASSERT_FALSE(zero_stride::is_allowlisted(zero_stride::ConsumerKind::MaskedSelect));
 
@@ -231,21 +234,21 @@ TEST(ZeroStrideExpand, NonAllowlistedMaskedSelectMaterializes) {
     EXPECT_FLOAT_EQ(vals[2], 2.f);
 }
 
-TEST(ZeroStrideExpand, NonAllowlistedCloneMaterializesDense) {
+TEST_F(ZeroStrideExpand, NonAllowlistedCloneMaterializesDense) {
     auto base = cuda_f32({5.f, 6.f}, {1, 2});
     auto v = base.expand(TensorShape({2, 2}));
     auto c = v.clone();
     cuda_ok();
     EXPECT_TRUE(c.is_contiguous());
     EXPECT_FALSE(c.has_zero_stride());
-    expect_allclose(c, cpu_f32({5, 6, 5, 6}, {2, 2}).cuda());
+    expect_allclose(c, cpu_f32({5, 6, 5, 6}, {2, 2}).gpu());
 }
 
 // ---------------------------------------------------------------------------
 // Allowlist registry itself
 // ---------------------------------------------------------------------------
 
-TEST(ZeroStrideExpand, AllowlistRegistryCoversSafeConsumers) {
+TEST_F(ZeroStrideExpand, AllowlistRegistryCoversSafeConsumers) {
     using K = zero_stride::ConsumerKind;
     EXPECT_TRUE(zero_stride::is_allowlisted(K::Contiguous));
     EXPECT_TRUE(zero_stride::is_allowlisted(K::Clone));

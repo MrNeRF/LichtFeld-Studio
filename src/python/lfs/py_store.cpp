@@ -163,9 +163,15 @@ namespace lfs::python {
         nb::dict account_state_to_dict(const lfs::vis::AppStore::AccountState& value) {
             nb::dict state;
             state["signed_in"] = value.signed_in;
+            state["authorized"] = value.authorized;
             state["linking"] = value.linking;
+            state["disconnecting"] = value.disconnecting;
+            state["error"] = value.error;
             state["membership_required"] = value.membership_required;
             state["label"] = value.label;
+            state["email"] = value.email;
+            state["connected_since"] = value.connected_since;
+            state["display_name"] = value.display_name;
             state["tier"] = value.tier;
             state["tooltip"] = value.tooltip;
             return state;
@@ -180,11 +186,57 @@ namespace lfs::python {
             const nb::dict dict = nb::cast<nb::dict>(value);
             lfs::vis::AppStore::AccountState state;
             state.signed_in = dict_value(dict, "signed_in", false);
+            state.authorized = dict_value(dict, "authorized", false);
             state.linking = dict_value(dict, "linking", false);
+            state.disconnecting = dict_value(dict, "disconnecting", false);
+            state.error = dict_value(dict, "error", std::string{});
             state.membership_required = dict_value(dict, "membership_required", false);
             state.label = dict_value(dict, "label", std::string{});
+            state.email = dict_value(dict, "email", std::string{});
+            state.connected_since = dict_value(dict, "connected_since", std::string{});
+            state.display_name = dict_value(dict, "display_name", std::string{});
             state.tier = dict_value(dict, "tier", std::string{});
             state.tooltip = dict_value(dict, "tooltip", std::string{});
+            return state;
+        }
+
+        nb::dict gallery_state_to_dict(const lfs::vis::AppStore::GalleryState& value) {
+            nb::dict state;
+            state["signed_in"] = value.signed_in;
+            state["relink_required"] = value.relink_required;
+            state["active_uploads"] = value.active_uploads;
+            state["active_downloads"] = value.active_downloads;
+            state["paused"] = value.paused;
+            state["attention"] = value.attention;
+            state["percent"] = value.percent;
+            state["label"] = value.label;
+            state["detail"] = value.detail;
+            state["tooltip"] = value.tooltip;
+            state["tone"] = value.tone;
+            state["epoch"] = value.epoch;
+            return state;
+        }
+
+        lfs::vis::AppStore::GalleryState gallery_state_from_object(const nb::object& value) {
+            if (value.is_none())
+                return {};
+            if (!nb::isinstance<nb::dict>(value))
+                throw nb::type_error("gallery_state must be a dict");
+
+            const nb::dict dict = nb::cast<nb::dict>(value);
+            lfs::vis::AppStore::GalleryState state;
+            state.signed_in = dict_value(dict, "signed_in", false);
+            state.relink_required = dict_value(dict, "relink_required", false);
+            state.active_uploads = dict_value(dict, "active_uploads", 0);
+            state.active_downloads = dict_value(dict, "active_downloads", 0);
+            state.paused = dict_value(dict, "paused", 0);
+            state.attention = dict_value(dict, "attention", 0);
+            state.percent = dict_value(dict, "percent", -1);
+            state.label = dict_value(dict, "label", std::string{});
+            state.detail = dict_value(dict, "detail", std::string{});
+            state.tooltip = dict_value(dict, "tooltip", std::string{});
+            state.tone = dict_value(dict, "tone", std::string{"idle"});
+            state.epoch = dict_value(dict, "epoch", std::uint64_t{0});
             return state;
         }
 
@@ -255,6 +307,28 @@ namespace lfs::python {
             return state;
         }
 
+        // Include the committed panel so Size rebases that panel's reference,
+        // regardless of which window the toolbar currently displays.
+        nb::dict depth_window_draw_commit_to_dict(const lfs::vis::AppStore::DepthWindowDrawCommit& value) {
+            nb::dict state;
+            state["generation"] = value.generation;
+            state["panel"] = value.panel == lfs::vis::SplitViewPanelId::Right ? "right" : "left";
+            return state;
+        }
+        lfs::vis::AppStore::DepthWindowDrawCommit depth_window_draw_commit_from_object(const nb::object& value) {
+            if (value.is_none())
+                return {};
+            if (!nb::isinstance<nb::dict>(value))
+                throw nb::type_error("depth window draw commit must be a dict");
+
+            const nb::dict dict = nb::cast<nb::dict>(value);
+            lfs::vis::AppStore::DepthWindowDrawCommit state;
+            state.generation = dict_value(dict, "generation", std::uint64_t{0});
+            state.panel = dict_value(dict, "panel", std::string{"left"}) == "right"
+                              ? lfs::vis::SplitViewPanelId::Right
+                              : lfs::vis::SplitViewPanelId::Left;
+            return state;
+        }
         lfs::vis::AppStore::TaskProgressState task_progress_state_from_object(const nb::object& value) {
             if (value.is_none())
                 return {};
@@ -321,6 +395,8 @@ namespace lfs::python {
                 store.import_overlay_state.set(import_overlay_state_from_object(value));
             else if (field == "account_state")
                 store.account_state.set(account_state_from_object(value));
+            else if (field == "gallery_state")
+                store.gallery_state.set(gallery_state_from_object(value));
             else if (field == "video_export_overlay_state")
                 store.video_export_overlay_state.set(video_export_overlay_state_from_object(value));
             else if (field == "export_progress_state")
@@ -337,6 +413,8 @@ namespace lfs::python {
                 store.render_settings_generation.set(nb::cast<std::uint64_t>(value));
             else if (field == "depth_window_draw_generation")
                 store.depth_window_draw_generation.set(nb::cast<std::uint64_t>(value));
+            else if (field == "depth_window_draw_commit")
+                store.depth_window_draw_commit.set(depth_window_draw_commit_from_object(value));
             else
                 throw_unknown_field(field);
         }
@@ -387,6 +465,8 @@ namespace lfs::python {
                 return import_overlay_state_to_dict(store.import_overlay_state.get());
             if (field == "account_state")
                 return account_state_to_dict(store.account_state.get());
+            if (field == "gallery_state")
+                return gallery_state_to_dict(store.gallery_state.get());
             if (field == "video_export_overlay_state")
                 return video_export_overlay_state_to_dict(store.video_export_overlay_state.get());
             if (field == "export_progress_state")
@@ -403,6 +483,8 @@ namespace lfs::python {
                 return nb::cast(store.render_settings_generation.get());
             if (field == "depth_window_draw_generation")
                 return nb::cast(store.depth_window_draw_generation.get());
+            if (field == "depth_window_draw_commit")
+                return depth_window_draw_commit_to_dict(store.depth_window_draw_commit.get());
             throw_unknown_field(field);
         }
 
@@ -454,6 +536,9 @@ namespace lfs::python {
             if (field == "account_state")
                 return subscribe_observable_as(
                     store.account_state, std::move(callback), account_state_to_dict);
+            if (field == "gallery_state")
+                return subscribe_observable_as(
+                    store.gallery_state, std::move(callback), gallery_state_to_dict);
             if (field == "video_export_overlay_state")
                 return subscribe_observable_as(
                     store.video_export_overlay_state, std::move(callback), video_export_overlay_state_to_dict);
@@ -474,6 +559,9 @@ namespace lfs::python {
                 return subscribe_observable(store.render_settings_generation, std::move(callback));
             if (field == "depth_window_draw_generation")
                 return subscribe_observable(store.depth_window_draw_generation, std::move(callback));
+            if (field == "depth_window_draw_commit")
+                return subscribe_observable_as(
+                    store.depth_window_draw_commit, std::move(callback), depth_window_draw_commit_to_dict);
             throw_unknown_field(field);
         }
 
@@ -507,16 +595,26 @@ namespace lfs::python {
         }
     } // namespace
 
-    void shutdown_store_bridge() {
-        if (!can_acquire_gil())
-            return;
-
-        const GilAcquire gil;
+    void clear_store_subscriptions() {
         std::unordered_map<std::uint64_t, std::shared_ptr<PyStoreSubscription>> subscriptions;
         {
             std::lock_guard lock(g_subscriptions_mutex);
             subscriptions.swap(g_subscriptions);
         }
+    }
+
+    void shutdown_store_bridge() {
+        if (!can_acquire_gil())
+            return;
+
+        const GilAcquire gil;
+        clear_store_subscriptions();
+    }
+
+    void shutdown_store_bridge_at_exit() {
+        // Python invokes atexit handlers with the GIL held. A standalone
+        // extension import never sets the app runtime's GIL-ready flag.
+        clear_store_subscriptions();
     }
 
     void register_store(nb::module_& ui_module) {
@@ -528,6 +626,8 @@ namespace lfs::python {
         store.def("begin_batch", &begin_batch, "Begin a batched app store update");
         store.def("end_batch", &end_batch, "End a batched app store update");
         store.def("_drain_for_tests", &drain_for_tests, "Drain pending app store notifications in tests");
+        nb::module_::import_("atexit").attr("register")(
+            nb::cpp_function(&shutdown_store_bridge_at_exit));
     }
 
 } // namespace lfs::python

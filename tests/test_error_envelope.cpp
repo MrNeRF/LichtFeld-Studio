@@ -55,6 +55,22 @@ TEST(ErrorEnvelopeTest, RoundTripCarriesAllFieldsAndSanitizesPath) {
     EXPECT_EQ(details["native_code"].get<std::int64_t>(), 2);
 }
 
+TEST(ErrorEnvelopeTest, UnicodeDetailPathPreservesFilenameAndHidesDirectories) {
+    const lfs::Error error = lfs::make_error(lfs::ErrorInit{
+        .code = lfs::ErrorCode::NotFound,
+        .domain = lfs::ErrorDomain::IO,
+        .user_message = "Load failed",
+        .detection = LFS_SOURCE_SITE_CURRENT(),
+        .fields = lfs::SmallFields{}.add("path", std::string("C:/secret/\u30d7\u30ed\u30b8\u30a7\u30af\u30c8_\u6d4b\u8bd5.ply")),
+    });
+
+    const nlohmann::json envelope = lfs::core::to_wire_envelope(error);
+
+    ASSERT_TRUE(envelope.contains("details"));
+    EXPECT_EQ(envelope["details"]["path"], "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8_\u6d4b\u8bd5.ply");
+    EXPECT_EQ(envelope.dump().find("secret"), std::string::npos);
+}
+
 TEST(ErrorEnvelopeTest, NeverLeaksPathsDetailOrFrameSources) {
     const std::string body = lfs::core::to_wire_envelope(make_cuda_oom_error()).dump();
 

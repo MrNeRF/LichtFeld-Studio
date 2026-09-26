@@ -86,7 +86,7 @@ TEST(ExpressionTemplates, FunctorComposition4Way) {
 // ============================================================================
 
 TEST(ExpressionTemplates, TensorLeafCreation) {
-    Tensor t = Tensor::randn({10, 10}, Device::CUDA);
+    Tensor t = Tensor::randn({10, 10}, Device::GPU);
     TensorLeaf leaf(t);
 
     // TensorLeaf should store the tensor
@@ -96,7 +96,7 @@ TEST(ExpressionTemplates, TensorLeafCreation) {
 }
 
 TEST(ExpressionTemplates, TensorLeafEval) {
-    Tensor t = Tensor::ones({5, 5}, Device::CUDA);
+    Tensor t = Tensor::ones({5, 5}, Device::GPU);
     TensorLeaf leaf(t);
 
     // Evaluating a leaf should return a copy of the tensor
@@ -111,7 +111,7 @@ TEST(ExpressionTemplates, TensorLeafEval) {
 
 TEST(ExpressionTemplates, UnaryExprSingleOp) {
     // Test: exp(x)
-    Tensor x = Tensor::randn({100}, Device::CUDA);
+    Tensor x = Tensor::randn({100}, Device::GPU);
     TensorLeaf leaf(x);
 
     UnaryExpr<TensorLeaf, ops::exp_op> expr(
@@ -128,7 +128,7 @@ TEST(ExpressionTemplates, UnaryExprSingleOp) {
 
 TEST(ExpressionTemplates, UnaryExprScalarOp) {
     // Test: x * 2.0
-    Tensor x = Tensor::randn({50, 50}, Device::CUDA);
+    Tensor x = Tensor::randn({50, 50}, Device::GPU);
     TensorLeaf leaf(x);
 
     ops::scalar_right_op<ops::mul_op, float> mul_2(2.0f);
@@ -147,7 +147,7 @@ TEST(ExpressionTemplates, UnaryExprScalarOp) {
 
 TEST(ExpressionTemplates, UnaryExprFusion2Ops) {
     // Test fusion: exp(x) * 2.0
-    Tensor x = Tensor::randn({100}, Device::CUDA);
+    Tensor x = Tensor::randn({100}, Device::GPU);
     TensorLeaf leaf(x);
 
     // Create first expression: exp(x)
@@ -172,7 +172,7 @@ TEST(ExpressionTemplates, UnaryExprFusion3Ops) {
     // Test fusion: (exp(x) * 2.0)
     // Note: 3+ operation fusion is a future enhancement
     // For now we test 2-op fusion which demonstrates the concept
-    Tensor x = Tensor::randn({100}, Device::CUDA);
+    Tensor x = Tensor::randn({100}, Device::GPU);
     TensorLeaf leaf(x);
 
     // First: exp(x)
@@ -196,7 +196,7 @@ TEST(ExpressionTemplates, UnaryExprFusion3Ops) {
 TEST(ExpressionTemplates, UnaryExprFusionComplex) {
     // Test complex fusion: abs(x * 2.0)
     // Testing 2-op fusion with different operation types
-    Tensor x = Tensor::randn({200}, Device::CUDA);
+    Tensor x = Tensor::randn({200}, Device::GPU);
     TensorLeaf leaf(x);
 
     // Build expression chain: x * 2.0, then abs
@@ -221,8 +221,8 @@ TEST(ExpressionTemplates, UnaryExprFusionComplex) {
 
 TEST(ExpressionTemplates, BinaryExprSimple) {
     // Test: a + b (same shape, no broadcasting)
-    Tensor a = Tensor::randn({50, 50}, Device::CUDA);
-    Tensor b = Tensor::randn({50, 50}, Device::CUDA);
+    Tensor a = Tensor::randn({50, 50}, Device::GPU);
+    Tensor b = Tensor::randn({50, 50}, Device::GPU);
 
     TensorLeaf leaf_a(a);
     TensorLeaf leaf_b(b);
@@ -238,8 +238,8 @@ TEST(ExpressionTemplates, BinaryExprSimple) {
 
 TEST(ExpressionTemplates, BinaryExprBroadcast) {
     // Test: a + b with broadcasting
-    Tensor a = Tensor::randn({50, 50}, Device::CUDA);
-    Tensor b = Tensor::randn({1, 50}, Device::CUDA);
+    Tensor a = Tensor::randn({50, 50}, Device::GPU);
+    Tensor b = Tensor::randn({1, 50}, Device::GPU);
 
     TensorLeaf leaf_a(a);
     TensorLeaf leaf_b(b);
@@ -256,8 +256,8 @@ TEST(ExpressionTemplates, BinaryExprBroadcast) {
 
 TEST(ExpressionTemplates, BinaryExprMultiplication) {
     // Test: a * b
-    Tensor a = Tensor::ones({100}, Device::CUDA) * 3.0f;
-    Tensor b = Tensor::ones({100}, Device::CUDA) * 2.0f;
+    Tensor a = Tensor::ones({100}, Device::GPU) * 3.0f;
+    Tensor b = Tensor::ones({100}, Device::GPU) * 2.0f;
 
     TensorLeaf leaf_a(a);
     TensorLeaf leaf_b(b);
@@ -277,8 +277,8 @@ TEST(ExpressionTemplates, BinaryExprMultiplication) {
 
 TEST(ExpressionTemplates, BinaryThenUnary) {
     // Test: (a + b).exp()
-    Tensor a = Tensor::randn({50}, Device::CUDA);
-    Tensor b = Tensor::randn({50}, Device::CUDA);
+    Tensor a = Tensor::randn({50}, Device::GPU);
+    Tensor b = Tensor::randn({50}, Device::GPU);
 
     TensorLeaf leaf_a(a);
     TensorLeaf leaf_b(b);
@@ -299,8 +299,8 @@ TEST(ExpressionTemplates, BinaryThenUnary) {
 
 TEST(ExpressionTemplates, ComplexMixed) {
     // Test: ((a + b) * 2.0).relu()
-    Tensor a = Tensor::randn({100}, Device::CUDA);
-    Tensor b = Tensor::randn({100}, Device::CUDA);
+    Tensor a = Tensor::randn({100}, Device::GPU);
+    Tensor b = Tensor::randn({100}, Device::GPU);
 
     TensorLeaf leaf_a(a);
     TensorLeaf leaf_b(b);
@@ -325,12 +325,12 @@ TEST(ExpressionTemplates, ComplexMixed) {
 }
 
 TEST(ExpressionTemplates, NestedBinaryBranchesPreserveValues) {
-    const auto a = Tensor::ones({100}, Device::CUDA);
-    const auto b = Tensor::full({100}, 2.0f, Device::CUDA);
-    const auto c = Tensor::full({100}, 3.0f, Device::CUDA);
+    const auto a = Tensor::ones({100}, Device::GPU);
+    const auto b = Tensor::full({100}, 2.0f, Device::GPU);
+    const auto c = Tensor::full({100}, 3.0f, Device::GPU);
 
     const Tensor result = (a + b) * (c - a);
-    const auto expected = Tensor::full({100}, 6.0f, Device::CUDA);
+    const auto expected = Tensor::full({100}, 6.0f, Device::GPU);
 
     EXPECT_TRUE(tensors_equal(result, expected));
 }
@@ -341,7 +341,7 @@ TEST(ExpressionTemplates, NestedBinaryBranchesPreserveValues) {
 
 TEST(ExpressionTemplates, TensorExprEval) {
     // Test eval() through the base class interface
-    Tensor x = Tensor::randn({50}, Device::CUDA);
+    Tensor x = Tensor::randn({50}, Device::GPU);
     TensorLeaf leaf(x);
 
     // Create expression
@@ -361,7 +361,7 @@ TEST(ExpressionTemplates, TensorExprEval) {
 
 TEST(ExpressionTemplates, ImplicitConversion) {
     // Test that expressions can implicitly convert to Tensor
-    Tensor x = Tensor::randn({50}, Device::CUDA);
+    Tensor x = Tensor::randn({50}, Device::GPU);
     TensorLeaf leaf(x);
 
     UnaryExpr<TensorLeaf, ops::exp_op> expr(
@@ -381,7 +381,7 @@ TEST(ExpressionTemplates, ImplicitConversion) {
 TEST(ExpressionTemplates, NoIntermediateAllocations) {
     // This test verifies the concept that expressions don't allocate
     // until eval() is called
-    Tensor x = Tensor::randn({1000}, Device::CUDA);
+    Tensor x = Tensor::randn({1000}, Device::GPU);
     TensorLeaf leaf(x);
 
     // Build an expression chain - should NOT allocate anything yet
@@ -408,7 +408,7 @@ TEST(ExpressionTemplates, IntegrationTest) {
     std::cout << "\n=== Expression Template Integration Test ===" << std::endl;
     std::cout << "Testing: a.exp().mul(2.0)" << std::endl;
 
-    Tensor a = Tensor::randn({1000}, Device::CUDA);
+    Tensor a = Tensor::randn({1000}, Device::GPU);
     TensorLeaf leaf(a);
 
     // Build expression: a.exp().mul(2.0)

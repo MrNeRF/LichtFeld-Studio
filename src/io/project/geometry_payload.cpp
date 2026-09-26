@@ -55,7 +55,7 @@ namespace lfs::io::project {
 
         struct PointProperty {
             std::string_view name;
-            lfs::core::Tensor lfs::core::PointCloud::*tensor;
+            lfs::core::Tensor lfs::core::PointCloud::* tensor;
             std::uint16_t components;
         };
 
@@ -73,7 +73,7 @@ namespace lfs::io::project {
 
         struct MeshProperty {
             std::string_view name;
-            lfs::core::Tensor lfs::core::MeshData::*tensor;
+            lfs::core::Tensor lfs::core::MeshData::* tensor;
             std::uint16_t components;
         };
 
@@ -1256,14 +1256,14 @@ namespace lfs::io::project {
                         material.name.size());
                     cursor += material.name.size();
                 }
-                for (std::size_t component = 0; component < 4; ++component) {
+                for (int component = 0; component < 4; ++component) {
                     write_f32(
                         result,
                         cursor,
                         material.base_color[component]);
                     cursor += 4;
                 }
-                for (std::size_t component = 0; component < 3; ++component) {
+                for (int component = 0; component < 3; ++component) {
                     write_f32(
                         result,
                         cursor,
@@ -1892,12 +1892,12 @@ namespace lfs::io::project {
                     reinterpret_cast<const char*>(plane.data() + cursor),
                     name_bytes);
                 cursor += name_bytes;
-                for (std::size_t component = 0; component < 4; ++component) {
+                for (int component = 0; component < 4; ++component) {
                     material.base_color[component] =
                         read_f32(plane, cursor);
                     cursor += 4;
                 }
-                for (std::size_t component = 0; component < 3; ++component) {
+                for (int component = 0; component < 3; ++component) {
                     material.emissive[component] =
                         read_f32(plane, cursor);
                     cursor += 4;
