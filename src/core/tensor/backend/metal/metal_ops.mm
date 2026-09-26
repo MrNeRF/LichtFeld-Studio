@@ -158,7 +158,12 @@ namespace lfs::core::internal {
             uint64_t output_offset;
             uint64_t pattern;
             uint64_t count;
+            std::array<uint32_t, MAX_TENSOR_RANK> dims{};
+            std::array<uint32_t, MAX_TENSOR_RANK> strides{};
+            uint32_t rank = 0;
+            uint32_t padding = 0;
         };
+        static_assert(sizeof(FillParams) == 96);
 
         struct CopyParams {
             uint64_t source_offset;
@@ -182,7 +187,7 @@ namespace lfs::core::internal {
             }
             if (element_size == 4 && bytes % 16 == 0 && output_at.offset % 16 == 0)
                 element_size = 16;
-            const auto pipeline = context.pipeline("fill", {{5, static_cast<uint32_t>(element_size)}});
+            const auto pipeline = context.pipeline("fill", {{0, 0}, {5, static_cast<uint32_t>(element_size)}});
             const FillParams params{.output_offset = output_at.offset, .pattern = pattern, .count = bytes / element_size};
             const std::array uses{output};
             context.dispatch(uses, {.pipeline = pipeline,
@@ -1516,9 +1521,28 @@ namespace lfs::core::internal {
     void MetalBackendOps::fill_strided(const StorageRef output, const StridedLayout& layout,
                                        const ScalarOperand value, ExecContext context) {
         LFS_FACADE_TRACE(fill_strided);
-        if (!is_contiguous(layout))
-            throw TensorError("Metal backend: strided fill is not implemented yet");
-        load_fill(output, layout.element_count, value, context);
+        if (is_contiguous(layout)) {
+            load_fill(output, layout.element_count, value, context);
+            return;
+        }
+        if (layout.element_count == 0)
+            return;
+        LFS_ASSERT_MSG(layout.rank <= MAX_TENSOR_RANK, "Metal strided fill rank exceeds MAX_TENSOR_RANK");
+        const auto metal = acquire_context();
+        const auto output_at = metal->locate(output);
+        FillParams params{.output_offset = output_at.offset,
+                          .pattern = fill_pattern(output.dtype, value),
+                          .count = checked_u32(layout.element_count, "Metal fill count exceeds uint32"),
+                          .rank = static_cast<uint32_t>(layout.rank)};
+        for (size_t axis = 0; axis < layout.rank; ++axis) {
+            params.dims[axis] = checked_u32(layout.dims[axis], "Metal fill extent exceeds uint32");
+            params.strides[axis] = checked_u32(layout.strides[axis], "Metal fill stride exceeds uint32");
+        }
+        const std::array uses{output};
+        metal->dispatch(uses, {.pipeline = metal->pipeline("fill", {{0, 1}, {5, static_cast<uint32_t>(dtype_size(output.dtype))}}),
+                               .buffers = {output_at.address},
+                               .params = param_bytes(params),
+                               .grid = threads(layout.element_count)});
     }
 
     void MetalBackendOps::load_fill(const StorageRef output, const size_t count,

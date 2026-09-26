@@ -608,20 +608,34 @@ kernel void convert(device const uchar* input_buffer [[buffer(0)]],
 
 // ---------------------------------------------------------------------------
 // Fill, arange and byte copies. kElementSize is 1, 2, 4, 8 or 16 bytes; the
-// 16-byte form replicates the low 32 bits of the pattern.
+// 16-byte form replicates the low 32 bits of the pattern. Fill with kOp 1
+// writes a strided view, whose elements the index enumerates row-major.
 
 struct FillParams {
     ulong output_offset;
     ulong pattern;
     ulong count;
+    uint dims[8];
+    uint strides[8];
+    uint rank;
+    uint padding;
 };
 
 kernel void fill(device uchar* output_buffer [[buffer(0)]],
                  constant FillParams& params [[buffer(1)]],
-                 uint index [[thread_position_in_grid]]) {
-    if (index >= params.count)
+                 uint thread_index [[thread_position_in_grid]]) {
+    if (thread_index >= params.count)
         return;
     device uchar* output = output_buffer + params.output_offset;
+    ulong index = thread_index;
+    if (kOp == 1) {
+        ulong remaining = index;
+        index = 0;
+        for (int axis = int(params.rank) - 1; axis >= 0; --axis) {
+            index += ulong(remaining % params.dims[axis]) * params.strides[axis];
+            remaining /= params.dims[axis];
+        }
+    }
     if (kElementSize == 16)
         ((device uint4*)output)[index] = uint4(uint(params.pattern));
     else if (kElementSize == 8)

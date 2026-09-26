@@ -418,6 +418,15 @@ namespace {
         const Tensor transposed = base.transpose(0, 1);
         expect_close(to_metal(base).transpose(0, 1).movement(MovementOp::Pad, pad_args),
                      transposed.movement(MovementOp::Pad, pad_args), 0.0f, 0.0f);
+        // A strided view fills only its own elements.
+        for (const DataType dtype : {DataType::Float32, DataType::Int32, DataType::Bool}) {
+            SCOPED_TRACE(static_cast<int>(dtype));
+            const Tensor source = random_tensor(24, 0.0f, 3.0f, 44).to(dtype).reshape({4, 6});
+            Tensor filled = to_metal(source), expected = source.clone();
+            filled.transpose(0, 1).slice(0, 1, 4).fill_(1.0f);
+            expected.transpose(0, 1).slice(0, 1, 4).fill_(1.0f);
+            expect_close(filled, expected, 0.0f, 0.0f);
+        }
     }
 
     std::vector<int> pseudo_indices(const size_t count, const size_t extent, const unsigned seed) {
