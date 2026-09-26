@@ -1279,15 +1279,36 @@ namespace lfs::core {
         if (dtype_ == DataType::Bool && device_ == Device::GPU &&
             !args.axes.empty() && args.axes.size() != shape_.rank()) {
             LFS_ASSERT_MSG(op == ReduceOp::Any || op == ReduceOp::All,
-                           "partial CUDA Bool reductions currently support only any and all");
+                           "partial GPU Bool reductions currently support only any and all");
             std::vector<int> sorted_axes = args.axes;
             for (int& axis : sorted_axes) {
                 axis = resolve_dim(axis);
             }
             std::sort(sorted_axes.begin(), sorted_axes.end());
+            bool adjacent = true;
             for (size_t i = 1; i < sorted_axes.size(); ++i) {
-                LFS_ASSERT_MSG(sorted_axes[i] == sorted_axes[i - 1] + 1,
-                               "multi-axis CUDA Bool reductions require contiguous axes");
+                adjacent = adjacent && sorted_axes[i] == sorted_axes[i - 1] + 1;
+            }
+            if (!adjacent) {
+                // The GPU kernels reduce one run of adjacent axes, so move the
+                // reduced axes to the end, keeping the others in order.
+                std::vector<int> order;
+                std::vector<size_t> kept_shape;
+                for (int axis = 0; axis < static_cast<int>(shape_.rank()); ++axis) {
+                    const bool reduced = std::binary_search(sorted_axes.begin(), sorted_axes.end(), axis);
+                    if (!reduced)
+                        order.push_back(axis);
+                    kept_shape.push_back(reduced ? 1 : shape_[axis]);
+                }
+                ReduceArgs trailing = args;
+                trailing.axes.clear();
+                trailing.keepdim = false;
+                for (const int axis : sorted_axes) {
+                    trailing.axes.push_back(static_cast<int>(order.size() + trailing.axes.size()));
+                }
+                order.insert(order.end(), sorted_axes.begin(), sorted_axes.end());
+                Tensor reduced = permute(order).contiguous().reduce(op, trailing);
+                return args.keepdim ? reduced.reshape(TensorShape(kept_shape)) : reduced;
             }
         }
 

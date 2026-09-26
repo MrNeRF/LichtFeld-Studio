@@ -392,6 +392,42 @@ namespace {
         expect_close(to_metal(matrix) / to_metal(row), matrix / row);
     }
 
+    TEST_F(TensorMetal, GpuMatchesCpuForBoolAxesAndGatheredIntegers) {
+        const Tensor mask = random_tensor(3 * 4 * 5 * 2, -1.0f, 1.0f, 99).gt(0.6f).reshape({3, 4, 5, 2});
+        const std::vector<std::vector<int>> axis_sets = {{0, 2}, {1, 3}, {0, 3}, {-1, 1}, {0, 1, 3}};
+        std::vector<int32_t> rows(6 * 3);
+        for (size_t i = 0; i < rows.size(); ++i)
+            rows[i] = static_cast<int32_t>(i * 7919 % 1000) - 500;
+        Tensor wide = Tensor::empty({6, 3}, Device::CPU, DataType::Int64);
+        for (size_t i = 0; i < rows.size(); ++i)
+            wide.ptr<int64_t>()[i] = (static_cast<int64_t>(rows[i]) << 36) + rows[i];
+        const std::vector<int> picks = {5, 0, 3, 3};
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            SCOPED_TRACE(static_cast<int>(backend));
+            GpuBackendScope scope(backend);
+            const Tensor gpu_mask = mask.to(Device::GPU);
+            for (const auto& axes : axis_sets) {
+                for (const bool keepdim : {false, true}) {
+                    expect_close(gpu_mask.any(axes, keepdim), mask.any(axes, keepdim), 0.0f, 0.0f);
+                    expect_close(gpu_mask.all(axes, keepdim), mask.all(axes, keepdim), 0.0f, 0.0f);
+                }
+            }
+            for (const Tensor& source : {Tensor::from_vector(rows, {6, 3}, Device::CPU), wide}) {
+                SCOPED_TRACE(static_cast<int>(source.dtype()));
+                Tensor expected = source.clone();
+                expected.reserve(10);
+                expected.append_gather(Tensor::from_vector(picks, {picks.size()}, Device::CPU));
+                Tensor grown = source.to(Device::GPU);
+                grown.reserve(10);
+                grown.append_gather(Tensor::from_vector(picks, {picks.size()}, Device::CPU).to(Device::GPU));
+                ASSERT_EQ(grown.shape(), TensorShape({10, 3}));
+                EXPECT_EQ(grown.cpu().to(DataType::Int64).to_vector_int64(), expected.to(DataType::Int64).to_vector_int64());
+            }
+        }
+    }
+
     TEST_F(TensorMetal, ClampCatAndPadMatchCpu) {
         std::vector<float> values = random_tensor(1000, -3.0f, 3.0f, 37).to_vector();
         values[123] = std::numeric_limits<float>::quiet_NaN();

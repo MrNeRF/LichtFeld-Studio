@@ -803,7 +803,8 @@ namespace lfs::core {
                            dtype_ == DataType::Bool || dtype_ == DataType::UInt8,
                        "scatter_ encountered an unsupported dtype");
         LFS_ASSERT_MSG(device_ != Device::GPU || mode == ScatterMode::None,
-                       "CUDA scatter_ supports assignment only; use index_add_ for addition");
+                       std::format("GPU scatter_ supports assignment and addition, not mode {}",
+                                   static_cast<int>(mode)));
 
         if (!is_contiguous()) {
             return mutate_logical_view(
@@ -2428,9 +2429,9 @@ namespace lfs::core {
                        "append_gather requires reserved capacity");
         LFS_ASSERT_MSG(ndim() > 0,
                        "append_gather requires a tensor with at least one dimension");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::UInt8 || dtype_ == DataType::Bool ||
-                           device_ == Device::CPU,
-                       "CUDA append_gather encountered an unsupported dtype");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32 || dtype_ == DataType::Int64 ||
+                           dtype_ == DataType::UInt8 || dtype_ == DataType::Bool || device_ == Device::CPU,
+                       std::format("GPU append_gather does not support dtype {}", dtype_name(dtype_)));
         assert_index_tensor(indices,
                             state_->logical_size > 0 ? state_->logical_size : shape_[0],
                             "append_gather",
@@ -2486,11 +2487,6 @@ namespace lfs::core {
 
             // IMPORTANT: Pass the INPUT shape to the kernel, not the output shape!
             // The kernel needs to know the source tensor dimensions to validate indices
-            if (dtype_ != DataType::Float32 && dtype_ != DataType::UInt8 &&
-                dtype_ != DataType::Bool) {
-                LFS_ASSERT_MSG(false,
-                               "append_gather encountered an unsupported CUDA dtype");
-            }
             internal::StorageRef output = internal::storage_ref(*this);
             output.byte_offset += write_offset_elements * dtype_size(dtype_);
             internal::backend_ops_for(*this).index_select(
