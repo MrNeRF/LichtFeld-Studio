@@ -2278,7 +2278,7 @@ namespace lfs::training {
             nvtxRangePush("depth_anchors/compute");
             const auto compute_start = std::chrono::steady_clock::now();
             raw = computeRawDepthAnchors(
-                means, cameras, params_.dataset.resize_factor, params_.dataset.max_width);
+                *training_ops_->geometry, means, cameras, params_.dataset.resize_factor, params_.dataset.max_width);
             source_ms = phase_ms(compute_start);
             nvtxRangePop();
             if (!sidecar.empty() && !writeDepthAnchorSidecar(sidecar, raw, fingerprint)) {
@@ -6667,22 +6667,24 @@ namespace lfs::training {
                         // Retain the photometric workspace view through all normal terms.
                         lfs::core::Tensor normal_terms_weight;
                         bool depth_grad_buffers_active = false;
-                        const auto roi_weight_ptr_on_stream =
-                            [&](const cudaStream_t stream) -> const float* {
+                        const auto roi_weight_on_stream =
+                            [&](const cudaStream_t stream) -> const lfs::core::Tensor& {
                             if (!roi_weight.is_valid()) {
-                                return nullptr;
+                                return roi_weight;
                             }
                             roi_weight.sync_to_stream(stream);
-                            return roi_weight.ptr<float>();
+                            roi_weight.ptr<float>();
+                            return roi_weight;
                         };
 
-                        const auto normal_weight_ptr_on_stream =
-                            [&](const cudaStream_t stream) -> const float* {
+                        const auto normal_weight_on_stream =
+                            [&](const cudaStream_t stream) -> const lfs::core::Tensor& {
                             if (!normal_terms_weight.is_valid()) {
-                                return roi_weight_ptr_on_stream(stream);
+                                return roi_weight_on_stream(stream);
                             }
                             normal_terms_weight.sync_to_stream(stream);
-                            return normal_terms_weight.ptr<float>();
+                            normal_terms_weight.ptr<float>();
+                            return normal_terms_weight;
                         };
 
                         const auto ensure_depth_grad_buffers =
@@ -6888,28 +6890,14 @@ namespace lfs::training {
                                     }
                                     if (depth_anchor_fit_attempted_ && depth_anchor != nullptr && depth_anchor->valid) {
                                         ensure_depth_grad_buffers(rendered_depth, depth_stream, false);
-                                        const int depth_width = static_cast<int>(rendered_depth.shape()[1]);
-                                        const int depth_height = static_cast<int>(rendered_depth.shape()[0]);
                                         const float depth_prior_qstep = cam->depth_prior_quantization_step();
-                                        const float* const depth_pixel_weight =
-                                            roi_weight_ptr_on_stream(depth_stream);
+                                        const auto& depth_pixel_weight =
+                                            roi_weight_on_stream(depth_stream);
                                         lfs::core::pin_operands({&rendered_depth, &rendered_alpha, &target_depth});
-                                        lfs::training::kernels::launch_depth_loss(
-                                            rendered_depth.ptr<float>(),
-                                            rendered_alpha.ptr<float>(),
-                                            target_depth.ptr<float>(),
-                                            depth_loss_grad_.ptr<float>(),
-                                            depth_loss_grad_alpha_.ptr<float>(),
-                                            depth_loss_scalar_.ptr<float>(),
-                                            depth_loss_partials_.ptr<float>(),
-                                            depth_width,
-                                            depth_height,
-                                            depth_weight_now,
-                                            kDepthLossGradientTermWeight,
-                                            depth_prior_qstep,
-                                            depth_anchor,
-                                            depth_stream,
-                                            depth_pixel_weight);
+                                        training_ops_->geometry->depth(
+                                            rendered_depth, rendered_alpha, target_depth, depth_pixel_weight,
+                                            depth_loss_grad_, depth_loss_grad_alpha_, depth_loss_scalar_, depth_loss_partials_,
+                                            {depth_weight_now, kDepthLossGradientTermWeight, depth_prior_qstep, depth_anchor});
 
                                         tile_loss = tile_loss + depth_loss_scalar_;
                                     }
@@ -7007,21 +6995,13 @@ namespace lfs::training {
                                     }
                                     normal_loss_partials_.set_stream(normal_stream);
 
-                                    const float* const normal_pixel_weight =
-                                        normal_weight_ptr_on_stream(normal_stream);
+                                    const auto& normal_pixel_weight =
+                                        normal_weight_on_stream(normal_stream);
                                     lfs::core::pin_operands({&rendered_normal, &rendered_alpha, &target_normal});
-                                    lfs::training::kernels::launch_normal_loss(
-                                        rendered_normal.ptr<float>(),
-                                        rendered_alpha.ptr<float>(),
-                                        target_normal.ptr<float>(),
-                                        normal_loss_grad_.ptr<float>(),
-                                        normal_loss_scalar_.ptr<float>(),
-                                        normal_loss_partials_.ptr<float>(),
-                                        render_w,
-                                        render_h,
-                                        params_.optimization.normal_loss_weight,
-                                        normal_stream,
-                                        normal_pixel_weight);
+                                    training_ops_->geometry->normal(
+                                        rendered_normal, rendered_alpha, target_normal, normal_pixel_weight,
+                                        normal_loss_grad_, normal_loss_scalar_, normal_loss_partials_,
+                                        params_.optimization.normal_loss_weight);
 
                                     if (output.depth.is_valid() &&
                                         output.depth.numel() > 0 &&
@@ -7069,23 +7049,10 @@ namespace lfs::training {
                                                              static_cast<float>(cam->camera_height());
 
                                             lfs::core::pin_operands({&target_normal, &rendered_depth, &rendered_alpha});
-                                            lfs::training::kernels::launch_normal_prior_depth_loss(
-                                                target_normal.ptr<float>(),
-                                                rendered_depth.ptr<float>(),
-                                                rendered_alpha.ptr<float>(),
-                                                depth_loss_grad_.ptr<float>(),
-                                                depth_loss_grad_alpha_.ptr<float>(),
-                                                normal_prior_depth_scalar_.ptr<float>(),
-                                                normal_consistency_partials_.ptr<float>(),
-                                                render_w,
-                                                render_h,
-                                                fx,
-                                                fy,
-                                                cx,
-                                                cy,
-                                                params_.optimization.normal_loss_weight,
-                                                normal_stream,
-                                                normal_pixel_weight);
+                                            training_ops_->geometry->prior_depth(
+                                                target_normal, rendered_depth, rendered_alpha, normal_pixel_weight,
+                                                depth_loss_grad_, depth_loss_grad_alpha_, normal_prior_depth_scalar_, normal_consistency_partials_,
+                                                {fx, fy, cx, cy}, params_.optimization.normal_loss_weight);
                                             tile_loss = tile_loss + normal_prior_depth_scalar_;
                                         }
                                     }
@@ -7187,26 +7154,12 @@ namespace lfs::training {
 
                                 lfs::core::pin_operands(
                                     {&rendered_normal, &rendered_depth, &rendered_alpha, &tile_grad_normal});
-                                const float* const consistency_pixel_weight =
-                                    normal_weight_ptr_on_stream(consistency_stream);
-                                lfs::training::kernels::launch_normal_consistency_loss(
-                                    rendered_normal.ptr<float>(),
-                                    rendered_depth.ptr<float>(),
-                                    rendered_alpha.ptr<float>(),
-                                    tile_grad_normal.ptr<float>(),
-                                    depth_loss_grad_.ptr<float>(),
-                                    depth_loss_grad_alpha_.ptr<float>(),
-                                    normal_consistency_scalar_.ptr<float>(),
-                                    normal_consistency_partials_.ptr<float>(),
-                                    render_w,
-                                    render_h,
-                                    fx,
-                                    fy,
-                                    cx,
-                                    cy,
-                                    params_.optimization.normal_consistency_weight,
-                                    consistency_stream,
-                                    consistency_pixel_weight);
+                                const auto& consistency_pixel_weight =
+                                    normal_weight_on_stream(consistency_stream);
+                                training_ops_->geometry->consistency(
+                                    rendered_normal, rendered_depth, rendered_alpha, consistency_pixel_weight,
+                                    tile_grad_normal, depth_loss_grad_, depth_loss_grad_alpha_, normal_consistency_scalar_, normal_consistency_partials_,
+                                    {fx, fy, cx, cy}, params_.optimization.normal_consistency_weight);
 
                                 tile_loss = tile_loss + normal_consistency_scalar_;
                             }
