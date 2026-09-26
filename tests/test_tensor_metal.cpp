@@ -392,6 +392,47 @@ namespace {
         expect_close(to_metal(matrix) / to_metal(row), matrix / row);
     }
 
+    TEST_F(TensorMetal, FiniteChecksAndAllCloseStayOnTheDevice) {
+        constexpr float inf = std::numeric_limits<float>::infinity();
+        constexpr float nan = std::numeric_limits<float>::quiet_NaN();
+        const auto tensor = [](std::vector<float> values) {
+            const size_t count = values.size();
+            return Tensor::from_vector(values, {count}, Device::CPU);
+        };
+        const std::vector<std::pair<std::vector<float>, std::vector<float>>> pairs = {
+            {{1.0f, 2.0f, 3.0f}, {1.0f, 2.0f + 1e-7f, 3.0f}},
+            {{1.0f, 2.0f, 3.0f}, {1.0f, 2.1f, 3.0f}},
+            {{1.0f, inf, -inf}, {1.0f, inf, -inf}},
+            {{1.0f, 5.0f}, {1.0f, inf}},
+            {{-inf, 5.0f}, {inf, 5.0f}},
+            {{1.0f, nan}, {1.0f, nan}},
+            {{3.0e38f, 0.0f}, {-3.0e38f, 0.0f}},
+            {{0.0f, 1.0e-9f}, {-0.0f, 0.0f}},
+        };
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            SCOPED_TRACE(static_cast<int>(backend));
+            GpuBackendScope scope(backend);
+            for (size_t i = 0; i < pairs.size(); ++i) {
+                SCOPED_TRACE(i);
+                const Tensor a = tensor(pairs[i].first), b = tensor(pairs[i].second);
+                EXPECT_EQ(a.to(Device::GPU).all_close(b.to(Device::GPU), 1e-5f, 1e-8f), a.all_close(b, 1e-5f, 1e-8f));
+            }
+            const Tensor special = tensor({1.0f, nan, 2.0f, inf});
+            for (const auto dtype : {DataType::Float32, DataType::Float16}) {
+                EXPECT_TRUE(special.to(dtype).to(Device::GPU).has_nan());
+                EXPECT_TRUE(special.to(dtype).to(Device::GPU).has_inf());
+                EXPECT_FALSE(tensor({1.0f, 2.0f}).to(dtype).to(Device::GPU).has_nan());
+                EXPECT_FALSE(tensor({1.0f, 2.0f}).to(dtype).to(Device::GPU).has_inf());
+            }
+            const Tensor integers = tensor({1.0f, -3.0f, 0.0f}).to(DataType::Int32).to(Device::GPU);
+            EXPECT_FALSE(integers.has_nan());
+            EXPECT_FALSE(integers.has_inf());
+            EXPECT_FALSE(integers.gt(0).has_nan());
+        }
+    }
+
     TEST_F(TensorMetal, ClampCatAndPadMatchCpu) {
         std::vector<float> values = random_tensor(1000, -3.0f, 3.0f, 37).to_vector();
         values[123] = std::numeric_limits<float>::quiet_NaN();

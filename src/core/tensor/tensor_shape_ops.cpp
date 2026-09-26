@@ -404,49 +404,6 @@ namespace lfs::core {
         return offset;
     }
 
-    Tensor Tensor::copy_slice(const std::vector<size_t>& starts,
-                              const std::vector<size_t>& ends,
-                              const std::vector<size_t>& new_shape) const {
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32,
-                       "non-contiguous slice copying currently supports only Float32");
-        auto result = internal::allocate_like(*this, TensorShape(new_shape), dtype_);
-
-        if (device_ == Device::GPU) {
-            auto cpu_copy = to(Device::CPU);
-            auto cpu_result = cpu_copy.copy_slice(starts, ends, new_shape);
-            return internal::copy_to_backend(
-                cpu_result, gpu_backend_of(*this).value());
-        } else {
-            const float* src = ptr<float>();
-            float* dst = result.ptr<float>();
-
-            size_t total = 1;
-            for (size_t s : new_shape) {
-                total *= s;
-            }
-
-            std::vector<size_t> indices(shape_.rank());
-            for (size_t i = 0; i < shape_.rank(); ++i) {
-                indices[i] = starts[i];
-            }
-
-            for (size_t dst_idx = 0; dst_idx < total; ++dst_idx) {
-                size_t src_idx = calculate_offset(indices);
-                dst[dst_idx] = src[src_idx];
-
-                for (int d = static_cast<int>(shape_.rank()) - 1; d >= 0; --d) {
-                    indices[d]++;
-                    if (indices[d] < ends[d]) {
-                        break;
-                    }
-                    indices[d] = starts[d];
-                }
-            }
-        }
-
-        return result;
-    }
-
     std::vector<size_t> Tensor::resolve_dims(std::span<const int> dims) const {
         std::vector<size_t> resolved;
         resolved.reserve(dims.size());

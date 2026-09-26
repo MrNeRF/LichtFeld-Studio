@@ -3326,10 +3326,14 @@ namespace lfs::core {
                 internal::storage_ref(*this), numel(), internal::ExecContext{stream()});
         }
 
-        // CPU fallback
-        auto values = to_vector();
-        return std::any_of(values.begin(), values.end(),
-                           [](float x) { return std::isnan(x); });
+        if (dtype_ == DataType::Float16) {
+            return to(DataType::Float32).has_nan();
+        }
+        if (dtype_ != DataType::Float32) {
+            return false; // Integers and Bool hold neither NaN nor Inf.
+        }
+        const float* const values = ptr<float>();
+        return std::any_of(values, values + numel(), [](const float x) { return std::isnan(x); });
     }
 
     bool Tensor::has_inf() const {
@@ -3351,10 +3355,14 @@ namespace lfs::core {
                 internal::storage_ref(*this), numel(), internal::ExecContext{stream()});
         }
 
-        // CPU fallback
-        auto values = to_vector();
-        return std::any_of(values.begin(), values.end(),
-                           [](float x) { return std::isinf(x); });
+        if (dtype_ == DataType::Float16) {
+            return to(DataType::Float32).has_inf();
+        }
+        if (dtype_ != DataType::Float32) {
+            return false; // Integers and Bool hold neither NaN nor Inf.
+        }
+        const float* const values = ptr<float>();
+        return std::any_of(values, values + numel(), [](const float x) { return std::isinf(x); });
     }
 
     bool Tensor::all_close(const Tensor& other, float rtol, float atol) const {
@@ -3380,28 +3388,20 @@ namespace lfs::core {
         const Tensor& a = contiguous_read(a_materialized);
         const Tensor& b = other.contiguous_read(b_materialized);
 
-        const float* a_data = nullptr;
-        const float* b_data = nullptr;
-
-        Tensor a_temp, b_temp;
-
         if (a.device_ == Device::GPU) {
-            a_temp = a.to(Device::CPU);
-            a_data = a_temp.ptr<float>();
-        } else {
-            a_data = a.ptr<float>();
+            // Only flags and a count come back. Equal values, infinities
+            // included, are close; the clamped tolerance keeps an infinite b
+            // from accepting every difference, as the host loop does.
+            if (a.has_nan() || b.has_nan()) {
+                return false;
+            }
+            const Tensor tolerance = b.abs().mul(rtol).add(atol).clamp_max(std::numeric_limits<float>::max());
+            const Tensor close = a.eq(b).logical_or(a.sub(b).abs().le(tolerance));
+            return close.count_nonzero() == numel();
         }
 
-        if (b.device() == Device::GPU) {
-            b_temp = b.to(Device::CPU);
-            b_data = b_temp.ptr<float>();
-        } else {
-            b_data = b.ptr<float>();
-        }
-
-        if (!a_data || !b_data) {
-            return false;
-        }
+        const float* const a_data = a.ptr<float>();
+        const float* const b_data = b.ptr<float>();
 
         for (size_t i = 0; i < numel(); ++i) {
             if (a_data[i] == b_data[i]) {

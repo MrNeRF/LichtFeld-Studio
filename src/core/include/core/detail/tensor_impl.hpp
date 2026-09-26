@@ -879,9 +879,6 @@ namespace lfs::core {
 
         std::vector<size_t> resolve_dims(std::span<const int> dims) const;
         size_t calculate_offset(const std::vector<size_t>& indices) const;
-        Tensor copy_slice(const std::vector<size_t>& starts,
-                          const std::vector<size_t>& ends,
-                          const std::vector<size_t>& new_shape) const;
 
     public:
         Tensor() = default;
