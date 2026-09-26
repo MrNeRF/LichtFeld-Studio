@@ -756,6 +756,7 @@ set(TEST_FILES
     test_nvcodec_sentinel_validation.cpp
     test_compressed_blob_tier.cpp
     test_pipelined_loader.cpp
+    test_pipelined_loader_backends.cpp
     test_pipelined_loader_ledger.cpp
     test_pipelined_loader_sidecar_jpeg2k.cpp
     test_operator_return_value.cpp
