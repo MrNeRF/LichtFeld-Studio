@@ -1621,27 +1621,39 @@ static ulong sort_line_base(uint line, constant SortParams& params) {
     return ulong(outer_index) * params.dim_size * params.inner + (line - outer_index * params.inner);
 }
 
-// One threadgroup sorts one line of at most kSortCapacity elements with a
-// bitonic network in threadgroup memory.
+// One threadgroup sorts kSortCapacity / kSortWidth lines of at most
+// kSortWidth (a power of two) elements each with bitonic networks in
+// threadgroup memory; a network's partners never leave its line's segment,
+// and the final merge of every line runs ascending.
+constant uint kSortWidth [[function_constant(29)]];
+
 kernel void sort_shared(device uchar* values_buffer [[buffer(0)]],
                         device uchar* indices_buffer [[buffer(1)]],
                         constant SortParams& params [[buffer(2)]],
                         uint thread_index [[thread_index_in_threadgroup]],
-                        uint line [[threadgroup_position_in_grid]]) {
+                        uint group [[threadgroup_position_in_grid]]) {
     threadgroup uint keys[kSortCapacity];
     threadgroup uint positions[kSortCapacity];
     device float* values = (device float*)(values_buffer + params.values_offset);
     device long* indices = (device long*)(indices_buffer + params.indices_offset);
-    const ulong base = sort_line_base(line, params);
     constexpr uint per_thread = kSortCapacity / kReduceThreads;
+    const uint first_line = group * (kSortCapacity / kSortWidth);
+    // Element e holds position e % kSortWidth of line first_line + e / kSortWidth.
+    const auto live = [&](const uint element) {
+        return first_line + element / kSortWidth < params.lines && element % kSortWidth < params.dim_size;
+    };
+    const auto address = [&](const uint element, const uint position) {
+        return sort_line_base(first_line + element / kSortWidth, params) + ulong(position) * params.inner;
+    };
     for (uint slot = 0; slot < per_thread; ++slot) {
         const uint element = thread_index + slot * kReduceThreads;
-        const bool live = element < params.dim_size;
-        keys[element] = live ? sortable_key(values[base + ulong(element) * params.inner], params.descending != 0) : 0xffffffffu;
-        positions[element] = live ? element : 0xffffffffu;
+        const bool present = live(element);
+        keys[element] = present ? sortable_key(values[address(element, element % kSortWidth)], params.descending != 0)
+                                : 0xffffffffu;
+        positions[element] = present ? element % kSortWidth : 0xffffffffu;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint size = 2; size <= kSortCapacity; size <<= 1) {
+    for (uint size = 2; size <= kSortWidth; size <<= 1) {
         for (uint span = size >> 1; span > 0; span >>= 1) {
             for (uint slot = 0; slot < per_thread; ++slot) {
                 const uint element = thread_index + slot * kReduceThreads;
@@ -1651,7 +1663,8 @@ kernel void sort_shared(device uchar* values_buffer [[buffer(0)]],
                 const uint key_a = keys[element], key_b = keys[partner];
                 const uint position_a = positions[element], position_b = positions[partner];
                 const bool greater = key_a > key_b || (key_a == key_b && position_a > position_b);
-                if (greater == ((element & size) == 0u)) {
+                // The direction follows the position within the line.
+                if (greater == ((element % kSortWidth & size) == 0u)) {
                     keys[element] = key_b;
                     keys[partner] = key_a;
                     positions[element] = position_b;
@@ -1661,20 +1674,20 @@ kernel void sort_shared(device uchar* values_buffer [[buffer(0)]],
             threadgroup_barrier(mem_flags::mem_threadgroup);
         }
     }
-    // Values permute through threadgroup memory, so the line is never read
+    // Values permute through threadgroup memory, so a line is never read
     // after it was partly overwritten.
     for (uint slot = 0; slot < per_thread; ++slot) {
         const uint element = thread_index + slot * kReduceThreads;
-        if (element < params.dim_size) {
-            indices[base + ulong(element) * params.inner] = long(positions[element]);
-            keys[element] = as_type<uint>(values[base + ulong(positions[element]) * params.inner]);
+        if (live(element)) {
+            indices[address(element, element % kSortWidth)] = long(positions[element]);
+            keys[element] = as_type<uint>(values[address(element, positions[element])]);
         }
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
     for (uint slot = 0; slot < per_thread; ++slot) {
         const uint element = thread_index + slot * kReduceThreads;
-        if (element < params.dim_size)
-            values[base + ulong(element) * params.inner] = as_type<float>(keys[element]);
+        if (live(element))
+            values[address(element, element % kSortWidth)] = as_type<float>(keys[element]);
     }
 }
 
@@ -1807,9 +1820,9 @@ kernel void radix_sort(device uchar* values_buffer [[buffer(0)]],
 // counter i and the seed as key, so every element draws an independent,
 // reproducible 128-bit block. kOp: 0 uniform [first, second), 1
 // bernoulli(first), 2 randint [low, high), 3 normal(first, second), 4
-// multinomial with replacement, 5 Gumbel keys for sampling without
-// replacement, 6 rank selection of the sample_count largest keys, 7 weight
-// statistics (scaled sum, invalid flag, scale) in one threadgroup.
+// multinomial with replacement over kOp 8's running sums, 5 Gumbel keys for
+// sampling without replacement (the host sorts them), 7 weight statistics
+// (scaled sum, invalid flag, scale) in one threadgroup, 8 the running sums.
 
 struct RandomParams {
     ulong output_offset;
@@ -1900,19 +1913,34 @@ kernel void random_op(device uchar* output_buffer [[buffer(0)]],
         }
         return;
     }
-    if (index >= (kOp == 4 ? params.sample_count : params.count))
-        return;
-    if (kOp == 6) {
-        const float key = keys[index];
-        uint rank = 0;
-        for (uint other = 0; other < params.count; ++other) {
-            const float candidate = keys[other];
-            rank += candidate > key || (candidate == key && other < index) ? 1u : 0u;
+    if (kOp == 8) {
+        // The scaled weights' running sum into keys, in category order, so
+        // each draw's search sees exactly the sums a linear scan adds up. One
+        // SIMD group loads 32 weights at a time, the next 32 in flight.
+        if (index >= 32)
+            return;
+        float cumulative = 0.0f;
+        float next = lane < params.count ? weights[lane] * params.first : 0.0f;
+        for (uint base = 0; base < params.count; base += 32) {
+            const float scaled = next;
+            const uint ahead = base + 32 + lane;
+            next = ahead < params.count ? weights[ahead] * params.first : 0.0f;
+            // Each lane adds the chunk's weights in order up to its own;
+            // lanes past the end add zeros, which leave the sum unchanged.
+            float running = cumulative;
+#pragma unroll
+            for (ushort j = 0; j < 32; ++j) {
+                const float weight = simd_shuffle(scaled, j);
+                running = j <= lane ? running + weight : running;
+            }
+            if (base + lane < params.count)
+                keys[base + lane] = running;
+            cumulative = simd_shuffle(running, ushort(31));
         }
-        if (rank < params.sample_count)
-            ((device long*)output)[rank] = long(index);
         return;
     }
+    if (index >= (kOp == 4 ? params.sample_count : params.count))
+        return;
     const uint4 words = philox_draw(index, params.seed);
     if (kOp == 0) {
         float value = params.first;
@@ -1931,17 +1959,18 @@ kernel void random_op(device uchar* output_buffer [[buffer(0)]],
         const float radius = sqrt(-2.0f * log(float((words.x >> 8) + 1u) * kUnitScale));
         ((device float*)output)[index] = params.first + params.second * (radius * cos(kTwoPi * unit_interval(words.y)));
     } else if (kOp == 4) {
+        // The first category whose running sum (kOp 8) exceeds the draw; the
+        // sums never decrease, so a binary search finds it.
         const float u = unit_interval(words.x) * params.total;
-        float cumulative = 0.0f;
-        long sample = long(params.count - 1);
-        for (uint category = 0; category < params.count; ++category) {
-            cumulative += weights[category] * params.first;
-            if (u < cumulative) {
-                sample = long(category);
-                break;
-            }
+        uint low = 0, high = params.count;
+        while (low < high) {
+            const uint middle = (low + high) / 2;
+            if (u < keys[middle])
+                high = middle;
+            else
+                low = middle + 1;
         }
-        ((device long*)output)[index] = sample;
+        ((device long*)output)[index] = long(min(low, params.count - 1));
     } else {
         const float u = min(max(unit_interval(words.x), 1e-10f), 1.0f - 1e-10f);
         keys[index] = log(max(weights[index], 1e-10f)) - log(-log(u));

@@ -1312,11 +1312,17 @@ namespace lfs::core::internal {
                 .descending = descending ? 1u : 0u,
             };
             if (dim_size <= kSortCapacity) {
+                // Networks as wide as the line rounded up to a power of two,
+                // packed kSortCapacity / width lines to a threadgroup.
+                size_t width = 2;
+                while (width < dim_size)
+                    width <<= 1;
+                const size_t lines_per_group = kSortCapacity / width;
                 const std::array uses{values, indices};
-                context->dispatch(uses, {.pipeline = context->pipeline("sort_shared"),
+                context->dispatch(uses, {.pipeline = context->pipeline("sort_shared", {{29, static_cast<uint32_t>(width)}}),
                                          .buffers = {values_at.address, indices_at.address},
                                          .params = param_bytes(params),
-                                         .grid = MTLSizeMake(lines, 1, 1),
+                                         .grid = MTLSizeMake((lines + lines_per_group - 1) / lines_per_group, 1, 1),
                                          .group_size = MTLSizeMake(kThreadgroupWidth, 1, 1)});
                 return;
             }
@@ -1360,7 +1366,7 @@ namespace lfs::core::internal {
 
         // random_op kinds.
         constexpr uint32_t kUniform = 0, kBernoulli = 1, kRandint = 2, kNormal = 3, kMultinomialReplacement = 4,
-                           kGumbelKeys = 5, kRankSelect = 6, kWeightStatistics = 7;
+                           kGumbelKeys = 5, kWeightStatistics = 7, kRunningSums = 8;
 
         struct RandomParams {
             uint64_t output_offset;
@@ -2210,22 +2216,29 @@ namespace lfs::core::internal {
         LFS_ASSERT_MSG(std::isfinite(statistics.sum) && statistics.sum > 0.0f,
                        "multinomial weights must have a positive finite sum");
         if (program.replacement) {
-            encode_random(*context, kMultinomialReplacement, output, weights, {},
-                          {.seed = program.seed, .count = categories, .sample_count = samples,
-                           .first = statistics.scale, .total = statistics.sum},
+            // One pass of running sums, then a binary search per draw.
+            const Scratch sums(*context, program.count * sizeof(float));
+            const RandomParams params{.seed = program.seed, .count = categories, .sample_count = samples,
+                                      .first = statistics.scale, .total = statistics.sum};
+            encode_random(*context, kRunningSums, {}, weights, sums.storage, params, MTLSizeMake(1, 1, 1));
+            encode_random(*context, kMultinomialReplacement, output, weights, sums.storage, params,
                           thread_groups(program.sample_count));
             return;
         }
         LFS_ASSERT_MSG(program.sample_count <= program.count,
                        "multinomial sample count exceeds weights without replacement");
-        // Gumbel-top-k: the sample_count largest perturbed log-weights, ranked
-        // by counting; ties fall back to the lower index.
+        // Gumbel-top-k: the sample_count largest perturbed log-weights. The
+        // sort is stable, so ties fall back to the lower index.
         const Scratch keys(*context, program.count * sizeof(float));
+        const Scratch order(*context, program.count * sizeof(int64_t));
+        StorageRef key_values = keys.storage, key_order = order.storage;
+        key_values.dtype = DataType::Float32;
+        key_order.dtype = DataType::Int64;
         encode_random(*context, kGumbelKeys, {}, weights, keys.storage,
                       {.seed = program.seed, .count = categories, .sample_count = samples},
                       thread_groups(program.count));
-        encode_random(*context, kRankSelect, output, {}, keys.storage, {.count = categories, .sample_count = samples},
-                      thread_groups(program.count));
+        sort_lines(key_values, key_order, 1, program.count, 1, true);
+        encode_copy(*context, key_order, output, program.sample_count * sizeof(int64_t));
     }
 
     void MetalBackendOps::radius_neighbors(const StorageRef points, const StorageRef references, const StorageRef heads,

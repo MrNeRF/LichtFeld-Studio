@@ -32,6 +32,7 @@
 #include <functional>
 #include <limits>
 #include <random>
+#include <span>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -576,6 +577,45 @@ namespace {
         expect_close(integers_metal, integers_cpu, 0.0f, 0.0f);
     }
 
+    TEST_F(TensorMetal, ExtremaWithIndicesMatchCpu) {
+        // Ties, infinities and NaNs first, later and twice in a line.
+        std::vector<float> values = random_tensor(4 * 9 * 7, -2.0f, 2.0f, 70).to_vector();
+        for (size_t i = 0; i < values.size(); i += 5)
+            values[i] = 1.5f;
+        for (size_t i = 2; i < values.size(); i += 17)
+            values[i] = std::numeric_limits<float>::infinity();
+        for (size_t i = 3; i < values.size(); i += 19)
+            values[i] = -std::numeric_limits<float>::infinity();
+        for (size_t i = 0; i < values.size(); i += 23)
+            values[i] = std::numeric_limits<float>::quiet_NaN();
+        const Tensor cpu = Tensor::from_vector(values, {4, 9, 7}, Device::CPU);
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            GpuBackendScope scope(backend);
+            const Tensor gpu = cpu.to(Device::GPU);
+            for (const int dim : {0, 1, 2, -1}) {
+                for (const bool keepdim : {false, true}) {
+                    SCOPED_TRACE(std::to_string(static_cast<int>(backend)) + " dim " + std::to_string(dim) +
+                                 (keepdim ? " keepdim" : ""));
+                    const auto [max_values, max_indices] = gpu.max_with_indices(dim, keepdim);
+                    const auto [max_values_cpu, max_indices_cpu] = cpu.max_with_indices(dim, keepdim);
+                    EXPECT_EQ(gpu_backend_of(max_values), backend);
+                    expect_close(max_values, max_values_cpu, 0.0f, 0.0f);
+                    expect_close(max_indices, max_indices_cpu, 0.0f, 0.0f);
+                    const auto [min_values, min_indices] = gpu.min_with_indices(dim, keepdim);
+                    const auto [min_values_cpu, min_indices_cpu] = cpu.min_with_indices(dim, keepdim);
+                    expect_close(min_values, min_values_cpu, 0.0f, 0.0f);
+                    expect_close(min_indices, min_indices_cpu, 0.0f, 0.0f);
+                }
+            }
+            const int axis[] = {1};
+            expect_close(gpu.argmax(std::span<const int>(axis), false), cpu.argmax(std::span<const int>(axis), false),
+                         0.0f, 0.0f);
+            expect_close(gpu.argmax(), cpu.argmax(), 0.0f, 0.0f);
+        }
+    }
+
     TEST_F(TensorMetal, SortsMatchCpu) {
         // Short lines sort in one threadgroup, longer ones through the radix sort.
         for (const size_t count : {size_t{1}, size_t{7}, size_t{2048}, size_t{2049}, size_t{100000}}) {
@@ -590,6 +630,21 @@ namespace {
                 SCOPED_TRACE(descending);
                 const auto [sorted, indices] = to_metal(x_cpu).sort(0, descending);
                 const auto [sorted_cpu, indices_cpu] = x_cpu.sort(0, descending);
+                expect_close(sorted, sorted_cpu, 0.0f, 0.0f);
+                expect_close(indices, indices_cpu, 0.0f, 0.0f);
+            }
+        }
+        // Many short rows share a threadgroup, each sorted in its own direction.
+        for (const size_t width : {size_t{5}, size_t{64}, size_t{1000}}) {
+            SCOPED_TRACE(width);
+            std::vector<float> values = random_tensor(300 * width, -3.0f, 3.0f, 64).to_vector();
+            for (size_t i = 3; i < values.size(); i += 13)
+                values[i] = i % 2 == 0 ? std::numeric_limits<float>::quiet_NaN() : -0.0f;
+            const Tensor rows = Tensor::from_vector(values, {300, width}, Device::CPU);
+            for (const bool descending : {false, true}) {
+                SCOPED_TRACE(descending);
+                const auto [sorted, indices] = to_metal(rows).sort(1, descending);
+                const auto [sorted_cpu, indices_cpu] = rows.sort(1, descending);
                 expect_close(sorted, sorted_cpu, 0.0f, 0.0f);
                 expect_close(indices, indices_cpu, 0.0f, 0.0f);
             }
