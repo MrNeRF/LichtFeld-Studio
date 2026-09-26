@@ -6,6 +6,7 @@
 #include "internal/tensor_impl.hpp"
 #include <algorithm>
 #include <cmath>
+#include <format>
 #include <numeric>
 
 namespace lfs::core {
@@ -119,7 +120,8 @@ namespace lfs::core {
             const Tensor& input, const int dim, const bool keepdim, const bool find_maximum) {
             const size_t size = input.size(static_cast<size_t>(dim));
             LFS_ASSERT_MSG(size <= static_cast<size_t>(std::numeric_limits<int32_t>::max()),
-                           "indexed-extrema dimension exceeds int32");
+                           std::format("indexed extrema index their dimension in int32 (dim={}, size={})", dim,
+                                       size));
             const Tensor x = input.contiguous();
             std::vector<int32_t> positions(size);
             for (size_t i = 0; i < size; ++i)
