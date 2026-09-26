@@ -1082,6 +1082,9 @@ namespace lfs::training {
         pipelined_normal_ = {};
 
         photo_saved_ = {};
+        photo_loss_ = {};
+        photo_grad_corrected_ = {};
+        photo_grad_raw_ = {};
         bind_training_ops();
         loss_accumulator_ = {};
         fused_scale_reg_loss_ = {};
@@ -1655,21 +1658,18 @@ namespace lfs::training {
             raw_rendered.numel() > 0 &&
             opt_params.lambda_dssim > 0.0f;
 
-        lfs::core::Tensor loss;
-        lfs::core::Tensor grad_corrected;
-        lfs::core::Tensor grad_raw;
         const lfs::gpu_ops::PhotoParams params{
             .path = photometric_path(false, use_decoupled_appearance_loss, opt_params.lambda_dssim),
             .ssim_weight = opt_params.lambda_dssim,
             .valid_padding = true,
         };
         training_ops_->photometric->evaluate(
-            photo_saved_, corrected, raw_rendered, gt_image, {}, params,
-            loss, grad_corrected, grad_raw);
+            photo_saved_, corrected, raw_rendered, gt_image, photo_mask_, params,
+            photo_loss_, photo_grad_corrected_, photo_grad_raw_);
         return PhotometricLossResult{
-            .loss = std::move(loss),
-            .grad_corrected = std::move(grad_corrected),
-            .grad_raw = std::move(grad_raw)};
+            .loss = std::move(photo_loss_),
+            .grad_corrected = std::move(photo_grad_corrected_),
+            .grad_raw = std::move(photo_grad_raw_)};
     }
 
     std::expected<void, std::string> Trainer::validate_masks() {
@@ -3332,6 +3332,9 @@ namespace lfs::training {
         pipelined_depth_ = {};
         pipelined_normal_ = {};
         photo_saved_ = {};
+        photo_loss_ = {};
+        photo_grad_corrected_ = {};
+        photo_grad_raw_ = {};
         training_ops_ = nullptr;
         loss_accumulator_ = {};
         depth_loss_scalar_ = {};

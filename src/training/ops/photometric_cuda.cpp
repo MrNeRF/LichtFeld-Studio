@@ -20,26 +20,42 @@ namespace lfs::training {
             lfs::core::Tensor grad_buffer;
             lfs::core::Tensor loss_scalar;
             lfs::core::Tensor l1_reduction;
-            std::vector<size_t> l1_shape;
             size_t l1_blocks = 0;
             kernels::SSIMMapWorkspace error_maps;
             // Keeps the last allocating metric's inputs alive until the next call.
             std::vector<lfs::core::Tensor> metric_keep;
+            lfs::core::RankedDims l1_dims;
+            bool l1_ready = false;
 
-            void ensure_l1(const std::vector<size_t>& shape, const size_t num_blocks) {
-                if (l1_shape == shape && l1_blocks == num_blocks) {
+            void ensure_l1(const lfs::core::TensorShape& shape, const size_t num_blocks) {
+                const lfs::core::RankedDims& dims = shape.dims();
+                if (l1_ready && l1_dims == dims && l1_blocks == num_blocks) {
                     return;
                 }
-                const lfs::core::TensorShape tensor_shape(shape);
-                grad_buffer = lfs::core::Tensor::empty(tensor_shape, lfs::core::Device::GPU);
+                grad_buffer = lfs::core::Tensor::empty(shape, lfs::core::Device::GPU);
                 loss_scalar = lfs::core::Tensor::zeros({1}, lfs::core::Device::GPU);
                 if (num_blocks > 0) {
                     l1_reduction = lfs::core::Tensor::empty({num_blocks}, lfs::core::Device::GPU);
                 }
-                l1_shape = shape;
+                l1_dims = dims;
                 l1_blocks = num_blocks;
+                l1_ready = true;
             }
         };
+
+        // operator= deep-copies when both sides are same-shaped views, and a
+        // steady publish aliases the workspace, so that assignment cloned the map.
+        void bind_handle(lfs::core::Tensor& dst, const lfs::core::Tensor& src) {
+            if (dst.is_valid() && src.is_valid() && dst.storage_ptr() == src.storage_ptr() &&
+                dst.shape() == src.shape() && dst.dtype() == src.dtype()) {
+                return;
+            }
+            if (dst.is_view() && dst.is_valid() && src.is_valid() && dst.shape() == src.shape() &&
+                dst.dtype() == src.dtype()) {
+                dst = lfs::core::Tensor{};
+            }
+            dst = src;
+        }
 
         template <typename Fn>
         void dispatch_target_ptr(const lfs::core::Tensor& target, Fn&& fn) {
@@ -64,8 +80,8 @@ namespace lfs::training {
         void publish_maps(lfs::gpu_ops::PhotoSaved& saved,
                           const lfs::core::Tensor& ssim_map,
                           const lfs::core::Tensor& cs_map) {
-            saved.ssim_map = ssim_map;
-            saved.cs_map = cs_map;
+            bind_handle(saved.ssim_map, ssim_map);
+            bind_handle(saved.cs_map, cs_map);
         }
 
         void squeeze_batch(lfs::core::Tensor& gradient, const lfs::core::Tensor& image) {
@@ -110,14 +126,18 @@ namespace lfs::training {
             lfs::gpu_ops::Tensor& grad_raw) {
             auto& state = state_of(saved);
             kernels::validate_loss_weight(params.ssim_weight);
-            grad_raw = {};
+            const bool writes_raw = params.path == lfs::gpu_ops::PhotoPath::Decoupled ||
+                                    params.path == lfs::gpu_ops::PhotoPath::MaskedDecoupled;
+            if (!writes_raw && grad_raw.is_valid()) {
+                grad_raw = {};
+            }
 
             switch (params.path) {
             case lfs::gpu_ops::PhotoPath::L1: {
                 auto [rendered_4d, gt_4d] = kernels::prepare_loss_images(corrected, target);
                 const size_t count = rendered_4d.numel();
                 const size_t num_blocks = std::min((count + 255) / 256, size_t{1024});
-                state.ensure_l1(rendered_4d.shape().dims(), num_blocks);
+                state.ensure_l1(rendered_4d.shape(), num_blocks);
                 lfs::core::pin_operands({&rendered_4d, &gt_4d});
                 dispatch_target_ptr(gt_4d, [&](auto* gt_ptr) {
                     kernels::launch_fused_l1_loss(
@@ -129,29 +149,31 @@ namespace lfs::training {
                         count,
                         nullptr);
                 });
-                grad_corrected = state.grad_buffer;
-                loss = state.loss_scalar;
+                bind_handle(grad_corrected, state.grad_buffer);
+                bind_handle(loss, state.loss_scalar);
                 squeeze_batch(grad_corrected, corrected);
                 break;
             }
             case lfs::gpu_ops::PhotoPath::SSIM: {
-                auto [rendered_4d, gt_4d] = kernels::prepare_loss_images(corrected, target);
-                auto& workspace = state.arena.ensure_pure_ssim(rendered_4d.shape().dims());
+                // ssim_forward prepares the images and sizes the workspace.
+                auto& workspace = state.arena.pure_ssim();
                 auto [ssim_value, ssim_ctx] = kernels::ssim_forward(
-                    rendered_4d, gt_4d, workspace, params.valid_padding);
-                loss = lfs::core::Tensor::full({1}, 1.0f, lfs::core::Device::GPU) - ssim_value;
-                grad_corrected = kernels::ssim_backward(ssim_ctx, workspace, -1.0f);
+                    corrected, target, workspace, params.valid_padding);
+                auto loss_tensor =
+                    lfs::core::Tensor::full({1}, 1.0f, lfs::core::Device::GPU) - ssim_value;
+                bind_handle(loss, loss_tensor);
+                bind_handle(grad_corrected, kernels::ssim_backward(ssim_ctx, workspace, -1.0f));
                 squeeze_batch(grad_corrected, corrected);
                 publish_maps(saved, workspace.ssim_map, workspace.cs_map);
                 break;
             }
             case lfs::gpu_ops::PhotoPath::Fused: {
-                auto [rendered_4d, gt_4d] = kernels::prepare_loss_images(corrected, target);
-                auto& workspace = state.arena.ensure_fused(rendered_4d.shape().dims());
+                // fused_l1_ssim_* prepares the images and sizes the workspace.
+                auto& workspace = state.arena.fused();
                 auto [loss_tensor, fused_ctx] = kernels::fused_l1_ssim_forward(
-                    rendered_4d, gt_4d, params.ssim_weight, workspace, params.valid_padding);
-                grad_corrected = kernels::fused_l1_ssim_backward(fused_ctx, workspace);
-                loss = loss_tensor;
+                    corrected, target, params.ssim_weight, workspace, params.valid_padding);
+                bind_handle(grad_corrected, kernels::fused_l1_ssim_backward(fused_ctx, workspace));
+                bind_handle(loss, loss_tensor);
                 squeeze_batch(grad_corrected, corrected);
                 publish_maps(saved, workspace.ssim_map, workspace.cs_map);
                 break;
@@ -161,9 +183,9 @@ namespace lfs::training {
                 auto [loss_tensor, ctx] = kernels::decoupled_fused_l1_ssim_forward(
                     corrected, raw, target, params.ssim_weight, workspace, params.valid_padding);
                 auto grads = kernels::decoupled_fused_l1_ssim_backward(ctx, workspace);
-                loss = loss_tensor;
-                grad_corrected = grads.grad_corrected;
-                grad_raw = grads.grad_raw;
+                bind_handle(loss, loss_tensor);
+                bind_handle(grad_corrected, grads.grad_corrected);
+                bind_handle(grad_raw, grads.grad_raw);
                 if (corrected.ndim() == 3) {
                     grad_corrected = grad_corrected.squeeze(0);
                     grad_raw = grad_raw.squeeze(0);
@@ -175,8 +197,8 @@ namespace lfs::training {
                 auto& workspace = state.arena.masked_fused();
                 auto [loss_tensor, ctx] = kernels::masked_fused_l1_ssim_forward(
                     corrected, target, mask, params.ssim_weight, workspace);
-                grad_corrected = kernels::masked_fused_l1_ssim_backward(ctx, workspace);
-                loss = loss_tensor;
+                bind_handle(grad_corrected, kernels::masked_fused_l1_ssim_backward(ctx, workspace));
+                bind_handle(loss, loss_tensor);
                 if (grad_corrected.ndim() == 4 && corrected.ndim() == 3) {
                     grad_corrected = grad_corrected.squeeze(0);
                 }
@@ -188,9 +210,9 @@ namespace lfs::training {
                 auto [loss_tensor, ctx] = kernels::masked_decoupled_fused_l1_ssim_forward(
                     corrected, raw, target, mask, params.ssim_weight, workspace);
                 auto grads = kernels::masked_decoupled_fused_l1_ssim_backward(ctx, workspace);
-                loss = loss_tensor;
-                grad_corrected = grads.grad_corrected;
-                grad_raw = grads.grad_raw;
+                bind_handle(loss, loss_tensor);
+                bind_handle(grad_corrected, grads.grad_corrected);
+                bind_handle(grad_raw, grads.grad_raw);
                 if (grad_corrected.ndim() == 4 && corrected.ndim() == 3) {
                     grad_corrected = grad_corrected.squeeze(0);
                 }

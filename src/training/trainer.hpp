@@ -807,6 +807,11 @@ namespace lfs::training {
         // Resolved once at training start. Hot paths use this table.
         const lfs::training::TrainingOps* training_ops_ = nullptr;
         lfs::gpu_ops::PhotoSaved photo_saved_{};
+        // photo_mask_ stays empty. Loss handles are moved to the caller.
+        lfs::core::Tensor photo_mask_;
+        lfs::core::Tensor photo_loss_;
+        lfs::core::Tensor photo_grad_corrected_;
+        lfs::core::Tensor photo_grad_raw_;
         void bind_training_ops();
 
         // Cached GPU scalar to avoid per-iteration allocation
