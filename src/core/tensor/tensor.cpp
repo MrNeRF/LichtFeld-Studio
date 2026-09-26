@@ -3651,7 +3651,9 @@ namespace lfs::core {
         t.adopt_storage(ptr, [stream](void* p) { safe_cuda_pool_deallocate(p, stream); });
         t.data_ = t.data_owner_.get();
         t.compute_alignment();
+#if LFS_HAS_CUDA
         CudaMemoryPool::instance().record_tensor(t.data_, t.shape().dims(), bytes, dtype_name(t.dtype_));
+#endif
         return t;
     }
 
