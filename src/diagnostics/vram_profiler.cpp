@@ -77,7 +77,8 @@ namespace lfs::diagnostics {
         constexpr std::size_t kGpuEventPoolSize = 64;
         constexpr std::size_t kMarkerCapacity = 1024;
 
-#ifndef _WIN32
+#if !defined(_WIN32) && LFS_HAS_CUDA
+        // NVML finds the device through the CUDA runtime's PCI bus id.
         struct NvmlMemorySample {
             std::size_t process = 0;
             std::size_t used = 0;
@@ -1180,7 +1181,7 @@ namespace lfs::diagnostics {
         std::lock_guard lock(impl_->mutex);
         if (impl_->cuda_device_baseline == 0)
             impl_->cuda_device_baseline = used;
-#ifndef _WIN32
+#if !defined(_WIN32) && LFS_HAS_CUDA
         if (impl_->cuda_context_baseline == 0) {
             const auto process_bytes = nvml_memory_sample().process;
             if (process_bytes) {
@@ -1327,7 +1328,7 @@ namespace lfs::diagnostics {
             return;
         }
 
-#ifndef _WIN32
+#if !defined(_WIN32) && LFS_HAS_CUDA
         const auto usage = process_used && total_used && total ? NvmlMemorySample{}
                                                                : nvml_memory_sample();
         const auto measured_process_used = process_used ? process_used : usage.process;
