@@ -1996,6 +1996,7 @@
     "reload": "Herladen"
   },
   "status_bar": {
+    "preview_reduced": "Voorbeeldresolutie verlaagd (GPU-geheugen)",
     "safe_mode": "VEILIGE MODUS",
     "mcp_preferences": "Bewerken",
     "mcp_turn_on": "Inschakelen",

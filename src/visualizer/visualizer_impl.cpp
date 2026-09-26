@@ -1149,7 +1149,7 @@ namespace lfs::vis {
                 const size_t freed = coordinator.run_episode(
                     e.failure(), lfs::core::PressureContext::RenderThread);
                 LOG_ERROR("GPU memory pressure during frame (attempt {}): {}. Freed {:.1f} MiB; "
-                          "reducing preview quality and retrying.",
+                          "retrying with preview protection if memory is still short.",
                           frame_state_.consecutive_oom_faults(), e.what(),
                           static_cast<double>(freed) / (1024.0 * 1024.0));
             }

@@ -1996,6 +1996,7 @@
     "reload": "再読み込み"
   },
   "status_bar": {
+    "preview_reduced": "プレビュー解像度を低下（GPUメモリ）",
     "safe_mode": "セーフモード",
     "mcp_preferences": "編集",
     "mcp_turn_on": "オンにする",

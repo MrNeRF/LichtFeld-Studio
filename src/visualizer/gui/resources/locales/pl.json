@@ -1996,6 +1996,7 @@
     "reload": "Przeładuj"
   },
   "status_bar": {
+    "preview_reduced": "Obniżona rozdzielczość podglądu (pamięć GPU)",
     "safe_mode": "TRYB BEZPIECZNY",
     "mcp_preferences": "Edytuj",
     "mcp_turn_on": "Włącz",

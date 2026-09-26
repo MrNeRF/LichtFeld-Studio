@@ -1996,6 +1996,7 @@
     "reload": "重新加载"
   },
   "status_bar": {
+    "preview_reduced": "预览分辨率已降低（GPU 显存）",
     "safe_mode": "安全模式",
     "mcp_preferences": "编辑",
     "mcp_turn_on": "开启",

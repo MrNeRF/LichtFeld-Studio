@@ -1996,6 +1996,7 @@
     "reload": "Neu laden"
   },
   "status_bar": {
+    "preview_reduced": "Vorschauauflösung reduziert (GPU-Speicher)",
     "safe_mode": "ABGESICHERTER MODUS",
     "mcp_preferences": "Bearbeiten",
     "mcp_turn_on": "Einschalten",
