@@ -344,6 +344,10 @@ namespace lfs::core {
         return oss.str();
     }
 
+    std::size_t Tensor::cuda_direct_storage_live_bytes() {
+        return storage_accounting_state().cuda_direct.live_bytes.load(std::memory_order_relaxed);
+    }
+
     void Tensor::log_storage_memory() {
         log_storage_memory({});
     }
@@ -1686,42 +1690,13 @@ namespace lfs::core {
             }
 
             if (device_ == Device::GPU) {
-                // Can't use launch_convert_type - need custom != 0 logic
-                auto result_cpu = empty(shape_, Device::CPU, DataType::Bool);
-                std::vector<float> temp(numel());
-                float* const download_dst = temp.data();
-                const size_t download_bytes = bytes();
-                internal::order_legacy_after_home(*this);
-                internal::backend_ops_for(*this).copy_device_to_host(
-                    internal::CopyRequest{
-                        .src = internal::storage_ref(*this),
-                        .dst = internal::raw_storage_ref(download_dst, dtype_),
-                        .bytes = download_bytes,
-                        .synchronous = true,
-                        .context = internal::ExecContext{},
-                    });
-
-                unsigned char* dst_cpu = result_cpu.ptr<unsigned char>();
-                for (size_t i = 0; i < numel(); ++i) {
-                    dst_cpu[i] = (temp[i] != 0.0f) ? 1 : 0;
-                }
-
-                const size_t upload_bytes = numel();
-                internal::backend_ops_for(result).copy_host_to_device(
-                    internal::CopyRequest{
-                        .src = internal::raw_storage_ref(dst_cpu, DataType::Bool),
-                        .dst = internal::storage_ref(result),
-                        .bytes = upload_bytes,
-                        .synchronous = true,
-                        .context = internal::ExecContext{},
-                    });
-                internal::order_home_after_legacy(result);
-            } else {
-                const float* src = ptr<float>();
-                unsigned char* dst = result.ptr<unsigned char>();
-                for (size_t i = 0; i < numel(); ++i) {
-                    dst[i] = (src[i] != 0.0f) ? 1 : 0;
-                }
+                // != 0 on the device, so NaN maps to true like the CPU loop.
+                return ne(internal::allocate_zeros_like(*this, TensorShape({1}), dtype_));
+            }
+            const float* src = ptr<float>();
+            unsigned char* dst = result.ptr<unsigned char>();
+            for (size_t i = 0; i < numel(); ++i) {
+                dst[i] = (src[i] != 0.0f) ? 1 : 0;
             }
             return result;
         }
@@ -1804,49 +1779,18 @@ namespace lfs::core {
 
         // Bool <-> Int32: Manual conversion (bool != 0 logic)
         if (dtype_ == DataType::Int32 && dtype == DataType::Bool) {
+            if (device_ == Device::GPU && numel() > 0) {
+                // != 0 on the device.
+                return ne(internal::allocate_zeros_like(*this, TensorShape({1}), dtype_));
+            }
             auto result = internal::allocate_like(*this, shape_, DataType::Bool);
             if (numel() == 0)
                 return result;
 
-            if (device_ == Device::GPU) {
-                // Copy to CPU, convert, copy back
-                auto result_cpu = empty(shape_, Device::CPU, DataType::Bool);
-                std::vector<int> temp(numel());
-                int* const download_dst = temp.data();
-                const size_t download_bytes = bytes();
-                internal::order_legacy_after_home(*this);
-                internal::backend_ops_for(*this).copy_device_to_host(
-                    internal::CopyRequest{
-                        .src = internal::storage_ref(*this),
-                        .dst = internal::raw_storage_ref(download_dst, dtype_),
-                        .bytes = download_bytes,
-                        .synchronous = true,
-                        .context = internal::ExecContext{},
-                    });
-
-                unsigned char* dst_cpu = result_cpu.ptr<unsigned char>();
-                for (size_t i = 0; i < numel(); ++i) {
-                    dst_cpu[i] = (temp[i] != 0) ? 1 : 0;
-                }
-
-                const unsigned char* const upload_src = result_cpu.ptr<unsigned char>();
-                const size_t upload_bytes = numel() * sizeof(unsigned char);
-                internal::backend_ops_for(result).copy_host_to_device(
-                    internal::CopyRequest{
-                        .src = internal::raw_storage_ref(
-                            const_cast<unsigned char*>(upload_src), DataType::Bool),
-                        .dst = internal::storage_ref(result),
-                        .bytes = upload_bytes,
-                        .synchronous = true,
-                        .context = internal::ExecContext{},
-                    });
-                internal::order_home_after_legacy(result);
-            } else {
-                const int* src = ptr<int>();
-                unsigned char* dst = result.ptr<unsigned char>();
-                for (size_t i = 0; i < numel(); ++i) {
-                    dst[i] = (src[i] != 0) ? 1 : 0;
-                }
+            const int* src = ptr<int>();
+            unsigned char* dst = result.ptr<unsigned char>();
+            for (size_t i = 0; i < numel(); ++i) {
+                dst[i] = (src[i] != 0) ? 1 : 0;
             }
             return result;
         }
@@ -1896,49 +1840,18 @@ namespace lfs::core {
 
         // Int64 -> Bool
         if (dtype_ == DataType::Int64 && dtype == DataType::Bool) {
+            if (device_ == Device::GPU && numel() > 0) {
+                // != 0 on the device.
+                return ne(internal::allocate_zeros_like(*this, TensorShape({1}), dtype_));
+            }
             auto result = internal::allocate_like(*this, shape_, DataType::Bool);
             if (numel() == 0)
                 return result;
 
-            if (device_ == Device::GPU) {
-                // Copy to CPU, convert, copy back
-                auto result_cpu = empty(shape_, Device::CPU, DataType::Bool);
-                std::vector<int64_t> temp(numel());
-                int64_t* const download_dst = temp.data();
-                const size_t download_bytes = bytes();
-                internal::order_legacy_after_home(*this);
-                internal::backend_ops_for(*this).copy_device_to_host(
-                    internal::CopyRequest{
-                        .src = internal::storage_ref(*this),
-                        .dst = internal::raw_storage_ref(download_dst, dtype_),
-                        .bytes = download_bytes,
-                        .synchronous = true,
-                        .context = internal::ExecContext{},
-                    });
-
-                unsigned char* dst_cpu = result_cpu.ptr<unsigned char>();
-                for (size_t i = 0; i < numel(); ++i) {
-                    dst_cpu[i] = (temp[i] != 0) ? 1 : 0;
-                }
-
-                const unsigned char* const upload_src = result_cpu.ptr<unsigned char>();
-                const size_t upload_bytes = numel() * sizeof(unsigned char);
-                internal::backend_ops_for(result).copy_host_to_device(
-                    internal::CopyRequest{
-                        .src = internal::raw_storage_ref(
-                            const_cast<unsigned char*>(upload_src), DataType::Bool),
-                        .dst = internal::storage_ref(result),
-                        .bytes = upload_bytes,
-                        .synchronous = true,
-                        .context = internal::ExecContext{},
-                    });
-                internal::order_home_after_legacy(result);
-            } else {
-                const int64_t* src = ptr<int64_t>();
-                unsigned char* dst = result.ptr<unsigned char>();
-                for (size_t i = 0; i < numel(); ++i) {
-                    dst[i] = (src[i] != 0) ? 1 : 0;
-                }
+            const int64_t* src = ptr<int64_t>();
+            unsigned char* dst = result.ptr<unsigned char>();
+            for (size_t i = 0; i < numel(); ++i) {
+                dst[i] = (src[i] != 0) ? 1 : 0;
             }
             return result;
         }
@@ -1970,51 +1883,18 @@ namespace lfs::core {
 
         // Float16 -> Bool
         if (dtype_ == DataType::Float16 && dtype == DataType::Bool) {
+            if (device_ == Device::GPU && numel() > 0) {
+                // != 0 on the device, so NaN maps to true like the CPU loop.
+                return ne(internal::allocate_zeros_like(*this, TensorShape({1}), dtype_));
+            }
             auto result = internal::allocate_like(*this, shape_, DataType::Bool);
             if (numel() == 0)
                 return result;
 
-            if (device_ == Device::GPU) {
-                // Copy to CPU, convert, copy back
-                auto result_cpu = empty(shape_, Device::CPU, DataType::Bool);
-                std::vector<detail::tensor_half_t> temp(numel());
-                detail::tensor_half_t* const download_dst = temp.data();
-                const size_t download_bytes = bytes();
-                internal::order_legacy_after_home(*this);
-                internal::backend_ops_for(*this).copy_device_to_host(
-                    internal::CopyRequest{
-                        .src = internal::storage_ref(*this),
-                        .dst = internal::raw_storage_ref(download_dst, dtype_),
-                        .bytes = download_bytes,
-                        .synchronous = true,
-                        .context = internal::ExecContext{},
-                    });
-                internal::backend_ops_for(*this).synchronize_device();
-
-                unsigned char* dst_cpu = result_cpu.ptr<unsigned char>();
-                for (size_t i = 0; i < numel(); ++i) {
-                    dst_cpu[i] = (detail::tensor_half_to_float(temp[i]) != 0.0f) ? 1 : 0;
-                }
-
-                const unsigned char* const upload_src = result_cpu.ptr<unsigned char>();
-                const size_t upload_bytes = numel() * sizeof(unsigned char);
-                internal::backend_ops_for(result).copy_host_to_device(
-                    internal::CopyRequest{
-                        .src = internal::raw_storage_ref(
-                            const_cast<unsigned char*>(upload_src), DataType::Bool),
-                        .dst = internal::storage_ref(result),
-                        .bytes = upload_bytes,
-                        .synchronous = true,
-                        .context = internal::ExecContext{},
-                    });
-                internal::order_home_after_legacy(result);
-                internal::backend_ops_for(result).synchronize_device();
-            } else {
-                const detail::tensor_half_t* src = ptr<detail::tensor_half_t>();
-                unsigned char* dst = result.ptr<unsigned char>();
-                for (size_t i = 0; i < numel(); ++i) {
-                    dst[i] = (detail::tensor_half_to_float(src[i]) != 0.0f) ? 1 : 0;
-                }
+            const detail::tensor_half_t* src = ptr<detail::tensor_half_t>();
+            unsigned char* dst = result.ptr<unsigned char>();
+            for (size_t i = 0; i < numel(); ++i) {
+                dst[i] = (detail::tensor_half_to_float(src[i]) != 0.0f) ? 1 : 0;
             }
             return result;
         }
@@ -3326,10 +3206,14 @@ namespace lfs::core {
                 internal::storage_ref(*this), numel(), internal::ExecContext{stream()});
         }
 
-        // CPU fallback
-        auto values = to_vector();
-        return std::any_of(values.begin(), values.end(),
-                           [](float x) { return std::isnan(x); });
+        if (dtype_ == DataType::Float16) {
+            return to(DataType::Float32).has_nan();
+        }
+        if (dtype_ != DataType::Float32) {
+            return false; // Integers and Bool hold neither NaN nor Inf.
+        }
+        const float* const values = ptr<float>();
+        return std::any_of(values, values + numel(), [](const float x) { return std::isnan(x); });
     }
 
     bool Tensor::has_inf() const {
@@ -3351,10 +3235,14 @@ namespace lfs::core {
                 internal::storage_ref(*this), numel(), internal::ExecContext{stream()});
         }
 
-        // CPU fallback
-        auto values = to_vector();
-        return std::any_of(values.begin(), values.end(),
-                           [](float x) { return std::isinf(x); });
+        if (dtype_ == DataType::Float16) {
+            return to(DataType::Float32).has_inf();
+        }
+        if (dtype_ != DataType::Float32) {
+            return false; // Integers and Bool hold neither NaN nor Inf.
+        }
+        const float* const values = ptr<float>();
+        return std::any_of(values, values + numel(), [](const float x) { return std::isinf(x); });
     }
 
     bool Tensor::all_close(const Tensor& other, float rtol, float atol) const {
@@ -3380,28 +3268,20 @@ namespace lfs::core {
         const Tensor& a = contiguous_read(a_materialized);
         const Tensor& b = other.contiguous_read(b_materialized);
 
-        const float* a_data = nullptr;
-        const float* b_data = nullptr;
-
-        Tensor a_temp, b_temp;
-
         if (a.device_ == Device::GPU) {
-            a_temp = a.to(Device::CPU);
-            a_data = a_temp.ptr<float>();
-        } else {
-            a_data = a.ptr<float>();
+            // Only flags and a count come back. Equal values, infinities
+            // included, are close; the clamped tolerance keeps an infinite b
+            // from accepting every difference, as the host loop does.
+            if (a.has_nan() || b.has_nan()) {
+                return false;
+            }
+            const Tensor tolerance = b.abs().mul(rtol).add(atol).clamp_max(std::numeric_limits<float>::max());
+            const Tensor close = a.eq(b).logical_or(a.sub(b).abs().le(tolerance));
+            return close.count_nonzero() == numel();
         }
 
-        if (b.device() == Device::GPU) {
-            b_temp = b.to(Device::CPU);
-            b_data = b_temp.ptr<float>();
-        } else {
-            b_data = b.ptr<float>();
-        }
-
-        if (!a_data || !b_data) {
-            return false;
-        }
+        const float* const a_data = a.ptr<float>();
+        const float* const b_data = b.ptr<float>();
 
         for (size_t i = 0; i < numel(); ++i) {
             if (a_data[i] == b_data[i]) {
@@ -3619,6 +3499,39 @@ namespace lfs::core {
     TensorError::TensorError(const std::string& msg, const Tensor* t)
         : std::runtime_error(msg),
           tensor_info_(t ? t->str() : "") {}
+
+    Tensor Tensor::empty_exact(TensorShape shape, DataType dtype) {
+        LFS_ASSERT_MSG(is_supported_dtype(dtype), "empty_exact received an invalid dtype");
+        const size_t elements = shape.elements();
+        LFS_ASSERT_MSG(elements == 0 || dtype_size(dtype) <= std::numeric_limits<size_t>::max() / elements,
+                       "empty_exact byte count overflow");
+        const size_t bytes = elements * dtype_size(dtype);
+        // Only the CUDA pool rounds sizes up into retained buckets.
+        if (bytes == 0 || internal::resolve_new_gpu_storage_backend() != GpuBackend::CUDA) {
+            return empty(std::move(shape), Device::GPU, dtype);
+        }
+
+        Tensor t;
+        t.shape_ = shape;
+        t.strides_ = shape.strides();
+        t.storage_offset_ = 0;
+        t.is_contiguous_ = true;
+        t.device_ = Device::GPU;
+        t.dtype_ = dtype;
+        t.id_ = next_id_++;
+        t.ensure_state();
+        t.state_->stream = getCurrentCUDAStream();
+        const cudaStream_t stream = t.state_->stream;
+        void* ptr = allocate_cuda_storage(
+            bytes, stream, CudaStorageMode::ExactAsync, "tensor.exact", "tensor.empty_exact");
+        t.adopt_storage(ptr, [stream](void* p) { safe_cuda_pool_deallocate(p, stream); });
+        t.data_ = t.data_owner_.get();
+        t.compute_alignment();
+#if LFS_HAS_CUDA
+        CudaMemoryPool::instance().record_tensor(t.data_, t.shape().dims(), bytes, dtype_name(t.dtype_));
+#endif
+        return t;
+    }
 
     Tensor Tensor::zeros_direct(TensorShape shape, size_t capacity, Device device, DataType dtype) {
         LFS_ASSERT_MSG(device == Device::GPU,

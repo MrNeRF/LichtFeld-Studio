@@ -529,6 +529,13 @@ namespace lfs::core {
         s.last = result;
         return result;
     }
+    namespace {
+        void require_readback_staging(const Tensor& staging, const size_t bytes) {
+            if (gpu_backend_of(staging) != GpuBackend::CUDA || !staging.is_contiguous() ||
+                staging.dtype() != DataType::UInt8 || staging.bytes() < bytes)
+                throw std::invalid_argument("Readback staging must cover a slot on the queue backend");
+        }
+    } // namespace
     struct TensorReadbackRing::Impl {
         struct Slot {
             void* host = nullptr;
@@ -539,6 +546,7 @@ namespace lfs::core {
         TensorWorkQueue* queue = nullptr;
         size_t bytes = 0;
         std::vector<Slot> slots;
+        const Tensor* staging = nullptr;
         Tensor scratch;
         ~Impl() {
             if (!queue)
@@ -564,13 +572,9 @@ namespace lfs::core {
         auto& s = *impl_;
         s.queue = &queue;
         s.bytes = bytes;
-        if (staging) {
-            if (!staging->is_valid() || gpu_backend_of(*staging) != backend ||
-                !staging->is_contiguous() || staging->dtype() != DataType::UInt8 ||
-                staging->bytes() < bytes)
-                throw std::invalid_argument("Readback staging must cover a slot on the queue backend");
-            s.scratch = *staging;
-        }
+        s.staging = staging;
+        if (staging && staging->is_valid())
+            require_readback_staging(*staging, bytes);
         s.slots.resize(slots);
 #if LFS_HAS_CUDA
         for (auto& slot : s.slots) {
@@ -605,10 +609,17 @@ namespace lfs::core {
         prepare_inputs_for_stream({&retained}, stream);
         const void* input = static_cast<const std::byte*>(retained.data_ptr()) + offset;
         if (stage && bytes) {
-            if (!s.scratch.is_valid())
+            const bool borrowed = s.staging && s.staging->is_valid();
+            if (borrowed) {
+                require_readback_staging(*s.staging, s.bytes);
+                // Retained with the slot so a released owner cannot free it mid-copy.
+                slot.sources.push_back(*s.staging);
+            } else if (!s.scratch.is_valid()) {
                 s.scratch = Tensor::empty({s.bytes}, Device::GPU, DataType::UInt8);
-            check(cudaMemcpyAsync(s.scratch.data_ptr(), input, bytes, cudaMemcpyDeviceToDevice, stream));
-            input = s.scratch.data_ptr();
+            }
+            Tensor& staging = borrowed ? slot.sources.back() : s.scratch;
+            check(cudaMemcpyAsync(staging.data_ptr(), input, bytes, cudaMemcpyDeviceToDevice, stream));
+            input = staging.data_ptr();
         }
         if (bytes)
             check(cudaMemcpyAsync(static_cast<std::byte*>(slot.host) + destination,

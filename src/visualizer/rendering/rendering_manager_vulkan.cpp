@@ -2442,6 +2442,7 @@ namespace lfs::vis {
             if (!point_cloud_vulkan_renderer_) {
                 point_cloud_vulkan_renderer_ = std::make_unique<PointCloudVulkanRenderer>();
             }
+            point_cloud_last_frame_serial_ = context.vulkan_context->lastFrameSubmitSerial() + 1;
 
             lfs::core::Tensor splat_positions;
             const lfs::core::Tensor* positions_ptr = nullptr;
@@ -3796,6 +3797,19 @@ namespace lfs::vis {
         }
 
         const bool render_point_cloud = frame_settings.point_cloud_mode || !has_visible_gaussian_model;
+        const auto release_inactive_point_cloud = [this]() {
+            if (!point_cloud_vulkan_renderer_ && !point_cloud_colors_cache_.is_valid()) {
+                return;
+            }
+            if (last_vulkan_context_ &&
+                last_vulkan_context_->retiredFrameSubmitSerial() < point_cloud_last_frame_serial_) {
+                return;
+            }
+            point_cloud_colors_cache_ = {};
+            point_cloud_colors_cache_key_ = nullptr;
+            point_cloud_colors_cache_size_ = 0;
+            point_cloud_vulkan_renderer_.reset();
+        };
 
         if (rendered_image || pending_split_view.enabled) {
             // Split-view paths populate pending_split_view directly; skip the
@@ -4344,6 +4358,7 @@ namespace lfs::vis {
                                         complete_temporal_convergence_frame();
                                     else if (temporal_convergence_.enabled())
                                         temporal_convergence_.cancelSettle();
+                                    release_inactive_point_cloud();
 
                                     vulkan_viewport_coordinate_size_ = current_size;
                                     return {.image = vulkan_viewport_image_,
@@ -4428,6 +4443,7 @@ namespace lfs::vis {
                             complete_temporal_convergence_frame();
                         else if (temporal_convergence_.enabled())
                             temporal_convergence_.cancelSettle();
+                        release_inactive_point_cloud();
 
                         vulkan_viewport_coordinate_size_ = current_size;
                         return {.image = {},
@@ -4835,6 +4851,9 @@ namespace lfs::vis {
             LOG_ERROR("Failed to render Vulkan viewport image: {}",
                       render_error.empty() ? "missing image payload" : render_error);
             clearVulkanViewportImageState();
+            if (!has_point_cloud) {
+                release_inactive_point_cloud();
+            }
             return {};
         }
 
@@ -4862,6 +4881,9 @@ namespace lfs::vis {
         viewport_artifact_service_.updateFromImageOutput(
             std::move(viewport_image), rendered_metadata, render_size, true);
         release_inactive_split_outputs();
+        if (has_visible_gaussian_model && !frame_settings.point_cloud_mode) {
+            release_inactive_point_cloud();
+        }
 
         if (resize_result.completed) {
             lfs::core::Tensor::trim_memory_pool();

@@ -2060,7 +2060,7 @@ namespace lfs::vis {
         stopLodStreaming("LOD scene released before upload completed");
         detachManagedBuffers();
         for (std::size_t ring_slot = 0; ring_slot < kInputRingSize; ++ring_slot) {
-            releaseOpacityCopySlot(ring_slot);
+            releaseDeletedMaskSlot(ring_slot);
             overlays_[ring_slot] = {};
         }
         selection_query_ = {};
@@ -2179,7 +2179,7 @@ namespace lfs::vis {
                 LOG_ERROR("VkSplat renderer cleanup during reset failed with an unknown error");
             }
         }
-        for (auto& slot : opacity_copies_) {
+        for (auto& slot : deleted_mask_copies_) {
             slot = {};
         }
         for (auto& slot : overlays_) {
@@ -3014,6 +3014,7 @@ namespace lfs::vis {
         buffers_.rotations.deviceBuffer = view(InputRotations);
         buffers_.scaling_raw.deviceBuffer = view(InputScalingRaw);
         buffers_.opacity_raw.deviceBuffer = view(InputOpacityRaw);
+        buffers_.deleted_mask.deviceBuffer = {};
         buffers_.page_frames.deviceBuffer = view(InputPageFrames);
         buffers_.quant_pool = true;
         buffers_.shN_f16 = false;
@@ -3113,18 +3114,19 @@ namespace lfs::vis {
         buffers_.shN_committed_bytes = 0;
         detach(buffers_.scaling_raw.deviceBuffer);
         detach(buffers_.opacity_raw.deviceBuffer);
+        detach(buffers_.deleted_mask.deviceBuffer);
     }
 
-    void VksplatViewportRenderer::releaseOpacityCopySlot(const std::size_t ring_slot) {
+    void VksplatViewportRenderer::releaseDeletedMaskSlot(const std::size_t ring_slot) {
         LFS_VK_DEBUG_ASSERT(
-            ring_slot < opacity_copies_.size(),
-            "VkSplat opacity-copy ring slot must be in range before release (ring_slot={}, ring_size={})",
+            ring_slot < deleted_mask_copies_.size(),
+            "VkSplat deleted-mask ring slot must be in range before release (ring_slot={}, ring_size={})",
             ring_slot,
-            opacity_copies_.size());
-        auto& slot = opacity_copies_[ring_slot];
-        if (slot.masked_opacity.is_valid() &&
-            buffers_.opacity_raw.deviceBuffer.allocation == VK_NULL_HANDLE) {
-            buffers_.opacity_raw.deviceBuffer = {};
+            deleted_mask_copies_.size());
+        auto& slot = deleted_mask_copies_[ring_slot];
+        if (slot.padded_mask.is_valid() &&
+            buffers_.deleted_mask.deviceBuffer.allocation == VK_NULL_HANDLE) {
+            buffers_.deleted_mask.deviceBuffer = {};
         }
         slot = {};
     }
@@ -4917,7 +4919,7 @@ namespace lfs::vis {
             return std::unexpected("VkSplat inputs require GPU storage");
         const bool has_deleted_mask = splat_data.has_deleted_mask();
         const Tensor& deleted_input = splat_data.deleted();
-        const bool bake_deleted = has_deleted_mask &&
+        const bool bind_deleted = has_deleted_mask &&
                                   deleted_input.dtype() == DataType::Bool &&
                                   deleted_input.device() == Device::GPU &&
                                   deleted_input.is_contiguous() &&
@@ -4939,34 +4941,41 @@ namespace lfs::vis {
             }
         };
 
-        Tensor opacity_for_bind = opacity_input;
-        auto& opacity_cache = opacity_copies_[ring_slot].masked_opacity;
-        if (bake_deleted && (input_upload_requested || !opacity_cache.is_valid())) {
+        // Deleted splats are skipped by the projection and selection shaders through
+        // the mask, so opacity binds unchanged. A ByteAddressBuffer needs a multiple
+        // of 4 bytes; any other mask length binds from a padded per-slot copy.
+        const std::size_t deleted_mask_bytes = (n + 3u) & ~std::size_t{3u};
+        Tensor deleted_for_bind;
+        auto& padded_mask = deleted_mask_copies_[ring_slot].padded_mask;
+        if (bind_deleted) {
             try {
                 lfs::core::GpuBackendScope backend_scope(*input_backend);
-                Tensor deleted_for_bind = deleted_input;
-                if (lfs::core::gpu_backend_of(deleted_for_bind) !=
-                    *input_backend) {
-                    deleted_for_bind = deleted_for_bind.to(*input_backend);
+                deleted_for_bind = lfs::core::gpu_backend_of(deleted_input) == input_backend
+                                       ? deleted_input
+                                       : deleted_input.to(*input_backend);
+                if (deleted_mask_bytes != n) {
+                    const bool fresh = !padded_mask.is_valid() ||
+                                       static_cast<std::size_t>(padded_mask.numel()) != deleted_mask_bytes ||
+                                       lfs::core::gpu_backend_of(padded_mask) != input_backend;
+                    if (fresh) {
+                        padded_mask = context.tensorInterop().empty(
+                            {deleted_mask_bytes}, DataType::Bool, *input_backend);
+                        padded_mask.zero_();
+                    }
+                    if (fresh || input_upload_requested) {
+                        padded_mask.slice(0, 0, n).copy_(deleted_for_bind);
+                    }
+                    deleted_for_bind = padded_mask;
+                } else {
+                    padded_mask = {};
                 }
-                if (!opacity_cache.is_valid() || opacity_cache.shape() != opacity_for_bind.shape() ||
-                    opacity_cache.dtype() != opacity_for_bind.dtype() ||
-                    lfs::core::gpu_backend_of(opacity_cache) != input_backend) {
-                    opacity_cache = context.tensorInterop().empty(opacity_for_bind.shape(),
-                                                                  opacity_for_bind.dtype(), *input_backend);
-                }
-                lfs::core::where_into(opacity_cache, deleted_for_bind, -20.0f, opacity_for_bind);
             } catch (const std::exception& error) {
                 return std::unexpected(std::format(
-                    "VkSplat failed to bake deleted-mask opacity: {}",
+                    "VkSplat failed to prepare the deleted mask: {}",
                     error.what()));
             }
-        }
-
-        if (bake_deleted) {
-            opacity_for_bind = opacity_cache;
         } else {
-            opacity_cache = {};
+            padded_mask = {};
         }
 
         std::vector<std::shared_ptr<void>> keep_alives;
@@ -5007,7 +5016,7 @@ namespace lfs::vis {
         if (!scaling_buffer) {
             return std::unexpected(legacyErrorString(scaling_buffer.error()));
         }
-        auto opacity_buffer = take(opacity_for_bind, "opacity");
+        auto opacity_buffer = take(opacity_input, "opacity");
         if (!opacity_buffer) {
             return std::unexpected(legacyErrorString(opacity_buffer.error()));
         }
@@ -5034,6 +5043,18 @@ namespace lfs::vis {
             return std::unexpected(legacyErrorString(opacity_view.error()));
         }
         buffers_.opacity_raw.deviceBuffer = opacity_view.value();
+        buffers_.deleted_mask.deviceBuffer = {};
+        if (deleted_for_bind.is_valid()) {
+            auto mask_buffer = take(deleted_for_bind, "deleted mask");
+            if (!mask_buffer) {
+                return std::unexpected(legacyErrorString(mask_buffer.error()));
+            }
+            auto mask_view = borrowVulkanTensorBuffer(mask_buffer.value(), deleted_mask_bytes, "deleted mask");
+            if (!mask_view) {
+                return std::unexpected(legacyErrorString(mask_view.error()));
+            }
+            buffers_.deleted_mask.deviceBuffer = mask_view.value();
+        }
 
         {
             LOG_TIMER("prepareInputs.borrow_views");
@@ -5183,9 +5204,9 @@ namespace lfs::vis {
             buffers_.sorting_gauss_idx_1.deviceBuffer.capacity +
             buffers_.sorting_gauss_idx_2.deviceBuffer.capacity;
 
-        std::size_t opacity_copy_bytes = 0;
-        for (const auto& slot : opacity_copies_) {
-            opacity_copy_bytes += slot.masked_opacity.bytes();
+        std::size_t deleted_mask_copy_bytes = 0;
+        for (const auto& slot : deleted_mask_copies_) {
+            deleted_mask_copy_bytes += slot.padded_mask.bytes();
         }
         std::size_t overlay_bytes = 0;
         for (const auto& slot : overlays_) {
@@ -5220,7 +5241,7 @@ namespace lfs::vis {
         signature = mix(signature, pipeline_current);
         signature = mix(signature, pipeline_peak);
         signature = mix(signature, input_view_bytes);
-        signature = mix(signature, opacity_copy_bytes);
+        signature = mix(signature, deleted_mask_copy_bytes);
         signature = mix(signature, overlay_bytes);
         signature = mix(signature, output_image_bytes);
         signature = mix(signature, output_pool_idle_bytes);
@@ -5250,13 +5271,13 @@ namespace lfs::vis {
             top += std::format("{}={:.2f}GiB", entries[i].first, gib(entries[i].second));
         }
 
-        LOG_PERF("vksplat.memory reason={} renderer_owned={:.2f}GiB pipeline_current={:.2f}GiB pipeline_peak={:.2f}GiB input_views={:.2f}GiB opacity_copies={:.2f}GiB overlays={:.2f}GiB outputs={:.2f}GiB output_pool_idle={:.2f}GiB sort_buffers={:.2f}GiB shared_scratch={:.2f}GiB sort_capacity={} top=[{}]",
+        LOG_PERF("vksplat.memory reason={} renderer_owned={:.2f}GiB pipeline_current={:.2f}GiB pipeline_peak={:.2f}GiB input_views={:.2f}GiB deleted_mask_copies={:.2f}GiB overlays={:.2f}GiB outputs={:.2f}GiB output_pool_idle={:.2f}GiB sort_buffers={:.2f}GiB shared_scratch={:.2f}GiB sort_capacity={} top=[{}]",
                  reason,
                  gib(owned_total),
                  gib(pipeline_current),
                  gib(pipeline_peak),
                  gib(input_view_bytes),
-                 gib(opacity_copy_bytes),
+                 gib(deleted_mask_copy_bytes),
                  gib(overlay_bytes),
                  gib(output_image_bytes),
                  gib(output_pool_idle_bytes),
