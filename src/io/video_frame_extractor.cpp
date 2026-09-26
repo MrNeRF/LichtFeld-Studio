@@ -416,11 +416,31 @@ namespace lfs::io {
             }
         }
 
-        AVPixelFormat get_hw_format(AVCodecContext*, const AVPixelFormat* pix_fmts) {
-            for (const AVPixelFormat* p = pix_fmts; *p != -1; p++) {
-                if (*p == AV_PIX_FMT_CUDA)
+        struct HwDecoderState {
+            AVPixelFormat pixel_format = AV_PIX_FMT_NONE;
+        };
+
+        AVPixelFormat get_hw_format(AVCodecContext* context, const AVPixelFormat* pix_fmts) {
+            const auto* const state = static_cast<const HwDecoderState*>(context->opaque);
+            if (!state)
+                return AV_PIX_FMT_NONE;
+            for (const AVPixelFormat* p = pix_fmts; *p != AV_PIX_FMT_NONE; ++p) {
+                if (*p == state->pixel_format)
                     return *p;
             }
+#if defined(__APPLE__)
+            // A decoder can advertise VideoToolbox yet reject a particular stream profile.
+            // Keep FFmpeg's software decoder usable when no hardware format is offered.
+            if (state->pixel_format == AV_PIX_FMT_VIDEOTOOLBOX) {
+                for (const AVPixelFormat* p = pix_fmts; *p != AV_PIX_FMT_NONE; ++p) {
+                    const AVPixFmtDescriptor* const descriptor = av_pix_fmt_desc_get(*p);
+                    if (descriptor && !(descriptor->flags & AV_PIX_FMT_FLAG_HWACCEL)) {
+                        LOG_WARN("VideoToolbox format unavailable for this stream; using FFmpeg software decode");
+                        return *p;
+                    }
+                }
+            }
+#endif
             return AV_PIX_FMT_NONE;
         }
 
@@ -802,6 +822,9 @@ namespace lfs::io {
             std::unique_ptr<NvCodecImageLoader> nvcodec;
 #endif
             bool using_hw_decode = false;
+            AVHWDeviceType hw_device_type = AV_HWDEVICE_TYPE_NONE;
+            HwDecoderState hw_decoder_state;
+            const char* decoder_backend = "ffmpeg_software";
 
             const auto cleanup = [&]() {
                 if (sws_ctx)
@@ -908,19 +931,18 @@ namespace lfs::io {
                 }
 
                 // Decode Dolby Vision in software to preserve per-frame RPU metadata.
+                const AVCodec* codec = nullptr;
 #if LFS_HAS_CUDA
                 const char* hw_decoder_name = dv_profile > 0 ? nullptr : get_hw_decoder_name(codec_id);
-#else
-                const char* hw_decoder_name = nullptr;
-#endif
-                const AVCodec* codec = nullptr;
-
                 if (hw_decoder_name) {
                     codec = avcodec_find_decoder_by_name(hw_decoder_name);
                     if (codec) {
                         if (av_hwdevice_ctx_create(&hw_device_ctx, AV_HWDEVICE_TYPE_CUDA, nullptr,
                                                    nullptr, 0) == 0) {
                             using_hw_decode = true;
+                            hw_device_type = AV_HWDEVICE_TYPE_CUDA;
+                            hw_decoder_state.pixel_format = AV_PIX_FMT_CUDA;
+                            decoder_backend = "nvdec";
                             LOG_INFO("Using NVDEC hardware decoder: {}", hw_decoder_name);
                         } else {
                             codec = nullptr;
@@ -928,6 +950,37 @@ namespace lfs::io {
                         }
                     }
                 }
+#endif
+#if defined(__APPLE__)
+                if (dv_profile == 0 && !codec) {
+                    const AVCodec* const software_codec = avcodec_find_decoder(codec_id);
+                    if (software_codec) {
+                        for (int i = 0;; ++i) {
+                            const AVCodecHWConfig* const config =
+                                avcodec_get_hw_config(software_codec, i);
+                            if (!config)
+                                break;
+                            if (!(config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) ||
+                                config->device_type != AV_HWDEVICE_TYPE_VIDEOTOOLBOX)
+                                continue;
+                            if (av_hwdevice_ctx_create(&hw_device_ctx,
+                                                       AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
+                                                       nullptr, nullptr, 0) == 0) {
+                                codec = software_codec;
+                                using_hw_decode = true;
+                                hw_device_type = AV_HWDEVICE_TYPE_VIDEOTOOLBOX;
+                                hw_decoder_state.pixel_format = config->pix_fmt;
+                                decoder_backend = "videotoolbox";
+                                LOG_INFO("Using VideoToolbox hardware decoder: {}",
+                                         software_codec->name);
+                            } else {
+                                LOG_WARN("Failed to create VideoToolbox device context; falling back to software");
+                            }
+                            break;
+                        }
+                    }
+                }
+#endif
 
                 if (!codec) {
                     codec = avcodec_find_decoder(codec_id);
@@ -965,12 +1018,13 @@ namespace lfs::io {
                     if (using_hw_decode) {
                         codec_ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
                         if (!codec_ctx->hw_device_ctx) {
-                            error = "Failed to retain CUDA video decoder context";
+                            error = "Failed to retain hardware video decoder context";
                             avcodec_free_context(&codec_ctx);
                             av_buffer_unref(&hw_device_ctx);
                             avformat_close_input(&fmt_ctx);
                             return false;
                         }
+                        codec_ctx->opaque = &hw_decoder_state;
                         codec_ctx->get_format = get_hw_format;
                     } else {
                         const unsigned int hardware_threads = std::max(1U, std::thread::hardware_concurrency());
@@ -995,10 +1049,14 @@ namespace lfs::io {
                         return false;
                     }
 
-                    LOG_WARN("Failed to open NVDEC hardware decoder {}, falling back to CPU", hw_decoder_name);
+                    LOG_WARN("Failed to open {} hardware decoder, falling back to software",
+                             av_hwdevice_get_type_name(hw_device_type));
                     avcodec_free_context(&codec_ctx);
                     av_buffer_unref(&hw_device_ctx);
                     using_hw_decode = false;
+                    hw_device_type = AV_HWDEVICE_TYPE_NONE;
+                    hw_decoder_state.pixel_format = AV_PIX_FMT_NONE;
+                    decoder_backend = "ffmpeg_software";
                     codec = avcodec_find_decoder(codec_id);
                     if (!codec) {
                         error = "Unsupported codec";
@@ -1340,7 +1398,8 @@ namespace lfs::io {
                     LOG_INFO("HDR hybrid pipeline: {} decode -> libplacebo Vulkan tone map -> host readback -> CUDA JPEG batch",
                              dv_profile > 0 ? "FFmpeg Dolby Vision" : "CPU");
                 } else if (using_hw_decode) {
-                    LOG_INFO("Hybrid pipeline: NVDEC decode → CPU transfer → {}",
+                    LOG_INFO("Hybrid pipeline: {} decode → CPU transfer → {}",
+                             decoder_backend,
                              gpu_encoding_enabled ? "GPU encode" : "CPU encode");
                 } else if (gpu_encoding_enabled) {
                     LOG_INFO("Using GPU batch JPEG encoding (batch size: {})",
@@ -1565,7 +1624,9 @@ namespace lfs::io {
                     window_skip_counter = 0;
                 };
 
+                bool saw_hardware_frame = false;
                 auto process_frame_hw = [&](AVFrame* hw_frame) {
+                    saw_hardware_frame = true;
                     throw_if_cancelled();
                     std::filesystem::path filename = generate_filename(current_src_frame);
 
@@ -1948,7 +2009,8 @@ namespace lfs::io {
                                                         const double frame_time) {
                     current_frame_time = frame_time;
                     current_src_frame = source_frame_for_time(frame_time);
-                    if (using_hw_decode)
+                    if (using_hw_decode &&
+                        selected_frame->format == hw_decoder_state.pixel_format)
                         process_frame_hw(selected_frame);
                     else
                         process_frame_sw(selected_frame);
@@ -2016,12 +2078,14 @@ namespace lfs::io {
                                 return false;
                         }
 
-                        if (using_hw_decode)
+                        if (using_hw_decode &&
+                            decoded_frame->format == hw_decoder_state.pixel_format)
                             process_frame_hw(decoded_frame);
                         else
                             process_frame_sw(decoded_frame);
                     } else if (should_extract_frame(frame_time)) {
-                        if (using_hw_decode)
+                        if (using_hw_decode &&
+                            decoded_frame->format == hw_decoder_state.pixel_format)
                             process_frame_hw(decoded_frame);
                         else
                             process_frame_sw(decoded_frame);
@@ -2242,7 +2306,7 @@ namespace lfs::io {
                         };
                         root["processing"] = {
                             {"decoder", {
-                                            {"backend", using_hw_decode ? "nvdec" : "ffmpeg_software"},
+                                            {"backend", saw_hardware_frame ? decoder_backend : "ffmpeg_software"},
                                             {"name", codec && codec->name ? codec->name : "unknown"},
                                             {"threads", using_hw_decode ? 0 : codec_ctx->thread_count},
                                         }},
