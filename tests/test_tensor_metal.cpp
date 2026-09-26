@@ -379,6 +379,43 @@ namespace {
         }
     }
 
+    TEST_F(TensorMetal, TransposesAndPermutesMatchCpu) {
+        // Tiled transposes for every element size, at sizes that leave partial
+        // tiles, and permutes whose axes merge.
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            SCOPED_TRACE(static_cast<int>(backend));
+            GpuBackendScope scope(backend);
+            for (const auto dtype : {DataType::Float32, DataType::Float16, DataType::Int32, DataType::Int64,
+                                     DataType::UInt8}) {
+                SCOPED_TRACE(static_cast<int>(dtype));
+                for (const auto& [rows, columns] : std::vector<std::pair<size_t, size_t>>{{1, 7}, {33, 65}, {448, 1000}, {5, 2}}) {
+                    const Tensor cpu = (random_tensor(rows * columns, 0.0f, 100.0f, 102)).to(dtype).reshape(TensorShape({rows, columns}));
+                    const Tensor gpu = cpu.to(Device::GPU);
+                    expect_close(gpu.transpose(0, 1).contiguous().to(DataType::Float32),
+                                 cpu.transpose(0, 1).contiguous().to(DataType::Float32), 0.0f, 0.0f);
+                    // A column slice of the transpose keeps the tile path's stride.
+                    if (rows > 2)
+                        expect_close(gpu.transpose(0, 1).slice(1, 1, rows - 1).contiguous().to(DataType::Float32),
+                                     cpu.transpose(0, 1).slice(1, 1, rows - 1).contiguous().to(DataType::Float32), 0.0f,
+                                     0.0f);
+                }
+                const Tensor volume = random_tensor(6 * 5 * 4 * 3, 0.0f, 100.0f, 103).to(dtype).reshape({6, 5, 4, 3});
+                for (const auto& order : std::vector<std::vector<int>>{{0, 2, 1, 3}, {3, 2, 1, 0}, {1, 0, 2, 3}, {0, 1, 3, 2}}) {
+                    expect_close(volume.to(Device::GPU).permute(order).contiguous().to(DataType::Float32),
+                                 volume.permute(order).contiguous().to(DataType::Float32), 0.0f, 0.0f);
+                }
+                // Writing into a transposed view scatters through the strided side.
+                Tensor destination = Tensor::zeros({9, 40}, Device::GPU, dtype);
+                const Tensor source = random_tensor(40 * 9, 0.0f, 100.0f, 104).to(dtype).reshape({40, 9});
+                destination.transpose(0, 1).copy_(source.to(Device::GPU));
+                expect_close(destination.to(DataType::Float32), source.transpose(0, 1).contiguous().to(DataType::Float32),
+                             0.0f, 0.0f);
+            }
+        }
+    }
+
     TEST_F(TensorMetal, BroadcastsMatchCpu) {
         const Tensor a_cpu = random_tensor(4 * 1 * 3, -2.0f, 2.0f, 33).reshape({4, 1, 3});
         const Tensor b_cpu = random_tensor(5 * 1, -2.0f, 2.0f, 34).reshape({5, 1});
