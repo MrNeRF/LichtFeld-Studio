@@ -8,6 +8,7 @@
 #include "core/tensor/backend/vulkan/vk_context.hpp"
 #include "core/tensor/backend/vulkan/vk_recorder.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_rad.hpp"
 #include "core/tensor_readback.hpp"
 #include "core/tensor_upload.hpp"
 #include "core/tensor_vulkan_interop.hpp"
@@ -302,6 +303,30 @@ namespace {
                              testing::Values(std::pair{GpuBackend::CUDA, false},
                                              std::pair{GpuBackend::Vulkan, false},
                                              std::pair{GpuBackend::Vulkan, true}));
+
+    // Degree-zero splats carry an empty SH tensor, which has no storage, so
+    // quantizing their resident LOD pages must not record it as a read.
+    TEST_F(TensorVulkanBufferQuery, RadResidentPagesQuantizeWithoutSh) {
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        constexpr uint32_t splats = 64;
+        RadPagePool pool{.page_splats = splats};
+        const std::array<size_t, 7> sizes{splats * 12, splats * 8, 0, splats * 8, splats * 8, splats * 2,
+                                          radq::kPageFrameBytes};
+        for (size_t i = 0; i < sizes.size(); ++i) {
+            if (sizes[i] != 0)
+                pool.regions[i] = Tensor::zeros({sizes[i]}, Device::GPU, DataType::UInt8);
+        }
+        const RadPageSources source{.means = Tensor::full({splats, 3}, 1.5f, Device::GPU),
+                                    .sh0 = Tensor::zeros({splats, 3}, Device::GPU),
+                                    .shN = Tensor::empty({splats, 0, 3}, Device::GPU),
+                                    .rotation = Tensor::zeros({splats, 4}, Device::GPU),
+                                    .scaling = Tensor::zeros({splats, 3}, Device::GPU),
+                                    .opacity = Tensor::zeros({splats}, Device::GPU),
+                                    .count = splats};
+        ASSERT_NO_THROW(rad_page_quantize(source, pool, 0));
+        const Tensor means = pool.regions[0].cpu();
+        EXPECT_EQ(static_cast<const float*>(means.data_ptr())[splats * 3 - 1], 1.5f);
+    }
 
     TEST_F(TensorVulkanBufferQuery, InteropBatchesVulkanReadinessAndPreservesViewOffsets) {
         ASSERT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan));
