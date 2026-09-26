@@ -392,6 +392,38 @@ namespace {
         expect_close(to_metal(matrix) / to_metal(row), matrix / row);
     }
 
+    TEST_F(TensorMetal, NonzeroOfEveryRankStaysOnTheDevice) {
+        const Tensor values = random_tensor(3 * 5 * 7 * 2, -1.0f, 1.0f, 97);
+        for (const auto& shape : std::vector<std::vector<size_t>>{{210}, {15, 14}, {3, 5, 14}, {3, 5, 7, 2}}) {
+            const Tensor mask = values.gt(0.3f).reshape(TensorShape(shape));
+            for (const Tensor& source : {mask, values.reshape(TensorShape(shape)).mul(mask.to(DataType::Float32)),
+                                         mask.to(DataType::Int32)}) {
+                SCOPED_TRACE(std::to_string(shape.size()) + "-D dtype " + std::to_string(static_cast<int>(source.dtype())));
+                const Tensor expected = source.nonzero();
+                ASSERT_EQ(expected.shape(), TensorShape({expected.shape()[0], shape.size()}));
+                for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+                    if (!gpu_backend_available(backend))
+                        continue;
+                    GpuBackendScope scope(backend);
+                    const Tensor found = source.to(Device::GPU).nonzero();
+                    EXPECT_EQ(found.dtype(), DataType::Int64);
+                    EXPECT_EQ(gpu_backend_of(found), backend);
+                    expect_close(found, expected, 0.0f, 0.0f);
+                    if (shape.size() > 1) {
+                        expect_close(source.to(Device::GPU).transpose(0, 1).nonzero(),
+                                     source.transpose(0, 1).contiguous().nonzero(), 0.0f, 0.0f);
+                    }
+                }
+            }
+        }
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            GpuBackendScope scope(backend);
+            EXPECT_EQ(Tensor::zeros({4, 6}, Device::GPU, DataType::Bool).nonzero().shape(), TensorShape({0, 2}));
+        }
+    }
+
     TEST_F(TensorMetal, ClampCatAndPadMatchCpu) {
         std::vector<float> values = random_tensor(1000, -3.0f, 3.0f, 37).to_vector();
         values[123] = std::numeric_limits<float>::quiet_NaN();
