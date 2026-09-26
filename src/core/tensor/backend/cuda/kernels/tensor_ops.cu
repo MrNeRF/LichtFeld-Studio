@@ -7,6 +7,7 @@
 #include "core/tensor/backend/cuda/kernels/cub_workspace.hpp"
 #include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "core/tensor/backend/cuda/kernels/warp_reduce.cuh"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "internal/gpu_config.hpp"
 #include "internal/tensor_dtype_dispatch.hpp"
@@ -3383,6 +3384,8 @@ namespace lfs::core::tensor_ops {
         cudaStream_t stream) {
         if (n == 0)
             return;
+        if (!stream)
+            stream = getCurrentCUDAStream();
 
         constexpr int BLOCK_SIZE = 256;
         size_t num_blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
@@ -3529,9 +3532,6 @@ namespace lfs::core::tensor_ops {
         }
 
         LFS_CUDA_CHECK(cudaGetLastError());
-        if (stream == nullptr) {
-            LFS_CUDA_CHECK(cudaDeviceSynchronize());
-        }
 
         pool.deallocate(d_shape, stream);
         pool.deallocate(d_strides, stream);

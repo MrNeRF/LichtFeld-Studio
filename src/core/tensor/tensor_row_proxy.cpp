@@ -13,13 +13,15 @@ namespace lfs::core {
         void copy_scalar_to_cuda(Tensor& tensor, const size_t element_index,
                                  const void* const source, const size_t bytes) {
             internal::preserve_lazy_snapshots_before_write(tensor);
+            const auto execution_stream = prepare_inputs_for_stream({&tensor});
+            tensor.set_stream(execution_stream);
             internal::backend_ops_for(tensor).copy_host_to_device(internal::CopyRequest{
                 .src = internal::raw_storage_ref(const_cast<void*>(source), tensor.dtype()),
                 .dst = internal::offset_storage_ref(
                     internal::storage_ref(tensor), element_index * bytes),
                 .bytes = bytes,
                 .synchronous = true,
-                .context = internal::ExecContext{tensor.stream()},
+                .context = internal::ExecContext{execution_stream},
             });
         }
 
@@ -31,7 +33,7 @@ namespace lfs::core {
                 .dst = internal::raw_storage_ref(destination, tensor.dtype()),
                 .bytes = bytes,
                 .synchronous = true,
-                .context = internal::ExecContext{tensor.stream()},
+                .context = internal::ExecContext{prepare_inputs_for_stream({&tensor})},
             });
         }
 
