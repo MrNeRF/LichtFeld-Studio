@@ -539,6 +539,57 @@ namespace {
         }
     }
 
+    TEST_F(TensorMetal, IndexValidationStaysOnTheDevice) {
+        const Tensor source = random_tensor(20, -5.0f, 5.0f, 98).reshape({4, 5});
+        const std::vector<int> positions = {0, -1, 7, -20, 19, 3};
+        const Tensor expected = source.take(Tensor::from_vector(positions, {2, 3}, Device::CPU));
+        std::vector<float> expected_rows_data = source.to_vector();
+        for (const int row : {2, 0, 3})
+            for (int column = 0; column < 5; ++column)
+                expected_rows_data.push_back(source.to_vector()[row * 5 + column]);
+        const Tensor expected_rows = Tensor::from_vector(expected_rows_data, {7, 5}, Device::CPU);
+        for (const auto backend : {GpuBackend::Metal, GpuBackend::Vulkan}) {
+            if (!gpu_backend_available(backend))
+                continue;
+            SCOPED_TRACE(static_cast<int>(backend));
+            GpuBackendScope scope(backend);
+            const Tensor gpu_source = source.to(Device::GPU);
+            for (const auto index_dtype : {DataType::Int32, DataType::Int64}) {
+                const Tensor indices = Tensor::from_vector(positions, {2, 3}, Device::CPU).to(index_dtype).to(Device::GPU);
+                const Tensor taken = gpu_source.take(indices);
+                EXPECT_EQ(taken.shape(), TensorShape({2, 3}));
+                expect_close(taken, expected, 0.0f, 0.0f);
+
+                Tensor grown = gpu_source.clone();
+                grown.reserve(8);
+                grown.append_gather(Tensor::from_vector(std::vector<int>{2, 0, 3}, {3}, Device::CPU)
+                                        .to(index_dtype)
+                                        .to(Device::GPU));
+                expect_close(grown, expected_rows, 0.0f, 0.0f);
+            }
+            // Out-of-range positions fault in the checked gather and surface
+            // when the result is read.
+            EXPECT_THROW((void)gpu_source.take(Tensor::from_vector(std::vector<int>{1, 20}, {2}, Device::CPU)
+                                                   .to(Device::GPU))
+                             .cpu(),
+                         std::exception);
+            EXPECT_THROW((void)gpu_source.take(Tensor::from_vector(std::vector<int>{-21}, {1}, Device::CPU)
+                                                   .to(Device::GPU))
+                             .cpu(),
+                         std::exception);
+
+            const Tensor numbers = Tensor::from_vector(std::vector<int>{7, -9, 12, 5}, {4}, Device::CPU);
+            const Tensor divisors = Tensor::from_vector(std::vector<int>{3, 4, 5, 2}, {4}, Device::CPU);
+            expect_close(numbers.to(Device::GPU).mod(divisors.to(Device::GPU)), numbers.mod(divisors), 0.0f, 0.0f);
+            EXPECT_THROW((void)numbers.to(Device::GPU).mod(
+                             Tensor::from_vector(std::vector<int>{3, 0, 5, 2}, {4}, Device::CPU).to(Device::GPU)),
+                         std::exception);
+            EXPECT_THROW((void)Tensor::multinomial(
+                             Tensor::from_vector({1.0f, -1.0f, 2.0f}, {3}, Device::CPU).to(Device::GPU), 2, true),
+                         std::exception);
+        }
+    }
+
     TEST_F(TensorMetal, ScattersMatchCpu) {
         constexpr size_t count = 4099;
         const Tensor base = random_tensor(count, -5.0f, 5.0f, 53);

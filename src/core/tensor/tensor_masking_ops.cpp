@@ -729,6 +729,18 @@ namespace lfs::core {
         LFS_ASSERT_MSG(indices.device() == device_,
                        "take indices must be on the input device");
         internal::require_same_gpu_backend(*this, indices, "take");
+        if (device_ == Device::GPU) {
+            // Negative indices count from the end. The checked gather then
+            // records a device fault for anything still out of range, so the
+            // indices never come back to the host.
+            assert_index_tensor_host_only(indices, numel(), "take");
+            const Tensor zero = internal::allocate_zeros_like(indices, TensorShape({1}), indices.dtype());
+            const Tensor extent = ensure_same_device(Tensor::from_vector(
+                                                         std::vector<int>{static_cast<int>(numel())}, {1}, Device::CPU))
+                                      .to(indices.dtype());
+            const Tensor wrapped = Tensor::where(indices.lt(zero), indices.add(extent), indices);
+            return flatten().index_select(0, wrapped.reshape({-1}), BoundaryMode::Assert).reshape(indices.shape());
+        }
         assert_index_tensor(indices, numel(), "take", true, true);
 
         auto indices_same_device = ensure_same_device(indices);
@@ -738,40 +750,22 @@ namespace lfs::core {
         auto flat = flatten();
         Tensor result;
 
-        // DEBUG: Log device and GPU state
-        if (device_ == Device::GPU) {
-            pin_operands({&flat, &indices_int32});
-            const cudaStream_t execution_stream =
-                prepare_inputs_for_stream({this, &indices_int32});
-            CUDAStreamGuard guard(execution_stream);
-            result = internal::allocate_like(*this, indices.shape(), dtype_);
-            internal::backend_ops_for(*this).take(
-                internal::storage_ref(flat), internal::storage_ref(indices_int32),
-                internal::storage_ref(result),
-                internal::IndexProgram{
-                    .input_size = flat.numel(),
-                    .index_size = indices_int32.numel(),
-                },
-                internal::ExecContext{result.stream()});
-            // No sync - tensor operation
-        } else {
-            pin_operands({&flat, &indices_int32});
-            result = internal::allocate_like(*this, indices.shape(), dtype_);
-            const float* src = flat.ptr<float>();
-            float* dst = result.ptr<float>();
-            const int* idx = indices_int32.ptr<int>();
-            size_t total = flat.numel();
+        pin_operands({&flat, &indices_int32});
+        result = internal::allocate_like(*this, indices.shape(), dtype_);
+        const float* src = flat.ptr<float>();
+        float* dst = result.ptr<float>();
+        const int* idx = indices_int32.ptr<int>();
+        size_t total = flat.numel();
 
-            // IMPORTANT: Use sequential execution to avoid TBB threading issues with CUDA
-            // TBB worker threads don't have CUDA device context, causing cudaErrorInvalidDevice
-            std::transform(
-                idx, idx + indices_int32.numel(), dst,
-                [src, total](int pos) {
-                    if (pos < 0)
-                        pos += total;
-                    return (pos >= 0 && pos < static_cast<int>(total)) ? src[pos] : 0.0f;
-                });
-        }
+        // IMPORTANT: Use sequential execution to avoid TBB threading issues with CUDA
+        // TBB worker threads don't have CUDA device context, causing cudaErrorInvalidDevice
+        std::transform(
+            idx, idx + indices_int32.numel(), dst,
+            [src, total](int pos) {
+                if (pos < 0)
+                    pos += total;
+                return (pos >= 0 && pos < static_cast<int>(total)) ? src[pos] : 0.0f;
+            });
         return result;
     }
 
@@ -2431,10 +2425,12 @@ namespace lfs::core {
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::UInt8 || dtype_ == DataType::Bool ||
                            device_ == Device::CPU,
                        "CUDA append_gather encountered an unsupported dtype");
-        assert_index_tensor(indices,
-                            state_->logical_size > 0 ? state_->logical_size : shape_[0],
-                            "append_gather",
-                            true);
+        // On the GPU the gather below runs in Assert mode and records a device
+        // fault for an out-of-range index, so release builds skip the download.
+        assert_async_index_tensor(indices,
+                                  state_->logical_size > 0 ? state_->logical_size : shape_[0],
+                                  "append_gather",
+                                  true);
 
         size_t n_gather = indices.numel();
 
@@ -2471,7 +2467,9 @@ namespace lfs::core {
         bool is_int64 = indices_same_device.dtype() == DataType::Int64;
         Tensor indices_int32;
         if (is_int64) {
-            indices_int32 = indices_same_device.to(DataType::Int32);
+            // Checked narrowing: a truncated index could land in range.
+            indices_int32 = index_cast(indices_same_device, *this,
+                                       state_->logical_size > 0 ? state_->logical_size : shape_[0]);
         }
         const Tensor& kernel_index = is_int64 ? indices_int32 : indices_same_device;
         pin_operands({this, &kernel_index});

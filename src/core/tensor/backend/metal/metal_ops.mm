@@ -2016,15 +2016,6 @@ namespace lfs::core::internal {
                       .params = {.input_size = checked_u32(program.input_size, "Metal gather input size exceeds uint32")}});
     }
 
-    void MetalBackendOps::take(const StorageRef input, const StorageRef indices, const StorageRef output,
-                               const IndexProgram& program, ExecContext) {
-        LFS_FACADE_TRACE(take);
-        encode_index(*acquire_context(),
-                     {.mode = kTakeMode, .dtype = input.dtype, .total = program.index_size, .input = input,
-                      .indices = indices, .values = output,
-                      .params = {.input_size = checked_u32(program.input_size, "Metal take input size exceeds uint32")}});
-    }
-
     void MetalBackendOps::index_select(const StorageRef input, const StorageRef indices, const StorageRef output,
                                        const StridedLayout& input_layout, const IndexProgram& program, ExecContext) {
         LFS_FACADE_TRACE(index_select);

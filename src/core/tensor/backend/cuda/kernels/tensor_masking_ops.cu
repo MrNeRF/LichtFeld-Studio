@@ -619,17 +619,6 @@ namespace lfs::core::tensor_ops {
         LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.gather_i64");
     }
 
-    void launch_take(const float* in, const int* idx, float* out,
-                     size_t in_size, size_t out_size, cudaStream_t stream) {
-        auto in_ptr = thrust::device_pointer_cast(in);
-        auto idx_ptr = thrust::device_pointer_cast(idx);
-        auto out_ptr = thrust::device_pointer_cast(out);
-        auto transform_idx = thrust::make_transform_iterator(idx_ptr,
-                                                             ops::index_clamp_op(in_size));
-        thrust::gather(thrust::cuda::par.on(stream), transform_idx, transform_idx + out_size,
-                       in_ptr, out_ptr);
-    }
-
     // ============= OPTIMIZED: Fused Gather + Unary Operation =============
     // This uses thrust::permutation_iterator for ZERO-COPY gather combined with
     // thrust::transform for fusion - inspired by NVIDIA's parrot library

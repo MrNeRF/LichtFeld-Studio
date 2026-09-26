@@ -1135,7 +1135,7 @@ namespace {
         {"launch_sort_2d", {FacadeEntry::sort_2d}},
         {"launch_gather", {FacadeEntry::gather, FacadeEntry::index_select}},
         {"launch_gather_fused_unary", {FacadeEntry::gather_fused_unary}},
-        {"launch_take", {FacadeEntry::take}},
+        {"launch_take", {FacadeEntry::index_select}},
         {"launch_index_select", {FacadeEntry::index_select}},
         {"launch_scatter", {FacadeEntry::scatter}},
         {"launch_index_copy", {FacadeEntry::index_copy}},
