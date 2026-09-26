@@ -8,7 +8,6 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -102,8 +101,9 @@ namespace lfs::core::internal {
         mutable std::mutex allocations_mutex_;
         std::unordered_map<uint64_t, std::unique_ptr<AllocationRecord>> allocations_;
         std::vector<std::unique_ptr<AllocationRecord>> retired_;
-        // Ordered, so a dedicated buffer can serve a slightly smaller request.
-        std::map<VkDeviceSize, std::vector<std::unique_ptr<AllocationRecord>>> free_lists_;
+        std::unordered_map<VkDeviceSize,
+                           std::vector<std::unique_ptr<AllocationRecord>>>
+            free_lists_;
         std::unordered_map<VkDeviceSize,
                            std::vector<std::unique_ptr<AllocationRecord>>>
             readback_free_lists_;

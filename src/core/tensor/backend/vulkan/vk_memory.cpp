@@ -349,36 +349,18 @@ namespace lfs::core::internal {
         }
         const VkDeviceSize bucket_size = allocation_size(bytes);
         const bool direct = bucket_size >= kDirectLimit && !host_visible;
-        // Freed pooled buffers of kDirectLimit and above go back to the driver:
-        // a cached one pins its whole pool block while it waits for a same-size
-        // request. Dedicated buffers, above the pool block, pin only themselves
-        // and cost a fresh driver allocation each time, so they are kept for
-        // reuse; an allocation that fails frees them and retries.
-        const bool dedicated = direct && bucket_size > kPoolBlockSize;
-        const bool cacheable = host_visible || (!direct_class && (!direct || dedicated));
+        // Freed buffers of kDirectLimit and above go back to the driver: a cached
+        // one pins its whole pool block while it waits for a same-size request.
+        const bool cacheable = host_visible || (!direct_class && !direct);
         std::unique_ptr<AllocationRecord> record;
         if (cacheable) {
             std::lock_guard lock(allocations_mutex_);
             collect_retired_locked(context_.completed_timeline());
-            if (host_visible) {
-                auto free_iterator = readback_free_lists_.find(bucket_size);
-                if (free_iterator != readback_free_lists_.end() && !free_iterator->second.empty()) {
-                    record = std::move(free_iterator->second.back());
-                    free_iterator->second.pop_back();
-                }
-            } else {
-                // Dedicated requests vary in size, so they also take a cached
-                // buffer up to a quarter larger, as on Metal.
-                const VkDeviceSize reach = dedicated ? bucket_size + bucket_size / 4 : bucket_size;
-                auto free_iterator = free_lists_.lower_bound(bucket_size);
-                while (free_iterator != free_lists_.end() && free_iterator->second.empty())
-                    free_iterator = free_lists_.erase(free_iterator);
-                if (free_iterator != free_lists_.end() && free_iterator->first <= reach) {
-                    record = std::move(free_iterator->second.back());
-                    free_iterator->second.pop_back();
-                    if (free_iterator->second.empty())
-                        free_lists_.erase(free_iterator);
-                }
+            auto& free_lists = host_visible ? readback_free_lists_ : free_lists_;
+            auto free_iterator = free_lists.find(bucket_size);
+            if (free_iterator != free_lists.end() && !free_iterator->second.empty()) {
+                record = std::move(free_iterator->second.back());
+                free_iterator->second.pop_back();
             }
         }
         if (!record) {
@@ -833,18 +815,16 @@ namespace lfs::core::internal {
     }
 
     void VulkanMemory::destroy_free_locked() {
-        const auto destroy = [&](auto& lists) {
-            for (auto& [size, records] : lists) {
+        for (auto* lists : {&free_lists_, &readback_free_lists_}) {
+            for (auto& [size, records] : *lists) {
                 (void)size;
                 for (auto& record : records) {
                     vmaDestroyBuffer(context_.allocator(), record->buffer,
                                      record->allocation);
                 }
             }
-            lists.clear();
-        };
-        destroy(free_lists_);
-        destroy(readback_free_lists_);
+            lists->clear();
+        }
     }
 
     uint64_t VulkanMemory::copy_to_readback(StorageRef src, StorageRef dst, size_t bytes) {
@@ -911,27 +891,23 @@ namespace lfs::core::internal {
     size_t VulkanMemory::cached_bytes() const noexcept {
         std::lock_guard lock(allocations_mutex_);
         size_t result = 0;
-        const auto add = [&](const auto& lists) {
-            for (const auto& [size, records] : lists) {
+        for (const auto* lists : {&free_lists_, &readback_free_lists_}) {
+            for (const auto& [size, records] : *lists) {
                 result += static_cast<size_t>(size) * records.size();
             }
-        };
-        add(free_lists_);
-        add(readback_free_lists_);
+        }
         return result;
     }
 
     uint64_t VulkanMemory::live_object_count() const noexcept {
         std::lock_guard lock(allocations_mutex_);
         size_t free_count = 0;
-        const auto count = [&](const auto& lists) {
-            for (const auto& [size, records] : lists) {
+        for (const auto* lists : {&free_lists_, &readback_free_lists_}) {
+            for (const auto& [size, records] : *lists) {
                 (void)size;
                 free_count += records.size();
             }
-        };
-        count(free_lists_);
-        count(readback_free_lists_);
+        }
         return allocations_.size() + retired_.size() + free_count +
                (staging_buffer_ != VK_NULL_HANDLE ? 1 : 0);
     }
