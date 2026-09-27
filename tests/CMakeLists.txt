@@ -461,7 +461,9 @@ if(NOT LFS_HAS_CUDA)
         test_viewer_no_cuda.cpp
     )
     if(LFS_BUILD_TRAINER)
-        list(APPEND TEST_SOURCES test_vulkan_trainer_start.cpp)
+        list(APPEND TEST_SOURCES
+            test_vulkan_trainer_start.cpp
+            test_session_loader_storage.cpp)
     endif()
     if(APPLE)
         list(APPEND TEST_SOURCES test_video_videotoolbox.cpp)
@@ -524,6 +526,7 @@ set(TEST_FILES
     test_assert_hardening.cpp
     test_cuda_error.cpp
     test_exportable_storage.cpp
+    test_session_loader_storage.cpp
     test_shareable_allocation_limit.cpp
     test_ply_q16_streamed_encode.cpp
     test_vram_leak_regression.cpp

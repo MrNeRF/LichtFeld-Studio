@@ -51,6 +51,8 @@ set(TENSOR_SOURCES
         tensor/tensor_execution.cpp
         tensor/tensor_backend_selftest.cpp
         tensor/backend/backend_registry.cpp
+        tensor/backend/splat_block.cpp
+        tensor/backend/device_splat_block.cpp
         tensor/backend/portable_nn_ops.cpp
         tensor/backend/dedicated_nn_ops.cpp
         tensor/backend/facade_trace.cpp
@@ -118,6 +120,10 @@ set(TENSOR_SOURCES
         nn/models/lpips.cpp
         nn/models/romav1.cpp
 )
+
+if(LFS_HAS_CUDA)
+    list(APPEND TENSOR_SOURCES tensor/backend/cuda/cuda_splat_block.cpp)
+endif()
 
 if(NOT LFS_HAS_CUDA)
     list(FILTER TENSOR_SOURCES EXCLUDE REGEX "tensor/backend/cuda/")
@@ -262,11 +268,9 @@ if(NOT LFS_HAS_CUDA)
         cuda_error_typed.cpp
         device_fault.cpp
         cuda/memory_arena_owner.cpp
-        cuda/vmm_device_buffer.cpp
-        splat_exportable_storage.cpp)
+        cuda/vmm_device_buffer.cpp)
     list(APPEND CORE_SOURCES
-        cuda_error_no_cuda.cpp
-        splat_exportable_storage_no_cuda.cpp)
+        cuda_error_no_cuda.cpp)
     list(APPEND TENSOR_SOURCES
         tensor/tensor_cuda_interop_no_cuda.cpp)
 endif()

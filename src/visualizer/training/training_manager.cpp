@@ -17,6 +17,7 @@
 #include "core/scene.hpp"
 #include "core/services.hpp"
 #include "core/shareable_allocation_limit.hpp"
+#include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
 #if LFS_HAS_CUDA
 #include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
@@ -374,58 +375,72 @@ namespace lfs::vis {
         const bool vulkan_interop_available =
             vk_ctx && vk_ctx->externalMemoryInteropEnabled();
 
-        if (vulkan_interop_available && exportable_capacity > 0) {
+        if (exportable_capacity > 0 &&
+            (vulkan_interop_available ||
+             lfs::core::default_gpu_backend() != lfs::core::GpuBackend::CUDA)) {
             auto storage_result = lfs::core::SplatExportableStorage::create(
                 exportable_capacity, sh_degree, /*device=*/0, reserve_capacity);
             if (storage_result) {
                 splat_storage_ = std::move(*storage_result);
-                auto make_interop_allocator = [this, vk_ctx] {
-                    return makeSplatExportableInteropAllocator(
-                        *vk_ctx, *splat_storage_, &splat_interop_parent_);
-                };
-                auto interop_alloc_result = viewer_ && !viewer_->isOnViewerThread()
-                                                ? post_work_and_wait(
-                                                      [this](Visualizer::WorkItem work) {
-                                                          return viewer_->postWork(std::move(work));
-                                                      },
-                                                      make_interop_allocator,
-                                                      []() -> lfs::Result<lfs::core::SplatTensorAllocator> {
-                                                          return lfs::Result<lfs::core::SplatTensorAllocator>(
-                                                              lfs::make_error(lfs::ErrorInit{
-                                                                  .code = lfs::ErrorCode::Cancelled,
-                                                                  .domain = lfs::ErrorDomain::Vulkan,
-                                                                  .user_message =
-                                                                      "Vulkan interop import cancelled during viewer shutdown",
-                                                                  .detection = LFS_SOURCE_SITE_CURRENT(),
-                                                              }));
-                                                      })
-                                                : make_interop_allocator();
-                if (interop_alloc_result) {
-                    splat_interop_allocator_ = std::move(*interop_alloc_result);
-                    tensor_allocator = splat_interop_allocator_;
-                    LOG_INFO("Training tensors share one CUDA-exportable VMM block "
-                             "imported into Vulkan (live≈{}, capacity={}, reserve={}, "
-                             "sh_degree={}, committed={} MiB reserved={} MiB chunks={}) "
-                             "— zero-copy viewer interop during live-N growth",
+                if (!(vulkan_interop_available &&
+                      lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA)) {
+                    tensor_allocator = splat_storage_->make_allocator();
+                    LOG_INFO("Training tensors use device splat storage "
+                             "(live≈{}, capacity={}, reserve={}, sh_degree={}, committed={} MiB)",
                              live_estimate,
                              exportable_capacity,
                              reserve_capacity,
                              sh_degree,
-                             splat_storage_->block->committed_bytes >> 20,
-                             splat_storage_->block->reserved_bytes >> 20,
-                             splat_storage_->block->chunks.size());
+                             splat_storage_->block->committed_bytes >> 20);
                 } else {
-                    LOG_WARN("Exportable-interop allocator failed ({}); dropping storage "
-                             "and falling back to legacy Vulkan-external allocator",
-                             lfs::format_for_developer(interop_alloc_result.error()));
-                    if (interop_alloc_result.error().code() == lfs::ErrorCode::Cancelled) {
+                    auto make_interop_allocator = [this, vk_ctx] {
+                        return makeSplatExportableInteropAllocator(
+                            *vk_ctx, *splat_storage_, &splat_interop_parent_);
+                    };
+                    auto interop_alloc_result = viewer_ && !viewer_->isOnViewerThread()
+                                                    ? post_work_and_wait(
+                                                          [this](Visualizer::WorkItem work) {
+                                                              return viewer_->postWork(std::move(work));
+                                                          },
+                                                          make_interop_allocator,
+                                                          []() -> lfs::Result<lfs::core::SplatTensorAllocator> {
+                                                              return lfs::Result<lfs::core::SplatTensorAllocator>(
+                                                                  lfs::make_error(lfs::ErrorInit{
+                                                                      .code = lfs::ErrorCode::Cancelled,
+                                                                      .domain = lfs::ErrorDomain::Vulkan,
+                                                                      .user_message =
+                                                                          "Vulkan interop import cancelled during viewer shutdown",
+                                                                      .detection = LFS_SOURCE_SITE_CURRENT(),
+                                                                  }));
+                                                          })
+                                                    : make_interop_allocator();
+                    if (interop_alloc_result) {
+                        splat_interop_allocator_ = std::move(*interop_alloc_result);
+                        tensor_allocator = splat_interop_allocator_;
+                        LOG_INFO("Training tensors share one CUDA-exportable VMM block "
+                                 "imported into Vulkan (live≈{}, capacity={}, reserve={}, "
+                                 "sh_degree={}, committed={} MiB reserved={} MiB chunks={}) "
+                                 "— zero-copy viewer interop during live-N growth",
+                                 live_estimate,
+                                 exportable_capacity,
+                                 reserve_capacity,
+                                 sh_degree,
+                                 splat_storage_->block->committed_bytes >> 20,
+                                 splat_storage_->block->reserved_bytes >> 20,
+                                 splat_storage_->block->chunks.size());
+                    } else {
+                        LOG_WARN("Exportable-interop allocator failed ({}); dropping storage "
+                                 "and falling back to legacy Vulkan-external allocator",
+                                 lfs::format_for_developer(interop_alloc_result.error()));
+                        if (interop_alloc_result.error().code() == lfs::ErrorCode::Cancelled) {
+                            splat_interop_parent_.reset();
+                            splat_storage_.reset();
+                            return lfs::Result<lfs::core::SplatTensorAllocator>(
+                                std::move(interop_alloc_result.error()));
+                        }
                         splat_interop_parent_.reset();
                         splat_storage_.reset();
-                        return lfs::Result<lfs::core::SplatTensorAllocator>(
-                            std::move(interop_alloc_result.error()));
                     }
-                    splat_interop_parent_.reset();
-                    splat_storage_.reset();
                 }
             } else if (lfs::core::is_shareable_allocation_limit_message(storage_result.error())) {
                 LOG_WARN("SplatExportableStorage creation exceeded the shareable allocation "

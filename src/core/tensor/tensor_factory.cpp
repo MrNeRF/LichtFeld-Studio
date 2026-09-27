@@ -98,6 +98,55 @@ namespace lfs::core {
         return t;
     }
 
+    Tensor Tensor::view_sharing_storage(const Tensor& backing,
+                                        const size_t byte_offset,
+                                        TensorShape shape,
+                                        const size_t capacity,
+                                        const DataType dtype,
+                                        std::string external_kind) {
+        const size_t elem = dtype_size(dtype);
+        LFS_ASSERT_MSG(backing.is_valid() && backing.device_ == Device::GPU && elem != 0 &&
+                           byte_offset % elem == 0,
+                       "view_sharing_storage requires an aligned GPU allocation");
+        const size_t rows = shape.rank() == 0 ? 0 : shape[0];
+        LFS_ASSERT_MSG(capacity == 0 || capacity >= rows,
+                       "view_sharing_storage capacity is smaller than the logical row count");
+        Tensor view;
+        view.data_ = backing.data_;
+        view.data_owner_ = backing.data_owner_;
+        view.storage_meta_ = backing.storage_meta_;
+        const size_t parent_bytes = backing.storage_offset_ * dtype_size(backing.dtype_);
+        LFS_ASSERT_MSG((parent_bytes + byte_offset) % elem == 0,
+                       "view_sharing_storage offset is not aligned to the view dtype");
+        view.storage_offset_ = (parent_bytes + byte_offset) / elem;
+        view.shape_ = std::move(shape);
+        view.strides_ = view.shape_.strides();
+        view.device_ = backing.device_;
+        view.dtype_ = dtype;
+        view.is_contiguous_ = true;
+        // Not a slice. SplatData move-assigns parameter tensors, and a view
+        // with the same shape would copy into the old storage instead of
+        // installing the grown capacity. The offset still selects the region.
+        view.is_view_ = false;
+        view.ensure_state();
+        view.state_->capacity = capacity == 0 ? rows : capacity;
+        view.state_->logical_size = rows;
+        view.state_->stream = backing.state_ ? static_cast<cudaStream_t>(backing.state_->stream) : nullptr;
+        view.id_ = next_id_++;
+        view.compute_alignment();
+        if (view.storage_meta_) {
+            if (view.storage_meta_->external_kind.empty())
+                view.storage_meta_->external_kind = std::move(external_kind);
+            if (!view.storage_meta_->external_owner) {
+                view.storage_meta_->external_owner =
+                    std::shared_ptr<int>(new int(0), [](int* value) { delete value; });
+            }
+            view.view_generation_snapshot_ =
+                view.storage_meta_->generation.load(std::memory_order_relaxed);
+        }
+        return view;
+    }
+
     Tensor Tensor::empty(TensorShape shape, Device device, DataType dtype, bool use_pinned) {
         LoadArgs args;
         args.shape = shape;

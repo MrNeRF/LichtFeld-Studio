@@ -507,13 +507,8 @@ namespace lfs::core {
         std::shared_ptr<void> external_owner;
         mutable std::mutex vulkan_interop_mutex;
         mutable std::unordered_map<void*, std::shared_ptr<void>> vulkan_interop_owners;
-        // Exportable packed-SoA provenance. When set, bind sites
-        // re-resolve the device pointer through the live control block instead of
-        // trusting the baked data_ pointer across a capacity grow.
-        // exportable_control holds shared_ptr<SplatExportableStorage::Control>.
-        std::shared_ptr<void> exportable_control;
-        std::uint32_t exportable_region = 0;
-        std::uint64_t exportable_bound_generation = 0;
+        // Exportable provenance lives on TensorState. Region views share this
+        // descriptor (Vulkan buffer, timeline) and must not share that identity.
     };
 
     namespace internal {
@@ -633,6 +628,12 @@ namespace lfs::core {
             std::string name; // Optional name for identification in traces
 
             std::shared_ptr<LazyExprState> lazy;
+
+            // Per-tensor exportable provenance. Region views share one allocation
+            // descriptor and must not share this identity.
+            std::shared_ptr<void> exportable_control;
+            std::uint32_t exportable_region = 0;
+            std::uint64_t exportable_bound_generation = 0;
         };
 
         void* data_ = nullptr;
@@ -1043,6 +1044,14 @@ namespace lfs::core {
                                           size_t capacity,
                                           cudaStream_t stream,
                                           std::string external_kind);
+        // View of one byte range of `backing`. Shares the allocation and its
+        // backend descriptor so Vulkan address math stays on the parent buffer.
+        static Tensor view_sharing_storage(const Tensor& backing,
+                                           size_t byte_offset,
+                                           TensorShape shape,
+                                           size_t capacity,
+                                           DataType dtype,
+                                           std::string external_kind);
 
         static Tensor from_vector(const std::vector<float>& data, TensorShape shape,
                                   Device device = Device::GPU);
@@ -1355,22 +1364,22 @@ namespace lfs::core {
         void set_exportable_provenance(std::shared_ptr<void> control,
                                        std::uint32_t region,
                                        std::uint64_t bound_generation) {
-            ensure_storage_meta();
-            storage_meta_->exportable_control = std::move(control);
-            storage_meta_->exportable_region = region;
-            storage_meta_->exportable_bound_generation = bound_generation;
+            ensure_state();
+            state_->exportable_control = std::move(control);
+            state_->exportable_region = region;
+            state_->exportable_bound_generation = bound_generation;
         }
         [[nodiscard]] bool has_exportable_provenance() const noexcept {
-            return storage_meta_ && static_cast<bool>(storage_meta_->exportable_control);
+            return state_ && static_cast<bool>(state_->exportable_control);
         }
         [[nodiscard]] std::shared_ptr<void> exportable_control() const noexcept {
-            return storage_meta_ ? storage_meta_->exportable_control : nullptr;
+            return state_ ? state_->exportable_control : nullptr;
         }
         [[nodiscard]] std::uint32_t exportable_region() const noexcept {
-            return storage_meta_ ? storage_meta_->exportable_region : 0u;
+            return state_ ? state_->exportable_region : 0u;
         }
         [[nodiscard]] std::uint64_t exportable_bound_generation() const noexcept {
-            return storage_meta_ ? storage_meta_->exportable_bound_generation : 0u;
+            return state_ ? state_->exportable_bound_generation : 0u;
         }
         static std::string storage_memory_summary();
         static std::size_t cuda_direct_storage_live_bytes();
