@@ -8,6 +8,7 @@
 #include "lfs/training/ops/extra_loss_cuda.hpp"
 #include "lfs/training/ops/fast_cuda.hpp"
 #include "lfs/training/ops/geometry_cuda.hpp"
+#include "lfs/training/ops/gsplat_cuda.hpp"
 #include "lfs/training/ops/masks_cuda.hpp"
 #include "lfs/training/ops/mcmc_cuda.hpp"
 #include "lfs/training/ops/morton_cuda.hpp"
@@ -54,6 +55,8 @@ namespace lfs::training {
                 return ops.ppisp != nullptr;
             case Family::Controller:
                 return ops.controller != nullptr;
+            case Family::Gsplat:
+                return ops.gsplat != nullptr;
             case Family::Count:
                 return false;
             default:
@@ -80,6 +83,7 @@ namespace lfs::training {
             .sh = &cuda_sh_ops(),
             .ppisp = &cuda_ppisp_ops(),
             .controller = &cuda_controller_ops(),
+            .gsplat = &cuda_gsplat_ops(),
         };
         static const TrainingOps kVulkan{
             .backend = core::GpuBackend::Vulkan,

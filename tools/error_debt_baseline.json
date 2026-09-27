@@ -654,8 +654,6 @@
       "src/training/metrics/eval_mask.cpp:176",
       "src/training/metrics/eval_mask.hpp:56",
       "src/training/metrics/eval_mask.hpp:61",
-      "src/training/rasterization/gsplat_rasterizer.cpp:103",
-      "src/training/rasterization/gsplat_rasterizer.hpp:115",
       "src/training/strategies/strategy_factory.cpp:33",
       "src/training/strategies/strategy_factory.cpp:38",
       "src/training/strategies/strategy_factory.cpp:43",

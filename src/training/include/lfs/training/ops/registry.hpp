@@ -8,6 +8,7 @@
 #include "lfs/training/ops/bilateral.hpp"
 #include "lfs/training/ops/extra_loss.hpp"
 #include "lfs/training/ops/geometry.hpp"
+#include "lfs/training/ops/gsplat.hpp"
 #include "lfs/training/ops/loss.hpp"
 #include "lfs/training/ops/masks.hpp"
 #include "lfs/training/ops/mcmc.hpp"
@@ -48,6 +49,7 @@ namespace lfs::training {
         const ops::ShOps* sh = nullptr;
         const ops::PPISPOps* ppisp = nullptr;
         const ops::ControllerOps* controller = nullptr;
+        const ops::GsplatRasterOps* gsplat = nullptr;
     };
 
     enum class Family {

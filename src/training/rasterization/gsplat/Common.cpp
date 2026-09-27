@@ -30,89 +30,26 @@ namespace gsplat_lfs {
     }
 
     namespace {
-        // Thread-local grow-only CUB workspace for scan/sort in the gsplat path.
-        // Replaces per-call StreamOrderedDeviceBuffer allocation and release.
-        struct GsplatCubWorkspaceCache {
-            StreamOrderedDeviceBuffer buffer;
-            size_t capacity_bytes = 0;
-
-            void* ensure(const size_t bytes, const cudaStream_t stream) {
-                if (bytes == 0) {
-                    return nullptr;
-                }
-                if (bytes <= capacity_bytes && buffer) {
-                    buffer.bind_stream(stream);
-                    return buffer.get();
-                }
-                const size_t new_cap = bytes;
-                StreamOrderedDeviceBuffer replacement(
-                    new_cap, stream, "rasterizer.gsplat.cub_workspace");
-                buffer = std::move(replacement);
-                capacity_bytes = new_cap;
+        void* ensure_workspace(StreamOrderedDeviceBuffer& buffer, size_t& capacity,
+                               size_t bytes, cudaStream_t stream, const char* label) {
+            if (bytes == 0)
+                return nullptr;
+            if (bytes <= capacity && buffer) {
+                buffer.bind_stream(stream);
                 return buffer.get();
             }
-
-            bool release() noexcept {
-                buffer.reset();
-                capacity_bytes = 0;
-                return !buffer;
-            }
-        };
-
-        GsplatCubWorkspaceCache& cub_cache() {
-            static thread_local GsplatCubWorkspaceCache cache;
-            return cache;
-        }
-
-        // Per-backward intermediate for rasterize_from_world_with_sh_bwd color grads.
-        // Same grow-only pattern as CUB workspace (stream-ordered, TLS).
-        struct GsplatColorGradWorkspaceCache {
-            StreamOrderedDeviceBuffer buffer;
-            size_t capacity_bytes = 0;
-
-            void* ensure(const size_t bytes, const cudaStream_t stream) {
-                if (bytes == 0) {
-                    return nullptr;
-                }
-                if (bytes <= capacity_bytes && buffer) {
-                    buffer.bind_stream(stream);
-                    return buffer.get();
-                }
-                const size_t new_cap = bytes;
-                StreamOrderedDeviceBuffer replacement(
-                    new_cap, stream, "rasterizer.gsplat.color_gradients");
-                buffer = std::move(replacement);
-                capacity_bytes = new_cap;
-                return buffer.get();
-            }
-
-            bool release() noexcept {
-                buffer.reset();
-                capacity_bytes = 0;
-                return !buffer;
-            }
-        };
-
-        GsplatColorGradWorkspaceCache& color_grad_cache() {
-            static thread_local GsplatColorGradWorkspaceCache cache;
-            return cache;
+            StreamOrderedDeviceBuffer replacement(bytes, stream, label);
+            buffer = std::move(replacement);
+            capacity = bytes;
+            return buffer.get();
         }
     } // namespace
 
-    void* ensure_gsplat_cub_workspace(const size_t bytes, const cudaStream_t stream) {
-        return cub_cache().ensure(bytes, stream);
+    void* ensure_gsplat_cub_workspace(Workspace& saved, size_t bytes, cudaStream_t stream) {
+        return ensure_workspace(saved.cub, saved.cub_capacity, bytes, stream, "rasterizer.gsplat.cub_workspace");
     }
-
-    bool release_gsplat_cub_workspace() noexcept {
-        return cub_cache().release();
-    }
-
-    void* ensure_gsplat_color_grad_workspace(const size_t bytes, const cudaStream_t stream) {
-        return color_grad_cache().ensure(bytes, stream);
-    }
-
-    bool release_gsplat_color_grad_workspace() noexcept {
-        return color_grad_cache().release();
+    void* ensure_gsplat_color_grad_workspace(Workspace& saved, size_t bytes, cudaStream_t stream) {
+        return ensure_workspace(saved.color_grad, saved.color_grad_capacity, bytes, stream, "rasterizer.gsplat.color_gradients");
     }
 
 #if LFS_CUDA_FAILURE_INJECTION_ENABLED

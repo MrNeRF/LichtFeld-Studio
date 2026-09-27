@@ -25,8 +25,6 @@
 #include "python/gil.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
-#include "training/rasterization/gsplat/Ops.h"
-#include "training/rasterization/gsplat_rasterizer.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/app_store.hpp"
@@ -80,8 +78,6 @@ namespace lfs::vis {
         };
 
         void release_training_thread_local_cuda_caches() noexcept {
-            (void)lfs::training::release_gsplat_rasterizer_thread_local_caches();
-            (void)gsplat_lfs::release_intersect_thread_local_cache();
             (void)lfs::core::tensor_ops::release_nan_check_thread_buffers();
             // sort workspaces — explicit release before thread join so
             // high-water VRAM is not held until TLS dtor races CUDA teardown.

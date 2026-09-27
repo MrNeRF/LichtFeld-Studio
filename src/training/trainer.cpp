@@ -48,6 +48,7 @@
 #include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/ops/fast_cuda.hpp"
+#include "lfs/training/ops/gsplat_cuda.hpp"
 #include "lfs/training/ops/photometric_cuda.hpp"
 #include "lfs/training/perf_bench.hpp"
 #include "lfs/training/screen_share.cuh"
@@ -59,8 +60,6 @@
 #include "optimizer/adam_optimizer.hpp"
 #include "python/runner.hpp"
 #include "rasterization/fast_rasterizer.hpp"
-#include "rasterization/gsplat/Ops.h"
-#include "rasterization/gsplat_rasterizer.hpp"
 #include "strategies/mcmc.hpp"
 #include "strategies/strategy_factory.hpp"
 #include "strategies/strategy_utils.hpp"
@@ -627,12 +626,6 @@ namespace lfs::training {
                          boundary);
             }
             if (release_all) {
-                // B3/B6: gsplat's exact high-water workspaces are retained
-                // across iterations (EXACT-2) and released only at a named
-                // boundary after the arena has drained.
-                (void)release_gsplat_rasterizer_thread_local_caches();
-                (void)gsplat_lfs::release_intersect_thread_local_cache();
-
                 // The viewer may have installed its exportable block as the
                 // arena backing. release_at_boundary intentionally preserves
                 // such a block for the peer owner; once the trainer is idle it
@@ -699,33 +692,6 @@ namespace lfs::training {
                 record_vram_tensor("optimizer.adam", prefix + ".grad", state->grad);
                 record_vram_tensor("optimizer.adam", prefix + ".exp_avg", state->exp_avg);
             }
-        }
-
-        void record_gsplat_vram_breakdown(const GsplatRasterizeContext& ctx,
-                                          const RenderOutput& output,
-                                          const lfs::core::Tensor& gt_tile,
-                                          const lfs::core::Tensor& bg_tile,
-                                          const lfs::core::Tensor& tile_error_map) {
-            constexpr std::string_view scope = "rasterizer.gsplat";
-            if (auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena()) {
-                std::size_t frame_bytes = 0;
-                for (const auto& buffer : arena->get_frame_buffers(ctx.frame_id)) {
-                    frame_bytes += buffer.size;
-                }
-                record_vram_current(scope, "arena.frame_buffers", frame_bytes);
-            }
-            record_rasterizer_arena_disclosure(scope);
-            record_vram_current(scope, "forward.isect_ids", static_cast<std::size_t>(ctx.n_isects) * sizeof(std::int64_t));
-            record_vram_current(scope, "forward.flatten_ids", static_cast<std::size_t>(ctx.n_isects) * sizeof(std::int32_t));
-            record_vram_tensor(scope, "output.image", output.image);
-            record_vram_tensor(scope, "output.alpha", output.alpha);
-            record_vram_tensor(scope, "camera.K_tensor", ctx.K_tensor);
-            record_vram_tensor(scope, "camera.radial_cuda", ctx.radial_cuda);
-            record_vram_tensor(scope, "camera.tangential_cuda", ctx.tangential_cuda);
-            record_vram_tensor(scope, "camera.thin_prism_cuda", ctx.thin_prism_cuda);
-            record_vram_tensor("train.inputs", "gt_tile", gt_tile);
-            record_vram_tensor("train.inputs", "background_tile", bg_tile);
-            record_vram_tensor("train.losses", "densification_error_map.live", tile_error_map);
         }
 
         void syncTrainingSceneTopology(lfs::core::Scene* const scene,
@@ -962,6 +928,8 @@ namespace lfs::training {
         pipelined_normal_ = {};
 
         photo_saved_ = {};
+        gsplat_saved_ = {};
+        metrics_gsplat_saved_ = {};
         fast_saved_ = {};
         photo_loss_ = {};
         photo_grad_corrected_ = {};
@@ -1521,7 +1489,11 @@ namespace lfs::training {
         if (training_ops_->fast != nullptr && !fast_saved_.backend) {
             fast_saved_.backend = training_ops_->fast->create();
         }
+        if (training_ops_->gsplat != nullptr && !gsplat_saved_.backend) {
+            gsplat_saved_.backend = training_ops_->gsplat->create();
+        }
         if (evaluator_) {
+            evaluator_->set_gsplat(training_ops_->gsplat, &gsplat_saved_);
             evaluator_->set_photometric(training_ops_->photometric);
             evaluator_->set_fast(training_ops_->fast, &fast_saved_);
         }
@@ -3073,9 +3045,15 @@ namespace lfs::training {
             try {
                 RenderOutput output;
                 if (params.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGUT) {
-                    output = gsplat_rasterize(
-                        camera, model, background,
-                        1.0f, false, GsplatRenderMode::RGB, true);
+                    if (training_ops_ == nullptr || training_ops_->gsplat == nullptr) {
+                        throw std::runtime_error(*unavailable_training_family(
+                            lfs::core::default_gpu_backend(), Family::Gsplat));
+                    }
+                    if (!metrics_gsplat_saved_.backend) {
+                        metrics_gsplat_saved_.backend = training_ops_->gsplat->create();
+                    }
+                    output = gsplat_infer(*training_ops_->gsplat, metrics_gsplat_saved_,
+                                          camera, model, background);
                 } else {
                     if (training_ops_ == nullptr || training_ops_->fast == nullptr) {
                         throw std::runtime_error(*unavailable_training_family(
@@ -3227,6 +3205,8 @@ namespace lfs::training {
         pipelined_depth_ = {};
         pipelined_normal_ = {};
         photo_saved_ = {};
+        gsplat_saved_ = {};
+        metrics_gsplat_saved_ = {};
         fast_saved_ = {};
         metrics_fast_saved_ = {};
         photo_loss_ = {};
@@ -5262,6 +5242,7 @@ namespace lfs::training {
             photo_reset(photo_saved_);
             fast_release_caches(fast_saved_);
             resize_rasterizer_arena_at_boundary("B3 pause", true);
+            gsplat_release_caches(gsplat_saved_);
             LOG_INFO("Training paused at iteration {}", iter);
             lfs::diagnostics::VramProfiler::instance().mark("training_pause");
             LOG_DEBUG("Click 'Resume Training' to continue.");
@@ -6110,7 +6091,7 @@ namespace lfs::training {
 
                     // Storage for render output (used by both paths)
                     RenderOutput output;
-                    std::optional<GsplatRasterizeContext> gsplat_ctx;
+                    bool gsplat_frame = false;
 
                     {
                         LFS_VRAM_SCOPE("train.rasterize_forward");
@@ -6124,32 +6105,16 @@ namespace lfs::training {
                             for (;;) {
                                 ++forward_attempts;
                                 try {
-                                    auto rasterize_result = gsplat_rasterize_forward(
+                                    const auto result = gsplat_render(
+                                        *training_ops_->gsplat, gsplat_saved_,
                                         *cam, strategy_->get_model(), bg,
-                                        0, 0, 0, 0,
-                                        1.0f, false, GsplatRenderMode::RGB, true, bg_tile);
-                                    if (!rasterize_result) {
-                                        auto typed = lfs::from_legacy_expected<
-                                            std::pair<RenderOutput, GsplatRasterizeContext>>(
-                                            std::move(rasterize_result),
-                                            lfs::LegacyErrorContext{
-                                                .code = lfs::ErrorCode::Internal,
-                                                .domain = lfs::ErrorDomain::Rendering,
-                                                .operation = "gsplat_rasterize_forward",
-                                                .source = LFS_SOURCE_SITE_CURRENT(),
-                                            });
-                                        if (!typed) {
-                                            nvtxRangePop(); // rasterize_forward
-                                            nvtxRangePop(); // tile
-                                            return std::move(typed).error();
-                                        }
-                                        auto gut_result = std::move(typed).value();
-                                        output = std::move(gut_result.first);
-                                        gsplat_ctx.emplace(std::move(gut_result.second));
-                                    } else {
-                                        output = std::move(rasterize_result->first);
-                                        gsplat_ctx.emplace(std::move(rasterize_result->second));
+                                        0, 0, 0, 0, 1.0f, false, GsplatRenderMode::RGB, bg_tile, output);
+                                    if (result.code != lfs::gpu_ops::RasterResult::Code::Success) {
+                                        nvtxRangePop();
+                                        nvtxRangePop();
+                                        return gsplat_raster_error(result);
                                     }
+                                    gsplat_frame = true;
                                     break;
                                 } catch (const lfs::Exception& exception) {
                                     const lfs::Error forward_error = exception.error();
@@ -6277,14 +6242,9 @@ namespace lfs::training {
                             if (training_ops_ != nullptr && training_ops_->fast != nullptr) {
                                 training_ops_->fast->release(fast_saved_);
                             }
-                        } else if (gsplat_ctx) {
-                            // Isect/flatten ids belong to the TLS VMM cache, not
-                            // the context; only end the arena frame here.
-                            auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
-                            gsplat_ctx->isect_ids_ptr = nullptr;
-                            gsplat_ctx->flatten_ids_ptr = nullptr;
-                            arena.end_frame(gsplat_ctx->frame_id, lfs::core::getCurrentCUDAStream());
-                            gsplat_ctx.reset();
+                        } else if (gsplat_frame) {
+                            training_ops_->gsplat->release(gsplat_saved_);
+                            gsplat_frame = false;
                         }
                     };
 
@@ -7145,8 +7105,8 @@ namespace lfs::training {
                                     static_cast<std::size_t>(strategy_->get_model().size()));
                                 record_vram_tensor("train.inputs", "gt_tile", gt_tile);
                                 record_vram_tensor("train.inputs", "background_tile", bg_tile);
-                            } else if (gsplat_ctx) {
-                                record_gsplat_vram_breakdown(*gsplat_ctx, output, gt_tile, bg_tile, tile_error_map);
+                            } else if (gsplat_frame) {
+                                gsplat_record_vram(gsplat_saved_, output, gt_tile, bg_tile, tile_error_map);
                             }
                             record_vram_tensor("train.losses", "tile_loss", tile_loss);
                             record_vram_tensor("train.losses", "tile_grad_corrected", tile_grad);
@@ -7230,16 +7190,21 @@ namespace lfs::training {
                         {
                             LFS_VRAM_SCOPE("train.rasterize_backward");
                             LOG_VRAM_DIFF("train.rasterize_backward");
-                            if (gsplat_ctx) {
+                            if (gsplat_frame) {
                                 auto grad_alpha = tile_grad_alpha.is_valid()
                                                       ? tile_grad_alpha
                                                       : lfs::core::Tensor::zeros_like(output.alpha);
                                 tile_context_guard.release();
-                                gsplat_rasterize_backward(*gsplat_ctx, raster_grad, grad_alpha,
-                                                          strategy_->get_model(), strategy_->get_optimizer(),
-                                                          use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{},
-                                                          edge_weight_scoring_active_ ? edge_weight_map : lfs::core::Tensor{},
-                                                          edge_weight_scoring_active_ ? edge_score_scratch : lfs::core::Tensor{});
+                                auto& model = strategy_->get_model();
+                                auto& optimizer = strategy_->get_optimizer();
+                                lfs::core::Tensor unused;
+                                training_ops_->gsplat->backward(gsplat_saved_, raster_grad, grad_alpha,
+                                                                gsplat_gradients(optimizer),
+                                                                model._densification_info,
+                                                                use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{},
+                                                                edge_weight_scoring_active_ ? edge_weight_map : lfs::core::Tensor{},
+                                                                edge_weight_scoring_active_ ? edge_score_scratch : unused,
+                                                                optimizer.collect_projected_screen_share() ? model._max_screen_share : unused);
                                 if (edge_weight_scoring_active_) {
                                     strategy_->on_edge_score_accumulated(iter);
                                 }
@@ -7824,8 +7789,8 @@ namespace lfs::training {
 
                                 RenderOutput rendered_timelapse_output;
                                 if (params_.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGUT) {
-                                    rendered_timelapse_output = gsplat_rasterize(*cam_to_use, strategy_->get_model(), background_,
-                                                                                 1.0f, false, GsplatRenderMode::RGB, true);
+                                    rendered_timelapse_output = gsplat_infer(
+                                        *training_ops_->gsplat, gsplat_saved_, *cam_to_use, strategy_->get_model(), background_);
                                 } else {
                                     rendered_timelapse_output = fast_infer(
                                         *training_ops_->fast, fast_saved_, *cam_to_use, strategy_->get_model(),
@@ -8718,6 +8683,7 @@ namespace lfs::training {
         release_training_transient_state_at_boundary();
         fast_release_caches(fast_saved_);
         resize_rasterizer_arena_at_boundary("B3 training end", true);
+        gsplat_release_caches(gsplat_saved_);
         lfs::core::Tensor::trim_memory_pool();
         if (auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena()) {
             // Emit arena growth and cross-module churn totals while the

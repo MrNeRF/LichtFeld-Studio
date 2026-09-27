@@ -55,10 +55,11 @@ namespace gsplat_lfs {
 
     // An over-budget result has n_isects > 0 and n_sort == 0: subdivide whole
     // tiles before rendering. No partial list may be accepted.
-    // isect_ids / flatten_ids point into a thread-local grow-only cache.
-    // Do NOT cudaFree them; release via release_intersect_thread_local_cache()
+    // isect_ids / flatten_ids point into a owner-held grow-only cache.
+    // Do NOT cudaFree them; release via Workspace::release()
     // only at thread/training shutdown.
     IntersectTileResult intersect_tile(
+        Workspace& saved,
         const float* means2d,        // [C, N, 2]
         const int32_t* radii,        // [C, N, 2]
         const float* depths,         // [C, N]
@@ -73,8 +74,6 @@ namespace gsplat_lfs {
         int32_t* tiles_per_gauss_out, // [C, N] pre-allocated output
         cudaStream_t stream = nullptr,
         int32_t* isect_offsets = nullptr, TileRange tiles = {}); // [C * tile_h * tile_w + 1]
-
-    bool release_intersect_thread_local_cache() noexcept;
 
     void intersect_offset(
         const int64_t* isect_ids, // [n_isects]
@@ -254,6 +253,7 @@ namespace gsplat_lfs {
     };
 
     void rasterize_from_world_with_sh_fwd(
+        Workspace& saved,
         // Gaussian parameters
         const float* means,     // [N, 3]
         const float* quats,     // [N, 4]
@@ -295,6 +295,7 @@ namespace gsplat_lfs {
         cudaStream_t stream = nullptr);
 
     void rasterize_from_world_with_sh_bwd(
+        Workspace& saved,
         // Gaussian parameters
         const float* means,     // [N, 3]
         const float* quats,     // [N, 4]

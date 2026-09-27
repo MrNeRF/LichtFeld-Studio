@@ -206,6 +206,7 @@ namespace gsplat_lfs {
     //=========================================================================
 
     void rasterize_from_world_with_sh_fwd(
+        Workspace& workspace,
         const float* means,
         const float* quats,
         const float* scales,
@@ -275,7 +276,7 @@ namespace gsplat_lfs {
 
         // The first call retains the existing speculative warm-cache path.
         auto intersect = [&](TileRange tiles) {
-            return intersect_tile(result.means2d, result.radii, result.depths,
+            return intersect_tile(workspace, result.means2d, result.radii, result.depths,
                                   nullptr, nullptr, C, N, tile_size, tile_width, tile_height,
                                   true, result.tiles_per_gauss, stream, result.tile_offsets, tiles);
         };
@@ -343,6 +344,7 @@ namespace gsplat_lfs {
     //=========================================================================
 
     void rasterize_from_world_with_sh_bwd(
+        Workspace& workspace,
         const float* means,
         const float* quats,
         const float* scales,
@@ -413,9 +415,9 @@ namespace gsplat_lfs {
             static_cast<size_t>(channels), "gsplat backward color elements");
         const size_t color_bytes = checked_bytes(
             color_values, sizeof(float), "gsplat backward color gradients");
-        // Grow-only TLS high-water — replaces per-backward cudaMallocAsync/Free.
+        // Grow-only owner-held high-water — replaces per-backward cudaMallocAsync/Free.
         float* const v_colors =
-            static_cast<float*>(ensure_gsplat_color_grad_workspace(color_bytes, stream));
+            static_cast<float*>(ensure_gsplat_color_grad_workspace(workspace, color_bytes, stream));
         LFS_CUDA_CHECK_MSG(
             cudaMemsetAsync(v_colors, 0, color_bytes, stream),
             "gsplat backward color-gradient initialization");
@@ -445,7 +447,7 @@ namespace gsplat_lfs {
             for (const auto& saved : batches) {
                 if (saved.count == 0)
                     continue;
-                const auto batch = intersect_tile(means2d, radii, depths, nullptr, nullptr,
+                const auto batch = intersect_tile(workspace, means2d, radii, depths, nullptr, nullptr,
                                                   C, N, tile_size, tile_width, tile_height, true,
                                                   tiles_per_gauss, stream, const_cast<int32_t*>(tile_offsets), saved.tiles);
                 LFS_ASSERT(batch.n_isects == saved.count && batch.n_sort > 0);

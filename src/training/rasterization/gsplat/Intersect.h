@@ -10,6 +10,8 @@
 
 namespace gsplat_lfs {
 
+    struct Workspace;
+
     void launch_intersect_tile_kernel(
         // inputs
         const float* means2d,        // [C, N, 2] or [nnz, 2]
@@ -51,6 +53,7 @@ namespace gsplat_lfs {
         cudaStream_t stream = nullptr);
 
     void radix_sort_double_buffer(
+        Workspace& saved,
         int64_t n_isects,
         uint32_t tile_n_bits,
         uint32_t cam_n_bits,
@@ -66,6 +69,7 @@ namespace gsplat_lfs {
         cudaStream_t stream = nullptr);
 
     void compute_cumsum_gpu(
+        Workspace& saved,
         const int32_t* input,
         int64_t* output,
         uint32_t n_elements,

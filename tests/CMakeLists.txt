@@ -552,6 +552,7 @@ set(TEST_FILES
     test_fused_bg_blend.cpp
     test_photometric_hygiene.cpp
     test_photometric_ops.cpp
+    test_gsplat_ops.cpp
     test_fast_ops.cpp
     fast_raster_test_helpers.cpp
     test_training_image_ops.cpp

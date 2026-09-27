@@ -15,6 +15,7 @@
 #include "core/tensor_upload.hpp"
 #include "cuda_backend_test.hpp"
 #include "fast_raster_test_helpers.hpp"
+#include "gsplat_raster_test_helpers.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "optimizer/adam_optimizer.hpp"
@@ -23,7 +24,6 @@
 #include "training/rasterization/gsplat/Common.h"
 #include "training/rasterization/gsplat/IntersectionCount.h"
 #include "training/rasterization/gsplat/Ops.h"
-#include "training/rasterization/gsplat_rasterizer.hpp"
 #include "training/strategies/mrnf.hpp"
 
 #include <algorithm>
@@ -51,11 +51,8 @@ using namespace lfs::core;
 
 namespace {
 
-    void release_ctx_arena(GsplatRasterizeContext& ctx) {
-        // Isect pointers are TLS high-water — never cudaFree them.
-        ctx.isect_ids_ptr = nullptr;
-        ctx.flatten_ids_ptr = nullptr;
-        GlobalArenaManager::instance().get_arena().end_frame(ctx.frame_id, ctx.stream);
+    void release_ctx_arena(lfs::test::GsplatTestContext& ctx) {
+        ctx.release();
     }
 
     Camera make_camera(int w, int h) {
@@ -243,7 +240,7 @@ namespace {
 
 } // namespace
 
-class GsplatRasterizerTest : public lfs::test::CudaBackendTest {
+class GsplatRasterizerTest : public lfs::test::GsplatBackendTest {
 protected:
     void SetUp() override {
         LFS_CUDA_BACKEND_OR_RETURN();
@@ -304,8 +301,7 @@ protected:
 #if LFS_CUDA_FAILURE_INJECTION_ENABLED
         gsplat_lfs::set_cuda_allocation_failure_for_testing(false);
 #endif
-        (void)gsplat_lfs::release_intersect_thread_local_cache();
-        (void)release_gsplat_rasterizer_thread_local_caches();
+        (void)release_gsplat_caches();
         GlobalArenaManager::instance().get_arena().full_reset();
     }
 
@@ -315,7 +311,7 @@ protected:
     Tensor bg_color_;
 };
 
-class VmmDeviceBufferTest : public lfs::test::CudaBackendTest {};
+class VmmDeviceBufferTest : public lfs::test::GsplatBackendTest {};
 
 TEST_F(VmmDeviceBufferTest, GrowsInPlace) {
     constexpr size_t kMiB = 1024u * 1024u;
@@ -387,7 +383,7 @@ TEST_F(GsplatRasterizerTest, CudaAllocationFailureAbortsAndRecovers) {
 }
 #endif
 
-class GsplatRasterizerPPISP : public lfs::test::CudaBackendTest {};
+class GsplatRasterizerPPISP : public lfs::test::GsplatBackendTest {};
 
 TEST_F(GsplatRasterizerPPISP, NegativeShRadianceDoesNotCreateBrightPixels) {
     constexpr int width = 32;
@@ -541,7 +537,7 @@ TEST_F(GsplatRasterizerTest, GutModeSteadyStateAllocs) {
 
 // gut/gsplat forward+backward with default quant ON + sh_degree>0.
 // Saves dequant temp in ctx so backward does not dtype-abort on q16 codes.
-class GsplatRasterizerQuantTest : public lfs::test::CudaBackendTest {};
+class GsplatRasterizerQuantTest : public lfs::test::GsplatBackendTest {};
 
 TEST_F(GsplatRasterizerQuantTest, GutForwardBackwardWithDefaultQuantAndShDegree) {
     // Default flags: quant ON (no force-off).
@@ -641,11 +637,11 @@ TEST_F(GsplatRasterizerQuantTest, RejectsFloat16ShRestWithoutQ16Bounds) {
     }
 }
 
-class GsplatRasterizerEdgeScores : public lfs::test::CudaBackendTest {};
+class GsplatRasterizerEdgeScores : public lfs::test::GsplatBackendTest {};
 
 TEST_F(GsplatRasterizerEdgeScores, GutFusedScoresRespectEdgeMapAndCameraModel) {
 
-    auto run = [](Camera camera, const Tensor& edge_map) {
+    auto run = [this](Camera camera, const Tensor& edge_map) {
         auto splat = make_visible_splat(32);
         AdamConfig cfg;
         cfg.lr = 1e-3f;
@@ -798,12 +794,9 @@ TEST(GsplatIntersectionCount, RoundedCapacityCannotOverflowSignedSortCount) {
     EXPECT_EQ(gsplat_lfs::intersection_sort_capacity(limit + 65536, limit + 65536), limit);
 }
 
-class GsplatRasterizerTestPositive : public lfs::test::CudaBackendTest {};
+class GsplatRasterizerTestPositive : public lfs::test::GsplatBackendTest {};
 
 TEST_F(GsplatRasterizerTestPositive, AggregateIntersectionsRenderOnColdAndWarmCache) {
-    struct CacheCleanup {
-        ~CacheCleanup() { (void)gsplat_lfs::release_intersect_thread_local_cache(); }
-    } cleanup;
 
     // Preserve #2185's 32769-splat / 256x256-tile fixture and exact pair count.
     // Project coincident splats across the full grid, then exercise the production
@@ -853,7 +846,7 @@ TEST_F(GsplatRasterizerTestPositive, AggregateIntersectionsRenderOnColdAndWarmCa
 
     for (const bool warm : {false, true}) {
         SCOPED_TRACE(warm ? "warm cache" : "cold cache");
-        ASSERT_TRUE(gsplat_lfs::release_intersect_thread_local_cache());
+        ASSERT_TRUE(release_gsplat_caches());
         if (warm) {
             auto seed = render(reference_model);
             ASSERT_TRUE(seed.has_value()) << seed.error();
@@ -892,7 +885,7 @@ TEST_F(GsplatRasterizerTestPositive, AggregateIntersectionsRenderOnColdAndWarmCa
     }
 }
 
-class GsplatRasterizerErrors : public lfs::test::CudaBackendTest {};
+class GsplatRasterizerErrors : public lfs::test::GsplatBackendTest {};
 
 TEST_F(GsplatRasterizerErrors, GutArenaExhaustionPreservesTypedResourceError) {
 
@@ -994,6 +987,7 @@ TEST_F(GsplatRasterizerTest, ForwardWritesChwAndBackwardIsStable) {
 }
 
 void run_gut_from_world_parity(Camera& camera, const char* dump_env, const char* ref_env) {
+    lfs::test::GsplatTestRenderer renderer;
     constexpr int kN = 50000;
     auto splat = make_parity_splat(kN, 0xC0FFEE01u);
     splat->_max_screen_share = Tensor::zeros({static_cast<size_t>(kN)}, Device::GPU);
@@ -1008,7 +1002,7 @@ void run_gut_from_world_parity(Camera& camera, const char* dump_env, const char*
 
     Tensor image0, image1, alpha0, alpha1;
     auto run_once = [&](Tensor& image_out, Tensor& alpha_out) {
-        auto r = gsplat_rasterize_forward(
+        auto r = renderer.gsplat_rasterize_forward(
             camera, *splat, bg, 0, 0, 0, 0, 1.0f, false, GsplatRenderMode::RGB,
             /*use_gut=*/true);
         ASSERT_TRUE(r.has_value()) << r.error();
@@ -1020,7 +1014,7 @@ void run_gut_from_world_parity(Camera& camera, const char* dump_env, const char*
             EXPECT_GT(ctx.batches.size(), 1u);
         auto grad_image = Tensor::ones_like(output.image);
         auto grad_alpha = Tensor::zeros_like(output.alpha);
-        gsplat_rasterize_backward(ctx, grad_image, grad_alpha, *splat, opt, Tensor{});
+        renderer.gsplat_rasterize_backward(ctx, grad_image, grad_alpha, *splat, opt, Tensor{});
         EXPECT_EQ(splat->_max_screen_share.max().item<float>(), 0.f);
         image_out = output.image.clone();
         alpha_out = output.alpha.clone();
@@ -1187,6 +1181,7 @@ TEST_F(GsplatRasterizerTest, AggregateOverflowTrainingStep) {
 }
 
 TEST_F(GsplatRasterizerTest, TileRangesPreserveCountsAndStableDepthOrder) {
+    gsplat_lfs::Workspace workspace;
     constexpr uint32_t n = 64, tw = 7, th = 5;
     std::vector<float> means(n * 2);
     std::vector<int32_t> radii(n * 2);
@@ -1202,7 +1197,7 @@ TEST_F(GsplatRasterizerTest, TileRangesPreserveCountsAndStableDepthOrder) {
     auto counts = Tensor::empty({n}, Device::CUDA, DataType::Int32);
     auto offsets = Tensor::empty({tw * th + 1}, Device::CUDA, DataType::Int32);
     auto intersect = [&](gsplat_lfs::TileRange range) {
-        return gsplat_lfs::intersect_tile(m.ptr<float>(), r.ptr<int32_t>(), d.ptr<float>(),
+        return gsplat_lfs::intersect_tile(workspace, m.ptr<float>(), r.ptr<int32_t>(), d.ptr<float>(),
                                           nullptr, nullptr, 1, n, 16, tw, th, true, counts.ptr<int32_t>(), nullptr,
                                           offsets.ptr<int32_t>(), range);
     };
@@ -1269,7 +1264,7 @@ TEST_F(GsplatRasterizerTest, TileBatchesPreserveShRestAlphaAndDensificationGradi
     Tensor reference_image, reference_alpha, reference_scores, reference_densification;
     std::vector<Tensor> gradients;
     for (int arm = 0; arm < 2; ++arm) {
-        ASSERT_TRUE(gsplat_lfs::release_intersect_thread_local_cache());
+        ASSERT_TRUE(release_gsplat_caches());
         ASSERT_TRUE(lfs::core::environment::set_value("LFS_GSPLAT_PAIR_BUDGET", arm ? "1" : ""));
         opt.zero_grad(1);
         scores.fill_(0.f);
@@ -1304,7 +1299,7 @@ TEST_F(GsplatRasterizerTest, TileBatchesPreserveShRestAlphaAndDensificationGradi
 
 // Regression for issue #2189. Run with and without the existing pair-budget
 // test override to cover both the single-list and tile replay dispatch paths.
-class GutScreenShare : public lfs::test::CudaBackendTest, public ::testing::WithParamInterface<int> {};
+class GutScreenShare : public lfs::test::GsplatBackendTest, public ::testing::WithParamInterface<int> {};
 
 TEST_P(GutScreenShare, PublishedOncePerFrameAndConstrainsOnlyWhenEnabled) {
     using Model = lfs::core::CameraModelType;
@@ -1532,7 +1527,7 @@ TEST_P(GutScreenShare, MrnfClipsAfterGrowthAndLeavesUnsetLimitUnchanged) {
     }
 }
 
-class GutScreenShareGeometry : public lfs::test::CudaBackendTest {};
+class GutScreenShareGeometry : public lfs::test::GsplatBackendTest {};
 
 TEST_F(GutScreenShareGeometry, ClippingVisibilityWindowResetAndNonDefaultStream) {
     auto radii = Tensor::from_vector(std::vector<int32_t>{10, 10, 10, 10, 0, 10, 100, 100}, {4, 2}, Device::CUDA);
@@ -1569,7 +1564,7 @@ TEST_F(GutScreenShareGeometry, ClippingVisibilityWindowResetAndNonDefaultStream)
     EXPECT_EQ(h.ptr<float>()[2], 0.f);
 }
 
-class GutScreenShareStrategy : public lfs::test::CudaBackendTest {};
+class GutScreenShareStrategy : public lfs::test::GsplatBackendTest {};
 
 TEST_F(GutScreenShareStrategy, RendererSwitchStartsANewMeasurementWindow) {
     auto model = make_parity_splat(100, 42);
@@ -1682,7 +1677,7 @@ TEST_F(GsplatRasterizerTest, BackwardUsesCurrentQueueAndJoinsForwardStorage) {
     }
     consumer.wait();
     producer.wait();
-    release_gsplat_rasterizer_thread_local_caches();
+    release_gsplat_caches();
 }
 
 TEST_F(GsplatRasterizerTest, BackwardJoinsAuxiliaryProducersAndOutputs) {
@@ -1743,7 +1738,7 @@ TEST_F(GsplatRasterizerTest, BackwardJoinsAuxiliaryProducersAndOutputs) {
         }
     }
     forward.wait();
-    release_gsplat_rasterizer_thread_local_caches();
+    release_gsplat_caches();
 }
 
 TEST_F(GsplatRasterizerTest, ForwardJoinsCameraTransformAndRetainsItForBackward) {
@@ -1794,7 +1789,7 @@ TEST_F(GsplatRasterizerTest, ForwardJoinsCameraTransformAndRetainsItForBackward)
     producer.wait();
     backward.wait();
     render.wait();
-    release_gsplat_rasterizer_thread_local_caches();
+    release_gsplat_caches();
 }
 
 TEST_F(GsplatRasterizerTest, FastContextRetiresOutsideExecutionScopeWithoutDeviceWait) {

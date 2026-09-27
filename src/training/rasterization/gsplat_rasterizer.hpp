@@ -4,29 +4,15 @@
 
 #pragma once
 
-#include "core/camera.hpp"
 #include "core/cuda/memory_arena.hpp"
-#include "core/splat_data.hpp"
 #include "gsplat/Common.h"
 #include "gsplat/TileBatch.h"
-#include "optimizer/adam_optimizer.hpp"
-#include "optimizer/render_output.hpp"
+#include "lfs/training/ops/gsplat_cuda.hpp"
 #include <cstdint>
 #include <cuda_runtime.h>
-#include <expected>
-#include <string>
 #include <vector>
 
 namespace lfs::training {
-
-    // Render modes for gsplat rasterizer
-    enum class GsplatRenderMode {
-        RGB = 0,   // RGB only
-        D = 1,     // Depth only
-        ED = 2,    // Expected depth
-        RGB_D = 3, // RGB + depth
-        RGB_ED = 4 // RGB + expected depth
-    };
 
     // Forward pass context - holds raw pointers needed for backward (arena allocated)
     struct GsplatRasterizeContext {
@@ -42,9 +28,8 @@ namespace lfs::training {
         int32_t* last_ids_ptr = nullptr;     // [C, H, W]
         float* compensations_ptr = nullptr;  // [C, N] or nullptr
 
-        // Borrowed from the gsplat TLS VMM intersection cache (do NOT free).
-        // Valid from forward through backward on this thread; released by the
-        // cache release hook or at thread shutdown.
+        // Borrowed from the gsplat owner-held VMM intersection cache (do NOT free).
+        // Valid from forward through backward for this owner; released at its cache boundary or destruction.
         int64_t* isect_ids_ptr = nullptr;
         int32_t* flatten_ids_ptr = nullptr;
         int64_t n_isects = 0;
@@ -78,6 +63,7 @@ namespace lfs::training {
         // Dimensions
         uint32_t N = 0;
         uint32_t K_sh = 0;
+        uint32_t layout_bases = 1;
         uint32_t channels = 0;
         uint32_t tile_width = 0;
         uint32_t tile_height = 0;
@@ -111,80 +97,17 @@ namespace lfs::training {
         lfs::core::Tensor bg_image;
     };
 
-    // Forward pass with optional tiling (tile_width/height=0 = full image)
-    // bg_image is optional - if provided, uses per-pixel background blending instead of solid color
-    std::expected<std::pair<RenderOutput, GsplatRasterizeContext>, std::string> gsplat_rasterize_forward(
-        lfs::core::Camera& viewpoint_camera,
-        lfs::core::SplatData& gaussian_model,
-        lfs::core::Tensor& bg_color,
-        int tile_x_offset = 0,
-        int tile_y_offset = 0,
-        int tile_width = 0,
-        int tile_height = 0,
-        float scaling_modifier = 1.0f,
-        bool antialiased = false,
-        GsplatRenderMode render_mode = GsplatRenderMode::RGB,
-        bool use_gut = false,
-        const lfs::core::Tensor& bg_image = {});
-
-    // Explicit backward pass - computes gradients and accumulates into optimizer
-    void gsplat_rasterize_backward(
-        const GsplatRasterizeContext& ctx,
-        const lfs::core::Tensor& grad_image,
-        const lfs::core::Tensor& grad_alpha,
-        lfs::core::SplatData& gaussian_model,
-        AdamOptimizer& optimizer,
-        const lfs::core::Tensor& pixel_error_map = {},
-        const lfs::core::Tensor& edge_weight_map = {},
-        lfs::core::Tensor edge_score_out = {});
-
-    // Release per-thread renderer caches before the owning CUDA stream is torn down.
-    bool release_gsplat_rasterizer_thread_local_caches() noexcept;
-
-    // Convenience wrapper for inference (no backward needed)
-    inline RenderOutput gsplat_rasterize(
-        lfs::core::Camera& viewpoint_camera,
-        lfs::core::SplatData& gaussian_model,
-        lfs::core::Tensor& bg_color,
-        float scaling_modifier = 1.0f,
-        bool antialiased = false,
-        GsplatRenderMode render_mode = GsplatRenderMode::RGB,
-        bool use_gut = false) {
-        auto result = gsplat_rasterize_forward(
-            viewpoint_camera, gaussian_model, bg_color, 0, 0, 0, 0,
-            scaling_modifier, antialiased, render_mode, use_gut);
-        if (!result) {
-            throw std::runtime_error(result.error());
-        }
-        // Isect/flatten ids are owned by the TLS VMM cache, not this context.
-        // Stream-ordered arena end_frame keeps the frame chain intact (a
-        // streamless end_frame would force a device sync on the calling — often
-        // UI — thread every inference render).
-        const cudaStream_t stream = core::getCurrentCUDAStream();
-        core::bridgeStreams(result->second.stream, stream);
-        auto& arena = core::GlobalArenaManager::instance().get_arena();
-        arena.end_frame(result->second.frame_id, stream);
-        return result->first;
-    }
-
-    // Inference-only rasterization does not mutate the camera; this overload avoids
-    // forcing callers with const camera handles to cast away constness at the call site.
-    inline RenderOutput gsplat_rasterize(
-        const lfs::core::Camera& viewpoint_camera,
-        lfs::core::SplatData& gaussian_model,
-        lfs::core::Tensor& bg_color,
-        float scaling_modifier = 1.0f,
-        bool antialiased = false,
-        GsplatRenderMode render_mode = GsplatRenderMode::RGB,
-        bool use_gut = false) {
-        return gsplat_rasterize(
-            const_cast<lfs::core::Camera&>(viewpoint_camera),
-            gaussian_model,
-            bg_color,
-            scaling_modifier,
-            antialiased,
-            render_mode,
-            use_gut);
-    }
-
+    lfs::gpu_ops::State gsplat_create();
+    lfs::gpu_ops::RasterResult gsplat_forward(
+        lfs::gpu_ops::GsplatSaved&, const lfs::gpu_ops::SplatInputs&, const core::Tensor& view,
+        const core::Tensor& radial, const core::Tensor& tangential,
+        const core::Tensor& bg_color, const core::Tensor& bg_image,
+        const lfs::gpu_ops::GsplatParams&, const lfs::gpu_ops::RenderOutputs&);
+    void gsplat_backward(
+        lfs::gpu_ops::GsplatSaved&, const core::Tensor& grad_image, const core::Tensor& grad_alpha,
+        const lfs::gpu_ops::GsplatGradients&, core::Tensor& densification,
+        const core::Tensor& error_map, const core::Tensor& edge_map,
+        core::Tensor& edge_scores, core::Tensor& max_screen_share);
+    void gsplat_release(lfs::gpu_ops::GsplatSaved&) noexcept;
+    const GsplatRasterizeContext& cuda_gsplat_frame(const lfs::gpu_ops::GsplatSaved&);
 } // namespace lfs::training

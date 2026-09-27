@@ -4,7 +4,6 @@
 
 #include "metrics.hpp"
 #include "../kernels/normal_loss.hpp"
-#include "../rasterization/gsplat_rasterizer.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/events.hpp"
@@ -19,6 +18,7 @@
 #include "eval_mask.hpp"
 #include "io/cuda/image_format_kernels.cuh"
 #include "lfs/training/ops/fast_cuda.hpp"
+#include "lfs/training/ops/gsplat_cuda.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include <algorithm>
 #include <cassert>
@@ -822,8 +822,17 @@ namespace lfs::training {
             auto& splatData_mutable = const_cast<lfs::core::SplatData&>(splatData);
             RenderOutput r_output;
             if (_params.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGUT) {
-                r_output = gsplat_rasterize(*cam, splatData_mutable, background,
-                                            1.0f, false, GsplatRenderMode::RGB, true);
+                if (_gsplat_ops == nullptr) {
+                    _gsplat_ops = lfs::training::training_ops(lfs::core::default_gpu_backend()).gsplat;
+                }
+                if (_gsplat_ops == nullptr) {
+                    throw std::runtime_error(*lfs::training::unavailable_training_family(
+                        lfs::core::default_gpu_backend(), lfs::training::Family::Gsplat));
+                }
+                auto& saved = _gsplat_saved != nullptr ? *_gsplat_saved : _gsplat_owned;
+                if (!saved.backend)
+                    saved.backend = _gsplat_ops->create();
+                r_output = gsplat_infer(*_gsplat_ops, saved, *cam, splatData_mutable, background);
             } else {
                 if (_fast_ops == nullptr) {
                     _fast_ops = lfs::training::training_ops(lfs::core::default_gpu_backend()).fast;

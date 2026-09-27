@@ -91,6 +91,7 @@ set(TRAINING_NEW_SOURCES
     ops/registry.cpp
     ops/requirements.cpp
     ops/photometric_cuda.cpp
+    ops/gsplat_cuda.cpp
     ops/adam_cuda.cpp
     ops/bilateral_cuda.cpp
     ops/training_image_cuda.cpp
