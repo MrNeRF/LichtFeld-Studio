@@ -557,6 +557,7 @@ set(TEST_FILES
     test_session_ops.cpp
     fast_raster_test_helpers.cpp
     test_training_image_ops.cpp
+    test_shared_image_ops.cpp
     test_adam_ops.cpp
     test_ppisp_ops.cpp
     test_geometry_ops.cpp
@@ -1062,6 +1063,7 @@ endif()
 
 # Link libraries
 target_link_libraries(lichtfeld_tests PRIVATE
+    lfs_shared_image_cuda
     ${LFS_TEST_INTERNAL_LINK_LIBS}
 
     # External libraries

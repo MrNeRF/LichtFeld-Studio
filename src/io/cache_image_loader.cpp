@@ -6,14 +6,13 @@
 #if LFS_HAS_CUDA
 #include "image_execution.hpp"
 #endif
-#include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #if LFS_HAS_CUDA
-#include "io/cuda/image_format_kernels.cuh"
+#include "core/shared_image_ops.hpp"
 #include "io/nvcodec_image_loader.hpp"
 #include <cuda_runtime.h>
 #endif
@@ -434,16 +433,12 @@ namespace lfs::io {
 
             if (params.output_uint8) {
                 auto output = Tensor::empty(TensorShape({C, H, W}), Device::GPU, DataType::UInt8);
-                lfs::io::cuda::launch_uint8_hwc_to_uint8_chw(
-                    gpu_uint8.ptr<uint8_t>(), output.ptr<uint8_t>(), H, W, C,
-                    stream);
+                lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(gpu_uint8, output, lfs::gpu_ops::ImageConversion::U8HWCToU8CHW, H, W, C, {});
                 return output;
             }
 
             auto output = Tensor::empty(TensorShape({C, H, W}), Device::GPU, DataType::Float32);
-            lfs::io::cuda::launch_uint8_hwc_to_float32_chw(
-                gpu_uint8.ptr<uint8_t>(), output.ptr<float>(), H, W, C,
-                stream);
+            lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(gpu_uint8, output, lfs::gpu_ops::ImageConversion::U8HWCToF32CHW, H, W, C, {});
             return output;
         }
 
@@ -512,17 +507,10 @@ namespace lfs::io {
                         static_cast<int>(tensor.shape()[2]),
                         static_cast<int>(tensor.shape()[1]),
                         params.max_width);
-                    tensor = lfs::core::undistort_image(
-                        tensor, scaled, stream);
+                    tensor = lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->undistort(tensor, scaled, false);
                     if (restore_uint8) {
                         auto uint8_tensor = Tensor::empty(tensor.shape(), Device::GPU, DataType::UInt8);
-                        lfs::io::cuda::launch_float32_chw_to_uint8_chw(
-                            tensor.ptr<float>(),
-                            uint8_tensor.ptr<uint8_t>(),
-                            tensor.shape()[1],
-                            tensor.shape()[2],
-                            tensor.shape()[0],
-                            stream);
+                        lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(tensor, uint8_tensor, lfs::gpu_ops::ImageConversion::F32CHWToU8CHW, tensor.shape()[1], tensor.shape()[2], tensor.shape()[0], {});
                         tensor = std::move(uint8_tensor);
                     }
                 }

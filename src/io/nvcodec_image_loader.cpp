@@ -4,14 +4,13 @@
 
 #include "io/nvcodec_image_loader.hpp"
 #include "core/assert.hpp"
-#include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda_error.hpp"
 #include "core/environment.hpp"
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/shared_image_ops.hpp"
 #include "core/tensor.hpp"
-#include "cuda/image_format_kernels.cuh"
 #include "diagnostics/vram_profiler.hpp"
 #include "image_execution.hpp"
 
@@ -812,6 +811,7 @@ namespace lfs::io {
         std::atomic<cudaError_t> completion_error{cudaSuccess};
         std::vector<uint32_t*> sentinel_flag_scratch;
         std::vector<size_t> sentinel_flag_capacity;
+        std::vector<std::vector<lfs::core::Tensor>> sentinel_flag_views;
         std::mutex pool_mutex;
         std::condition_variable pool_cv;
         nvimgcodecEncoder_t encoder = nullptr;
@@ -895,6 +895,7 @@ namespace lfs::io {
             }
             sentinel_flag_scratch[idx] = replacement;
             sentinel_flag_capacity[idx] = new_capacity;
+            sentinel_flag_views[idx].clear();
             return replacement;
         }
 
@@ -950,6 +951,7 @@ namespace lfs::io {
                         decoder_available.clear();
                         sentinel_flag_scratch.clear();
                         sentinel_flag_capacity.clear();
+                        sentinel_flag_views.clear();
                         instance = nullptr;
                         vram_account.unregister();
                         return;
@@ -996,6 +998,7 @@ namespace lfs::io {
                     }
                     sentinel_flag_scratch.clear();
                     sentinel_flag_capacity.clear();
+                    sentinel_flag_views.clear();
 
                     if (instance) {
                         nvimgcodecInstanceDestroy(instance);
@@ -1081,6 +1084,7 @@ namespace lfs::io {
             LFS_CUDA_CHECK(cudaEventCreateWithFlags(&event, cudaEventDisableTiming));
         impl_->sentinel_flag_scratch.resize(pool_size, nullptr);
         impl_->sentinel_flag_capacity.resize(pool_size, 0);
+        impl_->sentinel_flag_views.resize(pool_size);
 
         const nvimgcodecExecutionParams_t exec_params{
             NVIMGCODEC_STRUCTURE_TYPE_EXECUTION_PARAMS,
@@ -1391,10 +1395,7 @@ namespace lfs::io {
                 Device::GPU,
                 DataType::Float32));
 
-            cuda::launch_uint16_hwc_to_float32_hwc(
-                reinterpret_cast<const uint16_t*>(image_tensor_aux.data_ptr()),
-                u16_as_float->ptr<float>(),
-                src_height, src_width, num_channels, static_cast<cudaStream_t>(cuda_stream));
+            lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(image_tensor_aux, *u16_as_float, lfs::gpu_ops::ImageConversion::U16HWCToF32HWC, src_height, src_width, num_channels, {});
         }
 
         const Tensor& resize_input_image = u16_as_float ? *u16_as_float : image_tensor_aux;
@@ -1402,20 +1403,12 @@ namespace lfs::io {
         Tensor output_tensor;
         if (needs_resize) {
             if (is_grayscale) {
-                output_tensor = lanczos_resize_grayscale(resize_input_image, target_height, target_width,
-                                                         LANCZOS_KERNEL_SIZE, static_cast<cudaStream_t>(cuda_stream));
+                output_tensor = lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->resize(resize_input_image, target_height, target_width, lfs::gpu_ops::Resample::LanczosGray, LANCZOS_KERNEL_SIZE);
             } else {
-                output_tensor = lanczos_resize(resize_input_image, target_height, target_width,
-                                               LANCZOS_KERNEL_SIZE, static_cast<cudaStream_t>(cuda_stream));
+                output_tensor = lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->resize(resize_input_image, target_height, target_width, lfs::gpu_ops::Resample::LanczosRGB, LANCZOS_KERNEL_SIZE);
                 if (output_uint8) {
                     auto output_uint8_tensor = Tensor::empty(output_tensor.shape(), Device::GPU, DataType::UInt8);
-                    cuda::launch_float32_chw_to_uint8_chw(
-                        output_tensor.ptr<float>(),
-                        output_uint8_tensor.ptr<uint8_t>(),
-                        output_tensor.shape()[1],
-                        output_tensor.shape()[2],
-                        output_tensor.shape()[0],
-                        static_cast<cudaStream_t>(cuda_stream));
+                    lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(output_tensor, output_uint8_tensor, lfs::gpu_ops::ImageConversion::F32CHWToU8CHW, output_tensor.shape()[1], output_tensor.shape()[2], output_tensor.shape()[0], {});
                     output_tensor = std::move(output_uint8_tensor);
                 }
             }
@@ -1424,38 +1417,23 @@ namespace lfs::io {
                 const auto shape = image_tensor_aux.shape();
                 const size_t H = shape[0], W = shape[1];
                 output_tensor = Tensor::empty(TensorShape({H, W}), Device::GPU, DataType::Float32);
-                cuda::launch_uint8_hw_to_float32_hw(
-                    reinterpret_cast<const uint8_t*>(image_tensor_aux.data_ptr()),
-                    reinterpret_cast<float*>(output_tensor.data_ptr()),
-                    H, W, static_cast<cudaStream_t>(cuda_stream));
+                lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(image_tensor_aux, output_tensor, lfs::gpu_ops::ImageConversion::U8HWToF32HW, H, W, 1, {});
             } else {
                 const auto shape = image_tensor_aux.shape();
                 const size_t H = shape[0], W = shape[1], C = shape[2];
                 if (output_uint8) {
                     output_tensor = Tensor::empty(TensorShape({C, H, W}), Device::GPU, DataType::UInt8);
                     if (decode_u16) {
-                        cuda::launch_uint16_hwc_to_uint8_chw(
-                            reinterpret_cast<const uint16_t*>(image_tensor_aux.data_ptr()),
-                            reinterpret_cast<uint8_t*>(output_tensor.data_ptr()),
-                            H, W, C, static_cast<cudaStream_t>(cuda_stream));
+                        lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(image_tensor_aux, output_tensor, lfs::gpu_ops::ImageConversion::U16HWCToU8CHW, H, W, C, {});
                     } else {
-                        cuda::launch_uint8_hwc_to_uint8_chw(
-                            reinterpret_cast<const uint8_t*>(image_tensor_aux.data_ptr()),
-                            reinterpret_cast<uint8_t*>(output_tensor.data_ptr()),
-                            H, W, C, static_cast<cudaStream_t>(cuda_stream));
+                        lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(image_tensor_aux, output_tensor, lfs::gpu_ops::ImageConversion::U8HWCToU8CHW, H, W, C, {});
                     }
                 } else {
                     output_tensor = Tensor::empty(TensorShape({C, H, W}), Device::GPU, DataType::Float32);
                     if (decode_u16) {
-                        cuda::launch_uint16_hwc_to_float32_chw(
-                            reinterpret_cast<const uint16_t*>(image_tensor_aux.data_ptr()),
-                            reinterpret_cast<float*>(output_tensor.data_ptr()),
-                            H, W, C, static_cast<cudaStream_t>(cuda_stream));
+                        lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(image_tensor_aux, output_tensor, lfs::gpu_ops::ImageConversion::U16HWCToF32CHW, H, W, C, {});
                     } else {
-                        cuda::launch_uint8_hwc_to_float32_chw(
-                            reinterpret_cast<const uint8_t*>(image_tensor_aux.data_ptr()),
-                            reinterpret_cast<float*>(output_tensor.data_ptr()),
-                            H, W, C, static_cast<cudaStream_t>(cuda_stream));
+                        lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(image_tensor_aux, output_tensor, lfs::gpu_ops::ImageConversion::U8HWCToF32CHW, H, W, C, {});
                     }
                 }
             }
@@ -1601,10 +1579,7 @@ namespace lfs::io {
                 if (reusable && i < reusable->size() && (*reusable)[i]) {
                     *(*reusable)[i] = decoded[i];
                 }
-                cuda::launch_fill_u8_sentinel(
-                    decoded[i].ptr<uint8_t>(), decoded[i].bytes(),
-                    jpeg_batch_sentinel_seed(i, false),
-                    static_cast<cudaStream_t>(cuda_stream));
+                lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->sentinel_fill(decoded[i], jpeg_batch_sentinel_seed(i, false));
 
                 nvimgcodecImageInfo_t output = describe_destination(i, decoded[i].data_ptr());
                 if (impl_->sentinel_test_skipped_member == static_cast<int>(i)) {
@@ -1659,6 +1634,10 @@ namespace lfs::io {
 
                 uint32_t* device_flags = impl_->ensure_sentinel_flag_scratch(
                     decoder_idx, members.size());
+                auto& flag_views = impl_->sentinel_flag_views[decoder_idx];
+                while (flag_views.size() < members.size()) {
+                    flag_views.push_back(Tensor::from_blob(device_flags + flag_views.size(), {1}, Device::CUDA, DataType::UInt32, stream));
+                }
                 if (const cudaError_t err = cudaMemsetAsync(
                         device_flags, 0xff, members.size() * sizeof(uint32_t), stream);
                     err != cudaSuccess) {
@@ -1668,10 +1647,7 @@ namespace lfs::io {
                 }
                 for (size_t pos = 0; pos < members.size(); ++pos) {
                     const size_t member = members[pos];
-                    cuda::launch_flag_u8_sentinel_unchanged(
-                        decoded[member].ptr<uint8_t>(), decoded[member].bytes(),
-                        jpeg_batch_sentinel_seed(member, cuda_retry),
-                        device_flags + pos, stream);
+                    lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->sentinel_check(decoded[member], flag_views[pos], jpeg_batch_sentinel_seed(member, cuda_retry));
                 }
 
                 std::vector<uint32_t> host_flags(members.size(), 0);
@@ -1714,9 +1690,7 @@ namespace lfs::io {
                     skipped_members.size(), NVIMGCODEC_PROCESSING_STATUS_UNKNOWN);
                 for (size_t pos = 0; pos < skipped_members.size(); ++pos) {
                     const size_t member = skipped_members[pos];
-                    cuda::launch_fill_u8_sentinel(
-                        decoded[member].ptr<uint8_t>(), decoded[member].bytes(),
-                        jpeg_batch_sentinel_seed(member, true), stream);
+                    lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->sentinel_fill(decoded[member], jpeg_batch_sentinel_seed(member, true));
 
                     nvimgcodecImageInfo_t output =
                         describe_destination(member, decoded[member].data_ptr());
@@ -1798,9 +1772,7 @@ namespace lfs::io {
                     if (cuda_stream) {
                         output.set_stream(static_cast<cudaStream_t>(cuda_stream));
                     }
-                    cuda::launch_uint8_hwc_to_float32_chw(
-                        decoded[i].ptr<uint8_t>(), output.ptr<float>(),
-                        heights[i], widths[i], 3, static_cast<cudaStream_t>(cuda_stream));
+                    lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(decoded[i], output, lfs::gpu_ops::ImageConversion::U8HWCToF32CHW, heights[i], widths[i], 3, {});
                     if (reusable_outputs && i < reusable_outputs->size() && (*reusable_outputs)[i]) {
                         *(*reusable_outputs)[i] = output;
                     }
@@ -1977,10 +1949,7 @@ namespace lfs::io {
                                         : image.contiguous();
         Tensor hwc_uint16 = Tensor::empty(
             TensorShape({height, width, channels}), Device::GPU, DataType::Float16);
-        cuda::launch_float32_hwc_to_uint16_hwc(
-            hwc_float.ptr<float>(),
-            reinterpret_cast<uint16_t*>(hwc_uint16.data_ptr()),
-            height, width, channels, static_cast<cudaStream_t>(cuda_stream));
+        lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(hwc_float, hwc_uint16, lfs::gpu_ops::ImageConversion::F32HWCToU16HWC, height, width, channels, {});
 
         nvimgcodecImageInfo_t image_info{};
         image_info.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
@@ -2111,10 +2080,7 @@ namespace lfs::io {
                              ? (hw_float * 255.0f).clamp(0.0f, 255.0f).to(DataType::UInt8)
                              : Tensor::empty(TensorShape({height, width}), Device::GPU, DataType::Float16);
         if (!eight_bit) {
-            cuda::launch_float32_hwc_to_uint16_hwc(
-                hw_float.ptr<float>(),
-                reinterpret_cast<uint16_t*>(encoded.data_ptr()),
-                height, width, channels, static_cast<cudaStream_t>(cuda_stream));
+            lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(hw_float, encoded, lfs::gpu_ops::ImageConversion::F32HWCToU16HWC, height, width, channels, {});
         }
         encoded = encoded.contiguous();
         if (const auto err = cudaStreamSynchronize(static_cast<cudaStream_t>(cuda_stream));
@@ -2391,10 +2357,7 @@ namespace lfs::io {
         if (cuda_stream) {
             output_tensor.set_stream(static_cast<cudaStream_t>(cuda_stream));
         }
-        cuda::launch_uint16_hwc_to_float32_hwc(
-            reinterpret_cast<const uint16_t*>(decoded_tensor.data_ptr()),
-            output_tensor.ptr<float>(),
-            height, width, num_components, static_cast<cudaStream_t>(cuda_stream));
+        lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(decoded_tensor, output_tensor, lfs::gpu_ops::ImageConversion::U16HWCToF32HWC, height, width, num_components, {});
 
         if (synchronize) {
             if (const cudaError_t err = cudaStreamSynchronize(static_cast<cudaStream_t>(cuda_stream));
@@ -2574,11 +2537,7 @@ namespace lfs::io {
                 if (cuda_stream) {
                     output.set_stream(static_cast<cudaStream_t>(cuda_stream));
                 }
-                cuda::launch_uint16_hwc_to_float32_hwc(
-                    reinterpret_cast<const uint16_t*>(decoded_tensors[i].data_ptr()),
-                    output.ptr<float>(),
-                    heights[i], widths[i], components[i],
-                    static_cast<cudaStream_t>(cuda_stream));
+                lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->convert(decoded_tensors[i], output, lfs::gpu_ops::ImageConversion::U16HWCToF32HWC, heights[i], widths[i], components[i], {});
                 outputs.push_back(std::move(output));
             }
 

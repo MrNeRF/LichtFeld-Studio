@@ -63,6 +63,8 @@ namespace lfs::training {
                 return ops.gsplat != nullptr;
             case Family::Refine:
                 return ops.refine != nullptr;
+            case Family::SharedImage:
+                return ops.shared_image != nullptr;
             case Family::Count:
                 return false;
             default:
@@ -92,6 +94,7 @@ namespace lfs::training {
             .gsplat = &cuda_gsplat_ops(),
             .refine = &cuda_refine_ops(),
             .session = &cuda_session_ops(),
+            .shared_image = core::shared_image_ops(core::GpuBackend::CUDA),
         };
         static const TrainingOps kVulkan{
             .backend = core::GpuBackend::Vulkan,

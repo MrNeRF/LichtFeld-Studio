@@ -4,8 +4,6 @@
 
 #include "metrics.hpp"
 #include "../kernels/normal_loss.hpp"
-#include "core/cuda/lanczos_resize/lanczos_resize.hpp"
-#include "core/cuda/undistort/undistort.hpp"
 #include "core/events.hpp"
 #include "core/gpu_device_runtime.hpp"
 #include "core/gpu_elapsed.hpp"
@@ -13,10 +11,10 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
+#include "core/shared_image_ops.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor_backend.hpp"
 #include "eval_mask.hpp"
-#include "io/cuda/image_format_kernels.cuh"
 #include "lfs/training/ops/fast_cuda.hpp"
 #include "lfs/training/ops/gsplat_cuda.hpp"
 #include "lfs/training/ops/registry.hpp"
@@ -978,8 +976,7 @@ namespace lfs::training {
                             const int render_w = static_cast<int>(r_output.normal.shape()[2]);
                             if (static_cast<int>(prior.shape()[1]) != render_h ||
                                 static_cast<int>(prior.shape()[2]) != render_w) {
-                                prior = lfs::core::lanczos_resize_float_chw(
-                                    prior, render_h, render_w, 2, lfs::core::getCurrentCUDAStream());
+                                prior = lfs::training::training_ops(lfs::core::default_gpu_backend()).shared_image->resize(prior, render_h, render_w, lfs::gpu_ops::Resample::LanczosFloatCHW, 2);
                             }
                             if (const auto angle = mean_normal_angle_deg(
                                     r_output.normal, prior, r_output.alpha)) {

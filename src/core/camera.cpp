@@ -5,6 +5,7 @@
 #include "core/camera.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
+#include "core/shared_image_ops.hpp"
 #if LFS_HAS_CUDA
 #include "core/cuda_error_typed.hpp"
 #endif
@@ -657,7 +658,15 @@ namespace lfs::core {
                 static_cast<int>(mask.shape()[1]),
                 static_cast<int>(mask.shape()[0]),
                 max_width);
-            mask = undistort_mask(mask, scaled, _stream);
+#if LFS_HAS_CUDA
+            if (gpu_backend_of(mask) == GpuBackend::CUDA) {
+                const CUDAStreamGuard execution_scope(_stream);
+                mask = lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->undistort(mask, scaled, true);
+            } else
+#endif
+            {
+                mask = undistort_mask(mask, scaled, _stream);
+            }
         }
 
         if (binarize) {
@@ -733,7 +742,16 @@ namespace lfs::core {
 
         if (!_image_size_loaded)
             load_image_size(resize_factor, max_width);
-        depth = resize_depth_prior(depth.contiguous(), _image_height, _image_width, _stream);
+#if LFS_HAS_CUDA
+        if (gpu_backend_of(depth) == GpuBackend::CUDA) {
+            const auto source = depth.contiguous();
+            const CUDAStreamGuard execution_scope(_stream);
+            depth = lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->resize(source, _image_height, _image_width, lfs::gpu_ops::Resample::DepthPrior, 2);
+        } else
+#endif
+        {
+            depth = resize_depth_prior(depth.contiguous(), _image_height, _image_width, _stream);
+        }
 
         if (_undistort_prepared) {
             const auto scaled = scale_undistort_params(
@@ -741,7 +759,15 @@ namespace lfs::core {
                 static_cast<int>(depth.shape()[1]),
                 static_cast<int>(depth.shape()[0]),
                 max_width);
-            depth = undistort_mask(depth, scaled, _stream);
+#if LFS_HAS_CUDA
+            if (gpu_backend_of(depth) == GpuBackend::CUDA) {
+                const CUDAStreamGuard execution_scope(_stream);
+                depth = lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->undistort(depth, scaled, true);
+            } else
+#endif
+            {
+                depth = undistort_mask(depth, scaled, _stream);
+            }
         }
 
         _cached_depth = depth.contiguous();
@@ -843,7 +869,16 @@ namespace lfs::core {
 
         if (!_image_size_loaded)
             load_image_size(resize_factor, max_width);
-        normal = resize_normal_prior(normal.contiguous(), _image_height, _image_width, _stream);
+#if LFS_HAS_CUDA
+        if (gpu_backend_of(normal) == GpuBackend::CUDA) {
+            const auto source = normal.contiguous();
+            const CUDAStreamGuard execution_scope(_stream);
+            normal = lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->resize(source, _image_height, _image_width, lfs::gpu_ops::Resample::NormalPrior, 2);
+        } else
+#endif
+        {
+            normal = resize_normal_prior(normal.contiguous(), _image_height, _image_width, _stream);
+        }
 
         if (_undistort_prepared) {
             const auto scaled = scale_undistort_params(
@@ -851,8 +886,25 @@ namespace lfs::core {
                 static_cast<int>(normal.shape()[2]),
                 static_cast<int>(normal.shape()[1]),
                 max_width);
-            normal = undistort_image(normal, scaled, _stream);
-            normal = resize_normal_prior(normal.contiguous(), normal.shape()[1], normal.shape()[2], _stream);
+#if LFS_HAS_CUDA
+            if (gpu_backend_of(normal) == GpuBackend::CUDA) {
+                const CUDAStreamGuard execution_scope(_stream);
+                normal = lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->undistort(normal, scaled, false);
+            } else
+#endif
+            {
+                normal = undistort_image(normal, scaled, _stream);
+            }
+#if LFS_HAS_CUDA
+            if (gpu_backend_of(normal) == GpuBackend::CUDA) {
+                const auto source = normal.contiguous();
+                const CUDAStreamGuard execution_scope(_stream);
+                normal = lfs::core::shared_image_ops(lfs::core::GpuBackend::CUDA)->resize(source, normal.shape()[1], normal.shape()[2], lfs::gpu_ops::Resample::NormalPrior, 2);
+            } else
+#endif
+            {
+                normal = resize_normal_prior(normal.contiguous(), normal.shape()[1], normal.shape()[2], _stream);
+            }
         }
 
         _cached_normal = normal.contiguous();

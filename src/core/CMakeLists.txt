@@ -23,6 +23,7 @@ endif()
 # Core CUDA library (STATIC, linked privately)
 if(LFS_HAS_CUDA)
     add_subdirectory(cuda)
+    include(cuda/shared_image_kernels.cmake)
 endif()
 
 # Event bridge shared library
@@ -268,7 +269,10 @@ if(NOT LFS_HAS_CUDA)
         tensor/tensor_cuda_interop_no_cuda.cpp)
 endif()
 
-add_library(lfs_core SHARED ${CORE_SOURCES} ${TENSOR_SOURCES})
+add_library(lfs_core SHARED ${CORE_SOURCES} ${TENSOR_SOURCES} shared_image_ops.cpp)
+if(LFS_HAS_CUDA)
+    target_sources(lfs_core PRIVATE cuda/shared_image_cuda.cpp)
+endif()
 
 if(LFS_TENSOR_VULKAN)
     add_dependencies(lfs_core lfs_tensor_vulkan_shaders)
@@ -358,6 +362,7 @@ target_link_libraries(lfs_core
         GPUOpen::VulkanMemoryAllocator
     PRIVATE
         $<$<BOOL:${LFS_HAS_CUDA}>:lfs_core_cuda>
+        $<$<BOOL:${LFS_HAS_CUDA}>:lfs_shared_image_cuda>
         $<$<BOOL:${LFS_HAS_CUDA}>:lfs_tensor_kernels>
         $<$<BOOL:${LFS_HAS_CUDA}>:lfs_nn_kernels>
         JPEG::JPEG

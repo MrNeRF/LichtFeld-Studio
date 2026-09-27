@@ -2,54 +2,6 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-# CUDA library for dataset image conversion. Export kernels live in the tensor library.
-if(LFS_HAS_CUDA)
-add_library(lfs_io_cuda STATIC
-        cuda/image_format_kernels.cuh
-        cuda/image_format_kernels.cu
-)
-
-target_include_directories(lfs_io_cuda
-        PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/core/include
-        ${CMAKE_SOURCE_DIR}/src
-)
-
-target_link_libraries(lfs_io_cuda
-        INTERFACE
-        lfs_core      # Propagate to consumers, not linked during device linking
-        PRIVATE
-        lfs_diagnostics
-        CUDA::cudart
-)
-
-set_target_properties(lfs_io_cuda PROPERTIES
-        CUDA_SEPARABLE_COMPILATION OFF
-        CUDA_STANDARD 20
-        CUDA_STANDARD_REQUIRED ON
-        POSITION_INDEPENDENT_CODE ON
-)
-
-# CUDA compiler options for lfs_io_cuda
-target_compile_options(lfs_io_cuda PRIVATE
-        # CUDA device code + MSVC host compiler flags (Windows only)
-        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:-O0 -g --extended-lambda --expt-relaxed-constexpr -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS --diag-suppress=27>
-        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:-O3 -use_fast_math --extended-lambda --expt-relaxed-constexpr -Xcompiler=/DNDEBUG -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS --diag-suppress=27>
-
-        # CUDA device code for non-Windows
-        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<NOT:$<CXX_COMPILER_ID:MSVC>>,$<CONFIG:Debug>>:-O0 -g --extended-lambda --expt-relaxed-constexpr>
-        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<NOT:$<CXX_COMPILER_ID:MSVC>>,$<CONFIG:Release>>:-O3 -use_fast_math --extended-lambda --expt-relaxed-constexpr>
-)
-
-if(MSVC)
-    target_compile_definitions(lfs_io_cuda PRIVATE
-            $<$<COMPILE_LANGUAGE:CUDA>:FMT_UNICODE=0>
-    )
-endif()
-endif()
-
 # SPZ library (Niantic compressed format) - MIT licensed
 add_library(spz_lib STATIC
         ${CMAKE_SOURCE_DIR}/external/spz/load-spz.cc
@@ -370,10 +322,6 @@ else()
     set(ARCHIVE_LIB ${ARCHIVE_LIBRARY})
 endif()
 
-if(LFS_HAS_CUDA)
-    add_dependencies(lfs_io lfs_io_cuda)
-endif()
-
 # Link dependencies
 target_link_libraries(lfs_io
         PUBLIC
@@ -393,7 +341,6 @@ target_link_libraries(lfs_io
         OpenSSL::Crypto
         xxHash::xxhash         # REFS fingerprints and embedded-payload provenance
         $<$<BOOL:${LFS_HAS_CUDA}>:CUDA::cudart> # CUDA runtime for nvImageCodec
-        $<$<BOOL:${LFS_HAS_CUDA}>:lfs_io_cuda>  # IO-specific CUDA kernels (morton, k-means)
         $<$<BOOL:${LFS_HAS_CUDA}>:lfs_core_cuda> # Core CUDA utilities (lanczos_resize for nvcodec)
         assimp::assimp         # Multi-format mesh import
         lfs_tinyusdz           # USDA parser for flat Gaussian ParticleField interchange
@@ -460,7 +407,6 @@ if(NOT BUILD_PORTABLE)
 endif()
 
 message(STATUS "I/O module configured with SOG support")
-message(STATUS "  IO CUDA library: lfs_io_cuda (image conversion)")
 message(STATUS "  WebP decoder library: ${WEBP_DECODE_LIB}")
 message(STATUS "  Archive library: ${ARCHIVE_LIB}")
 

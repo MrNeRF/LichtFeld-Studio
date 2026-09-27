@@ -4,10 +4,10 @@
 
 #include "eval_mask.hpp"
 
-#include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
+#include "core/shared_image_ops.hpp"
 #include "core/tensor_cuda_interop.hpp"
-#include "io/cuda/image_format_kernels.cuh"
+#include "lfs/training/ops/registry.hpp"
 #include "training/kernels/mask_preprocess.hpp"
 
 #include <stdexcept>
@@ -28,7 +28,6 @@ namespace lfs::training {
             const lfs::core::Camera& camera,
             const MetricsMaskLoadConfig& config) {
             try {
-                const auto stream = lfs::core::getCurrentCUDAStream();
                 auto [img_data, width, height, channels] = lfs::core::load_image_with_alpha(
                     camera.image_path(), config.resize_factor, config.max_width);
 
@@ -56,20 +55,17 @@ namespace lfs::training {
                     lfs::core::TensorShape({H, W}),
                     lfs::core::Device::CUDA, lfs::core::DataType::Float32);
 
-                lfs::io::cuda::launch_uint8_rgba_split_to_uint8_rgb_and_float32_alpha(
-                    gpu_uint8.ptr<uint8_t>(), rgb.ptr<uint8_t>(), mask.ptr<float>(),
-                    H, W, stream);
+                lfs::training::training_ops(lfs::core::default_gpu_backend()).shared_image->rgba_split(gpu_uint8, rgb, mask);
                 gpu_uint8 = lfs::core::Tensor();
 
                 const bool sai = is_segment_and_ignore(config.mask_mode);
                 if (config.invert_masks) {
-                    lfs::io::cuda::launch_mask_invert(mask.ptr<float>(), H, W, stream);
+                    lfs::training::training_ops(lfs::core::default_gpu_backend()).shared_image->mask(mask, lfs::gpu_ops::MaskTransform::Invert, 0.f);
                 }
                 // SegmentAndIgnore must keep authored bands through undistort.
                 // Binary modes still snap before the warp, then re-binarize after.
                 if (!sai && config.mask_threshold > 0.0f) {
-                    lfs::io::cuda::launch_mask_threshold(
-                        mask.ptr<float>(), H, W, config.mask_threshold, stream);
+                    lfs::training::training_ops(lfs::core::default_gpu_backend()).shared_image->mask(mask, lfs::gpu_ops::MaskTransform::Threshold, config.mask_threshold);
                 }
 
                 if (camera.is_undistort_prepared()) {
@@ -78,18 +74,12 @@ namespace lfs::training {
                         static_cast<int>(W), static_cast<int>(H),
                         config.max_width);
                     auto rgb_float = rgb.to(lfs::core::DataType::Float32) / 255.0f;
-                    rgb_float = lfs::core::undistort_image(rgb_float, scaled, stream);
+                    rgb_float = lfs::training::training_ops(lfs::core::default_gpu_backend()).shared_image->undistort(rgb_float, scaled, false);
                     auto rgb_uint8 = lfs::core::Tensor::empty(
                         rgb_float.shape(), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
-                    lfs::io::cuda::launch_float32_chw_to_uint8_chw(
-                        rgb_float.ptr<float>(),
-                        rgb_uint8.ptr<uint8_t>(),
-                        rgb_float.shape()[1],
-                        rgb_float.shape()[2],
-                        rgb_float.shape()[0],
-                        stream);
+                    lfs::training::training_ops(lfs::core::default_gpu_backend()).shared_image->convert(rgb_float, rgb_uint8, lfs::gpu_ops::ImageConversion::F32CHWToU8CHW, rgb_float.shape()[1], rgb_float.shape()[2], rgb_float.shape()[0], {});
                     rgb = std::move(rgb_uint8);
-                    mask = lfs::core::undistort_mask(mask, scaled, stream);
+                    mask = lfs::training::training_ops(lfs::core::default_gpu_backend()).shared_image->undistort(mask, scaled, true);
                 }
 
                 if (sai) {

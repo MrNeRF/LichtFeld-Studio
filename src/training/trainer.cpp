@@ -12,7 +12,6 @@
 #include "core/assert.hpp"
 #include "core/checked_arithmetic.hpp"
 #include "core/checkpoint_format.hpp"
-#include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda_error.hpp"
 #include "core/cuda_error_typed.hpp"
@@ -27,6 +26,7 @@
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
+#include "core/shared_image_ops.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
@@ -36,7 +36,6 @@
 #include "depth_anchor_cache.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "io/cache_image_loader.hpp"
-#include "io/cuda/image_format_kernels.cuh"
 #include "io/filesystem_utils.hpp"
 #include "io/project_container.hpp"
 #include "io/project_document.hpp"
@@ -6675,8 +6674,7 @@ namespace lfs::training {
                                      target_depth.shape()[1] != rendered_depth.shape()[1])) {
                                     const int render_h = static_cast<int>(rendered_depth.shape()[0]);
                                     const int render_w = static_cast<int>(rendered_depth.shape()[1]);
-                                    target_depth = lfs::core::lanczos_resize_grayscale(
-                                        target_depth, render_h, render_w, 2, depth_stream);
+                                    target_depth = training_ops_->shared_image->resize(target_depth, render_h, render_w, lfs::gpu_ops::Resample::LanczosGray, 2);
                                 }
 
                                 const bool depth_shape_matches =
@@ -6788,8 +6786,7 @@ namespace lfs::training {
                                 if (target_normal.ndim() == 3 &&
                                     (target_normal.shape()[1] != rendered_normal.shape()[1] ||
                                      target_normal.shape()[2] != rendered_normal.shape()[2])) {
-                                    target_normal = lfs::core::lanczos_resize_float_chw(
-                                        target_normal, render_h, render_w, 2, normal_stream);
+                                    target_normal = training_ops_->shared_image->resize(target_normal, render_h, render_w, lfs::gpu_ops::Resample::LanczosFloatCHW, 2);
                                 }
 
                                 const bool normal_shape_matches =

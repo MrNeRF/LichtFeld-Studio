@@ -4,6 +4,7 @@
 #pragma once
 
 #include "core/gpu_backend_fwd.hpp"
+#include "core/shared_image_ops.hpp"
 #include "lfs/training/ops/adam.hpp"
 #include "lfs/training/ops/bilateral.hpp"
 #include "lfs/training/ops/extra_loss.hpp"
@@ -54,6 +55,7 @@ namespace lfs::training {
         const ops::GsplatRasterOps* gsplat = nullptr;
         const ops::RefineOps* refine = nullptr;
         const ops::SessionOps* session = nullptr;
+        const ops::SharedImageOps* shared_image = nullptr;
     };
 
     enum class Family {
