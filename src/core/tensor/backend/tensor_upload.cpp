@@ -655,6 +655,8 @@ namespace lfs::core {
         s.device = static_cast<VkDevice>(device);
         s.consumer = static_cast<VkSemaphore>(consumer);
         if (backend == GpuBackend::Vulkan) {
+            // The null device/consumer pair is the session storage timeline.
+            // A private recorder would not compare equal to TensorExecutionTarget::current().
             s.ready = internal::acquire_vulkan_context()->timeline();
             return;
         }
