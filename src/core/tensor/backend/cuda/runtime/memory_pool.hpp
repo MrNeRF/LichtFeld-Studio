@@ -30,6 +30,10 @@
 #include <unordered_set>
 #include <vector>
 
+namespace lfs::core::tensor_ops {
+    LFS_CORE_API bool release_nan_check_thread_buffers() noexcept;
+} // namespace lfs::core::tensor_ops
+
 namespace lfs::core {
 
     static constexpr size_t SLAB_ALLOC_THRESHOLD = 256 * 1024;
@@ -563,6 +567,9 @@ namespace lfs::core {
                 record_trim();
                 return;
             }
+            // The calling thread's finite-check cache owns a live slab block.
+            // Release it before reclaiming empty slabs; later checks recreate it.
+            (void)tensor_ops::release_nan_check_thread_buffers();
             {
                 std::lock_guard<std::mutex> lock(map_mutex_);
                 for (auto& entry : allocation_map_) {
