@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "regularization.hpp"
-#include "lfs/kernels/regularization.cuh" // LibTorch-free CUDA kernels
+#include "lfs/training/ops/registry.hpp"
 #include <format>
 
 namespace lfs::training::losses {
@@ -39,14 +39,7 @@ namespace lfs::training::losses {
             auto loss_tensor = lfs::core::Tensor::empty({1}, lfs::core::Device::GPU);
 
             // Launch LibTorch-free fused kernel with warp reductions
-            lfs::training::kernels::launch_fused_scale_regularization(
-                scaling_raw.ptr<float>(),
-                scaling_raw_grad.ptr<float>(),
-                loss_tensor.ptr<float>(),
-                temp_buffer.ptr<float>(),
-                n,
-                params.weight,
-                nullptr);
+            training_ops(core::default_gpu_backend()).extra_loss->regularize(scaling_raw, scaling_raw_grad, loss_tensor, temp_buffer, lfs::gpu_ops::Regularizer::Scale, params.weight);
 
             // NO .item<float>() - keep on GPU!
             return loss_tensor;
@@ -76,14 +69,8 @@ namespace lfs::training::losses {
             auto temp_buffer = lfs::core::Tensor::empty({num_blocks}, lfs::core::Device::GPU);
             auto loss_tensor = lfs::core::Tensor::empty({1}, lfs::core::Device::GPU);
 
-            lfs::training::kernels::launch_fused_scale_regularization(
-                scaling_raw.ptr<float>(),
-                nullptr,
-                loss_tensor.ptr<float>(),
-                temp_buffer.ptr<float>(),
-                n,
-                params.weight,
-                nullptr);
+            lfs::core::Tensor no_gradient;
+            training_ops(core::default_gpu_backend()).extra_loss->regularize(scaling_raw, no_gradient, loss_tensor, temp_buffer, lfs::gpu_ops::Regularizer::Scale, params.weight);
 
             return loss_tensor;
         } catch (const std::exception& e) {
@@ -122,14 +109,7 @@ namespace lfs::training::losses {
             auto loss_tensor = lfs::core::Tensor::empty({1}, lfs::core::Device::GPU);
 
             // Launch LibTorch-free fused kernel with warp reductions
-            lfs::training::kernels::launch_fused_opacity_regularization(
-                opacity_raw.ptr<float>(),
-                opacity_raw_grad.ptr<float>(),
-                loss_tensor.ptr<float>(),
-                temp_buffer.ptr<float>(),
-                n,
-                params.weight,
-                nullptr);
+            training_ops(core::default_gpu_backend()).extra_loss->regularize(opacity_raw, opacity_raw_grad, loss_tensor, temp_buffer, lfs::gpu_ops::Regularizer::Opacity, params.weight);
 
             // NO .item<float>() - keep on GPU!
             return loss_tensor;
@@ -159,14 +139,8 @@ namespace lfs::training::losses {
             auto temp_buffer = lfs::core::Tensor::empty({num_blocks}, lfs::core::Device::GPU);
             auto loss_tensor = lfs::core::Tensor::empty({1}, lfs::core::Device::GPU);
 
-            lfs::training::kernels::launch_fused_opacity_regularization(
-                opacity_raw.ptr<float>(),
-                nullptr,
-                loss_tensor.ptr<float>(),
-                temp_buffer.ptr<float>(),
-                n,
-                params.weight,
-                nullptr);
+            lfs::core::Tensor no_gradient;
+            training_ops(core::default_gpu_backend()).extra_loss->regularize(opacity_raw, no_gradient, loss_tensor, temp_buffer, lfs::gpu_ops::Regularizer::Opacity, params.weight);
 
             return loss_tensor;
         } catch (const std::exception& e) {

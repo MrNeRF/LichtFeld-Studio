@@ -5,8 +5,10 @@
 
 #include "core/gpu_backend_fwd.hpp"
 #include "lfs/training/ops/adam.hpp"
+#include "lfs/training/ops/extra_loss.hpp"
 #include "lfs/training/ops/geometry.hpp"
 #include "lfs/training/ops/loss.hpp"
+#include "lfs/training/ops/masks.hpp"
 #include "lfs/training/ops/mcmc.hpp"
 #include "lfs/training/ops/morton.hpp"
 #include "lfs/training/ops/mrnf.hpp"
@@ -35,6 +37,8 @@ namespace lfs::training {
         const ops::GeometryLossOps* geometry = nullptr;
         const ops::FastRasterOps* fast = nullptr;
         const ops::MortonOps* morton = nullptr;
+        const ops::MaskOps* masks = nullptr;
+        const ops::ExtraLossOps* extra_loss = nullptr;
     };
 
     enum class Family {

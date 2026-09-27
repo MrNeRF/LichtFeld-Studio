@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "lfs/training/ops/domain_types.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <cuda_runtime.h>
@@ -23,23 +25,6 @@ namespace lfs::training::kernels {
     inline constexpr float kMaskKeepMin = 250.5f / 255.0f;
     inline constexpr float kMaskSegmentMin = 127.5f / 255.0f;
 
-    /// Photometric mask weight modes for the fused preprocess kernel.
-    /// BinaryGt0: weight = (mask > 0)  — Segment / Ignore after binarize
-    /// SegmentAndIgnore: weight = (mask > kMaskKeepMin) — keep only the "keep" band
-    enum class MaskPhotoMode : int {
-        BinaryGt0 = 0,
-        SegmentAndIgnore = 1,
-    };
-
-    /// Opacity-penalty band modes.
-    /// BinaryGt0: bg = 1 - mask_as_float (UInt8/Bool → 0/1; Float32 pass-through)
-    /// SegmentAndIgnore: bg = 1 iff kMaskSegmentMin ≤ mask ≤ kMaskKeepMin
-    /// (the Ignore band is FG for the penalty)
-    enum class MaskOpacityMode : int {
-        BinaryGt0 = 0,
-        SegmentAndIgnore = 1,
-    };
-
     /// Fuse SegmentAndIgnore / Segment / Ignore photometric remapping + optional ROI
     /// into a single float32 [H,W] weight map (allocation-free; writes into `out`).
     ///
@@ -53,7 +38,7 @@ namespace lfs::training::kernels {
         float* out,
         int H,
         int W,
-        MaskPhotoMode mode,
+        lfs::gpu_ops::MaskPhotoMode mode,
         cudaStream_t stream = nullptr);
 
     void launch_fuse_photometric_mask_weight_f32(
@@ -62,7 +47,7 @@ namespace lfs::training::kernels {
         float* out,
         int H,
         int W,
-        MaskPhotoMode mode,
+        lfs::gpu_ops::MaskPhotoMode mode,
         cudaStream_t stream = nullptr);
 
     /// Fuse band remap + (1-mask)^power + opacity penalty loss/grad into one pass.
@@ -81,7 +66,7 @@ namespace lfs::training::kernels {
         int W,
         float power,
         float scale,
-        MaskOpacityMode mode,
+        lfs::gpu_ops::MaskOpacityMode mode,
         cudaStream_t stream = nullptr);
 
     void launch_fuse_mask_opacity_penalty_f32(
@@ -95,7 +80,7 @@ namespace lfs::training::kernels {
         int W,
         float power,
         float scale,
-        MaskOpacityMode mode,
+        lfs::gpu_ops::MaskOpacityMode mode,
         cudaStream_t stream = nullptr);
 
     /// Fuse AlphaConsistent path: abs/sign of (alpha - mask_as_float), optional ROI,
