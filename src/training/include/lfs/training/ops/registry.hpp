@@ -17,6 +17,7 @@
 #include "lfs/training/ops/ppisp.hpp"
 #include "lfs/training/ops/raster.hpp"
 #include "lfs/training/ops/refine.hpp"
+#include "lfs/training/ops/session.hpp"
 #include "lfs/training/ops/sh.hpp"
 #include "lfs/training/ops/training_image.hpp"
 
@@ -52,6 +53,7 @@ namespace lfs::training {
         const ops::ControllerOps* controller = nullptr;
         const ops::GsplatRasterOps* gsplat = nullptr;
         const ops::RefineOps* refine = nullptr;
+        const ops::SessionOps* session = nullptr;
     };
 
     enum class Family {

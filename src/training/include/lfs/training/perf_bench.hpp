@@ -21,8 +21,6 @@
 #include "core/gpu_elapsed.hpp"
 #include "diagnostics/vram_profiler.hpp"
 
-#include <cuda_runtime_api.h>
-
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -31,7 +29,8 @@
 
 namespace lfs::core {
     class MemoryInfo;
-}
+    class TensorWorkQueue;
+} // namespace lfs::core
 
 namespace lfs::training {
 
@@ -73,8 +72,13 @@ namespace lfs::training {
         /// Warmup length for steady-state metrics (default 200).
         [[nodiscard]] static int warmup_iters();
 
-        /// Training stream used for phase cudaEventRecord (lfs.train).
-        void set_timing_stream(cudaStream_t stream);
+        /// Label session queues in GPU traces.
+        static void name_queues(const core::TensorWorkQueue& training,
+                                const core::TensorWorkQueue& callback,
+                                const core::TensorWorkQueue& metrics);
+
+        /// Training queue used for phase timing (lfs.train).
+        void set_timing_queue(const core::TensorWorkQueue& queue);
 
         /// One integer compare when disabled or this iter is not sampled.
         static void phase_mark(PhaseBoundary b, int iter) {
@@ -148,7 +152,7 @@ namespace lfs::training {
 
         static inline int phase_active_iter_ = 0;
 
-        cudaStream_t timing_stream_ = nullptr;
+        void* timing_stream_ = nullptr;
         bool phase_pool_ready_ = false;
         int phase_sample_count_ = 0;
         int phase_current_index_ = -1;

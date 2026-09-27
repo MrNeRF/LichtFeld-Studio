@@ -16,6 +16,7 @@
 #include "lfs/training/ops/photometric_cuda.hpp"
 #include "lfs/training/ops/ppisp_cuda.hpp"
 #include "lfs/training/ops/refine_cuda.hpp"
+#include "lfs/training/ops/session_cuda.hpp"
 #include "lfs/training/ops/sh_cuda.hpp"
 #include "lfs/training/ops/training_image_cuda.hpp"
 
@@ -28,6 +29,8 @@ namespace lfs::training {
         // Families without a table slot still run in the CUDA trainer.
         [[nodiscard]] bool family_available(const TrainingOps& ops, const Family family) {
             switch (family) {
+            case Family::Session:
+                return ops.session != nullptr;
             case Family::Photometric:
                 return ops.photometric != nullptr;
             case Family::Adam:
@@ -88,6 +91,7 @@ namespace lfs::training {
             .controller = &cuda_controller_ops(),
             .gsplat = &cuda_gsplat_ops(),
             .refine = &cuda_refine_ops(),
+            .session = &cuda_session_ops(),
         };
         static const TrainingOps kVulkan{
             .backend = core::GpuBackend::Vulkan,

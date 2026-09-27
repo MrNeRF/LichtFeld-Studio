@@ -89,6 +89,7 @@ set(TRAINING_NEW_SOURCES
     optimizer/scheduler.cpp
     losses/regularization.cpp
     ops/registry.cpp
+    ops/session_cuda.cpp
     ops/requirements.cpp
     ops/photometric_cuda.cpp
     ops/gsplat_cuda.cpp

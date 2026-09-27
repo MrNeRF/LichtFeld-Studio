@@ -86,7 +86,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <cuda_profiler_api.h>
 #include <cuda_runtime.h>
 #include <expected>
 #include <format>
@@ -96,7 +95,6 @@
 #include <mutex>
 #include <numeric>
 #include <nvtx3/nvToolsExt.h>
-#include <nvtx3/nvToolsExtCudaRt.h>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -1866,11 +1864,9 @@ namespace lfs::training {
         // Preserve legacy-default ordering for cold uploads and readbacks.
         training_queue_ = std::make_unique<TensorWorkQueue>(GpuBackend::CUDA, TensorWorkQueue::Mode::LegacyOrdered);
         metrics_queue_ = std::make_unique<TensorWorkQueue>(GpuBackend::CUDA);
-        nvtxNameCudaStreamA(static_cast<cudaStream_t>(training_queue_->native_handle()), "lfs.train");
-        nvtxNameCudaStreamA(static_cast<cudaStream_t>(callback_queue_->native_handle()), "lfs.train.callback");
-        nvtxNameCudaStreamA(static_cast<cudaStream_t>(metrics_queue_->native_handle()), "lfs.metrics");
+        PerfBenchCollector::name_queues(*training_queue_, *callback_queue_, *metrics_queue_);
         createSyncPrimitives();
-        PerfBenchCollector::instance().set_timing_stream(static_cast<cudaStream_t>(training_queue_->native_handle()));
+        PerfBenchCollector::instance().set_timing_queue(*training_queue_);
     }
 
     void Trainer::createSyncPrimitives() {
@@ -5601,7 +5597,7 @@ namespace lfs::training {
 
     namespace {
         // Profiling hooks for perf_campaign/profile.sh via CLI `--profile-window=START:STOP`.
-        // cudaProfilerStart/Stop at [START, STOP); NVTX per-iter ranges while the window
+        // Session profiling at [START, STOP); NVTX per-iter ranges while the window
         // is active (nvtxRange* are no-ops when NVTX is compiled out / unused by nsys).
         struct NvtxIterationGuard {
             bool active = false;
@@ -5624,9 +5620,9 @@ namespace lfs::training {
         const bool profile_window_active =
             prof_start >= 0 && prof_stop > prof_start && iter >= prof_start && iter < prof_stop;
         if (iter == prof_start)
-            cudaProfilerStart();
+            training_ops_->session->profile(true);
         if (iter == prof_stop)
-            cudaProfilerStop();
+            training_ops_->session->profile(false);
         NvtxIterationGuard nvtx_iter_guard;
         if (profile_window_active) {
             char range_name[32];

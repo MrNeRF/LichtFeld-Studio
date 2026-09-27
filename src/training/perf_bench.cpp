@@ -9,6 +9,7 @@
 #include "core/logger.hpp"
 #include "core/pinned_allocator_stats.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_upload.hpp"
 #include "diagnostics/vram_ledger_model.hpp"
 
 #include <algorithm>
@@ -18,6 +19,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <nvtx3/nvToolsExtCudaRt.h>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
@@ -170,8 +172,18 @@ namespace lfs::training {
         destroy_phase_event_pool();
     }
 
-    void PerfBenchCollector::set_timing_stream(const cudaStream_t stream) {
-        timing_stream_ = stream;
+    void PerfBenchCollector::name_queues(const core::TensorWorkQueue& training,
+                                         const core::TensorWorkQueue& callback,
+                                         const core::TensorWorkQueue& metrics) {
+        if (training.backend() == core::GpuBackend::CUDA) {
+            nvtxNameCudaStreamA(static_cast<cudaStream_t>(training.native_handle()), "lfs.train");
+            nvtxNameCudaStreamA(static_cast<cudaStream_t>(callback.native_handle()), "lfs.train.callback");
+            nvtxNameCudaStreamA(static_cast<cudaStream_t>(metrics.native_handle()), "lfs.metrics");
+        }
+    }
+
+    void PerfBenchCollector::set_timing_queue(const core::TensorWorkQueue& queue) {
+        timing_stream_ = queue.native_handle();
     }
 
     void PerfBenchCollector::destroy_phase_event_pool() {
