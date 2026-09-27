@@ -255,8 +255,8 @@ namespace {
         lfs::training::Trainer trainer(scene);
 
         EXPECT_NO_THROW({
-            trainer.beginModelRead(nullptr);
-            trainer.endModelRead(nullptr);
+            trainer.beginModelRead(lfs::core::TensorExecutionTarget::default_queue(lfs::core::GpuBackend::CUDA));
+            trainer.endModelRead(lfs::core::TensorExecutionTarget::default_queue(lfs::core::GpuBackend::CUDA));
         });
     }
 

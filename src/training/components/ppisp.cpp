@@ -4,9 +4,8 @@
 #include "ppisp.hpp"
 #include "config_serialization.hpp"
 #include "core/logger.hpp"
-#include "core/tensor/internal/tensor_serialization.hpp"
 #include "core/tensor_backend.hpp"
-#include "core/tensor_cuda_interop.hpp"
+#include "core/tensor_execution.hpp"
 #include "core/tensor_serialization.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include <algorithm>
@@ -378,7 +377,7 @@ namespace lfs::training {
         const float clamped = std::clamp(exposure_ev, -16.0f, 16.0f); // PPISP_MIN/MAX_EXPOSURE_EV
         override_exposure_.fill_(clamped);
         // The forward kernel resolves a null stream to the current stream.
-        lfs::core::waitForCUDAStream(lfs::core::getCurrentCUDAStream(), override_exposure_.stream());
+        lfs::core::TensorExecutionTarget::current().wait_for(override_exposure_.execution_target());
         return apply_forward(rgb, camera_idx, 0, override_exposure_, override_color_, 1,
                              region);
     }
@@ -447,7 +446,7 @@ namespace lfs::training {
             crf_modified.flatten().slice(0, copy_offset, copy_offset + 12).copy_from(crf_cpu.flatten().slice(0, copy_offset, copy_offset + 12));
         }
 
-        lfs::core::waitForCUDAStream(lfs::core::getCurrentCUDAStream(), override_exposure_.stream());
+        lfs::core::TensorExecutionTarget::current().wait_for(override_exposure_.execution_target());
         training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->forward({override_exposure_, vignetting_modified, override_color_, crf_modified}, rgb, output, {region.y_offset, full_h, num_cameras_, 1, camera_idx, 0});
         return output;
     }

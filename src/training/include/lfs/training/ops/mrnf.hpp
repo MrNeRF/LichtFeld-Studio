@@ -97,6 +97,9 @@ namespace lfs::gpu_ops {
 
         float (*sorted_median)(In values);
         void (*starvation_weights)(Out weights, In visibility, float median);
+        size_t (*compact_bool_indices)(In mask, Out indices, size_t count);
+        void (*prune_bounds)(In means, In scale_max, Out mask, std::array<float, 3> center, float maximum, float log_maximum);
+        void (*replace_parent_weights)(In opacity, In visibility, In active, In trainable, In edge, Out weights);
     };
 
 } // namespace lfs::gpu_ops

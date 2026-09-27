@@ -169,8 +169,8 @@
     ],
     "training": [
       "src/training/depth_anchor/depth_anchor_cache.cpp:401",
-      "src/training/include/lfs/cuda_scratch.hpp:36",
-      "src/training/include/lfs/cuda_scratch.hpp:43",
+      "src/training/kernels/cuda_scratch.hpp:36",
+      "src/training/kernels/cuda_scratch.hpp:43",
       "src/training/rasterization/fastgs/rasterization/src/rasterization_api.cu:414",
       "src/training/rasterization/fastgs/rasterization/src/rasterization_api.cu:540",
       "src/training/rasterization/fastgs/rasterization/src/rasterization_api.cu:680",

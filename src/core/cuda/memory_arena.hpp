@@ -294,6 +294,8 @@ namespace lfs::core {
         // holds the arena frame and wants the exclusive lock: the reader's
         // begin_frame bails (throws), the metric is skipped, the lock releases.
         // Training threads never set this, so their acquisition stays blocking.
+        static uint32_t set_begin_frame_timeout(uint32_t timeout_ms);
+
         class ScopedBeginFrameTimeout {
         public:
             explicit ScopedBeginFrameTimeout(uint32_t timeout_ms);

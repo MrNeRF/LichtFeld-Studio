@@ -15,8 +15,8 @@
 #include "core/splat_data.hpp"
 #include "core/tensor_backend.hpp"
 #include "eval_mask.hpp"
-#include "lfs/training/ops/fast_cuda.hpp"
-#include "lfs/training/ops/gsplat_cuda.hpp"
+#include "lfs/training/ops/fast_services.hpp"
+#include "lfs/training/ops/gsplat_services.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include <algorithm>
 #include <cassert>
@@ -34,8 +34,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-
-#include <cuda_runtime.h>
 
 namespace lfs::training {
 
@@ -913,7 +911,7 @@ namespace lfs::training {
                                   _lpips_metric->tile_size_for(image_height, image_width), required, free_bytes);
                     }
                     if (lpips_preflight_ok) {
-                        const cudaStream_t lpips_stream = lfs::core::getCurrentCUDAStream();
+                        const lfs::core::TensorExecutionTarget lpips_stream = lfs::core::TensorExecutionTarget::current();
                         const bool timed_lpips = lpips_timer.mark(0, lpips_stream);
                         auto value = _lpips_metric->forward(
                             pred_lpips, target_lpips,

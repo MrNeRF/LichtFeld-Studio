@@ -250,13 +250,13 @@ namespace lfs::training {
 
         // GPU-side model-read handshake. Call both under a shared lock on
         // getRenderMutex(), bracketing every GPU read of the live model enqueued
-        // on reader_stream: beginModelRead orders the reads after the last
+        // on reader_queue: beginModelRead orders the reads after the last
         // consistent parameter state; endModelRead records the reads so the next
         // optimizer step waits for them (GPU-side, no CPU blocking).
-        void beginModelRead(void* reader_stream);
-        void endModelRead(void* reader_stream);
+        void beginModelRead(lfs::core::TensorExecutionTarget reader_queue);
+        void endModelRead(lfs::core::TensorExecutionTarget reader_queue);
 
-        void* trainingStream() const { return training_queue_ ? training_queue_->native_handle() : nullptr; }
+        lfs::core::TensorExecutionTarget trainingQueue() const { return training_queue_ ? lfs::core::TensorExecutionTarget(*training_queue_) : lfs::core::TensorExecutionTarget::default_queue(lfs::core::GpuBackend::CUDA); }
 
         // Reverse edge for the zero-copy viewport: the viewer's render-complete
         // timeline imported into CUDA, plus the latest timeline value covering
@@ -957,7 +957,7 @@ namespace lfs::training {
         // and after it has joined (drain) — no lock needed.
         std::vector<lfs::core::TensorFence> orphaned_sidecar_events_;
 
-        void createCudaResources();
+        void createGpuResources();
         void createSyncPrimitives();
         void destroySyncPrimitives();
         void recordParamsReady();

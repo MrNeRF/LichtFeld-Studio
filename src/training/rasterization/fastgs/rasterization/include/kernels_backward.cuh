@@ -7,9 +7,9 @@
 #include "buffer_utils.h"
 #include "helper_math.h"
 #include "kernel_utils.cuh"
-#include "lfs/core/warp_reduce.cuh"
 #include "lfs/training/mean_step_scale.cuh"
 #include "rasterization_config.h"
+#include "training/kernels/warp_reduce.cuh"
 #include "utils.h"
 #include <cooperative_groups.h>
 #include <cstdint>

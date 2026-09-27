@@ -33,7 +33,7 @@ set(LFS_TRAINING_KERNEL_SOURCES
     kernels/roi_weight_map.cu
     kernels/image_kernels.cu
     kernels/mask_preprocess.cu
-    components/sparsity_optimizer_kernels.cu
+    kernels/sparsity_optimizer_kernels.cu
 )
 
 # Create CUDA kernels library
@@ -111,8 +111,8 @@ set(TRAINING_NEW_SOURCES
     strategies/mrnf.cpp
     strategies/strategy_factory.cpp
     strategies/improved_gs_plus.cpp
-    rasterization/fast_rasterizer.cpp
-    rasterization/gsplat_rasterizer.cpp
+    rasterization/fast_rasterizer_cuda.cpp
+    rasterization/gsplat_rasterizer_cuda.cpp
     components/config_serialization.cpp
     components/bilateral_grid.cpp
     components/ppisp.cpp

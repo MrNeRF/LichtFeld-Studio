@@ -4,7 +4,7 @@
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "depth_loss.hpp"
-#include "lfs/core/warp_reduce.cuh"
+#include "training/kernels/warp_reduce.cuh"
 
 #include <algorithm>
 #include <cmath>

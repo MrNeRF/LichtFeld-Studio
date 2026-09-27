@@ -5,8 +5,8 @@
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
 #include "densification_kernels.hpp"
-#include "lfs/cuda_scratch.hpp"
 #include "lfs/training/screen_share.cuh"
+#include "training/kernels/cuda_scratch.hpp"
 #include <algorithm>
 #include <cub/cub.cuh>
 #include <limits>

@@ -8,7 +8,7 @@
 #include "core/sh_value_quant_kernels.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor_cuda_interop.hpp"
-#include "lfs/cuda_scratch.hpp"
+#include "training/kernels/cuda_scratch.hpp"
 
 #include <cstdint>
 #include <stdexcept>
@@ -255,6 +255,24 @@ namespace lfs::training {
             }
         }
 
+        [[nodiscard]] Tensor concatenate_into_arena(
+            std::span<const Tensor> parts, char* data, const core::TensorShape shape,
+            const core::DataType dtype, core::TensorExecutionTarget target) {
+            const auto stream = static_cast<cudaStream_t>(target.native_handle());
+            Tensor result = Tensor::from_blob(data, shape, core::Device::CUDA, dtype, stream);
+            std::size_t offset = 0;
+            for (const Tensor& part : parts) {
+                assert(part.is_contiguous() && part.device() == core::Device::CUDA &&
+                       part.dtype() == dtype);
+                core::waitForCUDAStream(stream, part.stream());
+                LFS_CUDA_CHECK(cudaMemcpyAsync(data + offset, part.data_ptr(), part.bytes(),
+                                               cudaMemcpyDeviceToDevice, stream));
+                offset += part.bytes();
+            }
+            assert(offset == result.bytes());
+            return result;
+        }
+
         const lfs::gpu_ops::ShOps kCudaShOps{
             .create_run_scratch = create_run_scratch,
             .encode_q16 = encode_q16,
@@ -269,6 +287,7 @@ namespace lfs::training {
             .append_canonical = append_canonical,
             .scatter_canonical = scatter_canonical,
             .fill_bytes = fill_bytes,
+            .concatenate_into_arena = concatenate_into_arena,
         };
 
     } // namespace

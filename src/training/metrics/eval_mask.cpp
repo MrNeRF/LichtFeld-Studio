@@ -6,7 +6,6 @@
 
 #include "core/image_io.hpp"
 #include "core/shared_image_ops.hpp"
-#include "core/tensor_cuda_interop.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include "training/kernels/mask_preprocess.hpp"
 
@@ -45,15 +44,15 @@ namespace lfs::training {
                     img_data, lfs::core::TensorShape({H, W, 4}),
                     lfs::core::Device::CPU, lfs::core::DataType::UInt8);
                 // The implicit transfer stream overload completes the upload before returning.
-                auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
+                auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::GPU);
                 lfs::core::free_image(img_data);
 
                 auto rgb = lfs::core::Tensor::zeros(
                     lfs::core::TensorShape({3, H, W}),
-                    lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                    lfs::core::Device::GPU, lfs::core::DataType::UInt8);
                 auto mask = lfs::core::Tensor::zeros(
                     lfs::core::TensorShape({H, W}),
-                    lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+                    lfs::core::Device::GPU, lfs::core::DataType::Float32);
 
                 lfs::training::training_ops(lfs::core::default_gpu_backend()).shared_image->rgba_split(gpu_uint8, rgb, mask);
                 gpu_uint8 = lfs::core::Tensor();

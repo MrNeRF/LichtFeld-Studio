@@ -4,7 +4,6 @@
 #include "config_serialization.hpp"
 #include "core/gpu_backend_fwd.hpp"
 #include "core/logger.hpp"
-#include "core/tensor/internal/tensor_serialization.hpp"
 #include "core/tensor_serialization.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include "ppisp_controller_pool.hpp"

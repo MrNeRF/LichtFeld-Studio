@@ -3,7 +3,7 @@
 
 #include "lfs/training/ops/gsplat_cuda.hpp"
 #include "optimizer/adam_optimizer.hpp"
-#include "rasterization/gsplat_rasterizer.hpp"
+#include "rasterization/gsplat_rasterizer_cuda.hpp"
 
 namespace lfs::training {
     lfs::gpu_ops::GsplatGradients gsplat_gradients(AdamOptimizer& optimizer) {

@@ -5,9 +5,9 @@
 #include "core/cuda_error.hpp"
 #include "core/tensor/backend/cuda/kernels/tensor_generic_ops.cuh"
 #include "densification_kernels.hpp"
-#include "lfs/cuda_scratch.hpp"
 #include "lfs/training/refine_scratch.hpp"
 #include "mrnf_kernels.hpp"
+#include "training/kernels/cuda_scratch.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cub/cub.cuh>

@@ -6,8 +6,7 @@
 
 #include "core/igs_failure_diagnostics.hpp"
 #include "core/logger.hpp"
-#include "core/tensor/internal/tensor_serialization.hpp"
-#include "core/tensor_cuda_interop.hpp"
+#include "core/tensor_execution.hpp"
 #include "core/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "lfs/training/morton_reorder.hpp"
@@ -429,7 +428,7 @@ namespace lfs::training {
                                 auto idx_i32 = sampled_idxs.dtype() == lfs::core::DataType::Int32
                                                    ? sampled_idxs
                                                    : sampled_idxs.to(lfs::core::DataType::Int32);
-                                const auto stream = lfs::core::getCurrentCUDAStream();
+                                const auto stream = lfs::core::TensorExecutionTarget::current();
                                 idx_i32.sync_to_stream(stream);
                                 state->grad.set_stream(stream);
                                 training_sh_ops().zero_rows(state->grad, idx_i32, layout_rest_u32);
@@ -590,7 +589,7 @@ namespace lfs::training {
             return;
         }
 
-        const auto stream = lfs::core::getCurrentCUDAStream();
+        const auto stream = lfs::core::TensorExecutionTarget::current();
         _edge_view_scores.set_stream(stream);
         training_ops(lfs::core::default_gpu_backend()).refine->normalize_positive_median(_edge_view_scores);
         zero_frozen_scores_inplace(*_splat_data, _edge_view_scores);
@@ -878,7 +877,7 @@ namespace lfs::training {
                         auto idx_i32 = prune_indices.dtype() == lfs::core::DataType::Int32
                                            ? prune_indices
                                            : prune_indices.to(lfs::core::DataType::Int32);
-                        const auto stream = lfs::core::getCurrentCUDAStream();
+                        const auto stream = lfs::core::TensorExecutionTarget::current();
                         idx_i32.sync_to_stream(stream);
                         state->grad.set_stream(stream);
                         training_sh_ops().zero_rows(state->grad, idx_i32, layout_rest);
@@ -992,7 +991,7 @@ namespace lfs::training {
                                 auto idx_i32 = target_indices.dtype() == lfs::core::DataType::Int32
                                                    ? target_indices
                                                    : target_indices.to(lfs::core::DataType::Int32);
-                                const auto stream = lfs::core::getCurrentCUDAStream();
+                                const auto stream = lfs::core::TensorExecutionTarget::current();
                                 idx_i32.sync_to_stream(stream);
                                 state->grad.set_stream(stream);
                                 training_sh_ops().zero_rows(state->grad, idx_i32, layout_rest);

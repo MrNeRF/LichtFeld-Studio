@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/cuda_error.hpp"
-#include "lfs/kernels/ppisp_controller.cuh"
+#include "training/kernels/ppisp_controller.cuh"
 namespace lfs::training::kernels {
     constexpr int BLOCK_SIZE = 256;
     constexpr int TILE_SIZE = 16;

@@ -3,9 +3,9 @@
 
 #include "lfs/training/ops/photometric_cuda.hpp"
 
-#include "lfs/kernels/l1_loss.cuh"
-#include "lfs/kernels/loss_tensor_contract.hpp"
 #include "lfs/kernels/ssim.cuh"
+#include "training/kernels/l1_loss.cuh"
+#include "training/kernels/loss_tensor_contract.hpp"
 
 #include <algorithm>
 #include <cstdint>

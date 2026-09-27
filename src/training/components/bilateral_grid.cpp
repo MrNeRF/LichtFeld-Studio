@@ -7,10 +7,8 @@
 
 #include "bilateral_grid.hpp"
 #include "config_serialization.hpp"
-#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
-#include "core/tensor/internal/tensor_serialization.hpp"
-#include "core/tensor_cuda_interop.hpp"
+#include "core/tensor_execution.hpp"
 #include "core/tensor_serialization.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include <algorithm>
@@ -20,7 +18,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <nvtx3/nvToolsExt.h>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -326,7 +323,7 @@ namespace lfs::training {
 
     lfs::core::Tensor BilateralGrid::tv_loss_gpu() {
         assert(static_cast<int>(grids_.shape()[1]) == channels_);
-        auto total = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+        auto total = lfs::core::Tensor::zeros({1}, lfs::core::Device::GPU);
         for (int i = 0; i < num_images_; ++i) {
             total = total.add(tv_loss_gpu(i));
         }
@@ -390,17 +387,17 @@ namespace lfs::training {
     }
 
     void BilateralGrid::step_image(int image_idx, float tv_weight) {
-        nvtxRangePush("bilateral_grid_tv_backward");
+        lfs::core::push_gpu_range("bilateral_grid_tv_backward");
         tv_backward(tv_weight, image_idx);
-        nvtxRangePop();
+        lfs::core::pop_gpu_range();
 
         const auto mean_old = channel_mean_of_image(image_idx);
 
-        nvtxRangePush("bilateral_grid_adam");
+        lfs::core::push_gpu_range("bilateral_grid_adam");
         optimizer_step(image_idx);
-        nvtxRangePop();
+        lfs::core::pop_gpu_range();
 
-        nvtxRangePush("bilateral_grid_project_mean");
+        lfs::core::push_gpu_range("bilateral_grid_project_mean");
         if (parameterization_ == BilateralGridParameterization::ExposureChroma) {
             project_image(image_idx);
         } else {
@@ -410,7 +407,7 @@ namespace lfs::training {
             const float inv_n_spatial = 1.0f / (static_cast<float>(num_images_) * spatial);
             training_ops(lfs::core::default_gpu_backend()).bilateral->update_offset(channel_sum_, shared_offset_, identity_mean_, mean_old, mean_new, spatial, inv_n_spatial);
         }
-        nvtxRangePop();
+        lfs::core::pop_gpu_range();
 
         zero_grad();
         scheduler_step();
@@ -450,7 +447,7 @@ namespace lfs::training {
     void BilateralGrid::rebuild_projection_state() {
         flush_resident();
         const int dataset_axes[] = {0, 2, 3, 4};
-        const auto mean = grids_.mean(std::span<const int>(dataset_axes), false).cuda();
+        const auto mean = grids_.mean(std::span<const int>(dataset_axes), false).gpu();
         const float spatial = static_cast<float>(grid_guidance_ * grid_height_ * grid_width_);
         // Sum over every image's cells: N * L * H * W, not the per-image spatial count.
         const float n_spatial = spatial * static_cast<float>(num_images_);
@@ -470,9 +467,9 @@ namespace lfs::training {
             static_cast<size_t>(kResidentSlots), static_cast<size_t>(channels_),
             static_cast<size_t>(grid_guidance_), static_cast<size_t>(grid_height_),
             static_cast<size_t>(grid_width_)};
-        resident_grids_ = lfs::core::Tensor::empty(shape, lfs::core::Device::CUDA);
-        resident_exp_avg_ = lfs::core::Tensor::empty(shape, lfs::core::Device::CUDA);
-        resident_exp_avg_sq_ = lfs::core::Tensor::empty(shape, lfs::core::Device::CUDA);
+        resident_grids_ = lfs::core::Tensor::empty(shape, lfs::core::Device::GPU);
+        resident_exp_avg_ = lfs::core::Tensor::empty(shape, lfs::core::Device::GPU);
+        resident_exp_avg_sq_ = lfs::core::Tensor::empty(shape, lfs::core::Device::GPU);
         slots_ = {};
         slot_clock_ = 0;
     }
@@ -495,9 +492,9 @@ namespace lfs::training {
         }
         write_back(static_cast<int>(victim));
 
-        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+        const lfs::core::TensorExecutionTarget stream = lfs::core::TensorExecutionTarget::current();
         if (copy_stream_ && *copy_stream_ != stream) {
-            LFS_CUDA_CHECK(cudaStreamSynchronize(*copy_stream_));
+            copy_stream_->wait();
         }
         copy_stream_ = stream;
         const size_t elements = slice_elements();
@@ -508,9 +505,7 @@ namespace lfs::training {
             {&exp_avg_sq_, &resident_exp_avg_sq_},
         }};
         for (const auto& [host, device] : tensors) {
-            LFS_CUDA_CHECK(cudaMemcpyAsync(device_slice(*device, static_cast<int>(victim)),
-                                           host->ptr<float>() + host_offset, elements * sizeof(float),
-                                           cudaMemcpyHostToDevice, stream));
+            training_ops(lfs::core::default_gpu_backend()).bilateral->upload_slice(*host, *device, host_offset, victim * elements, elements);
         }
         slots_[victim] = {.image = image_idx, .dirty = false, .last_use = ++slot_clock_};
         return static_cast<int>(victim);
@@ -521,9 +516,9 @@ namespace lfs::training {
         if (state.image < 0 || !state.dirty) {
             return;
         }
-        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+        const lfs::core::TensorExecutionTarget stream = lfs::core::TensorExecutionTarget::current();
         if (copy_stream_ && *copy_stream_ != stream) {
-            LFS_CUDA_CHECK(cudaStreamSynchronize(*copy_stream_));
+            copy_stream_->wait();
         }
         copy_stream_ = stream;
         auto& self = const_cast<BilateralGrid&>(*this);
@@ -535,9 +530,7 @@ namespace lfs::training {
             {&self.exp_avg_sq_, &self.resident_exp_avg_sq_},
         }};
         for (const auto& [host, device] : tensors) {
-            LFS_CUDA_CHECK(cudaMemcpyAsync(host->ptr<float>() + host_offset,
-                                           device_slice(*device, slot), elements * sizeof(float),
-                                           cudaMemcpyDeviceToHost, stream));
+            training_ops(lfs::core::default_gpu_backend()).bilateral->download_slice(*host, *device, host_offset, static_cast<size_t>(slot) * elements, elements);
         }
         state.dirty = false;
     }
@@ -547,7 +540,7 @@ namespace lfs::training {
             write_back(s);
         }
         if (copy_stream_) {
-            LFS_CUDA_CHECK(cudaStreamSynchronize(*copy_stream_));
+            copy_stream_->wait();
         }
     }
 

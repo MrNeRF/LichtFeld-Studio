@@ -2,7 +2,6 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "fast_rasterizer.hpp"
 #include "core/cuda/memory_arena.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -11,6 +10,7 @@
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "fast_rasterizer.hpp"
 #include "lfs/training/ops/fast_cuda.hpp"
 #include "lfs/training/perf_bench.hpp"
 #include "lfs/training/sh_value_storage.hpp"

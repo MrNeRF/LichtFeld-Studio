@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include "core/tensor_execution.hpp"
+#include <optional>
 
 /**
  * @file perf_bench.hpp
@@ -152,7 +154,7 @@ namespace lfs::training {
 
         static inline int phase_active_iter_ = 0;
 
-        void* timing_stream_ = nullptr;
+        std::optional<core::TensorExecutionTarget> timing_queue_;
         bool phase_pool_ready_ = false;
         int phase_sample_count_ = 0;
         int phase_current_index_ = -1;

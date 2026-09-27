@@ -3428,7 +3428,7 @@ TEST_F(UnicodePathTest, TensorDumpDiagnostic) {
     }
 }
 
-// Test 62: Fast rasterizer crash dump (fast_rasterizer.cpp fix)
+// Test 62: Fast rasterizer crash dump (fast_rasterizer_cuda.cpp fix)
 TEST_F(UnicodePathTest, RasterizerCrashDump) {
     const auto crash_dir = test_root_ / "クラッシュダンプ_crash_dump_崩溃转储";
     fs::create_directories(crash_dir);

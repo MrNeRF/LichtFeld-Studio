@@ -741,7 +741,7 @@ TEST_F(MortonReorderCudaTest, Q16ChunkedPermuteMatchesOldRoundtripBitIdentical) 
     ASSERT_TRUE(splat_old.shN_value_quantized());
 
     const cudaStream_t stream = getCurrentCUDAStream();
-    morton::permute_shN(splat_new, perm, stream);
+    morton::permute_shN(splat_new, perm, lfs::core::TensorExecutionTarget::current());
     permute_shN_old_fp32_roundtrip(splat_old, perm, stream);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
@@ -873,7 +873,7 @@ TEST_F(MortonReorderCudaTest, ArenaScratchMatchesAllocationFallbackBytewise) {
     ASSERT_GE(arena.get_memory_info().arena_capacity, grown_bytes);
 
     const auto shN_moments_before = device_bytes(shN_state->exp_avg);
-    const auto arena_result = morton::apply_morton_reorder(arena_splat, &arena_opt, stream);
+    const auto arena_result = morton::apply_morton_reorder(arena_splat, &arena_opt, lfs::core::TensorExecutionTarget::current());
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     EXPECT_NE(device_bytes(arena_opt.get_state(ParamType::ShN)->exp_avg), shN_moments_before)
         << "SH Adam moments were not permuted";
@@ -883,7 +883,7 @@ TEST_F(MortonReorderCudaTest, ArenaScratchMatchesAllocationFallbackBytewise) {
     EXPECT_LT(arena_info.current_usage, grown_bytes) << "reorder did not borrow the arena";
 
     const auto held = arena.begin_frame(stream);
-    const auto fallback_result = morton::apply_morton_reorder(fallback_splat, &fallback_opt, stream);
+    const auto fallback_result = morton::apply_morton_reorder(fallback_splat, &fallback_opt, lfs::core::TensorExecutionTarget::current());
     arena.end_frame(held, stream);
     ASSERT_TRUE(fallback_result.applied);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);

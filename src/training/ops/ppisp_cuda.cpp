@@ -5,8 +5,8 @@
 #include "core/cuda_error.hpp"
 #include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "core/tensor_cuda_interop.hpp"
-#include "lfs/kernels/ppisp.cuh"
-#include "lfs/kernels/ppisp_controller.cuh"
+#include "training/kernels/ppisp.cuh"
+#include "training/kernels/ppisp_controller.cuh"
 
 namespace lfs::training {
     namespace {

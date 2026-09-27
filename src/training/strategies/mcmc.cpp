@@ -3,10 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "mcmc.hpp"
-#include "core/cuda/sh_layout.cuh"
-#include "core/cuda_error.hpp"
 #include "core/gpu_device_runtime.hpp"
 #include "core/logger.hpp"
+#include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"

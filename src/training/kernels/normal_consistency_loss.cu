@@ -2,9 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/cuda_error.hpp"
-#include "lfs/core/warp_reduce.cuh"
 #include "normal_consistency_loss.hpp"
 #include "normal_loss.hpp"
+#include "training/kernels/warp_reduce.cuh"
 
 #include <algorithm>
 

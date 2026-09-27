@@ -3,8 +3,8 @@
 
 #include "core/parameters.hpp"
 #include "cuda_backend_test.hpp"
-#include "lfs/kernels/bilateral_grid.cuh"
 #include "lfs/training/ops/registry.hpp"
+#include "training/kernels/bilateral_grid.cuh"
 
 #include <cstdint>
 #include <vector>

@@ -6,13 +6,11 @@
 #include "core/alloc_counter.hpp"
 #include "core/assert.hpp"
 #include "core/camera.hpp"
-#include "core/cuda_error.hpp"
 #include "core/gpu_device_runtime.hpp"
 #include "core/logger.hpp"
 #include "core/sh_value_quant.hpp"
-#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "core/tensor_completion.hpp"
-#include "core/tensor_cuda_interop.hpp"
+#include "core/tensor_execution.hpp"
 #include "core/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "lfs/training/mean_step_scale.cuh"
@@ -27,7 +25,6 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <cuda_runtime.h>
 #include <limits>
 #include <numeric>
 #include <random>
@@ -56,15 +53,13 @@ namespace lfs::training {
             const lfs::core::Tensor& mask, size_t count) {
             using namespace lfs::core;
             LFS_ASSERT_MSG(mask.ndim() == 1 && mask.is_contiguous() &&
-                               mask.device() == Device::CUDA && mask.dtype() == DataType::Bool,
+                               mask.device() == Device::GPU && mask.dtype() == DataType::Bool,
                            "MRNF index compaction requires a contiguous CUDA bool vector");
             LFS_ASSERT_MSG(count <= mask.numel(), "MRNF index count exceeds mask length");
-            auto indices = Tensor::empty({count}, Device::CUDA, DataType::Int64);
-            indices.set_stream(mask.stream());
+            auto indices = Tensor::empty({count}, Device::GPU, DataType::Int64);
+            indices.set_stream(mask.execution_target());
             if (count != 0) {
-                const size_t actual = tensor_ops::launch_nonzero_bool(
-                    mask.ptr<unsigned char>(), indices.ptr<int64_t>(), mask.numel(), count,
-                    mask.stream());
+                const size_t actual = training_ops(default_gpu_backend()).mrnf->compact_bool_indices(mask, indices, count);
                 if (actual != count)
                     throw std::runtime_error("MRNF index compaction count mismatch");
             }
@@ -112,7 +107,7 @@ namespace lfs::training {
         }
 
         void ensure_cuda_float_exact(lfs::core::Tensor& tensor, const lfs::core::TensorShape& shape) {
-            if (tensor.is_valid() && tensor.device() == lfs::core::Device::CUDA &&
+            if (tensor.is_valid() && tensor.device() == lfs::core::Device::GPU &&
                 tensor.dtype() == lfs::core::DataType::Float32 && tensor.shape() == shape) {
                 return;
             }
@@ -120,7 +115,7 @@ namespace lfs::training {
         }
 
         [[nodiscard]] lfs::core::Tensor zero_splat_vector(const size_t n, const lfs::core::Device device) {
-            if (device != lfs::core::Device::CUDA) {
+            if (device != lfs::core::Device::GPU) {
                 return lfs::core::Tensor::zeros({n}, device);
             }
             auto tensor = lfs::core::Tensor::empty_exact({n}, lfs::core::DataType::Float32);
@@ -361,7 +356,7 @@ namespace lfs::training {
                         auto idx_i32 = indices.dtype() == lfs::core::DataType::Int32
                                            ? indices
                                            : indices.to(lfs::core::DataType::Int32);
-                        const auto stream = lfs::core::getCurrentCUDAStream();
+                        const auto stream = lfs::core::TensorExecutionTarget::current();
                         idx_i32.sync_to_stream(stream);
                         state->grad.set_stream(stream);
                         training_sh_ops().zero_rows(state->grad, idx_i32, layout_rest);
@@ -1309,9 +1304,7 @@ namespace lfs::training {
                     ? _bounds.max_extent * 100.0f
                     : std::numeric_limits<float>::max();
             const float log_max_allowed = std::log(max_allowed);
-            mrnf_strategy::launch_prune_bounds_or(
-                means.ptr<float>(), scale_max.ptr<float>(), prune_mask.ptr<bool>(),
-                n, _bounds.center, max_allowed, log_max_allowed);
+            training_ops(lfs::core::default_gpu_backend()).mrnf->prune_bounds(means, scale_max, prune_mask, {_bounds.center[0], _bounds.center[1], _bounds.center[2]}, max_allowed, log_max_allowed);
         }
 
         if (_free_mask.is_valid() && n > 0) {
@@ -2229,7 +2222,7 @@ namespace lfs::training {
         // Local to the refine event so the staging storage returns to the CUDA
         // pool before the next phase; no later refine reads the prior children.
         DensifyChildWorkspace densify_ws;
-        densify_ws.ensure(std::min(K, chunk_rows), sh_rest, use_shN, /*sh0_flat_layout=*/false, Device::CUDA);
+        densify_ws.ensure(std::min(K, chunk_rows), sh_rest, use_shN, /*sh0_flat_layout=*/false, Device::GPU);
         _densify_child_required_peak_bytes = std::max(
             _densify_child_required_peak_bytes, densify_ws.required_bytes());
         _densify_child_allocated_peak_bytes = std::max(
@@ -2307,12 +2300,7 @@ namespace lfs::training {
         assert(!trainable_mask.is_valid() || (trainable_mask.ndim() == 1 && trainable_mask.numel() == n));
         assert(!edge_guidance.is_valid() || (edge_guidance.ndim() == 1 && edge_guidance.numel() == n));
         auto w_view = _densify_n_scratch.f32_a_view(n);
-        mrnf_strategy::launch_replace_parent_weights(
-            opacities.ptr<float>(), visibility.ptr<float>(),
-            active_mask.is_valid() ? active_mask.ptr<bool>() : nullptr,
-            trainable_mask.is_valid() ? trainable_mask.ptr<bool>() : nullptr,
-            edge_guidance.is_valid() ? edge_guidance.ptr<float>() : nullptr,
-            w_view.ptr<float>(), n);
+        training_ops(default_gpu_backend()).mrnf->replace_parent_weights(opacities, visibility, active_mask, trainable_mask, edge_guidance, w_view);
         return w_view;
     }
 
@@ -2359,7 +2347,7 @@ namespace lfs::training {
             const size_t cap_floats = cap_rows > 0 ? lfs::core::sh_swizzled_float_count(cap_rows, layout_rest_u32)
                                                    : lfs::core::sh_swizzled_float_count(new_size, layout_rest_u32);
             const size_t logical_floats = lfs::core::sh_swizzled_float_count(new_size, layout_rest_u32);
-            const auto stream = getCurrentCUDAStream();
+            const auto stream = lfs::core::TensorExecutionTarget::current();
             t.sync_to_stream(stream);
             idx_i32.sync_to_stream(stream);
             auto fresh = Tensor::zeros_direct(TensorShape({logical_floats}), cap_floats, t.device(), t.dtype());

@@ -89,6 +89,8 @@ namespace lfs::training {
 
     // Throws the missing-family message when this backend has no Sh table.
     const ops::ShOps& training_sh_ops();
+    const ops::SessionOps& training_session_ops();
+    const ops::MortonOps& training_morton_ops();
 
     // Called after configuration defaults and input-dependent options are resolved.
     // input_dependencies covers the selected loader and preprocessing path.

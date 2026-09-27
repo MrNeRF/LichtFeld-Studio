@@ -181,7 +181,7 @@ TEST_F(FastOpsRaster, ZeroGradientLeavesParametersUnchanged) {
         ops, saved, *camera_, *splat_, bg_, 0, 0, 0, 0, false, {}, false, true, output);
     ASSERT_EQ(forward.code, lfs::gpu_ops::RasterResult::Code::Success);
     auto grad = Tensor::zeros_like(output.image);
-    const auto prepared = ops_opt.prepare_fastgs_fused_adam(1, lfs::core::getCurrentCUDAStream());
+    const auto prepared = ops_opt.prepare_fastgs_fused_adam(1, lfs::core::TensorExecutionTarget::current());
     Tensor none;
     ops.backward(
         saved,

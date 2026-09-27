@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "lfs/kernels/loss_tensor_contract.hpp"
+#include "training/kernels/loss_tensor_contract.hpp"
 
 #include <format>
 

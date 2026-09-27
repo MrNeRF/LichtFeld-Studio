@@ -71,6 +71,8 @@ namespace lfs::gpu_ops {
     };
 
     struct AdamOps {
+        void (*validate_far_mask)(const bool* pointer);
+
         // One update over every present step. A step whose parameter binding is
         // invalid is absent.
         void (*step_batch)(

@@ -6,10 +6,6 @@
 
 #include <cmath>
 
-#ifdef __CUDACC__
-#include <cuda_runtime.h>
-#endif
-
 namespace lfs::training {
 
     // Dimensionless angular / screen-share of a 3D Gaussian. Saturates toward 1

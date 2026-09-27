@@ -2,7 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "gsplat_rasterizer.hpp"
+#include "gsplat_rasterizer_cuda.hpp"
 #include "core/crash_handler.hpp"
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda_error.hpp"

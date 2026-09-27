@@ -4,7 +4,7 @@
 #include "core/parameters.hpp"
 #include "cuda_backend_test.hpp"
 #include "lfs/training/ops/registry.hpp"
-#include "training/rasterization/gsplat_rasterizer.hpp"
+#include "training/rasterization/gsplat_rasterizer_cuda.hpp"
 
 #include <array>
 #include <cstring>

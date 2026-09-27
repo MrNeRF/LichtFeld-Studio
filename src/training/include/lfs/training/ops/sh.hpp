@@ -67,6 +67,8 @@ namespace lfs::gpu_ops {
         void (*scatter_canonical)(In canonical, In indices, Out destination, const ShRowsParams&);
 
         void (*fill_bytes)(Out storage, size_t byte_count, uint8_t value);
+        Tensor (*concatenate_into_arena)(std::span<const Tensor> parts, char* data,
+                                         core::TensorShape shape, core::DataType dtype, core::TensorExecutionTarget);
     };
 
 } // namespace lfs::gpu_ops

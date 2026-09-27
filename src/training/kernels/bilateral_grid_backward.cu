@@ -2,9 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/cuda_error.hpp"
-#include "lfs/core/memory_ops.cuh"
-#include "lfs/kernels/bilateral_grid.cuh"
 #include "ppisp_math_bwd.cuh"
+#include "training/kernels/bilateral_grid.cuh"
+#include "training/kernels/memory_ops.cuh"
 #include <cassert>
 #include <cuda_runtime.h>
 

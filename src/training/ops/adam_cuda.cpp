@@ -4,6 +4,7 @@
 #include "lfs/training/ops/adam_cuda.hpp"
 
 #include "adam_api.h"
+#include "core/cuda_error.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor_cuda_interop.hpp"
 
@@ -144,7 +145,12 @@ namespace lfs::training {
                 lfs::core::getCurrentCUDAStream());
         }
 
+        void validate_far_mask(const bool* pointer) {
+            LFS_VALIDATE_CUDA_DEVICE_POINTER(pointer, "mean_step_far_mask");
+        }
+
         const lfs::gpu_ops::AdamOps kCudaAdamOps{
+            .validate_far_mask = validate_far_mask,
             .step_batch = adam_step_batch,
             .step_sh = adam_step_sh,
             .encode_zero = adam_encode_zero,

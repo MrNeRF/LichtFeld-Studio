@@ -3,7 +3,6 @@
 
 #pragma once
 #include "core/tensor.hpp"
-#include "lfs/kernels/bilateral_grid.cuh"
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -153,7 +152,7 @@ namespace lfs::training {
         mutable std::array<ResidentSlot, kResidentSlots> slots_{};
         uint64_t slot_clock_ = 0;
         // Stream of the latest slice copy; the legacy default stream is a null handle.
-        mutable std::optional<cudaStream_t> copy_stream_;
+        mutable std::optional<lfs::core::TensorExecutionTarget> copy_stream_;
         lfs::core::Tensor slice_grad_; // [C, L, H, W]
         lfs::core::Tensor tv_temp_buffer_;
         lfs::core::Tensor tv_loss_scalar_; // persistent [1], reused by tv_loss_gpu

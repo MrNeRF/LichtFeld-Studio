@@ -6,7 +6,7 @@
 
 #include "core/cuda_error.hpp"
 #include "kernel_stream.hpp"
-#include "lfs/core/warp_reduce.cuh"
+#include "training/kernels/warp_reduce.cuh"
 
 #include <algorithm>
 #include <cmath>

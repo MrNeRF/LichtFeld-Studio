@@ -3,10 +3,8 @@
 
 #include "sparsity_optimizer.hpp"
 #include "core/logger.hpp"
-#include "core/tensor/internal/tensor_serialization.hpp"
 #include "core/tensor_serialization.hpp"
 #include "lfs/training/ops/registry.hpp"
-#include <cuda_runtime.h>
 #include <format>
 #include <limits>
 #include <stdexcept>
@@ -237,9 +235,8 @@ namespace lfs::training {
             training_ops(core::default_gpu_backend()).extra_loss->admm(opa_sigmoid_, z_, u_, grad_opacities, ctx.rho, grad_loss, true);
 
             // Check for kernel errors
-            cudaError_t err = cudaGetLastError();
-            if (err != cudaSuccess) {
-                return std::unexpected(std::format("CUDA kernel error: {}", cudaGetErrorString(err)));
+            if (auto error = training_session_ops().last_error()) {
+                return std::unexpected(*error);
             }
 
             return {};

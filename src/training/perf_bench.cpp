@@ -2,12 +2,13 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "lfs/training/perf_bench.hpp"
+#include "lfs/training/ops/registry.hpp"
 
 #include "core/alloc_counter.hpp"
-#include "core/detail/tensor_impl.hpp"
 #include "core/gpu_device_runtime.hpp"
 #include "core/logger.hpp"
 #include "core/pinned_allocator_stats.hpp"
+#include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_upload.hpp"
 #include "diagnostics/vram_ledger_model.hpp"
@@ -19,7 +20,6 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
-#include <nvtx3/nvToolsExtCudaRt.h>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
@@ -175,15 +175,13 @@ namespace lfs::training {
     void PerfBenchCollector::name_queues(const core::TensorWorkQueue& training,
                                          const core::TensorWorkQueue& callback,
                                          const core::TensorWorkQueue& metrics) {
-        if (training.backend() == core::GpuBackend::CUDA) {
-            nvtxNameCudaStreamA(static_cast<cudaStream_t>(training.native_handle()), "lfs.train");
-            nvtxNameCudaStreamA(static_cast<cudaStream_t>(callback.native_handle()), "lfs.train.callback");
-            nvtxNameCudaStreamA(static_cast<cudaStream_t>(metrics.native_handle()), "lfs.metrics");
-        }
+        core::TensorExecutionTarget(training).set_name("lfs.train");
+        core::TensorExecutionTarget(callback).set_name("lfs.train.callback");
+        core::TensorExecutionTarget(metrics).set_name("lfs.metrics");
     }
 
     void PerfBenchCollector::set_timing_queue(const core::TensorWorkQueue& queue) {
-        timing_stream_ = queue.native_handle();
+        timing_queue_ = core::TensorExecutionTarget(queue);
     }
 
     void PerfBenchCollector::destroy_phase_event_pool() {
@@ -232,7 +230,7 @@ namespace lfs::training {
             static_cast<std::size_t>(phase_current_index_) *
                 static_cast<std::size_t>(kPhaseBoundaryCount) +
             static_cast<std::size_t>(bi);
-        if (!phase_timer_->mark(ev_idx, timing_stream_)) {
+        if (!phase_timer_->mark(ev_idx, timing_queue_.value_or(core::TensorExecutionTarget::default_queue(core::GpuBackend::CUDA)))) {
             return;
         }
         sample.seen_mask |= (1u << bi);
@@ -252,7 +250,7 @@ namespace lfs::training {
         if (enable) {
             auto& c = instance();
             const auto early =
-                diagnostics::VramProfiler::instance().cudaDeviceBaselineBytes();
+                training_session_ops().device_baseline_bytes();
             if (early > 0) {
                 c.baseline_cuda_used_ = early;
             } else {
@@ -408,7 +406,7 @@ namespace lfs::training {
 
         // Refresh process snapshot so pool_bucket_cache / exportable are current.
         auto& profiler = diagnostics::VramProfiler::instance();
-        profiler.sampleCudaMemory();
+        training_session_ops().sample_memory();
         const auto snap = profiler.snapshot();
         const auto cover = detail::collect_perf_peak_cover_sample(snap);
         peak_pool_bucket_cache_ = cover.pool_bucket_cache_bytes;
@@ -740,8 +738,8 @@ namespace lfs::training {
 
         if (phase_pool_ready_ && phase_sample_count_ > 0) {
             // Bench-end only: the training loop has finished; make events readable.
-            if (timing_stream_ != nullptr) {
-                static_cast<void>(phase_timer_->wait_queue(timing_stream_));
+            if (timing_queue_ && !timing_queue_->is_default_queue()) {
+                static_cast<void>(phase_timer_->wait_queue(*timing_queue_));
             }
 
             std::vector<char> sample_ok(static_cast<std::size_t>(phase_sample_count_), 0);

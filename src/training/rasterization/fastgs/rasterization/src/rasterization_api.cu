@@ -9,9 +9,9 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "forward.h"
 #include "helper_math.h"
-#include "lfs/cuda_scratch.hpp"
 #include "rasterization_api.h"
 #include "rasterization_config.h"
+#include "training/kernels/cuda_scratch.hpp"
 #include "utils.h"
 #include <atomic>
 #include <cstring>

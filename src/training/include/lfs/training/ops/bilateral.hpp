@@ -31,5 +31,7 @@ namespace lfs::gpu_ops {
                               In old_mean, In new_mean, float spatial, float inv_n_spatial);
         void (*adam)(Out grid, Out moment1, Out moment2, In gradient, const AdamUpdateParams&);
         void (*scale_moments)(Out moment1, Out moment2, float scale1, float scale2);
+        void (*upload_slice)(Out host, Out device, size_t host_offset, size_t device_offset, size_t elements);
+        void (*download_slice)(Out host, Out device, size_t host_offset, size_t device_offset, size_t elements);
     };
 } // namespace lfs::gpu_ops

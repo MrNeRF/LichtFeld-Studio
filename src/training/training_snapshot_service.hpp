@@ -8,6 +8,7 @@
 
 #include "core/error.hpp"
 #include "core/parameters.hpp"
+#include "core/tensor_execution.hpp"
 #include "core/uuid.hpp"
 
 #include <chrono>
@@ -117,7 +118,7 @@ namespace lfs::training {
         const PPISP* ppisp = nullptr;
         const PPISPControllerPool* ppisp_controller_pool = nullptr;
         const ADMMSparsityOptimizer* sparsity_optimizer = nullptr;
-        std::span<void* const> mutating_streams;
+        std::span<const lfs::core::TensorExecutionTarget> mutating_queues;
         // Runs inside the measured safe-point clock after all mutation streams
         // are quiescent. The callback may only copy detached value state and
         // must stamp it with the supplied UUID. JSON/DOM/chapter assembly runs

@@ -21,6 +21,7 @@
 #include "lfs/training/ops/sh_cuda.hpp"
 #include "lfs/training/ops/training_image_cuda.hpp"
 
+#include <array>
 #include <format>
 #include <stdexcept>
 
@@ -70,9 +71,8 @@ namespace lfs::training {
                 return ops.lpips != nullptr;
             case Family::Count:
                 return false;
-            default:
-                return ops.backend == core::GpuBackend::CUDA;
             }
+            return false;
         }
 
     } // namespace
@@ -116,15 +116,25 @@ namespace lfs::training {
             .fast = nullptr,
             .sh = nullptr,
         };
-        switch (backend) {
-        case core::GpuBackend::CUDA:
-            return kCuda;
-        case core::GpuBackend::Vulkan:
-            return kVulkan;
-        case core::GpuBackend::Metal:
-            return kMetal;
-        }
-        return kVulkan;
+        static const std::array tables{&kCuda, &kVulkan, &kMetal};
+        const auto index = static_cast<size_t>(backend);
+        return index < tables.size() ? *tables[index] : kVulkan;
+    }
+
+    const ops::MortonOps& training_morton_ops() {
+        const auto* morton = training_ops(core::GpuBackend::CUDA).morton;
+        if (!morton)
+            throw std::runtime_error(unavailable_training_family(core::GpuBackend::CUDA, Family::Morton)
+                                         .value_or("Morton training ops are unavailable"));
+        return *morton;
+    }
+
+    const ops::SessionOps& training_session_ops() {
+        const auto* session = training_ops(core::GpuBackend::CUDA).session;
+        if (!session)
+            throw std::runtime_error(unavailable_training_family(core::GpuBackend::CUDA, Family::Session)
+                                         .value_or("Session training ops are unavailable"));
+        return *session;
     }
 
     const ops::ShOps& training_sh_ops() {

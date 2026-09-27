@@ -17,7 +17,6 @@
 #include "core/tensor.hpp"
 
 #include <cstddef>
-#include <cuda_runtime.h>
 
 namespace lfs::training {
     class AdamOptimizer;
@@ -54,7 +53,7 @@ namespace lfs::training::morton {
     void permute_shN(
         core::SplatData& splat,
         const lfs::core::Tensor& perm,
-        cudaStream_t stream = nullptr);
+        lfs::core::TensorExecutionTarget stream = lfs::core::TensorExecutionTarget::default_queue(lfs::core::default_gpu_backend()));
 
     /// Apply Morton ordering to all per-Gaussian model parameters, optimizer
     /// moments, and row-indexed aux tensors on `splat`. Skips (and logs at
@@ -62,6 +61,6 @@ namespace lfs::training::morton {
     [[nodiscard]] ReorderResult apply_morton_reorder(
         lfs::core::SplatData& splat,
         AdamOptimizer* optimizer = nullptr,
-        cudaStream_t stream = nullptr);
+        lfs::core::TensorExecutionTarget stream = lfs::core::TensorExecutionTarget::default_queue(lfs::core::default_gpu_backend()));
 
 } // namespace lfs::training::morton

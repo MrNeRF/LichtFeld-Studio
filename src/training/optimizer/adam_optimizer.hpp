@@ -11,7 +11,6 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
-#include <cuda_runtime_api.h>
 #include <string>
 #include <unordered_map>
 
@@ -93,7 +92,7 @@ namespace lfs::training {
         void step(int iteration);
         // Groups and optimizer scalars. Loss and sparsity tensors stay unbound (absent_);
         // the caller overlays those when it builds the backward hand-off.
-        lfs::gpu_ops::BackwardAdam prepare_fastgs_fused_adam(int iteration, cudaStream_t execution_stream = nullptr);
+        lfs::gpu_ops::BackwardAdam prepare_fastgs_fused_adam(int iteration, lfs::core::TensorExecutionTarget execution_stream = lfs::core::TensorExecutionTarget::default_queue(lfs::core::default_gpu_backend()));
         void commit_fastgs_fused_adam(int iteration);
         void set_frozen_mask(lfs::core::Tensor mask);
         [[nodiscard]] const lfs::core::Tensor& frozen_mask() const { return frozen_mask_; }

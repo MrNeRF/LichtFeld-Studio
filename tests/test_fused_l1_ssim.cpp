@@ -15,9 +15,9 @@
 #include "core/tensor.hpp"
 #include "core/tensor_upload.hpp"
 #include "cuda_backend_test.hpp"
-#include "lfs/kernels/l1_loss.cuh"
 #include "lfs/kernels/ssim.cuh"
 #include "lfs/training/ops/photometric_cuda.hpp"
+#include "training/kernels/l1_loss.cuh"
 #include <array>
 #include <chrono>
 #include <cmath>

@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/cuda_error.hpp"
-#include "lfs/core/warp_reduce.cuh"
 #include "lfs/kernels/ssim.cuh"
-#include "lfs/kernels/ssim_reduction.cuh"
+#include "training/kernels/ssim_reduction.cuh"
+#include "training/kernels/warp_reduce.cuh"
 #include <algorithm>
 #include <type_traits>
 

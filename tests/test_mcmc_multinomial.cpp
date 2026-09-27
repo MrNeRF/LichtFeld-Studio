@@ -12,7 +12,7 @@
 #include "core/tensor.hpp"
 #include "cuda_backend_test.hpp"
 #include "kernels/mcmc_kernels.hpp"
-#include "lfs/cuda_scratch.hpp"
+#include "training/kernels/cuda_scratch.hpp"
 
 using namespace lfs::core;
 

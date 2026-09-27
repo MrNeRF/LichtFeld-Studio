@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "cuda_backend_test.hpp"
-#include "lfs/kernels/ppisp.cuh"
+#include "training/kernels/ppisp.cuh"
 
 namespace {
 

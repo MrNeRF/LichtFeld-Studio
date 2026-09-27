@@ -7,10 +7,10 @@
 #include "core/sh_value_codec.cuh"
 #include "fused_adam_types.h"
 #include "helper_math.h"
-#include "lfs/core/warp_reduce.cuh"
-#include "lfs/training/joint_adam_codec.cuh"
 #include "lfs/training/screen_share.cuh"
 #include "rasterization_config.h"
+#include "training/kernels/joint_adam_codec.cuh"
+#include "training/kernels/warp_reduce.cuh"
 #include "utils.h"
 
 #include <cuda_fp16.h>

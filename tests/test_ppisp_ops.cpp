@@ -5,9 +5,9 @@
 #include "core/tensor.hpp"
 #include "core/tensor_cuda_interop.hpp"
 #include "cuda_backend_test.hpp"
-#include "lfs/kernels/ppisp.cuh"
-#include "lfs/kernels/ppisp_controller.cuh"
 #include "lfs/training/ops/registry.hpp"
+#include "training/kernels/ppisp.cuh"
+#include "training/kernels/ppisp_controller.cuh"
 #include <algorithm>
 #include <array>
 #include <cstring>

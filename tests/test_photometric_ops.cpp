@@ -6,10 +6,10 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "cuda_backend_test.hpp"
-#include "lfs/kernels/l1_loss.cuh"
 #include "lfs/kernels/ssim.cuh"
 #include "lfs/training/ops/photometric_cuda.hpp"
 #include "lfs/training/ops/registry.hpp"
+#include "training/kernels/l1_loss.cuh"
 #include "training/metrics/metrics.hpp"
 
 #include <algorithm>

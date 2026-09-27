@@ -4,7 +4,7 @@
 #include "components/ppisp.hpp"
 #include "core/tensor.hpp"
 #include "cuda_backend_test.hpp"
-#include "lfs/kernels/ppisp.cuh"
+#include "training/kernels/ppisp.cuh"
 
 #include <cmath>
 #include <cuda_runtime.h>

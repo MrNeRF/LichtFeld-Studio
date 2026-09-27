@@ -2289,7 +2289,7 @@ namespace lfs::vis {
         if (live_trainer) {
             live_trainer->setViewerReleaseFence(context.vulkan_context->device(),
                                                 {vksplat_viewport_renderer_->renderCompleteTimeline(), 0, {}});
-            live_trainer->beginModelRead(lfs::core::getCurrentCUDAStream());
+            live_trainer->beginModelRead(lfs::core::TensorExecutionTarget::current());
             lfs::training::Trainer* const trainer = live_trainer;
             vksplat_viewport_renderer_->setLiveSubmitCallback(
                 [trainer](const std::uint64_t value) { trainer->publishViewerBorrow(value); });
@@ -2304,7 +2304,7 @@ namespace lfs::vis {
             ~ViewerBorrowPublisher() {
                 if (trainer && renderer) {
                     try {
-                        trainer->endModelRead(lfs::core::getCurrentCUDAStream());
+                        trainer->endModelRead(lfs::core::TensorExecutionTarget::current());
                         trainer->publishViewerBorrow(renderer->renderCompleteValue());
                     } catch (const std::exception& e) {
                         LOG_ERROR("ViewerBorrowPublisher: endModelRead/publishViewerBorrow failed "

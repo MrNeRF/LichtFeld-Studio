@@ -5,7 +5,7 @@
 
 #include "cuda_backend_test.hpp"
 #include "optimizer/adam_optimizer.hpp"
-#include "training/rasterization/gsplat_rasterizer.hpp"
+#include "training/rasterization/gsplat_rasterizer_cuda.hpp"
 #include <expected>
 
 namespace lfs::test {

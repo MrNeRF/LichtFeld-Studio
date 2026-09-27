@@ -5,10 +5,10 @@
 #pragma once
 
 #include "adam_api.h"
-#include "lfs/core/warp_reduce.cuh"
-#include "lfs/training/joint_adam_codec.cuh"
 #include "lfs/training/mean_step_scale.cuh"
 #include "lfs/training/screen_share.cuh"
+#include "training/kernels/joint_adam_codec.cuh"
+#include "training/kernels/warp_reduce.cuh"
 
 #include <cstdint>
 
