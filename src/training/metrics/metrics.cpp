@@ -768,7 +768,7 @@ namespace lfs::training {
                          lfs::core::path_to_utf8(weights_path), e.what());
             }
         }
-        lfs::core::GpuElapsed lpips_timer(lfs::core::GpuBackend::CUDA, 2);
+        lfs::core::GpuElapsed lpips_timer(lfs::core::default_gpu_backend(), 2);
         const bool use_masking = eval_uses_masks(_params.optimization.mask_mode);
 
         bool render_normal = false;
@@ -899,7 +899,7 @@ namespace lfs::training {
                     lpips_preflight_size = image_size;
                     const auto required = _lpips_metric->estimated_peak_bytes(image_height, image_width);
                     const std::size_t free_bytes =
-                        lfs::core::gpu_backend_memory_info(lfs::core::GpuBackend::CUDA).free_bytes;
+                        lfs::core::gpu_backend_memory_info(lfs::core::default_gpu_backend()).free_bytes;
                     const bool lpips_preflight_ok = free_bytes >= required && free_bytes != 0;
                     if (!lpips_preflight_ok && size_changed) {
                         const auto shortfall = required > free_bytes ? required - free_bytes : 0;

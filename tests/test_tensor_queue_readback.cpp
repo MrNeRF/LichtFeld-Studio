@@ -56,7 +56,7 @@ namespace {
         EXPECT_EQ(middle, (std::array<float, 2>{6, 4}));
         target.wait();
         EXPECT_THROW(target.wait_for(target), std::runtime_error);
-        EXPECT_THROW(target.set_name("test.queue"), std::runtime_error);
+        EXPECT_NO_THROW(target.set_name("test.queue"));
         EXPECT_THROW(push_gpu_range("test.range"), std::runtime_error);
         EXPECT_THROW(pop_gpu_range(), std::runtime_error);
         GpuElapsed timer(GpuBackend::Vulkan, 2);

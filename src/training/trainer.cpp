@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "trainer.hpp"
-#include "backward.h" // BWD-A T_eff hist arm/flush
 #include "components/bilateral_grid.hpp"
 #include "components/ppisp.hpp"
 #include "components/ppisp_controller_pool.hpp"
@@ -1810,7 +1809,7 @@ namespace lfs::training {
         project_snapshot_service_ =
             std::make_unique<TrainingSnapshotService>();
 
-        const int device_count = lfs::core::gpu_device_count(lfs::core::GpuBackend::CUDA);
+        const int device_count = lfs::core::gpu_device_count(lfs::core::default_gpu_backend());
         LFS_ASSERT_MSG(device_count > 0, "The selected GPU backend is not available - aborting");
         createGpuResources();
 
@@ -1825,19 +1824,25 @@ namespace lfs::training {
 
     void Trainer::createGpuResources() {
         using namespace lfs::core;
-        callback_queue_ = std::make_unique<TensorWorkQueue>(GpuBackend::CUDA);
+        const GpuBackend backend = default_gpu_backend();
+        callback_queue_ = std::make_unique<TensorWorkQueue>(backend);
         // Preserve legacy-default ordering for cold uploads and readbacks.
-        training_queue_ = std::make_unique<TensorWorkQueue>(GpuBackend::CUDA, TensorWorkQueue::Mode::LegacyOrdered);
-        metrics_queue_ = std::make_unique<TensorWorkQueue>(GpuBackend::CUDA);
-        PerfBenchCollector::name_queues(*training_queue_, *callback_queue_, *metrics_queue_);
+        training_queue_ = std::make_unique<TensorWorkQueue>(backend, TensorWorkQueue::Mode::LegacyOrdered);
+        metrics_queue_ = std::make_unique<TensorWorkQueue>(backend);
+        try {
+            PerfBenchCollector::name_queues(*training_queue_, *callback_queue_, *metrics_queue_);
+        } catch (const std::runtime_error& error) {
+            LOG_DEBUG("Training queue naming skipped: {}", error.what());
+        }
         createSyncPrimitives();
         PerfBenchCollector::instance().set_timing_queue(*training_queue_);
     }
 
     void Trainer::createSyncPrimitives() {
-        params_ready_event_ = std::make_unique<lfs::core::TensorFence>(lfs::core::GpuBackend::CUDA);
+        const auto backend = lfs::core::default_gpu_backend();
+        params_ready_event_ = std::make_unique<lfs::core::TensorFence>(backend);
         for (auto& event : reader_done_events_)
-            event = std::make_unique<lfs::core::TensorFence>(lfs::core::GpuBackend::CUDA);
+            event = std::make_unique<lfs::core::TensorFence>(backend);
     }
 
     void Trainer::destroySyncPrimitives() {
@@ -2285,7 +2290,7 @@ namespace lfs::training {
         heatmap->staging_valid.resize(heatmap->camera_uids.size());
 
         try {
-            heatmap->copy_queue = std::make_unique<lfs::core::TensorWorkQueue>(lfs::core::GpuBackend::CUDA);
+            heatmap->copy_queue = std::make_unique<lfs::core::TensorWorkQueue>(lfs::core::default_gpu_backend());
             heatmap->readback.prepare(heatmap->ema_loss_gpu, heatmap->ema_loss_stage_cpu);
         } catch (const std::exception& e) {
             return std::unexpected(std::format("Failed to create camera-loss queue: {}", e.what()));
@@ -3139,12 +3144,12 @@ namespace lfs::training {
 
         try {
             lfs::core::TensorCompletion completion;
-            completion.include(lfs::core::GpuBackend::CUDA);
+            completion.include(lfs::core::default_gpu_backend());
             completion.wait();
         } catch (const std::exception& e) {
-            LOG_ERROR("Trainer::shutdown CUDA barrier failed (continuing): {}", e.what());
+            LOG_ERROR("Trainer::shutdown device barrier failed (continuing): {}", e.what());
         } catch (...) {
-            LOG_ERROR("Trainer::shutdown CUDA barrier failed (unknown; continuing)");
+            LOG_ERROR("Trainer::shutdown device barrier failed (unknown; continuing)");
         }
 
         finish_project_writer();
@@ -3219,22 +3224,26 @@ namespace lfs::training {
             } catch (...) {
                 LOG_ERROR("Trainer::shutdown trim_memory_pool failed (unknown; continuing)");
             }
-            try {
-                training_session_ops().reset_arena();
-            } catch (const std::exception& e) {
-                LOG_ERROR("Trainer::shutdown arena full_reset failed (continuing): {}",
-                          e.what());
-            } catch (...) {
-                LOG_ERROR("Trainer::shutdown arena full_reset failed (unknown; continuing)");
+            // reset_arena is the CUDA session op. A Vulkan start that stops at the
+            // capability check must not touch that arena on the way out.
+            if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA) {
+                try {
+                    training_session_ops().reset_arena();
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Trainer::shutdown arena full_reset failed (continuing): {}",
+                              e.what());
+                } catch (...) {
+                    LOG_ERROR("Trainer::shutdown arena full_reset failed (unknown; continuing)");
+                }
             }
             try {
                 lfs::core::TensorCompletion completion;
-                completion.include(lfs::core::GpuBackend::CUDA);
+                completion.include(lfs::core::default_gpu_backend());
                 completion.wait();
             } catch (const std::exception& e) {
-                LOG_ERROR("Trainer::shutdown final CUDA barrier failed (continuing): {}", e.what());
+                LOG_ERROR("Trainer::shutdown final device barrier failed (continuing): {}", e.what());
             } catch (...) {
-                LOG_ERROR("Trainer::shutdown final CUDA barrier failed (unknown; continuing)");
+                LOG_ERROR("Trainer::shutdown final device barrier failed (unknown; continuing)");
             }
         }
         LOG_DEBUG("GPU memory released");
@@ -5496,7 +5505,7 @@ namespace lfs::training {
                 return;
             }
             lfs::core::TensorCompletion completion;
-            completion.include(lfs::core::GpuBackend::CUDA);
+            completion.include(lfs::core::default_gpu_backend());
             completion.wait();
         };
         const auto cuda_recovery_error = [&cause](const std::string_view operation,
@@ -8009,7 +8018,7 @@ namespace lfs::training {
                 // initialize() ran on another thread; order all of its CUDA work
                 // before the first training-stream kernel.
                 lfs::core::TensorCompletion completion;
-                completion.include(lfs::core::GpuBackend::CUDA);
+                completion.include(lfs::core::default_gpu_backend());
                 completion.wait();
             }
 

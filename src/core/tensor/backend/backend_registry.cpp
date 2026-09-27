@@ -24,9 +24,7 @@ namespace lfs::core::internal {
     void GpuBackendOps::pop_range() {
         throw std::runtime_error("GPU diagnostic ranges are unsupported on this backend");
     }
-    void GpuBackendOps::name_queue(ExecContext, const char*) {
-        throw std::runtime_error("GPU queue naming is unsupported on this backend");
-    }
+    void GpuBackendOps::name_queue(ExecContext, const char*) {}
 
     GpuBackendOps& backend_ops(const GpuBackend backend) {
         if (backend == GpuBackend::CUDA) {

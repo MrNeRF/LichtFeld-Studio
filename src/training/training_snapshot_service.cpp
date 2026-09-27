@@ -766,12 +766,12 @@ namespace lfs::training {
             const std::span<const lfs::core::TensorExecutionTarget>
                 mutating_queues) {
             if (!d2h_queue)
-                d2h_queue = std::make_unique<lfs::core::TensorWorkQueue>(lfs::core::GpuBackend::CUDA);
+                d2h_queue = std::make_unique<lfs::core::TensorWorkQueue>(lfs::core::default_gpu_backend());
             ensure_device_scratch();
             calibrate_once(layout, mutating_queues);
             device_scratch = {};
             if (slots.empty()) {
-                ring = std::make_unique<lfs::core::TensorReadbackRing>(lfs::core::GpuBackend::CUDA,
+                ring = std::make_unique<lfs::core::TensorReadbackRing>(d2h_queue->backend(),
                                                                        config.ring_slots, config.band_bytes, *d2h_queue, &device_scratch);
                 slots.resize(config.ring_slots);
                 for (size_t i = 0; i < slots.size(); ++i)
@@ -860,12 +860,12 @@ namespace lfs::training {
                     "Snapshot calibration requires device scratch");
             }
 
-            lfs::core::TensorReadbackRing calibration(lfs::core::GpuBackend::CUDA, 1, bytes, *d2h_queue, &device_scratch);
+            lfs::core::TensorReadbackRing calibration(d2h_queue->backend(), 1, bytes, *d2h_queue, &device_scratch);
             calibration.enqueue(source->source, 0, bytes, 0, 0, true);
             calibration.seal(0);
             calibration.wait(0);
             calibration.release(0);
-            lfs::core::GpuElapsed elapsed(lfs::core::GpuBackend::CUDA, 2);
+            lfs::core::GpuElapsed elapsed(d2h_queue->backend(), 2);
             if (!elapsed.mark(0, *d2h_queue))
                 throw std::runtime_error("Cannot start readback calibration timer");
             // Every iteration appends to the same slot; one seal covers the batch.
