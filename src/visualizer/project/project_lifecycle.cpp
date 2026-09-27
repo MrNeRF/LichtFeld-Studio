@@ -1079,7 +1079,7 @@ namespace lfs::vis::project {
         return state;
     }
 
-    void ProjectLifecycle::captureStoredTrainingSession(
+    bool ProjectLifecycle::captureStoredTrainingSession(
         const lfs::io::project::
             ProjectDocumentHydrationReport& report) {
         stored_training_kind_ = StoredTrainingKind::None;
@@ -1137,7 +1137,7 @@ namespace lfs::vis::project {
             }
         } presentation_guard{viewer_};
         if (!document_) {
-            return;
+            return false;
         }
         if (report.trainer_state_pending &&
             report.checkpoint_uuid &&
@@ -1157,7 +1157,7 @@ namespace lfs::vis::project {
                 std::lock_guard lock(training_session_mutex_);
                 training_session_error_ =
                     "Project CKPT iteration is negative";
-                return;
+                return false;
             }
             const auto* checkpoint =
                 document_->find_checkpoint(
@@ -1166,7 +1166,7 @@ namespace lfs::vis::project {
                 std::lock_guard lock(training_session_mutex_);
                 training_session_error_ =
                     "Project CKPT handle disappeared";
-                return;
+                return false;
             }
             const auto dataset_root =
                 resolveDatasetRootForTrainer(
@@ -1175,7 +1175,7 @@ namespace lfs::vis::project {
                         .data_path);
             if (dataset_root && !dataset_root->empty() &&
                 std::filesystem::exists(*dataset_root)) {
-                return;
+                return false;
             }
             auto parsed_params = checkpointParamsFromReportOrStream(
                 report, *checkpoint);
@@ -1183,7 +1183,7 @@ namespace lfs::vis::project {
                 std::lock_guard lock(training_session_mutex_);
                 training_session_error_ =
                     developerError(parsed_params.error());
-                return;
+                return false;
             }
             auto ckpt_params = std::move(*parsed_params);
             const auto ckpt_dataset_root =
@@ -1200,13 +1200,13 @@ namespace lfs::vis::project {
                     ckpt_params,
                     report.checkpoint_header->iteration);
             }
-            return;
+            return false;
         }
 
         const auto persisted_dataset =
             inspectPersistedDatasetScene(*document_);
         if (!persisted_dataset.has_dataset_node) {
-            return;
+            return false;
         }
         stored_training_kind_ =
             StoredTrainingKind::DatasetScene;
@@ -1216,7 +1216,7 @@ namespace lfs::vis::project {
         const auto dataset =
             document_->project().dataset_reference();
         if (!dataset || !*dataset) {
-            return;
+            return false;
         }
         auto dataset_root = resolveDatasetRootForTrainer(
             *document_, std::filesystem::path{});
@@ -1228,7 +1228,9 @@ namespace lfs::vis::project {
                     report.pending_parameters.dataset
                         .output_path);
             }
+            return false;
         }
+        return true;
     }
 
     void ProjectLifecycle::launchStoredTrainingSessionRestore(
@@ -8277,19 +8279,25 @@ namespace lfs::vis::project {
                                     const auto selection_restored_at =
                                         std::chrono::steady_clock::
                                             now();
-                                    // Display hydration is complete. The
-                                    // training session stays stored until
-                                    // Resume/Start (or another live-trainer
-                                    // operation) calls restoreTrainingSession.
-                                    const bool pending_restore =
+                                    // Display hydration is complete. A checkpoint
+                                    // session stays stored until Resume/Start
+                                    // (or another live-trainer operation) calls
+                                    // restoreTrainingSession. A project that
+                                    // never trained has nothing to resume, so
+                                    // its trainer is built now and it opens
+                                    // Ready, like a freshly loaded dataset.
+                                    bool pending_restore =
                                         training_session_restoring_.load(
                                             std::memory_order_acquire);
                                     if (epoch_.load(
                                             std::memory_order_acquire) ==
                                             epoch &&
-                                        document_ == document) {
+                                        document_ == document &&
                                         captureStoredTrainingSession(
-                                            report);
+                                            report) &&
+                                        !training_session_restoring_.exchange(
+                                            true, std::memory_order_acq_rel)) {
+                                        pending_restore = true;
                                     }
                                     const auto trainer_restored_at =
                                         std::chrono::steady_clock::

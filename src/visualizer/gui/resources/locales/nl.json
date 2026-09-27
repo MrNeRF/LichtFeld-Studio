@@ -97,8 +97,6 @@
   "projects.action.repair": "Repareren",
   "projects.action.verify": "Verifiëren",
   "projects.action.update_version": "LichtFeld Studio bijwerken",
-  "projects.action.export": "Exporteren",
-  "projects.dialog.export_as": "Project exporteren",
   "projects.dialog.update_thumbnail": "Miniatuur bijwerken",
   "projects.dialog.rename_project": "Project hernoemen",
   "projects.dialog.repair": "Project repareren",
@@ -143,6 +141,7 @@
     "file.save_project": "Project opslaan",
     "file.save_project_as": "Project opslaan als...",
     "file.compact_project": "Project comprimeren",
+    "file.compact_stop_training": "Stop de training voordat je het project comprimeert.",
     "file.embed_dataset": "Dataset in project insluiten",
     "file.auto_save_on_close": "Opslaan bij sluiten zonder te vragen",
     "file.no_recent_projects": "Geen recente projecten",
@@ -2062,6 +2061,7 @@
     "reload": "Herladen"
   },
   "status_bar": {
+    "preview_reduced": "Voorbeeldresolutie verlaagd (GPU-geheugen)",
     "safe_mode": "VEILIGE MODUS",
     "mcp_preferences": "Bewerken",
     "mcp_turn_on": "Inschakelen",
@@ -2918,7 +2918,6 @@
   "projects.dialog.first_embedded_image": "Eerste ingesloten afbeelding",
   "projects.dialog.image_file": "Afbeeldingsbestand",
   "projects.property.display_name": "Weergavenaam",
-  "projects.dialog.format": "Formaat",
   "projects.dialog.source": "Bron",
   "projects.gallery.eligibility.connect": "De Portal-verbinding is niet beschikbaar.",
   "projects.gallery.eligibility.busy": "Er wordt een andere bewerking uitgevoerd",

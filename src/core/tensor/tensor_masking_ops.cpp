@@ -2122,9 +2122,8 @@ namespace lfs::core {
                         .dst = internal::storage_ref(t),
                         .bytes = t.bytes(),
                         .synchronous = true,
-                        .context = internal::ExecContext{},
+                        .context = internal::ExecContext{t.stream()},
                     });
-                internal::order_home_after_legacy(t);
             } else {
                 std::memcpy(t.data_ptr(), data.data(), t.bytes());
             }
@@ -2185,6 +2184,8 @@ namespace lfs::core {
         unsigned char val = value ? 1 : 0;
 
         if (device_ == Device::GPU) {
+            const auto execution_stream = prepare_inputs_for_stream({this});
+            set_stream(execution_stream);
             internal::backend_ops_for(*this).copy_host_to_device(
                 internal::CopyRequest{
                     .src = internal::raw_storage_ref(&val),
@@ -2192,9 +2193,8 @@ namespace lfs::core {
                         internal::storage_ref(*this), linear_idx),
                     .bytes = 1,
                     .synchronous = true,
-                    .context = internal::ExecContext{},
+                    .context = internal::ExecContext{execution_stream},
                 });
-            internal::order_home_after_legacy(*this);
         } else {
             ptr<unsigned char>()[linear_idx] = val;
         }

@@ -2802,7 +2802,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def get_dialog_title(self) -> str:
         return tr({
-            "export_as": "projects.dialog.export_as",
             "update_thumbnail": "projects.dialog.update_thumbnail",
             "license": "projects.contents.license_chooser",
             "remove_content": "projects.contents.remove",
@@ -2815,7 +2814,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
 
     def get_dialog_confirm_label(self) -> str:
         return tr({
-            "export_as": "projects.action.export",
             "update_thumbnail": "projects.action.update_thumbnail",
             "license": "common.save",
             "remove_content": "projects.contents.remove",
@@ -2926,6 +2924,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         asset = self._asset_dict(asset_id)
         if not asset or asset.get("remote_only"):
             return
+        if action == "export_as":
+            self._export_asset(asset)
+            return
         self._dialog_asset_id = asset_id
         details = self._inspection_by_asset.get(asset_id, {}).get("details")
         if action == "update_thumbnail":
@@ -2948,11 +2949,8 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._set_dialog(action, data)
 
     def dialog_choose_destination(self, _handle=None, _ev=None, _args=None) -> None:
-        if self._dialog_kind == "export_as":
-            path = self._choose_export_destination(str(self._dialog_data.get("format") or "sog"))
-        else:
-            source = Path(str(self._dialog_data.get("path") or "project.licht"))
-            path = lf.ui.save_project_file_dialog(source.stem + "-copy.licht", str(source.parent))
+        source = Path(str(self._dialog_data.get("path") or "project.licht"))
+        path = lf.ui.save_project_file_dialog(source.stem + "-copy.licht", str(source.parent))
         if path:
             self._dialog_data["destination"] = str(path)
 
@@ -2990,15 +2988,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                 return
             self.close_project_dialog()
             return
-        if action == "export_as":
-            destination = str(data.get("destination") or "")
-            if not destination:
-                destination = self._choose_export_destination(str(data.get("format") or "sog"))
-                data["destination"] = destination
-            if not destination:
-                return
-            self._start_project_operation(asset["id"], "Export project", lambda progress, cancel: self._native_io_call("export_project_as", path, data.get("format", "sog"), destination, progress, cancel), backup=False)
-        elif action == "update_thumbnail":
+        if action == "update_thumbnail":
             dataset_available, embedded_available = self._thumbnail_source_availability(path)
             sources = thumbnail_source_options(
                 asset,
@@ -3061,15 +3051,24 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             directory = lf.ui.open_folder_dialog(tr("projects.dialog.select_dataset"), str(Path(path).parent))
             if directory:
                 self._start_project_operation(asset["id"], "Locate dataset", lambda _progress, _cancel: self._native_io_call("set_dataset_reference", path, directory))
-        if action not in {"export_as", "update_thumbnail", "license", "rename", "repair", "locate_dataset", "remove_content", "compact_content"}:
+        if action not in {"update_thumbnail", "license", "rename", "repair", "locate_dataset", "remove_content", "compact_content"}:
             return
         self.close_project_dialog()
 
-    def _choose_export_destination(self, format_name: str) -> str:
-        chooser = getattr(lf.ui, "save_" + format_name + "_file_dialog", None)
-        if callable(chooser):
-            return str(chooser("export"))
-        return str(getattr(lf.ui, "open_project_file_dialog", lambda *_args: "")(""))
+    def _export_asset(self, asset: Dict[str, Any]) -> None:
+        """Show the File > Export panel for this project, opening the project first when needed."""
+        path = str(asset.get("path") or "")
+
+        def show_export() -> None:
+            lf.ui.set_panel_enabled("lfs.export", True)
+
+        if self._is_active_project_path(path):
+            self._on_close_panel()
+            show_export()
+            return
+        from .file_menu import open_project_with_confirmation
+
+        open_project_with_confirmation(path, then=show_export)
 
     def _rename_catalog_entry(self, asset_id: str, name: str) -> None:
         self._library_command("update_asset", asset_id, name=name)

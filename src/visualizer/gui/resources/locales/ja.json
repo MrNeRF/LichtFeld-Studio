@@ -97,8 +97,6 @@
   "projects.action.repair": "修復",
   "projects.action.verify": "検証",
   "projects.action.update_version": "LichtFeld Studio を更新",
-  "projects.action.export": "書き出す",
-  "projects.dialog.export_as": "プロジェクトを書き出す",
   "projects.dialog.update_thumbnail": "サムネイルを更新",
   "projects.dialog.rename_project": "プロジェクト名を変更",
   "projects.dialog.repair": "プロジェクトを修復",
@@ -143,6 +141,7 @@
     "file.save_project": "プロジェクトを保存",
     "file.save_project_as": "プロジェクトを別名で保存...",
     "file.compact_project": "プロジェクトを圧縮",
+    "file.compact_stop_training": "プロジェクトを圧縮する前にトレーニングを停止してください。",
     "file.embed_dataset": "データセットをプロジェクトに埋め込む",
     "file.auto_save_on_close": "確認なしで終了時に保存",
     "file.no_recent_projects": "最近使ったプロジェクトはありません",
@@ -2062,6 +2061,7 @@
     "reload": "再読み込み"
   },
   "status_bar": {
+    "preview_reduced": "プレビュー解像度を低下（GPUメモリ）",
     "safe_mode": "セーフモード",
     "mcp_preferences": "編集",
     "mcp_turn_on": "オンにする",
@@ -2918,7 +2918,6 @@
   "projects.dialog.first_embedded_image": "最初の埋め込み画像",
   "projects.dialog.image_file": "画像ファイル",
   "projects.property.display_name": "表示名",
-  "projects.dialog.format": "形式",
   "projects.dialog.source": "取得元",
   "projects.gallery.eligibility.connect": "Portal に接続できません。",
   "projects.gallery.eligibility.busy": "別の処理が実行中です",

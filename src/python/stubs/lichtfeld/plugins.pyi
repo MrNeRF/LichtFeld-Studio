@@ -81,5 +81,8 @@ def list_capabilities() -> list:
 def settings(plugin_name: str) -> object:
     """Get settings object for a plugin"""
 
+def data_dir(plugin_name: str) -> str:
+    """Return the plugin's durable data directory, creating it if missing"""
+
 def create(name: str) -> str:
     """Create a new plugin from template (returns path to created plugin)"""

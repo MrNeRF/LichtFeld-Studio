@@ -292,13 +292,12 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         static_cast<uint>(n_primitives));
     LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.compact_visible");
 
-    // Legacy-default-stream copies do not wait for nonblocking streams.
-    LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream), "cudaStreamSynchronize(FastGS visible count)");
     uint h_n_visible = 0;
     LFS_CUDA_CHECK_MSG(
-        cudaMemcpy(&h_n_visible, visibility_buffers.block_offsets + n_visibility_blocks - 1,
-                   sizeof(h_n_visible), cudaMemcpyDeviceToHost),
+        cudaMemcpyAsync(&h_n_visible, visibility_buffers.block_offsets + n_visibility_blocks - 1,
+                        sizeof(h_n_visible), cudaMemcpyDeviceToHost, stream),
         "cudaMemcpy(FastGS visible count)");
+    LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream), "cudaStreamSynchronize(FastGS visible count)");
     const int n_visible = checked_fastgs_visible_count(h_n_visible, n_primitives);
 
     char* per_primitive_buffers_base =
@@ -380,6 +379,15 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     FastGSSortWorkspace sort_workspace;
 
     if (n_visible > 0) {
+        std::uint64_t h_n_instances = 0;
+        check_cuda_with_fastgs_status(
+            cudaMemcpyAsync(&h_n_instances, d_n_instances,
+                            sizeof(h_n_instances), cudaMemcpyDeviceToHost, stream),
+            "cudaMemcpy(n_instances)",
+            forward_status,
+            "primitive offset scan",
+            static_cast<uint64_t>(n_primitives),
+            n_tiles_u64);
         check_cuda_with_fastgs_status(
             cudaStreamSynchronize(stream),
             "cudaStreamSynchronize(n_instances)",
@@ -388,15 +396,6 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
             static_cast<uint64_t>(n_primitives),
             n_tiles_u64);
         LFS_FASTGS_PHASE_CHECK("cudaStreamSynchronize(n_instances)");
-        std::uint64_t h_n_instances = 0;
-        check_cuda_with_fastgs_status(
-            cudaMemcpy(&h_n_instances, d_n_instances,
-                       sizeof(h_n_instances), cudaMemcpyDeviceToHost),
-            "cudaMemcpy(n_instances)",
-            forward_status,
-            "primitive offset scan",
-            static_cast<uint64_t>(n_primitives),
-            n_tiles_u64);
         n_instances = checked_fastgs_instance_count(
             h_n_instances, static_cast<uint64_t>(n_primitives), n_tiles_u64);
 

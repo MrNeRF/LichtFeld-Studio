@@ -182,7 +182,6 @@ void apply_crop_box_filter(
     StructuredBuffer<float4> overlay_params,
     uint flags_idx,
     float4 crop_flags,
-    bool node_data_enabled,
     int node_idx,
     float3 mean_ws,
     inout bool active,
@@ -192,7 +191,7 @@ void apply_crop_box_filter(
     if (!overlay_enabled(crop_flags.x)) return;
 
     int parent_node_idx = overlay_int(crop_flags.w);
-    bool applies = parent_node_idx < 0 || (node_data_enabled && node_idx == parent_node_idx);
+    bool applies = parent_node_idx < 0 || node_idx == parent_node_idx;
     if (!applies) return;
 
     float3 local = transform_point_rows(overlay_params, flags_idx + 3u, mean_ws);
@@ -218,7 +217,6 @@ void apply_ellipsoid_filter(
     StructuredBuffer<float4> overlay_params,
     uint flags_idx,
     float4 ellipsoid_flags,
-    bool node_data_enabled,
     int node_idx,
     float3 mean_ws,
     inout bool active,
@@ -228,7 +226,7 @@ void apply_ellipsoid_filter(
     if (!overlay_enabled(ellipsoid_flags.x)) return;
 
     int parent_node_idx = overlay_int(ellipsoid_flags.w);
-    bool applies = parent_node_idx < 0 || (node_data_enabled && node_idx == parent_node_idx);
+    bool applies = parent_node_idx < 0 || node_idx == parent_node_idx;
     if (!applies) return;
 
     float3 local = transform_point_rows(overlay_params, flags_idx + 2u, mean_ws);
@@ -263,9 +261,9 @@ SplatActiveState compute_splat_active_state(
     float4 emphasis_flags = overlay_params[OVERLAY_PARAM_EMPHASIS_FLAGS];
     bool node_data_enabled = overlay_enabled(emphasis_flags.y);
     int node_count = overlay_int(emphasis_flags.z);
-    int node_idx = node_data_enabled ? read_int32(transform_indices, logical_idx) : -1;
-    int model_transform_idx = node_data_enabled ? node_idx : 0;
-    model_transform_idx = clamp(model_transform_idx, 0, int(max(model_transform_count, 1u)) - 1);
+    // Without per-splat indices the scene has one model, so every splat is node 0.
+    int node_idx = node_data_enabled ? read_int32(transform_indices, logical_idx) : 0;
+    int model_transform_idx = clamp(node_idx, 0, int(max(model_transform_count, 1u)) - 1);
     uint model_transform_base = uint(model_transform_idx) * 4u;
     bool model_transform_enabled = model_transform_count > 0u;
     float3 mean_ws = model_transform_enabled
@@ -279,7 +277,7 @@ SplatActiveState compute_splat_active_state(
         float4 crop_flags = overlay_params[OVERLAY_PARAM_CROP_FLAGS];
         if (overlay_enabled(crop_flags.x)) {
             apply_crop_box_filter(overlay_params, OVERLAY_PARAM_CROP_FLAGS, crop_flags,
-                                  node_data_enabled, node_idx, mean_ws,
+                                  node_idx, mean_ws,
                                   active, overlay_flags);
             for (uint crop_i = 0u; crop_i < OVERLAY_PARAM_CROP_EXTRA_COUNT; ++crop_i) {
                 const uint flags_idx =
@@ -288,7 +286,7 @@ SplatActiveState compute_splat_active_state(
                 if (!overlay_enabled(extra_flags.x))
                     break;
                 apply_crop_box_filter(overlay_params, flags_idx, extra_flags,
-                                      node_data_enabled, node_idx, mean_ws,
+                                      node_idx, mean_ws,
                                       active, overlay_flags);
             }
         }
@@ -298,7 +296,7 @@ SplatActiveState compute_splat_active_state(
         float4 ellipsoid_flags = overlay_params[OVERLAY_PARAM_ELLIPSOID_FLAGS];
         if (overlay_enabled(ellipsoid_flags.x)) {
             apply_ellipsoid_filter(overlay_params, OVERLAY_PARAM_ELLIPSOID_FLAGS, ellipsoid_flags,
-                                   node_data_enabled, node_idx, mean_ws,
+                                   node_idx, mean_ws,
                                    active, overlay_flags);
             for (uint ellipsoid_i = 0u; ellipsoid_i < OVERLAY_PARAM_ELLIPSOID_EXTRA_COUNT; ++ellipsoid_i) {
                 const uint flags_idx =
@@ -307,7 +305,7 @@ SplatActiveState compute_splat_active_state(
                 if (!overlay_enabled(extra_flags.x))
                     break;
                 apply_ellipsoid_filter(overlay_params, flags_idx, extra_flags,
-                                       node_data_enabled, node_idx, mean_ws,
+                                       node_idx, mean_ws,
                                        active, overlay_flags);
             }
         }

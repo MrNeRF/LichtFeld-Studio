@@ -97,8 +97,6 @@
   "projects.action.repair": "Napraw",
   "projects.action.verify": "Weryfikuj",
   "projects.action.update_version": "Zaktualizuj LichtFeld Studio",
-  "projects.action.export": "Eksportuj",
-  "projects.dialog.export_as": "Eksportuj projekt",
   "projects.dialog.update_thumbnail": "Aktualizuj miniaturę",
   "projects.dialog.rename_project": "Zmień nazwę projektu",
   "projects.dialog.repair": "Napraw projekt",
@@ -143,6 +141,7 @@
     "file.save_project": "Zapisz projekt",
     "file.save_project_as": "Zapisz projekt jako...",
     "file.compact_project": "Kompaktuj projekt",
+    "file.compact_stop_training": "Zatrzymaj trening przed kompaktowaniem projektu.",
     "file.embed_dataset": "Osadź zbiór danych w projekcie",
     "file.auto_save_on_close": "Zapisz przy zamykaniu bez pytania",
     "file.no_recent_projects": "Brak ostatnich projektów",
@@ -2062,6 +2061,7 @@
     "reload": "Przeładuj"
   },
   "status_bar": {
+    "preview_reduced": "Obniżona rozdzielczość podglądu (pamięć GPU)",
     "safe_mode": "TRYB BEZPIECZNY",
     "mcp_preferences": "Edytuj",
     "mcp_turn_on": "Włącz",
@@ -2918,7 +2918,6 @@
   "projects.dialog.first_embedded_image": "Pierwszy osadzony obraz",
   "projects.dialog.image_file": "Plik obrazu",
   "projects.property.display_name": "Nazwa wyświetlana",
-  "projects.dialog.format": "Format",
   "projects.dialog.source": "Źródło",
   "projects.gallery.eligibility.connect": "Połączenie z Portalem jest niedostępne.",
   "projects.gallery.eligibility.busy": "Trwa inna operacja",

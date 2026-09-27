@@ -73,21 +73,6 @@ namespace lfs::core::sh_value_quant {
         std::uint32_t coeffs_rest,
         cudaStream_t stream = nullptr);
 
-    /// Overlay canonical [K, rest, 3] rows into a compact float4-swizzled
-    /// chunk of n_chunk prims that represents global prims
-    /// [block_start, block_start + n_chunk). dest_indices[group_offset + i]
-    /// is the global primitive for canonical row group_offset + i.
-    void overlay_canonical_into_float4_chunk(
-        const float* src_canonical,
-        const std::int64_t* dest_indices,
-        float* dst_float4_swizzled,
-        std::size_t group_offset,
-        std::size_t n_group,
-        std::size_t block_start,
-        std::size_t n_chunk,
-        std::uint32_t coeffs_rest,
-        cudaStream_t stream = nullptr);
-
     /// block_id[i] = dest_indices[i] / 256 as float32 (exact for training-scale N).
     void fill_quant_block_ids_f32(
         const std::int64_t* dest_indices,

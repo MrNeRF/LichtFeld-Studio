@@ -12,6 +12,7 @@
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "core/tensor_cuda_interop.hpp"
 #include "core/tensor_serialization.hpp"
+#include "lfs/training/ops/registry.hpp"
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -241,6 +242,9 @@ namespace lfs::training {
           channels_(bilateral_grid_channel_count(parameterization)),
           parameterization_(parameterization) {
 
+        if (const auto reason = unavailable_training_family(lfs::core::default_gpu_backend(), Family::Bilateral)) {
+            throw std::runtime_error(*reason);
+        }
         const size_t grid_elements = validated_grid_elements(
             num_images, grid_W, grid_H, grid_L, channels_, total_iterations, config);
 
@@ -288,38 +292,11 @@ namespace lfs::training {
         const ImageLayout layout = validate_image_tensor(rgb, "BilateralGrid::apply");
         const auto& shape = rgb.shape();
         const auto rgb_cont = rgb.contiguous();
-        const float* grid_ptr = device_slice(resident_grids_, resident_slot(image_idx));
-        const float* offset_ptr = shared_offset_.ptr<float>();
+        const int slot = resident_slot(image_idx);
+        const auto grid = resident_grids_.slice(0, slot, slot + 1);
         assert(static_cast<int>(grids_.shape()[1]) == channels_);
-
-        if (layout.chw) {
-            auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::GPU);
-            if (parameterization_ == BilateralGridParameterization::ExposureChroma) {
-                kernels::launch_bilateral_grid_slice_forward_exposure_chroma_chw(
-                    grid_ptr, rgb_cont.ptr<float>(), output.ptr<float>(),
-                    grid_guidance_, grid_height_, grid_width_, layout.height, layout.width,
-                    offset_ptr, nullptr);
-            } else {
-                kernels::launch_bilateral_grid_slice_forward_chw(
-                    grid_ptr, rgb_cont.ptr<float>(), output.ptr<float>(),
-                    grid_guidance_, grid_height_, grid_width_, layout.height, layout.width,
-                    offset_ptr, nullptr);
-            }
-            return output;
-        }
-
-        auto output = lfs::core::Tensor::empty({shape[0], shape[1], 3}, lfs::core::Device::GPU);
-        if (parameterization_ == BilateralGridParameterization::ExposureChroma) {
-            kernels::launch_bilateral_grid_slice_forward_exposure_chroma(
-                grid_ptr, rgb_cont.ptr<float>(), output.ptr<float>(),
-                grid_guidance_, grid_height_, grid_width_, layout.height, layout.width,
-                offset_ptr, nullptr);
-        } else {
-            kernels::launch_bilateral_grid_slice_forward(
-                grid_ptr, rgb_cont.ptr<float>(), output.ptr<float>(),
-                grid_guidance_, grid_height_, grid_width_, layout.height, layout.width,
-                offset_ptr, nullptr);
-        }
+        auto output = lfs::core::Tensor::empty(shape, lfs::core::Device::GPU);
+        training_ops(lfs::core::default_gpu_backend()).bilateral->slice_forward(grid, rgb_cont, shared_offset_, output, {.layout = layout.chw ? ops::Layout::CHW : ops::Layout::HWC, .transform = parameterization_ == BilateralGridParameterization::ExposureChroma ? ops::GridTransform::ExposureChroma : ops::GridTransform::Affine});
         return output;
     }
 
@@ -338,45 +315,12 @@ namespace lfs::training {
         const auto& shape = rgb.shape();
         const auto rgb_cont = rgb.contiguous();
         const auto grad_cont = grad_output.contiguous();
-        const float* grid_ptr = device_slice(resident_grids_, resident_slot(image_idx));
-        const float* offset_ptr = shared_offset_.ptr<float>();
-        float* grad_grid_ptr = slice_grad_.ptr<float>();
+        const int slot = resident_slot(image_idx);
+        const auto grid = resident_grids_.slice(0, slot, slot + 1);
         assert(static_cast<int>(grids_.shape()[1]) == channels_);
-
         slice_grad_.zero_();
-
-        if (layout.chw) {
-            auto grad_rgb = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::GPU);
-            if (parameterization_ == BilateralGridParameterization::ExposureChroma) {
-                kernels::launch_bilateral_grid_slice_backward_exposure_chroma_chw(
-                    grid_ptr, rgb_cont.ptr<float>(), grad_cont.ptr<float>(),
-                    grad_grid_ptr, grad_rgb.ptr<float>(),
-                    grid_guidance_, grid_height_, grid_width_, layout.height, layout.width,
-                    offset_ptr, nullptr);
-            } else {
-                kernels::launch_bilateral_grid_slice_backward_chw(
-                    grid_ptr, rgb_cont.ptr<float>(), grad_cont.ptr<float>(),
-                    grad_grid_ptr, grad_rgb.ptr<float>(),
-                    grid_guidance_, grid_height_, grid_width_, layout.height, layout.width,
-                    offset_ptr, nullptr);
-            }
-            return grad_rgb;
-        }
-
-        auto grad_rgb = lfs::core::Tensor::empty({shape[0], shape[1], 3}, lfs::core::Device::GPU);
-        if (parameterization_ == BilateralGridParameterization::ExposureChroma) {
-            kernels::launch_bilateral_grid_slice_backward_exposure_chroma(
-                grid_ptr, rgb_cont.ptr<float>(), grad_cont.ptr<float>(),
-                grad_grid_ptr, grad_rgb.ptr<float>(),
-                grid_guidance_, grid_height_, grid_width_, layout.height, layout.width,
-                offset_ptr, nullptr);
-        } else {
-            kernels::launch_bilateral_grid_slice_backward(
-                grid_ptr, rgb_cont.ptr<float>(), grad_cont.ptr<float>(),
-                grad_grid_ptr, grad_rgb.ptr<float>(),
-                grid_guidance_, grid_height_, grid_width_, layout.height, layout.width,
-                offset_ptr, nullptr);
-        }
+        auto grad_rgb = lfs::core::Tensor::empty(shape, lfs::core::Device::GPU);
+        training_ops(lfs::core::default_gpu_backend()).bilateral->slice_backward(grid, rgb_cont, grad_cont, shared_offset_, slice_grad_, grad_rgb, {.layout = layout.chw ? ops::Layout::CHW : ops::Layout::HWC, .transform = parameterization_ == BilateralGridParameterization::ExposureChroma ? ops::GridTransform::ExposureChroma : ops::GridTransform::Affine});
         return grad_rgb;
     }
 
@@ -394,11 +338,9 @@ namespace lfs::training {
             throw std::out_of_range("BilateralGrid::tv_loss_gpu: image_idx out of range");
         }
         tv_loss_scalar_.zero_();
-        kernels::launch_bilateral_grid_tv_forward(
-            device_slice(resident_grids_, resident_slot(image_idx)), tv_loss_scalar_.ptr<float>(),
-            tv_temp_buffer_.ptr<float>(),
-            1, channels_, grid_guidance_, grid_height_, grid_width_,
-            num_images_, nullptr);
+        const int slot = resident_slot(image_idx);
+        const auto grid = resident_grids_.slice(0, slot, slot + 1);
+        training_ops(lfs::core::default_gpu_backend()).bilateral->tv_forward(grid, tv_loss_scalar_, tv_temp_buffer_, num_images_);
         return tv_loss_scalar_;
     }
 
@@ -413,10 +355,9 @@ namespace lfs::training {
         if (image_idx < 0 || image_idx >= num_images_) {
             throw std::out_of_range("BilateralGrid::tv_backward: image_idx out of range");
         }
-        kernels::launch_bilateral_grid_tv_backward(
-            device_slice(resident_grids_, resident_slot(image_idx)), tv_weight, slice_grad_.ptr<float>(),
-            1, channels_, grid_guidance_, grid_height_, grid_width_,
-            num_images_, nullptr);
+        const int slot = resident_slot(image_idx);
+        const auto grid = resident_grids_.slice(0, slot, slot + 1);
+        training_ops(lfs::core::default_gpu_backend()).bilateral->tv_backward(grid, slice_grad_, tv_weight, num_images_);
     }
 
     void BilateralGrid::optimizer_step() {
@@ -432,26 +373,19 @@ namespace lfs::training {
         }
         const int slot = resident_slot(image_idx);
         slots_[static_cast<size_t>(slot)].dirty = true;
-        float* const exp_avg = device_slice(resident_exp_avg_, slot);
-        float* const exp_avg_sq = device_slice(resident_exp_avg_sq_, slot);
+        auto grid = resident_grids_.slice(0, slot, slot + 1);
+        auto exp_avg = resident_exp_avg_.slice(0, slot, slot + 1);
+        auto exp_avg_sq = resident_exp_avg_sq_.slice(0, slot, slot + 1);
         const int64_t K = step_ - last_step_[static_cast<size_t>(image_idx)];
         if (K > 1) {
             const double skipped = static_cast<double>(K - 1);
             const float scale_avg = static_cast<float>(std::pow(config_.beta1, skipped));
             const float scale_avg_sq = static_cast<float>(std::pow(config_.beta2, skipped));
-            kernels::launch_bilateral_grid_scale_moments(
-                exp_avg, exp_avg_sq,
-                static_cast<int>(slice_elements()), scale_avg, scale_avg_sq, nullptr);
+            training_ops(lfs::core::default_gpu_backend()).bilateral->scale_moments(exp_avg, exp_avg_sq, scale_avg, scale_avg_sq);
         }
         float bc1_rcp, bc2_sqrt_rcp;
         compute_bias_corrections(bc1_rcp, bc2_sqrt_rcp);
-        kernels::launch_bilateral_grid_adam_update(
-            device_slice(resident_grids_, slot), exp_avg,
-            exp_avg_sq, slice_grad_.ptr<float>(),
-            static_cast<int>(slice_elements()),
-            static_cast<float>(current_lr_),
-            static_cast<float>(config_.beta1), static_cast<float>(config_.beta2),
-            bc1_rcp, bc2_sqrt_rcp, static_cast<float>(config_.eps), nullptr);
+        training_ops(lfs::core::default_gpu_backend()).bilateral->adam(grid, exp_avg, exp_avg_sq, slice_grad_, {static_cast<float>(current_lr_), static_cast<float>(config_.beta1), static_cast<float>(config_.beta2), bc1_rcp, bc2_sqrt_rcp, static_cast<float>(config_.eps)});
         last_step_[static_cast<size_t>(image_idx)] = step_;
     }
 
@@ -474,10 +408,7 @@ namespace lfs::training {
             const float spatial = static_cast<float>(
                 grid_guidance_ * grid_height_ * grid_width_);
             const float inv_n_spatial = 1.0f / (static_cast<float>(num_images_) * spatial);
-            kernels::launch_bilateral_grid_update_shared_offset(
-                channel_sum_.ptr<float>(), shared_offset_.ptr<float>(),
-                identity_mean_.ptr<float>(), mean_old.ptr<float>(), mean_new.ptr<float>(),
-                channels_, spatial, inv_n_spatial, nullptr);
+            training_ops(lfs::core::default_gpu_backend()).bilateral->update_offset(channel_sum_, shared_offset_, identity_mean_, mean_old, mean_new, spatial, inv_n_spatial);
         }
         nvtxRangePop();
 
@@ -647,16 +578,12 @@ namespace lfs::training {
         const auto mean = channel_mean_of_image(image_idx);
         const int slot = resident_slot(image_idx);
         slots_[static_cast<size_t>(slot)].dirty = true;
-        kernels::launch_bilateral_grid_project_mean(
-            device_slice(resident_grids_, slot), mean.ptr<float>(), identity_mean_.ptr<float>(),
-            1, channels_, grid_guidance_, grid_height_, grid_width_, 1, nullptr);
+        auto grid = resident_grids_.slice(0, slot, slot + 1);
+        training_ops(lfs::core::default_gpu_backend()).bilateral->project_mean(grid, mean, identity_mean_, 1);
         const float spatial = static_cast<float>(grid_guidance_ * grid_height_ * grid_width_);
         const float inv_n_spatial = 1.0f / (static_cast<float>(num_images_) * spatial);
         auto zeros = lfs::core::Tensor::zeros({static_cast<size_t>(channels_)}, lfs::core::Device::GPU);
-        kernels::launch_bilateral_grid_update_shared_offset(
-            channel_sum_.ptr<float>(), shared_offset_.ptr<float>(),
-            identity_mean_.ptr<float>(), mean.ptr<float>(), zeros.ptr<float>(),
-            channels_, spatial, inv_n_spatial, nullptr);
+        training_ops(lfs::core::default_gpu_backend()).bilateral->update_offset(channel_sum_, shared_offset_, identity_mean_, mean, zeros, spatial, inv_n_spatial);
     }
 
     void BilateralGrid::project_mean(bool per_image) {

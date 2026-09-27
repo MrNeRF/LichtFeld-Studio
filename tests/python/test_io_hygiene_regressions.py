@@ -29,3 +29,4 @@ def test_mask_cache_and_eight_bit_staging_contracts():
     assert "cuda_stream = image_execution_stream(cuda_stream);" in encode_body
     assert "cudaStreamSynchronize(static_cast<cudaStream_t>(cuda_stream))" in encode_body
     assert "cuda_stream == nullptr" not in encode_body
+    assert "cudaDeviceSynchronize" not in encode_body

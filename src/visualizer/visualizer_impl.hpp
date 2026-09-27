@@ -401,6 +401,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_BoundCheckpointIterationCacheSkipsHeaderWhenWarm_Test;
         friend class VisualizerImplResetTest_SelectedGaussiansAndSelectionToolSurviveSaveAndReopen_Test;
         friend class VisualizerImplResetTest_DatasetProjectWithoutCheckpointReloadsTrainer_Test;
+        friend class VisualizerImplResetTest_DatasetProjectWithoutCheckpointOpensReady_Test;
         friend class VisualizerImplResetTest_HydratedDatasetReopenMarksDeletedImageMissing_Test;
         friend class VisualizerImplResetTest_HydratedDatasetReopenIncludesRestoredImage_Test;
         friend class VisualizerImplResetTest_HydratedDatasetReopenAllImagesMissingDoesNotCrash_Test;

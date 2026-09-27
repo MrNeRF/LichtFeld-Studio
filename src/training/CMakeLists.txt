@@ -92,8 +92,14 @@ set(TRAINING_NEW_SOURCES
     ops/requirements.cpp
     ops/photometric_cuda.cpp
     ops/adam_cuda.cpp
+    ops/bilateral_cuda.cpp
+    ops/training_image_cuda.cpp
     ops/mcmc_cuda.cpp
     ops/mrnf_cuda.cpp
+    ops/morton_cuda.cpp
+    ops/masks_cuda.cpp
+    ops/extra_loss_cuda.cpp
+    ops/sh_cuda.cpp
     losses/mask_loss.cpp
     strategies/strategy_utils.cpp
     strategies/mcmc.cpp

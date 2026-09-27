@@ -97,8 +97,6 @@
   "projects.action.repair": "修复",
   "projects.action.verify": "验证",
   "projects.action.update_version": "更新 LichtFeld Studio",
-  "projects.action.export": "导出",
-  "projects.dialog.export_as": "导出项目",
   "projects.dialog.update_thumbnail": "更新缩略图",
   "projects.dialog.rename_project": "重命名项目",
   "projects.dialog.repair": "修复项目",
@@ -143,6 +141,7 @@
     "file.save_project": "保存项目",
     "file.save_project_as": "项目另存为...",
     "file.compact_project": "压缩项目",
+    "file.compact_stop_training": "压缩项目前请先停止训练。",
     "file.embed_dataset": "将数据集嵌入项目",
     "file.auto_save_on_close": "关闭时直接保存（不询问）",
     "file.no_recent_projects": "没有最近项目",
@@ -2062,6 +2061,7 @@
     "reload": "重新加载"
   },
   "status_bar": {
+    "preview_reduced": "预览分辨率已降低（GPU 显存）",
     "safe_mode": "安全模式",
     "mcp_preferences": "编辑",
     "mcp_turn_on": "开启",
@@ -2918,7 +2918,6 @@
   "projects.dialog.first_embedded_image": "第一张嵌入图像",
   "projects.dialog.image_file": "图像文件",
   "projects.property.display_name": "显示名称",
-  "projects.dialog.format": "格式",
   "projects.dialog.source": "来源",
   "projects.gallery.eligibility.connect": "Portal 连接不可用。",
   "projects.gallery.eligibility.busy": "另一项操作正在进行",

@@ -557,10 +557,16 @@ set(TEST_FILES
     test_photometric_ops.cpp
     test_fast_ops.cpp
     fast_raster_test_helpers.cpp
+    test_training_image_ops.cpp
     test_adam_ops.cpp
     test_geometry_ops.cpp
+    test_bilateral_ops.cpp
     test_mcmc_ops.cpp
     test_mrnf_ops.cpp
+    test_morton_ops.cpp
+    test_mask_ops.cpp
+    test_extra_loss_ops.cpp
+    test_sh_ops.cpp
     test_persistent_masks.cpp
     test_fused_noise_injection.cpp
     test_densification_info_zero.cpp

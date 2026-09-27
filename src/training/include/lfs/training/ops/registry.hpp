@@ -5,11 +5,17 @@
 
 #include "core/gpu_backend_fwd.hpp"
 #include "lfs/training/ops/adam.hpp"
+#include "lfs/training/ops/bilateral.hpp"
+#include "lfs/training/ops/extra_loss.hpp"
 #include "lfs/training/ops/geometry.hpp"
 #include "lfs/training/ops/loss.hpp"
+#include "lfs/training/ops/masks.hpp"
 #include "lfs/training/ops/mcmc.hpp"
+#include "lfs/training/ops/morton.hpp"
 #include "lfs/training/ops/mrnf.hpp"
 #include "lfs/training/ops/raster.hpp"
+#include "lfs/training/ops/sh.hpp"
+#include "lfs/training/ops/training_image.hpp"
 
 #include <bitset>
 #include <optional>
@@ -33,6 +39,12 @@ namespace lfs::training {
         const ops::MrnfOps* mrnf = nullptr;
         const ops::GeometryLossOps* geometry = nullptr;
         const ops::FastRasterOps* fast = nullptr;
+        const ops::MortonOps* morton = nullptr;
+        const ops::MaskOps* masks = nullptr;
+        const ops::ExtraLossOps* extra_loss = nullptr;
+        const ops::BilateralOps* bilateral = nullptr;
+        const ops::TrainingImageOps* training_image = nullptr;
+        const ops::ShOps* sh = nullptr;
     };
 
     enum class Family {
@@ -61,6 +73,9 @@ namespace lfs::training {
     using FamilySet = std::bitset<static_cast<size_t>(Family::Count)>;
 
     const TrainingOps& training_ops(core::GpuBackend backend);
+
+    // Throws the missing-family message when this backend has no Sh table.
+    const ops::ShOps& training_sh_ops();
 
     // Called after configuration defaults and input-dependent options are resolved.
     // input_dependencies covers the selected loader and preprocessing path.

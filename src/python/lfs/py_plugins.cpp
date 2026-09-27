@@ -6,7 +6,16 @@
 #include "py_ui.hpp"
 #include "python_runtime.hpp"
 
+#include "core/error.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
+#include "core/user_paths.hpp"
+
+#include <algorithm>
+#include <cctype>
+#include <filesystem>
+#include <format>
+#include <stdexcept>
 
 #include <nanobind/stl/function.h>
 #include <nanobind/stl/map.h>
@@ -205,6 +214,40 @@ namespace lfs::python {
             "settings",
             [](const std::string& plugin_name) { return get_settings_manager().attr("get")(plugin_name); },
             nb::arg("plugin_name"), "Get settings object for a plugin");
+
+        // ===== Data Directory API =====
+
+        plugins.def(
+            "data_dir",
+            [](const std::string& plugin_name) {
+                // One plain folder name per plugin: no separators, no traversal.
+                const bool valid_name =
+                    !plugin_name.empty() && plugin_name.front() != '.' &&
+                    std::ranges::all_of(plugin_name, [](const unsigned char c) {
+                        return std::isalnum(c) || c == '_' || c == '-' || c == '.';
+                    });
+                if (!valid_name) {
+                    throw std::invalid_argument(
+                        std::format("Invalid plugin name for data_dir: '{}'", plugin_name));
+                }
+                auto paths = core::UserPaths::resolve();
+                if (!paths) {
+                    throw std::runtime_error(
+                        std::format("data_dir failed: {}",
+                                    lfs::format_for_developer(paths.error())));
+                }
+                const auto directory = paths->pluginDataDir() / plugin_name;
+                std::error_code error;
+                std::filesystem::create_directories(directory, error);
+                if (error) {
+                    throw std::runtime_error(
+                        std::format("Unable to create plugin data directory '{}': {}",
+                                    core::path_to_utf8(directory), error.message()));
+                }
+                return core::path_to_utf8(directory);
+            },
+            nb::arg("plugin_name"),
+            "Return the plugin's durable data directory, creating it if missing");
 
         // ===== Template Generator =====
 

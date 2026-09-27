@@ -12998,6 +12998,50 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
+           DatasetProjectWithoutCheckpointOpensReady) {
+        LFS_CUDA_BACKEND_OR_RETURN();
+        const auto project_path =
+            temporary_.path / "never-trained.licht";
+        const auto dataset_path =
+            temporary_.path / "never-trained-source";
+        write_minimal_transforms_dataset(dataset_path);
+        write_dataset_project_without_checkpoint(
+            project_path, dataset_path);
+
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        ASSERT_TRUE(viewer.getParameterManager()
+                        ->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        auto opened = viewer.projectOpen(
+            project_path,
+            ProjectSwitchDisposition::DiscardChanges);
+        ASSERT_TRUE(opened)
+            << lfs::format_for_developer(
+                   opened.error());
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        // Nothing asks for a restore: a project that never trained opens
+        // with its trainer built, ready to start.
+        ASSERT_TRUE(pumpUntil(
+            viewer.work_queue_mutex_,
+            viewer.work_queue_, [&] {
+                viewer.getGuiManager()
+                    ->asyncTasks()
+                    .pollImportCompletion();
+                const auto session =
+                    viewer.projectTrainingSessionState();
+                return session.hydrated && !session.restoring;
+            }));
+
+        ASSERT_NE(viewer.getTrainer(), nullptr);
+        EXPECT_EQ(viewer.getTrainerManager()->getState(),
+                  lfs::vis::TrainingState::Ready);
+        EXPECT_EQ(
+            viewer.getTrainer()->getParams().optimization.iterations,
+            1234);
+    }
+
+    TEST_F(VisualizerImplResetTest,
            HydratedDatasetReopenMarksDeletedImageMissing) {
         LFS_CUDA_BACKEND_OR_RETURN();
         const auto dataset_path =

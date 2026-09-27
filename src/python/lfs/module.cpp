@@ -1683,6 +1683,48 @@ NB_MODULE(lichtfeld, m) {
         },
         "Return whether the active project has a bound .licht path");
     m.def(
+        "project_path", []() -> std::optional<std::string> {
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                return std::nullopt;
+            }
+            auto info = viewer->projectGetInfo();
+            if (!info) {
+                throw std::runtime_error(
+                    std::format(
+                        "project_path failed: {}",
+                        lfs::format_for_developer(
+                            info.error())));
+            }
+            if (!info->path) {
+                return std::nullopt;
+            }
+            return lfs::core::path_to_utf8(*info->path);
+        },
+        "Return the active project's bound .licht path, or None");
+    m.def(
+        "project_uuid", []() -> std::optional<std::string> {
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                return std::nullopt;
+            }
+            auto info = viewer->projectGetInfo();
+            if (!info) {
+                throw std::runtime_error(
+                    std::format(
+                        "project_uuid failed: {}",
+                        lfs::format_for_developer(
+                            info.error())));
+            }
+            if (info->project_uuid.empty()) {
+                return std::nullopt;
+            }
+            return info->project_uuid;
+        },
+        "Return the active project UUID (kept across saves), or None");
+    m.def(
         "project_can_embed_dataset", []() {
             auto* const viewer = lfs::python::get_visualizer();
             if (!viewer) {

@@ -338,8 +338,8 @@ namespace {
     }
 
     TEST(TensorQueue, UnsupportedVulkanOperationsAreExplicit) {
-        EXPECT_THROW(TensorWorkQueue(GpuBackend::Vulkan), std::runtime_error);
-        EXPECT_THROW(TensorFence(GpuBackend::Vulkan), std::runtime_error);
+        EXPECT_THROW(TensorWorkQueue{GpuBackend::Vulkan}, std::runtime_error);
+        EXPECT_THROW(TensorFence{GpuBackend::Vulkan}, std::runtime_error);
     }
 
     TEST(TensorQueue, PackedReadbackPreservesSourceAndDestinationOffsets) {

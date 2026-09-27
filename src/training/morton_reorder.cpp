@@ -12,10 +12,10 @@
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor_completion.hpp"
-#include "kernels/morton_reorder_kernels.hpp"
 #include "lfs/training/idle_arena_scratch.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/live_model_mutation_guard.hpp"
+#include "lfs/training/ops/registry.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "optimizer/adam_optimizer.hpp"
@@ -270,7 +270,8 @@ namespace lfs::training::morton {
 
     namespace {
 
-        void permute_optimizer(AdamOptimizer& optimizer, const Tensor& perm, cudaStream_t stream) {
+        void permute_optimizer(AdamOptimizer& optimizer, const Tensor& perm, cudaStream_t stream,
+                               const ops::MortonOps& morton_ops) {
             const std::size_t n = perm.numel();
             if (n == 0) {
                 return;
@@ -323,16 +324,11 @@ namespace lfs::training::morton {
                 Tensor dest_bounds = Tensor::empty_exact({nb, std::size_t{4}}, DataType::Float32);
                 dest_bounds.set_stream(stream);
                 dest_bounds.zero_();
-                kernels::launch_joint_permute_contiguous(
-                    state->exp_avg.ptr<std::uint8_t>(),
-                    state->joint_bounds.ptr<float>(),
-                    dest_packed.ptr<std::uint8_t>(),
-                    dest_bounds.ptr<float>(),
-                    perm.ptr<std::int64_t>(),
-                    static_cast<int>(n),
-                    n_attr,
-                    state->joint_bits,
-                    stream);
+                {
+                    const core::CUDAStreamGuard stream_guard(stream);
+                    morton_ops.permute_joint(state->exp_avg, state->joint_bounds, perm, dest_packed, dest_bounds,
+                                             {ops::JointLayout::Rows, static_cast<int>(n), n_attr, state->joint_bits});
+                }
                 state->exp_avg.copy_from(dest_packed);
                 state->joint_bounds.copy_from(dest_bounds);
             }
@@ -343,7 +339,8 @@ namespace lfs::training::morton {
             const core::SplatData& splat,
             const Tensor& perm,
             cudaStream_t stream,
-            const IdleArenaScratch& scratch) {
+            const IdleArenaScratch& scratch,
+            const ops::MortonOps& morton_ops) {
             auto* state = optimizer.get_state_mutable(ParamType::ShN);
             if (state == nullptr || !state->is_joint() || !state->exp_avg.is_valid() ||
                 !state->joint_bounds.is_valid()) {
@@ -382,16 +379,12 @@ namespace lfs::training::morton {
             dest_bounds.set_stream(stream);
             dest_bounds.zero_();
             if (auto* packed = static_cast<std::uint8_t*>(scratch.zeroed(packed_bytes))) {
-                kernels::launch_joint_permute_shN(
-                    state->exp_avg.ptr<std::uint8_t>(),
-                    state->joint_bounds.ptr<float>(),
-                    packed,
-                    dest_bounds.ptr<float>(),
-                    perm.ptr<std::int64_t>(),
-                    static_cast<int>(n),
-                    slots,
-                    state->joint_bits,
-                    stream);
+                auto dest_packed = Tensor::from_blob(packed, {packed_bytes}, Device::CUDA, DataType::UInt8, stream);
+                {
+                    const core::CUDAStreamGuard stream_guard(stream);
+                    morton_ops.permute_joint(state->exp_avg, state->joint_bounds, perm, dest_packed, dest_bounds,
+                                             {ops::JointLayout::SwizzledSH, static_cast<int>(n), slots, state->joint_bits});
+                }
                 copy_back(state->exp_avg, packed, packed_bytes, stream);
             } else {
                 constexpr std::size_t R = core::kShReorderSize;
@@ -399,17 +392,12 @@ namespace lfs::training::morton {
                 const std::size_t slot_bytes =
                     tiles * R * 4 * static_cast<std::size_t>(joint_adam::bytes_per_cell(state->joint_bits));
                 const auto group = group_scratch(scratch, slot_bytes, static_cast<std::size_t>(slots), stream);
-                kernels::launch_joint_permute_shN_grouped(
-                    state->exp_avg.ptr<std::uint8_t>(),
-                    state->joint_bounds.ptr<float>(),
-                    dest_bounds.ptr<float>(),
-                    perm.ptr<std::int64_t>(),
-                    static_cast<int>(n),
-                    slots,
-                    state->joint_bits,
-                    static_cast<std::uint8_t*>(group.ptr),
-                    group.bytes,
-                    stream);
+                auto group_view = Tensor::from_blob(group.ptr, {group.bytes}, Device::CUDA, DataType::UInt8, stream);
+                {
+                    const core::CUDAStreamGuard stream_guard(stream);
+                    morton_ops.permute_joint_grouped(state->exp_avg, state->joint_bounds, perm, dest_bounds, group_view,
+                                                     {ops::JointLayout::SwizzledSH, static_cast<int>(n), slots, state->joint_bits});
+                }
                 if (state->exp_avg.stream() != stream) {
                     lfs::core::waitForCUDAStream(state->exp_avg.stream(), stream);
                 }
@@ -469,6 +457,12 @@ namespace lfs::training::morton {
             return result;
         }
 
+        const auto backend = core::default_gpu_backend();
+        const auto* morton_ops = training_ops(backend).morton;
+        if (morton_ops == nullptr) [[unlikely]] {
+            throw std::runtime_error(unavailable_training_family(backend, Family::Morton)
+                                         .value_or("Morton training ops are unavailable"));
+        }
         LiveModelMutationGuard mutation_guard("morton_reorder");
         if (stream == nullptr) {
             stream = core::getCurrentCUDAStream();
@@ -477,7 +471,10 @@ namespace lfs::training::morton {
             splat.means().set_stream(stream);
         }
 
-        result.permutation = kernels::launch_morton_permutation(splat.means(), stream);
+        {
+            const core::CUDAStreamGuard stream_guard(stream);
+            result.permutation = morton_ops->permutation(splat.means());
+        }
         if (!result.permutation.is_valid() || result.permutation.numel() != n) {
             LOG_ERROR("Morton reorder failed to produce a permutation of length {}", n);
             return result;
@@ -509,8 +506,8 @@ namespace lfs::training::morton {
         }
 
         if (optimizer != nullptr) {
-            permute_optimizer(*optimizer, result.permutation, stream);
-            permute_optimizer_shN(*optimizer, splat, result.permutation, stream, scratch);
+            permute_optimizer(*optimizer, result.permutation, stream, *morton_ops);
+            permute_optimizer_shN(*optimizer, splat, result.permutation, stream, scratch, *morton_ops);
         }
 
         splat.note_param_layout_changed();

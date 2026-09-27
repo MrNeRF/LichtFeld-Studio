@@ -1500,26 +1500,25 @@ namespace lfs::training {
 
             const bool indices_are_i64 = indices.dtype() == lfs::core::DataType::Int64;
             lfs::core::Tensor indices_i32;
-            const int* indices_i32_ptr = nullptr;
             if (!indices_are_i64) {
                 indices_i32 = indices.dtype() == lfs::core::DataType::Int32
                                   ? indices
                                   : indices.to(lfs::core::DataType::Int32);
-                indices_i32_ptr = indices_i32.ptr<int>();
             }
 
             auto gather_new_swizzled_rows = [&](lfs::core::Tensor& tensor) {
                 const auto stream = lfs::core::getCurrentCUDAStream();
                 (indices_are_i64 ? indices : indices_i32).sync_to_stream(stream);
                 tensor.set_stream(stream);
-                float* ptr = tensor.ptr<float>();
-                if (indices_are_i64) {
-                    lfs::core::shN_swizzled_gather_self_i64(
-                        ptr, ptr, indices.ptr<int64_t>(), n_new, old_N, layout_rest, stream);
-                } else {
-                    lfs::core::shN_swizzled_gather_self(
-                        ptr, ptr, indices_i32_ptr, n_new, old_N, layout_rest, stream);
-                }
+                training_sh_ops().gather_swizzled(
+                    tensor,
+                    indices_are_i64 ? indices : indices_i32,
+                    tensor,
+                    {.source_rows = old_N,
+                     .count = n_new,
+                     .destination_offset = old_N,
+                     .source_rest = layout_rest,
+                     .destination_rest = layout_rest});
             };
 
             // q16: gather-decode sources and encode only the appended 256-splat

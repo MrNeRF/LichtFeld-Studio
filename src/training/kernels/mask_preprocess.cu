@@ -14,6 +14,9 @@
 #include <type_traits>
 
 namespace lfs::training::kernels {
+
+    using lfs::gpu_ops::MaskOpacityMode;
+    using lfs::gpu_ops::MaskPhotoMode;
     namespace {
 
         constexpr int kBlock = 256;

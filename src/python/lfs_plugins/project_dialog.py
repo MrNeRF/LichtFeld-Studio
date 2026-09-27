@@ -40,10 +40,6 @@ def form_content(kind: str, data: dict[str, Any], *, tr: Callable[[str], str],
     buttons = []
     if busy:
         body += f'<div class="modal-note">{label("projects.status.reading")}</div>'
-    elif kind == "export_as":
-        body += choice("format", "projects.dialog.format", [(value, value.upper()) for value in data.get("formats", [])])
-        body += field("destination", "projects.dialog.choose_destination")
-        buttons = [button("projects.dialog.choose_destination")]
     elif kind == "update_thumbnail":
         keys = {"viewport": "projects.dialog.current_viewport", "first_dataset": "projects.dialog.first_dataset_image", "first_embedded": "projects.dialog.first_embedded_image", "image_file": "projects.dialog.image_file"}
         sources = data.get("sources") or ["image_file"]

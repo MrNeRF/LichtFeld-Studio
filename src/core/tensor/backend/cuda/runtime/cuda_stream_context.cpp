@@ -72,13 +72,9 @@ namespace lfs::core {
 
     cudaError_t memcpy_ordered(void* const dst, const void* const src, const size_t bytes,
                                const cudaMemcpyKind kind, const cudaStream_t stream) {
-        if (stream != nullptr && kind == cudaMemcpyDeviceToHost) {
-            bridgeStreams(stream, nullptr);
-        }
-        const cudaError_t status = cudaMemcpy(dst, src, bytes, kind);
-        if (status == cudaSuccess && stream != nullptr && kind == cudaMemcpyHostToDevice) {
-            bridgeStreams(nullptr, stream);
-        }
+        auto status = cudaMemcpyAsync(dst, src, bytes, kind, stream);
+        if (status == cudaSuccess)
+            status = cudaStreamSynchronize(stream);
         return status;
     }
 
@@ -105,7 +101,7 @@ namespace lfs::core {
             for (const Tensor* input : inputs) {
                 LFS_ASSERT_MSG(input != nullptr && input->is_valid(),
                                "stream preparation requires valid tensor inputs");
-                if (input->device() == Device::GPU) {
+                if (input->device() == Device::GPU && !is_stream_retired(input->stream())) {
                     execution_stream = input->stream();
                     break;
                 }

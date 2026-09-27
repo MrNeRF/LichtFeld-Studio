@@ -6,6 +6,7 @@
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
+#include "core/tensor_cuda_interop.hpp"
 #include "core/tensor_serialization.hpp"
 #include <algorithm>
 #include <array>
@@ -378,6 +379,8 @@ namespace lfs::training {
         const int camera_idx = translate_camera(camera_id);
         const float clamped = std::clamp(exposure_ev, -16.0f, 16.0f); // PPISP_MIN/MAX_EXPOSURE_EV
         override_exposure_.fill_(clamped);
+        // The forward kernel resolves a null stream to the current stream.
+        lfs::core::waitForCUDAStream(lfs::core::getCurrentCUDAStream(), override_exposure_.stream());
         return apply_forward(rgb, camera_idx, 0, override_exposure_.ptr<float>(), override_color_.ptr<float>(), 1,
                              region);
     }
@@ -447,6 +450,7 @@ namespace lfs::training {
             crf_modified.flatten().slice(0, copy_offset, copy_offset + 12).copy_from(crf_cpu.flatten().slice(0, copy_offset, copy_offset + 12));
         }
 
+        lfs::core::waitForCUDAStream(lfs::core::getCurrentCUDAStream(), override_exposure_.stream());
         kernels::launch_ppisp_forward_chw_region(override_exposure_.ptr<float>(), vignetting_modified.ptr<float>(),
                                                  override_color_.ptr<float>(), crf_modified.ptr<float>(),
                                                  rgb.ptr<float>(), output.ptr<float>(), h, w, region.y_offset, full_h,

@@ -70,14 +70,6 @@ namespace lfs::core {
         std::uint32_t active_coeffs_rest,
         cudaStream_t stream = nullptr);
 
-    // int64 variant for callers holding device-side Int64 index buffers (e.g. relocate).
-    void shN_swizzled_zero_at_indices_i64(
-        float* buffer_swizzled,
-        const std::int64_t* indices,
-        std::size_t n_indices,
-        std::uint32_t active_coeffs_rest,
-        cudaStream_t stream = nullptr);
-
     // Gather n_dst primitives' SH from src_indices[i] into dst position (dst_offset + i).
     // src and dst MAY alias (in-place append-gather) as long as the source range
     // [0, dst_offset) and the destination range [dst_offset, dst_offset + n_dst) are
@@ -110,17 +102,6 @@ namespace lfs::core {
         std::size_t n_dst,
         std::size_t dst_offset,
         std::uint32_t active_coeffs_rest,
-        cudaStream_t stream = nullptr);
-
-    // Copy the first n_src primitives from one swizzled buffer into dst_offset in another
-    // swizzled buffer. Source and destination may have different padded block boundaries.
-    void shN_swizzled_copy_contiguous(
-        const float* src_swizzled,
-        float* dst_swizzled,
-        std::size_t n_src,
-        std::size_t dst_offset,
-        std::uint32_t src_active_coeffs_rest,
-        std::uint32_t dst_active_coeffs_rest,
         cudaStream_t stream = nullptr);
 
     // Copy n_src primitives starting at src_offset from one swizzled buffer into

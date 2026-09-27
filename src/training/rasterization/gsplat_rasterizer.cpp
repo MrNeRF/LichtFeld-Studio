@@ -5,14 +5,13 @@
 #include "gsplat_rasterizer.hpp"
 #include "core/crash_handler.hpp"
 #include "core/cuda/memory_arena.hpp"
-#include "core/cuda/sh_layout.cuh"
 #include "core/cuda_error.hpp"
 #include "core/error.hpp"
 #include "core/logger.hpp"
-#include "core/sh_value_quant_kernels.hpp"
-#include "core/splat_exportable_storage.hpp"
+#include "core/sh_layout.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "gsplat/Ops.h"
+#include "lfs/training/ops/registry.hpp"
 #include "training/kernels/densification_kernels.hpp"
 #include "training/kernels/grad_alpha.hpp"
 #include <algorithm>
@@ -220,14 +219,12 @@ namespace lfs::training {
                         dequant.set_stream(fwd_stream);
                     }
                     shN_dequant_temp = dequant;
-                    const auto q16 = lfs::core::resolve_q16_bind_ptrs(gaussian_model);
-                    lfs::core::sh_value_quant::decode_shN_u16_to_float4(
-                        reinterpret_cast<const std::uint16_t*>(q16.codes),
-                        q16.bounds,
-                        shN_dequant_temp.ptr<float>(),
+                    training_sh_ops().decode_q16(
+                        gaussian_model.shN(),
+                        gaussian_model.shN_value_bounds(),
+                        shN_dequant_temp,
                         n_prims,
-                        rest,
-                        fwd_stream);
+                        rest);
                     shN_ptr = shN_dequant_temp.ptr<float>();
                 } else {
                     if (shN.dtype() != core::DataType::Float32) {

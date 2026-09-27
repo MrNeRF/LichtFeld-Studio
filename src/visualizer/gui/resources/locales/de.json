@@ -97,8 +97,6 @@
   "projects.action.repair": "Reparieren",
   "projects.action.verify": "Prüfen",
   "projects.action.update_version": "LichtFeld Studio aktualisieren",
-  "projects.action.export": "Exportieren",
-  "projects.dialog.export_as": "Projekt exportieren",
   "projects.dialog.update_thumbnail": "Vorschaubild aktualisieren",
   "projects.dialog.rename_project": "Projekt umbenennen",
   "projects.dialog.repair": "Projekt reparieren",
@@ -143,6 +141,7 @@
     "file.save_project": "Projekt speichern",
     "file.save_project_as": "Projekt speichern unter...",
     "file.compact_project": "Projekt komprimieren",
+    "file.compact_stop_training": "Beenden Sie das Training, bevor Sie das Projekt komprimieren.",
     "file.embed_dataset": "Datensatz ins Projekt einbetten",
     "file.auto_save_on_close": "Beim Schließen speichern ohne Nachfrage",
     "file.no_recent_projects": "Keine zuletzt geöffneten Projekte",
@@ -2062,6 +2061,7 @@
     "reload": "Neu laden"
   },
   "status_bar": {
+    "preview_reduced": "Vorschauauflösung reduziert (GPU-Speicher)",
     "safe_mode": "ABGESICHERTER MODUS",
     "mcp_preferences": "Bearbeiten",
     "mcp_turn_on": "Einschalten",
@@ -2918,7 +2918,6 @@
   "projects.dialog.first_embedded_image": "Erstes eingebettetes Bild",
   "projects.dialog.image_file": "Bilddatei",
   "projects.property.display_name": "Anzeigename",
-  "projects.dialog.format": "Format",
   "projects.dialog.source": "Quelle",
   "projects.gallery.eligibility.connect": "Die Portal-Verbindung ist nicht verfügbar.",
   "projects.gallery.eligibility.busy": "Ein anderer Vorgang läuft",

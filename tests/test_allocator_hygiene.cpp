@@ -15,6 +15,7 @@
 #include <atomic>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <limits>
 #include <vector>
 
 using namespace lfs::core;
@@ -130,6 +131,32 @@ TEST_F(AllocatorHygiene, TrimCachedMemoryFreesFullyEmptySlabs) {
     EXPECT_LT(reserved_after, reserved_peak)
         << "trim_cached_memory must free fully-empty slabs (peak="
         << reserved_peak << " after=" << reserved_after << ")";
+}
+
+TEST_F(AllocatorHygiene, TrimCachedMemoryReleasesFiniteCheckScratch) {
+    auto& pool = CudaMemoryPool::instance();
+    const auto& stats = GPUSlabAllocator::instance().stats();
+    pool.trim_cached_memory();
+
+    // Repeat to verify that a finite check can recreate its cache after trim.
+    for (int pass = 0; pass < 2; ++pass) {
+        const auto allocs_before = stats.alloc_count.load(std::memory_order_relaxed);
+        const auto frees_before = stats.free_count.load(std::memory_order_relaxed);
+        {
+            auto values = Tensor::ones({64}, Device::GPU, DataType::Float32);
+            EXPECT_FALSE(values.has_nan());
+            EXPECT_FALSE(values.has_inf());
+            values.fill_(std::numeric_limits<float>::quiet_NaN());
+            EXPECT_TRUE(values.has_nan());
+            values.fill_(std::numeric_limits<float>::infinity());
+            EXPECT_TRUE(values.has_inf());
+        }
+        pool.trim_cached_memory();
+        cuda_ok();
+        EXPECT_EQ(stats.alloc_count.load(std::memory_order_relaxed) - allocs_before,
+                  stats.free_count.load(std::memory_order_relaxed) - frees_before)
+            << "trim must release finite-check scratch as well as tensor storage";
+    }
 }
 
 TEST_F(AllocatorHygiene, FailedSlabReclaimRestoresOwnershipAndAccounting) {

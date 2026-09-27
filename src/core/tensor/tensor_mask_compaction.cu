@@ -32,7 +32,7 @@ namespace lfs::core::tensor_ops {
             auto transform_end = thrust::make_transform_iterator(end, ops::extract_value_op());
             auto mask_begin = thrust::make_transform_iterator(begin, ops::extract_mask_op());
 
-            thrust::copy_if(thrust::cuda::par.on(stream),
+            thrust::copy_if(thrust::cuda::par_nosync.on(stream),
                             transform_begin, transform_end, mask_begin, output_ptr,
                             [] __device__(bool x) { return x; });
         }
@@ -71,7 +71,7 @@ namespace lfs::core::tensor_ops {
         auto data_ptr = thrust::device_pointer_cast(data);
         auto indices_ptr = thrust::device_pointer_cast(indices);
         auto counting = thrust::counting_iterator<int64_t>(0);
-        auto end_it = thrust::copy_if(thrust::cuda::par.on(stream), counting, counting + n, data_ptr,
+        auto end_it = thrust::copy_if(thrust::cuda::par_nosync.on(stream), counting, counting + n, data_ptr,
                                       indices_ptr, ops::nonzero_predicate<float>());
         // Return actual count (fixes potential mismatch)
         return end_it - indices_ptr;
@@ -83,7 +83,7 @@ namespace lfs::core::tensor_ops {
         auto data_ptr = thrust::device_pointer_cast(data);
         auto indices_ptr = thrust::device_pointer_cast(indices);
         auto counting = thrust::counting_iterator<int64_t>(0);
-        auto end_it = thrust::copy_if(thrust::cuda::par.on(stream), counting, counting + n, data_ptr,
+        auto end_it = thrust::copy_if(thrust::cuda::par_nosync.on(stream), counting, counting + n, data_ptr,
                                       indices_ptr, ops::nonzero_bool_predicate());
         // Return actual count (fixes potential mismatch)
         return end_it - indices_ptr;

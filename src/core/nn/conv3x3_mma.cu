@@ -6,6 +6,7 @@
 #include "nn_device.cuh"
 #include "nn_kernels.hpp"
 
+#include "core/tensor_cuda_interop.hpp"
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
@@ -422,9 +423,11 @@ namespace lfs::core::nn::kernels {
             LFS_CUDA_CHECK(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device));
             int compiled = 0;
             if (major >= 8) {
-                compiled_arch_probe_kernel<<<1, 1>>>();
+                const auto stream = getCurrentCUDAStream();
+                compiled_arch_probe_kernel<<<1, 1, 0, stream>>>();
                 LFS_CUDA_CHECK(cudaGetLastError());
-                LFS_CUDA_CHECK(cudaMemcpyFromSymbol(&compiled, g_compiled_arch, sizeof(int)));
+                LFS_CUDA_CHECK(cudaMemcpyFromSymbolAsync(&compiled, g_compiled_arch, sizeof(int), 0, cudaMemcpyDeviceToHost, stream));
+                LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
             }
             cached[device].store((major >= 8 && compiled >= 800) ? 1 : -1,
                                  std::memory_order_relaxed);

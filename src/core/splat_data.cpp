@@ -2544,14 +2544,15 @@ namespace lfs::core {
 #if LFS_HAS_CUDA
                 LOG_DEBUG("Copying CPU values to direct CUDA tensors");
                 cudaError_t err;
+                const auto stream = getCurrentCUDAStream();
 
                 // Means copy
                 LOG_DEBUG("  Copying means: src_ptr={}, dst_ptr={}, bytes={}",
                           static_cast<const void*>(means_cpu.ptr<float>()),
                           static_cast<void*>(means_.ptr<float>()),
                           means_cpu.numel() * sizeof(float));
-                err = cudaMemcpy(means_.ptr<float>(), means_cpu.ptr<float>(),
-                                 means_cpu.numel() * sizeof(float), cudaMemcpyHostToDevice);
+                err = cudaMemcpyAsync(means_.ptr<float>(), means_cpu.ptr<float>(),
+                                      means_cpu.numel() * sizeof(float), cudaMemcpyHostToDevice, stream);
                 if (err != cudaSuccess) {
                     LOG_ERROR("cudaMemcpy failed for means:");
                     LOG_ERROR("  src (CPU): is_valid={}, ptr={}, device={}, numel={}",
@@ -2569,8 +2570,8 @@ namespace lfs::core {
                           static_cast<const void*>(scaling_cpu.ptr<float>()),
                           static_cast<void*>(scaling_.ptr<float>()),
                           scaling_cpu.numel() * sizeof(float));
-                err = cudaMemcpy(scaling_.ptr<float>(), scaling_cpu.ptr<float>(),
-                                 scaling_cpu.numel() * sizeof(float), cudaMemcpyHostToDevice);
+                err = cudaMemcpyAsync(scaling_.ptr<float>(), scaling_cpu.ptr<float>(),
+                                      scaling_cpu.numel() * sizeof(float), cudaMemcpyHostToDevice, stream);
                 if (err != cudaSuccess) {
                     LOG_ERROR("cudaMemcpy failed for scaling:");
                     LOG_ERROR("  src (CPU): is_valid={}, ptr={}, numel={}",
@@ -2586,8 +2587,8 @@ namespace lfs::core {
                           static_cast<const void*>(rotation_cpu.ptr<float>()),
                           static_cast<void*>(rotation_.ptr<float>()),
                           rotation_cpu.numel() * sizeof(float));
-                err = cudaMemcpy(rotation_.ptr<float>(), rotation_cpu.ptr<float>(),
-                                 rotation_cpu.numel() * sizeof(float), cudaMemcpyHostToDevice);
+                err = cudaMemcpyAsync(rotation_.ptr<float>(), rotation_cpu.ptr<float>(),
+                                      rotation_cpu.numel() * sizeof(float), cudaMemcpyHostToDevice, stream);
                 if (err != cudaSuccess) {
                     LOG_ERROR("cudaMemcpy failed for rotation:");
                     LOG_ERROR("  src (CPU): is_valid={}, ptr={}, numel={}",
@@ -2603,8 +2604,8 @@ namespace lfs::core {
                           static_cast<const void*>(opacity_cpu.ptr<float>()),
                           static_cast<void*>(opacity_.ptr<float>()),
                           opacity_cpu.numel() * sizeof(float));
-                err = cudaMemcpy(opacity_.ptr<float>(), opacity_cpu.ptr<float>(),
-                                 opacity_cpu.numel() * sizeof(float), cudaMemcpyHostToDevice);
+                err = cudaMemcpyAsync(opacity_.ptr<float>(), opacity_cpu.ptr<float>(),
+                                      opacity_cpu.numel() * sizeof(float), cudaMemcpyHostToDevice, stream);
                 if (err != cudaSuccess) {
                     LOG_ERROR("cudaMemcpy failed for opacity:");
                     LOG_ERROR("  src (CPU): is_valid={}, ptr={}, numel={}",
@@ -2620,8 +2621,8 @@ namespace lfs::core {
                           static_cast<const void*>(sh0_cpu.ptr<float>()),
                           static_cast<void*>(sh0_.ptr<float>()),
                           sh0_cpu.numel() * sizeof(float));
-                err = cudaMemcpy(sh0_.ptr<float>(), sh0_cpu.ptr<float>(),
-                                 sh0_cpu.numel() * sizeof(float), cudaMemcpyHostToDevice);
+                err = cudaMemcpyAsync(sh0_.ptr<float>(), sh0_cpu.ptr<float>(),
+                                      sh0_cpu.numel() * sizeof(float), cudaMemcpyHostToDevice, stream);
                 if (err != cudaSuccess) {
                     LOG_ERROR("cudaMemcpy failed for sh0:");
                     LOG_ERROR("  src (CPU): is_valid={}, ptr={}, numel={}",
@@ -2631,6 +2632,8 @@ namespace lfs::core {
                     throw TensorError("cudaMemcpy failed for sh0: " + std::string(cudaGetErrorString(err)));
                 }
                 LOG_DEBUG("  SH0 copy successful");
+
+                LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
 
                 if (!direct_q16) {
                     reorder_canonical_into_swizzled(

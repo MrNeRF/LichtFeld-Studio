@@ -97,8 +97,6 @@
   "projects.action.repair": "Repair",
   "projects.action.verify": "Verify",
   "projects.action.update_version": "Update LichtFeld Studio",
-  "projects.action.export": "Export",
-  "projects.dialog.export_as": "Export project",
   "projects.dialog.update_thumbnail": "Update thumbnail",
   "projects.dialog.rename_project": "Rename project",
   "projects.dialog.repair": "Repair project",
@@ -139,6 +137,7 @@
     "file.save_project": "Save Project",
     "file.save_project_as": "Save Project As...",
     "file.compact_project": "Compact Project",
+    "file.compact_stop_training": "Stop training before compacting the project.",
     "file.embed_dataset": "Embed Dataset in Project",
     "file.auto_save_on_close": "Save on Close Without Asking",
     "file.no_recent_projects": "No Recent Projects",
@@ -2060,6 +2059,7 @@
     "reload": "Reload"
   },
   "status_bar": {
+    "preview_reduced": "Preview resolution reduced (GPU memory)",
     "safe_mode": "SAFE MODE",
     "mcp_preferences": "Edit",
     "mcp_turn_on": "Turn on",
@@ -2918,7 +2918,6 @@
   "projects.dialog.first_embedded_image": "First embedded image",
   "projects.dialog.image_file": "Image file",
   "projects.property.display_name": "Display name",
-  "projects.dialog.format": "Format",
   "projects.dialog.source": "Source",
   "projects.gallery.eligibility.connect": "Portal connection is unavailable.",
   "projects.gallery.eligibility.busy": "Another operation is running",

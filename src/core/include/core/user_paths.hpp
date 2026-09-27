@@ -90,6 +90,8 @@ namespace lfs::core {
         [[nodiscard]] std::filesystem::path keymapDir() const;
         [[nodiscard]] std::filesystem::path presetDir() const;
         [[nodiscard]] std::filesystem::path assetLibraryDir() const;
+        /** Durable plugin-owned data: `<data>/plugin_data/<plugin name>/`. */
+        [[nodiscard]] std::filesystem::path pluginDataDir() const;
         [[nodiscard]] std::filesystem::path backupDir() const;
         /** Legacy untitled crash files: `<root>/recovery`. Kept for startup scan. */
         [[nodiscard]] std::filesystem::path recoveryDir() const;

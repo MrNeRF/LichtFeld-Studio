@@ -31,4 +31,8 @@ namespace lfs::gpu_ops {
         float cy = 0.f;
     };
 
+    enum class ShStorage { Float32,
+                           IeeeFloat16,
+                           Q16 };
+
 } // namespace lfs::gpu_ops

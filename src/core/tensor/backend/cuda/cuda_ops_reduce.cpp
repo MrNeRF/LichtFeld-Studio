@@ -62,9 +62,10 @@ namespace lfs::core::internal {
                     cuda_const_pointer<float>(input), device_result,
                     count, context.cuda_stream);
             }
+            LFS_CUDA_CHECK(cudaMemcpyAsync(
+                &result, device_result, sizeof(size_t), cudaMemcpyDeviceToHost,
+                context.cuda_stream));
             LFS_CUDA_CHECK(cudaStreamSynchronize(context.cuda_stream));
-            LFS_CUDA_CHECK(cudaMemcpy(
-                &result, device_result, sizeof(size_t), cudaMemcpyDeviceToHost));
             CudaMemoryPool::instance().deallocate(device_result, context.cuda_stream);
             return result;
         }
