@@ -16,7 +16,7 @@ set(LFS_AMD_FSR3_ROOT "" CACHE PATH
     "Path to an AMD FidelityFX SDK 1.1.4 checkout; the SDK is never fetched by CMake")
 set(LFS_AMD_FSR3_LIBRARY_DIR "" CACHE PATH
     "Optional directory containing prebuilt FidelityFX FSR 3.1 Vulkan libraries")
-if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
+if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE)
     set(_lfs_amd_fsr3_build_sdk_default ON)
 else()
     set(_lfs_amd_fsr3_build_sdk_default OFF)
@@ -49,9 +49,17 @@ endif()
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "The AMD FSR 3.1 Vulkan plugin supports 64-bit builds only")
 endif()
-if(NOT WIN32 AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+if(NOT WIN32 AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT APPLE)
     message(FATAL_ERROR
-        "The AMD FSR 3.1 Vulkan plugin currently supports Windows and Linux only")
+        "The AMD FSR 3.1 Vulkan plugin currently supports Windows, Linux and macOS only")
+endif()
+if(APPLE AND CMAKE_OSX_ARCHITECTURES)
+    list(LENGTH CMAKE_OSX_ARCHITECTURES _lfs_fsr3_arch_count)
+    if(NOT _lfs_fsr3_arch_count EQUAL 1)
+        message(FATAL_ERROR
+            "The AMD FSR 3.1 macOS SDK build requires one architecture per build; "
+            "universal binaries are not supported")
+    endif()
 endif()
 
 cmake_path(ABSOLUTE_PATH LFS_AMD_FSR3_ROOT
@@ -90,16 +98,44 @@ list(APPEND _lfs_fsr3_library_hints
     "${_lfs_fsr3_root}/build/bin/ffx_sdk"
     "${_lfs_fsr3_root}/build/sdk/bin/ffx_sdk")
 
+if(APPLE)
+    if(CMAKE_OSX_ARCHITECTURES)
+        set(_lfs_fsr3_arch "${CMAKE_OSX_ARCHITECTURES}")
+    else()
+        set(_lfs_fsr3_arch "${CMAKE_SYSTEM_PROCESSOR}")
+    endif()
+    if(_lfs_fsr3_arch MATCHES "^(arm64|aarch64)$")
+        set(_lfs_fsr3_suffix arm64)
+    elseif(_lfs_fsr3_arch MATCHES "^(x86_64|amd64)$")
+        set(_lfs_fsr3_suffix x64)
+    else()
+        message(FATAL_ERROR
+            "The AMD FSR 3.1 macOS SDK build does not support '${_lfs_fsr3_arch}'")
+    endif()
+    set(_lfs_fsr3_effect_names ffx_fsr3upscaler_${_lfs_fsr3_suffix})
+    set(_lfs_fsr3_backend_names ffx_backend_vk_${_lfs_fsr3_suffix})
+    # The plugin imports static SDK archives; do not accept a same-named dylib.
+    set(_lfs_fsr3_saved_library_suffixes "${CMAKE_FIND_LIBRARY_SUFFIXES}")
+    set(CMAKE_FIND_LIBRARY_SUFFIXES .a)
+else()
+    set(_lfs_fsr3_effect_names
+        ffx_fsr3upscaler_x64 ffx_fsr3upscaler_x86_64 ffx_fsr3upscaler)
+    set(_lfs_fsr3_backend_names
+        ffx_backend_vk_x64 ffx_backend_vk_x86_64 ffx_backend_vk)
+endif()
 unset(_lfs_fsr3_effect_library CACHE)
 unset(_lfs_fsr3_backend_library CACHE)
 find_library(_lfs_fsr3_effect_library
-    NAMES ffx_fsr3upscaler_x64 ffx_fsr3upscaler_x86_64 ffx_fsr3upscaler
+    NAMES ${_lfs_fsr3_effect_names}
     PATHS ${_lfs_fsr3_library_hints}
     NO_DEFAULT_PATH)
 find_library(_lfs_fsr3_backend_library
-    NAMES ffx_backend_vk_x64 ffx_backend_vk_x86_64 ffx_backend_vk
+    NAMES ${_lfs_fsr3_backend_names}
     PATHS ${_lfs_fsr3_library_hints}
     NO_DEFAULT_PATH)
+if(APPLE)
+    set(CMAKE_FIND_LIBRARY_SUFFIXES "${_lfs_fsr3_saved_library_suffixes}")
+endif()
 
 set(_lfs_fsr3_build_target "")
 if(NOT _lfs_fsr3_effect_library OR NOT _lfs_fsr3_backend_library)
@@ -151,17 +187,23 @@ if(NOT _lfs_fsr3_effect_library OR NOT _lfs_fsr3_backend_library)
         message(STATUS
             "AMD FidelityFX FSR 3.1: building the user-provided SDK in an "
             "isolated build-tree copy")
-    elseif(LFS_AMD_FSR3_BUILD_SDK AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    elseif(LFS_AMD_FSR3_BUILD_SDK AND
+           (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE))
         include(ExternalProject)
         set(_lfs_fsr3_stage_root "${CMAKE_BINARY_DIR}/_deps/amd-fsr3-sdk")
         set(_lfs_fsr3_stage_source "${_lfs_fsr3_stage_root}/src")
         set(_lfs_fsr3_stage_binary "${_lfs_fsr3_stage_root}/build")
         set(_lfs_fsr3_stage_install "${_lfs_fsr3_stage_root}/install")
         set(_lfs_fsr3_stage_library_dir "${_lfs_fsr3_stage_install}/lib")
+        if(APPLE)
+            set(_lfs_fsr3_archive_suffix "${_lfs_fsr3_suffix}")
+        else()
+            set(_lfs_fsr3_archive_suffix x64)
+        endif()
         set(_lfs_fsr3_effect_library
-            "${_lfs_fsr3_stage_library_dir}/libffx_fsr3upscaler_x64.a")
+            "${_lfs_fsr3_stage_library_dir}/libffx_fsr3upscaler_${_lfs_fsr3_archive_suffix}.a")
         set(_lfs_fsr3_backend_library
-            "${_lfs_fsr3_stage_library_dir}/libffx_backend_vk_x64.a")
+            "${_lfs_fsr3_stage_library_dir}/libffx_backend_vk_${_lfs_fsr3_archive_suffix}.a")
 
         find_program(_lfs_fsr3_glslang_executable
             NAMES glslang glslangValidator
@@ -169,14 +211,17 @@ if(NOT _lfs_fsr3_effect_library OR NOT _lfs_fsr3_backend_library)
                 "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/glslang"
                 "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/tools/glslang"
             NO_DEFAULT_PATH)
+        if(APPLE AND NOT _lfs_fsr3_glslang_executable)
+            find_program(_lfs_fsr3_glslang_executable
+                NAMES glslang glslangValidator)
+        endif()
         if(NOT _lfs_fsr3_glslang_executable)
             message(FATAL_ERROR
-                "AMD FSR 3.1 Linux shader generation requires glslang from "
-                "vcpkg glslang[tools,opt] (${VCPKG_TARGET_TRIPLET}/tools/glslang). No glslang "
-                "executable was found.")
+                "AMD FSR 3.1 shader generation requires glslang with its "
+                "SPIR-V optimiser. No glslang executable was found.")
         endif()
 
-        set(_lfs_fsr3_linux_dir
+        set(_lfs_fsr3_posix_dir
             "${CMAKE_SOURCE_DIR}/src/scene_upscalers/amd_fsr3/linux")
         ExternalProject_Add(lfs_amd_fsr3_sdk
             PREFIX "${_lfs_fsr3_stage_root}/prefix"
@@ -186,16 +231,16 @@ if(NOT _lfs_fsr3_effect_library OR NOT _lfs_fsr3_backend_library)
                 "${CMAKE_COMMAND}"
                 -DFFX_SDK_SOURCE_DIR:PATH=${_lfs_fsr3_root}/sdk
                 -DFFX_SDK_DEST_DIR:PATH=<SOURCE_DIR>
-                -P "${_lfs_fsr3_linux_dir}/stage_sdk.cmake"
+                -P "${_lfs_fsr3_posix_dir}/stage_sdk.cmake"
             UPDATE_COMMAND ""
             PATCH_COMMAND
                 "${CMAKE_COMMAND}"
                 -DFFX_SDK_STAGE_DIR:PATH=<SOURCE_DIR>
-                -DFFX_PATCH_DIR:PATH=${_lfs_fsr3_linux_dir}/patches
-                -P "${_lfs_fsr3_linux_dir}/apply_patches.cmake"
+                -DFFX_PATCH_DIR:PATH=${_lfs_fsr3_posix_dir}/patches
+                -P "${_lfs_fsr3_posix_dir}/apply_patches.cmake"
             CONFIGURE_COMMAND
                 "${CMAKE_COMMAND}"
-                -S "${_lfs_fsr3_linux_dir}"
+                -S "${_lfs_fsr3_posix_dir}"
                 -B <BINARY_DIR>
                 -G "${CMAKE_GENERATOR}"
                 -DCMAKE_INSTALL_PREFIX:PATH=${_lfs_fsr3_stage_install}
@@ -203,11 +248,13 @@ if(NOT _lfs_fsr3_effect_library OR NOT _lfs_fsr3_backend_library)
                 -DGLSLANG_EXECUTABLE:FILEPATH=${_lfs_fsr3_glslang_executable}
                 -DCMAKE_C_COMPILER:FILEPATH=${CMAKE_C_COMPILER}
                 -DCMAKE_CXX_COMPILER:FILEPATH=${CMAKE_CXX_COMPILER}
+                -DCMAKE_OSX_ARCHITECTURES:STRING=${CMAKE_OSX_ARCHITECTURES}
+                -DCMAKE_OSX_DEPLOYMENT_TARGET:STRING=${CMAKE_OSX_DEPLOYMENT_TARGET}
                 -DCMAKE_BUILD_TYPE:STRING=Release
                 -DVulkan_INCLUDE_DIR:PATH=${Vulkan_INCLUDE_DIR}
                 -DVulkan_LIBRARY:FILEPATH=${Vulkan_LIBRARY}
             BUILD_COMMAND
-                "${CMAKE_COMMAND}" --build "<BINARY_DIR>" --parallel
+                "${CMAKE_COMMAND}" --build "<BINARY_DIR>" --config Release --parallel
             BUILD_BYPRODUCTS
                 "${_lfs_fsr3_effect_library}"
                 "${_lfs_fsr3_backend_library}"
@@ -218,7 +265,7 @@ if(NOT _lfs_fsr3_effect_library OR NOT _lfs_fsr3_backend_library)
             USES_TERMINAL_INSTALL TRUE)
         set(_lfs_fsr3_build_target lfs_amd_fsr3_sdk)
         message(STATUS
-            "AMD FidelityFX FSR 3.1: building the Linux SDK copy with the "
+            "AMD FidelityFX FSR 3.1: building the POSIX SDK copy with the "
             "standalone GLSL/Vulkan project")
     else()
         message(FATAL_ERROR

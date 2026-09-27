@@ -23,9 +23,8 @@ execute_process(
     RESULT_VARIABLE GLSLANG_OPTIMIZER_RESULT)
 if(NOT GLSLANG_OPTIMIZER_RESULT EQUAL 0)
     message(FATAL_ERROR
-        "FSR 3.1 shaders require glslang with the SPIR-V optimiser (vcpkg "
-        "feature `opt`, requested by vcpkg.json; re-run the LichtFeld configure "
-        "so vcpkg installs it).")
+        "FSR 3.1 shaders require glslang with the SPIR-V optimiser. "
+        "Use vcpkg glslang[tools,opt] or a suitable glslang on PATH.")
 endif()
 set(PERM_ARGS
     "-DFFX_FSR3UPSCALER_OPTION_REPROJECT_USE_LANCZOS_TYPE={0,1}"

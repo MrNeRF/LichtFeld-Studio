@@ -8,14 +8,15 @@ endif()
 find_program(FFX_PATCH_EXECUTABLE NAMES patch REQUIRED)
 if(NOT FFX_PATCH_EXECUTABLE)
     message(FATAL_ERROR
-        "AMD FSR 3.1 Linux SDK patching requires the 'patch' executable, "
+        "AMD FSR 3.1 POSIX SDK patching requires the 'patch' executable, "
         "but it was not found in PATH")
 endif()
 
 # Do not use git apply: the staged SDK can be inside LichtFeld's Git worktree.
 foreach(patch_name IN ITEMS
         0001-shader-compiler-linux-pch.patch
-        0002-vk-backend-effect-context-alignment.patch)
+        0002-vk-backend-effect-context-alignment.patch
+        0003-vk-core-memory-requirements-fallback.patch)
     execute_process(
         COMMAND "${FFX_PATCH_EXECUTABLE}" --forward --dry-run --batch -p1
                 -i "${FFX_PATCH_DIR}/${patch_name}"

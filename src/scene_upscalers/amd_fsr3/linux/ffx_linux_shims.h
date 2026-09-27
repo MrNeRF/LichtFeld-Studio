@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: MIT
 //
-// Linux-only compatibility shims for the FidelityFX SDK sources and tool.
+// POSIX compatibility shims for the FidelityFX SDK sources and tool.
 // The SDK requires two-byte wchar_t and uses Windows-only string helpers; the
-// wide helpers below intentionally operate on elements rather than glibc w*.
+// wide helpers below intentionally operate on elements rather than native w*.
 #pragma once
 
 #include <stddef.h>
@@ -12,7 +12,9 @@
 #include <string.h>
 #include <wchar.h>
 #ifdef __cplusplus
+#include <codecvt>
 #include <filesystem>
+#include <locale>
 #include <new>
 #endif
 
@@ -102,7 +104,8 @@ static inline int ffx_linux_wcstombs_s(size_t* converted, char* destination, siz
 
 // The SDK's Vulkan source still spells its debug-label conversion through
 // std::wstring_convert. Define a local element-wise substitute after loading
-// filesystem, since libstdc++ uses its own wide codecvt types there.
+// codecvt, filesystem and locale, since standard libraries use native wide
+// codecvt types there (libc++ declares them in an inline namespace).
 #ifdef __cplusplus
 #define wstring_convert ffx_linux_wstring_convert
 #define codecvt_utf8    ffx_linux_codecvt_utf8

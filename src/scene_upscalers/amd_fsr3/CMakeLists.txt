@@ -32,6 +32,12 @@ if(LFS_AMD_FSR3_BUILD_TARGET)
         "${LFS_AMD_FSR3_BUILD_TARGET}")
 endif()
 
+if(APPLE)
+    # Installed plugin: lib/scene_upscalers/amd -> lib, where Vulkan lives.
+    set_property(TARGET lfs_scene_upscaler_amd_fsr3 PROPERTY
+        INSTALL_RPATH "@loader_path/../..")
+endif()
+
 set_target_properties(lfs_scene_upscaler_amd_fsr3 PROPERTIES
     OUTPUT_NAME "lfs_scene_upscaler_amd_fsr3"
     CXX_VISIBILITY_PRESET hidden

@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: MIT
-// Linux uses element-wise conversion because glibc wide-character helpers
+// This build uses element-wise conversion because native wide-character helpers
 // assume its native four-byte wchar_t, while the FidelityFX ABI requires two.
 
 #include "utils.h"

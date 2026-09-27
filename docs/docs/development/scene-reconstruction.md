@@ -218,16 +218,26 @@ cmake -S . -B build -DLFS_ENABLE_AMD_FSR3=ON -DLFS_AMD_FSR3_ROOT=/path/to/Fideli
 
 `LFS_AMD_FSR3_BUILD_SDK=ON` builds the required static FSR upscaler and Vulkan
 backend libraries from an isolated copy of the user-provided SDK if prebuilt
-libraries are absent. On Linux, CMake uses glslang from vcpkg and applies the
-two small compatibility patches required by SDK v1.1.4: a Linux shader-tool
-PCH and Vulkan scratch-buffer alignment. The Linux SDK build uses vcpkg's
-glslang with its SPIR-V optimiser. The SDK and plugin use two-byte
-`wchar_t`; a typical Linux build takes about four minutes on an eight-core
-machine. Portable configurations default the plugin on and require the SDK
-unless explicitly disabled. The Windows nightly workflow checks out the exact
-v1.1.4 revision before configuration. The FidelityFX SDK MIT
-license is staged at the plugin binary boundary and installed with package
-licenses.
+libraries are absent. Linux and macOS use the standalone GLSL/Vulkan build and
+apply two compatibility patches required by SDK v1.1.4: a POSIX shader-tool
+PCH and Vulkan scratch-buffer alignment. Shader generation requires glslang
+with its SPIR-V optimiser; Linux uses the vcpkg tool, while macOS can also use
+one on `PATH`. The SDK and plugin use two-byte `wchar_t`; the shader compiler
+uses the native platform width. The C plugin ABI's wide path fields are
+currently validated but are not read by this FSR implementation. A typical
+Linux build takes about four minutes on an eight-core machine. Portable
+configurations default the plugin on and require the SDK unless explicitly
+disabled. The Windows nightly workflow checks out the exact v1.1.4 revision
+before configuration. The FidelityFX SDK MIT license is staged at the plugin
+binary boundary and installed with package licenses.
+
+On macOS, use a single `arm64` or `x86_64` architecture per build. The plugin
+is loaded as `liblfs_scene_upscaler_amd_fsr3.dylib` from the executable's
+`scene_upscalers/amd` directory during development, or from
+`lib/scene_upscalers/amd` after installation. FSR uses the Vulkan upscaler
+through MoltenVK; it does not use FSR frame generation. Device support and
+image-format capabilities still need to be checked by running the plugin on
+the target Mac.
 
 ## Persistence and safe mode
 

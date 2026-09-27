@@ -49,6 +49,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         test_menu_bar_title.cpp
         test_panel_layout_render_demand.cpp
         test_preferences_migration.cpp
+        test_scene_upscaler_registry.cpp
         test_startup_overlay_geometry.cpp
         test_trackpad_navigation.cpp
     )
@@ -197,6 +198,7 @@ endif()
 # =============================================================================
 if(BUILD_TEMPORAL_CPU_TESTS)
     add_executable(lichtfeld_temporal_cpu_tests
+        test_scene_upscaler_plugin_api.cpp
         test_scene_motion_contract.cpp
         test_scene_temporal_coordinator.cpp
         test_scene_temporal_plan.cpp

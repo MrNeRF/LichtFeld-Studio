@@ -1,22 +1,39 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: MIT
 #
-# Standalone Linux build for the AMD FidelityFX SDK v1.1.4 FSR3 upscaler.
+# Standalone Linux/macOS build for the AMD FidelityFX SDK v1.1.4 FSR3 upscaler.
 # The SDK is Windows-only upstream, its shader compiler is a Windows .exe,
-# and its ABI requires two-byte wchar_t; this project supplies the Linux tool
+# and its ABI requires two-byte wchar_t; this project supplies the POSIX tool
 # driver/shims and builds only the GLSL Vulkan upscaler path.
 
 cmake_minimum_required(VERSION 3.23)
-project(ffx_fsr3_linux LANGUAGES C CXX)
+project(ffx_fsr3_posix LANGUAGES C CXX)
 
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    message(FATAL_ERROR "ffx_fsr3_linux is a Linux-only project")
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT APPLE)
+    message(FATAL_ERROR "ffx_fsr3_posix supports Linux and macOS only")
 endif()
 if(NOT FFX_SDK_SOURCE_DIR)
     message(FATAL_ERROR "FFX_SDK_SOURCE_DIR must point to a staged FidelityFX SDK sdk directory")
 endif()
 if(NOT GLSLANG_EXECUTABLE OR NOT EXISTS "${GLSLANG_EXECUTABLE}")
-    message(FATAL_ERROR "GLSLANG_EXECUTABLE must point to vcpkg's glslang executable")
+    message(FATAL_ERROR "GLSLANG_EXECUTABLE must point to a glslang executable")
+endif()
+
+if(APPLE)
+    if(CMAKE_OSX_ARCHITECTURES)
+        set(_ffx_arch "${CMAKE_OSX_ARCHITECTURES}")
+    else()
+        set(_ffx_arch "${CMAKE_SYSTEM_PROCESSOR}")
+    endif()
+    if(_ffx_arch MATCHES "^(arm64|aarch64)$")
+        set(_ffx_archive_suffix arm64)
+    elseif(_ffx_arch MATCHES "^(x86_64|amd64)$")
+        set(_ffx_archive_suffix x64)
+    else()
+        message(FATAL_ERROR "Unsupported macOS FSR architecture: ${_ffx_arch}")
+    endif()
+else()
+    set(_ffx_archive_suffix x64)
 endif()
 
 find_package(Threads REQUIRED)
@@ -93,7 +110,7 @@ set(FFX_SDK_INCLUDES
     "${FFX_SDK_SOURCE_DIR}/src/components"
     "${FFX_SHADER_OUTPUT_DIR}")
 
-function(ffx_linux_sdk_options target)
+function(ffx_posix_sdk_options target)
     target_compile_features(${target} PRIVATE cxx_std_17)
     target_compile_definitions(${target} PRIVATE FFX_FSR3UPSCALER)
     target_compile_options(${target} PRIVATE -O2 -fPIC -fshort-wchar -include "${FFX_SHIM}")
@@ -101,14 +118,14 @@ function(ffx_linux_sdk_options target)
     add_dependencies(${target} ffx_fsr3upscaler_shaders)
 endfunction()
 
-add_library(ffx_fsr3upscaler_x64 STATIC
+add_library(ffx_fsr3upscaler_${_ffx_archive_suffix} STATIC
     "${FFX_SDK_SOURCE_DIR}/src/components/fsr3upscaler/ffx_fsr3upscaler.cpp"
     "${FFX_SDK_SOURCE_DIR}/src/shared/ffx_assert.cpp"
     "${FFX_SDK_SOURCE_DIR}/src/shared/ffx_message.cpp"
     "${FFX_SDK_SOURCE_DIR}/src/shared/ffx_object_management.cpp")
-ffx_linux_sdk_options(ffx_fsr3upscaler_x64)
+ffx_posix_sdk_options(ffx_fsr3upscaler_${_ffx_archive_suffix})
 
-add_library(ffx_backend_vk_x64 STATIC
+add_library(ffx_backend_vk_${_ffx_archive_suffix} STATIC
     "${FFX_SDK_SOURCE_DIR}/src/backends/vk/ffx_vk.cpp"
     "${FFX_SDK_SOURCE_DIR}/src/backends/shared/ffx_shader_blobs.cpp"
     "${FFX_SDK_SOURCE_DIR}/src/backends/shared/blob_accessors/ffx_fsr3upscaler_shaderblobs.cpp"
@@ -116,8 +133,9 @@ add_library(ffx_backend_vk_x64 STATIC
     "${FFX_SDK_SOURCE_DIR}/src/shared/ffx_message.cpp"
     "${FFX_SDK_SOURCE_DIR}/src/shared/ffx_breadcrumbs_list.cpp"
     ffx_vk_noop.cpp)
-ffx_linux_sdk_options(ffx_backend_vk_x64)
-target_link_libraries(ffx_backend_vk_x64 PRIVATE Vulkan::Vulkan)
+ffx_posix_sdk_options(ffx_backend_vk_${_ffx_archive_suffix})
+target_link_libraries(ffx_backend_vk_${_ffx_archive_suffix} PRIVATE Vulkan::Vulkan)
 
-install(TARGETS ffx_fsr3upscaler_x64 ffx_backend_vk_x64
+install(TARGETS ffx_fsr3upscaler_${_ffx_archive_suffix}
+                ffx_backend_vk_${_ffx_archive_suffix}
     ARCHIVE DESTINATION lib)

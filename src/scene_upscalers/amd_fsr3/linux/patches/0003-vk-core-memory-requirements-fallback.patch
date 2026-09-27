@@ -1,0 +1,19 @@
+diff --git a/src/backends/vk/ffx_vk.cpp b/src/backends/vk/ffx_vk.cpp
+--- a/src/backends/vk/ffx_vk.cpp
++++ b/src/backends/vk/ffx_vk.cpp
+@@ -1487,2 +1487,7 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect effect, FfxEffectBindlessConfig* bindlessConfig, FfxUInt32* effectContextId)
+         backendContext->vkFunctionTable.vkGetBufferMemoryRequirements2KHR = (PFN_vkGetBufferMemoryRequirements2KHR)vkDeviceContext->vkDeviceProcAddr(backendContext->device, "vkGetBufferMemoryRequirements2KHR");
++        // Vulkan 1.1 promotes this entry point to the core name. MoltenVK
++        // exposes the core name without the KHR alias even when dedicated
++        // allocation is supported.
++        if (!backendContext->vkFunctionTable.vkGetBufferMemoryRequirements2KHR)
++            backendContext->vkFunctionTable.vkGetBufferMemoryRequirements2KHR = (PFN_vkGetBufferMemoryRequirements2KHR)vkDeviceContext->vkDeviceProcAddr(backendContext->device, "vkGetBufferMemoryRequirements2");
+         backendContext->vkFunctionTable.vkGetImageMemoryRequirements = (PFN_vkGetImageMemoryRequirements)vkDeviceContext->vkDeviceProcAddr(backendContext->device, "vkGetImageMemoryRequirements");
+@@ -1663,2 +1668,7 @@ FfxErrorCode CreateBackendContextVK(FfxInterface* backendInterface, FfxEffect effect, FfxEffectBindlessConfig* bindlessConfig, FfxUInt32* effectContextId)
++                if (!backendContext->vkFunctionTable.vkGetBufferMemoryRequirements2KHR)
++                {
++                    backendContext->vkFunctionTable.vkDestroyBuffer(backendContext->device, testBuffer, nullptr);
++                    return FFX_ERROR_BACKEND_API_ERROR;
++                }
+                 backendContext->vkFunctionTable.vkGetBufferMemoryRequirements2KHR(backendContext->device, &bufferReq, &memoryReq2);
+                 if (dedicatedMemoryReq.requiresDedicatedAllocation)

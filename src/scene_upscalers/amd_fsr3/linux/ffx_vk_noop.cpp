@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: MIT
 //
-// The upscaler-only Linux archive omits the SDK frame-interpolation sources,
+// The upscaler-only POSIX archive omits the SDK frame-interpolation sources,
 // but the public Vulkan interface still exposes this callback.
 
 #include <FidelityFX/host/backends/vk/ffx_vk.h>

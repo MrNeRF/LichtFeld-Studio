@@ -34,6 +34,9 @@ namespace lfs::vis {
 #ifdef _WIN32
         constexpr const wchar_t* PLUGIN_FILENAME = L"lfs_scene_upscaler_amd_fsr3.dll";
         using NativeLibrary = HMODULE;
+#elif defined(__APPLE__)
+        constexpr const char* PLUGIN_FILENAME = "liblfs_scene_upscaler_amd_fsr3.dylib";
+        using NativeLibrary = void*;
 #else
         constexpr const char* PLUGIN_FILENAME = "liblfs_scene_upscaler_amd_fsr3.so";
         using NativeLibrary = void*;

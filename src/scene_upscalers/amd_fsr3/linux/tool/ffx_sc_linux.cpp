@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: MIT
 //
-// Linux uses the SDK's GLSL compiler sources with a small driver because the
+// Linux and macOS use the SDK's GLSL compiler sources with a small driver because the
 // v1.1.4 SDK ships only a Windows shader-compiler executable. HLSL/DXC is not
-// part of this plugin-side Linux build.
+// part of this plugin-side POSIX build.
 
 #include "glsl_compiler.h"
 #include "utils.h"
@@ -91,7 +91,7 @@ namespace {
         }
 
         if (params.compiler != "glslang" || params.output.empty() || params.input.empty() || params.name.empty())
-            throw std::runtime_error("Linux driver requires -compiler=glslang, -name, -output, and an input shader");
+            throw std::runtime_error("POSIX driver requires -compiler=glslang, -name, -output, and an input shader");
         if (params.options.empty())
             throw std::runtime_error("no permutation options supplied");
         return params;
