@@ -5,6 +5,7 @@
 
 #include "core/gpu_backend_fwd.hpp"
 #include "lfs/training/ops/adam.hpp"
+#include "lfs/training/ops/bilateral.hpp"
 #include "lfs/training/ops/extra_loss.hpp"
 #include "lfs/training/ops/geometry.hpp"
 #include "lfs/training/ops/loss.hpp"
@@ -39,6 +40,7 @@ namespace lfs::training {
         const ops::MortonOps* morton = nullptr;
         const ops::MaskOps* masks = nullptr;
         const ops::ExtraLossOps* extra_loss = nullptr;
+        const ops::BilateralOps* bilateral = nullptr;
     };
 
     enum class Family {

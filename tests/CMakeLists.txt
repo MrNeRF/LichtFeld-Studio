@@ -556,6 +556,7 @@ set(TEST_FILES
     fast_raster_test_helpers.cpp
     test_adam_ops.cpp
     test_geometry_ops.cpp
+    test_bilateral_ops.cpp
     test_mcmc_ops.cpp
     test_mrnf_ops.cpp
     test_morton_ops.cpp

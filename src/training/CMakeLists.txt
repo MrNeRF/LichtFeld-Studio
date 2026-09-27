@@ -92,6 +92,7 @@ set(TRAINING_NEW_SOURCES
     ops/requirements.cpp
     ops/photometric_cuda.cpp
     ops/adam_cuda.cpp
+    ops/bilateral_cuda.cpp
     ops/mcmc_cuda.cpp
     ops/mrnf_cuda.cpp
     ops/morton_cuda.cpp

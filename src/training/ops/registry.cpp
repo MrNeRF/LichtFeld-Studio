@@ -4,6 +4,7 @@
 #include "lfs/training/ops/registry.hpp"
 
 #include "lfs/training/ops/adam_cuda.hpp"
+#include "lfs/training/ops/bilateral_cuda.hpp"
 #include "lfs/training/ops/extra_loss_cuda.hpp"
 #include "lfs/training/ops/fast_cuda.hpp"
 #include "lfs/training/ops/geometry_cuda.hpp"
@@ -39,6 +40,8 @@ namespace lfs::training {
                 return ops.masks != nullptr;
             case Family::ExtraLoss:
                 return ops.extra_loss != nullptr;
+            case Family::Bilateral:
+                return ops.bilateral != nullptr;
             case Family::Count:
                 return false;
             default:
@@ -60,6 +63,7 @@ namespace lfs::training {
             .morton = &cuda_morton_ops(),
             .masks = &cuda_masks_ops(),
             .extra_loss = &cuda_extra_loss_ops(),
+            .bilateral = &cuda_bilateral_ops(),
         };
         static const TrainingOps kVulkan{
             .backend = core::GpuBackend::Vulkan,
