@@ -878,6 +878,38 @@ namespace lfs::core::internal {
         submitted_timeline_.store(signal_value, std::memory_order_release);
     }
 
+    void VulkanContext::submit_after(const VkCommandBuffer command, const uint64_t wait_value,
+                                     const uint64_t signal_value) {
+        if (wait_value == 0 || wait_value >= signal_value) {
+            submit(command, signal_value);
+            return;
+        }
+        if (dead()) {
+            vk_check(this, VK_ERROR_DEVICE_LOST, "vkQueueSubmit2");
+        }
+        VkCommandBufferSubmitInfo command_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+        command_info.commandBuffer = command;
+        VkSemaphoreSubmitInfo wait_info{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+        wait_info.semaphore = timeline_;
+        wait_info.value = wait_value;
+        wait_info.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        VkSemaphoreSubmitInfo signal_info{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+        signal_info.semaphore = timeline_;
+        signal_info.value = signal_value;
+        signal_info.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        VkSubmitInfo2 submit_info{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+        submit_info.waitSemaphoreInfoCount = 1;
+        submit_info.pWaitSemaphoreInfos = &wait_info;
+        submit_info.commandBufferInfoCount = 1;
+        submit_info.pCommandBufferInfos = &command_info;
+        submit_info.signalSemaphoreInfoCount = 1;
+        submit_info.pSignalSemaphoreInfos = &signal_info;
+        std::lock_guard lock(queue_mutex_);
+        vk_check(this, vkQueueSubmit2(queue_, 1, &submit_info, VK_NULL_HANDLE),
+                 "vkQueueSubmit2");
+        submitted_timeline_.store(signal_value, std::memory_order_release);
+    }
+
     void VulkanContext::submit_external_wait(VkSemaphore semaphore, uint64_t value, uint64_t signal_value) {
         VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
         wait.semaphore = semaphore;

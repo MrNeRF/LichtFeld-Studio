@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/tensor_execution.hpp"
 
+#include "backend/vulkan/vk_context.hpp"
+#include "backend/vulkan/vk_recorder.hpp"
 #include "core/tensor_upload.hpp"
 #include "internal/tensor_impl.hpp"
 
@@ -17,10 +19,24 @@ namespace lfs::core {
 
     TensorExecutionTarget::Scope::Scope(TensorExecutionTarget target)
         : backend_scope_(target.backend()), previous_target_(getCurrentCUDAStream()) {
+        if (target.backend() == GpuBackend::Vulkan && target.native_handle() != nullptr) {
+            const auto id = reinterpret_cast<uint64_t>(target.native_handle());
+            auto context = internal::acquire_vulkan_context();
+            if (!context->recorders().owns_queue(id))
+                throw std::invalid_argument("Tensor execution target is not a Vulkan queue");
+            context->recorders().bind_queue(id);
+            rebound_vulkan_ = true;
+            return;
+        }
         setCurrentCUDAStream(static_cast<cudaStream_t>(target.native_handle()));
     }
 
     TensorExecutionTarget::Scope::~Scope() {
+        if (rebound_vulkan_) {
+            if (const auto context = internal::try_live_vulkan_context())
+                context->recorders().unbind_queue();
+            return;
+        }
         setCurrentCUDAStream(static_cast<cudaStream_t>(previous_target_));
     }
 

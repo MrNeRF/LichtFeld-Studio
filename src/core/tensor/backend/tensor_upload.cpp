@@ -21,6 +21,7 @@
 #include "vulkan/vk_recorder.hpp"
 #include <algorithm>
 #include <cstring>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 #if LFS_HAS_CUDA && !defined(_WIN32)
@@ -112,8 +113,13 @@ namespace lfs::core {
             !destination.is_contiguous() || destination.dtype() != source.dtype() || destination.bytes() != source.bytes())
             throw std::invalid_argument("TensorUpload requires matching contiguous CPU and GPU tensors");
         const auto backend = gpu_backend_of(destination);
-        if (backend != GpuBackend::CUDA && execution_target != nullptr)
+        if (backend == GpuBackend::Vulkan && execution_target != nullptr) {
+            const auto id = reinterpret_cast<uint64_t>(execution_target);
+            if (!internal::acquire_vulkan_context()->recorders().owns_queue(id))
+                throw std::invalid_argument("TensorUpload execution targets are CUDA streams");
+        } else if (backend != GpuBackend::CUDA && execution_target != nullptr) {
             throw std::invalid_argument("TensorUpload execution targets are CUDA streams");
+        }
         if (!impl_)
             impl_ = std::make_unique<Impl>();
         auto& s = *impl_;
@@ -127,7 +133,25 @@ namespace lfs::core {
                                 : nullptr;
         s.destination.set_stream(stream);
         s.pending = true;
+        struct VulkanQueueBind {
+            bool active = false;
+            VulkanQueueBind(GpuBackend queue_backend, void* target) {
+                if (queue_backend != GpuBackend::Vulkan || target == nullptr)
+                    return;
+                internal::acquire_vulkan_context()->recorders().bind_queue(
+                    reinterpret_cast<uint64_t>(target));
+                active = true;
+            }
+            ~VulkanQueueBind() {
+                if (active)
+                    if (const auto context = internal::try_live_vulkan_context())
+                        context->recorders().unbind_queue();
+            }
+            VulkanQueueBind(const VulkanQueueBind&) = delete;
+            VulkanQueueBind& operator=(const VulkanQueueBind&) = delete;
+        };
         try {
+            const VulkanQueueBind queue_bind(*backend, execution_target);
             internal::backend_ops_for(s.destination).copy_host_to_device({.src = internal::raw_storage_ref(const_cast<void*>(s.source.data_ptr()), s.source.dtype()), .dst = internal::storage_ref(s.destination), .bytes = s.source.bytes(), .synchronous = false, .context = internal::ExecContext{stream}});
             if (backend == GpuBackend::CUDA) {
 #if LFS_HAS_CUDA
@@ -193,7 +217,9 @@ namespace lfs::core {
 #endif
     }
     struct TensorFence::Impl {
-        GpuBackend backend;
+        GpuBackend backend = GpuBackend::CUDA;
+        mutable std::shared_ptr<internal::VulkanContext> vulkan;
+        uint64_t timeline = 0;
 #if LFS_HAS_CUDA
         cudaEvent_t event = nullptr;
         ~Impl() {
@@ -204,6 +230,10 @@ namespace lfs::core {
     };
     TensorFence::TensorFence(GpuBackend backend) : impl_(std::make_unique<Impl>()) {
         impl_->backend = backend;
+        if (backend == GpuBackend::Vulkan) {
+            impl_->vulkan = internal::acquire_vulkan_context();
+            return;
+        }
         if (backend != GpuBackend::CUDA)
             throw std::runtime_error("Reusable tensor fences are unsupported on Vulkan");
 #if LFS_HAS_CUDA
@@ -239,21 +269,43 @@ namespace lfs::core {
         wait_on(target.native_handle());
     }
     void TensorFence::record(void* target) {
+        if (impl_->backend == GpuBackend::Vulkan) {
+            const auto id = reinterpret_cast<uint64_t>(target);
+            if (id != 0 && !impl_->vulkan->recorders().owns_queue(id))
+                throw std::invalid_argument("TensorFence queue backend mismatch");
+            impl_->timeline = impl_->vulkan->recorders().flush_queue(id);
+            return;
+        }
 #if LFS_HAS_CUDA
         check(cudaEventRecord(impl_->event, static_cast<cudaStream_t>(target)));
 #endif
     }
     void TensorFence::wait_on(void* target) const {
+        if (impl_->backend == GpuBackend::Vulkan) {
+            const auto id = reinterpret_cast<uint64_t>(target);
+            if (id != 0 && !impl_->vulkan->recorders().owns_queue(id))
+                throw std::invalid_argument("TensorFence queue backend mismatch");
+            impl_->vulkan->recorders().queue_defer_wait(id, impl_->timeline);
+            return;
+        }
 #if LFS_HAS_CUDA
         check(cudaStreamWaitEvent(static_cast<cudaStream_t>(target), impl_->event, 0));
 #endif
     }
     void TensorFence::wait() const {
+        if (impl_->backend == GpuBackend::Vulkan) {
+            if (impl_->timeline != 0)
+                impl_->vulkan->wait(impl_->timeline);
+            return;
+        }
 #if LFS_HAS_CUDA
         check(cudaEventSynchronize(impl_->event));
 #endif
     }
     bool TensorFence::ready() const {
+        if (impl_->backend == GpuBackend::Vulkan)
+            return impl_->timeline == 0 ||
+                   impl_->vulkan->completed_timeline() >= impl_->timeline;
 #if LFS_HAS_CUDA
         const auto status = cudaEventQuery(impl_->event);
         if (status == cudaErrorNotReady)
@@ -276,6 +328,10 @@ namespace lfs::core {
         std::vector<std::pair<cudaExternalSemaphore_t, VulkanTimelinePoint>> retired_consumers;
 #endif
         std::unique_ptr<internal::MetalVulkanQueue> metal;
+        mutable std::shared_ptr<internal::VulkanContext> queue_context;
+        uint64_t recorder_id = 0;
+        bool vulkan_queue = false;
+        bool borrowed_queue = false;
         uint64_t counter = 0;
         TensorCompletion last;
         ~Impl() {
@@ -336,6 +392,12 @@ namespace lfs::core {
     TensorWorkQueue::TensorWorkQueue(GpuBackend backend, Mode mode) : impl_(std::make_unique<Impl>()) {
         auto& s = *impl_;
         s.backend = backend;
+        if (backend == GpuBackend::Vulkan) {
+            s.queue_context = internal::acquire_vulkan_context();
+            s.recorder_id = s.queue_context->recorders().create_queue(mode == Mode::LegacyOrdered);
+            s.vulkan_queue = true;
+            return;
+        }
         if (backend != GpuBackend::CUDA)
             throw std::runtime_error("Independent tensor queues are unsupported on Vulkan");
 #if LFS_HAS_CUDA
@@ -346,6 +408,19 @@ namespace lfs::core {
 #endif
     }
     TensorWorkQueue::TensorWorkQueue(GpuBackend backend, void* target) : impl_(std::make_unique<Impl>()) {
+        if (backend == GpuBackend::Vulkan) {
+            auto context = internal::acquire_vulkan_context();
+            const auto id = reinterpret_cast<uint64_t>(target);
+            if (target != nullptr && !context->recorders().owns_queue(id))
+                throw std::runtime_error("Borrowed tensor queues are unsupported on Vulkan");
+            impl_->backend = backend;
+            impl_->owns_stream = false;
+            impl_->queue_context = std::move(context);
+            impl_->recorder_id = id;
+            impl_->vulkan_queue = true;
+            impl_->borrowed_queue = true;
+            return;
+        }
         if (backend != GpuBackend::CUDA)
             throw std::runtime_error("Borrowed tensor queues are unsupported on Vulkan");
         impl_->backend = backend;
@@ -357,15 +432,34 @@ namespace lfs::core {
 #endif
     }
     TensorWorkQueue::Scope::Scope(const TensorWorkQueue& queue)
-        : backend_scope_(queue.backend()), previous_target_(getCurrentCUDAStream()) {
+        : backend_scope_(queue.backend()),
+          previous_target_(queue.backend() == GpuBackend::CUDA || !queue.impl_->vulkan_queue
+                               ? getCurrentCUDAStream()
+                               : nullptr) {
+        if (queue.impl_->vulkan_queue) {
+            queue.impl_->queue_context->recorders().bind_queue(queue.impl_->recorder_id);
+            rebound_vulkan_ = true;
+            return;
+        }
         setCurrentCUDAStream(static_cast<cudaStream_t>(queue.native_handle()));
     }
     TensorWorkQueue::Scope::~Scope() {
+        if (rebound_vulkan_) {
+            if (const auto context = internal::try_live_vulkan_context())
+                context->recorders().unbind_queue();
+            return;
+        }
         setCurrentCUDAStream(static_cast<cudaStream_t>(previous_target_));
     }
-    void* TensorWorkQueue::native_handle() const { return impl_->stream; }
+    void* TensorWorkQueue::native_handle() const {
+        if (impl_->vulkan_queue)
+            return reinterpret_cast<void*>(impl_->recorder_id);
+        return impl_->stream;
+    }
     GpuBackend TensorWorkQueue::backend() const { return impl_->backend; }
     bool TensorWorkQueue::ready() const {
+        if (impl_->vulkan_queue)
+            return impl_->queue_context->recorders().queue_ready(impl_->recorder_id);
         if (impl_->backend != GpuBackend::CUDA)
             throw std::runtime_error("Queue polling is unsupported on Vulkan");
 #if LFS_HAS_CUDA
@@ -377,6 +471,10 @@ namespace lfs::core {
         return true;
     }
     void TensorWorkQueue::wait() const {
+        if (impl_->vulkan_queue) {
+            impl_->queue_context->recorders().queue_wait(impl_->recorder_id);
+            return;
+        }
         if (impl_->backend != GpuBackend::CUDA)
             throw std::runtime_error("Queue waits are unsupported on Vulkan");
 #if LFS_HAS_CUDA
@@ -384,11 +482,19 @@ namespace lfs::core {
 #endif
     }
     void TensorWorkQueue::record(TensorFence& fence) const {
+        if (impl_->vulkan_queue) {
+            fence.record(TensorExecutionTarget(*this));
+            return;
+        }
         if (backend() != GpuBackend::CUDA)
             throw std::runtime_error("Reusable fences are unsupported on Vulkan");
         fence.record(native_handle());
     }
     void TensorWorkQueue::wait_for(const TensorFence& fence) const {
+        if (impl_->vulkan_queue) {
+            fence.wait_on(TensorExecutionTarget(*this));
+            return;
+        }
         if (backend() != GpuBackend::CUDA)
             throw std::runtime_error("Reusable fences are unsupported on Vulkan");
         fence.wait_on(native_handle());
@@ -478,6 +584,9 @@ namespace lfs::core {
     }
     TensorWorkQueue::~TensorWorkQueue() {
         try {
+            if (impl_->vulkan_queue && !impl_->borrowed_queue && impl_->recorder_id != 0 &&
+                impl_->queue_context)
+                impl_->queue_context->recorders().destroy_queue(impl_->recorder_id);
             // Stream ownership and import lifetime are independent. In particular,
             // a borrowed default stream can still have outstanding timeline waits.
 #if LFS_HAS_CUDA
@@ -496,6 +605,9 @@ namespace lfs::core {
         auto& s = *impl_;
         const GpuBackendScope backend(s.backend);
         const CUDAStreamGuard stream(s.stream);
+        std::optional<TensorWorkQueue::Scope> vulkan_scope;
+        if (s.vulkan_queue)
+            vulkan_scope.emplace(*this);
         uint64_t consumer_completion = 0;
         if (value && s.consumer) {
             if (s.backend == GpuBackend::CUDA) {

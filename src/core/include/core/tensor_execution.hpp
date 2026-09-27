@@ -35,6 +35,7 @@ namespace lfs::core {
         private:
             GpuBackendScope backend_scope_;
             void* previous_target_;
+            bool rebound_vulkan_ = false;
         };
 
         // Native interoperability belongs to backend implementations.

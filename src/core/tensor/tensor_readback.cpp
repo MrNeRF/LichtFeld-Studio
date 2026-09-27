@@ -111,7 +111,11 @@ namespace lfs::core {
                 if (!state.buffer) {
                     state.buffer = internal::backend_ops_for(state.source).create_readback_buffer();
                 }
-                const auto stream = prepare_inputs_for_stream({&state.source}, static_cast<cudaStream_t>(target));
+                // A Vulkan queue handle is not a CUDA stream. The caller has
+                // already bound that queue; ordering stays on its timeline.
+                const auto stream = *backend == GpuBackend::CUDA
+                                        ? prepare_inputs_for_stream({&state.source}, static_cast<cudaStream_t>(target))
+                                        : prepare_inputs_for_stream({&state.source});
                 try {
                     auto storage = internal::storage_ref(state.source);
                     storage.byte_offset += byte_offset;

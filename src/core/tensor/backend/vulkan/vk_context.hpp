@@ -127,6 +127,9 @@ namespace lfs::core::internal {
 
         [[nodiscard]] uint64_t reserve_timeline_value();
         void submit(VkCommandBuffer command, uint64_t signal_value);
+        // Waits for an earlier value on the context timeline, then signals signal_value.
+        // wait_value == 0 or wait_value >= signal_value submits without a wait.
+        void submit_after(VkCommandBuffer command, uint64_t wait_value, uint64_t signal_value);
         void submit_external_wait(VkSemaphore semaphore, uint64_t value, uint64_t signal_value);
         void wait(uint64_t value);
         [[nodiscard]] uint64_t completed_timeline() const;

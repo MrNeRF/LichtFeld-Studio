@@ -42,13 +42,30 @@ namespace lfs::core::internal {
         void release_thread(uint64_t recorder_id);
         void shutdown();
 
+        // Dedicated recorder used as a tensor work queue. The caller binds it
+        // onto the thread that records commands. Destruction waits for its
+        // submitted timeline value. id 0 is the thread's implicit recorder.
+        [[nodiscard]] uint64_t create_queue(bool legacy_ordered);
+        void destroy_queue(uint64_t id);
+        void bind_queue(uint64_t id);
+        void unbind_queue();
+        [[nodiscard]] bool owns_queue(uint64_t id) const;
+        [[nodiscard]] uint64_t flush_queue(uint64_t id);
+        [[nodiscard]] bool queue_ready(uint64_t id);
+        void queue_wait(uint64_t id);
+        // Submits work already recorded on the queue, then makes the next
+        // submission wait for value. value 0 is already signaled.
+        void queue_defer_wait(uint64_t id, uint64_t value);
+
         [[nodiscard]] uint64_t pending_value(StorageRef storage) const;
         [[nodiscard]] size_t dead_recorder_count() const;
 
     private:
         struct Recorder;
 
+        Recorder& ensure_implicit_locked();
         Recorder& current_locked();
+        Recorder* queue_locked(uint64_t id);
         void ensure_submitted_locked(StorageRef storage);
         uint64_t flush_through_locked(uint64_t value);
         void submit_locked(Recorder& recorder);
@@ -65,6 +82,8 @@ namespace lfs::core::internal {
         std::unordered_map<uint64_t, std::unique_ptr<Recorder>> recorders_;
         uint64_t next_recorder_id_ = 1;
         bool shutting_down_ = false;
+        uint64_t implicit_submitted_ = 0;
+        uint64_t legacy_submitted_ = 0;
         std::vector<std::pair<uint64_t, std::shared_ptr<void>>> external_owners_;
     };
 

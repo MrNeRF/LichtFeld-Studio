@@ -8,6 +8,7 @@
 #include "core/tensor_readback.hpp"
 #include "core/tensor_upload.hpp"
 #include <array>
+#include <cstdint>
 #include <cstring>
 #include <gtest/gtest.h>
 #include <span>
@@ -71,9 +72,33 @@ namespace {
     }
 
     TEST(TensorQueueContract, UnavailableConstructorsRejectExplicitly) {
-        EXPECT_THROW((void)TensorWorkQueue(GpuBackend::Vulkan), std::runtime_error);
-        EXPECT_THROW(TensorWorkQueue(GpuBackend::Vulkan, nullptr), std::runtime_error);
-        EXPECT_THROW((void)TensorFence(GpuBackend::Vulkan), std::runtime_error);
+        if (gpu_backend_available(GpuBackend::Vulkan)) {
+            const GpuBackendScope scope(GpuBackend::Vulkan);
+            TensorWorkQueue independent(GpuBackend::Vulkan);
+            TensorWorkQueue legacy(GpuBackend::Vulkan, TensorWorkQueue::Mode::LegacyOrdered);
+            TensorWorkQueue borrowed(GpuBackend::Vulkan, independent.native_handle());
+            TensorWorkQueue implicit(GpuBackend::Vulkan, nullptr);
+            TensorFence fence(GpuBackend::Vulkan);
+            EXPECT_EQ(independent.backend(), GpuBackend::Vulkan);
+            EXPECT_TRUE(fence.ready());
+            EXPECT_TRUE(independent.ready());
+            independent.record(fence);
+            legacy.wait_for(fence);
+            borrowed.wait_for(fence);
+            implicit.record(fence);
+            independent.wait();
+            legacy.wait();
+            borrowed.wait();
+            implicit.wait();
+            EXPECT_TRUE(fence.ready());
+            EXPECT_TRUE(independent.ready());
+            EXPECT_THROW(TensorWorkQueue(GpuBackend::Vulkan, reinterpret_cast<void*>(~uintptr_t{0})), std::runtime_error);
+            EXPECT_THROW(independent.enqueue_host_callback([](void*) {}, nullptr), std::runtime_error);
+        } else {
+            EXPECT_THROW((void)TensorWorkQueue(GpuBackend::Vulkan), std::runtime_error);
+            EXPECT_THROW(TensorWorkQueue(GpuBackend::Vulkan, nullptr), std::runtime_error);
+            EXPECT_THROW((void)TensorFence(GpuBackend::Vulkan), std::runtime_error);
+        }
         if (!gpu_backend_available(GpuBackend::CUDA)) {
             EXPECT_THROW((void)TensorWorkQueue(GpuBackend::CUDA), std::runtime_error);
 #if !LFS_HAS_CUDA
@@ -113,6 +138,51 @@ namespace {
         Tensor destination = Tensor::empty({6}, Device::CPU);
         EXPECT_THROW(readback.prepare(source, destination), std::runtime_error);
         EXPECT_FALSE(reserved_allocation_bytes(source).has_value());
+    }
+
+    TEST(TensorQueueContract, VulkanQueueUploadReadbackAndFenceReuse) {
+        if (!gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP();
+        const GpuBackendScope scope(GpuBackend::Vulkan);
+        TensorWorkQueue producer(GpuBackend::Vulkan, TensorWorkQueue::Mode::LegacyOrdered);
+        TensorWorkQueue consumer(GpuBackend::Vulkan);
+        TensorFence fence(GpuBackend::Vulkan);
+        Tensor destination = Tensor::empty({4}, Device::GPU);
+        TensorUpload upload;
+        const std::array<float, 4> first{1.f, 2.f, 3.f, 4.f};
+        upload.enqueue(destination, std::as_bytes(std::span(first)), TensorExecutionTarget(producer));
+        producer.record(fence);
+        consumer.wait_for(fence);
+        TensorReadback readback;
+        readback.enqueue(destination, consumer);
+        std::array<float, 4> output{};
+        readback.wait(std::as_writable_bytes(std::span(output)));
+        EXPECT_EQ(output, first);
+        upload.wait();
+        EXPECT_TRUE(fence.ready());
+        producer.wait();
+        consumer.wait();
+        EXPECT_TRUE(producer.ready());
+        EXPECT_TRUE(consumer.ready());
+
+        const std::array<float, 4> second{8.f, 7.f, 6.f, 5.f};
+        upload.enqueue(destination, std::as_bytes(std::span(second)), TensorExecutionTarget(producer));
+        producer.record(fence);
+        consumer.wait_for(fence);
+        readback.enqueue(destination, TensorExecutionTarget(consumer));
+        readback.wait(std::as_writable_bytes(std::span(output)));
+        EXPECT_EQ(output, second);
+        upload.wait();
+        consumer.wait();
+        EXPECT_TRUE(fence.ready());
+
+        TensorWorkQueue::Scope producer_scope(producer);
+        const Tensor filled = Tensor::full({4}, 9.f, Device::GPU);
+        producer.record(fence);
+        consumer.wait_for(fence);
+        consumer.wait();
+        EXPECT_EQ(filled.to_vector(), std::vector<float>(4, 9.f));
+        EXPECT_TRUE(fence.ready());
     }
 
 #if LFS_HAS_CUDA
