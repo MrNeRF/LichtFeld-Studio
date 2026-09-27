@@ -554,6 +554,7 @@ set(TEST_FILES
     test_photometric_ops.cpp
     test_fast_ops.cpp
     fast_raster_test_helpers.cpp
+    test_training_image_ops.cpp
     test_adam_ops.cpp
     test_geometry_ops.cpp
     test_bilateral_ops.cpp

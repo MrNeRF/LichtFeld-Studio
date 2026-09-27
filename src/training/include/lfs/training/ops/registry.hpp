@@ -14,6 +14,7 @@
 #include "lfs/training/ops/morton.hpp"
 #include "lfs/training/ops/mrnf.hpp"
 #include "lfs/training/ops/raster.hpp"
+#include "lfs/training/ops/training_image.hpp"
 
 #include <bitset>
 #include <optional>
@@ -41,6 +42,7 @@ namespace lfs::training {
         const ops::MaskOps* masks = nullptr;
         const ops::ExtraLossOps* extra_loss = nullptr;
         const ops::BilateralOps* bilateral = nullptr;
+        const ops::TrainingImageOps* training_image = nullptr;
     };
 
     enum class Family {

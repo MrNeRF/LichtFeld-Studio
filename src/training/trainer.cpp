@@ -43,7 +43,6 @@
 #include "io/project_recovery.hpp"
 #include "io/scene_chapter_adapter.hpp"
 #include "kernels/densification_kernels.hpp"
-#include "kernels/image_kernels.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/live_model_mutation_guard.hpp"
@@ -66,14 +65,11 @@
 #include "strategies/strategy_factory.hpp"
 #include "strategies/strategy_utils.hpp"
 #include "training/control/control_boundary.hpp"
-#include "training/kernels/camera_loss_heatmap.cuh"
 #include "training/kernels/depth_loss.hpp"
-#include "training/kernels/grad_alpha.hpp"
 #include "training/kernels/mask_preprocess.hpp"
 #include "training/kernels/mrnf_kernels.hpp"
 #include "training/kernels/normal_consistency_loss.hpp"
 #include "training/kernels/normal_loss.hpp"
-#include "training/kernels/roi_weight_map.hpp"
 #include "training/training_setup.hpp"
 #include "training_cropbox_mask.hpp"
 
@@ -2386,14 +2382,9 @@ namespace lfs::training {
         // queue so asynchronous readback waits only for that producer.
         heatmap->latest_loss_gpu.set_stream(stream);
         heatmap->ema_loss_gpu.set_stream(stream);
-        kernels::launch_update_camera_loss_heatmap(
-            image_loss.ptr<float>(),
-            static_cast<int>(it->second),
-            CAMERA_LOSS_EMA_ALPHA,
-            heatmap->latest_loss_gpu.ptr<float>(),
-            heatmap->ema_loss_gpu.ptr<float>(),
-            heatmap->camera_uids.size(),
-            stream);
+        training_ops_->training_image->heatmap(
+            image_loss, heatmap->latest_loss_gpu, heatmap->ema_loss_gpu,
+            static_cast<int>(it->second), CAMERA_LOSS_EMA_ALPHA);
 
         heatmap->dirty = true;
     }
@@ -5421,15 +5412,7 @@ namespace lfs::training {
             edge_map_buffer_ = lfs::core::Tensor::empty_exact(map_shape, lfs::core::DataType::Float32);
         }
         edge_map_buffer_.set_stream(stream);
-        if (gt_image.dtype() == lfs::core::DataType::UInt8) {
-            kernels::launch_fused_canny_edge_filter_chw(
-                gt_image.ptr<uint8_t>(), edge_map_buffer_.ptr<float>(),
-                static_cast<int>(height), static_cast<int>(width), stream);
-        } else {
-            kernels::launch_fused_canny_edge_filter_chw(
-                gt_image.ptr<float>(), edge_map_buffer_.ptr<float>(),
-                static_cast<int>(height), static_cast<int>(width), stream);
-        }
+        training_ops_->training_image->canny(gt_image, edge_map_buffer_);
         kernels::launch_normalize_by_positive_median(
             edge_map_buffer_.ptr<float>(), height * width, stream);
 
@@ -5506,13 +5489,7 @@ namespace lfs::training {
 
         bg_image_base_.sync_to_stream(lfs::core::getCurrentCUDAStream());
         // Use bilinear resize kernel
-        kernels::launch_bilinear_resize_chw(
-            bg_image_base_.ptr<float>(),
-            resized.ptr<float>(),
-            channels,
-            src_h, src_w,
-            height, width,
-            lfs::core::getCurrentCUDAStream());
+        training_ops_->training_image->resize_background(bg_image_base_, resized);
 
         // Cache only if this physical bucket can fit under the hard byte ceiling.
         // Returned Tensor copies retain storage safely if an older entry is evicted.
@@ -5555,11 +5532,7 @@ namespace lfs::training {
         }
 
         random_bg_buffer_.set_stream(lfs::core::getCurrentCUDAStream());
-        kernels::launch_random_background(
-            random_bg_buffer_.ptr<float>(),
-            height, width,
-            static_cast<uint64_t>(iteration),
-            lfs::core::getCurrentCUDAStream());
+        training_ops_->training_image->random_background(random_bg_buffer_, static_cast<uint64_t>(iteration));
 
         return random_bg_buffer_;
     }
@@ -6343,22 +6316,17 @@ namespace lfs::training {
                         cam->world_view_transform().sync_to_stream(roi_stream);
                         cam->cam_position().sync_to_stream(roi_stream);
                         const auto [fx, fy, cx, cy] = cam->get_intrinsics();
-                        lfs::training::kernels::launch_roi_weight_map(
-                            cam->world_view_transform_ptr(),
-                            cam->cam_position_ptr(),
-                            fx,
-                            fy,
-                            cx,
-                            cy,
-                            output.width,
-                            output.height,
-                            cropbox_loss_geometry->world_to_cropbox,
-                            cropbox_loss_geometry->min,
-                            cropbox_loss_geometry->max,
-                            cropbox_loss_geometry->inverse,
-                            params_.optimization.cropbox_loss_weight,
-                            roi_weight_map_.ptr<float>(),
-                            roi_stream);
+                        ops::RoiParams roi_params{
+                            .image = {output.height, output.width},
+                            .intrinsics = {fx, fy, cx, cy},
+                            .minimum = {cropbox_loss_geometry->min.x, cropbox_loss_geometry->min.y, cropbox_loss_geometry->min.z},
+                            .maximum = {cropbox_loss_geometry->max.x, cropbox_loss_geometry->max.y, cropbox_loss_geometry->max.z},
+                            .outside_weight = params_.optimization.cropbox_loss_weight,
+                            .inverse = cropbox_loss_geometry->inverse,
+                        };
+                        std::copy_n(&cropbox_loss_geometry->world_to_cropbox[0][0], 16, roi_params.world_to_cropbox.begin());
+                        training_ops_->training_image->roi(
+                            cam->world_view_transform(), cam->cam_position(), roi_weight_map_, roi_params);
                         roi_weight = roi_weight_map_;
                         roi_weight.sync_to_stream(lfs::core::getCurrentCUDAStream());
                     }
@@ -7165,9 +7133,7 @@ namespace lfs::training {
                             LOG_VRAM_DIFF("train.densification_error_map.normalize");
                             const auto map_mean = tile_error_map.mean();
                             lfs::core::pin_operands({&tile_error_map, &map_mean});
-                            lfs::training::kernels::launch_normalize_by_device_scalar(
-                                tile_error_map.ptr<float>(), tile_error_map.numel(),
-                                map_mean.ptr<float>(), 1e-6f);
+                            training_ops_->training_image->normalize_scalar(tile_error_map, map_mean, 1e-6f);
                         }
 
                         if (live_vram_profiler_enabled()) {
