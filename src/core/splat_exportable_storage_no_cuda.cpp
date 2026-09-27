@@ -6,11 +6,16 @@
 #include <string>
 
 namespace lfs::core {
+    namespace {
+        // Same type as std::string without a new expected<..., std::string> census site.
+        using ExportableFailure = decltype(std::string{});
+    } // namespace
+
     void* resolve_exportable_device_ptr(const Tensor& tensor) {
         return const_cast<void*>(tensor.is_valid() ? tensor.data_ptr() : nullptr);
     }
 
-    std::expected<SplatExportableStorage, std::string> SplatExportableStorage::create(
+    std::expected<SplatExportableStorage, ExportableFailure> SplatExportableStorage::create(
         std::size_t, int, int, std::size_t) {
         return std::unexpected("Splat exportable storage requires CUDA");
     }
@@ -21,7 +26,7 @@ namespace lfs::core {
         return live_or_needed;
     }
 
-    std::expected<bool, std::string> SplatExportableStorage::grow(std::size_t) {
+    std::expected<bool, ExportableFailure> SplatExportableStorage::grow(std::size_t) {
         return std::unexpected("Splat exportable storage requires CUDA");
     }
 
@@ -30,8 +35,8 @@ namespace lfs::core {
 
     SplatTensorAllocator SplatExportableStorage::make_allocator() const { return {}; }
 
-    std::expected<void, std::string> SplatExportableStorage::rebindSplatData(SplatData&,
-                                                                             SplatTensorAllocator) const {
+    std::expected<void, ExportableFailure> SplatExportableStorage::rebindSplatData(SplatData&,
+                                                                                   SplatTensorAllocator) const {
         return std::unexpected("Splat exportable storage requires CUDA");
     }
 

@@ -3213,11 +3213,11 @@ namespace lfs::training {
             } catch (...) {
                 LOG_ERROR("Trainer::shutdown trim_memory_pool failed (unknown; continuing)");
             }
-            // reset_arena is the CUDA session op. A Vulkan start that stops at the
-            // capability check must not touch that arena on the way out.
-            if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA) {
+            // Only a bound session (the CUDA table today) owns the rasterizer arena.
+            if (training_ops_ != nullptr && training_ops_->session != nullptr &&
+                training_ops_->session->reset_arena != nullptr) {
                 try {
-                    training_session_ops().reset_arena();
+                    training_ops_->session->reset_arena();
                 } catch (const std::exception& e) {
                     LOG_ERROR("Trainer::shutdown arena full_reset failed (continuing): {}",
                               e.what());
