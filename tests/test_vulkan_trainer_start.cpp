@@ -6,12 +6,14 @@
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
+#include "lfs/training/ops/registry.hpp"
 #include "training/trainer.hpp"
 
 #include <gtest/gtest.h>
 
 #include <filesystem>
 #include <memory>
+#include <string>
 
 namespace {
 
@@ -39,6 +41,25 @@ namespace {
         EXPECT_NE(result.error().find("Missing families:"), std::string::npos);
         EXPECT_NE(result.error().find("Photometric"), std::string::npos);
         EXPECT_NE(result.error().find("Fast"), std::string::npos);
+    }
+
+    TEST(TrainingOpsSessionBackend, MortonAndSessionFollowTheDefaultBackend) {
+        const auto backend = lfs::core::default_gpu_backend();
+        if (lfs::training::training_ops(backend).morton == nullptr) {
+            EXPECT_THROW(lfs::training::training_morton_ops(), std::runtime_error);
+        } else {
+            EXPECT_EQ(&lfs::training::training_morton_ops(), lfs::training::training_ops(backend).morton);
+        }
+        if (lfs::training::training_ops(backend).session == nullptr) {
+            try {
+                lfs::training::training_session_ops();
+                FAIL() << "missing session ops did not throw";
+            } catch (const std::runtime_error& error) {
+                EXPECT_NE(std::string(error.what()).find("Session"), std::string::npos);
+            }
+        } else {
+            EXPECT_EQ(&lfs::training::training_session_ops(), lfs::training::training_ops(backend).session);
+        }
     }
 
 } // namespace

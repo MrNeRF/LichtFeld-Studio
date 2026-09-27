@@ -355,7 +355,7 @@ namespace lfs::training::morton {
             permute_row_tensor(splat._densification_info, result.permutation);
         }
         if (splat._max_screen_share.is_valid() && splat._max_screen_share.numel() > 0) {
-            core::gpu_device_barrier(core::GpuBackend::CUDA);
+            core::gpu_device_barrier(stream.backend());
             permute_row_tensor(splat._max_screen_share, result.permutation);
             if (optimizer != nullptr) {
                 optimizer->refresh_screen_share_buffer();
@@ -372,7 +372,7 @@ namespace lfs::training::morton {
         }
 
         splat.note_param_layout_changed();
-        core::gpu_device_barrier(core::GpuBackend::CUDA);
+        core::gpu_device_barrier(stream.backend());
         // Morton's temporary permutation buffers normally return to the CUDA
         // pool immediately. Keep the VRAM hygiene trim when that leaves a
         // substantial reserved/unused tail, but avoid paying a device-wide

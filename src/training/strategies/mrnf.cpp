@@ -9,6 +9,7 @@
 #include "core/gpu_device_runtime.hpp"
 #include "core/logger.hpp"
 #include "core/sh_value_quant.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/tensor_completion.hpp"
 #include "core/tensor_execution.hpp"
 #include "core/tensor_serialization.hpp"
@@ -1264,7 +1265,8 @@ namespace lfs::training {
 
         if (_splat_data->_max_screen_share.is_valid() &&
             _splat_data->_max_screen_share.numel() > 0) {
-            core::gpu_device_barrier(core::GpuBackend::CUDA);
+            core::gpu_device_barrier(core::gpu_backend_of(_splat_data->_max_screen_share)
+                                         .value_or(core::default_gpu_backend()));
         }
 
         if (_params && screen_share_shrink_active(iter) &&

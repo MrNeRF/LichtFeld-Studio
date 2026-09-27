@@ -56,8 +56,8 @@ namespace lfs::training::sh_value {
         /// Full device barrier after encode/decode. Stream-only sync is not enough:
         /// densify runs on the strategy stream while the next forward may launch on
         // the training stream without an intervening wait (multi-stream UAF).
-        void sync_codec_stream(lfs::core::TensorExecutionTarget /*stream*/) {
-            core::gpu_device_barrier(core::GpuBackend::CUDA);
+        void sync_codec_stream(lfs::core::TensorExecutionTarget stream) {
+            core::gpu_device_barrier(stream.backend());
         }
 
         [[nodiscard]] Tensor as_i64_indices(const Tensor& indices, lfs::core::TensorExecutionTarget stream) {

@@ -85,17 +85,19 @@ namespace lfs::training {
     }
 
     const ops::MortonOps& training_morton_ops() {
-        const auto* morton = training_ops(core::GpuBackend::CUDA).morton;
+        const auto backend = core::default_gpu_backend();
+        const auto* morton = training_ops(backend).morton;
         if (!morton)
-            throw std::runtime_error(unavailable_training_family(core::GpuBackend::CUDA, Family::Morton)
+            throw std::runtime_error(unavailable_training_family(backend, Family::Morton)
                                          .value_or("Morton training ops are unavailable"));
         return *morton;
     }
 
     const ops::SessionOps& training_session_ops() {
-        const auto* session = training_ops(core::GpuBackend::CUDA).session;
+        const auto backend = core::default_gpu_backend();
+        const auto* session = training_ops(backend).session;
         if (!session)
-            throw std::runtime_error(unavailable_training_family(core::GpuBackend::CUDA, Family::Session)
+            throw std::runtime_error(unavailable_training_family(backend, Family::Session)
                                          .value_or("Session training ops are unavailable"));
         return *session;
     }

@@ -7,6 +7,7 @@
 #include "core/logger.hpp"
 #include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "lfs/training/morton_reorder.hpp"
@@ -667,7 +668,8 @@ namespace lfs::training {
         if (is_refining(iter)) {
             if (_splat_data->_max_screen_share.is_valid() &&
                 _splat_data->_max_screen_share.numel() > 0) {
-                core::gpu_device_barrier(core::GpuBackend::CUDA);
+                core::gpu_device_barrier(core::gpu_backend_of(_splat_data->_max_screen_share)
+                                             .value_or(core::default_gpu_backend()));
             }
             const size_t n_clip = static_cast<size_t>(_splat_data->size());
             if (_params && screen_share_cap_active(_params->max_screen_share) &&

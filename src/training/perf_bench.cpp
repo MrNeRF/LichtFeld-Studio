@@ -196,8 +196,10 @@ namespace lfs::training {
         const std::size_t n =
             static_cast<std::size_t>(kPhaseSampleCap) *
             static_cast<std::size_t>(kPhaseBoundaryCount);
-        phase_timer_ = std::make_unique<lfs::core::GpuElapsed>(
-            lfs::core::GpuBackend::CUDA, n);
+        const auto timing_backend = timing_queue_
+                                        ? timing_queue_->backend()
+                                        : lfs::core::default_gpu_backend();
+        phase_timer_ = std::make_unique<lfs::core::GpuElapsed>(timing_backend, n);
         if (!phase_timer_->ready()) {
             destroy_phase_event_pool();
             LOG_WARN("PerfBench: failed to allocate phase event pool; phase timings disabled");
@@ -230,7 +232,10 @@ namespace lfs::training {
             static_cast<std::size_t>(phase_current_index_) *
                 static_cast<std::size_t>(kPhaseBoundaryCount) +
             static_cast<std::size_t>(bi);
-        if (!phase_timer_->mark(ev_idx, timing_queue_.value_or(core::TensorExecutionTarget::default_queue(core::GpuBackend::CUDA)))) {
+        const auto timing_backend = timing_queue_
+                                        ? timing_queue_->backend()
+                                        : lfs::core::default_gpu_backend();
+        if (!phase_timer_->mark(ev_idx, timing_queue_.value_or(core::TensorExecutionTarget::default_queue(timing_backend)))) {
             return;
         }
         sample.seen_mask |= (1u << bi);
@@ -256,7 +261,7 @@ namespace lfs::training {
             } else {
                 std::size_t used = 0;
                 std::size_t total = 0;
-                sample_cuda_used(lfs::core::gpu_backend_memory_info(lfs::core::GpuBackend::CUDA), used, total);
+                sample_cuda_used(lfs::core::gpu_backend_memory_info(lfs::core::default_gpu_backend()), used, total);
                 c.baseline_cuda_used_ = used;
                 (void)total;
             }
@@ -476,7 +481,7 @@ namespace lfs::training {
 
         std::size_t used = 0;
         std::size_t total = 0;
-        const auto memory = lfs::core::gpu_backend_memory_info(lfs::core::GpuBackend::CUDA, true);
+        const auto memory = lfs::core::gpu_backend_memory_info(lfs::core::default_gpu_backend(), true);
         sample_cuda_used(memory, used, total);
         if (used > peak_cuda_used_) {
             capture_peak_snapshot(iter, used, total, memory);
