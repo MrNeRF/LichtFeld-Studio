@@ -10,6 +10,11 @@
 #include <optional>
 
 namespace lfs::test {
+    // --tensor-backend freezes the process default. Tests that switch it call this first.
+    inline void reset_gpu_backend_for_testing() {
+        core::internal::gpu_backend_reset_for_testing();
+    }
+
     // Skips without a CUDA device; tensors stay on the backend --tensor-backend selects.
     class CudaDeviceTest : public ::testing::Test {
     protected:
