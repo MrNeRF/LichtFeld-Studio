@@ -4,7 +4,7 @@
 
 #include "io/cache_image_loader.hpp"
 #if LFS_HAS_CUDA
-#include "image_execution.hpp"
+#include "image_execution_cuda.hpp"
 #endif
 #include "core/image_io.hpp"
 #include "core/logger.hpp"

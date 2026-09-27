@@ -59,6 +59,7 @@ namespace lfs::io {
             upload.wait();
             auto device = Tensor::empty(host.shape(), Device::GPU, host.dtype());
             upload.enqueue(device, host);
+            upload.wait();
             return device;
         }
 
@@ -217,7 +218,7 @@ namespace lfs::io {
                             }
                         }
                         try_complete_pair(item.sequence_id, item.loader_generation, std::move(image),
-                                          std::nullopt, nullptr);
+                                          std::nullopt);
                     } catch (const std::exception& e) {
                         LOG_ERROR("[PipelinedImageLoader] RGB fallback also failed {}: {}",
                                   lfs::core::path_to_utf8(item.path), e.what());
@@ -243,7 +244,7 @@ namespace lfs::io {
                 if (item.alpha_as_mask) {
                     auto [rgb, alpha] = decode_rgba(item.path, params, upload);
                     try_complete_pair(item.sequence_id, item.loader_generation, std::move(rgb),
-                                      finish_mask(std::move(alpha), item.alpha_mask_params), nullptr);
+                                      finish_mask(std::move(alpha), item.alpha_mask_params));
                 } else if (item.is_mask) {
                     int width = 0, height = 0, channels = 0;
                     stbi_uc* const gray = stbi_load(lfs::core::path_to_utf8(item.path).c_str(),
@@ -271,7 +272,7 @@ namespace lfs::io {
                             mask.contiguous(), undistort_for(*item.undistort, mask, params.max_width), nullptr);
                     }
                     try_complete_pair(item.sequence_id, item.loader_generation, std::nullopt,
-                                      finish_mask(std::move(mask), item.mask_params), nullptr);
+                                      finish_mask(std::move(mask), item.mask_params));
                 } else if (item.is_depth || item.is_normal) {
                     const std::string path_utf8 = lfs::core::path_to_utf8(item.path);
                     const int channels = item.is_depth ? 1 : 3;
@@ -326,15 +327,15 @@ namespace lfs::io {
                     prior = prior.contiguous();
                     if (item.is_depth) {
                         try_complete_pair(item.sequence_id, item.loader_generation, std::nullopt,
-                                          std::nullopt, nullptr, std::move(prior));
+                                          std::nullopt, std::move(prior));
                     } else {
                         try_complete_pair(item.sequence_id, item.loader_generation, std::nullopt,
-                                          std::nullopt, nullptr, std::nullopt, std::move(prior));
+                                          std::nullopt, std::nullopt, std::move(prior));
                     }
                 } else {
                     auto image = decode_portable_rgb(item.path, params, upload);
                     try_complete_pair(item.sequence_id, item.loader_generation, std::move(image),
-                                      std::nullopt, nullptr);
+                                      std::nullopt);
                 }
             } catch (const std::exception& e) {
                 LOG_WARN("[PipelinedImageLoader] Host processing failed {}: {}",

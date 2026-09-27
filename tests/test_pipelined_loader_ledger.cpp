@@ -40,10 +40,8 @@ namespace lfs::io {
                 loader.accepted_sequences_.fetch_add(1);
                 loader.in_flight_.fetch_add(1);
             }
-            const auto image_stream = image.stream();
-            const auto mask_stream = mask.stream();
-            loader.try_complete_pair(0, generation, std::move(image), {}, image_stream);
-            loader.try_complete_pair(0, generation, {}, std::move(mask), mask_stream);
+            loader.try_complete_pair(0, generation, std::move(image), {});
+            loader.try_complete_pair(0, generation, {}, std::move(mask));
         }
     };
 } // namespace lfs::io
@@ -178,14 +176,12 @@ namespace {
         if (!completion.outcome) {
             return;
         }
-        if (completion.outcome->depth_ready_event) {
-            EXPECT_EQ(cudaEventDestroy(completion.outcome->depth_ready_event), cudaSuccess);
-            completion.outcome->depth_ready_event = nullptr;
-        }
-        if (completion.outcome->normal_ready_event) {
-            EXPECT_EQ(cudaEventDestroy(completion.outcome->normal_ready_event), cudaSuccess);
-            completion.outcome->normal_ready_event = nullptr;
-        }
+        if (completion.outcome->depth_ready)
+            completion.outcome->depth_ready->wait();
+        if (completion.outcome->normal_ready)
+            completion.outcome->normal_ready->wait();
+        completion.outcome->depth_ready.reset();
+        completion.outcome->normal_ready.reset();
     }
 
     LoaderCompletion get_completion(PipelinedImageLoader& loader) {

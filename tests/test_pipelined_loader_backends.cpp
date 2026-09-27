@@ -167,9 +167,9 @@ namespace {
                 return {};
             }
             auto& ready = *completion->outcome;
-            for (auto* event : {&ready.depth_ready_event, &ready.normal_ready_event}) {
-                if (*event)
-                    TensorFence::adopt(GpuBackend::CUDA, std::exchange(*event, nullptr)).wait();
+            for (auto* fence : {&ready.depth_ready, &ready.normal_ready}) {
+                if (*fence)
+                    (*fence)->wait();
             }
             EXPECT_TRUE(gpu_backend_of(ready.tensor) == GetParam());
             // Exercise a consumer GPU operation on a different thread before readback.

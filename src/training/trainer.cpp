@@ -8312,15 +8312,13 @@ namespace lfs::training {
                     gt_image.sync_to_stream(*training_queue_);
                 }
 
-                for (auto* event : {&example.depth_ready_event, &example.normal_ready_event}) {
-                    if (!*event)
+                for (auto* fence : {&example.depth_ready, &example.normal_ready}) {
+                    if (!*fence)
                         continue;
-                    auto fence = lfs::core::TensorFence::adopt(lfs::core::GpuBackend::CUDA, *event);
-                    *event = nullptr;
                     try {
-                        training_queue_->wait_for(fence);
+                        training_queue_->wait_for(**fence);
                     } catch (...) {
-                        orphaned_sidecar_events_.push_back(std::move(fence));
+                        orphaned_sidecar_events_.push_back(std::move(**fence));
                         throw;
                     }
                 }

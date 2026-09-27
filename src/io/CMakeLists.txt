@@ -260,14 +260,16 @@ add_library(lfs_io STATIC
 
 )
 target_sources(lfs_io PRIVATE splat_decimate.cpp)
+target_sources(lfs_io PRIVATE
+    pipelined_image_loader.cpp
+    pipelined_image_loader_portable.cpp)
 if(LFS_HAS_CUDA)
     target_sources(lfs_io PRIVATE
         nvcodec_image_loader.hpp
         nvcodec_image_loader.cpp
-        pipelined_image_loader.cpp
-        pipelined_image_loader_portable.cpp)
+        pipelined_image_loader_cuda.cpp)
 else()
-    target_sources(lfs_io PRIVATE pipelined_image_loader_no_cuda.cpp)
+    target_sources(lfs_io PRIVATE pipelined_image_loader_host.cpp)
 endif()
 
 # Set include directories

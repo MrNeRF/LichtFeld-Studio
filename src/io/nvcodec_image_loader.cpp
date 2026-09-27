@@ -12,7 +12,7 @@
 #include "core/shared_image_ops.hpp"
 #include "core/tensor.hpp"
 #include "diagnostics/vram_profiler.hpp"
-#include "image_execution.hpp"
+#include "image_execution_cuda.hpp"
 
 #include <algorithm>
 #include <atomic>

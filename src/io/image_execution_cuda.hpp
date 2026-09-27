@@ -7,9 +7,9 @@
 #include "core/tensor_upload.hpp"
 
 namespace lfs::io {
-    // Synchronous entry points can also be called outside a trainer/worker scope.
-    // A CUDA session keeps one non-blocking queue per calling thread, shared by
-    // nested decode and cache calls. Any other session does not own a CUDA queue.
+    // CUDA image codecs. A requested stream or the calling thread's current
+    // CUDA stream wins. Otherwise one non-blocking queue is kept per thread.
+    // A non-CUDA session does not own a CUDA queue.
     inline cudaStream_t image_execution_stream(void* requested = nullptr) {
         if (requested)
             return static_cast<cudaStream_t>(requested);
