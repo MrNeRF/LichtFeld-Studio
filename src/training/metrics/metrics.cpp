@@ -755,6 +755,11 @@ namespace lfs::training {
                     weights_path, lfs::core::Device::GPU, lfs::core::DataType::Float16,
                     lfs::core::nn::models::InputScaling::Identity);
                 if (loaded) {
+                    const auto backend = lfs::core::default_gpu_backend();
+                    const auto* lpips = training_ops(backend).lpips;
+                    if (!lpips)
+                        throw std::runtime_error(*unavailable_training_family(backend, Family::Lpips));
+                    loaded->set_dispatch(*lpips);
                     _lpips_metric.emplace(std::move(*loaded));
                 } else {
                     LOG_WARN("Eval: LPIPS unavailable at '{}' ({})",

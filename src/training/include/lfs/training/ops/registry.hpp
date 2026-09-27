@@ -11,6 +11,7 @@
 #include "lfs/training/ops/geometry.hpp"
 #include "lfs/training/ops/gsplat.hpp"
 #include "lfs/training/ops/loss.hpp"
+#include "lfs/training/ops/lpips.hpp"
 #include "lfs/training/ops/masks.hpp"
 #include "lfs/training/ops/mcmc.hpp"
 #include "lfs/training/ops/morton.hpp"
@@ -56,6 +57,7 @@ namespace lfs::training {
         const ops::RefineOps* refine = nullptr;
         const ops::SessionOps* session = nullptr;
         const ops::SharedImageOps* shared_image = nullptr;
+        const ops::LpipsOps* lpips = nullptr;
     };
 
     enum class Family {

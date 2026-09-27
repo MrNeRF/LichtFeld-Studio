@@ -393,15 +393,23 @@ namespace lfs::core::nn::models {
             taps_bytes += kernels::conv2d_weight_scratch_bytes(kLayers[i].cout, kLayers[i].cin,
                                                                DataType::Float16);
         }
+        std::array<Tensor, 13> tap_views;
         if (taps_bytes > 0 && !fast_weight_taps_.is_valid()) {
             fast_weight_taps_ = Tensor::empty(shape_of({taps_bytes / sizeof(uint16_t)}), Device::GPU,
                                               DataType::Float16);
             fast_weight_taps_.set_stream(stream);
             auto* taps = static_cast<unsigned char*>(fast_weight_taps_.data_ptr());
             for (std::size_t i = 1; i < kLayers.size(); ++i) {
-                kernels::conv3x3_weight_taps(
-                    w(std::format("vgg.features.{}.weight", kLayers[i].index)).data_ptr(),
-                    taps + fast_weight_tap_offsets_[i], kLayers[i].cout, kLayers[i].cin, stream);
+                const auto& weight = w(std::format("vgg.features.{}.weight", kLayers[i].index));
+                if (dispatch_) {
+                    auto view = Tensor::from_blob(taps + fast_weight_tap_offsets_[i],
+                                                  shape_of({9, static_cast<std::size_t>(kLayers[i].cout), static_cast<std::size_t>(kLayers[i].cin)}),
+                                                  Device::GPU, DataType::Float16, stream);
+                    dispatch_->weight_taps(weight, view);
+                } else {
+                    kernels::conv3x3_weight_taps(weight.data_ptr(), taps + fast_weight_tap_offsets_[i],
+                                                 kLayers[i].cout, kLayers[i].cin, stream);
+                }
             }
         }
         if (fast_weight_taps_.is_valid())
@@ -409,6 +417,14 @@ namespace lfs::core::nn::models {
         const auto* taps_base = taps_bytes > 0
                                     ? static_cast<const unsigned char*>(fast_weight_taps_.data_ptr())
                                     : nullptr;
+
+        if (dispatch_ && taps_base) {
+            for (std::size_t i = 1; i < kLayers.size(); ++i)
+                tap_views[i] = Tensor::from_blob(
+                    static_cast<unsigned char*>(fast_weight_taps_.data_ptr()) + fast_weight_tap_offsets_[i],
+                    shape_of({9, static_cast<std::size_t>(kLayers[i].cout), static_cast<std::size_t>(kLayers[i].cin)}),
+                    Device::GPU, DataType::Float16, stream);
+        }
 
         const bool tiled = tile < static_cast<std::size_t>(std::max(height, width));
         const auto crop_height = std::min<std::size_t>(height, tile + 2 * kTileHalo);
@@ -465,6 +481,45 @@ namespace lfs::core::nn::models {
                 void* cur[2] = {tiled ? tile_x.data_ptr() : x_in.data_ptr(),
                                 tiled ? tile_y.data_ptr() : y_in.data_ptr()};
                 void* next[2] = {fast_features_[0].data_ptr(), fast_features_[1].data_ptr()};
+                // Prepare shaped, non-owning views before the inference loop. The
+                // ping-pong allocations, offsets and launch order stay unchanged.
+                std::array<std::array<Tensor, 2>, 13> inputs, outputs;
+                std::array<std::array<Tensor, 2>, kBlocks> features, pooled;
+                std::array<Tensor, kBlocks> score_views;
+                Tensor scratch;
+                if (dispatch_) {
+                    void* read[2] = {cur[0], cur[1]};
+                    void* write[2] = {next[0], next[1]};
+                    int h = crop_h, width = crop_w, index = 0;
+                    for (int stage = 0; stage < kBlocks; ++stage) {
+                        for (int i = 0; i < kStageLayers[stage]; ++i, ++index) {
+                            const auto& spec = kLayers[index];
+                            for (int side = 0; side < 2; ++side) {
+                                inputs[index][side] = Tensor::from_blob(read[side],
+                                                                        shape_of({1, static_cast<std::size_t>(spec.cin), static_cast<std::size_t>(h), static_cast<std::size_t>(width)}),
+                                                                        Device::GPU, index == 0 ? DataType::Float32 : DataType::Float16, stream);
+                                outputs[index][side] = Tensor::from_blob(write[side],
+                                                                         shape_of({1, static_cast<std::size_t>(spec.cout), static_cast<std::size_t>(h), static_cast<std::size_t>(width)}),
+                                                                         Device::GPU, DataType::Float16, stream);
+                                std::swap(read[side], write[side]);
+                                if (index == 0)
+                                    write[side] = fast_features_[side + 2].data_ptr();
+                            }
+                        }
+                        for (int side = 0; side < 2; ++side) {
+                            features[stage][side] = outputs[index - 1][side];
+                            if (stage + 1 < kBlocks) {
+                                pooled[stage][side] = Tensor::from_blob(write[side],
+                                                                        shape_of({1, static_cast<std::size_t>(kLayers[index - 1].cout), static_cast<std::size_t>(h / 2), static_cast<std::size_t>(width / 2)}),
+                                                                        Device::GPU, DataType::Float16, stream);
+                                std::swap(read[side], write[side]);
+                            }
+                        }
+                        score_views[stage] = Tensor::from_blob(scores + stage, shape_of({1}), Device::GPU, DataType::Float32, stream);
+                        h /= 2;
+                        width /= 2;
+                    }
+                }
                 int cur_h = crop_h;
                 int cur_w = crop_w;
                 int layer = 0;
@@ -475,7 +530,18 @@ namespace lfs::core::nn::models {
                         const auto& weight = w(std::format("vgg.features.{}.weight", spec.index));
                         const auto& bias = w(std::format("vgg.features.{}.bias", spec.index));
                         for (int side = 0; side < 2; ++side) {
-                            if (layer == 0) {
+                            if (dispatch_) {
+                                if (layer == 0) {
+                                    dispatch_->rgb_conv(inputs[layer][side], weight, bias, outputs[layer][side],
+                                                        {scaling_shift_, scaling_scale_, scaling == InputScaling::Normalize});
+                                } else {
+                                    Conv2dParams params;
+                                    params.pad_h = params.pad_w = 1;
+                                    params.activation = Activation::Relu;
+                                    dispatch_->convolution(inputs[layer][side], weight, tap_views[layer], bias,
+                                                           outputs[layer][side], scratch, params);
+                                }
+                            } else if (layer == 0) {
                                 kernels::lpips_rgb_conv3x3(
                                     static_cast<const float*>(cur[side]), weight.data_ptr(),
                                     bias.data_ptr(), next[side], scaling_shift_.data(),
@@ -514,11 +580,18 @@ namespace lfs::core::nn::models {
                     const int interior_x1 = std::clamp(gx1 - cx0 / factor, 0, cur_w);
                     const bool last = stage + 1 == kBlocks;
                     const int channels = kLayers[static_cast<std::size_t>(layer - 1)].cout;
-                    kernels::lpips_pool_reduce(
-                        cur[0], cur[1], w(std::format("lin{}.weight", stage)).data_ptr(),
-                        scores + stage, last ? nullptr : next[0], last ? nullptr : next[1], 1,
-                        channels, cur_h, cur_w, interior_y0, interior_y1, interior_x0, interior_x1,
-                        1.0f / (static_cast<float>(feature_h) * static_cast<float>(feature_w)), stream);
+                    if (dispatch_) {
+                        dispatch_->pool_reduce(features[stage][0], features[stage][1], w(std::format("lin{}.weight", stage)),
+                                               score_views[stage], pooled[stage][0], pooled[stage][1],
+                                               {interior_y0, interior_y1, interior_x0, interior_x1,
+                                                1.0f / (static_cast<float>(feature_h) * static_cast<float>(feature_w))});
+                    } else {
+                        kernels::lpips_pool_reduce(
+                            cur[0], cur[1], w(std::format("lin{}.weight", stage)).data_ptr(),
+                            scores + stage, last ? nullptr : next[0], last ? nullptr : next[1], 1,
+                            channels, cur_h, cur_w, interior_y0, interior_y1, interior_x0, interior_x1,
+                            1.0f / (static_cast<float>(feature_h) * static_cast<float>(feature_w)), stream);
+                    }
                     if (!last) {
                         std::swap(cur[0], next[0]);
                         std::swap(cur[1], next[1]);

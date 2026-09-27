@@ -9,6 +9,7 @@
 #include "lfs/training/ops/fast_cuda.hpp"
 #include "lfs/training/ops/geometry_cuda.hpp"
 #include "lfs/training/ops/gsplat_cuda.hpp"
+#include "lfs/training/ops/lpips_cuda.hpp"
 #include "lfs/training/ops/masks_cuda.hpp"
 #include "lfs/training/ops/mcmc_cuda.hpp"
 #include "lfs/training/ops/morton_cuda.hpp"
@@ -65,6 +66,8 @@ namespace lfs::training {
                 return ops.refine != nullptr;
             case Family::SharedImage:
                 return ops.shared_image != nullptr;
+            case Family::Lpips:
+                return ops.lpips != nullptr;
             case Family::Count:
                 return false;
             default:
@@ -95,6 +98,7 @@ namespace lfs::training {
             .refine = &cuda_refine_ops(),
             .session = &cuda_session_ops(),
             .shared_image = core::shared_image_ops(core::GpuBackend::CUDA),
+            .lpips = &cuda_lpips_ops(),
         };
         static const TrainingOps kVulkan{
             .backend = core::GpuBackend::Vulkan,

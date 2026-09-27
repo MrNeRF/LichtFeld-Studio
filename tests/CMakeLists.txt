@@ -559,6 +559,7 @@ set(TEST_FILES
     test_training_image_ops.cpp
     test_shared_image_ops.cpp
     test_adam_ops.cpp
+    test_lpips_ops.cpp
     test_ppisp_ops.cpp
     test_geometry_ops.cpp
     test_bilateral_ops.cpp
