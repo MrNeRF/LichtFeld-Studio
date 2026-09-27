@@ -48,6 +48,12 @@ namespace lfs::core {
     void TensorExecutionTarget::wait_for(TensorExecutionTarget producer) const {
         if (backend_ != producer.backend_)
             throw std::invalid_argument("Tensor queue bridge backend mismatch");
+        if (backend_ == GpuBackend::Vulkan) {
+            internal::acquire_vulkan_context()->recorders().bridge_queues(
+                reinterpret_cast<uint64_t>(target_),
+                reinterpret_cast<uint64_t>(producer.target_));
+            return;
+        }
         if (backend_ != GpuBackend::CUDA)
             throw std::runtime_error("Explicit tensor queue bridges are unsupported on this backend");
         waitForCUDAStream(static_cast<cudaStream_t>(target_),

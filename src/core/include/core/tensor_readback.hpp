@@ -36,11 +36,12 @@ namespace lfs::core {
                            std::size_t byte_count);
         void enqueue_range(const Tensor& source, std::size_t byte_offset,
                            std::size_t byte_count, TensorExecutionTarget target);
-        // Bind contiguous CUDA input and pinned CPU output once for recurring
-        // downloads. Both tensors are retained; their storage must not be replaced
-        // while bound; do not mutate or create lazy consumers of the destination
-        // until unbound. Read its bytes only after poll/wait completes. prepare allocates the reusable ordering/completion markers.
-        // Vulkan direct destinations are explicitly unsupported.
+        // Bind contiguous GPU input and CPU output once for recurring downloads.
+        // CUDA destinations must be pinned. Vulkan copies into the CPU tensor when
+        // the download completes. Both tensors are retained; their storage must not
+        // be replaced while bound; do not mutate or create lazy consumers of the
+        // destination until unbound. Read its bytes only after poll/wait completes.
+        // prepare allocates the reusable ordering/completion markers.
         void prepare(const Tensor& source, const Tensor& destination);
         void enqueue(TensorWorkQueue& queue);
         [[nodiscard]] bool poll();
@@ -67,7 +68,8 @@ namespace lfs::core {
     // Packed asynchronous downloads into reusable pinned slots. Calls on a slot
     // must be serialized; distinct slots may be drained concurrently. Sources
     // remain retained until release(). Slot bytes are readable after wait/poll.
-    // CUDA implemented; Vulkan reports unsupported before allocating resources.
+    // CUDA uses pinned host slots. Vulkan uses host-visible readback storage on
+    // the queue's recorder.
     class LFS_CORE_API TensorReadbackRing {
     public:
         // Optional staging is borrowed for device staging: the caller owns it and

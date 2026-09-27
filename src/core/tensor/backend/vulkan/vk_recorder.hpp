@@ -56,6 +56,16 @@ namespace lfs::core::internal {
         // Submits work already recorded on the queue, then makes the next
         // submission wait for value. value 0 is already signaled.
         void queue_defer_wait(uint64_t id, uint64_t value);
+        // Flush producer, then make consumer's next submit wait for that value.
+        // id 0 is the calling thread's current recorder (bound queue, else implicit).
+        void bridge_queues(uint64_t consumer, uint64_t producer);
+        // Submit an empty wait for an external timeline semaphore on this device,
+        // then order the queue's later submits behind it. Does not wait on the host.
+        void queue_wait_external(uint64_t id, VkSemaphore semaphore, uint64_t value,
+                                 std::shared_ptr<void> keep_alive);
+        // Reset and write one timestamp into the queue's open command buffer.
+        // The returned value is signalled when that buffer completes.
+        [[nodiscard]] uint64_t write_timestamp(uint64_t id, VkQueryPool pool, uint32_t query);
 
         [[nodiscard]] uint64_t pending_value(StorageRef storage) const;
         [[nodiscard]] size_t dead_recorder_count() const;

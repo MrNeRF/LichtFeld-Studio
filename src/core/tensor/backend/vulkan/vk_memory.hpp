@@ -49,6 +49,7 @@ namespace lfs::core::internal {
         [[nodiscard]] uint64_t copy_to_readback(StorageRef src, StorageRef dst, size_t bytes);
         // The caller has waited for writes and the host-read barrier.
         void copy_mapped(StorageRef storage, void* destination, size_t bytes);
+        [[nodiscard]] std::byte* mapped_pointer(StorageRef storage) const;
         [[nodiscard]] uint64_t foreign_use(std::span<const StorageRef> reads,
                                            std::span<const StorageRef> writes,
                                            uint64_t current_value) const;

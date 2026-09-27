@@ -22,8 +22,8 @@ namespace lfs::core {
         GpuElapsed& operator=(GpuElapsed&&) = delete;
 
         [[nodiscard]] bool ready() const noexcept;
-        // CUDA execution target: nullptr selects the default CUDA stream. A
-        // Vulkan timer is unsupported and rejects a non-null native queue.
+        // nullptr selects the backend's current queue. Vulkan marks are timestamp
+        // queries on that queue.
         [[nodiscard]] bool mark(std::size_t index, void* execution_target);
         [[nodiscard]] bool mark(std::size_t index, TensorExecutionTarget target);
         [[nodiscard]] bool wait_queue(TensorExecutionTarget target);

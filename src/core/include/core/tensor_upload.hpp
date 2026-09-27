@@ -58,6 +58,8 @@ namespace lfs::core {
         void wait() const;
         [[nodiscard]] bool ready() const;
         // Takes ownership of an event from an external backend producer.
+        // Vulkan `event` is a context-timeline value (not a CUDA event); zero is
+        // already signaled and nothing is destroyed.
         static TensorFence adopt(GpuBackend backend, void* event);
 
     private:
@@ -96,7 +98,7 @@ namespace lfs::core {
         void record(TensorFence& fence) const;
         void wait_for(const TensorFence& fence) const;
         // Callback must not call GPU APIs or throw. Runs off the submitting
-        // thread after prior queue work. CUDA only; Vulkan throws unsupported.
+        // thread after prior queue work.
         void enqueue_host_callback(void (*callback)(void*), void* user);
         // Imports consumer semaphores without a host wait. Imports and keep_alive
         // tokens survive replacement until queue destruction.
@@ -109,6 +111,7 @@ namespace lfs::core {
         [[nodiscard]] void* timeline() const;
 
     private:
+        friend class TensorReadbackRing;
         struct Impl;
         std::unique_ptr<Impl> impl_;
     };

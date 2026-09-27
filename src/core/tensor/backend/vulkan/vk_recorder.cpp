@@ -524,6 +524,84 @@ namespace lfs::core::internal {
         recorder->gpu_wait = std::max(recorder->gpu_wait, value);
     }
 
+    void VulkanRecorderRegistry::bridge_queues(const uint64_t consumer, const uint64_t producer) {
+        std::lock_guard lock(mutex_);
+        auto resolve = [&](const uint64_t id) -> Recorder* {
+            if (id == 0) {
+                return &current_locked();
+            }
+            return queue_locked(id);
+        };
+        Recorder* const produced = resolve(producer);
+        if (produced == nullptr) {
+            throw std::invalid_argument("Tensor queue is not a Vulkan recorder");
+        }
+        if (produced->command != VK_NULL_HANDLE) {
+            flush_through_locked(produced->reserved_value);
+        }
+        const uint64_t value = produced->submitted_value;
+        if (value == 0) {
+            return;
+        }
+        Recorder* const consumed = resolve(consumer);
+        if (consumed == nullptr) {
+            throw std::invalid_argument("Tensor queue is not a Vulkan recorder");
+        }
+        if (consumed == produced) {
+            consumed->gpu_wait = std::max(consumed->gpu_wait, value);
+            return;
+        }
+        if (consumed->command != VK_NULL_HANDLE) {
+            flush_through_locked(consumed->reserved_value);
+        }
+        consumed->gpu_wait = std::max(consumed->gpu_wait, value);
+    }
+
+    void VulkanRecorderRegistry::queue_wait_external(const uint64_t id, const VkSemaphore semaphore,
+                                                     const uint64_t value, std::shared_ptr<void> keep_alive) {
+        if (semaphore == VK_NULL_HANDLE || value == 0) {
+            return;
+        }
+        std::lock_guard lock(mutex_);
+        Recorder* const recorder = id == 0 ? &current_locked() : queue_locked(id);
+        if (recorder == nullptr) {
+            throw std::invalid_argument("Tensor queue is not a Vulkan recorder");
+        }
+        if (recorder->command != VK_NULL_HANDLE) {
+            flush_through_locked(recorder->reserved_value);
+        }
+        const uint64_t prior = std::max(recorder->submitted_value, recorder->gpu_wait);
+        recorder->gpu_wait = 0;
+        const uint64_t signal = context_.reserve_timeline_value();
+        context_.submit_external_after(semaphore, value, prior, signal);
+        recorder->submitted_value = signal;
+        recorder->gpu_wait = signal;
+        const auto completed = context_.completed_timeline();
+        std::erase_if(external_owners_, [completed](const auto& owner) { return owner.first <= completed; });
+        external_owners_.emplace_back(signal, std::move(keep_alive));
+    }
+
+    uint64_t VulkanRecorderRegistry::write_timestamp(const uint64_t id, const VkQueryPool pool,
+                                                     const uint32_t query) {
+        std::lock_guard lock(mutex_);
+        Recorder& recorder = id == 0 ? current_locked() : [&]() -> Recorder& {
+            Recorder* const found = queue_locked(id);
+            if (found == nullptr) {
+                throw std::invalid_argument("Tensor queue is not a Vulkan recorder");
+            }
+            return *found;
+        }();
+        begin_locked(recorder);
+        vkCmdResetQueryPool(recorder.command, pool, query, 1);
+        vkCmdWriteTimestamp2(recorder.command, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, pool, query);
+        ++recorder.command_count;
+        const uint64_t value = recorder.reserved_value;
+        if (recorder.command_count >= kCommandLimit) {
+            flush_through_locked(value);
+        }
+        return value;
+    }
+
     void VulkanRecorderRegistry::shutdown() {
         std::lock_guard lock(mutex_);
         if (shutting_down_) {

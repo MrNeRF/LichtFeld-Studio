@@ -7,13 +7,16 @@
 #include "core/tensor_execution.hpp"
 #include "core/tensor_readback.hpp"
 #include "core/tensor_upload.hpp"
+#include "core/tensor_vulkan_interop.hpp"
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <gtest/gtest.h>
 #include <span>
 #include <type_traits>
 #include <vector>
+#include <vulkan/vulkan.h>
 #if LFS_HAS_CUDA
 #include "core/alloc_counter.hpp"
 #include "core/headless_vulkan_device.hpp"
@@ -55,13 +58,19 @@ namespace {
         readback.wait(std::as_writable_bytes(std::span(middle)));
         EXPECT_EQ(middle, (std::array<float, 2>{6, 4}));
         target.wait();
-        EXPECT_THROW(target.wait_for(target), std::runtime_error);
+        EXPECT_NO_THROW(target.wait_for(target));
         EXPECT_NO_THROW(target.set_name("test.queue"));
         EXPECT_THROW(push_gpu_range("test.range"), std::runtime_error);
         EXPECT_THROW(pop_gpu_range(), std::runtime_error);
         GpuElapsed timer(GpuBackend::Vulkan, 2);
-        EXPECT_THROW(timer.mark(0, target), std::runtime_error);
-        EXPECT_THROW(timer.wait_queue(target), std::runtime_error);
+        if (timer.ready()) {
+            EXPECT_TRUE(timer.mark(0, target));
+            EXPECT_TRUE(timer.wait_event(0));
+            EXPECT_TRUE(timer.wait_queue(target));
+        } else {
+            EXPECT_FALSE(timer.mark(0, target));
+            EXPECT_FALSE(timer.wait_queue(target));
+        }
         const auto other = TensorExecutionTarget::default_queue(GpuBackend::CUDA);
         EXPECT_THROW(destination.set_stream(other), std::invalid_argument);
         EXPECT_THROW(destination.sync_to_stream(other), std::invalid_argument);
@@ -93,7 +102,13 @@ namespace {
             EXPECT_TRUE(fence.ready());
             EXPECT_TRUE(independent.ready());
             EXPECT_THROW(TensorWorkQueue(GpuBackend::Vulkan, reinterpret_cast<void*>(~uintptr_t{0})), std::runtime_error);
-            EXPECT_THROW(independent.enqueue_host_callback([](void*) {}, nullptr), std::runtime_error);
+            std::atomic<bool> called{false};
+            independent.enqueue_host_callback([](void* flag) {
+                static_cast<std::atomic<bool>*>(flag)->store(true);
+            },
+                                              &called);
+            independent.wait();
+            EXPECT_TRUE(called.load());
         } else {
             EXPECT_THROW((void)TensorWorkQueue(GpuBackend::Vulkan), std::runtime_error);
             EXPECT_THROW(TensorWorkQueue(GpuBackend::Vulkan, nullptr), std::runtime_error);
@@ -136,7 +151,11 @@ namespace {
         EXPECT_THROW(TensorReadbackRing(GpuBackend::CUDA, 1, 16, queue), std::invalid_argument);
 #endif
         Tensor destination = Tensor::empty({6}, Device::CPU);
-        EXPECT_THROW(readback.prepare(source, destination), std::runtime_error);
+        TensorWorkQueue copy(GpuBackend::Vulkan);
+        readback.prepare(source, destination);
+        readback.enqueue(copy);
+        readback.wait();
+        EXPECT_EQ(destination.to_vector(), (std::vector<float>{1.f, 2.f, 3.f, 4.f, 5.f, 6.f}));
         EXPECT_FALSE(reserved_allocation_bytes(source).has_value());
     }
 
@@ -183,6 +202,96 @@ namespace {
         consumer.wait();
         EXPECT_EQ(filled.to_vector(), std::vector<float>(4, 9.f));
         EXPECT_TRUE(fence.ready());
+    }
+
+    TEST(TensorQueueContract, VulkanHostPathsOrderCopiesCallbacksAndTimestamps) {
+        if (!gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP();
+        const GpuBackendScope scope(GpuBackend::Vulkan);
+        TensorWorkQueue producer(GpuBackend::Vulkan, TensorWorkQueue::Mode::LegacyOrdered);
+        TensorWorkQueue consumer(GpuBackend::Vulkan);
+        Tensor device = Tensor::empty({4}, Device::GPU);
+        const auto buffer = tensor_vulkan_buffer(device);
+        ASSERT_TRUE(buffer.has_value());
+        ASSERT_NE(buffer->device, nullptr);
+        const auto vk_device = static_cast<VkDevice>(buffer->device);
+        VkSemaphoreTypeCreateInfo type{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+        type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+        VkSemaphoreCreateInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+        info.pNext = &type;
+        VkSemaphore semaphore = VK_NULL_HANDLE;
+        ASSERT_EQ(vkCreateSemaphore(vk_device, &info, nullptr, &semaphore), VK_SUCCESS);
+        auto token = std::make_shared<int>(1);
+        std::weak_ptr<int> weak = token;
+        producer.set_consumer_timeline(buffer->device, {semaphore, 1, token});
+        token.reset();
+        EXPECT_FALSE(weak.expired());
+        producer.wait_timeline(1);
+
+        TensorUpload upload;
+        const std::array<float, 4> values{4.f, 5.f, 6.f, 7.f};
+        upload.enqueue(device, std::as_bytes(std::span(values)), TensorExecutionTarget(producer));
+        const auto pending = tensor_vulkan_buffer(device);
+        ASSERT_TRUE(pending.has_value());
+        ASSERT_GT(pending->pending_timeline_value, 0u);
+        TensorFence adopted = TensorFence::adopt(
+            GpuBackend::Vulkan, reinterpret_cast<void*>(static_cast<uintptr_t>(pending->pending_timeline_value)));
+        EXPECT_FALSE(adopted.ready());
+        TensorExecutionTarget(consumer).wait_for(TensorExecutionTarget(producer));
+
+        TensorReadbackRing ring(GpuBackend::Vulkan, 2, 16, consumer);
+        ring.enqueue(device, sizeof(float), 2 * sizeof(float), 0, 4, true);
+        ring.enqueue(device, 0, sizeof(float), 1, 0);
+        ring.seal(0);
+        ring.seal(1);
+        EXPECT_FALSE(ring.poll(0));
+        EXPECT_FALSE(adopted.ready());
+
+        std::atomic<bool> called{false};
+        consumer.enqueue_host_callback([](void* flag) {
+            static_cast<std::atomic<bool>*>(flag)->store(true);
+        },
+                                       &called);
+        EXPECT_FALSE(called.load());
+        EXPECT_FALSE(consumer.ready());
+
+        VkSemaphoreSignalInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+        signal.semaphore = semaphore;
+        signal.value = 1;
+        ASSERT_EQ(vkSignalSemaphore(vk_device, &signal), VK_SUCCESS);
+
+        adopted.wait();
+        EXPECT_TRUE(adopted.ready());
+        ring.wait(0);
+        ring.wait(1);
+        consumer.wait();
+        EXPECT_TRUE(called.load());
+        std::array<float, 4> slot{};
+        std::memcpy(slot.data(), ring.slot_bytes(0).data(), sizeof(slot));
+        EXPECT_EQ(slot[1], 5.f);
+        EXPECT_EQ(slot[2], 6.f);
+        float first = 0.f;
+        std::memcpy(&first, ring.slot_bytes(1).data(), sizeof(first));
+        EXPECT_EQ(first, 4.f);
+        upload.wait();
+        producer.wait();
+        GpuElapsed timer(GpuBackend::Vulkan, 2);
+        if (timer.ready()) {
+            EXPECT_TRUE(timer.mark(0, TensorExecutionTarget(consumer)));
+            {
+                const TensorWorkQueue::Scope mark_scope(consumer);
+                const Tensor work = Tensor::full({1 << 16}, 1.f, Device::GPU);
+                (void)work;
+            }
+            EXPECT_TRUE(timer.mark(1, TensorExecutionTarget(consumer)));
+            EXPECT_TRUE(timer.wait_event(1));
+            const auto elapsed = timer.milliseconds(0, 1);
+            ASSERT_TRUE(elapsed.has_value());
+            EXPECT_GE(*elapsed, 0.f);
+        }
+        producer.set_consumer_timeline(buffer->device, {});
+        vkDestroySemaphore(vk_device, semaphore, nullptr);
+        EXPECT_FALSE(weak.expired());
     }
 
 #if LFS_HAS_CUDA

@@ -320,6 +320,14 @@ namespace lfs::core::internal {
         copy_mapped(storage, destination, bytes);
     }
 
+    std::byte* VulkanMemory::mapped_pointer(const StorageRef storage) const {
+        std::lock_guard lock(allocations_mutex_);
+        const AllocationRecord& record = allocation_for(storage);
+        LFS_ASSERT_MSG(record.host_visible && record.mapped != nullptr,
+                       "mapped_pointer requires host-visible Vulkan storage");
+        return record.mapped + storage.byte_offset;
+    }
+
     void VulkanMemory::copy_mapped(StorageRef storage, void* destination, size_t bytes) {
         const std::byte* source = nullptr;
         {

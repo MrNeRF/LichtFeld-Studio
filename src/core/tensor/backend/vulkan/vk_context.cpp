@@ -929,6 +929,40 @@ namespace lfs::core::internal {
         submitted_timeline_.store(signal_value, std::memory_order_release);
     }
 
+    void VulkanContext::submit_external_after(const VkSemaphore external, const uint64_t external_value,
+                                              const uint64_t timeline_wait, const uint64_t signal_value) {
+        if (dead()) {
+            vk_check(this, VK_ERROR_DEVICE_LOST, "vkQueueSubmit2");
+        }
+        std::array<VkSemaphoreSubmitInfo, 2> waits{};
+        uint32_t count = 0;
+        if (timeline_wait != 0 && timeline_wait < signal_value) {
+            waits[count] = {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+            waits[count].semaphore = timeline_;
+            waits[count].value = timeline_wait;
+            waits[count].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            ++count;
+        }
+        waits[count] = {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+        waits[count].semaphore = external;
+        waits[count].value = external_value;
+        waits[count].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        ++count;
+        VkSemaphoreSubmitInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+        signal.semaphore = timeline_;
+        signal.value = signal_value;
+        signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+        submit.waitSemaphoreInfoCount = count;
+        submit.pWaitSemaphoreInfos = waits.data();
+        submit.signalSemaphoreInfoCount = 1;
+        submit.pSignalSemaphoreInfos = &signal;
+        std::lock_guard lock(queue_mutex_);
+        vk_check(this, vkQueueSubmit2(queue_, 1, &submit, VK_NULL_HANDLE),
+                 "vkQueueSubmit2(external tensor wait)");
+        submitted_timeline_.store(signal_value, std::memory_order_release);
+    }
+
     void VulkanContext::wait(const uint64_t value) {
         if (value == 0) {
             return;

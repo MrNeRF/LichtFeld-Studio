@@ -21,7 +21,6 @@ namespace lfs::core {
         [[nodiscard]] bool is_default_queue() const { return target_ == nullptr; }
         void wait() const;
         // Enqueues the existing queue bridge without waiting on the host.
-        // Explicit queue bridges are currently supported only by CUDA.
         void wait_for(TensorExecutionTarget producer) const;
         void set_name(const char* name) const;
 

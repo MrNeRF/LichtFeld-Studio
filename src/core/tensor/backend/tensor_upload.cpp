@@ -15,14 +15,20 @@
 #include "tensor_completion.hpp"
 #include "tensor_vulkan_interop.hpp"
 #include "vulkan/vk_context.hpp"
+#include "vulkan/vk_memory.hpp"
 #if LFS_HAS_CUDA
 #include "vulkan/vk_cuda_bridge.hpp"
 #endif
 #include "vulkan/vk_recorder.hpp"
 #include <algorithm>
+#include <atomic>
+#include <condition_variable>
 #include <cstring>
+#include <deque>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 #if LFS_HAS_CUDA && !defined(_WIN32)
 #include <unistd.h>
@@ -246,9 +252,16 @@ namespace lfs::core {
     TensorFence::TensorFence(TensorFence&&) noexcept = default;
     TensorFence& TensorFence::operator=(TensorFence&&) noexcept = default;
     TensorFence::TensorFence(GpuBackend backend, void* event) : impl_(std::make_unique<Impl>()) {
+        impl_->backend = backend;
+        // Vulkan producers hand over a context-timeline value. There is no event
+        // object to destroy; zero is already signaled.
+        if (backend == GpuBackend::Vulkan) {
+            impl_->vulkan = internal::acquire_vulkan_context();
+            impl_->timeline = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(event));
+            return;
+        }
         if (backend != GpuBackend::CUDA || !event)
             throw std::invalid_argument("Adopted tensor fence requires a CUDA event");
-        impl_->backend = backend;
 #if LFS_HAS_CUDA
         impl_->event = static_cast<cudaEvent_t>(event);
 #else
@@ -334,7 +347,61 @@ namespace lfs::core {
         bool borrowed_queue = false;
         uint64_t counter = 0;
         TensorCompletion last;
+        struct HostCallback {
+            uint64_t timeline = 0;
+            void (*function)(void*) = nullptr;
+            void* user = nullptr;
+        };
+        std::mutex callback_mutex;
+        std::condition_variable callback_cv;
+        std::deque<HostCallback> callbacks;
+        std::thread callback_thread;
+        std::atomic<int> callbacks_outstanding{0};
+        bool callback_stop = false;
+        std::vector<VulkanTimelinePoint> retired_timelines;
+        void ensure_callback_thread() {
+            if (callback_thread.joinable())
+                return;
+            callback_thread = std::thread([this] {
+                for (;;) {
+                    HostCallback callback;
+                    {
+                        std::unique_lock lock(callback_mutex);
+                        callback_cv.wait(lock, [&] { return callback_stop || !callbacks.empty(); });
+                        if (callbacks.empty())
+                            return;
+                        callback = callbacks.front();
+                        callbacks.pop_front();
+                    }
+                    try {
+                        if (callback.timeline != 0 && queue_context)
+                            queue_context->wait(callback.timeline);
+                        if (callback.function)
+                            callback.function(callback.user);
+                    } catch (const std::exception& error) {
+                        LOG_ERROR("Tensor queue host callback failed: {}", error.what());
+                    } catch (...) {
+                        LOG_ERROR("Tensor queue host callback failed");
+                    }
+                    {
+                        std::lock_guard lock(callback_mutex);
+                        callbacks_outstanding.fetch_sub(1, std::memory_order_acq_rel);
+                        callback_cv.notify_all();
+                    }
+                }
+            });
+        }
+        void stop_callbacks() {
+            {
+                std::lock_guard lock(callback_mutex);
+                callback_stop = true;
+            }
+            callback_cv.notify_all();
+            if (callback_thread.joinable())
+                callback_thread.join();
+        }
         ~Impl() {
+            stop_callbacks();
 #if LFS_HAS_CUDA
             if (stream && owns_stream) {
                 (void)cudaStreamSynchronize(stream);
@@ -458,8 +525,11 @@ namespace lfs::core {
     }
     GpuBackend TensorWorkQueue::backend() const { return impl_->backend; }
     bool TensorWorkQueue::ready() const {
-        if (impl_->vulkan_queue)
+        if (impl_->vulkan_queue) {
+            if (impl_->callbacks_outstanding.load(std::memory_order_acquire) != 0)
+                return false;
             return impl_->queue_context->recorders().queue_ready(impl_->recorder_id);
+        }
         if (impl_->backend != GpuBackend::CUDA)
             throw std::runtime_error("Queue polling is unsupported on Vulkan");
 #if LFS_HAS_CUDA
@@ -473,6 +543,10 @@ namespace lfs::core {
     void TensorWorkQueue::wait() const {
         if (impl_->vulkan_queue) {
             impl_->queue_context->recorders().queue_wait(impl_->recorder_id);
+            std::unique_lock lock(impl_->callback_mutex);
+            impl_->callback_cv.wait(lock, [&] {
+                return impl_->callbacks_outstanding.load(std::memory_order_acquire) == 0;
+            });
             return;
         }
         if (impl_->backend != GpuBackend::CUDA)
@@ -500,6 +574,17 @@ namespace lfs::core {
         fence.wait_on(native_handle());
     }
     void TensorWorkQueue::enqueue_host_callback(void (*callback)(void*), void* user) {
+        if (impl_->vulkan_queue) {
+            const uint64_t timeline = impl_->queue_context->recorders().flush_queue(impl_->recorder_id);
+            {
+                std::lock_guard lock(impl_->callback_mutex);
+                impl_->callbacks.push_back({timeline, callback, user});
+                impl_->callbacks_outstanding.fetch_add(1, std::memory_order_acq_rel);
+                impl_->ensure_callback_thread();
+            }
+            impl_->callback_cv.notify_all();
+            return;
+        }
         if (impl_->backend != GpuBackend::CUDA)
             throw std::runtime_error("Queue host callbacks are unsupported on Vulkan");
 #if LFS_HAS_CUDA
@@ -508,6 +593,19 @@ namespace lfs::core {
     }
     void TensorWorkQueue::set_consumer_timeline(void* device, VulkanTimelinePoint point) {
         auto& s = *impl_;
+        if (s.vulkan_queue) {
+            const auto context_device = s.queue_context->device();
+            if (device != nullptr && static_cast<VkDevice>(device) != context_device)
+                throw std::invalid_argument("Cannot change the device of an exported tensor queue");
+            if (s.consumer == point.semaphore && s.device == device)
+                return;
+            if (s.consumer != VK_NULL_HANDLE || s.consumer_point.keep_alive)
+                s.retired_timelines.push_back(std::move(s.consumer_point));
+            s.device = static_cast<VkDevice>(device);
+            s.consumer = static_cast<VkSemaphore>(point.semaphore);
+            s.consumer_point = std::move(point);
+            return;
+        }
         if (s.backend != GpuBackend::CUDA)
             throw std::runtime_error("Consumer timeline replacement is unsupported on Vulkan");
         if (s.consumer == point.semaphore && s.device == device)
@@ -534,6 +632,13 @@ namespace lfs::core {
     }
     void TensorWorkQueue::wait_timeline(uint64_t value) {
         auto& s = *impl_;
+        if (s.vulkan_queue) {
+            if (value == 0 || s.consumer == VK_NULL_HANDLE)
+                return;
+            s.queue_context->recorders().queue_wait_external(
+                s.recorder_id, s.consumer, value, s.consumer_point.keep_alive);
+            return;
+        }
         if (s.backend != GpuBackend::CUDA)
             throw std::runtime_error("Consumer timeline waits are unsupported on Vulkan");
 #if LFS_HAS_CUDA
@@ -587,8 +692,12 @@ namespace lfs::core {
             if (impl_->vulkan_queue && !impl_->borrowed_queue && impl_->recorder_id != 0 &&
                 impl_->queue_context)
                 impl_->queue_context->recorders().destroy_queue(impl_->recorder_id);
-                // Stream ownership and import lifetime are independent. In particular,
-                // a borrowed default stream can still have outstanding timeline waits.
+            // Stream ownership and import lifetime are independent. In particular,
+            // a borrowed default stream can still have outstanding timeline waits.
+            if (impl_->vulkan_queue &&
+                (impl_->consumer != VK_NULL_HANDLE || !impl_->retired_timelines.empty() ||
+                 impl_->callbacks_outstanding.load(std::memory_order_acquire) != 0))
+                wait();
 #if LFS_HAS_CUDA
             if (impl_->backend == GpuBackend::CUDA &&
                 (impl_->ready_cuda || impl_->consumer_cuda || !impl_->retired_consumers.empty()))
@@ -662,8 +771,8 @@ namespace lfs::core {
         return result;
     }
     namespace {
-        void require_readback_staging(const Tensor& staging, const size_t bytes) {
-            if (gpu_backend_of(staging) != GpuBackend::CUDA || !staging.is_contiguous() ||
+        void require_readback_staging(const Tensor& staging, const GpuBackend backend, const size_t bytes) {
+            if (gpu_backend_of(staging) != backend || !staging.is_contiguous() ||
                 staging.dtype() != DataType::UInt8 || staging.bytes() < bytes)
                 throw std::invalid_argument("Readback staging must cover a slot on the queue backend");
         }
@@ -671,11 +780,14 @@ namespace lfs::core {
     struct TensorReadbackRing::Impl {
         struct Slot {
             void* host = nullptr;
+            std::optional<internal::StorageRef> vulkan_host;
             std::unique_ptr<TensorFence> fence;
             std::vector<Tensor> sources;
             bool sealed = false;
         };
+        GpuBackend backend = GpuBackend::CUDA;
         TensorWorkQueue* queue = nullptr;
+        std::shared_ptr<internal::VulkanContext> vulkan;
         size_t bytes = 0;
         std::vector<Slot> slots;
         const Tensor* staging = nullptr;
@@ -686,28 +798,51 @@ namespace lfs::core {
             try {
                 queue->wait();
             } catch (const std::exception& error) { LOG_WARN("Readback ring drain failed: {}", error.what()); }
+            if (vulkan) {
+                for (auto& slot : slots) {
+                    if (slot.vulkan_host)
+                        vulkan->memory().deallocate(*slot.vulkan_host);
+                }
+            }
 #if LFS_HAS_CUDA
-            for (auto& slot : slots)
-                if (slot.host)
-                    (void)cudaFreeHost(slot.host);
+            if (!vulkan) {
+                for (auto& slot : slots)
+                    if (slot.host)
+                        (void)cudaFreeHost(slot.host);
+            }
 #endif
         }
     };
     TensorReadbackRing::TensorReadbackRing(GpuBackend backend, size_t slots, size_t bytes, TensorWorkQueue& queue, const Tensor* staging)
         : impl_(std::make_unique<Impl>()) {
-        if (backend != GpuBackend::CUDA)
-            throw std::runtime_error("Packed tensor readback rings are unsupported on Vulkan");
+        if (backend == GpuBackend::Vulkan) {
+            if (!queue.impl_->vulkan_queue)
+                throw std::runtime_error("Packed tensor readback rings need an owned Vulkan work queue");
+        } else if (backend != GpuBackend::CUDA) {
+            throw std::runtime_error("Packed tensor readback rings are unsupported on this backend");
+        }
         if (queue.backend() != backend)
             throw std::invalid_argument("Readback ring queue backend mismatch");
         if (!slots || !bytes)
             throw std::invalid_argument("Readback ring dimensions must be nonzero");
         auto& s = *impl_;
+        s.backend = backend;
         s.queue = &queue;
         s.bytes = bytes;
         s.staging = staging;
         if (staging && staging->is_valid())
-            require_readback_staging(*staging, bytes);
+            require_readback_staging(*staging, backend, bytes);
         s.slots.resize(slots);
+        if (backend == GpuBackend::Vulkan) {
+            s.vulkan = internal::acquire_vulkan_context();
+            for (auto& slot : s.slots) {
+                auto storage = s.vulkan->memory().allocate_readback(bytes);
+                slot.host = s.vulkan->memory().mapped_pointer(storage);
+                slot.vulkan_host = storage;
+                slot.fence = std::make_unique<TensorFence>(backend);
+            }
+            return;
+        }
 #if LFS_HAS_CUDA
         for (auto& slot : s.slots) {
             check(cudaHostAlloc(&slot.host, bytes, cudaHostAllocPortable));
@@ -725,7 +860,7 @@ namespace lfs::core {
         auto& slot = s.slots.at(index);
         if (slot.sealed)
             throw std::logic_error("Readback slot must be released before reuse");
-        if (!source.is_valid() || gpu_backend_of(source) != GpuBackend::CUDA)
+        if (!source.is_valid() || gpu_backend_of(source) != s.backend)
             throw std::invalid_argument("Readback ring requires a tensor on its queue backend");
         if (offset > source.bytes() || bytes > source.bytes() - offset ||
             destination > s.bytes || bytes > s.bytes - destination)
@@ -736,6 +871,31 @@ namespace lfs::core {
         slot.sources.push_back(source.contiguous());
         const auto& retained = slot.sources.back();
         pin_operands({&retained});
+        if (s.backend == GpuBackend::Vulkan) {
+            auto input = internal::storage_ref(retained);
+            input.byte_offset += offset;
+            if (stage) {
+                const bool borrowed = s.staging && s.staging->is_valid();
+                if (borrowed) {
+                    require_readback_staging(*s.staging, s.backend, s.bytes);
+                    // Retained with the slot so a released owner cannot free it mid-copy.
+                    slot.sources.push_back(*s.staging);
+                } else if (!s.scratch.is_valid()) {
+                    s.scratch = Tensor::empty({s.bytes}, Device::GPU, DataType::UInt8);
+                }
+                Tensor& staging = borrowed ? slot.sources.back() : s.scratch;
+                internal::CopyRequest copy;
+                copy.src = input;
+                copy.dst = internal::storage_ref(staging);
+                copy.bytes = bytes;
+                s.vulkan->memory().copy_device_to_device(copy);
+                input = internal::storage_ref(staging);
+            }
+            auto output = *slot.vulkan_host;
+            output.byte_offset += destination;
+            (void)s.vulkan->memory().copy_to_readback(input, output, bytes);
+            return;
+        }
 #if LFS_HAS_CUDA
         const auto stream = static_cast<cudaStream_t>(s.queue->native_handle());
         prepare_inputs_for_stream({&retained}, stream);
@@ -743,7 +903,7 @@ namespace lfs::core {
         if (stage && bytes) {
             const bool borrowed = s.staging && s.staging->is_valid();
             if (borrowed) {
-                require_readback_staging(*s.staging, s.bytes);
+                require_readback_staging(*s.staging, s.backend, s.bytes);
                 // Retained with the slot so a released owner cannot free it mid-copy.
                 slot.sources.push_back(*s.staging);
             } else if (!s.scratch.is_valid()) {

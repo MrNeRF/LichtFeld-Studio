@@ -131,6 +131,10 @@ namespace lfs::core::internal {
         // wait_value == 0 or wait_value >= signal_value submits without a wait.
         void submit_after(VkCommandBuffer command, uint64_t wait_value, uint64_t signal_value);
         void submit_external_wait(VkSemaphore semaphore, uint64_t value, uint64_t signal_value);
+        // Empty submit: wait for the context timeline (when earlier than signal_value)
+        // and for one external timeline semaphore, then signal signal_value.
+        void submit_external_after(VkSemaphore external, uint64_t external_value,
+                                   uint64_t timeline_wait, uint64_t signal_value);
         void wait(uint64_t value);
         [[nodiscard]] uint64_t completed_timeline() const;
         // The newest timeline value submitted to the queue.
