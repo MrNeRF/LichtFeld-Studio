@@ -34,6 +34,8 @@ namespace lfs::core::internal {
     namespace {
         using metal::acquire_context;
         using metal::Context;
+        using metal::host_copy;
+        using metal::kHostCopyBytes;
         using metal::kThreadgroupWidth;
         using metal::live_context;
         using metal::param_bytes;
@@ -1492,8 +1494,9 @@ namespace lfs::core::internal {
             return static_cast<std::byte*>(storage.data) + storage.byte_offset;
         }
 
-        // A readback snapshots its source on the GPU timeline into a shared
-        // staging block; poll() copies it out once that batch completed.
+        // A readback snapshots its source into a shared staging block: on the
+        // host when it is small and the GPU idle, else on the GPU timeline, and
+        // poll() copies it out once that batch completed.
         // Metal adds floats atomically and screens the SH3 assignment with
         // SIMD-group matrices.
         class API_AVAILABLE(macos(26.0)) MetalExportKernels final : public ExportKernels {
@@ -1541,10 +1544,15 @@ namespace lfs::core::internal {
                     capacity_ = bytes;
                 }
                 bytes_ = bytes;
+                pending_ = true;
+                if (bytes <= kHostCopyBytes && context_->idle()) {
+                    host_copy(context_->host(staging_), context_->host(source), bytes);
+                    serial_ = 0;
+                    return;
+                }
                 encode_copy(*context_, source, staging_, bytes);
                 serial_ = context_->pending(staging_);
                 context_->flush();
-                pending_ = true;
             }
 
             void wait() override {
@@ -1556,7 +1564,7 @@ namespace lfs::core::internal {
                 if (context_->completed() < serial_)
                     return false;
                 if (destination)
-                    std::memcpy(destination, context_->host(staging_), bytes_);
+                    host_copy(static_cast<std::byte*>(destination), context_->host(staging_), bytes_);
                 pending_ = false;
                 return true;
             }
@@ -3543,14 +3551,24 @@ namespace lfs::core::internal {
     void MetalBackendOps::record_tensor_allocation(StorageRef, const StridedLayout&, size_t) {}
 
     // Storage is shared with the CPU, so host copies are plain memcpy once the
-    // last batch that may use the memory completed.
+    // last batch that may use the memory completed. An asynchronous upload into
+    // storage that the GPU still uses stages the bytes instead and copies them
+    // on the GPU after that use, so the host does not wait.
     void MetalBackendOps::copy_host_to_device(const CopyRequest& request) {
         LFS_FACADE_TRACE(service_copy_host_to_device);
         if (request.bytes == 0)
             return;
         const auto context = acquire_context();
-        context->wait(context->last_use(request.dst));
-        std::memcpy(context->host(request.dst), host_bytes(request.src), request.bytes);
+        const uint64_t last_use = context->last_use(request.dst);
+        if (request.synchronous || last_use <= context->completed()) {
+            context->wait(last_use);
+            host_copy(context->host(request.dst), host_bytes(request.src), request.bytes);
+            return;
+        }
+        const StorageRef staging = context->allocate(request.bytes, true);
+        host_copy(context->host(staging), host_bytes(request.src), request.bytes);
+        encode_copy(*context, staging, request.dst, request.bytes);
+        context->release(staging);
     }
 
     void MetalBackendOps::copy_device_to_host(const CopyRequest& request) {
@@ -3559,7 +3577,7 @@ namespace lfs::core::internal {
             return;
         const auto context = acquire_context();
         context->wait(context->last_use(request.src));
-        std::memcpy(host_bytes(request.dst), context->host(request.src), request.bytes);
+        host_copy(host_bytes(request.dst), context->host(request.src), request.bytes);
     }
 
     void MetalBackendOps::copy_device_to_device(const CopyRequest& request) {

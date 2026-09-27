@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/tensor_execution.hpp"
 
+#include "backend/metal/metal_queue.hpp"
 #include "backend/vulkan/vk_context.hpp"
 #include "backend/vulkan/vk_recorder.hpp"
 #include "core/tensor_upload.hpp"
@@ -28,6 +29,12 @@ namespace lfs::core {
             rebound_vulkan_ = true;
             return;
         }
+        if (target.backend() == GpuBackend::Metal) {
+            // Metal queues share one timeline; there is nothing to bind.
+            if (!internal::metal_queue::valid(reinterpret_cast<uint64_t>(target.native_handle())))
+                throw std::invalid_argument("Tensor execution target is not a Metal queue");
+            return;
+        }
         setCurrentCUDAStream(static_cast<cudaStream_t>(target.native_handle()));
     }
 
@@ -52,6 +59,13 @@ namespace lfs::core {
             internal::acquire_vulkan_context()->recorders().bridge_queues(
                 reinterpret_cast<uint64_t>(target_),
                 reinterpret_cast<uint64_t>(producer.target_));
+            return;
+        }
+        if (backend_ == GpuBackend::Metal) {
+            // Later Metal batches already follow every submitted batch.
+            if (!internal::metal_queue::valid(reinterpret_cast<uint64_t>(target_)) ||
+                !internal::metal_queue::valid(reinterpret_cast<uint64_t>(producer.target_)))
+                throw std::invalid_argument("Tensor queue bridge needs live Metal queues");
             return;
         }
         if (backend_ != GpuBackend::CUDA)

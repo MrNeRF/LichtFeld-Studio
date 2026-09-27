@@ -14,8 +14,8 @@ namespace lfs::core {
     class Tensor;
     // Reusable asynchronous H2D slot. Owns both tensors until the queued copy
     // completes. Destruction waits; poll never blocks. Does not alter copy_from.
-    // Metal copies through unified memory during enqueue, after earlier GPU
-    // use of the destination.
+    // Metal copies the bytes during enqueue: into the destination when the GPU
+    // no longer uses it, else into staging that a GPU copy drains after that use.
     class LFS_CORE_API TensorUpload {
     public:
         TensorUpload();
@@ -25,9 +25,9 @@ namespace lfs::core {
         void enqueue(Tensor destination, const Tensor& source);
         void enqueue(Tensor destination, const Tensor& source, TensorExecutionTarget target);
         void enqueue(Tensor destination, std::span<const std::byte> source, TensorExecutionTarget target);
-        // execution_target is a CUDA stream, or the native handle of a Vulkan
-        // tensor queue. nullptr selects the backend's current queue. Other
-        // non-null targets are rejected. Metal requires nullptr.
+        // execution_target is a CUDA stream, or the native handle of a Vulkan or
+        // Metal tensor queue. nullptr selects the backend's current queue. Other
+        // non-null targets are rejected.
         void enqueue(Tensor destination, const Tensor& source, void* execution_target);
         void enqueue(Tensor destination, std::span<const std::byte> source,
                      void* execution_target);
@@ -43,6 +43,8 @@ namespace lfs::core {
     // Does not retain tensor storage. The caller owns storage through completion.
     // Re-record only after every consumer has submitted its wait. A Vulkan fence
     // is a context-timeline value; waiting copies that value into the consumer.
+    // A Metal fence is a batch serial; Metal runs batches in submission order,
+    // so a GPU wait on it is already satisfied.
     class LFS_CORE_API TensorFence {
     public:
         explicit TensorFence(GpuBackend backend);
@@ -58,8 +60,8 @@ namespace lfs::core {
         void wait() const;
         [[nodiscard]] bool ready() const;
         // Takes ownership of an event from an external backend producer.
-        // Vulkan `event` is a context-timeline value (not a CUDA event); zero is
-        // already signaled and nothing is destroyed.
+        // Vulkan `event` is a context-timeline value and Metal `event` a batch
+        // serial (not CUDA events); zero is already signaled and nothing is destroyed.
         static TensorFence adopt(GpuBackend backend, void* event);
 
     private:

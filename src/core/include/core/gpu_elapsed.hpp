@@ -23,7 +23,7 @@ namespace lfs::core {
 
         [[nodiscard]] bool ready() const noexcept;
         // nullptr selects the backend's current queue. Vulkan marks are timestamp
-        // queries on that queue.
+        // queries on that queue; Metal marks are counter-heap timestamps.
         [[nodiscard]] bool mark(std::size_t index, void* execution_target);
         [[nodiscard]] bool mark(std::size_t index, TensorExecutionTarget target);
         [[nodiscard]] bool wait_queue(TensorExecutionTarget target);

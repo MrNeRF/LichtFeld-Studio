@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/gpu_device_runtime.hpp"
 #include "core/gpu_elapsed.hpp"
+#include "core/headless_vulkan_device.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_execution.hpp"
@@ -19,7 +20,6 @@
 #include <vulkan/vulkan.h>
 #if LFS_HAS_CUDA
 #include "core/alloc_counter.hpp"
-#include "core/headless_vulkan_device.hpp"
 #include "cuda_stream_gate.hpp"
 #include <chrono>
 #include <future>
@@ -292,6 +292,227 @@ namespace {
         producer.set_consumer_timeline(buffer->device, {});
         vkDestroySemaphore(vk_device, semaphore, nullptr);
         EXPECT_FALSE(weak.expired());
+    }
+
+    TEST(TensorQueueContract, MetalQueuesFencesAndCallbacks) {
+        if (!gpu_backend_available(GpuBackend::Metal)) {
+            EXPECT_THROW((void)TensorWorkQueue(GpuBackend::Metal), std::runtime_error);
+            EXPECT_THROW(TensorWorkQueue(GpuBackend::Metal, nullptr), std::runtime_error);
+            EXPECT_THROW((void)TensorFence(GpuBackend::Metal), std::runtime_error);
+            GTEST_SKIP();
+        }
+        const GpuBackendScope scope(GpuBackend::Metal);
+        TensorWorkQueue independent(GpuBackend::Metal);
+        TensorWorkQueue legacy(GpuBackend::Metal, TensorWorkQueue::Mode::LegacyOrdered);
+        TensorWorkQueue borrowed(GpuBackend::Metal, independent.native_handle());
+        TensorWorkQueue implicit(GpuBackend::Metal, nullptr);
+        TensorFence fence(GpuBackend::Metal);
+        EXPECT_EQ(independent.backend(), GpuBackend::Metal);
+        EXPECT_NE(independent.native_handle(), nullptr);
+        EXPECT_NE(independent.native_handle(), legacy.native_handle());
+        EXPECT_EQ(borrowed.native_handle(), independent.native_handle());
+        EXPECT_EQ(implicit.native_handle(), nullptr);
+        EXPECT_TRUE(fence.ready());
+        EXPECT_TRUE(independent.ready());
+        independent.record(fence);
+        legacy.wait_for(fence);
+        borrowed.wait_for(fence);
+        implicit.record(fence);
+        independent.wait();
+        legacy.wait();
+        borrowed.wait();
+        implicit.wait();
+        EXPECT_TRUE(fence.ready());
+        EXPECT_TRUE(independent.ready());
+        EXPECT_THROW(TensorWorkQueue(GpuBackend::Metal, reinterpret_cast<void*>(~uintptr_t{0})), std::runtime_error);
+        EXPECT_THROW(fence.record(reinterpret_cast<void*>(~uintptr_t{0})), std::invalid_argument);
+        EXPECT_THROW(fence.record(TensorExecutionTarget::default_queue(GpuBackend::Vulkan)), std::invalid_argument);
+
+        std::atomic<bool> called{false};
+        {
+            const TensorWorkQueue::Scope work(independent);
+            Tensor busy = Tensor::full({1 << 20}, 1.f, Device::GPU);
+            for (int i = 0; i < 8; ++i)
+                busy = busy * 1.0001f + 0.5f;
+            independent.enqueue_host_callback([](void* flag) {
+                static_cast<std::atomic<bool>*>(flag)->store(true);
+            },
+                                              &called);
+        }
+        independent.wait();
+        EXPECT_TRUE(called.load());
+        EXPECT_TRUE(independent.ready());
+
+        // A destroyed queue's handle is no longer a valid target.
+        void* const stale = [] {
+            const TensorWorkQueue temporary(GpuBackend::Metal);
+            return temporary.native_handle();
+        }();
+        EXPECT_THROW(TensorWorkQueue(GpuBackend::Metal, stale), std::runtime_error);
+    }
+
+    TEST(TensorQueueContract, MetalExecutionTargetUploadReadbackAndTimestamps) {
+        if (!gpu_backend_available(GpuBackend::Metal))
+            GTEST_SKIP();
+        const GpuBackendScope scope(GpuBackend::Metal);
+        TensorWorkQueue producer(GpuBackend::Metal, TensorWorkQueue::Mode::LegacyOrdered);
+        TensorWorkQueue consumer(GpuBackend::Metal);
+        const TensorExecutionTarget target(consumer);
+        const Tensor source = Tensor::from_vector(std::vector<float>{2, 4, 6, 8}, {2, 2}, Device::CPU);
+        Tensor destination = Tensor::empty({2, 2}, Device::GPU);
+        TensorUpload upload;
+        upload.enqueue(destination, source, TensorExecutionTarget(producer));
+        destination.set_stream(target);
+        destination.sync_to_stream(target);
+        destination.record_stream(target);
+        TensorFence fence(GpuBackend::Metal);
+        producer.record(fence);
+        consumer.wait_for(fence);
+        TensorReadback readback;
+        readback.enqueue(destination.transpose(0, 1), target);
+        std::array<float, 4> output{};
+        readback.wait(std::as_writable_bytes(std::span(output)));
+        EXPECT_EQ(output, (std::array<float, 4>{2, 6, 4, 8}));
+        upload.wait();
+        upload.enqueue(destination, std::as_bytes(std::span(output)), target);
+        upload.wait();
+        readback.enqueue_range(destination, sizeof(float), 2 * sizeof(float), target);
+        std::array<float, 2> middle{};
+        readback.wait(std::as_writable_bytes(std::span(middle)));
+        EXPECT_EQ(middle, (std::array<float, 2>{6, 4}));
+
+        const Tensor uploaded = source.to(Device::GPU, target);
+        EXPECT_EQ(uploaded.to_vector(), (std::vector<float>{2, 4, 6, 8}));
+        Tensor filled = Tensor::empty({3}, Device::GPU);
+        filled.fill_(7.f, target);
+        EXPECT_EQ(filled.to_vector(), std::vector<float>(3, 7.f));
+
+        target.wait();
+        EXPECT_NO_THROW(target.wait_for(TensorExecutionTarget(producer)));
+        EXPECT_NO_THROW(target.set_name("test.queue"));
+        EXPECT_THROW(target.wait_for(TensorExecutionTarget::default_queue(GpuBackend::Vulkan)), std::invalid_argument);
+
+        Tensor prepared_source = Tensor::from_vector(std::vector<float>{1, 2, 3, 4, 5, 6}, {6}, Device::GPU);
+        Tensor prepared_destination = Tensor::empty({6}, Device::CPU);
+        TensorReadback prepared;
+        prepared.prepare(prepared_source, prepared_destination);
+        prepared.enqueue(consumer);
+        prepared.wait();
+        EXPECT_EQ(prepared_destination.to_vector(), (std::vector<float>{1, 2, 3, 4, 5, 6}));
+        {
+            const TensorWorkQueue::Scope work(producer);
+            prepared_source.fill_(3.f);
+        }
+        prepared.enqueue(consumer);
+        while (!prepared.poll()) {
+        }
+        EXPECT_EQ(prepared_destination.to_vector(), std::vector<float>(6, 3.f));
+
+        GpuElapsed timer(GpuBackend::Metal, 2);
+        ASSERT_TRUE(timer.ready());
+        EXPECT_TRUE(timer.mark(0, target));
+        {
+            const TensorWorkQueue::Scope work(consumer);
+            Tensor busy = Tensor::full({1 << 22}, 1.f, Device::GPU);
+            for (int i = 0; i < 16; ++i)
+                busy = busy * 1.0001f + 0.5f;
+        }
+        EXPECT_TRUE(timer.mark(1, target));
+        EXPECT_FALSE(timer.mark(2, target));
+        EXPECT_TRUE(timer.wait_event(1));
+        EXPECT_TRUE(timer.wait_queue(target));
+        const auto elapsed = timer.milliseconds(0, 1);
+        ASSERT_TRUE(elapsed.has_value());
+        EXPECT_GT(*elapsed, 0.f);
+        EXPECT_LT(*elapsed, 10'000.f);
+
+        const auto other = TensorExecutionTarget::default_queue(GpuBackend::Vulkan);
+        EXPECT_THROW(destination.set_stream(other), std::invalid_argument);
+        EXPECT_THROW(upload.enqueue(destination, source, other), std::invalid_argument);
+        EXPECT_THROW(readback.enqueue(destination, other), std::invalid_argument);
+        EXPECT_THROW(timer.mark(0, other), std::invalid_argument);
+        EXPECT_THROW((void)timer.mark(0, reinterpret_cast<void*>(~uintptr_t{0})), std::invalid_argument);
+    }
+
+    TEST(TensorQueueContract, MetalReadbackRingWaitsForConsumerTimeline) {
+        if (!gpu_backend_available(GpuBackend::Metal) || !gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP();
+        // A timeline semaphore of a MoltenVK device stands in for a viewer's
+        // timeline that the Metal queue waits on.
+        auto consumer = HeadlessAdoptedDevice::try_create();
+        if (!consumer || !consumer->handles().metal_objects)
+            GTEST_SKIP() << "No Vulkan device with VK_EXT_metal_objects";
+        const auto vk_device = static_cast<VkDevice>(consumer->handles().device);
+        VkSemaphoreTypeCreateInfo type{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+        type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+        VkSemaphoreCreateInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+        info.pNext = &type;
+        VkSemaphore semaphore = VK_NULL_HANDLE;
+        ASSERT_EQ(vkCreateSemaphore(vk_device, &info, nullptr, &semaphore), VK_SUCCESS);
+
+        const GpuBackendScope scope(GpuBackend::Metal);
+        Tensor device = Tensor::from_vector(std::vector<float>{4.f, 5.f, 6.f, 7.f}, {4}, Device::GPU);
+        Tensor lent = Tensor::empty({16}, Device::GPU, DataType::UInt8);
+        {
+            TensorWorkQueue queue(GpuBackend::Metal);
+            auto token = std::make_shared<int>(1);
+            const std::weak_ptr<int> weak = token;
+            queue.set_consumer_timeline(vk_device, {semaphore, 1, token});
+            token.reset();
+            EXPECT_FALSE(weak.expired());
+            queue.wait_timeline(1);
+
+            TensorReadbackRing ring(GpuBackend::Metal, 3, 16, queue, &lent);
+            ring.enqueue(device, sizeof(float), 2 * sizeof(float), 0, 4, true);
+            ring.enqueue(device, 0, sizeof(float), 1, 0);
+            ring.enqueue(device, 0, device.bytes(), 2, 0);
+            ring.seal(0);
+            ring.seal(1);
+            const TensorFence& last = ring.seal(2);
+            std::atomic<bool> called{false};
+            queue.enqueue_host_callback([](void* flag) {
+                static_cast<std::atomic<bool>*>(flag)->store(true);
+            },
+                                        &called);
+            EXPECT_FALSE(ring.poll(0));
+            EXPECT_FALSE(last.ready());
+            EXPECT_FALSE(queue.ready());
+            EXPECT_FALSE(called.load());
+            EXPECT_THROW(ring.release(0), std::logic_error);
+
+            VkSemaphoreSignalInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+            signal.semaphore = semaphore;
+            signal.value = 1;
+            ASSERT_EQ(vkSignalSemaphore(vk_device, &signal), VK_SUCCESS);
+
+            ring.wait(0);
+            ring.wait(1);
+            ring.wait(2);
+            queue.wait();
+            EXPECT_TRUE(called.load());
+            std::array<float, 4> slot{};
+            std::memcpy(slot.data(), ring.slot_bytes(0).data(), sizeof(slot));
+            EXPECT_EQ(slot[1], 5.f);
+            EXPECT_EQ(slot[2], 6.f);
+            float first = 0.f;
+            std::memcpy(&first, ring.slot_bytes(1).data(), sizeof(first));
+            EXPECT_EQ(first, 4.f);
+            std::memcpy(slot.data(), ring.slot_bytes(2).data(), sizeof(slot));
+            EXPECT_EQ(slot, (std::array<float, 4>{4.f, 5.f, 6.f, 7.f}));
+            for (size_t index = 0; index < 3; ++index)
+                ring.release(index);
+
+            // A released slot is reusable and reads the newest values.
+            device.fill_(9.f);
+            ring.enqueue(device, 0, sizeof(float), 1, 12);
+            ring.seal(1);
+            ring.wait(1);
+            std::memcpy(&first, ring.slot_bytes(1).data() + 12, sizeof(first));
+            EXPECT_EQ(first, 9.f);
+            queue.set_consumer_timeline(vk_device, {});
+            EXPECT_FALSE(weak.expired());
+        }
+        vkDestroySemaphore(vk_device, semaphore, nullptr);
     }
 
 #if LFS_HAS_CUDA

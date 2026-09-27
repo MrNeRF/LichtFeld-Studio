@@ -145,8 +145,8 @@ namespace lfs::core {
         if (pending())
             throw std::logic_error("Cannot prepare a pending readback");
         const auto backend = gpu_backend_of(source);
-        if (backend != GpuBackend::CUDA && backend != GpuBackend::Vulkan)
-            throw std::runtime_error("Direct tensor readback requires CUDA");
+        if (!backend)
+            throw std::runtime_error("Direct tensor readback requires a GPU source");
         if (!source.is_valid() || !source.is_contiguous() ||
             !destination.is_valid() || destination.device() != Device::CPU ||
             !destination.is_contiguous() || destination.bytes() != source.bytes())
@@ -185,23 +185,27 @@ namespace lfs::core {
             throw std::logic_error("Readback already has a pending download");
         if (!s.backend || queue.backend() != *s.backend)
             throw std::invalid_argument("Direct readback queue backend mismatch");
-        if (*s.backend == GpuBackend::Vulkan) {
+        if (*s.backend != GpuBackend::CUDA) {
             const auto storage = internal::storage_ref(s.source);
-            const uint64_t recorder = storage.meta == nullptr
-                                          ? 0
-                                          : storage.meta->pending_recorder.load(std::memory_order_acquire);
-            const uint64_t pending = storage.meta == nullptr
-                                         ? 0
-                                         : storage.meta->pending_value.load(std::memory_order_acquire);
-            // Flush the recorder that owns the source write, including an implicit
-            // recorder. Fence::record rejects anything that is not an owned queue.
-            uint64_t value = pending;
-            if (recorder != 0) {
-                value = std::max(value, internal::acquire_vulkan_context()->recorders().flush_queue(recorder));
+            // Metal runs batches in submission order, so its copy already
+            // follows the source's producer.
+            if (*s.backend == GpuBackend::Vulkan) {
+                const uint64_t recorder = storage.meta == nullptr
+                                              ? 0
+                                              : storage.meta->pending_recorder.load(std::memory_order_acquire);
+                const uint64_t pending = storage.meta == nullptr
+                                             ? 0
+                                             : storage.meta->pending_value.load(std::memory_order_acquire);
+                // Flush the recorder that owns the source write, including an implicit
+                // recorder. Fence::record rejects anything that is not an owned queue.
+                uint64_t value = pending;
+                if (recorder != 0) {
+                    value = std::max(value, internal::acquire_vulkan_context()->recorders().flush_queue(recorder));
+                }
+                *s.producer = TensorFence::adopt(GpuBackend::Vulkan,
+                                                 reinterpret_cast<void*>(static_cast<uintptr_t>(value)));
+                queue.wait_for(*s.producer);
             }
-            *s.producer = TensorFence::adopt(GpuBackend::Vulkan,
-                                             reinterpret_cast<void*>(static_cast<uintptr_t>(value)));
-            queue.wait_for(*s.producer);
             const TensorWorkQueue::Scope scope(queue);
             try {
                 if (s.bytes && s.buffer) {
@@ -251,7 +255,7 @@ namespace lfs::core {
             throw std::logic_error("No pending direct readback");
         if (!impl_->completion->ready())
             return false;
-        if (impl_->backend == GpuBackend::Vulkan) {
+        if (impl_->backend != GpuBackend::CUDA) {
             if (impl_->bytes != 0 && impl_->buffer &&
                 !impl_->buffer->poll(impl_->destination_pointer))
                 return false;

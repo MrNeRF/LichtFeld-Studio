@@ -193,6 +193,8 @@ if(APPLE)
     if(LFS_TENSOR_VULKAN)
         list(APPEND TENSOR_SOURCES tensor/backend/metal/metal_vulkan_interop.mm)
     endif()
+else()
+    list(APPEND TENSOR_SOURCES tensor/backend/metal/metal_queue_unavailable.cpp)
 endif()
 
 # Core module sources

@@ -116,11 +116,21 @@ namespace lfs::core::internal::metal {
         // reaches `value`. The host does not wait. Returns the serial of an
         // empty batch that completes once the wait is over.
         uint64_t queue_wait(id<MTLSharedEvent> event, uint64_t value);
+        // Writes a GPU timestamp after all earlier work; returns its batch serial.
+        uint64_t write_timestamp(id<MTL4CounterHeap> heap, NSUInteger index);
         void wait(uint64_t serial);
+        // Commits the batch of serial if it is still open; never blocks.
+        bool ready(uint64_t serial);
+        // Waits without raising batch failures or device faults, for threads
+        // that only observe completion and must leave errors to the owner.
+        void wait_completed(uint64_t serial);
         uint64_t completed() const;
+        // No batch is open or running, so the host may touch any storage.
+        bool idle() const { return newest_serial_.load(std::memory_order_acquire) <= completed(); }
         void wait_idle();
 
-        StorageRef allocate(size_t bytes);
+        // host_writable skips cached blocks that a running batch may still use.
+        StorageRef allocate(size_t bytes, bool host_writable = false);
         void release(const StorageRef& storage) noexcept;
         void trim();
         size_t cached_bytes();
@@ -250,6 +260,13 @@ namespace lfs::core::internal::metal {
 
     std::shared_ptr<Context> acquire_context();
     std::shared_ptr<Context> live_context();
+
+    // Storage is shared with the CPU: one thread copies about 40 GB/s, and
+    // several together about 180 GB/s on an M5 Max.
+    void host_copy(std::byte* destination, const std::byte* source, size_t bytes);
+    // A GPU round trip costs ~150 us while the host copies 4 MiB in ~30 us, so
+    // copies up to this size run on the host while the GPU is idle.
+    inline constexpr size_t kHostCopyBytes = size_t{4} << 20;
 
     API_AVAILABLE_END
 

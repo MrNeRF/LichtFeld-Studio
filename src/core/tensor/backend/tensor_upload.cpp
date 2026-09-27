@@ -3,6 +3,7 @@
 #include "core/tensor_upload.hpp"
 #include "../internal/tensor_impl.hpp"
 #include "core/tensor_readback.hpp"
+#include "metal/metal_queue.hpp"
 #if LFS_HAS_CUDA
 #include "core/cuda_error_typed.hpp"
 #include <cuda_runtime.h>
@@ -42,6 +43,14 @@ namespace lfs::core {
         }
     } // namespace
 #endif
+    namespace {
+        uint64_t metal_target(void* const target) {
+            const auto id = reinterpret_cast<uint64_t>(target);
+            if (!internal::metal_queue::valid(id))
+                throw std::invalid_argument("Execution target is not a Metal tensor queue");
+            return id;
+        }
+    } // namespace
     struct TensorUpload::Impl {
         Tensor source, destination, staging;
         TensorCompletion completion;
@@ -98,6 +107,15 @@ namespace lfs::core {
             throw std::invalid_argument("TensorUpload byte span must match a contiguous destination");
         if (pending())
             throw std::logic_error("TensorUpload already pending");
+        if (gpu_backend_of(destination) == GpuBackend::Metal && !source.empty()) {
+            // Metal copies the bytes during enqueue, so the span needs no staging copy.
+            const size_t count = destination.numel();
+            const DataType dtype = destination.dtype();
+            enqueue(std::move(destination),
+                    Tensor::from_blob(const_cast<std::byte*>(source.data()), {count}, Device::CPU, dtype),
+                    execution_target);
+            return;
+        }
         if (!impl_)
             impl_ = std::make_unique<Impl>();
         auto& state = *impl_;
@@ -123,6 +141,8 @@ namespace lfs::core {
             const auto id = reinterpret_cast<uint64_t>(execution_target);
             if (!internal::acquire_vulkan_context()->recorders().owns_queue(id))
                 throw std::invalid_argument("TensorUpload execution targets are CUDA streams");
+        } else if (backend == GpuBackend::Metal) {
+            (void)metal_target(execution_target);
         } else if (backend != GpuBackend::CUDA && execution_target != nullptr) {
             throw std::invalid_argument("TensorUpload execution targets are CUDA streams");
         }
@@ -170,10 +190,17 @@ namespace lfs::core {
                 s.completion = TensorCompletionAccess::vulkan(
                     s.vk->recorders().pending_value(internal::storage_ref(s.destination)));
             } else {
-                // Metal copies through unified memory before returning.
-                s.pending = false;
+                // Metal has copied the bytes, into the destination or, while the
+                // GPU still uses it, into staging that a queued copy drains.
                 s.source = {};
-                s.destination = {};
+                const auto* const meta = internal::storage_ref(s.destination).meta;
+                const uint64_t serial = meta ? meta->pending_value.load(std::memory_order_acquire) : 0;
+                if (internal::metal_queue::ready(serial)) {
+                    s.pending = false;
+                    s.destination = {};
+                } else {
+                    s.completion = TensorCompletionAccess::metal(serial);
+                }
             }
         } catch (...) {
             internal::backend_ops_for(s.destination).synchronize_stream(internal::ExecContext{stream});
@@ -187,6 +214,9 @@ namespace lfs::core {
         auto& s = *impl_;
         if (s.vk) {
             s.vk->recorders().flush_storage(internal::storage_ref(s.destination));
+            if (!s.completion.ready())
+                return false;
+        } else if (gpu_backend_of(s.destination) == GpuBackend::Metal) {
             if (!s.completion.ready())
                 return false;
         } else {
@@ -211,8 +241,9 @@ namespace lfs::core {
         if (!pending())
             return;
         auto& s = *impl_;
-        if (s.vk) {
-            s.vk->recorders().flush_storage(internal::storage_ref(s.destination));
+        if (s.vk || gpu_backend_of(s.destination) == GpuBackend::Metal) {
+            if (s.vk)
+                s.vk->recorders().flush_storage(internal::storage_ref(s.destination));
             s.completion.wait();
             (void)poll();
             return;
@@ -240,6 +271,11 @@ namespace lfs::core {
             impl_->vulkan = internal::acquire_vulkan_context();
             return;
         }
+        if (backend == GpuBackend::Metal) {
+            if (!gpu_backend_available(GpuBackend::Metal))
+                throw std::runtime_error("Metal tensor fences are unavailable");
+            return;
+        }
         if (backend != GpuBackend::CUDA)
             throw std::runtime_error("Reusable tensor fences are unsupported on Vulkan");
 #if LFS_HAS_CUDA
@@ -253,10 +289,11 @@ namespace lfs::core {
     TensorFence& TensorFence::operator=(TensorFence&&) noexcept = default;
     TensorFence::TensorFence(GpuBackend backend, void* event) : impl_(std::make_unique<Impl>()) {
         impl_->backend = backend;
-        // Vulkan producers hand over a context-timeline value. There is no event
-        // object to destroy; zero is already signaled.
-        if (backend == GpuBackend::Vulkan) {
-            impl_->vulkan = internal::acquire_vulkan_context();
+        // Vulkan producers hand over a context-timeline value and Metal ones a
+        // batch serial. There is no event object to destroy; zero is signaled.
+        if (backend == GpuBackend::Vulkan || backend == GpuBackend::Metal) {
+            if (backend == GpuBackend::Vulkan)
+                impl_->vulkan = internal::acquire_vulkan_context();
             impl_->timeline = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(event));
             return;
         }
@@ -289,6 +326,11 @@ namespace lfs::core {
             impl_->timeline = impl_->vulkan->recorders().flush_queue(id);
             return;
         }
+        if (impl_->backend == GpuBackend::Metal) {
+            (void)metal_target(target);
+            impl_->timeline = internal::metal_queue::submit();
+            return;
+        }
 #if LFS_HAS_CUDA
         check(cudaEventRecord(impl_->event, static_cast<cudaStream_t>(target)));
 #endif
@@ -301,6 +343,11 @@ namespace lfs::core {
             impl_->vulkan->recorders().queue_defer_wait(id, impl_->timeline);
             return;
         }
+        if (impl_->backend == GpuBackend::Metal) {
+            // Later batches of every Metal queue already follow the fence's batch.
+            (void)metal_target(target);
+            return;
+        }
 #if LFS_HAS_CUDA
         check(cudaStreamWaitEvent(static_cast<cudaStream_t>(target), impl_->event, 0));
 #endif
@@ -311,6 +358,10 @@ namespace lfs::core {
                 impl_->vulkan->wait(impl_->timeline);
             return;
         }
+        if (impl_->backend == GpuBackend::Metal) {
+            internal::metal_queue::wait(impl_->timeline);
+            return;
+        }
 #if LFS_HAS_CUDA
         check(cudaEventSynchronize(impl_->event));
 #endif
@@ -319,6 +370,8 @@ namespace lfs::core {
         if (impl_->backend == GpuBackend::Vulkan)
             return impl_->timeline == 0 ||
                    impl_->vulkan->completed_timeline() >= impl_->timeline;
+        if (impl_->backend == GpuBackend::Metal)
+            return internal::metal_queue::ready(impl_->timeline);
 #if LFS_HAS_CUDA
         const auto status = cudaEventQuery(impl_->event);
         if (status == cudaErrorNotReady)
@@ -345,6 +398,9 @@ namespace lfs::core {
         uint64_t recorder_id = 0;
         bool vulkan_queue = false;
         bool borrowed_queue = false;
+        // Id of an owned or borrowed Metal queue; 0 is the default queue.
+        uint64_t metal_queue = 0;
+        bool owns_metal_queue = false;
         uint64_t counter = 0;
         TensorCompletion last;
         struct HostCallback {
@@ -374,7 +430,9 @@ namespace lfs::core {
                         callbacks.pop_front();
                     }
                     try {
-                        if (callback.timeline != 0 && queue_context)
+                        if (callback.timeline != 0 && backend == GpuBackend::Metal)
+                            internal::metal_queue::wait_completed(callback.timeline);
+                        else if (callback.timeline != 0 && queue_context)
                             queue_context->wait(callback.timeline);
                         if (callback.function)
                             callback.function(callback.user);
@@ -465,6 +523,12 @@ namespace lfs::core {
             s.vulkan_queue = true;
             return;
         }
+        if (backend == GpuBackend::Metal) {
+            // Metal work runs in submission order, so every mode is ordered.
+            s.metal_queue = internal::metal_queue::create();
+            s.owns_metal_queue = true;
+            return;
+        }
         if (backend != GpuBackend::CUDA)
             throw std::runtime_error("Independent tensor queues are unsupported on Vulkan");
 #if LFS_HAS_CUDA
@@ -488,6 +552,15 @@ namespace lfs::core {
             impl_->borrowed_queue = true;
             return;
         }
+        if (backend == GpuBackend::Metal) {
+            const auto id = reinterpret_cast<uint64_t>(target);
+            if (!gpu_backend_available(GpuBackend::Metal) || !internal::metal_queue::valid(id))
+                throw std::runtime_error("Borrowed Metal tensor queues must be live Metal queues");
+            impl_->backend = backend;
+            impl_->owns_stream = false;
+            impl_->metal_queue = id;
+            return;
+        }
         if (backend != GpuBackend::CUDA)
             throw std::runtime_error("Borrowed tensor queues are unsupported on Vulkan");
         impl_->backend = backend;
@@ -508,6 +581,9 @@ namespace lfs::core {
             rebound_vulkan_ = true;
             return;
         }
+        // Metal queues share one timeline; there is nothing to bind.
+        if (queue.backend() == GpuBackend::Metal)
+            return;
         setCurrentCUDAStream(static_cast<cudaStream_t>(queue.native_handle()));
     }
     TensorWorkQueue::Scope::~Scope() {
@@ -521,6 +597,8 @@ namespace lfs::core {
     void* TensorWorkQueue::native_handle() const {
         if (impl_->vulkan_queue)
             return reinterpret_cast<void*>(impl_->recorder_id);
+        if (impl_->backend == GpuBackend::Metal)
+            return reinterpret_cast<void*>(impl_->metal_queue);
         return impl_->stream;
     }
     GpuBackend TensorWorkQueue::backend() const { return impl_->backend; }
@@ -530,6 +608,9 @@ namespace lfs::core {
                 return false;
             return impl_->queue_context->recorders().queue_ready(impl_->recorder_id);
         }
+        if (impl_->backend == GpuBackend::Metal)
+            return impl_->callbacks_outstanding.load(std::memory_order_acquire) == 0 &&
+                   internal::metal_queue::ready(internal::metal_queue::submit());
         if (impl_->backend != GpuBackend::CUDA)
             throw std::runtime_error("Queue polling is unsupported on Vulkan");
 #if LFS_HAS_CUDA
@@ -541,8 +622,11 @@ namespace lfs::core {
         return true;
     }
     void TensorWorkQueue::wait() const {
-        if (impl_->vulkan_queue) {
-            impl_->queue_context->recorders().queue_wait(impl_->recorder_id);
+        if (impl_->vulkan_queue || impl_->backend == GpuBackend::Metal) {
+            if (impl_->vulkan_queue)
+                impl_->queue_context->recorders().queue_wait(impl_->recorder_id);
+            else
+                internal::metal_queue::wait(internal::metal_queue::submit());
             std::unique_lock lock(impl_->callback_mutex);
             impl_->callback_cv.wait(lock, [&] {
                 return impl_->callbacks_outstanding.load(std::memory_order_acquire) == 0;
@@ -556,7 +640,7 @@ namespace lfs::core {
 #endif
     }
     void TensorWorkQueue::record(TensorFence& fence) const {
-        if (impl_->vulkan_queue) {
+        if (impl_->vulkan_queue || impl_->backend == GpuBackend::Metal) {
             fence.record(TensorExecutionTarget(*this));
             return;
         }
@@ -565,7 +649,7 @@ namespace lfs::core {
         fence.record(native_handle());
     }
     void TensorWorkQueue::wait_for(const TensorFence& fence) const {
-        if (impl_->vulkan_queue) {
+        if (impl_->vulkan_queue || impl_->backend == GpuBackend::Metal) {
             fence.wait_on(TensorExecutionTarget(*this));
             return;
         }
@@ -574,8 +658,10 @@ namespace lfs::core {
         fence.wait_on(native_handle());
     }
     void TensorWorkQueue::enqueue_host_callback(void (*callback)(void*), void* user) {
-        if (impl_->vulkan_queue) {
-            const uint64_t timeline = impl_->queue_context->recorders().flush_queue(impl_->recorder_id);
+        if (impl_->vulkan_queue || impl_->backend == GpuBackend::Metal) {
+            const uint64_t timeline = impl_->vulkan_queue
+                                          ? impl_->queue_context->recorders().flush_queue(impl_->recorder_id)
+                                          : internal::metal_queue::submit();
             {
                 std::lock_guard lock(impl_->callback_mutex);
                 impl_->callbacks.push_back({timeline, callback, user});
@@ -597,6 +683,16 @@ namespace lfs::core {
             const auto context_device = s.queue_context->device();
             if (device != nullptr && static_cast<VkDevice>(device) != context_device)
                 throw std::invalid_argument("Cannot change the device of an exported tensor queue");
+            if (s.consumer == point.semaphore && s.device == device)
+                return;
+            if (s.consumer != VK_NULL_HANDLE || s.consumer_point.keep_alive)
+                s.retired_timelines.push_back(std::move(s.consumer_point));
+            s.device = static_cast<VkDevice>(device);
+            s.consumer = static_cast<VkSemaphore>(point.semaphore);
+            s.consumer_point = std::move(point);
+            return;
+        }
+        if (s.backend == GpuBackend::Metal && !s.metal) {
             if (s.consumer == point.semaphore && s.device == device)
                 return;
             if (s.consumer != VK_NULL_HANDLE || s.consumer_point.keep_alive)
@@ -637,6 +733,11 @@ namespace lfs::core {
                 return;
             s.queue_context->recorders().queue_wait_external(
                 s.recorder_id, s.consumer, value, s.consumer_point.keep_alive);
+            return;
+        }
+        if (s.backend == GpuBackend::Metal && !s.metal) {
+            if (value != 0 && s.consumer != VK_NULL_HANDLE)
+                internal::metal_queue::wait_vulkan_timeline(s.device, s.consumer, value);
             return;
         }
         if (s.backend != GpuBackend::CUDA)
@@ -692,9 +793,11 @@ namespace lfs::core {
             if (impl_->vulkan_queue && !impl_->borrowed_queue && impl_->recorder_id != 0 &&
                 impl_->queue_context)
                 impl_->queue_context->recorders().destroy_queue(impl_->recorder_id);
+            if (impl_->owns_metal_queue)
+                internal::metal_queue::destroy(impl_->metal_queue);
             // Stream ownership and import lifetime are independent. In particular,
             // a borrowed default stream can still have outstanding timeline waits.
-            if (impl_->vulkan_queue &&
+            if ((impl_->vulkan_queue || impl_->backend == GpuBackend::Metal) &&
                 (impl_->consumer != VK_NULL_HANDLE || !impl_->retired_timelines.empty() ||
                  impl_->callbacks_outstanding.load(std::memory_order_acquire) != 0))
                 wait();
@@ -729,6 +832,8 @@ namespace lfs::core {
 #endif
             } else if (s.metal) {
                 s.metal->wait(value);
+            } else if (s.backend == GpuBackend::Metal) {
+                internal::metal_queue::wait_vulkan_timeline(s.device, s.consumer, value);
             } else {
                 const auto ctx = internal::acquire_vulkan_context();
                 consumer_completion = ctx->recorders().wait_external({}, s.consumer, value, {});
@@ -751,6 +856,8 @@ namespace lfs::core {
 #endif
             } else if (s.metal) {
                 result = s.metal->signal();
+            } else if (s.backend == GpuBackend::Metal) {
+                result = TensorCompletionAccess::metal(internal::metal_queue::submit());
             } else {
                 result = TensorCompletionAccess::vulkan(
                     std::max(consumer_completion, internal::acquire_vulkan_context()->recorders().flush_current()));
@@ -762,6 +869,8 @@ namespace lfs::core {
 #endif
             } else if (s.metal) {
                 s.metal->signal().wait();
+            } else if (s.backend == GpuBackend::Metal) {
+                internal::metal_queue::wait_completed(internal::metal_queue::submit());
             } else {
                 internal::acquire_vulkan_context()->recorders().wait_all();
             }
@@ -781,6 +890,8 @@ namespace lfs::core {
         struct Slot {
             void* host = nullptr;
             std::optional<internal::StorageRef> vulkan_host;
+            // Metal storage is shared, so a slot is a tensor the CPU reads in place.
+            Tensor metal_host;
             std::unique_ptr<TensorFence> fence;
             std::vector<Tensor> sources;
             bool sealed = false;
@@ -805,7 +916,7 @@ namespace lfs::core {
                 }
             }
 #if LFS_HAS_CUDA
-            if (!vulkan) {
+            if (backend == GpuBackend::CUDA) {
                 for (auto& slot : slots)
                     if (slot.host)
                         (void)cudaFreeHost(slot.host);
@@ -818,7 +929,7 @@ namespace lfs::core {
         if (backend == GpuBackend::Vulkan) {
             if (!queue.impl_->vulkan_queue)
                 throw std::runtime_error("Packed tensor readback rings need an owned Vulkan work queue");
-        } else if (backend != GpuBackend::CUDA) {
+        } else if (backend != GpuBackend::CUDA && backend != GpuBackend::Metal) {
             throw std::runtime_error("Packed tensor readback rings are unsupported on this backend");
         }
         if (queue.backend() != backend)
@@ -839,6 +950,15 @@ namespace lfs::core {
                 auto storage = s.vulkan->memory().allocate_readback(bytes);
                 slot.host = s.vulkan->memory().mapped_pointer(storage);
                 slot.vulkan_host = storage;
+                slot.fence = std::make_unique<TensorFence>(backend);
+            }
+            return;
+        }
+        if (backend == GpuBackend::Metal) {
+            const GpuBackendScope scope(backend);
+            for (auto& slot : s.slots) {
+                slot.metal_host = Tensor::zeros({bytes}, Device::GPU, DataType::UInt8);
+                slot.host = internal::metal_queue::host(internal::storage_ref(slot.metal_host));
                 slot.fence = std::make_unique<TensorFence>(backend);
             }
             return;
@@ -871,9 +991,22 @@ namespace lfs::core {
         slot.sources.push_back(source.contiguous());
         const auto& retained = slot.sources.back();
         pin_operands({&retained});
-        if (s.backend == GpuBackend::Vulkan) {
+        if (s.backend == GpuBackend::Vulkan || s.backend == GpuBackend::Metal) {
+            const bool metal = s.backend == GpuBackend::Metal;
             auto input = internal::storage_ref(retained);
             input.byte_offset += offset;
+            auto output = metal ? internal::storage_ref(slot.metal_host) : *slot.vulkan_host;
+            output.byte_offset += destination;
+            // Staging only serves the GPU copy.
+            if (metal && internal::metal_queue::host_copy_if_idle(output, input, bytes))
+                return;
+            const auto copy = [&](const internal::StorageRef from, const internal::StorageRef to) {
+                const internal::CopyRequest request{.src = from, .dst = to, .bytes = bytes};
+                if (metal)
+                    internal::backend_ops(GpuBackend::Metal).copy_device_to_device(request);
+                else
+                    s.vulkan->memory().copy_device_to_device(request);
+            };
             if (stage) {
                 const bool borrowed = s.staging && s.staging->is_valid();
                 if (borrowed) {
@@ -884,16 +1017,13 @@ namespace lfs::core {
                     s.scratch = Tensor::empty({s.bytes}, Device::GPU, DataType::UInt8);
                 }
                 Tensor& staging = borrowed ? slot.sources.back() : s.scratch;
-                internal::CopyRequest copy;
-                copy.src = input;
-                copy.dst = internal::storage_ref(staging);
-                copy.bytes = bytes;
-                s.vulkan->memory().copy_device_to_device(copy);
+                copy(input, internal::storage_ref(staging));
                 input = internal::storage_ref(staging);
             }
-            auto output = *slot.vulkan_host;
-            output.byte_offset += destination;
-            (void)s.vulkan->memory().copy_to_readback(input, output, bytes);
+            if (metal)
+                copy(input, output);
+            else
+                (void)s.vulkan->memory().copy_to_readback(input, output, bytes);
             return;
         }
 #if LFS_HAS_CUDA

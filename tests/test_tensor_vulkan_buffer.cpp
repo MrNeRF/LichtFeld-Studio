@@ -308,8 +308,8 @@ namespace {
                                              std::pair{GpuBackend::Metal, false}));
 
     // The LOD page queue on Metal: its work waits on the GPU for the consumer
-    // timeline, uploads reuse storage that Metal already used, and completion
-    // reaches the consumer device through the queue timeline.
+    // timeline, uploads into storage that Metal may still use do not block the
+    // host, and completion reaches the consumer device through the queue timeline.
     TEST_F(TensorVulkanBufferQuery, MetalWorkQueueOrdersAgainstTheConsumerTimeline) {
         if (!gpu_backend_available(GpuBackend::Metal))
             GTEST_SKIP() << "Metal backend unavailable";
@@ -336,7 +336,6 @@ namespace {
                 output.copy_from(staging.mul(2.0f));
             },
                                                   1);
-            EXPECT_FALSE(upload.pending());
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             EXPECT_FALSE(completion.ready());
 
@@ -345,6 +344,8 @@ namespace {
             signal.value = 1;
             ASSERT_EQ(vkSignalSemaphore(device, &signal), VK_SUCCESS);
             completion.wait();
+            upload.wait();
+            EXPECT_FALSE(upload.pending());
             const auto point = completion.timeline();
             EXPECT_EQ(point.semaphore, queue.timeline());
             const auto timeline = static_cast<VkSemaphore>(point.semaphore);
