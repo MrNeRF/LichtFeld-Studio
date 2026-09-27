@@ -254,9 +254,11 @@ namespace {
         scene.addCamera("camera.png", cameras, make_camera(0));
         lfs::training::Trainer trainer(scene);
 
+        // Fences follow the session backend, which a CUDA scope does not change.
+        const auto backend = lfs::core::default_gpu_backend();
         EXPECT_NO_THROW({
-            trainer.beginModelRead(lfs::core::TensorExecutionTarget::default_queue(lfs::core::GpuBackend::CUDA));
-            trainer.endModelRead(lfs::core::TensorExecutionTarget::default_queue(lfs::core::GpuBackend::CUDA));
+            trainer.beginModelRead(lfs::core::TensorExecutionTarget::default_queue(backend));
+            trainer.endModelRead(lfs::core::TensorExecutionTarget::default_queue(backend));
         });
     }
 
