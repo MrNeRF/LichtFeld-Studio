@@ -18,8 +18,10 @@
 #include "core/services.hpp"
 #include "core/shareable_allocation_limit.hpp"
 #include "core/tensor.hpp"
+#if LFS_HAS_CUDA
 #include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "core/tensor/backend/cuda/runtime/size_bucketed_pool.hpp"
+#endif
 #include "core/tensor_backend.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include "python/gil.hpp"
@@ -37,7 +39,9 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#if LFS_HAS_CUDA
 #include <cuda_runtime.h>
+#endif
 #include <expected>
 #include <filesystem>
 #include <format>
@@ -78,9 +82,11 @@ namespace lfs::vis {
         };
 
         void release_training_thread_local_cuda_caches() noexcept {
+#if LFS_HAS_CUDA
             (void)lfs::core::tensor_ops::release_nan_check_thread_buffers();
             // sort workspaces — explicit release before thread join so
             // high-water VRAM is not held until TLS dtor races CUDA teardown.
+#endif
         }
 
         [[nodiscard]] std::uint64_t thread_id_for_logging(const std::thread::id id) noexcept {
@@ -598,7 +604,11 @@ namespace lfs::vis {
                 new_state == TrainingState::Running ||
                 new_state == TrainingState::Paused ||
                 new_state == TrainingState::Stopping;
+#if LFS_HAS_CUDA
             lfs::core::SizeBucketedPool::instance().set_training_active(training_cache_active);
+#else
+            (void)training_cache_active;
+#endif
 
             if (new_state == TrainingState::Starting) {
                 auto& store = app_store();

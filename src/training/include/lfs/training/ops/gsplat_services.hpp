@@ -28,9 +28,4 @@ namespace lfs::training {
         const core::Camera&, core::SplatData&, const core::Tensor& bg_color,
         float scaling_modifier = 1.f, bool antialiased = false,
         GsplatRenderMode = GsplatRenderMode::RGB);
-
-    void gsplat_record_vram(const lfs::gpu_ops::GsplatSaved&, const RenderOutput&,
-                            const core::Tensor& gt_tile, const core::Tensor& bg_tile,
-                            const core::Tensor& error_map);
-    bool gsplat_release_caches(lfs::gpu_ops::GsplatSaved&) noexcept;
 } // namespace lfs::training

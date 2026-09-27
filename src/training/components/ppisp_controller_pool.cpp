@@ -1,12 +1,12 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "ppisp_controller_pool.hpp"
 #include "config_serialization.hpp"
 #include "core/gpu_backend_fwd.hpp"
 #include "core/logger.hpp"
 #include "core/tensor_serialization.hpp"
 #include "lfs/training/ops/registry.hpp"
-#include "ppisp_controller_pool.hpp"
 #include <cassert>
 #include <cmath>
 #include <cstddef>

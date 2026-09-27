@@ -998,7 +998,8 @@ namespace lfs::training {
         return static_cast<const CudaGsplatState&>(*saved.backend).frame;
     }
     void gsplat_record_vram(const lfs::gpu_ops::GsplatSaved& saved,
-                            const RenderOutput& output,
+                            const lfs::core::Tensor& image,
+                            const lfs::core::Tensor& alpha,
                             const lfs::core::Tensor& gt_tile,
                             const lfs::core::Tensor& bg_tile,
                             const lfs::core::Tensor& tile_error_map) {
@@ -1016,8 +1017,8 @@ namespace lfs::training {
         record_rasterizer_arena_disclosure(scope);
         record_vram_current(scope, "forward.isect_ids", static_cast<std::size_t>(ctx.n_isects) * sizeof(std::int64_t));
         record_vram_current(scope, "forward.flatten_ids", static_cast<std::size_t>(ctx.n_isects) * sizeof(std::int32_t));
-        record_vram_tensor(scope, "output.image", output.image);
-        record_vram_tensor(scope, "output.alpha", output.alpha);
+        record_vram_tensor(scope, "output.image", image);
+        record_vram_tensor(scope, "output.alpha", alpha);
         record_vram_tensor(scope, "camera.K_tensor", ctx.K_tensor);
         record_vram_tensor(scope, "camera.radial_cuda", ctx.radial_cuda);
         record_vram_tensor(scope, "camera.tangential_cuda", ctx.tangential_cuda);

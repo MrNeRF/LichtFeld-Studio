@@ -1333,24 +1333,19 @@ namespace lfs::app {
                 show_dialog);
             return false;
         }
+#if LFS_HAS_CUDA
         if (lfs::core::configured_gpu_backend() == lfs::core::GpuBackend::Vulkan) {
-            if (viewer_only &&
-                lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan)) {
+            if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan)) {
+                // Training has no Vulkan kernels yet. Let startup reach
+                // Trainer::initialize, which names the missing families.
                 return true;
             }
             reportFatalStartupError(
                 "LichtFeld Studio - No usable GPU",
-                "The selected Vulkan tensor backend requires a Vulkan GPU and a viewer-only session.",
+                "The selected Vulkan tensor backend requires a Vulkan GPU.",
                 show_dialog);
             return false;
         }
-#if !LFS_HAS_CUDA
-        reportFatalStartupError(
-            "LichtFeld Studio - No usable GPU",
-            "CUDA is not compiled into this build; select the Vulkan tensor backend.",
-            show_dialog);
-        return false;
-#else
         const bool cuda_usable =
             lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA);
         const bool vulkan_usable =
@@ -1425,6 +1420,17 @@ namespace lfs::app {
             return false;
         }
         return true;
+#else
+        if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan)) {
+            // Training has no Vulkan kernels yet. Let startup reach
+            // Trainer::initialize, which names the missing families.
+            return true;
+        }
+        reportFatalStartupError(
+            "LichtFeld Studio - No usable GPU",
+            "CUDA is not compiled into this build and no Vulkan GPU is available.",
+            show_dialog);
+        return false;
 #endif
     }
 

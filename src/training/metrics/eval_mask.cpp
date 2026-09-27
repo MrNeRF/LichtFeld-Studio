@@ -6,8 +6,8 @@
 
 #include "core/image_io.hpp"
 #include "core/shared_image_ops.hpp"
+#include "lfs/training/ops/masks.hpp"
 #include "lfs/training/ops/registry.hpp"
-#include "training/kernels/mask_preprocess.hpp"
 
 #include <stdexcept>
 #include <utility>

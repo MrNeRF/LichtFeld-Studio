@@ -58,8 +58,9 @@ namespace lfs::test {
         }
 
         bool release_gsplat_caches() {
-            training::cuda_gsplat_ops().release(gsplat_saved);
-            return training::gsplat_release_caches(gsplat_saved);
+            const auto& ops = training::cuda_gsplat_ops();
+            ops.release(gsplat_saved);
+            return ops.release_caches(gsplat_saved);
         }
     };
 

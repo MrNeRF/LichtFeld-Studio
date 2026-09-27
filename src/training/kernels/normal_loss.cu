@@ -13,14 +13,13 @@ namespace lfs::training::kernels {
     namespace {
         namespace slots = normal_loss_slots;
 
-        constexpr int kThreadsPerBlock = 256;
-        constexpr size_t kMaxBlocks = 1024;
+        constexpr int kThreadsPerBlock = kGeometryLossThreads;
 
-        constexpr int kStatCount = 3;
+        constexpr int kStatCount = kNormalStatCount;
         constexpr int kLossStatCount = 1;
 
         [[nodiscard]] size_t normal_loss_block_count(const size_t num_pixels) {
-            return std::min((num_pixels + kThreadsPerBlock - 1) / kThreadsPerBlock, kMaxBlocks);
+            return geometry_loss_block_count(num_pixels);
         }
 
         struct PixelSample {
@@ -224,12 +223,6 @@ namespace lfs::training::kernels {
             loss_out[0] = finals[slots::kInvNorm] * static_cast<float>(sums[0]);
         }
     } // namespace
-
-    size_t normal_loss_partial_count(const size_t num_pixels) {
-        const size_t num_blocks = normal_loss_block_count(num_pixels);
-        return static_cast<size_t>(slots::kSlotCount) +
-               2 * static_cast<size_t>(kStatCount) * num_blocks;
-    }
 
     namespace {
         template <bool Weighted>

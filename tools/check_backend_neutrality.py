@@ -41,6 +41,10 @@ TRAINER_CUDA_FILE = re.compile(
     r'src/training/(?:ops/[^/]+_cuda\.cpp|'
     r'include/lfs/training/ops/[^/]+_cuda\.hpp|'
     r'rasterization/[^/]+_cuda\.(?:cpp|hpp)|perf_bench_cuda\.cpp)$')
+# Neutral trainer sources dispatch through the ops table. Kernel and CUDA
+# headers stay on the implementation side of that boundary.
+TRAINER_KERNEL_INCLUDE = re.compile(
+    r'(?:^|/)kernels/|_cuda\.hpp$|^(?:cuda(?:_runtime(?:_api)?)?\.h)$')
 CUDA_RASTERIZERS = ("src/rendering/rasterizer/cuda/",)
 # File-specific native interoperability and backend selection seams.
 SEAMS = {
@@ -115,6 +119,12 @@ def mask_tokens(source: str, *, strings: bool = True) -> str:
     return TOKEN.sub(replace, source)
 
 
+def neutral_trainer_file(relative: str) -> bool:
+    return (relative.startswith(TRAINER_ROOTS) and
+            not relative.startswith(TRAINER_CUDA_ROOTS) and
+            TRAINER_CUDA_FILE.fullmatch(relative) is None)
+
+
 def private_header(path: Path, header: str) -> bool:
     if re.search(r'(?:^|/)core/tensor/', header):
         return True
@@ -161,6 +171,8 @@ def scan(path: Path) -> list[tuple[int, str, str]]:
         if native_checked and (CUDA_HEADER.fullmatch(header) or
                                (relative.startswith(TRAINER_ROOTS) and TRAINER_CUDA_HEADER.fullmatch(header))):
             add(match.start(), "cuda-header", header)
+        if neutral_trainer_file(relative) and TRAINER_KERNEL_INCLUDE.search(normalized):
+            add(match.start(), "trainer-cuda-include", header)
     if native_checked:
         if relative.startswith(TRAINER_ROOTS):
             for match in TRAINER_NATIVE.finditer(code):

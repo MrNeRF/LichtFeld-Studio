@@ -9,9 +9,6 @@
 #include "lfs/training/ops/raster.hpp"
 #include "optimizer/render_output.hpp"
 
-#include <cstddef>
-#include <cstdint>
-
 namespace lfs::training {
 
     [[nodiscard]] lfs::Error fast_raster_error(const lfs::gpu_ops::RasterResult& result);
@@ -43,16 +40,5 @@ namespace lfs::training {
         bool mip_filter,
         const lfs::core::Tensor& bg_image = {},
         bool render_normal = false);
-
-    // Rasterizer-owned VRAM rows. Image and alpha are the bound outputs.
-    void fast_record_vram(
-        const lfs::gpu_ops::FastSaved& saved,
-        const lfs::core::Tensor& image,
-        const lfs::core::Tensor& alpha,
-        bool run_gaussian_backward,
-        size_t num_primitives);
-
-    // Drops cached output tensors. The live forward frame stays owned by release.
-    void fast_release_caches(lfs::gpu_ops::FastSaved& saved) noexcept;
 
 } // namespace lfs::training

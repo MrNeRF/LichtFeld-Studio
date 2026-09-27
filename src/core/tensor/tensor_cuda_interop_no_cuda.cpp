@@ -47,5 +47,7 @@ namespace lfs::core {
 } // namespace lfs::core
 
 namespace lfs::core::cuda {
+    ExternalMemoryImportScope::ExternalMemoryImportScope() noexcept {}
+    ExternalMemoryImportScope::~ExternalMemoryImportScope() noexcept {}
     bool ExternalMemoryImportScope::active() noexcept { return false; }
 } // namespace lfs::core::cuda

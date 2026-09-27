@@ -4,7 +4,6 @@
 #pragma once
 
 #include "lfs/training/ops/geometry.hpp"
-#include "training/kernels/depth_loss.hpp"
 
 #include <cstdint>
 #include <filesystem>

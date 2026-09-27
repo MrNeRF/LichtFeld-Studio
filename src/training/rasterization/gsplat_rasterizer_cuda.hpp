@@ -109,5 +109,9 @@ namespace lfs::training {
         const core::Tensor& error_map, const core::Tensor& edge_map,
         core::Tensor& edge_scores, core::Tensor& max_screen_share);
     void gsplat_release(lfs::gpu_ops::GsplatSaved&) noexcept;
+    void gsplat_record_vram(
+        const lfs::gpu_ops::GsplatSaved&, const core::Tensor& image, const core::Tensor& alpha,
+        const core::Tensor& gt_tile, const core::Tensor& bg_tile, const core::Tensor& error_map);
+    bool gsplat_release_caches(lfs::gpu_ops::GsplatSaved&) noexcept;
     const GsplatRasterizeContext& cuda_gsplat_frame(const lfs::gpu_ops::GsplatSaved&);
 } // namespace lfs::training

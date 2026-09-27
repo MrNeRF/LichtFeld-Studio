@@ -4,21 +4,12 @@
 
 #pragma once
 
+#include "lfs/training/ops/mrnf.hpp"
+
 #include <cstddef>
 #include <cstdint>
 
-namespace lfs::training {
-    struct GumbelTopKScratch;
-} // namespace lfs::training
-
 namespace lfs::training::mrnf_strategy {
-
-    struct MRNFBounds {
-        float center[3];
-        float extent[3];
-        float median_size;
-        float max_extent;
-    };
 
     void launch_prune_bounds_or(
         const float* means,
@@ -156,11 +147,6 @@ namespace lfs::training::mrnf_strategy {
         bool compact_sparse = true,
         lfs::training::GumbelTopKScratch* scratch = nullptr,
         size_t known_nnz = 0);
-
-    // Baked per-splat exploration starvation weights.
-    inline constexpr float kStarvEps = 0.0026f;
-    inline constexpr float kStarvGamma = 1.72f;
-    inline constexpr float kExploreStarvDose = 2.38f;
 
     /**
      * fold densification_info into vis_count (add row0) and refine_weight_max

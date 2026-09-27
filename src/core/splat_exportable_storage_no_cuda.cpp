@@ -3,8 +3,40 @@
 
 #include "core/splat_exportable_storage.hpp"
 
+#include <string>
+
 namespace lfs::core {
     void* resolve_exportable_device_ptr(const Tensor& tensor) {
         return const_cast<void*>(tensor.is_valid() ? tensor.data_ptr() : nullptr);
     }
+
+    std::expected<SplatExportableStorage, std::string> SplatExportableStorage::create(
+        std::size_t, int, int, std::size_t) {
+        return std::unexpected("Splat exportable storage requires CUDA");
+    }
+
+    std::size_t SplatExportableStorage::layoutBytes(std::size_t, int) { return 0; }
+    std::size_t SplatExportableStorage::layoutBytesPerSplat(int) { return 0; }
+    std::size_t SplatExportableStorage::growthCapacity(std::size_t live_or_needed, std::size_t) {
+        return live_or_needed;
+    }
+
+    std::expected<bool, std::string> SplatExportableStorage::grow(std::size_t) {
+        return std::unexpected("Splat exportable storage requires CUDA");
+    }
+
+    void SplatExportableStorage::restoreCapacity(std::size_t, const std::array<std::size_t, Count>&,
+                                                 std::uint64_t) noexcept {}
+
+    SplatTensorAllocator SplatExportableStorage::make_allocator() const { return {}; }
+
+    std::expected<void, std::string> SplatExportableStorage::rebindSplatData(SplatData&,
+                                                                             SplatTensorAllocator) const {
+        return std::unexpected("Splat exportable storage requires CUDA");
+    }
+
+    void* SplatExportableStorage::live_region_ptr(Region) const { return nullptr; }
+
+    void stamp_exportable_provenance(Tensor&, std::shared_ptr<SplatExportableStorage::Control>,
+                                     SplatExportableStorage::Region) {}
 } // namespace lfs::core

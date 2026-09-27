@@ -44,5 +44,12 @@ namespace lfs::gpu_ops {
                          const GsplatGradients&, Out densification, In error_map, In edge_map,
                          Out edge_scores, Out max_screen_share);
         void (*release)(GsplatSaved&) noexcept;
+
+        // Rasterizer-owned VRAM rows. Image and alpha are the bound outputs.
+        void (*record_vram)(
+            const GsplatSaved&, In image, In alpha,
+            In gt_tile, In bg_tile, In error_map);
+        // Drops cached camera and output tensors. True when every cache is gone.
+        bool (*release_caches)(GsplatSaved&) noexcept;
     };
 } // namespace lfs::gpu_ops

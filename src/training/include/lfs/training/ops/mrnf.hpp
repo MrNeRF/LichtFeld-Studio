@@ -13,6 +13,19 @@ namespace lfs::training {
     struct GumbelTopKScratch;
 } // namespace lfs::training
 
+namespace lfs::training::mrnf_strategy {
+    struct MRNFBounds {
+        float center[3] = {};
+        float extent[3] = {};
+        float median_size = 0.f;
+        float max_extent = 0.f;
+    };
+
+    inline constexpr float kStarvEps = 0.0026f;
+    inline constexpr float kStarvGamma = 1.72f;
+    inline constexpr float kExploreStarvDose = 2.38f;
+} // namespace lfs::training::mrnf_strategy
+
 namespace lfs::gpu_ops {
 
     struct Bounds {

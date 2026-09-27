@@ -460,6 +460,9 @@ if(NOT LFS_HAS_CUDA)
         test_camera_priors_portable.cpp
         test_viewer_no_cuda.cpp
     )
+    if(LFS_BUILD_TRAINER)
+        list(APPEND TEST_SOURCES test_vulkan_trainer_start.cpp)
+    endif()
     if(APPLE)
         list(APPEND TEST_SOURCES test_video_videotoolbox.cpp)
     endif()
@@ -482,6 +485,7 @@ if(NOT LFS_HAS_CUDA)
         ${CMAKE_BINARY_DIR}/include
         ${CMAKE_SOURCE_DIR}/tests
         ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/src/training
         ${CMAKE_SOURCE_DIR}/src/app/include
     )
     lfs_tensor_private_access(${TEST_SOURCES})
@@ -491,6 +495,9 @@ if(NOT LFS_HAS_CUDA)
         GTest::gtest
         Vulkan::Vulkan
     )
+    if(LFS_BUILD_TRAINER)
+        target_link_libraries(lichtfeld_tests PRIVATE lfs_training)
+    endif()
     add_test(NAME lichtfeld_tests COMMAND lichtfeld_tests --tensor-backend=vulkan)
     set_tests_properties(lichtfeld_tests PROPERTIES TIMEOUT 300)
 
@@ -857,6 +864,7 @@ set(TEST_FILES
     test_splat_raw_payload.cpp
     test_tensor_stream.cpp
     test_tensor_queue_readback.cpp
+    test_vulkan_trainer_start.cpp
     test_tensor_completion.cpp
     test_tensor_d4_from_blob_stream.cpp
     tensor_hardening_cuda_utils.cu

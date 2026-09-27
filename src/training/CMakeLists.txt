@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+if(LFS_HAS_CUDA)
 # Add fastlfs backend
 add_subdirectory(rasterization/fastgs)
 
@@ -75,6 +76,7 @@ if(MSVC)
             $<$<COMPILE_LANGUAGE:CUDA>:FMT_UNICODE=0>
     )
 endif()
+endif()
 
 # Shared depth-anchor fit + sidecar cache (reused by the preprocess CLI)
 add_subdirectory(depth_anchor)
@@ -89,35 +91,19 @@ set(TRAINING_NEW_SOURCES
     optimizer/scheduler.cpp
     losses/regularization.cpp
     ops/registry.cpp
-    ops/session_cuda.cpp
     ops/requirements.cpp
-    ops/photometric_cuda.cpp
-    ops/gsplat_cuda.cpp
-    ops/adam_cuda.cpp
-    ops/lpips_cuda.cpp
-    ops/bilateral_cuda.cpp
-    ops/training_image_cuda.cpp
-    ops/ppisp_cuda.cpp
-    ops/mcmc_cuda.cpp
-    ops/mrnf_cuda.cpp
-    ops/morton_cuda.cpp
-    ops/masks_cuda.cpp
-    ops/extra_loss_cuda.cpp
-    ops/sh_cuda.cpp
-    ops/refine_cuda.cpp
+    ops/fast_services.cpp
+    ops/gsplat_services.cpp
     losses/mask_loss.cpp
     strategies/strategy_utils.cpp
     strategies/mcmc.cpp
     strategies/mrnf.cpp
     strategies/strategy_factory.cpp
     strategies/improved_gs_plus.cpp
-    rasterization/fast_rasterizer_cuda.cpp
-    rasterization/gsplat_rasterizer_cuda.cpp
     components/config_serialization.cpp
     components/bilateral_grid.cpp
     components/ppisp.cpp
-    components/ppisp_controller_pool.cu
-    kernels/ppisp_controller.cu
+    components/ppisp_controller_pool.cpp
     components/ppisp_file.cpp
     components/sparsity_optimizer.cpp
     control/command_api.cpp
@@ -134,6 +120,33 @@ set(TRAINING_NEW_SOURCES
         perf_bench.cpp
     training_setup.cpp
 )
+if(LFS_HAS_CUDA)
+    list(APPEND TRAINING_NEW_SOURCES
+        ops/table_cuda.cpp
+        ops/session_cuda.cpp
+        ops/photometric_cuda.cpp
+        ops/gsplat_cuda.cpp
+        ops/adam_cuda.cpp
+        ops/lpips_cuda.cpp
+        ops/bilateral_cuda.cpp
+        ops/training_image_cuda.cpp
+        ops/ppisp_cuda.cpp
+        ops/mcmc_cuda.cpp
+        ops/mrnf_cuda.cpp
+        ops/morton_cuda.cpp
+        ops/masks_cuda.cpp
+        ops/extra_loss_cuda.cpp
+        ops/sh_cuda.cpp
+        ops/refine_cuda.cpp
+        rasterization/fast_rasterizer_cuda.cpp
+        rasterization/gsplat_rasterizer_cuda.cpp
+        kernels/ppisp_controller.cu
+    )
+else()
+    list(APPEND TRAINING_NEW_SOURCES
+        ops/cuda_table_stub.cpp
+    )
+endif()
 
 # lfs_training - Training module with optimizer
 add_library(lfs_training STATIC ${TRAINING_NEW_SOURCES})
@@ -164,14 +177,18 @@ target_link_libraries(lfs_training
         lfs_diagnostics         # Live VRAM diagnostic accounting
         lfs_io                  # For CacheLoader, exporter, pipelined loader
         lfs_event_bridge        # Shared event bridge for cross-module singletons
-        lfs_training_kernels    # LibTorch-free SSIM kernels
-        fastlfs_backend         # LibTorch-free FastGS rasterization and optimizer kernels
-        gsplat_backend_lfs      # LibTorch-free gsplat rasterization backend
-    PRIVATE
         lfs_depth_anchor        # Shared depth-anchor fit + sidecar cache
+    PRIVATE
         lfs_preprocessing       # MoGe-2 normal auto-generate
         lfs_python_utils
 )
+if(LFS_HAS_CUDA)
+    target_link_libraries(lfs_training PUBLIC
+        lfs_training_kernels
+        fastlfs_backend
+        gsplat_backend_lfs
+    )
+endif()
 
 # Set C++ standard
 set_target_properties(lfs_training PROPERTIES

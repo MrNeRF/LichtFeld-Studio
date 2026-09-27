@@ -275,42 +275,45 @@ namespace lfs::training {
             kernels::launch_ssim_to_error_map(map, error);
         }
 
+        lfs::gpu_ops::PhotoWorkspaceBytes photo_workspace_bytes(const lfs::gpu_ops::PhotoSaved& saved) {
+            const CudaPhotoState* state = state_of(saved);
+            if (!state) {
+                return {};
+            }
+            return lfs::gpu_ops::PhotoWorkspaceBytes{
+                .required = state->arena.required_bytes(),
+                .allocated = state->arena.allocated_bytes(),
+                .error_map = reserved_bytes(state->error_maps.ssim_map),
+            };
+        }
+
+        void photo_shrink_to_required(lfs::gpu_ops::PhotoSaved& saved) {
+            if (saved.backend) {
+                state_of(saved).arena.shrink_to_required();
+            }
+        }
+
+        void photo_reset(lfs::gpu_ops::PhotoSaved& saved) {
+            if (saved.backend) {
+                state_of(saved).arena.reset();
+            }
+        }
+
         const lfs::gpu_ops::PhotometricOps kCudaPhotometricOps{
             .create = photo_create,
             .evaluate = photo_evaluate,
             .metric = photo_metric,
             .error_map = photo_error_map,
             .map_to_error = photo_map_to_error,
+            .workspace_bytes = photo_workspace_bytes,
+            .shrink_to_required = photo_shrink_to_required,
+            .reset = photo_reset,
         };
 
     } // namespace
 
     const lfs::gpu_ops::PhotometricOps& cuda_photometric_ops() {
         return kCudaPhotometricOps;
-    }
-
-    PhotoWorkspaceBytes photo_workspace_bytes(const lfs::gpu_ops::PhotoSaved& saved) {
-        const CudaPhotoState* state = state_of(saved);
-        if (!state) {
-            return {};
-        }
-        return PhotoWorkspaceBytes{
-            .required = state->arena.required_bytes(),
-            .allocated = state->arena.allocated_bytes(),
-            .error_map = reserved_bytes(state->error_maps.ssim_map),
-        };
-    }
-
-    void photo_shrink_to_required(lfs::gpu_ops::PhotoSaved& saved) {
-        if (saved.backend) {
-            state_of(saved).arena.shrink_to_required();
-        }
-    }
-
-    void photo_reset(lfs::gpu_ops::PhotoSaved& saved) {
-        if (saved.backend) {
-            state_of(saved).arena.reset();
-        }
     }
 
 } // namespace lfs::training

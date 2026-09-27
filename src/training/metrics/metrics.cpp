@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "metrics.hpp"
-#include "../kernels/normal_loss.hpp"
 #include "core/events.hpp"
 #include "core/gpu_device_runtime.hpp"
 #include "core/gpu_elapsed.hpp"
@@ -16,6 +15,7 @@
 #include "core/tensor_backend.hpp"
 #include "eval_mask.hpp"
 #include "lfs/training/ops/fast_services.hpp"
+#include "lfs/training/ops/geometry_types.hpp"
 #include "lfs/training/ops/gsplat_services.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include <algorithm>

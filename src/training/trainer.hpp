@@ -18,7 +18,7 @@
 #include "core/tensor_upload.hpp"
 #include "dataset.hpp"
 #include "io/project_recovery.hpp"
-#include "kernels/depth_loss.hpp"
+#include "lfs/training/ops/geometry_types.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include "lfs/training/refine_scratch.hpp"
 #include "losses/mask_loss.hpp"

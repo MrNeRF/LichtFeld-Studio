@@ -35,13 +35,11 @@
 #include "io/project_document.hpp"
 #include "io/project_recovery.hpp"
 #include "io/scene_chapter_adapter.hpp"
-#include "lfs/kernels/ssim.cuh"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/ops/fast_services.hpp"
 #include "lfs/training/ops/gsplat_services.hpp"
-#include "lfs/training/ops/photometric_services.hpp"
 #include "lfs/training/perf_bench.hpp"
 #include "lfs/training/screen_share.cuh"
 #include "lfs/training/sh_value_codec.hpp"
@@ -56,11 +54,6 @@
 #include "strategies/strategy_factory.hpp"
 #include "strategies/strategy_utils.hpp"
 #include "training/control/control_boundary.hpp"
-#include "training/kernels/depth_loss.hpp"
-#include "training/kernels/mask_preprocess.hpp"
-#include "training/kernels/mrnf_kernels.hpp"
-#include "training/kernels/normal_consistency_loss.hpp"
-#include "training/kernels/normal_loss.hpp"
 #include "training/training_setup.hpp"
 #include "training_cropbox_mask.hpp"
 
@@ -1829,11 +1822,7 @@ namespace lfs::training {
         // Preserve legacy-default ordering for cold uploads and readbacks.
         training_queue_ = std::make_unique<TensorWorkQueue>(backend, TensorWorkQueue::Mode::LegacyOrdered);
         metrics_queue_ = std::make_unique<TensorWorkQueue>(backend);
-        try {
-            PerfBenchCollector::name_queues(*training_queue_, *callback_queue_, *metrics_queue_);
-        } catch (const std::runtime_error& error) {
-            LOG_DEBUG("Training queue naming skipped: {}", error.what());
-        }
+        PerfBenchCollector::name_queues(*training_queue_, *callback_queue_, *metrics_queue_);
         createSyncPrimitives();
         PerfBenchCollector::instance().set_timing_queue(*training_queue_);
     }
@@ -4295,7 +4284,8 @@ namespace lfs::training {
             return;
         }
 
-        photo_shrink_to_required(photo_saved_);
+        if (training_ops_ != nullptr && training_ops_->photometric != nullptr)
+            training_ops_->photometric->shrink_to_required(photo_saved_);
 
         std::optional<std::filesystem::path> headless_source_path;
         bool first_publish_to_destination =
@@ -5206,10 +5196,13 @@ namespace lfs::training {
                 progress_->pause();
             }
             // B3: the previous step is complete; release the production loss arena.
-            photo_reset(photo_saved_);
-            fast_release_caches(fast_saved_);
+            if (training_ops_ != nullptr && training_ops_->photometric != nullptr)
+                training_ops_->photometric->reset(photo_saved_);
+            if (training_ops_ != nullptr && training_ops_->fast != nullptr)
+                training_ops_->fast->release_caches(fast_saved_);
             training_session_ops().resize_arena("B3 pause", true);
-            gsplat_release_caches(gsplat_saved_);
+            if (training_ops_ != nullptr && training_ops_->gsplat != nullptr)
+                training_ops_->gsplat->release_caches(gsplat_saved_);
             LOG_INFO("Training paused at iteration {}", iter);
             lfs::diagnostics::VramProfiler::instance().mark("training_pause");
             LOG_DEBUG("Click 'Resume Training' to continue.");
@@ -5229,7 +5222,8 @@ namespace lfs::training {
         // Handle stop request - this permanently stops training
         if (stop_requested_.load()) {
             // B3: no new forward work will consume these views.
-            photo_reset(photo_saved_);
+            if (training_ops_ != nullptr && training_ops_->photometric != nullptr)
+                training_ops_->photometric->reset(photo_saved_);
             LOG_INFO("Stopping training permanently at iteration {}...", iter);
             lfs::diagnostics::VramProfiler::instance().mark("training_stop");
         }
@@ -6359,7 +6353,7 @@ namespace lfs::training {
                             record_vram_tensor("train.appearance", "ppisp_controller.prediction", pred);
                             {
                                 const auto loss_ws =
-                                    photo_workspace_bytes(photo_saved_);
+                                    training_ops_->photometric->workspace_bytes(photo_saved_);
                                 record_vram_current("train.losses", "loss_workspace_arena",
                                                     loss_ws.allocated);
                                 auto& profiler = lfs::diagnostics::VramProfiler::instance();
@@ -7056,14 +7050,15 @@ namespace lfs::training {
                         if (live_vram_profiler_enabled()) {
                             if (params_.optimization.raster_backend() !=
                                 lfs::core::param::RasterBackendId::ThreeDGUT) {
-                                fast_record_vram(
+                                training_ops_->fast->record_vram(
                                     fast_saved_, output.image, output.alpha,
                                     run_fastgs_gaussian_backward,
                                     static_cast<std::size_t>(strategy_->get_model().size()));
                                 record_vram_tensor("train.inputs", "gt_tile", gt_tile);
                                 record_vram_tensor("train.inputs", "background_tile", bg_tile);
                             } else if (gsplat_frame) {
-                                gsplat_record_vram(gsplat_saved_, output, gt_tile, bg_tile, tile_error_map);
+                                training_ops_->gsplat->record_vram(
+                                    gsplat_saved_, output.image, output.alpha, gt_tile, bg_tile, tile_error_map);
                             }
                             record_vram_tensor("train.losses", "tile_loss", tile_loss);
                             record_vram_tensor("train.losses", "tile_grad_corrected", tile_grad);
@@ -7072,7 +7067,7 @@ namespace lfs::training {
                             record_vram_tensor("train.losses", "densification_error_map.live", tile_error_map);
                             {
                                 const auto loss_ws =
-                                    photo_workspace_bytes(photo_saved_);
+                                    training_ops_->photometric->workspace_bytes(photo_saved_);
                                 record_vram_current("train.losses", "loss_workspace_arena",
                                                     loss_ws.allocated);
                                 auto& profiler = lfs::diagnostics::VramProfiler::instance();
@@ -7086,7 +7081,7 @@ namespace lfs::training {
                                 }
                             }
                             record_vram_current("train.losses", "densification_ssim.workspace",
-                                                photo_workspace_bytes(photo_saved_).error_map);
+                                                training_ops_->photometric->workspace_bytes(photo_saved_).error_map);
                             record_vram_tensor("train.losses", "densification_error_map.buffer", densification_error_map_);
                             record_vram_tensor("train.losses", "edge_map_buffer", edge_map_buffer_);
                         }
@@ -7705,7 +7700,8 @@ namespace lfs::training {
                             bilateral_grid_->log_eval_diagnostics();
                         }
                         // B2: retain only the current active shape after evaluation.
-                        photo_shrink_to_required(photo_saved_);
+                        if (training_ops_ != nullptr && training_ops_->photometric != nullptr)
+                            training_ops_->photometric->shrink_to_required(photo_saved_);
                     }
 
                     current_phase = StepPhase::TerminalCleanup;
@@ -8424,7 +8420,8 @@ namespace lfs::training {
                                                     val_dataset_,
                                                     background_);
                 LOG_INFO("{}", metrics.to_string());
-                photo_shrink_to_required(photo_saved_);
+                if (training_ops_ != nullptr && training_ops_->photometric != nullptr)
+                    training_ops_->photometric->shrink_to_required(photo_saved_);
             }
 
             clearActiveImageLoader();
@@ -8638,9 +8635,11 @@ namespace lfs::training {
 
         // B3: training has stopped or completed; the editor may remain alive.
         release_training_transient_state_at_boundary();
-        fast_release_caches(fast_saved_);
+        if (training_ops_ != nullptr && training_ops_->fast != nullptr)
+            training_ops_->fast->release_caches(fast_saved_);
         training_session_ops().resize_arena("B3 training end", true);
-        gsplat_release_caches(gsplat_saved_);
+        if (training_ops_ != nullptr && training_ops_->gsplat != nullptr)
+            training_ops_->gsplat->release_caches(gsplat_saved_);
         lfs::core::Tensor::trim_memory_pool();
         training_session_ops().dump_arena_statistics();
 

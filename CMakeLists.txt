@@ -95,13 +95,21 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/VcpkgProfiles.cmake")
 lfs_validate_vcpkg_profile()
 
 # APPLE is only defined after project(); the host variable exists before it.
+# Default ON except on Apple, where the trainer and CUDA language stay off.
+option(LFS_ENABLE_CUDA "Build the CUDA language, toolkit, and CUDA trainer kernels" ON)
 if(CMAKE_HOST_APPLE)
+    set(LFS_ENABLE_CUDA OFF CACHE BOOL "Build the CUDA language, toolkit, and CUDA trainer kernels" FORCE)
+endif()
+if(LFS_ENABLE_CUDA)
+    project(LichtFeld-Studio VERSION 0.5.3 LANGUAGES CUDA CXX C)
+    set(LFS_HAS_CUDA ON)
+elseif(CMAKE_HOST_APPLE)
     # Objective-C++ builds the Metal tensor backend.
     project(LichtFeld-Studio VERSION 0.5.3 LANGUAGES CXX C OBJCXX)
     set(LFS_HAS_CUDA OFF)
 else()
-    project(LichtFeld-Studio VERSION 0.5.3 LANGUAGES CUDA CXX C)
-    set(LFS_HAS_CUDA ON)
+    project(LichtFeld-Studio VERSION 0.5.3 LANGUAGES CXX C)
+    set(LFS_HAS_CUDA OFF)
 endif()
 
 if(WIN32)
@@ -141,7 +149,9 @@ endif()
 # The application ships CUDA DLLs and links CUDA::cudart throughout the target graph.
 # Keep CUDA language targets on the shared runtime as well; MSVC otherwise adds
 # cudart_static.lib implicitly, which collides with cudart.lib when linking DLLs.
-set(CMAKE_CUDA_RUNTIME_LIBRARY Shared CACHE STRING "CUDA runtime linkage" FORCE)
+if(LFS_HAS_CUDA)
+    set(CMAKE_CUDA_RUNTIME_LIBRARY Shared CACHE STRING "CUDA runtime linkage" FORCE)
+endif()
 
 # On Windows with a multi-config generator (MSVC/Visual Studio, Ninja Multi-Config),
 # route all build outputs to build/<Config>/ so Debug and Release binaries are
@@ -727,7 +737,10 @@ set(LFS_APP_INTERNAL_LINK_LIBS
     lfs_python_utils
 )
 if(LFS_BUILD_TRAINER)
-    list(APPEND LFS_APP_INTERNAL_LINK_LIBS lfs_training lfs_tcp fastlfs_backend)
+    list(APPEND LFS_APP_INTERNAL_LINK_LIBS lfs_training lfs_tcp)
+    if(LFS_HAS_CUDA)
+        list(APPEND LFS_APP_INTERNAL_LINK_LIBS fastlfs_backend)
+    endif()
 endif()
 if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
     list(JOIN LFS_APP_INTERNAL_LINK_LIBS "," _lfs_app_link_group)

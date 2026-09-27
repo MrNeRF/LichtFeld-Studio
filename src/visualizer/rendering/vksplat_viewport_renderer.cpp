@@ -7,7 +7,7 @@
 
 #include "core/tensor_rad.hpp"
 
-#if LFS_BUILD_TRAINER
+#if LFS_BUILD_TRAINER && LFS_HAS_CUDA
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda_vulkan_interop.hpp"
 #endif
@@ -232,7 +232,7 @@ namespace lfs::vis {
             bool active_ = true;
         };
 
-#if LFS_BUILD_TRAINER
+#if LFS_BUILD_TRAINER && LFS_HAS_CUDA
         class RasterizerArenaRenderGuard final {
         public:
             RasterizerArenaRenderGuard(
@@ -1861,6 +1861,14 @@ namespace lfs::vis {
 
     VksplatViewportRenderer::VksplatViewportRenderer() = default;
 
+    bool VksplatViewportRenderer::hasLiveTrainerReleaseFence() const {
+#if LFS_BUILD_TRAINER && LFS_HAS_CUDA
+        return static_cast<bool>(training_completion_);
+#else
+        return render_complete_timeline_ != VK_NULL_HANDLE;
+#endif
+    }
+
     VksplatViewportRenderer::~VksplatViewportRenderer() {
         try {
             reset();
@@ -1885,7 +1893,7 @@ namespace lfs::vis {
     std::expected<void, std::string> VksplatViewportRenderer::ensureHandshakeReady(VulkanContext& context) {
         if (auto result = ensureInitialized(context); !result)
             return result;
-#if LFS_BUILD_TRAINER
+#if LFS_BUILD_TRAINER && LFS_HAS_CUDA
         const auto cuda_device = lfs::core::gpu_backend_device_info(lfs::core::GpuBackend::CUDA, 0);
         if (!cuda_device)
             return std::unexpected("CUDA training requires CUDA device 0");
@@ -1908,14 +1916,14 @@ namespace lfs::vis {
     }
 
     void VksplatViewportRenderer::requestArenaHandoff() {
-#if LFS_BUILD_TRAINER
+#if LFS_BUILD_TRAINER && LFS_HAS_CUDA
         auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
         arena_handoff_token_ = arena.request_render_handoff(arena_handoff_token_);
 #endif
     }
 
     void VksplatViewportRenderer::cancelArenaHandoff() {
-#if LFS_BUILD_TRAINER
+#if LFS_BUILD_TRAINER && LFS_HAS_CUDA
         if (arena_handoff_token_ == 0) {
             return;
         }
@@ -1936,7 +1944,7 @@ namespace lfs::vis {
     }
 
     bool VksplatViewportRenderer::pollArenaHandoff() {
-#if LFS_BUILD_TRAINER
+#if LFS_BUILD_TRAINER && LFS_HAS_CUDA
         renewArenaHandoff();
         return lfs::core::GlobalArenaManager::instance().get_arena().render_frame_ready(arena_handoff_token_);
 #else
@@ -1945,7 +1953,7 @@ namespace lfs::vis {
     }
 
     bool VksplatViewportRenderer::waitForArenaHandoff(const std::chrono::milliseconds timeout) {
-#if LFS_BUILD_TRAINER
+#if LFS_BUILD_TRAINER && LFS_HAS_CUDA
         return waitForViewerArenaWindow(lfs::core::GlobalArenaManager::instance().get_arena(),
                                         arena_handoff_token_, timeout, kNavigationTrainingGrace);
 #else
@@ -1955,7 +1963,7 @@ namespace lfs::vis {
     }
 
     void VksplatViewportRenderer::renewArenaHandoff() {
-#if LFS_BUILD_TRAINER
+#if LFS_BUILD_TRAINER && LFS_HAS_CUDA
         if (arena_handoff_token_ == 0) {
             return;
         }
@@ -2216,7 +2224,7 @@ namespace lfs::vis {
             if (compose_) {
                 compose_->destroy(context_->device());
             }
-#if LFS_BUILD_TRAINER
+#if LFS_BUILD_TRAINER && LFS_HAS_CUDA
             training_completion_.reset();
 #endif
             if (render_complete_external_.semaphore != VK_NULL_HANDLE) {
@@ -3218,7 +3226,7 @@ namespace lfs::vis {
     std::expected<void, std::string> VksplatViewportRenderer::ensureSharedScratchArena(
         VulkanContext& context,
         const std::size_t required_bytes) {
-#if LFS_BUILD_TRAINER
+#if LFS_BUILD_TRAINER && LFS_HAS_CUDA
         if (required_bytes == 0) {
             return std::unexpected("VkSplat shared scratch requested zero bytes");
         }
@@ -3508,7 +3516,7 @@ namespace lfs::vis {
 
     std::expected<void, std::string>
     VksplatViewportRenderer::reimportSharedScratchIfGrown(VulkanContext& context) {
-#if LFS_BUILD_TRAINER
+#if LFS_BUILD_TRAINER && LFS_HAS_CUDA
         if (!shared_scratch_.block) {
             return {};
         }
@@ -3985,7 +3993,7 @@ namespace lfs::vis {
     }
 
     void VksplatViewportRenderer::releaseSharedScratchArena() {
-#if LFS_BUILD_TRAINER
+#if LFS_BUILD_TRAINER && LFS_HAS_CUDA
         if (shared_scratch_.installed_in_training_arena && shared_scratch_.block) {
             lfs::core::GlobalArenaManager::instance().clear_external_backing(shared_scratch_.block->device_ptr);
         }
@@ -7882,7 +7890,7 @@ namespace lfs::vis {
         // This pass re-reads the resident sort buffers in shared arena scratch:
         // hold the arena frame across the submit so a training iteration cannot
         // reset the offset and overwrite them mid-batch.
-#if LFS_BUILD_TRAINER
+#if LFS_BUILD_TRAINER && LFS_HAS_CUDA
         std::optional<RasterizerArenaRenderGuard> overlay_arena_guard;
         if (synchronize_input_read && shared_scratch_.block) {
             try {
@@ -7974,7 +7982,7 @@ namespace lfs::vis {
             // is needed on either path.
             if (renderer_.wasTimelineSignalSubmitted(render_complete_timeline_, completion_value)) {
                 last_submitted_render_value_ = completion_value;
-#if LFS_BUILD_TRAINER
+#if LFS_BUILD_TRAINER && LFS_HAS_CUDA
                 if (overlay_arena_guard) {
                     overlay_arena_guard->noteVulkanRelease(renderCompleteFence(), completion_value);
                 }
@@ -7991,7 +7999,7 @@ namespace lfs::vis {
                 last_submitted_render_value_));
         }
         last_submitted_render_value_ = completion_value;
-#if LFS_BUILD_TRAINER
+#if LFS_BUILD_TRAINER && LFS_HAS_CUDA
         if (overlay_arena_guard) {
             overlay_arena_guard->noteVulkanRelease(renderCompleteFence(), completion_value);
         }
@@ -8246,7 +8254,7 @@ namespace lfs::vis {
             lod_request_active &&
             splat_data.lod_tree &&
             splat_data.lod_tree->rad_source.valid();
-#if LFS_BUILD_TRAINER
+#if LFS_BUILD_TRAINER && LFS_HAS_CUDA
         std::optional<RasterizerArenaRenderGuard> shared_arena_guard;
 #endif
         std::vector<LodPageCache::PendingUpload> lod_page_uploads;
@@ -8692,7 +8700,7 @@ namespace lfs::vis {
                 completion_value);
         };
 
-#if LFS_BUILD_TRAINER
+#if LFS_BUILD_TRAINER && LFS_HAS_CUDA
         if (synchronize_input_upload) {
             // A busy training arena makes this frame fall back to the cached viewport.
             // Do not resize output images until this render is guaranteed to proceed.
@@ -9103,7 +9111,7 @@ namespace lfs::vis {
             // host-side submission record, so neither path waits on the GPU.
             if (renderer_.wasTimelineSignalSubmitted(render_complete_timeline_, completion_value)) {
                 last_submitted_render_value_ = completion_value;
-#if LFS_BUILD_TRAINER
+#if LFS_BUILD_TRAINER && LFS_HAS_CUDA
                 if (shared_arena_guard) {
                     shared_arena_guard->noteVulkanRelease(renderCompleteFence(), completion_value);
                 }
@@ -9130,7 +9138,7 @@ namespace lfs::vis {
         last_render_used_macro_chain_ = higs_active;
         resident_depth_wave_armed_ = armed_depth_waves;
         resident_sort_bits_ = depth_wave_sort_bits;
-#if LFS_BUILD_TRAINER
+#if LFS_BUILD_TRAINER && LFS_HAS_CUDA
         if (shared_arena_guard) {
             shared_arena_guard->noteVulkanRelease(renderCompleteFence(), completion_value);
         }

@@ -14,17 +14,16 @@ namespace lfs::training::kernels {
     namespace {
         namespace slots = normal_consistency_slots;
 
-        constexpr int kThreadsPerBlock = 256;
-        constexpr size_t kMaxBlocks = 1024;
+        constexpr int kThreadsPerBlock = kGeometryLossThreads;
 
-        constexpr int kStatCount = 3;
+        constexpr int kStatCount = kNormalStatCount;
         constexpr int kLossStatCount = 1;
 
         constexpr float kMinExpectedDepth = 1.0e-6f;
         constexpr float kMinCrossNormSq = 1.0e-24f;
 
         [[nodiscard]] size_t consistency_block_count(const size_t num_pixels) {
-            return std::min((num_pixels + kThreadsPerBlock - 1) / kThreadsPerBlock, kMaxBlocks);
+            return geometry_loss_block_count(num_pixels);
         }
 
         template <bool Weighted>
@@ -558,12 +557,6 @@ namespace lfs::training::kernels {
             loss_out[0] = finals[slots::kInvNorm] * static_cast<float>(sums[0]);
         }
     } // namespace
-
-    size_t normal_consistency_partial_count(const size_t num_pixels) {
-        const size_t num_blocks = consistency_block_count(num_pixels);
-        return static_cast<size_t>(slots::kSlotCount) +
-               2 * static_cast<size_t>(kStatCount) * num_blocks;
-    }
 
     namespace {
         template <bool Weighted>

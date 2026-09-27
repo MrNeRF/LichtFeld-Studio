@@ -5,6 +5,8 @@
 
 #include "lfs/training/ops/types.hpp"
 
+#include <cstddef>
+
 namespace lfs::gpu_ops {
 
     enum class PhotoPath {
@@ -27,6 +29,12 @@ namespace lfs::gpu_ops {
         State backend;
     };
 
+    struct PhotoWorkspaceBytes {
+        size_t required = 0;
+        size_t allocated = 0;
+        size_t error_map = 0;
+    };
+
     struct PhotometricOps {
         State (*create)();
 
@@ -45,6 +53,10 @@ namespace lfs::gpu_ops {
             Out error, bool contrast_structure_only);
 
         void (*map_to_error)(In map, Out error);
+
+        PhotoWorkspaceBytes (*workspace_bytes)(const PhotoSaved&);
+        void (*shrink_to_required)(PhotoSaved&);
+        void (*reset)(PhotoSaved&);
     };
 
 } // namespace lfs::gpu_ops

@@ -15,7 +15,7 @@
 #include "core/tensor_backend.hpp"
 #if LFS_BUILD_TRAINER
 #include "depth_anchor_cache.hpp"
-#include "lfs/training/ops/geometry_cuda.hpp"
+#include "lfs/training/ops/registry.hpp"
 #endif
 
 #include "io/loader.hpp"
@@ -967,10 +967,10 @@ namespace {
         if (!needs_depth(params.mode)) {
             return;
         }
-        // This optional training cache still uses CUDA projection kernels.
-        // Vulkan inference must not hand its buffers to those raw CUDA kernels.
-        if (lfs::core::default_gpu_backend() != lfs::core::GpuBackend::CUDA) {
-            LOG_INFO("Depth anchors: CUDA training will fit and cache anchors at startup");
+        const auto backend = lfs::core::default_gpu_backend();
+        if (const auto reason = lfs::training::unavailable_training_family(
+                backend, lfs::training::Family::Geometry)) {
+            LOG_INFO("Depth anchors: {}", *reason);
             return;
         }
         try {
@@ -1017,7 +1017,8 @@ namespace {
                 };
             }
 
-            const auto anchors = lfs::training::computeRawDepthAnchors(lfs::training::cuda_geometry_ops(), means, scene->cameras, -1, 0, progress);
+            const auto anchors = lfs::training::computeRawDepthAnchors(
+                *lfs::training::training_ops(backend).geometry, means, scene->cameras, -1, 0, progress);
 
             if (anchor_bar && !anchor_bar->is_completed()) {
                 anchor_bar->set_progress(100);

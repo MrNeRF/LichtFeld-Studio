@@ -234,7 +234,8 @@ namespace lfs::training {
             // The prior's lazy ops materialize on their own stream; the collect
             // kernel reads raw pointers, so settle the device first (startup only).
             prior.ptr<float>();
-            lfs::core::gpu_device_barrier(lfs::core::GpuBackend::CUDA);
+            if (const auto backend = lfs::core::gpu_backend_of(prior))
+                lfs::core::gpu_device_barrier(*backend);
 
             auto samples = geometry.collect_anchor_samples(
                 means, cam->world_view_transform(), prior,

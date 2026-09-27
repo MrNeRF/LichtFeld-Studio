@@ -3,12 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
-#if LFS_BUILD_TRAINER
-#include "core/cuda/memory_arena.hpp"
-#endif
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
+#include "core/raster_arena.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
@@ -1521,7 +1519,7 @@ namespace lfs::vis {
             // shrink callback takes that mutex while holding the arena gate.
             vksplat_viewport_renderer_->cancelArenaHandoff();
 #if LFS_BUILD_TRAINER
-            lfs::core::GlobalArenaManager::instance().clear_external_backing();
+            lfs::core::clear_raster_arena_external_backing();
 #endif
             vksplat_viewport_renderer_->releaseScratchOnIdle(true);
         }
@@ -2222,8 +2220,7 @@ namespace lfs::vis {
                 return cached_frame_result();
             }
             if (context.vulkan_context)
-                context.vulkan_context->tensorInterop().drain(
-                    is_training ? lfs::core::GpuBackend::CUDA : lfs::core::default_gpu_backend());
+                context.vulkan_context->tensorInterop().drain(lfs::core::default_gpu_backend());
             LOG_DEBUG("VkSplat output resize to {}x{} (viewer-side quiesce; training continues)",
                       render_size.x,
                       render_size.y);
@@ -2255,11 +2252,11 @@ namespace lfs::vis {
         frame_tensor_scope.reset();
         if (context.vulkan_context)
             frame_tensor_scope = context.vulkan_context->tensorInterop().execution_scope(
-                is_training ? lfs::core::GpuBackend::CUDA : lfs::core::default_gpu_backend());
+                lfs::core::default_gpu_backend());
 #if LFS_BUILD_TRAINER
         lfs::training::Trainer* live_trainer = nullptr;
         if (is_training && trainer_manager && vksplat_viewport_renderer_ &&
-            vksplat_viewport_renderer_->renderCompleteFence()) {
+            vksplat_viewport_renderer_->hasLiveTrainerReleaseFence()) {
             // A live stream without its release fence is a partial initialization;
             // render() will fail too, so never install a handshake missing the
             // trainer's reverse dependency.

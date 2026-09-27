@@ -5,7 +5,9 @@
 #pragma once
 
 #include "optimizer/adam_optimizer.hpp"
+#if LFS_HAS_CUDA
 #include <rasterization_api.h>
+#endif
 
 namespace lfs::training {
 
@@ -30,7 +32,9 @@ namespace lfs::training {
         float* edge_score_out = nullptr;
     };
 
+#if LFS_HAS_CUDA
     [[nodiscard]] fast_lfs::rasterization::FusedAdamSettings fast_adam_settings(
         const lfs::gpu_ops::BackwardAdam& adam);
+#endif
 
 } // namespace lfs::training

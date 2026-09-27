@@ -6,6 +6,14 @@
 #include "lfs/training/ops/domain_types.hpp"
 #include "lfs/training/ops/types.hpp"
 
+namespace lfs::training::kernels {
+    /// SegmentAndIgnore band bounds for Float32 masks in [0,1].
+    /// Midpoints between adjacent eight-bit levels preserve their classification
+    /// despite floating-point error in the normalization by 255.
+    inline constexpr float kMaskKeepMin = 250.5f / 255.0f;
+    inline constexpr float kMaskSegmentMin = 127.5f / 255.0f;
+} // namespace lfs::training::kernels
+
 namespace lfs::gpu_ops {
     struct MaskOps {
         void (*photometric_weight)(In mask, In roi, Out weight, MaskPhotoMode);

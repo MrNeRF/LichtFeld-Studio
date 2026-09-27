@@ -4,26 +4,13 @@
 
 #pragma once
 
-#include "lfs/training/ops/domain_types.hpp"
+#include "lfs/training/ops/masks.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <cuda_runtime.h>
 
 namespace lfs::training::kernels {
-
-    /// SegmentAndIgnore band bounds for Float32 masks in [0,1], as returned by
-    /// the pipelined loader and by Camera::load_and_get_mask(binarize=false).
-    /// UInt8 masks still carry 0..255 samples and are normalized by the fused kernels.
-    ///
-    ///   value > 250       → keep    (photometric weight 1, no opacity penalty)
-    ///   128 ≤ value ≤ 250 → segment (opacity penalty, no photometric weight)
-    ///   value < 128       → ignore  (no loss at all)
-    ///
-    /// Midpoints between adjacent eight-bit levels preserve their classification
-    /// despite floating-point error in the normalization by 255.
-    inline constexpr float kMaskKeepMin = 250.5f / 255.0f;
-    inline constexpr float kMaskSegmentMin = 127.5f / 255.0f;
 
     /// Fuse SegmentAndIgnore / Segment / Ignore photometric remapping + optional ROI
     /// into a single float32 [H,W] weight map (allocation-free; writes into `out`).

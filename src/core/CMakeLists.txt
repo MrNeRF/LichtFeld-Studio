@@ -219,6 +219,7 @@ set(CORE_SOURCES
         cuda/vmm_device_buffer.cpp
         memory_pressure.cpp
         memory_domain.cpp
+        raster_arena.cpp
         operator_callbacks.cpp
         animatable_property.cpp
         camera.cpp

@@ -14,7 +14,7 @@
 #include "output_image_pool.hpp"
 #include "output_slot_ring.hpp"
 #include "readback_ticket_ring.hpp"
-#if LFS_BUILD_TRAINER
+#if LFS_BUILD_TRAINER && LFS_HAS_CUDA
 #include <cuda_runtime.h>
 #endif
 #include "rendering/rasterizer/vulkan/src/gs_renderer.h"
@@ -161,11 +161,13 @@ namespace lfs::vis {
             const lfs::rendering::ViewportRenderRequest& request,
             OutputSlot output_slot = OutputSlot::Main,
             bool synchronize_input_read = false);
-#if LFS_BUILD_TRAINER
+#if LFS_BUILD_TRAINER && LFS_HAS_CUDA
         [[nodiscard]] cudaExternalSemaphore_t renderCompleteFence() const {
             return static_cast<cudaExternalSemaphore_t>(training_completion_.get());
         }
 #endif
+        // True when the trainer can wait for this viewport's render completion.
+        [[nodiscard]] bool hasLiveTrainerReleaseFence() const;
         [[nodiscard]] void* renderCompleteTimeline() const { return render_complete_timeline_; }
         [[nodiscard]] std::uint64_t renderCompleteValue() const { return last_submitted_render_value_; }
 
