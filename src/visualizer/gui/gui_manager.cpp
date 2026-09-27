@@ -8965,6 +8965,10 @@ namespace lfs::vis::gui {
     }
 
     bool GuiManager::needsAnimationFrame(const bool include_export_progress) const {
+        // Async completions are applied during render; waking the event loop alone
+        // does not request a frame when the viewer is otherwise idle.
+        if (async_tasks_.hasPendingMainThreadCompletions())
+            return true;
         const auto now = std::chrono::steady_clock::now();
         if (cameraThumbnailRefreshDue(now)) {
             if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr)
