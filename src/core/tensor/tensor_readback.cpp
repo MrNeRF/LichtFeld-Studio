@@ -69,10 +69,18 @@ namespace lfs::core {
     }
 
     void TensorReadback::enqueue(const Tensor& source, TensorWorkQueue& queue) {
-        if (gpu_backend_of(source) != queue.backend())
+        enqueue(source, TensorExecutionTarget(queue));
+    }
+
+    void TensorReadback::enqueue(const Tensor& source, TensorExecutionTarget target) {
+        enqueue_range(source, 0, source.bytes(), target);
+    }
+
+    void TensorReadback::enqueue_range(const Tensor& source, size_t offset, size_t bytes, TensorExecutionTarget target) {
+        if (gpu_backend_of(source) != target.backend())
             throw std::invalid_argument("TensorReadback queue backend mismatch");
-        TensorWorkQueue::Scope scope(queue);
-        enqueue_range_on(source, 0, source.bytes(), queue.native_handle());
+        TensorExecutionTarget::Scope scope(target);
+        enqueue_range_on(source, offset, bytes, target.native_handle());
     }
 
     void TensorReadback::enqueue_range_on(const Tensor& source, size_t byte_offset, size_t byte_count, void* target) {

@@ -4,6 +4,7 @@
 #include "core/export.hpp"
 #include "core/gpu_backend_fwd.hpp"
 #include "core/tensor_completion.hpp"
+#include "core/tensor_execution.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -22,6 +23,8 @@ namespace lfs::core {
         TensorUpload(TensorUpload&&) noexcept;
         TensorUpload& operator=(TensorUpload&&) noexcept;
         void enqueue(Tensor destination, const Tensor& source);
+        void enqueue(Tensor destination, const Tensor& source, TensorExecutionTarget target);
+        void enqueue(Tensor destination, std::span<const std::byte> source, TensorExecutionTarget target);
         // execution_target is a CUDA stream (nullptr selects the CUDA default
         // stream). Vulkan and Metal use their own queues and require nullptr.
         void enqueue(Tensor destination, const Tensor& source, void* execution_target);
@@ -48,6 +51,8 @@ namespace lfs::core {
         TensorFence(const TensorFence&) = delete;
         TensorFence& operator=(const TensorFence&) = delete;
         void record(void* execution_target);
+        void record(TensorExecutionTarget target);
+        void wait_on(TensorExecutionTarget target) const;
         void wait_on(void* execution_target) const;
         void wait() const;
         [[nodiscard]] bool ready() const;

@@ -67,6 +67,16 @@ namespace lfs::core {
         return *this;
     }
     bool TensorUpload::pending() const noexcept { return impl_ && impl_->pending; }
+    void TensorUpload::enqueue(Tensor destination, const Tensor& source, TensorExecutionTarget target) {
+        if (gpu_backend_of(destination) != target.backend())
+            throw std::invalid_argument("TensorUpload queue backend mismatch");
+        enqueue(std::move(destination), source, target.native_handle());
+    }
+    void TensorUpload::enqueue(Tensor destination, std::span<const std::byte> source, TensorExecutionTarget target) {
+        if (gpu_backend_of(destination) != target.backend())
+            throw std::invalid_argument("TensorUpload queue backend mismatch");
+        enqueue(std::move(destination), source, target.native_handle());
+    }
     void TensorUpload::enqueue(Tensor destination, const Tensor& source) {
         const auto stream = gpu_backend_of(destination) == GpuBackend::CUDA
                                 ? reinterpret_cast<void*>(getCurrentCUDAStream())
@@ -217,6 +227,16 @@ namespace lfs::core {
     }
     TensorFence TensorFence::adopt(GpuBackend backend, void* event) {
         return TensorFence(backend, event);
+    }
+    void TensorFence::record(TensorExecutionTarget target) {
+        if (target.backend() != impl_->backend)
+            throw std::invalid_argument("TensorFence queue backend mismatch");
+        record(target.native_handle());
+    }
+    void TensorFence::wait_on(TensorExecutionTarget target) const {
+        if (target.backend() != impl_->backend)
+            throw std::invalid_argument("TensorFence queue backend mismatch");
+        wait_on(target.native_handle());
     }
     void TensorFence::record(void* target) {
 #if LFS_HAS_CUDA

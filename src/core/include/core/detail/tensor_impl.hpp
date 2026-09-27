@@ -7,6 +7,7 @@
 #include "core/cuda_types.hpp"
 #include "core/detail/tensor_half.hpp"
 #include "core/gpu_backend_fwd.hpp"
+#include "core/tensor_execution.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -1014,6 +1015,8 @@ namespace lfs::core {
                            "from_blob received null data for a non-empty tensor");
             return Tensor(data, shape, device, dtype, home_stream);
         }
+        static Tensor from_blob(void* data, TensorShape shape, Device device, DataType dtype,
+                                TensorExecutionTarget target);
         static Tensor from_external_owner(void* data,
                                           TensorShape shape,
                                           Device device,
@@ -1281,14 +1284,18 @@ namespace lfs::core {
         // Declarative re-homing: future writes happen on `stream`. The old home
         // becomes a recorded use so the eventual free stays ordered after it.
         void set_stream(cudaStream_t stream);
+        void set_stream(TensorExecutionTarget target);
+        [[nodiscard]] TensorExecutionTarget execution_target() const;
 
         // Marks a read of this tensor on `stream` (other than its home) so the
         // allocator defers recycling until that stream passes the read.
         void record_stream(cudaStream_t stream) const;
+        void record_stream(TensorExecutionTarget target) const;
 
         // Orders `execution_stream` after this tensor's pending work, then records
         // the use. The standard prologue for consuming a tensor on another stream.
         void sync_to_stream(cudaStream_t execution_stream) const;
+        void sync_to_stream(TensorExecutionTarget target) const;
 
         // Debug tracking - mark tensor to trace all operations it's involved in
         bool is_tracked() const { return state_ && state_->tracked; }
@@ -1378,6 +1385,7 @@ namespace lfs::core {
         Tensor clone() const;      // Deep copy
         Tensor contiguous() const; // Materialize to contiguous if strided
         Tensor to(Device device, cudaStream_t stream = nullptr) const;
+        Tensor to(Device device, TensorExecutionTarget target) const;
         // Synchronous export-oriented copy to ordinary pageable host memory.
         Tensor to_pageable_host(cudaStream_t stream = nullptr) const;
         Tensor to(DataType dtype) const;
@@ -2109,6 +2117,7 @@ namespace lfs::core {
         Tensor& zero_();
         Tensor& fill_(float value);
         Tensor& fill_(float value, cudaStream_t stream); // Stream-aware version (no sync)
+        Tensor& fill_(float value, TensorExecutionTarget target);
         Tensor& copy_from(const Tensor& other);
         Tensor& copy_(const Tensor& src) { return copy_from(src); }
         Tensor& uniform_(float low = 0.0f, float high = 1.0f);

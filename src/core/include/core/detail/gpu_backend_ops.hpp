@@ -345,6 +345,10 @@ namespace lfs::core {
 
             virtual std::unique_ptr<ReadbackBuffer> create_readback_buffer() = 0;
 
+            virtual void push_range(const char* name);
+            virtual void pop_range();
+            virtual void name_queue(ExecContext context, const char* name);
+
             virtual void synchronize_stream(ExecContext context) = 0;
             virtual void synchronize_device() = 0;
             virtual void device_barrier() = 0;
@@ -643,6 +647,9 @@ namespace lfs::core {
             void memset(const FillRequest& request) override;
 
             std::unique_ptr<ReadbackBuffer> create_readback_buffer() override;
+            void push_range(const char* name) override;
+            void pop_range() override;
+            void name_queue(ExecContext context, const char* name) override;
             void synchronize_stream(ExecContext context) override;
             void synchronize_device() override;
             void device_barrier() override;

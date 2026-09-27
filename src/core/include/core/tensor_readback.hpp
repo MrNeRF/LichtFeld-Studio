@@ -4,6 +4,7 @@
 
 #include "core/export.hpp"
 #include "core/gpu_backend_fwd.hpp"
+#include "core/tensor_execution.hpp"
 
 #include <cstddef>
 #include <memory>
@@ -29,9 +30,12 @@ namespace lfs::core {
         // Complete the previous download before reusing this slot.
         void enqueue(const Tensor& source);
         void enqueue(const Tensor& source, TensorWorkQueue& queue);
+        void enqueue(const Tensor& source, TensorExecutionTarget target);
         // Byte range is measured in the source's contiguous logical layout.
         void enqueue_range(const Tensor& source, std::size_t byte_offset,
                            std::size_t byte_count);
+        void enqueue_range(const Tensor& source, std::size_t byte_offset,
+                           std::size_t byte_count, TensorExecutionTarget target);
         // Bind contiguous CUDA input and pinned CPU output once for recurring
         // downloads. Both tensors are retained; their storage must not be replaced
         // while bound; do not mutate or create lazy consumers of the destination

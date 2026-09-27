@@ -5,6 +5,7 @@
 
 #include "core/cuda_types.hpp"
 
+#include <stdexcept>
 #include <vector>
 
 #if LFS_HAS_CUDA
@@ -59,6 +60,22 @@ namespace lfs::core {
 
     bool GpuElapsed::ready() const noexcept {
         return impl_ && impl_->ready;
+    }
+
+    bool GpuElapsed::mark(std::size_t index, TensorExecutionTarget target) {
+        if (target.backend() != impl_->backend)
+            throw std::invalid_argument("GpuElapsed queue backend mismatch");
+        if (impl_->backend != GpuBackend::CUDA)
+            throw std::runtime_error("GPU elapsed timing is unsupported on this backend");
+        return mark(index, target.native_handle());
+    }
+
+    bool GpuElapsed::wait_queue(TensorExecutionTarget target) {
+        if (target.backend() != impl_->backend)
+            throw std::invalid_argument("GpuElapsed queue backend mismatch");
+        if (impl_->backend != GpuBackend::CUDA)
+            throw std::runtime_error("GPU elapsed timing is unsupported on this backend");
+        return wait_queue(target.native_handle());
     }
 
     bool GpuElapsed::mark(const std::size_t index, void* const execution_target) {

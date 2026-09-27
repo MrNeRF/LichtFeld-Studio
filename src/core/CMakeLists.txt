@@ -48,6 +48,7 @@ set(TENSOR_SOURCES
         tensor/tensor_fused.cpp
         tensor/tensor_backend.cpp
         tensor/tensor_gpu_elapsed.cpp
+        tensor/tensor_execution.cpp
         tensor/tensor_backend_selftest.cpp
         tensor/backend/backend_registry.cpp
         tensor/backend/portable_nn_ops.cpp

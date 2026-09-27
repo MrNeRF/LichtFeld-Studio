@@ -1,14 +1,17 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/gpu_device_runtime.hpp"
+#include "core/gpu_elapsed.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_execution.hpp"
 #include "core/tensor_readback.hpp"
 #include "core/tensor_upload.hpp"
 #include <array>
 #include <cstring>
 #include <gtest/gtest.h>
 #include <span>
+#include <type_traits>
 #include <vector>
 #if LFS_HAS_CUDA
 #include "core/alloc_counter.hpp"
@@ -20,6 +23,52 @@
 
 namespace {
     using namespace lfs::core;
+
+    static_assert(std::is_trivially_copyable_v<TensorExecutionTarget>);
+
+    TEST(TensorQueueContract, VulkanExecutionTargetUsesStorageTimeline) {
+        if (!gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP();
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        TensorWorkQueue queue(GpuBackend::Vulkan, nullptr, nullptr);
+        const auto target = TensorExecutionTarget::current();
+        EXPECT_EQ(target, TensorExecutionTarget(queue));
+        const Tensor source = Tensor::from_vector(std::vector<float>{2, 4, 6, 8}, {2, 2}, Device::CPU);
+        Tensor destination = Tensor::empty({2, 2}, Device::GPU);
+        TensorUpload upload;
+        upload.enqueue(destination, source, queue);
+        destination.set_stream(queue);
+        destination.sync_to_stream(target);
+        destination.record_stream(target);
+        EXPECT_EQ(destination.execution_target(), target);
+        TensorReadback readback;
+        readback.enqueue(destination.transpose(0, 1), target);
+        std::array<float, 4> output{};
+        readback.wait(std::as_writable_bytes(std::span(output)));
+        EXPECT_EQ(output, (std::array<float, 4>{2, 6, 4, 8}));
+        upload.wait();
+        upload.enqueue(destination, std::as_bytes(std::span(output)), target);
+        upload.wait();
+        readback.enqueue_range(destination, sizeof(float), 2 * sizeof(float), target);
+        std::array<float, 2> middle{};
+        readback.wait(std::as_writable_bytes(std::span(middle)));
+        EXPECT_EQ(middle, (std::array<float, 2>{6, 4}));
+        target.wait();
+        EXPECT_THROW(target.wait_for(target), std::runtime_error);
+        EXPECT_THROW(target.set_name("test.queue"), std::runtime_error);
+        EXPECT_THROW(push_gpu_range("test.range"), std::runtime_error);
+        EXPECT_THROW(pop_gpu_range(), std::runtime_error);
+        GpuElapsed timer(GpuBackend::Vulkan, 2);
+        EXPECT_THROW(timer.mark(0, target), std::runtime_error);
+        EXPECT_THROW(timer.wait_queue(target), std::runtime_error);
+        const auto other = TensorExecutionTarget::default_queue(GpuBackend::CUDA);
+        EXPECT_THROW(destination.set_stream(other), std::invalid_argument);
+        EXPECT_THROW(destination.sync_to_stream(other), std::invalid_argument);
+        EXPECT_THROW(destination.record_stream(other), std::invalid_argument);
+        EXPECT_THROW(upload.enqueue(destination, source, other), std::invalid_argument);
+        EXPECT_THROW(readback.enqueue(destination, other), std::invalid_argument);
+        EXPECT_THROW(timer.mark(0, other), std::invalid_argument);
+    }
 
     TEST(TensorQueueContract, UnavailableConstructorsRejectExplicitly) {
         EXPECT_THROW((void)TensorWorkQueue(GpuBackend::Vulkan), std::runtime_error);
@@ -68,6 +117,68 @@ namespace {
 
 #if LFS_HAS_CUDA
     using namespace std::chrono_literals;
+    TEST(TensorQueueContract, CudaExecutionTargetPreservesStreamAndDoesNotWaitOnHost) {
+        if (!gpu_backend_available(GpuBackend::CUDA))
+            GTEST_SKIP();
+        GpuBackendScope backend(GpuBackend::CUDA);
+        const auto previous = TensorExecutionTarget::current();
+        for (bool default_stream : {false, true}) {
+            SCOPED_TRACE(default_stream);
+            TensorWorkQueue owned(GpuBackend::CUDA);
+            TensorWorkQueue producer(GpuBackend::CUDA, default_stream ? nullptr : owned.native_handle());
+            TensorWorkQueue consumer(GpuBackend::CUDA);
+            TensorExecutionTarget::Scope producer_scope(producer);
+            const auto target = TensorExecutionTarget::current();
+            EXPECT_EQ(target.native_handle(), producer.native_handle());
+            Tensor value = Tensor::full({16}, 1.f, Device::GPU);
+            EXPECT_EQ(value.execution_target(), target);
+            TensorFence done(GpuBackend::CUDA);
+            GpuElapsed timer(GpuBackend::CUDA, 2);
+            TensorUpload upload;
+            const Tensor host = Tensor::full({16}, 7.f, Device::CPU);
+            producer.wait();
+            consumer.wait();
+            lfs::test::CudaStreamGate gate;
+            ASSERT_EQ(gate.block(static_cast<cudaStream_t>(producer.native_handle())), cudaSuccess);
+            ASSERT_TRUE(gate.entered());
+            auto submitted = std::async(std::launch::async, [&] {
+                TensorExecutionTarget::Scope scope(producer);
+                EXPECT_EQ(TensorExecutionTarget::current(), target);
+                EXPECT_TRUE(timer.mark(0, producer));
+                upload.enqueue(value, host, target);
+                EXPECT_TRUE(timer.mark(1, producer));
+                value.sync_to_stream(consumer);
+                value.record_stream(consumer);
+                value.set_stream(consumer);
+                done.record(consumer);
+                done.wait_on(producer);
+            });
+            const auto status = submitted.wait_for(1s);
+            EXPECT_FALSE(gate.released());
+            if (status == std::future_status::ready)
+                EXPECT_FALSE(done.ready());
+            gate.release();
+            EXPECT_EQ(status, std::future_status::ready);
+            submitted.get();
+            EXPECT_EQ(value.stream(), static_cast<cudaStream_t>(consumer.native_handle()));
+            done.wait();
+            upload.wait();
+            EXPECT_TRUE(timer.wait_event(1));
+            EXPECT_TRUE(timer.milliseconds(0, 1).has_value());
+            EXPECT_TRUE(timer.wait_queue(producer));
+            TensorReadback readback;
+            readback.enqueue(value, TensorExecutionTarget(consumer));
+            std::array<float, 16> result{};
+            readback.wait(std::as_writable_bytes(std::span(result)));
+            for (float element : result)
+                EXPECT_EQ(element, 7.f);
+            target.set_name("test.queue");
+            push_gpu_range("test.range");
+            pop_gpu_range();
+        }
+        EXPECT_EQ(TensorExecutionTarget::current(), previous);
+    }
+
     TEST(TensorQueueReadback, BlockedProducerOrdersExplicitAndPackedDownloads) {
         if (!gpu_backend_available(GpuBackend::CUDA))
             GTEST_SKIP();

@@ -493,6 +493,11 @@ namespace lfs::core {
         return internal::gpu_backend_tag(tensor);
     }
 
+    TensorExecutionTarget TensorExecutionTarget::current() {
+        const auto backend = scoped_backend ? *scoped_backend : default_gpu_backend();
+        return {backend, backend == GpuBackend::CUDA ? getCurrentCUDAStream() : nullptr};
+    }
+
     GpuBackendScope::GpuBackendScope(const GpuBackend backend)
         : previous_(scoped_backend) {
         scoped_backend = backend;

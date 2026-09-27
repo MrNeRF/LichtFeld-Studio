@@ -28,6 +28,8 @@
 #include <atomic>
 #include <cstring>
 #include <cuda_runtime.h>
+#include <nvtx3/nvToolsExt.h>
+#include <nvtx3/nvToolsExtCudaRt.h>
 #include <string>
 #include <vector>
 
@@ -396,6 +398,16 @@ namespace lfs::core {
                     cudaStreamSynchronize(request.context.cuda_stream),
                     request.context.cuda_stream, "{} synchronize", request.operation);
             }
+        }
+
+        void CudaBackendOps::push_range(const char* name) {
+            nvtxRangePushA(name);
+        }
+        void CudaBackendOps::pop_range() {
+            nvtxRangePop();
+        }
+        void CudaBackendOps::name_queue(ExecContext context, const char* name) {
+            nvtxNameCudaStreamA(context.cuda_stream, name);
         }
 
         void CudaBackendOps::synchronize_stream(const ExecContext context) {
