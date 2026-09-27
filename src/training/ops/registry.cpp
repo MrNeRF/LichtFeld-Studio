@@ -15,6 +15,7 @@
 #include "lfs/training/ops/mrnf_cuda.hpp"
 #include "lfs/training/ops/photometric_cuda.hpp"
 #include "lfs/training/ops/ppisp_cuda.hpp"
+#include "lfs/training/ops/refine_cuda.hpp"
 #include "lfs/training/ops/sh_cuda.hpp"
 #include "lfs/training/ops/training_image_cuda.hpp"
 
@@ -57,6 +58,8 @@ namespace lfs::training {
                 return ops.controller != nullptr;
             case Family::Gsplat:
                 return ops.gsplat != nullptr;
+            case Family::Refine:
+                return ops.refine != nullptr;
             case Family::Count:
                 return false;
             default:
@@ -84,6 +87,7 @@ namespace lfs::training {
             .ppisp = &cuda_ppisp_ops(),
             .controller = &cuda_controller_ops(),
             .gsplat = &cuda_gsplat_ops(),
+            .refine = &cuda_refine_ops(),
         };
         static const TrainingOps kVulkan{
             .backend = core::GpuBackend::Vulkan,

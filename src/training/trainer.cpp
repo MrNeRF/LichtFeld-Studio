@@ -42,7 +42,6 @@
 #include "io/project_document.hpp"
 #include "io/project_recovery.hpp"
 #include "io/scene_chapter_adapter.hpp"
-#include "kernels/densification_kernels.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/live_model_mutation_guard.hpp"
@@ -5394,8 +5393,7 @@ namespace lfs::training {
         }
         edge_map_buffer_.set_stream(stream);
         training_ops_->training_image->canny(gt_image, edge_map_buffer_);
-        kernels::launch_normalize_by_positive_median(
-            edge_map_buffer_.ptr<float>(), height * width, stream);
+        training_ops_->refine->normalize_positive_median(edge_map_buffer_);
 
         lfs::core::Tensor map;
         const bool cacheable = map_bytes <= EDGE_WEIGHT_CACHE_BUDGET_BYTES;

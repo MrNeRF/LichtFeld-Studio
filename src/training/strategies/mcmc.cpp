@@ -10,7 +10,6 @@
 #include "core/sh_value_quant.hpp"
 #include "core/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
-#include "kernels/densification_kernels.hpp"
 #include "lfs/training/morton_reorder.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include "lfs/training/sh_value_storage.hpp"
@@ -677,22 +676,9 @@ namespace lfs::training {
                 _splat_data->_max_screen_share.numel() == n_clip) {
                 auto& log_scales = _splat_data->scaling_raw();
                 assert(log_scales.shape()[0] == n_clip && log_scales.shape()[1] == 3);
-                const bool* frozen = nullptr;
-                size_t frozen_n = 0;
-                if (_optimizer) {
-                    const auto& mask = _optimizer->frozen_mask();
-                    if (mask.is_valid()) {
-                        frozen = mask.ptr<bool>();
-                        frozen_n = mask.numel();
-                    }
-                }
-                kernels::launch_clip_log_scale_by_screen_share(
-                    log_scales.ptr<float>(),
-                    _splat_data->_max_screen_share.ptr<float>(),
-                    frozen,
-                    frozen_n,
-                    _params->max_screen_share,
-                    n_clip);
+                const lfs::core::Tensor no_frozen;
+                const auto& frozen = _optimizer ? _optimizer->frozen_mask() : no_frozen;
+                training_ops(lfs::core::default_gpu_backend()).refine->clip_scales(log_scales, _splat_data->_max_screen_share, frozen, _params->max_screen_share);
             }
 
             const int n_relocated = relocate_gs();

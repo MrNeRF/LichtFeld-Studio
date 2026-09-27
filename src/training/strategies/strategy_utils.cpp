@@ -9,7 +9,6 @@
 #include "core/tensor_completion.hpp"
 #include "core/tensor_cuda_interop.hpp"
 #include "core/training_churn_metrics.hpp"
-#include "kernels/pruning_kernels.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include <algorithm>
@@ -378,12 +377,7 @@ namespace lfs::training {
         assert(rotations.shape()[0] == n);
 
         auto dead_mask = Tensor::empty({n}, Device::GPU, DataType::Bool);
-        pruning::launch_compute_dead_mask(
-            flat_opacities.ptr<float>(),
-            rotations.ptr<float>(),
-            dead_mask.ptr<uint8_t>(),
-            n,
-            min_opacity);
+        training_ops(lfs::core::default_gpu_backend()).refine->dead_mask(flat_opacities, rotations, dead_mask, min_opacity);
         return dead_mask;
     }
 
@@ -395,10 +389,7 @@ namespace lfs::training {
         assert(rotations.ndim() == 2 && rotations.shape()[1] == 4);
 
         auto near_zero_mask = Tensor::empty({n}, Device::GPU, DataType::Bool);
-        pruning::launch_compute_near_zero_rotation_mask(
-            rotations.ptr<float>(),
-            near_zero_mask.ptr<uint8_t>(),
-            n);
+        training_ops(lfs::core::default_gpu_backend()).refine->rotation_mask(rotations, near_zero_mask);
         return near_zero_mask;
     }
 

@@ -102,6 +102,7 @@ set(TRAINING_NEW_SOURCES
     ops/masks_cuda.cpp
     ops/extra_loss_cuda.cpp
     ops/sh_cuda.cpp
+    ops/refine_cuda.cpp
     losses/mask_loss.cpp
     strategies/strategy_utils.cpp
     strategies/mcmc.cpp

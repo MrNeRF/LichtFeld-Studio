@@ -566,6 +566,7 @@ set(TEST_FILES
     test_mask_ops.cpp
     test_extra_loss_ops.cpp
     test_sh_ops.cpp
+    test_refine_ops.cpp
     test_persistent_masks.cpp
     test_fused_noise_injection.cpp
     test_densification_info_zero.cpp
