@@ -3,7 +3,6 @@
 
 #pragma once
 #include "core/tensor.hpp"
-#include "lfs/kernels/ppisp.cuh"
 #include <cassert>
 #include <cmath>
 #include <expected>
@@ -252,7 +251,7 @@ namespace lfs::training {
         int translate_frame(int uid) const;
 
         lfs::core::Tensor apply_forward(const lfs::core::Tensor& rgb, int camera_idx, int frame_idx,
-                                        const float* exposure, const float* color, int num_frames,
+                                        const lfs::core::Tensor& exposure, const lfs::core::Tensor& color, int num_frames,
                                         const PPISPRegion& region);
 
         void allocate_tensors();

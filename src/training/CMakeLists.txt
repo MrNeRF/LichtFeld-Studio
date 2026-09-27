@@ -94,6 +94,7 @@ set(TRAINING_NEW_SOURCES
     ops/adam_cuda.cpp
     ops/bilateral_cuda.cpp
     ops/training_image_cuda.cpp
+    ops/ppisp_cuda.cpp
     ops/mcmc_cuda.cpp
     ops/mrnf_cuda.cpp
     ops/morton_cuda.cpp
@@ -112,6 +113,7 @@ set(TRAINING_NEW_SOURCES
     components/bilateral_grid.cpp
     components/ppisp.cpp
     components/ppisp_controller_pool.cu
+    kernels/ppisp_controller.cu
     components/ppisp_file.cpp
     components/sparsity_optimizer.cpp
     control/command_api.cpp

@@ -3,11 +3,12 @@
 
 #include "ppisp.hpp"
 #include "config_serialization.hpp"
-#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/tensor_cuda_interop.hpp"
 #include "core/tensor_serialization.hpp"
+#include "lfs/training/ops/registry.hpp"
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -279,6 +280,9 @@ namespace lfs::training {
 
         // Allocate exposure params [num_frames]
         exposure_params_ = lfs::core::Tensor::zeros({static_cast<size_t>(num_frames_)}, lfs::core::Device::GPU);
+        if (const auto reason = unavailable_training_family(lfs::core::gpu_backend_of(exposure_params_).value(), Family::PPISP)) {
+            throw std::runtime_error(*reason);
+        }
         exposure_exp_avg_ = lfs::core::Tensor::zeros({static_cast<size_t>(num_frames_)}, lfs::core::Device::GPU);
         exposure_exp_avg_sq_ = lfs::core::Tensor::zeros({static_cast<size_t>(num_frames_)}, lfs::core::Device::GPU);
         exposure_grad_ = lfs::core::Tensor::zeros({static_cast<size_t>(num_frames_)}, lfs::core::Device::GPU);
@@ -315,9 +319,7 @@ namespace lfs::training {
         ctrl_bwd_crf_ = lfs::core::Tensor::zeros({crf_size}, lfs::core::Device::GPU);
         ctrl_bwd_output_ = lfs::core::Tensor::empty({9}, lfs::core::Device::GPU);
 
-        kernels::launch_ppisp_init_identity(exposure_params_.ptr<float>(), vignetting_params_.ptr<float>(),
-                                            color_params_.ptr<float>(), crf_params_.ptr<float>(), num_cameras_,
-                                            num_frames_, nullptr);
+        training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->initialize({exposure_params_, vignetting_params_, color_params_, crf_params_});
 
         init_color_pinv_block_diag();
     }
@@ -345,22 +347,18 @@ namespace lfs::training {
     }
 
     lfs::core::Tensor PPISP::apply_forward(const lfs::core::Tensor& rgb, int camera_idx, int frame_idx,
-                                           const float* exposure, const float* color, int num_frames,
+                                           const lfs::core::Tensor& exposure, const lfs::core::Tensor& color, int num_frames,
                                            const PPISPRegion& region) {
         const auto& shape = rgb.shape();
         assert(shape.rank() == 3 && shape[0] == 3 && "Expected CHW layout with 3 channels");
 
         const int h = static_cast<int>(shape[1]);
-        const int w = static_cast<int>(shape[2]);
         const int full_h = region.full_height > 0 ? region.full_height : h;
         assert(region.y_offset >= 0 && region.y_offset + h <= full_h && "PPISP region out of bounds");
 
         auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::GPU);
 
-        kernels::launch_ppisp_forward_chw_region(exposure, vignetting_params_.ptr<float>(), color,
-                                                 crf_params_.ptr<float>(), rgb.ptr<float>(), output.ptr<float>(), h, w,
-                                                 region.y_offset, full_h, num_cameras_, num_frames, camera_idx,
-                                                 frame_idx, nullptr);
+        training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->forward({exposure, vignetting_params_, color, crf_params_}, rgb, output, {region.y_offset, full_h, num_cameras_, num_frames, camera_idx, frame_idx});
 
         return output;
     }
@@ -369,7 +367,7 @@ namespace lfs::training {
         assert(finalized_ && "Must call finalize() before apply()");
         const int camera_idx = translate_camera(camera_id);
         const int frame_idx = translate_frame(uid);
-        return apply_forward(rgb, camera_idx, frame_idx, exposure_params_.ptr<float>(), color_params_.ptr<float>(),
+        return apply_forward(rgb, camera_idx, frame_idx, exposure_params_, color_params_,
                              num_frames_, region);
     }
 
@@ -381,7 +379,7 @@ namespace lfs::training {
         override_exposure_.fill_(clamped);
         // The forward kernel resolves a null stream to the current stream.
         lfs::core::waitForCUDAStream(lfs::core::getCurrentCUDAStream(), override_exposure_.stream());
-        return apply_forward(rgb, camera_idx, 0, override_exposure_.ptr<float>(), override_color_.ptr<float>(), 1,
+        return apply_forward(rgb, camera_idx, 0, override_exposure_, override_color_, 1,
                              region);
     }
 
@@ -396,7 +394,6 @@ namespace lfs::training {
         assert(shape.rank() == 3 && shape[0] == 3 && "Expected CHW layout with 3 channels");
 
         const int h = static_cast<int>(shape[1]);
-        const int w = static_cast<int>(shape[2]);
         const int full_h = region.full_height > 0 ? region.full_height : h;
         assert(region.y_offset >= 0 && region.y_offset + h <= full_h && "PPISP region out of bounds");
 
@@ -451,10 +448,7 @@ namespace lfs::training {
         }
 
         lfs::core::waitForCUDAStream(lfs::core::getCurrentCUDAStream(), override_exposure_.stream());
-        kernels::launch_ppisp_forward_chw_region(override_exposure_.ptr<float>(), vignetting_modified.ptr<float>(),
-                                                 override_color_.ptr<float>(), crf_modified.ptr<float>(),
-                                                 rgb.ptr<float>(), output.ptr<float>(), h, w, region.y_offset, full_h,
-                                                 num_cameras_, 1, camera_idx, 0, nullptr);
+        training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->forward({override_exposure_, vignetting_modified, override_color_, crf_modified}, rgb, output, {region.y_offset, full_h, num_cameras_, 1, camera_idx, 0});
         return output;
     }
 
@@ -470,7 +464,6 @@ namespace lfs::training {
         assert(shape.rank() == 3 && shape[0] == 3 && "Expected CHW layout with 3 channels");
 
         const int h = static_cast<int>(shape[1]);
-        const int w = static_cast<int>(shape[2]);
         const int full_h = region.full_height > 0 ? region.full_height : h;
         assert(region.y_offset >= 0 && region.y_offset + h <= full_h && "PPISP region out of bounds");
 
@@ -481,10 +474,7 @@ namespace lfs::training {
         auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::GPU);
 
         // Use controller-predicted exposure and color, but existing vignetting and CRF from camera
-        kernels::launch_ppisp_forward_chw_region(exposure_temp.ptr<float>(), vignetting_params_.ptr<float>(),
-                                                 color_temp.ptr<float>(), crf_params_.ptr<float>(), rgb.ptr<float>(),
-                                                 output.ptr<float>(), h, w, region.y_offset, full_h, num_cameras_, 1,
-                                                 camera_idx, 0, nullptr);
+        training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->forward({exposure_temp, vignetting_params_, color_temp, crf_params_}, rgb, output, {region.y_offset, full_h, num_cameras_, 1, camera_idx, 0});
 
         return output;
     }
@@ -502,7 +492,6 @@ namespace lfs::training {
         assert(shape.rank() == 3 && shape[0] == 3 && "Expected CHW layout with 3 channels");
 
         const int h = static_cast<int>(shape[1]);
-        const int w = static_cast<int>(shape[2]);
         const int full_h = region.full_height > 0 ? region.full_height : h;
         assert(region.y_offset >= 0 && region.y_offset + h <= full_h && "PPISP region out of bounds");
 
@@ -567,10 +556,7 @@ namespace lfs::training {
             crf_modified.flatten().slice(0, copy_offset, copy_offset + 12).copy_from(crf_cpu.flatten().slice(0, copy_offset, copy_offset + 12));
         }
 
-        kernels::launch_ppisp_forward_chw_region(exposure_temp.ptr<float>(), vignetting_modified.ptr<float>(),
-                                                 color_temp.ptr<float>(), crf_modified.ptr<float>(), rgb.ptr<float>(),
-                                                 output.ptr<float>(), h, w, region.y_offset, full_h, num_cameras_, 1,
-                                                 camera_idx, 0, nullptr);
+        training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->forward({exposure_temp, vignetting_modified, color_temp, crf_modified}, rgb, output, {region.y_offset, full_h, num_cameras_, 1, camera_idx, 0});
 
         return output;
     }
@@ -585,7 +571,6 @@ namespace lfs::training {
         assert(shape.rank() == 3 && shape[0] == 3 && "Expected CHW layout with 3 channels");
 
         const int h = static_cast<int>(shape[1]);
-        const int w = static_cast<int>(shape[2]);
         const int full_h = region.full_height > 0 ? region.full_height : h;
         assert(region.y_offset >= 0 && region.y_offset + h <= full_h && "PPISP region out of bounds");
 
@@ -651,10 +636,7 @@ namespace lfs::training {
             crf_modified.flatten().slice(0, copy_offset, copy_offset + 12).copy_from(crf_cpu.flatten().slice(0, copy_offset, copy_offset + 12));
         }
 
-        kernels::launch_ppisp_forward_chw_region(exposure_modified.ptr<float>(), vignetting_modified.ptr<float>(),
-                                                 color_modified.ptr<float>(), crf_modified.ptr<float>(),
-                                                 rgb.ptr<float>(), output.ptr<float>(), h, w, region.y_offset, full_h,
-                                                 num_cameras_, num_frames_, camera_idx, frame_idx, nullptr);
+        training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->forward({exposure_modified, vignetting_modified, color_modified, crf_modified}, rgb, output, {region.y_offset, full_h, num_cameras_, num_frames_, camera_idx, frame_idx});
 
         return output;
     }
@@ -668,16 +650,9 @@ namespace lfs::training {
         const auto& shape = rgb.shape();
         assert(shape.rank() == 3 && shape[0] == 3 && "Expected CHW layout with 3 channels");
 
-        const int h = static_cast<int>(shape[1]);
-        const int w = static_cast<int>(shape[2]);
-
         auto grad_rgb = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::GPU);
 
-        kernels::launch_ppisp_backward_chw(
-            exposure_params_.ptr<float>(), vignetting_params_.ptr<float>(), color_params_.ptr<float>(),
-            crf_params_.ptr<float>(), rgb.ptr<float>(), grad_output.ptr<float>(), exposure_grad_.ptr<float>(),
-            vignetting_grad_.ptr<float>(), color_grad_.ptr<float>(), crf_grad_.ptr<float>(), grad_rgb.ptr<float>(), h,
-            w, num_cameras_, num_frames_, camera_idx, frame_idx, nullptr);
+        training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->backward({exposure_params_, vignetting_params_, color_params_, crf_params_}, rgb, grad_output, {exposure_grad_, vignetting_grad_, color_grad_, crf_grad_}, grad_rgb, num_cameras_, num_frames_, camera_idx, frame_idx);
 
         return grad_rgb;
     }
@@ -713,13 +688,7 @@ namespace lfs::training {
         ctrl_bwd_vignetting_.zero_();
         ctrl_bwd_crf_.zero_();
 
-        kernels::launch_ppisp_backward_chw(exposure_temp.ptr<float>(), vignetting_params_.ptr<float>(),
-                                           color_temp.ptr<float>(), crf_params_.ptr<float>(), rgb.ptr<float>(),
-                                           grad_output.ptr<float>(), ctrl_bwd_exposure_.ptr<float>(),
-                                           ctrl_bwd_vignetting_.ptr<float>(), ctrl_bwd_color_.ptr<float>(),
-                                           ctrl_bwd_crf_.ptr<float>(), ctrl_bwd_rgb_.ptr<float>(),
-                                           static_cast<int>(h), static_cast<int>(w), num_cameras_, 1, camera_idx, 0,
-                                           nullptr);
+        training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->backward({exposure_temp, vignetting_params_, color_temp, crf_params_}, rgb, grad_output, {ctrl_bwd_exposure_, ctrl_bwd_vignetting_, ctrl_bwd_color_, ctrl_bwd_crf_}, ctrl_bwd_rgb_, num_cameras_, 1, camera_idx, 0);
 
         // Assemble [exposure(1), color(8)] -> [9] via D2D copy into preallocated output
         ctrl_bwd_output_.slice(0, 0, 1).copy_(ctrl_bwd_exposure_);
@@ -753,10 +722,8 @@ namespace lfs::training {
         const bool skip_crf = !config_.train_crf || config_.crf_channel <= 0.0f;
         if (skip_mean && skip_crf) {
             vig_reg_loss_.zero_();
-            kernels::launch_ppisp_vignetting_reg(
-                vignetting_params_.ptr<float>(), nullptr, vig_reg_loss_.ptr<float>(),
-                num_cameras_, config_.vig_center, config_.vig_channel, config_.vig_non_pos,
-                nullptr);
+            lfs::core::Tensor unused;
+            training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->vignetting_regularization(vignetting_params_, unused, vig_reg_loss_, config_.vig_center, config_.vig_channel, config_.vig_non_pos);
             return vig_reg_loss_;
         }
 
@@ -903,10 +870,8 @@ namespace lfs::training {
         const bool skip_mean = config_.exposure_mean <= 0.0f && config_.color_mean <= 0.0f;
         const bool skip_crf = !config_.train_crf || config_.crf_channel <= 0.0f;
         if (skip_mean && skip_crf) {
-            kernels::launch_ppisp_vignetting_reg(
-                vignetting_params_.ptr<float>(), vignetting_grad_.ptr<float>(), nullptr,
-                num_cameras_, config_.vig_center, config_.vig_channel, config_.vig_non_pos,
-                nullptr);
+            lfs::core::Tensor unused;
+            training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->vignetting_regularization(vignetting_params_, vignetting_grad_, unused, config_.vig_center, config_.vig_channel, config_.vig_non_pos);
             return;
         }
 
@@ -1071,20 +1036,11 @@ namespace lfs::training {
         const float beta2 = static_cast<float>(config_.beta2);
         const float eps = static_cast<float>(config_.eps);
 
-        kernels::PPISPAdamGroup crf_group{};
-        if (config_.train_crf) {
-            crf_group = {crf_params_.ptr<float>(), crf_exp_avg_.ptr<float>(), crf_exp_avg_sq_.ptr<float>(),
-                         crf_grad_.ptr<float>(), static_cast<int>(crf_params_.numel())};
-        }
-        kernels::launch_ppisp_adam_update_batched(
-            {exposure_params_.ptr<float>(), exposure_exp_avg_.ptr<float>(), exposure_exp_avg_sq_.ptr<float>(),
-             exposure_grad_.ptr<float>(), static_cast<int>(exposure_params_.numel())},
-            {vignetting_params_.ptr<float>(), vignetting_exp_avg_.ptr<float>(),
-             vignetting_exp_avg_sq_.ptr<float>(), vignetting_grad_.ptr<float>(),
-             static_cast<int>(vignetting_params_.numel())},
-            {color_params_.ptr<float>(), color_exp_avg_.ptr<float>(), color_exp_avg_sq_.ptr<float>(),
-             color_grad_.ptr<float>(), static_cast<int>(color_params_.numel())},
-            crf_group, lr, beta1, beta2, bc1_rcp, bc2_sqrt_rcp, eps, nullptr);
+        lfs::core::Tensor absent;
+        const lfs::gpu_ops::PPISPAdamGroup crf_group = config_.train_crf
+                                                           ? lfs::gpu_ops::PPISPAdamGroup{crf_params_, crf_exp_avg_, crf_exp_avg_sq_, crf_grad_}
+                                                           : lfs::gpu_ops::PPISPAdamGroup{absent, absent, absent, absent};
+        training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->adam_batch({{{exposure_params_, exposure_exp_avg_, exposure_exp_avg_sq_, exposure_grad_}, {vignetting_params_, vignetting_exp_avg_, vignetting_exp_avg_sq_, vignetting_grad_}, {color_params_, color_exp_avg_, color_exp_avg_sq_, color_grad_}, crf_group}}, {lr, beta1, beta2, bc1_rcp, bc2_sqrt_rcp, eps});
     }
 
     void PPISP::zero_grad() {
@@ -1118,8 +1074,7 @@ namespace lfs::training {
         if (num_frames_ <= 0)
             return;
 
-        kernels::launch_ppisp_project_mean(
-            exposure_params_.ptr<float>(), color_params_.ptr<float>(), num_frames_, nullptr);
+        training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->project_mean(exposure_params_, color_params_);
     }
 
     float PPISP::mean_exposure_ev() const {

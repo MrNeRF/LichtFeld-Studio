@@ -2,19 +2,16 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "config_serialization.hpp"
-#include "core/cuda_error.hpp"
+#include "core/gpu_backend_fwd.hpp"
 #include "core/logger.hpp"
-#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
-#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "core/tensor_serialization.hpp"
-#include "lfs/kernels/ppisp.cuh"
+#include "lfs/training/ops/registry.hpp"
 #include "ppisp_controller_pool.hpp"
 #include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cuda_runtime.h>
 #include <stdexcept>
 #include <type_traits>
 
@@ -29,15 +26,12 @@ namespace lfs::training {
         constexpr uint32_t INFERENCE_MAGIC = 0x4C464349;
         constexpr uint32_t INFERENCE_VERSION = 1;
 
-        constexpr int BLOCK_SIZE = 256;
-        constexpr int TILE_SIZE = 16;
         constexpr int CNN_CH1 = 16;
         constexpr int CNN_CH2 = 32;
         constexpr int CNN_CH3 = 64;
         constexpr int FC1_INPUT_DIM = 1601;
         constexpr int FC_HIDDEN_DIM = 128;
         constexpr int FC_OUTPUT_DIM = 9;
-        constexpr int CNN_FLAT_DIM = 1600;
         constexpr int POOL2_SIZE = 5;
         constexpr int POOL_STRIDE = 3;
         constexpr int MAX_CHECKPOINT_CAMERAS = 100'000;
@@ -138,50 +132,6 @@ namespace lfs::training {
             return lfs::core::Tensor::zeros({size}, lfs::core::Device::GPU);
         }
 
-        __global__ void relu_backward_kernel(const float* grad, const float* input, float* out, const int n) {
-            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx < n) {
-                out[idx] = (input[idx] > 0.0f) ? grad[idx] : 0.0f;
-            }
-        }
-
-        void launch_relu_backward(const float* grad, const float* input, float* out, const int n,
-                                  cudaStream_t stream) {
-            const int blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-            relu_backward_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(grad, input, out, n);
-            LFS_CUDA_LAUNCH_CHECK(stream, "training.ppisp_controller_pool.relu_backward");
-        }
-
-        __global__ void outer_product_accumulate_kernel(const float* a, const float* b, float* c,
-                                                        const int m, const int n, const float scale) {
-            const int i = blockIdx.y * blockDim.y + threadIdx.y;
-            const int j = blockIdx.x * blockDim.x + threadIdx.x;
-            if (i < m && j < n) {
-                c[i * n + j] += scale * a[i] * b[j];
-            }
-        }
-
-        void launch_outer_product_accumulate(const float* a, const float* b, float* c, const int m, const int n,
-                                             const float scale, cudaStream_t stream) {
-            const dim3 block(TILE_SIZE, TILE_SIZE);
-            const dim3 grid((n + TILE_SIZE - 1) / TILE_SIZE, (m + TILE_SIZE - 1) / TILE_SIZE);
-            outer_product_accumulate_kernel<<<grid, block, 0, stream>>>(a, b, c, m, n, scale);
-            LFS_CUDA_LAUNCH_CHECK(stream, "training.ppisp_controller_pool.outer_product");
-        }
-
-        __global__ void bias_grad_accumulate_kernel(const float* grad, float* bias_grad, const int n) {
-            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx < n) {
-                bias_grad[idx] += grad[idx];
-            }
-        }
-
-        void launch_bias_grad_accumulate(const float* grad, float* bias_grad, const int n, cudaStream_t stream) {
-            const int blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-            bias_grad_accumulate_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(grad, bias_grad, n);
-            LFS_CUDA_LAUNCH_CHECK(stream, "training.ppisp_controller_pool.bias_grad");
-        }
-
     } // namespace
 
     PPISPControllerPool::PPISPControllerPool(const int num_cameras, const int total_iterations)
@@ -193,8 +143,10 @@ namespace lfs::training {
           config_(config),
           current_lr_(config.warmup_steps > 0 ? config.lr * config.warmup_start_factor : config.lr),
           initial_lr_(config.lr) {
-
         conv1_w_ = kaiming_uniform(3, CNN_CH1);
+        if (const auto reason = unavailable_training_family(lfs::core::gpu_backend_of(conv1_w_).value(), Family::Controller)) {
+            throw std::runtime_error(*reason);
+        }
         conv1_b_ = zeros_bias(CNN_CH1);
         conv2_w_ = kaiming_uniform(CNN_CH1, CNN_CH2);
         conv2_b_ = zeros_bias(CNN_CH2);
@@ -253,10 +205,7 @@ namespace lfs::training {
         buf_output_ = lfs::core::Tensor::empty({1, FC_OUTPUT_DIM}, lfs::core::Device::GPU);
         fc_input_buffer_ = lfs::core::Tensor::zeros({1, FC1_INPUT_DIM}, lfs::core::Device::GPU);
         constexpr float DEFAULT_PRIOR = 1.0f;
-        const auto stream = lfs::core::getCurrentCUDAStream();
-        LFS_CUDA_CHECK(cudaMemcpyAsync(fc_input_buffer_.ptr<float>() + CNN_FLAT_DIM,
-                                       &DEFAULT_PRIOR, sizeof(float), cudaMemcpyHostToDevice, stream));
-        LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+        training_ops(lfs::core::gpu_backend_of(fc_input_buffer_).value()).controller->prepare_input({}, fc_input_buffer_, DEFAULT_PRIOR);
 
         grad_fc3_out_ = lfs::core::Tensor::empty({1, FC_HIDDEN_DIM}, lfs::core::Device::GPU);
         grad_fc2_out_ = lfs::core::Tensor::empty({1, FC_HIDDEN_DIM}, lfs::core::Device::GPU);
@@ -325,16 +274,7 @@ namespace lfs::training {
         conv3_out.adaptive_avg_pool2d_out(POOL2_SIZE, POOL2_SIZE, buf_pool2_);
 
         auto flat = buf_pool2_.flatten(1);
-        // Resolve the current stream — under the GUI metrics guard this runs on
-        // the non-blocking metrics stream, where a legacy-stream copy would be
-        // unordered with the conv/linear ops that consume fc_input_buffer_.
-        const cudaStream_t predict_stream = lfs::core::getCurrentCUDAStream();
-        cudaMemcpyAsync(fc_input_buffer_.ptr<float>(), flat.ptr<float>(), CNN_FLAT_DIM * sizeof(float),
-                        cudaMemcpyDeviceToDevice, predict_stream);
-        if (exposure_prior != 1.0f) {
-            cudaMemcpyAsync(fc_input_buffer_.ptr<float>() + CNN_FLAT_DIM, &exposure_prior, sizeof(float),
-                            cudaMemcpyHostToDevice, predict_stream);
-        }
+        training_ops(lfs::core::gpu_backend_of(fc_input_buffer_).value()).controller->prepare_input(flat, fc_input_buffer_, exposure_prior);
         cached_flat_ = fc_input_buffer_;
 
         cached_flat_.linear_bias_relu_out(fc1_w_[camera_idx], fc1_b_[camera_idx], buf_fc1_);
@@ -351,42 +291,12 @@ namespace lfs::training {
         assert(grad_output.shape().rank() == 2);
         assert(grad_output.shape()[0] == 1 && grad_output.shape()[1] == FC_OUTPUT_DIM);
 
-        const float* const grad_fc4 = grad_output.ptr<float>();
-        cudaStream_t stream = lfs::core::getCurrentCUDAStream();
-
-        launch_outer_product_accumulate(grad_fc4, buf_fc3_.ptr<float>(), fc4_w_grad_.ptr<float>(), FC_OUTPUT_DIM,
-                                        FC_HIDDEN_DIM, 1.0f, stream);
-        launch_bias_grad_accumulate(grad_fc4, fc4_b_grad_.ptr<float>(), FC_OUTPUT_DIM, stream);
-        core::tensor_ops::launch_sgemm(grad_fc4, fc4_w_[camera_idx].ptr<float>(), grad_fc3_out_.ptr<float>(), 1,
-                                       FC_HIDDEN_DIM, FC_OUTPUT_DIM, stream);
-
-        launch_relu_backward(grad_fc3_out_.ptr<float>(), buf_fc3_.ptr<float>(), grad_fc3_out_.ptr<float>(),
-                             FC_HIDDEN_DIM, stream);
-
-        const float* const grad_fc3 = grad_fc3_out_.ptr<float>();
-        launch_outer_product_accumulate(grad_fc3, buf_fc2_.ptr<float>(), fc3_w_grad_.ptr<float>(), FC_HIDDEN_DIM,
-                                        FC_HIDDEN_DIM, 1.0f, stream);
-        launch_bias_grad_accumulate(grad_fc3, fc3_b_grad_.ptr<float>(), FC_HIDDEN_DIM, stream);
-        core::tensor_ops::launch_sgemm(grad_fc3, fc3_w_[camera_idx].ptr<float>(), grad_fc2_out_.ptr<float>(), 1,
-                                       FC_HIDDEN_DIM, FC_HIDDEN_DIM, stream);
-
-        launch_relu_backward(grad_fc2_out_.ptr<float>(), buf_fc2_.ptr<float>(), grad_fc2_out_.ptr<float>(),
-                             FC_HIDDEN_DIM, stream);
-
-        const float* const grad_fc2 = grad_fc2_out_.ptr<float>();
-        launch_outer_product_accumulate(grad_fc2, buf_fc1_.ptr<float>(), fc2_w_grad_.ptr<float>(), FC_HIDDEN_DIM,
-                                        FC_HIDDEN_DIM, 1.0f, stream);
-        launch_bias_grad_accumulate(grad_fc2, fc2_b_grad_.ptr<float>(), FC_HIDDEN_DIM, stream);
-        core::tensor_ops::launch_sgemm(grad_fc2, fc2_w_[camera_idx].ptr<float>(), grad_fc1_out_.ptr<float>(), 1,
-                                       FC_HIDDEN_DIM, FC_HIDDEN_DIM, stream);
-
-        launch_relu_backward(grad_fc1_out_.ptr<float>(), buf_fc1_.ptr<float>(), grad_fc1_out_.ptr<float>(),
-                             FC_HIDDEN_DIM, stream);
-
-        const float* const grad_fc1 = grad_fc1_out_.ptr<float>();
-        launch_outer_product_accumulate(grad_fc1, cached_flat_.ptr<float>(), fc1_w_grad_.ptr<float>(), FC_HIDDEN_DIM,
-                                        FC1_INPUT_DIM, 1.0f, stream);
-        launch_bias_grad_accumulate(grad_fc1, fc1_b_grad_.ptr<float>(), FC_HIDDEN_DIM, stream);
+        const auto& ops = *training_ops(lfs::core::gpu_backend_of(fc_input_buffer_).value()).controller;
+        ops.backward_layer(grad_output, buf_fc3_, fc4_w_[camera_idx], fc4_w_grad_, fc4_b_grad_, grad_fc3_out_);
+        ops.backward_layer(grad_fc3_out_, buf_fc2_, fc3_w_[camera_idx], fc3_w_grad_, fc3_b_grad_, grad_fc2_out_);
+        ops.backward_layer(grad_fc2_out_, buf_fc1_, fc2_w_[camera_idx], fc2_w_grad_, fc2_b_grad_, grad_fc1_out_);
+        lfs::core::Tensor no_grad_input;
+        ops.backward_layer(grad_fc1_out_, cached_flat_, fc1_w_[camera_idx], fc1_w_grad_, fc1_b_grad_, no_grad_input);
     }
 
     void PPISPControllerPool::compute_bias_corrections(float& bc1_rcp, float& bc2_sqrt_rcp) const {
@@ -407,9 +317,7 @@ namespace lfs::training {
         const float beta2 = static_cast<float>(config_.beta2);
         const float eps = static_cast<float>(config_.eps);
 
-        kernels::launch_ppisp_adam_update(param.ptr<float>(), exp_avg.ptr<float>(), exp_avg_sq.ptr<float>(),
-                                          grad.ptr<float>(), static_cast<int>(param.numel()), lr, beta1, beta2,
-                                          bc1_rcp, bc2_sqrt_rcp, eps, nullptr);
+        training_ops(lfs::core::gpu_backend_of(param).value()).ppisp->adam({param, exp_avg, exp_avg_sq, grad}, {lr, beta1, beta2, bc1_rcp, bc2_sqrt_rcp, eps});
     }
 
     void PPISPControllerPool::optimizer_step(const int camera_idx) {

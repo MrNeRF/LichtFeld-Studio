@@ -37,8 +37,8 @@
       "src/rendering/rasterizer/cuda/point_cloud_raster.cu:309"
     ],
     "training": [
-      "src/training/components/ppisp_controller_pool.cu:338",
-      "src/training/components/ppisp_controller_pool.cu:341",
+      "src/training/ops/ppisp_cuda.cpp:84",
+      "src/training/ops/ppisp_cuda.cpp:87",
       "src/training/kernels/depth_loss.cu:689",
       "src/training/kernels/depth_loss.cu:692",
       "src/training/kernels/depth_loss.cu:704",

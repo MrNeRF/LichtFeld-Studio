@@ -13,6 +13,7 @@
 #include "lfs/training/ops/morton_cuda.hpp"
 #include "lfs/training/ops/mrnf_cuda.hpp"
 #include "lfs/training/ops/photometric_cuda.hpp"
+#include "lfs/training/ops/ppisp_cuda.hpp"
 #include "lfs/training/ops/sh_cuda.hpp"
 #include "lfs/training/ops/training_image_cuda.hpp"
 
@@ -49,6 +50,10 @@ namespace lfs::training {
                 return ops.training_image != nullptr;
             case Family::Sh:
                 return ops.sh != nullptr;
+            case Family::PPISP:
+                return ops.ppisp != nullptr;
+            case Family::Controller:
+                return ops.controller != nullptr;
             case Family::Count:
                 return false;
             default:
@@ -73,6 +78,8 @@ namespace lfs::training {
             .bilateral = &cuda_bilateral_ops(),
             .training_image = &cuda_training_image_ops(),
             .sh = &cuda_sh_ops(),
+            .ppisp = &cuda_ppisp_ops(),
+            .controller = &cuda_controller_ops(),
         };
         static const TrainingOps kVulkan{
             .backend = core::GpuBackend::Vulkan,

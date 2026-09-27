@@ -556,6 +556,7 @@ set(TEST_FILES
     fast_raster_test_helpers.cpp
     test_training_image_ops.cpp
     test_adam_ops.cpp
+    test_ppisp_ops.cpp
     test_geometry_ops.cpp
     test_bilateral_ops.cpp
     test_mcmc_ops.cpp
@@ -1703,6 +1704,9 @@ if(COMMAND lfs_enable_fast_cxx_compile)
 endif()
 
 lfs_tensor_private_access(${TEST_SOURCES})
+# The controller parity fixture calls the direct SGEMM launcher.
+set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/test_ppisp_ops.cpp" APPEND
+    PROPERTY COMPILE_DEFINITIONS LFS_TENSOR_PRIVATE_ACCESS)
 foreach(_lfs_tensor_test_target IN ITEMS
         tensor_hardening_tests tensor_interface_freeze tensor_backend_corpus
         bench_tensor_launch_overhead bench_tensor_gui)
