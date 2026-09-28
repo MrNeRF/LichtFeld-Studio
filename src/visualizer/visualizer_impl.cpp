@@ -3991,8 +3991,8 @@ namespace lfs::vis {
                 message, lfs::ErrorCode::FailedPrecondition));
             return std::unexpected(std::move(message));
         };
-        if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
-            return reject("Training requires an available CUDA device");
+        if (!lfs::core::gpu_backend_available(lfs::core::default_gpu_backend())) {
+            return reject("Training requires an available GPU");
         }
         if (project_lifecycle_) {
             if (project_lifecycle_->isHydrating()) {

@@ -2898,10 +2898,10 @@ namespace lfs::vis {
             manager->setScene(&scene_);
         }
 #if LFS_BUILD_TRAINER
-        // Cameras and point clouds can be viewed without a CUDA trainer.
-        // CUDA availability only controls whether training can be prepared.
-        if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
-            LOG_INFO("Dataset ready for viewing; CUDA training is unavailable");
+        // Cameras and point clouds can be viewed without a trainer; the
+        // training backend only controls whether training can be prepared.
+        if (!lfs::core::gpu_backend_available(lfs::core::default_gpu_backend())) {
+            LOG_INFO("Dataset ready for viewing; the training GPU backend is unavailable");
             return {};
         }
         if (const auto unavailable = lfs::training::unavailable_training_reason(
@@ -3188,7 +3188,7 @@ namespace lfs::vis {
                                                  const lfs::core::param::TrainingParameters& params) {
 #if LFS_BUILD_TRAINER
         const lfs::core::GpuBackend training_backend = lfs::core::default_gpu_backend();
-        const lfs::core::GpuBackendScope backend(lfs::core::GpuBackend::CUDA);
+        const lfs::core::GpuBackendScope backend(training_backend);
         LOG_TIMER("SceneManager::loadCheckpointForTraining");
 
         try {

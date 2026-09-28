@@ -708,12 +708,13 @@ namespace lfs::vis::project {
                 return;
             }
 #endif
-            const lfs::core::GpuBackendScope backend(lfs::core::GpuBackend::CUDA);
+            const lfs::core::GpuBackend training_backend = lfs::core::default_gpu_backend();
+            const lfs::core::GpuBackendScope backend(training_backend);
             auto tensor_allocator = makeViewerSplatTensorAllocator();
             auto& scene = scene_manager.getScene();
             for (const auto& camera : scene.getAllCameras()) {
                 if (camera) {
-                    camera->to_backend(lfs::core::GpuBackend::CUDA);
+                    camera->to_backend(training_backend);
                 }
             }
             if (auto* model = scene.getTrainingModel()) {

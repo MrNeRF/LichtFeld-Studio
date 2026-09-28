@@ -352,7 +352,7 @@ namespace lfs::vis {
             lfs::core::SplatExportableStorage::growthCapacity(live_estimate, configured_capacity);
         std::size_t reserve_capacity = configured_capacity;
         if (reserve_capacity == 0) {
-            const auto memory = lfs::core::gpu_backend_memory_info(lfs::core::GpuBackend::CUDA);
+            const auto memory = lfs::core::gpu_backend_memory_info(lfs::core::default_gpu_backend());
             const std::size_t total_mem = memory.total_bytes;
             if (total_mem > 0) {
                 const std::size_t per_splat =
@@ -453,7 +453,7 @@ namespace lfs::vis {
             }
         }
 
-        if (!tensor_allocator) {
+        if (!tensor_allocator && lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA) {
             tensor_allocator = makeVulkanTrainingTensorAllocator(viewer_);
             if (tensor_allocator) {
                 LOG_INFO("Training model tensors will use Vulkan-external CUDA storage");
@@ -501,7 +501,7 @@ namespace lfs::vis {
         // remap). Generation-checked bind handles protect FastGS and Adam
         // readers from stale pointers during densification.
         try {
-            lfs::core::gpu_device_barrier(lfs::core::GpuBackend::CUDA);
+            lfs::core::gpu_device_barrier(lfs::core::default_gpu_backend());
         } catch (const std::exception& error) {
             LOG_ERROR("Device barrier before densify exportable barrier failed: {}", error.what());
             return false;
@@ -519,7 +519,7 @@ namespace lfs::vis {
             return true;
         }
         try {
-            lfs::core::gpu_device_barrier(lfs::core::GpuBackend::CUDA);
+            lfs::core::gpu_device_barrier(lfs::core::default_gpu_backend());
         } catch (const std::exception& error) {
             LOG_ERROR("Device barrier after densify exportable barrier failed: {}", error.what());
             return false;
@@ -547,7 +547,7 @@ namespace lfs::vis {
         const std::uint64_t old_generation = splat_storage_->generation();
 
         try {
-            lfs::core::gpu_device_barrier(lfs::core::GpuBackend::CUDA);
+            lfs::core::gpu_device_barrier(lfs::core::default_gpu_backend());
         } catch (const std::exception& error) {
             LOG_ERROR("Device barrier before exportable grow failed: {}", error.what());
             return false;
@@ -894,8 +894,8 @@ namespace lfs::vis {
             return false;
         }
 
-        if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
-            static_cast<void>(rejectStart("Training requires an available CUDA device", lfs::ErrorCode::FailedPrecondition));
+        if (!lfs::core::gpu_backend_available(lfs::core::default_gpu_backend())) {
+            static_cast<void>(rejectStart("Training requires an available GPU", lfs::ErrorCode::FailedPrecondition));
             return false;
         }
 
@@ -1018,7 +1018,7 @@ namespace lfs::vis {
                     graph_capture = lfs::training::captureTrainingModelGraph(*scene_);
                     for (const auto& camera : scene_->getAllCameras()) {
                         if (camera) {
-                            camera->to_backend(lfs::core::GpuBackend::CUDA);
+                            camera->to_backend(lfs::core::default_gpu_backend());
                         }
                     }
                 },
@@ -1868,7 +1868,7 @@ namespace lfs::vis {
     }
 
     void TrainerManager::trainingInitializationThreadFunc(std::stop_token stop_token) {
-        const lfs::core::GpuBackendScope backend(lfs::core::GpuBackend::CUDA);
+        const lfs::core::GpuBackendScope backend(lfs::core::default_gpu_backend());
         LOG_INFO("Training initialization thread started");
         lfs::Result<void> initialization_result;
         try {
@@ -1957,7 +1957,7 @@ namespace lfs::vis {
     }
 
     void TrainerManager::trainingThreadFunc(std::stop_token stop_token) {
-        const lfs::core::GpuBackendScope backend(lfs::core::GpuBackend::CUDA);
+        const lfs::core::GpuBackendScope backend(lfs::core::default_gpu_backend());
         {
             std::unique_lock lock(initialization_gate_mutex_);
             initialization_gate_cv_.wait(lock, [this] { return initialization_gate_open_; });
