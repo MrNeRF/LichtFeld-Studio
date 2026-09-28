@@ -22,6 +22,7 @@
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 
+#include "cuda_backend_test.hpp"
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -56,7 +57,8 @@ namespace {
         void SetUp() override {
             if (!lfs::core::gpu_backend_available(GpuBackend::Metal))
                 GTEST_SKIP() << "Metal device unavailable";
-            scope_.emplace(GpuBackend::Metal);
+            session_.emplace(GpuBackend::Metal);
+            ASSERT_TRUE(session_->switched());
             const auto& table = lfs::training::training_ops(GpuBackend::Metal);
             if (table.adam == nullptr || table.sh == nullptr || table.morton == nullptr)
                 GTEST_SKIP() << "Metal Adam, Sh or Morton slot is empty";
@@ -65,7 +67,7 @@ namespace {
             morton = table.morton;
         }
 
-        std::optional<lfs::core::GpuBackendScope> scope_;
+        std::optional<lfs::test::DefaultGpuBackendForTesting> session_;
         const ops::AdamOps* adam = nullptr;
         const ops::ShOps* sh = nullptr;
         const ops::MortonOps* morton = nullptr;

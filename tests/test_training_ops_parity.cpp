@@ -1577,7 +1577,10 @@ namespace {
     }
 
     Capture capture(lfs::training::Family family, GpuBackend backend) {
-        lfs::core::GpuBackendScope scope(backend);
+        const lfs::test::DefaultGpuBackendForTesting session(backend);
+        if (!session.switched()) {
+            return Capture{{}, std::string("cannot make ") + backend_name(backend) + " the default backend"};
+        }
         switch (family) {
         case lfs::training::Family::Photometric: return capture_photometric(backend);
         case lfs::training::Family::Adam: return capture_adam(backend);
