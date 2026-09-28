@@ -16,4 +16,4 @@ Development docs in this section are organized around execution workflows rather
 - [Scene reconstruction](scene-reconstruction)
 - [Offline video reconstruction contract](video-reconstruction-contract)
 - [Training ops parity](training-ops-parity)
-- [Metal training ops](training-ops-parity)
+- [Metal training ops](metal-training-ops)
