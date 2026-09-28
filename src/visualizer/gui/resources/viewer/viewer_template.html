@@ -149,6 +149,12 @@
                         </svg>
                     </button>
 
+                    <button id="screenshot" class="controlButton" title="Export View as JPG">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">
+                            <g class='stroke'><use href="#screenshotIcon"/></g>
+                            <g class='fill'><use href="#screenshotIcon"/></g>
+                        </svg>
+                    </button>
                     <button id="info" class="controlButton">
                         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">
                             <g class='stroke'><use href="#infoIcon"/></g>
@@ -197,6 +203,17 @@
                 <div class="settingsRow">
                     <button id="frame">Frame</button>
                     <button id="reset">Reset</button>
+                </div>
+            </div>
+
+            <!-- Screenshot Panel -->
+            <div id="screenshotPanel" class="hidden">
+                <div id="screenshotPanelLabel">Export Current View (JPG)</div>
+                <div id="screenshotOptions">
+                    <button id="screenshot1080p">1080p</button>
+                    <button id="screenshot2k">2K</button>
+                    <button id="screenshot4k">4K</button>
+                    <button id="screenshot8k">8K</button>
                 </div>
             </div>
 
@@ -289,6 +306,9 @@
             <!-- Tooltip -->
             <div id="tooltip"></div>
 
+            <!-- Screenshot Toast -->
+            <div id="screenshotToast" class="hidden"></div>
+
             <!-- Branding -->
             <a id="lichtfeldBranding" href="https://github.com/MrNeRF/LichtFeld-Studio" target="_blank" rel="noopener">
                 <svg id="lichtfeldLogo" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
@@ -356,6 +376,9 @@
             </symbol>
             <symbol id="orthoIcon" viewBox="0 0 24 24">
                 <path fill-rule="evenodd" clip-rule="evenodd" d="M5 2C3.34315 2 2 3.34315 2 5V19C2 20.6569 3.34315 22 5 22H19C20.6569 22 22 20.6569 22 19V5C22 3.34315 20.6569 2 19 2H5ZM5 7V17H17V7H5Z"/>
+            </symbol>
+            <symbol id="screenshotIcon" viewBox="0 0 24 24">
+                <path fill-rule="evenodd" clip-rule="evenodd" d="M5 5C3.34315 5 2 6.34315 2 8V19C2 20.6569 3.34315 22 5 22H19C20.6569 22 22 20.6569 22 19V8C22 6.34315 20.6569 5 19 5H16.5L15 3H9L7.5 5H5ZM14.5 12A2.5 2.5 0 1 1 9.5 12A2.5 2.5 0 1 1 14.5 12Z"/>
             </symbol>
             <symbol id="labelIcon" viewBox="0 0 24 24">
                 <path fill-rule="evenodd" clip-rule="evenodd" d="M2 5C2 3.3431 3.3431 2 5 2H9.1716C9.7064 2 10.2225 2.2121 10.6064 2.5858L21.4142 13.3936C22.1953 14.1747 22.1953 15.4359 21.4142 16.217L16.2172 21.4142C15.4361 22.1953 14.1749 22.1953 13.3938 21.4142L2.5858 10.6064C2.2121 10.2225 2 9.7064 2 9.1716V5ZM7.5 3.5A1.5 1.5 0 1 1 7.5 6.5A1.5 1.5 0 0 1 7.5 3.5Z"/>
