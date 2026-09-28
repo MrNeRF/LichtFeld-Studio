@@ -28,15 +28,15 @@ namespace lfs::training {
 
             // .extra_loss = &metal_extra_loss_ops(),
 
-            // .bilateral = &metal_bilateral_ops(),
+            .bilateral = &metal_bilateral_ops(),
 
             .training_image = &metal_training_image_ops(),
 
             // .sh = &metal_sh_ops(),
 
-            // .ppisp = &metal_ppisp_ops(),
+            .ppisp = &metal_ppisp_ops(),
 
-            // .controller = &metal_controller_ops(),
+            .controller = &metal_controller_ops(),
 
             // .gsplat = &metal_gsplat_ops(),
 
@@ -44,9 +44,9 @@ namespace lfs::training {
 
             .session = &metal_session_ops(),
 
-            // .shared_image = core::shared_image_ops(core::GpuBackend::Metal),
+            .shared_image = core::shared_image_ops(core::GpuBackend::Metal),
 
-            // .lpips = &metal_lpips_ops(),
+            .lpips = &metal_lpips_ops(),
         };
         return table;
     }

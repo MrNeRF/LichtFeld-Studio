@@ -168,8 +168,9 @@ if(APPLE)
         kernels/metal/mrnf.metal
         kernels/metal/refine.metal
         kernels/metal/mcmc.metal
-        kernels/metal/bilateral.metal
         kernels/metal/ppisp.metal
+        kernels/metal/bilateral.metal
+        kernels/metal/lpips.metal
     )
     set(_lfs_training_metal_cpp ${CMAKE_CURRENT_BINARY_DIR}/lfs_training_metal_kernels.cpp)
     list(TRANSFORM LFS_TRAINING_METAL_KERNELS PREPEND ${CMAKE_CURRENT_SOURCE_DIR}/

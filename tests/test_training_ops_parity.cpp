@@ -930,7 +930,7 @@ namespace {
 
         auto adam_grid = pattern({1, 12, 2, 3, 4}, 1.f, 4);
         auto m1 = pattern(adam_grid.shape(), 1.f, 11);
-        auto m2 = pattern(adam_grid.shape(), 1.f, 17);
+        auto m2 = pattern(adam_grid.shape(), 1.f, 17).abs();
         auto adam_grad = pattern(adam_grid.shape(), 1.f, 19);
         const ops::AdamUpdateParams adam{0.002f, 0.9f, 0.999f, 10.f, 31.622776f, 1e-15f};
         table->adam(adam_grid, m1, m2, adam_grad, adam);
@@ -1149,20 +1149,20 @@ namespace {
     Capture capture_lpips(GpuBackend backend) {
         Capture out;
         const auto* table = lfs::training::training_ops(backend).lpips;
-        auto weight = pattern({128, 64, 3, 3}, 1.f, 7);
+        auto weight = pattern({128, 64, 3, 3}, 1.f, 7).to(DataType::Float16);
         auto taps = Tensor::empty({9, 128, 64}, Device::GPU, DataType::Float16);
         table->weight_taps(weight, taps);
         keep(out.snapshot, backend, "lpips.taps", taps, kConv);
         auto rgb = pattern({1, 3, 7, 9}, 1.f, 1);
-        auto conv_w = pattern({64, 3, 3, 3}, 1.f, 2);
-        auto bias = pattern({64}, 1.f, 3);
+        auto conv_w = pattern({64, 3, 3, 3}, 1.f, 2).to(DataType::Float16);
+        auto bias = pattern({64}, 1.f, 3).to(DataType::Float16);
         auto conv = Tensor::empty({1, 64, 7, 9}, Device::GPU, DataType::Float16);
         const ops::RGBConvParams rgb_params{{-.030f, -.088f, -.188f}, {.458f, .448f, .450f}, true};
         table->rgb_conv(rgb, conv_w, bias, conv, rgb_params);
         keep(out.snapshot, backend, "lpips.rgb", conv, kConv);
-        auto x = pattern({1, 64, 7, 9}, 1.f, 1);
-        auto w = pattern({64, 64, 3, 3}, 1.f, 2);
-        auto b = pattern({64}, 1.f, 3);
+        auto x = pattern({1, 64, 7, 9}, 1.f, 1).to(DataType::Float16);
+        auto w = pattern({64, 64, 3, 3}, 1.f, 2).to(DataType::Float16);
+        auto b = pattern({64}, 1.f, 3).to(DataType::Float16);
         auto y = Tensor::empty({1, 64, 7, 9}, Device::GPU, DataType::Float16);
         auto scratch = Tensor::empty({9, 64, 64}, Device::GPU, DataType::Float16);
         Tensor absent;
@@ -1171,9 +1171,9 @@ namespace {
         conv_params.activation = lfs::core::nn::Activation::Relu;
         table->convolution(x, w, absent, b, y, scratch, conv_params);
         keep(out.snapshot, backend, "lpips.conv", y, kConv);
-        auto px = pattern({1, 64, 2, 8}, 1.f, 1);
-        auto py = pattern({1, 64, 2, 8}, 1.f, 2);
-        auto pw = pattern({1, 64, 1, 1}, 1.f, 3);
+        auto px = pattern({1, 64, 2, 8}, 1.f, 1).to(DataType::Float16);
+        auto py = pattern({1, 64, 2, 8}, 1.f, 2).to(DataType::Float16);
+        auto pw = pattern({1, 64, 1, 1}, 1.f, 3).to(DataType::Float16);
         auto score = Tensor::zeros({1}, Device::GPU);
         auto pooled_x = Tensor::empty({1, 64, 1, 4}, Device::GPU, DataType::Float16);
         auto pooled_y = Tensor::empty(pooled_x.shape(), Device::GPU, pooled_x.dtype());
