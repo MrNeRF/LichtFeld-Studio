@@ -464,7 +464,8 @@ if(NOT LFS_HAS_CUDA)
         list(APPEND TEST_SOURCES
             test_vulkan_trainer_start.cpp
             test_session_loader_storage.cpp
-            test_training_ops_parity.cpp)
+            test_training_ops_parity.cpp
+            test_training_ops_metal_adam_sh.cpp)
     endif()
     if(APPLE)
         list(APPEND TEST_SOURCES test_video_videotoolbox.cpp)
