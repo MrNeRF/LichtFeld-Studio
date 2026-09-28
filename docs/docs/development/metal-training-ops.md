@@ -38,3 +38,4 @@ Tensor library ops (`core::Tensor`) run on the same timeline and may carry glue 
 - CUDA `roundf` rounds halves away from zero, as MSL `round` does; MSL `rint` rounds them to even.
 - Fast math lets the compiler fold `isfinite` and `isnan` to constants; test the exponent bits instead.
 - MSL has no `double`. Where a CUDA reduction accumulates in double, sum floats in a fixed order and expect float-tolerance agreement.
+- Metal fast math reassociates (CUDA's -use_fast_math does not): `(1 - b) * g * g` can become `g * g - b * g * g` and cancel. Optimizer and codec code compiles under `#pragma METAL fp math_mode(safe)`, as `joint_adam.metal` does.
