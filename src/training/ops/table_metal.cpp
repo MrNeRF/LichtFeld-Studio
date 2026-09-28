@@ -12,7 +12,7 @@ namespace lfs::training {
 
             .photometric = &metal_photometric_ops(),
 
-            // .adam = &metal_adam_ops(),
+            .adam = &metal_adam_ops(),
 
             .mcmc = &metal_mcmc_ops(),
 
@@ -22,7 +22,7 @@ namespace lfs::training {
 
             // .fast = &metal_fast_ops(),
 
-            // .morton = &metal_morton_ops(),
+            .morton = &metal_morton_ops(),
 
             .masks = &metal_masks_ops(),
 
@@ -32,7 +32,7 @@ namespace lfs::training {
 
             .training_image = &metal_training_image_ops(),
 
-            // .sh = &metal_sh_ops(),
+            .sh = &metal_sh_ops(),
 
             .ppisp = &metal_ppisp_ops(),
 

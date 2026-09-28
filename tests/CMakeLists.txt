@@ -468,7 +468,8 @@ if(NOT LFS_HAS_CUDA)
             test_training_ops_metal_densify.cpp
             test_training_ops_metal_appearance.cpp
             test_training_ops_metal_gsplat.cpp
-            test_training_ops_metal_losses.cpp)
+            test_training_ops_metal_losses.cpp
+            test_training_ops_metal_adam_sh.cpp)
     endif()
     if(APPLE)
         list(APPEND TEST_SOURCES test_video_videotoolbox.cpp)
