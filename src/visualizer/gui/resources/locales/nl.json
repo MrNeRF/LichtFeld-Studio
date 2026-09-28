@@ -4,6 +4,8 @@
   "ui.vram_process_estimate_tooltip": "GPU-geheugen van het proces, geschat als bovengrens op basis van apparaatgebruik omdat een proceswaarde ontbreekt.",
   "ui.vram_device_nvml_tooltip": "Apparaatgeheugen volgens het NVIDIA-stuurprogramma.",
   "ui.vram_device_cuda_tooltip": "Geheugen dat CUDA ziet; gereserveerde fysieke capaciteit kan ontbreken.",
+  "ui.vram_process_metal_tooltip": "GPU-geheugen dat dit proces via Metal heeft toegewezen.",
+  "ui.vram_device_unified_tooltip": "Gedeeld geheugen dat de GPU niet meer kan gebruiken, van zijn working-set-limiet: de GPU-toewijzingen van alle apps plus het systeemgeheugen dat andere processen bezetten.",
   "ui.vram_device_capacity": "Device capacity",
   "ui.vram_window_5m": "5 min",
   "ui.vram_window_30m": "30 min",

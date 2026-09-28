@@ -433,6 +433,8 @@ set_target_properties(lfs_visualizer PROPERTIES
 )
 if(APPLE)
     target_link_options(lfs_visualizer PRIVATE "LINKER:-undefined,dynamic_lookup")
+    # GPU utilization and allocation for the status bar come from IOKit.
+    target_link_libraries(lfs_visualizer PRIVATE "-framework IOKit" "-framework CoreFoundation")
 endif()
 if(WIN32)
     set_target_properties(lfs_visualizer PROPERTIES

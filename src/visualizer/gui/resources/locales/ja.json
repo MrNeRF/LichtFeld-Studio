@@ -4,6 +4,8 @@
   "ui.vram_process_estimate_tooltip": "プロセス値を取得できないため、デバイス使用量から推定したプロセス GPU メモリの上限です。",
   "ui.vram_device_nvml_tooltip": "NVIDIA ドライバーが報告するデバイスメモリ。",
   "ui.vram_device_cuda_tooltip": "CUDA から見えるメモリです。予約済みの物理容量は含まれない場合があります。",
+  "ui.vram_process_metal_tooltip": "このプロセスが Metal で確保した GPU メモリ。",
+  "ui.vram_device_unified_tooltip": "GPU のワーキングセット上限のうち、GPU が使えなくなったユニファイドメモリ。全アプリの GPU 割り当てと、他のプロセスが使用中のシステムメモリを含みます。",
   "ui.vram_device_capacity": "Device capacity",
   "ui.vram_window_5m": "5 min",
   "ui.vram_window_30m": "30 min",

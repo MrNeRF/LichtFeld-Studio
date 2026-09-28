@@ -4,6 +4,7 @@
 
 #include "gui/gpu_memory_query.hpp"
 #include "core/gpu_device_info.hpp"
+#include "core/host_metrics.hpp"
 #include "core/tensor_backend.hpp"
 
 #include <algorithm>
@@ -12,6 +13,7 @@
 #include <format>
 #include <limits>
 #include <mutex>
+#include <optional>
 #if LFS_HAS_CUDA
 #include <cuda_runtime.h>
 #include <nvml.h>
@@ -20,6 +22,9 @@
 #ifdef _WIN32
 #include <dxgi1_4.h>
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <CoreFoundation/CoreFoundation.h>
+#include <IOKit/IOKitLib.h>
 #elif defined(__linux__)
 #include <dlfcn.h>
 #include <unistd.h>
@@ -285,6 +290,60 @@ namespace lfs::vis::gui {
         }
 #endif
 
+#ifdef __APPLE__
+        struct AcceleratorStats {
+            size_t allocated = 0;
+            float utilization = -1.f;
+        };
+
+        // Apple GPUs publish device-wide counters on their IOAccelerator
+        // service, readable without privileges.
+        std::optional<AcceleratorStats> readAcceleratorStats() {
+            io_iterator_t services = IO_OBJECT_NULL;
+            if (IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("IOAccelerator"), &services) !=
+                KERN_SUCCESS)
+                return std::nullopt;
+            std::optional<AcceleratorStats> result;
+            for (io_object_t service; !result && (service = IOIteratorNext(services)) != IO_OBJECT_NULL;) {
+                const CFTypeRef stats = IORegistryEntryCreateCFProperty(service, CFSTR("PerformanceStatistics"),
+                                                                        kCFAllocatorDefault, 0);
+                IOObjectRelease(service);
+                if (!stats)
+                    continue;
+                if (CFGetTypeID(stats) == CFDictionaryGetTypeID()) {
+                    const auto read = [dict = static_cast<CFDictionaryRef>(stats)](const CFStringRef key, int64_t& out) {
+                        const auto value = CFDictionaryGetValue(dict, key);
+                        return value && CFGetTypeID(value) == CFNumberGetTypeID() &&
+                               CFNumberGetValue(static_cast<CFNumberRef>(value), kCFNumberSInt64Type, &out);
+                    };
+                    int64_t utilization = 0;
+                    int64_t allocated = 0;
+                    if (read(CFSTR("Device Utilization %"), utilization) && read(CFSTR("Alloc system memory"), allocated))
+                        result = AcceleratorStats{.allocated = static_cast<size_t>(std::max<int64_t>(allocated, 0)),
+                                                  .utilization = std::clamp(static_cast<float>(utilization), 0.f, 100.f)};
+                }
+                CFRelease(stats);
+            }
+            IOObjectRelease(services);
+            return result;
+        }
+
+        // IOKit is sampled at most every 500 ms.
+        std::optional<AcceleratorStats> acceleratorStats() {
+            static std::mutex mutex;
+            static std::optional<AcceleratorStats> cached;
+            static auto last_sample = std::chrono::steady_clock::time_point{};
+            std::lock_guard lock(mutex);
+            const auto now = std::chrono::steady_clock::now();
+            if (last_sample == std::chrono::steady_clock::time_point{} ||
+                now - last_sample >= std::chrono::milliseconds(500)) {
+                cached = readAcceleratorStats();
+                last_sample = now;
+            }
+            return cached;
+        }
+#endif
+
     } // namespace
 
     size_t parseGpuProcessBytes(unsigned int pid,
@@ -320,13 +379,52 @@ namespace lfs::vis::gui {
         return info;
     }
 
+    GpuMemoryInfo selectUnifiedGpuMemory(const size_t process_used, const size_t working_set,
+                                         const size_t gpu_allocated, const size_t host_available) {
+        GpuMemoryInfo info;
+        info.unified_memory = true;
+        info.process_used = process_used;
+        info.total = working_set;
+        const size_t gpu_free = working_set - std::min(gpu_allocated, working_set);
+        info.total_used = std::max(working_set - std::min(gpu_free, host_available), std::min(process_used, working_set));
+        return info;
+    }
+
     std::string formatGpuGiB(size_t bytes) {
         constexpr double gib = 1024.0 * 1024.0 * 1024.0;
         return std::format("{:.2f}", static_cast<double>(bytes) / gib);
     }
 
+    const char* gpuProcessMemoryTooltipKey(const GpuMemoryInfo& info) {
+        if (info.unified_memory)
+            return "ui.vram_process_metal_tooltip";
+        return info.process_estimated ? "ui.vram_process_estimate_tooltip" : "ui.vram_process_nvml_tooltip";
+    }
+
+    const char* gpuDeviceMemoryTooltipKey(const GpuMemoryInfo& info) {
+        if (info.unified_memory)
+            return "ui.vram_device_unified_tooltip";
+        return info.device_estimated ? "ui.vram_device_cuda_tooltip" : "ui.vram_device_nvml_tooltip";
+    }
+
     GpuMemoryInfo queryGpuMemory(const lfs::core::GpuBackend backend) {
         const auto device = lfs::core::gpu_backend_device_info(backend);
+#ifdef __APPLE__
+        // Metal and MoltenVK share one GPU and the host's memory.
+        if (device && device->supports_process_memory_budget) {
+            const auto stats = acceleratorStats();
+            const auto host = lfs::core::host_metrics::memory();
+            if (stats && host) {
+                auto info = selectUnifiedGpuMemory(device->process_memory_used_bytes,
+                                                   device->process_memory_budget_bytes, stats->allocated,
+                                                   host->available_bytes);
+                info.device_name = shortenGpuDeviceName(device->name);
+                info.gpu_utilization_percent = stats->utilization;
+                info.gpu_utilization_valid = true;
+                return info;
+            }
+        }
+#endif
         if (backend == lfs::core::GpuBackend::Vulkan || backend == lfs::core::GpuBackend::Metal) {
             GpuMemoryInfo info;
             if (device) {
@@ -382,6 +480,10 @@ namespace lfs::vis::gui {
     }
 
     float queryGpuUtilization() {
+#ifdef __APPLE__
+        if (const auto stats = acceleratorStats())
+            return stats->utilization;
+#endif
         if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Vulkan) {
             return -1.f;
         }

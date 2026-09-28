@@ -966,9 +966,7 @@ namespace lfs::vis::gui {
                                                       memory.device_estimated ? "≈" : "",
                                                       formatBytes(total_bytes)));
         if (perf_vram_value_)
-            perf_vram_value_->SetAttribute("title", LOC(memory.process_estimated
-                                                            ? "ui.vram_process_estimate_tooltip"
-                                                            : "ui.vram_process_nvml_tooltip"));
+            perf_vram_value_->SetAttribute("title", LOC(gpuProcessMemoryTooltipKey(memory)));
         if (perf_vram_badge_) {
             // Unknown when profiler off, no standing amber GAP.
             if (!s.ledger_valid)
@@ -1158,9 +1156,7 @@ namespace lfs::vis::gui {
                                                         formatBytes(points.back().capacity_bytes),
                                                         points.back().capacity_bytes > ceiling ? " ↑" : ""));
         if (timeline_capacity_)
-            timeline_capacity_->SetAttribute("title", LOC(queryGpuMemory().device_estimated
-                                                              ? "ui.vram_device_cuda_tooltip"
-                                                              : "ui.vram_device_nvml_tooltip"));
+            timeline_capacity_->SetAttribute("title", LOC(gpuDeviceMemoryTooltipKey(queryGpuMemory())));
         if (auto* scale = document_->GetElementById("vram-hud-scale-toggle"))
             scale->SetInnerRML(device_scale_ ? LOC("ui.vram_scale_device") : LOC("ui.vram_scale_fit"));
         if (panel_overview_) {
@@ -1387,9 +1383,7 @@ namespace lfs::vis::gui {
         write("process", std::format("{}{}", memory.process_estimated ? "≤" : "", formatBytes(process_used)),
               formatPercent(process_used, process_total));
         if (auto it = summary_by_key_.find("process"); it != summary_by_key_.end())
-            it->second.value->SetAttribute("title", LOC(memory.process_estimated
-                                                            ? "ui.vram_process_estimate_tooltip"
-                                                            : "ui.vram_process_nvml_tooltip"));
+            it->second.value->SetAttribute("title", LOC(gpuProcessMemoryTooltipKey(memory)));
         write("cuda_context", formatBytes(s.process.cuda_used),
               formatPercent(s.process.cuda_used, s.process.cuda_total));
         write("cuda_pool_used",

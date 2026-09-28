@@ -27,6 +27,10 @@ namespace lfs::vis::gui {
         bool uses_process_budget = false;
         size_t process_budget = 0;
         size_t process_budget_used = 0;
+        // Apple unified memory: `total` is the GPU working-set limit and
+        // `total_used` what the GPU cannot use anymore, counting every GPU
+        // client and the host memory other processes hold.
+        bool unified_memory = false;
     };
 
     struct LFS_VIS_API GpuProcessUsage {
@@ -40,7 +44,12 @@ namespace lfs::vis::gui {
                                               size_t dxgi_bytes, size_t cuda_used,
                                               size_t cuda_total, size_t nvml_used,
                                               size_t nvml_total);
+    LFS_VIS_API GpuMemoryInfo selectUnifiedGpuMemory(size_t process_used, size_t working_set,
+                                                     size_t gpu_allocated, size_t host_available);
     LFS_VIS_API std::string formatGpuGiB(size_t bytes);
+    // Localization keys naming the source of the process and device readings.
+    LFS_VIS_API const char* gpuProcessMemoryTooltipKey(const GpuMemoryInfo& info);
+    LFS_VIS_API const char* gpuDeviceMemoryTooltipKey(const GpuMemoryInfo& info);
     LFS_VIS_API size_t parseGpuProcessBytes(unsigned int pid,
                                             std::span<const GpuProcessUsage> processes);
 

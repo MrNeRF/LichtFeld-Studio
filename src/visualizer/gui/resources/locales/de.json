@@ -4,6 +4,8 @@
   "ui.vram_process_estimate_tooltip": "GPU-Speicher des Prozesses als Obergrenze aus der Gerätenutzung geschätzt, da kein Prozesswert verfügbar ist.",
   "ui.vram_device_nvml_tooltip": "Gerätespeicher laut NVIDIA-Treiber.",
   "ui.vram_device_cuda_tooltip": "Gerätespeicher aus dem für CUDA sichtbaren Speicher; reservierte physische Kapazität kann fehlen.",
+  "ui.vram_process_metal_tooltip": "GPU-Speicher, den dieser Prozess über Metal belegt hat.",
+  "ui.vram_device_unified_tooltip": "Gemeinsamer Speicher, den die GPU nicht mehr nutzen kann, gemessen an ihrem Working-Set-Limit: die GPU-Belegung aller Apps plus der Systemspeicher, den andere Prozesse halten.",
   "ui.vram_device_capacity": "Device capacity",
   "ui.vram_window_5m": "5 min",
   "ui.vram_window_30m": "30 min",

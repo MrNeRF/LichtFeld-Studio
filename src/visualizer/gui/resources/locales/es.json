@@ -4,6 +4,8 @@
   "ui.vram_process_estimate_tooltip": "Memoria GPU del proceso estimada como límite superior a partir del uso del dispositivo porque no hay un valor por proceso.",
   "ui.vram_device_nvml_tooltip": "Memoria del dispositivo según el controlador de NVIDIA.",
   "ui.vram_device_cuda_tooltip": "Memoria visible para CUDA; puede excluir capacidad física reservada.",
+  "ui.vram_process_metal_tooltip": "Memoria de GPU que este proceso ha reservado mediante Metal.",
+  "ui.vram_device_unified_tooltip": "Memoria unificada que la GPU ya no puede usar, sobre su límite de working set: las reservas de GPU de todas las aplicaciones más la memoria del sistema que ocupan otros procesos.",
   "ui.vram_device_capacity": "Device capacity",
   "ui.vram_window_5m": "5 min",
   "ui.vram_window_30m": "30 min",

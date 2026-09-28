@@ -4,6 +4,8 @@
   "ui.vram_process_estimate_tooltip": "Process GPU memory is estimated as an upper bound from device usage because a process value is unavailable.",
   "ui.vram_device_nvml_tooltip": "Device memory reported by the NVIDIA driver.",
   "ui.vram_device_cuda_tooltip": "Device memory comes from CUDA visible memory, which can exclude reserved physical capacity.",
+  "ui.vram_process_metal_tooltip": "GPU memory this process has allocated through Metal.",
+  "ui.vram_device_unified_tooltip": "Unified memory the GPU can no longer use, out of its working-set limit: every app's GPU allocations, plus system memory other processes hold.",
   "ui.vram_device_capacity": "Device capacity",
   "ui.vram_window_5m": "5 min",
   "ui.vram_window_30m": "30 min",

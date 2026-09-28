@@ -53,6 +53,12 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         test_trackpad_navigation.cpp
         test_vram_hud_geometry.cpp
     )
+    if(NOT LFS_HAS_CUDA)
+        # CUDA builds run these in lichtfeld_tests.
+        list(APPEND LICHTFELD_VISUALIZER_TEST_SOURCES
+            test_gpu_memory_query.cpp
+            test_viewer_gpu_memory.cpp)
+    endif()
     add_executable(lichtfeld_visualizer_tests EXCLUDE_FROM_ALL
         ${LICHTFELD_VISUALIZER_TEST_SOURCES}
     )
