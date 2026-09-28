@@ -205,6 +205,9 @@ button {
 #controlsWrap > #buttonsContainer #orthoCamera.active {
   color: #F60;
 }
+#controlsWrap > #buttonsContainer #screenshot.active {
+  color: #F60;
+}
 
 /* Measurement tool overlay */
 #measureToolSvg,
@@ -392,6 +395,42 @@ button {
   padding: 10px 12px;
 }
 
+/* screenshotPanel */
+#screenshotPanel {
+  position: fixed;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: calc(max(16px, env(safe-area-inset-bottom)) + 70px);
+  padding: 10px;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 14px;
+  color: #E0DCDD;
+  background-color: #333;
+}
+#screenshotPanel > #screenshotPanelLabel {
+  cursor: default;
+  white-space: nowrap;
+  color: #fff;
+}
+#screenshotPanel > #screenshotOptions {
+  display: flex;
+  gap: 4px;
+}
+#screenshotPanel > #screenshotOptions > button {
+  flex-grow: 1;
+  padding: 10px 14px;
+  border: 0;
+  cursor: pointer;
+  color: #E0DCDD;
+  background-color: #141414;
+  white-space: nowrap;
+}
+#screenshotPanel > #screenshotOptions > button:hover {
+  color: #fff;
+}
+
 /* infoPanel */
 #infoPanel {
   position: fixed;
@@ -494,6 +533,21 @@ button {
   font-size: 12px;
   color: #E0DCDD;
   background-color: #282828;
+}
+
+/* screenshotToast */
+#screenshotToast {
+  position: fixed;
+  top: max(24px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translate(-50%, 0);
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  color: #E0DCDD;
+  background-color: rgba(40, 40, 40, 0.85);
+  pointer-events: none;
+  white-space: nowrap;
 }
 
 #lichtfeldBranding {
