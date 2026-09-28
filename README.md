@@ -142,7 +142,10 @@ Getting started:
 
 <p>
   <a href="https://www.core11.eu/">
-    <img src="docs/media/core11_multi.svg" alt="Core 11" height="60">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/media/core11-dark.svg">
+      <img src="docs/media/core11.svg" alt="Core 11" height="60">
+    </picture>
   </a>
 </p>
 
@@ -160,14 +163,14 @@ Getting started:
 <br>
 
 <p>
+  <sub>Hardware sponsor</sub>
+  <br>
   <a href="https://www.tersus-gnss.com/">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="docs/media/tersus-dark.svg">
-      <img src="docs/media/tersus.svg" alt="Tersus GNSS" height="176">
+      <img src="docs/media/tersus.svg" alt="Tersus GNSS" height="120">
     </picture>
   </a>
-  <br>
-  <sub>Hardware sponsor</sub>
 </p>
 
 </div>
