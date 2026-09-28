@@ -160,6 +160,7 @@ if(APPLE)
         kernels/metal/sh.metal
         kernels/metal/morton.metal
         kernels/metal/fast_raster.metal
+        kernels/metal/fast_backward.metal
         kernels/metal/gsplat.metal
         kernels/metal/photometric.metal
         kernels/metal/masks.metal

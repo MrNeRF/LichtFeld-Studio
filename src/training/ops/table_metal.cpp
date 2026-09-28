@@ -20,7 +20,7 @@ namespace lfs::training {
 
             .geometry = &metal_geometry_ops(),
 
-            // .fast = &metal_fast_ops(),
+            .fast = &metal_fast_ops(),
 
             .morton = &metal_morton_ops(),
 
