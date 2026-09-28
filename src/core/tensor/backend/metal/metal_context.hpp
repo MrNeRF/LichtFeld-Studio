@@ -41,6 +41,9 @@ namespace lfs::core::internal {
 
     // Completion for TensorCompletion: work is submitted in batches numbered by
     // serial, and StorageMeta::pending_value holds the batch that last used it.
+    // Capacity of the block the Metal allocator hands out for `bytes`.
+    size_t metal_allocation_bytes(size_t bytes);
+
     uint64_t metal_flush();
     uint64_t metal_completed_serial();
     void metal_wait(uint64_t serial);

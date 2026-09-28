@@ -463,7 +463,8 @@ if(NOT LFS_HAS_CUDA)
     if(LFS_BUILD_TRAINER)
         list(APPEND TEST_SOURCES
             test_vulkan_trainer_start.cpp
-            test_session_loader_storage.cpp)
+            test_session_loader_storage.cpp
+            test_training_ops_parity.cpp)
     endif()
     if(APPLE)
         list(APPEND TEST_SOURCES test_video_videotoolbox.cpp)
@@ -499,6 +500,14 @@ if(NOT LFS_HAS_CUDA)
     )
     if(LFS_BUILD_TRAINER)
         target_link_libraries(lichtfeld_tests PRIVATE lfs_training)
+        if(APPLE)
+            # lfs_training resolves CPython from the host process, which the app
+            # embeds; the test binary must load it whole.
+            find_package(Python REQUIRED COMPONENTS Development.Embed)
+            target_link_options(lichtfeld_tests PRIVATE
+                "LINKER:-force_load,$<TARGET_LINKER_FILE:Python::Python>")
+            target_link_libraries(lichtfeld_tests PRIVATE lfs_python_embed)
+        endif()
     endif()
     add_test(NAME lichtfeld_tests COMMAND lichtfeld_tests --tensor-backend=vulkan)
     set_tests_properties(lichtfeld_tests PROPERTIES TIMEOUT 300)

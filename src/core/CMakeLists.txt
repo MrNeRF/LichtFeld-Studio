@@ -103,6 +103,7 @@ set(TENSOR_SOURCES
         tensor/tensor_export.cpp
         tensor/tensor_readback.cpp
         tensor/backend/tensor_upload.cpp
+        tensor/backend/gpu_kernel_module.cpp
         tensor/tensor_rad.cpp
         tensor/backend/cuda/cuda_ops_rad.cpp
         tensor/backend/cuda/kernels/rad_page.cu
@@ -194,13 +195,14 @@ if(APPLE)
         tensor/backend/metal/expression_msl.cpp
         tensor/backend/metal/metal_context.mm
         tensor/backend/metal/metal_ops.mm
+        tensor/backend/metal/metal_module.mm
         ${_lfs_metal_kernels_cpp}
     )
     if(LFS_TENSOR_VULKAN)
         list(APPEND TENSOR_SOURCES tensor/backend/metal/metal_vulkan_interop.mm)
     endif()
 else()
-    list(APPEND TENSOR_SOURCES tensor/backend/metal/metal_queue_unavailable.cpp)
+    list(APPEND TENSOR_SOURCES tensor/backend/metal/metal_unavailable.cpp)
 endif()
 
 # Core module sources

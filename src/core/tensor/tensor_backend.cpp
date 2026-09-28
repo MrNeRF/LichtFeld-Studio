@@ -101,6 +101,17 @@ namespace lfs::core {
         return std::nullopt;
     }
 
+    size_t gpu_allocation_bytes(const GpuBackend backend, const size_t bytes) {
+        if (backend == GpuBackend::CUDA)
+            return cuda_allocation_size(bytes);
+#ifdef LFS_TENSOR_METAL
+        if (backend == GpuBackend::Metal)
+            return internal::metal_allocation_bytes(bytes);
+#endif
+        throw std::invalid_argument(
+            std::format("Allocation sizes are unknown on the {} backend", gpu_backend_name(backend)));
+    }
+
     PinnedAllocatorStats pinned_allocator_stats() {
 #if LFS_HAS_CUDA
         const auto stats = PinnedMemoryAllocator::instance().get_stats();

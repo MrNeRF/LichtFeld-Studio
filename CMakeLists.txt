@@ -189,9 +189,7 @@ add_custom_target(lfs_git_version ALL
 )
 
 include(CMakeDependentOption)
-cmake_dependent_option(LFS_BUILD_TRAINER
-    "Include training in the full LichtFeld Studio application" ON
-    "NOT APPLE" OFF)
+option(LFS_BUILD_TRAINER "Include training in the full LichtFeld Studio application" ON)
 option(BUILD_TESTS "Build tests" OFF)
 option(BUILD_PANEL_LAYOUT_TESTS "Build focused panel layout and registry tests" OFF)
 option(BUILD_VISUALIZER_TESTS "Build CPU-only visualizer tests without LibTorch" OFF)

@@ -1,5 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "metal_module.hpp"
 #include "metal_queue.hpp"
 
 #include <stdexcept>
@@ -7,7 +8,7 @@
 namespace lfs::core::internal::metal_queue {
     namespace {
         [[noreturn]] void unavailable() {
-            throw std::runtime_error("Metal tensor queues are unavailable in this build");
+            throw std::runtime_error("Metal is unavailable in this build");
         }
     } // namespace
 
@@ -23,3 +24,9 @@ namespace lfs::core::internal::metal_queue {
     void wait_vulkan_timeline(void*, void*, uint64_t) { unavailable(); }
     std::unique_ptr<Timestamps> timestamps(size_t) { return nullptr; }
 } // namespace lfs::core::internal::metal_queue
+
+namespace lfs::core::internal {
+    std::unique_ptr<MetalModule> make_metal_module(std::string, bool) {
+        throw std::runtime_error("Metal kernel modules are unavailable in this build");
+    }
+} // namespace lfs::core::internal

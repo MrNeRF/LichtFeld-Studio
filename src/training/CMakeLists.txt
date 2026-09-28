@@ -148,6 +148,40 @@ else()
     )
 endif()
 
+# Metal trainer kernels are embedded as MSL and compiled at runtime, so the
+# build needs no Metal toolchain. common.metal comes first.
+if(APPLE)
+    set(LFS_TRAINING_METAL_KERNELS
+        kernels/metal/common.metal
+    )
+    set(_lfs_training_metal_cpp ${CMAKE_CURRENT_BINARY_DIR}/lfs_training_metal_kernels.cpp)
+    list(TRANSFORM LFS_TRAINING_METAL_KERNELS PREPEND ${CMAKE_CURRENT_SOURCE_DIR}/
+         OUTPUT_VARIABLE _lfs_training_metal_inputs)
+    string(REPLACE ";" "$<SEMICOLON>" _lfs_training_metal_inputs "${_lfs_training_metal_inputs}")
+    set(_lfs_embed_script ${CMAKE_SOURCE_DIR}/src/core/tensor/backend/metal/embed_kernels.cmake)
+    add_custom_command(
+        OUTPUT ${_lfs_training_metal_cpp}
+        COMMAND ${CMAKE_COMMAND}
+            "-DINPUTS=${_lfs_training_metal_inputs}"
+            -DOUTPUT=${_lfs_training_metal_cpp}
+            -DNAMESPACE=lfs::training::metal
+            -DSYMBOL=kTrainingKernelSource
+            -P ${_lfs_embed_script}
+        DEPENDS ${LFS_TRAINING_METAL_KERNELS} ${_lfs_embed_script}
+        COMMENT "Embedding Metal trainer kernels"
+        VERBATIM)
+    list(APPEND TRAINING_NEW_SOURCES
+        ${_lfs_training_metal_cpp}
+        ops/metal_kernels.cpp
+        ops/table_metal.cpp
+        ops/session_metal.cpp
+    )
+else()
+    list(APPEND TRAINING_NEW_SOURCES
+        ops/metal_table_stub.cpp
+    )
+endif()
+
 # lfs_training - Training module with optimizer
 add_library(lfs_training STATIC ${TRAINING_NEW_SOURCES})
 

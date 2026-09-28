@@ -726,6 +726,12 @@ namespace lfs::core::internal {
         return std::nullopt;
     }
 
+    size_t metal_allocation_bytes(const size_t bytes) {
+        if (@available(macOS 26.0, *))
+            return metal::size_class(bytes);
+        return bytes;
+    }
+
     uint64_t metal_flush() {
         if (@available(macOS 26.0, *)) {
             if (const auto context = metal::live_context())
