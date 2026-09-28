@@ -86,8 +86,12 @@ format_number() {
 
 # Function to format numbers with thousands separators
 format_with_commas() {
-    local num=$1
-    echo $num | sed ':a;s/\B[0-9]\{3\}\>/,&/;ta'
+    local num=$1 grouped=""
+    while [ ${#num} -gt 3 ]; do
+        grouped=",${num: -3}${grouped}"
+        num=${num:0:${#num}-3}
+    done
+    echo "${num}${grouped}"
 }
 
 # Format seconds as either "Xs" or "MmSs" (e.g. "212.34s" or "3m32.34s")
