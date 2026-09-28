@@ -38,7 +38,7 @@ namespace lfs::training {
 
             .controller = &metal_controller_ops(),
 
-            // .gsplat = &metal_gsplat_ops(),
+            .gsplat = &metal_gsplat_ops(),
 
             .refine = &metal_refine_ops(),
 
