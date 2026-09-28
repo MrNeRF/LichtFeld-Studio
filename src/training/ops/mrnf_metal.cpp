@@ -50,7 +50,8 @@ namespace lfs::training {
                 params.pass = pass;
                 launch_2d("mrnf_select_histogram", params, {&values, &workspace}, groups,
                           static_cast<uint32_t>(selections), kGroupWidth, 1);
-                launch("mrnf_select_pick", params, {&workspace}, 1, static_cast<uint32_t>(selections));
+                // kMrnfPickThreads in mrnf.metal.
+                launch("mrnf_select_pick", params, {&workspace}, static_cast<uint32_t>(selections), 256);
             }
             return workspace;
         }

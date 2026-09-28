@@ -175,6 +175,38 @@ static void fast_atomic_add(device atomic_float* target, const float value) {
     atomic_fetch_add_explicit(target, value, memory_order_relaxed);
 }
 
+// One halving step of fast_transpose_sum16 with compile-time indices, so the
+// values stay in registers.
+template <uint W>
+static void fast_transpose_step(thread float (&v)[16], const uint lane) {
+    const bool upper = (lane & (2u * W)) != 0u;
+#pragma unroll
+    for (uint i = 0u; i < W; ++i) {
+        const float send = upper ? v[i] : v[i + W];
+        const float keep = upper ? v[i + W] : v[i];
+        v[i] = keep + simd_shuffle_xor(send, ushort(2u * W));
+    }
+}
+
+// Sums 16 values over the SIMD group in 16 shuffles instead of 16 separate
+// reductions: each step halves the values a lane keeps. Lane l ends with the
+// total of value (l >> 1) & 15, so the 16 atomics that follow issue at once.
+static float fast_transpose_sum16(thread float (&v)[16], const uint lane) {
+    fast_transpose_step<8u>(v, lane);
+    fast_transpose_step<4u>(v, lane);
+    fast_transpose_step<2u>(v, lane);
+    fast_transpose_step<1u>(v, lane);
+    return v[0] + simd_shuffle_xor(v[0], ushort(1));
+}
+
+// SIMD groups per tile in the backward blend. Each owns kFastBwdSubtiles of
+// the tile's eight 8x4 sub-tiles, one pixel of each per lane. Fewer groups
+// mean fewer reductions and atomics per splat and tile, which dominate on
+// Apple GPUs; the per-pixel math does not change.
+constant constexpr uint kFastBwdWarps = 2u;
+constant constexpr uint kFastBwdSubtiles = 8u / kFastBwdWarps;
+constant constexpr uint kFastBwdThreads = 32u * kFastBwdWarps;
+
 // Port of blend_backward_cu: reverse walk over [0, T_eff) with the exact
 // ellipse sub-tile cull; one atomic per splat per SIMD group.
 kernel void fast_blend_backward(constant FastBlendBackwardParams& p [[buffer(0)]],
@@ -189,72 +221,86 @@ kernel void fast_blend_backward(constant FastBlendBackwardParams& p [[buffer(0)]
     threadgroup float4 s_color[kFastBlendThreads];
     threadgroup float s_depth[kFastBlendThreads];
     threadgroup float3 s_normal[kFastBlendThreads];
-    threadgroup uint s_max[kFastBlendThreads / 32u];
+    threadgroup uint s_max[kFastBwdWarps];
 
     const uint2 range = p.ranges[tile_idx];
     if (range.x >= range.y || range.y > p.n_instances)
         return;
     const int tile_n = int(range.y - range.x);
 
-    const FastTilePixels t =
-        fast_tile_pixels(uint2(tile_idx % p.grid_w, tile_idx / p.grid_w), lane, warp, p.width, p.height);
-    FastBackwardPixel px0 = fast_backward_pixel(p, t.pix0, t.inside0, tile_idx * kFastTilePixels + t.rank0);
-    FastBackwardPixel px1 = fast_backward_pixel(p, t.pix1, t.inside1, tile_idx * kFastTilePixels + t.rank1);
+    const uint2 origin = uint2(tile_idx % p.grid_w, tile_idx / p.grid_w) * kFastTileSize;
+    const uint2 local = uint2(lane & 7u, lane >> 3);
+    uint2 sub[kFastBwdSubtiles];
+    FastBackwardPixel px[kFastBwdSubtiles];
+    uint last = 0u;
+#pragma unroll
+    for (uint k = 0u; k < kFastBwdSubtiles; ++k) {
+        const uint st = warp + kFastBwdWarps * k;
+        const uint2 offset = uint2((st & 1u) * 8u, (st >> 1) * 4u);
+        sub[k] = origin + offset;
+        const uint2 pixel = sub[k] + local;
+        const bool inside = pixel.x < p.width && pixel.y < p.height;
+        px[k] = fast_backward_pixel(p, pixel, inside,
+                                    tile_idx * kFastTilePixels + (offset.y + local.y) * kFastTileSize + offset.x + local.x);
+        last = max(last, px[k].last);
+    }
 
-    const uint warp_max = simd_max(max(px0.last, px1.last));
+    const uint warp_max = simd_max(last);
     if (lane == 0u)
         s_max[warp] = warp_max;
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    const int t_eff = min(tile_n, int(max(max(s_max[0], s_max[1]), max(s_max[2], s_max[3]))));
+    uint tile_max = 0u;
+    for (uint w = 0u; w < kFastBwdWarps; ++w)
+        tile_max = max(tile_max, s_max[w]);
+    const int t_eff = min(tile_n, int(tile_max));
     if (t_eff <= 0)
         return;
     const int batch_size = t_eff <= 4 ? 32 : (t_eff <= 16 ? 64 : (t_eff <= 36 ? 96 : int(kFastBlendThreads)));
-    const float2 sub0 = float2(t.sub0);
-    const float2 sub1 = float2(t.sub1);
     const bool edge = p.edge_score != nullptr;
 
     for (int batch_base = 0; batch_base < t_eff; batch_base += batch_size) {
         const int n_batch = min(batch_size, t_eff - batch_base);
-        if (int(rank) < n_batch) {
-            const uint prim = p.values[range.x + uint(t_eff - (batch_base + int(rank)) - 1)];
+        for (int slot = int(rank); slot < n_batch; slot += int(kFastBwdThreads)) {
+            const uint prim = p.values[range.x + uint(t_eff - (batch_base + slot) - 1)];
             const bool valid = prim < p.n_primitives;
-            s_prim[rank] = valid ? prim : kFastInvalid;
+            s_prim[slot] = valid ? prim : kFastInvalid;
             if (valid) {
                 const FastMeanBox geom = p.mean_box[prim];
                 const float4 cd = p.color_depth[prim];
-                s_mean[rank] = geom.mean;
-                s_bbox[rank] = geom.bbox;
-                s_conic[rank] = p.conic_opacity[prim];
+                s_mean[slot] = geom.mean;
+                s_bbox[slot] = geom.bbox;
+                s_conic[slot] = p.conic_opacity[prim];
                 // Clamped color; w holds which channels stayed below the upper clamp.
                 const uint factor_bits = (cd.x <= kFastMaxBlendColor ? 1u : 0u) |
                                          (cd.y <= kFastMaxBlendColor ? 2u : 0u) |
                                          (cd.z <= kFastMaxBlendColor ? 4u : 0u);
-                s_color[rank] = float4(fmin(fmax(cd.xyz, 0.0f), kFastMaxBlendColor), as_type<float>(factor_bits));
-                s_depth[rank] = cd.w;
+                s_color[slot] = float4(fmin(fmax(cd.xyz, 0.0f), kFastMaxBlendColor), as_type<float>(factor_bits));
+                s_depth[slot] = cd.w;
                 if (kFastNormalChannel != 0u)
-                    s_normal[rank] = p.normals[prim].xyz;
+                    s_normal[slot] = p.normals[prim].xyz;
             }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
         for (int j_base = 0; j_base < n_batch; j_base += 32) {
             const int j_test = j_base + int(lane);
-            bool hit0 = false, hit1 = false;
-            if (j_test < n_batch && s_prim[j_test] != kFastInvalid) {
-                const ushort4 bb = s_bbox[j_test];
-                const float4 co = s_conic[j_test];
-                if (fast_bbox_hits(bb, t.sub0))
-                    hit0 = fast_overlaps_subtile(s_mean[j_test], co.xyz, co.w, sub0);
-                if (fast_bbox_hits(bb, t.sub1))
-                    hit1 = fast_overlaps_subtile(s_mean[j_test], co.xyz, co.w, sub1);
+            uint mask[kFastBwdSubtiles];
+            uint live = 0u;
+            const bool testable = j_test < n_batch && s_prim[j_test] != kFastInvalid;
+            const ushort4 bb = testable ? s_bbox[j_test] : ushort4(0);
+            const float4 co_test = testable ? s_conic[j_test] : float4(0.0f);
+            const float2 mean_test = testable ? s_mean[j_test] : float2(0.0f);
+#pragma unroll
+            for (uint k = 0u; k < kFastBwdSubtiles; ++k) {
+                const bool hit = testable && fast_bbox_hits(bb, sub[k]) &&
+                                 fast_overlaps_subtile(mean_test, co_test.xyz, co_test.w, float2(sub[k]));
+                mask[k] = uint(static_cast<simd_vote::vote_t>(simd_ballot(hit)));
+                live |= mask[k];
             }
-            const uint mask0 = uint(static_cast<simd_vote::vote_t>(simd_ballot(hit0)));
-            const uint mask1 = uint(static_cast<simd_vote::vote_t>(simd_ballot(hit1)));
-            uint live = mask0 | mask1;
             while (live != 0u) {
-                const uint k = ctz(live);
+                const uint bit = ctz(live);
                 live &= live - 1u;
-                const int j = j_base + int(k);
+                const int j = j_base + int(bit);
                 const uint tile_primitive = uint(t_eff - (batch_base + j) - 1);
                 const uint prim = s_prim[j];
                 const float2 mean = s_mean[j];
@@ -267,50 +313,31 @@ kernel void fast_blend_backward(constant FastBlendBackwardParams& p [[buffer(0)]
 
                 FastBlendAccum a = {float2(0.0f), float3(0.0f), 0.0f, float3(0.0f), 0.0f, float3(0.0f), 0.0f, 0.0f, 0.0f};
                 bool contributed = false;
-                if ((mask0 >> k) & 1u)
-                    contributed |= fast_accumulate_pixel(px0, a, tile_primitive, mean, co, c.xyz, factor, depth, normal);
-                if ((mask1 >> k) & 1u)
-                    contributed |= fast_accumulate_pixel(px1, a, tile_primitive, mean, co, c.xyz, factor, depth, normal);
+#pragma unroll
+                for (uint k = 0u; k < kFastBwdSubtiles; ++k) {
+                    if ((mask[k] >> bit) & 1u)
+                        contributed |= fast_accumulate_pixel(px[k], a, tile_primitive, mean, co, c.xyz, factor, depth, normal);
+                }
                 if (!simd_any(contributed))
                     continue;
-                const float2 g_mean = float2(simd_sum(a.mean.x), simd_sum(a.mean.y));
-                const float3 g_conic = float3(simd_sum(a.conic.x), simd_sum(a.conic.y), simd_sum(a.conic.z));
-                const float g_depth = simd_sum(a.depth);
-                const float g_opacity = simd_sum(a.opacity);
-                const float3 g_color = float3(simd_sum(a.color.x), simd_sum(a.color.y), simd_sum(a.color.z));
-                float3 g_normal = float3(0.0f);
-                if (kFastNormalChannel != 0u)
-                    g_normal = float3(simd_sum(a.normal.x), simd_sum(a.normal.y), simd_sum(a.normal.z));
-                float dens_w = 0.0f, dens_e = 0.0f;
-                if (kFastDensification != 0u) {
-                    dens_w = simd_sum(a.densification_weight);
-                    dens_e = simd_sum(a.densification_error);
-                }
-                const float g_edge = edge ? simd_sum(a.edge) : 0.0f;
-                if (lane == 0u) {
-                    device atomic_float* g = p.grads + prim * kFastGradStride;
-                    fast_atomic_add(g + 0, fast_clamp_grad(g_mean.x));
-                    fast_atomic_add(g + 1, fast_clamp_grad(g_mean.y));
-                    fast_atomic_add(g + 2, fast_clamp_grad(g_conic.x));
-                    fast_atomic_add(g + 3, fast_clamp_grad(g_conic.y));
-                    fast_atomic_add(g + 4, fast_clamp_grad(g_conic.z));
-                    fast_atomic_add(g + 5, fast_clamp_grad(g_opacity));
-                    fast_atomic_add(g + 6, fast_clamp_grad(g_color.x));
-                    fast_atomic_add(g + 7, fast_clamp_grad(g_color.y));
-                    fast_atomic_add(g + 8, fast_clamp_grad(g_color.z));
-                    fast_atomic_add(g + 9, fast_clamp_grad(g_depth));
-                    if (kFastNormalChannel != 0u) {
-                        device atomic_float* n = p.normal_grads + prim * 4u;
-                        fast_atomic_add(n + 0, fast_clamp_grad(g_normal.x));
-                        fast_atomic_add(n + 1, fast_clamp_grad(g_normal.y));
-                        fast_atomic_add(n + 2, fast_clamp_grad(g_normal.z));
+                float v[16] = {a.mean.x, a.mean.y, a.conic.x, a.conic.y, a.conic.z, a.opacity,
+                               a.color.x, a.color.y, a.color.z, a.depth, a.normal.x, a.normal.y,
+                               a.normal.z, a.densification_weight, a.densification_error, a.edge};
+                const float total = fast_transpose_sum16(v, lane);
+                const uint component = (lane >> 1u) & 15u;
+                // Zero totals leave the +0-initialized accumulators unchanged.
+                if ((lane & 1u) == 0u && total != 0.0f) {
+                    if (component < 10u) {
+                        fast_atomic_add(p.grads + prim * kFastGradStride + component, fast_clamp_grad(total));
+                    } else if (component < 13u) {
+                        if (kFastNormalChannel != 0u)
+                            fast_atomic_add(p.normal_grads + prim * 4u + (component - 10u), fast_clamp_grad(total));
+                    } else if (component < 15u) {
+                        if (kFastDensification != 0u)
+                            fast_atomic_add(p.densification + (component - 13u) * p.n_primitives + prim, total);
+                    } else if (edge) {
+                        fast_atomic_add(p.edge_score + prim, total);
                     }
-                    if (kFastDensification != 0u) {
-                        fast_atomic_add(p.densification + prim, dens_w);
-                        fast_atomic_add(p.densification + p.n_primitives + prim, dens_e);
-                    }
-                    if (edge)
-                        fast_atomic_add(p.edge_score + prim, g_edge);
                 }
             }
         }

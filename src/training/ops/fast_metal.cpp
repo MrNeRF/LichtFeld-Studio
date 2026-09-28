@@ -34,6 +34,8 @@ namespace lfs::training {
         constexpr uint32_t kTile = 16;
         constexpr uint32_t kTilePixels = kTile * kTile;
         constexpr uint32_t kBlendThreads = 128;
+        // kFastBwdThreads in fast_backward.metal.
+        constexpr uint32_t kBackwardThreads = 64;
         constexpr uint32_t kGradStride = 12;
         constexpr uint32_t kScanBlock = 2048;
         constexpr uint32_t kSortBlock = 2048;
@@ -685,7 +687,7 @@ namespace lfs::training {
                         &grad_image, &grad_alpha, &grad_depth, &grad_normal, &bg_use, &s.n_contrib,
                         &s.final_transmittance, &s.grads, &normal_grads_use, &densification_use, &error, &edge_weight,
                         &edge_scores},
-                       f.grid_w * f.grid_h, 1, kBlendThreads,
+                       f.grid_w * f.grid_h, 1, kBackwardThreads,
                        {{kDensificationConstant, blend_densification}, {kNormalChannelConstant, normal_channel ? 1u : 0u}});
             }
 

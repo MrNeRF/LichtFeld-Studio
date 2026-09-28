@@ -834,14 +834,21 @@ kernel void fast_blend_forward(constant FastBlendParams& p [[buffer(0)]],
             }
             const uint mask0 = uint(static_cast<simd_vote::vote_t>(simd_ballot(hit0)));
             const uint mask1 = uint(static_cast<simd_vote::vote_t>(simd_ballot(hit1)));
-            for (int k = 0; k < 32; ++k) {
-                const int j = j_base + k;
-                if (j >= batch_size)
-                    break;
+            // Walk only splats that touch a sub-tile of this SIMD group. A pixel's
+            // done flag changes only when it blends, so every skipped splat counts
+            // toward `possible` exactly as a one-by-one walk would.
+            const uint chunk = uint(min(32, batch_size - j_base));
+            uint live = mask0 | mask1;
+            uint walked = 0u;
+            while (live != 0u) {
+                const uint k = ctz(live);
+                live &= live - 1u;
+                const int j = j_base + int(k);
                 const bool walk0 = !s0.done;
                 const bool walk1 = !s1.done;
-                s0.possible += walk0 ? 1u : 0u;
-                s1.possible += walk1 ? 1u : 0u;
+                s0.possible += walk0 ? k + 1u - walked : 0u;
+                s1.possible += walk1 ? k + 1u - walked : 0u;
+                walked = k + 1u;
                 const bool use0 = walk0 && ((mask0 >> k) & 1u) != 0u;
                 const bool use1 = walk1 && ((mask1 >> k) & 1u) != 0u;
                 if (!use0 && !use1)
@@ -856,6 +863,8 @@ kernel void fast_blend_forward(constant FastBlendParams& p [[buffer(0)]],
                 if (use1)
                     fast_blend_pixel(s1, pixel1, mean, co, c, depth, normal);
             }
+            s0.possible += !s0.done ? chunk - walked : 0u;
+            s1.possible += !s1.done ? chunk - walked : 0u;
         }
     }
 

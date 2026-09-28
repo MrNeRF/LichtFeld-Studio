@@ -131,35 +131,67 @@ kernel void mrnf_select_histogram(constant MrnfSelectParams& p [[buffer(0)]],
 }
 
 // One thread per selection walks the digit histogram.
-kernel void mrnf_select_pick(constant MrnfSelectParams& p [[buffer(0)]], uint s [[thread_position_in_grid]]) {
-    if (s >= p.selections)
-        return;
+// One threadgroup of kMrnfPickThreads per selection: a prefix scan over the
+// digit histogram finds the bin that holds the remaining rank, as the serial
+// walk it replaces did, then the histogram is cleared for the next pass.
+constant constexpr uint kMrnfPickThreads = 256u;
+
+kernel void mrnf_select_pick(constant MrnfSelectParams& p [[buffer(0)]], uint s [[threadgroup_position_in_grid]],
+                             uint t [[thread_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]],
+                             uint warp [[simdgroup_index_in_threadgroup]]) {
+    threadgroup uint warp_sums[kMrnfPickThreads / 32u];
+    threadgroup uint picked[2];
     device uint* state = p.workspace + 4 * s;
     device uint* hist = p.workspace + 4 * p.selections + kMrnfSelectBins * s;
-    if (p.pass == 0) {
+    if (p.pass == 0 && t == 0u) {
         if (p.positive_only == 0)
             state[0] = p.count;
         state[1] = p.ranks[s] == kMrnfSelectMedian ? state[0] / 2u : p.ranks[s];
         state[2] = 0u;
     }
+    threadgroup_barrier(mem_flags::mem_device);
     const uint bins = 1u << mrnf_select_bits(p.pass);
-    uint below = 0u;
-    uint digit = bins - 1u;
-    for (uint b = 0; b < bins; ++b) {
-        const uint c = hist[b];
-        if (state[1] < below + c) {
-            digit = b;
-            break;
-        }
-        below += c;
+    const uint per_thread = bins / kMrnfPickThreads;
+    const uint first = t * per_thread;
+    uint sum = 0u;
+    for (uint i = 0u; i < per_thread; ++i)
+        sum += hist[first + i];
+    const uint inclusive = simd_prefix_inclusive_sum(sum);
+    if (lane == 31u)
+        warp_sums[warp] = inclusive;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    uint before = 0u;
+    uint total = 0u;
+    for (uint w = 0u; w < kMrnfPickThreads / 32u; ++w) {
+        before += w < warp ? warp_sums[w] : 0u;
+        total += warp_sums[w];
     }
-    for (uint b = 0; b < kMrnfSelectBins; ++b)
+    const uint rank = state[1];
+    uint below = before + inclusive - sum;
+    if (rank >= below && rank < below + sum) {
+        for (uint i = 0u; i < per_thread; ++i) {
+            const uint c = hist[first + i];
+            if (rank < below + c) {
+                picked[0] = first + i;
+                picked[1] = below;
+                break;
+            }
+            below += c;
+        }
+    } else if (t == 0u && rank >= total) {
+        picked[0] = bins - 1u;
+        picked[1] = total;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
+    for (uint b = t; b < kMrnfSelectBins; b += kMrnfPickThreads)
         hist[b] = 0u;
-    state[2] |= digit << mrnf_select_shift(p.pass);
-    state[1] -= below;
-    if (p.pass == 2) {
-        const uint key = state[2];
-        state[3] = state[0] == 0u ? 0u : ((key & 0x80000000u) != 0u ? (key & 0x7fffffffu) : ~key);
+    if (t == 0u) {
+        state[2] |= picked[0] << mrnf_select_shift(p.pass);
+        state[1] -= picked[1];
+        if (p.pass == 2) {
+            const uint key = state[2];
+            state[3] = state[0] == 0u ? 0u : ((key & 0x80000000u) != 0u ? (key & 0x7fffffffu) : ~key);
+        }
     }
 }
 

@@ -46,6 +46,25 @@ namespace lfs::io {
                                                std::shared_ptr<void>(data, release));
         }
 
+        // Takes ownership of decoded interleaved 8-bit samples and returns them
+        // planar, so the device copy needs no transpose.
+        Tensor host_uint8_planar(void* const data, const int height, const int width, const int channels,
+                                 const ReleaseFn release) {
+            const std::unique_ptr<void, ReleaseFn> owner(data, release);
+            const size_t pixels = static_cast<size_t>(height) * static_cast<size_t>(width);
+            const auto c = static_cast<size_t>(channels);
+            auto planar = Tensor::empty_pageable_host(
+                TensorShape({c, static_cast<size_t>(height), static_cast<size_t>(width)}), DataType::UInt8);
+            const auto* const src = static_cast<const uint8_t*>(data);
+            auto* const dst = planar.ptr<uint8_t>();
+            for (size_t ch = 0; ch < c; ++ch) {
+                uint8_t* const plane = dst + ch * pixels;
+                for (size_t i = 0; i < pixels; ++i)
+                    plane[i] = src[i * c + ch];
+            }
+            return planar;
+        }
+
         // 16-bit samples have no tensor dtype; Int32 holds them exactly.
         Tensor host_uint16(void* const data, TensorShape shape, const ReleaseFn release) {
             const std::unique_ptr<void, ReleaseFn> owner(data, release);
@@ -172,9 +191,7 @@ namespace lfs::io {
                 lfs::core::load_image(path, params.resize_factor, params.max_width);
             if (!data)
                 throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
-            image = to_device(upload, host_uint8(data, image_shape(height, width, channels),
-                                                 lfs::core::free_image))
-                        .permute({2, 0, 1});
+            image = to_device(upload, host_uint8_planar(data, height, width, channels, lfs::core::free_image));
             if (!params.output_uint8)
                 image = image.to(DataType::Float32).mul(UINT8_SCALE);
         }
