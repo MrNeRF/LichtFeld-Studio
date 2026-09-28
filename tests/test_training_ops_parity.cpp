@@ -1807,6 +1807,26 @@ namespace {
         expect_match(capture(family, backend), *reference, false);
     }
 
+    // Without a CUDA reference, a filled slot must still run its fixture cleanly
+    // and produce finite floats.
+    TEST_P(TrainingOpsFamilyParity, RunsCleanly) {
+        const auto [family, backend] = GetParam();
+        if (!family_present(lfs::training::training_ops(backend), family)) {
+            GTEST_SKIP() << lfs::training::training_family_name(family);
+        }
+        if (!lfs::core::gpu_backend_available(backend)) {
+            GTEST_SKIP() << backend_name(backend) << " device unavailable";
+        }
+        const Capture result = capture(family, backend);
+        ASSERT_TRUE(result.error.empty()) << result.error;
+        for (const Field& field : result.snapshot.fields) {
+            for (size_t index = 0; index < field.values.size(); ++index) {
+                ASSERT_TRUE(std::isfinite(field.values[index]))
+                    << field.name << " index " << index << " is " << field.values[index];
+            }
+        }
+    }
+
     INSTANTIATE_TEST_SUITE_P(
         Backends, TrainingOpsFamilyParity,
         ::testing::Combine(::testing::Values(

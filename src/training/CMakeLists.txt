@@ -153,6 +153,7 @@ endif()
 if(APPLE)
     set(LFS_TRAINING_METAL_KERNELS
         kernels/metal/common.metal
+        kernels/metal/training_image.metal
     )
     set(_lfs_training_metal_cpp ${CMAKE_CURRENT_BINARY_DIR}/lfs_training_metal_kernels.cpp)
     list(TRANSFORM LFS_TRAINING_METAL_KERNELS PREPEND ${CMAKE_CURRENT_SOURCE_DIR}/
@@ -175,6 +176,7 @@ if(APPLE)
         ops/metal_kernels.cpp
         ops/table_metal.cpp
         ops/session_metal.cpp
+        ops/training_image_metal.cpp
     )
 else()
     list(APPEND TRAINING_NEW_SOURCES

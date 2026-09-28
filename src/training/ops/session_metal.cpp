@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "lfs/training/ops/session_metal.hpp"
+#include "metal_families.hpp"
 
 #include "core/gpu_device_runtime.hpp"
 #include "core/logger.hpp"

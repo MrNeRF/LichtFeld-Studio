@@ -17,6 +17,19 @@ namespace lfs::training::metal {
 
     inline constexpr uint32_t kGroupWidth = 256;
 
+    // MSL vector layouts inside parameter blocks: float3 and float4 are both
+    // 16 bytes with 16-byte alignment.
+    struct alignas(16) Float4 {
+        float x = 0.f, y = 0.f, z = 0.f, w = 0.f;
+    };
+    struct alignas(16) Float3 {
+        float x = 0.f, y = 0.f, z = 0.f;
+        float unused = 0.f;
+    };
+    struct alignas(8) Float2 {
+        float x = 0.f, y = 0.f;
+    };
+
     core::GpuKernelModule& kernels();
 
     // Device address of a tensor, or 0 when it is absent.
@@ -32,6 +45,20 @@ namespace lfs::training::metal {
                           .uses = std::span(uses.begin(), uses.size()),
                           .groups = {groups, 1, 1},
                           .group = {width, 1, 1},
+                          .constants = std::span(constants.begin(), constants.size())});
+    }
+
+    // Threadgroups of width x height threads over a 2D grid of groups.
+    template <class Params>
+    void launch_2d(const std::string_view function, const Params& params,
+                   const std::initializer_list<const core::Tensor*> uses, const uint32_t groups_x,
+                   const uint32_t groups_y, const uint32_t width, const uint32_t height,
+                   const std::initializer_list<std::pair<uint32_t, uint32_t>> constants = {}) {
+        kernels().launch({.function = function,
+                          .params = std::as_bytes(std::span(&params, 1)),
+                          .uses = std::span(uses.begin(), uses.size()),
+                          .groups = {groups_x, groups_y, 1},
+                          .group = {width, height, 1},
                           .constants = std::span(constants.begin(), constants.size())});
     }
 
