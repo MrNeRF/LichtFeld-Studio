@@ -13,6 +13,28 @@ endforeach()
 file(GLOB_RECURSE _candidates LIST_DIRECTORIES FALSE
     "${_contents}/MacOS/*" "${_contents}/lib/*")
 foreach(_candidate IN LISTS _candidates)
+    # otool can print diagnostics for text files while returning success.
+    # Inspect the Mach-O magic before interpreting its output or signing it.
+    file(READ "${_candidate}" _magic LIMIT 4 HEX)
+    string(TOLOWER "${_magic}" _magic)
+    if(NOT _magic MATCHES "^(cffaedfe|feedfacf|cafebabe|cafebabf)$")
+        continue()
+    endif()
+    # Third-party libraries copied by GET_RUNTIME_DEPENDENCIES retain build-tree
+    # LC_RPATH entries. Remove those from the copied file before validation.
+    execute_process(COMMAND /usr/bin/otool -l "${_candidate}"
+        RESULT_VARIABLE _otool_result OUTPUT_VARIABLE _load_commands ERROR_QUIET)
+    if(NOT _otool_result EQUAL 0)
+        message(FATAL_ERROR "Cannot inspect Mach-O load commands: ${_candidate}")
+    endif()
+    string(REPLACE "\n" ";" _load_lines "${_load_commands}")
+    foreach(_line IN LISTS _load_lines)
+        if(_line MATCHES "^[ \t]*path (/[^ \t]+) ")
+            execute_process(COMMAND /usr/bin/install_name_tool -delete_rpath
+                "${CMAKE_MATCH_1}" "${_candidate}" COMMAND_ERROR_IS_FATAL ANY)
+        endif()
+    endforeach()
+
     execute_process(COMMAND /usr/bin/otool -L "${_candidate}"
         RESULT_VARIABLE _otool_result OUTPUT_VARIABLE _links ERROR_QUIET)
     if(NOT _otool_result EQUAL 0)
@@ -20,13 +42,13 @@ foreach(_candidate IN LISTS _candidates)
     endif()
     string(REPLACE "\n" ";" _lines "${_links}")
     foreach(_line IN LISTS _lines)
-        if(_line MATCHES "^[ \t]*(/[^ \t]+)[ \t]+")
+        if(_line MATCHES "^[ \t]*(/[^ \t]+)[ \t]+[(]")
             set(_dependency "${CMAKE_MATCH_1}")
             if(NOT _dependency MATCHES "^/System/Library/" AND
                NOT _dependency MATCHES "^/usr/lib/")
                 message(FATAL_ERROR "Non-portable dependency in ${_candidate}: ${_dependency}")
             endif()
-        elseif(_line MATCHES "^[ \t]*@rpath/([^ \t]+)[ \t]+")
+        elseif(_line MATCHES "^[ \t]*@rpath/([^ \t]+)[ \t]+[(]")
             set(_rpath_name "${CMAKE_MATCH_1}")
             if(NOT EXISTS "${_contents}/lib/${_rpath_name}" AND
                NOT EXISTS "${_contents}/MacOS/${_rpath_name}")

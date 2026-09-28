@@ -57,6 +57,7 @@ vcpkg_*/**
 vcpkg_*/
 build*/
 build*/**
+dist-macos-portable/
 !tools/build/
 !tools/build/check_build_deps.sh
 

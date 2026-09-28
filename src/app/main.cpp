@@ -307,6 +307,10 @@ int main(int argc, char* argv[]) {
         return 2;
     }
 
+#ifdef LFS_MACOS_PORTABLE_APP
+    // Keep the signed app immutable, including for bundled Python child processes.
+    (void)lfs::core::environment::set_value("PYTHONDONTWRITEBYTECODE", "1");
+#endif
 #ifdef __APPLE__
     configureVulkanDriver();
 #endif

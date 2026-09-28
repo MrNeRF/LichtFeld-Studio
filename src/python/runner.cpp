@@ -1187,6 +1187,9 @@ _add_dll_dirs()
                 PyConfig config;
                 PyConfig_InitPythonConfig(&config);
                 config.user_site_directory = 0;
+#ifdef LFS_MACOS_PORTABLE_APP
+                config.write_bytecode = 0;
+#endif
 
                 const auto python_home = lfs::core::getPythonHome();
                 if (!python_home.empty()) {
