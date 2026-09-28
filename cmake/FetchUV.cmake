@@ -156,13 +156,17 @@ endfunction()
 
 # Function to install uv to the bin directory
 function(install_uv)
+    set(_uv_install_dir "bin")
+    if(CMAKE_INSTALL_BINDIR)
+        set(_uv_install_dir "${CMAKE_INSTALL_BINDIR}")
+    endif()
     # First try the downloaded binary
     if(EXISTS "${UV_BINARY_PATH}")
         install(PROGRAMS "${UV_BINARY_PATH}"
-            DESTINATION bin
+            DESTINATION "${_uv_install_dir}"
             COMPONENT runtime
         )
-        message(STATUS "FetchUV: Will install uv to bin/")
+        message(STATUS "FetchUV: Will install uv to ${_uv_install_dir}/")
         return()
     endif()
 
@@ -171,7 +175,7 @@ function(install_uv)
     if(SYSTEM_UV_PATH)
         message(STATUS "FetchUV: Using system uv at ${SYSTEM_UV_PATH}")
         install(PROGRAMS "${SYSTEM_UV_PATH}"
-            DESTINATION bin
+            DESTINATION "${_uv_install_dir}"
             COMPONENT runtime
         )
     else()

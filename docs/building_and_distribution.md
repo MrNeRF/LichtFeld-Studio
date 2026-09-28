@@ -161,6 +161,24 @@ cmake --install build --prefix ./dist
 # cmake -B build -DBUILD_PORTABLE=ON -DLFS_ENABLE_NVIDIA_DLSS=OFF
 ```
 
+### macOS portable app (Apple Silicon)
+
+The `macos-portable` preset uses a separate build directory and installs a
+relocatable `LichtFeld-Studio.app`. Building alone produces build artifacts;
+the `.app` is assembled by the install step. It is not copied to `/Applications`.
+
+```bash
+cmake --preset macos-portable
+cmake --build --preset macos-portable
+cmake --install build-macos-portable --prefix ./dist-macos-portable
+open ./dist-macos-portable/LichtFeld-Studio.app
+```
+
+The bundle contains its executable in `Contents/MacOS`, libraries and Python
+in `Contents/lib`, and resources and the MoltenVK ICD in `Contents/share`.
+The install step verifies bundled library paths and ad-hoc signs the local app.
+Developer ID signing and notarization are separate release steps.
+
 ## Tests
 
 The tensor comparison tests validate the built-in tensor library against LibTorch as an

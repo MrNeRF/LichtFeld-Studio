@@ -105,6 +105,18 @@
       }
     },
     {
+      "name": "macos-portable",
+      "displayName": "macOS arm64 portable .app",
+      "description": "Relocatable Apple Silicon app bundle with Python and MoltenVK",
+      "inherits": "macos-release",
+      "binaryDir": "${sourceDir}/build-macos-portable",
+      "cacheVariables": {
+        "BUILD_PORTABLE": "ON",
+        "LFS_MACOS_PORTABLE_APP": "ON",
+        "LFS_ENABLE_NVIDIA_DLSS": "OFF"
+      }
+    },
+    {
       "name": "linux-relwithdebinfo",
       "displayName": "Linux x64 RelWithDebInfo (Release-only dependencies)",
       "description": "Optimized Linux x64 application with debug information, reusing the linux-release dependency profile; Vulkan validation remains enabled",
@@ -163,6 +175,16 @@
     {
       "name": "macos-release",
       "configurePreset": "macos-release",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "jobs": 2
+    },
+    {
+      "name": "macos-portable",
+      "configurePreset": "macos-portable",
       "condition": {
         "type": "equals",
         "lhs": "${hostSystemName}",

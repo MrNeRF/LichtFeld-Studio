@@ -234,12 +234,30 @@ option(BUILD_CUDA_PTX_ONLY "Build PTX-only (JIT at runtime, ~5-15s first startup
 # Portable: PTX-only + bundled libs, no tests
 option(BUILD_PORTABLE "Build portable distribution" OFF)
 if(BUILD_PORTABLE)
-    set(BUILD_CUDA_PTX_ONLY ON CACHE BOOL "" FORCE)
+    if(NOT APPLE)
+        set(BUILD_CUDA_PTX_ONLY ON CACHE BOOL "" FORCE)
+    endif()
     set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(BUILD_FORMAT_TESTS OFF CACHE BOOL "" FORCE)
     set(BUILD_TEMPORAL_CPU_TESTS OFF CACHE BOOL "" FORCE)
     add_compile_definitions(LFS_BUILD_PORTABLE=1)
-    message(STATUS "Portable: PTX-only, tests disabled")
+    message(STATUS "Portable: bundled runtime, tests disabled")
+endif()
+
+option(LFS_MACOS_PORTABLE_APP "Install the macOS portable build as a relocatable .app" OFF)
+if(LFS_MACOS_PORTABLE_APP)
+    if(NOT APPLE OR NOT BUILD_PORTABLE)
+        message(FATAL_ERROR "LFS_MACOS_PORTABLE_APP requires macOS and BUILD_PORTABLE=ON")
+    endif()
+    set(_lfs_macos_app "LichtFeld-Studio.app")
+    set(_lfs_macos_contents "${_lfs_macos_app}/Contents")
+    # Existing executable-relative resource, Python and library lookup resolves
+    # from Contents/MacOS to Contents/share and Contents/lib.
+    set(CMAKE_INSTALL_BINDIR "${_lfs_macos_contents}/MacOS" CACHE PATH "macOS app executables" FORCE)
+    set(CMAKE_INSTALL_LIBDIR "${_lfs_macos_contents}/lib" CACHE PATH "macOS app libraries" FORCE)
+    set(CMAKE_INSTALL_DATADIR "${_lfs_macos_contents}/share" CACHE PATH "macOS app resources" FORCE)
+    set(CMAKE_INSTALL_RPATH "@loader_path;@loader_path/../lib;@executable_path/../lib")
+    add_compile_definitions(LFS_MACOS_PORTABLE_APP=1)
 endif()
 
 # Compiler caching is part of the default developer loop. Disable it for clean
@@ -1161,9 +1179,14 @@ if(UNIX)
         set(_lichtfeld_origin "$ORIGIN")
     endif()
     if(BUILD_PORTABLE)
+        if(LFS_MACOS_PORTABLE_APP)
+            set(_lfs_build_with_install_rpath FALSE)
+        else()
+            set(_lfs_build_with_install_rpath TRUE)
+        endif()
         set_target_properties(${PROJECT_NAME} PROPERTIES
                 INSTALL_RPATH "${_lichtfeld_origin};${_lichtfeld_origin}/lib;${_lichtfeld_origin}/../lib"
-                BUILD_WITH_INSTALL_RPATH TRUE
+                BUILD_WITH_INSTALL_RPATH ${_lfs_build_with_install_rpath}
                 INSTALL_RPATH_USE_LINK_PATH FALSE
         )
     else()
@@ -1325,8 +1348,12 @@ message(STATUS "  Temporal CPU Tests: ${BUILD_TEMPORAL_CPU_TESTS}")
 message(STATUS "  Unicode Test Only: ${BUILD_UNICODE_TEST_ONLY}")
 message(STATUS "  Portable Build: ${BUILD_PORTABLE}")
 if(BUILD_PORTABLE)
-    message(STATUS "  -> PTX-only: ON (SM >= ${BUILD_CUDA_MIN_SM}, JIT at runtime)")
-    message(STATUS "  -> Use: cmake --install build --prefix ./dist")
+    if(LFS_MACOS_PORTABLE_APP)
+        message(STATUS "  -> macOS app bundle: ${_lfs_macos_app}")
+    elseif(NOT APPLE)
+        message(STATUS "  -> PTX-only: ON (SM >= ${BUILD_CUDA_MIN_SM}, JIT at runtime)")
+    endif()
+    message(STATUS "  -> Use: cmake --install ${CMAKE_BINARY_DIR} --prefix ./dist")
 endif()
 message(STATUS "===========================================")
 
@@ -1368,7 +1395,53 @@ install(TARGETS lfs_mcp
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
-install(FILES "${CMAKE_SOURCE_DIR}/LICENSE" DESTINATION ".")
+if(LFS_MACOS_PORTABLE_APP)
+    install(FILES "${CMAKE_SOURCE_DIR}/LICENSE"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/licenses/LichtFeld-Studio")
+
+    configure_file("${CMAKE_SOURCE_DIR}/cmake/templates/LichtFeld-Studio-Info.plist.in"
+        "${CMAKE_BINARY_DIR}/LichtFeld-Studio-Info.plist" @ONLY)
+    install(FILES "${CMAKE_BINARY_DIR}/LichtFeld-Studio-Info.plist"
+        DESTINATION "${_lfs_macos_contents}" RENAME "Info.plist")
+    install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/lichtfeld-icon.icns"
+        DESTINATION "${_lfs_macos_contents}/Resources")
+
+    set(_lfs_moltenvk_prefixes /opt/homebrew /usr/local)
+    if(DEFINED ENV{HOMEBREW_PREFIX})
+        list(PREPEND _lfs_moltenvk_prefixes "$ENV{HOMEBREW_PREFIX}")
+    endif()
+    find_library(LFS_MOLTENVK_LIBRARY NAMES MoltenVK
+        PATHS ${_lfs_moltenvk_prefixes} PATH_SUFFIXES lib NO_DEFAULT_PATH)
+    find_file(LFS_MOLTENVK_ICD_JSON NAMES MoltenVK_icd.json
+        PATHS ${_lfs_moltenvk_prefixes} PATH_SUFFIXES etc/vulkan/icd.d NO_DEFAULT_PATH)
+    if(NOT LFS_MOLTENVK_LIBRARY OR NOT LFS_MOLTENVK_ICD_JSON)
+        message(FATAL_ERROR "Portable macOS app requires MoltenVK library and ICD manifest; set LFS_MOLTENVK_LIBRARY and LFS_MOLTENVK_ICD_JSON")
+    endif()
+    get_filename_component(_lfs_moltenvk_real "${LFS_MOLTENVK_LIBRARY}" REALPATH)
+    get_filename_component(_lfs_moltenvk_libdir "${_lfs_moltenvk_real}" DIRECTORY)
+    get_filename_component(_lfs_moltenvk_package "${_lfs_moltenvk_libdir}" DIRECTORY)
+    if(NOT EXISTS "${_lfs_moltenvk_package}/LICENSE")
+        message(FATAL_ERROR "MoltenVK license not found next to ${_lfs_moltenvk_real}")
+    endif()
+    file(READ "${LFS_MOLTENVK_ICD_JSON}" _lfs_moltenvk_icd)
+    string(JSON LFS_MOLTENVK_API_VERSION GET "${_lfs_moltenvk_icd}" ICD api_version)
+    configure_file("${CMAKE_SOURCE_DIR}/cmake/templates/MoltenVK_icd.json.in"
+        "${CMAKE_BINARY_DIR}/MoltenVK_icd.json" @ONLY)
+    install(FILES "${_lfs_moltenvk_real}" DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        RENAME "libMoltenVK.dylib")
+    install(CODE "
+        execute_process(COMMAND /usr/bin/install_name_tool -id
+            @rpath/libMoltenVK.dylib
+            \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/libMoltenVK.dylib\"
+            COMMAND_ERROR_IS_FATAL ANY)
+    " COMPONENT runtime)
+    install(FILES "${CMAKE_BINARY_DIR}/MoltenVK_icd.json"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/vulkan/icd.d")
+    install(FILES "${_lfs_moltenvk_package}/LICENSE"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/licenses/MoltenVK")
+else()
+    install(FILES "${CMAKE_SOURCE_DIR}/LICENSE" DESTINATION ".")
+endif()
 
 set(INSTALL_RESOURCE_DIR "${CMAKE_INSTALL_DATADIR}/LichtFeld-Studio")
 if(_LFS_VULKAN_RASTERIZER_SPV_DIR)
@@ -1459,6 +1532,9 @@ if(BUILD_PORTABLE)
             [[.*libdl[.]so.*]] [[.*libm[.]so[.].*]] [[.*librt[.]so.*]]
             [[.*libstdc[+][+].*]] [[.*libgcc_s.*]]
             [[.*libnvimgcodec.*]] [[.*libnvjpeg_ext.*]])
+    if(APPLE)
+        list(APPEND _POST_EXCLUDE [[/System/Library/.*]])
+    endif()
 
     # Search directories for runtime dependencies (quoted for paths with spaces on Windows)
     set(_RUNTIME_SEARCH_DIRS
@@ -1508,6 +1584,10 @@ if(BUILD_PORTABLE)
     endfunction()
 
     bundle_runtime_deps("$<TARGET_FILE:${PROJECT_NAME}>" FALSE)
+    if(LFS_MACOS_PORTABLE_APP)
+        # The Python extension is dlopened and is not in the executable's link graph.
+        bundle_runtime_deps("$<TARGET_FILE:lfs_py>" TRUE)
+    endif()
     if(TARGET nvjpeg_ext)
         bundle_runtime_deps("$<TARGET_FILE:nvjpeg_ext>" TRUE)
     endif()
@@ -1548,6 +1628,12 @@ if(BUILD_PORTABLE)
             endif()
         " COMPONENT runtime)
     endif()
+endif()
+
+if(LFS_MACOS_PORTABLE_APP)
+    configure_file("${CMAKE_SOURCE_DIR}/cmake/templates/VerifyMacPortableApp.cmake.in"
+        "${CMAKE_BINARY_DIR}/VerifyMacPortableApp.cmake" @ONLY)
+    install(SCRIPT "${CMAKE_BINARY_DIR}/VerifyMacPortableApp.cmake" COMPONENT runtime)
 endif()
 
 # Build statistics (parses .ninja_log, no Python required)

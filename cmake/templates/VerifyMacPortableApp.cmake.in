@@ -1,0 +1,61 @@
+# Verify that every installed Mach-O file has only app-relative or system links.
+# CMAKE_INSTALL_PREFIX is set by cmake --install, including when --prefix is used.
+set(_contents "${CMAKE_INSTALL_PREFIX}/@_lfs_macos_contents@")
+set(_exe "${_contents}/MacOS/LichtFeld-Studio")
+set(_icd "${_contents}/share/vulkan/icd.d/MoltenVK_icd.json")
+set(_moltenvk "${_contents}/lib/libMoltenVK.dylib")
+foreach(_required IN ITEMS "${_exe}" "${_icd}" "${_moltenvk}")
+    if(NOT EXISTS "${_required}")
+        message(FATAL_ERROR "Incomplete portable macOS app: ${_required} is missing")
+    endif()
+endforeach()
+
+file(GLOB_RECURSE _candidates LIST_DIRECTORIES FALSE
+    "${_contents}/MacOS/*" "${_contents}/lib/*")
+foreach(_candidate IN LISTS _candidates)
+    execute_process(COMMAND /usr/bin/otool -L "${_candidate}"
+        RESULT_VARIABLE _otool_result OUTPUT_VARIABLE _links ERROR_QUIET)
+    if(NOT _otool_result EQUAL 0)
+        continue() # Python source, stubs and other non-Mach-O files.
+    endif()
+    string(REPLACE "\n" ";" _lines "${_links}")
+    foreach(_line IN LISTS _lines)
+        if(_line MATCHES "^[ \t]*(/[^ \t]+)[ \t]+")
+            set(_dependency "${CMAKE_MATCH_1}")
+            if(NOT _dependency MATCHES "^/System/Library/" AND
+               NOT _dependency MATCHES "^/usr/lib/")
+                message(FATAL_ERROR "Non-portable dependency in ${_candidate}: ${_dependency}")
+            endif()
+        elseif(_line MATCHES "^[ \t]*@rpath/([^ \t]+)[ \t]+")
+            set(_rpath_name "${CMAKE_MATCH_1}")
+            if(NOT EXISTS "${_contents}/lib/${_rpath_name}" AND
+               NOT EXISTS "${_contents}/MacOS/${_rpath_name}")
+                message(FATAL_ERROR "Missing bundled @rpath dependency in ${_candidate}: ${_rpath_name}")
+            endif()
+        endif()
+    endforeach()
+    execute_process(COMMAND /usr/bin/otool -l "${_candidate}"
+        RESULT_VARIABLE _otool_result OUTPUT_VARIABLE _load_commands ERROR_QUIET)
+    if(_otool_result EQUAL 0)
+        string(REPLACE "\n" ";" _lines "${_load_commands}")
+        foreach(_line IN LISTS _lines)
+            if(_line MATCHES "^[ \t]*path (/[^ \t]+) ")
+                message(FATAL_ERROR "Absolute rpath in ${_candidate}: ${CMAKE_MATCH_1}")
+            endif()
+        endforeach()
+    endif()
+    list(APPEND _macho_files "${_candidate}")
+endforeach()
+
+# CMake may rewrite install rpaths and MoltenVK's install name. Sign the final
+# installed Mach-O files, then seal the bundle so arm64 dyld accepts them.
+foreach(_candidate IN LISTS _macho_files)
+    execute_process(COMMAND /usr/bin/codesign --force --sign - "${_candidate}"
+        COMMAND_ERROR_IS_FATAL ANY)
+endforeach()
+get_filename_component(_app "${_contents}" DIRECTORY)
+execute_process(COMMAND /usr/bin/codesign --force --sign - "${_app}"
+    COMMAND_ERROR_IS_FATAL ANY)
+execute_process(COMMAND /usr/bin/codesign --verify --deep --strict "${_app}"
+    COMMAND_ERROR_IS_FATAL ANY)
+message(STATUS "Verified and ad-hoc signed portable macOS app: ${_app}")

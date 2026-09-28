@@ -37,13 +37,22 @@
 
 namespace {
 #ifdef __APPLE__
-    void configureHomebrewVulkanDriver() {
+    void configureVulkanDriver() {
         // The vcpkg Vulkan loader does not always discover Homebrew's MoltenVK
         // manifest. Keep an explicit Vulkan driver selection from the caller.
         if (std::getenv("VK_DRIVER_FILES") || std::getenv("VK_ICD_FILENAMES") ||
             std::getenv("VK_ADD_DRIVER_FILES"))
             return;
 
+#ifdef LFS_MACOS_PORTABLE_APP
+        const auto bundled_manifest = lfs::core::getExecutableDir().parent_path() /
+                                      "share/vulkan/icd.d/MoltenVK_icd.json";
+        std::error_code bundled_error;
+        if (std::filesystem::is_regular_file(bundled_manifest, bundled_error)) {
+            (void)lfs::core::environment::set_value("VK_DRIVER_FILES", bundled_manifest.string());
+        }
+        // A portable bundle must not silently use the build machine's Homebrew ICD.
+#else
         const auto try_prefix = [](const std::filesystem::path& prefix) {
             const auto manifest = prefix / "etc/vulkan/icd.d/MoltenVK_icd.json";
             std::error_code error;
@@ -59,6 +68,7 @@ namespace {
         if (try_prefix("/opt/homebrew"))
             return;
         (void)try_prefix("/usr/local");
+#endif
     }
 #endif
 
@@ -298,7 +308,7 @@ int main(int argc, char* argv[]) {
     }
 
 #ifdef __APPLE__
-    configureHomebrewVulkanDriver();
+    configureVulkanDriver();
 #endif
 
     lfs::core::install_crash_handlers();
