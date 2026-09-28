@@ -153,6 +153,7 @@ endif()
 if(APPLE)
     set(LFS_TRAINING_METAL_KERNELS
         kernels/metal/common.metal
+        kernels/metal/joint_adam.metal
         kernels/metal/training_image.metal
     )
     set(_lfs_training_metal_cpp ${CMAKE_CURRENT_BINARY_DIR}/lfs_training_metal_kernels.cpp)
