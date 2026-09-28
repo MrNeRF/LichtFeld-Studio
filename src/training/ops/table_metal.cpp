@@ -14,9 +14,9 @@ namespace lfs::training {
 
             // .adam = &metal_adam_ops(),
 
-            // .mcmc = &metal_mcmc_ops(),
+            .mcmc = &metal_mcmc_ops(),
 
-            // .mrnf = &metal_mrnf_ops(),
+            .mrnf = &metal_mrnf_ops(),
 
             // .geometry = &metal_geometry_ops(),
 
@@ -40,7 +40,7 @@ namespace lfs::training {
 
             // .gsplat = &metal_gsplat_ops(),
 
-            // .refine = &metal_refine_ops(),
+            .refine = &metal_refine_ops(),
 
             .session = &metal_session_ops(),
 
