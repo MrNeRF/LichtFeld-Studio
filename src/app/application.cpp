@@ -1317,9 +1317,10 @@ namespace lfs::app {
     bool preflightGpu(const bool show_dialog, const bool viewer_only) {
         // Falling back changes the default, so it must not be resolved yet.
         if (lfs::core::configured_gpu_backend() == lfs::core::GpuBackend::Metal) {
+            // Training reaches Trainer::initialize, which names any missing families.
+            if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::Metal))
+                return true;
             if (viewer_only) {
-                if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::Metal))
-                    return true;
                 if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan) &&
                     lfs::core::set_default_gpu_backend(lfs::core::GpuBackend::Vulkan).has_value()) {
                     LOG_WARN("The Metal tensor backend needs macOS 26 and a Metal 4 GPU; the viewer runs "
@@ -1329,7 +1330,7 @@ namespace lfs::app {
             }
             reportFatalStartupError(
                 "LichtFeld Studio - No usable GPU",
-                "The selected Metal tensor backend requires a Metal 4 or Vulkan GPU and a viewer-only session.",
+                "The selected Metal tensor backend requires macOS 26 and a Metal 4 GPU; only the viewer can fall back to Vulkan.",
                 show_dialog);
             return false;
         }
