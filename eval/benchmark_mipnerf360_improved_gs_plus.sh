@@ -11,6 +11,11 @@ abort_script() {
 }
 trap abort_script INT TERM
 
+# Fractional seconds; BSD date (macOS) has no %N.
+now_seconds() {
+    perl -MTime::HiRes=time -e 'printf "%.3f\n", time'
+}
+
 run_child() {
     "$@" &
     child_pid=$!
@@ -54,7 +59,7 @@ do
 
     # Run training with evaluation, capturing wall-clock duration.
     mkdir -p "$RESULT_DIR/$SCENE"
-    scene_start=$(date +%s.%N)
+    scene_start=$(now_seconds)
     run_child ./build/LichtFeld-Studio \
         -d $SCENE_DIR/$SCENE/ \
         -o $RESULT_DIR/$SCENE/ \
@@ -64,7 +69,7 @@ do
         --headless \
         --export ply \
         --config eval/improvedGSplus_optimization_params.json || exit $?
-    scene_end=$(date +%s.%N)
+    scene_end=$(now_seconds)
     scene_elapsed=$(echo "$scene_end - $scene_start" | bc -l)
     printf "%.2f\n" "$scene_elapsed" > "$RESULT_DIR/$SCENE/training_time_seconds.txt"
 
