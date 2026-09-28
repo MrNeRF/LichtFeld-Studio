@@ -7,6 +7,7 @@
 
 #include "checkpoint.hpp"
 #include "core/gpu_elapsed.hpp"
+#include "core/host_metrics.hpp"
 #include "core/logger.hpp"
 #include "core/resource_messages.hpp"
 #include "core/sh_layout.hpp"
@@ -166,6 +167,13 @@ namespace lfs::training {
                 result = {
                     .total_bytes = status.ullTotalPhys,
                     .available_bytes = status.ullAvailPhys,
+                };
+            }
+#elif defined(__APPLE__)
+            if (const auto host = core::host_metrics::sample(); host.ram_valid) {
+                result = {
+                    .total_bytes = host.system_total_bytes,
+                    .available_bytes = host.system_total_bytes - host.system_used_bytes,
                 };
             }
 #elif defined(__linux__)

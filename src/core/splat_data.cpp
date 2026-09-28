@@ -2653,10 +2653,12 @@ namespace lfs::core {
                 rotation_.copy_from(rotation_cpu);
                 opacity_.copy_from(opacity_cpu);
                 sh0_.copy_from(sh0_cpu);
-                reorder_canonical_into_swizzled(
-                    shN_cpu, shN_, num_points,
-                    static_cast<uint32_t>(feature_shape - 1),
-                    static_cast<uint32_t>(feature_shape - 1));
+                if (!direct_q16) {
+                    reorder_canonical_into_swizzled(
+                        shN_cpu, shN_, num_points,
+                        static_cast<uint32_t>(feature_shape - 1),
+                        static_cast<uint32_t>(feature_shape - 1));
+                }
 #endif
             } else {
                 // No capacity specified - use pool
