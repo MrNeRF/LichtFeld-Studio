@@ -15,6 +15,7 @@ output*
 !src/visualizer/rendering/output_slot_ring.cpp
 results
 .idea
+.DS_Store
 data
 !tests/data/
 tests/data/*

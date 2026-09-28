@@ -543,25 +543,27 @@ if(NOT BUILD_PORTABLE)
             DESTINATION include/visualizer)
 endif()
 
-# Optionally install resources
-install(FILES ${RENDERING_SOURCE_RESOURCE_DIR}/assets/JetBrainsMono-Regular.ttf
-        DESTINATION share/LichtFeld-Studio/visualizer/resources/assets/fonts)
+# The macOS portable app installs these same resources under Contents/share
+# in the top-level CMakeLists.txt. Keep the legacy destinations elsewhere.
+if(NOT LFS_MACOS_PORTABLE_APP)
+    install(FILES ${RENDERING_SOURCE_RESOURCE_DIR}/assets/JetBrainsMono-Regular.ttf
+            DESTINATION share/LichtFeld-Studio/visualizer/resources/assets/fonts)
 
-install(DIRECTORY ${VISUALIZER_SOURCE_RESOURCE_DIR}/
-        DESTINATION share/LichtFeld-Studio/visualizer/resources
-        FILES_MATCHING
-        PATTERN "*.ttf"
-)
+    install(DIRECTORY ${VISUALIZER_SOURCE_RESOURCE_DIR}/
+            DESTINATION share/LichtFeld-Studio/visualizer/resources
+            FILES_MATCHING
+            PATTERN "*.ttf"
+    )
 
-# Install locale files
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locales/
-        DESTINATION share/LichtFeld-Studio/locales
-        FILES_MATCHING
-        PATTERN "*.json"
-)
-install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locale_index.json
-        DESTINATION share/LichtFeld-Studio
-)
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locales/
+            DESTINATION share/LichtFeld-Studio/locales
+            FILES_MATCHING
+            PATTERN "*.json"
+    )
+    install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locale_index.json
+            DESTINATION share/LichtFeld-Studio
+    )
+endif()
 
 # Add custom target for resource files (makes them show up in IDEs)
 file(GLOB_RECURSE VISUALIZER_RESOURCE_FILES
