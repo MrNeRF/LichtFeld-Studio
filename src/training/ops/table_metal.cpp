@@ -10,7 +10,7 @@ namespace lfs::training {
         static const TrainingOps table{
             .backend = core::GpuBackend::Metal,
 
-            // .photometric = &metal_photometric_ops(),
+            .photometric = &metal_photometric_ops(),
 
             // .adam = &metal_adam_ops(),
 
@@ -18,15 +18,15 @@ namespace lfs::training {
 
             .mrnf = &metal_mrnf_ops(),
 
-            // .geometry = &metal_geometry_ops(),
+            .geometry = &metal_geometry_ops(),
 
             // .fast = &metal_fast_ops(),
 
             // .morton = &metal_morton_ops(),
 
-            // .masks = &metal_masks_ops(),
+            .masks = &metal_masks_ops(),
 
-            // .extra_loss = &metal_extra_loss_ops(),
+            .extra_loss = &metal_extra_loss_ops(),
 
             .bilateral = &metal_bilateral_ops(),
 
