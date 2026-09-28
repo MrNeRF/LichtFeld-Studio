@@ -29,6 +29,9 @@
 #include <tuple>
 #include <vector>
 
+#include <os/signpost.h>
+#include <stdexcept>
+
 namespace lfs::core::internal {
 
     namespace {
@@ -3633,6 +3636,28 @@ namespace lfs::core::internal {
 
     bool MetalBackendOps::stream_is_capturing(ExecContext) {
         return false;
+    }
+
+    namespace {
+        os_log_t range_log() {
+            static const os_log_t log = os_log_create("com.lichtfeld.studio", "gpu");
+            return log;
+        }
+
+        thread_local std::vector<os_signpost_id_t> open_ranges;
+    } // namespace
+
+    void MetalBackendOps::push_range(const char* const name) {
+        const os_signpost_id_t id = os_signpost_id_generate(range_log());
+        os_signpost_interval_begin(range_log(), id, "range", "%{public}s", name);
+        open_ranges.push_back(id);
+    }
+
+    void MetalBackendOps::pop_range() {
+        if (open_ranges.empty())
+            throw std::logic_error("pop_gpu_range without a matching push_gpu_range");
+        os_signpost_interval_end(range_log(), open_ranges.back(), "range");
+        open_ranges.pop_back();
     }
 
 } // namespace lfs::core::internal
