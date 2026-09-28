@@ -179,7 +179,8 @@ endif()
 if(APPLE)
     set(_lfs_metal_kernels_cpp ${CMAKE_CURRENT_BINARY_DIR}/lfs_metal_kernels.cpp)
     set(_lfs_metal_sources tensor/backend/metal/kernels.metal tensor/backend/metal/export.metal
-                           tensor/backend/metal/nn.metal tensor/backend/metal/raster.metal)
+                           tensor/backend/metal/nn.metal tensor/backend/metal/raster.metal
+                           tensor/backend/metal/image.metal)
     list(TRANSFORM _lfs_metal_sources PREPEND ${CMAKE_CURRENT_SOURCE_DIR}/ OUTPUT_VARIABLE _lfs_metal_inputs)
     string(REPLACE ";" "$<SEMICOLON>" _lfs_metal_inputs "${_lfs_metal_inputs}")
     add_custom_command(
@@ -195,6 +196,7 @@ if(APPLE)
         tensor/backend/metal/expression_msl.cpp
         tensor/backend/metal/metal_context.mm
         tensor/backend/metal/metal_ops.mm
+        tensor/backend/metal/metal_shared_image.mm
         tensor/backend/metal/metal_module.mm
         ${_lfs_metal_kernels_cpp}
     )
