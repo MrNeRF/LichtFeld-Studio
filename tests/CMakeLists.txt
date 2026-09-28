@@ -51,6 +51,7 @@ if(BUILD_VISUALIZER_TESTS)
         test_panel_layout_render_demand.cpp
         test_preferences_migration.cpp
         test_startup_overlay_geometry.cpp
+        test_vram_hud_geometry.cpp
     )
     add_executable(lichtfeld_visualizer_tests EXCLUDE_FROM_ALL
         ${LICHTFELD_VISUALIZER_TEST_SOURCES}

@@ -10,6 +10,7 @@
 #include "visualizer/app_store.hpp"
 
 #include <RmlUi/Core/EventListener.h>
+#include <RmlUi/Core/Types.h>
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -42,6 +43,8 @@ namespace lfs::vis::gui {
 
         void onDocumentLoaded(Rml::ElementDocument* document);
         void onDocumentDestroyed();
+        void setViewportGeometry(float origin_x, float origin_y, float width, float height);
+        [[nodiscard]] bool initializeGeometryAfterLayout();
 
         void setState(State state);
         [[nodiscard]] bool isVisible() const noexcept { return state_.visible || state_.perf_hud.visible; }
@@ -139,6 +142,9 @@ namespace lfs::vis::gui {
         bool ledger_default_collapse_applied_ = false;
 
         Rml::ElementDocument* document_ = nullptr;
+        Rml::Vector2f viewport_origin_{};
+        Rml::Vector2f viewport_size_{};
+        bool has_viewport_geometry_ = false;
         Rml::Element* root_ = nullptr;
         Rml::Element* perf_strip_ = nullptr;
         Rml::Element* perf_card_ = nullptr;
@@ -331,6 +337,7 @@ namespace lfs::vis::gui {
         AnnoFilterClearListener anno_filter_clear_listener_;
         TimelineListener timeline_listener_;
         bool listeners_attached_ = false;
+        bool geometry_initialized_ = false;
 
         float pos_x_ = -1.0f;
         float pos_y_ = -1.0f;

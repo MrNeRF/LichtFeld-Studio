@@ -360,6 +360,10 @@ namespace lfs::vis::gui {
         vp_pos_ = pos;
         vp_size_ = size;
         screen_origin_ = screen_origin;
+        if (vram_hud_)
+            vram_hud_->setViewportGeometry(
+                viewport_content_offset_, 0.0f,
+                vp_size_.x - viewport_content_offset_, vp_size_.y);
         if (context_size_changed && project_drag_overlay_.visible)
             applyProjectDragOverlay();
     }
@@ -371,6 +375,10 @@ namespace lfs::vis::gui {
             toolbar_roots_dirty_ = true;
             markRenderNeeded(RenderReason::ViewportResize);
         }
+        if (vram_hud_)
+            vram_hud_->setViewportGeometry(
+                viewport_content_offset_, 0.0f,
+                vp_size_.x - viewport_content_offset_, vp_size_.y);
     }
 
     void RmlViewportOverlay::setToolbarPanels(const float primary_x,
@@ -1624,6 +1632,8 @@ namespace lfs::vis::gui {
                 LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render.update.context_update", 0.25);
                 rml_context_->Update();
             }
+            if (vram_hud_ && vram_hud_->initializeGeometryAfterLayout())
+                rml_context_->Update();
             updateToolbarRailLayout();
             if (viewport_toolbar_position_ == "free" && applyToolbarPosition()) {
                 LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render.update.toolbar_position", 0.25);
