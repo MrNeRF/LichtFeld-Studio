@@ -38,12 +38,12 @@ namespace lfs::training {
                 return;
             if (n > static_cast<size_t>(std::numeric_limits<int>::max()))
                 throw std::invalid_argument(std::format("refine split count {} exceeds INT_MAX", n));
-            const SplitParams params{mk::address(parents.means),      mk::address(parents.rotations),
-                                     mk::address(parents.scales),     mk::address(parents.sh0),
-                                     mk::address(parents.opacity),    mk::address(children.means),
+            const SplitParams params{mk::address(parents.means), mk::address(parents.rotations),
+                                     mk::address(parents.scales), mk::address(parents.sh0),
+                                     mk::address(parents.opacity), mk::address(children.means),
                                      mk::address(children.rotations), mk::address(children.scales),
-                                     mk::address(children.sh0),       mk::address(children.opacity),
-                                     mk::address(indices),            static_cast<uint32_t>(n)};
+                                     mk::address(children.sh0), mk::address(children.opacity),
+                                     mk::address(indices), static_cast<uint32_t>(n)};
             mk::launch_items("refine_split", params,
                              {&parents.means, &parents.rotations, &parents.scales, &parents.sh0, &parents.opacity,
                               &children.means, &children.rotations, &children.scales, &children.sh0,
@@ -94,9 +94,9 @@ namespace lfs::training {
 
         void counts(const Tensor& bool0, const Tensor& bool1, const Tensor& float0, const Tensor& float1,
                     Tensor& counts4) {
-            const CountsParams params{mk::address(bool0),     mk::address(bool1),     mk::address(float0),
-                                      mk::address(float1),    mk::address(counts4),   optional_count(bool0),
-                                      optional_count(bool1),  optional_count(float0), optional_count(float1)};
+            const CountsParams params{mk::address(bool0), mk::address(bool1), mk::address(float0),
+                                      mk::address(float1), mk::address(counts4), optional_count(bool0),
+                                      optional_count(bool1), optional_count(float0), optional_count(float1)};
             mk::launch("refine_counts", params, {&bool0, &bool1, &float0, &float1, &counts4}, 1, 1024);
         }
 

@@ -302,8 +302,7 @@ namespace lfs::training {
             const size_t n = means.shape()[0];
             if (n == 0)
                 return;
-            const FarMaskParams params{mk::address(means), mk::address(mask), {center[0], center[1], center[2]},
-                                       count32(n, "MRNF far mask"), radius * radius};
+            const FarMaskParams params{mk::address(means), mk::address(mask), {center[0], center[1], center[2]}, count32(n, "MRNF far mask"), radius * radius};
             mk::launch_items("mrnf_far_mask", params, {&means, &mask}, n);
         }
 
@@ -410,9 +409,7 @@ namespace lfs::training {
             const size_t n = means.shape()[0];
             if (n == 0)
                 return;
-            const PruneBoundsParams params{mk::address(means), mk::address(scale_max), mk::address(mask),
-                                           {center[0], center[1], center[2]}, count32(n, "MRNF prune bounds"),
-                                           maximum, log_maximum};
+            const PruneBoundsParams params{mk::address(means), mk::address(scale_max), mk::address(mask), {center[0], center[1], center[2]}, count32(n, "MRNF prune bounds"), maximum, log_maximum};
             mk::launch_items("mrnf_prune_bounds", params, {&means, &scale_max, &mask}, n);
         }
 

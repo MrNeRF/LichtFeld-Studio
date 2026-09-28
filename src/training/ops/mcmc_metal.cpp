@@ -68,8 +68,8 @@ namespace lfs::training {
             const Tensor& coefficients = relocation_coefficients();
             if (!coefficients.is_valid())
                 throw std::logic_error("MCMC relocate needs initialize() to upload the relocation coefficients");
-            const RelocateParams params{mk::address(opacity),     mk::address(scales),
-                                        mk::address(ratios),      mk::address(coefficients),
+            const RelocateParams params{mk::address(opacity), mk::address(scales),
+                                        mk::address(ratios), mk::address(coefficients),
                                         mk::address(new_opacity), mk::address(new_scales),
                                         count32(n, "MCMC relocate"), min_opacity};
             mk::launch_items("mcmc_relocate", params,

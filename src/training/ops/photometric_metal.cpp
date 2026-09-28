@@ -57,7 +57,7 @@ namespace lfs::training {
             Tensor ssim_map, dm_mu, dm_sigma1, dm_sigma12, raw_dm_mu, dl_dmap, grad, grad_raw, temp, result, mask_sum;
         };
         struct Field {
-            Tensor Views::* member;
+            Tensor Views::*member;
             Slot slot;
         };
 

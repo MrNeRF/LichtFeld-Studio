@@ -554,7 +554,7 @@ namespace {
         const auto loss = [&](const PpispParams& q, const Doubles& image) {
             return weighted(ppisp_forward(q, image, H, W, 0, H, camera, frame), grad_values);
         };
-        const auto group = [&](Doubles PpispParams::* member) {
+        const auto group = [&](Doubles PpispParams::*member) {
             return finite_difference(p.*member, [&](const Doubles& values) {
                 PpispParams q = p;
                 q.*member = values;
