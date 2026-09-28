@@ -4,15 +4,7 @@
 
 include_guard(GLOBAL)
 
-# Inspect the cache before option() creates LFS_ENABLE_NVIDIA_DLSS. Portable
-# builds default the plugin ON so nightlies still ship it; an explicit
-# command-line/cache value (including OFF) always wins. Ordinary developer
-# builds remain opt-in.
-if(BUILD_PORTABLE AND NOT APPLE AND NOT DEFINED CACHE{LFS_ENABLE_NVIDIA_DLSS})
-    set(LFS_ENABLE_NVIDIA_DLSS ON CACHE BOOL
-        "Build the optional external NVIDIA DLSS scene-reconstruction plugin")
-endif()
-
+# Opt-in for every build; the nightly package passes -DLFS_ENABLE_NVIDIA_DLSS=ON.
 option(LFS_ENABLE_NVIDIA_DLSS
     "Build the optional external NVIDIA DLSS scene-reconstruction plugin"
     OFF)
