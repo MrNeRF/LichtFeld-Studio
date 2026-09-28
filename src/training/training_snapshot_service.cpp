@@ -170,10 +170,10 @@ namespace lfs::training {
                 };
             }
 #elif defined(__APPLE__)
-            if (const auto host = core::host_metrics::sample(); host.ram_valid) {
+            if (const auto memory = core::host_metrics::memory()) {
                 result = {
-                    .total_bytes = host.system_total_bytes,
-                    .available_bytes = host.system_total_bytes - host.system_used_bytes,
+                    .total_bytes = memory->total_bytes,
+                    .available_bytes = memory->available_bytes,
                 };
             }
 #elif defined(__linux__)

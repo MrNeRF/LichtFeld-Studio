@@ -176,6 +176,14 @@ namespace lfs::core::host_metrics {
 
     } // namespace
 
+    std::optional<Memory> memory() {
+        Sample result;
+        read_memory(result);
+        if (!result.ram_valid)
+            return std::nullopt;
+        return Memory{result.system_total_bytes, result.system_total_bytes - result.system_used_bytes};
+    }
+
     Sample sample() {
         Sample result;
         read_memory(result);

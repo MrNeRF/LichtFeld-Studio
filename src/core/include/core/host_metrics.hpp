@@ -6,6 +6,7 @@
 #include "core/export.hpp"
 
 #include <cstddef>
+#include <optional>
 #include <vector>
 
 namespace lfs::core::host_metrics {
@@ -21,5 +22,14 @@ namespace lfs::core::host_metrics {
     };
 
     [[nodiscard]] LFS_CORE_API Sample sample();
+
+    struct Memory {
+        std::size_t total_bytes = 0;
+        // What the OS can hand out without swapping.
+        std::size_t available_bytes = 0;
+    };
+
+    // System RAM without the CPU sampling of sample(); nullopt when the query fails.
+    [[nodiscard]] LFS_CORE_API std::optional<Memory> memory();
 
 } // namespace lfs::core::host_metrics

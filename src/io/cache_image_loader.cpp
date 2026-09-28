@@ -6,6 +6,7 @@
 #if LFS_HAS_CUDA
 #include "image_execution_cuda.hpp"
 #endif
+#include "core/host_metrics.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -20,59 +21,17 @@
 #include <algorithm>
 #include <fstream>
 
-#ifdef __linux__
-#include <sys/sysinfo.h>
-#elif defined(_WIN32)
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#endif
-
 namespace lfs::io {
 
     std::size_t get_total_physical_memory() {
-#ifdef __linux__
-        struct sysinfo info;
-        if (sysinfo(&info) == 0) {
-            return info.totalram * info.mem_unit;
-        }
-#elif defined(_WIN32)
-        MEMORYSTATUSEX mem_info;
-        mem_info.dwLength = sizeof(MEMORYSTATUSEX);
-        if (GlobalMemoryStatusEx(&mem_info)) {
-            return mem_info.ullTotalPhys;
-        }
-#endif
+        if (const auto memory = core::host_metrics::memory())
+            return memory->total_bytes;
         return DEFAULT_FALLBACK_MEMORY_GB * BYTES_PER_GB;
     }
 
     std::size_t get_available_physical_memory() {
-#ifdef __linux__
-        std::ifstream meminfo("/proc/meminfo");
-        if (meminfo.is_open()) {
-            std::string line;
-            while (std::getline(meminfo, line)) {
-                if (line.find("MemAvailable:") == 0) {
-                    std::istringstream iss(line);
-                    std::string label;
-                    std::size_t value_kb;
-                    iss >> label >> value_kb;
-                    return value_kb * 1024;
-                }
-            }
-        }
-        struct sysinfo info;
-        if (sysinfo(&info) == 0) {
-            return info.freeram * info.mem_unit;
-        }
-#elif defined(_WIN32)
-        MEMORYSTATUSEX mem_info;
-        mem_info.dwLength = sizeof(MEMORYSTATUSEX);
-        if (GlobalMemoryStatusEx(&mem_info)) {
-            return mem_info.ullAvailPhys;
-        }
-#endif
+        if (const auto memory = core::host_metrics::memory())
+            return memory->available_bytes;
         return DEFAULT_FALLBACK_AVAILABLE_GB * BYTES_PER_GB;
     }
 
