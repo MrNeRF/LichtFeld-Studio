@@ -253,7 +253,11 @@ namespace lfs::training::morton {
                 const std::size_t slot_bytes =
                     tiles * R * 4 * static_cast<std::size_t>(joint_adam::bytes_per_cell(state->joint_bits));
                 const auto group = group_scratch(scratch, slot_bytes, static_cast<std::size_t>(slots), stream);
-                auto group_view = Tensor::from_blob(group.ptr, {group.bytes}, Device::GPU, DataType::UInt8, stream);
+                // Only a borrowed arena block needs a raw view; backends without an
+                // arena cannot view raw device memory.
+                auto group_view = group.owner.is_valid()
+                                      ? group.owner
+                                      : Tensor::from_blob(group.ptr, {group.bytes}, Device::GPU, DataType::UInt8, stream);
                 {
                     const core::TensorExecutionTarget::Scope stream_guard(stream);
                     morton_ops.permute_joint_grouped(state->exp_avg, state->joint_bounds, perm, dest_bounds, group_view,
