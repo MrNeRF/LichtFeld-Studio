@@ -69,8 +69,8 @@ struct JointCodec {
 
     static void encode_us(device uchar* packed, const long cell, const float u, const float log_s,
                           const float u_min, const float s_min, const float inv_u_range, const float inv_s_range) {
-        const float u_q = fmin(fmax(rint(q_max() * (u - u_min) * inv_u_range), 0.0f), q_max());
-        const float s_q = fmin(fmax(rint(q_max() * (log_s - s_min) * inv_s_range), 0.0f), q_max());
+        const float u_q = fmin(fmax(round(q_max() * (u - u_min) * inv_u_range), 0.0f), q_max());
+        const float s_q = fmin(fmax(round(q_max() * (log_s - s_min) * inv_s_range), 0.0f), q_max());
         if (BITS == 16) {
             device ushort* codes = reinterpret_cast<device ushort*>(packed);
             codes[cell * 2] = ushort(u_q);

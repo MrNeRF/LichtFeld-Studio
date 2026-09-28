@@ -154,7 +154,22 @@ if(APPLE)
     set(LFS_TRAINING_METAL_KERNELS
         kernels/metal/common.metal
         kernels/metal/joint_adam.metal
+        kernels/metal/sh_storage.metal
         kernels/metal/training_image.metal
+        kernels/metal/adam.metal
+        kernels/metal/sh.metal
+        kernels/metal/morton.metal
+        kernels/metal/fast_raster.metal
+        kernels/metal/gsplat.metal
+        kernels/metal/photometric.metal
+        kernels/metal/masks.metal
+        kernels/metal/extra_loss.metal
+        kernels/metal/geometry.metal
+        kernels/metal/mrnf.metal
+        kernels/metal/refine.metal
+        kernels/metal/mcmc.metal
+        kernels/metal/bilateral.metal
+        kernels/metal/ppisp.metal
     )
     set(_lfs_training_metal_cpp ${CMAKE_CURRENT_BINARY_DIR}/lfs_training_metal_kernels.cpp)
     list(TRANSFORM LFS_TRAINING_METAL_KERNELS PREPEND ${CMAKE_CURRENT_SOURCE_DIR}/
@@ -178,6 +193,21 @@ if(APPLE)
         ops/table_metal.cpp
         ops/session_metal.cpp
         ops/training_image_metal.cpp
+        ops/adam_metal.cpp
+        ops/sh_metal.cpp
+        ops/morton_metal.cpp
+        ops/fast_metal.cpp
+        ops/gsplat_metal.cpp
+        ops/photometric_metal.cpp
+        ops/masks_metal.cpp
+        ops/extra_loss_metal.cpp
+        ops/geometry_metal.cpp
+        ops/mrnf_metal.cpp
+        ops/refine_metal.cpp
+        ops/mcmc_metal.cpp
+        ops/bilateral_metal.cpp
+        ops/ppisp_metal.cpp
+        ops/lpips_metal.cpp
     )
 else()
     list(APPEND TRAINING_NEW_SOURCES

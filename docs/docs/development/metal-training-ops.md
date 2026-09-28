@@ -35,3 +35,4 @@ Tensor library ops (`core::Tensor`) run on the same timeline and may carry glue 
 - There is no `log1p` or `expm1`; `joint_adam.metal` has compensated versions.
 - There is no float atomic max; `atomic_max_float` compares and swaps the bits.
 - The library builds with fast math, as the CUDA kernels do with `-use_fast_math`. Use `precise::` where a kernel depends on exact results.
+- CUDA `roundf` rounds halves away from zero, as MSL `round` does; MSL `rint` rounds them to even.

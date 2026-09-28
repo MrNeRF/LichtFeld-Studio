@@ -236,8 +236,8 @@ kernel void training_image_canny(constant CannyParams& p [[buffer(0)]],
     const float2 gradient = filtered[local.y + kHalo2][local.x + kHalo2];
     float magnitude = length(gradient);
     if (magnitude > 0.0f) {
-        const int dx = min(max(int(rint(gradient.x / magnitude)), -kHalo2), kHalo2);
-        const int dy = min(max(int(rint(gradient.y / magnitude)), -kHalo2), kHalo2);
+        const int dx = min(max(int(round(gradient.x / magnitude)), -kHalo2), kHalo2);
+        const int dy = min(max(int(round(gradient.y / magnitude)), -kHalo2), kHalo2);
         const float2 forward = filtered[int(local.y) + dy + kHalo2][int(local.x) + dx + kHalo2];
         const float2 backward = filtered[int(local.y) - dy + kHalo2][int(local.x) - dx + kHalo2];
         if (magnitude < length(forward) || magnitude < length(backward))
