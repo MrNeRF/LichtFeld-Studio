@@ -3415,46 +3415,63 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         if asset.get("recent_only"):
             asset = self._asset_with_inspection(asset)
             items = [{"label": tr("projects.action.open"), "action": "load"}]
-            if self._project_available(asset):
+            details = self._inspection_by_asset.get(str(asset.get("id") or ""), {}).get("details")
+            if details is not None:
+                labels = {
+                    "rename": "projects.action.rename",
+                    "update_thumbnail": "projects.action.update_thumbnail",
+                    "inspector": "projects.inspector.title",
+                }
+                operations = operation_actions(asset)
+                available = {str(operation.get("action") or "") for operation in operations}
+                for action in ("rename", "update_thumbnail", "inspector"):
+                    if action in available:
+                        items.append({
+                            "label": tr(labels[action]),
+                            "action": action if action == "inspector" else "project:" + action,
+                        })
+                if self._project_available(asset):
+                    items.append({
+                        "label": tr("projects.action.show_in_folder"),
+                        "action": "show_in_folder",
+                        "separator_before": True,
+                    })
+                if any(operation.get("action") == "export_as" for operation in operations):
+                    items.append({
+                        "label": tr("projects.action.export_as"),
+                        "action": "project:export_as",
+                        "separator_before": True,
+                    })
+            elif self._project_available(asset):
                 items.append({
                     "label": tr("projects.action.show_in_folder"),
                     "action": "show_in_folder",
                     "separator_before": True,
                 })
-            details = self._inspection_by_asset.get(str(asset.get("id") or ""), {}).get("details")
-            if details is not None:
-                labels = {
-                    "inspector": "projects.inspector.title",
-                    "export_as": "projects.action.export_as",
-                    "update_thumbnail": "projects.action.update_thumbnail",
-                    "rename": "projects.action.rename",
-                }
-                for operation in operation_actions(asset):
-                    action = str(operation.get("action") or "")
-                    if action in labels:
-                        items.append({
-                            "label": tr(labels[action]),
-                            "action": action if action == "inspector" else "project:" + action,
-                            "separator_before": action == "inspector",
-                        })
             return items
         items: List[Dict[str, Any]] = []
         if not asset.get("remote_only") and self._project_available(asset):
             items.append({"label": tr("projects.action.open"), "action": "load"})
-        if not asset.get("remote_only"):
-            items.append({"label": tr("projects.inspector.title"), "action": "inspector"})
-        items.extend(self._gallery_context_items(asset))
         if asset.get("remote_only"):
+            items.extend(self._gallery_context_items(asset))
             return items
-        if str(asset.get("relocation_candidate") or ""):
-            items.append(
-                {
-                    "label": tr("projects.action.use_found_location"),
-                    "action": "use_found_location",
-                }
-            )
-        if any(operation.get("action") == "rename" for operation in operation_actions(asset)):
+
+        operations = operation_actions(asset)
+        operation_ids = {str(operation.get("action") or "") for operation in operations}
+        if "rename" in operation_ids:
             items.append({"label": tr("projects.action.rename"), "action": "project:rename"})
+
+        details = self._inspection_by_asset.get(
+            str(asset.get("id") or asset.get("project_uuid") or ""), {}
+        ).get("details")
+        has_project_operations = details is not None or asset.get("status") == "REPAIR_ONLY"
+        if has_project_operations and "update_thumbnail" in operation_ids:
+            items.append({
+                "label": tr("projects.action.update_thumbnail"),
+                "action": "project:update_thumbnail",
+            })
+        items.append({"label": tr("projects.inspector.title"), "action": "inspector"})
+
         items.extend(
             [
                 {
@@ -3463,31 +3480,47 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                     "separator_before": True,
                 },
                 {"label": tr("projects.action.remove_from_library"), "action": "remove"},
-                {
-                    "label": tr("projects.action.move_to_trash"),
-                    "action": "trash",
-                    "separator_before": True,
-                },
+                {"label": tr("projects.action.move_to_trash"), "action": "trash"},
             ]
         )
-        details = self._inspection_by_asset.get(str(asset.get("id") or asset.get("project_uuid") or ""), {}).get("details")
-        if details is not None or asset.get("status") == "REPAIR_ONLY":
+        if str(asset.get("relocation_candidate") or ""):
+            items.append({
+                "label": tr("projects.action.use_found_location"),
+                "action": "use_found_location",
+            })
+
+        if has_project_operations:
             labels = {
                 "repair": "projects.action.repair",
                 "embed_dataset": "projects.action.embed_dataset",
                 "locate_dataset": "projects.action.locate_dataset",
-                "export_as": "projects.action.export_as",
-                "update_thumbnail": "projects.action.update_thumbnail",
             }
-            for operation in operation_actions(asset):
+            for operation in operations:
                 action = str(operation.get("action") or "")
                 if action in ("rename", "inspector") or action not in labels:
                     continue
                 items.append({
                     "label": tr(labels[action]),
                     "action": "project:" + action,
-                    "separator_before": action == "export_as",
                 })
+
+        export = next(
+            (operation for operation in operations if operation.get("action") == "export_as"),
+            None,
+        )
+        gallery_items = self._gallery_context_items(asset)
+        show_export = has_project_operations and export is not None
+        if show_export:
+            items.append({
+                "label": tr("projects.action.export_as"),
+                "action": "project:export_as",
+                "separator_before": True,
+            })
+        for index, gallery_item in enumerate(gallery_items):
+            gallery_item = dict(gallery_item)
+            if index == 0:
+                gallery_item["separator_before"] = not show_export
+            items.append(gallery_item)
         return items
 
     def _handle_asset_context_action(self, action: str, asset_id: str) -> None:

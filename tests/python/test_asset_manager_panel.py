@@ -814,12 +814,12 @@ def test_dom_right_click_uses_shared_app_context_menu(panel_module):
     assert menu["position"] == (120.0, 220.0)
     assert [item["action"] for item in menu["items"]] == [
         "load",
-        "inspector",
-        "gallery:publish",
         "project:rename",
+        "inspector",
         "show_in_folder",
         "remove",
         "trash",
+        "gallery:publish",
     ]
     assert event.stopped is True
 
@@ -846,14 +846,30 @@ def test_context_menu_opens_inspector_for_local_project(panel_module, status, ha
     actions = [entry["action"] for entry in menu["items"]]
     assert "project:contents" not in actions
     assert actions.count("inspector") == 1
-    expected_prefix = ["load", "inspector"] if status == "AVAILABLE" else ["inspector"]
+    expected_prefix = (
+        [
+            "load",
+            "project:rename",
+            *( ["project:update_thumbnail"] if has_details else [] ),
+            "inspector",
+        ]
+        if status == "AVAILABLE"
+        else ["inspector"]
+    )
     assert actions[:len(expected_prefix)] == expected_prefix
     assert ("project:rename" in actions) == (status == "AVAILABLE")
     assert not menu["items"][0].get("separator_before", False)
     assert not item.get("separator_before", False)
-    for entry in menu["items"]:
-        if entry["action"] in ("show_in_folder", "trash") or entry["action"].startswith("gallery:"):
-            assert entry["separator_before"] is True
+    assert next(item for item in menu["items"] if item["action"] == "show_in_folder")["separator_before"] is True
+    group_three = next(
+        (item for item in menu["items"] if item["action"] == "project:export_as"),
+        next(
+            (item for item in menu["items"] if item["action"].startswith("gallery:")),
+            None,
+        ),
+    )
+    if group_three is not None:
+        assert group_three["separator_before"] is True
     menu["on_action"](item["action"])
 
     assert panel._selected_asset_ids == {asset["id"]}
@@ -1450,11 +1466,11 @@ def test_recent_only_project_uses_native_inspection_without_joining_library(
     menu = panel_module.lf._test_state.context_menus[-1]
     assert [item["action"] for item in menu["items"]] == [
         "load",
-        "show_in_folder",
-        "inspector",
-        "project:export_as",
-        "project:update_thumbnail",
         "project:rename",
+        "project:update_thumbnail",
+        "inspector",
+        "show_in_folder",
+        "project:export_as",
     ]
     assert [item["label"] for item in menu["items"] if item["action"] == "inspector"] == [
         "projects.inspector.title"
@@ -3172,14 +3188,29 @@ def test_use_found_location_relinks_selected_asset(panel_module):
 def test_context_menu_shows_use_found_location_only_with_candidate(panel_module):
     panel = panel_module.AssetManagerPanel()
     asset = _project()
-    assert [item["action"] for item in panel._asset_context_menu_items(asset)] == [
+    panel._inspection_by_asset[asset["id"]] = {"details": object()}
+    items = panel._asset_context_menu_items(asset)
+    assert [item["action"] for item in items] == [
         "load",
-        "inspector",
-        "gallery:publish",
         "project:rename",
+        "project:update_thumbnail",
+        "inspector",
         "show_in_folder",
         "remove",
         "trash",
+        "project:export_as",
+        "gallery:publish",
+    ]
+    assert [item.get("separator_before", False) for item in items] == [
+        False,
+        False,
+        False,
+        False,
+        True,
+        False,
+        False,
+        True,
+        False,
     ]
 
     asset["relocation_candidate"] = "/tmp/found.licht"
@@ -4064,7 +4095,7 @@ def test_gallery_attention_scope_and_state_specific_context_menu(panel_module):
     panel._select_folder_id('__gallery_attention__')
     assert [r['id'] for r in panel._filtered_assets()] == [local['id']]
     actions = [i['action'] for i in panel._asset_context_menu_items(local)]
-    assert actions[0:3] == ['load','inspector','gallery:resolve']
+    assert actions[0:3] == ['load', 'project:rename', 'inspector']
     assert 'gallery:update' not in actions and 'gallery:publish' not in actions
     remote_actions=[i['action'] for i in panel._asset_context_menu_items(panel._asset_dict('remote:remote-only'))]
     assert remote_actions == ['gallery:pull','gallery:pull_open','gallery:open','gallery:copy','gallery:remove']
