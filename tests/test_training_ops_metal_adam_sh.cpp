@@ -21,6 +21,7 @@
 #include "lfs/training/ops/registry.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
+#include "optimizer/adam_optimizer.hpp"
 
 #include "cuda_backend_test.hpp"
 #include <gtest/gtest.h>
@@ -1093,6 +1094,43 @@ namespace {
         const auto source_values = pattern(16, 0.2f, 2);
         std::copy_n(source_values.begin(), 10, expected_live.begin());
         expect_equal(host<float>(live), expected_live, "copy_back");
+    }
+
+    // 3DGUT materializes the shN gradient only once SH bands activate; MCMC growth after
+    // that must extend every materialized gradient with its moments, whether the growth
+    // fits the reserved capacity or not, or zero_grad slices past the gradient's end.
+    TEST_P(PortableAdamShMorton, GatherGrowthExtendsMaterializedGradients) {
+        using lfs::training::ParamType;
+        constexpr size_t n = 300;
+        constexpr uint32_t rest = 3;
+        for (const size_t capacity : {size_t{512}, n}) {
+            SCOPED_TRACE(capacity);
+            auto splat = make_degree1_splat(n);
+            for (auto* param : {&splat.means(), &splat.sh0(), &splat.scaling_raw(),
+                                &splat.rotation_raw(), &splat.opacity_raw()})
+                param->reserve(2 * n);
+            lfs::training::AdamConfig cfg;
+            cfg.initial_capacity = capacity;
+            lfs::training::AdamOptimizer optimizer(splat, cfg);
+            optimizer.allocate_gradients(capacity);
+            const std::array types{ParamType::Means, ParamType::Sh0, ParamType::ShN,
+                                   ParamType::Rotation, ParamType::Opacity, ParamType::Scaling};
+            for (const auto type : types)
+                optimizer.get_grad(type);
+            ASSERT_EQ(optimizer.get_grad(ParamType::ShN).numel(), lfs::core::sh_swizzled_float_count(n, rest));
+
+            constexpr size_t n_new = 40;
+            std::vector<int64_t> sampled(n_new);
+            std::iota(sampled.begin(), sampled.end(), int64_t{7});
+            const Tensor indices = upload(sampled, {n_new}, DataType::Int64);
+            for (const auto type : types)
+                optimizer.add_new_params_gather(type, indices);
+
+            EXPECT_EQ(optimizer.get_grad(ParamType::ShN).numel(),
+                      lfs::core::sh_swizzled_float_count(n + n_new, rest));
+            EXPECT_EQ(optimizer.get_grad(ParamType::Means).shape()[0], n + n_new);
+            EXPECT_NO_THROW(optimizer.zero_grad(0));
+        }
     }
 
     INSTANTIATE_TEST_SUITE_P(Backends, PortableAdamShMorton, testing::Values(GpuBackend::Metal, GpuBackend::Vulkan),
