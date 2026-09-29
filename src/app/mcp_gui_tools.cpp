@@ -4409,6 +4409,9 @@ namespace lfs::app {
                     if (!cropbox_id)
                         return json{{"error", cropbox_id.error()}};
 
+                    // Select the box as the GUI's add does, so crop_box_set/get without a
+                    // node address it whatever was selected before.
+                    scene_manager->selectNode(*cropbox_id);
                     return crop_box_info_json(*scene_manager, *cropbox_id);
                 });
             });
@@ -4613,6 +4616,9 @@ namespace lfs::app {
                     if (!ellipsoid_id)
                         return json{{"error", ellipsoid_id.error()}};
 
+                    // Select the ellipsoid as the GUI's add does, so ellipsoid_set/get without
+                    // a node address it whatever was selected before.
+                    scene_manager->selectNode(*ellipsoid_id);
                     return ellipsoid_info_json(*scene_manager, *ellipsoid_id);
                 });
             });
