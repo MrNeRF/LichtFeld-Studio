@@ -37,10 +37,17 @@ namespace {
         // 65536^2 RGBA is 16 GiB; the request must fail before any buffer is sized from it.
         const auto huge = lfs::mcp::encode_pixels_to_base64(pixels.data(), 4, 4, 4, 65536, 65536);
         ASSERT_FALSE(huge);
-        EXPECT_NE(huge.error().find("65536x65536"), std::string::npos) << huge.error();
+        EXPECT_EQ(huge.error().code(), lfs::ErrorCode::InvalidArgument);
+        EXPECT_NE(huge.error().user_message().find("65536x65536"), std::string_view::npos) << huge.error().user_message();
+
+        // A height within the limit whose aspect-derived width is not is the caller's error too.
+        const std::vector<std::uint8_t> wide(16 * 4 * 4, 128);
+        const auto derived = lfs::mcp::encode_pixels_to_base64(wide.data(), 16, 4, 4, 0, MAX_CAPTURE_DIMENSION);
+        ASSERT_FALSE(derived);
+        EXPECT_EQ(derived.error().code(), lfs::ErrorCode::InvalidArgument) << derived.error().user_message();
 
         const auto small = lfs::mcp::encode_pixels_to_base64(pixels.data(), 4, 4, 4, 8, 8);
-        ASSERT_TRUE(small) << small.error();
+        ASSERT_TRUE(small) << small.error().user_message();
         EXPECT_FALSE(small->empty());
     }
 

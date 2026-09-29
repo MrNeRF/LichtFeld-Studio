@@ -73,8 +73,7 @@ namespace {
                     start_overwrite = overwrite;
                     return {};
                 },
-                .render_capture = [this](int, int, bool)
-                    -> std::expected<std::string, std::string> {
+                .render_capture = [this](int, int, bool) -> lfs::Result<std::string> {
                     ++capture_calls;
                     return std::string{};
                 },
@@ -275,6 +274,25 @@ TEST(McpSharedSceneToolsTest, RenderCaptureRejectsSizesOutsideTheCaptureLimit) {
 
     EXPECT_EQ(registry.call_tool("render.capture", json{{"width", lfs::mcp::MAX_CAPTURE_DIMENSION}})["success"], true);
     EXPECT_EQ(backend.capture_calls, 1);
+}
+
+TEST(McpSharedSceneToolsTest, RenderCaptureKeepsTheBackendErrorCode) {
+    ScopedSharedSceneToolRegistration cleanup;
+    FakeSharedSceneBackend fake;
+    auto backend = fake.backend();
+    backend.render_capture = [](int, int, bool) -> lfs::Result<std::string> {
+        return lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::InvalidArgument,
+            .domain = lfs::ErrorDomain::MCP,
+            .user_message = "Capture size 20603x16384 exceeds the 16384 pixel limit per side",
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+        });
+    };
+    lfs::mcp::register_shared_scene_tools(backend);
+
+    const auto result = lfs::mcp::ToolRegistry::instance().call_tool("render.capture", json{{"height", 16384}});
+    EXPECT_EQ(result["error"]["code"], "InvalidArgument") << result.dump();
+    EXPECT_EQ(result["error_message"], "Capture size 20603x16384 exceeds the 16384 pixel limit per side");
 }
 
 TEST(McpSharedSceneToolsTest, RenderCaptureDoesNotAdvertiseCameraIndex) {

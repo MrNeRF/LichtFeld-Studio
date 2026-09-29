@@ -11,6 +11,7 @@
 #include "app/mcp_sequencer_tools.hpp"
 #include "app/mcp_ui_registry_tools.hpp"
 #include "app/view_info_json.hpp"
+#include "core/error_envelope.hpp"
 #include "core/tensor_sh.hpp"
 
 #include "core/event_bridge/command_center_bridge.hpp"
@@ -312,23 +313,23 @@ namespace lfs::app {
             return post_render_and_wait(viewer_impl, std::forward<F>(fn));
         }
 
-        std::expected<std::string, std::string> capture_viewport_from_window(
+        lfs::Result<std::string> capture_viewport_from_window(
             vis::VisualizerImpl* viewer_impl,
             const vis::RenderingManager& rendering_manager,
             const int width,
             const int height) {
             const auto rect = rendering_manager.framebufferViewportRect();
             if (!rect.valid())
-                return std::unexpected("No rendered viewport image is available yet");
+                return mcp::capture_error(lfs::ErrorCode::Unavailable, "No rendered viewport image is available yet");
 
             auto* const window_manager = viewer_impl->getWindowManager();
             auto* const vulkan_context = window_manager ? window_manager->getVulkanContext() : nullptr;
             if (!vulkan_context)
-                return std::unexpected("Viewport capture requires a Vulkan window");
+                return mcp::capture_error(lfs::ErrorCode::FailedPrecondition, "Viewport capture requires a Vulkan window");
 
             auto capture = vulkan_context->captureAndEndActiveFrameRgba();
             if (!capture)
-                return std::unexpected(capture.error());
+                return mcp::capture_error(lfs::ErrorCode::Unavailable, capture.error());
 
             const int left = std::clamp(rect.top_left.x, 0, capture->width);
             const int top = std::clamp(rect.top_left.y, 0, capture->height);
@@ -337,7 +338,10 @@ namespace lfs::app {
             const int crop_width = right - left;
             const int crop_height = bottom - top;
             if (crop_width <= 0 || crop_height <= 0)
-                return std::unexpected("Viewport region lies outside the captured window");
+                return mcp::capture_error(lfs::ErrorCode::Unavailable,
+                                          std::format("Viewport region at ({}, {}) size {}x{} lies outside the {}x{} window",
+                                                      rect.top_left.x, rect.top_left.y, rect.size.x, rect.size.y,
+                                                      capture->width, capture->height));
 
             constexpr int kChannels = 4;
             std::vector<std::uint8_t> cropped(
@@ -358,18 +362,18 @@ namespace lfs::app {
                                                 height);
         }
 
-        std::expected<std::string, std::string> capture_live_viewport_to_base64(
+        lfs::Result<std::string> capture_live_viewport_to_base64(
             vis::Visualizer* viewer,
             int width = 0,
             int height = 0,
             bool presented = false) {
             auto* const viewer_impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
             if (!viewer_impl)
-                return std::unexpected("Live viewport capture requires a GUI visualizer");
+                return mcp::capture_error(lfs::ErrorCode::FailedPrecondition, "Live viewport capture requires a GUI visualizer");
 
             auto* const rendering_manager = viewer_impl->getRenderingManager();
             if (!rendering_manager)
-                return std::unexpected("Viewport capture is not initialized");
+                return mcp::capture_error(lfs::ErrorCode::Unavailable, "Viewport capture is not initialized");
 
             if (!presented) {
                 if (auto image = rendering_manager->captureViewportImage(); image && image->is_valid())
@@ -384,22 +388,22 @@ namespace lfs::app {
             return capture_viewport_from_window(viewer_impl, *rendering_manager, width, height);
         }
 
-        std::expected<std::string, std::string> capture_full_window_to_base64(
+        lfs::Result<std::string> capture_full_window_to_base64(
             vis::Visualizer* viewer,
             int width = 0,
             int height = 0) {
             auto* const viewer_impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
             if (!viewer_impl)
-                return std::unexpected("Full-window capture requires a GUI visualizer");
+                return mcp::capture_error(lfs::ErrorCode::FailedPrecondition, "Full-window capture requires a GUI visualizer");
 
             auto* const window_manager = viewer_impl->getWindowManager();
             auto* const vulkan_context = window_manager ? window_manager->getVulkanContext() : nullptr;
             if (!vulkan_context)
-                return std::unexpected("Full-window capture requires a Vulkan window");
+                return mcp::capture_error(lfs::ErrorCode::FailedPrecondition, "Full-window capture requires a Vulkan window");
 
             auto capture = vulkan_context->captureAndEndActiveFrameRgba();
             if (!capture)
-                return std::unexpected(capture.error());
+                return mcp::capture_error(lfs::ErrorCode::Unavailable, capture.error());
 
             return mcp::encode_pixels_to_base64(capture->rgba.data(),
                                                 capture->width,
@@ -2723,7 +2727,7 @@ namespace lfs::app {
                     return capture_full_window_to_base64(viewer, width, height);
                 });
                 if (!result)
-                    return json{{"error", result.error()}};
+                    return json{{"error", lfs::core::to_wire_envelope(result.error())}};
 
                 return json{
                     {"success", true},
@@ -5647,7 +5651,7 @@ namespace lfs::app {
                     return capture_live_viewport_to_base64(viewer);
                 });
                 if (!result)
-                    return std::unexpected(result.error());
+                    return std::unexpected(std::string(result.error().user_message()));
 
                 return single_blob_resource(uri, "image/png", *result);
             });
@@ -5663,7 +5667,7 @@ namespace lfs::app {
                     return capture_full_window_to_base64(viewer);
                 });
                 if (!result)
-                    return std::unexpected(result.error());
+                    return std::unexpected(std::string(result.error().user_message()));
 
                 return single_blob_resource(uri, "image/png", *result);
             });
@@ -5671,7 +5675,8 @@ namespace lfs::app {
         registry.register_resource_prefix(
             "lichtfeld://render/",
             [viewer](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
-                std::expected<std::string, std::string> result = std::unexpected("Unknown resource URI: " + uri);
+                lfs::Result<std::string> result =
+                    mcp::capture_error(lfs::ErrorCode::NotFound, "Unknown resource URI: " + uri);
                 if (uri == "lichtfeld://render/current") {
                     result = capture_after_gui_render(viewer, [viewer]() {
                         return capture_live_viewport_to_base64(viewer);
@@ -5682,7 +5687,7 @@ namespace lfs::app {
                     });
                 }
                 if (!result)
-                    return std::unexpected(result.error());
+                    return std::unexpected(std::string(result.error().user_message()));
 
                 return single_blob_resource(uri, "image/png", *result);
             });

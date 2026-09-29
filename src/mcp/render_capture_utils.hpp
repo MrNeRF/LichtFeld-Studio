@@ -4,6 +4,7 @@
 #pragma once
 
 #include "core/base64.hpp"
+#include "core/error.hpp"
 #include "core/tensor.hpp"
 #include "mcp/shared_scene_tools.hpp"
 #include "rendering/image_layout.hpp"
@@ -79,28 +80,43 @@ namespace lfs::mcp {
 
     } // namespace detail
 
-    inline std::expected<std::string, std::string> encode_pixels_to_base64(const uint8_t* src_pixels,
+    // MCP-domain error for a failed capture, detected at the caller's site.
+    [[nodiscard]] inline lfs::Error capture_error(const lfs::ErrorCode code, std::string message,
+                                                  const core::SourceSite site = LFS_SOURCE_SITE_CURRENT()) {
+        return lfs::make_error(lfs::ErrorInit{
+            .code = code,
+            .domain = lfs::ErrorDomain::MCP,
+            .user_message = std::move(message),
+            .detection = site,
+        });
+    }
+
+    // Encodes a capture as base64 PNG. A requested size the source cannot satisfy (negative,
+    // or past MAX_CAPTURE_DIMENSION once the omitted side follows the source aspect) is the
+    // caller's error and fails as InvalidArgument; a bad source buffer as Internal.
+    inline lfs::Result<std::string> encode_pixels_to_base64(const uint8_t* src_pixels,
                                                                            int src_width,
                                                                            int src_height,
                                                                            int channels,
                                                                            int width = 0,
                                                                            int height = 0) {
         if (!src_pixels)
-            return std::unexpected("Pixel buffer is null");
-        if (src_width <= 0 || src_height <= 0)
-            return std::unexpected("Pixel buffer dimensions must be positive");
-        if (channels < 1 || channels > 4)
-            return std::unexpected("Pixel buffer channel count must be between 1 and 4");
+            return capture_error(lfs::ErrorCode::Internal, "Pixel buffer is null");
+        if (src_width <= 0 || src_height <= 0 || channels < 1 || channels > 4)
+            return capture_error(lfs::ErrorCode::Internal,
+                                 std::format("Pixel buffer {}x{} with {} channels cannot be encoded", src_width,
+                                             src_height, channels));
 
         const auto size = detail::resolve_capture_size(src_width, src_height, width, height);
         if (!size)
-            return std::unexpected(size.error());
+            return capture_error(lfs::ErrorCode::InvalidArgument, size.error());
 
         const auto [out_width, out_height] = *size;
         // stb_image_write sizes its filtered scanlines, (width * channels + 1) * height, in int.
         if ((static_cast<std::int64_t>(out_width) * channels + 1) * out_height > std::numeric_limits<int>::max())
-            return std::unexpected(std::format("Capture size {}x{} with {} channels is too large to encode as PNG",
-                                               out_width, out_height, channels));
+            return capture_error(lfs::ErrorCode::InvalidArgument,
+                                 std::format("Capture size {}x{} with {} channels is too large to encode as PNG",
+                                             out_width, out_height, channels));
 
         const uint8_t* pixels = src_pixels;
         std::vector<uint8_t> resized;
@@ -121,22 +137,24 @@ namespace lfs::mcp {
             pixels,
             out_width * channels);
         if (!ok)
-            return std::unexpected("PNG encoding failed");
+            return capture_error(lfs::ErrorCode::Internal,
+                                         std::format("PNG encoding of a {}x{} capture failed", out_width, out_height));
 
         return core::base64_encode(png_buf);
     }
 
-    inline std::expected<std::string, std::string> encode_render_tensor_to_base64(core::Tensor image,
+    inline lfs::Result<std::string> encode_render_tensor_to_base64(core::Tensor image,
                                                                                   int width = 0,
                                                                                   int height = 0) {
         image = image.clone().to(core::Device::CPU).to(core::DataType::Float32);
         if (image.ndim() == 4)
             image = image.squeeze(0);
         if (image.ndim() != 3)
-            return std::unexpected("Render tensor must be 3D");
+            return capture_error(lfs::ErrorCode::Internal,
+                                         std::format("Render tensor must be 3D (got {} dimensions)", image.ndim()));
         const auto layout = rendering::detectImageLayout(image);
         if (layout == rendering::ImageLayout::Unknown)
-            return std::unexpected("Render tensor has an unsupported image layout");
+            return capture_error(lfs::ErrorCode::Internal, "Render tensor has an unsupported image layout");
         if (layout == rendering::ImageLayout::CHW)
             image = image.permute({1, 2, 0});
         image = (image.clamp(0, 1) * 255.0f).to(core::DataType::UInt8).contiguous();
