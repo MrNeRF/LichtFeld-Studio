@@ -25,6 +25,12 @@ namespace lfs::training {
         size_t aligned(size_t bytes) { return (bytes + 255) & ~size_t{255}; }
         bool decoupled(PhotoPath p) { return p == PhotoPath::Decoupled || p == PhotoPath::MaskedDecoupled; }
         bool masked(PhotoPath p) { return p == PhotoPath::MaskedFused || p == PhotoPath::MaskedDecoupled; }
+        void ensure_buffer(Tensor& buffer, core::TensorShape shape) {
+            if (!buffer.is_valid() || buffer.shape() != shape) {
+                buffer = Tensor{};
+                buffer = Tensor::empty(shape, Device::GPU);
+            }
+        }
         struct PhotoState : BackendState {
             Tensor arena, map, cs, gradient, raw_gradient;
             Tensor horizontal, full_map, full_cs, losses, normalizer, l1_gradient;
@@ -78,7 +84,7 @@ namespace lfs::training {
                     offset = aligned(offset) + 4 * e;
                 gradient = field(4 * e, dims);
                 raw_gradient = decoupled(path) ? field(4 * e, dims) : Tensor{};
-                cs = Tensor::empty(map_shape, Device::GPU);
+                ensure_buffer(cs, map_shape);
             }
         };
         PhotoState& state(PhotoSaved& saved) {
@@ -138,7 +144,7 @@ namespace lfs::training {
             p.mask_byte = m.is_valid() && m.dtype() != DataType::Float32;
             p.valid_padding = options.valid_padding;
             p.weight = options.path == PhotoPath::SSIM ? 1.f : options.ssim_weight;
-            s.losses = Tensor::empty(dims, Device::GPU);
+            ensure_buffer(s.losses, dims);
             p.losses = address(s.losses);
             std::vector<core::internal::StorageRef> inputs{ref(a), ref(t)};
             if (r.is_valid())
@@ -149,7 +155,7 @@ namespace lfs::training {
                 p.normalizer = address(s.normalizer);
             }
             if (options.path == PhotoPath::L1) {
-                s.l1_gradient = Tensor::empty(dims, Device::GPU);
+                ensure_buffer(s.l1_gradient, dims);
                 p.grad = address(s.l1_gradient);
                 p.stage = 4;
                 const std::array writes{ref(s.losses), ref(s.l1_gradient)};
@@ -160,9 +166,9 @@ namespace lfs::training {
                     s.ensure(options.path, dims);
                 else
                     s.shape = dims;
-                s.horizontal = Tensor::empty({6 * a.numel()}, Device::GPU);
-                s.full_map = Tensor::empty(dims, Device::GPU);
-                s.full_cs = Tensor::empty(dims, Device::GPU);
+                ensure_buffer(s.horizontal, {6 * a.numel()});
+                ensure_buffer(s.full_map, dims);
+                ensure_buffer(s.full_cs, dims);
                 p.horizontal = address(s.horizontal);
                 p.partials = derivatives ? address(s.arena) + s.partial_offset : 0;
                 p.partial_stride = s.partial_stride;
