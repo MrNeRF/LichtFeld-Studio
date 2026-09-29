@@ -41,6 +41,8 @@ namespace lfs::core::internal {
                 });
             }
 
+            void submit() override { context_->recorders().flush_current(); }
+
         private:
             std::shared_ptr<VulkanContext> context_ = acquire_vulkan_context();
         };

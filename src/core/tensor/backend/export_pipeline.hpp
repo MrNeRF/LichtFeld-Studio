@@ -28,6 +28,9 @@ namespace lfs::core::internal {
         // Runs `work` invocations of a module phase.
         virtual void launch(const char* module, uint32_t phase, std::span<const std::byte> params,
                             std::span<const StorageRef> reads, std::span<const StorageRef> writes, size_t work) = 0;
+        // Submits the launches recorded so far, so long work spans several command
+        // buffers instead of one that could exceed the GPU watchdog.
+        virtual void submit() = 0;
     };
 
     Tensor export_morton_sort(ExportKernels& kernels, const Tensor& positions, Tensor* sorted_keys);
