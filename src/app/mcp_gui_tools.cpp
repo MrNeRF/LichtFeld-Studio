@@ -56,6 +56,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <deque>
@@ -269,17 +270,35 @@ namespace lfs::app {
                     }));
         }
 
-        std::expected<std::string, std::string> render_scene_to_base64(
-            core::Scene& scene,
-            int camera_index = 0,
-            int width = 0,
-            int height = 0) {
-            (void)scene;
-            (void)camera_index;
-            (void)width;
-            (void)height;
-            return std::unexpected(
-                "Camera-index CUDA scene rendering has been removed; use live Vulkan viewport capture");
+        // Renders dataset camera `camera_index` (an index into the scene's camera list, as selection
+        // camera_index uses) from its pose and intrinsics at its image size. Viewer thread only.
+        std::expected<std::string, std::string> render_dataset_camera_to_base64(vis::Visualizer* viewer,
+                                                                                const int camera_index) {
+            auto* const scene_manager = viewer->getSceneManager();
+            auto* const rendering_manager = viewer->getRenderingManager();
+            if (!scene_manager || !rendering_manager)
+                return std::unexpected("Dataset camera rendering requires the GUI scene and renderer");
+
+            const auto cameras = scene_manager->getScene().getAllCameras();
+            if (camera_index < 0 || static_cast<size_t>(camera_index) >= cameras.size() || !cameras[camera_index])
+                return std::unexpected(std::format("Camera index {} is out of range; the scene has {} dataset cameras",
+                                                   camera_index, cameras.size()));
+            const auto& camera = *cameras[camera_index];
+            if (camera.camera_model_type() == core::CameraModelType::EQUIRECTANGULAR)
+                return std::unexpected(std::format(
+                    "Dataset camera {} is equirectangular; only pinhole-projected cameras can be rendered",
+                    camera_index));
+
+            const auto image = rendering_manager->renderDatasetCameraImage(scene_manager, camera);
+            if (!image || !image->is_valid())
+                return std::unexpected(std::format(
+                    "Rendering dataset camera {} failed: the scene has no renderable Gaussian model, "
+                    "or the renderer rejected the frame (see the log)",
+                    camera_index));
+            auto encoded = mcp::encode_render_tensor_to_base64(*image);
+            if (!encoded)
+                return std::unexpected(std::string(encoded.error().user_message()));
+            return std::move(*encoded);
         }
 
         template <typename F>
@@ -5425,8 +5444,8 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"problem", json{{"type", "string"}, {"description", "Description of the problem or question"}}},
-                        {"include_render", json{{"type", "boolean"}, {"description", "Include current render in request (default: true)"}}},
-                        {"camera_index", json{{"type", "integer"}, {"description", "Camera index for render (default: 0)"}}}},
+                        {"include_render", json{{"type", "boolean"}, {"description", "Include a render from a dataset camera in the request (default: true)"}}},
+                        {"camera_index", json{{"type", "integer"}, {"minimum", 0}, {"description", "Index into the dataset camera list to render from (default: 0)"}}}},
                     .required = {}}},
             [viewer](const json& args) -> json {
                 auto api_key = mcp::LLMClient::load_api_key_from_env();
@@ -5445,12 +5464,13 @@ namespace lfs::app {
                 std::string base64_render;
                 bool include_render = args.value("include_render", true);
                 if (include_render) {
-                    int camera_index = args.value("camera_index", 0);
+                    const int camera_index = args.value("camera_index", 0);
                     auto render_result = post_and_wait(viewer, [viewer, camera_index]() {
-                        return render_scene_to_base64(viewer->getScene(), camera_index);
+                        return render_dataset_camera_to_base64(viewer, camera_index);
                     });
-                    if (render_result)
-                        base64_render = *render_result;
+                    if (!render_result)
+                        return json{{"error", render_result.error() + "; pass include_render=false to ask without a render"}};
+                    base64_render = std::move(*render_result);
                 }
 
                 std::string problem = args.value("problem", "");
@@ -5485,7 +5505,7 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"description", json{{"type", "string"}, {"description", "Natural language description of what to select (e.g., 'the bicycle wheel')"}}},
-                        {"camera_index", json{{"type", "integer"}, {"description", "Camera index for rendering (default: 0)"}}}},
+                        {"camera_index", json{{"type", "integer"}, {"minimum", 0}, {"description", "Index into the dataset camera list to render and select from (default: 0)"}}}},
                     .required = {"description"}}},
             [viewer_impl](const json& args) -> json {
                 auto api_key = mcp::LLMClient::load_api_key_from_env();
@@ -5496,7 +5516,7 @@ namespace lfs::app {
                 const std::string description = args["description"].get<std::string>();
 
                 auto render_result = post_and_wait(viewer_impl, [viewer_impl, camera_index]() {
-                    return render_scene_to_base64(viewer_impl->getScene(), camera_index);
+                    return render_dataset_camera_to_base64(viewer_impl, camera_index);
                 });
                 if (!render_result)
                     return json{{"error", render_result.error()}};
@@ -5696,16 +5716,15 @@ namespace lfs::app {
             "lichtfeld://render/camera/",
             [viewer](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
                 constexpr std::string_view camera_prefix = "lichtfeld://render/camera/";
-                int camera_index = 0;
-                const auto idx_str = uri.substr(camera_prefix.size());
-                try {
-                    camera_index = std::stoi(idx_str);
-                } catch (...) {
-                    return std::unexpected("Invalid camera resource URI: " + uri);
-                }
+                const std::string_view idx_str = std::string_view(uri).substr(camera_prefix.size());
+                int camera_index = -1;
+                const auto [last, ec] = std::from_chars(idx_str.data(), idx_str.data() + idx_str.size(), camera_index);
+                if (idx_str.empty() || ec != std::errc{} || last != idx_str.data() + idx_str.size() || camera_index < 0)
+                    return std::unexpected("Invalid camera resource URI '" + uri +
+                                           "'; expected lichtfeld://render/camera/<dataset camera index>");
 
                 auto result = post_and_wait(viewer, [viewer, camera_index]() {
-                    return render_scene_to_base64(viewer->getScene(), camera_index);
+                    return render_dataset_camera_to_base64(viewer, camera_index);
                 });
                 if (!result)
                     return std::unexpected(result.error());
