@@ -182,10 +182,12 @@ namespace lfs::training {
                 auto reads = inputs;
                 reads.insert(reads.end(), writes.begin(), writes.end());
                 for (uint32_t stage = 0; stage < 5; ++stage) {
-                    if (!derivatives && (stage == 2 || stage == 3))
+                    if ((stage == 0 || stage == 2 || stage == 4) || (!derivatives && (stage == 2 || stage == 3)))
                         continue;
                     p.stage = stage;
-                    vulkan::dispatch("photometric", p, reads, writes, vulkan::groups(a.numel()), p.stage | (p.path << 3));
+                    const size_t tiles = ((size_t(p.width) + 15) / 16) *
+                                         ((size_t(p.height) + 15) / 16) * p.batch * p.channels;
+                    vulkan::dispatch(stage == 1 ? "photometric_fused" : "photometric_fused_gradient", p, reads, writes, vulkan::groups(tiles * 256), p.stage | (p.path << 3));
                 }
                 if (options.path == PhotoPath::SSIM) {
                     if (derivatives) {
