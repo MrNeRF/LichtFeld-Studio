@@ -453,6 +453,7 @@ namespace {
         // Borders, batch normalization, soft masks and byte targets are observable
         // contracts, including independent valid padding on each image axis.
         for (const auto [n, h, w] : {std::tuple{1, 7, 19}, std::tuple{1, 8, 40}, std::tuple{1, 40, 8},
+                                     std::tuple{2, 10, 10}, std::tuple{2, 10, 11}, std::tuple{2, 11, 10},
                                      std::tuple{2, 13, 17}, std::tuple{2, 8, 40}, std::tuple{2, 40, 8},
                                      std::tuple{1, 13, 259}, std::tuple{1, 17, 31}, std::tuple{2, 33, 35}}) {
             auto host = Tensor::empty({static_cast<size_t>(n), 3, static_cast<size_t>(h), static_cast<size_t>(w)}, Device::CPU);

@@ -48,11 +48,15 @@ float chain(Params p, int x, int y) {
     if (x < 0 || y < 0 || x >= int(p.width) || y >= int(p.height))
         return 0;
     if (masked(p))
-        return maskAt(p, uint(y) * p.width + uint(x)) / (readFloat(p.normalizer, 0) * float(p.channels) + 1e-8f);
-    bool crop = (operation >> 3u) != 0 && p.validPadding != 0 && p.width > 10 && p.height > 10;
-    if (crop && (x < 5 || y < 5 || x >= int(p.width) - 5 || y >= int(p.height) - 5))
+        return maskAt(p, uint(y) * p.width + uint(x)) / (readFloat(p.normalizer, 0) * float(p.batch) * float(p.channels) + 1e-8f);
+    bool valid = (operation >> 3u) != 0 && p.validPadding != 0;
+    bool cropX = valid && p.width > 10, cropY = valid && p.height > 10;
+    if ((cropX && (x < 5 || x >= int(p.width) - 5)) ||
+        (cropY && (y < 5 || y >= int(p.height) - 5)))
         return 0;
-    return 1.0f / float(crop ? p.batch * p.channels * (p.width - 10) * (p.height - 10) : p.count);
+    uint width = cropX ? p.width - 10 : p.width;
+    uint height = cropY ? p.height - 10 : p.height;
+    return 1.0f / float(p.batch * p.channels * width * height);
 }
 void storePartial(Params p, uint i, uint field, float value) {
     if (p.partials == 0)
