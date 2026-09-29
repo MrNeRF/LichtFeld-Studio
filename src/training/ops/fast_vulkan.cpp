@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "core/memory_pressure.hpp"
+#include "core/tensor/backend/vulkan/vk_recorder.hpp"
 #include "lfs/training/ops/pair_sort_vulkan.hpp"
 #include "vulkan/fast_state.hpp"
 #include <bit>
@@ -254,6 +255,10 @@ namespace lfs::training::vulkan {
                         s.mark(8);
                         launch(s, 5, tiles * 256);
                         s.mark(9);
+                        // Keep the already-recorded indirect forward work running
+                        // while the host validates the earlier status copy.
+                        if (s.submit_before_status)
+                            core::internal::acquire_vulkan_context()->recorders().flush_current();
                         std::array<uint32_t, 2> status{};
                         // Validate before exposing output or scheduling any optimizer writes.
                         const bool ready = s.scalar_readback.poll(std::as_writable_bytes(std::span(status)));

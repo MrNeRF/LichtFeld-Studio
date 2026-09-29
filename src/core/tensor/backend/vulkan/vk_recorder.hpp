@@ -37,7 +37,7 @@ namespace lfs::core::internal {
         uint64_t flush_storages(std::span<const StorageRef> storage);
         uint64_t wait_external(std::span<const StorageRef> storage, VkSemaphore semaphore,
                                uint64_t value, std::shared_ptr<void> keep_alive);
-        uint64_t flush_current();
+        LFS_CORE_API uint64_t flush_current();
         [[nodiscard]] uint64_t current_queue();
         LFS_CORE_API uint64_t flush_all();
         LFS_CORE_API void wait_all();

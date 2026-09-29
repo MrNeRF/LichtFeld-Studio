@@ -170,12 +170,14 @@ namespace lfs::training {
             if (saved.backend) {
                 auto& state = static_cast<vulkan::FastState&>(*saved.backend);
                 const bool indirect = state.indirect;
+                const bool submit_before_status = state.submit_before_status;
                 auto* timer = state.timer;
                 auto scratch = std::move(state.scratch);
                 auto readback = std::move(state.scalar_readback);
                 state = vulkan::FastState{};
                 state.timer = timer;
                 state.indirect = indirect;
+                state.submit_before_status = submit_before_status;
                 state.scratch = std::move(scratch);
                 state.scalar_readback = std::move(readback);
             }

@@ -63,6 +63,8 @@ namespace lfs::training::vulkan {
         core::Tensor image, alpha, depth, normal;
         // The direct path is retained for bitwise overflow/retry regression tests.
         bool indirect = true;
+        // Retain the synchronous submission order for exact state regressions.
+        bool submit_before_status = true;
         bool live = false;
         std::string message;
     };
