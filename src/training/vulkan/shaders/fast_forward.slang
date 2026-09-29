@@ -6,6 +6,18 @@ struct Push {
     uint64_t parameters;
 };
 [[vk::push_constant]] Push push;
+// First fault wins. Synchronization reports it through the tensor runtime;
+// every invalid access below is still suppressed on the device.
+void tileFault(FastPush p, uint value, uint bound, uint operation) {
+    Ptr<uint, Access.ReadWrite> words = (Ptr<uint, Access.ReadWrite>)p.status;
+    uint observed;
+    InterlockedCompareExchange(words[0], 0u, 3u, observed);
+    if (observed == 0) {
+        words[1] = value;
+        words[2] = bound;
+        words[3] = operation;
+    }
+}
 Projected project(FastPush p, uint i, out uint touched) {
     Projected o = (Projected)0;
     touched = 0;
@@ -249,7 +261,7 @@ result:
                 for (uint cross = span.x; cross < span.y; ++cross) {
                     uint tile = alongX ? scan * p.gridWidth + cross : cross * p.gridWidth + scan;
                     if (at >= end || at >= p.instances || tile >= p.gridWidth * p.gridHeight) {
-                        InterlockedOr(((Ptr<uint, Access.ReadWrite>)p.status)[0], 1u);
+                        tileFault(p, uint(at), p.instances, 1u);
                         continue;
                     }
                     storeUint(p.keys, uint(at), (tile << p.depthBits) | o.depthKey);
@@ -258,11 +270,12 @@ result:
                 }
             }
             if (at != end)
-                InterlockedOr(((Ptr<uint, Access.ReadWrite>)p.status)[0], 2u);
+                tileFault(p, uint(at), uint(end), 2u);
         } else if (p.stage == 4) {
             uint tile = loadUint(p.keys, i) >> p.depthBits;
             if (tile >= p.gridWidth * p.gridHeight || loadUint(p.values, i) >= p.visible) {
-                InterlockedOr(((Ptr<uint, Access.ReadWrite>)p.status)[0], 4u);
+                tileFault(p, tile >= p.gridWidth * p.gridHeight ? tile : loadUint(p.values, i),
+                          tile >= p.gridWidth * p.gridHeight ? p.gridWidth * p.gridHeight : p.visible, 4u);
                 continue;
             }
             if (i == 0 || (loadUint(p.keys, i - 1) >> p.depthBits) != tile)

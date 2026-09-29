@@ -17,7 +17,7 @@ namespace lfs::training::vulkan {
             if (t.is_valid() && t.numel())
                 result.push_back(ref(t));
         for (const auto* t : {&s.projected, &s.visibility, &s.offsets, &s.original_to_work, &s.work_to_original,
-                              &s.counts, &s.keys_a, &s.keys_b, &s.values_a, &s.values_b, &s.ranges, &s.transmittance, &s.last, &s.status,
+                              &s.counts, &s.keys_a, &s.keys_b, &s.values_a, &s.values_b, &s.ranges, &s.transmittance, &s.last,
                               &s.image, &s.alpha, &s.depth, &s.normal})
             if (t->is_valid() && t->numel())
                 result.push_back(ref(*t));
@@ -69,10 +69,10 @@ namespace lfs::training::vulkan {
                                 &s.work_to_original, &s.inputs[11]});
             } else if (stage == 3) {
                 append(reads, {&s.projected, &s.offsets});
-                append(writes, {&s.keys_a, &s.values_a, &s.status});
+                append(writes, {&s.keys_a, &s.values_a});
             } else if (stage == 4) {
                 append(reads, {&s.keys_a, &s.keys_b, &s.values_a, &s.values_b});
-                append(writes, {&s.ranges, &s.status});
+                append(writes, {&s.ranges});
             } else {
                 LFS_ASSERT_MSG(stage == 5, "Unexpected forward raster stage");
                 append(reads, {&s.projected, &s.values_a, &s.values_b, &s.ranges,
@@ -126,7 +126,7 @@ namespace lfs::training::vulkan {
         for (auto* tensor : {&s.projected, &s.visibility, &s.offsets, &s.original_to_work,
                              &s.work_to_original, &s.counts, &s.keys_a, &s.keys_b,
                              &s.values_a, &s.values_b, &s.ranges, &s.transmittance,
-                             &s.last, &s.status})
+                             &s.last})
             *tensor = Tensor{};
         auto& p = s.push;
         p = {};
@@ -194,8 +194,9 @@ namespace lfs::training::vulkan {
             s.last = s.temporary(2, tiles * 256, DataType::Int32, true);
             p.transmittance = address(s.transmittance);
             p.last = address(s.last);
-            s.status = s.temporary(3, 1, DataType::Int32, true);
-            p.status = address(s.status);
+            // Tile validation uses the deferred device-fault channel, which is
+            // checked by the next queue/readback synchronization.
+            p.status = core::internal::acquire_vulkan_context()->fault_address();
             // Dense work ids retain original splat order for stable depth ties.
             p.visible = count;
             s.original_to_work = s.temporary(4, count, DataType::Int32);
@@ -234,11 +235,6 @@ namespace lfs::training::vulkan {
                 p.values = address(in_a ? s.values_a : s.values_b);
                 launch(s, 4, p.instances);
                 s.mark(7);
-                int status = 0;
-                s.scalar_readback.enqueue(s.status);
-                s.scalar_readback.wait(std::as_writable_bytes(std::span(&status, 1)));
-                if (status != 0)
-                    return failure(s, RasterResult::Code::Failed, "Fast tile emission or sorted range is invalid");
             }
             if (!p.visible) {
                 for (size_t event = 3; event <= 7; ++event)

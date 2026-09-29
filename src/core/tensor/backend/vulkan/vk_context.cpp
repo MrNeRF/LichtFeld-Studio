@@ -1089,10 +1089,13 @@ namespace lfs::core::internal {
         throw lfs::Exception(lfs::make_error(lfs::ErrorInit{
             .code = ErrorCode::BoundsViolation,
             .domain = lfs::ErrorDomain::Vulkan,
-            .user_message = "A tensor index was out of range on the Vulkan backend",
-            .detail = std::format("device fault code {}: index {} is outside the extent {} "
-                                  "(operation {})",
-                                  record[0], value, bound, op_id),
+            .user_message = record[0] == 3 ? "The Vulkan rasterizer reported invalid tile data"
+                                           : "A tensor index was out of range on the Vulkan backend",
+            .detail = record[0] == 3
+                          ? std::format("raster validation observed {}, expected limit/count {} (operation {})",
+                                        value, bound, op_id)
+                          : std::format("device fault code {}: index {} is outside the extent {} (operation {})",
+                                        record[0], value, bound, op_id),
             .detection = LFS_SOURCE_SITE_CURRENT(),
             .fields = lfs::SmallFields{}
                           .add("op_id", static_cast<std::int64_t>(op_id))

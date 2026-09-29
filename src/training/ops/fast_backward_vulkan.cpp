@@ -209,7 +209,6 @@ namespace lfs::training {
             record_vram_tensor(scope, "forward.counts", s.counts);
             record_vram_tensor(scope, "forward.keys_a", s.keys_a);
             record_vram_tensor(scope, "forward.keys_b", s.keys_b);
-            record_vram_tensor(scope, "forward.status", s.status);
             record_vram_tensor(scope, "output.depth", s.depth);
             record_vram_tensor(scope, "output.normal", s.normal);
             record_vram_current(scope, "backward.screen_gradient", backward ? size_t(s.push.visible) * 16 * 4 : 0, true);
