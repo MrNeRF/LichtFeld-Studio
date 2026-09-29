@@ -115,6 +115,8 @@ namespace lfs::training {
             bool live = false;
             std::string message;
             Tensor camera, radial, tangential, prism, image, alpha, last_ids, depth;
+            Tensor radii, means2d, colors, depth_keys, tile_counts, tile_offsets, ends;
+            Tensor keys_a, keys_b, ids_a, ids_b, grads;
         };
 
         VulkanGsplatState& state_of(ops::GsplatSaved& saved) {
@@ -164,8 +166,15 @@ namespace lfs::training {
             return cache;
         }
 
-        Tensor inclusive_counts(const Tensor& input) {
-            auto output = Tensor::empty(input.shape(), Device::GPU, DataType::Int64);
+        Tensor reuse_capacity(Tensor& cache, size_t count, DataType dtype) {
+            if (!cache.is_valid() || cache.numel() < count || cache.dtype() != dtype)
+                cache = Tensor::empty({count}, Device::GPU, dtype);
+            return cache;
+        }
+
+        Tensor inclusive_counts(const Tensor& input, Tensor* cache = nullptr) {
+            auto output = cache ? reuse(*cache, input.shape(), DataType::Int64)
+                                : Tensor::empty(input.shape(), Device::GPU, DataType::Int64);
             auto totals = Tensor::empty({(input.numel() + 255) / 256}, Device::GPU, DataType::Int64);
             ScanParams p{mk::address(input), mk::address(output), mk::address(totals), uint32_t(input.numel())};
             launch_items(4, p, {&input, &output, &totals}, input.numel());
@@ -293,11 +302,11 @@ namespace lfs::training {
             setup.camera = mk::address(f.camera);
             launch(0, setup, {&view_matrix, &radial_d, &tangential_d, &prism_d, &f.camera}, 1);
 
-            f.radii = Tensor::empty({count, 2}, Device::GPU, DataType::Int32);
-            f.means2d = Tensor::empty({count, 2}, Device::GPU, DataType::Float32);
-            f.colors = Tensor::empty({count, 3}, Device::GPU, DataType::Float32);
-            Tensor depth_keys = Tensor::empty({count}, Device::GPU, DataType::Int32);
-            const Tensor tile_counts = Tensor::empty({count}, Device::GPU, DataType::Int64);
+            f.radii = reuse(state.radii, {count, 2}, DataType::Int32);
+            f.means2d = reuse(state.means2d, {count, 2}, DataType::Float32);
+            f.colors = reuse(state.colors, {count, 3}, DataType::Float32);
+            Tensor depth_keys = reuse(state.depth_keys, {count}, DataType::Int32);
+            const Tensor tile_counts = reuse(state.tile_counts, {count}, DataType::Int64);
             f.depths = depth_keys;
             if (count > 0) {
                 const ProjectParams project{
@@ -318,18 +327,19 @@ namespace lfs::training {
             int64_t intersections = 0;
             Tensor ends;
             if (count) {
-                ends = inclusive_counts(tile_counts);
+                ends = inclusive_counts(tile_counts, &state.ends);
                 intersections = ends.slice(0, count - 1, count).item<int64_t>();
             }
             if (intersections < 0 || intersections > INT_MAX)
                 return {ops::RasterResult::Code::InstanceOverflow, false, "Gsplat tile intersections exceed signed indexing"};
             f.intersections = uint32_t(intersections);
-            f.tile_offsets = Tensor::zeros({size_t(tiles) + 1}, Device::GPU, DataType::Int32);
+            f.tile_offsets = reuse(state.tile_offsets, {size_t(tiles) + 1}, DataType::Int32);
+            f.tile_offsets.zero_();
             if (intersections) {
-                auto keys_a = Tensor::empty({size_t(intersections)}, Device::GPU, DataType::Int64);
-                auto keys_b = Tensor::empty_like(keys_a);
-                auto ids_a = Tensor::empty({size_t(intersections)}, Device::GPU, DataType::UInt32);
-                auto ids_b = Tensor::empty_like(ids_a);
+                auto keys_a = reuse_capacity(state.keys_a, size_t(intersections), DataType::Int64);
+                auto keys_b = reuse_capacity(state.keys_b, size_t(intersections), DataType::Int64);
+                auto ids_a = reuse_capacity(state.ids_a, size_t(intersections), DataType::UInt32);
+                auto ids_b = reuse_capacity(state.ids_b, size_t(intersections), DataType::UInt32);
                 BinParams bin{mk::address(tile_counts), mk::address(ends), mk::address(f.radii), mk::address(f.means2d),
                               mk::address(depth_keys), mk::address(keys_a), mk::address(ids_a), mk::address(f.tile_offsets),
                               f.count, tiles_x, tiles_y};
@@ -457,7 +467,8 @@ namespace lfs::training {
                 edge_map.shape()[0] == f.height && edge_map.shape()[1] == f.width && edge_scores.numel() == count &&
                 edge_scores.is_contiguous();
             const Tensor edges = edge_scoring ? edge_map.contiguous() : Tensor();
-            const Tensor grads = Tensor::zeros({count, kGradStride}, Device::GPU, DataType::Float32);
+            const Tensor grads = reuse(state.grads, {count, kGradStride}, DataType::Float32);
+            state.grads.zero_();
 
             if (f.intersections > 0) {
                 const uint32_t tiles_x = (f.width + kTile - 1) / kTile;
@@ -563,6 +574,18 @@ namespace lfs::training {
             record_vram_tensor(scope, "output.image", image);
             record_vram_tensor(scope, "output.alpha", alpha);
             record_vram_tensor(scope, "output.depth", state.depth);
+            record_vram_tensor(scope, "cache.radii", state.radii);
+            record_vram_tensor(scope, "cache.means2d", state.means2d);
+            record_vram_tensor(scope, "cache.colors", state.colors);
+            record_vram_tensor(scope, "cache.depth_keys", state.depth_keys);
+            record_vram_tensor(scope, "cache.tile_counts", state.tile_counts);
+            record_vram_tensor(scope, "cache.tile_offsets", state.tile_offsets);
+            record_vram_tensor(scope, "cache.ends", state.ends);
+            record_vram_tensor(scope, "cache.keys_a", state.keys_a);
+            record_vram_tensor(scope, "cache.keys_b", state.keys_b);
+            record_vram_tensor(scope, "cache.ids_a", state.ids_a);
+            record_vram_tensor(scope, "cache.ids_b", state.ids_b);
+            record_vram_tensor(scope, "cache.grads", state.grads);
             record_vram_tensor(scope, "camera.block", state.camera);
             record_vram_tensor(scope, "camera.radial", state.radial);
             record_vram_tensor(scope, "camera.tangential", state.tangential);
@@ -584,6 +607,18 @@ namespace lfs::training {
             state.alpha = {};
             state.last_ids = {};
             state.depth = {};
+            state.radii = {};
+            state.means2d = {};
+            state.colors = {};
+            state.depth_keys = {};
+            state.tile_counts = {};
+            state.tile_offsets = {};
+            state.ends = {};
+            state.keys_a = {};
+            state.keys_b = {};
+            state.ids_a = {};
+            state.ids_b = {};
+            state.grads = {};
             return true;
         }
     } // namespace
