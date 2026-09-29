@@ -66,7 +66,8 @@ namespace lfs::training {
             if (const auto found = cache.find(key); found != cache.end())
                 return found->second;
             const auto modules = vulkan::embedded_training_shaders();
-            const auto module = std::ranges::find(modules, std::string_view("geometry"), &vulkan::EmbeddedShader::name);
+            const std::string_view name = context->caps().shader_float64 ? "geometry" : "geometry_fp32";
+            const auto module = std::ranges::find(modules, name, &vulkan::EmbeddedShader::name);
             LFS_ASSERT_MSG(module != modules.end(), "Vulkan Geometry shader module is missing");
             VkShaderModuleCreateInfo shader_info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
             shader_info.codeSize = module->words.size_bytes();
@@ -110,11 +111,6 @@ namespace lfs::training {
             LFS_ASSERT_MSG(storage.backend == core::GpuBackend::Vulkan,
                            "Vulkan Geometry op received storage from another backend");
             return storage;
-        }
-
-        void ensure_fp64(const std::shared_ptr<VulkanContext>& context) {
-            LFS_ASSERT_MSG(context->caps().shader_float64,
-                           "Vulkan Geometry requires shaderFloat64 for CUDA-compatible statistics");
         }
 
         void launch(const std::shared_ptr<VulkanContext>& context, const Push& p, uint32_t op,
@@ -180,7 +176,6 @@ namespace lfs::training {
             p.anchor_floor = anchor ? params.anchor->floor : 0.0f;
             p.floor_override = p.anchor_floor;
             const auto context = acquire_vulkan_context();
-            ensure_fp64(context);
             std::vector<StorageRef> reads{ref(depth_map), ref(alpha), ref(target), ref(partials)};
             if (pixel_weight.is_valid())
                 reads.push_back(ref(pixel_weight));
@@ -205,7 +200,6 @@ namespace lfs::training {
             p.min_count = k::kNormalLossMinValidCount;
             p.min_weight = k::kNormalLossMinValidWeight;
             const auto context = acquire_vulkan_context();
-            ensure_fp64(context);
             std::vector<StorageRef> reads{ref(normal_map), ref(alpha), ref(target), ref(partials)};
             if (pixel_weight.is_valid())
                 reads.push_back(ref(pixel_weight));
@@ -235,7 +229,6 @@ namespace lfs::training {
             p.min_count = k::kNormalConsistencyMinValidCount;
             p.min_weight = k::kNormalConsistencyMinValidWeight;
             const auto context = acquire_vulkan_context();
-            ensure_fp64(context);
             std::vector<StorageRef> reads{ref(depth_map), ref(alpha), ref(partials)};
             if (normal_map.is_valid())
                 reads.push_back(ref(normal_map));
@@ -291,7 +284,6 @@ namespace lfs::training {
             p.cy = params.intrinsics.cy;
             p.near_plane = params.near_plane;
             const auto context = acquire_vulkan_context();
-            ensure_fp64(context);
             std::vector<StorageRef> reads{ref(points), ref(view), ref(prior)}, writes{ref(pairs), ref(sample_count)};
             launch(context, p, 14, reads, writes, vk::dispatch_groups(*context, samples));
             const int found = std::min(sample_count.item<int>(), static_cast<int>(kMaxAnchorSamples));

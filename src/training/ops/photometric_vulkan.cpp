@@ -207,7 +207,7 @@ namespace lfs::training {
                 bind(grad, s.gradient);
             }
             if (masked(options.path))
-                loss = (s.losses.sum() / (s.normalizer * float(p.channels) + 1e-8f)).reshape({1});
+                loss = (s.losses.sum() / (s.normalizer * float(p.batch) * float(p.channels) + 1e-8f)).reshape({1});
             else {
                 auto selected = s.losses;
                 if (options.path != PhotoPath::L1 && options.valid_padding) {

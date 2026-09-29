@@ -1,3 +1,14 @@
+#ifndef GEOMETRY_FP64
+#define GEOMETRY_FP64 1
+#endif
+// Devices without shaderFloat64 (Apple GPUs through MoltenVK) accumulate the
+// statistics in fp32, as the Metal family does.
+#if GEOMETRY_FP64
+typedef double real;
+#else
+typedef float real;
+#endif
+
 [SpecializationConstant] const uint operation = 0;
 struct Parameters {
     uint64_t normal, depth, alpha, target, weight;
@@ -10,7 +21,7 @@ struct Parameters {
     float fx, fy, cx, cy, lossWeight, lambdaGrad, quantStep, floorOverride;
     float anchorScale, anchorShift, anchorFloor, minCount, minWeight, nearPlane;
 };
-groupshared double reduction[256];
+groupshared real reduction[256];
 
 float rd(uint64_t a, uint i) { return ((Ptr<float, Access.Read>)a)[i]; }
 void wr(uint64_t a, uint i, float v) { ((Ptr<float, Access.ReadWrite>)a)[i] = v; }
@@ -23,46 +34,46 @@ float pixelWeight(Parameters p, uint i) {
 }
 
 // This XOR tree mirrors warp_reduce::block_reduce_sum for fp64 partials.
-double reduceDouble(double value, uint lane) {
+real reduceReal(real value, uint lane) {
     reduction[lane] = value;
     GroupMemoryBarrierWithGroupSync();
     for (uint off = 16; off > 0; off >>= 1) {
-        double next = reduction[lane] + reduction[lane ^ off];
+        real next = reduction[lane] + reduction[lane ^ off];
         // All readers must finish before any lane overwrites its source.
         GroupMemoryBarrierWithGroupSync();
         reduction[lane] = next;
         GroupMemoryBarrierWithGroupSync();
     }
-    double warpSum = lane < 8 ? reduction[lane * 32] : 0.0;
+    real warpSum = lane < 8 ? reduction[lane * 32] : 0.0;
     GroupMemoryBarrierWithGroupSync();
     reduction[lane] = warpSum;
     GroupMemoryBarrierWithGroupSync();
     for (uint off = 16; off > 0; off >>= 1) {
-        double next = lane < 32 ? reduction[lane] + reduction[lane ^ off] : 0.0;
+        real next = lane < 32 ? reduction[lane] + reduction[lane ^ off] : 0.0;
         GroupMemoryBarrierWithGroupSync();
         if (lane < 32)
             reduction[lane] = next;
         GroupMemoryBarrierWithGroupSync();
     }
-    double result = reduction[0];
+    real result = reduction[0];
     GroupMemoryBarrierWithGroupSync();
     return result;
 }
-void writeStats(Parameters p, uint lane, uint group, double vals[3], uint n, uint slotCount) {
-    Ptr<double, Access.ReadWrite> out = (Ptr<double, Access.ReadWrite>)(p.partials + uint64_t(slotCount) * 4);
+void writeStats(Parameters p, uint lane, uint group, real vals[3], uint n, uint slotCount) {
+    Ptr<real, Access.ReadWrite> out = (Ptr<real, Access.ReadWrite>)(p.partials + uint64_t(slotCount) * 4);
     for (uint k = 0; k < n; ++k) {
-        double total = reduceDouble(vals[k], lane);
+        real total = reduceReal(vals[k], lane);
         if (lane == 0)
             out[k * p.blocks + group] = total;
     }
 }
-void reduceStats(Parameters p, uint lane, inout double vals[3], uint n, uint slotCount) {
-    Ptr<double, Access.Read> in = (Ptr<double, Access.Read>)(p.partials + uint64_t(slotCount) * 4);
+void reduceStats(Parameters p, uint lane, inout real vals[3], uint n, uint slotCount) {
+    Ptr<real, Access.Read> in = (Ptr<real, Access.Read>)(p.partials + uint64_t(slotCount) * 4);
     for (uint k = 0; k < n; ++k) {
-        double s = 0.0;
+        real s = 0.0;
         for (uint i = lane; i < p.blocks; i += 256)
             s += in[k * p.blocks + i];
-        vals[k] = reduceDouble(s, lane);
+        vals[k] = reduceReal(s, lane);
     }
 }
 void writeFinal(Parameters p, uint slot, float value) { wr(p.partials, slot, value); }
@@ -121,8 +132,8 @@ struct NormalSample {
 };
 float3 normalizeGeometry(float3 value, out float norm) {
     float norm_sq = value.x * value.x + value.y * value.y + value.z * value.z;
-    norm = float(sqrt(double(norm_sq)));
-    float reciprocal = float(1.0 / double(norm));
+    norm = float(sqrt(real(norm_sq)));
+    float reciprocal = float(1.0 / real(norm));
     return float3(value.x * reciprocal, value.y * reciprocal, value.z * reciprocal);
 }
 NormalSample normalSample(Parameters p, uint i, uint pixels) {
@@ -199,7 +210,7 @@ DepthNormal depthNormal(Parameters p, int x, int y) {
     float face = fma(n.z, r.z, fma(n.y, r.y, n.x * r.x));
     s.sign = face > 0 ? -1.0f : 1.0f;
     s.norm = sqrt(ns);
-    float nd_rcp = float(double(s.sign) / double(s.norm));
+    float nd_rcp = float(real(s.sign) / real(s.norm));
     s.nd = n * nd_rcp;
     s.alpha = ac;
     s.active = true;
@@ -215,7 +226,7 @@ bool renderedHat(Parameters p, uint i, uint n, out float3 hat, out float norm) {
     norm = sqrt(norm_sq);
     if (norm < 0.1f)
         return false;
-    float rcp_norm = float(1.0 / double(norm));
+    float rcp_norm = float(1.0 / real(norm));
     hat = float3(v.x * rcp_norm, v.y * rcp_norm, v.z * rcp_norm);
     return true;
 }
@@ -229,7 +240,7 @@ bool priorHat(Parameters p, uint i, uint n, out float3 hat) {
     nrm = sqrt(norm_sq);
     if (nrm < 0.5f)
         return false;
-    float rcp_norm = float(1.0 / double(nrm));
+    float rcp_norm = float(1.0 / real(nrm));
     hat = float3(v.x * rcp_norm, v.y * rcp_norm, v.z * rcp_norm);
     return true;
 }
@@ -264,16 +275,16 @@ result:
     };
     uint pixels = p.width * p.height;
     if (operation == 0 || operation == 2 || operation == 4 || operation == 6 || operation == 8 || operation == 10 || operation == 12) {
-        double sums[3] = {0.0, 0.0, 0.0};
+        real sums[3] = {0.0, 0.0, 0.0};
         if (operation == 0) {
             for (uint i = groupId.x * 256 + lane; i < pixels; i += p.blocks * 256)
                 if (depthActive(p, i)) {
                     float w = pixelWeight(p, i);
                     if (w != 0) {
                         float a = rd(p.alpha, i), d = rd(p.depth, i);
-                        double aw = double(a) * double(w), e = max(d, 0.0f) / a;
+                        real aw = real(a) * real(w), e = max(d, 0.0f) / a;
                         sums[0] += aw;
-                        sums[1] += aw * double(e);
+                        sums[1] += aw * real(e);
                         sums[2] += 1.0;
                     }
                 }
@@ -289,7 +300,7 @@ result:
                         float w = pixelWeight(p, i);
                         if (w != 0) {
                             float a = rd(p.alpha, i), d = rd(p.depth, i), e = max(d, 0.0f) / a, ipf = 1.0f / (e + floorF);
-                            double ip = double(ipf), aw = double(a) * double(w);
+                            real ip = real(ipf), aw = real(a) * real(w);
                             sums[0] += aw * ip;
                             sums[1] += aw * ip * ip;
                         }
@@ -299,7 +310,7 @@ result:
         }
         if (operation == 4) {
             int slot = 10;
-            double vals[3] = {0, 0, 0};
+            real vals[3] = {0, 0, 0};
             float valid = finalValue(p, 0), invNorm = finalValue(p, 5), modelF = finalValue(p, 1), scale = finalValue(p, 2), shift = finalValue(p, 3), floorF = finalValue(p, 4), sigma = finalValue(p, 9);
             int model = int(modelF);
             float pMax = 1.0f / floorF, halfStep = 0.5f * max(p.quantStep, 0.0f) * abs(scale), invSigma = valid > 0.5f && sigma > 0 ? 1.0f / (2.0f * sigma) : 0.0f, lambda = p.lambdaGrad;
@@ -315,7 +326,7 @@ result:
                 if (c.ok) {
                     float xr = deadband(c.inv - c.aligned, c.delta) * invSigma;
                     if (xr != 0) {
-                        vals[0] += double(c.wa) * double(depthRho(xr));
+                        vals[0] += real(c.wa) * real(depthRho(xr));
                         gp += c.wa * depthPsi(xr) * invSigma;
                     }
                     if (x + 1 < p.width) {
@@ -324,7 +335,7 @@ result:
                             float q = deadband((n.inv - c.inv) - (n.aligned - c.aligned), c.delta + n.delta) * invSigma;
                             if (q != 0) {
                                 float w = min(c.wa, n.wa);
-                                vals[1] += double(w) * double(depthRho(q));
+                                vals[1] += real(w) * real(depthRho(q));
                                 gp -= lambda * w * depthPsi(q) * invSigma;
                             }
                         }
@@ -335,7 +346,7 @@ result:
                             float q = deadband((n.inv - c.inv) - (n.aligned - c.aligned), c.delta + n.delta) * invSigma;
                             if (q != 0) {
                                 float w = min(c.wa, n.wa);
-                                vals[1] += double(w) * double(depthRho(q));
+                                vals[1] += real(w) * real(depthRho(q));
                                 gp -= lambda * w * depthPsi(q) * invSigma;
                             }
                         }
@@ -373,16 +384,16 @@ result:
             for (uint i = groupId.x * 256 + lane; i < pixels; i += p.blocks * 256) {
                 NormalSample s = normalSample(p, i, pixels);
                 if (s.active) {
-                    sums[0] += double(s.weight);
+                    sums[0] += real(s.weight);
                     sums[1] += 1.0;
-                    sums[2] += double(s.weight) * double(s.cos);
+                    sums[2] += real(s.weight) * real(s.cos);
                 }
             }
             writeStats(p, lane, groupId.x, sums, 3, 6);
             return;
         }
         if (operation == 8) {
-            double vals[3] = {0, 0, 0};
+            real vals[3] = {0, 0, 0};
             float invNorm = finalValue(p, 4);
             for (uint i = groupId.x * 256 + lane; i < pixels; i += p.blocks * 256) {
                 NormalSample s = normalSample(p, i, pixels);
@@ -392,7 +403,7 @@ result:
                     wr(p.gradNormal, 2 * pixels + i, 0);
                     continue;
                 }
-                vals[0] += double(s.weight) * (1.0 - double(s.cos));
+                vals[0] += real(s.weight) * (1.0 - real(s.cos));
                 float scale = -invNorm * s.weight / s.norm;
                 float3 g = scale * (s.tHat - s.cos * s.nHat);
                 wr(p.gradNormal, i, g.x);
@@ -416,16 +427,16 @@ result:
                 float cosine = fma(s.nd.z, hat.z, fma(s.nd.y, hat.y, s.nd.x * hat.x));
                 float aw = s.alpha * pixelWeight(p, i);
                 if (aw != 0) {
-                    sums[0] += double(aw);
+                    sums[0] += real(aw);
                     sums[1] += 1.0;
-                    sums[2] += double(aw) * double(cosine);
+                    sums[2] += real(aw) * real(cosine);
                 }
             }
             writeStats(p, lane, groupId.x, sums, 3, 6);
             return;
         }
         if (operation == 12) {
-            double vals[3] = {0, 0, 0};
+            real vals[3] = {0, 0, 0};
             float invNorm = finalValue(p, 4);
             for (uint i = groupId.x * 256 + lane; i < pixels; i += p.blocks * 256) {
                 if (invNorm == 0)
@@ -443,7 +454,7 @@ result:
                 float aw = s.alpha * pixelWeight(p, i);
                 if (aw == 0)
                     continue;
-                vals[0] += double(aw) * (1.0 - double(cosine));
+                vals[0] += real(aw) * (1.0 - real(cosine));
                 float gw = invNorm * aw;
                 if (p.prior == 0) {
                     float3 g = (-gw / norm) * (s.nd - cosine * hat);
@@ -458,7 +469,7 @@ result:
         }
     }
     if (operation == 1 || operation == 3 || operation == 5 || operation == 7 || operation == 9 || operation == 11 || operation == 13) {
-        double vals[3] = {0, 0, 0};
+        real vals[3] = {0, 0, 0};
         uint n = (operation == 1) ? 3 : (operation == 3)                  ? 2
                                     : (operation == 5)                    ? 2
                                     : (operation == 7 || operation == 11) ? 3
@@ -469,9 +480,9 @@ result:
         if (lane != 0)
             return;
         if (operation == 1) {
-            double sa = vals[0], count = vals[2];
+            real sa = vals[0], count = vals[2];
             bool valid = sa > 0;
-            double me = valid ? vals[1] / sa : 0;
+            real me = valid ? vals[1] / sa : 0;
             writeFinal(p, 0, valid ? 1 : 0);
             writeFinal(p, 4, max(1e-8f, 0.05f * float(me)));
             writeFinal(p, 6, float(sa));
@@ -482,9 +493,9 @@ result:
         if (operation == 3) {
             float floorF = p.floorOverride > 0 ? p.floorOverride : finalValue(p, 4);
             bool valid = finalValue(p, 0) > 0.5f && p.anchorFloor > 0 && finitef(p.anchorScale) && finitef(p.anchorShift);
-            double sa = double(finalValue(p, 6)), sigma = 0;
+            real sa = real(finalValue(p, 6)), sigma = 0;
             if (valid) {
-                double mean = vals[0] / sa, var = max(vals[1] / sa - mean * mean, 0.0);
+                real mean = vals[0] / sa, var = max(vals[1] / sa - mean * mean, 0.0);
                 sigma = sqrt(max(var, 1e-20));
                 writeFinal(p, 4, p.anchorFloor);
             }
@@ -499,7 +510,7 @@ result:
         if (operation == 5) {
             bool valid = finalValue(p, 0) > 0.5f;
             float inv = finalValue(p, 5);
-            wr(p.loss, 0, valid ? p.lossWeight * inv * float(vals[0] + double(p.lambdaGrad) * vals[1]) : 0);
+            wr(p.loss, 0, valid ? p.lossWeight * inv * float(vals[0] + real(p.lambdaGrad) * vals[1]) : 0);
             return;
         }
         if (operation == 7 || operation == 11) {
@@ -509,7 +520,7 @@ result:
             writeFinal(p, 1, sa);
             writeFinal(p, 2, count);
             writeFinal(p, 3, sa > 0 ? float(vals[2] / vals[0]) : 0);
-            writeFinal(p, 4, valid ? float(double(p.lossWeight) / max(vals[0], 1.0)) : 0);
+            writeFinal(p, 4, valid ? float(real(p.lossWeight) / max(vals[0], 1.0)) : 0);
             return;
         }
         if (operation == 9 || operation == 13) {

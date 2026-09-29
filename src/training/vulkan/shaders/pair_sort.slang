@@ -204,14 +204,18 @@ bool firstMatchingLane(uint4 matchMask, uint lane) {
     }
 
     if (kStage == 3u) {
+        // Stage the totals in shared memory: SPIRV-Cross (MoltenVK) forwards a
+        // device-address load past a store to the same address, so an in-place
+        // read-then-overwrite of offsets would read the new value.
         const uint pass = parameters.passIndex;
+        for (uint digit = lane; digit < kDigitCount; digit += kWorkers)
+            localCounts[digit] = offsets[pass * kDigitCount + digit];
+        GroupMemoryBarrierWithGroupSync();
         if (lane == 0u) {
             uint base = 0u;
             for (uint digit = 0u; digit < kDigitCount; ++digit) {
-                const uint index = pass * kDigitCount + digit;
-                const uint amount = offsets[index];
-                offsets[index] = base;
-                base += amount;
+                offsets[pass * kDigitCount + digit] = base;
+                base += localCounts[digit];
             }
         }
         return;

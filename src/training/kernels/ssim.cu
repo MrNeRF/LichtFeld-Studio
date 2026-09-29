@@ -728,8 +728,8 @@ namespace {
                         if (gx >= 0 && gx < W && gy >= 0 && gy < H) {
                             const bool inside_valid_region =
                                 !apply_valid_padding ||
-                                (H <= 10 || W <= 10) ||
-                                (gx >= 5 && gx < W - 5 && gy >= 5 && gy < H - 5);
+                                ((H <= 10 || (gy >= 5 && gy < H - 5)) &&
+                                 (W <= 10 || (gx >= 5 && gx < W - 5)));
                             if (inside_valid_region) {
                                 chain = grad_per_pixel;
                             }
@@ -826,8 +826,8 @@ namespace {
                 float chain_local = 0.0f;
                 const bool inside_valid_region =
                     !apply_valid_padding ||
-                    (H <= 10 || W <= 10) ||
-                    (pix_x >= 5 && pix_x < W - 5 && pix_y >= 5 && pix_y < H - 5);
+                    ((H <= 10 || (pix_y >= 5 && pix_y < H - 5)) &&
+                     (W <= 10 || (pix_x >= 5 && pix_x < W - 5)));
                 if (inside_valid_region) {
                     chain_local = grad_per_pixel;
                 }
@@ -1541,8 +1541,13 @@ namespace lfs::training::kernels {
         // Apply valid padding (crop 5 pixels from each side) using efficient view slicing
         // Then compute mean using optimized tensor reduction (matches PyTorch speed!)
         lfs::core::Tensor ssim_map_cropped = ssim_map;
-        if (apply_valid_padding && H > 10 && W > 10) {
-            ssim_map_cropped = ssim_map.slice(2, 5, H - 5).slice(3, 5, W - 5);
+        if (apply_valid_padding) {
+            if (H > 10) {
+                ssim_map_cropped = ssim_map_cropped.slice(2, 5, H - 5);
+            }
+            if (W > 10) {
+                ssim_map_cropped = ssim_map_cropped.slice(3, 5, W - 5);
+            }
         }
 
         // Use tensor library's optimized mean (warp reductions + vectorized loads)
@@ -1605,8 +1610,13 @@ namespace lfs::training::kernels {
         });
 
         lfs::core::Tensor ssim_map_for_mean = ssim_map;
-        if (apply_valid_padding && H > 10 && W > 10) {
-            ssim_map_for_mean = ssim_map.slice(2, 5, H - 5).slice(3, 5, W - 5);
+        if (apply_valid_padding) {
+            if (H > 10) {
+                ssim_map_for_mean = ssim_map_for_mean.slice(2, 5, H - 5);
+            }
+            if (W > 10) {
+                ssim_map_for_mean = ssim_map_for_mean.slice(3, 5, W - 5);
+            }
         }
 
         return SSIMMapResult{
@@ -1776,9 +1786,9 @@ namespace lfs::training::kernels {
         size_t C = ctx.img1.shape()[1];
         size_t numel = N * C * grad_h * grad_w;
 
-        if (ctx.apply_valid_padding && grad_h > 10 && grad_w > 10) {
-            grad_h -= 10;
-            grad_w -= 10;
+        if (ctx.apply_valid_padding) {
+            grad_h = grad_h > 10 ? grad_h - 10 : grad_h;
+            grad_w = grad_w > 10 ? grad_w - 10 : grad_w;
             numel = N * C * grad_h * grad_w;
         }
 
@@ -1790,12 +1800,14 @@ namespace lfs::training::kernels {
         workspace.dL_dimg1.set_stream(stream);
         workspace.dL_dmap.fill_(0.0f, stream);
 
-        if (ctx.apply_valid_padding && ctx.original_h > 10 && ctx.original_w > 10) {
-            auto cropped_view = workspace.dL_dmap.slice(2, 5, ctx.original_h - 5).slice(3, 5, ctx.original_w - 5);
-            cropped_view.fill_(grad_per_pixel, stream);
-        } else {
-            workspace.dL_dmap.fill_(grad_per_pixel, stream);
+        auto cropped_view = workspace.dL_dmap;
+        if (ctx.apply_valid_padding && ctx.original_h > 10) {
+            cropped_view = cropped_view.slice(2, 5, ctx.original_h - 5);
         }
+        if (ctx.apply_valid_padding && ctx.original_w > 10) {
+            cropped_view = cropped_view.slice(3, 5, ctx.original_w - 5);
+        }
+        cropped_view.fill_(grad_per_pixel, stream);
 
         // Use pre-allocated output buffer
         workspace.dL_dimg1.fill_(0.0f, stream);
@@ -1908,9 +1920,9 @@ namespace lfs::training::kernels {
         // Compute gradient normalization factor
         int grad_h = ctx.H;
         int grad_w = ctx.W;
-        if (ctx.apply_valid_padding && grad_h > 10 && grad_w > 10) {
-            grad_h -= 10;
-            grad_w -= 10;
+        if (ctx.apply_valid_padding) {
+            grad_h = grad_h > 10 ? grad_h - 10 : grad_h;
+            grad_w = grad_w > 10 ? grad_w - 10 : grad_w;
         }
         const size_t numel = N * C * grad_h * grad_w;
         const float grad_per_pixel = 1.0f / static_cast<float>(numel);
@@ -2026,9 +2038,9 @@ namespace lfs::training::kernels {
 
         int grad_h = ctx.H;
         int grad_w = ctx.W;
-        if (ctx.apply_valid_padding && grad_h > 10 && grad_w > 10) {
-            grad_h -= 10;
-            grad_w -= 10;
+        if (ctx.apply_valid_padding) {
+            grad_h = grad_h > 10 ? grad_h - 10 : grad_h;
+            grad_w = grad_w > 10 ? grad_w - 10 : grad_w;
         }
         const size_t numel = N * C * grad_h * grad_w;
         const float grad_per_pixel = 1.0f / static_cast<float>(numel);

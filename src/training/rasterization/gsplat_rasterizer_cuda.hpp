@@ -70,6 +70,7 @@ namespace lfs::training {
 
         // Settings
         uint32_t sh_degree = 0;
+        uint32_t sh_layout_degree = 0;
         uint32_t image_width = 0;
         uint32_t image_height = 0;
         uint32_t tile_size = 0;

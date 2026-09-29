@@ -454,6 +454,183 @@ TEST_F(GsplatRasterizerTest, ForwardPassBasic) {
     release_ctx_arena(ctx);
 }
 
+TEST_F(GsplatRasterizerTest, ShDegreeRampUpUsesAllocatedLayoutForForwardAndGradient) {
+    constexpr uint32_t count = 65;
+    constexpr uint32_t active_degree = 1;
+    constexpr uint32_t layout_degree = 3;
+    constexpr uint32_t slots_per_primitive = 12; // 45 RGB-rest floats, padded to float4
+    constexpr float sh_c0 = 0.2820947917738781f;
+    constexpr float sh_c1 = 0.48860251190292f;
+
+    std::vector<float> dirs(count * 3u);
+    std::vector<float> sh0(count * 3u);
+    std::vector<float> swizzled(((count + 31u) / 32u) * slots_per_primitive * 32u * 4u, -7.0f);
+    std::vector<float> color_grads(count * 3u);
+    auto coeff = [&](const uint32_t primitive, const uint32_t rest, const uint32_t channel) {
+        const uint32_t flat = rest * 3u + channel;
+        const uint32_t slot = flat / 4u;
+        const uint32_t component = flat % 4u;
+        const uint32_t index = (primitive / 32u) * (slots_per_primitive * 32u) +
+                               slot * 32u + primitive % 32u;
+        return swizzled[index * 4u + component];
+    };
+    for (uint32_t i = 0; i < count; ++i) {
+        dirs[i * 3u + 0] = 0.1f + static_cast<float>(i) * 0.003f;
+        dirs[i * 3u + 1] = -0.4f + static_cast<float>(i) * 0.001f;
+        dirs[i * 3u + 2] = 1.0f + static_cast<float>(i % 7u) * 0.02f;
+        color_grads[i * 3u + 0] = 0.3f;
+        color_grads[i * 3u + 1] = 0.7f;
+        color_grads[i * 3u + 2] = 1.1f;
+        for (uint32_t c = 0; c < 3u; ++c) {
+            sh0[i * 3u + c] = 0.02f * static_cast<float>(c + 1u);
+            for (uint32_t k = 0; k < 15u; ++k) {
+                const uint32_t flat = k * 3u + c;
+                const uint32_t slot = flat / 4u;
+                const uint32_t component = flat % 4u;
+                const uint32_t index = (i / 32u) * (slots_per_primitive * 32u) +
+                                       slot * 32u + i % 32u;
+                swizzled[index * 4u + component] =
+                    0.0007f * static_cast<float>(1u + i * 19u + k * 5u + c);
+            }
+        }
+    }
+
+    const auto dirs_gpu = Tensor::from_vector(dirs, {count, 3u}, Device::CUDA);
+    const auto sh0_gpu = Tensor::from_vector(sh0, {count, 1u, 3u}, Device::CUDA);
+    const auto shn_gpu = Tensor::from_vector(swizzled, {swizzled.size()}, Device::CUDA);
+    const auto grads_gpu = Tensor::from_vector(color_grads, {count, 3u}, Device::CUDA);
+    auto colors_gpu = Tensor::empty({count, 3u}, Device::CUDA, DataType::Float32);
+    gsplat_lfs::spherical_harmonics_swizzled_fwd(
+        active_degree, layout_degree, dirs_gpu.ptr<float>(), sh0_gpu.ptr<float>(),
+        shn_gpu.ptr<float>(), nullptr, count, colors_gpu.ptr<float>(), 3u);
+
+    auto expected_color = std::vector<float>(count * 3u);
+    for (uint32_t i = 0; i < count; ++i) {
+        const float x0 = dirs[i * 3u + 0];
+        const float y0 = dirs[i * 3u + 1];
+        const float z0 = dirs[i * 3u + 2];
+        const float inv = 1.0f / std::sqrt(x0 * x0 + y0 * y0 + z0 * z0);
+        for (uint32_t c = 0; c < 3u; ++c) {
+            expected_color[i * 3u + c] = 0.5f + sh_c0 * sh0[i * 3u + c] + sh_c1 * (-y0 * inv * coeff(i, 0u, c) + z0 * inv * coeff(i, 1u, c) - x0 * inv * coeff(i, 2u, c));
+        }
+    }
+    const auto actual_color = colors_gpu.cpu();
+    float first_block_color_error = 0.0f;
+    float later_block_color_error = 0.0f;
+    for (uint32_t i = 0; i < count * 3u; ++i) {
+        const float error = std::abs(actual_color.ptr<float>()[i] - expected_color[i]);
+        if (i / 3u < 32u) {
+            first_block_color_error = std::max(first_block_color_error, error);
+        } else {
+            later_block_color_error = std::max(later_block_color_error, error);
+        }
+    }
+    EXPECT_LT(first_block_color_error, 2e-5f);
+    EXPECT_LT(later_block_color_error, 2e-5f) << "forward error after primitive 31";
+
+    constexpr uint32_t active_coefficients = 4;
+    auto coeff_grads_gpu = Tensor::zeros({count, active_coefficients, 3u}, Device::CUDA);
+    auto dir_grads_gpu = Tensor::zeros({count, 3u}, Device::CUDA);
+    gsplat_lfs::spherical_harmonics_swizzled_bwd(
+        active_coefficients, active_degree, layout_degree, dirs_gpu.ptr<float>(),
+        sh0_gpu.ptr<float>(), shn_gpu.ptr<float>(), nullptr, grads_gpu.ptr<float>(),
+        count, true, coeff_grads_gpu.ptr<float>(), dir_grads_gpu.ptr<float>(), 3u);
+
+    auto actual_coeff_grads = coeff_grads_gpu.cpu();
+    auto actual_dir_grads = dir_grads_gpu.cpu();
+    float coefficient_gradient_error = 0.0f;
+    float direction_gradient_error = 0.0f;
+    for (uint32_t i = 0; i < count; ++i) {
+        const float x0 = dirs[i * 3u + 0];
+        const float y0 = dirs[i * 3u + 1];
+        const float z0 = dirs[i * 3u + 2];
+        const float inv = 1.0f / std::sqrt(x0 * x0 + y0 * y0 + z0 * z0);
+        const float x = x0 * inv, y = y0 * inv, z = z0 * inv;
+        for (uint32_t c = 0; c < 3u; ++c) {
+            const float v = color_grads[i * 3u + c];
+            const auto base = i * active_coefficients * 3u;
+            coefficient_gradient_error = std::max(coefficient_gradient_error,
+                                                  std::abs(actual_coeff_grads.ptr<float>()[base + c] - sh_c0 * v));
+            coefficient_gradient_error = std::max(coefficient_gradient_error,
+                                                  std::abs(actual_coeff_grads.ptr<float>()[base + 3u + c] + sh_c1 * y * v));
+            coefficient_gradient_error = std::max(coefficient_gradient_error,
+                                                  std::abs(actual_coeff_grads.ptr<float>()[base + 6u + c] - sh_c1 * z * v));
+            coefficient_gradient_error = std::max(coefficient_gradient_error,
+                                                  std::abs(actual_coeff_grads.ptr<float>()[base + 9u + c] + sh_c1 * x * v));
+        }
+
+        auto reference = [&](float dx, float dy, float dz) {
+            const float norm = std::sqrt(dx * dx + dy * dy + dz * dz);
+            const float nx = dx / norm, ny = dy / norm, nz = dz / norm;
+            float value = 0.0f;
+            for (uint32_t c = 0; c < 3u; ++c) {
+                value += color_grads[i * 3u + c] * sh_c1 *
+                         (-ny * coeff(i, 0u, c) + nz * coeff(i, 1u, c) - nx * coeff(i, 2u, c));
+            }
+            return value;
+        };
+        constexpr float eps = 1e-3f;
+        const std::array expected_dir_grad{
+            (reference(x0 + eps, y0, z0) - reference(x0 - eps, y0, z0)) / (2.0f * eps),
+            (reference(x0, y0 + eps, z0) - reference(x0, y0 - eps, z0)) / (2.0f * eps),
+            (reference(x0, y0, z0 + eps) - reference(x0, y0, z0 - eps)) / (2.0f * eps)};
+        for (uint32_t axis = 0; axis < 3u; ++axis) {
+            direction_gradient_error = std::max(direction_gradient_error,
+                                                std::abs(actual_dir_grads.ptr<float>()[i * 3u + axis] - expected_dir_grad[axis]));
+        }
+    }
+    EXPECT_LT(coefficient_gradient_error, 1e-6f);
+    EXPECT_LT(direction_gradient_error, 2e-3f);
+    EXPECT_EQ(active_degree, 1u);
+    EXPECT_EQ(layout_degree, 3u);
+}
+
+TEST_F(GsplatRasterizerTest, GutDepthModesMatchSingleSplatCpuCompositing) {
+    constexpr int width = 32;
+    constexpr int height = 32;
+    constexpr size_t center = (height / 2) * width + width / 2;
+    constexpr float camera_depth = 3.0f;
+    auto camera = make_camera(width, height);
+    auto splat = make_visible_splat(1);
+    splat->means_raw().fill_(0.0f);
+    auto background = Tensor::zeros({3u}, Device::CUDA);
+
+    struct ModeCase {
+        GsplatRenderMode mode;
+        bool returns_rgb;
+        bool returns_expected_depth;
+    };
+    const std::array cases{
+        ModeCase{GsplatRenderMode::D, false, false},
+        ModeCase{GsplatRenderMode::ED, false, true},
+        ModeCase{GsplatRenderMode::RGB_D, true, false},
+        ModeCase{GsplatRenderMode::RGB_ED, true, true}};
+
+    for (const auto& mode_case : cases) {
+        auto result = gsplat_rasterize_forward(
+            camera, *splat, background, 0, 0, 0, 0, 1.0f, false,
+            mode_case.mode, /*use_gut=*/true);
+        ASSERT_TRUE(result.has_value()) << result.error();
+        auto output = std::move(result->first);
+        auto context = std::move(result->second);
+        const auto alpha = output.alpha.cpu();
+        const float opacity = alpha.ptr<float>()[center];
+        ASSERT_GT(opacity, 0.1f) << "fixture's center ray must hit the splat";
+        ASSERT_TRUE(output.depth.is_valid());
+        const auto depth = output.depth.cpu();
+        // CPU reference: a single constant-depth splat contributes z * alpha;
+        // expected depth divides that accumulated contribution by alpha.
+        const float expected = mode_case.returns_expected_depth ? camera_depth : camera_depth * opacity;
+        EXPECT_NEAR(depth.ptr<float>()[center], expected, 1e-4f)
+            << "render_mode=" << static_cast<int>(mode_case.mode);
+        if (mode_case.returns_rgb) {
+            ASSERT_TRUE(output.image.is_valid());
+            EXPECT_EQ(output.image.shape()[0], 3u);
+        }
+        release_ctx_arena(context);
+    }
+}
+
 TEST_F(GsplatRasterizerTest, InferenceWrapper) {
     // Test the convenience wrapper
     EXPECT_NO_THROW({

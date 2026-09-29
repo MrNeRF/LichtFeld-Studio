@@ -451,8 +451,10 @@ namespace {
         const ops::PhotoWorkspaceBytes reset = table->workspace_bytes(saved);
         out.snapshot.exact_u("photometric.workspace.reset", reset.allocated);
         // Borders, batch normalization, soft masks and byte targets are observable
-        // contracts, including the thin-image forward/backward padding asymmetry.
-        for (const auto [n, h, w] : {std::tuple{1, 7, 19}, std::tuple{2, 13, 17}, std::tuple{1, 13, 259}, std::tuple{1, 17, 31}, std::tuple{2, 33, 35}}) {
+        // contracts, including independent valid padding on each image axis.
+        for (const auto [n, h, w] : {std::tuple{1, 7, 19}, std::tuple{1, 8, 40}, std::tuple{1, 40, 8},
+                                     std::tuple{2, 13, 17}, std::tuple{2, 8, 40}, std::tuple{2, 40, 8},
+                                     std::tuple{1, 13, 259}, std::tuple{1, 17, 31}, std::tuple{2, 33, 35}}) {
             auto host = Tensor::empty({static_cast<size_t>(n), 3, static_cast<size_t>(h), static_cast<size_t>(w)}, Device::CPU);
             auto bytes_host = Tensor::empty(host.shape(), Device::CPU, DataType::UInt8);
             auto soft_host = Tensor::empty({static_cast<size_t>(h), static_cast<size_t>(w)}, Device::CPU);
@@ -471,7 +473,7 @@ namespace {
                     Tensor loss, grad, raw_gradient;
                     table->evaluate(saved, prediction, path.raw ? raw_image : absent, byte_target,
                                     path.mask ? soft : absent, {path.path, path.weight, true}, loss, grad, raw_gradient);
-                    const std::string prefix = std::format("photo.edge.{}.{}.{}.{}", n, h, zero_mask, path.name);
+                    const std::string prefix = std::format("photo.edge.{}.{}.{}.{}.{}", n, h, w, zero_mask, path.name);
                     keep(out.snapshot, backend, prefix + ".loss", loss, kReduce);
                     keep(out.snapshot, backend, prefix + ".gradient", grad, kReduce);
                     keep(out.snapshot, backend, prefix + ".raw", raw_gradient, kReduce);
@@ -1849,6 +1851,105 @@ namespace {
         return out;
     }
 
+    Capture capture_gsplat_contract(GpuBackend backend, uint32_t active_bases,
+                                    ops::GsplatRenderMode mode, bool background_image) {
+        const lfs::test::DefaultGpuBackendForTesting scope(backend);
+        Capture out;
+        if (!scope.switched()) {
+            out.error = "cannot select gsplat parity backend";
+            return out;
+        }
+        const auto* table = lfs::training::training_ops(backend).gsplat;
+        constexpr uint32_t count = 65, height = 32, width = 40, layout_rest = 15;
+        std::vector<float> means(count * 3), rotations(count * 4, 0.f);
+        std::vector<float> rest(lfs::core::sh_swizzled_float_count(count, layout_rest), 0.f);
+        for (uint32_t i = 0; i < count; ++i) {
+            means[i * 3] = (float(i % 9) - 4.f) * 0.16f + 0.013f;
+            means[i * 3 + 1] = (float(i / 9) - 3.f) * 0.17f + 0.027f;
+            means[i * 3 + 2] = 3.f + 0.013f * float(i);
+            rotations[i * 4] = 1.f;
+            for (uint32_t k = 0; k < layout_rest; ++k) {
+                for (uint32_t c = 0; c < 3; ++c) {
+                    const uint32_t flat = k * 3 + c;
+                    const auto index = lfs::core::sh_swizzled_index(i, flat / 4, layout_rest) * 4 + flat % 4;
+                    rest[index] = 0.0007f * float(1 + i * 19 + k * 5 + c);
+                }
+            }
+        }
+        auto positions = Tensor::from_vector(means, {count, 3}, Device::GPU);
+        auto scales = Tensor::full({count, 3}, -2.5f, Device::GPU);
+        auto quats = Tensor::from_vector(rotations, {count, 4}, Device::GPU);
+        auto opacity = Tensor::full({count, 1}, -0.7f, Device::GPU);
+        auto sh0 = Tensor::full({count, 1, 3}, 0.25f, Device::GPU);
+        auto shN = Tensor::from_vector(rest, {rest.size()}, Device::GPU);
+        auto view = Tensor::eye(4, Device::GPU);
+        auto background = Tensor::from_vector({0.12f, 0.07f, 0.18f}, {3}, Device::GPU);
+        Tensor empty;
+        const auto bg_image = background_image ? pattern({3, height, width}, 0.1f, 17) : Tensor{};
+        const ops::SplatInputs inputs{positions, scales, quats, opacity, sh0, shN, empty};
+        const ops::GsplatParams params{
+            .full_image = {height, width},
+            .intrinsics = {40.f, 40.f, 20.f, 16.f},
+            .sh = {.active_bases = active_bases, .layout_bases = 16},
+            .render_mode = mode};
+        ops::GsplatSaved saved{.backend = table->create()};
+        Tensor image, alpha, depth, normal;
+        const auto result = table->forward(saved, inputs, view, empty, empty, background, bg_image,
+                                           params, {image, alpha, depth, normal});
+        if (result.code != ops::RasterResult::Code::Success) {
+            out.error = std::string(result.message);
+            table->release(saved);
+            return out;
+        }
+        keep(out.snapshot, backend, "gsplat.contract.image", image, kRaster);
+        keep(out.snapshot, backend, "gsplat.contract.alpha", alpha, kRaster);
+        keep(out.snapshot, backend, "gsplat.contract.depth", depth, kRaster);
+        const bool rgb = mode == ops::GsplatRenderMode::RGB || mode == ops::GsplatRenderMode::RGB_D ||
+                         mode == ops::GsplatRenderMode::RGB_ED;
+        EXPECT_EQ(image.is_valid(), rgb);
+        EXPECT_EQ(depth.is_valid(), mode != ops::GsplatRenderMode::RGB);
+        EXPECT_GT(alpha.max().item<float>(), 0.1f);
+        // The table accepts packed raster-channel gradients. Compare RGB and
+        // alpha backward here; depth outputs are compared above in every mode.
+        const size_t channels = mode == ops::GsplatRenderMode::RGB ? 3 : rgb ? 4
+                                                                             : 1;
+        auto image_grad = Tensor::zeros({channels, height, width}, Device::GPU);
+        if (rgb)
+            image_grad.slice(0, 0, 3).fill_(0.001f);
+        auto alpha_grad = Tensor::full({1, height, width}, 0.0003f, Device::GPU);
+        std::array<Tensor, 6> gradients{Tensor::zeros_like(positions), Tensor::zeros_like(scales),
+                                        Tensor::zeros_like(quats), Tensor::zeros_like(opacity),
+                                        Tensor::zeros_like(sh0), Tensor::zeros_like(shN)};
+        const ops::GsplatGradients destination{&gradients, [](void* owner, ops::AdamSlot slot) -> Tensor& {
+                                                   return (*static_cast<std::array<Tensor, 6>*>(owner))[static_cast<size_t>(slot)];
+                                               }};
+        auto densification = Tensor::zeros({2, count}, Device::GPU);
+        auto scores = Tensor::zeros({count}, Device::GPU);
+        auto share = Tensor::zeros({count}, Device::GPU);
+        table->backward(saved, image_grad, alpha_grad, destination, densification, empty, empty, scores, share);
+        for (size_t slot = 0; slot < gradients.size(); ++slot)
+            keep(out.snapshot, backend, "gsplat.contract.gradient." + std::to_string(slot), gradients[slot], kRaster);
+        const auto host_gradient = gradients[5].cpu();
+        for (uint32_t i = 0; i < count; ++i) {
+            float active_sum = 0.f;
+            for (uint32_t k = 0; k < layout_rest; ++k) {
+                for (uint32_t c = 0; c < 3; ++c) {
+                    const uint32_t flat = k * 3 + c;
+                    const auto index = lfs::core::sh_swizzled_index(i, flat / 4, layout_rest) * 4 + flat % 4;
+                    const float value = host_gradient.ptr<float>()[index];
+                    if (k < active_bases - 1)
+                        active_sum += std::abs(value);
+                    else
+                        EXPECT_EQ(value, 0.f) << "inactive coefficient " << i << ":" << k;
+                }
+            }
+            if (rgb)
+                EXPECT_GT(active_sum, 0.f) << "primitive " << i << " must exercise SH backward";
+        }
+        table->release(saved);
+        return out;
+    }
+
     Capture capture_session(GpuBackend backend) {
         Capture out;
         const auto* table = lfs::training::training_ops(backend).session;
@@ -2041,6 +2142,41 @@ namespace {
         }
         return std::nullopt;
     }
+
+    class GsplatFixedContractParity
+        : public ::testing::TestWithParam<std::tuple<uint32_t, ops::GsplatRenderMode, bool>> {};
+
+    TEST_P(GsplatFixedContractParity, MatchesCuda) {
+        if (!lfs::core::gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP() << "Vulkan device unavailable";
+        const auto [active_bases, mode, background_image] = GetParam();
+        const auto name = std::format("gsplat_contract_{}_{}_{}", active_bases, int(mode), background_image);
+        const auto directory = golden_directory();
+        std::optional<Capture> reference;
+        if (lfs::core::gpu_backend_available(GpuBackend::CUDA)) {
+            reference = capture_gsplat_contract(GpuBackend::CUDA, active_bases, mode, background_image);
+            if (directory)
+                write_golden(golden_path(*directory, name), *reference);
+        } else if (directory && std::filesystem::exists(golden_path(*directory, name))) {
+            reference = read_golden(golden_path(*directory, name));
+        }
+        const auto actual = capture_gsplat_contract(GpuBackend::Vulkan, active_bases, mode, background_image);
+        ASSERT_TRUE(actual.error.empty()) << actual.error;
+        for (const auto& field : actual.snapshot.fields)
+            for (const float value : field.values)
+                ASSERT_TRUE(std::isfinite(value)) << field.name;
+        if (!reference)
+            GTEST_SKIP() << "no CUDA device or golden for " << name;
+        expect_match(actual, *reference, false);
+    }
+
+    INSTANTIATE_TEST_SUITE_P(
+        AllocatedLayoutAndDepth, GsplatFixedContractParity,
+        ::testing::Combine(::testing::Values(4u, 9u),
+                           ::testing::Values(ops::GsplatRenderMode::RGB, ops::GsplatRenderMode::D,
+                                             ops::GsplatRenderMode::ED, ops::GsplatRenderMode::RGB_D,
+                                             ops::GsplatRenderMode::RGB_ED),
+                           ::testing::Bool()));
 
     // On a CUDA machine with LFS_TRAINING_OPS_GOLDEN set, records every family's
     // CUDA capture for machines without CUDA. The loss curve is recorded by

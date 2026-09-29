@@ -474,6 +474,7 @@ if(NOT LFS_HAS_CUDA)
             test_training_ops_parity.cpp
             test_training_ops_vulkan_gsplat.cpp
             test_tensor_vulkan_training_fault.cpp
+            test_training_pair_sort.cpp
             test_training_ops_metal_densify.cpp
             test_training_ops_metal_appearance.cpp
             test_training_ops_metal_gsplat.cpp

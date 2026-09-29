@@ -358,7 +358,9 @@ static GsplatRay gsplat_pixel_ray(GsplatCamera cam, const float2 pixel) {
 }
 
 struct GsplatSetupParams {
-    Ptr<float, Access.ReadWrite> view;
+    // An address, not a Ptr member: SPIRV-Cross (MoltenVK) folds indexing a
+    // loaded pointer member into the struct pointer's index.
+    uint64_t view;
     Ptr<float, Access.ReadWrite> radial;
     Ptr<float, Access.ReadWrite> tangential;
     Ptr<float, Access.ReadWrite> prism;
@@ -371,7 +373,7 @@ struct GsplatSetupParams {
 
 void gsplat_camera_setup(GsplatSetupParams p) {
     GsplatCamera cam;
-    Ptr<float, Access.ReadWrite> v = p.view; // row-major [R | t]
+    Ptr<float, Access.Read> v = (Ptr<float, Access.Read>)p.view; // row-major [R | t]
     cam.R = float3x3(float3(v[0], v[4], v[8]), float3(v[1], v[5], v[9]), float3(v[2], v[6], v[10]));
     cam.t = float3(v[3], v[7], v[11]);
     cam.origin = -(mul(cam.t, transpose(cam.R)));
