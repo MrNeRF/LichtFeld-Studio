@@ -1,0 +1,3 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#pragma once
+inline constexpr const char* kTileRasterizerSource = R"LFSMSL(@LFS_METAL_TILE_SOURCE@)LFSMSL";

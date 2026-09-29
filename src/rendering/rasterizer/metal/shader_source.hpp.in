@@ -1,0 +1,4 @@
+#pragma once
+namespace lfs::rendering::metal {
+inline constexpr char kSplatPreprocessorSource[] = R"LFS_METAL(@LFS_METAL_PREPROCESS_SOURCE@)LFS_METAL";
+}

@@ -643,6 +643,26 @@ namespace lfs::vis {
         return std::clamp(std::isfinite(value) ? value : 0.5f, 0.0f, 1.0f);
     }
 
+    void UserPreferences::setViewerBackend(const rendering::ViewerBackend backend) {
+        const auto name = rendering::viewerBackendName(backend);
+        if (name.empty())
+            throw std::invalid_argument("Unsupported viewer backend");
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["viewer_backend"] = std::string(name);
+        impl_->saveLocked();
+    }
+
+    rendering::ViewerBackend UserPreferences::viewerBackend() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("viewer_backend");
+        if (it == impl_->values.end() || !it->is_string())
+            return rendering::ViewerBackend::Automatic;
+        return rendering::parseViewerBackend(it->get<std::string>())
+            .value_or(rendering::ViewerBackend::Automatic);
+    }
+
     void UserPreferences::setTensorBackend(const TensorPreferenceState& state) {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
