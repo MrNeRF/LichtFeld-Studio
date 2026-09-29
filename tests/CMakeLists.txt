@@ -463,6 +463,7 @@ if(NOT LFS_HAS_CUDA)
         test_tensor_vulkan_matrix_nn.cpp
         test_tensor_vulkan_random.cpp
         test_tensor_vulkan_buffer.cpp
+        test_tensor_backend_semantics.cpp
         test_tensor_metal.cpp
         test_camera_priors_portable.cpp
         test_pipelined_loader_backends.cpp
@@ -933,6 +934,7 @@ if(LFS_TENSOR_VULKAN)
         test_tensor_vulkan_buffer.cpp
         test_tensor_vulkan_cuda_bridge.cpp
         test_tensor_backend_parity.cpp
+        test_tensor_backend_semantics.cpp
         test_ply_vulkan_q16_bands.cpp
         test_viewer_vulkan_load.cpp
         test_headless_vulkan_device_selection.cpp
