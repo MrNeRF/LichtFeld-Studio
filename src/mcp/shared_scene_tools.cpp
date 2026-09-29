@@ -195,26 +195,21 @@ namespace lfs::mcp {
         registry.register_tool(
             McpTool{
                 .name = "render.capture",
-                .description = "Capture the current scene. Omit camera_index to grab the live viewport region only; pass camera_index to render from a dataset camera. By default this reads the renderer's internal raster when available; set presented=true to capture the presented viewport (window crop after Spatial/Temporal reconstruction, includes viewport overlays). Scenes with no Gaussian or point-cloud content (meshes and environment backgrounds alone) are composited straight into the window, so their capture is cropped from it and includes any viewport overlays such as the axis gizmo and floating toolbars.",
+                .description = "Capture the live viewport region of the current scene. By default this reads the renderer's internal raster when available; set presented=true to capture the presented viewport (window crop after Spatial/Temporal reconstruction, includes viewport overlays). Scenes with no Gaussian or point-cloud content (meshes and environment backgrounds alone) are composited straight into the window, so their capture is cropped from it and includes any viewport overlays such as the axis gizmo and floating toolbars.",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"camera_index", json{{"type", "integer"}, {"description", "Dataset camera index; omit to capture the live viewport region only"}}},
-                        {"width", json{{"type", "integer"}, {"description", "Optional output width; preserves aspect ratio when height is omitted"}}},
-                        {"height", json{{"type", "integer"}, {"description", "Optional output height; preserves aspect ratio when width is omitted"}}},
+                        {"width", capture_size_schema("Optional output width in pixels; preserves aspect ratio when height is omitted")},
+                        {"height", capture_size_schema("Optional output height in pixels; preserves aspect ratio when width is omitted")},
                         {"presented", json{{"type", "boolean"}, {"default", false}, {"description", "Capture the presented viewport (window crop after Spatial/Temporal reconstruction, includes viewport overlays) instead of the renderer's internal raster"}}}},
                     .required = {}},
                 .metadata = query_metadata(backend, "render")},
             [backend](const json& args) -> json {
-                const std::optional<int> camera_index =
-                    args.contains("camera_index")
-                        ? std::optional<int>(args["camera_index"].get<int>())
-                        : std::nullopt;
                 const int width = args.value("width", 0);
                 const int height = args.value("height", 0);
                 const bool presented = args.value("presented", false);
 
-                auto result = backend.render_capture(camera_index, width, height, presented);
+                auto result = backend.render_capture(width, height, presented);
                 if (!result)
                     return json{{"error", result.error()}};
 

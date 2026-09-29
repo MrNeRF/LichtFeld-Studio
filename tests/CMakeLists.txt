@@ -486,7 +486,7 @@ if(NOT LFS_HAS_CUDA)
             test_training_ops_metal_fast.cpp)
     endif()
     if(APPLE)
-        list(APPEND TEST_SOURCES test_video_videotoolbox.cpp)
+        list(APPEND TEST_SOURCES test_video_videotoolbox.cpp test_mcp_render_capture_utils.cpp)
     endif()
     add_executable(lichtfeld_tests ${TEST_SOURCES})
     if(APPLE)
@@ -739,6 +739,7 @@ set(TEST_FILES
     test_mcp_operator_schema.cpp
     test_mcp_shared_scene_tools.cpp
     test_mcp_sequencer_tools.cpp
+    test_mcp_render_capture_utils.cpp
     test_tcp_publisher.cpp
     test_view_info_json.cpp
     test_video_reconstruction.cpp

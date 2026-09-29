@@ -2556,14 +2556,11 @@ namespace lfs::app {
                     return result;
                 },
             .render_capture =
-                [viewer](std::optional<int> camera_index, int width, int height, bool presented) {
+                [viewer](int width, int height, bool presented) {
                     // Runs as render work, not plain posted work: the window-crop fallback
                     // inside capture_live_viewport_to_base64 needs an active GUI frame.
                     return capture_after_gui_render(
-                        viewer, [viewer, camera_index, width, height, presented]() {
-                            if (camera_index)
-                                return render_scene_to_base64(
-                                    viewer->getScene(), *camera_index, width, height);
+                        viewer, [viewer, width, height, presented]() {
                             return capture_live_viewport_to_base64(viewer, width, height, presented);
                         });
                 },
@@ -2668,12 +2665,12 @@ namespace lfs::app {
         registry.register_tool(
             McpTool{
                 .name = "render.capture_window",
-                .description = "Capture the current composited app window. Unlike render_capture without camera_index, this includes the full window, including panels, toolbars, and GUI overlays.",
+                .description = "Capture the current composited app window. Unlike render_capture, which grabs the viewport region only, this includes the full window, including panels, toolbars, and GUI overlays.",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"width", json{{"type", "integer"}, {"description", "Optional output width; preserves aspect ratio when height is omitted"}}},
-                        {"height", json{{"type", "integer"}, {"description", "Optional output height; preserves aspect ratio when width is omitted"}}}},
+                        {"width", mcp::capture_size_schema("Optional output width in pixels; preserves aspect ratio when height is omitted")},
+                        {"height", mcp::capture_size_schema("Optional output height in pixels; preserves aspect ratio when width is omitted")}},
                     .required = {}},
                 .metadata = mcp::McpToolMetadata{
                     .category = "render",

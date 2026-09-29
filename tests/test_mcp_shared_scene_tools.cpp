@@ -6,6 +6,7 @@
 #include "mcp/mcp_tools.hpp"
 #include "mcp/shared_scene_tools.hpp"
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <gtest/gtest.h>
@@ -16,11 +17,12 @@ namespace {
 
     using json = nlohmann::json;
 
-    constexpr std::array<const char*, 5> kSharedSceneToolNames = {
+    constexpr std::array<const char*, 6> kSharedSceneToolNames = {
         "scene.load_dataset",
         "scene.load_checkpoint",
         "scene.save_ply",
         "training.start",
+        "render.capture",
         "training.get_last_error",
     };
 
@@ -44,6 +46,7 @@ namespace {
         lfs::core::param::TrainingParameters loaded_params;
         bool load_dataset_called = false;
         std::optional<bool> start_overwrite;
+        int capture_calls = 0;
 
         lfs::mcp::SharedSceneToolBackend backend() {
             return lfs::mcp::SharedSceneToolBackend{
@@ -70,8 +73,9 @@ namespace {
                     start_overwrite = overwrite;
                     return {};
                 },
-                .render_capture = [](std::optional<int>, int, int, bool)
+                .render_capture = [this](int, int, bool)
                     -> std::expected<std::string, std::string> {
+                    ++capture_calls;
                     return std::string{};
                 },
                 .gaussian_count = []() -> std::expected<int64_t, std::string> { return 0; },
@@ -253,4 +257,34 @@ TEST(McpSharedSceneToolsTest, TrainingStartForwardsOverwriteConsent) {
 
     ASSERT_TRUE(registry.call_tool("training.start", json{{"overwrite", true}})["success"].get<bool>());
     EXPECT_EQ(backend.start_overwrite, true);
+}
+
+TEST(McpSharedSceneToolsTest, RenderCaptureRejectsSizesOutsideTheCaptureLimit) {
+    ScopedSharedSceneToolRegistration cleanup;
+    FakeSharedSceneBackend backend;
+    lfs::mcp::register_shared_scene_tools(backend.backend());
+    auto& registry = lfs::mcp::ToolRegistry::instance();
+
+    for (const auto& args : {json{{"width", 0}}, json{{"width", -1}}, json{{"height", 65536}},
+                             json{{"width", 65536}, {"height", 65536}},
+                             json{{"width", lfs::mcp::MAX_CAPTURE_DIMENSION + 1}}}) {
+        const auto result = registry.call_tool("render.capture", args);
+        EXPECT_EQ(result["error"]["code"], "InvalidArgument") << args.dump() << " -> " << result.dump();
+    }
+    EXPECT_EQ(backend.capture_calls, 0) << "an out-of-range capture size reached the backend";
+
+    EXPECT_EQ(registry.call_tool("render.capture", json{{"width", lfs::mcp::MAX_CAPTURE_DIMENSION}})["success"], true);
+    EXPECT_EQ(backend.capture_calls, 1);
+}
+
+TEST(McpSharedSceneToolsTest, RenderCaptureDoesNotAdvertiseCameraIndex) {
+    ScopedSharedSceneToolRegistration cleanup;
+    FakeSharedSceneBackend backend;
+    lfs::mcp::register_shared_scene_tools(backend.backend());
+
+    const auto tools = lfs::mcp::ToolRegistry::instance().list_tools();
+    const auto capture = std::ranges::find_if(tools, [](const auto& tool) { return tool.name == "render.capture"; });
+    ASSERT_NE(capture, tools.end());
+    EXPECT_FALSE(capture->input_schema.properties.contains("camera_index"))
+        << "render.capture advertises camera_index, which no backend can render";
 }
