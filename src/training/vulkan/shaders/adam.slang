@@ -18,6 +18,21 @@ struct Push { uint64_t parameters; };
 groupshared float red[4][256];
 groupshared float4 newMomentBounds;
 groupshared float2 newValueBounds;
+groupshared float4 oldMomentBounds;
+groupshared float2 oldValueBounds;
+
+// The kernel replaces a block's bounds in place, and bounds are read through
+// read-only pointers the compiler may re-load at every use (SPIRV-Cross on
+// MoltenVK does). Snapshot them once in shared memory so no thread decodes
+// with bounds another thread already replaced. Every thread must call it.
+float4 loadOldBounds(Params p, uint block, uint lane) {
+    if (lane == 0) {
+        oldMomentBounds = ((Ptr<float4, Access.Read>)p.bounds)[block];
+        oldValueBounds = p.valueBounds != 0 ? ((Ptr<float2, Access.Read>)p.valueBounds)[block] : float2(0);
+    }
+    GroupMemoryBarrierWithGroupSync();
+    return oldMomentBounds;
+}
 
 float qRound(float x) { float base = floor(abs(x)); return sign(x) * (base + (abs(x) - base >= 0.5f ? 1.0f : 0.0f)); }
 float qMin(float a, float b) { return isnan(a) ? b : isnan(b) ? a : min(a, b); }
@@ -157,7 +172,7 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Push pu
     uint row = groupId.x * 256 + lane;
     if (p.operation == 0) {
         uint attrs = min(p.attributes, 16u);
-        float4 oldmm = ((Ptr<float4, Access.Read>)p.bounds)[groupId.x];
+        float4 oldmm = loadOldBounds(p, groupId.x, lane);
         float usU[16], usS[16], grad[16], m[16], v[16];
         float umin = 1e30f, umax = -1e30f, smin = 1e30f, smax = -1e30f;
         bool valid = row < p.primitives;
@@ -191,7 +206,7 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Push pu
     }
     if (p.operation == 2) {
         uint block=groupId.x, start=block*256;
-        float4 oldmm=((Ptr<float4,Access.Read>)p.bounds)[block];
+        float4 oldmm=loadOldBounds(p, block, lane);
         bool touched=false;
         if(row<p.primitives) for(uint i=0;i<p.indexCount;++i) {
             int64_t idx=((Ptr<int64_t,Access.Read>)p.indices)[i];
@@ -215,8 +230,8 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Push pu
     uint slots=p.slots;
     uint activeSlots=p.activeBases>9?12u:(p.activeBases>4?6u:3u);
     uint oldIndex=groupId.x;
-    float4 oldmm=((Ptr<float4,Access.Read>)p.bounds)[oldIndex];
-    float2 oldvb=p.valueBounds!=0?((Ptr<float2,Access.Read>)p.valueBounds)[oldIndex]:float2(0);
+    float4 oldmm=loadOldBounds(p, oldIndex, lane);
+    float2 oldvb=oldValueBounds;
     bool valid=row<p.primitives;
     bool apply=valid;
     if(valid&&p.frozenMask!=0&&row<p.frozenCount&&((Ptr<uint8_t,Access.Read>)p.frozenMask)[row]!=0&&p.frozenScale==0) apply=false;
