@@ -575,6 +575,52 @@ TEST_F(GsplatRasterizerTest, ShDegreeRampUpUsesAllocatedLayoutForForwardAndGradi
     EXPECT_EQ(layout_degree, 3u);
 }
 
+TEST_F(GsplatRasterizerTest, GutDepthModesMatchSingleSplatCpuCompositing) {
+    constexpr int width = 32;
+    constexpr int height = 32;
+    constexpr size_t center = (height / 2) * width + width / 2;
+    constexpr float camera_depth = 3.0f;
+    auto camera = make_camera(width, height);
+    auto splat = make_visible_splat(1);
+    splat->means_raw().fill_(0.0f);
+    auto background = Tensor::zeros({3u}, Device::CUDA);
+
+    struct ModeCase {
+        GsplatRenderMode mode;
+        bool returns_rgb;
+        bool returns_expected_depth;
+    };
+    const std::array cases{
+        ModeCase{GsplatRenderMode::D, false, false},
+        ModeCase{GsplatRenderMode::ED, false, true},
+        ModeCase{GsplatRenderMode::RGB_D, true, false},
+        ModeCase{GsplatRenderMode::RGB_ED, true, true}};
+
+    for (const auto& mode_case : cases) {
+        auto result = gsplat_rasterize_forward(
+            camera, *splat, background, 0, 0, 0, 0, 1.0f, false,
+            mode_case.mode, /*use_gut=*/true);
+        ASSERT_TRUE(result.has_value()) << result.error();
+        auto output = std::move(result->first);
+        auto context = std::move(result->second);
+        const auto alpha = output.alpha.cpu();
+        const float opacity = alpha.ptr<float>()[center];
+        ASSERT_GT(opacity, 0.1f) << "fixture's center ray must hit the splat";
+        ASSERT_TRUE(output.depth.is_valid());
+        const auto depth = output.depth.cpu();
+        // CPU reference: a single constant-depth splat contributes z * alpha;
+        // expected depth divides that accumulated contribution by alpha.
+        const float expected = mode_case.returns_expected_depth ? camera_depth : camera_depth * opacity;
+        EXPECT_NEAR(depth.ptr<float>()[center], expected, 1e-4f)
+            << "render_mode=" << static_cast<int>(mode_case.mode);
+        if (mode_case.returns_rgb) {
+            ASSERT_TRUE(output.image.is_valid());
+            EXPECT_EQ(output.image.shape()[0], 3u);
+        }
+        release_ctx_arena(context);
+    }
+}
+
 TEST_F(GsplatRasterizerTest, InferenceWrapper) {
     // Test the convenience wrapper
     EXPECT_NO_THROW({
