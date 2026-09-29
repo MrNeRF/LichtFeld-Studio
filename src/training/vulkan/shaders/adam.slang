@@ -189,24 +189,32 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Push pu
         if(valid) for(uint a=0;a<attrs;++a) storeUS(p,uint64_t(row)*attrs+a,float2(usU[a],usS[a]),newMomentBounds);
         return;
     }
-    if (p.operation == 2) {
-        uint block=groupId.x, start=block*256;
-        float4 oldmm=((Ptr<float4,Access.Read>)p.bounds)[block];
-        bool touched=false;
-        if(row<p.primitives) for(uint i=0;i<p.indexCount;++i) {
-            int64_t idx=((Ptr<int64_t,Access.Read>)p.indices)[i];
-            if(idx>=int64_t(start)&&idx<int64_t(start+256)) touched=true;
+    if (p.operation == 3) {
+        uint3 groups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
+        Ptr<uint, Access.ReadWrite> flags = (Ptr<uint, Access.ReadWrite>)p.scratch;
+        for (uint i = row; i < p.indexCount; i += groups.x * 256) {
+            int64_t index = ((Ptr<int64_t, Access.Read>)p.indices)[i];
+            if (index < 0 || index >= int64_t(p.primitives)) continue;
+            uint previous;
+            InterlockedOr(flags[uint(index)], 1u, previous);
+            InterlockedOr(flags[p.primitives + uint(index) / 256], 1u, previous);
         }
+        return;
+    }
+    if (p.operation == 2) {
+        uint block=groupId.x;
+        bool touched=((Ptr<uint,Access.Read>)p.scratch)[p.primitives+block]!=0;
+        if (!touched) return;
+        float4 oldmm=((Ptr<float4,Access.Read>)p.bounds)[block];
         if(lane==0) newMomentBounds=float4(min(oldmm.x,0.0f),max(oldmm.y,0.0f),min(oldmm.z,0.0f),max(oldmm.w,0.0f));
         GroupMemoryBarrierWithGroupSync();
         if(!touched || row>=p.primitives) return;
         uint n=p.layout==0?p.attributes:p.slots*4;
-        bool selected=false;
-        for(uint i=0;i<p.indexCount;++i) if(((Ptr<int64_t,Access.Read>)p.indices)[i]==int64_t(row)) selected=true;
+        bool selected=((Ptr<uint,Access.Read>)p.scratch)[row]!=0;
         for(uint a=0;a<n;++a) {
             uint64_t cell=p.layout==0?uint64_t(row)*n+a:uint64_t(shSlot(row,a/4,p.slots)*4+a%4);
             if(selected) storeUS(p,cell,float2(0),newMomentBounds);
-            else storeUS(p,cell,loadUS(p,cell,oldmm),newMomentBounds);
+            else if (any(oldmm != newMomentBounds)) storeUS(p,cell,loadUS(p,cell,oldmm),newMomentBounds);
         }
         if(lane==0)((Ptr<float4,Access.ReadWrite>)p.bounds)[block]=newMomentBounds;
         return;

@@ -639,6 +639,16 @@ namespace {
                            {.layout = ops::JointLayout::Rows, .primitives = static_cast<int>(n), .attributes_or_slots = 4, .bits = 16});
         keep(out.snapshot, backend, "adam.encode_zero.packed", rows.packed, kExact);
         keep(out.snapshot, backend, "adam.encode_zero.bounds", rows.bounds, kAdam);
+        // Duplicate and invalid selections touch the first and final blocks;
+        // the middle block and the partial final block must retain their state.
+        std::vector<int64_t> reset_rows{-1, static_cast<int64_t>(n), 0, 255, static_cast<int64_t>(n - 1)};
+        for (int i = 0; i < 40; ++i)
+            reset_rows.push_back(i % 17);
+        const auto reset_indices = i64_rows(reset_rows);
+        table->encode_zero(sh_packed, sh_bounds, reset_indices,
+                           {.layout = ops::JointLayout::SwizzledSH, .primitives = static_cast<int>(n), .attributes_or_slots = static_cast<int>(lfs::core::sh_float4_slots_for_rest(rest)), .bits = 8});
+        keep(out.snapshot, backend, "adam.encode_zero.sh.packed", sh_packed, kExact);
+        keep(out.snapshot, backend, "adam.encode_zero.sh.bounds", sh_bounds, kAdam);
         return out;
     }
 

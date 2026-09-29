@@ -304,9 +304,17 @@ namespace lfs::training {
             p.layout = codec.layout == JointLayout::Rows ? 0u : 1u;
             p.operation = 2;
             p.index_count = vk::checked_u32(indices.numel(), "Adam index count exceeds 32-bit indexing");
-            const std::array reads{ref(packed), ref(bounds), ref(indices)};
+            const uint32_t blocks = (p.primitives + 255u) / 256u;
+            auto flags = Tensor::zeros({size_t(p.primitives) + blocks}, core::Device::GPU, core::DataType::Int32);
+            p.scratch = address(flags);
+            const std::array mark_reads{ref(indices)};
+            const std::array mark_writes{ref(flags)};
+            p.operation = 3;
+            launch(p, mark_reads, mark_writes, groups(p.index_count));
+            p.operation = 2;
+            const std::array reads{ref(packed), ref(bounds), ref(flags)};
             const std::array writes{ref(packed), ref(bounds)};
-            launch(p, reads, writes, (p.primitives + 255u) / 256u);
+            launch(p, reads, writes, blocks);
         }
 
         const AdamOps kVulkanAdamOps{
