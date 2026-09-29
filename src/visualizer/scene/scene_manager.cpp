@@ -5760,7 +5760,7 @@ namespace lfs::vis {
                     mutable_node->model->deleted().numel() == node_size) {
                     auto slice = plan.selection_mask.slice(0, offset, node_end);
                     slice = slice.logical_and(mutable_node->model->deleted().logical_not().to(slice.device()));
-                    plan.selection_mask.slice(0, offset, node_end) = slice;
+                    plan.selection_mask.slice(0, offset, node_end).copy_from(slice);
                 }
 
                 const size_t selected_count = plan.selection_mask.slice(0, offset, node_end).count_nonzero();

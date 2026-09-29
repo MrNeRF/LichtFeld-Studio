@@ -350,7 +350,7 @@ namespace lfs::training {
                 return mask;
             }
             auto slice = mask.slice(0, s.start, effective_end);
-            slice = core::Tensor::ones_bool({len}, device);
+            slice.copy_from(core::Tensor::ones_bool({len}, device));
             return mask;
         }
         case SelectionKind::Indices: {

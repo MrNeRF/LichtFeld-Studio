@@ -926,14 +926,16 @@ TEST_F(UndoHistoryTest, TensorUndoEntryRoundTripsWhenTargetIsAView) {
         Tensor::zeros({6}, Device::CPU),
         [&]() -> Tensor* { return &live; });
 
-    live = Tensor::ones({6}, Device::CPU);
+    live.copy_from(Tensor::ones({6}, Device::CPU));
     entry->captureAfter();
     ASSERT_TRUE(entry->hasChanges());
 
     entry->undo();
-    EXPECT_EQ(backing.to_vector(), std::vector<float>(6, 0.0f));
-    entry->redo();
+    EXPECT_EQ(live.to_vector(), std::vector<float>(6, 0.0f));
     EXPECT_EQ(backing.to_vector(), std::vector<float>(6, 1.0f));
+    backing.fill_(3.0f);
+    entry->redo();
+    EXPECT_EQ(live.to_vector(), std::vector<float>(6, 1.0f));
 }
 
 TEST_F(UndoHistoryTest, TensorUndoEntryRejectsTopologyChangedReplayWithoutMutatingTensor) {

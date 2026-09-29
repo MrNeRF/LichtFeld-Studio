@@ -419,7 +419,7 @@ TEST_F(SpzFormatTest, ExtremeEncodedOpacityLoadsAsFinite) {
 TEST_F(SpzFormatTest, SaveOmitsSoftDeletedRows) {
     auto original = create_test_splat(8, 1);
     Tensor del = Tensor::zeros_bool({8}, original.means().device());
-    del.slice(0, 0, 3) = Tensor::ones_bool({3}, original.means().device());
+    del.slice(0, 0, 3).copy_from(Tensor::ones_bool({3}, original.means().device()));
     original.soft_delete(del);
     ASSERT_TRUE(original.has_deleted_mask());
     ASSERT_EQ(original.size(), 8u);

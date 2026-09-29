@@ -702,21 +702,11 @@ namespace lfs::core {
         }
     }
 
-    // ============= Copy Assignment - Context-aware (Shallow or Deep) =============
+    // ============= Copy Assignment - Shallow Handle Copy =============
     Tensor& Tensor::operator=(const Tensor& other) {
         if (this == &other) {
             return *this;
         }
-        // PyTorch semantics: slice/view assignment does deep copy, regular assignment does shallow copy
-        // Example: t1[0:5] = t2  -> deep copy into the slice
-        //          t1 = t2        -> shallow copy (both point to same data)
-
-        // If LHS is a view/slice and shapes match, do deep copy
-        if (is_view_ && is_valid() && other.is_valid() &&
-            shape_ == other.shape_ && dtype_ == other.dtype_) {
-            return copy_from(other);
-        }
-
         if (lazy_ir_registered_) {
             internal::lazy_ir_unregister_tensor(id_);
             lazy_ir_registered_ = false;
@@ -789,15 +779,6 @@ namespace lfs::core {
     // ============= Move Assignment =============
     Tensor& Tensor::operator=(Tensor&& other) {
         if (this != &other) {
-            // PyTorch semantics: slice/view assignment does deep copy even for rvalues
-            // This handles: t1.slice(0, 0, 5) = t2.slice(0, 5, 10)
-            // where the RHS is a temporary view
-
-            if (is_view_ && is_valid() && other.is_valid() &&
-                shape_ == other.shape_ && dtype_ == other.dtype_) {
-                return copy_from(other);
-            }
-
             if (lazy_ir_registered_) {
                 internal::lazy_ir_unregister_tensor(id_);
             }
@@ -1075,9 +1056,7 @@ namespace lfs::core {
             return;
         }
 
-        // Produce a dense owned tensor, then rebind *this. Do not assign:
-        // expand views are is_view_=true, so operator= would copy_from into the
-        // view and re-enter data_ptr() (stack overflow).
+        // Materialize storage while preserving this handle's tracing identity.
         Tensor dense = contiguous();
         LFS_ASSERT_MSG(dense.is_valid() && dense.is_contiguous() && !dense.has_zero_stride(),
                        std::format(

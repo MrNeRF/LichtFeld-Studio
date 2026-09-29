@@ -1090,25 +1090,15 @@ namespace lfs::core {
             _scene_scale = other._scene_scale;
 
             // Move tensors
-            _means = Tensor{};
             _means = std::move(other._means);
-            _sh0 = Tensor{};
             _sh0 = std::move(other._sh0);
-            _shN = Tensor{};
             _shN = std::move(other._shN);
-            _shN_value_bounds = Tensor{};
             _shN_value_bounds = std::move(other._shN_value_bounds);
-            _scaling = Tensor{};
             _scaling = std::move(other._scaling);
-            _rotation = Tensor{};
             _rotation = std::move(other._rotation);
-            _opacity = Tensor{};
             _opacity = std::move(other._opacity);
-            _densification_info = Tensor{};
             _densification_info = std::move(other._densification_info);
-            _max_screen_share = Tensor{};
             _max_screen_share = std::move(other._max_screen_share);
-            _deleted = Tensor{};
             _deleted = std::move(other._deleted);
 
             // Move LOD tree

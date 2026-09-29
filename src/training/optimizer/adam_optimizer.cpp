@@ -204,8 +204,7 @@ namespace lfs::training {
                        "AdamOptimizer mean-step far mask must be a 1D bool tensor");
         LFS_ASSERT_MSG(mask.numel() <= static_cast<size_t>(std::numeric_limits<int>::max()),
                        "AdamOptimizer mean-step far mask exceeds the supported row count");
-        // Construct fresh handles: assignment to a view copies into its existing
-        // storage, even for mask = mask.cuda() or mask = mask.clone().
+        // Retain owned, contiguous device storage for the raw mask pointer.
         auto uploaded = mask.device() == lfs::core::Device::CUDA ? mask : mask.cuda();
         auto storage = uploaded.is_contiguous() && uploaded.owns_memory()
                            ? uploaded

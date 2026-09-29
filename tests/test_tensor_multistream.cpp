@@ -460,7 +460,7 @@ TEST_F(TensorMultiStreamTest, ExplicitD2HTransferGuardsDroppedPinnedDestination)
     EXPECT_EQ(reused_after_completion.data_ptr(), destination_ptr);
 }
 
-TEST_F(TensorMultiStreamTest, ExplicitH2DViewMoveAssignmentGuardsDroppedPinnedSource) {
+TEST_F(TensorMultiStreamTest, ExplicitH2DViewCopyFromGuardsDroppedPinnedSource) {
     auto& pinned = PinnedMemoryAllocator::instance();
     pinned.empty_cache();
     pinned.reset_stats();
@@ -481,7 +481,7 @@ TEST_F(TensorMultiStreamTest, ExplicitH2DViewMoveAssignmentGuardsDroppedPinnedSo
         source_ptr = source.data_ptr();
         ASSERT_EQ(source.shape(), destination_view.shape());
         ASSERT_FLOAT_EQ(source.ptr<float>()[0], 3.0f);
-        destination_view = std::move(source);
+        destination_view.copy_from(source);
         EXPECT_EQ(destination_view.device(), Device::CUDA);
         EXPECT_TRUE(destination_view.is_view());
     }
@@ -501,7 +501,7 @@ TEST_F(TensorMultiStreamTest, ExplicitH2DViewMoveAssignmentGuardsDroppedPinnedSo
     EXPECT_FLOAT_EQ(values.back(), 0.0f);
 }
 
-TEST_F(TensorMultiStreamTest, ExplicitD2HViewAssignmentGuardsDroppedPinnedDestination) {
+TEST_F(TensorMultiStreamTest, ExplicitD2HViewCopyFromGuardsDroppedPinnedDestination) {
     auto& pinned = PinnedMemoryAllocator::instance();
     pinned.empty_cache();
     pinned.reset_stats();
@@ -520,7 +520,7 @@ TEST_F(TensorMultiStreamTest, ExplicitD2HViewAssignmentGuardsDroppedPinnedDestin
         auto destination_view = destination.slice(0, 0, kElements);
         destination_view.set_stream(transfer.get());
         transfer.close();
-        destination_view = source;
+        destination_view.copy_from(source);
     }
 
     auto replacement = Tensor::empty({kElements}, Device::CPU);

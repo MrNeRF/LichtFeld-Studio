@@ -469,11 +469,12 @@ TEST_F(TensorViewTest, BroadcastPointwiseMaterializationDoesNotMutateViewSource)
 
     auto view_chain = base.unsqueeze(0);
     view_chain = view_chain.mul(scale).sub(shift).contiguous();
-    EXPECT_EQ(base.to_vector(), view_chain.squeeze(0).to_vector());
+    EXPECT_EQ(base.to_vector(), expected_source);
+    EXPECT_NE(view_chain.storage_ptr(), base.storage_ptr());
 
     auto write_through_view = base.unsqueeze(0);
     const auto write_through_source = write_through_view.mul(scale).sub(shift).contiguous();
-    write_through_view = write_through_source;
+    write_through_view.copy_from(write_through_source);
     EXPECT_EQ(base.to_vector(), write_through_source.squeeze(0).to_vector());
 
     const auto batched = Tensor::from_vector(

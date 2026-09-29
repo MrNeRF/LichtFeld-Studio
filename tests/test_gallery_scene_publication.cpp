@@ -537,7 +537,7 @@ TEST(GalleryScenePublicationTest, GallerySpzPublicationCountMatchesVisibleAfterS
     auto snapshot = cpu_snapshot();
     ASSERT_EQ(snapshot.row_count, 8u);
     lfs::core::Tensor del = lfs::core::Tensor::zeros_bool({8}, snapshot.data->means().device());
-    del.slice(0, 2, 5) = lfs::core::Tensor::ones_bool({3}, snapshot.data->means().device());
+    del.slice(0, 2, 5).copy_from(lfs::core::Tensor::ones_bool({3}, snapshot.data->means().device()));
     snapshot.data->soft_delete(del);
     // Snapshot row_count covers stored rows; the deletion mask selects live rows.
     ASSERT_EQ(snapshot.row_count, 8u);
@@ -569,7 +569,7 @@ TEST(GalleryScenePublicationTest, GallerySogPublicationCountMatchesVisibleAfterS
     auto snapshot = cpu_snapshot();
     ASSERT_EQ(snapshot.row_count, 8u);
     lfs::core::Tensor del = lfs::core::Tensor::zeros_bool({8}, snapshot.data->means().device());
-    del.slice(0, 2, 5) = lfs::core::Tensor::ones_bool({3}, snapshot.data->means().device());
+    del.slice(0, 2, 5).copy_from(lfs::core::Tensor::ones_bool({3}, snapshot.data->means().device()));
     snapshot.data->soft_delete(del);
     ASSERT_EQ(snapshot.data->visible_count(), 5u);
 
