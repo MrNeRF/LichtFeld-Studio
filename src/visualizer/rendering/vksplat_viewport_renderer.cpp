@@ -1497,12 +1497,11 @@ namespace lfs::vis {
             reallocated = true;
         }
 
-        // Regions share one per-slot allocation; assigning into a live view copies data.
+        // Regions share one per-slot allocation.
         void bindRegion(Tensor& region, const Tensor& storage, const std::size_t offset,
                         const std::size_t bytes, const DataType dtype) {
             const Tensor bytes_view = storage.slice(0, offset, offset + bytes);
             const std::size_t width = lfs::core::dtype_size(dtype);
-            region = Tensor{};
             region = width == 1 ? bytes_view
                                 : bytes_view.reshape(lfs::core::TensorShape({bytes / width, width})).view_as(dtype);
         }

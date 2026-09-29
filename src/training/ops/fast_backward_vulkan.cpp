@@ -43,7 +43,12 @@ namespace lfs::training::vulkan {
         const size_t pixels = size_t(p.width) * p.height;
         for (const auto [tensor, expected] : {std::pair{&gradient.image, pixels * 3}, std::pair{&gradient.alpha, pixels}, std::pair{&gradient.depth, pixels}, std::pair{&gradient.normal, pixels * 3}, std::pair{&error, pixels}, std::pair{&edge, pixels}})
             LFS_ASSERT_MSG(!tensor->is_valid() || tensor->numel() == expected, "Fast image gradient shape mismatch");
-        LFS_ASSERT_MSG(!densification.is_valid() || densification.numel() >= size_t(p.count) * 2, "Fast densification needs two rows");
+        // As on CUDA and Metal, statistics that do not cover every splat (the
+        // strategy stops refining) are not updated.
+        const Tensor no_densification;
+        const bool update_densification =
+            densification.is_valid() && densification.ndim() == 2 && densification.shape()[1] >= size_t(p.count);
+        const Tensor& stats = update_densification ? densification : no_densification;
         LFS_ASSERT_MSG(!scores.is_valid() || scores.numel() >= p.count, "Fast edge scores need one row");
         s.mark(14);
         std::array<Tensor, 6> gradients;
@@ -62,7 +67,7 @@ namespace lfs::training::vulkan {
         b.depth_gradient = address(gradient.depth);
         b.normal_gradient = address(gradient.normal);
         b.screen_gradient = address(screen_gradient);
-        b.densification = address(densification);
+        b.densification = address(stats);
         b.error = address(error);
         b.edge = address(edge);
         b.scores = address(scores);
@@ -104,7 +109,7 @@ namespace lfs::training::vulkan {
         for (auto& t : gradients)
             if (t.numel())
                 writes.push_back(ref(t));
-        for (const Tensor* t : {&screen_gradient, &densification, &scores})
+        for (const Tensor* t : std::initializer_list<const Tensor*>{&screen_gradient, &stats, &scores})
             if (t->is_valid() && t->numel()) {
                 reads.push_back(ref(*t));
                 writes.push_back(ref(*t));

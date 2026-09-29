@@ -49,7 +49,7 @@ namespace {
                                     const Device device) {
         Tensor mask = Tensor::zeros_bool({n}, device);
         if (count > 0) {
-            mask.slice(0, start, start + count) = Tensor::ones_bool({count}, device);
+            mask.slice(0, start, start + count).copy_from(Tensor::ones_bool({count}, device));
         }
         return mask;
     }
@@ -511,8 +511,7 @@ TEST_F(SceneConsolidationExtractTest, SoftDeletedRowsAreExcluded) {
     ASSERT_LE(delete_start + delete_count, last_start + built.last_n);
 
     Tensor del = Tensor::zeros_bool({combined_n}, combined->means_raw().device());
-    del.slice(0, delete_start, delete_start + delete_count) =
-        Tensor::ones_bool({delete_count}, combined->means_raw().device());
+    del.slice(0, delete_start, delete_start + delete_count).copy_from(Tensor::ones_bool({delete_count}, combined->means_raw().device()));
     combined->soft_delete(del);
     ASSERT_TRUE(combined->has_deleted_mask());
 

@@ -123,11 +123,10 @@ namespace lfs::training::vulkan {
             check(screen_share, count);
         LFS_ASSERT_MSG(params.sh.active_bases == 1 || params.sh.active_bases == 4 || params.sh.active_bases == 9 || params.sh.active_bases == 16, "Fast SH degree must be 0..3");
         LFS_ASSERT_MSG(params.sh.layout_bases >= params.sh.active_bases && params.sh.layout_bases <= 16, "Fast SH layout is smaller than active degree");
-        // Replace handles: assigning into retained Tensor views would overwrite
-        // their original storage, including a previously rendered camera.
-        s.inputs = std::vector<Tensor>{inputs.means, inputs.raw_scales, inputs.raw_rotations, inputs.raw_opacities, inputs.sh0, inputs.shN,
-                                       inputs.sh_value_bounds, view, camera, background, background_image, screen_share};
-        // Rebind private workspace views without invoking Tensor's view-copy assignment.
+        s.inputs = {inputs.means, inputs.raw_scales, inputs.raw_rotations, inputs.raw_opacities, inputs.sh0, inputs.shN,
+                    inputs.sh_value_bounds, view, camera, background, background_image, screen_share};
+        // Drop the previous step's workspace handles so a stage this step skips
+        // does not leave them in fast_storage(). The status buffer persists.
         for (auto* tensor : {&s.projected, &s.visibility, &s.offsets, &s.original_to_work,
                              &s.work_to_original, &s.counts, &s.keys_a, &s.keys_b,
                              &s.values_a, &s.values_b, &s.ranges, &s.transmittance,

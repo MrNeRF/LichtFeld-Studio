@@ -124,9 +124,8 @@ namespace lfs::core {
         view.device_ = backing.device_;
         view.dtype_ = dtype;
         view.is_contiguous_ = true;
-        // Not a slice. SplatData move-assigns parameter tensors, and a view
-        // with the same shape would copy into the old storage instead of
-        // installing the grown capacity. The offset still selects the region.
+        // Capacity-bearing parameter storage shares an arena allocation.
+        // The offset selects its region.
         view.is_view_ = false;
         view.ensure_state();
         view.state_->capacity = capacity == 0 ? rows : capacity;

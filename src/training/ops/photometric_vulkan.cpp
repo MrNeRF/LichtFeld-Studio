@@ -62,10 +62,6 @@ namespace lfs::training {
                 }
                 kind = path;
                 shape = dims;
-                // Rebind arena views without invoking Tensor's view-copy assignment.
-                map = Tensor{};
-                gradient = Tensor{};
-                raw_gradient = Tensor{};
                 size_t offset = 0;
                 auto field = [&](size_t bytes, core::TensorShape field_shape) {
                     offset = aligned(offset);

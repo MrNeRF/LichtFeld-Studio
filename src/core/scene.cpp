@@ -1117,11 +1117,11 @@ namespace lfs::core {
                       transform_indices_data.begin() + offset + size,
                       static_cast<int>(i));
 
-            means.slice(0, offset, offset + size) = model.means_raw();
-            scaling.slice(0, offset, offset + size) = model.scaling_raw();
-            rotation.slice(0, offset, offset + size) = model.rotation_raw();
-            sh0.slice(0, offset, offset + size) = model.sh0_raw();
-            opacity.slice(0, offset, offset + size) = model.opacity_raw();
+            means.slice(0, offset, offset + size).copy_from(model.means_raw());
+            scaling.slice(0, offset, offset + size).copy_from(model.scaling_raw());
+            rotation.slice(0, offset, offset + size).copy_from(model.rotation_raw());
+            sh0.slice(0, offset, offset + size).copy_from(model.sh0_raw());
+            opacity.slice(0, offset, offset + size).copy_from(model.opacity_raw());
 
             if (stats.max_sh_degree > 0 && model.shN_raw().is_valid() &&
                 model.shN_raw().numel() > 0) {
@@ -1133,7 +1133,7 @@ namespace lfs::core {
             }
 
             if (has_any_deleted && model.has_deleted_mask()) {
-                deleted.slice(0, offset, offset + size) = model.deleted();
+                deleted.slice(0, offset, offset + size).copy_from(model.deleted());
             }
             offset += size;
         }
@@ -1440,7 +1440,7 @@ namespace lfs::core {
         const auto device = combined.means_raw().device();
         Tensor keep = Tensor::zeros_bool({combined_n}, device);
         if (count > 0) {
-            keep.slice(0, start, start + count) = Tensor::ones_bool({count}, device);
+            keep.slice(0, start, start + count).copy_from(Tensor::ones_bool({count}, device));
         }
         if (combined.has_deleted_mask() &&
             combined.deleted().numel() == combined_n) {
@@ -1572,8 +1572,7 @@ namespace lfs::core {
             dims[0] = new_size;
             Tensor dst = alloc_param(TensorShape(dims), new_size, name);
             for (const auto& range : live_ranges) {
-                dst.slice(0, range.dst_start, range.dst_start + range.count) =
-                    src.slice(0, range.src_start, range.src_start + range.count);
+                dst.slice(0, range.dst_start, range.dst_start + range.count).copy_from(src.slice(0, range.src_start, range.src_start + range.count));
             }
             return dst;
         };
@@ -1582,8 +1581,7 @@ namespace lfs::core {
         if (source->has_deleted_mask() && source->deleted().numel() == old_size) {
             deleted = Tensor::empty({new_size}, device, DataType::Bool);
             for (const auto& range : live_ranges) {
-                deleted.slice(0, range.dst_start, range.dst_start + range.count) =
-                    source->deleted().slice(0, range.src_start, range.src_start + range.count);
+                deleted.slice(0, range.dst_start, range.dst_start + range.count).copy_from(source->deleted().slice(0, range.src_start, range.src_start + range.count));
             }
         }
 
@@ -1977,8 +1975,7 @@ namespace lfs::core {
                         source = source.reshape(
                             TensorShape{slice_elements});
                     }
-                    output.slice(0, offset, offset + copy_elements) =
-                        source.slice(0, 0, copy_elements);
+                    output.slice(0, offset, offset + copy_elements).copy_from(source.slice(0, 0, copy_elements));
                 }
             }
             offset = end;
@@ -2028,8 +2025,7 @@ namespace lfs::core {
                     const size_t copy_count =
                         std::min(expected_size, domain_mask->numel());
                     if (copy_count > 0 && domain_mask->ndim() == 1) {
-                        normalized.slice(0, 0, copy_count) =
-                            domain_mask->slice(0, 0, copy_count);
+                        normalized.slice(0, 0, copy_count).copy_from(domain_mask->slice(0, 0, copy_count));
                     }
                     replacement = std::make_shared<lfs::core::Tensor>(std::move(normalized));
                     domain_mask = replacement;
@@ -2158,7 +2154,7 @@ namespace lfs::core {
                 if (node->model &&
                     node->model->has_deleted_mask() &&
                     node->model->deleted().numel() == node_size) {
-                    live.slice(0, offset, node_end) = node->model->deleted().logical_not().to(device).to(dtype);
+                    live.slice(0, offset, node_end).copy_from(node->model->deleted().logical_not().to(device).to(dtype));
                 }
 
                 offset = node_end;
@@ -2311,7 +2307,7 @@ namespace lfs::core {
         }
         auto keep = Tensor::zeros_bool({static_cast<size_t>(data->size())}, data->means_raw().device());
         if (row_count > 0)
-            keep.slice(0, row_offset, row_offset + row_count) = Tensor::ones_bool({row_count}, data->means_raw().device());
+            keep.slice(0, row_offset, row_offset + row_count).copy_from(Tensor::ones_bool({row_count}, data->means_raw().device()));
         if (data->has_deleted_mask())
             keep = keep.logical_and(data->deleted().logical_not());
         auto extracted = std::make_shared<SplatData>(extract_by_mask(*data, keep));
@@ -4808,11 +4804,11 @@ namespace lfs::core {
                 }
                 const size_t visible = static_cast<size_t>(piece->size());
 
-                means.slice(0, offset, offset + visible) = piece->means_raw();
-                sh0.slice(0, offset, offset + visible) = piece->sh0_raw();
-                scaling.slice(0, offset, offset + visible) = piece->scaling_raw();
-                rotation.slice(0, offset, offset + visible) = piece->rotation_raw();
-                opacity.slice(0, offset, offset + visible) = piece->opacity_raw();
+                means.slice(0, offset, offset + visible).copy_from(piece->means_raw());
+                sh0.slice(0, offset, offset + visible).copy_from(piece->sh0_raw());
+                scaling.slice(0, offset, offset + visible).copy_from(piece->scaling_raw());
+                rotation.slice(0, offset, offset + visible).copy_from(piece->rotation_raw());
+                opacity.slice(0, offset, offset + visible).copy_from(piece->opacity_raw());
 
                 const auto src_layout_rest = static_cast<std::uint32_t>(piece->max_sh_coeffs_rest());
                 if (shN.is_valid() && src_layout_rest > 0 && piece->shN_raw().is_valid() &&

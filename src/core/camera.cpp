@@ -71,13 +71,6 @@ namespace lfs::core {
         return mask ? undistort_mask(source, params, stream) : undistort_image(source, params, stream);
     }
 
-    namespace {
-        void rebind_tensor(Tensor& destination, Tensor&& replacement) {
-            destination = Tensor{};
-            destination = std::move(replacement);
-        }
-    } // namespace
-
     static Tensor world_to_view(const Tensor& R, const Tensor& t) {
         // Create 4x4 identity matrix
         auto w2c = Tensor::eye(4, R.device());
@@ -311,10 +304,10 @@ namespace lfs::core {
             _focal_y = other._focal_y;
             _center_x = other._center_x;
             _center_y = other._center_y;
-            rebind_tensor(_R, std::move(other._R));
-            rebind_tensor(_T, std::move(other._T));
-            rebind_tensor(_radial_distortion, std::move(other._radial_distortion));
-            rebind_tensor(_tangential_distortion, std::move(other._tangential_distortion));
+            _R = std::move(other._R);
+            _T = std::move(other._T);
+            _radial_distortion = std::move(other._radial_distortion);
+            _tangential_distortion = std::move(other._tangential_distortion);
             _image_path = std::move(other._image_path);
             _image_name = std::move(other._image_name);
             _mask_path = std::move(other._mask_path);
@@ -327,9 +320,9 @@ namespace lfs::core {
             _image_width = other._image_width;
             _image_height = other._image_height;
             _image_size_loaded = other._image_size_loaded;
-            rebind_tensor(_world_view_transform, std::move(other._world_view_transform));
-            rebind_tensor(_cam_position, std::move(other._cam_position));
-            rebind_tensor(_cached_mask, std::move(other._cached_mask));
+            _world_view_transform = std::move(other._world_view_transform);
+            _cam_position = std::move(other._cam_position);
+            _cached_mask = std::move(other._cached_mask);
             _mask_loaded = other._mask_loaded;
             _cached_mask_resize_factor = other._cached_mask_resize_factor;
             _cached_mask_max_width = other._cached_mask_max_width;
@@ -337,11 +330,11 @@ namespace lfs::core {
             _cached_mask_threshold = other._cached_mask_threshold;
             _cached_mask_binarize = other._cached_mask_binarize;
             _cached_mask_undistort_prepared = other._cached_mask_undistort_prepared;
-            rebind_tensor(_in_memory_mask_raw, std::move(other._in_memory_mask_raw));
-            rebind_tensor(_cached_depth, std::move(other._cached_depth));
+            _in_memory_mask_raw = std::move(other._in_memory_mask_raw);
+            _cached_depth = std::move(other._cached_depth);
             _depth_loaded = other._depth_loaded;
             _depth_quantization_step = other._depth_quantization_step;
-            rebind_tensor(_cached_normal, std::move(other._cached_normal));
+            _cached_normal = std::move(other._cached_normal);
             _normal_loaded = other._normal_loaded;
             _undistort_precomputed = other._undistort_precomputed;
             _undistort_prepared = other._undistort_prepared;
@@ -617,7 +610,7 @@ namespace lfs::core {
     }
 
     void Camera::set_mask_tensor(Tensor mask) {
-        rebind_tensor(_in_memory_mask_raw, std::move(mask));
+        _in_memory_mask_raw = std::move(mask);
         // Force reprocessing on the next load_and_get_mask call.
         _cached_mask = Tensor();
         _mask_loaded = false;
@@ -975,7 +968,7 @@ namespace lfs::core {
             T_new[i] = T_acc(i) - Rt_i;
         }
 
-        rebind_tensor(_T, Tensor::from_vector(T_new, {3}, Device::CPU));
+        _T = Tensor::from_vector(T_new, {3}, Device::CPU);
         _world_view_transform = world_to_view(_R, _T);
         _cam_position = _cam_position + trans.to(Device::GPU).contiguous();
         for (auto& observation : _sfm_observations) {

@@ -689,10 +689,7 @@ namespace lfs::core {
         ///   flat-buffer consumer safe. storage_ptr() stays non-materializing
         ///   (allocation base for lifetime / sharing checks only).
         ///
-        /// Do not assign `contiguous()` back to `*this`: expand views
-        /// set is_view_=true, so operator= takes the view deep-copy path (copy_from),
-        /// which re-enters data_ptr() → infinite recursion. Rebind fields like
-        /// materialize_deferred_slow instead (implemented in tensor.cpp).
+        /// Rebind materialized storage at the raw-pointer escape boundary.
         void materialize_zero_stride_for_raw_ptr_escape();
         void materialize_zero_stride_for_raw_ptr_escape() const {
             // has_zero_stride is cheap; avoid a virtual-ish hop when dense.
@@ -888,7 +885,8 @@ namespace lfs::core {
         Tensor(void* data, TensorShape shape, Device device, DataType dtype,
                cudaStream_t home_stream = nullptr);
 
-        // Copy constructor and assignment - SHALLOW COPY (LibTorch behavior)
+        // Copy construction and assignment share storage, including for view destinations.
+        // Use copy_from() to write data into existing storage.
         Tensor(const Tensor& other);
         Tensor& operator=(const Tensor& other);
 

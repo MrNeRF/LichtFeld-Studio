@@ -57,7 +57,7 @@ namespace lfs::training {
             Tensor ssim_map, dm_mu, dm_sigma1, dm_sigma12, raw_dm_mu, dl_dmap, grad, grad_raw, temp, result, mask_sum;
         };
         struct Field {
-            Tensor Views::*member;
+            Tensor Views::* member;
             Slot slot;
         };
 
@@ -183,21 +183,9 @@ namespace lfs::training {
             return static_cast<MetalPhotoState&>(*saved.backend);
         }
 
-        // operator= deep-copies when both sides are same-shaped views, and a
-        // steady publish aliases the workspace, so that assignment would clone.
-        void bind_handle(Tensor& dst, const Tensor& src) {
-            if (dst.is_valid() && src.is_valid() && dst.storage_ptr() == src.storage_ptr() &&
-                dst.shape() == src.shape() && dst.dtype() == src.dtype())
-                return;
-            if (dst.is_view() && dst.is_valid() && src.is_valid() && dst.shape() == src.shape() &&
-                dst.dtype() == src.dtype())
-                dst = Tensor{};
-            dst = src;
-        }
-
         void publish_maps(PhotoSaved& saved, const Tensor& ssim_map, const Tensor& cs_map) {
-            bind_handle(saved.ssim_map, ssim_map);
-            bind_handle(saved.cs_map, cs_map);
+            saved.ssim_map = ssim_map;
+            saved.cs_map = cs_map;
         }
 
         void ensure_cs_map(Tensor& cs_map, const Tensor& ssim_map) {
@@ -459,8 +447,8 @@ namespace lfs::training {
             launch_with("photo_l1", params, {&images.prediction, &images.target, &state.l1_grad, &state.l1_partials},
                         {groups, 1, 1}, {256, 1, 1}, Constants(images, kLossNone, false));
             reduce_final(state.l1_partials, groups, state.l1_loss, 1.0f / static_cast<float>(count), 1.f, 0.f);
-            bind_handle(grad, state.l1_grad);
-            bind_handle(loss, state.l1_loss);
+            grad = state.l1_grad;
+            loss = state.l1_loss;
             squeeze_like(grad, corrected);
         }
 
@@ -520,11 +508,11 @@ namespace lfs::training {
                 ssim_backward(images, images.prediction, ws.dm_mu, ws.dm_sigma1, ws.dm_sigma12, mask_sum, ws.grad, weight,
                               padding);
             }
-            bind_handle(loss, ws.result);
-            bind_handle(grad_corrected, ws.grad);
+            loss = ws.result;
+            grad_corrected = ws.grad;
             squeeze_like(grad_corrected, corrected);
             if (decoupled) {
-                bind_handle(grad_raw, ws.grad_raw);
+                grad_raw = ws.grad_raw;
                 squeeze_like(grad_raw, corrected);
             }
             publish_maps(saved, ws.ssim_map, state.cs_map);
