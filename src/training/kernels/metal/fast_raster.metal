@@ -502,8 +502,14 @@ struct FastInstanceParams {
     device const uint* offsets;
     device uint* keys;
     device uint* values;
-    uint n, grid_w, depth_bits, unused;
+    uint n, grid_w, depth_bits, capacity;
 };
+
+// The instance count the scan wrote (low and high words), or 0 when it exceeds
+// the buffers the host sized speculatively; the host then redoes the frame.
+static uint fast_instance_count(device const uint* counts, const uint capacity) {
+    return counts[1] != 0u || counts[0] > capacity ? 0u : counts[0];
+}
 
 // Port of create_instances_cu: one (tile << depth_bits | depth) key per
 // touched tile, walked exactly as the preprocess count. A walk that falls
@@ -519,6 +525,9 @@ kernel void fast_create_instances(constant FastInstanceParams& p [[buffer(0)]], 
     const FastTileWalk walk = fast_tile_walk(p.mean_box[idx].mean, co.xyz, co.w, uint4(info.bounds));
     const uint begin = p.offsets[idx];
     const uint end = begin + count;
+    // A speculative frame sized below the true count writes nothing past it.
+    if (end < begin || end > p.capacity)
+        return;
     uint write_at = begin;
     uint key = ((uint(info.bounds.z) * p.grid_w + uint(info.bounds.x)) << p.depth_bits) | info.depth_key;
     for (uint scan = walk.scan0; scan < walk.scan1 && write_at < end; ++scan) {
@@ -549,6 +558,7 @@ struct FastSortParams {
     device uint* keys_out;
     device uint* values_out;
     device uint* histogram;
+    device const uint* counts;
     uint n, n_blocks, shift, unused;
 };
 
@@ -561,10 +571,11 @@ kernel void fast_sort_histogram(constant FastSortParams& p [[buffer(0)]],
     for (uint i = lane; i < groups * 256u; i += kFastSortThreads)
         atomic_store_explicit(&counts[i], 0u, memory_order_relaxed);
     threadgroup_barrier(mem_flags::mem_threadgroup);
+    const uint n = fast_instance_count(p.counts, p.n);
     const uint base = group * kFastSortBlock;
     for (uint j = 0; j < kFastSortBlock / kFastSortThreads; ++j) {
         const uint i = base + j * kFastSortThreads + lane;
-        if (i < p.n)
+        if (i < n)
             atomic_fetch_add_explicit(&counts[simd_group * 256u + ((p.keys_in[i] >> p.shift) & 255u)], 1u,
                                       memory_order_relaxed);
     }
@@ -585,13 +596,14 @@ kernel void fast_sort_scatter(constant FastSortParams& p [[buffer(0)]],
     threadgroup uint offsets[groups * 256u];
     digit_base[lane] = p.histogram[lane * p.n_blocks + group];
     const uint below = (1u << simd_lane) - 1u;
+    const uint n = fast_instance_count(p.counts, p.n);
     const uint base = group * kFastSortBlock;
-    for (uint chunk = base; chunk < min(base + kFastSortBlock, p.n); chunk += kFastSortThreads) {
+    for (uint chunk = base; chunk < min(base + kFastSortBlock, n); chunk += kFastSortThreads) {
         for (uint s = 0; s < groups; ++s)
             offsets[s * 256u + lane] = 0u;
         threadgroup_barrier(mem_flags::mem_threadgroup);
         const uint i = chunk + lane;
-        const bool valid = i < p.n;
+        const bool valid = i < n;
         const uint key = valid ? p.keys_in[i] : 0u;
         const uint digit = (key >> p.shift) & 255u;
         uint peers = uint(static_cast<simd_vote::vote_t>(simd_ballot(valid)));
@@ -624,13 +636,15 @@ kernel void fast_sort_scatter(constant FastSortParams& p [[buffer(0)]],
 struct FastRangeParams {
     device const uint* keys;
     device uint* ranges;
-    uint n_instances, n_tiles, depth_bits, unused;
+    device const uint* counts;
+    uint capacity, n_tiles, depth_bits, unused;
 };
 
 // Port of extract_instance_ranges_cu. Range ends are written as separate
 // words: a uint2 component store may rewrite its neighbour.
 kernel void fast_tile_ranges(constant FastRangeParams& p [[buffer(0)]], const uint idx [[thread_position_in_grid]]) {
-    if (idx >= p.n_instances)
+    const uint n_instances = fast_instance_count(p.counts, p.capacity);
+    if (idx >= n_instances)
         return;
     const uint tile = p.keys[idx] >> p.depth_bits;
     if (tile >= p.n_tiles)
@@ -646,8 +660,8 @@ kernel void fast_tile_ranges(constant FastRangeParams& p [[buffer(0)]], const ui
             p.ranges[2u * tile] = idx;
         }
     }
-    if (idx == p.n_instances - 1u)
-        p.ranges[2u * tile + 1u] = p.n_instances;
+    if (idx == n_instances - 1u)
+        p.ranges[2u * tile + 1u] = n_instances;
 }
 
 struct FastFillParams {
