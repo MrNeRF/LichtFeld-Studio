@@ -114,6 +114,24 @@ namespace {
     }
 
     TEST_F(TensorVulkanAllocationPadding,
+           LargeStorageDoesNotReserveAnOversizedBlock) {
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        const auto context = internal::acquire_vulkan_context();
+        for (const size_t mib : {17u, 65u}) {
+            const size_t bytes = mib << 20;
+            const Tensor tensor = Tensor::empty({bytes}, Device::GPU, DataType::UInt8);
+            const auto storage = internal::storage_ref(tensor);
+            VmaAllocationInfo2 allocation{};
+            vmaGetAllocationInfo2(context->allocator(),
+                                  reinterpret_cast<VmaAllocation>(static_cast<uintptr_t>(
+                                      storage.meta->gpu_descriptor.native_allocation)),
+                                  &allocation);
+            EXPECT_LE(allocation.blockSize, 2 * bytes)
+                << "One large tensor should not reserve several times its storage";
+        }
+    }
+
+    TEST_F(TensorVulkanAllocationPadding,
            DirectRangeOddByteBufferCoversLastWordAndKeepsLogicalSize) {
         GpuBackendScope scope(GpuBackend::Vulkan);
         auto& ops = internal::backend_ops(GpuBackend::Vulkan);
