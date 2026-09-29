@@ -166,7 +166,8 @@ namespace lfs::training {
                     s.ensure(options.path, dims);
                 else
                     s.shape = dims;
-                ensure_buffer(s.horizontal, {6 * a.numel()});
+                if (derivatives)
+                    ensure_buffer(s.horizontal, {6 * a.numel()});
                 ensure_buffer(s.full_map, dims);
                 ensure_buffer(s.full_cs, dims);
                 p.horizontal = address(s.horizontal);
@@ -176,7 +177,9 @@ namespace lfs::training {
                 p.cs = address(s.full_cs);
                 p.grad = address(s.gradient);
                 p.grad_raw = address(s.raw_gradient);
-                std::vector<core::internal::StorageRef> writes{ref(s.horizontal), ref(s.full_map), ref(s.full_cs), ref(s.losses)};
+                std::vector<core::internal::StorageRef> writes{ref(s.full_map), ref(s.full_cs), ref(s.losses)};
+                if (s.horizontal.is_valid())
+                    writes.push_back(ref(s.horizontal));
                 if (derivatives)
                     writes.push_back(ref(s.arena));
                 auto reads = inputs;
