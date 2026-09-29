@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cuda_runtime.h>
 #include <limits>
+#include <utility>
 
 using namespace lfs::core;
 using namespace lfs::training::kernels;
@@ -776,6 +777,63 @@ TEST_F(FusedL1SSIMTest, DecoupledMatchesStandardWhenCorrectedEqualsRaw) {
     auto diff = (combined_grad - standard_grad).abs();
     EXPECT_LT(diff.max().item<float>(), 1e-3f);
     EXPECT_LT(diff.mean().item<float>(), 1e-5f);
+}
+
+TEST_F(FusedL1SSIMTest, ThinImagesMatchFiniteDifferenceForFusedAndDecoupled) {
+    constexpr int C = 3;
+    constexpr float ssim_weight = 0.35f;
+    constexpr float epsilon = 1.0e-2f;
+    for (const auto& [H, W] : {std::pair{8, 40}, std::pair{40, 8}}) {
+        const TensorShape dims{
+            size_t{1}, static_cast<size_t>(C), static_cast<size_t>(H), static_cast<size_t>(W)};
+        auto raw = Tensor::rand(dims, Device::CUDA) * 0.7f + 0.15f;
+        auto target = Tensor::rand(dims, Device::CUDA) * 0.7f + 0.15f;
+        auto direction = Tensor::randn(dims, Device::CUDA);
+
+        FusedL1SSIMWorkspace fused_workspace;
+        auto [fused_loss, fused_ctx] =
+            fused_l1_ssim_forward(raw, target, ssim_weight, fused_workspace, true);
+        const auto fused_grad = fused_l1_ssim_backward(fused_ctx, fused_workspace);
+        const float fused_analytic = (fused_grad * direction).sum().item<float>();
+        const auto [fused_plus, ignored_plus_ctx] = fused_l1_ssim_forward(
+            raw + direction * epsilon, target, ssim_weight, fused_workspace, true);
+        (void)ignored_plus_ctx;
+        const float fused_plus_value = fused_plus.item<float>();
+        const auto [fused_minus, ignored_minus_ctx] = fused_l1_ssim_forward(
+            raw - direction * epsilon, target, ssim_weight, fused_workspace, true);
+        (void)ignored_minus_ctx;
+        const float fused_minus_value = fused_minus.item<float>();
+        const float fused_numeric =
+            (fused_plus_value - fused_minus_value) / (2.0f * epsilon);
+        EXPECT_NEAR(fused_analytic, fused_numeric, 4.0e-3f)
+            << "fused thin image " << H << "x" << W;
+
+        DecoupledFusedL1SSIMWorkspace decoupled_workspace;
+        auto [decoupled_loss, decoupled_ctx] = decoupled_fused_l1_ssim_forward(
+            raw, raw, target, ssim_weight, decoupled_workspace, true);
+        const auto decoupled_grads =
+            decoupled_fused_l1_ssim_backward(decoupled_ctx, decoupled_workspace);
+        const auto decoupled_grad =
+            decoupled_grads.grad_corrected + decoupled_grads.grad_raw;
+        const float decoupled_analytic =
+            (decoupled_grad * direction).sum().item<float>();
+        const auto [decoupled_plus, ignored_dec_plus_ctx] = decoupled_fused_l1_ssim_forward(
+            raw + direction * epsilon, raw + direction * epsilon, target,
+            ssim_weight, decoupled_workspace, true);
+        (void)ignored_dec_plus_ctx;
+        const float decoupled_plus_value = decoupled_plus.item<float>();
+        const auto [decoupled_minus, ignored_dec_minus_ctx] = decoupled_fused_l1_ssim_forward(
+            raw - direction * epsilon, raw - direction * epsilon, target,
+            ssim_weight, decoupled_workspace, true);
+        (void)ignored_dec_minus_ctx;
+        const float decoupled_minus_value = decoupled_minus.item<float>();
+        const float decoupled_numeric =
+            (decoupled_plus_value - decoupled_minus_value) / (2.0f * epsilon);
+        EXPECT_NEAR(decoupled_analytic, decoupled_numeric, 4.0e-3f)
+            << "decoupled thin image " << H << "x" << W;
+        (void)fused_loss;
+        (void)decoupled_loss;
+    }
 }
 
 TEST_F(MaskedFusedL1SSIMTest, DecoupledMatchesStandardWhenCorrectedEqualsRaw) {
