@@ -56,6 +56,14 @@ namespace lfs::vis::op {
         using std::runtime_error::runtime_error;
     };
 
+    // Thrown before an entry mutates anything when the scene no longer matches the
+    // state the entry was recorded against. Only that entry is unusable; entries
+    // below it validate their own preconditions on replay.
+    class LFS_VIS_API HistoryStaleEntryError : public HistoryCorruptionError {
+    public:
+        using HistoryCorruptionError::HistoryCorruptionError;
+    };
+
     struct SceneTopologyNodeProof {
         lfs::core::Uuid uuid;
         lfs::core::Uuid parent_uuid;
