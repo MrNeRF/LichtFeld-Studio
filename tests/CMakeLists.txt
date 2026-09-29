@@ -472,6 +472,7 @@ if(NOT LFS_HAS_CUDA)
         list(APPEND TEST_SOURCES
             test_vulkan_trainer_start.cpp
             test_session_loader_storage.cpp
+            test_training_command_masks.cpp
             test_training_ops_parity.cpp
             test_training_ops_vulkan_gsplat.cpp
             test_tensor_vulkan_training_fault.cpp
@@ -732,6 +733,7 @@ set(TEST_FILES
     test_parameter_manager.cpp
     test_mcp_protocol.cpp
     test_mcp_training_state.cpp
+    test_training_command_masks.cpp
     test_mcp_app_utils.cpp
     test_mcp_operator_schema.cpp
     test_mcp_shared_scene_tools.cpp

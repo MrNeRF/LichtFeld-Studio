@@ -120,6 +120,9 @@ namespace lfs::training {
         float loss;
     };
 
+    // Broadcasts a [N] row mask over an attribute whose leading axis holds the N rows.
+    core::Tensor expand_row_mask(const core::Tensor& row_mask, const core::TensorShape& target_shape);
+
     class CommandCenter {
     public:
         static LFS_BRIDGE_API CommandCenter& instance();
