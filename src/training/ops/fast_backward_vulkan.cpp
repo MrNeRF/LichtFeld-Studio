@@ -49,7 +49,7 @@ namespace lfs::training::vulkan {
         std::array<Tensor, 6> gradients;
         constexpr std::array<size_t, 5> widths{3, 3, 4, 1, 3};
         for (size_t i = 0; i < 5; ++i)
-            gradients[i] = s.temporary(20 + i, size_t(p.count) * widths[i]).reshape({size_t(p.count), widths[i]});
+            gradients[i] = s.temporary(20 + i, size_t(p.count) * widths[i]).reshape(lfs::core::TensorShape{size_t(p.count), widths[i]});
         const uint32_t slots = (p.rest * 3 + 3) / 4;
         gradients[5] = s.temporary(25, size_t((p.count + 31) / 32) * 32 * slots * 4);
         s.mark(15);

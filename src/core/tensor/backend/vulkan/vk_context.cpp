@@ -820,8 +820,19 @@ namespace lfs::core::internal {
             VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
         create_info.initialDataSize = initial_data.size();
         create_info.pInitialData = initial_data.data();
-        vk_check(this, vkCreatePipelineCache(device_, &create_info, nullptr, &pipeline_cache_),
-                 "vkCreatePipelineCache");
+        VkResult result = vkCreatePipelineCache(device_, &create_info, nullptr, &pipeline_cache_);
+        // MoltenVK compiles every cached shader library on load, so one entry
+        // that no longer compiles fails the whole cache; start empty instead.
+        if (result != VK_SUCCESS && !initial_data.empty()) {
+            LOG_WARN("Discarding the Vulkan pipeline cache '{}': it failed to load ({})",
+                     pipeline_cache_path_, static_cast<int>(result));
+            std::error_code error;
+            std::filesystem::remove(pipeline_cache_path_, error);
+            create_info.initialDataSize = 0;
+            create_info.pInitialData = nullptr;
+            result = vkCreatePipelineCache(device_, &create_info, nullptr, &pipeline_cache_);
+        }
+        vk_check(this, result, "vkCreatePipelineCache");
     }
 
     void VulkanContext::save_pipeline_cache() noexcept {

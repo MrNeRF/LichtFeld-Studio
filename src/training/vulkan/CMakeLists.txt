@@ -45,21 +45,29 @@ add_custom_command(
     COMMENT "slangc training/pair_sort.spv"
     VERBATIM)
 set(_geometry_source "${CMAKE_CURRENT_SOURCE_DIR}/shaders/geometry.slang")
-set(_geometry_raw "${LFS_TRAINING_SPV_DIR}/geometry.raw.spv")
 set(_geometry_spv "${LFS_TRAINING_SPV_DIR}/geometry.spv")
-set(_geometry_manifest "${LFS_TRAINING_SPV_DIR}/geometry.json")
-add_custom_command(
-    OUTPUT "${_geometry_spv}" "${_geometry_manifest}"
-    BYPRODUCTS "${_geometry_raw}"
-    COMMAND ${LFS_TENSOR_SLANGC} "${_geometry_source}"
-            -entry main -stage compute -O -fp-mode precise
-            -line-directive-mode none -target spirv -profile glsl_460
-            -emit-spirv-directly
-            -o "${_geometry_raw}"
-    COMMAND lfs_tensor_spirv_finalize "${_geometry_raw}" "${_geometry_spv}" "${_geometry_manifest}"
-    DEPENDS "${_geometry_source}" lfs_tensor_spirv_finalize
-    COMMENT "slangc training/geometry.spv"
-    VERBATIM)
+set(_geometry_fp32_spv "${LFS_TRAINING_SPV_DIR}/geometry_fp32.spv")
+# geometry_fp32 serves devices without shaderFloat64 (Apple GPUs via MoltenVK).
+foreach(_variant IN ITEMS geometry geometry_fp32)
+    if(_variant STREQUAL "geometry_fp32")
+        set(_geometry_fp64 0)
+    else()
+        set(_geometry_fp64 1)
+    endif()
+    add_custom_command(
+        OUTPUT "${LFS_TRAINING_SPV_DIR}/${_variant}.spv" "${LFS_TRAINING_SPV_DIR}/${_variant}.json"
+        BYPRODUCTS "${LFS_TRAINING_SPV_DIR}/${_variant}.raw.spv"
+        COMMAND ${LFS_TENSOR_SLANGC} "${_geometry_source}"
+                -entry main -stage compute -O -fp-mode precise
+                -line-directive-mode none -target spirv -profile glsl_460
+                -emit-spirv-directly -D GEOMETRY_FP64=${_geometry_fp64}
+                -o "${LFS_TRAINING_SPV_DIR}/${_variant}.raw.spv"
+        COMMAND lfs_tensor_spirv_finalize "${LFS_TRAINING_SPV_DIR}/${_variant}.raw.spv"
+                "${LFS_TRAINING_SPV_DIR}/${_variant}.spv" "${LFS_TRAINING_SPV_DIR}/${_variant}.json"
+        DEPENDS "${_geometry_source}" lfs_tensor_spirv_finalize
+        COMMENT "slangc training/${_variant}.spv"
+        VERBATIM)
+endforeach()
 set(_sh_ops_source "${CMAKE_CURRENT_SOURCE_DIR}/shaders/sh_ops.slang")
 set(_sh_ops_raw "${LFS_TRAINING_SPV_DIR}/sh_ops.raw.spv")
 set(_sh_ops_spv "${LFS_TRAINING_SPV_DIR}/sh_ops.spv")
@@ -443,14 +451,14 @@ add_custom_command(
             bilateral "${_bilateral_spv}"
             controller "${_controller_spv}"
             ppisp "${_ppisp_spv}"
-            geometry "${_geometry_spv}"
+            geometry "${_geometry_spv}" geometry_fp32 "${_geometry_fp32_spv}"
     DEPENDS "${LFS_TRAINING_SPV_DIR}/fast_backward.spv" "${LFS_TRAINING_SPV_DIR}/fast_backward_atomic.spv" "${_gsplat_forward_spv}" "${LFS_TRAINING_SPV_DIR}/gsplat_backward.spv" "${LFS_TRAINING_SPV_DIR}/gsplat_backward_atomic.spv"
             "${_fast_forward_spv}" "${_photometric_spv}" "${_pair_sort_spv}" "${_pair_sort_match_spv}" lfs_tensor_spirv_finalize
-            "${_sh_ops_spv}" "${_extra_loss_spv}" "${_adam_spv}" "${_training_image_spv}" "${_refine_spv}" "${_mrnf_spv}" "${_morton_spv}" "${_joint_morton_spv}" "${_mcmc_spv}" "${_lpips_spv}" "${_lpips_coop_spv}" "${_lpips_halo_spv}" "${_masks_spv}" "${_bilateral_spv}" "${_controller_spv}" "${_ppisp_spv}" "${_geometry_spv}"
+            "${_sh_ops_spv}" "${_extra_loss_spv}" "${_adam_spv}" "${_training_image_spv}" "${_refine_spv}" "${_mrnf_spv}" "${_morton_spv}" "${_joint_morton_spv}" "${_mcmc_spv}" "${_lpips_spv}" "${_lpips_coop_spv}" "${_lpips_halo_spv}" "${_masks_spv}" "${_bilateral_spv}" "${_controller_spv}" "${_ppisp_spv}" "${_geometry_spv}" "${_geometry_fp32_spv}"
             "${CMAKE_CURRENT_SOURCE_DIR}/training_shader_table.hpp"
     COMMENT "embed training shaders"
     VERBATIM)
-add_custom_target(lfs_training_vulkan_shaders DEPENDS "${_pair_sort_spv}" "${_pair_sort_match_spv}" "${_geometry_spv}" "${_sh_ops_spv}" "${_extra_loss_spv}" "${_adam_spv}" "${_morton_spv}" "${_joint_morton_spv}" "${_mcmc_spv}" "${_lpips_spv}" "${_lpips_coop_spv}" "${_lpips_halo_spv}" "${_masks_spv}" "${_bilateral_spv}" "${_controller_spv}" "${_ppisp_spv}" "${_photometric_spv}" "${_fast_forward_spv}" "${_gsplat_forward_spv}" "${_training_image_spv}" "${_refine_spv}" "${_mrnf_spv}" "${_training_shader_table}")
+add_custom_target(lfs_training_vulkan_shaders DEPENDS "${_pair_sort_spv}" "${_pair_sort_match_spv}" "${_geometry_spv}" "${_geometry_fp32_spv}" "${_sh_ops_spv}" "${_extra_loss_spv}" "${_adam_spv}" "${_morton_spv}" "${_joint_morton_spv}" "${_mcmc_spv}" "${_lpips_spv}" "${_lpips_coop_spv}" "${_lpips_halo_spv}" "${_masks_spv}" "${_bilateral_spv}" "${_controller_spv}" "${_ppisp_spv}" "${_photometric_spv}" "${_fast_forward_spv}" "${_gsplat_forward_spv}" "${_training_image_spv}" "${_refine_spv}" "${_mrnf_spv}" "${_training_shader_table}")
 add_dependencies(lfs_training_vulkan lfs_training_vulkan_shaders)
 target_sources(lfs_training_vulkan PRIVATE "${_training_shader_table}")
 target_include_directories(lfs_training_vulkan

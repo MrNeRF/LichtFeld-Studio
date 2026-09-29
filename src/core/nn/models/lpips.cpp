@@ -341,7 +341,10 @@ namespace lfs::core::nn::models {
             const int width = static_cast<int>(pred.shape()[pred.ndim() - 1]);
             if (compute_ == DataType::Float16 && gpu_backend_of(weights_.begin()->second) == GpuBackend::CUDA)
                 return run_fast(pred, target, scaling);
-            if (compute_ == DataType::Float16 && dispatch_ != nullptr)
+            // Metal's family kernels are reference implementations; its nn
+            // convolutions (below) are the fast path there.
+            if (compute_ == DataType::Float16 && dispatch_ != nullptr &&
+                gpu_backend_of(weights_.begin()->second) == GpuBackend::Vulkan)
                 return run_fast(pred, target, scaling);
             if (tile_size_for(height, width) < static_cast<std::size_t>(std::max(height, width)))
                 return run_tiled(pred, target, scaling);
