@@ -29,9 +29,8 @@ namespace lfs::training {
         constexpr uint32_t kDigitWidth = 8;
         constexpr uint32_t kHistogramStage = 0;
         constexpr uint32_t kPartitionScanStage = 1;
-        constexpr uint32_t kHistogramReduceStage = 2;
-        constexpr uint32_t kDigitBaseScanStage = 3;
-        constexpr uint32_t kScatterStage = 4;
+        constexpr uint32_t kDigitBaseScanStage = 2;
+        constexpr uint32_t kScatterStage = 3;
         constexpr uint32_t kStageSpecializationId = 0;
 
         struct PairSortPush {
@@ -65,7 +64,7 @@ namespace lfs::training {
         struct Pipelines {
             std::shared_ptr<VulkanContext> context;
             VkPipelineLayout layout = VK_NULL_HANDLE;
-            std::array<VkPipeline, 5> stages{};
+            std::array<VkPipeline, 4> stages{};
 
             ~Pipelines() {
                 if (!context || context->device() == VK_NULL_HANDLE)
@@ -237,7 +236,7 @@ namespace lfs::training {
                            "Vulkan pair sort indirect control has the wrong type or size");
         const StorageRef control = indirect ? storage(indirect) : StorageRef{};
         bool in_a = true;
-        const size_t dispatch_count = static_cast<size_t>(pass_count) * 5;
+        const size_t dispatch_count = static_cast<size_t>(pass_count) * 4;
         core::GpuElapsed gpu_elapsed(core::GpuBackend::Vulkan,
                                      pass_timings == nullptr ? 0 : dispatch_count * 2);
         const auto target = core::TensorExecutionTarget::current();
@@ -296,26 +295,14 @@ namespace lfs::training {
                            histogram_reads, histogram_writes,
                            pass_timings == nullptr ? nullptr
                                                    : &(*pass_timings)[pass].histogram_ms);
-            {
-                const std::array reduce_reads{counts};
-                const std::array reduce_writes{offsets};
-                timed_dispatch(kHistogramReduceStage, 256u, push,
-                               reduce_reads, reduce_writes,
-                               pass_timings == nullptr ? nullptr
-                                                       : &(*pass_timings)[pass].histogram_reduce_ms);
-                const std::array base_scan_reads{offsets};
-                const std::array base_scan_writes{offsets};
-                timed_dispatch(kDigitBaseScanStage, 1, push,
-                               base_scan_reads, base_scan_writes,
-                               pass_timings == nullptr ? nullptr
-                                                       : &(*pass_timings)[pass].digit_base_scan_ms);
-            }
             const std::array partition_scan_reads{counts};
             const std::array partition_scan_writes{counts, offsets};
-            timed_dispatch(kPartitionScanStage, 256, push,
-                           partition_scan_reads, partition_scan_writes,
-                           pass_timings == nullptr ? nullptr
-                                                   : &(*pass_timings)[pass].partition_scan_ms);
+            timed_dispatch(kPartitionScanStage, 256, push, partition_scan_reads, partition_scan_writes,
+                           pass_timings == nullptr ? nullptr : &(*pass_timings)[pass].partition_scan_ms);
+            const std::array base_scan_reads{offsets};
+            const std::array base_scan_writes{offsets};
+            timed_dispatch(kDigitBaseScanStage, 1, push, base_scan_reads, base_scan_writes,
+                           pass_timings == nullptr ? nullptr : &(*pass_timings)[pass].digit_base_scan_ms);
             const std::array scatter_reads{source_keys, source_values, counts, offsets};
             const std::array scatter_writes{destination_keys, destination_values};
             timed_dispatch(kScatterStage, partitions, push, scatter_reads, scatter_writes,
