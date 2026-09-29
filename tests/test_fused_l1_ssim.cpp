@@ -532,6 +532,44 @@ TEST_F(MaskedFusedL1SSIMTest, SoftWeightsUseWeightedMeanNormalization) {
             static_cast<float>(weight_sum * C + lfs::training::kernels::SSIM_EPSILON));
 }
 
+TEST_F(MaskedFusedL1SSIMTest, BatchUsesRepeatedMaskNormalization) {
+    constexpr int N = 2;
+    constexpr int C = 3;
+    constexpr int H = 17;
+    constexpr int W = 19;
+    constexpr float ssim_weight = 0.3f;
+    const auto prediction = Tensor::rand({N, C, H, W}, Device::CUDA) * 0.8f + 0.1f;
+    const auto target = Tensor::rand({N, C, H, W}, Device::CUDA) * 0.8f + 0.1f;
+    auto mask = Tensor::ones({H, W}, Device::CUDA);
+    mask.slice(0, 0, 4).zero_();
+    mask.slice(1, W - 3, W).fill_(0.25f);
+
+    MaskedFusedL1SSIMWorkspace workspace;
+    const auto [loss, ctx] =
+        masked_fused_l1_ssim_forward(prediction, target, mask, ssim_weight, workspace);
+    const auto gradient = masked_fused_l1_ssim_backward(ctx, workspace);
+    const auto [reference_loss, reference_gradient] =
+        compute_reference_masked_loss(prediction, target, mask, ssim_weight);
+
+    EXPECT_NEAR(loss.item<float>(), reference_loss, 2.0e-3f);
+    const auto difference = (gradient - reference_gradient).abs();
+    EXPECT_LT(difference.max().item<float>(), 2.0e-3f);
+    EXPECT_LT(difference.mean().item<float>(), 2.0e-5f);
+
+    MaskedDecoupledFusedL1SSIMWorkspace decoupled_workspace;
+    const auto [decoupled_loss, decoupled_ctx] =
+        masked_decoupled_fused_l1_ssim_forward(
+            prediction, prediction, target, mask, ssim_weight, decoupled_workspace);
+    const auto decoupled_gradients =
+        masked_decoupled_fused_l1_ssim_backward(decoupled_ctx, decoupled_workspace);
+    const auto decoupled_gradient =
+        decoupled_gradients.grad_corrected + decoupled_gradients.grad_raw;
+    EXPECT_NEAR(decoupled_loss.item<float>(), reference_loss, 2.0e-3f);
+    const auto decoupled_difference = (decoupled_gradient - reference_gradient).abs();
+    EXPECT_LT(decoupled_difference.max().item<float>(), 2.0e-3f);
+    EXPECT_LT(decoupled_difference.mean().item<float>(), 2.0e-5f);
+}
+
 TEST_F(MaskedFusedL1SSIMTest, AllOneWeightMatchesUnmaskedTinyImage) {
     constexpr int N = 1;
     constexpr int C = 3;

@@ -189,6 +189,7 @@ namespace lfs::training::kernels {
             float* __restrict__ mask_sum_result,
             int loss_num_blocks,
             int mask_num_blocks,
+            int N,
             int C) {
 
             float loss_sum = 0.0f;
@@ -205,7 +206,8 @@ namespace lfs::training::kernels {
             __syncthreads();
             mask_sum = lfs::core::warp_ops::block_reduce_sum(mask_sum);
             if (threadIdx.x == 0) {
-                const float normalized_mask_sum = mask_sum * static_cast<float>(C) + SSIM_EPSILON;
+                const float normalized_mask_sum =
+                    mask_sum * static_cast<float>(N) * static_cast<float>(C) + SSIM_EPSILON;
                 loss_result[0] = loss_sum / normalized_mask_sum;
                 mask_sum_result[0] = normalized_mask_sum;
             }
@@ -336,6 +338,7 @@ namespace lfs::training::kernels {
             mask_sum_buffer,
             loss_num_blocks,
             mask_num_blocks,
+            N,
             C);
         LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim_reduction.final_masked_mean");
     }
