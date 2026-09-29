@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 #include "core/cuda_types.hpp"
+#include "core/export.hpp"
 #include "core/tensor/internal/private_access.hpp"
 
 #include "core/error.hpp"
@@ -36,12 +37,16 @@ namespace lfs::core::internal {
         std::array<uint32_t, 3> max_workgroup_count{};
         uint32_t device_index = 0;
         uint32_t subgroup_size = 0;
+        uint32_t min_subgroup_size = 0;
+        uint32_t max_subgroup_size = 0;
         uint32_t max_workgroup_invocations = 0;
         uint32_t shared_memory_size = 0;
         float timestamp_period = 0.0f;
         bool shader_float64 = false;
+        bool shader_int64 = false;
         bool shader_float16 = false;
         bool shader_atomic_float = false;
+        bool subgroup_size_control = false;
         bool cooperative_matrix = false;
         bool vulkan_memory_model = false;
         bool vulkan_memory_model_device_scope = false;
@@ -145,11 +150,11 @@ namespace lfs::core::internal {
         // Shaders record an out-of-range index as {code, index, extent, op}; the
         // adapter that owns the launch reads and clears the record after its wait.
         [[nodiscard]] uint64_t fault_address() const noexcept { return fault_address_; }
-        [[nodiscard]] std::array<uint32_t, 4> consume_fault_record() noexcept;
+        [[nodiscard]] LFS_CORE_API std::array<uint32_t, 4> consume_fault_record() noexcept;
         void mark_device_lost_once();
 
-        [[nodiscard]] VulkanMemory& memory();
-        [[nodiscard]] VulkanRecorderRegistry& recorders();
+        [[nodiscard]] LFS_CORE_API VulkanMemory& memory();
+        [[nodiscard]] LFS_CORE_API VulkanRecorderRegistry& recorders();
         [[nodiscard]] VulkanPipelines& pipelines();
 
         void shutdown();
@@ -214,9 +219,9 @@ namespace lfs::core::internal {
     // when a context already exists or the device lacks a required feature.
     [[nodiscard]] lfs::Status adopt_vulkan_context(const AdoptedDevice& adopted);
     [[nodiscard]] bool vulkan_context_adopted() noexcept;
-    [[nodiscard]] std::shared_ptr<VulkanContext> acquire_vulkan_context();
+    [[nodiscard]] LFS_CORE_API std::shared_ptr<VulkanContext> acquire_vulkan_context();
     [[nodiscard]] int vulkan_device_count();
-    [[nodiscard]] std::shared_ptr<VulkanContext> try_live_vulkan_context() noexcept;
+    [[nodiscard]] LFS_CORE_API std::shared_ptr<VulkanContext> try_live_vulkan_context() noexcept;
     void shutdown_vulkan_context();
 
     // Marks the live context lost as if a call had returned VK_ERROR_DEVICE_LOST,
@@ -230,6 +235,6 @@ namespace lfs::core::internal {
     [[nodiscard]] LFS_CORE_API uint64_t vulkan_completed_timeline_for_testing();
     [[nodiscard]] LFS_CORE_API size_t vulkan_dead_recorder_count_for_testing();
 
-    void vk_check(VulkanContext* context, VkResult result, const char* operation);
+    LFS_CORE_API void vk_check(VulkanContext* context, VkResult result, const char* operation);
 
 } // namespace lfs::core::internal

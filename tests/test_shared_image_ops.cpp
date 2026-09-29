@@ -482,7 +482,10 @@ namespace {
     TEST_F(SharedImageOpsTest, RegistrySharesCoreTableAndRejectsMissingBackends) {
         EXPECT_EQ(lfs::training::training_ops(GpuBackend::CUDA).shared_image, shared_image_ops(GpuBackend::CUDA));
         lfs::core::param::TrainingParameters params;
-        for (auto backend : {GpuBackend::Vulkan, GpuBackend::Metal}) {
+        EXPECT_EQ(lfs::training::training_ops(GpuBackend::Vulkan).shared_image, shared_image_ops(GpuBackend::Vulkan));
+        EXPECT_NE(shared_image_ops(GpuBackend::Vulkan), nullptr);
+        EXPECT_FALSE(lfs::training::unavailable_training_family(GpuBackend::Vulkan, lfs::training::Family::SharedImage));
+        for (auto backend : {GpuBackend::Metal}) {
             EXPECT_EQ(shared_image_ops(backend), nullptr);
             EXPECT_EQ(lfs::training::training_ops(backend).shared_image, nullptr);
             const auto reason = lfs::training::unavailable_training_reason(params, backend, lfs::training::training_loader_dependencies(params));

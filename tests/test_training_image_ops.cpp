@@ -6,6 +6,7 @@
 #include "cuda_backend_test.hpp"
 #include "lfs/training/ops/registry.hpp"
 #include "lfs/training/ops/training_image_cuda.hpp"
+#include "lfs/training/ops/training_image_vulkan.hpp"
 #include "training/kernels/camera_loss_heatmap.cuh"
 #include "training/kernels/grad_alpha.hpp"
 #include "training/kernels/image_kernels.hpp"
@@ -57,6 +58,10 @@ TEST(TrainingImageRegistry, RequiresCudaTableForEveryTrainingConfiguration) {
     required.set(static_cast<size_t>(Family::TrainingImage));
     EXPECT_EQ(missing_training_families(empty_cuda, required), std::vector<std::string_view>{"TrainingImage"});
     for (const auto backend : {lfs::core::GpuBackend::Vulkan, lfs::core::GpuBackend::Metal}) {
+        if (backend == lfs::core::GpuBackend::Vulkan) {
+            EXPECT_EQ(training_ops(backend).training_image, &vulkan_training_image_ops());
+            continue;
+        }
         EXPECT_EQ(training_ops(backend).training_image, nullptr);
         const auto reason = unavailable_training_reason(params, backend, {});
         ASSERT_TRUE(reason.has_value());

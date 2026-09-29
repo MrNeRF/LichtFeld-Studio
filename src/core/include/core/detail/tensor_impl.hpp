@@ -1383,6 +1383,7 @@ namespace lfs::core {
         }
         static std::string storage_memory_summary();
         static std::size_t cuda_direct_storage_live_bytes();
+        static std::size_t vulkan_external_storage_live_bytes();
         static void log_storage_memory();
         static void log_storage_memory(std::string_view label);
 

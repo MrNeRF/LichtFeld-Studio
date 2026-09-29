@@ -188,6 +188,8 @@ namespace lfs::io {
             size_t total_bytes_read = 0;
             size_t total_decode_calls = 0;
             size_t cpu_decode_calls = 0;
+            size_t host_decoded_cache_bytes = 0;
+            size_t device_decoded_cache_bytes = 0;
             // Mask loading stats
             size_t masks_loaded = 0;
             size_t mask_cache_hits = 0;
@@ -419,6 +421,10 @@ namespace lfs::io {
         void gpu_batch_decode_thread_func();
         void cold_process_thread_func(size_t worker_index);
         void portable_process_thread_func();
+        struct PortableImageCache;
+        size_t release_portable_host_cache(size_t bytes);
+        mutable std::once_flag portable_cache_once_;
+        mutable std::shared_ptr<PortableImageCache> portable_cache_;
         lfs::core::Tensor decode_portable_rgb(const std::filesystem::path& path,
                                               const LoadParams& params,
                                               lfs::core::TensorUpload& upload) const;

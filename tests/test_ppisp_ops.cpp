@@ -179,13 +179,17 @@ namespace {
         auto required = lfs::training::required_training_families(p, {});
         EXPECT_TRUE(required.test(size_t(lfs::training::Family::PPISP)));
         EXPECT_TRUE(required.test(size_t(lfs::training::Family::Controller)));
-        for (auto backend : {lfs::core::GpuBackend::Vulkan, lfs::core::GpuBackend::Metal}) {
-            const auto& table = lfs::training::training_ops(backend);
-            EXPECT_EQ(table.ppisp, nullptr);
-            EXPECT_EQ(table.controller, nullptr);
-            auto missing = lfs::training::missing_training_families(table, required);
-            EXPECT_NE(std::find(missing.begin(), missing.end(), "PPISP"), missing.end());
-            EXPECT_NE(std::find(missing.begin(), missing.end(), "Controller"), missing.end());
-        }
+        const auto& vulkan = lfs::training::training_ops(lfs::core::GpuBackend::Vulkan);
+        EXPECT_NE(vulkan.ppisp, nullptr);
+        EXPECT_NE(vulkan.controller, nullptr);
+        const auto vulkan_missing = lfs::training::missing_training_families(vulkan, required);
+        EXPECT_EQ(std::find(vulkan_missing.begin(), vulkan_missing.end(), "PPISP"), vulkan_missing.end());
+        EXPECT_EQ(std::find(vulkan_missing.begin(), vulkan_missing.end(), "Controller"), vulkan_missing.end());
+        const auto& metal = lfs::training::training_ops(lfs::core::GpuBackend::Metal);
+        EXPECT_EQ(metal.ppisp, nullptr);
+        EXPECT_EQ(metal.controller, nullptr);
+        auto missing = lfs::training::missing_training_families(metal, required);
+        EXPECT_NE(std::find(missing.begin(), missing.end(), "PPISP"), missing.end());
+        EXPECT_NE(std::find(missing.begin(), missing.end(), "Controller"), missing.end());
     }
 } // namespace

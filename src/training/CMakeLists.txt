@@ -91,6 +91,7 @@ set(TRAINING_NEW_SOURCES
     optimizer/scheduler.cpp
     losses/regularization.cpp
     ops/registry.cpp
+    ops/table_vulkan.cpp
     ops/requirements.cpp
     ops/fast_services.cpp
     ops/gsplat_services.cpp
@@ -251,6 +252,11 @@ target_link_libraries(lfs_training
         lfs_preprocessing       # MoGe-2 normal auto-generate
         lfs_python_utils
 )
+if(LFS_TENSOR_VULKAN)
+    add_subdirectory(vulkan)
+    target_link_libraries(lfs_training PRIVATE lfs_training_vulkan)
+    target_compile_definitions(lfs_training PRIVATE LFS_TENSOR_VULKAN=1)
+endif()
 if(LFS_HAS_CUDA)
     target_link_libraries(lfs_training PUBLIC
         lfs_training_kernels

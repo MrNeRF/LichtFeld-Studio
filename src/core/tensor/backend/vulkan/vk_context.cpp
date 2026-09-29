@@ -196,12 +196,29 @@ namespace lfs::core::internal {
 
             VkPhysicalDeviceSubgroupProperties subgroup{
                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES};
+            VkPhysicalDeviceSubgroupSizeControlProperties subgroup_control_props{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES};
+            uint32_t extension_count = 0;
+            bool has_size_control = false;
+            if (vkEnumerateDeviceExtensionProperties(device, nullptr, &extension_count, nullptr) == VK_SUCCESS) {
+                std::vector<VkExtensionProperties> extension_properties(extension_count);
+                if (vkEnumerateDeviceExtensionProperties(device, nullptr, &extension_count,
+                                                         extension_properties.data()) == VK_SUCCESS) {
+                    has_size_control = std::ranges::any_of(
+                        extension_properties, [](const VkExtensionProperties& extension) {
+                            return std::string_view(extension.extensionName) ==
+                                   VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME;
+                        });
+                }
+            }
             VkPhysicalDeviceIDProperties ids{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
             VkPhysicalDeviceFloatControlsProperties float_controls{
                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FLOAT_CONTROLS_PROPERTIES};
             VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
             properties.pNext = &subgroup;
-            subgroup.pNext = &ids;
+            subgroup.pNext = has_size_control ? static_cast<void*>(&subgroup_control_props)
+                                              : static_cast<void*>(&ids);
+            subgroup_control_props.pNext = &ids;
             ids.pNext = &float_controls;
             vkGetPhysicalDeviceProperties2(device, &properties);
             const VkSubgroupFeatureFlags subgroup_required =
@@ -218,6 +235,8 @@ namespace lfs::core::internal {
                 std::copy_n(ids.deviceUUID, VK_UUID_SIZE, caps->device_uuid.begin());
                 std::copy_n(ids.driverUUID, VK_UUID_SIZE, caps->driver_uuid.begin());
                 caps->subgroup_size = subgroup.subgroupSize;
+                caps->min_subgroup_size = has_size_control ? subgroup_control_props.minSubgroupSize : 0;
+                caps->max_subgroup_size = has_size_control ? subgroup_control_props.maxSubgroupSize : 0;
                 caps->max_workgroup_invocations =
                     properties.properties.limits.maxComputeWorkGroupInvocations;
                 std::copy_n(properties.properties.limits.maxComputeWorkGroupSize, 3,
@@ -226,11 +245,20 @@ namespace lfs::core::internal {
                             caps->max_workgroup_count.begin());
                 caps->shared_memory_size =
                     properties.properties.limits.maxComputeSharedMemorySize;
+                caps->shader_int64 = features.features.shaderInt64;
                 caps->timestamp_period = properties.properties.limits.timestampPeriod;
                 caps->shader_float64 = features.features.shaderFloat64;
                 caps->shader_float16 = features12.shaderFloat16 &&
                                        float_controls.shaderSignedZeroInfNanPreserveFloat16;
                 caps->float_controls_fp16 = float_controls.shaderSignedZeroInfNanPreserveFloat16;
+                VkPhysicalDeviceSubgroupSizeControlFeatures size_control{
+                    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES};
+                VkPhysicalDeviceFeatures2 size_features{
+                    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+                size_features.pNext = &size_control;
+                if (has_size_control)
+                    vkGetPhysicalDeviceFeatures2(device, &size_features);
+                caps->subgroup_size_control = has_size_control && size_control.subgroupSizeControl;
             }
             return required;
         }
@@ -611,9 +639,13 @@ namespace lfs::core::internal {
         }
         caps_.memory_budget =
             extensions_available.contains(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+        caps_.subgroup_size_control =
+            extensions_available.contains(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
 
         VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomic_float{
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT};
+        VkPhysicalDeviceSubgroupSizeControlFeatures subgroup_size_query{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES};
         VkPhysicalDeviceVulkan13Features query13{
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
         VkPhysicalDeviceVulkan12Features query12{
@@ -624,9 +656,14 @@ namespace lfs::core::internal {
         query.pNext = &query11;
         query11.pNext = &query12;
         query12.pNext = &query13;
-        query13.pNext = &atomic_float;
+        query13.pNext = caps_.subgroup_size_control ? static_cast<void*>(&subgroup_size_query) : static_cast<void*>(&atomic_float);
+        if (caps_.subgroup_size_control)
+            subgroup_size_query.pNext = &atomic_float;
         vkGetPhysicalDeviceFeatures2(physical_device_, &query);
         caps_.shader_float64 = query.features.shaderFloat64;
+        caps_.shader_int64 = query.features.shaderInt64;
+        caps_.subgroup_size_control = caps_.subgroup_size_control &&
+                                      subgroup_size_query.subgroupSizeControl;
         caps_.shader_float16 = query12.shaderFloat16 && caps_.float_controls_fp16;
         caps_.vulkan_memory_model = query12.vulkanMemoryModel;
         caps_.vulkan_memory_model_device_scope = query12.vulkanMemoryModelDeviceScope;
@@ -670,16 +707,35 @@ namespace lfs::core::internal {
             else
                 features13.pNext = &coop_enable;
         }
+        VkPhysicalDeviceSubgroupSizeControlFeatures subgroup_size_enable{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES};
+        subgroup_size_enable.subgroupSizeControl = caps_.subgroup_size_control ? VK_TRUE : VK_FALSE;
+        subgroup_size_enable.computeFullSubgroups = VK_FALSE;
+        if (caps_.subgroup_size_control) {
+            if (caps_.cooperative_matrix) {
+                coop_enable.pNext = &subgroup_size_enable;
+            } else if (caps_.shader_atomic_float) {
+                atomic_float.pNext = &subgroup_size_enable;
+            } else {
+                features13.pNext = &subgroup_size_enable;
+            }
+        }
 
         std::vector<const char*> enabled_extensions;
         if (caps_.memory_budget) {
             enabled_extensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+        }
+        if (caps_.subgroup_size_control) {
+            enabled_extensions.push_back(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
         }
         if (caps_.shader_atomic_float) {
             enabled_extensions.push_back(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
         }
         if (caps_.cooperative_matrix)
             enabled_extensions.push_back(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+        if (extensions_available.contains(VK_NV_SHADER_SUBGROUP_PARTITIONED_EXTENSION_NAME)) {
+            enabled_extensions.push_back(VK_NV_SHADER_SUBGROUP_PARTITIONED_EXTENSION_NAME);
+        }
 #if LFS_HAS_CUDA && defined(_WIN32)
         constexpr const char* kExternalMemoryExtension =
             VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME;

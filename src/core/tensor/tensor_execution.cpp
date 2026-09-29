@@ -4,6 +4,9 @@
 
 #include "backend/metal/metal_queue.hpp"
 #include "backend/vulkan/vk_context.hpp"
+#ifdef LFS_TENSOR_VULKAN
+#include "backend/vulkan/vk_memory.hpp"
+#endif
 #include "backend/vulkan/vk_recorder.hpp"
 #include "core/tensor_upload.hpp"
 #include "internal/tensor_impl.hpp"
@@ -107,6 +110,21 @@ namespace lfs::core {
 
     Tensor Tensor::from_blob(void* data, TensorShape shape, Device device, DataType dtype,
                              TensorExecutionTarget target) {
+#ifdef LFS_TENSOR_VULKAN
+        if (device == Device::GPU && target.backend() == GpuBackend::Vulkan) {
+            const auto storage = internal::acquire_vulkan_context()->memory().borrow_address(
+                data, shape.elements() * dtype_size(dtype));
+            LFS_ASSERT_MSG(storage.byte_offset % dtype_size(dtype) == 0,
+                           "Vulkan tensor view offset is not aligned");
+            // Like the raw CUDA overload, this view borrows the caller's arena.
+            Tensor result = from_blob(storage.data, std::move(shape), Device::CPU, dtype);
+            result.device_ = Device::GPU;
+            result.storage_offset_ = storage.byte_offset / dtype_size(dtype);
+            result.storage_meta_ = std::shared_ptr<StorageMeta>(const_cast<StorageMeta*>(storage.meta), [](StorageMeta*) {});
+            result.view_generation_snapshot_ = storage.meta->generation.load(std::memory_order_relaxed);
+            return result;
+        }
+#endif
         if (device == Device::GPU && target.backend() != GpuBackend::CUDA)
             throw std::runtime_error("Raw device tensor views are unsupported on this backend");
         return from_blob(data, std::move(shape), device, dtype,

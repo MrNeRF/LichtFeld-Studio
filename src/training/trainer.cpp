@@ -1434,6 +1434,22 @@ namespace lfs::training {
 
     } // namespace
 
+    void Trainer::prepare_evaluation_workspaces() {
+        if (!training_session_ops().release_workspaces_before_evaluation)
+            return;
+        photo_saved_ = {};
+        fast_saved_ = {};
+        gsplat_saved_ = {};
+        photo_loss_ = {};
+        photo_grad_corrected_ = {};
+        photo_grad_raw_ = {};
+        bind_training_ops();
+        // Retired storage can be reclaimed after this training queue completes.
+        if (training_queue_)
+            training_queue_->wait();
+        core::Tensor::trim_memory_pool();
+    }
+
     void Trainer::bind_training_ops() {
         const core::GpuBackend backend = core::default_gpu_backend();
         training_ops_ = &training_ops(backend);
@@ -7665,6 +7681,7 @@ namespace lfs::training {
                     // Clean evaluation - let the evaluator handle everything
                     if (evaluator_->is_enabled() && evaluator_->should_evaluate(iter, get_total_iterations())) {
                         lfs::diagnostics::VramProfiler::instance().mark("evaluation");
+                        prepare_evaluation_workspaces();
                         evaluator_->print_evaluation_header(iter);
                         eval_ppisp_applied_.store(0);
                         eval_ppisp_exif_.store(0);
@@ -8409,6 +8426,7 @@ namespace lfs::training {
                 evaluator_->is_enabled() &&
                 evaluator_->should_evaluate(current_iteration_.load(), get_total_iterations())) {
                 const int eval_iteration = current_iteration_.load();
+                prepare_evaluation_workspaces();
                 evaluator_->print_evaluation_header(eval_iteration);
                 lfs::diagnostics::VramProfiler::instance().mark("evaluation");
                 eval_ppisp_applied_.store(0);

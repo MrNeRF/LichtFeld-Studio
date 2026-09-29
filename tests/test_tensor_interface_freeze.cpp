@@ -65,9 +65,15 @@ namespace {
     LFS_FREEZE(T::to_vector_int, std::vector<int> (T::*)() const);
     LFS_FREEZE(T::to_vector_bool, std::vector<bool> (T::*)() const);
     LFS_FREEZE(T::stream, cudaStream_t (T::*)() const);
-    LFS_FREEZE(T::set_stream, void (T::*)(cudaStream_t));
-    LFS_FREEZE(T::record_stream, void (T::*)(cudaStream_t) const);
-    LFS_FREEZE(T::sync_to_stream, void (T::*)(cudaStream_t) const);
+    static_assert(std::is_same_v<
+                  decltype(static_cast<void (T::*)(cudaStream_t)>(&T::set_stream)),
+                  void (T::*)(cudaStream_t)>);
+    static_assert(std::is_same_v<
+                  decltype(static_cast<void (T::*)(cudaStream_t) const>(&T::record_stream)),
+                  void (T::*)(cudaStream_t) const>);
+    static_assert(std::is_same_v<
+                  decltype(static_cast<void (T::*)(cudaStream_t) const>(&T::sync_to_stream)),
+                  void (T::*)(cudaStream_t) const>);
     LFS_FREEZE(T::reserve, void (T::*)(size_t));
     LFS_FREEZE(T::numel, size_t (T::*)() const);
     LFS_FREEZE(T::ndim, size_t (T::*)() const);
@@ -327,7 +333,10 @@ namespace {
     LFS_FREEZE(T::ones_bool, T (*)(S, Device));
     LFS_FREEZE(T::linspace, T (*)(float, float, size_t, Device));
     LFS_FREEZE(T::diag, T (*)(const T&));
-    LFS_FREEZE(T::from_blob, T (*)(void*, S, Device, DataType, cudaStream_t));
+    static_assert(std::is_same_v<
+                  decltype(static_cast<T (*)(void*, S, Device, DataType, cudaStream_t)>(
+                      &T::from_blob)),
+                  T (*)(void*, S, Device, DataType, cudaStream_t)>);
     LFS_FREEZE(T::zeros_like, T (*)(const T&));
     LFS_FREEZE(T::full_like, T (*)(const T&, float));
     LFS_FREEZE(T::stack, T (*)(const std::vector<T>&, int));
@@ -787,7 +796,7 @@ namespace {
         t.div_(1.0f);
         ct + ct;
         ct - ct;
-        ct* ct;
+        ct * ct;
         ct / ct;
         ct % ct;
         ct == ct;
@@ -796,7 +805,7 @@ namespace {
         ct <= ct;
         ct > ct;
         ct >= ct;
-        ct&& ct;
+        ct && ct;
         ct || ct;
         ct | ct;
     };
@@ -1144,9 +1153,9 @@ namespace {
         TensorLeaf(t).stream_hint();
         TensorLeaf(t).snapshot();
         TensorLeaf(t).map(operation);
-        ct.template apply([](const X& value) { return value; });
+        ct.template apply([](const X & value) { return value; });
         t.template inplace([](X&) {});
-        ct.template timed("", [](const X& value) { return value; });
+        ct.template timed("", [](const X & value) { return value; });
     };
 
     using LeafExpr = TensorLeaf;
@@ -1249,7 +1258,7 @@ namespace {
         row = 1.0f;
         const_row - const_row;
         const_row + const_row;
-        const_row* const_row;
+        const_row * const_row;
         const_row / const_row;
         const_row - 1.0f;
         const_row + 1.0f;

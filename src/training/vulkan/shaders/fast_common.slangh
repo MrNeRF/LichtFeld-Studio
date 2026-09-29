@@ -1,0 +1,152 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "../../../core/tensor/backend/vulkan/shaders/sh_decode.slangh"
+struct FastPush {
+    uint64_t means, scales, rotations, opacities, sh0, sh, view, camera;
+    uint64_t background, backgroundImage, screenShare;
+    uint64_t projected, visibility, offsets, originalToWork, workToOriginal;
+    uint64_t counts, keys, values, ranges, image, alpha, depth, normal, transmittance, last;
+    uint64_t status;
+    uint count, visible, width, height, gridWidth, gridHeight, activeBases, rest;
+    uint depthBits, mip, renderNormal, renderDepth, stage, instances;
+    float fx, fy, cx, cy, clipLeft, clipRight, clipTop, clipBottom;
+    uint64_t shBounds;
+    uint shFormat, padding;
+};
+void specializeFast(inout FastPush p, uint bits) {
+    p.stage = bits & 15;
+    p.activeBases = (bits >> 4) & 31;
+    p.rest = (bits >> 9) & 15;
+    p.shFormat = (bits >> 13) & 3;
+    p.renderNormal = (bits >> 15) & 1;
+    p.renderDepth = (bits >> 16) & 1;
+    p.mip = (bits >> 17) & 1;
+}
+float3 shColor(FastPush p, uint row, uint basis) {
+    return float3(shReadCell(p.sh, p.shBounds, p.shFormat, p.rest, p.count, row, basis * 3),
+                  shReadCell(p.sh, p.shBounds, p.shFormat, p.rest, p.count, row, basis * 3 + 1),
+                  shReadCell(p.sh, p.shBounds, p.shFormat, p.rest, p.count, row, basis * 3 + 2));
+}
+struct Projected {
+    float mx, my, a, b, c, opacity, red, green, blue, depth, nx, ny, nz;
+    uint xmin, xmax, ymin, ymax, depthKey;
+};
+Projected projectedAt(FastPush p, uint work) {
+    return ((Ptr<Projected, Access.Read>)p.projected)[work];
+}
+// Closed pixel-center rectangle test, conservative at the contribution boundary.
+bool overlapsSubtile(Projected o, float2 origin) {
+    float2 lo = origin + 0.5f - float2(o.mx, o.my), hi = lo + float2(7, 3);
+    if (max(max(lo.x, -hi.x), max(lo.y, -hi.y)) <= 0)
+        return true;
+    float u0 = clamp(-o.b / o.c * lo.x, lo.y, hi.y);
+    float u1 = clamp(-o.b / o.c * hi.x, lo.y, hi.y);
+    float v0 = clamp(-o.b / o.a * lo.y, lo.x, hi.x);
+    float v1 = clamp(-o.b / o.a * hi.y, lo.x, hi.x);
+    float q0 = o.a * lo.x * lo.x + 2 * o.b * lo.x * u0 + o.c * u0 * u0;
+    float q1 = o.a * hi.x * hi.x + 2 * o.b * hi.x * u1 + o.c * u1 * u1;
+    float q2 = o.a * v0 * v0 + 2 * o.b * v0 * lo.y + o.c * lo.y * lo.y;
+    float q3 = o.a * v1 * v1 + 2 * o.b * v1 * hi.y + o.c * hi.y * hi.y;
+    return min(min(q0, q1), min(q2, q3)) <= 2 * log(255 * o.opacity) + 1e-4f;
+}
+Projected broadcastProjected(Projected o, uint lane, bool depth, bool normal) {
+    Projected result = (Projected)0;
+    float4 a = WaveReadLaneAt(float4(o.mx, o.my, o.a, o.b), lane);
+    float4 b = WaveReadLaneAt(float4(o.c, o.opacity, o.red, o.green), lane);
+
+    result.mx = a.x;
+    result.my = a.y;
+    result.a = a.z;
+    result.b = a.w;
+    result.c = b.x;
+    result.opacity = b.y;
+    result.red = b.z;
+    result.green = b.w;
+    result.blue = WaveReadLaneAt(o.blue, lane);
+    if (depth)
+        result.depth = WaveReadLaneAt(o.depth, lane);
+    if (normal) {
+        float3 n = WaveReadLaneAt(float3(o.nx, o.ny, o.nz), lane);
+        result.nx = n.x;
+        result.ny = n.y;
+        result.nz = n.z;
+    }
+    return result;
+}
+float loadFloat(uint64_t a, uint i) { return ((Ptr<float, Access.Read>)a)[i]; }
+float3 load3(uint64_t a, uint i) { return float3(loadFloat(a, 3 * i), loadFloat(a, 3 * i + 1), loadFloat(a, 3 * i + 2)); }
+void storeFloat(uint64_t a, uint i, float v) { ((Ptr<float, Access.ReadWrite>)a)[i] = v; }
+void store3(uint64_t a, uint i, float3 v) {
+    storeFloat(a, 3 * i, v.x);
+    storeFloat(a, 3 * i + 1, v.y);
+    storeFloat(a, 3 * i + 2, v.z);
+}
+uint loadUint(uint64_t a, uint i) { return ((Ptr<uint, Access.Read>)a)[i]; }
+void storeUint(uint64_t a, uint i, uint v) { ((Ptr<uint, Access.ReadWrite>)a)[i] = v; }
+float minNumber(float a, float b) { return isnan(a) ? b : isnan(b) ? a
+                                                                   : min(a, b); }
+float maxNumber(float a, float b) { return isnan(a) ? b : isnan(b) ? a
+                                                                   : max(a, b); }
+float clampGradient(float g) { return minNumber(maxNumber(g, -1e4f), 1e4f); }
+float3 clampGradient3(float3 g) { return float3(clampGradient(g.x), clampGradient(g.y), clampGradient(g.z)); }
+float3 direction(float3 v) {
+    float q = fma(v.z, v.z, fma(v.y, v.y, v.x * v.x));
+    return q < 1e-12f ? float3(0, 0, 1) : v * rsqrt(q);
+}
+float3x3 rotation(float4 q) {
+    float k = 2 / max(dot(q, q), 1e-8f);
+    float xx = q.y * q.y * k, yy = q.z * q.z * k, zz = q.w * q.w * k;
+    float xy = q.y * q.z * k, xz = q.y * q.w * k, yz = q.z * q.w * k;
+    float wx = q.x * q.y * k, wy = q.x * q.z * k, wz = q.x * q.w * k;
+    return float3x3(1 - (yy + zz), xy - wz, wy + xz, wz + xy, 1 - (xx + zz), yz - wx, xz - wy, wx + yz, 1 - (xx + yy));
+}
+void shBasis(float3 v, out float basis[16]) {
+    float x = v.x, y = v.y, z = v.z, xx = x * x, yy = y * y, zz = z * z;
+    basis[0] = 0.28209479177387814f;
+    basis[1] = -0.48860251190291987f * y;
+    basis[2] = 0.48860251190291987f * z;
+    basis[3] = -0.48860251190291987f * x;
+    basis[4] = 1.0925484305920792f * x * y;
+    basis[5] = -1.0925484305920792f * y * z;
+    basis[6] = fma(0.94617469575755997f, zz, -0.31539156525251999f);
+    basis[7] = -1.0925484305920792f * x * z;
+    basis[8] = fma(0.54627421529603959f, xx, -(0.54627421529603959f * yy));
+    basis[9] = 0.59004358992664352f * y * fma(-3.0f, xx, yy);
+    basis[10] = 2.8906114426405538f * x * y * z;
+    basis[11] = 0.45704579946446572f * y * fma(-5.0f, zz, 1.0f);
+    basis[12] = 0.3731763325901154f * z * fma(5.0f, zz, -3.0f);
+    basis[13] = 0.45704579946446572f * x * fma(-5.0f, zz, 1.0f);
+    basis[14] = 1.4453057213202769f * z * (xx - yy);
+    basis[15] = 0.59004358992664352f * x * fma(3.0f, yy, -xx);
+}
+float2 ellipseRange(float3 conic, float radius, float y0, float y1) {
+    float a = conic.x, b = conic.y, c = conic.z;
+    float det = max(a * c - b * b, 1e-20f);
+    float ym = -b / c * sqrt(max(c * radius / det, 0.0f));
+    float v0 = clamp(-ym, y0, y1), v1 = clamp(ym, y0, y1);
+    float bv0 = -b * v0, bv1 = -b * v1;
+    return float2((bv0 - sqrt(max(bv0 * bv0 - a * (c * v0 * v0 - radius), 0.0f))) / a,
+                  (bv1 + sqrt(max(bv1 * bv1 - a * (c * v1 * v1 - radius), 0.0f))) / a);
+}
+uint2 tileSpan(Projected p, bool alongX, uint scan) {
+    float2 mean = float2(p.mx, p.my) - 0.5f;
+    float3 conic = alongX ? float3(p.a, p.b, p.c) : float3(p.c, p.b, p.a);
+    float start = float(scan * 16) - (alongX ? mean.y : mean.x);
+    float2 b = ellipseRange(conic, 2 * log(p.opacity * 255), start, start + 16);
+    float cross = alongX ? mean.x : mean.y;
+    uint lo = alongX ? p.xmin : p.ymin, hi = alongX ? p.xmax : p.ymax;
+    return uint2(clamp(int(floor((b.x + cross) / 16)), int(lo), int(hi)),
+                 clamp(int(floor((b.y + cross) / 16)) + 1, int(lo), int(hi)));
+}
+uint pixelIndex(FastPush p, uint tile, uint rank) {
+    // Four logical 8x4 warps, with the second pixel eight rows below.
+    uint lane = rank % 128, warp = lane / 32, l = lane % 32;
+    uint x = (tile % p.gridWidth) * 16 + (warp % 2) * 8 + l % 8;
+    uint y = (tile / p.gridWidth) * 16 + (warp / 2) * 4 + l / 8 + (rank / 128) * 8;
+    return x < p.width && y < p.height ? y * p.width + x : 0xffffffffu;
+}
+float3 background(FastPush p, uint pixel) {
+    uint n = p.width * p.height;
+    return p.backgroundImage != 0 ? float3(loadFloat(p.backgroundImage, pixel), loadFloat(p.backgroundImage, n + pixel), loadFloat(p.backgroundImage, 2 * n + pixel)) : p.background != 0 ? load3(p.background, 0)
+                                                                                                                                                                                          : float3(0);
+}

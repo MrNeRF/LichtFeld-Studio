@@ -126,7 +126,7 @@ TEST_F(GeometryOps, AnchorCollectionMatchesLauncher) {
     EXPECT_EQ(std::memcmp(actual.data(), expected.data(), actual.size() * sizeof(geo::AnchorSample)), 0);
 }
 
-TEST_F(GeometryOps, RequiredOnlyForSupervisionAndUnavailableOnOtherBackends) {
+TEST_F(GeometryOps, RequiredOnlyForSupervisionAndUnavailableOnMetal) {
     lfs::core::param::TrainingParameters p;
     const auto bit = static_cast<size_t>(lfs::training::Family::Geometry);
     EXPECT_FALSE(lfs::training::required_training_families(p, {}).test(bit));
@@ -134,12 +134,13 @@ TEST_F(GeometryOps, RequiredOnlyForSupervisionAndUnavailableOnOtherBackends) {
         p.optimization.use_depth_loss = depth;
         p.optimization.use_normal_loss = !depth;
         EXPECT_TRUE(lfs::training::required_training_families(p, {}).test(bit));
-        for (const auto backend : {GpuBackend::Vulkan, GpuBackend::Metal}) {
-            const auto& table = lfs::training::training_ops(backend);
-            EXPECT_EQ(table.geometry, nullptr);
-            lfs::training::FamilySet required;
-            required.set(bit);
-            EXPECT_EQ(lfs::training::missing_training_families(table, required), std::vector<std::string_view>{"Geometry"});
-        }
+        const auto& vulkan = lfs::training::training_ops(GpuBackend::Vulkan);
+        EXPECT_NE(vulkan.geometry, nullptr);
+        lfs::training::FamilySet required;
+        required.set(bit);
+        EXPECT_TRUE(lfs::training::missing_training_families(vulkan, required).empty());
+        const auto& metal = lfs::training::training_ops(GpuBackend::Metal);
+        EXPECT_EQ(metal.geometry, nullptr);
+        EXPECT_EQ(lfs::training::missing_training_families(metal, required), std::vector<std::string_view>{"Geometry"});
     }
 }

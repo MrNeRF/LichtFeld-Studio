@@ -8,6 +8,7 @@
 #include "cuda_backend_test.hpp"
 #include "lfs/training/ops/registry.hpp"
 
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -175,11 +176,81 @@ namespace {
         required.set(static_cast<size_t>(Family::Lpips));
         EXPECT_EQ(missing_training_families(TrainingOps{}, required), std::vector<std::string_view>{"Lpips"});
         EXPECT_FALSE(unavailable_training_family(GpuBackend::CUDA, Family::Lpips));
-        for (const auto backend : {GpuBackend::Vulkan, GpuBackend::Metal}) {
+        EXPECT_NE(training_ops(GpuBackend::Vulkan).lpips, nullptr);
+        EXPECT_FALSE(unavailable_training_family(GpuBackend::Vulkan, Family::Lpips));
+        for (const auto backend : {GpuBackend::Metal}) {
             EXPECT_EQ(training_ops(backend).lpips, nullptr);
             const auto reason = unavailable_training_family(backend, Family::Lpips);
             ASSERT_TRUE(reason);
             EXPECT_NE(reason->find("Lpips"), std::string::npos);
         }
+    }
+
+    TEST(LpipsVulkanRuntime, TiledForwardUsesVulkanTensorOperations) {
+        const char* home = std::getenv("HOME");
+        if (!home)
+            GTEST_SKIP() << "No model cache";
+        const auto path = std::filesystem::path(home) / ".lichtfeld/onnx/lpips-vgg16-v0.1.lfw";
+        if (!std::filesystem::exists(path))
+            GTEST_SKIP() << "LPIPS weights unavailable";
+
+        GpuBackendScope backend(GpuBackend::Vulkan);
+        auto model = nn::models::Lpips::load(path, Device::GPU, DataType::Float16,
+                                             nn::models::InputScaling::Identity, 1);
+        ASSERT_TRUE(model);
+        model->set_dispatch(*lfs::training::training_ops(GpuBackend::Vulkan).lpips);
+        ASSERT_EQ(model->tile_size_for(33, 35), 16u);
+        const auto x = pattern({1, 3, 33, 35}, 9, DataType::Float32);
+        const auto y = pattern({1, 3, 33, 35}, 12, DataType::Float32);
+        const auto value = model->forward(x, y);
+        ASSERT_TRUE(value);
+        EXPECT_GT(*value, 0.f);
+    }
+
+    TEST(LpipsVulkanRuntime, LargeWeightTapsDispatchCoversAllOutputs) {
+        GpuBackendScope backend(GpuBackend::Vulkan);
+        constexpr size_t output_channels = 1024;
+        constexpr size_t input_channels = 2048;
+        const TensorShape shape{output_channels, input_channels, 3, 3};
+        std::vector<float> values(shape.elements());
+        for (size_t i = 0; i < values.size(); ++i)
+            values[i] = static_cast<float>(i % 251) / 251.f;
+        const auto source = Tensor::from_vector(values, shape, Device::CPU).to(DataType::Float16);
+        const auto weight = source.gpu();
+        auto actual = Tensor::empty({9, output_channels, input_channels}, Device::GPU, DataType::Float16);
+        auto expected = Tensor::empty(actual.shape(), Device::CPU, DataType::Float16);
+        const auto* source_values = static_cast<const uint16_t*>(source.data_ptr());
+        auto* expected_values = static_cast<uint16_t*>(expected.data_ptr());
+        for (size_t tap = 0; tap < 9; ++tap)
+            for (size_t oc = 0; oc < output_channels; ++oc)
+                for (size_t ic = 0; ic < input_channels; ++ic)
+                    expected_values[tap * output_channels * input_channels + oc * input_channels + ic] =
+                        source_values[(oc * input_channels + ic) * 9 + tap];
+
+        lfs::training::training_ops(GpuBackend::Vulkan).lpips->weight_taps(weight, actual);
+        const auto actual_cpu = actual.cpu();
+        EXPECT_EQ(std::memcmp(actual_cpu.data_ptr(), expected.data_ptr(), actual.bytes()), 0);
+    }
+
+    TEST(LpipsVulkanRuntime, FullResolutionMetricUsesBoundedDispatches) {
+        const char* home = std::getenv("HOME");
+        if (!home)
+            GTEST_SKIP() << "No model cache";
+        const auto path = std::filesystem::path(home) / ".lichtfeld/onnx/lpips-vgg16-v0.1.lfw";
+        if (!std::filesystem::exists(path))
+            GTEST_SKIP() << "LPIPS weights unavailable";
+
+        GpuBackendScope backend(GpuBackend::Vulkan);
+        auto model = nn::models::Lpips::load(path, Device::GPU, DataType::Float16,
+                                             nn::models::InputScaling::Identity,
+                                             512ULL * 1024ULL * 1024ULL);
+        ASSERT_TRUE(model);
+        model->set_dispatch(*lfs::training::training_ops(GpuBackend::Vulkan).lpips);
+        ASSERT_LT(model->tile_size_for(840, 1297), 1297u);
+        const auto x = pattern({1, 3, 840, 1297}, 9, DataType::Float32);
+        const auto y = pattern({1, 3, 840, 1297}, 12, DataType::Float32);
+        const auto value = model->forward(x, y);
+        ASSERT_TRUE(value);
+        EXPECT_TRUE(std::isfinite(*value));
     }
 } // namespace

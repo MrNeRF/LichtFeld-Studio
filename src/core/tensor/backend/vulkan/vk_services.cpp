@@ -101,6 +101,9 @@ namespace lfs::core::internal {
         }
     }
 
+    void VulkanBackendOps::push_range(const char*) {}
+    void VulkanBackendOps::pop_range() {}
+
     void VulkanBackendOps::record_stream(StorageRef, ExecContext) {}
 
     void VulkanBackendOps::release_stream(ExecContext) {}
@@ -174,19 +177,23 @@ namespace lfs::core::internal {
         acquire_vulkan_context()->memory().memset(request);
     }
 
-    void VulkanBackendOps::synchronize_stream(ExecContext) {
+    void VulkanBackendOps::synchronize_stream(const ExecContext execution) {
         LFS_FACADE_TRACE(service_synchronize_stream);
+        const auto context = acquire_vulkan_context();
+        auto id = reinterpret_cast<uint64_t>(execution.cuda_stream);
+        if (id == 0)
+            id = context->recorders().current_queue();
+        context->recorders().queue_wait(id);
+    }
+
+    void VulkanBackendOps::synchronize_device() {
         const auto context = acquire_vulkan_context();
         context->recorders().wait_all();
         context->check_fault_buffer();
     }
 
-    void VulkanBackendOps::synchronize_device() {
-        synchronize_stream({});
-    }
-
     void VulkanBackendOps::device_barrier() {
-        synchronize_stream({});
+        synchronize_device();
     }
 
     void VulkanBackendOps::wait_for(const SyncToken token) {

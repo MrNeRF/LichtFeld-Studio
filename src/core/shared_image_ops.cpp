@@ -13,6 +13,12 @@ namespace lfs::core {
 } // namespace lfs::core
 #endif
 
+#if LFS_TENSOR_VULKAN
+namespace lfs::core {
+    const gpu_ops::SharedImageOps* vulkan_shared_image_ops();
+} // namespace lfs::core
+#endif
+
 namespace lfs::core {
     const gpu_ops::SharedImageOps* shared_image_ops(const GpuBackend backend) {
 #if LFS_HAS_CUDA
@@ -23,6 +29,11 @@ namespace lfs::core {
 #if LFS_TENSOR_METAL
         if (backend == GpuBackend::Metal) {
             return metal_shared_image_ops();
+        }
+#endif
+#if LFS_TENSOR_VULKAN
+        if (backend == GpuBackend::Vulkan) {
+            return vulkan_shared_image_ops();
         }
 #endif
         return nullptr;

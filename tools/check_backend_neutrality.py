@@ -40,6 +40,9 @@ TRAINER_CUDA_ROOTS = (
 TRAINER_CUDA_FILE = re.compile(
     r'src/training/(?:ops/[^/]+_cuda\.cpp|'
     r'include/lfs/training/ops/[^/]+_cuda\.hpp|'
+    r'ops/[^/]+_vulkan\.cpp|'
+    r'include/lfs/training/ops/[^/]+_vulkan\.hpp|'
+    r'vulkan/.*|'
     r'rasterization/[^/]+_cuda\.(?:cpp|hpp)|perf_bench_cuda\.cpp)$')
 # Neutral trainer sources dispatch through the ops table. Kernel and CUDA
 # headers stay on the implementation side of that boundary.

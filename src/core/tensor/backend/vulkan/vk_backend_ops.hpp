@@ -159,6 +159,8 @@ namespace lfs::core::internal {
 
         StorageRef allocate(size_t, size_t, ExecContext) override;
         void deallocate(StorageRef, ExecContext) noexcept override;
+        void push_range(const char*) override;
+        void pop_range() override;
         void record_stream(StorageRef, ExecContext) override;
         void release_stream(ExecContext) override;
         void rehome_stream(StorageRef, ExecContext) override;

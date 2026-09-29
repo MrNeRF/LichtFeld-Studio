@@ -134,12 +134,28 @@ TEST_F(GsplatOpsTest, ForwardBackwardAndReleaseMatchDirectLaunchers) {
     ops.release(table);
 }
 
-TEST(TrainingOpsCapability, GsplatFamilyIsCudaOnly) {
+TEST(TrainingOpsCapability, GsplatFamilyAvailabilityMatchesBuild) {
     using namespace lfs;
     EXPECT_NE(training::training_ops(core::GpuBackend::CUDA).gsplat, nullptr);
     for (auto backend : {core::GpuBackend::Vulkan, core::GpuBackend::Metal}) {
+#if defined(LFS_TEST_TENSOR_VULKAN)
+        if (backend == core::GpuBackend::Vulkan) {
+            const auto* gsplat = training::training_ops(backend).gsplat;
+            ASSERT_NE(gsplat, nullptr);
+            EXPECT_NE(gsplat->create, nullptr);
+            EXPECT_NE(gsplat->forward, nullptr);
+            EXPECT_NE(gsplat->backward, nullptr);
+            EXPECT_NE(gsplat->release, nullptr);
+            EXPECT_NE(gsplat->record_vram, nullptr);
+            EXPECT_NE(gsplat->release_caches, nullptr);
+            EXPECT_FALSE(training::unavailable_training_family(backend, training::Family::Gsplat));
+            continue;
+        }
+#endif
         EXPECT_EQ(training::training_ops(backend).gsplat, nullptr);
-        EXPECT_NE(training::unavailable_training_family(backend, training::Family::Gsplat)->find("Gsplat"), std::string::npos);
+        const auto reason = training::unavailable_training_family(backend, training::Family::Gsplat);
+        ASSERT_TRUE(reason.has_value());
+        EXPECT_NE(reason->find("Gsplat"), std::string::npos);
     }
     core::param::TrainingParameters params;
     params.optimization.gut = true;

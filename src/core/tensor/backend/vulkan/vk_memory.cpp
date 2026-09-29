@@ -65,7 +65,9 @@ namespace lfs::core::internal {
                 return align_up(bytes, 256);
             }
             if (bytes < kDirectLimit) {
-                return std::bit_ceil(bytes);
+                // Reuse nearby image/workspace sizes without rounding each
+                // multi-megabyte buffer up to the next power of two.
+                return align_up(bytes, 256 * 1024);
             }
             // Byte shaders RMW the aligned uint32 covering the last logical
             // byte; the VkBuffer must include that word.
@@ -928,6 +930,22 @@ namespace lfs::core::internal {
             return address >= record->address &&
                    address < record->address + record->requested_size;
         });
+    }
+
+    StorageRef VulkanMemory::borrow_address(const void* pointer, const size_t bytes) const {
+        const uint64_t address = reinterpret_cast<uintptr_t>(pointer);
+        std::lock_guard lock(allocations_mutex_);
+        for (const auto& [key, record] : allocations_) {
+            if (address >= record->address && address - record->address <= record->requested_size &&
+                bytes <= record->requested_size - (address - record->address)) {
+                return {.backend = GpuBackend::Vulkan,
+                        .data = reinterpret_cast<void*>(record->address),
+                        .byte_offset = static_cast<size_t>(address - record->address),
+                        .dtype = DataType::UInt8,
+                        .meta = &record->descriptor_owner};
+            }
+        }
+        throw std::invalid_argument("Vulkan tensor view is outside a live allocation");
     }
 
     void VulkanMemory::shutdown() {

@@ -348,6 +348,10 @@ namespace lfs::core {
         return storage_accounting_state().cuda_direct.live_bytes.load(std::memory_order_relaxed);
     }
 
+    std::size_t Tensor::vulkan_external_storage_live_bytes() {
+        return storage_accounting_state().vulkan_external.live_bytes.load(std::memory_order_relaxed);
+    }
+
     void Tensor::log_storage_memory() {
         log_storage_memory({});
     }

@@ -135,7 +135,8 @@ namespace lfs::core {
         if (impl_->backend == GpuBackend::Vulkan) {
             if (!ready() || index >= impl_->marks.size())
                 return false;
-            const auto id = reinterpret_cast<uint64_t>(execution_target);
+            const auto id = execution_target ? reinterpret_cast<uint64_t>(execution_target)
+                                             : impl_->vulkan->recorders().current_queue();
             const uint64_t timeline = impl_->vulkan->recorders().write_timestamp(
                 id, impl_->queries, static_cast<uint32_t>(index));
             impl_->marks[index] = {id, timeline, true};
@@ -168,7 +169,9 @@ namespace lfs::core {
         if (impl_->backend == GpuBackend::Vulkan) {
             if (!ready())
                 return false;
-            impl_->vulkan->recorders().queue_wait(reinterpret_cast<uint64_t>(execution_target));
+            const auto id = execution_target ? reinterpret_cast<uint64_t>(execution_target)
+                                             : impl_->vulkan->recorders().current_queue();
+            impl_->vulkan->recorders().queue_wait(id);
             return true;
         }
 #if LFS_HAS_CUDA

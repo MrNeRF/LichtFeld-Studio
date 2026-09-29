@@ -19,6 +19,8 @@
 
 namespace lfs::core::nn::models {
 
+    [[nodiscard]] LFS_CORE_API std::size_t default_lpips_activation_budget();
+
     enum class InputScaling {
         Identity,
         Normalize,

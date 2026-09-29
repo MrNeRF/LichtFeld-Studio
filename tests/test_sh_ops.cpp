@@ -379,13 +379,21 @@ TEST_F(CudaBackendTest, ShOpsMatchDirectLaunchers) {
     }
 }
 
-TEST(ShOpsCapability, OnlyCudaCarriesSh) {
+TEST(ShOpsCapability, CompiledBackendsCarrySh) {
     EXPECT_EQ(lfs::training::training_ops(lfs::core::GpuBackend::CUDA).sh, &lfs::training::cuda_sh_ops());
+#if defined(LFS_TEST_TENSOR_VULKAN)
+    EXPECT_NE(lfs::training::training_ops(lfs::core::GpuBackend::Vulkan).sh, nullptr);
+#else
     EXPECT_EQ(lfs::training::training_ops(lfs::core::GpuBackend::Vulkan).sh, nullptr);
+#endif
     EXPECT_EQ(lfs::training::training_ops(lfs::core::GpuBackend::Metal).sh, nullptr);
     EXPECT_FALSE(lfs::training::unavailable_training_family(
         lfs::core::GpuBackend::CUDA, lfs::training::Family::Sh));
+#if defined(LFS_TEST_TENSOR_VULKAN)
+    EXPECT_FALSE(lfs::training::unavailable_training_family(lfs::core::GpuBackend::Vulkan, lfs::training::Family::Sh));
+#else
     EXPECT_EQ(
         lfs::training::unavailable_training_family(lfs::core::GpuBackend::Vulkan, lfs::training::Family::Sh),
         "Vulkan training is unavailable for this configuration.\nMissing families: Sh.");
+#endif
 }

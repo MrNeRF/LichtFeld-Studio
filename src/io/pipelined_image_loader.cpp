@@ -831,6 +831,8 @@ namespace lfs::io {
     }
 
     size_t PipelinedImageLoader::release_host_cache(const size_t bytes) {
+        if (config_.backend != lfs::core::GpuBackend::CUDA)
+            return release_portable_host_cache(bytes);
         size_t released = 0;
         {
             std::lock_guard<std::mutex> lock(jpeg_cache_mutex_);

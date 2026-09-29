@@ -86,12 +86,22 @@ namespace {
 
 } // namespace
 
-TEST(TrainingOpsCapability, VulkanConfigurationIsRejectedBeforeAllocation) {
+TEST(TrainingOpsCapability, VulkanConfigurationAvailabilityIsCheckedBeforeAllocation) {
     const auto before = lfs::core::alloc_counter::snapshot();
     lfs::core::param::TrainingParameters params;
     const auto dependencies = lfs::training::training_loader_dependencies(params);
     const auto reason = lfs::training::unavailable_training_reason(
         params, lfs::core::GpuBackend::Vulkan, dependencies);
+#if defined(LFS_TEST_TENSOR_VULKAN)
+    // Every family of the default configuration has a Vulkan implementation.
+    EXPECT_FALSE(reason.has_value()) << *reason;
+    // The 3DGUT configuration has the complete Gsplat family as well.
+    params.optimization.set_raster_backend(lfs::core::param::RasterBackendId::ThreeDGUT);
+    const auto gut = lfs::training::unavailable_training_reason(
+        params, lfs::core::GpuBackend::Vulkan, lfs::training::training_loader_dependencies(params));
+    EXPECT_FALSE(gut.has_value()) << *gut;
+    params = {};
+#else
     ASSERT_TRUE(reason.has_value());
     EXPECT_EQ(
         reason->rfind("Vulkan training is unavailable for this configuration.\nMissing families: ", 0),
@@ -100,6 +110,7 @@ TEST(TrainingOpsCapability, VulkanConfigurationIsRejectedBeforeAllocation) {
     EXPECT_NE(reason->find("Fast"), std::string::npos);
     EXPECT_NE(reason->find("Mrnf"), std::string::npos);
     EXPECT_EQ(reason->back(), '.');
+#endif
     EXPECT_FALSE(lfs::training::unavailable_training_reason(
         params, lfs::core::GpuBackend::CUDA, dependencies));
     const auto metal = lfs::training::unavailable_training_reason(
@@ -118,10 +129,14 @@ TEST(TrainingOpsCapability, EvaluationWithoutPhotometricFamilyFailsBeforeAllocat
         "Metal training is unavailable for this configuration.\nMissing families: Photometric.");
     const auto vulkan = lfs::training::unavailable_training_family(
         lfs::core::GpuBackend::Vulkan, lfs::training::Family::Photometric);
+#if defined(LFS_TEST_TENSOR_VULKAN)
+    EXPECT_FALSE(vulkan.has_value());
+#else
     ASSERT_TRUE(vulkan.has_value());
     EXPECT_EQ(
         *vulkan,
         "Vulkan training is unavailable for this configuration.\nMissing families: Photometric.");
+#endif
     EXPECT_FALSE(lfs::training::unavailable_training_family(
         lfs::core::GpuBackend::CUDA, lfs::training::Family::Photometric));
 

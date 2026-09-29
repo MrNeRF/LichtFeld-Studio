@@ -1,0 +1,106 @@
+// Vulkan training PPISP scalar math. Kept in the same order as the CUDA stages.
+static bool ppFinite(float v) { return (asuint(v) & 0x7f800000u) != 0x7f800000u; }
+static float ppFinite0(float v) { return ppFinite(v) ? v : 0.0f; }
+static float ppSigmoid(float raw) {
+    const float v = ppFinite0(raw);
+    if (v >= 0.0f) return 1.0f / (1.0f + exp(-v));
+    const float e = exp(v); return e / (1.0f + e);
+}
+static float ppExposure(float raw) { return clamp(ppFinite0(raw), -16.0f, 16.0f); }
+static float ppBounded(float raw, float minimum) {
+    const float v = min(32.0f, ppFinite0(raw));
+    return minimum + max(v, 0.0f) + log(1.0f + exp(-abs(v)));
+}
+static float ppClamped(float raw) { return clamp(ppSigmoid(raw), 1.0e-4f, 1.0f - 1.0e-4f); }
+
+struct PpColor { float2 b, r, g, n; };
+struct PpMat3 { float m[9]; };
+static PpMat3 ppMat(float a,float b,float c,float d,float e,float f,float g,float h,float i) {
+    PpMat3 x; x.m[0]=a; x.m[1]=b; x.m[2]=c; x.m[3]=d; x.m[4]=e; x.m[5]=f; x.m[6]=g; x.m[7]=h; x.m[8]=i; return x;
+}
+static float3 ppMul(PpMat3 a, float3 v) {
+    return float3(fma(a.m[0],v.x,fma(a.m[1],v.y,a.m[2]*v.z)),
+                  fma(a.m[3],v.x,fma(a.m[4],v.y,a.m[5]*v.z)),
+                  fma(a.m[6],v.x,fma(a.m[7],v.y,a.m[8]*v.z)));
+}
+static PpMat3 ppMul(PpMat3 a, PpMat3 b) {
+    PpMat3 c;
+    for(int i=0;i<3;++i) for(int j=0;j<3;++j)
+        c.m[i*3+j]=fma(a.m[i*3],b.m[j],fma(a.m[i*3+1],b.m[3+j],a.m[i*3+2]*b.m[6+j]));
+    return c;
+}
+static PpMat3 ppTranspose(PpMat3 a) {
+    return ppMat(a.m[0],a.m[3],a.m[6],a.m[1],a.m[4],a.m[7],a.m[2],a.m[5],a.m[8]);
+}
+static float3 ppCross(float3 a,float3 b) { return float3(a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x); }
+static float ppDot(float3 a,float3 b) { return fma(a.x,b.x,fma(a.y,b.y,a.z*b.z)); }
+static float2 ppZca(uint block,float2 v) {
+    const float z[16]={0.0480542f,-0.0043631f,-0.0043631f,0.0481283f,
+      0.0580570f,-0.0179872f,-0.0179872f,0.0431061f,0.0433336f,-0.0180537f,-0.0180537f,0.0580500f,
+      0.0128369f,-0.0034654f,-0.0034654f,0.0128158f};
+    const uint i=block*4; return float2(fma(z[i],v.x,z[i+1]*v.y),fma(z[i+2],v.x,z[i+3]*v.y));
+}
+static float2 ppZcaT(uint block,float2 v) {
+    const float z[16]={0.0480542f,-0.0043631f,-0.0043631f,0.0481283f,
+      0.0580570f,-0.0179872f,-0.0179872f,0.0431061f,0.0433336f,-0.0180537f,-0.0180537f,0.0580500f,
+      0.0128369f,-0.0034654f,-0.0034654f,0.0128158f};
+    const uint i=block*4; return float2(fma(z[i],v.x,z[i+2]*v.y),fma(z[i+1],v.x,z[i+3]*v.y));
+}
+static PpMat3 ppHomography(PpColor c) {
+    const float2 bd=ppZca(0,float2(ppFinite0(c.b.x),ppFinite0(c.b.y)));
+    const float2 rd=ppZca(1,float2(ppFinite0(c.r.x),ppFinite0(c.r.y)));
+    const float2 gd=ppZca(2,float2(ppFinite0(c.g.x),ppFinite0(c.g.y)));
+    const float2 nd=ppZca(3,float2(ppFinite0(c.n.x),ppFinite0(c.n.y)));
+    const float3 tb=float3(bd,1), tr=float3(1+rd.x,rd.y,1), tg=float3(gd.x,1+gd.y,1), gray=float3(1.0f/3+nd.x,1.0f/3+nd.y,1);
+    PpMat3 t=ppMat(tb.x,tr.x,tg.x,tb.y,tr.y,tg.y,tb.z,tr.z,tg.z);
+    PpMat3 s=ppMat(0,-gray.z,gray.y,gray.z,0,-gray.x,-gray.y,gray.x,0);
+    PpMat3 m=ppMul(s,t); float3 r0=float3(m.m[0],m.m[1],m.m[2]), r1=float3(m.m[3],m.m[4],m.m[5]), r2=float3(m.m[6],m.m[7],m.m[8]);
+    float3 l=ppCross(r0,r1); if(ppDot(l,l)<1e-20f){l=ppCross(r0,r2);if(ppDot(l,l)<1e-20f)l=ppCross(r1,r2);}
+    PpMat3 d=ppMat(l.x,0,0,0,l.y,0,0,0,l.z); PpMat3 h=ppMul(ppMul(t,d),ppMat(-1,-1,1,1,0,0,0,1,0));
+    const float scale=h.m[8]; if(abs(scale)>1e-20f) for(int i=0;i<9;++i) h.m[i]/=scale;
+    return h;
+}
+static float3 ppApplyExposure(float3 rgb,float raw) { return rgb*exp2(ppExposure(raw)); }
+static float3 ppApplyColor(float3 rgbIn,PpColor c) {
+    PpMat3 h=ppHomography(c); float3 rgb=max(rgbIn,0.0f); float intensity=rgb.x+rgb.y+rgb.z;
+    float3 out=ppMul(h,float3(rgb.x,rgb.y,intensity)); out*=intensity/(max(out.z,0.0f)+1.0e-5f);
+    return float3(out.x,out.y,out.z-out.x-out.y);
+}
+static void ppHomographyBwd(PpColor c,PpMat3 gradH,inout float gradColor[8]) {
+    PpMat3 h=ppHomography(c); const float scale=1.0f; // normalized homography is recomputed below
+    const float2 bd=ppZca(0,float2(ppFinite0(c.b.x),ppFinite0(c.b.y)));
+    const float2 rd=ppZca(1,float2(ppFinite0(c.r.x),ppFinite0(c.r.y)));
+    const float2 gd=ppZca(2,float2(ppFinite0(c.g.x),ppFinite0(c.g.y)));
+    const float2 nd=ppZca(3,float2(ppFinite0(c.n.x),ppFinite0(c.n.y)));
+    const float3 tb=float3(bd,1),tr=float3(1+rd.x,rd.y,1),tg=float3(gd.x,1+gd.y,1),gray=float3(1.0f/3+nd.x,1.0f/3+nd.y,1);
+    PpMat3 t=ppMat(tb.x,tr.x,tg.x,tb.y,tr.y,tg.y,tb.z,tr.z,tg.z),sk=ppMat(0,-gray.z,gray.y,gray.z,0,-gray.x,-gray.y,gray.x,0);
+    PpMat3 m=ppMul(sk,t); float3 r0=float3(m.m[0],m.m[1],m.m[2]),r1=float3(m.m[3],m.m[4],m.m[5]),r2=float3(m.m[6],m.m[7],m.m[8]);
+    float3 lam=ppCross(r0,r1); if(ppDot(lam,lam)<1e-20f){lam=ppCross(r0,r2);if(ppDot(lam,lam)<1e-20f)lam=ppCross(r1,r2);}
+    PpMat3 d=ppMat(lam.x,0,0,0,lam.y,0,0,0,lam.z), sinv=ppMat(-1,-1,1,1,0,0,0,1,0);
+    PpMat3 td=ppMul(t,d), hu=ppMul(td,sinv); float s=hu.m[8]; PpMat3 gh=gradH;
+    if(abs(s)>1e-20f){float inv=1/s, inv2=inv*inv, gs=0;for(int i=0;i<9;++i){gh.m[i]=gradH.m[i]*inv;gs-=gradH.m[i]*hu.m[i]*inv2;}gh.m[8]+=gs;}
+    PpMat3 gtd=ppMul(gh,ppTranspose(sinv)), gt=ppMul(gtd,ppTranspose(d)), gdmat=ppMul(ppTranspose(t),gtd);
+    float3 gl=float3(gdmat.m[0],gdmat.m[4],gdmat.m[8]),gr0=0,gr1=0,gr2=0;
+    float3 test=ppCross(r0,r1);if(ppDot(test,test)<1e-20f){test=ppCross(r0,r2);if(ppDot(test,test)<1e-20f){gr1=ppCross(r2,gl);gr2=ppCross(gl,r1);}else{gr0=ppCross(r2,gl);gr2=ppCross(gl,r0);}}else{gr0=ppCross(r1,gl);gr1=ppCross(gl,r0);}
+    PpMat3 gm=ppMat(gr0.x,gr0.y,gr0.z,gr1.x,gr1.y,gr1.z,gr2.x,gr2.y,gr2.z);
+    PpMat3 gsk=ppMul(gm,ppTranspose(t)), gt2=ppMul(ppTranspose(sk),gm); for(int i=0;i<9;++i)gt.m[i]+=gt2.m[i];
+    float2 gb=ppZcaT(0,float2(gt.m[0],gt.m[3])), rr=ppZcaT(1,float2(gt.m[1],gt.m[4])), gg=ppZcaT(2,float2(gt.m[2],gt.m[5]));
+    float2 gn=ppZcaT(3,float2(gsk.m[7]-gsk.m[5],gsk.m[2]-gsk.m[6]));
+    gradColor[0]+=gb.x;gradColor[1]+=gb.y;gradColor[2]+=rr.x;gradColor[3]+=rr.y;gradColor[4]+=gg.x;gradColor[5]+=gg.y;gradColor[6]+=gn.x;gradColor[7]+=gn.y;
+}
+static float3 ppApplyColorBwd(float3 rgbIn,PpColor c,float3 gradOut,inout float gradColor[8]) {
+    PpMat3 h=ppHomography(c); float3 rgb=max(rgbIn,0.0f);float intensity=rgb.x+rgb.y+rgb.z;
+    float3 ri=float3(rgb.x,rgb.y,intensity),ro=ppMul(h,ri);float z=max(ro.z,0.0f),nf=intensity/(z+1e-5f);
+    float3 grn=float3(gradOut.x-gradOut.z,gradOut.y-gradOut.z,gradOut.z),gr=grn*nf;
+    float gn=ppDot(grn,ro);if(ro.z>0)gr.z+=-gn*nf/(ro.z+1e-5f);
+    PpMat3 gh=ppMat(gr.x*ri.x,gr.x*ri.y,gr.x*ri.z,gr.y*ri.x,gr.y*ri.y,gr.y*ri.z,gr.z*ri.x,gr.z*ri.y,gr.z*ri.z);
+    float3 gi=ppMul(ppTranspose(h),gr);float gint=gn/(z+1e-5f);
+    float3 result=float3(gi.x+gi.z+gint,gi.y+gi.z+gint,gi.z+gint);
+    if(rgbIn.x<0.0f) result.x=0.0f; if(rgbIn.y<0.0f) result.y=0.0f; if(rgbIn.z<0.0f) result.z=0.0f;
+    ppHomographyBwd(c,gh,gradColor); return result;
+}
+static float3 ppApplyExposureBwd(float3 rgb,float raw,float3 grad,inout float gradExposure) {
+    const float factor=exp2(ppExposure(raw));float3 out=rgb*factor;
+    gradExposure=ppFinite(raw)&&raw>-16.0f&&raw<16.0f?ppDot(grad,out)*0.69314718f:0.0f;
+    if(!ppFinite(gradExposure))gradExposure=0.0f;return grad*factor;
+}

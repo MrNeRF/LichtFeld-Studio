@@ -30,6 +30,53 @@ namespace {
 
     static_assert(std::is_trivially_copyable_v<TensorExecutionTarget>);
 
+    TEST(TensorQueueContract, VulkanTargetWaitLeavesUnrelatedQueuePending) {
+        if (!gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP();
+        const GpuBackendScope backend(GpuBackend::Vulkan);
+        for (const bool bound : {false, true}) {
+            SCOPED_TRACE(bound);
+            TensorWorkQueue producer(GpuBackend::Vulkan);
+            TensorWorkQueue consumer(GpuBackend::Vulkan);
+            Tensor work;
+            {
+                const TensorWorkQueue::Scope scope(producer);
+                work = Tensor::full({1 << 16}, 1.f, Device::GPU).mul(2.f);
+            }
+            ASSERT_FALSE(producer.ready());
+            if (bound) {
+                const TensorWorkQueue::Scope scope(consumer);
+                TensorExecutionTarget::current().wait();
+            } else {
+                TensorExecutionTarget(consumer).wait();
+            }
+            EXPECT_FALSE(producer.ready());
+            producer.wait();
+            EXPECT_FLOAT_EQ(work.cpu().to_vector().front(), 2.f);
+        }
+    }
+
+    TEST(TensorQueueContract, VulkanElapsedTracksBoundQueue) {
+        if (!gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP();
+        const GpuBackendScope backend(GpuBackend::Vulkan);
+        TensorWorkQueue queue(GpuBackend::Vulkan);
+        GpuElapsed timer(GpuBackend::Vulkan, 2);
+        if (!timer.ready())
+            GTEST_SKIP();
+        {
+            const TensorWorkQueue::Scope scope(queue);
+            EXPECT_TRUE(timer.mark(0, TensorExecutionTarget::current()));
+            const Tensor work = Tensor::full({1 << 16}, 1.f, Device::GPU);
+            EXPECT_TRUE(timer.mark(1, TensorExecutionTarget::current()));
+            EXPECT_TRUE(timer.wait_queue(TensorExecutionTarget::current()));
+            EXPECT_TRUE(timer.milliseconds(0, 1).has_value());
+        }
+        // Event ownership survives leaving the bound queue scope.
+        EXPECT_TRUE(timer.wait_event(1));
+        queue.wait();
+    }
+
     TEST(TensorQueueContract, VulkanExecutionTargetUsesStorageTimeline) {
         if (!gpu_backend_available(GpuBackend::Vulkan))
             GTEST_SKIP();
@@ -60,8 +107,8 @@ namespace {
         target.wait();
         EXPECT_NO_THROW(target.wait_for(target));
         EXPECT_NO_THROW(target.set_name("test.queue"));
-        EXPECT_THROW(push_gpu_range("test.range"), std::runtime_error);
-        EXPECT_THROW(pop_gpu_range(), std::runtime_error);
+        EXPECT_NO_THROW(push_gpu_range("test.range"));
+        EXPECT_NO_THROW(pop_gpu_range());
         GpuElapsed timer(GpuBackend::Vulkan, 2);
         if (timer.ready()) {
             EXPECT_TRUE(timer.mark(0, target));

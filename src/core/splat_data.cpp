@@ -2542,111 +2542,125 @@ namespace lfs::core {
 
                 // Copy CPU data to direct GPU tensors
 #if LFS_HAS_CUDA
-                LOG_DEBUG("Copying CPU values to direct CUDA tensors");
-                cudaError_t err;
-                const auto stream = getCurrentCUDAStream();
+                if (gpu_backend_of(means_) == GpuBackend::CUDA) {
+                    LOG_DEBUG("Copying CPU values to direct CUDA tensors");
+                    cudaError_t err;
+                    const auto stream = getCurrentCUDAStream();
 
-                // Means copy
-                LOG_DEBUG("  Copying means: src_ptr={}, dst_ptr={}, bytes={}",
-                          static_cast<const void*>(means_cpu.ptr<float>()),
-                          static_cast<void*>(means_.ptr<float>()),
-                          means_cpu.numel() * sizeof(float));
-                err = cudaMemcpyAsync(means_.ptr<float>(), means_cpu.ptr<float>(),
-                                      means_cpu.numel() * sizeof(float), cudaMemcpyHostToDevice, stream);
-                if (err != cudaSuccess) {
-                    LOG_ERROR("cudaMemcpy failed for means:");
-                    LOG_ERROR("  src (CPU): is_valid={}, ptr={}, device={}, numel={}",
-                              means_cpu.is_valid(), static_cast<const void*>(means_cpu.ptr<float>()),
-                              means_cpu.device() == Device::CPU ? "CPU" : "CUDA", means_cpu.numel());
-                    LOG_ERROR("  dst (CUDA): is_valid={}, ptr={}, device={}, numel={}",
-                              means_.is_valid(), static_cast<void*>(means_.ptr<float>()),
-                              means_.device() == Device::CPU ? "CPU" : "CUDA", means_.numel());
-                    throw TensorError("cudaMemcpy failed for means: " + std::string(cudaGetErrorString(err)));
-                }
-                LOG_DEBUG("  Means copy successful");
-
-                // Scaling copy
-                LOG_DEBUG("  Copying scaling: src_ptr={}, dst_ptr={}, bytes={}",
-                          static_cast<const void*>(scaling_cpu.ptr<float>()),
-                          static_cast<void*>(scaling_.ptr<float>()),
-                          scaling_cpu.numel() * sizeof(float));
-                err = cudaMemcpyAsync(scaling_.ptr<float>(), scaling_cpu.ptr<float>(),
-                                      scaling_cpu.numel() * sizeof(float), cudaMemcpyHostToDevice, stream);
-                if (err != cudaSuccess) {
-                    LOG_ERROR("cudaMemcpy failed for scaling:");
-                    LOG_ERROR("  src (CPU): is_valid={}, ptr={}, numel={}",
-                              scaling_cpu.is_valid(), static_cast<const void*>(scaling_cpu.ptr<float>()), scaling_cpu.numel());
-                    LOG_ERROR("  dst (CUDA): is_valid={}, ptr={}, numel={}",
-                              scaling_.is_valid(), static_cast<void*>(scaling_.ptr<float>()), scaling_.numel());
-                    throw TensorError("cudaMemcpy failed for scaling: " + std::string(cudaGetErrorString(err)));
-                }
-                LOG_DEBUG("  Scaling copy successful");
-
-                // Rotation copy
-                LOG_DEBUG("  Copying rotation: src_ptr={}, dst_ptr={}, bytes={}",
-                          static_cast<const void*>(rotation_cpu.ptr<float>()),
-                          static_cast<void*>(rotation_.ptr<float>()),
-                          rotation_cpu.numel() * sizeof(float));
-                err = cudaMemcpyAsync(rotation_.ptr<float>(), rotation_cpu.ptr<float>(),
-                                      rotation_cpu.numel() * sizeof(float), cudaMemcpyHostToDevice, stream);
-                if (err != cudaSuccess) {
-                    LOG_ERROR("cudaMemcpy failed for rotation:");
-                    LOG_ERROR("  src (CPU): is_valid={}, ptr={}, numel={}",
-                              rotation_cpu.is_valid(), static_cast<const void*>(rotation_cpu.ptr<float>()), rotation_cpu.numel());
-                    LOG_ERROR("  dst (CUDA): is_valid={}, ptr={}, numel={}",
-                              rotation_.is_valid(), static_cast<void*>(rotation_.ptr<float>()), rotation_.numel());
-                    throw TensorError("cudaMemcpy failed for rotation: " + std::string(cudaGetErrorString(err)));
-                }
-                LOG_DEBUG("  Rotation copy successful");
-
-                // Opacity copy
-                LOG_DEBUG("  Copying opacity: src_ptr={}, dst_ptr={}, bytes={}",
-                          static_cast<const void*>(opacity_cpu.ptr<float>()),
-                          static_cast<void*>(opacity_.ptr<float>()),
-                          opacity_cpu.numel() * sizeof(float));
-                err = cudaMemcpyAsync(opacity_.ptr<float>(), opacity_cpu.ptr<float>(),
-                                      opacity_cpu.numel() * sizeof(float), cudaMemcpyHostToDevice, stream);
-                if (err != cudaSuccess) {
-                    LOG_ERROR("cudaMemcpy failed for opacity:");
-                    LOG_ERROR("  src (CPU): is_valid={}, ptr={}, numel={}",
-                              opacity_cpu.is_valid(), static_cast<const void*>(opacity_cpu.ptr<float>()), opacity_cpu.numel());
-                    LOG_ERROR("  dst (CUDA): is_valid={}, ptr={}, numel={}",
-                              opacity_.is_valid(), static_cast<void*>(opacity_.ptr<float>()), opacity_.numel());
-                    throw TensorError("cudaMemcpy failed for opacity: " + std::string(cudaGetErrorString(err)));
-                }
-                LOG_DEBUG("  Opacity copy successful");
-
-                // SH0 copy
-                LOG_DEBUG("  Copying sh0: src_ptr={}, dst_ptr={}, bytes={}",
-                          static_cast<const void*>(sh0_cpu.ptr<float>()),
-                          static_cast<void*>(sh0_.ptr<float>()),
-                          sh0_cpu.numel() * sizeof(float));
-                err = cudaMemcpyAsync(sh0_.ptr<float>(), sh0_cpu.ptr<float>(),
-                                      sh0_cpu.numel() * sizeof(float), cudaMemcpyHostToDevice, stream);
-                if (err != cudaSuccess) {
-                    LOG_ERROR("cudaMemcpy failed for sh0:");
-                    LOG_ERROR("  src (CPU): is_valid={}, ptr={}, numel={}",
-                              sh0_cpu.is_valid(), static_cast<const void*>(sh0_cpu.ptr<float>()), sh0_cpu.numel());
-                    LOG_ERROR("  dst (CUDA): is_valid={}, ptr={}, numel={}",
-                              sh0_.is_valid(), static_cast<void*>(sh0_.ptr<float>()), sh0_.numel());
-                    throw TensorError("cudaMemcpy failed for sh0: " + std::string(cudaGetErrorString(err)));
-                }
-                LOG_DEBUG("  SH0 copy successful");
-
-                LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
-
-                if (!direct_q16) {
-                    reorder_canonical_into_swizzled(
-                        shN_cpu, shN_, num_points,
-                        static_cast<uint32_t>(feature_shape - 1),
-                        static_cast<uint32_t>(feature_shape - 1));
-                    err = cudaGetLastError();
+                    // Means copy
+                    LOG_DEBUG("  Copying means: src_ptr={}, dst_ptr={}, bytes={}",
+                              static_cast<const void*>(means_cpu.ptr<float>()),
+                              static_cast<void*>(means_.ptr<float>()),
+                              means_cpu.numel() * sizeof(float));
+                    err = cudaMemcpyAsync(means_.ptr<float>(), means_cpu.ptr<float>(),
+                                          means_cpu.numel() * sizeof(float), cudaMemcpyHostToDevice, stream);
                     if (err != cudaSuccess) {
-                        throw TensorError("SH swizzle failed for shN: " + std::string(cudaGetErrorString(err)));
+                        LOG_ERROR("cudaMemcpy failed for means:");
+                        LOG_ERROR("  src (CPU): is_valid={}, ptr={}, device={}, numel={}",
+                                  means_cpu.is_valid(), static_cast<const void*>(means_cpu.ptr<float>()),
+                                  means_cpu.device() == Device::CPU ? "CPU" : "CUDA", means_cpu.numel());
+                        LOG_ERROR("  dst (CUDA): is_valid={}, ptr={}, device={}, numel={}",
+                                  means_.is_valid(), static_cast<void*>(means_.ptr<float>()),
+                                  means_.device() == Device::CPU ? "CPU" : "CUDA", means_.numel());
+                        throw TensorError("cudaMemcpy failed for means: " + std::string(cudaGetErrorString(err)));
+                    }
+                    LOG_DEBUG("  Means copy successful");
+
+                    // Scaling copy
+                    LOG_DEBUG("  Copying scaling: src_ptr={}, dst_ptr={}, bytes={}",
+                              static_cast<const void*>(scaling_cpu.ptr<float>()),
+                              static_cast<void*>(scaling_.ptr<float>()),
+                              scaling_cpu.numel() * sizeof(float));
+                    err = cudaMemcpyAsync(scaling_.ptr<float>(), scaling_cpu.ptr<float>(),
+                                          scaling_cpu.numel() * sizeof(float), cudaMemcpyHostToDevice, stream);
+                    if (err != cudaSuccess) {
+                        LOG_ERROR("cudaMemcpy failed for scaling:");
+                        LOG_ERROR("  src (CPU): is_valid={}, ptr={}, numel={}",
+                                  scaling_cpu.is_valid(), static_cast<const void*>(scaling_cpu.ptr<float>()), scaling_cpu.numel());
+                        LOG_ERROR("  dst (CUDA): is_valid={}, ptr={}, numel={}",
+                                  scaling_.is_valid(), static_cast<void*>(scaling_.ptr<float>()), scaling_.numel());
+                        throw TensorError("cudaMemcpy failed for scaling: " + std::string(cudaGetErrorString(err)));
+                    }
+                    LOG_DEBUG("  Scaling copy successful");
+
+                    // Rotation copy
+                    LOG_DEBUG("  Copying rotation: src_ptr={}, dst_ptr={}, bytes={}",
+                              static_cast<const void*>(rotation_cpu.ptr<float>()),
+                              static_cast<void*>(rotation_.ptr<float>()),
+                              rotation_cpu.numel() * sizeof(float));
+                    err = cudaMemcpyAsync(rotation_.ptr<float>(), rotation_cpu.ptr<float>(),
+                                          rotation_cpu.numel() * sizeof(float), cudaMemcpyHostToDevice, stream);
+                    if (err != cudaSuccess) {
+                        LOG_ERROR("cudaMemcpy failed for rotation:");
+                        LOG_ERROR("  src (CPU): is_valid={}, ptr={}, numel={}",
+                                  rotation_cpu.is_valid(), static_cast<const void*>(rotation_cpu.ptr<float>()), rotation_cpu.numel());
+                        LOG_ERROR("  dst (CUDA): is_valid={}, ptr={}, numel={}",
+                                  rotation_.is_valid(), static_cast<void*>(rotation_.ptr<float>()), rotation_.numel());
+                        throw TensorError("cudaMemcpy failed for rotation: " + std::string(cudaGetErrorString(err)));
+                    }
+                    LOG_DEBUG("  Rotation copy successful");
+
+                    // Opacity copy
+                    LOG_DEBUG("  Copying opacity: src_ptr={}, dst_ptr={}, bytes={}",
+                              static_cast<const void*>(opacity_cpu.ptr<float>()),
+                              static_cast<void*>(opacity_.ptr<float>()),
+                              opacity_cpu.numel() * sizeof(float));
+                    err = cudaMemcpyAsync(opacity_.ptr<float>(), opacity_cpu.ptr<float>(),
+                                          opacity_cpu.numel() * sizeof(float), cudaMemcpyHostToDevice, stream);
+                    if (err != cudaSuccess) {
+                        LOG_ERROR("cudaMemcpy failed for opacity:");
+                        LOG_ERROR("  src (CPU): is_valid={}, ptr={}, numel={}",
+                                  opacity_cpu.is_valid(), static_cast<const void*>(opacity_cpu.ptr<float>()), opacity_cpu.numel());
+                        LOG_ERROR("  dst (CUDA): is_valid={}, ptr={}, numel={}",
+                                  opacity_.is_valid(), static_cast<void*>(opacity_.ptr<float>()), opacity_.numel());
+                        throw TensorError("cudaMemcpy failed for opacity: " + std::string(cudaGetErrorString(err)));
+                    }
+                    LOG_DEBUG("  Opacity copy successful");
+
+                    // SH0 copy
+                    LOG_DEBUG("  Copying sh0: src_ptr={}, dst_ptr={}, bytes={}",
+                              static_cast<const void*>(sh0_cpu.ptr<float>()),
+                              static_cast<void*>(sh0_.ptr<float>()),
+                              sh0_cpu.numel() * sizeof(float));
+                    err = cudaMemcpyAsync(sh0_.ptr<float>(), sh0_cpu.ptr<float>(),
+                                          sh0_cpu.numel() * sizeof(float), cudaMemcpyHostToDevice, stream);
+                    if (err != cudaSuccess) {
+                        LOG_ERROR("cudaMemcpy failed for sh0:");
+                        LOG_ERROR("  src (CPU): is_valid={}, ptr={}, numel={}",
+                                  sh0_cpu.is_valid(), static_cast<const void*>(sh0_cpu.ptr<float>()), sh0_cpu.numel());
+                        LOG_ERROR("  dst (CUDA): is_valid={}, ptr={}, numel={}",
+                                  sh0_.is_valid(), static_cast<void*>(sh0_.ptr<float>()), sh0_.numel());
+                        throw TensorError("cudaMemcpy failed for sh0: " + std::string(cudaGetErrorString(err)));
+                    }
+                    LOG_DEBUG("  SH0 copy successful");
+
+                    LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
+
+                    if (!direct_q16) {
+                        reorder_canonical_into_swizzled(
+                            shN_cpu, shN_, num_points,
+                            static_cast<uint32_t>(feature_shape - 1),
+                            static_cast<uint32_t>(feature_shape - 1));
+                        err = cudaGetLastError();
+                        if (err != cudaSuccess) {
+                            throw TensorError("SH swizzle failed for shN: " + std::string(cudaGetErrorString(err)));
+                        }
+                    }
+
+                    LOG_DEBUG("All CPU to CUDA copies completed successfully");
+                } else {
+                    means_.copy_from(means_cpu);
+                    scaling_.copy_from(scaling_cpu);
+                    rotation_.copy_from(rotation_cpu);
+                    opacity_.copy_from(opacity_cpu);
+                    sh0_.copy_from(sh0_cpu);
+                    if (!direct_q16) {
+                        reorder_canonical_into_swizzled(
+                            shN_cpu, shN_, num_points,
+                            static_cast<uint32_t>(feature_shape - 1),
+                            static_cast<uint32_t>(feature_shape - 1));
                     }
                 }
-
-                LOG_DEBUG("All CPU to CUDA copies completed successfully");
 #else
                 means_.copy_from(means_cpu);
                 scaling_.copy_from(scaling_cpu);

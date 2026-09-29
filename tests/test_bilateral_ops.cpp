@@ -163,10 +163,10 @@ namespace {
         FamilySet required;
         required.set(static_cast<size_t>(Family::Bilateral));
         EXPECT_TRUE(missing_training_families(training_ops(GpuBackend::CUDA), required).empty());
-        for (const auto backend : {GpuBackend::Vulkan, GpuBackend::Metal}) {
-            EXPECT_EQ(training_ops(backend).bilateral, nullptr);
-            EXPECT_EQ(missing_training_families(training_ops(backend), required), std::vector<std::string_view>{"Bilateral"});
-        }
+        EXPECT_NE(training_ops(GpuBackend::Vulkan).bilateral, nullptr);
+        EXPECT_TRUE(missing_training_families(training_ops(GpuBackend::Vulkan), required).empty());
+        EXPECT_EQ(training_ops(GpuBackend::Metal).bilateral, nullptr);
+        EXPECT_EQ(missing_training_families(training_ops(GpuBackend::Metal), required), std::vector<std::string_view>{"Bilateral"});
         auto missing = training_ops(GpuBackend::CUDA);
         missing.bilateral = nullptr;
         EXPECT_EQ(missing_training_families(missing, required), std::vector<std::string_view>{"Bilateral"});

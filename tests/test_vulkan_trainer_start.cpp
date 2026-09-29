@@ -17,7 +17,7 @@
 
 namespace {
 
-    TEST(VulkanTrainerStart, InitializeReportsMissingFamilies) {
+    TEST(VulkanTrainerStart, ThreeDGUTReachesModelValidation) {
         if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan))
             GTEST_SKIP() << "Vulkan is unavailable";
         if (lfs::core::default_gpu_backend() != lfs::core::GpuBackend::Vulkan)
@@ -35,12 +35,12 @@ namespace {
                             "camera.png", std::filesystem::path{}, std::filesystem::path{},
                             64, 64, 0));
         lfs::training::Trainer trainer(scene);
-        const auto result = trainer.initialize(lfs::core::param::TrainingParameters{});
+        // ThreeDGUT passes the family check and reaches scene validation.
+        lfs::core::param::TrainingParameters params;
+        params.optimization.set_raster_backend(lfs::core::param::RasterBackendId::ThreeDGUT);
+        const auto result = trainer.initialize(params);
         ASSERT_FALSE(result.has_value());
-        EXPECT_NE(result.error().find("Vulkan training is unavailable"), std::string::npos);
-        EXPECT_NE(result.error().find("Missing families:"), std::string::npos);
-        EXPECT_NE(result.error().find("Photometric"), std::string::npos);
-        EXPECT_NE(result.error().find("Fast"), std::string::npos);
+        EXPECT_EQ(result.error(), "Scene has no training model set");
     }
 
     TEST(TrainingOpsSessionBackend, MortonAndSessionFollowTheDefaultBackend) {

@@ -35,6 +35,9 @@ namespace lfs::gpu_ops {
         std::optional<std::string> (*last_error)();
         size_t (*device_baseline_bytes)();
         void (*sample_memory)();
+        // Backends with persistent private workspaces can relinquish them
+        // between training and evaluation, then recreate them on resume.
+        bool release_workspaces_before_evaluation = false;
     };
 
     class ScopedArenaTimeout {

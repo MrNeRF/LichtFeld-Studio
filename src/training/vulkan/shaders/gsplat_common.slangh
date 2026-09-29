@@ -1,0 +1,690 @@
+// SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// Gsplat camera and unscented projection math. Matrices store columns as rows
+// so indexed quaternion derivatives agree with the CUDA implementation.
+#include "../../../core/tensor/backend/vulkan/shaders/sh_decode.slangh"
+static const uint kGsplatTile = 16u;
+static const uint kGsplatBatch = 64u;
+static const uint kGsplatGradStride = 14u; // mean 3, scale 3, quat 4, opacity 1, rgb 3
+static const float kGsplatAlphaMin = 1.0f / 255.0f;
+static const float kGsplatPi = 3.14159265358979323846f;
+static const float kGsplatNear = 0.01f;
+static const float kGsplatFar = 10000.0f;
+static const float kGsplatEps2d = 0.3f;
+static const float kGsplatMargin = 0.1f;
+
+static const uint kGsplatPinhole = 0u;
+static const uint kGsplatFisheye = 2u;
+static const uint kGsplatEquirect = 3u;
+static const uint kGsplatThinPrism = 4u;
+
+// Written once per forward by gsplat_camera_setup; read by every other kernel.
+struct GsplatCamera {
+    float3x3 R; // world to camera rotation
+    float3 t;
+    float3 origin; // camera centre, -R^T t
+    float2 focal;
+    float2 principal;
+    float2 offset;    // equirectangular tile offset
+    uint2 resolution; // camera-model resolution
+    uint model;
+    uint distorted; // pinhole with any distortion tensor: OpenCV model
+    float max_angle;
+    float backward_slope;
+    float radial[6];
+    float tangential[2];
+    float prism[4];
+};
+
+GsplatCamera gsplat_camera_load(Ptr<float, Access.ReadWrite> data) {
+    GsplatCamera c;
+    c.R[0][0] = (data[0]);
+    c.R[0][1] = (data[1]);
+    c.R[0][2] = (data[2]);
+    c.R[1][0] = (data[3]);
+    c.R[1][1] = (data[4]);
+    c.R[1][2] = (data[5]);
+    c.R[2][0] = (data[6]);
+    c.R[2][1] = (data[7]);
+    c.R[2][2] = (data[8]);
+    c.t[0] = (data[9]);
+    c.t[1] = (data[10]);
+    c.t[2] = (data[11]);
+    c.origin[0] = (data[12]);
+    c.origin[1] = (data[13]);
+    c.origin[2] = (data[14]);
+    c.focal[0] = (data[15]);
+    c.focal[1] = (data[16]);
+    c.principal[0] = (data[17]);
+    c.principal[1] = (data[18]);
+    c.offset[0] = (data[19]);
+    c.offset[1] = (data[20]);
+    c.resolution[0] = asuint(data[21]);
+    c.resolution[1] = asuint(data[22]);
+    c.model = asuint(data[23]);
+    c.distorted = asuint(data[24]);
+    c.max_angle = (data[25]);
+    c.backward_slope = (data[26]);
+    c.radial[0] = (data[27]);
+    c.radial[1] = (data[28]);
+    c.radial[2] = (data[29]);
+    c.radial[3] = (data[30]);
+    c.radial[4] = (data[31]);
+    c.radial[5] = (data[32]);
+    c.tangential[0] = (data[33]);
+    c.tangential[1] = (data[34]);
+    c.prism[0] = (data[35]);
+    c.prism[1] = (data[36]);
+    c.prism[2] = (data[37]);
+    c.prism[3] = (data[38]);
+    return c;
+}
+void gsplat_camera_store(Ptr<float, Access.ReadWrite> data, GsplatCamera c) {
+    data[0] = (c.R[0][0]);
+    data[1] = (c.R[0][1]);
+    data[2] = (c.R[0][2]);
+    data[3] = (c.R[1][0]);
+    data[4] = (c.R[1][1]);
+    data[5] = (c.R[1][2]);
+    data[6] = (c.R[2][0]);
+    data[7] = (c.R[2][1]);
+    data[8] = (c.R[2][2]);
+    data[9] = (c.t[0]);
+    data[10] = (c.t[1]);
+    data[11] = (c.t[2]);
+    data[12] = (c.origin[0]);
+    data[13] = (c.origin[1]);
+    data[14] = (c.origin[2]);
+    data[15] = (c.focal[0]);
+    data[16] = (c.focal[1]);
+    data[17] = (c.principal[0]);
+    data[18] = (c.principal[1]);
+    data[19] = (c.offset[0]);
+    data[20] = (c.offset[1]);
+    data[21] = asfloat(c.resolution[0]);
+    data[22] = asfloat(c.resolution[1]);
+    data[23] = asfloat(c.model);
+    data[24] = asfloat(c.distorted);
+    data[25] = (c.max_angle);
+    data[26] = (c.backward_slope);
+    data[27] = (c.radial[0]);
+    data[28] = (c.radial[1]);
+    data[29] = (c.radial[2]);
+    data[30] = (c.radial[3]);
+    data[31] = (c.radial[4]);
+    data[32] = (c.radial[5]);
+    data[33] = (c.tangential[0]);
+    data[34] = (c.tangential[1]);
+    data[35] = (c.prism[0]);
+    data[36] = (c.prism[1]);
+    data[37] = (c.prism[2]);
+    data[38] = (c.prism[3]);
+}
+struct GsplatRay {
+    float3 origin;
+    float3 dir;
+    bool valid;
+};
+
+// ---------------------------------------------------------------------------
+// Camera models (Cameras.cuh)
+
+static float gsplat_cbrt(const float x) {
+    return sign(x) * pow(abs(x), 1.0f / 3.0f);
+}
+
+// Smallest positive root of 1 + a x + b x^2 + c x^3.
+static float gsplat_fisheye_max_angle(const float a, const float b, const float c) {
+    if (c == 0.0f) {
+        if (b == 0.0f)
+            return a >= 0.0f ? 3.402823466e38f : -1.0f / a;
+        float delta = a * a - 4.0f * b;
+        if (delta >= 0.0f) {
+            delta = sqrt(delta) - a;
+            if (delta > 0.0f)
+                return 2.0f / delta;
+        }
+        return 3.402823466e38f;
+    }
+    const float boc = b / c;
+    const float boc2 = boc * boc;
+    const float t1 = (9.0f * a * boc - 2.0f * b * boc2 - 27.0f) / c;
+    const float t2 = 3.0f * a / c - boc2;
+    const float delta = t1 * t1 + 4.0f * t2 * t2 * t2;
+    if (delta >= 0.0f) {
+        const float cube_root = gsplat_cbrt((sqrt(delta) + t1) / 2.0f);
+        if (cube_root != 0.0f) {
+            const float soln = (cube_root - (t2 / cube_root) - boc) / 3.0f;
+            if (soln > 0.0f)
+                return soln;
+        }
+        return 3.402823466e38f;
+    }
+    const float theta = atan2(sqrt(-delta), t1) / 3.0f;
+    const float t3 = 2.0f * sqrt(-t2);
+    float soln = 3.402823466e38f;
+    for (int i = -1; i <= 1; ++i) {
+        const float s = (t3 * cos(theta + float(i) * (2.0f * kGsplatPi / 3.0f)) - boc) / 3.0f;
+        if (s > 0.0f)
+            soln = min(soln, s);
+    }
+    return soln;
+}
+
+// theta + k1 theta^3 + ... + k4 theta^9 and its derivative.
+static float gsplat_fisheye_forward(GsplatCamera cam, const float theta) {
+    const float t2 = theta * theta;
+    return theta * (1.0f + t2 * (cam.radial[0] + t2 * (cam.radial[1] + t2 * (cam.radial[2] + t2 * cam.radial[3]))));
+}
+
+static float gsplat_fisheye_dforward(GsplatCamera cam, const float theta) {
+    const float t2 = theta * theta;
+    return 1.0f + t2 * (3.0f * cam.radial[0] +
+                        t2 * (5.0f * cam.radial[1] + t2 * (7.0f * cam.radial[2] + t2 * (9.0f * cam.radial[3]))));
+}
+
+// Newton inverse of the forward polynomial, 20 iterations.
+static float gsplat_fisheye_theta(GsplatCamera cam, const float delta, out bool converged) {
+    float x = delta * cam.backward_slope;
+    converged = false;
+    for (int j = 0; j < 20; ++j) {
+        const float dx = (gsplat_fisheye_forward(cam, x) - delta) / gsplat_fisheye_dforward(cam, x);
+        x -= dx;
+        if (abs(dx) < 1e-6f) {
+            converged = true;
+            break;
+        }
+    }
+    return x;
+}
+
+static bool gsplat_in_bounds(const float2 p, const uint2 resolution) {
+    const float mx = float(resolution.x) * kGsplatMargin;
+    const float my = float(resolution.y) * kGsplatMargin;
+    return -mx <= p.x && p.x < float(resolution.x) + mx && -my <= p.y && p.y < float(resolution.y) + my;
+}
+
+// OpenCV radial / tangential / thin-prism distortion; returns icD.
+static float gsplat_distortion(GsplatCamera cam, const float2 uv, out float2 delta) {
+    const float u2 = uv.x * uv.x, v2 = uv.y * uv.y;
+    const float r2 = u2 + v2;
+    const float a1 = 2.0f * uv.x * uv.y;
+    const float a2 = r2 + 2.0f * u2;
+    const float a3 = r2 + 2.0f * v2;
+    const float numerator = 1.0f + r2 * (cam.radial[0] + r2 * (cam.radial[1] + r2 * cam.radial[2]));
+    const float denominator = 1.0f + r2 * (cam.radial[3] + r2 * (cam.radial[4] + r2 * cam.radial[5]));
+    delta = float2(cam.tangential[0] * a1 + cam.tangential[1] * a2 + r2 * (cam.prism[0] + r2 * cam.prism[1]),
+                   cam.tangential[0] * a3 + cam.tangential[1] * a1 + r2 * (cam.prism[2] + r2 * cam.prism[3]));
+    return numerator / denominator;
+}
+
+// Camera point to image point; false when the projection is invalid.
+static bool gsplat_camera_to_image(GsplatCamera cam, const float3 p, out float2 image) {
+    image = float2(0.0f);
+    if (cam.model == kGsplatEquirect) {
+        const float azimuth = atan2(p.x, p.z);
+        const float elevation = asin(p.y / length(p));
+        image = float2((azimuth / (2.0f * kGsplatPi) + 0.5f) * float(cam.resolution.x),
+                       (elevation / kGsplatPi + 0.5f) * float(cam.resolution.y));
+        return true;
+    }
+    if (p.z <= 0.0f)
+        return false;
+    if (cam.model == kGsplatPinhole) {
+        const float2 uv = p.xy / p.z;
+        if (cam.distorted == 0u) {
+            image = uv * cam.focal + cam.principal;
+            return gsplat_in_bounds(image, cam.resolution);
+        }
+        float2 delta;
+        const float icD = gsplat_distortion(cam, uv, delta);
+        image = (icD * uv + delta) * cam.focal + cam.principal;
+        return icD > 0.8f && gsplat_in_bounds(image, cam.resolution);
+    }
+    // Fisheye and thin-prism fisheye.
+    const float ax = abs(p.x), ay = abs(p.y);
+    const float lo = min(ax, ay), hi = max(ax, ay);
+    float norm = hi <= 0.0f ? 0.0f : hi * sqrt(1.0f + (lo / hi) * (lo / hi));
+    if (norm <= 0.0f)
+        norm = 1.192092896e-7f;
+    const float theta_full = atan2(norm, p.z);
+    const float theta = theta_full < cam.max_angle ? theta_full : cam.max_angle;
+    const float thetad = gsplat_fisheye_forward(cam, theta);
+    if (cam.model == kGsplatFisheye) {
+        const float delta = thetad / norm;
+        if (delta <= 0.0f)
+            return false;
+        image = cam.focal * delta * p.xy + cam.principal;
+    } else {
+        if (thetad <= 0.0f)
+            return false;
+        const float scale = thetad / norm;
+        const float dx = scale * p.x, dy = scale * p.y;
+        const float p1 = cam.prism[0], p2 = cam.prism[1], sx1 = cam.prism[2], sy1 = cam.prism[3];
+        const float dr2 = dx * dx + dy * dy;
+        const float xd = dx + 2.0f * p1 * dx * dy + p2 * (dr2 + 2.0f * dx * dx) + sx1 * dr2;
+        const float yd = dy + p1 * (dr2 + 2.0f * dy * dy) + 2.0f * p2 * dx * dy + sy1 * dr2;
+        image = cam.focal * float2(xd, yd) + cam.principal;
+    }
+    return gsplat_in_bounds(image, cam.resolution) && theta <= cam.max_angle;
+}
+
+// Newton undistortion of the OpenCV pinhole model, at most 5 iterations.
+static float2 gsplat_undistort(GsplatCamera cam, const float2 uv0, out bool converged) {
+    const float k1 = cam.radial[0], k2 = cam.radial[1], k3 = cam.radial[2];
+    const float k4 = cam.radial[3], k5 = cam.radial[4], k6 = cam.radial[5];
+    const float p1 = cam.tangential[0], p2 = cam.tangential[1];
+    const float s1 = cam.prism[0], s2 = cam.prism[1], s3 = cam.prism[2], s4 = cam.prism[3];
+    const float xd = uv0.x, yd = uv0.y;
+    float x = xd, y = yd;
+    converged = false;
+    for (int iter = 0; iter < 5; ++iter) {
+        const float r = x * x + y * y;
+        const float r2 = r * r;
+        const float alpha = 1.0f + r * (k1 + r * (k2 + r * k3));
+        const float beta = 1.0f + r * (k4 + r * (k5 + r * k6));
+        const float d = alpha / beta;
+        if (d <= 0.0f)
+            break;
+        const float fx = d * x + 2 * p1 * x * y + p2 * (r + 2 * x * x) + s1 * r + s2 * r2 - xd;
+        const float fy = d * y + 2 * p2 * x * y + p1 * (r + 2 * y * y) + s3 * r + s4 * r2 - yd;
+        const float alpha_r = k1 + r * (2.0f * k2 + r * (3.0f * k3));
+        const float beta_r = k4 + r * (2.0f * k5 + r * (3.0f * k6));
+        const float d_r = (alpha_r * beta - alpha * beta_r) / (beta * beta);
+        const float d_x = 2.0f * x * d_r;
+        const float d_y = 2.0f * y * d_r;
+        const float fx_x = d + d_x * x + 2.0f * p1 * y + 6.0f * p2 * x + 2.0f * x * (s1 + 2.0f * s2 * r);
+        const float fx_y = d_y * x + 2.0f * p1 * x + 2.0f * p2 * y + 2.0f * y * (s1 + 2.0f * s2 * r);
+        const float fy_x = d_x * y + 2.0f * p2 * y + 2.0f * p1 * x + 2.0f * x * (s3 + 2.0f * s4 * r);
+        const float fy_y = d + d_y * y + 2.0f * p2 * x + 6.0f * p1 * y + 2.0f * y * (s3 + 2.0f * s4 * r);
+        const float det = fx_y * fy_x - fx_x * fy_y;
+        if (abs(det) < 1e-6f)
+            break;
+        const float dx = (fx * fy_y - fy * fx_y) / det;
+        const float dy = (fy * fx_x - fx * fy_x) / det;
+        x += dx;
+        y += dy;
+        if (abs(dx) < 1e-6f && abs(dy) < 1e-6f) {
+            converged = true;
+            break;
+        }
+    }
+    return float2(x, y);
+}
+
+// World ray through a render-space pixel position.
+static GsplatRay gsplat_pixel_ray(GsplatCamera cam, const float2 pixel) {
+    float3 ray = float3(0.0f, 0.0f, 1.0f);
+    bool valid = true;
+    if (cam.model == kGsplatEquirect) {
+        const float2 full = pixel + cam.offset;
+        const float azimuth = 2.0f * kGsplatPi * (full.x / float(cam.resolution.x) - 0.5f);
+        const float elevation = kGsplatPi * (full.y / float(cam.resolution.y) - 0.5f);
+        ray = float3(cos(elevation) * sin(azimuth), sin(elevation), cos(azimuth) * cos(elevation));
+        ray /= length(ray);
+    } else {
+        float2 uv = (pixel - cam.principal) / cam.focal;
+        if (cam.model == kGsplatPinhole) {
+            if (cam.distorted != 0u)
+                uv = gsplat_undistort(cam, uv, valid);
+            ray = float3(uv, 1.0f);
+            ray /= length(ray);
+        } else {
+            if (cam.model == kGsplatThinPrism) {
+                const float p1 = cam.prism[0], p2 = cam.prism[1], sx1 = cam.prism[2], sy1 = cam.prism[3];
+                for (int i = 0; i < 5; ++i) {
+                    const float dr2 = uv.x * uv.x + uv.y * uv.y;
+                    const float dx = 2.0f * p1 * uv.x * uv.y + p2 * (dr2 + 2.0f * uv.x * uv.x) + sx1 * dr2;
+                    const float dy = p1 * (dr2 + 2.0f * uv.y * uv.y) + 2.0f * p2 * uv.x * uv.y + sy1 * dr2;
+                    uv.x -= dx;
+                    uv.y -= dy;
+                }
+            }
+            const float delta = length(uv);
+            bool converged;
+            const float theta = gsplat_fisheye_theta(cam, delta, converged);
+            valid = !(theta < 0.0f || theta >= cam.max_angle || !converged);
+            if (valid && delta >= 1e-6f) {
+                const float s = sin(theta) / delta;
+                ray = float3(s * uv.x, s * uv.y, cos(theta));
+            }
+        }
+    }
+    if (!valid)
+        return GsplatRay(float3(0.0f), float3(0.0f), false);
+    const float3x3 R = cam.R;
+    return GsplatRay(cam.origin, mul(ray, transpose(R)), true);
+}
+
+struct GsplatSetupParams {
+    Ptr<float, Access.ReadWrite> view;
+    Ptr<float, Access.ReadWrite> radial;
+    Ptr<float, Access.ReadWrite> tangential;
+    Ptr<float, Access.ReadWrite> prism;
+    Ptr<float, Access.ReadWrite> camera;
+    float fx, fy, cx, cy;
+    uint width, height;
+    uint model;
+    uint radial_count, tangential_count, prism_count;
+};
+
+void gsplat_camera_setup(GsplatSetupParams p) {
+    GsplatCamera cam;
+    Ptr<float, Access.ReadWrite> v = p.view; // row-major [R | t]
+    cam.R = float3x3(float3(v[0], v[4], v[8]), float3(v[1], v[5], v[9]), float3(v[2], v[6], v[10]));
+    cam.t = float3(v[3], v[7], v[11]);
+    cam.origin = -(mul(cam.t, transpose(cam.R)));
+    cam.focal = float2(p.fx, p.fy);
+    cam.principal = float2(p.cx, p.cy);
+    cam.model = p.model;
+    cam.distorted = p.radial_count + p.tangential_count > 0u ? 1u : 0u;
+    for (uint i = 0; i < 6u; ++i)
+        cam.radial[i] = i < p.radial_count ? p.radial[i] : 0.0f;
+    for (uint i = 0; i < 2u; ++i)
+        cam.tangential[i] = i < p.tangential_count ? p.tangential[i] : 0.0f;
+    for (uint i = 0; i < 4u; ++i)
+        cam.prism[i] = i < p.prism_count ? p.prism[i] : 0.0f;
+    cam.offset = float2(0.0f);
+    cam.resolution = uint2(p.width, p.height);
+    cam.max_angle = 3.402823466e38f;
+    cam.backward_slope = 0.0f;
+    if (p.model == kGsplatEquirect) {
+        // K carries the full image size and the tile offset.
+        cam.resolution = uint2(uint(p.fx), uint(p.fy));
+        cam.offset = float2(p.cx, p.cy);
+    } else if (p.model == kGsplatFisheye || p.model == kGsplatThinPrism) {
+        const float k1 = cam.radial[0], k2 = cam.radial[1], k3 = cam.radial[2], k4 = cam.radial[3];
+        const float2 res = float2(cam.resolution);
+        const float max_x = max(res.x - p.cx, p.cx);
+        const float max_y = max(res.y - p.cy, p.cy);
+        const float max_radius = sqrt(max_x * max_x + max_y * max_y);
+        float max_angle;
+        if (k4 == 0.0f) {
+            max_angle = sqrt(gsplat_fisheye_max_angle(3.0f * k1, 5.0f * k2, 7.0f * k3));
+        } else {
+            // Newton on the derivative polynomial from 1.57.
+            float x = 1.57f;
+            bool converged = false;
+            for (int j = 0; j < 20; ++j) {
+                const float x2 = x * x;
+                const float f = 1.0f + x2 * (3.0f * k1 + x2 * (5.0f * k2 + x2 * (7.0f * k3 + x2 * (9.0f * k4))));
+                const float df = x * (6.0f * k1 + x2 * (20.0f * k2 + x2 * (42.0f * k3 + x2 * (72.0f * k4))));
+                const float dx = f / df;
+                x -= dx;
+                if (abs(dx) < 1e-6f) {
+                    converged = true;
+                    break;
+                }
+            }
+            max_angle = (!converged || x <= 0.0f) ? 3.402823466e38f : x;
+        }
+        cam.max_angle = min(max_angle, max(max_radius / p.fx, max_radius / p.fy));
+        cam.backward_slope = cam.max_angle / max(res.x / 2.0f / p.fx, res.y / 2.0f / p.fy);
+    }
+    gsplat_camera_store(p.camera, cam);
+}
+
+// ---------------------------------------------------------------------------
+// Gaussian math (Utils.cuh)
+
+static float3 gsplat_load3(Ptr<float, Access.ReadWrite> p, const uint i) {
+    return float3(p[i * 3u], p[i * 3u + 1u], p[i * 3u + 2u]);
+}
+
+static float4 gsplat_load4(Ptr<float, Access.ReadWrite> p, const uint i) {
+    return float4(p[i * 4u], p[i * 4u + 1u], p[i * 4u + 2u], p[i * 4u + 3u]);
+}
+
+static float gsplat_sigmoid(const float raw) {
+    return 1.0f / (1.0f + exp(-raw));
+}
+
+// Rotation of a unit (w, x, y, z) quaternion, column-major as glm.
+static float3x3 gsplat_rotmat(const float4 q) {
+    const float w = q.x, x = q.y, y = q.z, z = q.w;
+    const float x2 = x * x, y2 = y * y, z2 = z * z;
+    const float xy = x * y, xz = x * z, yz = y * z;
+    const float wx = w * x, wy = w * y, wz = w * z;
+    return float3x3(float3(1.0f - 2.0f * (y2 + z2), 2.0f * (xy + wz), 2.0f * (xz - wy)),
+                    float3(2.0f * (xy - wz), 1.0f - 2.0f * (x2 + z2), 2.0f * (yz + wx)),
+                    float3(2.0f * (xz + wy), 2.0f * (yz - wx), 1.0f - 2.0f * (x2 + y2)));
+}
+
+static float3x3 gsplat_quat_to_rotmat(const float4 q) {
+    return gsplat_rotmat(q * rsqrt(dot(q, q)));
+}
+
+// S^-1 R^T: world offsets to the gaussian's unit frame.
+static float3x3 gsplat_world_to_unit(const float4 quat, const float3 scale) {
+    const float3x3 R = gsplat_quat_to_rotmat(quat);
+    const float3x3 S_inv = float3x3(float3(1.0f / scale.x, 0.0f, 0.0f), float3(0.0f, 1.0f / scale.y, 0.0f),
+                                    float3(0.0f, 0.0f, 1.0f / scale.z));
+    return transpose(mul(S_inv, R));
+}
+
+static float3 gsplat_safe_normalize(const float3 v) {
+    const float l = dot(v, v);
+    return l > 0.0f ? v * rsqrt(l) : v;
+}
+
+static float3 gsplat_safe_normalize_bw(const float3 v, const float3 d_out) {
+    const float l = dot(v, v);
+    if (l > 0.0f) {
+        const float il = rsqrt(l);
+        return il * d_out - il * il * il * dot(d_out, v) * v;
+    }
+    return d_out;
+}
+
+static float3x3 gsplat_outer(const float3 c, const float3 r) {
+    return float3x3(c * r.x, c * r.y, c * r.z);
+}
+
+static void gsplat_quat_to_rotmat_vjp(const float4 quat, const float3x3 v_R, inout float4 v_quat) {
+    const float inv_norm = rsqrt(dot(quat, quat));
+    const float w = quat.x * inv_norm, x = quat.y * inv_norm, y = quat.z * inv_norm, z = quat.w * inv_norm;
+    const float4 v_quat_n = float4(
+        2.0f * (x * (v_R[1][2] - v_R[2][1]) + y * (v_R[2][0] - v_R[0][2]) + z * (v_R[0][1] - v_R[1][0])),
+        2.0f * (-2.0f * x * (v_R[1][1] + v_R[2][2]) + y * (v_R[0][1] + v_R[1][0]) + z * (v_R[0][2] + v_R[2][0]) +
+                w * (v_R[1][2] - v_R[2][1])),
+        2.0f * (x * (v_R[0][1] + v_R[1][0]) - 2.0f * y * (v_R[0][0] + v_R[2][2]) + z * (v_R[1][2] + v_R[2][1]) +
+                w * (v_R[2][0] - v_R[0][2])),
+        2.0f * (x * (v_R[0][2] + v_R[2][0]) + y * (v_R[1][2] + v_R[2][1]) - 2.0f * z * (v_R[0][0] + v_R[1][1]) +
+                w * (v_R[0][1] - v_R[1][0])));
+    const float4 quat_n = float4(w, x, y, z);
+    v_quat += (v_quat_n - dot(v_quat_n, quat_n) * quat_n) * inv_norm;
+}
+
+// Gradient of M = R S^-1 into the quaternion and the activated scale.
+static void gsplat_preci_half_vjp(const float4 quat, const float3 scale, const float3x3 R, const float3x3 v_M,
+                                  inout float4 v_quat, inout float3 v_scale) {
+    const float sx = 1.0f / scale.x, sy = 1.0f / scale.y, sz = 1.0f / scale.z;
+    const float3x3 S = float3x3(float3(sx, 0.0f, 0.0f), float3(0.0f, sy, 0.0f), float3(0.0f, 0.0f, sz));
+    gsplat_quat_to_rotmat_vjp(quat, mul(S, v_M), v_quat);
+    v_scale.x += -sx * sx * (R[0][0] * v_M[0][0] + R[0][1] * v_M[0][1] + R[0][2] * v_M[0][2]);
+    v_scale.y += -sy * sy * (R[1][0] * v_M[1][0] + R[1][1] * v_M[1][1] + R[1][2] * v_M[1][2]);
+    v_scale.z += -sz * sz * (R[2][0] * v_M[2][0] + R[2][1] * v_M[2][1] + R[2][2] * v_M[2][2]);
+}
+
+// ---------------------------------------------------------------------------
+// Spherical harmonics (SphericalHarmonicsCUDA.cu), basis values up to degree 3.
+
+static void gsplat_sh_basis(const float3 dir, const uint degree, out float b[16]) {
+    b[0] = 0.2820947917738781f;
+    if (degree < 1u)
+        return;
+    const float3 n = dir * rsqrt(dot(dir, dir));
+    const float x = n.x, y = n.y, z = n.z;
+    const float C1 = 0.48860251190292f;
+    b[1] = -C1 * y;
+    b[2] = C1 * z;
+    b[3] = -C1 * x;
+    if (degree < 2u)
+        return;
+    const float z2 = z * z;
+    const float fTmp0B = -1.092548430592079f * z;
+    const float fC1 = x * x - y * y;
+    const float fS1 = 2.0f * x * y;
+    b[4] = 0.5462742152960395f * fS1;
+    b[5] = fTmp0B * y;
+    b[6] = 0.9461746957575601f * z2 - 0.3153915652525201f;
+    b[7] = fTmp0B * x;
+    b[8] = 0.5462742152960395f * fC1;
+    if (degree < 3u)
+        return;
+    const float fTmp0C = -2.285228997322329f * z2 + 0.4570457994644658f;
+    const float fTmp1B = 1.445305721320277f * z;
+    const float fC2 = x * fC1 - y * fS1;
+    const float fS2 = x * fS1 + y * fC1;
+    b[9] = -0.5900435899266435f * fS2;
+    b[10] = fTmp1B * fS1;
+    b[11] = fTmp0C * y;
+    b[12] = z * (1.865881662950577f * z2 - 1.119528997770346f);
+    b[13] = fTmp0C * x;
+    b[14] = fTmp1B * fC1;
+    b[15] = -0.5900435899266435f * fC2;
+}
+
+// Float index of SH-rest value (coeff, channel) in swizzled float storage.
+static uint gsplat_sh_float_index(const uint g, const uint coeff, const uint channel, const uint layout_rest) {
+    const uint offset = coeff * 3u + channel;
+    return shOffset(g, offset, layout_rest, false);
+}
+
+// ---------------------------------------------------------------------------
+// Projection, SH colour and tile count per gaussian (ProjectionUT3DGSFused.cu,
+// IntersectTile.cu first pass, spherical_harmonics_swizzled_fwd).
+
+struct GsplatProjectParams {
+    Ptr<float, Access.ReadWrite> camera;
+    Ptr<float, Access.ReadWrite> means;
+    Ptr<float, Access.ReadWrite> scales;
+    Ptr<float, Access.ReadWrite> quats;
+    Ptr<float, Access.ReadWrite> opacities;
+    Ptr<float, Access.ReadWrite> sh0;
+    uint64_t sh_rest;                           // swizzled float storage
+    Ptr<uint16_t, Access.ReadWrite> sh_codes;   // swizzled Q16 storage
+    uint64_t sh_bounds;                         // Q16 bounds, float2 per 256 primitives
+    Ptr<int, Access.ReadWrite> radii;           // [N, 2]
+    Ptr<float, Access.ReadWrite> means2d;       // [N, 2]
+    Ptr<float, Access.ReadWrite> colors;        // [N, 3]
+    Ptr<uint, Access.ReadWrite> depth_keys;     // [N]
+    Ptr<int64_t, Access.ReadWrite> tile_counts; // [N]
+    uint count;
+    uint width, height;
+    uint tiles_x, tiles_y;
+    uint degree;
+    uint layout_rest;
+    uint sh_format;
+};
+
+struct GsplatTileRect {
+    uint x0, y0, x1, y1;
+};
+
+static GsplatTileRect gsplat_tile_rect(const float2 mean, const int2 radius, const uint tiles_x, const uint tiles_y) {
+    const float tile = float(kGsplatTile);
+    const float rx = float(radius.x) / tile, ry = float(radius.y) / tile;
+    const float tx = mean.x / tile, ty = mean.y / tile;
+    return GsplatTileRect(uint(clamp(floor(tx - rx), 0.0f, float(tiles_x))), uint(clamp(floor(ty - ry), 0.0f, float(tiles_y))),
+                          uint(clamp(ceil(tx + rx), 0.0f, float(tiles_x))), uint(clamp(ceil(ty + ry), 0.0f, float(tiles_y))));
+}
+
+void gsplat_project(GsplatProjectParams p, uint g) {
+    if (g >= p.count)
+        return;
+    GsplatCamera cam = gsplat_camera_load(p.camera);
+    p.radii[g * 2u] = 0;
+    p.radii[g * 2u + 1u] = 0;
+    p.tile_counts[g] = 0;
+    p.depth_keys[g] = 0xffffffffu;
+
+    const float3 mean = gsplat_load3(p.means, g);
+    const float3x3 view_R = cam.R;
+    const float3 mean_c = mul(mean, view_R) + cam.t;
+    if ((mean_c.z < kGsplatNear && cam.model != kGsplatEquirect) || mean_c.z > kGsplatFar)
+        return;
+
+    const float3 scale = exp(gsplat_load3(p.scales, g));
+    float4 quat = gsplat_load4(p.quats, g);
+    const float quat_length = length(quat);
+    quat = quat_length > 0.0f ? quat / quat_length : float4(1.0f, 0.0f, 0.0f, 0.0f);
+    const float3x3 rotation = gsplat_rotmat(quat);
+
+    // Unscented transform: alpha 0.1, beta 2, kappa 0, all sigma points valid.
+    const float D = 3.0f, ut_alpha = 0.1f, ut_beta = 2.0f;
+    const float lambda = ut_alpha * ut_alpha * D - D;
+    const float spread = sqrt(D + lambda);
+    const float w_mean0 = lambda / (D + lambda);
+    const float w_cov0 = lambda / (D + lambda) + (1.0f - ut_alpha * ut_alpha + ut_beta);
+    const float w_i = 1.0f / (2.0f * (D + lambda));
+
+    float2 image_points[7];
+    float2 image_mean = float2(0.0f);
+    for (uint i = 0; i < 7u; ++i) {
+        float3 point = mean;
+        if (i > 0u) {
+            const uint axis = (i - 1u) % 3u;
+            const float3 delta = spread * scale[axis] * rotation[axis];
+            point = i <= 3u ? mean + delta : mean - delta;
+        }
+        if (!gsplat_camera_to_image(cam, mul(point, view_R) + cam.t, image_points[i]))
+            return;
+        image_mean += (i == 0u ? w_mean0 : w_i) * image_points[i];
+    }
+    float c00 = 0.0f, c01 = 0.0f, c11 = 0.0f;
+    for (uint i = 0; i < 7u; ++i) {
+        const float2 d = image_points[i] - image_mean;
+        const float w = i == 0u ? w_cov0 : w_i;
+        c00 += w * d.x * d.x;
+        c01 += w * d.x * d.y;
+        c11 += w * d.y * d.y;
+    }
+    if (cam.model == kGsplatEquirect)
+        image_mean -= cam.offset;
+
+    const float det_orig = c00 * c11 - c01 * c01;
+    c00 += kGsplatEps2d;
+    c11 += kGsplatEps2d;
+    const float det = c00 * c11 - c01 * c01;
+    const float compensation = sqrt(max(0.0f, det_orig / det));
+    if (det <= 0.0f)
+        return;
+    const float opacity = gsplat_sigmoid(p.opacities[g]) * compensation;
+    if (opacity < kGsplatAlphaMin)
+        return;
+    const float extend = min(3.33f, sqrt(2.0f * log(opacity / kGsplatAlphaMin)));
+    const float b = 0.5f * (c00 + c11);
+    const float r1 = extend * sqrt(b + sqrt(max(0.01f, b * b - det)));
+    const float radius_x = ceil(min(extend * sqrt(c00), r1));
+    const float radius_y = ceil(min(extend * sqrt(c11), r1));
+    if (radius_x <= 0.0f && radius_y <= 0.0f)
+        return;
+    if (image_mean.x + radius_x <= 0.0f || image_mean.x - radius_x >= float(p.width) ||
+        image_mean.y + radius_y <= 0.0f || image_mean.y - radius_y >= float(p.height))
+        return;
+
+    const int2 radius = int2(int(radius_x), int(radius_y));
+    p.radii[g * 2u] = radius.x;
+    p.radii[g * 2u + 1u] = radius.y;
+    p.means2d[g * 2u] = image_mean.x;
+    p.means2d[g * 2u + 1u] = image_mean.y;
+    p.depth_keys[g] = asuint(mean_c.z);
+    if (radius.x > 0 && radius.y > 0) {
+        const GsplatTileRect rect = gsplat_tile_rect(image_mean, radius, p.tiles_x, p.tiles_y);
+        p.tile_counts[g] = int((rect.y1 - rect.y0) * (rect.x1 - rect.x0));
+    }
+
+    float basis[16];
+    gsplat_sh_basis(mean - cam.origin, p.degree, basis);
+    const uint bases = (p.degree + 1u) * (p.degree + 1u);
+    for (uint c = 0; c < 3u; ++c) {
+        float color = basis[0] * p.sh0[g * 3u + c];
+        for (uint k = 1; k < bases; ++k) {
+            color += basis[k] * shReadCell(p.sh_rest, p.sh_bounds, p.sh_format,
+                                           p.layout_rest, p.count, g, (k - 1u) * 3u + c);
+        }
+        p.colors[g * 3u + c] = color + 0.5f;
+    }
+}

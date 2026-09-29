@@ -36,6 +36,16 @@ class NeutralTrainerIncludeTest(unittest.TestCase):
         ):
             self.assertFalse(gate.neutral_trainer_file(relative), relative)
 
+    def test_vulkan_implementation_files_are_not_neutral(self) -> None:
+        for relative in (
+            "src/training/ops/session_vulkan.cpp",
+            "src/training/ops/table_vulkan.cpp",
+            "src/training/include/lfs/training/ops/session_vulkan.hpp",
+            "src/training/vulkan/pair_sort.cpp",
+            "src/training/vulkan/shaders/pair_sort.slang",
+        ):
+            self.assertFalse(gate.neutral_trainer_file(relative), relative)
+
     def test_scan_reports_a_neutral_include(self) -> None:
         path = Path(__file__).resolve().parent.parent / "src/training/trainer.hpp"
         # The live header is part of the gate. A synthetic copy proves the rule

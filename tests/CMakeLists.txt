@@ -472,6 +472,7 @@ if(NOT LFS_HAS_CUDA)
             test_vulkan_trainer_start.cpp
             test_session_loader_storage.cpp
             test_training_ops_parity.cpp
+            test_training_ops_vulkan_gsplat.cpp
             test_training_ops_metal_densify.cpp
             test_training_ops_metal_appearance.cpp
             test_training_ops_metal_gsplat.cpp
@@ -585,6 +586,8 @@ set(TEST_FILES
     test_photometric_hygiene.cpp
     test_photometric_ops.cpp
     test_training_ops_parity.cpp
+    test_training_ops_vulkan_gsplat.cpp
+    test_training_pair_sort.cpp
     test_gsplat_ops.cpp
     test_fast_ops.cpp
     test_session_ops.cpp

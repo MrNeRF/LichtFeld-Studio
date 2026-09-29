@@ -74,7 +74,9 @@ TEST(MortonOpsCapability, OnlyCudaProvidesScheduledFamily) {
     FamilySet required;
     required.set(static_cast<size_t>(Family::Morton));
     EXPECT_EQ(missing_training_families(TrainingOps{}, required), std::vector<std::string_view>{"Morton"});
-    for (auto backend : {lfs::core::GpuBackend::Vulkan, lfs::core::GpuBackend::Metal}) {
+    EXPECT_NE(training_ops(lfs::core::GpuBackend::Vulkan).morton, nullptr);
+    EXPECT_FALSE(unavailable_training_family(lfs::core::GpuBackend::Vulkan, Family::Morton));
+    for (auto backend : {lfs::core::GpuBackend::Metal}) {
         EXPECT_EQ(training_ops(backend).morton, nullptr);
         const auto reason = unavailable_training_family(backend, Family::Morton);
         ASSERT_TRUE(reason.has_value());

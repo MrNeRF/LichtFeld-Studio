@@ -113,26 +113,39 @@ namespace {
 
 } // namespace
 
-TEST(TrainingOpsCapability, FastFamilyIsCudaOnly) {
+TEST(TrainingOpsCapability, FastFamilyMatchesCompiledBackends) {
     const auto& cuda = lfs::training::training_ops(lfs::core::GpuBackend::CUDA);
     const auto& vulkan = lfs::training::training_ops(lfs::core::GpuBackend::Vulkan);
     const auto& metal = lfs::training::training_ops(lfs::core::GpuBackend::Metal);
     EXPECT_NE(cuda.fast, nullptr);
+#if defined(LFS_TEST_TENSOR_VULKAN)
+    EXPECT_NE(vulkan.fast, nullptr);
+#else
     EXPECT_EQ(vulkan.fast, nullptr);
+#endif
     EXPECT_EQ(metal.fast, nullptr);
     EXPECT_FALSE(lfs::training::unavailable_training_family(
         lfs::core::GpuBackend::CUDA, lfs::training::Family::Fast));
     const auto reason = lfs::training::unavailable_training_family(
         lfs::core::GpuBackend::Vulkan, lfs::training::Family::Fast);
+#if defined(LFS_TEST_TENSOR_VULKAN)
+    EXPECT_FALSE(reason.has_value());
+#else
     ASSERT_TRUE(reason.has_value());
     EXPECT_NE(reason->find("Fast"), std::string::npos);
+#endif
 
     lfs::core::param::TrainingParameters params;
     params.optimization.set_raster_backend(lfs::core::param::RasterBackendId::ThreeDGS);
     const auto missing = lfs::training::unavailable_training_reason(
         params, lfs::core::GpuBackend::Vulkan, lfs::training::training_loader_dependencies(params));
+#if defined(LFS_TEST_TENSOR_VULKAN)
+    if (missing)
+        EXPECT_EQ(missing->find("Mrnf"), std::string::npos);
+#else
     ASSERT_TRUE(missing.has_value());
-    EXPECT_NE(missing->find("Fast"), std::string::npos);
+    EXPECT_NE(missing->find("Mrnf"), std::string::npos);
+#endif
 }
 
 TEST_F(FastOpsRaster, ForwardRepeatsExactly) {

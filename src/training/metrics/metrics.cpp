@@ -5,7 +5,6 @@
 #include "metrics.hpp"
 #include "core/events.hpp"
 #include "core/gpu_device_runtime.hpp"
-#include "core/gpu_elapsed.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -149,6 +148,12 @@ namespace lfs::training {
                 lfs::core::TensorShape({H, W, C}),
                 lfs::core::Device::CPU,
                 lfs::core::DataType::UInt8);
+            const auto* image_ops = training_ops(lfs::core::default_gpu_backend()).training_image;
+            if (image_ops && image_ops->upload_image_chw) {
+                auto chw = image_ops->upload_image_chw(hwc);
+                cam.set_image_dimensions(width, height);
+                return chw;
+            }
             auto chw = hwc.permute({2, 0, 1}).contiguous();
             image_data.reset();
 
@@ -751,7 +756,8 @@ namespace lfs::training {
             try {
                 auto loaded = lfs::core::nn::models::Lpips::load(
                     weights_path, lfs::core::Device::GPU, lfs::core::DataType::Float16,
-                    lfs::core::nn::models::InputScaling::Identity);
+                    lfs::core::nn::models::InputScaling::Identity,
+                    lfs::core::nn::models::default_lpips_activation_budget());
                 if (loaded) {
                     const auto backend = lfs::core::default_gpu_backend();
                     const auto* lpips = training_ops(backend).lpips;
@@ -768,7 +774,6 @@ namespace lfs::training {
                          lfs::core::path_to_utf8(weights_path), e.what());
             }
         }
-        lfs::core::GpuElapsed lpips_timer(lfs::core::default_gpu_backend(), 2);
         const bool use_masking = eval_uses_masks(_params.optimization.mask_mode);
 
         bool render_normal = false;
@@ -911,21 +916,17 @@ namespace lfs::training {
                                   _lpips_metric->tile_size_for(image_height, image_width), required, free_bytes);
                     }
                     if (lpips_preflight_ok) {
-                        const lfs::core::TensorExecutionTarget lpips_stream = lfs::core::TensorExecutionTarget::current();
-                        const bool timed_lpips = lpips_timer.mark(0, lpips_stream);
+                        const auto lpips_wall_start = std::chrono::steady_clock::now();
                         auto value = _lpips_metric->forward(
                             pred_lpips, target_lpips,
                             lfs::core::nn::models::InputScaling::Identity);
-                        const bool lpips_event_complete =
-                            timed_lpips && lpips_timer.mark(1, lpips_stream) &&
-                            lpips_timer.wait_event(1);
                         if (value && std::isfinite(*value)) {
-                            if (lpips_event_complete) {
-                                const auto elapsed_ms = lpips_timer.milliseconds(0, 1);
-                                if (elapsed_ms && std::isfinite(*elapsed_ms)) {
-                                    lpips_elapsed_ms += *elapsed_ms;
-                                    lpips_timed_images++;
-                                }
+                            const auto elapsed_ms = std::chrono::duration<float, std::milli>(
+                                                        std::chrono::steady_clock::now() - lpips_wall_start)
+                                                        .count();
+                            if (std::isfinite(elapsed_ms)) {
+                                lpips_elapsed_ms += elapsed_ms;
+                                lpips_timed_images++;
                             }
                             lpips = *value;
                             lpips_values.push_back(*value);

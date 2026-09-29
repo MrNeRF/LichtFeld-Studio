@@ -309,6 +309,11 @@ namespace lfs::core::internal {
         ensure_submitted_locked(storage);
     }
 
+    uint64_t VulkanRecorderRegistry::current_queue() {
+        std::lock_guard lock(mutex_);
+        return current_locked().id;
+    }
+
     uint64_t VulkanRecorderRegistry::flush_current() {
         std::lock_guard lock(mutex_);
         // A bound tensor queue is the current recorder. Flushing only the

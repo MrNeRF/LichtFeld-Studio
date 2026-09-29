@@ -297,6 +297,67 @@ namespace {
                              ::testing::Values(GpuBackend::CUDA, GpuBackend::Vulkan),
                              [](const auto& info) { return std::string(gpu_backend_name(info.param)); });
 
+    TEST(PipelinedLoaderVulkan, PortableHostRgbCacheIsBoundedAndKeepsOutputsIndependent) {
+        if (!gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP();
+        const GpuBackendScope backend(GpuBackend::Vulkan);
+        const auto directory = fixture_directory() / "rgb_cache";
+        std::filesystem::create_directories(directory);
+        const auto first = directory / "first.png", second = directory / "second.png";
+        const auto pixels = samples<uint8_t>(3, 255, 17);
+        save_png(first, pixels.data(), WIDTH, HEIGHT, 3, 8, 1);
+        save_png(second, pixels.data(), WIDTH, HEIGHT, 3, 8, 1);
+        {
+            PipelinedLoaderConfig config;
+            config.backend = GpuBackend::Vulkan;
+            config.max_cache_bytes = size_t(WIDTH) * HEIGHT * 3;
+            PipelinedImageLoader loader(config);
+            lfs::io::LoadParams params;
+            auto initial = loader.load_image_immediate(first, params);
+            const auto expected = initial.cpu();
+            initial.fill_(0.f);
+            const auto cached = loader.load_image_immediate(first, params);
+            expect_close(cached, expected, 0.f);
+            EXPECT_EQ(loader.get_stats().cpu_decode_calls, 1u);
+            EXPECT_EQ(loader.get_stats().host_decoded_cache_bytes, config.max_cache_bytes);
+            EXPECT_EQ(loader.get_stats().device_decoded_cache_bytes, 0u);
+            params.output_uint8 = true;
+            const auto bytes = loader.load_image_immediate(first, params);
+            EXPECT_EQ(bytes.dtype(), DataType::UInt8);
+            EXPECT_EQ(loader.get_stats().cpu_decode_calls, 1u);
+            params.output_uint8 = false;
+            (void)loader.load_image_immediate(second, params);
+            (void)loader.load_image_immediate(first, params);
+            EXPECT_EQ(loader.get_stats().cpu_decode_calls, 3u);
+            params.resize_factor = 2;
+            const auto resized = loader.load_image_immediate(first, params);
+            EXPECT_NE(resized.shape(), expected.shape());
+            EXPECT_EQ(loader.get_stats().cpu_decode_calls, 4u);
+            EXPECT_GT(loader.release_host_cache(config.max_cache_bytes), 0u);
+            EXPECT_EQ(loader.get_stats().host_decoded_cache_bytes, 0u);
+            EXPECT_EQ(loader.get_stats().device_decoded_cache_bytes, 0u);
+            // Concurrent prefetch and cache eviction must retain upload sources
+            // until the transfer completes, even with a one-image cache.
+            std::vector<ImageRequest> requests;
+            for (size_t i = 0; i < 6; ++i) {
+                ImageRequest request;
+                request.sequence_id = i;
+                request.path = i % 2 ? second : first;
+                requests.push_back(request);
+            }
+            loader.prefetch(requests);
+            for (size_t i = 0; i < requests.size(); ++i) {
+                auto completion = loader.try_get_completion_for(std::chrono::seconds(20));
+                ASSERT_TRUE(completion);
+                ASSERT_TRUE(completion->outcome);
+                expect_close(completion->outcome->tensor, expected, 0.f);
+            }
+            EXPECT_LE(loader.get_stats().host_decoded_cache_bytes, config.max_cache_bytes);
+            EXPECT_EQ(loader.get_stats().device_decoded_cache_bytes, 0u);
+        }
+        std::filesystem::remove_all(directory);
+    }
+
     // Runs in a fresh process: an earlier codec probe elsewhere would otherwise hide one here.
     TEST(PipelinedLoaderVulkan, NeverProbesOrCreatesTheCudaCodec) {
         if (!gpu_backend_available(GpuBackend::Vulkan))

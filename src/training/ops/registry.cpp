@@ -61,17 +61,11 @@ namespace lfs::training {
 
     const TrainingOps& cuda_training_ops_table();
     const TrainingOps& metal_training_ops_table();
+    const TrainingOps& vulkan_training_ops_table();
 
     const TrainingOps& training_ops(const core::GpuBackend backend) {
         static const TrainingOps& kCuda = cuda_training_ops_table();
-        static const TrainingOps kVulkan{
-            .backend = core::GpuBackend::Vulkan,
-            .photometric = nullptr,
-            .adam = nullptr,
-            .mrnf = nullptr,
-            .fast = nullptr,
-            .sh = nullptr,
-        };
+        static const TrainingOps& kVulkan = vulkan_training_ops_table();
         static const TrainingOps& kMetal = metal_training_ops_table();
         static const std::array tables{&kCuda, &kVulkan, &kMetal};
         const auto index = static_cast<size_t>(backend);

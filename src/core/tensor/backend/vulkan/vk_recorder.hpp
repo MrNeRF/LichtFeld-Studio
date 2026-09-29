@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
+#include "core/export.hpp"
 #include "core/tensor/internal/private_access.hpp"
 
 #include "../descriptors.hpp"
@@ -26,19 +27,20 @@ namespace lfs::core::internal {
         VulkanRecorderRegistry(const VulkanRecorderRegistry&) = delete;
         VulkanRecorderRegistry& operator=(const VulkanRecorderRegistry&) = delete;
 
-        uint64_t record(std::span<const StorageRef> reads,
-                        std::span<const StorageRef> writes,
-                        const std::function<void(VkCommandBuffer)>& command,
-                        VkPipelineStageFlags2 stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                        VkDeviceSize bytes = VK_WHOLE_SIZE,
-                        std::shared_ptr<void> lifetime = {});
+        LFS_CORE_API uint64_t record(std::span<const StorageRef> reads,
+                                     std::span<const StorageRef> writes,
+                                     const std::function<void(VkCommandBuffer)>& command,
+                                     VkPipelineStageFlags2 stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                     VkDeviceSize bytes = VK_WHOLE_SIZE,
+                                     std::shared_ptr<void> lifetime = {});
         void flush_storage(StorageRef storage);
         uint64_t flush_storages(std::span<const StorageRef> storage);
         uint64_t wait_external(std::span<const StorageRef> storage, VkSemaphore semaphore,
                                uint64_t value, std::shared_ptr<void> keep_alive);
         uint64_t flush_current();
-        uint64_t flush_all();
-        void wait_all();
+        [[nodiscard]] uint64_t current_queue();
+        LFS_CORE_API uint64_t flush_all();
+        LFS_CORE_API void wait_all();
         void release_thread(uint64_t recorder_id);
         void shutdown();
 

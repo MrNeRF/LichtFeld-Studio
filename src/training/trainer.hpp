@@ -818,6 +818,7 @@ namespace lfs::training {
         lfs::core::Tensor photo_grad_corrected_;
         lfs::core::Tensor photo_grad_raw_;
         void bind_training_ops();
+        void prepare_evaluation_workspaces();
 
         // Cached GPU scalar to avoid per-iteration allocation
         core::Tensor loss_accumulator_;

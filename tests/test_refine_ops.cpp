@@ -6,12 +6,59 @@
 #include "kernels/densification_kernels.hpp"
 #include "kernels/pruning_kernels.hpp"
 #include "lfs/training/ops/refine_cuda.hpp"
+#include "lfs/training/ops/refine_vulkan.hpp"
 #include "lfs/training/ops/registry.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <optional>
 #include <vector>
+
+TEST(RefineVulkanMedian, MatchesPositiveUpperMedianAcrossDistributions) {
+    using namespace lfs::core;
+    if (!gpu_backend_available(GpuBackend::Vulkan))
+        GTEST_SKIP() << "Vulkan unavailable";
+    GpuBackendScope scope(GpuBackend::Vulkan);
+    const auto* ops = lfs::training::training_ops(GpuBackend::Vulkan).refine;
+    ASSERT_NE(ops, nullptr);
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    std::vector<std::vector<float>> cases{{0.f, -2.f, nan}, {3.f}, {nan, -2.f, 0.f, 1.f, 9.f, 4.f, 4.f, inf}, {inf, inf, 1.f, -inf}, {1e-12f, 2e-12f, -1e-12f}};
+    for (size_t count : {255u, 256u, 257u, 4097u, 1048576u}) {
+        std::vector<float> values(count);
+        for (size_t i = 0; i < count; ++i)
+            values[i] = i % 13 == 0 ? nan : float(int((i * 37) % 997) - 100) / 64.f;
+        cases.push_back(std::move(values));
+    }
+    for (auto values : cases) {
+        auto tensor = Tensor::from_vector(values, {values.size()}, Device::GPU);
+        ops->normalize_positive_median(tensor);
+        const auto host = tensor.cpu();
+        std::vector<float> positives;
+        for (float& value : values) {
+            if (std::isnan(value))
+                value = 0.f;
+            if (value > 0.f)
+                positives.push_back(value);
+        }
+        float median = 0.f;
+        if (!positives.empty()) {
+            auto middle = positives.begin() + positives.size() / 2;
+            std::nth_element(positives.begin(), middle, positives.end());
+            median = *middle;
+        }
+        const float* actual = host.ptr<float>();
+        for (size_t i = 0; i < values.size(); ++i) {
+            const float expected = positives.empty() ? 0.f : values[i] / std::max(median, 1e-9f);
+            if (std::isnan(expected)) {
+                ASSERT_TRUE(std::isnan(actual[i])) << "index " << i;
+            } else {
+                ASSERT_FLOAT_EQ(actual[i], expected) << "count " << values.size() << ", index " << i;
+            }
+        }
+    }
+}
 
 namespace {
     using lfs::core::DataType;
@@ -68,13 +115,15 @@ namespace {
     };
 } // namespace
 
-TEST(RefineOpsCapability, OnlyCudaProvidesTheFamily) {
+TEST(RefineOpsCapability, ProvidesCudaAndVulkanFamilies) {
     using namespace lfs::training;
     EXPECT_EQ(training_ops(lfs::core::GpuBackend::CUDA).refine, &cuda_refine_ops());
     FamilySet required;
     required.set(static_cast<size_t>(Family::Refine));
     EXPECT_EQ(missing_training_families(TrainingOps{}, required), std::vector<std::string_view>{"Refine"});
-    for (auto backend : {lfs::core::GpuBackend::Vulkan, lfs::core::GpuBackend::Metal}) {
+    EXPECT_EQ(training_ops(lfs::core::GpuBackend::Vulkan).refine, &vulkan_refine_ops());
+    {
+        auto backend = lfs::core::GpuBackend::Metal;
         EXPECT_EQ(training_ops(backend).refine, nullptr);
         const auto reason = unavailable_training_family(backend, Family::Refine);
         ASSERT_TRUE(reason.has_value());
