@@ -60,8 +60,8 @@ namespace lfs::core::internal {
                               uint64_t timeline_value, VkPipelineStageFlags2 stage,
                               VkDeviceSize bytes);
 
-        [[nodiscard]] static VkBuffer buffer_for(StorageRef storage);
-        [[nodiscard]] static VkDeviceSize offset_for(StorageRef storage);
+        [[nodiscard]] LFS_CORE_API static VkBuffer buffer_for(StorageRef storage);
+        [[nodiscard]] LFS_CORE_API static VkDeviceSize offset_for(StorageRef storage);
 
         void trim();
         [[nodiscard]] LFS_CORE_API MemoryInfo stats() const;

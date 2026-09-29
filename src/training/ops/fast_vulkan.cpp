@@ -80,7 +80,12 @@ namespace lfs::training::vulkan {
                 append(writes, {&s.image, &s.alpha, &s.depth, &s.normal,
                                 &s.transmittance, &s.last});
             }
-            dispatch("fast_forward", s.push, reads, writes, groups(work), specialization(s.push, stage));
+            if (s.push.padding != 0 && stage >= 3 && stage <= 5) {
+                const size_t word = stage == 3 ? 4 : stage == 4 ? 12
+                                                                : 20;
+                dispatch("fast_forward", s.push, reads, writes, 0, specialization(s.push, stage), ref(s.visibility), word * 4);
+            } else
+                dispatch("fast_forward", s.push, reads, writes, groups(work), specialization(s.push, stage));
         }
         RasterResult failure(FastState& s, RasterResult::Code code, std::string message) {
             s.message = std::move(message);
@@ -216,24 +221,82 @@ namespace lfs::training::vulkan {
                 s.offsets = inclusive_counts(s, s.counts);
                 p.offsets = address(s.offsets);
                 s.mark(5);
-                int64_t instances = 0;
-                s.scalar_readback.enqueue_range(s.offsets, (p.visible - 1) * sizeof(instances), sizeof(instances));
-                s.scalar_readback.wait(std::as_writable_bytes(std::span(&instances, 1)));
-                if (instances < 0 || instances > INT_MAX)
-                    return failure(s, RasterResult::Code::InstanceOverflow, "Fast instance count exceeds signed indexing");
-                p.instances = static_cast<uint32_t>(instances);
-                s.mark(6);
-                s.keys_a = s.temporary(8, p.instances, DataType::UInt32);
-                s.keys_b = s.temporary(9, p.instances, DataType::UInt32);
-                s.values_a = s.temporary(10, p.instances, DataType::UInt32);
-                s.values_b = s.temporary(11, p.instances, DataType::UInt32);
-                p.keys = address(s.keys_a);
-                p.values = address(s.values_a);
-                launch(s, 3, p.visible);
-                bool in_a = vulkan_pair_sort({&s.keys_a, &s.keys_b, &s.values_a, &s.values_b}, p.instances, 0, tile_bits + p.depth_bits, false);
-                p.keys = address(in_a ? s.keys_a : s.keys_b);
-                p.values = address(in_a ? s.values_a : s.values_b);
-                launch(s, 4, p.instances);
+                if (s.indirect) {
+                    s.visibility = s.temporary(3, 32, DataType::UInt32);
+                    p.visibility = address(s.visibility);
+                    p.padding = core::internal::acquire_vulkan_context()->caps().max_workgroup_count[0];
+                    size_t capacity = s.scratch[8].is_valid() ? s.scratch[8].numel() : std::min(size_t{1} << 20, count * 8);
+                    capacity = std::max(size_t{256}, capacity);
+                    for (;;) {
+                        // Retained buffers already include bounded growth headroom.
+                        for (size_t slot = 8; slot < 12; ++slot) {
+                            if (!s.scratch[slot].is_valid() || s.scratch[slot].numel() < capacity)
+                                s.scratch[slot] = Tensor::empty({capacity}, Device::GPU, DataType::UInt32);
+                        }
+                        s.keys_a = Tensor(s.scratch[8]);
+                        s.keys_b = Tensor(s.scratch[9]);
+                        s.values_a = Tensor(s.scratch[10]);
+                        s.values_b = Tensor(s.scratch[11]);
+                        p.instances = capacity;
+                        p.keys = address(s.keys_a);
+                        p.values = address(s.values_a);
+                        p.stage = 8;
+                        const std::array count_reads{ref(s.offsets)};
+                        const std::array count_writes{ref(s.visibility)};
+                        dispatch("fast_forward", p, count_reads, count_writes, 1, specialization(p, 8));
+                        s.scalar_readback.enqueue_range(s.visibility, 4, 8);
+                        s.mark(6);
+                        launch(s, 3, p.visible);
+                        const bool in_a = vulkan_pair_sort({&s.keys_a, &s.keys_b, &s.values_a, &s.values_b}, p.instances, 0, tile_bits + p.depth_bits, false, nullptr, &s.visibility);
+                        p.keys = address(in_a ? s.keys_a : s.keys_b);
+                        p.values = address(in_a ? s.values_a : s.values_b);
+                        launch(s, 4, p.instances);
+                        s.mark(7);
+                        s.mark(8);
+                        launch(s, 5, tiles * 256);
+                        s.mark(9);
+                        std::array<uint32_t, 2> status{};
+                        // Validate before exposing output or scheduling any optimizer writes.
+                        const bool ready = s.scalar_readback.poll(std::as_writable_bytes(std::span(status)));
+                        if (!ready)
+                            s.scalar_readback.wait(std::as_writable_bytes(std::span(status)));
+                        if (status[0] == 0) {
+                            outputs.image = Tensor(s.image);
+                            outputs.alpha = Tensor(s.alpha);
+                            outputs.depth = Tensor(s.depth);
+                            outputs.normal = Tensor(s.normal);
+                            s.live = true;
+                            return {RasterResult::Code::Success, status[1] != 0, {}};
+                        }
+                        if (status[0] == 2)
+                            return failure(s, RasterResult::Code::InstanceOverflow, "Fast instance count exceeds signed indexing");
+                        uint64_t required = 0;
+                        s.scalar_readback.enqueue_range(s.visibility, 24 * 4, sizeof(required));
+                        s.scalar_readback.wait(std::as_writable_bytes(std::span(&required, 1)));
+                        // Limit speculative slack to 4 MiB per pair buffer.
+                        capacity = std::min(uint64_t(INT_MAX), required + std::min((required + 3) / 4, uint64_t{1} << 20));
+                        capacity = std::min(size_t(INT_MAX), (capacity + 255) & ~size_t{255});
+                    }
+                } else {
+                    int64_t instances = 0;
+                    s.scalar_readback.enqueue_range(s.offsets, (p.visible - 1) * sizeof(instances), sizeof(instances));
+                    s.scalar_readback.wait(std::as_writable_bytes(std::span(&instances, 1)));
+                    if (instances < 0 || instances > INT_MAX)
+                        return failure(s, RasterResult::Code::InstanceOverflow, "Fast instance count exceeds signed indexing");
+                    p.instances = static_cast<uint32_t>(instances);
+                    s.mark(6);
+                    s.keys_a = s.temporary(8, p.instances, DataType::UInt32);
+                    s.keys_b = s.temporary(9, p.instances, DataType::UInt32);
+                    s.values_a = s.temporary(10, p.instances, DataType::UInt32);
+                    s.values_b = s.temporary(11, p.instances, DataType::UInt32);
+                    p.keys = address(s.keys_a);
+                    p.values = address(s.values_a);
+                    launch(s, 3, p.visible);
+                    bool in_a = vulkan_pair_sort({&s.keys_a, &s.keys_b, &s.values_a, &s.values_b}, p.instances, 0, tile_bits + p.depth_bits, false);
+                    p.keys = address(in_a ? s.keys_a : s.keys_b);
+                    p.values = address(in_a ? s.values_a : s.values_b);
+                    launch(s, 4, p.instances);
+                }
                 s.mark(7);
             }
             if (!p.visible) {

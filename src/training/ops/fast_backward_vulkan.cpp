@@ -164,11 +164,13 @@ namespace lfs::training {
         void release(FastSaved& saved) noexcept {
             if (saved.backend) {
                 auto& state = static_cast<vulkan::FastState&>(*saved.backend);
+                const bool indirect = state.indirect;
                 auto* timer = state.timer;
                 auto scratch = std::move(state.scratch);
                 auto readback = std::move(state.scalar_readback);
                 state = vulkan::FastState{};
                 state.timer = timer;
+                state.indirect = indirect;
                 state.scratch = std::move(scratch);
                 state.scalar_readback = std::move(readback);
             }

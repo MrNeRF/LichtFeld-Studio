@@ -162,6 +162,26 @@ result:
     };
     FastPush p = ((Ptr<FastPush, Access.Read>)push.parameters)[0];
     specializeFast(p, fastStage);
+    if (p.stage == 8) {
+        if (gid.x == 0 && lane == 0) {
+            uint64_t count = ((Ptr<uint64_t, Access.Read>)p.offsets)[p.visible - 1];
+            uint overflow = count > uint64_t(0x7fffffffu) ? 2 : count > p.instances ? 1 : 0;
+            Ptr<uint, Access.ReadWrite> args = (Ptr<uint, Access.ReadWrite>)p.visibility;
+            args[0] = overflow == 0 ? uint(count) : 0;
+            args[1] = overflow; args[2] = count != 0 ? 1 : 0;
+            args[24] = uint(count); args[25] = uint(count >> 32);
+            uint active = overflow == 0 && count != 0 ? 1 : 0;
+            args[4] = active * min((p.visible + 255) / 256, p.padding); args[5] = 1; args[6] = 1;
+            args[8] = active * ((uint(count) + 2047) / 2048); args[9] = 1; args[10] = 1;
+            args[12] = active * min((uint(count) + 255) / 256, p.padding); args[13] = 1; args[14] = 1;
+            args[16] = active * 256; args[17] = 1; args[18] = 1;
+            args[20] = overflow == 0 ? min(p.gridWidth * p.gridHeight, p.padding) : 0; args[21] = 1; args[22] = 1;
+            args[28] = active; args[29] = 1; args[30] = 1;
+        }
+        return;
+    }
+    if (p.padding != 0 && p.stage >= 3 && p.stage <= 5)
+        p.instances = loadUint(p.visibility, 0);
     if (p.stage == 6) {
         uint blocks = (p.count + 255) / 256;
         for (uint block = gid.x; block < blocks; block += groups.x) {

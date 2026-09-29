@@ -83,8 +83,8 @@ namespace lfs::training::vulkan {
     }
     void dispatch(std::string_view name, const void* parameters, size_t bytes,
                   std::span<const StorageRef> reads, std::span<const StorageRef> writes,
-                  uint32_t group_count, uint32_t specialization) {
-        if (!group_count)
+                  uint32_t group_count, uint32_t specialization, StorageRef indirect, VkDeviceSize indirect_offset) {
+        if (!group_count && !indirect.meta)
             return;
         auto context = acquire_vulkan_context();
         auto block = std::make_shared<vk::ScopedAllocation>(*context, bytes);
@@ -97,10 +97,14 @@ namespace lfs::training::vulkan {
         const Push push{vk::address(block->storage())};
         std::vector<StorageRef> all_reads(reads.begin(), reads.end());
         all_reads.push_back(block->storage());
-        context->recorders().record(all_reads, writes, [pipeline, push, group_count](VkCommandBuffer command) {
+        if (indirect.meta)
+            all_reads.push_back(indirect);
+        context->recorders().record(all_reads, writes, [pipeline, push, group_count, indirect, indirect_offset](VkCommandBuffer command) {
             vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->handle);
             vkCmdPushConstants(command, pipeline->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
-            vkCmdDispatch(command, group_count, 1, 1); }, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_WHOLE_SIZE, block);
+            if (indirect.meta)
+                vkCmdDispatchIndirect(command, VulkanMemory::buffer_for(indirect), VulkanMemory::offset_for(indirect) + indirect_offset);
+            else vkCmdDispatch(command, group_count, 1, 1); }, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | (indirect.meta ? VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT : 0), VK_WHOLE_SIZE, block);
     }
     uint32_t groups(size_t work) { return vk::dispatch_groups(*acquire_vulkan_context(), work); }
 } // namespace lfs::training::vulkan

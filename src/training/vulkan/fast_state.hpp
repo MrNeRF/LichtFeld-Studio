@@ -61,6 +61,8 @@ namespace lfs::training::vulkan {
         core::Tensor projected, visibility, offsets, original_to_work, work_to_original;
         core::Tensor counts, keys_a, keys_b, values_a, values_b, ranges, transmittance, last;
         core::Tensor image, alpha, depth, normal;
+        // The direct path is retained for bitwise overflow/retry regression tests.
+        bool indirect = true;
         bool live = false;
         std::string message;
     };

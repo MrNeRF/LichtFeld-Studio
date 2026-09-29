@@ -11,6 +11,7 @@
 #include "core/tensor/internal/tensor_impl.hpp"
 #include "training_shader_table.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <map>
@@ -47,8 +48,9 @@ namespace lfs::training {
             uint32_t significant_bits;
             uint32_t pass_count;
             uint32_t pass_index;
+            uint64_t control;
         };
-        static_assert(sizeof(PairSortPush) == 80);
+        static_assert(sizeof(PairSortPush) == 88);
         static_assert(offsetof(PairSortPush, source_keys) == 0);
         static_assert(offsetof(PairSortPush, destination_keys) == 8);
         static_assert(offsetof(PairSortPush, source_values) == 16);
@@ -58,6 +60,7 @@ namespace lfs::training {
         static_assert(offsetof(PairSortPush, element_count) == 48);
         static_assert(offsetof(PairSortPush, pass_count) == 68);
         static_assert(offsetof(PairSortPush, pass_index) == 72);
+        static_assert(offsetof(PairSortPush, control) == 80);
 
         struct Pipelines {
             std::shared_ptr<VulkanContext> context;
@@ -156,16 +159,21 @@ namespace lfs::training {
                       const uint32_t stage, const uint32_t groups,
                       const PairSortPush& push,
                       const std::span<const StorageRef> reads,
-                      const std::span<const StorageRef> writes) {
+                      const std::span<const StorageRef> writes, StorageRef indirect = {}) {
             context.recorders().record(
                 reads, writes,
                 [&](const VkCommandBuffer command) {
                     vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipelines->stages[stage]);
                     vkCmdPushConstants(command, pipelines->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                        sizeof(push), &push);
-                    vkCmdDispatch(command, groups, 1, 1);
+                    if (indirect.meta) {
+                        const VkDeviceSize word = stage == kHistogramStage || stage == kScatterStage ? 8 : stage == kDigitBaseScanStage ? 28
+                                                                                                                                        : 16;
+                        vkCmdDispatchIndirect(command, VulkanMemory::buffer_for(indirect), VulkanMemory::offset_for(indirect) + word * 4);
+                    } else
+                        vkCmdDispatch(command, groups, 1, 1);
                 },
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_WHOLE_SIZE,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | (indirect.meta ? VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT : 0), VK_WHOLE_SIZE,
                 pipelines);
         }
     } // namespace
@@ -173,7 +181,7 @@ namespace lfs::training {
     bool vulkan_pair_sort(const PairSortBuffers buffers, const uint32_t element_count,
                           const uint32_t begin_bit, const uint32_t end_bit,
                           const bool wide_keys,
-                          std::vector<PairSortPassTimings>* pass_timings) {
+                          std::vector<PairSortPassTimings>* pass_timings, const core::Tensor* indirect) {
         LFS_ASSERT_MSG(buffers.keys_a && buffers.keys_b && buffers.values_a && buffers.values_b,
                        "Vulkan pair sort needs four ping-pong buffers");
         if (element_count == 0)
@@ -224,6 +232,10 @@ namespace lfs::training {
         } release{*context, counts, offsets};
 
         const auto pipelines = pipelines_for(context, subgroup_match);
+        if (indirect)
+            LFS_ASSERT_MSG(indirect->is_contiguous() && indirect->dtype() == core::DataType::UInt32 && indirect->numel() >= 32,
+                           "Vulkan pair sort indirect control has the wrong type or size");
+        const StorageRef control = indirect ? storage(indirect) : StorageRef{};
         bool in_a = true;
         const size_t dispatch_count = static_cast<size_t>(pass_count) * 5;
         core::GpuElapsed gpu_elapsed(core::GpuBackend::Vulkan,
@@ -243,7 +255,16 @@ namespace lfs::training {
                 (void)gpu_elapsed.mark(timestamp, target);
                 timing_records.emplace_back(timestamp, elapsed_ms);
             }
-            dispatch(*context, pipelines, stage, groups, push, reads, writes);
+            if (control.meta) {
+                std::array<StorageRef, 5> dependencies{};
+                LFS_ASSERT_MSG(reads.size() < dependencies.size(), "Too many pair sort read dependencies");
+                std::copy(reads.begin(), reads.end(), dependencies.begin());
+                dependencies[reads.size()] = control;
+                dispatch(*context, pipelines, stage, groups, push,
+                         std::span(dependencies.data(), reads.size() + 1), writes, control);
+            } else {
+                dispatch(*context, pipelines, stage, groups, push, reads, writes);
+            }
             if (pass_timings != nullptr && gpu_elapsed.ready())
                 (void)gpu_elapsed.mark(timestamp + 1, target);
             timestamp += 2;
@@ -267,6 +288,7 @@ namespace lfs::training {
                 .significant_bits = end_bit,
                 .pass_count = pass_count,
                 .pass_index = pass,
+                .control = control.meta ? vk::address(control) : 0,
             };
             const std::array histogram_reads{source_keys};
             const std::array histogram_writes{counts};

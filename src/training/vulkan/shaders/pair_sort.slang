@@ -24,6 +24,7 @@ struct SortParameters {
     uint significantBits;
     uint passCount;
     uint passIndex;
+    uint64_t control;
 };
 
 groupshared uint localCounts[kDigitCount];
@@ -109,6 +110,10 @@ bool firstMatchingLane(uint4 matchMask, uint lane) {
                                        uint3 groupId : SV_GroupID,
                                        uint3 groupThreadId : SV_GroupThreadID,
                                        uniform SortParameters parameters) {
+    if (parameters.control != 0) {
+        parameters.elementCount = ((Ptr<uint, Access.Read>)parameters.control)[0];
+        parameters.partitionCount = (parameters.elementCount + kPartitionWidth - 1) / kPartitionWidth;
+    }
     Ptr<uint, Access.Read> valuesIn = (Ptr<uint, Access.Read>)parameters.sourceValues;
     Ptr<uint, Access.ReadWrite> valuesOut = (Ptr<uint, Access.ReadWrite>)parameters.destinationValues;
     Ptr<uint, Access.ReadWrite> counts = (Ptr<uint, Access.ReadWrite>)parameters.partitionCounts;
