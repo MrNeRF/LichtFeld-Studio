@@ -167,7 +167,7 @@ namespace lfs::training {
 
         void validate_far_mask(const bool* pointer) {
             if (!pointer)
-                return;
+                throw std::invalid_argument("mean-step far mask must not be null");
             const auto context = acquire_vulkan_context();
             LFS_ASSERT_MSG(context->memory().owns_address(pointer),
                            "Vulkan Adam far-mask pointer is not a live Vulkan allocation");
