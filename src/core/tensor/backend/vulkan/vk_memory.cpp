@@ -141,7 +141,8 @@ namespace lfs::core::internal {
         : context_(context) {
         try {
             create_pool();
-            ensure_staging(kInitialStagingSize);
+            // Availability probes also construct a context. Allocate the ring
+            // on the first upload, when acquire_staging holds its mutex.
         } catch (...) {
             shutdown();
             throw;
@@ -239,15 +240,38 @@ namespace lfs::core::internal {
         buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                             VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        // Upload workers write sequentially through the device mapping while
+        // training runs. The queued copy then reads local device memory. A
+        // dedicated allocation bounds this ring to its requested size.
         VmaAllocationCreateInfo allocation_info{};
-        allocation_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
-                                VMA_ALLOCATION_CREATE_MAPPED_BIT;
-        allocation_info.usage = VMA_MEMORY_USAGE_AUTO;
+        allocation_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                VMA_ALLOCATION_CREATE_MAPPED_BIT |
+                                VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+        allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
         allocation_info.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+                                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        uint32_t memory_type = 0;
+        VkResult result = vmaFindMemoryTypeIndexForBufferInfo(
+            context_.allocator(), &buffer_info, &allocation_info, &memory_type);
         VmaAllocationInfo info{};
-        vk_check(&context_, vmaCreateBuffer(context_.allocator(), &buffer_info, &allocation_info, &staging_buffer_, &staging_allocation_, &info),
-                 "vmaCreateBuffer(staging)");
+        if (result == VK_SUCCESS) {
+            result = vmaCreateBuffer(context_.allocator(), &buffer_info, &allocation_info,
+                                     &staging_buffer_, &staging_allocation_, &info);
+        }
+        if (result == VK_ERROR_FEATURE_NOT_PRESENT || result == VK_ERROR_MEMORY_MAP_FAILED ||
+            result == VK_ERROR_OUT_OF_DEVICE_MEMORY || result == VK_ERROR_OUT_OF_HOST_MEMORY) {
+            // Preserve ordinary host staging on devices without a usable
+            // coherent device mapping, including an exhausted mapping heap.
+            allocation_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                                    VMA_ALLOCATION_CREATE_MAPPED_BIT;
+            allocation_info.usage = VMA_MEMORY_USAGE_AUTO;
+            allocation_info.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+            result = vmaCreateBuffer(context_.allocator(), &buffer_info, &allocation_info,
+                                     &staging_buffer_, &staging_allocation_, &info);
+        }
+        vk_check(&context_, result, "vmaCreateBuffer(staging)");
         staging_mapped_ = static_cast<std::byte*>(info.pMappedData);
         LFS_ASSERT_MSG(staging_mapped_ != nullptr,
                        "Vulkan staging allocation was not mapped");
