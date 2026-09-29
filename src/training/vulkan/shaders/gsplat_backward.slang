@@ -204,6 +204,7 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
     GsplatPixel px0 = gsplat_pixel(p, i, j), px1 = gsplat_pixel(p, i, j + 1);
     bool bg = p.bg_color != 0 || p.bg_image != 0;
     int begin = p.tile_offsets[tile], end = p.tile_offsets[tile + 1];
+    const int wave_last = WaveActiveMax(max(px0.bin_final, px1.bin_final));
     last_active[lane] = max(px0.bin_final, px1.bin_final);
     GroupMemoryBarrierWithGroupSync();
     for (uint step = 64; step != 0; step >>= 1) {
@@ -230,7 +231,10 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
             ids[lane] = g;
         }
         GroupMemoryBarrierWithGroupSync();
-        for (int t = 0; t < min(64, batch_end + 1 - begin); ++t) {
+        // A subgroup can skip intersections beyond all of its pixels.
+        // Other subgroup widths retain the shared-memory reduction barriers.
+        const int first = WaveGetLaneCount() == 32 ? max(0, batch_end - wave_last) : 0;
+        for (int t = first; t < min(64, batch_end + 1 - begin); ++t) {
             GsplatGrad grad = (GsplatGrad)0;
             bool hit0 = gsplat_contribute(px0, batch_end - t, xyzo[t], m0[t], m1[t], m2[t], quats[t], colors[t].xyz, colors[t].w, bg, grad);
             bool hit1 = gsplat_contribute(px1, batch_end - t, xyzo[t], m0[t], m1[t], m2[t], quats[t], colors[t].xyz, colors[t].w, bg, grad);
