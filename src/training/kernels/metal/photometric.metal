@@ -412,13 +412,13 @@ kernel void photo_ssim_backward(constant PhotoBackwardParams& p [[buffer(0)]],
     const uint pixel = inside ? uint(py) * uint(W) + uint(px) : 0;
     const float l1_weight = 1.0f - p.ssim_weight;
     const float inv_mask_sum = p.masked != 0 ? 1.0f / p.mask_sum[0] : 0.0f;
-    const bool crop = p.valid_padding != 0 && H > 10 && W > 10;
+    const bool crop_y = p.valid_padding != 0 && H > 10, crop_x = p.valid_padding != 0 && W > 10;
 
     float chain_center = 0.0f;
     if (inside) {
         if (p.masked != 0)
             chain_center = photo_mask(p.mask, pixel) * inv_mask_sum;
-        else if (!crop || (px >= 5 && px < W - 5 && py >= 5 && py < H - 5))
+        else if ((!crop_x || (px >= 5 && px < W - 5)) && (!crop_y || (py >= 5 && py < H - 5)))
             chain_center = p.grad_per_pixel;
     }
 
@@ -434,7 +434,7 @@ kernel void photo_ssim_backward(constant PhotoBackwardParams& p [[buffer(0)]],
                 if (p.masked != 0)
                     chain = photo_mask(p.mask, local) * inv_mask_sum;
                 else
-                    chain = !crop || (gx >= 5 && gx < W - 5 && gy >= 5 && gy < H - 5) ? p.grad_per_pixel : 0.0f;
+                    chain = (!crop_x || (gx >= 5 && gx < W - 5)) && (!crop_y || (gy >= 5 && gy < H - 5)) ? p.grad_per_pixel : 0.0f;
                 const float scale = -p.ssim_weight * chain;
                 v0 = scale * float(p.dm_mu[base + local]);
                 if (p.has_sigma != 0) {
