@@ -21,17 +21,6 @@
 
 namespace lfs::io {
 
-    struct PipelinedImageLoader::PortableImageCache {
-        struct Entry {
-            lfs::core::Tensor image;
-            uint64_t access = 0;
-        };
-        std::mutex mutex;
-        std::unordered_map<std::string, Entry> entries;
-        size_t bytes = 0;
-        uint64_t access = 0;
-    };
-
     namespace {
 
         using lfs::core::DataType;
@@ -179,64 +168,32 @@ namespace lfs::io {
     lfs::core::Tensor PipelinedImageLoader::decode_portable_rgb(
         const std::filesystem::path& path,
         const LoadParams& params,
-        lfs::core::TensorUpload& upload) const {
-        // Cache only immutable host pixels. Workers decode ahead of training;
-        // every consumer gets a new asynchronously uploaded device image.
-        const bool cacheable = !params.undistort && !config_.use_16bit_color;
-        const size_t cache_budget = std::min(config_.max_cache_bytes, size_t{1} << 30);
-        const auto cache_key = cacheable ? make_cache_key(path, params) : std::string{};
-        Tensor host;
-        if (cacheable) {
-            std::call_once(portable_cache_once_, [&] { portable_cache_ = std::make_shared<PortableImageCache>(); });
-            std::lock_guard lock(portable_cache_->mutex);
-            if (const auto found = portable_cache_->entries.find(cache_key); found != portable_cache_->entries.end()) {
-                found->second.access = ++portable_cache_->access;
-                host = found->second.image;
-            }
+        lfs::core::TensorUpload& upload,
+        const std::vector<uint8_t>* const encoded) const {
+        // Like the CUDA path, only encoded bytes are cached; every request
+        // decodes, and every consumer gets a new asynchronously uploaded image.
+        {
+            std::lock_guard stats_lock(stats_mutex_);
+            ++stats_.cpu_decode_calls;
         }
-        if (!host.is_valid()) {
-            {
-                std::lock_guard stats_lock(stats_mutex_);
-                ++stats_.cpu_decode_calls;
-            }
-            if (config_.use_16bit_color) {
-                auto [data, width, height, channels] =
-                    lfs::core::load_image_u16(path, params.resize_factor, params.max_width);
-                if (!data)
-                    throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
-                host = host_uint16(data, image_shape(height, width, channels), lfs::core::free_image)
-                           .permute({2, 0, 1})
-                           .contiguous();
-            } else {
-                auto [data, width, height, channels] =
-                    lfs::core::load_image(path, params.resize_factor, params.max_width);
-                if (!data)
-                    throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
-                // Planar bytes avoid a second device image and a per-step GPU transpose.
-                host = host_uint8_planar(data, height, width, channels, lfs::core::free_image);
-            }
-            if (cacheable && host.bytes() <= cache_budget) {
-                std::lock_guard lock(portable_cache_->mutex);
-                if (!portable_cache_->entries.contains(cache_key)) {
-                    while (portable_cache_->bytes + host.bytes() > cache_budget && !portable_cache_->entries.empty()) {
-                        const auto oldest = std::min_element(portable_cache_->entries.begin(), portable_cache_->entries.end(),
-                                                             [](const auto& a, const auto& b) { return a.second.access < b.second.access; });
-                        portable_cache_->bytes -= oldest->second.image.bytes();
-                        portable_cache_->entries.erase(oldest);
-                    }
-                    portable_cache_->entries.emplace(cache_key, PortableImageCache::Entry{host, ++portable_cache_->access});
-                    portable_cache_->bytes += host.bytes();
-                    std::lock_guard stats_lock(stats_mutex_);
-                    stats_.host_decoded_cache_bytes = 0;
-                    stats_.device_decoded_cache_bytes = 0;
-                    for (const auto& [key, entry] : portable_cache_->entries) {
-                        auto& bytes = entry.image.device() == Device::CPU
-                                          ? stats_.host_decoded_cache_bytes
-                                          : stats_.device_decoded_cache_bytes;
-                        bytes += entry.image.bytes();
-                    }
-                }
-            }
+        Tensor host;
+        if (config_.use_16bit_color) {
+            auto [data, width, height, channels] = lfs::core::load_image_u16(path, params.resize_factor, params.max_width);
+            if (!data)
+                throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
+            host = host_uint16(data, image_shape(height, width, channels), lfs::core::free_image)
+                       .permute({2, 0, 1})
+                       .contiguous();
+        } else {
+            auto [data, width, height, channels] =
+                encoded != nullptr
+                    ? lfs::core::load_image_from_memory(encoded->data(), encoded->size(), params.resize_factor,
+                                                        params.max_width)
+                    : lfs::core::load_image(path, params.resize_factor, params.max_width);
+            if (!data)
+                throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
+            // Planar bytes avoid a second device image and a per-step GPU transpose.
+            host = host_uint8_planar(data, height, width, channels, lfs::core::free_image);
         }
         Tensor image = to_device(upload, host);
         if (config_.use_16bit_color) {
@@ -257,22 +214,6 @@ namespace lfs::io {
                 image = float_to_uint8(image);
         }
         return image.contiguous();
-    }
-
-    size_t PipelinedImageLoader::release_portable_host_cache(const size_t bytes) {
-        std::call_once(portable_cache_once_, [&] { portable_cache_ = std::make_shared<PortableImageCache>(); });
-        std::lock_guard lock(portable_cache_->mutex);
-        size_t released = 0;
-        while (released < bytes && !portable_cache_->entries.empty()) {
-            const auto oldest = std::min_element(portable_cache_->entries.begin(), portable_cache_->entries.end(),
-                                                 [](const auto& a, const auto& b) { return a.second.access < b.second.access; });
-            released += oldest->second.image.bytes();
-            portable_cache_->bytes -= oldest->second.image.bytes();
-            portable_cache_->entries.erase(oldest);
-        }
-        std::lock_guard stats_lock(stats_mutex_);
-        stats_.host_decoded_cache_bytes = portable_cache_->bytes;
-        return released;
     }
 
     void PipelinedImageLoader::portable_process_thread_func() {
@@ -417,7 +358,7 @@ namespace lfs::io {
                                           std::nullopt, std::nullopt, std::move(prior));
                     }
                 } else {
-                    auto image = decode_portable_rgb(item.path, params, upload);
+                    auto image = decode_portable_rgb(item.path, params, upload, item.jpeg_data.get());
                     try_complete_pair(item.sequence_id, item.loader_generation, std::move(image),
                                       std::nullopt);
                 }

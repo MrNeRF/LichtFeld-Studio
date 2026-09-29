@@ -781,7 +781,8 @@ namespace lfs::training {
             constexpr size_t JPEG_HOT_OUTPUT_QUEUE_SIZE = 2;
             constexpr size_t JPEG_HOT_DECODER_POOL_SIZE = 2;
             const float non_jpeg_ratio = dataset ? dataset->get_non_jpeg_ratio() : 0.0f;
-            if (non_jpeg_ratio <= NON_JPEG_THRESHOLD) {
+            // The JPEG hot path decodes on the GPU; CPU decoding keeps its queues.
+            if (lfs::io::PipelinedImageLoader::decodes_on_gpu(config.backend) && non_jpeg_ratio <= NON_JPEG_THRESHOLD) {
                 if (config.output_queue_size > JPEG_HOT_OUTPUT_QUEUE_SIZE) {
                     LOG_INFO(
                         "Reducing JPEG image ready queue {} -> {} (hot path keeps compressed prefetch)",
@@ -8054,17 +8055,21 @@ namespace lfs::training {
             pipelined_config.io_threads = 2;
             pipelined_config.use_16bit_color = params_.dataset.loading_params.use_16bit_color;
 
-            // Non-JPEG images (PNG, WebP) need CPU decoding - use more threads until cache warms
+            // Non-JPEG images (PNG, WebP) need CPU decoding - use more threads until cache warms.
+            // Without CUDA every image decodes on the CPU.
             constexpr float NON_JPEG_THRESHOLD = 0.1f;
             constexpr size_t MIN_COLD_THREADS = 4;
             constexpr size_t COLD_PREFETCH_COUNT = 16;
             const float non_jpeg_ratio = train_dataset_->get_non_jpeg_ratio();
-            if (non_jpeg_ratio > NON_JPEG_THRESHOLD) {
+            const bool cpu_decode = !lfs::io::PipelinedImageLoader::decodes_on_gpu(pipelined_config.backend);
+            if (cpu_decode || non_jpeg_ratio > NON_JPEG_THRESHOLD) {
                 const size_t cold_threads = std::max(MIN_COLD_THREADS,
                                                      static_cast<size_t>(std::thread::hardware_concurrency() / 2));
                 pipelined_config.cold_process_threads = cold_threads;
                 pipelined_config.prefetch_count = COLD_PREFETCH_COUNT;
-                LOG_INFO("{:.0f}% non-JPEG images, using {} cold threads", non_jpeg_ratio * 100.0f, cold_threads);
+                LOG_INFO("{} images decode on the CPU, using {} cold threads",
+                         cpu_decode ? std::string("All") : std::format("{:.0f}% non-JPEG", non_jpeg_ratio * 100.0f),
+                         cold_threads);
             }
 
             const bool alpha_available = scene_ && scene_->imagesHaveAlpha();

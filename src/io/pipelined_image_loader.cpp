@@ -831,8 +831,6 @@ namespace lfs::io {
     }
 
     size_t PipelinedImageLoader::release_host_cache(const size_t bytes) {
-        if (config_.backend != lfs::core::GpuBackend::CUDA)
-            return release_portable_host_cache(bytes);
         size_t released = 0;
         {
             std::lock_guard<std::mutex> lock(jpeg_cache_mutex_);
@@ -841,9 +839,9 @@ namespace lfs::io {
         }
         if (released > 0) {
             return_freed_heap_to_os();
-            LOG_INFO("[PipelinedImageLoader] Moved {:.1f} MiB of cached images from RAM to the run spill "
-                     "to free host memory",
-                     static_cast<double>(released) / (1024.0 * 1024.0));
+            LOG_INFO("[PipelinedImageLoader] {} {:.1f} MiB of cached images {} to free host memory",
+                     run_spill_folder_.empty() ? "Dropped" : "Moved", static_cast<double>(released) / (1024.0 * 1024.0),
+                     run_spill_folder_.empty() ? "from RAM" : "from RAM to the run spill");
         }
         return released;
     }
@@ -1491,8 +1489,9 @@ namespace lfs::io {
             }
 
             if (!cuda_run) {
-                // Host decoding reads each source file in its worker; there is no
-                // encoded run cache to consult.
+                // As on CUDA, the run cache keeps each JPEG's encoded bytes and
+                // every request decodes them. Other formats, alpha masks and
+                // 16-bit color decode the file in the worker.
                 PrefetchedImage result;
                 result.sequence_id = request.sequence_id;
                 result.loader_generation = request.loader_generation;
@@ -1502,6 +1501,28 @@ namespace lfs::io {
                 result.alpha_as_mask = request.extract_alpha_as_mask;
                 result.alpha_mask_params = request.alpha_mask_params;
                 result.undistort = request.undistort;
+                if (!request.extract_alpha_as_mask && !config_.use_16bit_color) {
+                    try {
+                        result.cache_key = make_cache_key(request.path, request.params);
+                        result.jpeg_data = load_cached_jpeg_blob(result.cache_key);
+                        if (!result.jpeg_data) {
+                            auto bytes = read_file(request.path);
+                            {
+                                std::lock_guard<std::mutex> lock(stats_mutex_);
+                                stats_.total_bytes_read += bytes.size();
+                            }
+                            if (is_jpeg_data(bytes)) {
+                                result.jpeg_data = std::make_shared<std::vector<uint8_t>>(std::move(bytes));
+                                put_in_jpeg_cache(result.cache_key, result.jpeg_data);
+                            }
+                        }
+                    } catch (const std::exception& e) {
+                        LOG_ERROR("[PipelinedImageLoader] Prefetch error {}: {}", lfs::core::path_to_utf8(request.path),
+                                  e.what());
+                        fail_image_request(e.what());
+                        continue;
+                    }
+                }
                 cold_queue_.push(std::move(result));
                 {
                     std::lock_guard<std::mutex> lock(stats_mutex_);
