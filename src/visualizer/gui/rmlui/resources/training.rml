@@ -57,16 +57,6 @@
     <span class="status-text status-success" data-if="show_project_saved">{{label_project_saved}}</span>
   </div>
 
-  <!-- ── Training Parameters ── -->
-  <div id="training-search-container">
-    <img id="training-search-icon" src="../icon/scene/search.png" />
-    <input id="training-search-input" type="text" data-value="pv_search_query" />
-    <button id="training-search-clear" type="button"
-            data-if="pv_search_active" data-event-click="pv_search_clear">
-      <img src="../icon/scene/x.png" />
-    </button>
-  </div>
-
   <!-- Training telemetry remains visible while parameter rows scroll independently. -->
   <div class="section-gap training-telemetry" data-if="show_training_telemetry">
     <span class="status-text text-default training-status-line">{{status_mode}}</span>
@@ -98,6 +88,16 @@
         <loss-graph id="psnr-graph-el" />
       </div>
     </div>
+  </div>
+
+  <!-- ── Training Parameters ── -->
+  <div id="training-search-container">
+    <img id="training-search-icon" src="../icon/scene/search.png" />
+    <input id="training-search-input" type="text" data-value="pv_search_query" />
+    <button id="training-search-clear" type="button"
+            data-if="pv_search_active" data-event-click="pv_search_clear">
+      <img src="../icon/scene/x.png" />
+    </button>
   </div>
 
   <div class="training-scroll-region">
