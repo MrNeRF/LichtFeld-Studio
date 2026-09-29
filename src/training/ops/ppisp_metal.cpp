@@ -70,7 +70,7 @@ namespace lfs::training {
             if (!g.parameter.is_valid())
                 return {};
             return {mk::address(g.parameter), mk::address(g.moment1), mk::address(g.moment2), mk::address(g.gradient),
-                    static_cast<uint32_t>(g.parameter.numel()), 0};
+                    mk::count32(g.parameter.numel(), "PPISP parameter"), 0};
         }
 
         size_t adam_items(const AdamParams& params) {

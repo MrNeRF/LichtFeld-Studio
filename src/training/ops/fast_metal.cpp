@@ -787,7 +787,7 @@ namespace lfs::training {
                 .far_mask_n = far_mask ? static_cast<uint32_t>(std::min<size_t>(adam.far_mask.numel(),
                                                                                 static_cast<size_t>(means_group.primitives)))
                                        : 0,
-                .sparsity_n = sparsity ? static_cast<uint32_t>(adam.sparsity_sigmoid.numel()) : 0,
+                .sparsity_n = sparsity ? mk::count32(adam.sparsity_sigmoid.numel(), "sparsity") : 0,
                 .per_splat_mean_step = adam.per_splat_mean_step ? 1u : 0u,
             };
             launch("fast_backward_geometry", geometry, std::span<const Tensor* const>(uses), blocks, 1, 256,

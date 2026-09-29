@@ -22,7 +22,7 @@ namespace lfs::training {
 
         void heatmap(const Tensor& loss, Tensor& latest, Tensor& ema, const int slot, const float ema_alpha) {
             const HeatmapParams params{mk::address(loss), mk::address(latest), mk::address(ema), slot,
-                                       static_cast<uint32_t>(latest.numel()), ema_alpha};
+                                       mk::count32(latest.numel(), "EMA"), ema_alpha};
             mk::launch("training_image_heatmap", params, {&loss, &latest, &ema}, 1, 1);
         }
 
@@ -115,7 +115,7 @@ namespace lfs::training {
             if (values.numel() == 0)
                 return;
             const NormalizeScalarParams params{mk::address(values), mk::address(scalar),
-                                               static_cast<uint32_t>(values.numel()), skip_below};
+                                               mk::count32(values.numel(), "values"), skip_below};
             mk::launch_items("training_image_normalize_scalar", params, {&values, &scalar}, values.numel());
         }
     } // namespace
