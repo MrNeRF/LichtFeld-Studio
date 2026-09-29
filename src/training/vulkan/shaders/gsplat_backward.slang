@@ -194,8 +194,9 @@ struct Push {
 };
 [[vk::push_constant]] Push push;
 [SpecializationConstant] const uint stage = 0;
-groupshared float4 xyzo[64], m0[64], m1[64], m2[64], quats[64], colors[64];
-groupshared uint ids[64];
+// Stage one Gaussian per lane to amortize workgroup synchronization.
+groupshared float4 xyzo[128], m0[128], m1[128], m2[128], quats[128], colors[128];
+groupshared uint ids[128];
 groupshared float reduction[17][128];
 groupshared int last_active[128];
 void raster(GsplatRasterParams p, uint tile, uint lane) {
@@ -214,10 +215,10 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
     }
     // Later intersections did not contribute to any pixel in this tile.
     end = min(end, last_active[0] + 1);
-    for (int batch_end = end - 1; batch_end >= begin; batch_end -= 64) {
+    for (int batch_end = end - 1; batch_end >= begin; batch_end -= 128) {
         GroupMemoryBarrierWithGroupSync();
         int index = batch_end - int(lane);
-        if (lane < 64 && index >= begin) {
+        if (lane < 128 && index >= begin) {
             uint g = p.gaussian_ids[index];
             float3 scale = exp(gsplat_load3(p.scales, g));
             float4 quat = gsplat_load4(p.quats, g);
@@ -234,7 +235,7 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
         // A subgroup can skip intersections beyond all of its pixels.
         // Other subgroup widths retain the shared-memory reduction barriers.
         const int first = WaveGetLaneCount() == 32 ? max(0, batch_end - wave_last) : 0;
-        for (int t = first; t < min(64, batch_end + 1 - begin); ++t) {
+        for (int t = first; t < min(128, batch_end + 1 - begin); ++t) {
             GsplatGrad grad = (GsplatGrad)0;
             bool hit0 = gsplat_contribute(px0, batch_end - t, xyzo[t], m0[t], m1[t], m2[t], quats[t], colors[t].xyz, colors[t].w, bg, grad);
             bool hit1 = gsplat_contribute(px1, batch_end - t, xyzo[t], m0[t], m1[t], m2[t], quats[t], colors[t].xyz, colors[t].w, bg, grad);
