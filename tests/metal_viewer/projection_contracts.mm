@@ -160,7 +160,7 @@ static void run(id<MTLDevice> device) {
 int main() {
     @autoreleasepool {
         auto device=MTLCreateSystemDefaultDevice();
-        if(!device){std::puts("SKIP: no Metal device");return 77;}
+        if(!device){std::puts("No Metal device");return LFS_METAL_TEST_REQUIRE_DEVICE?1:77;}
         try{run(device);return 0;}
         catch(const std::exception& error){std::fprintf(stderr,"FAIL: %s\n",error.what());return 1;}
     }

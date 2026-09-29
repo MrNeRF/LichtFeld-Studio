@@ -198,6 +198,7 @@ if(APPLE)
         tensor/backend/metal/metal_ops.mm
         tensor/backend/metal/metal_shared_image.mm
         tensor/backend/metal/metal_module.mm
+        tensor/backend/metal/metal_tensor_reader.mm
         ${_lfs_metal_kernels_cpp}
     )
     if(LFS_TENSOR_VULKAN)

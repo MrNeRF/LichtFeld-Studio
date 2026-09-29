@@ -126,7 +126,7 @@ static void run(id<MTLDevice> device) {
 }
 int main() {
     @autoreleasepool {
-        auto device=MTLCreateSystemDefaultDevice();if(!device)return 77;
+        auto device=MTLCreateSystemDefaultDevice();if(!device)return LFS_METAL_TEST_REQUIRE_DEVICE?1:77;
         try{run(device);return 0;}catch(const std::exception& e){std::fprintf(stderr,"%s\n",e.what());return 1;}
     }
 }

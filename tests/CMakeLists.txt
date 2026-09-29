@@ -3,6 +3,10 @@
 
 # Testing module - comprehensive tests for all components
 
+if(BUILD_TESTS OR BUILD_FORMAT_TESTS OR BUILD_VISUALIZER_TESTS)
+    add_subdirectory(metal_viewer)
+endif()
+
 # =============================================================================
 # Headless localization contracts (no LibTorch/CUDA)
 # =============================================================================

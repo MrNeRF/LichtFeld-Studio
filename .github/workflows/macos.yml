@@ -65,7 +65,7 @@ jobs:
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
 
       - name: Configure
-        run: cmake --preset macos-release -DBUILD_TESTS=ON
+        run: cmake --preset macos-release -DBUILD_TESTS=ON -DLFS_METAL_TEST_REQUIRE_DEVICE=ON -DLFS_TEST_METAL_VULKAN_INTEROP=ON
 
       - name: Remove vcpkg build intermediates
         run: |
@@ -81,3 +81,18 @@ jobs:
           icd="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
           test -f "$icd"
           VK_DRIVER_FILES="$icd" ctest --test-dir build-macos-release -R '^lichtfeld_tests$' --no-tests=error --verbose
+
+      - name: Run native viewer contracts with Metal validation
+        run: |
+          icd="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
+          test -f "$icd"
+          VK_DRIVER_FILES="$icd" MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1 \
+            ctest --test-dir build-macos-release -L viewer --no-tests=error --output-on-failure
+
+      - name: Upload test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-test-diagnostics
+          path: build-macos-release/Testing/Temporary/
+          if-no-files-found: ignore

@@ -167,6 +167,11 @@ jobs:
           cmake --build build --target lichtfeld_format_tests -j $(nproc)
           ctest --test-dir build --output-on-failure -R '^lichtfeld_format_tests$'
 
+      - name: Run viewer backend policy contracts
+        run: |
+          cmake --build build --target viewer_backend_contracts -j $(nproc)
+          ctest --test-dir build --output-on-failure --no-tests=error -R '^ViewerBackendSelectionContracts$'
+
       - name: Run scene reconstruction CPU tests
         if: matrix.build_type == 'Release'
         run: |
