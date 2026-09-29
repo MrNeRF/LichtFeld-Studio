@@ -452,7 +452,7 @@ namespace {
         out.snapshot.exact_u("photometric.workspace.reset", reset.allocated);
         // Borders, batch normalization, soft masks and byte targets are observable
         // contracts, including the thin-image forward/backward padding asymmetry.
-        for (const auto [n, h, w] : {std::tuple{1, 7, 19}, std::tuple{2, 13, 17}}) {
+        for (const auto [n, h, w] : {std::tuple{1, 7, 19}, std::tuple{2, 13, 17}, std::tuple{1, 13, 259}}) {
             auto host = Tensor::empty({static_cast<size_t>(n), 3, static_cast<size_t>(h), static_cast<size_t>(w)}, Device::CPU);
             auto bytes_host = Tensor::empty(host.shape(), Device::CPU, DataType::UInt8);
             auto soft_host = Tensor::empty({static_cast<size_t>(h), static_cast<size_t>(w)}, Device::CPU);
