@@ -572,6 +572,39 @@ namespace {
         expect_close(host(gk), group(&PpispParams::crf), 2e-4, 2e-3, "ppisp crf gradient");
     }
 
+    // Parameter gradients summed over many workgroups: each reduces its pixels
+    // before one atomic per parameter.
+    TEST_P(PortableAppearance, PpispBackwardSumsAcrossWorkgroups) {
+        const auto& table = *this->table().ppisp;
+        PpispParams p = ppisp_values();
+        for (int i = 0; i < 30; ++i)
+            if (i % 5 >= 2)
+                p.vignetting[i] = -std::abs(p.vignetting[i]) * 0.5;
+        constexpr int H = 48, W = 96, camera = 1, frame = 2;
+        const auto rgb_values = pattern(3 * H * W, 0.25f, 7, 0.45f);
+        const auto grad_values = pattern(3 * H * W, 1.f, 9);
+        const Doubles rgb = widen(rgb_values);
+        const auto exposure = gpu(narrow(p.exposure), {3}), vignetting = gpu(narrow(p.vignetting), {30});
+        const auto color = gpu(narrow(p.color), {24}), crf = gpu(narrow(p.crf), {24});
+        auto ge = Tensor::zeros({3}, Device::GPU), gv = Tensor::zeros({30}, Device::GPU);
+        auto gc = Tensor::zeros({24}, Device::GPU), gk = Tensor::zeros({24}, Device::GPU);
+        auto grad_rgb = Tensor::empty({3, H, W}, Device::GPU);
+        table.backward({exposure, vignetting, color, crf}, gpu(rgb_values, {3, H, W}), gpu(grad_values, {3, H, W}),
+                       {ge, gv, gc, gk}, grad_rgb, 2, 3, camera, frame);
+
+        const auto group = [&](Doubles PpispParams::*member) {
+            return finite_difference(p.*member, [&](const Doubles& values) {
+                PpispParams q = p;
+                q.*member = values;
+                return weighted(ppisp_forward(q, rgb, H, W, 0, H, camera, frame), grad_values);
+            });
+        };
+        expect_close(host(ge), group(&PpispParams::exposure), 2e-4, 2e-3, "ppisp exposure gradient");
+        expect_close(host(gv), group(&PpispParams::vignetting), 2e-4, 2e-3, "ppisp vignetting gradient");
+        expect_close(host(gc), group(&PpispParams::color), 2e-4, 2e-3, "ppisp color gradient");
+        expect_close(host(gk), group(&PpispParams::crf), 2e-4, 2e-3, "ppisp crf gradient");
+    }
+
     TEST_P(PortableAppearance, PpispOptimizerAndRegularizers) {
         const auto& table = *this->table().ppisp;
         {

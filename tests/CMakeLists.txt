@@ -483,7 +483,8 @@ if(NOT LFS_HAS_CUDA)
             test_training_ops_metal_gsplat.cpp
             test_training_ops_metal_losses.cpp
             test_training_ops_metal_adam_sh.cpp
-            test_training_ops_metal_fast.cpp)
+            test_training_ops_metal_fast.cpp
+            test_ppisp_regularizer_portable.cpp)
     endif()
     if(APPLE)
         list(APPEND TEST_SOURCES test_video_videotoolbox.cpp test_mcp_render_capture_utils.cpp)

@@ -100,6 +100,11 @@ namespace lfs::training {
         [[nodiscard]] const lfs::core::Tensor& color_params() const { return color_params_; }
         [[nodiscard]] const lfs::core::Tensor& vignetting_params() const { return vignetting_params_; }
         [[nodiscard]] const lfs::core::Tensor& crf_params() const { return crf_params_; }
+        /// Accumulated gradients, laid out like the parameters.
+        [[nodiscard]] const lfs::core::Tensor& exposure_grad() const { return exposure_grad_; }
+        [[nodiscard]] const lfs::core::Tensor& vignetting_grad() const { return vignetting_grad_; }
+        [[nodiscard]] const lfs::core::Tensor& color_grad() const { return color_grad_; }
+        [[nodiscard]] const lfs::core::Tensor& crf_grad() const { return crf_grad_; }
 
         /// Check if a frame UID is registered
         bool is_known_frame(int uid) const;
