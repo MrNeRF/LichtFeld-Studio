@@ -4,6 +4,8 @@
   "ui.vram_process_estimate_tooltip": "Pamięć GPU procesu oszacowana jako górna granica na podstawie użycia urządzenia, ponieważ brak wartości procesu.",
   "ui.vram_device_nvml_tooltip": "Pamięć urządzenia zgłoszona przez sterownik NVIDIA.",
   "ui.vram_device_cuda_tooltip": "Pamięć widoczna dla CUDA; może nie obejmować zarezerwowanej pojemności fizycznej.",
+  "ui.vram_process_metal_tooltip": "Pamięć GPU przydzielona przez ten proces za pośrednictwem Metal.",
+  "ui.vram_device_unified_tooltip": "Pamięć zunifikowana, z której GPU nie może już korzystać w ramach limitu zestawu roboczego: alokacje GPU wszystkich aplikacji oraz pamięć systemowa zajmowana przez inne procesy.",
   "ui.vram_device_capacity": "Device capacity",
   "ui.vram_window_5m": "5 min",
   "ui.vram_window_30m": "30 min",

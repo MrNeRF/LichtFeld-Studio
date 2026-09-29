@@ -9,6 +9,7 @@
 #include <cmath>
 #include <format>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <vector>
 
@@ -27,12 +28,11 @@ namespace lfs::training {
             return static_cast<uint32_t>(count);
         }
 
-        // The CUDA table lives in __constant__ memory; this one is never freed,
-        // so it outlives the tensor backend at exit.
-        Tensor& relocation_coefficients() {
-            static Tensor* const table = new Tensor();
-            return *table;
-        }
+        // Host copy of the relocation coefficients (CUDA keeps them in
+        // __constant__ memory), uploaded per relocation so no GPU table
+        // outlives the Metal backend.
+        std::mutex coefficient_mutex;
+        std::vector<float> coefficient_values;
 
         void initialize(const int n_max) {
             if (n_max < 0 || n_max > kRelocationMax)
@@ -50,8 +50,8 @@ namespace lfs::training {
                         binom *= static_cast<float>(n - k) / static_cast<float>(k + 1);
                 }
             }
-            relocation_coefficients() =
-                Tensor::from_vector(coefficients, {coefficients.size()}, core::Device::GPU);
+            std::lock_guard lock(coefficient_mutex);
+            coefficient_values = std::move(coefficients);
         }
 
         struct RelocateParams {
@@ -65,9 +65,13 @@ namespace lfs::training {
             const size_t n = opacity.numel();
             if (n == 0)
                 return;
-            const Tensor& coefficients = relocation_coefficients();
-            if (!coefficients.is_valid())
-                throw std::logic_error("MCMC relocate needs initialize() to upload the relocation coefficients");
+            Tensor coefficients;
+            {
+                std::lock_guard lock(coefficient_mutex);
+                if (coefficient_values.empty())
+                    throw std::logic_error("MCMC relocate needs initialize() to set the relocation coefficients");
+                coefficients = Tensor::from_vector(coefficient_values, {coefficient_values.size()}, core::Device::GPU);
+            }
             const RelocateParams params{mk::address(opacity), mk::address(scales),
                                         mk::address(ratios), mk::address(coefficients),
                                         mk::address(new_opacity), mk::address(new_scales),

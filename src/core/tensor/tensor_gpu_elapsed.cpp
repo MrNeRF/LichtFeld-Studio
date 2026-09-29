@@ -172,6 +172,18 @@ namespace lfs::core {
             const auto id = execution_target ? reinterpret_cast<uint64_t>(execution_target)
                                              : impl_->vulkan->recorders().current_queue();
             impl_->vulkan->recorders().queue_wait(id);
+            // A finished submission does not make its timestamps readable yet:
+            // MoltenVK resolves them after the timeline signal. Wait for them
+            // so milliseconds() holds right after this returns.
+            for (std::size_t index = 0; index < impl_->marks.size(); ++index) {
+                if (!impl_->marks[index].written || impl_->marks[index].queue != id)
+                    continue;
+                uint64_t ticks = 0;
+                if (vkGetQueryPoolResults(impl_->vulkan->device(), impl_->queries, static_cast<uint32_t>(index), 1,
+                                          sizeof(ticks), &ticks, sizeof(ticks),
+                                          VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) != VK_SUCCESS)
+                    return false;
+            }
             return true;
         }
 #if LFS_HAS_CUDA
