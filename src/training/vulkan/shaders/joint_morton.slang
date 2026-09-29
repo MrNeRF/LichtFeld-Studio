@@ -76,6 +76,24 @@ void encode(uint64_t cell, float2 value, uint destinationRow, uniform Parameters
 [numthreads(256, 1, 1)]
 void main(uint3 groupId : SV_GroupID, uint3 laneId : SV_GroupThreadID, uniform Parameters p) {
     const uint lane = laneId.x;
+    if (kPhase == 2u) {
+        uint3 grid = spirv_asm {
+        result:
+            $$uint3 = OpLoad builtin(NumWorkgroups : uint3);
+        };
+        const uint wordsPerSlot = 32u * (p.bits == 16u ? 4u : 2u);
+        const uint groupWords = (p.slotEnd - p.slotBegin) * wordsPerSlot;
+        const uint64_t words = uint64_t((p.primitives + 31u) / 32u) * groupWords;
+        Ptr<uint, Access.Read> source = (Ptr<uint, Access.Read>)p.source;
+        Ptr<uint, Access.ReadWrite> destination = (Ptr<uint, Access.ReadWrite>)p.destination;
+        for (uint64_t word = uint64_t(groupId.x) * 256u + lane;
+             word < words; word += uint64_t(grid.x) * 256u) {
+            const uint64_t tile = word / groupWords;
+            const uint local = uint(word % groupWords);
+            destination[tile * p.width * wordsPerSlot + p.slotBegin * wordsPerSlot + local] = source[word];
+        }
+        return;
+    }
     Ptr<int64_t, Access.Read> permutation = (Ptr<int64_t, Access.Read>)p.permutation;
     if (kPhase == 0u) {
         const uint row = groupId.x * 256u + lane;

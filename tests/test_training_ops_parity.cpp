@@ -2881,6 +2881,55 @@ namespace {
         }
     }
 
+    TEST(TrainingVulkanOps, GroupedMortonPreservesPackedWordsAndPadding) {
+        if (!lfs::core::gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP();
+        const lfs::core::GpuBackendScope scope(GpuBackend::Vulkan);
+        const auto& table = *lfs::training::training_ops(GpuBackend::Vulkan).morton;
+        constexpr size_t width = 5;
+        for (const int bits : {8, 16}) {
+            for (const size_t n : {size_t{513}, size_t{1048609}}) {
+                SCOPED_TRACE(std::to_string(n) + "/" + std::to_string(bits));
+                const auto perm = shuffled_indices(n);
+                const size_t cells = lfs::core::sh_swizzled_padded_n(n) * width * 4;
+                const size_t bytes = cells * joint::bytes_per_cell(bits);
+                auto host = Tensor::empty({bytes}, Device::CPU, DataType::UInt8);
+                uint32_t value = 731;
+                for (size_t i = 0; i < bytes; ++i) {
+                    value = value * 1664525u + 1013904223u;
+                    host.ptr<uint8_t>()[i] = uint8_t(value >> 24);
+                }
+                const auto packed = host.gpu();
+                std::vector<float> values(joint::n_bounds_for_prims(n) * 4);
+                for (size_t b = 0; b < values.size() / 4; ++b) {
+                    values[b * 4] = -.3f - .01f * float(b % 13);
+                    values[b * 4 + 1] = .5f + .01f * float(b % 17);
+                    values[b * 4 + 2] = .01f;
+                    values[b * 4 + 3] = .1f + .001f * float(b % 11);
+                }
+                const auto bounds = Tensor::from_vector(values, {values.size()}, Device::GPU);
+                const ops::JointCodecParams codec{ops::JointLayout::SwizzledSH, int(n), int(width), bits};
+                auto reference = Tensor::zeros(packed.shape(), Device::GPU, DataType::UInt8);
+                auto reference_bounds = Tensor::zeros(bounds.shape(), Device::GPU);
+                table.permute_joint(packed, bounds, perm, reference, reference_bounds, codec);
+                const auto expected = reference.cpu(), expected_bounds = reference_bounds.cpu();
+                // The large 16-bit case exceeds 65535 workgroups; small cases
+                // cover one-slot batches and a partial final group.
+                for (const size_t group : n == 513 ? std::vector<size_t>{1, 3, 5} : std::vector<size_t>{5}) {
+                    SCOPED_TRACE(group);
+                    auto grouped = packed.clone();
+                    auto grouped_bounds = Tensor::zeros(bounds.shape(), Device::GPU);
+                    auto scratch = Tensor::empty({bytes / width * group}, Device::GPU, DataType::UInt8);
+                    table.permute_joint_grouped(grouped, bounds, perm, grouped_bounds, scratch, codec);
+                    const auto actual = grouped.cpu(), actual_bounds = grouped_bounds.cpu();
+                    ASSERT_EQ(actual.bytes(), expected.bytes());
+                    EXPECT_EQ(std::memcmp(actual.data_ptr(), expected.data_ptr(), actual.bytes()), 0);
+                    EXPECT_EQ(std::memcmp(actual_bounds.data_ptr(), expected_bounds.data_ptr(), actual_bounds.bytes()), 0);
+                }
+            }
+        }
+    }
+
     TEST(TrainingVulkanOps, TrainingResumesAfterEvaluationReleasesWorkspaces) {
         if (!lfs::core::gpu_backend_available(GpuBackend::Vulkan))
             GTEST_SKIP();
