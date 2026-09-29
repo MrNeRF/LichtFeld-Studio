@@ -13,6 +13,7 @@
 #include "training_shader_table.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -386,8 +387,14 @@ namespace lfs::training {
             if (!values.is_valid() || !values.numel())
                 return 0.0f;
             auto v = read_floats(values);
-            std::sort(v.begin(), v.end(), [](float a, float b) {if(std::isnan(a))return false;if(std::isnan(b))return true;return a<b; });
-            float median = v[v.size() / 2];
+            // CUB's radix order: -0 before +0 and NaNs by sign at the ends.
+            const auto key = [](float x) {
+                const uint32_t bits = std::bit_cast<uint32_t>(x);
+                return (bits & 0x80000000u) ? ~bits : bits | 0x80000000u;
+            };
+            const auto mid = v.begin() + v.size() / 2;
+            std::nth_element(v.begin(), mid, v.end(), [&](float a, float b) { return key(a) < key(b); });
+            float median = *mid;
             return std::isfinite(median) ? median : 0.0f;
         }
         void starvation(Out weights, In visibility, float median) {
