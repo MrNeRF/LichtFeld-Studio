@@ -22,11 +22,7 @@ namespace lfs::training {
 
         constexpr int kRelocationMax = 51;
 
-        uint32_t count32(const size_t count, const char* what) {
-            if (count > std::numeric_limits<uint32_t>::max())
-                throw std::invalid_argument(std::format("{} count {} exceeds uint32", what, count));
-            return static_cast<uint32_t>(count);
-        }
+        using metal::count32;
 
         // Host copy of the relocation coefficients (CUDA keeps them in
         // __constant__ memory), uploaded per relocation so no GPU table

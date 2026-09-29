@@ -199,7 +199,9 @@ namespace lfs::core::internal::metal {
         } else {
             LFS_ASSERT_MSG(dispatch.group_size.width * dispatch.group_size.height * dispatch.group_size.depth <=
                                dispatch.pipeline.maxTotalThreadsPerThreadgroup,
-                           "Metal threadgroup exceeds its pipeline's limit");
+                           std::format("Metal threadgroup of {}x{}x{} threads exceeds its pipeline's limit of {}",
+                                       dispatch.group_size.width, dispatch.group_size.height,
+                                       dispatch.group_size.depth, dispatch.pipeline.maxTotalThreadsPerThreadgroup));
             [encoder dispatchThreadgroups:dispatch.grid threadsPerThreadgroup:dispatch.group_size];
         }
         for (const StorageRef& use : uses) {

@@ -756,10 +756,16 @@ namespace lfs::training {
             _lpips_load_attempted = true;
             const auto& weights_path = *_lpips_weights_path;
             try {
+                // Up to a quarter of the free device memory, never below the
+                // default: a device with room runs LPIPS untiled instead of
+                // recomputing tile halos.
+                const std::size_t free_bytes =
+                    lfs::core::gpu_backend_memory_info(lfs::core::default_gpu_backend()).free_bytes;
+                const std::size_t budget =
+                    std::max(lfs::core::nn::models::default_lpips_activation_budget(), free_bytes / 4);
                 auto loaded = lfs::core::nn::models::Lpips::load(
                     weights_path, lfs::core::Device::GPU, lfs::core::DataType::Float16,
-                    lfs::core::nn::models::InputScaling::Identity,
-                    lfs::core::nn::models::default_lpips_activation_budget());
+                    lfs::core::nn::models::InputScaling::Identity, budget);
                 if (loaded) {
                     const auto backend = lfs::core::default_gpu_backend();
                     const auto* lpips = training_ops(backend).lpips;

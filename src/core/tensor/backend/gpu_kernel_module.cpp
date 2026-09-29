@@ -9,6 +9,7 @@
 
 #include <format>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace lfs::core {
@@ -38,6 +39,15 @@ namespace lfs::core {
             throw std::invalid_argument(std::format("GPU kernel operand must live on the {} backend, got {} storage",
                                                     gpu_backend_name(impl_->backend),
                                                     tensor.device() == Device::GPU ? "another GPU backend's" : "CPU"));
+        // Kernels index operands densely from this address.
+        if (!tensor.is_contiguous()) {
+            const auto strides = tensor.strides();
+            std::string text;
+            for (size_t i = 0; i < strides.rank; ++i)
+                text += std::format("{}{}", i ? ", " : "", strides.values[i]);
+            throw std::invalid_argument(std::format("GPU kernel operand must be contiguous, got shape {} strides [{}]",
+                                                    tensor.shape().str(), text));
+        }
         return impl_->metal->address(internal::storage_ref(tensor));
     }
 

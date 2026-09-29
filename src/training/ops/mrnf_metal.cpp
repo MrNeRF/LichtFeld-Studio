@@ -76,11 +76,7 @@ namespace lfs::training {
         using lfs::gpu_ops::Tensor;
         namespace mk = metal;
 
-        uint32_t count32(const size_t count, const char* what) {
-            if (count > std::numeric_limits<uint32_t>::max())
-                throw std::invalid_argument(std::format("{} count {} exceeds uint32", what, count));
-            return static_cast<uint32_t>(count);
-        }
+        using metal::count32;
 
         uint32_t optional_count(const Tensor& tensor) {
             return tensor.is_valid() ? count32(tensor.numel(), "optional mask") : 0u;
