@@ -30,14 +30,16 @@ struct Push {
 };
 [[vk::push_constant]] Push push;
 [SpecializationConstant] const uint stage = 0;
-groupshared float4 xyzo[64], m0[64], m1[64], m2[64], colors[64];
+groupshared float4 m0[64], m1[64], m2[64], colors[64];
+groupshared float opacity[64];
 groupshared uint finished[256];
 groupshared int64_t prefix[256];
 void raster(GsplatRasterParams p, uint tile, uint lane) {
     uint x = (tile % p.tiles_x) * 16 + lane % 16;
     uint y = (tile / p.tiles_x) * 16 + lane / 16;
     bool inside = x < p.width && y < p.height;
-    GsplatRay ray = gsplat_pixel_ray(gsplat_camera_load(p.camera), float2(x, y) + 0.5f);
+    const GsplatCamera camera = gsplat_camera_load(p.camera);
+    GsplatRay ray = gsplat_pixel_ray(camera, float2(x, y) + 0.5f);
     bool done = !inside || !ray.valid;
     uint begin = p.offsets[tile], end = p.offsets[tile + 1];
     float T = 1, z = 0;
@@ -58,19 +60,21 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
         if (lane < 64 && batch + lane < end) {
             uint g = p.ids[batch + lane];
             float3x3 M = gsplat_world_to_unit(gsplat_load4(p.quats, g), exp(gsplat_load3(p.scales, g)));
-            xyzo[lane] = float4(gsplat_load3(p.means, g), gsplat_sigmoid(p.opacities[g]));
-            m0[lane] = float4(M[0], 0);
-            m1[lane] = float4(M[1], 0);
-            m2[lane] = float4(M[2], 0);
+            // Global-shutter rays share their origin across the whole tile.
+            const float3 gro = mul(camera.origin - gsplat_load3(p.means, g), M);
+            opacity[lane] = gsplat_sigmoid(p.opacities[g]);
+            m0[lane] = float4(M[0], gro.x);
+            m1[lane] = float4(M[1], gro.y);
+            m2[lane] = float4(M[2], gro.z);
             colors[lane] = float4(gsplat_load3(p.colors, g), asfloat(p.depths[g]));
         }
         GroupMemoryBarrierWithGroupSync();
         for (uint t = 0; t < min(64u, end - batch) && !done; ++t) {
             float3x3 M = float3x3(m0[t].xyz, m1[t].xyz, m2[t].xyz);
-            float3 gro = mul(ray.origin - xyzo[t].xyz, M);
+            const float3 gro = float3(m0[t].w, m1[t].w, m2[t].w);
             float3 grd = gsplat_safe_normalize(mul(ray.dir, M));
             float3 crossed = cross(grd, gro);
-            float a = min(0.999f, xyzo[t].w * exp(-0.5f * dot(crossed, crossed)));
+            float a = min(0.999f, opacity[t] * exp(-0.5f * dot(crossed, crossed)));
             if (a < kGsplatAlphaMin)
                 continue;
             float next = T * (1 - a);
