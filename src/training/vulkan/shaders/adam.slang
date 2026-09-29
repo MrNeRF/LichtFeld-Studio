@@ -157,6 +157,7 @@ float rowScale(Params p, uint row, bool sh) {
     }
     return scale;
 }
+// First-moment-only term (see screen_share.cuh): feeding it into v overflows v.
 float hinge(Params p, uint row, float oldV) {
     if ((p.entryCount & 2) == 0 || p.screenShare == 0 || !(p.screenLimit > 0.0f && p.screenLimit < 1.0f) || !(p.screenPenalty > 0.0f)) return 0.0f;
     if (row >= p.screenCount) return 0.0f;
@@ -185,10 +186,11 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Push pu
             float2 mv = decodeMV(loadUS(p, cell, oldmm));
             m[a]=mv.x; v[a]=mv.y;
             float g=((Ptr<float, Access.Read>)p.gradient)[cell];
+            float h=0.0f;
             if (p.screenShare != 0 && row < p.primitives && (p.entryCount & 2) != 0)
-                g += hinge(p,row,mv.y);
+                h = hinge(p,row,mv.y);
             if (apply) {
-                m[a] = fma(p.beta1, mv.x, (1.0f-p.beta1)*g);
+                m[a] = fma(p.beta1, mv.x, (1.0f-p.beta1)*(g+h));
                 v[a] = fma(p.beta2, mv.y, roundedMul(roundedMul(1.0f-p.beta2,g),g));
                 ((Ptr<float, Access.ReadWrite>)p.parameter)[cell] -= step * m[a] / (sqrt(v[a])*p.bc2+p.eps);
             }

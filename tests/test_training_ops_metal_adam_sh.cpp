@@ -301,13 +301,14 @@ namespace {
                     const auto mv = joint_g1g2(joint_decode_us(s.packed, cell, old.data()));
                     float mn = mv[0], vn = mv[1];
                     if (apply) {
-                        float grad = s.gradient[cell];
+                        const float grad = s.gradient[cell];
                         const float limit = mod.screen_share_limit;
+                        float hinge = 0.f;
                         if (s.screen_share && static_cast<size_t>(prim) < m.share.size() && limit > 0.f &&
                             limit < 1.f && m.share[prim] > limit && mod.screen_share_penalty > 0.f)
-                            grad += mod.screen_share_penalty * std::log2(m.share[prim] / limit) *
+                            hinge = mod.screen_share_penalty * std::log2(m.share[prim] / limit) *
                                     (std::sqrt(mv[1]) * bc2_sqrt_rcp + h.eps);
-                        mn = h.beta1 * mv[0] + (1.f - h.beta1) * grad;
+                        mn = h.beta1 * mv[0] + (1.f - h.beta1) * (grad + hinge);
                         vn = h.beta2 * mv[1] + (1.f - h.beta2) * grad * grad;
                         s.parameter[cell] -= step * mn / (std::sqrt(vn) * bc2_sqrt_rcp + h.eps);
                     }

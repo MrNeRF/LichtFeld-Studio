@@ -108,11 +108,12 @@ kernel void adam_step_batch(constant AdamBatchParams& p [[buffer(0)]], uint2 gro
         float m = mv.x;
         float v = mv.y;
         if (apply_step) {
-            float grad = step.gradient[cell];
+            const float grad = step.gradient[cell];
+            float hinge = 0.0f;
             if (step.apply_screen_share != 0u && p.screen_share != nullptr && prim < p.screen_share_count)
-                grad += screen_share_hinge_extra_grad(p.screen_share[prim], p.screen_share_limit,
+                hinge = screen_share_hinge_extra_grad(p.screen_share[prim], p.screen_share_limit,
                                                       p.screen_share_penalty, mv.y, step.bc2_sqrt_rcp, p.eps);
-            m = p.beta1 * mv.x + (1.0f - p.beta1) * grad;
+            m = p.beta1 * mv.x + (1.0f - p.beta1) * (grad + hinge);
             v = p.beta2 * mv.y + (1.0f - p.beta2) * grad * grad;
             const float denom = sqrt(v) * step.bc2_sqrt_rcp + p.eps;
             step.parameter[cell] -= step_size * m / denom;

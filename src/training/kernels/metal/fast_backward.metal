@@ -408,11 +408,12 @@ static void fast_adam_row(constant FastAdamGroup& g, thread const float* grads, 
         float m = mv.x;
         float v = mv.y;
         if (r.apply) {
-            float grad = i < active ? grads[i] : 0.0f;
+            const float grad = i < active ? grads[i] : 0.0f;
+            float hinge = 0.0f;
             if (i < active && g.screen_share != nullptr && p < uint(g.screen_share_n))
-                grad += screen_share_hinge_extra_grad(g.screen_share[p], g.screen_share_limit,
+                hinge = screen_share_hinge_extra_grad(g.screen_share[p], g.screen_share_limit,
                                                       g.screen_share_penalty, mv.y, g.bc2_sqrt_rcp, eps);
-            m = beta1 * mv.x + (1.0f - beta1) * grad;
+            m = beta1 * mv.x + (1.0f - beta1) * (grad + hinge);
             v = beta2 * mv.y + (1.0f - beta2) * grad * grad;
             if (i < active)
                 param[base + i] -= fast_adam_delta(r.step, m, v, g.bc2_sqrt_rcp, eps);

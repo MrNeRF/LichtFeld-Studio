@@ -141,6 +141,7 @@ static float oversize_split_score(const float error_score, const float max_share
     return sqrt(error_score) * (max_share / limit);
 }
 
+// First-moment-only term (see screen_share.cuh): feeding it into v overflows v.
 static float screen_share_hinge_extra_grad(const float share, const float limit, const float penalty,
                                            const float old_v, const float bias_correction2_sqrt_rcp,
                                            const float eps) {
