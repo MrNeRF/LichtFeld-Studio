@@ -168,6 +168,8 @@ namespace lfs::training {
             auto sh0 = ensure_contiguous(gaussian_model.sh0());
             auto shN = ensure_contiguous(gaussian_model.shN());
             const uint32_t sh_degree = static_cast<uint32_t>(gaussian_model.get_active_sh_degree());
+            const uint32_t sh_layout_degree =
+                static_cast<uint32_t>(gaussian_model.get_max_sh_degree());
 
             // Squeeze opacities if needed
             if (opacities.ndim() == 2 && opacities.shape()[1] == 1) {
@@ -476,6 +478,7 @@ namespace lfs::training {
                 sh0_ptr,
                 shN_ptr,
                 sh_degree,
+                sh_layout_degree,
                 bg_color_ptr,
                 bg_image_ptr, // per-pixel background image
                 nullptr,      // masks
@@ -599,6 +602,7 @@ namespace lfs::training {
             ctx.K_sh = K;
             ctx.channels = channels;
             ctx.sh_degree = sh_degree;
+            ctx.sh_layout_degree = sh_layout_degree;
             ctx.image_width = image_width;
             ctx.image_height = image_height;
             ctx.tile_size = tile_size;
@@ -792,6 +796,7 @@ namespace lfs::training {
                 ctx.sh0.ptr<float>(),
                 (ctx.sh_degree > 0 && ctx.shN.is_valid() && ctx.shN.numel() > 0) ? ctx.shN.ptr<float>() : nullptr,
                 ctx.sh_degree,
+                ctx.sh_layout_degree,
                 bg_color_ptr,
                 bg_image_ptr, // per-pixel background image
                 nullptr,      // masks

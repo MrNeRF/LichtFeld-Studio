@@ -19,17 +19,20 @@ namespace gsplat_lfs {
 
     void spherical_harmonics_swizzled_fwd(
         uint32_t degrees_to_use,
+        uint32_t layout_degree,
         const float* dirs,             // [..., 3] flattened
         const float* sh0,              // [N, 1, 3] / [N, 3]
         const float* sh_rest_swizzled, // vksplat swizzled SH-rest storage
         const bool* masks,             // [...] optional (can be nullptr)
         int64_t total_elements,        // total batch size
         float* colors,                 // [..., 3] output (pre-allocated)
+        uint32_t color_stride = 3,
         cudaStream_t stream = nullptr);
 
     void spherical_harmonics_swizzled_bwd(
         uint32_t K,
         uint32_t degrees_to_use,
+        uint32_t layout_degree,
         const float* dirs,             // [..., 3]
         const float* sh0,              // [N, 1, 3] / [N, 3]
         const float* sh_rest_swizzled, // vksplat swizzled SH-rest storage
@@ -39,6 +42,7 @@ namespace gsplat_lfs {
         bool compute_v_dirs,
         float* v_coeffs, // [..., K, 3] canonical output for accumulation
         float* v_dirs,   // [..., 3] optional output
+        uint32_t color_stride = 3,
         cudaStream_t stream = nullptr);
 
     //=========================================================================
@@ -296,6 +300,7 @@ namespace gsplat_lfs {
         const float* sh0,       // [N, 1, 3]
         const float* shN,       // swizzled SH-rest storage
         uint32_t sh_degree,
+        uint32_t sh_layout_degree,
         const float* backgrounds, // [C, channels] optional - solid color
         const float* bg_images,   // [C, channels, H, W] optional - per-pixel background
         const bool* masks,        // optional
@@ -337,6 +342,7 @@ namespace gsplat_lfs {
         const float* sh0,       // [N, 1, 3]
         const float* shN,       // swizzled SH-rest storage
         uint32_t sh_degree,
+        uint32_t sh_layout_degree,
         const float* backgrounds, // [C, channels] optional - solid color
         const float* bg_images,   // [C, channels, H, W] optional - per-pixel background
         const bool* masks,        // optional

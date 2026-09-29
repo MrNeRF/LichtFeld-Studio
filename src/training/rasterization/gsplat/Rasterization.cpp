@@ -213,6 +213,7 @@ namespace gsplat_lfs {
         const float* sh0,
         const float* shN,
         uint32_t sh_degree,
+        uint32_t sh_layout_degree,
         const float* backgrounds,
         const float* bg_images,
         const bool* masks,
@@ -287,9 +288,9 @@ namespace gsplat_lfs {
                 compute_view_dirs(means, viewmats0, C, N, result.dirs, stream);
             }
             spherical_harmonics_swizzled_fwd(
-                sh_degree, sh_degree > 0 ? result.dirs : nullptr, sh0, shN, nullptr,
-                static_cast<int64_t>(C) * N,
-                result.colors, stream);
+                sh_degree, sh_layout_degree, sh_degree > 0 ? result.dirs : nullptr,
+                sh0, shN, nullptr, static_cast<int64_t>(C) * N,
+                result.colors, channels, stream);
         }
 
         auto render = [&](const IntersectTileResult& batch, TileRange tiles) {
@@ -350,6 +351,7 @@ namespace gsplat_lfs {
         const float* sh0,
         const float* shN,
         uint32_t sh_degree,
+        uint32_t sh_layout_degree,
         const float* backgrounds,
         const float* bg_images,
         const bool* masks,
@@ -458,7 +460,7 @@ namespace gsplat_lfs {
         // Backward through SH
         if (render_mode == 0 || render_mode == 3 || render_mode == 4) {
             spherical_harmonics_swizzled_bwd(
-                K, sh_degree,
+                K, sh_degree, sh_layout_degree,
                 dirs,
                 sh0,
                 shN,
@@ -468,6 +470,7 @@ namespace gsplat_lfs {
                 false, // compute_v_dirs
                 v_sh_coeffs,
                 nullptr, // v_dirs
+                channels,
                 stream);
         }
 
