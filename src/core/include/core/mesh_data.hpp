@@ -68,11 +68,17 @@ namespace lfs::core {
 
         MeshData& operator=(MeshData&& o) noexcept {
             if (this != &o) {
+                vertices = Tensor{};
                 vertices = std::move(o.vertices);
+                normals = Tensor{};
                 normals = std::move(o.normals);
+                tangents = Tensor{};
                 tangents = std::move(o.tangents);
+                texcoords = Tensor{};
                 texcoords = std::move(o.texcoords);
+                colors = Tensor{};
                 colors = std::move(o.colors);
+                indices = Tensor{};
                 indices = std::move(o.indices);
                 materials = std::move(o.materials);
                 submeshes = std::move(o.submeshes);

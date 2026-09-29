@@ -2727,7 +2727,7 @@ namespace lfs::vis::op {
         }
 
         const int flat_size = static_cast<int>(element_count_);
-        auto flat = current->contiguous().reshape({flat_size});
+        auto flat = current->contiguous().reshape({flat_size}).clone();
         applyTensorSwapStorage(flat, storage_);
         *current = flat.reshape(tensor_shape_).contiguous();
         if (scene_) {

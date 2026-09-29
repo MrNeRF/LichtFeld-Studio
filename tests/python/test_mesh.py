@@ -150,6 +150,18 @@ class TestMeshIO:
 
 class TestMeshDataBridge:
 
+    def test_set_vertices_rebinds_an_existing_view(self, lf):
+        backing = lf.Tensor.zeros([3, 3], dtype="float32", device="cpu")
+        view = backing[:, :]
+        indices = lf.Tensor.zeros([1, 3], dtype="int32", device="cpu")
+        mesh = lf.mesh.MeshData(view, indices)
+        replacement = lf.Tensor.ones([3, 3], dtype="float32", device="cpu")
+
+        mesh.set_vertices(replacement)
+
+        assert np.array_equal(backing.numpy(), np.zeros((3, 3), dtype=np.float32))
+        assert np.array_equal(mesh.vertices.numpy(), np.ones((3, 3), dtype=np.float32))
+
     def test_to_mesh_data(self, lf):
         mesh = _make_triangle(lf)
         md = lf.mesh.to_mesh_data(mesh)

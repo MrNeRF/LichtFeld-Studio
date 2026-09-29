@@ -911,6 +911,31 @@ TEST_F(UndoHistoryTest, TensorUndoEntryRestoresTensorRoundTrip) {
     EXPECT_TRUE((node->model->sh0() == after).all().item<bool>());
 }
 
+TEST_F(UndoHistoryTest, TensorUndoEntryRoundTripsWhenTargetIsAView) {
+    Tensor backing = Tensor::zeros({6}, Device::CPU);
+    Tensor live = backing.slice(0, 0, 6);
+    auto entry = std::make_unique<lfs::vis::op::TensorUndoEntry>(
+        "tensor.view.edit",
+        lfs::vis::op::UndoMetadata{
+            .id = "tensor.view.edit",
+            .label = "Tensor View Edit",
+            .source = "operator",
+            .scope = "tensor",
+        },
+        "view",
+        Tensor::zeros({6}, Device::CPU),
+        [&]() -> Tensor* { return &live; });
+
+    live = Tensor::ones({6}, Device::CPU);
+    entry->captureAfter();
+    ASSERT_TRUE(entry->hasChanges());
+
+    entry->undo();
+    EXPECT_EQ(backing.to_vector(), std::vector<float>(6, 0.0f));
+    entry->redo();
+    EXPECT_EQ(backing.to_vector(), std::vector<float>(6, 1.0f));
+}
+
 TEST_F(UndoHistoryTest, TensorUndoEntryRejectsTopologyChangedReplayWithoutMutatingTensor) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     lfs::vis::services().set(scene_manager.get());
