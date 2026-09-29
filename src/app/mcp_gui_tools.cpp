@@ -591,13 +591,35 @@ namespace lfs::app {
             };
         }
 
-        json selection_result_json(vis::SceneManager& scene_manager, const vis::SelectionResult& result) {
+        // Gaussians whose selection state differs between two selection masks; a missing
+        // mask selects nothing.
+        int64_t changed_selection_count(const std::shared_ptr<core::Tensor>& before,
+                                        const std::shared_ptr<core::Tensor>& after) {
+            const bool has_before = before && before->is_valid();
+            const bool has_after = after && after->is_valid();
+            if (has_before && has_after && before->numel() == after->numel()) {
+                const core::Tensor prior =
+                    before->device() == after->device() ? *before : before->to(after->device());
+                return static_cast<int64_t>(after->ne(prior).count_nonzero());
+            }
+            if (has_after)
+                return static_cast<int64_t>(after->count_nonzero());
+            return has_before ? static_cast<int64_t>(before->count_nonzero()) : 0;
+        }
+
+        // Runs a selection command and reports how many Gaussians it changed. The service's
+        // SelectionResult::affected_count is the post-command selected count, which its
+        // deferred group counts can still hold at the previous selection size.
+        template <typename Command>
+        json selection_command_json(vis::SceneManager& scene_manager, Command&& command) {
+            const auto before = scene_manager.getScene().getSelectionMask();
+            const vis::SelectionResult result = std::forward<Command>(command)();
             if (!result.success)
                 return json{{"error", result.error}};
 
             return json{
                 {"success", true},
-                {"affected_count", static_cast<int64_t>(result.affected_count)},
+                {"affected_count", changed_selection_count(before, scene_manager.getScene().getSelectionMask())},
                 {"selected_count", selected_gaussian_count(scene_manager)},
             };
         }
@@ -3939,8 +3961,9 @@ namespace lfs::app {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
-                    return selection_result_json(*scene_manager,
-                                                 scene_manager->selectRect(x0, y0, x1, y1, mode, camera_index));
+                    return selection_command_json(*scene_manager, [&] {
+                        return scene_manager->selectRect(x0, y0, x1, y1, mode, camera_index);
+                    });
                 });
             });
 
@@ -3974,8 +3997,9 @@ namespace lfs::app {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
-                    return selection_result_json(*scene_manager,
-                                                 scene_manager->selectPolygon(vertex_data, mode, camera_index));
+                    return selection_command_json(*scene_manager, [&] {
+                        return scene_manager->selectPolygon(vertex_data, mode, camera_index);
+                    });
                 });
             });
 
@@ -4009,8 +4033,9 @@ namespace lfs::app {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
-                    return selection_result_json(*scene_manager,
-                                                 scene_manager->selectLasso(vertex_data, mode, camera_index));
+                    return selection_command_json(*scene_manager, [&] {
+                        return scene_manager->selectLasso(vertex_data, mode, camera_index);
+                    });
                 });
             });
 
@@ -4036,8 +4061,9 @@ namespace lfs::app {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
-                    return selection_result_json(*scene_manager,
-                                                 scene_manager->selectRing(x, y, mode, camera_index));
+                    return selection_command_json(*scene_manager, [&] {
+                        return scene_manager->selectRing(x, y, mode, camera_index);
+                    });
                 });
             });
 
@@ -4065,8 +4091,9 @@ namespace lfs::app {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
-                    return selection_result_json(*scene_manager,
-                                                 scene_manager->selectBrush(x, y, radius, mode, camera_index));
+                    return selection_command_json(*scene_manager, [&] {
+                        return scene_manager->selectBrush(x, y, radius, mode, camera_index);
+                    });
                 });
             });
 
@@ -4094,8 +4121,9 @@ namespace lfs::app {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
-                    return selection_result_json(*scene_manager,
-                                                 scene_manager->selectBrush(x, y, radius, mode, camera_index));
+                    return selection_command_json(*scene_manager, [&] {
+                        return scene_manager->selectBrush(x, y, radius, mode, camera_index);
+                    });
                 });
             });
 
@@ -5489,8 +5517,9 @@ namespace lfs::app {
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
 
-                    auto result = selection_result_json(*scene_manager,
-                                                        scene_manager->selectRect(x0, y0, x1, y1, "replace", camera_index));
+                    auto result = selection_command_json(*scene_manager, [&] {
+                        return scene_manager->selectRect(x0, y0, x1, y1, "replace", camera_index);
+                    });
                     if (!result.value("success", false))
                         return result;
                     result["bounding_box"] = bbox;
