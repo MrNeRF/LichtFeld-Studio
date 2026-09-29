@@ -44,14 +44,16 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
     float3 rgb = 0;
     int last = 0;
     for (uint batch = begin; batch < end; batch += 64) {
-        finished[lane] = done ? 1 : 0;
+        // Publish one completion flag per subgroup instead of reducing 256
+        // flags through eight workgroup barriers for every batch.
+        const bool wave_done = WaveActiveAllTrue(done);
+        if (WaveIsFirstLane())
+            finished[lane / WaveGetLaneCount()] = wave_done ? 1u : 0u;
         GroupMemoryBarrierWithGroupSync();
-        for (uint step = 128; step != 0; step >>= 1) {
-            if (lane < step)
-                finished[lane] &= finished[lane + step];
-            GroupMemoryBarrierWithGroupSync();
-        }
-        if (finished[0] != 0)
+        uint all_done = 1;
+        for (uint wave = 0; wave < (256 + WaveGetLaneCount() - 1) / WaveGetLaneCount(); ++wave)
+            all_done &= finished[wave];
+        if (all_done != 0)
             break;
         if (lane < 64 && batch + lane < end) {
             uint g = p.ids[batch + lane];
