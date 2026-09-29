@@ -240,7 +240,25 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
             bool wave_hit = WaveActiveAnyTrue(hit0 || hit1);
             if (WaveGetLaneCount() == 32) {
                 if (wave_hit) {
-                    [unroll] for (uint k = 0; k < 17; ++k) values[k] = WaveActiveSum(values[k]);
+                    const float edge = p.edge_scores != 0 ? WaveActiveSum(values[16]) : 0;
+                    // Reduce each field to its own lane using the CUDA XOR tree.
+                    const uint wl = WaveGetLaneIndex();
+                    [unroll] for (uint k = 0; k < 16; ++k)
+                        values[k] += WaveReadLaneAt(values[k], wl ^ 16);
+                    [unroll] for (uint stride = 8; stride > 0; stride >>= 1) {
+                        [unroll] for (uint k = 0; k < stride; ++k) {
+                            const float own = (wl & stride) != 0 ? values[k + stride] : values[k];
+                            const float send = (wl & stride) != 0 ? values[k] : values[k + stride];
+                            values[k] = own + WaveReadLaneAt(send, wl ^ stride);
+                        }
+                    }
+                    const uint g = ids[t];
+                    if (wl < 14 && values[0] != 0)
+                        gsplat_atomic_add(p.grads, g * 14 + wl, values[0]);
+                    if (wl >= 14 && wl < 16 && p.densification != 0 && p.error_map != 0)
+                        gsplat_atomic_add(p.densification, (wl - 14) * p.count + g, values[0]);
+                    if (wl == 16 && p.edge_scores != 0)
+                        gsplat_atomic_add(p.edge_scores, g, edge * p.edge_factor);
                 }
             } else {
                 for (uint k = 0; k < 17; ++k)
@@ -257,7 +275,7 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
                     values[k] = reduction[k][lane];
                 GroupMemoryBarrierWithGroupSync();
             }
-            if (WaveGetLaneCount() == 32 ? (WaveIsFirstLane() && wave_hit) : lane % 32 == 0) {
+            if (WaveGetLaneCount() != 32 && lane % 32 == 0) {
                 uint g = ids[t];
                 [unroll] for (uint k = 0; k < 14; ++k) if (values[k] != 0)
                     gsplat_atomic_add(p.grads, g * 14 + k, values[k]);
