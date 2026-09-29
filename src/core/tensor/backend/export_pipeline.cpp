@@ -307,7 +307,7 @@ namespace lfs::core::internal {
     std::tuple<Tensor, Tensor> export_kmeans_sh(ExportKernels& kernels, const Tensor& sh, const int n_points,
                                                 const int sh_coeffs, const int k, const int iterations) {
         const GpuBackendScope scope(kernels.backend());
-        if (sh_coeffs < int(kShMaxCoeffsRest) && n_points > k) {
+        if (sh_coeffs > 0 && sh_coeffs < int(kShMaxCoeffsRest) && n_points > k) {
             // Only SH3 has the hierarchical and screened assignment; other degrees would
             // assign by brute force against the whole palette every iteration. Zero
             // coefficients add nothing to a distance and their centroid means stay zero,
