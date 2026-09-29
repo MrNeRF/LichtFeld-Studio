@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// Metal FastRasterOps against a CPU reference of the fastgs math (preprocess,
+// Metal and Vulkan FastRasterOps against a CPU reference of the fastgs math (preprocess,
 // depth-ordered blend, background, depth and normals). Gradients are read back
 // from one fused Adam step configured so the parameter moves by exactly -grad
 // (beta1 = 0, eps = 1, bc2_sqrt_rcp = 0, step 1) and are compared with
@@ -31,6 +31,9 @@
 #include <vector>
 
 namespace {
+    // The backend of the running parameterized test.
+    lfs::core::GpuBackend backend_under_test() { return testing::TestWithParam<lfs::core::GpuBackend>::GetParam(); }
+
     namespace ops = lfs::gpu_ops;
     using lfs::core::DataType;
     using lfs::core::Device;
@@ -489,7 +492,7 @@ namespace {
         ops::RasterResult result;
     };
 
-    const ops::FastRasterOps& fast_ops() { return *lfs::training::training_ops(GpuBackend::Metal).fast; }
+    const ops::FastRasterOps& fast_ops() { return *lfs::training::training_ops(backend_under_test()).fast; }
 
     void forward(Frame& frame, const Scene& s, const Gpu& g, const Config& c) {
         const auto& table = fast_ops();
@@ -618,14 +621,14 @@ namespace {
             << actual[worst_index] << " vs " << expected[worst_index];
     }
 
-    class MetalFastRaster : public ::testing::Test {
+    class PortableFastRaster : public ::testing::TestWithParam<GpuBackend> {
     protected:
         void SetUp() override {
-            if (!lfs::core::gpu_backend_available(GpuBackend::Metal))
-                GTEST_SKIP() << "Metal device unavailable";
-            if (lfs::training::training_ops(GpuBackend::Metal).fast == nullptr)
-                GTEST_SKIP() << "Metal Fast slot is empty";
-            session_.emplace(GpuBackend::Metal);
+            if (!lfs::core::gpu_backend_available(backend_under_test()))
+                GTEST_SKIP() << lfs::core::gpu_backend_name(GetParam()) << " device unavailable";
+            if (lfs::training::training_ops(backend_under_test()).fast == nullptr)
+                GTEST_SKIP() << "Fast slot is empty";
+            session_.emplace(backend_under_test());
             ASSERT_TRUE(session_->switched());
         }
         void TearDown() override { session_.reset(); }
@@ -676,7 +679,7 @@ namespace {
         fast_ops().release(frame.saved);
     }
 
-    TEST_F(MetalFastRaster, ForwardMatchesReference) {
+    TEST_P(PortableFastRaster, ForwardMatchesReference) {
         const ForwardCase cases[] = {
             {"sh0", 40, 0, 48, 40, ops::ShStorage::Float32, false, {}},
             {"sh3_float_bg_image_mip", 40, 3, 64, 48, ops::ShStorage::Float32, true, {.mip = true}},
@@ -693,7 +696,7 @@ namespace {
 
     // Zero moments and a zero image gradient leave every parameter bit-identical,
     // as the parity fixture expects.
-    TEST_F(MetalFastRaster, ZeroGradientLeavesParametersUnchanged) {
+    TEST_P(PortableFastRaster, ZeroGradientLeavesParametersUnchanged) {
         Scene s = make_scene(40, 3, 64, 48, 3u);
         Gpu g = upload_scene(s, ops::ShStorage::Q16);
         const HostParams before = read_params(g);
@@ -828,7 +831,7 @@ namespace {
         }
     }
 
-    TEST_F(MetalFastRaster, GradientsMatchFiniteDifferences) {
+    TEST_P(PortableFastRaster, GradientsMatchFiniteDifferences) {
         check_gradients(0, false);
         check_gradients(3, false);
         check_gradients(2, true);
@@ -838,7 +841,7 @@ namespace {
 
     // With the trainer's Adam settings a first step from zero moments moves every
     // gradient-carrying parameter by the learning rate against its gradient.
-    TEST_F(MetalFastRaster, FirstAdamStepFollowsGradientSign) {
+    TEST_P(PortableFastRaster, FirstAdamStepFollowsGradientSign) {
         Scene s = make_scene(24, 1, 48, 40, 33u, -2.3f, -1.6f);
         Gpu g = upload_scene(s, ops::ShStorage::Float32);
         const HostParams before = read_params(g);
@@ -880,7 +883,7 @@ namespace {
         check(before.sh0, after.sh0, expected.sh0, "sh0");
     }
 
-    TEST_F(MetalFastRaster, DensificationMatchesReference) {
+    TEST_P(PortableFastRaster, DensificationMatchesReference) {
         Scene s = make_scene(30, 1, 48, 40, 44u, -2.3f, -1.6f);
         // Keep every splat well inside the image so visibility is unambiguous.
         for (int i = 0; i < s.count; ++i) {
@@ -948,7 +951,7 @@ namespace {
 
     // Q16 shN: the fused step moves the decoded values by -grad and re-encodes them
     // under the new block bounds.
-    TEST_F(MetalFastRaster, Q16ShRestFollowsReferenceGradient) {
+    TEST_P(PortableFastRaster, Q16ShRestFollowsReferenceGradient) {
         Scene s = make_scene(24, 2, 48, 40, 51u, -2.3f, -1.6f);
         Gpu g = upload_scene(s, ops::ShStorage::Q16);
         const LossWeights w = random_weights(s.width, s.height, 13u, false);
@@ -985,7 +988,7 @@ namespace {
 
     // Masks, regularizers, sparsity, the per-splat mean step and the
     // screen-share hinge on top of the render gradient, under the unit step.
-    TEST_F(MetalFastRaster, FusedAdamTermsMatchReference) {
+    TEST_P(PortableFastRaster, FusedAdamTermsMatchReference) {
         Scene s = make_scene(24, 1, 48, 40, 61u, -2.3f, -1.6f);
         const auto n = static_cast<size_t>(s.count);
         Gpu g = upload_scene(s, ops::ShStorage::Float32);
@@ -1087,8 +1090,8 @@ namespace {
     }
 
     // Timing on a synthetic scene: ./lichtfeld_tests --tensor-backend=metal
-    // --gtest_also_run_disabled_tests --gtest_filter='*MetalFastRaster.DISABLED_Benchmark*'
-    TEST_F(MetalFastRaster, DISABLED_Benchmark) {
+    // --gtest_also_run_disabled_tests --gtest_filter='*PortableFastRaster.DISABLED_Benchmark*'
+    TEST_P(PortableFastRaster, DISABLED_Benchmark) {
         constexpr int count = 1'000'000;
         Scene s = make_scene(count, 3, 1000, 700, 77u, -4.5f, -3.0f);
         Gpu g = upload_scene(s, ops::ShStorage::Q16);
@@ -1119,4 +1122,7 @@ namespace {
         std::printf("Metal fast raster, %d splats, %dx%d: forward %.2f ms, backward %.2f ms\n", count, s.width,
                     s.height, forward_ms / runs, backward_ms / runs);
     }
+    INSTANTIATE_TEST_SUITE_P(Backends, PortableFastRaster, testing::Values(GpuBackend::Metal, GpuBackend::Vulkan),
+                             [](const auto& info) { return std::string(lfs::core::gpu_backend_name(info.param)); });
+
 } // namespace
