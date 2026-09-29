@@ -3574,6 +3574,14 @@ namespace lfs::vis {
         VulkanContext& context,
         const std::size_t num_splats,
         const glm::ivec2 viewport_size) {
+#if !(LFS_BUILD_TRAINER && LFS_HAS_CUDA)
+        // The shared scratch arena is shared with CUDA training only; other builds have
+        // nothing to prime.
+        (void)context;
+        (void)num_splats;
+        (void)viewport_size;
+        return {};
+#else
         if (num_splats == 0 || viewport_size.x <= 0 || viewport_size.y <= 0) {
             return {};
         }
@@ -3599,6 +3607,7 @@ namespace lfs::vis {
 
         releasePrivateScratchBuffers();
         return ensureSharedScratchArena(context, required_shared_scratch);
+#endif
     }
 
     void VksplatViewportRenderer::bindSharedScratchBuffers(
