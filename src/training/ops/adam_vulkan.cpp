@@ -97,6 +97,7 @@ namespace lfs::training {
                      "vkCreateComputePipelines(training.adam)");
             vkDestroyShaderModule(context->device(), shader, nullptr);
             cache.emplace(context->context_id(), pipeline);
+            vulkan::release_at_shutdown(*context, mutex, cache);
             return pipeline;
         }
 

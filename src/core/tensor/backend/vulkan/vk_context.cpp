@@ -644,8 +644,6 @@ namespace lfs::core::internal {
 
         VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomic_float{
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT};
-        VkPhysicalDeviceSubgroupSizeControlFeatures subgroup_size_query{
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES};
         VkPhysicalDeviceVulkan13Features query13{
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
         VkPhysicalDeviceVulkan12Features query12{
@@ -656,14 +654,13 @@ namespace lfs::core::internal {
         query.pNext = &query11;
         query11.pNext = &query12;
         query12.pNext = &query13;
-        query13.pNext = caps_.subgroup_size_control ? static_cast<void*>(&subgroup_size_query) : static_cast<void*>(&atomic_float);
-        if (caps_.subgroup_size_control)
-            subgroup_size_query.pNext = &atomic_float;
+        query13.pNext = &atomic_float;
         vkGetPhysicalDeviceFeatures2(physical_device_, &query);
         caps_.shader_float64 = query.features.shaderFloat64;
         caps_.shader_int64 = query.features.shaderInt64;
-        caps_.subgroup_size_control = caps_.subgroup_size_control &&
-                                      subgroup_size_query.subgroupSizeControl;
+        // Vulkan 1.3 is required, so subgroup size control is a Vulkan13Features member;
+        // chaining the promoted struct as well is invalid (VUID-VkDeviceCreateInfo-pNext-06532).
+        caps_.subgroup_size_control = caps_.subgroup_size_control && query13.subgroupSizeControl;
         caps_.shader_float16 = query12.shaderFloat16 && caps_.float_controls_fp16;
         caps_.vulkan_memory_model = query12.vulkanMemoryModel;
         caps_.vulkan_memory_model_device_scope = query12.vulkanMemoryModelDeviceScope;
@@ -707,19 +704,7 @@ namespace lfs::core::internal {
             else
                 features13.pNext = &coop_enable;
         }
-        VkPhysicalDeviceSubgroupSizeControlFeatures subgroup_size_enable{
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES};
-        subgroup_size_enable.subgroupSizeControl = caps_.subgroup_size_control ? VK_TRUE : VK_FALSE;
-        subgroup_size_enable.computeFullSubgroups = VK_FALSE;
-        if (caps_.subgroup_size_control) {
-            if (caps_.cooperative_matrix) {
-                coop_enable.pNext = &subgroup_size_enable;
-            } else if (caps_.shader_atomic_float) {
-                atomic_float.pNext = &subgroup_size_enable;
-            } else {
-                features13.pNext = &subgroup_size_enable;
-            }
-        }
+        features13.subgroupSizeControl = caps_.subgroup_size_control ? VK_TRUE : VK_FALSE;
 
         std::vector<const char*> enabled_extensions;
         if (caps_.memory_budget) {
@@ -1149,6 +1134,11 @@ namespace lfs::core::internal {
         return *pipelines_;
     }
 
+    void VulkanContext::on_shutdown(std::function<void()> release) {
+        std::lock_guard lock(shutdown_release_mutex_);
+        shutdown_releases_.push_back(std::move(release));
+    }
+
     void VulkanContext::shutdown() {
         std::lock_guard shutdown_lock(shutdown_mutex_);
         if (instance_ == VK_NULL_HANDLE) {
@@ -1162,6 +1152,14 @@ namespace lfs::core::internal {
                 // LFS-CENSUS-OK(empty-catch): mark_device_lost_once reports the loss.
                 mark_device_lost_once();
             }
+        }
+        std::vector<std::function<void()>> releases;
+        {
+            std::lock_guard release_lock(shutdown_release_mutex_);
+            releases.swap(shutdown_releases_);
+        }
+        for (auto& release : releases) {
+            release();
         }
         if (memory_) {
             memory_->shutdown();

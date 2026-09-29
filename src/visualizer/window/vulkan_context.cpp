@@ -2996,7 +2996,7 @@ namespace lfs::vis {
                 tensor_backend_device_.queue != VK_NULL_HANDLE &&
                 features2.features.shaderInt64 == VK_TRUE && features2.features.shaderInt16 == VK_TRUE &&
                 features11.storageBuffer16BitAccess == VK_TRUE && features12.storageBuffer8BitAccess == VK_TRUE &&
-                features12.timelineSemaphore == VK_TRUE && features12.bufferDeviceAddress == VK_TRUE &&
+                features12.shaderInt8 == VK_TRUE && features12.timelineSemaphore == VK_TRUE && features12.bufferDeviceAddress == VK_TRUE &&
                 features13.synchronization2 == VK_TRUE;
         }
         LOG_INFO("Vulkan: tensor backend queue {} (family {})",

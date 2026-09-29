@@ -12,6 +12,7 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -158,6 +159,9 @@ namespace lfs::core::internal {
         [[nodiscard]] VulkanPipelines& pipelines();
 
         void shutdown();
+        // Runs `release` early in shutdown(), while the device is still alive, for
+        // objects held outside core past their last use (static pipeline caches).
+        LFS_CORE_API void on_shutdown(std::function<void()> release);
 
     private:
         void create_instance();
@@ -199,6 +203,8 @@ namespace lfs::core::internal {
         std::atomic<bool> device_loss_reported_{false};
         std::mutex queue_mutex_;
         std::mutex shutdown_mutex_;
+        std::mutex shutdown_release_mutex_;
+        std::vector<std::function<void()>> shutdown_releases_;
 #if LFS_HAS_CUDA
         std::unique_ptr<VulkanCudaImportRegistry> cuda_imports_;
 #endif

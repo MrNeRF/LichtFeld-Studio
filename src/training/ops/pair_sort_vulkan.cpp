@@ -151,6 +151,7 @@ namespace lfs::training {
             }
             vkDestroyShaderModule(context->device(), shader, nullptr);
             cached.emplace(key, pipelines);
+            vulkan::release_at_shutdown(*context, mutex, cached);
             return pipelines;
         }
 

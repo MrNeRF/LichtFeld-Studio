@@ -85,6 +85,7 @@ namespace lfs::training {
             vk_check(context.get(), vkCreateComputePipelines(context->device(), context->pipeline_cache(), 1, &ci, nullptr, &out->handle), "vkCreateComputePipelines(training.mrnf)");
             vkDestroyShaderModule(context->device(), shader, nullptr);
             cache.emplace(key, out);
+            vulkan::release_at_shutdown(*context, mutex, cache);
             return out;
         }
         StorageRef ref(const Tensor& t) {

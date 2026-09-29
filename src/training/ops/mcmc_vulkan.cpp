@@ -97,6 +97,7 @@ namespace lfs::training {
                      "vkCreateComputePipelines(training.mcmc)");
             vkDestroyShaderModule(context->device(), shader, nullptr);
             cache.emplace(key, pipeline);
+            release_at_shutdown(*context, mutex, cache);
             return pipeline;
         }
 
