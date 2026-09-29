@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/error.hpp"
+#include "core/gpu_device_runtime.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor/backend/vulkan/vk_context.hpp"
@@ -72,6 +73,8 @@ namespace {
     TEST_F(TensorVulkanRuntime, HostStagingAndDiagnosticsDoNotCreateCudaContext) {
         if (gpu_backend_live(GpuBackend::CUDA))
             GTEST_SKIP() << "Run alone with --tensor-backend=vulkan before any CUDA work";
+        gpu_trim_cached_memory(GpuBackend::CUDA);
+        EXPECT_FALSE(gpu_backend_live(GpuBackend::CUDA));
         GpuBackendScope scope(GpuBackend::Vulkan);
         auto& profiler = lfs::diagnostics::VramProfiler::instance();
         profiler.setEnabled(true);
@@ -81,6 +84,7 @@ namespace {
             const auto gpu = cpu.to(Device::GPU);
             EXPECT_EQ(gpu.to(Device::CPU).sum().item<float>(), 1024.0f);
         }
+        gpu_trim_cached_memory(GpuBackend::Vulkan);
         Tensor::trim_memory_pool();
         profiler.popTimerScope(0.0);
         profiler.sampleCudaMemory();

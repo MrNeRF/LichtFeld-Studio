@@ -5,6 +5,7 @@
 
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
+#include "core/gpu_device_runtime.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_completion.hpp"
@@ -403,6 +404,13 @@ namespace lfs::core::nn::models {
         x_in.sync_to_stream(stream);
         y_in.sync_to_stream(stream);
         bind_weights_to_stream(stream);
+
+        if (dispatch_ && !cuda_backend && gpu_backend_of(pred) == GpuBackend::Vulkan &&
+            !fast_features_[0].is_valid()) {
+            // Release completed transient storage at the phase boundary before
+            // weight taps and activations pin additional allocator blocks.
+            gpu_trim_cached_memory(GpuBackend::Vulkan);
+        }
 
         std::size_t taps_bytes = 0;
         if (cuda_backend) {
