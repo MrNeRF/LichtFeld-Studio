@@ -177,6 +177,8 @@ static uint fast_depth_key(const float depth, const uint depth_bits) {
     return (as_type<uint>(normalized) & 0x7fffffu) >> (23u - depth_bits);
 }
 
+// Bit test, immune to fast-math NaN folding.
+static bool fast_is_finite(const float x) { return (as_type<uint>(x) & 0x7fffffffu) < 0x7f800000u; }
 static int fast_floor_int(const float x) { return int(floor(clamp(x, -1.0e9f, 1.0e9f))); }
 static int fast_ceil_int(const float x) { return int(ceil(clamp(x, -1.0e9f, 1.0e9f))); }
 
@@ -295,8 +297,14 @@ kernel void fast_preprocess(constant FastPreprocessParams& p [[buffer(0)]], cons
         return;
 
     const float3 raw_scale = float3(p.scales[idx]);
-    const float3 variance = exp(2.0f * fmin(raw_scale, kFastMaxRawScale));
     const float4 q = p.rotations[idx];
+    // Primitives with NaN/Inf geometry or opacity are culled on every backend.
+    if (!fast_is_finite(mean3d.x) || !fast_is_finite(mean3d.y) || !fast_is_finite(mean3d.z) ||
+        !fast_is_finite(raw_scale.x) || !fast_is_finite(raw_scale.y) || !fast_is_finite(raw_scale.z) ||
+        !fast_is_finite(q.x) || !fast_is_finite(q.y) || !fast_is_finite(q.z) || !fast_is_finite(q.w) ||
+        !fast_is_finite(raw_opacity))
+        return;
+    const float3 variance = exp(2.0f * fmin(raw_scale, kFastMaxRawScale));
     if (dot(q, q) < 1e-8f)
         return;
     const FastRotation rot = fast_rotation(q);

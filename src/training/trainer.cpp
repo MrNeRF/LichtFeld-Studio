@@ -96,6 +96,32 @@ namespace lfs::training {
         constexpr float CAMERA_LOSS_EMA_ALPHA = 0.2f;
         constexpr int CAMERA_LOSS_PUBLISH_INTERVAL = 16;
 
+        // Streak of iterations without a visible primitive after which a finite
+        // model is declared degenerate (every camera several times over).
+        constexpr int INVISIBLE_ITERATION_LIMIT = 1000;
+
+        // Name of the first float parameter holding NaN or Inf. Two scalar readbacks
+        // per tensor, so it only runs off the per-step path.
+        [[nodiscard]] std::optional<std::string_view> first_non_finite_parameter(
+            const lfs::core::SplatData& model) {
+            const std::array<std::pair<std::string_view, const lfs::core::Tensor*>, 6> parameters{{
+                {"means", &model.means()},
+                {"scaling", &model.scaling_raw()},
+                {"rotation", &model.rotation_raw()},
+                {"opacity", &model.opacity_raw()},
+                {"sh0", &model.sh0()},
+                {"shN", &model.shN()},
+            }};
+            for (const auto& [name, tensor] : parameters) {
+                if (tensor->is_valid() && tensor->numel() > 0 &&
+                    tensor->dtype() == lfs::core::DataType::Float32 &&
+                    (tensor->has_nan() || tensor->has_inf())) {
+                    return name;
+                }
+            }
+            return std::nullopt;
+        }
+
         [[nodiscard]] lfs::Error project_snapshot_error(
             const lfs::ErrorCode code,
             std::string detail,
@@ -1937,6 +1963,38 @@ namespace lfs::training {
                 .emit();
         }
         return {};
+    }
+
+    std::optional<lfs::Error> Trainer::check_invisible_iteration(const int iter) {
+        ++invisible_iteration_streak_;
+        if (invisible_iteration_streak_ != 1 &&
+            invisible_iteration_streak_ < INVISIBLE_ITERATION_LIMIT) {
+            return std::nullopt;
+        }
+        const auto& model = strategy_->get_model();
+        if (const auto parameter = first_non_finite_parameter(model)) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Internal,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = std::format("Model parameters became NaN/Inf at iteration {}", iter),
+                .detail = std::format("Parameter '{}' of the {}-primitive model holds NaN/Inf at "
+                                      "iteration {}; nothing is visible to train",
+                                      *parameter, model.size(), iter),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+        if (invisible_iteration_streak_ >= INVISIBLE_ITERATION_LIMIT) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Internal,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = std::format("No primitive was visible for {} iterations", invisible_iteration_streak_),
+                .detail = std::format("None of the {} primitives was visible from any camera for {} "
+                                      "consecutive iterations up to iteration {}; the model degenerated",
+                                      model.size(), invisible_iteration_streak_, iter),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+        return std::nullopt;
     }
 
     void Trainer::beginModelRead(lfs::core::TensorExecutionTarget reader_queue) {
@@ -6187,6 +6245,8 @@ namespace lfs::training {
                                 training_ops_->fast->release(fast_saved_);
                                 lfs::core::pop_gpu_range();
                                 lfs::core::pop_gpu_range();
+                                if (auto degenerate = check_invisible_iteration(iter))
+                                    return std::move(*degenerate);
                                 LOG_DEBUG("Skipping iteration {} - no visible primitives", iter);
                                 return iter < get_total_iterations() && !stop_requested_.load() && !stop_token.stop_requested()
                                            ? StepDisposition::Continue
@@ -7265,11 +7325,14 @@ namespace lfs::training {
                 }
 
                 if (tiles_processed == 0) {
+                    if (auto degenerate = check_invisible_iteration(iter))
+                        return std::move(*degenerate);
                     LOG_DEBUG("Skipping iteration {} - no visible primitives", iter);
                     return iter < get_total_iterations() && !stop_requested_.load() && !stop_token.stop_requested()
                                ? StepDisposition::Continue
                                : StepDisposition::Stop;
                 }
+                invisible_iteration_streak_ = 0;
 
                 update_camera_loss_heatmap(*cam, loss_tensor_gpu);
                 maybe_publish_camera_loss_heatmap(iter);
@@ -8460,6 +8523,16 @@ namespace lfs::training {
                         .source = LFS_SOURCE_SITE_CURRENT(),
                     });
                 append_terminal_error(std::move(typed).error());
+            } else if (const auto parameter = first_non_finite_parameter(strategy_->get_model())) {
+                // Culled NaN primitives never reach the loss; refuse to finish on them.
+                append_terminal_error(lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::Internal,
+                    .domain = lfs::ErrorDomain::Training,
+                    .user_message = "Training finished with NaN/Inf model parameters",
+                    .detail = std::format("Parameter '{}' holds NaN/Inf after iteration {}",
+                                          *parameter, current_iteration_.load()),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }));
             }
         } catch (const lfs::Exception& e) {
             append_terminal_error(e.error());

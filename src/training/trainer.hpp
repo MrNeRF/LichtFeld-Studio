@@ -983,6 +983,11 @@ namespace lfs::training {
         void submitLossReadback(const lfs::core::Tensor& total_loss, int iter);
         std::expected<void, std::string> harvestLossReadbacks(bool drain, bool in_controller_phase);
 
+        // Rasterizers cull non-finite primitives, so a NaN model renders nothing and
+        // never reaches the loss check. Skipped iterations check the model instead.
+        int invisible_iteration_streak_ = 0;
+        [[nodiscard]] std::optional<lfs::Error> check_invisible_iteration(int iter);
+
         // Python control scripts (file paths) to execute before training starts
         std::vector<std::filesystem::path> python_scripts_;
 

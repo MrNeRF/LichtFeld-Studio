@@ -25,7 +25,13 @@ Projected project(FastPush p, uint i, out uint touched) {
     float4 q = ((Ptr<float4, Access.Read>)p.rotations)[i];
     float4 v0 = ((Ptr<float4, Access.Read>)p.view)[0], v1 = ((Ptr<float4, Access.Read>)p.view)[1], v2 = ((Ptr<float4, Access.Read>)p.view)[2];
     float z = dot(v2.xyz, m) + v2.w;
-    float opacity = 1 / (1 + exp(-loadFloat(p.opacities, i)));
+    float rawOpacity = loadFloat(p.opacities, i);
+    // Primitives with NaN/Inf geometry or opacity are culled on every backend.
+    if (!finiteValue(m.x) || !finiteValue(m.y) || !finiteValue(m.z) || !finiteValue(s.x) || !finiteValue(s.y) ||
+        !finiteValue(s.z) || !finiteValue(q.x) || !finiteValue(q.y) || !finiteValue(q.z) || !finiteValue(q.w) ||
+        !finiteValue(rawOpacity))
+        return o;
+    float opacity = 1 / (1 + exp(-rawOpacity));
     if (z < 0.01f || z > 1e10f || opacity < 1.0f / 255 || dot(q, q) < 1e-8f)
         return o;
     float3 variance = exp(2 * min(s, float3(20)));

@@ -1122,6 +1122,37 @@ namespace {
         std::printf("Metal fast raster, %d splats, %dx%d: forward %.2f ms, backward %.2f ms\n", count, s.width,
                     s.height, forward_ms / runs, backward_ms / runs);
     }
+    // A primitive with NaN/Inf geometry or opacity has no footprint on any backend.
+    // Vulkan used to turn NaN tile bounds into tile 0 while Metal's clamp emptied
+    // them, so a NaN model trained on (or failed) depending on the backend.
+    TEST_P(PortableFastRaster, NonFinitePrimitivesAreCulled) {
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        const float inf = std::numeric_limits<float>::infinity();
+        struct Case {
+            const char* name;
+            std::vector<float> Scene::*field;
+            int width;
+            float value;
+        };
+        for (const Case c : {Case{"mean", &Scene::means, 3, nan}, Case{"scale", &Scene::scales, 3, nan},
+                             Case{"scale inf", &Scene::scales, 3, inf}, Case{"rotation", &Scene::rotations, 4, nan},
+                             Case{"opacity", &Scene::opacities, 1, nan}}) {
+            SCOPED_TRACE(c.name);
+            Scene s = make_scene(4, 0, 64, 48, 5u);
+            Frame finite;
+            forward(finite, s, upload_scene(s, ops::ShStorage::Float32), {});
+            ASSERT_EQ(finite.result.code, ops::RasterResult::Code::Success) << finite.result.message;
+            ASSERT_TRUE(finite.result.has_work);
+
+            for (int i = 0; i < s.count; ++i)
+                (s.*c.field)[static_cast<size_t>(i * c.width)] = c.value;
+            Frame frame;
+            forward(frame, s, upload_scene(s, ops::ShStorage::Float32), {});
+            ASSERT_EQ(frame.result.code, ops::RasterResult::Code::Success) << frame.result.message;
+            EXPECT_FALSE(frame.result.has_work);
+        }
+    }
+
     INSTANTIATE_TEST_SUITE_P(Backends, PortableFastRaster, testing::Values(GpuBackend::Metal, GpuBackend::Vulkan),
                              [](const auto& info) { return std::string(lfs::core::gpu_backend_name(info.param)); });
 
