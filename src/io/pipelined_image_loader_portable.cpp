@@ -277,6 +277,14 @@ namespace lfs::io {
 
     void PipelinedImageLoader::portable_process_thread_func() {
         const lfs::core::GpuBackendScope backend(config_.backend);
+        // A worker upload must not order unrelated prefetched images against
+        // the legacy training queue. Consumers follow each image storage fence.
+        std::unique_ptr<lfs::core::TensorWorkQueue> queue;
+        std::unique_ptr<lfs::core::TensorWorkQueue::Scope> queue_scope;
+        if (config_.backend == lfs::core::GpuBackend::Vulkan) {
+            queue = std::make_unique<lfs::core::TensorWorkQueue>(config_.backend);
+            queue_scope = std::make_unique<lfs::core::TensorWorkQueue::Scope>(*queue);
+        }
         lfs::core::TensorUpload upload;
         while (running_) {
             PrefetchedImage item;
