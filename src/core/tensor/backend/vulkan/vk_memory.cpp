@@ -921,6 +921,10 @@ namespace lfs::core::internal {
 #endif
         std::lock_guard lock(allocations_mutex_);
         collect_retired_locked(context_.completed_timeline());
+        // A trim also discards buffers whose last GPU use is still pending.
+        // Reclaim them after completion instead of repopulating the cache.
+        for (auto& record : retired_)
+            record->cacheable = false;
         destroy_free_when_idle_locked();
     }
 

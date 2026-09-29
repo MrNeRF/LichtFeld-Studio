@@ -5,13 +5,17 @@
 #include "core/tensor.hpp"
 #include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor/backend/vulkan/vk_context.hpp"
+#include "core/tensor/backend/vulkan/vk_memory.hpp"
 #include "core/tensor_backend.hpp"
+#include "core/tensor_upload.hpp"
 
 #include <gtest/gtest.h>
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <future>
 #include <limits>
 #include <vector>
 #include <vulkan/vulkan.h>
@@ -65,6 +69,48 @@ namespace {
                 .bytes = sizeof(word),
                 .synchronous = true,
             });
+    }
+
+    TEST_F(TensorVulkanAllocationPadding, TrimDiscardsPendingFreeBuffersAfterCompletion) {
+#ifdef __APPLE__
+        GTEST_SKIP() << "MoltenVK must wait for device residency before freeing storage";
+#else
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        auto& ops = internal::backend_ops(GpuBackend::Vulkan);
+        ops.synchronize_device();
+        ops.trim();
+        const auto context = internal::acquire_vulkan_context();
+        const auto device = context->device();
+        VkSemaphoreTypeCreateInfo type{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+        type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+        VkSemaphoreCreateInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+        info.pNext = &type;
+        VkSemaphore gate = VK_NULL_HANDLE;
+        ASSERT_EQ(vkCreateSemaphore(device, &info, nullptr, &gate), VK_SUCCESS);
+        {
+            TensorWorkQueue queue(GpuBackend::Vulkan);
+            queue.set_consumer_timeline(device, {gate, 1, {}});
+            queue.wait_timeline(1);
+            {
+                TensorWorkQueue::Scope binding(queue);
+                Tensor pending = Tensor::zeros({size_t{8} << 20}, Device::GPU, DataType::UInt8);
+            }
+            EXPECT_FALSE(queue.ready());
+            auto trimmed = std::async(std::launch::async, [&] { ops.trim(); });
+            const auto status = trimmed.wait_for(std::chrono::seconds(1));
+            VkSemaphoreSignalInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+            signal.semaphore = gate;
+            signal.value = 1;
+            EXPECT_EQ(vkSignalSemaphore(device, &signal), VK_SUCCESS);
+            EXPECT_EQ(status, std::future_status::ready);
+            trimmed.get();
+            queue.wait();
+            // An allocation collects completed retirements without trimming again.
+            const Tensor probe = Tensor::empty({1}, Device::GPU, DataType::UInt8);
+            EXPECT_EQ(context->memory().cached_bytes(), 0u);
+        }
+        vkDestroySemaphore(device, gate, nullptr);
+#endif
     }
 
     TEST_F(TensorVulkanAllocationPadding,
