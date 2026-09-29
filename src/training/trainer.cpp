@@ -8572,7 +8572,8 @@ namespace lfs::training {
                     }
                     const auto params = getParams();
                     if (!params.optimization.headless) {
-                        export_final_splats(*this, params);
+                        // Failures are logged per format; the GUI run already finished.
+                        static_cast<void>(export_final_splats(*this, params));
                     }
                 }
             } catch (const std::exception& e) {

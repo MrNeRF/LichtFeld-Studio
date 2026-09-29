@@ -704,10 +704,11 @@ namespace lfs::training {
         }
     } // namespace
 
-    void export_final_splats(const Trainer& trainer,
-                             const lfs::core::param::TrainingParameters& params) {
+    lfs::Status export_final_splats(
+        const Trainer& trainer,
+        const lfs::core::param::TrainingParameters& params) {
         if (params.export_formats.empty()) {
-            return;
+            return {};
         }
         const auto& model = trainer.get_strategy().get_model();
         const std::filesystem::path out_dir = params.dataset.output_path;
@@ -723,15 +724,34 @@ namespace lfs::training {
             stamp.strategy = params.optimization.strategy;
         }
 
+        std::string failed;
         for (const auto format : params.export_formats) {
             const std::filesystem::path path = out_dir / (stem + final_export_extension(format));
-            if (const auto result = save_final_splat(model, path, format, stamp, params); !result) {
-                LOG_ERROR("Failed to export final splat to {}: {}",
-                          lfs::core::path_to_utf8(path), result.error().message);
-            } else {
-                LOG_INFO("Exported final splat: {}", lfs::core::path_to_utf8(path));
+            const std::string file = lfs::core::path_to_utf8(path);
+            try {
+                if (const auto result = save_final_splat(model, path, format, stamp, params); !result) {
+                    LOG_ERROR("Failed to export final splat to {}: {}", file, result.error().message);
+                    failed += failed.empty() ? file : ", " + file;
+                    continue;
+                }
+                LOG_INFO("Exported final splat: {}", file);
+            } catch (const std::exception& e) {
+                // A lost GPU device throws from tensor readbacks; keep it from
+                // escaping past the remaining formats.
+                LOG_ERROR("Failed to export final splat to {}: {}", file, e.what());
+                failed += failed.empty() ? file : ", " + file;
             }
         }
+        if (failed.empty()) {
+            return {};
+        }
+        return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::Internal,
+            .domain = lfs::ErrorDomain::IO,
+            .user_message = "Final export failed.",
+            .detail = std::format("Final export failed for {}", failed),
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+        }));
     }
 
 } // namespace lfs::training

@@ -5,6 +5,7 @@
 #pragma once
 #include "io/dataset_scene_import.hpp"
 
+#include "core/error.hpp"
 #include "core/parameters.hpp"
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
@@ -74,8 +75,9 @@ namespace lfs::training {
         std::optional<std::filesystem::path> source_path = std::nullopt);
 
     /// Write `--export` formats next to project.licht after a terminal project
-    /// save. No-op when `params.export_formats` is empty.
-    void export_final_splats(
+    /// save. No-op when `params.export_formats` is empty. Every format is
+    /// attempted; the error names each one that failed.
+    [[nodiscard]] lfs::Status export_final_splats(
         const Trainer& trainer,
         const lfs::core::param::TrainingParameters& params);
 

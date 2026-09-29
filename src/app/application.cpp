@@ -916,6 +916,13 @@ namespace lfs::app {
             HeadlessRunCoordinator coordinator;
             HeadlessPluginSignalGuard plugin_signals;
 
+            bool final_export_failed = false;
+            const auto record_final_export = [&](const lfs::Status& exported) {
+                if (!exported) {
+                    LOG_ERROR("{}", lfs::format_for_developer(exported.error()));
+                    final_export_failed = true;
+                }
+            };
             {
                 core::Scene scene;
 
@@ -1015,7 +1022,7 @@ namespace lfs::app {
                                 rebound.error()));
                         return 1;
                     }
-                    training::export_final_splats(*trainer, *params);
+                    record_final_export(training::export_final_splats(*trainer, *params));
                     trainer->shutdown();
                     static_cast<void>(
                         trainer.release());
@@ -1061,7 +1068,7 @@ namespace lfs::app {
                         }
                         return 1;
                     }
-                    training::export_final_splats(*trainer, *params);
+                    record_final_export(training::export_final_splats(*trainer, *params));
                     trainer->shutdown();
                     static_cast<void>(trainer.release());
                 } else {
@@ -1111,16 +1118,20 @@ namespace lfs::app {
                         }
                         return 1;
                     }
-                    training::export_final_splats(*trainer, *params);
+                    record_final_export(training::export_final_splats(*trainer, *params));
                     trainer->shutdown();
                     static_cast<void>(trainer.release());
                 }
 
-                LOG_INFO("Headless training {}",
-                         coordinator.interrupted() ? "stopped by user" : "completed");
+                if (final_export_failed) {
+                    LOG_ERROR("Headless training finished but a final export failed");
+                } else {
+                    LOG_INFO("Headless training {}",
+                             coordinator.interrupted() ? "stopped by user" : "completed");
+                }
                 core::teardown_gpu_before_exit();
                 core::mark_clean_exit();
-                core::flush_and_exit(0);
+                core::flush_and_exit(final_export_failed ? 1 : 0);
             }
 
             core::teardown_gpu_before_exit();
