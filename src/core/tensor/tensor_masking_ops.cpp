@@ -294,6 +294,9 @@ namespace lfs::core {
             case DataType::Int32:
                 masked_select_cpu(ptr<int32_t>(), mask.ptr<unsigned char>(), result.ptr<int32_t>(), numel());
                 break;
+            case DataType::UInt32:
+                masked_select_cpu(ptr<uint32_t>(), mask.ptr<unsigned char>(), result.ptr<uint32_t>(), numel());
+                break;
             case DataType::Int64:
                 masked_select_cpu(ptr<int64_t>(), mask.ptr<unsigned char>(), result.ptr<int64_t>(), numel());
                 break;
@@ -762,9 +765,11 @@ namespace lfs::core {
         assert_index_tensor(indices, numel(), "take", true, true);
 
         auto indices_same_device = ensure_same_device(indices);
-        Tensor indices_int32 = indices_same_device.dtype() == DataType::Int64
-                                   ? indices_same_device.to(DataType::Int32)
-                                   : indices_same_device;
+        // The loop reads raw storage, so views must be materialized first.
+        Tensor indices_int32 = (indices_same_device.dtype() == DataType::Int64
+                                    ? indices_same_device.to(DataType::Int32)
+                                    : indices_same_device)
+                                   .contiguous();
         auto flat = flatten();
         Tensor result;
 
@@ -1818,6 +1823,10 @@ namespace lfs::core {
             return internal::allocate_like(
                 *this, TensorShape{0, ndim()}, DataType::Int64);
         }
+
+        // A nonzero scalar has one coordinate row with no columns.
+        if (ndim() == 0)
+            return internal::allocate_like(*this, TensorShape{count_nonzero(), 0}, DataType::Int64);
 
         if (device_ == Device::GPU && ndim() > 1) {
             // Flat positions from the 1-D path, then each coordinate is

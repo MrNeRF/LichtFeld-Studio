@@ -1,0 +1,80 @@
+// SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// C powf semantics. SPIR-V Pow reaches Metal as powr, which is undefined for
+// negative bases and for 0^y with y <= 0.
+float cPow(float x, float y)
+{
+    if (y == 0.0f || x == 1.0f)
+        return 1.0f;
+    if (isnan(x) || isnan(y))
+        return x + y;
+    const float magnitude = abs(x);
+    if (isinf(y))
+        return magnitude == 1.0f ? 1.0f
+             : (magnitude > 1.0f) == (y > 0.0f) ? asfloat(0x7f800000u) : 0.0f;
+    const bool integral = floor(y) == y;
+    if (x < 0.0f && !integral && !isinf(x))
+        return asfloat(0x7fc00000u);
+    const bool odd = integral && abs(y) < 16777216.0f && fmod(y, 2.0f) != 0.0f;
+    float result;
+    if (magnitude == 0.0f)
+        result = y < 0.0f ? asfloat(0x7f800000u) : 0.0f;
+    else if (isinf(magnitude))
+        result = y < 0.0f ? 0.0f : asfloat(0x7f800000u);
+    else
+        result = pow(magnitude, y);
+    return odd && (asuint(x) & 0x80000000u) != 0u ? -result : result;
+}
+
+// Wrap-around integer power; negative exponents follow integer division, so
+// only bases 1 and -1 keep a nonzero result.
+int intPow(int base, int exponent)
+{
+    if (exponent < 0)
+        return base == 1 ? 1 : base == -1 ? ((exponent & 1) != 0 ? -1 : 1) : 0;
+    int result = 1;
+    int factor = base;
+    int remaining = exponent;
+    while (remaining != 0)
+    {
+        if ((remaining & 1) != 0)
+            result *= factor;
+        factor *= factor;
+        remaining >>= 1;
+    }
+    return result;
+}
+
+int64_t int64Pow(int64_t base, int64_t exponent)
+{
+    if (exponent < int64_t(0))
+        return base == int64_t(1) ? int64_t(1)
+             : base == int64_t(-1) ? ((exponent & int64_t(1)) != int64_t(0) ? int64_t(-1) : int64_t(1))
+                                   : int64_t(0);
+    int64_t result = int64_t(1);
+    int64_t factor = base;
+    int64_t remaining = exponent;
+    while (remaining != int64_t(0))
+    {
+        if ((remaining & int64_t(1)) != int64_t(0))
+            result *= factor;
+        factor *= factor;
+        remaining >>= 1;
+    }
+    return result;
+}
+
+uint uintPow(uint base, uint exponent)
+{
+    uint result = 1u;
+    uint factor = base;
+    while (exponent != 0u)
+    {
+        if ((exponent & 1u) != 0u)
+            result *= factor;
+        factor *= factor;
+        exponent >>= 1u;
+    }
+    return result;
+}
