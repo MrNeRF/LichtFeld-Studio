@@ -476,6 +476,12 @@ namespace lfs::mcp {
 
         for (const auto& arg : op.args) {
             json prop = arg_type_to_json_schema(arg.type);
+            if (arg.exclusive_minimum) {
+                prop["exclusiveMinimum"] = *arg.exclusive_minimum;
+            }
+            if (arg.maximum) {
+                prop["maximum"] = *arg.maximum;
+            }
             if (arg.description) {
                 prop["description"] = *arg.description;
             }

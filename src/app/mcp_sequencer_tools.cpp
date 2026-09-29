@@ -557,10 +557,16 @@ namespace lfs::app {
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"speed", json{{"type", "number"}, {"description", "Playback speed multiplier"}}}},
+                        {"speed", json{{"type", "number"}, {"description", std::format("Playback speed multiplier, {} to {}", vis::MIN_PLAYBACK_SPEED, vis::MAX_PLAYBACK_SPEED)}}}},
                     .required = {"speed"}}},
             [viewer, backend](const json& args) -> json {
                 const float speed = args["speed"].get<float>();
+                // Compared in float: the bounds are floats, and 0.1 must equal MIN_PLAYBACK_SPEED.
+                if (!(speed >= vis::MIN_PLAYBACK_SPEED && speed <= vis::MAX_PLAYBACK_SPEED))
+                    return mcp::invalid_argument_result(
+                        std::format("Parameter 'speed' must be between {} and {} (got {})", vis::MIN_PLAYBACK_SPEED,
+                                    vis::MAX_PLAYBACK_SPEED, args["speed"].dump()),
+                        "speed");
 
                 return post_and_wait(viewer, [backend, speed]() -> json {
                     auto controller = ensure_ready_controller(backend);

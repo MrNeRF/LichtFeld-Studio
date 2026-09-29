@@ -60,6 +60,10 @@ namespace lfs::training {
         ArgType type;
         bool required = true;
         std::optional<std::string> description;
+        // Bounds for a Float argument, enforced by CommandCenter::execute and advertised
+        // in the generated MCP schema.
+        std::optional<double> exclusive_minimum;
+        std::optional<double> maximum;
     };
 
     struct OperationInfo {

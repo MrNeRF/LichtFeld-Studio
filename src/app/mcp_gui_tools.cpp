@@ -62,6 +62,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <numbers>
 #include <optional>
 #include <shared_mutex>
 #include <string>
@@ -1369,6 +1370,20 @@ namespace lfs::app {
 
             props.set("resolved_node_names", *targets);
             return {};
+        }
+
+        // Euler angles past a full turn in either direction are almost always a units
+        // mistake (degrees passed as radians) and lose precision in float.
+        json rotation_components_schema(const std::string& description) {
+            constexpr double FULL_TURN = 2.0 * std::numbers::pi;
+            return json{{"items", json{{"type", "number"}, {"minimum", -FULL_TURN}, {"maximum", FULL_TURN}}},
+                        {"description", description + ", each within [-2*pi, 2*pi]"}};
+        }
+
+        // A zero or negative scale factor collapses or mirrors the node.
+        json scale_components_schema(const std::string& description) {
+            return json{{"items", json{{"type", "number"}, {"exclusiveMinimum", 0}}},
+                        {"description", description + ", each > 0"}};
         }
 
         std::expected<void, std::string> prepare_transform_set_operator(vis::Visualizer& viewer,
@@ -4321,6 +4336,9 @@ namespace lfs::app {
                 .operator_id = vis::op::BuiltinOp::TransformSet,
                 .category = "transform",
                 .description = "Set absolute visualizer-world transform components for a node or the current shared node selection",
+                .property_overrides = json{
+                    {"rotation", rotation_components_schema("Optional visualizer-world XYZ Euler rotation in radians")},
+                    {"scale", scale_components_schema("Optional visualizer-world XYZ scale")}},
                 .prepare = prepare_transform_set_operator,
                 .on_success = transform_operator_result,
             });
@@ -4345,6 +4363,8 @@ namespace lfs::app {
                 .category = "transform",
                 .description = "Rotate a node or the current shared node selection by visualizer-world XYZ Euler deltas in radians",
                 .required = {"value"},
+                .property_overrides = json{
+                    {"value", rotation_components_schema("Visualizer-world XYZ Euler delta in radians")}},
                 .prepare = prepare_transform_operator,
                 .on_success = transform_operator_result,
             });
@@ -4357,6 +4377,8 @@ namespace lfs::app {
                 .category = "transform",
                 .description = "Scale a node or the current shared node selection by visualizer-world XYZ factors",
                 .required = {"value"},
+                .property_overrides = json{
+                    {"value", scale_components_schema("Visualizer-world XYZ scale multiplier")}},
                 .prepare = prepare_transform_operator,
                 .on_success = transform_operator_result,
             });

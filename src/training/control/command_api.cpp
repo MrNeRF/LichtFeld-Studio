@@ -535,6 +535,16 @@ namespace lfs::training {
             if (!argument_is_finite(value)) {
                 return std::unexpected("Non-finite argument '" + name + "' in op " + cmd.op);
             }
+            if (const auto* scalar = std::get_if<double>(&value)) {
+                if (spec->exclusive_minimum && !(*scalar > *spec->exclusive_minimum)) {
+                    return std::unexpected(std::format("Argument '{}' of op {} must be > {} (got {})",
+                                                       name, cmd.op, *spec->exclusive_minimum, *scalar));
+                }
+                if (spec->maximum && *scalar > *spec->maximum) {
+                    return std::unexpected(std::format("Argument '{}' of op {} must be <= {} (got {})",
+                                                       name, cmd.op, *spec->maximum, *scalar));
+                }
+            }
         }
         for (const auto& spec : it_op->args) {
             if (spec.required && !cmd.args.contains(spec.name)) {

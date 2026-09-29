@@ -133,6 +133,16 @@ namespace {
         const auto result = command_center.execute(command);
         ASSERT_FALSE(result);
         EXPECT_NE(result.error().find("Non-finite"), std::string::npos);
+
+        for (const double lr : {0.0, -1e-3, 1e6}) {
+            command.args = {{"value", lr}};
+            const auto rejected = command_center.execute(command);
+            ASSERT_FALSE(rejected) << "set_lr accepted " << lr;
+            EXPECT_NE(rejected.error().find("'value'"), std::string::npos) << rejected.error();
+        }
+        command.op = "scale_lr";
+        command.args = {{"factor", 0.0}};
+        EXPECT_FALSE(command_center.execute(command)) << "scale_lr accepted a zero factor";
         command_center.clear_snapshot(trainer);
     }
 
