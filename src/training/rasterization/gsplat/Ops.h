@@ -285,6 +285,7 @@ namespace gsplat_lfs {
         int64_t n_isects;
         int32_t n_sort = 0;
         std::vector<TileBatch> batches; // Empty on the ordinary single-batch path
+        float* rgb = nullptr;           // [C, N, 3], required for non-RGB feature packing
     };
 
     void rasterize_from_world_with_sh_fwd(

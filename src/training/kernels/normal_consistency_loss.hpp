@@ -58,7 +58,9 @@ namespace lfs::training::kernels {
         float cy,
         float weight,
         cudaStream_t stream = nullptr,
-        const float* pixel_weight = nullptr);
+        const float* pixel_weight = nullptr,
+        const float* camera_rays = nullptr, // optional [H,W,3], Z or radial convention
+        bool wrap_horizontal = false);
 
     // Prior-supervised depth normals: alpha-weighted cosine between the prior
     // normal map and the normal derived from rendered expected depth. Gradients
@@ -80,6 +82,8 @@ namespace lfs::training::kernels {
         float cy,
         float weight,
         cudaStream_t stream = nullptr,
-        const float* pixel_weight = nullptr);
+        const float* pixel_weight = nullptr,
+        const float* camera_rays = nullptr, // optional [H,W,3], Z or radial convention
+        bool wrap_horizontal = false);
 
 } // namespace lfs::training::kernels
