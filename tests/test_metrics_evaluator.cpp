@@ -620,3 +620,52 @@ TEST(ViewEvaluationJson, FileFormatStaysFixed) {
     EXPECT_EQ(record.at("evaluations")[0].at("split"), "test");
     EXPECT_TRUE(record.at("evaluations")[1].at("psnr").is_null());
 }
+
+TEST(MetricsEvaluatorVulkan, ConcurrentLpipsPreservesPerImageMetricsAndWaitsBeforeReturning) {
+    if (lfs::core::default_gpu_backend() != lfs::core::GpuBackend::Vulkan ||
+        !lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan))
+        GTEST_SKIP();
+    const char* home = std::getenv("HOME");
+    if (!home)
+        GTEST_SKIP() << "No model cache";
+    const auto weights = std::filesystem::path(home) / ".lichtfeld/onnx/lpips-vgg16-v0.1.lfw";
+    if (!std::filesystem::exists(weights))
+        GTEST_SKIP() << "LPIPS weights unavailable";
+    const lfs::core::GpuBackendScope backend(lfs::core::GpuBackend::Vulkan);
+    ensure_image_loader();
+    const auto tmp = std::filesystem::temp_directory_path() / "lfs_vulkan_eval_overlap";
+    std::filesystem::remove_all(tmp);
+    std::filesystem::create_directories(tmp);
+    constexpr int width = 35, height = 33;
+    const auto image = tmp / "image.png", normal = tmp / "normal.png";
+    write_rgb_png(image, 60, 120, 180, height, width);
+    write_normal_png(normal, 0.f, 0.f, -1.f, height, width);
+    auto concurrent = make_eval_camera(image, normal, width, height);
+    auto serial = make_eval_camera(image, {}, width, height);
+    auto missing = make_eval_camera(image, tmp / "missing.png", width, height);
+    auto dataset = std::make_shared<CameraDataset>(
+        std::vector<std::shared_ptr<Camera>>{concurrent, serial, missing},
+        DatasetConfig{}, CameraDataset::Split::ALL);
+    auto model = make_front_facing_splat();
+    auto background = Tensor::zeros({3}, Device::GPU);
+    auto params = make_eval_params(tmp / "output");
+    std::filesystem::create_directories(params.dataset.output_path);
+    MetricsEvaluator evaluator(params);
+    evaluator.set_lpips_weights_path(weights);
+    for (int repeat = 0; repeat < 2; ++repeat) {
+        SCOPED_TRACE(repeat);
+        const auto metrics = evaluator.evaluate(repeat + 1, model, dataset, background);
+        ASSERT_TRUE(metrics.valid);
+        ASSERT_EQ(metrics.views.size(), 3u);
+        ASSERT_TRUE(metrics.normal_angle_deg.has_value());
+        EXPECT_TRUE(std::isfinite(*metrics.normal_angle_deg));
+        for (const auto& view : metrics.views) {
+            ASSERT_TRUE(view.lpips.has_value());
+            EXPECT_GT(*view.lpips, 0.f);
+            EXPECT_EQ(view.psnr, metrics.views[1].psnr);
+            EXPECT_EQ(view.ssim, metrics.views[1].ssim);
+            EXPECT_NEAR(*view.lpips, *metrics.views[1].lpips, 2e-6f);
+        }
+    }
+    std::filesystem::remove_all(tmp);
+}

@@ -23,6 +23,8 @@ namespace lfs::core::nn {
                             Tensor&, Tensor&, const Conv2dParams&);
         void (*pool_reduce)(const Tensor&, const Tensor&, const Tensor&, Tensor&, Tensor&, Tensor&,
                             const PoolReduceParams&);
+        // Run exclusively on a worker queue to overlap independent CPU metrics.
+        bool prefer_independent_queue = false;
     };
 
 } // namespace lfs::core::nn
