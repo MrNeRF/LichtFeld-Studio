@@ -23,6 +23,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -1461,6 +1462,81 @@ namespace lfs::mcp {
         EXPECT_EQ(registry.call_tool(tool_name, json{{"label", "x"}, {"scale", "2.5x"}})["error"]["details"]["parameter"],
                   "scale");
         EXPECT_EQ(handler_calls, 3);
+    }
+
+    TEST(McpProtocolTest, SchemaBoundsAndArrayShapesAreRejectedBeforeTheHandler) {
+        static constexpr const char* tool_name = "test.schema_constraints";
+        ScopedToolRegistration cleanup(tool_name);
+        int handler_calls = 0;
+        json last_arguments;
+        const json point{{"type", "array"}, {"items", {{"type", "number"}}}, {"minItems", 2}, {"maxItems", 2}};
+        ToolRegistry::instance().register_tool(
+            McpTool{
+                .name = tool_name,
+                .description = "Schema constraints",
+                .input_schema = {.type = "object",
+                                 .properties = json{{"points", {{"type", "array"}, {"items", point}, {"minItems", 3}}},
+                                                    {"size", {{"type", "integer"}, {"minimum", 1}, {"maximum", 16}}},
+                                                    {"speed", {{"type", "number"}, {"exclusiveMinimum", 0}}},
+                                                    {"ratio", {{"type", "number"}, {"exclusiveMaximum", 1}}}},
+                                 .required = {}},
+                .metadata = McpToolMetadata{.category = "test", .kind = "command"}},
+            [&](const json& args) -> json {
+                ++handler_calls;
+                last_arguments = args;
+                return json{{"success", true}};
+            });
+        auto& registry = ToolRegistry::instance();
+        const auto message_for = [&](const json& args) {
+            const auto result = registry.call_tool(tool_name, args, OperationId::generate());
+            EXPECT_EQ(result["error"]["code"], "InvalidArgument") << args.dump() << " -> " << result.dump();
+            EXPECT_NE(result["error"]["operation_id"], 0) << "the envelope lost the call's operation id";
+            return result.value("error_message", std::string{});
+        };
+
+        EXPECT_EQ(message_for(json{{"points", json::parse("[[1],[2,3,4],[]]")}}),
+                  "Parameter 'points[0]' must have at least 2 items (got 1)");
+        EXPECT_EQ(message_for(json{{"points", json::parse("[[1,2],[3,4,5],[6,7]]")}}),
+                  "Parameter 'points[1]' must have at most 2 items (got 3)");
+        EXPECT_EQ(message_for(json{{"points", json::parse("[[1,2],[3,4]]")}}),
+                  "Parameter 'points' must have at least 3 items (got 2)");
+        EXPECT_EQ(message_for(json{{"points", json::parse("[[1,2],[3,\"a\"],[5,6]]")}}),
+                  "Parameter 'points[1][1]' must be of type number");
+        EXPECT_EQ(message_for(json{{"size", 0}}), "Parameter 'size' must be >= 1 (got 0)");
+        EXPECT_EQ(message_for(json{{"size", 65536}}), "Parameter 'size' must be <= 16 (got 65536)");
+        EXPECT_EQ(message_for(json{{"speed", 0}}), "Parameter 'speed' must be > 0 (got 0)");
+        EXPECT_EQ(message_for(json{{"speed", -1.5}}), "Parameter 'speed' must be > 0 (got -1.5)");
+        EXPECT_EQ(message_for(json{{"ratio", 1}}), "Parameter 'ratio' must be < 1 (got 1)");
+        EXPECT_EQ(message_for(json{{"speed", std::numeric_limits<double>::infinity()}}),
+                  "Parameter 'speed' must be finite");
+        EXPECT_EQ(handler_calls, 0) << "a rejected call reached the handler";
+
+        EXPECT_EQ(registry.call_tool(tool_name, json{{"points", json::parse("[[1,2],[\"3\",4],[5,6]]")},
+                                                     {"size", "16"},
+                                                     {"speed", 0.5}})["success"],
+                  true);
+        EXPECT_EQ(handler_calls, 1);
+        EXPECT_EQ(last_arguments["points"][1][0], 3.0) << "a numeric string inside an array was not converted";
+        EXPECT_EQ(last_arguments["size"], 16);
+    }
+
+    TEST(McpProtocolTest, InvalidArgumentResultCarriesTheCallOperationId) {
+        static constexpr const char* tool_name = "test.invalid_argument_result";
+        ScopedToolRegistration cleanup(tool_name);
+        ToolRegistry::instance().register_tool(
+            McpTool{
+                .name = tool_name,
+                .description = "Handler-side argument rejection",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .metadata = McpToolMetadata{.category = "test", .kind = "command"}},
+            [](const json&) -> json { return invalid_argument_result("Field 'eye' is degenerate", "eye"); });
+
+        const auto operation_id = OperationId::generate();
+        const auto result = ToolRegistry::instance().call_tool(tool_name, json::object(), operation_id);
+        EXPECT_EQ(result["error"]["code"], "InvalidArgument");
+        EXPECT_EQ(result["error"]["details"]["parameter"], "eye");
+        EXPECT_EQ(result["error"]["operation_id"], operation_id.value());
+        EXPECT_EQ(result["error_message"], "Field 'eye' is degenerate");
     }
 
     TEST(McpProtocolTest, TypedEnvelopeHandlerResultIsPassedThroughWithMirror) {

@@ -4,17 +4,22 @@
 #pragma once
 
 #include "mcp/mcp_protocol.hpp"
+#include "rendering/coordinate_conventions.hpp"
+#include "visualizer/gui/utils/native_file_dialog.hpp"
 #include "visualizer/post_work_utils.hpp"
 #include "visualizer/visualizer.hpp"
 
 #include "core/error.hpp"
 #include "core/path_utils.hpp"
 
+#include <glm/vec3.hpp>
+
 #include <chrono>
 #include <expected>
 #include <filesystem>
 #include <format>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -320,6 +325,39 @@ namespace lfs::app {
                 .uri = uri,
                 .mime_type = mime_type,
                 .content = std::move(base64_payload)}};
+    }
+
+    // Schema for a fixed-length list of numbers such as an [x,y,z] vector. ToolRegistry
+    // rejects a wrong length or a non-number element before the handler runs.
+    [[nodiscard]] inline nlohmann::json number_array_schema(const int size, std::string description) {
+        return nlohmann::json{{"type", "array"},
+                              {"items", nlohmann::json{{"type", "number"}}},
+                              {"minItems", size},
+                              {"maxItems", size},
+                              {"description", std::move(description)}};
+    }
+
+    // Schema for a screen-space point list [[x0,y0], [x1,y1], ...] of at least min_points points.
+    [[nodiscard]] inline nlohmann::json point_list_schema(const int min_points, std::string description) {
+        auto point = number_array_schema(2, "Screen point [x,y]");
+        point.erase("description");
+        return nlohmann::json{{"type", "array"},
+                              {"items", std::move(point)},
+                              {"minItems", min_points},
+                              {"description", std::move(description)}};
+    }
+
+    // Why the viewer's set_view would silently ignore this view (eye and target that
+    // coincide, or coordinates too large to form a view direction in float), or nullopt.
+    [[nodiscard]] inline std::optional<std::string> view_vectors_error(const glm::vec3& eye,
+                                                                       const glm::vec3& target,
+                                                                       const glm::vec3& up) {
+        if (lfs::rendering::tryMakeVisualizerLookAtRotation(eye, target, up))
+            return std::nullopt;
+        return std::format(
+            "Fields 'eye' [{}, {}, {}], 'target' [{}, {}, {}] and 'up' [{}, {}, {}] describe no camera view; "
+            "eye and target must differ and stay small enough to form a view direction in float",
+            eye.x, eye.y, eye.z, target.x, target.y, target.z, up.x, up.y, up.z);
     }
 
     // Selection tools: an omitted camera_index means "the current viewer".

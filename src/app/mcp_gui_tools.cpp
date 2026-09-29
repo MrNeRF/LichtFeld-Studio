@@ -608,15 +608,23 @@ namespace lfs::app {
             return args[key].get<std::string>();
         }
 
+        // Tool schemas reject malformed vectors before the handler; this keeps a direct
+        // caller from indexing a short array and rejects values that overflow float.
         std::expected<std::optional<glm::vec3>, std::string> optional_vec3_arg(const json& args, const char* key) {
             if (!args.contains(key) || args[key].is_null())
                 return std::optional<glm::vec3>{};
 
             const auto& value = args[key];
-            if (!value.is_array() || value.size() != 3)
-                return std::unexpected(std::string("Field '") + key + "' must be a 3-element array");
+            if (!value.is_array() || value.size() != 3 ||
+                !std::ranges::all_of(value, [](const json& v) { return v.is_number(); }))
+                return std::unexpected(std::format("Field '{}' must be a 3-element number array (got {})", key,
+                                                   value.dump()));
 
-            return glm::vec3(value[0].get<float>(), value[1].get<float>(), value[2].get<float>());
+            const glm::vec3 result(value[0].get<float>(), value[1].get<float>(), value[2].get<float>());
+            if (!std::isfinite(result.x) || !std::isfinite(result.y) || !std::isfinite(result.z))
+                return std::unexpected(std::format("Field '{}' must contain finite float values (got {})", key,
+                                                   value.dump()));
+            return result;
         }
 
         struct ViewArguments {
@@ -628,26 +636,29 @@ namespace lfs::app {
 
         struct ViewArgumentsError {
             std::string message;
+            std::string parameter;
         };
 
         std::expected<ViewArguments, ViewArgumentsError> parse_view_arguments(const json& args) {
             auto eye = optional_vec3_arg(args, "eye");
             if (!eye)
-                return std::unexpected(ViewArgumentsError{eye.error()});
+                return std::unexpected(ViewArgumentsError{eye.error(), "eye"});
             auto target = optional_vec3_arg(args, "target");
             if (!target)
-                return std::unexpected(ViewArgumentsError{target.error()});
+                return std::unexpected(ViewArgumentsError{target.error(), "target"});
             auto up = optional_vec3_arg(args, "up");
             if (!up)
-                return std::unexpected(ViewArgumentsError{up.error()});
+                return std::unexpected(ViewArgumentsError{up.error(), "up"});
             if (!eye->has_value() || !target->has_value())
-                return std::unexpected(ViewArgumentsError{"Fields 'eye' and 'target' must be provided"});
+                return std::unexpected(ViewArgumentsError{"Fields 'eye' and 'target' must be provided", "eye"});
 
             ViewArguments result{
                 .eye = **eye,
                 .target = **target,
                 .up = up->value_or(glm::vec3(0.0f, 1.0f, 0.0f)),
             };
+            if (auto error = view_vectors_error(result.eye, result.target, result.up))
+                return std::unexpected(ViewArgumentsError{std::move(*error), "eye"});
             if (args.contains("fov_degrees"))
                 result.fov_degrees = args["fov_degrees"].get<float>();
             return result;
@@ -2708,15 +2719,15 @@ namespace lfs::app {
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"eye", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Camera eye position [x,y,z]"}}},
-                        {"target", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Camera target/pivot position [x,y,z]"}}},
-                        {"up", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional up vector [x,y,z], defaults to [0,1,0]"}}},
+                        {"eye", number_array_schema(3, "Camera eye position [x,y,z]")},
+                        {"target", number_array_schema(3, "Camera target/pivot position [x,y,z]")},
+                        {"up", number_array_schema(3, "Optional up vector [x,y,z], defaults to [0,1,0]")},
                         {"fov_degrees", json{{"type", "number"}, {"description", "Optional vertical field of view in degrees"}}}},
                     .required = {"eye", "target"}}},
             [viewer_impl](const json& args) -> json {
                 auto view = parse_view_arguments(args);
                 if (!view)
-                    return json{{"error", view.error().message}};
+                    return mcp::invalid_argument_result(view.error().message, view.error().parameter);
 
                 return post_and_wait(viewer_impl, [view = *view]() -> json {
                     apply_view_arguments(view);
@@ -3024,9 +3035,9 @@ namespace lfs::app {
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"eye", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Camera eye position [x,y,z]"}}},
-                        {"target", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Camera target/pivot position [x,y,z]"}}},
-                        {"up", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional up vector [x,y,z], defaults to [0,1,0]"}}},
+                        {"eye", number_array_schema(3, "Camera eye position [x,y,z]")},
+                        {"target", number_array_schema(3, "Camera target/pivot position [x,y,z]")},
+                        {"up", number_array_schema(3, "Optional up vector [x,y,z], defaults to [0,1,0]")},
                         {"fov_degrees", json{{"type", "number"}, {"description", "Optional vertical field of view in degrees"}}}},
                     .required = {"eye", "target"}},
                 .metadata = mcp::McpToolMetadata{
@@ -3039,7 +3050,7 @@ namespace lfs::app {
             [viewer_impl](const json& args) -> json {
                 auto view = parse_view_arguments(args);
                 if (!view)
-                    return json{{"error", view.error().message}};
+                    return mcp::invalid_argument_result(view.error().message, view.error().parameter);
 
                 const auto started_at = std::chrono::steady_clock::now();
                 auto applied = post_and_wait(viewer_impl, [view = *view]() -> json {
@@ -3102,7 +3113,7 @@ namespace lfs::app {
                         {"render_scale", json{{"type", "number"}}},
                         {"scene_upscaler", json{{"type", "string"}, {"enum", scene_upscaler_backend_enum}}},
                         {"scene_upscaler_preset", json{{"type", "string"}, {"enum", scene_upscaler_preset_enum}}},
-                        {"background_color", json{{"type", "array"}, {"items", json{{"type", "number"}}}}},
+                        {"background_color", number_array_schema(3, "Background RGB color [r,g,b]")},
                         {"environment_mode", json{{"type", "integer"}}},
                         {"environment_map_path", json{{"type", "string"}}},
                         {"environment_exposure", json{{"type", "number"}}},
@@ -3916,7 +3927,7 @@ namespace lfs::app {
                         {"y0", json{{"type", "number"}, {"description", "Top edge Y coordinate"}}},
                         {"x1", json{{"type", "number"}, {"description", "Right edge X coordinate"}}},
                         {"y1", json{{"type", "number"}, {"description", "Bottom edge Y coordinate"}}},
-                        {"camera_index", json{{"type", "integer"}, {"description", "-1 = the current viewer (default; matches render.capture omitted-index behavior); >= 0 = dataset camera index; out-of-range fails with an error"}}},
+                        {"camera_index", json{{"type", "integer"}, {"minimum", SELECTION_VIEWER_CAMERA_INDEX}, {"description", "-1 = project through the current viewer (default); >= 0 = project through that dataset camera, with x/y in its image pixels; an index past the last camera fails with an error"}}},
                         {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove", "intersect"})}, {"description", "Selection mode (default: replace)"}}}},
                     .required = {"x0", "y0", "x1", "y1"}}},
             [viewer_impl](const json& args) -> json {
@@ -3943,8 +3954,8 @@ namespace lfs::app {
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"points", json{{"type", "array"}, {"items", json{{"type", "array"}, {"items", json{{"type", "number"}}}}}, {"description", "Polygon vertices [[x0,y0], [x1,y1], ...]"}}},
-                        {"camera_index", json{{"type", "integer"}, {"description", "-1 = the current viewer (default; matches render.capture omitted-index behavior); >= 0 = dataset camera index; out-of-range fails with an error"}}},
+                        {"points", point_list_schema(3, "Polygon vertices [[x0,y0], [x1,y1], ...]")},
+                        {"camera_index", json{{"type", "integer"}, {"minimum", SELECTION_VIEWER_CAMERA_INDEX}, {"description", "-1 = project through the current viewer (default); >= 0 = project through that dataset camera, with x/y in its image pixels; an index past the last camera fails with an error"}}},
                         {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove", "intersect"})}, {"description", "Selection mode (default: replace)"}}}},
                     .required = {"points"}}},
             [viewer_impl](const json& args) -> json {
@@ -3978,8 +3989,8 @@ namespace lfs::app {
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"points", json{{"type", "array"}, {"items", json{{"type", "array"}, {"items", json{{"type", "number"}}}}}, {"description", "Lasso points [[x0,y0], [x1,y1], ...]"}}},
-                        {"camera_index", json{{"type", "integer"}, {"description", "-1 = the current viewer (default; matches render.capture omitted-index behavior); >= 0 = dataset camera index; out-of-range fails with an error"}}},
+                        {"points", point_list_schema(3, "Lasso points [[x0,y0], [x1,y1], ...]")},
+                        {"camera_index", json{{"type", "integer"}, {"minimum", SELECTION_VIEWER_CAMERA_INDEX}, {"description", "-1 = project through the current viewer (default); >= 0 = project through that dataset camera, with x/y in its image pixels; an index past the last camera fails with an error"}}},
                         {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove", "intersect"})}, {"description", "Selection mode (default: replace)"}}}},
                     .required = {"points"}}},
             [viewer_impl](const json& args) -> json {
@@ -4015,7 +4026,7 @@ namespace lfs::app {
                     .properties = json{
                         {"x", json{{"type", "number"}, {"description", "X coordinate"}}},
                         {"y", json{{"type", "number"}, {"description", "Y coordinate"}}},
-                        {"camera_index", json{{"type", "integer"}, {"description", "-1 = the current viewer (default; matches render.capture omitted-index behavior); >= 0 = dataset camera index; out-of-range fails with an error"}}},
+                        {"camera_index", json{{"type", "integer"}, {"minimum", SELECTION_VIEWER_CAMERA_INDEX}, {"description", "-1 = project through the current viewer (default); >= 0 = project through that dataset camera, with x/y in its image pixels; an index past the last camera fails with an error"}}},
                         {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove", "intersect"})}, {"description", "Selection mode (default: replace)"}}}},
                     .required = {"x", "y"}}},
             [viewer_impl](const json& args) -> json {
@@ -4043,7 +4054,7 @@ namespace lfs::app {
                         {"x", json{{"type", "number"}, {"description", "X coordinate"}}},
                         {"y", json{{"type", "number"}, {"description", "Y coordinate"}}},
                         {"radius", json{{"type", "number"}, {"description", "Selection radius in pixels (default: 20)"}}},
-                        {"camera_index", json{{"type", "integer"}, {"description", "-1 = the current viewer (default; matches render.capture omitted-index behavior); >= 0 = dataset camera index; out-of-range fails with an error"}}},
+                        {"camera_index", json{{"type", "integer"}, {"minimum", SELECTION_VIEWER_CAMERA_INDEX}, {"description", "-1 = project through the current viewer (default); >= 0 = project through that dataset camera, with x/y in its image pixels; an index past the last camera fails with an error"}}},
                         {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove", "intersect"})}, {"description", "Selection mode (default: replace)"}}}},
                     .required = {"x", "y"}}},
             [viewer_impl](const json& args) -> json {
@@ -4072,7 +4083,7 @@ namespace lfs::app {
                         {"x", json{{"type", "number"}, {"description", "X coordinate"}}},
                         {"y", json{{"type", "number"}, {"description", "Y coordinate"}}},
                         {"radius", json{{"type", "number"}, {"description", "Selection radius in pixels (default: 20)"}}},
-                        {"camera_index", json{{"type", "integer"}, {"description", "-1 = the current viewer (default; matches render.capture omitted-index behavior); >= 0 = dataset camera index; out-of-range fails with an error"}}},
+                        {"camera_index", json{{"type", "integer"}, {"minimum", SELECTION_VIEWER_CAMERA_INDEX}, {"description", "-1 = project through the current viewer (default); >= 0 = project through that dataset camera, with x/y in its image pixels; an index past the last camera fails with an error"}}},
                         {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove", "intersect"})}, {"description", "Selection mode (default: replace)"}}}},
                     .required = {"x", "y"}}},
             [viewer_impl](const json& args) -> json {
@@ -4388,11 +4399,11 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"node", json{{"type", "string"}, {"description", "Optional crop box node or parent node name; defaults to the current selected crop box"}}},
-                        {"min", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional local minimum bounds"}}},
-                        {"max", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional local maximum bounds"}}},
-                        {"translation", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional local XYZ translation"}}},
-                        {"rotation", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional local XYZ Euler rotation in radians"}}},
-                        {"scale", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional local XYZ scale"}}},
+                        {"min", number_array_schema(3, "Optional local minimum bounds")},
+                        {"max", number_array_schema(3, "Optional local maximum bounds")},
+                        {"translation", number_array_schema(3, "Optional local XYZ translation")},
+                        {"rotation", number_array_schema(3, "Optional local XYZ Euler rotation in radians")},
+                        {"scale", number_array_schema(3, "Optional local XYZ scale")},
                         {"inverse", json{{"type", "boolean"}, {"description", "Invert the crop volume"}}},
                         {"enabled", json{{"type", "boolean"}, {"description", "Enable crop filtering for this crop box"}}},
                         {"show", json{{"type", "boolean"}, {"description", "Show crop boxes in the viewport"}}},
@@ -4592,10 +4603,10 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"node", json{{"type", "string"}, {"description", "Optional ellipsoid node or parent node name; defaults to the current selected ellipsoid"}}},
-                        {"radii", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional ellipsoid radii"}}},
-                        {"translation", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional local XYZ translation"}}},
-                        {"rotation", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional local XYZ Euler rotation in radians"}}},
-                        {"scale", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional local XYZ scale"}}},
+                        {"radii", number_array_schema(3, "Optional ellipsoid radii")},
+                        {"translation", number_array_schema(3, "Optional local XYZ translation")},
+                        {"rotation", number_array_schema(3, "Optional local XYZ Euler rotation in radians")},
+                        {"scale", number_array_schema(3, "Optional local XYZ scale")},
                         {"inverse", json{{"type", "boolean"}, {"description", "Invert the ellipsoid selection volume"}}},
                         {"enabled", json{{"type", "boolean"}, {"description", "Enable ellipsoid filtering for this helper"}}},
                         {"show", json{{"type", "boolean"}, {"description", "Show ellipsoids in the viewport"}}},
