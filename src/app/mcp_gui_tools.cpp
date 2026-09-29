@@ -2479,11 +2479,18 @@ namespace lfs::app {
             .runtime = "gui",
             .thread_affinity = "gui_thread",
             .load_dataset =
-                [viewer](const std::filesystem::path& path,
-                         const core::param::TrainingParameters& params) {
+                [viewer, viewer_impl](const std::filesystem::path& path,
+                                      const core::param::TrainingParameters& params) {
                     auto immediate_params = params;
                     immediate_params.dataset.data_path.clear();
-                    return post_and_wait(viewer, [viewer, params = std::move(immediate_params), path]() {
+                    return post_and_wait(viewer, [viewer, viewer_impl, params = std::move(immediate_params), path]() -> mcp::SharedSceneToolBackend::LoadDatasetHandler::result_type {
+                        // Loading replaces the trainer. The GUI thread cannot wait for a live
+                        // worker, so the load would stop the run and then fail; refuse first.
+                        if (const auto* const trainer_manager = viewer_impl->getTrainerManager();
+                            trainer_manager && trainer_manager->hasLiveTrainingThread()) {
+                            return std::unexpected(
+                                "Cannot load a dataset while training is running. Stop training and wait for it to finish first.");
+                        }
                         viewer->setParameters(params);
                         return viewer->loadDataset(path);
                     });
@@ -2516,11 +2523,17 @@ namespace lfs::app {
                     });
                 },
             .start_training =
-                [viewer, viewer_impl]() {
+                [viewer, viewer_impl](const bool overwrite) {
                     // The GUI hop only acknowledges Starting. MCP keeps its
                     // historical start contract by waiting for worker-side
                     // initialization before returning to the caller.
-                    auto result = post_and_wait(viewer, [viewer]() {
+                    auto result = post_and_wait(viewer, [viewer, viewer_impl, overwrite]() {
+                        // Overwrite consent follows the training panel: a finished
+                        // run is reset to its fresh dataset before Start.
+                        if (const auto* const trainer_manager = viewer_impl->getTrainerManager();
+                            overwrite && trainer_manager && trainer_manager->isFinished()) {
+                            core::events::cmd::ResetTraining{}.emit();
+                        }
                         return viewer->startTraining();
                     });
                     if (result) {

@@ -179,10 +179,14 @@ namespace lfs::mcp {
             McpTool{
                 .name = "training.start",
                 .description = "Start training in the current runtime",
-                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"overwrite", json{{"type", "boolean"}, {"default", false}, {"description", "Explicitly authorize replacing a finished training run with a new run from iteration 0"}}}},
+                    .required = {}},
                 .metadata = command_metadata(backend, "training", false, true)},
-            [backend](const json&) -> json {
-                auto result = backend.start_training();
+            [backend](const json& args) -> json {
+                auto result = backend.start_training(args.value("overwrite", false));
                 if (!result)
                     return json{{"error", result.error()}};
                 return json{{"success", true}, {"message", "Training started"}};

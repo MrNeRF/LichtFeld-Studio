@@ -25,7 +25,7 @@ namespace lfs::mcp {
         using SavePlyHandler =
             std::function<std::expected<void, std::string>(const std::filesystem::path&, bool include_provenance)>;
         using StartTrainingHandler =
-            std::function<std::expected<void, std::string>()>;
+            std::function<std::expected<void, std::string>(bool overwrite)>;
         using RenderCaptureHandler =
             std::function<std::expected<std::string, std::string>(
                 std::optional<int> camera_index, int width, int height, bool presented)>;
