@@ -95,6 +95,7 @@ namespace lfs::core::internal {
         void ensure_staging(size_t bytes);
         [[nodiscard]] StagingSlice acquire_staging(size_t bytes, size_t alignment);
         void collect_retired_locked(uint64_t completed);
+        void destroy_free_when_idle_locked();
         void destroy_free_locked();
         [[nodiscard]] AllocationRecord& allocation_for(StorageRef storage) const;
 

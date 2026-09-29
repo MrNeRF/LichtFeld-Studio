@@ -453,7 +453,7 @@ namespace lfs::core::internal {
                 {
                     std::lock_guard lock(allocations_mutex_);
                     collect_retired_locked(context_.completed_timeline());
-                    destroy_free_locked();
+                    destroy_free_when_idle_locked();
                 }
                 result = vmaCreateBuffer(
                     context_.allocator(), &buffer_info, &allocation_info,
@@ -825,21 +825,13 @@ namespace lfs::core::internal {
     }
 
     void VulkanMemory::collect_retired_locked(const uint64_t completed) {
-#ifdef __APPLE__
-        // MoltenVK makes all device memory resident for every command buffer
-        // it submits without keeping that memory alive, so freeing memory also
-        // waits for work that never used it.
-        const bool idle = completed >= context_.submitted_timeline();
-#else
-        constexpr bool idle = true;
-#endif
+        std::vector<std::unique_ptr<AllocationRecord>> released;
         std::erase_if(retired_, [&](auto& record) {
-            if (record->last_use > completed || (!record->cacheable && !idle)) {
+            if (record->last_use > completed) {
                 return false;
             }
             if (!record->cacheable) {
-                vmaDestroyBuffer(context_.allocator(), record->buffer,
-                                 record->allocation);
+                released.push_back(std::move(record));
             } else if (record->host_visible) {
                 readback_free_lists_[record->allocated_size].push_back(std::move(record));
             } else {
@@ -847,6 +839,35 @@ namespace lfs::core::internal {
             }
             return true;
         });
+        if (released.empty()) {
+            return;
+        }
+        const auto destroy = [&] {
+            for (auto& record : released) {
+                vmaDestroyBuffer(context_.allocator(), record->buffer,
+                                 record->allocation);
+            }
+            released.clear();
+        };
+#ifdef __APPLE__
+        // See run_while_queue_idle: memory is freed only with nothing in flight.
+        if (!context_.run_while_queue_idle(destroy)) {
+            for (auto& record : released) {
+                retired_.push_back(std::move(record));
+            }
+        }
+#else
+        destroy();
+#endif
+    }
+
+    void VulkanMemory::destroy_free_when_idle_locked() {
+#ifdef __APPLE__
+        // See run_while_queue_idle; pooled blocks stay cached when work is in flight.
+        (void)context_.run_while_queue_idle([&] { destroy_free_locked(); });
+#else
+        destroy_free_locked();
+#endif
     }
 
     void VulkanMemory::destroy_free_locked() {
@@ -900,7 +921,7 @@ namespace lfs::core::internal {
 #endif
         std::lock_guard lock(allocations_mutex_);
         collect_retired_locked(context_.completed_timeline());
-        destroy_free_locked();
+        destroy_free_when_idle_locked();
     }
 
     MemoryInfo VulkanMemory::stats() const {
