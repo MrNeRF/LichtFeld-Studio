@@ -5,8 +5,11 @@
 
 #include "lfs/training/ops/gsplat_vulkan.hpp"
 #include "core/memory_pressure.hpp"
+#include "core/tensor/backend/vulkan/vk_recorder.hpp"
+#include "core/tensor_readback.hpp"
 #include "lfs/training/ops/pair_sort_vulkan.hpp"
 #include "vulkan/dispatch.hpp"
+#include "vulkan/gsplat_state.hpp"
 #include <climits>
 
 #include "core/sh_layout.hpp"
@@ -25,12 +28,14 @@ namespace lfs::training {
         namespace ops = lfs::gpu_ops;
         namespace mk = vulkan;
         template <class P>
-        void launch(uint32_t stage, const P& p, std::initializer_list<const core::Tensor*> tensors, uint32_t groups) {
+        void launch(uint32_t stage, const P& p, std::initializer_list<const core::Tensor*> tensors, uint32_t groups, const core::Tensor* control = nullptr, size_t word = 0) {
             std::vector<mk::StorageRef> refs;
             for (auto t : tensors)
                 if (t->is_valid() && t->numel())
                     refs.push_back(mk::ref(*t));
-            mk::dispatch("gsplat_forward", p, refs, refs, groups, stage);
+            if (control)
+                refs.push_back(mk::ref(*control));
+            mk::dispatch("gsplat_forward", p, refs, refs, groups, stage, control ? mk::ref(*control) : mk::StorageRef{}, word * 4);
         }
         template <class P>
         void launch_items(uint32_t stage, const P& p, std::initializer_list<const core::Tensor*> tensors, size_t count) {
@@ -60,6 +65,7 @@ namespace lfs::training {
         struct BinParams {
             uint64_t counts, ends, radii, means2d, depths, keys, ids, offsets;
             uint32_t count, tiles_x, tiles_y;
+            uint64_t control;
         };
         struct ScanParams {
             uint64_t input, output, totals;
@@ -69,11 +75,12 @@ namespace lfs::training {
             uint64_t camera, means, scales, quats, opacities, colors, bg_color, bg_image, tile_offsets, gaussian_ids;
             uint64_t image, alpha, last_ids, depth, depths;
             uint32_t count, width, height, tiles_x, tiles_y, mode;
+            uint64_t control;
         };
         static_assert(sizeof(SetupParams) == 80 && offsetof(SetupParams, fx) == 40);
         static_assert(sizeof(ProjectParams) == 144 && offsetof(ProjectParams, count) == 112);
-        static_assert(sizeof(BinParams) == 80 && offsetof(BinParams, count) == 64);
-        static_assert(sizeof(RasterParams) == 144 && offsetof(RasterParams, count) == 120);
+        static_assert(sizeof(BinParams) == 88 && offsetof(BinParams, count) == 64);
+        static_assert(sizeof(RasterParams) == 152 && offsetof(RasterParams, count) == 120);
         static_assert(sizeof(ScanParams) == 32 && offsetof(ScanParams, count) == 24);
         struct BackParams {
             uint64_t camera, means, scales, quats, opacities, colors, bg_color, bg_image, tile_offsets, gaussian_ids;
@@ -102,22 +109,8 @@ namespace lfs::training {
         static_assert(alignof(SetupParams) == 8 && alignof(ProjectParams) == 8 && alignof(BinParams) == 8 &&
                       alignof(RasterParams) == 8 && alignof(BackParams) == 8 && alignof(AccumulateParams) == 8);
 
-        // What backward needs from the forward it follows.
-        struct Frame {
-            Tensor means, scales, quats, opacities, camera, bg_color, bg_image;
-            Tensor radii, means2d, colors, tile_offsets, gaussian_ids, alpha, last_ids, depths;
-            ops::GsplatRenderMode mode = ops::GsplatRenderMode::RGB;
-            uint32_t count = 0, width = 0, height = 0, degree = 0, layout_rest = 0, intersections = 0;
-        };
-
-        struct VulkanGsplatState : ops::BackendState {
-            Frame frame;
-            bool live = false;
-            std::string message;
-            Tensor camera, radial, tangential, prism, image, alpha, last_ids, depth;
-            Tensor radii, means2d, colors, depth_keys, tile_counts, tile_offsets, ends;
-            Tensor keys_a, keys_b, ids_a, ids_b, grads;
-        };
+        using Frame = vulkan::GsplatFrame;
+        using vulkan::VulkanGsplatState;
 
         VulkanGsplatState& state_of(ops::GsplatSaved& saved) {
             if (!saved.backend)
@@ -194,6 +187,8 @@ namespace lfs::training {
             auto& state = static_cast<VulkanGsplatState&>(*saved.backend);
             state.live = false;
             state.frame = {};
+            if (state.intersection_readback.pending())
+                state.intersection_readback = {};
         }
 
         ops::RasterResult forward(ops::GsplatSaved& saved, const ops::SplatInputs& splats, const Tensor& view,
@@ -326,33 +321,13 @@ namespace lfs::training {
             LFS_ASSERT_MSG(tiles_wide < INT_MAX && uint64_t(f.width) * f.height <= INT_MAX, "Gsplat image exceeds signed indexing");
             int64_t intersections = 0;
             Tensor ends;
-            if (count) {
+            if (count)
                 ends = inclusive_counts(tile_counts, &state.ends);
+            if (count && !state.indirect) {
                 intersections = ends.slice(0, count - 1, count).item<int64_t>();
             }
             if (intersections < 0 || intersections > INT_MAX)
                 return {ops::RasterResult::Code::InstanceOverflow, false, "Gsplat tile intersections exceed signed indexing"};
-            f.intersections = uint32_t(intersections);
-            f.tile_offsets = reuse(state.tile_offsets, {size_t(tiles) + 1}, DataType::Int32);
-            f.tile_offsets.zero_();
-            if (intersections) {
-                auto keys_a = reuse_capacity(state.keys_a, size_t(intersections), DataType::Int64);
-                auto keys_b = reuse_capacity(state.keys_b, size_t(intersections), DataType::Int64);
-                auto ids_a = reuse_capacity(state.ids_a, size_t(intersections), DataType::UInt32);
-                auto ids_b = reuse_capacity(state.ids_b, size_t(intersections), DataType::UInt32);
-                BinParams bin{mk::address(tile_counts), mk::address(ends), mk::address(f.radii), mk::address(f.means2d),
-                              mk::address(depth_keys), mk::address(keys_a), mk::address(ids_a), mk::address(f.tile_offsets),
-                              f.count, tiles_x, tiles_y};
-                launch_items(2, bin, {&tile_counts, &ends, &f.radii, &f.means2d, &depth_keys, &keys_a, &ids_a}, count);
-                const bool in_a = vulkan_pair_sort({&keys_a, &keys_b, &ids_a, &ids_b}, f.intersections, 0,
-                                                   32 + std::bit_width(tiles - 1), true);
-                f.gaussian_ids = in_a ? ids_a : ids_b;
-                const auto& keys = in_a ? keys_a : keys_b;
-                bin.keys = mk::address(keys);
-                bin.count = f.intersections;
-                launch_items(3, bin, {&keys, &f.tile_offsets}, f.intersections);
-            }
-
             const auto plane = [&](const size_t channels) {
                 return core::TensorShape({channels, static_cast<size_t>(f.height), static_cast<size_t>(f.width)});
             };
@@ -365,42 +340,99 @@ namespace lfs::training {
                 f.bg_image = float_input(bg_image, 3 * size_t{f.width} * f.height, "background image");
             else if (bg_color.is_valid() && bg_color.numel() > 0)
                 f.bg_color = float_input(bg_color, 3, "background colour");
-            if (intersections == 0) {
-                // As CUDA: an empty intersection list clears the outputs, background included.
-                if (image.is_valid())
-                    state.image.zero_();
-                if (depth.is_valid())
-                    state.depth.zero_();
-                f.alpha.zero_();
-                f.last_ids.zero_();
+            const auto record_forward = [&](uint32_t capacity, const Tensor* control) {
+                f.tile_offsets = reuse(state.tile_offsets, {size_t(tiles) + 1}, DataType::Int32);
+                f.tile_offsets.zero_();
+                if (capacity) {
+                    auto keys_a = reuse_capacity(state.keys_a, size_t(capacity), DataType::Int64);
+                    auto keys_b = reuse_capacity(state.keys_b, size_t(capacity), DataType::Int64);
+                    auto ids_a = reuse_capacity(state.ids_a, size_t(capacity), DataType::UInt32);
+                    auto ids_b = reuse_capacity(state.ids_b, size_t(capacity), DataType::UInt32);
+                    BinParams bin{mk::address(tile_counts), mk::address(ends), mk::address(f.radii), mk::address(f.means2d),
+                                  mk::address(depth_keys), mk::address(keys_a), mk::address(ids_a), mk::address(f.tile_offsets),
+                                  f.count, tiles_x, tiles_y, control ? mk::address(*control) : 0};
+                    launch(2, bin, {&tile_counts, &ends, &f.radii, &f.means2d, &depth_keys, &keys_a, &ids_a}, mk::groups(count), control, 4);
+                    const bool in_a = vulkan_pair_sort({&keys_a, &keys_b, &ids_a, &ids_b}, capacity, 0,
+                                                       32 + std::bit_width(tiles - 1), true, nullptr, control);
+                    f.gaussian_ids = in_a ? ids_a : ids_b;
+                    const auto& keys = in_a ? keys_a : keys_b;
+                    bin.keys = mk::address(keys);
+                    bin.count = capacity;
+                    launch(3, bin, {&keys, &f.tile_offsets}, mk::groups(capacity), control, 12);
+                }
+
+                if (!control && capacity == 0) {
+                    // As CUDA: an empty intersection list clears the outputs, background included.
+                    if (image.is_valid())
+                        state.image.zero_();
+                    if (depth.is_valid())
+                        state.depth.zero_();
+                    f.alpha.zero_();
+                    f.last_ids.zero_();
+                } else {
+                    const RasterParams raster{
+                        .camera = mk::address(f.camera),
+                        .means = mk::address(f.means),
+                        .scales = mk::address(f.scales),
+                        .quats = mk::address(f.quats),
+                        .opacities = mk::address(f.opacities),
+                        .colors = mk::address(f.colors),
+                        .bg_color = mk::address(f.bg_color),
+                        .bg_image = mk::address(f.bg_image),
+                        .tile_offsets = mk::address(f.tile_offsets),
+                        .gaussian_ids = mk::address(f.gaussian_ids),
+                        .image = mk::address(image),
+                        .alpha = mk::address(f.alpha),
+                        .last_ids = mk::address(f.last_ids),
+                        .depth = mk::address(depth),
+                        .depths = mk::address(f.depths),
+                        .count = f.count,
+                        .width = f.width,
+                        .height = f.height,
+                        .tiles_x = tiles_x,
+                        .tiles_y = tiles_y,
+                        .mode = static_cast<uint32_t>(params.render_mode),
+                        .control = control ? mk::address(*control) : 0,
+                    };
+                    launch(6, raster,
+                           {&f.camera, &f.means, &f.scales, &f.quats, &f.opacities, &f.colors, &f.bg_color,
+                            &f.bg_image, &f.tile_offsets, &f.gaussian_ids, &image, &depth, &f.depths, &f.alpha, &f.last_ids},
+                           std::min(tiles, core::internal::acquire_vulkan_context()->caps().max_workgroup_count[0]), control, 20);
+                }
+            };
+            if (!state.indirect) {
+                f.intersections = uint32_t(intersections);
+                record_forward(f.intersections, nullptr);
             } else {
-                const RasterParams raster{
-                    .camera = mk::address(f.camera),
-                    .means = mk::address(f.means),
-                    .scales = mk::address(f.scales),
-                    .quats = mk::address(f.quats),
-                    .opacities = mk::address(f.opacities),
-                    .colors = mk::address(f.colors),
-                    .bg_color = mk::address(f.bg_color),
-                    .bg_image = mk::address(f.bg_image),
-                    .tile_offsets = mk::address(f.tile_offsets),
-                    .gaussian_ids = mk::address(f.gaussian_ids),
-                    .image = mk::address(image),
-                    .alpha = mk::address(f.alpha),
-                    .last_ids = mk::address(f.last_ids),
-                    .depth = mk::address(depth),
-                    .depths = mk::address(f.depths),
-                    .count = f.count,
-                    .width = f.width,
-                    .height = f.height,
-                    .tiles_x = tiles_x,
-                    .tiles_y = tiles_y,
-                    .mode = static_cast<uint32_t>(params.render_mode),
-                };
-                launch(6, raster,
-                       {&f.camera, &f.means, &f.scales, &f.quats, &f.opacities, &f.colors, &f.bg_color,
-                        &f.bg_image, &f.tile_offsets, &f.gaussian_ids, &image, &depth, &f.depths, &f.alpha, &f.last_ids},
-                       std::min(tiles, core::internal::acquire_vulkan_context()->caps().max_workgroup_count[0]));
+                if (!state.control.is_valid())
+                    state.control = Tensor::empty({32}, Device::GPU, DataType::UInt32);
+                size_t capacity = state.keys_a.is_valid() ? state.keys_a.numel() : std::min(size_t{1} << 20, count * 8);
+                capacity = std::max(size_t{256}, capacity);
+                for (;;) {
+                    struct ControlParams {
+                        uint64_t ends, control;
+                        uint32_t count, capacity, tiles, max_groups;
+                    };
+                    const ControlParams control{mk::address(ends), mk::address(state.control), f.count,
+                                                uint32_t(capacity), tiles, core::internal::acquire_vulkan_context()->caps().max_workgroup_count[0]};
+                    launch(7, control, {&ends, &state.control}, 1);
+                    state.intersection_readback.enqueue_range(state.control, sizeof(uint32_t), 2 * sizeof(uint32_t));
+                    record_forward(uint32_t(capacity), &state.control);
+                    // Submit the dependent work before checking capacity. Overflow
+                    // dispatches are empty, so retry cannot expose partial output.
+                    core::internal::acquire_vulkan_context()->recorders().flush_current();
+                    std::array<uint32_t, 2> status{};
+                    state.intersection_readback.wait(std::as_writable_bytes(std::span(status)));
+                    if (status[0] == 0) {
+                        f.intersections = status[1];
+                        break;
+                    }
+                    if (status[0] == 2)
+                        return {ops::RasterResult::Code::InstanceOverflow, false, "Gsplat tile intersections exceed signed indexing"};
+                    // One eighth headroom avoids repeated growth without reserving
+                    // another full pair buffer at late training sizes.
+                    capacity = std::min(size_t(INT_MAX), (size_t(status[1]) + status[1] / 8 + 255) & ~size_t{255});
+                }
             }
             output.image = image;
             output.alpha = f.alpha;
@@ -586,6 +618,7 @@ namespace lfs::training {
             record_vram_tensor(scope, "cache.ids_a", state.ids_a);
             record_vram_tensor(scope, "cache.ids_b", state.ids_b);
             record_vram_tensor(scope, "cache.grads", state.grads);
+            record_vram_tensor(scope, "cache.control", state.control);
             record_vram_tensor(scope, "camera.block", state.camera);
             record_vram_tensor(scope, "camera.radial", state.radial);
             record_vram_tensor(scope, "camera.tangential", state.tangential);
@@ -619,6 +652,7 @@ namespace lfs::training {
             state.ids_a = {};
             state.ids_b = {};
             state.grads = {};
+            state.control = {};
             return true;
         }
     } // namespace

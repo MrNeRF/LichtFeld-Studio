@@ -13,9 +13,12 @@
 #include "core/tensor/backend/vulkan/vk_context.hpp"
 #include "cuda_backend_test.hpp"
 #include "lfs/training/ops/fast_vulkan.hpp"
+#include "lfs/training/ops/gsplat_services.hpp"
+#include "lfs/training/ops/gsplat_vulkan.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/strategies/strategy_factory.hpp"
 #include "training/vulkan/fast_state.hpp"
+#include "training/vulkan/gsplat_state.hpp"
 #include <sstream>
 
 namespace {
@@ -278,6 +281,135 @@ namespace {
                 SCOPED_TRACE(field);
                 EXPECT_TRUE(captures[0][field] == captures[1][field]);
                 EXPECT_TRUE(captures[1][field] == captures[2][field]);
+            }
+        }
+    }
+    TEST(TensorVulkanTrainingFault, GsplatIndirectPreservesStateThroughOverflowAndEmptyFrames) {
+        using namespace lfs;
+        using core::DataType;
+        using core::Device;
+        using core::Tensor;
+        if (!core::gpu_backend_available(core::GpuBackend::Vulkan))
+            GTEST_SKIP();
+        // Strategies resolve their kernels through the default backend.
+        const test::DefaultGpuBackendForTesting backend(core::GpuBackend::Vulkan);
+        ASSERT_TRUE(backend.switched());
+        constexpr size_t count = 257;
+        std::vector<float> positions(count * 3), rotations(count * 4);
+        for (size_t i = 0; i < count; ++i) {
+            positions[3 * i] = .001f * float(int(i % 11) - 5);
+            positions[3 * i + 1] = .001f * float(int(i % 7) - 3);
+            positions[3 * i + 2] = 2.f + .001f * float(i);
+            rotations[4 * i] = 1.f;
+        }
+        core::SplatData original(0,
+                                 Tensor::from_vector(positions, {count, 3}, Device::GPU),
+                                 Tensor::full({count, 1, 3}, .3f, Device::GPU),
+                                 Tensor::empty({count, 0, 3}, Device::GPU),
+                                 Tensor::full({count, 3}, -2.f, Device::GPU),
+                                 Tensor::from_vector(rotations, {count, 4}, Device::GPU),
+                                 Tensor::full({count, 1}, 2.f, Device::GPU), 1.f);
+        const auto& table = training::vulkan_gsplat_ops();
+        const auto capture_tensor = [](const Tensor& tensor) {
+            if (!tensor.is_valid() || tensor.numel() == 0)
+                return std::string{};
+            const auto host = tensor.cpu().contiguous();
+            return std::string(static_cast<const char*>(host.data_ptr()), host.bytes());
+        };
+        for (const std::string name : {"mrnf", "mcmc", "igs+"}) {
+            SCOPED_TRACE(name);
+            std::vector<std::vector<std::string>> captures;
+            for (int mode = 0; mode < 2; ++mode) {
+                SCOPED_TRACE(mode);
+                auto model = original.clone();
+                auto created = training::StrategyFactory::instance().create(name, model);
+                ASSERT_TRUE(created.has_value()) << created.error();
+                auto strategy = std::move(*created);
+                core::param::OptimizationParameters options;
+                options.strategy = name;
+                options.gut = true;
+                options.iterations = 20;
+                options.sh_degree = 0;
+                options.max_cap = count;
+                options.start_refine = options.stop_refine = options.refine_every = 1000;
+                options.morton_reorder_interval = 0;
+                options.background_improvements = false;
+                options.use_edge_map = false;
+                strategy->initialize(options);
+                gpu_ops::GsplatSaved saved{.backend = table.create()};
+                auto& state = static_cast<training::vulkan::VulkanGsplatState&>(*saved.backend);
+                state.indirect = mode != 0;
+                Tensor absent;
+                auto background = Tensor::full({3}, .12f, Device::GPU);
+                // One pixel gives every primitive a single gradient contribution,
+                // avoiding unrelated floating atomic ordering in this exact check.
+                std::vector<float> pixels(3 * 27 * 35);
+                pixels[13 * 35 + 17] = .3f;
+                auto gradient = Tensor::from_vector(pixels, {3, 27, 35}, Device::GPU);
+                const gpu_ops::GsplatParams params{.full_image = {27, 35}, .intrinsics = {20, 20, 17.5f, 13.5f}};
+                training::RenderOutput output;
+                std::vector<std::string> snapshots;
+                auto& optimizer = strategy->get_optimizer();
+                optimizer.allocate_gradients();
+                optimizer.zero_grad(0);
+                for (int iteration = 1; iteration <= 6; ++iteration) {
+                    SCOPED_TRACE(iteration);
+                    const bool empty = iteration == 2 || iteration == 5;
+                    strategy->pre_step(iteration, output);
+                    strategy->post_backward(iteration, output);
+                    auto view = Tensor::eye(4, Device::GPU);
+                    if (empty) {
+                        auto values = std::vector<float>{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, -20, 0, 0, 0, 1};
+                        view = Tensor::from_vector(values, {4, 4}, Device::GPU);
+                    }
+                    if (state.indirect && (iteration == 1 || iteration == 4)) {
+                        state.keys_a = Tensor::empty({1}, Device::GPU, DataType::Int64);
+                        state.keys_b = Tensor::empty({1}, Device::GPU, DataType::Int64);
+                        state.ids_a = Tensor::empty({1}, Device::GPU, DataType::UInt32);
+                        state.ids_b = Tensor::empty({1}, Device::GPU, DataType::UInt32);
+                    }
+                    const gpu_ops::SplatInputs inputs{model.means(), model.scaling_raw(), model.rotation_raw(), model.opacity_raw(), model.sh0(), model.shN(), absent};
+                    const auto step_before = optimizer.get_step_count(training::ParamType::Means);
+                    const auto result = table.forward(saved, inputs, view, absent, absent, background, absent, params,
+                                                      {output.image, output.alpha, output.depth, output.normal});
+                    ASSERT_EQ(result.code, gpu_ops::RasterResult::Code::Success);
+                    ASSERT_TRUE(result.has_work);
+                    ASSERT_EQ(state.frame.intersections == 0, empty);
+                    snapshots.push_back(capture_tensor(output.image));
+                    snapshots.push_back(capture_tensor(output.alpha));
+                    snapshots.push_back(capture_tensor(state.frame.tile_offsets));
+                    snapshots.push_back(capture_tensor(state.frame.last_ids));
+                    if (!empty)
+                        snapshots.push_back(capture_tensor(state.frame.gaussian_ids.slice(0, 0, state.frame.intersections)));
+                    if (state.indirect && !empty)
+                        EXPECT_GT(state.keys_a.numel(), 256u);
+                    if (result.has_work) {
+                        strategy->post_render(iteration, output);
+                        table.backward(saved, gradient, absent, training::gsplat_gradients(optimizer), absent, absent, absent, absent, absent);
+                        strategy->step(iteration);
+                    }
+                    EXPECT_EQ(optimizer.get_step_count(training::ParamType::Means), step_before + 1);
+                    for (const auto* tensor : {&model.means(), &model.scaling_raw(), &model.rotation_raw(), &model.opacity_raw(), &model.sh0(), &model.shN()})
+                        snapshots.push_back(capture_tensor(*tensor));
+                    for (const auto type : training::AdamOptimizer::all_param_types()) {
+                        const auto* moment = optimizer.get_state(type);
+                        ASSERT_NE(moment, nullptr);
+                        snapshots.push_back(capture_tensor(moment->exp_avg));
+                        snapshots.push_back(capture_tensor(moment->joint_bounds));
+                        snapshots.push_back(std::to_string(moment->step_count));
+                    }
+                    std::ostringstream serialized(std::ios::binary);
+                    strategy->serialize(serialized);
+                    snapshots.push_back(serialized.str());
+                    table.release(saved);
+                    EXPECT_EQ(state.indirect, mode != 0);
+                }
+                captures.push_back(std::move(snapshots));
+            }
+            ASSERT_EQ(captures[0].size(), captures[1].size());
+            for (size_t field = 0; field < captures[0].size(); ++field) {
+                SCOPED_TRACE(field);
+                EXPECT_TRUE(captures[0][field] == captures[1][field]);
             }
         }
     }

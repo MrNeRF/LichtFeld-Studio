@@ -9,6 +9,7 @@ struct GsplatBinParams {
     Ptr<uint64_t, Access.ReadWrite> keys;
     Ptr<uint, Access.ReadWrite> ids, offsets;
     uint count, tiles_x, tiles_y;
+    Ptr<uint, Access.ReadWrite> control;
 };
 struct GsplatRasterParams {
     Ptr<float, Access.ReadWrite> camera;
@@ -20,6 +21,12 @@ struct GsplatRasterParams {
     Ptr<float, Access.ReadWrite> depth;
     Ptr<uint, Access.ReadWrite> depths;
     uint count, width, height, tiles_x, tiles_y, mode;
+    Ptr<uint, Access.ReadWrite> control;
+};
+struct ControlParams {
+    Ptr<int64_t, Access.Read> ends;
+    Ptr<uint, Access.ReadWrite> control;
+    uint count, capacity, tiles, max_groups;
 };
 struct ScanParams {
     Ptr<int64_t, Access.ReadWrite> input, output, totals;
@@ -38,6 +45,18 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
     uint x = (tile % p.tiles_x) * 16 + lane % 16;
     uint y = (tile / p.tiles_x) * 16 + lane / 16;
     bool inside = x < p.width && y < p.height;
+    // Match the synchronous empty-frame contract, including background.
+    if (p.control != 0 && p.control[0] == 0) {
+        if (inside) {
+            uint pixel = y * p.width + x, plane = p.width * p.height;
+            p.alpha[pixel] = 0;
+            p.last[pixel] = 0;
+            if (p.image != 0)
+                for (uint c = 0; c < 3; ++c) p.image[c * plane + pixel] = 0;
+            if (p.depth != 0) p.depth[pixel] = 0;
+        }
+        return;
+    }
     const GsplatCamera camera = gsplat_camera_load(p.camera);
     GsplatRay ray = gsplat_pixel_ray(camera, float2(x, y) + 0.5f);
     bool done = !inside || !ray.valid;
@@ -118,6 +137,7 @@ result:
             gsplat_project(p, i);
     } else if (stage == 2 || stage == 3) {
         GsplatBinParams p = ((Ptr<GsplatBinParams, Access.Read>)push.parameters)[0];
+        if (stage == 3 && p.control != 0) p.count = p.control[0];
         for (uint i = gid.x * 256 + lane; i < p.count; i += grid.x * 256) {
             if (stage == 2) {
                 if (p.counts[i] == 0)
@@ -161,6 +181,27 @@ result:
             if (lane == 255)
                 p.totals[block] = prefix[lane];
             GroupMemoryBarrierWithGroupSync();
+        }
+    } else if (stage == 7) {
+        if (lane != 0 || gid.x != 0) return;
+        ControlParams p = ((Ptr<ControlParams, Access.Read>)push.parameters)[0];
+        int64_t total = p.count != 0 ? p.ends[p.count - 1] : 0;
+        bool invalid = total < 0 || total > 0x7fffffff;
+        bool overflow = invalid || total > int64_t(p.capacity);
+        uint n = overflow ? 0 : uint(total);
+        p.control[0] = n;
+        p.control[1] = invalid ? 2u : overflow ? 1u : 0u;
+        p.control[2] = uint(total);
+        uint partitions = (n + 2047u) / 2048u;
+        p.control[4] = n != 0 ? min((p.count + 255u) / 256u, p.max_groups) : 0u;
+        p.control[8] = partitions;
+        p.control[12] = min((n + 255u) / 256u, p.max_groups);
+        p.control[16] = n != 0 ? 256u : 0u;
+        p.control[20] = overflow ? 0u : min(p.tiles, p.max_groups);
+        p.control[28] = n != 0 ? 1u : 0u;
+        for (uint word = 4; word <= 28; word += 4) {
+            p.control[word + 1] = 1;
+            p.control[word + 2] = 1;
         }
     } else {
         GsplatRasterParams p = ((Ptr<GsplatRasterParams, Access.Read>)push.parameters)[0];
