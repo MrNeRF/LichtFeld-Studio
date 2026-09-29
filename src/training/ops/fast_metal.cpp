@@ -34,6 +34,10 @@ namespace lfs::training {
         constexpr uint32_t kTile = 16;
         constexpr uint32_t kTilePixels = kTile * kTile;
         constexpr uint32_t kBlendThreads = 128;
+        // kFastShParts and kFastShSlotsPerThread in fast_backward.metal:
+        // fast_backward_sh spreads a primitive's SH rest slots over kShParts threads.
+        constexpr uint32_t kShParts = 4;
+        constexpr uint32_t kShSlotsPerThread = 3;
         // kFastBwdThreads in fast_backward.metal.
         constexpr uint32_t kBackwardThreads = 64;
         constexpr uint32_t kGradStride = 12;
@@ -51,6 +55,8 @@ namespace lfs::training {
         constexpr uint32_t kMipFilterConstant = 65;
         constexpr uint32_t kShLayoutRestConstant = 66;
         constexpr uint32_t kShStorageConstant = 67;
+        constexpr uint32_t kDepthGradConstant = 68;
+        constexpr uint32_t kEdgeWeightConstant = 69;
 
         // Tensors captured by forward for the backward of the same frame.
         struct Frame {
@@ -688,7 +694,10 @@ namespace lfs::training {
                         &s.final_transmittance, &s.grads, &normal_grads_use, &densification_use, &error, &edge_weight,
                         &edge_scores},
                        f.grid_w * f.grid_h, 1, kBackwardThreads,
-                       {{kDensificationConstant, blend_densification}, {kNormalChannelConstant, normal_channel ? 1u : 0u}});
+                       {{kDensificationConstant, blend_densification},
+                        {kNormalChannelConstant, normal_channel ? 1u : 0u},
+                        {kDepthGradConstant, present(grad_depth) ? 1u : 0u},
+                        {kEdgeWeightConstant, present(edge_weight) && present(edge_scores) ? 1u : 0u}});
             }
 
             const uint32_t blocks = div_up(f.n, 256);
@@ -707,7 +716,11 @@ namespace lfs::training {
                 .eps = adam.eps,
                 .n = f.n,
             };
-            launch("fast_backward_sh", sh, std::span<const Tensor* const>(uses), blocks, 1, 256,
+            // The kernels clamp to degree 3: 15 rest coefficients in 12 float4 slots.
+            LFS_ASSERT_MSG(f.sh_layout_rest <= 15 && (f.sh_layout_rest * 3 + 3) / 4 <= kShParts * kShSlotsPerThread,
+                           std::format("fast_backward_sh covers 15 SH rest coefficients in {} slots, the layout has {}",
+                                       kShParts * kShSlotsPerThread, f.sh_layout_rest));
+            launch("fast_backward_sh", sh, std::span<const Tensor* const>(uses), blocks, 1, 256 * kShParts,
                    {{kShBasesConstant, f.sh_bases},
                     {kShLayoutRestConstant, f.sh_layout_rest},
                     {kShStorageConstant, f.sh_storage}});

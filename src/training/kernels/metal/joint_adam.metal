@@ -53,25 +53,22 @@ struct JointCodec {
         return float2(g1 / (sqrt_g2 + kJointEps), forward_sqrt_g2(sqrt_g2));
     }
 
-    static float2 decode_us(device const uchar* packed, const long cell, const float4 mm) {
-        float u_q;
-        float s_q;
-        if (BITS == 16) {
-            device const ushort* codes = reinterpret_cast<device const ushort*>(packed);
-            u_q = float(codes[cell * 2]);
-            s_q = float(codes[cell * 2 + 1]);
-        } else {
-            u_q = float(packed[cell * 2]);
-            s_q = float(packed[cell * 2 + 1]);
-        }
-        // The CUDA codec scales by the rounded reciprocal kInvQMax, and nvcc
-        // contracts the sum into an fma.
+    // Codes (u_q, s_q) to (u, log_s). The CUDA codec scales by the rounded
+    // reciprocal kInvQMax, and nvcc contracts the sum into an fma.
+    static float2 decode_codes(const float2 q, const float4 mm) {
         const float inv_q_max = 1.0f / q_max();
-        return float2(fma(mm.y - mm.x, u_q * inv_q_max, mm.x), fma(mm.w - mm.z, s_q * inv_q_max, mm.z));
+        return float2(fma(mm.y - mm.x, q.x * inv_q_max, mm.x), fma(mm.w - mm.z, q.y * inv_q_max, mm.z));
     }
 
-    static float2 decode_g1g2(device const uchar* packed, const long cell, const float4 mm) {
-        const float2 us = decode_us(packed, cell, mm);
+    static float2 decode_us(device const uchar* packed, const long cell, const float4 mm) {
+        if (BITS == 16) {
+            device const ushort* codes = reinterpret_cast<device const ushort*>(packed);
+            return decode_codes(float2(codes[cell * 2], codes[cell * 2 + 1]), mm);
+        }
+        return decode_codes(float2(packed[cell * 2], packed[cell * 2 + 1]), mm);
+    }
+
+    static float2 us_to_g1g2(const float2 us) {
         const float sqrt_g2 = inverse_sqrt_g2(us.y);
         const float g2 = sqrt_g2 * sqrt_g2;
         // Zero variance must not turn a quantized u residue into momentum.
@@ -79,17 +76,26 @@ struct JointCodec {
         return float2(g1, g2);
     }
 
+    static float2 decode_g1g2(device const uchar* packed, const long cell, const float4 mm) {
+        return us_to_g1g2(decode_us(packed, cell, mm));
+    }
+
+    static float2 encode_codes(const float u, const float log_s, const float u_min, const float s_min,
+                               const float inv_u_range, const float inv_s_range) {
+        return float2(fmin(fmax(round(q_max() * (u - u_min) * inv_u_range), 0.0f), q_max()),
+                      fmin(fmax(round(q_max() * (log_s - s_min) * inv_s_range), 0.0f), q_max()));
+    }
+
     static void encode_us(device uchar* packed, const long cell, const float u, const float log_s,
                           const float u_min, const float s_min, const float inv_u_range, const float inv_s_range) {
-        const float u_q = fmin(fmax(round(q_max() * (u - u_min) * inv_u_range), 0.0f), q_max());
-        const float s_q = fmin(fmax(round(q_max() * (log_s - s_min) * inv_s_range), 0.0f), q_max());
+        const float2 q = encode_codes(u, log_s, u_min, s_min, inv_u_range, inv_s_range);
         if (BITS == 16) {
             device ushort* codes = reinterpret_cast<device ushort*>(packed);
-            codes[cell * 2] = ushort(u_q);
-            codes[cell * 2 + 1] = ushort(s_q);
+            codes[cell * 2] = ushort(q.x);
+            codes[cell * 2 + 1] = ushort(q.y);
         } else {
-            packed[cell * 2] = uchar(u_q);
-            packed[cell * 2 + 1] = uchar(s_q);
+            packed[cell * 2] = uchar(q.x);
+            packed[cell * 2 + 1] = uchar(q.y);
         }
     }
 
