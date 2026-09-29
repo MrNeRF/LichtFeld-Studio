@@ -1536,6 +1536,10 @@ namespace lfs::io {
         }
     }
 
+    bool PipelinedImageLoader::decodes_on_gpu(const lfs::core::GpuBackend backend) {
+        return backend == lfs::core::GpuBackend::CUDA && lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA);
+    }
+
     bool PipelinedImageLoader::attach_cuda_decode_stage() {
         if (config_.backend != lfs::core::GpuBackend::CUDA)
             return false;

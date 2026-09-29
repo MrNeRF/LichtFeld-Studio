@@ -26,8 +26,10 @@ namespace lfs::core {
     get_image_info(std::filesystem::path p);
     LFS_CORE_API std::tuple<unsigned char*, int, int, int>
     load_image_with_alpha(std::filesystem::path p, int res_div = -1, int max_width = 0);
+    // Decodes an encoded image held in memory to RGB; res_div and max_width
+    // resize as in load_image.
     LFS_CORE_API std::tuple<unsigned char*, int, int, int>
-    load_image_from_memory(const uint8_t* data, size_t size);
+    load_image_from_memory(const uint8_t* data, size_t size, int res_div = -1, int max_width = 0);
 
     LFS_CORE_API std::tuple<unsigned char*, int, int, int>
     load_image(std::filesystem::path p, int res_div = -1, int max_width = 0);

@@ -465,6 +465,7 @@ if(NOT LFS_HAS_CUDA)
         test_tensor_vulkan_buffer.cpp
         test_tensor_metal.cpp
         test_camera_priors_portable.cpp
+        test_pipelined_loader_backends.cpp
         test_viewer_no_cuda.cpp
     )
     if(LFS_BUILD_TRAINER)

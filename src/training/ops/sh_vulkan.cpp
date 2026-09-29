@@ -103,7 +103,7 @@ namespace lfs::training {
             vk_check(context.get(), vkCreatePipelineLayout(context->device(), &layout_info, nullptr, &pipeline->layout),
                      "vkCreatePipelineLayout(training.sh_ops)");
 
-            std::array<VkSpecializationMapEntry, constants.size()> entries{};
+            std::array<VkSpecializationMapEntry, Specialization{}.size()> entries{};
             for (uint32_t i = 0; i < entries.size(); ++i)
                 entries[i] = {i, static_cast<uint32_t>(sizeof(uint32_t) * i), sizeof(uint32_t)};
             VkSpecializationInfo specialization{};
