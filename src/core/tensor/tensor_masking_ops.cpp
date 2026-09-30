@@ -776,6 +776,7 @@ namespace lfs::core {
         Tensor indices_int32 = indices_same_device.dtype() == DataType::Int64
                                    ? indices_same_device.to(DataType::Int32)
                                    : indices_same_device;
+        indices_int32 = indices_int32.contiguous();
         auto flat = flatten();
         Tensor result;
 

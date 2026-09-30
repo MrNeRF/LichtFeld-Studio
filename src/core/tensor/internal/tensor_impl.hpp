@@ -2665,21 +2665,24 @@ namespace lfs::core {
         }
 
         float mean_scalar() const {
-            if (device_ == Device::CUDA && dtype_ == DataType::Float32 && is_contiguous_) {
+            if (numel() > 0 && device_ == Device::CUDA && dtype_ == DataType::Float32 &&
+                is_contiguous_) {
                 return tensor_ops::direct_mean_scalar(ptr<float>(), numel(), stream());
             }
             return mean().item();
         }
 
         float min_scalar() const {
-            if (device_ == Device::CUDA && dtype_ == DataType::Float32 && is_contiguous_) {
+            if (numel() > 0 && device_ == Device::CUDA && dtype_ == DataType::Float32 &&
+                is_contiguous_) {
                 return tensor_ops::direct_min_scalar(ptr<float>(), numel(), stream());
             }
             return min().item();
         }
 
         float max_scalar() const {
-            if (device_ == Device::CUDA && dtype_ == DataType::Float32 && is_contiguous_) {
+            if (numel() > 0 && device_ == Device::CUDA && dtype_ == DataType::Float32 &&
+                is_contiguous_) {
                 return tensor_ops::direct_max_scalar(ptr<float>(), numel(), stream());
             }
             return max().item();

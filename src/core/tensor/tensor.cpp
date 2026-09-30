@@ -1364,6 +1364,9 @@ namespace lfs::core {
             return clone();
         }
 
+        if (numel() == 0 && device_ == Device::CUDA && device == Device::CPU)
+            LFS_CUDA_CHECK(cudaStreamSynchronize(this->stream()));
+
         // OPTIMIZATION: Handle non-contiguous tensor transfers intelligently
         // NEW: Use GPU-side strided upload kernel for CPU→GPU transfers!
         // This eliminates CPU-side materialization entirely.
@@ -1714,7 +1717,8 @@ namespace lfs::core {
         for (size_t i = 0; i < numel(); ++i) {                                      \
             if constexpr (std::is_same_v<FROM_TYPE, float> &&                       \
                           (std::is_same_v<TO_TYPE, int> ||                          \
-                           std::is_same_v<TO_TYPE, int64_t>)) {                     \
+                           std::is_same_v<TO_TYPE, int64_t> ||                      \
+                           std::is_same_v<TO_TYPE, uint32_t>)) {                    \
                 dst[i] = detail::saturating_float_cast<TO_TYPE>(src[i]);            \
             } else if constexpr (std::is_same_v<TO_TYPE, uint8_t>) {                \
                 dst[i] = detail::torch_uint8_cast(src[i]);                          \
@@ -2363,6 +2367,7 @@ namespace lfs::core {
                        "copy_from requires valid tensors");
         LFS_ASSERT_MSG(shape_ == other.shape_,
                        std::format("copy_from shape mismatch: {} vs {}", shape_.str(), other.shape_.str()));
+        reject_inplace_on_zero_stride("copy_from");
 
         if (this == &other) {
             return *this;
@@ -2703,13 +2708,19 @@ namespace lfs::core {
                 size_t dim_size = shape_[dim];
                 size_t total = numel();
 
-                for (size_t idx = 0; idx < total; ++idx) {
-                    size_t coord_along_dim = (idx / dim_stride) % dim_size;
-
-                    if (coord_along_dim == 0)
-                        continue;
-
-                    data[idx] += data[idx - dim_stride];
+                if (total > 0) {
+                    const size_t outer_size = total / (dim_size * dim_stride);
+                    for (size_t outer = 0; outer < outer_size; ++outer) {
+                        for (size_t inner = 0; inner < dim_stride; ++inner) {
+                            const size_t base = outer * dim_size * dim_stride + inner;
+                            double sum = 0.0;
+                            for (size_t i = 0; i < dim_size; ++i) {
+                                const size_t idx = base + i * dim_stride;
+                                sum += data[idx];
+                                data[idx] = static_cast<float>(sum);
+                            }
+                        }
+                    }
                 }
             } else if (dtype_ == DataType::Int32) {
                 int* data = result.ptr<int>();
