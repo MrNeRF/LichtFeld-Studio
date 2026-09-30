@@ -48,12 +48,12 @@ namespace lfs::python {
             return vis::screen::AreaId{id > 0 ? static_cast<std::uint32_t>(id) : 0};
         }
 
-        nb::dict area_dict(vis::VisualizerImpl& impl, const vis::screen::AreaId id) {
+        nlohmann::json area_dict(vis::VisualizerImpl& impl, const vis::screen::AreaId id) {
             const auto& screen = impl.screens().screen();
             const auto* area = screen.area(id);
-            nb::dict out;
+            nlohmann::json out = nlohmann::json::object();
             out["id"] = static_cast<int>(id.value);
-            out["editor"] = area ? nb::cast(area->editor) : nb::str();
+            out["editor"] = area ? area->editor : std::string{};
             const auto rect = impl.areaRect(id);
             out["x"] = rect.x;
             out["y"] = rect.y;
@@ -86,10 +86,10 @@ namespace lfs::python {
                 return nb::none();
             if (json.is_boolean())
                 return nb::cast(json.get<bool>());
-            if (json.is_number_integer())
-                return nb::cast(json.get<long long>());
             if (json.is_number_unsigned())
                 return nb::cast(json.get<unsigned long long>());
+            if (json.is_number_integer())
+                return nb::cast(json.get<long long>());
             if (json.is_number_float())
                 return nb::cast(json.get<double>());
             if (json.is_string())
@@ -107,6 +107,14 @@ namespace lfs::python {
                 return dict;
             }
             return nb::none();
+        }
+
+        std::vector<nb::dict> json_dicts_to_python(const nlohmann::json& array) {
+            std::vector<nb::dict> out;
+            out.reserve(array.size());
+            for (const auto& item : array)
+                out.push_back(nb::cast<nb::dict>(json_to_python(item)));
+            return out;
         }
 
         nlohmann::json python_to_json(const nb::handle& obj) {
@@ -143,35 +151,33 @@ namespace lfs::python {
         screen.def(
             "areas",
             []() {
-                return invoke_on_viewer(
-                    []() -> std::vector<nb::dict> {
-                        const nb::gil_scoped_acquire acquire;
+                return json_dicts_to_python(invoke_on_viewer(
+                    []() -> nlohmann::json {
                         auto* impl = visualizer_impl();
                         if (!impl)
-                            return {};
-                        std::vector<nb::dict> out;
+                            return nlohmann::json::array();
+                        nlohmann::json out = nlohmann::json::array();
                         impl->screens().read([&](const vis::screen::Screen& s) {
                             for (const auto id : s.areas())
                                 out.push_back(area_dict(*impl, id));
                         });
                         return out;
                     },
-                    std::vector<nb::dict>{});
+                    nlohmann::json::array()));
             },
             "List the screen's areas as dicts (id, editor, geometry, view flags)");
 
         screen.def(
             "editors",
             []() {
-                return invoke_on_viewer(
-                    []() -> std::vector<nb::dict> {
-                        const nb::gil_scoped_acquire acquire;
+                return json_dicts_to_python(invoke_on_viewer(
+                    []() -> nlohmann::json {
                         auto* impl = visualizer_impl();
                         if (!impl)
-                            return {};
-                        std::vector<nb::dict> out;
+                            return nlohmann::json::array();
+                        nlohmann::json out = nlohmann::json::array();
                         for (const auto& type : impl->screens().editorTypes().list()) {
-                            nb::dict item;
+                            nlohmann::json item;
                             item["id"] = type.id;
                             item["label"] = type.label;
                             item["multi_instance"] = type.multi_instance;
@@ -179,7 +185,7 @@ namespace lfs::python {
                         }
                         return out;
                     },
-                    std::vector<nb::dict>{});
+                    nlohmann::json::array()));
             },
             "List registered editor types");
 
@@ -402,24 +408,23 @@ namespace lfs::python {
         screen.def(
             "view_camera",
             [](const int view) {
-                return invoke_on_viewer(
-                    [view]() -> nb::dict {
-                        const nb::gil_scoped_acquire acquire;
+                auto out = nb::cast<nb::dict>(json_to_python(invoke_on_viewer(
+                    [view]() -> nlohmann::json {
                         auto* impl = visualizer_impl();
                         if (!impl)
-                            return {};
+                            return nlohmann::json::object();
                         const auto* space = impl->screens().view3D(area_id(view));
                         if (!space)
-                            return {};
+                            return nlohmann::json::object();
                         const auto& cam = space->camera.camera;
-                        nb::dict out;
-                        nb::list rotation;
+                        nlohmann::json out = nlohmann::json::object();
+                        nlohmann::json rotation = nlohmann::json::array();
                         for (int c = 0; c < 3; ++c)
                             for (int r = 0; r < 3; ++r)
-                                rotation.append(cam.R[c][r]);
+                                rotation.push_back(cam.R[c][r]);
                         out["rotation"] = rotation;
-                        out["translation"] = nb::make_tuple(cam.t.x, cam.t.y, cam.t.z);
-                        out["pivot"] = nb::make_tuple(cam.pivot.x, cam.pivot.y, cam.pivot.z);
+                        out["translation"] = nlohmann::json::array({cam.t.x, cam.t.y, cam.t.z});
+                        out["pivot"] = nlohmann::json::array({cam.pivot.x, cam.pivot.y, cam.pivot.z});
                         out["fov"] = lfs::rendering::focalLengthToVFov(space->settings.focal_length_mm);
                         out["orthographic"] = space->settings.orthographic;
                         out["ortho_scale"] = space->settings.ortho_scale;
@@ -427,7 +432,12 @@ namespace lfs::python {
                         out["height"] = space->camera.windowSize.y;
                         return out;
                     },
-                    nb::dict{});
+                    nlohmann::json::object())));
+                if (out.contains("translation")) {
+                    out["translation"] = nb::tuple(out["translation"]);
+                    out["pivot"] = nb::tuple(out["pivot"]);
+                }
+                return out;
             },
             nb::arg("view"), "Camera state of a 3D view");
 
@@ -462,18 +472,17 @@ namespace lfs::python {
         screen.def(
             "view_settings",
             [](const int view) {
-                return invoke_on_viewer(
-                    [view]() -> nb::dict {
-                        const nb::gil_scoped_acquire acquire;
+                return nb::cast<nb::dict>(json_to_python(invoke_on_viewer(
+                    [view]() -> nlohmann::json {
                         auto* impl = visualizer_impl();
                         if (!impl)
-                            return {};
+                            return nlohmann::json::object();
                         const auto* space = impl->screens().view3D(area_id(view));
                         if (!space)
-                            return {};
-                        return nb::cast<nb::dict>(json_to_python(vis::screen::viewSettingsToJson(space->settings)));
+                            return nlohmann::json::object();
+                        return vis::screen::viewSettingsToJson(space->settings);
                     },
-                    nb::dict{});
+                    nlohmann::json::object())));
             },
             nb::arg("view"), "ViewSettings of a 3D view as a dict");
 

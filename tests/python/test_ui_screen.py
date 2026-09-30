@@ -88,6 +88,10 @@ def test_screen_layout_and_view_settings_round_trip(lf):
 
     settings = lf.ui.screen.view_settings(view)
     assert "show_grid" in settings
+    lf.ui.screen.set_view_settings(view, **settings)
+    assert lf.ui.screen.view_settings(view) == settings
+    lf.ui.screen.set_view_settings(view, split_view_offset=0)
+    assert lf.ui.screen.view_settings(view)["split_view_offset"] == 0
     original_grid = settings["show_grid"]
     lf.ui.screen.set_view_settings(view, show_grid=not original_grid)
     assert lf.ui.screen.view_settings(view)["show_grid"] is (not original_grid)

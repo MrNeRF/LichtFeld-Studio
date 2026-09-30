@@ -6,10 +6,25 @@
 #include "py_ui.hpp"
 #include "visualizer/post_work_utils.hpp"
 
+#include <optional>
+#include <type_traits>
+#include <vector>
+
 namespace lfs::python {
+    template <typename T>
+    struct ViewerResultContainsPython : std::bool_constant<std::is_base_of_v<nb::handle, std::remove_cvref_t<T>>> {};
+
+    template <typename T>
+    struct ViewerResultContainsPython<std::optional<T>> : ViewerResultContainsPython<T> {};
+
+    template <typename T, typename Allocator>
+    struct ViewerResultContainsPython<std::vector<T, Allocator>> : ViewerResultContainsPython<T> {};
+
     template <typename F>
         requires(!std::is_void_v<std::invoke_result_t<F>>)
     auto invoke_on_viewer(F&& fn, std::invoke_result_t<F> fallback) {
+        static_assert(!ViewerResultContainsPython<std::invoke_result_t<F>>::value,
+                      "Viewer work must return C++ snapshots; construct Python objects with the GIL held after dispatch");
         auto* const viewer = get_visualizer();
         if (!viewer || viewer->isOnViewerThread())
             return std::invoke(std::forward<F>(fn));

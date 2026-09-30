@@ -2759,18 +2759,13 @@ namespace lfs::python {
         m.def(
             "get_panel_object",
             [](const std::string& panel_id) {
-                return invoke_on_viewer(
-                    [panel_id]() -> nb::object {
-                        const nb::gil_scoped_acquire acquire;
+                const auto retained_panel = invoke_on_viewer(
+                    [panel_id]() {
                         const auto panel = vis::gui::PanelRegistry::instance().get_panel_instance(panel_id);
-                        const auto retained_panel =
-                            std::dynamic_pointer_cast<vis::gui::RmlPythonPanelAdapter>(panel);
-                        if (!retained_panel)
-                            return nb::none();
-
-                        return retained_panel->panelInstance();
+                        return std::dynamic_pointer_cast<vis::gui::RmlPythonPanelAdapter>(panel);
                     },
-                    nb::none());
+                    std::shared_ptr<vis::gui::RmlPythonPanelAdapter>{});
+                return retained_panel ? retained_panel->panelInstance() : nb::object(nb::none());
             },
             nb::arg("panel_id"),
             "Get the Python object for a retained Python panel, or None if unavailable");
