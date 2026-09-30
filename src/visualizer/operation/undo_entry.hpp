@@ -53,6 +53,11 @@ namespace lfs::vis::op {
         using std::runtime_error::runtime_error;
     };
 
+    class LFS_VIS_API HistoryStaleEntryError : public HistoryCorruptionError {
+    public:
+        using HistoryCorruptionError::HistoryCorruptionError;
+    };
+
     struct SceneTopologyNodeProof {
         lfs::core::Uuid uuid;
         lfs::core::Uuid parent_uuid;

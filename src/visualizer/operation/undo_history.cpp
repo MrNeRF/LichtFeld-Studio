@@ -633,6 +633,20 @@ namespace lfs::vis::op {
                 } else {
                     entry->redo();
                 }
+            } catch (const HistoryStaleEntryError& e) {
+                LOG_WARN("Discarding stale {} entry '{}': {}",
+                         undo_direction ? "undo" : "redo", entry->name(), e.what());
+                {
+                    std::lock_guard lock(mutex_);
+                    refreshResidencyLocked();
+                    updateAvailabilityLocked();
+                    bumpGenerationLocked();
+                }
+                result.success = false;
+                result.error = e.what();
+                refreshAfterHistoryPlayback(dirty_flags);
+                notifyObservers();
+                return result;
             } catch (const HistoryCorruptionError& e) {
                 LOG_ERROR("Fatal {} failure for '{}': {}",
                           undo_direction ? "undo" : "redo", entry->name(), e.what());

@@ -1093,6 +1093,43 @@ TEST_F(ColmapImageLayoutTest, WriteBackAppliesSceneTransformsToTextSparseModel) 
     EXPECT_EQ(track_point_idx, 0u);
 }
 
+TEST_F(ColmapImageLayoutTest, WriteBackAcceptsTrackObservingOneImageTwice) {
+    const fs::path dataset_dir = temp_dir_ / "dataset";
+    const fs::path output_dir = temp_dir_ / "out_sparse";
+
+    write_text_file(dataset_dir / "cameras.txt",
+                    "1 PINHOLE 640 480 500 500 320 240\n");
+    write_text_file(dataset_dir / "images.txt",
+                    "1 1 0 0 0 0 0 0 1 frame_0001.png\n"
+                    "12 34 7 56 78 7\n");
+    write_text_file(dataset_dir / "points3D.txt",
+                    "7 10 20 30 1 2 3 0.25 1 0 1 1\n");
+
+    auto cameras_result = lfs::io::read_colmap_cameras_only(dataset_dir);
+    ASSERT_TRUE(cameras_result.has_value()) << cameras_result.error().format();
+    auto [cameras, scene_center] = std::move(*cameras_result);
+    (void)scene_center;
+    ASSERT_EQ(cameras.size(), 1u);
+
+    lfs::io::PointCloud point_cloud(
+        lfs::io::Tensor::from_vector({10.0f, 20.0f, 30.0f}, {1, 3}, lfs::io::Device::CPU),
+        lfs::io::Tensor::from_vector({1.0f / 255.0f, 2.0f / 255.0f, 3.0f / 255.0f}, {1, 3}, lfs::io::Device::CPU));
+    const std::vector<lfs::io::ColmapCameraWriteData> camera_data{
+        lfs::io::ColmapCameraWriteData{.camera = cameras[0], .data_world_transform = glm::mat4(1.0f)},
+    };
+
+    for (const auto format : {lfs::io::ColmapWriteFormat::Text, lfs::io::ColmapWriteFormat::Binary}) {
+        const auto write_result = lfs::io::write_colmap_reconstruction(
+            dataset_dir, output_dir, camera_data, &point_cloud, glm::mat4(1.0f),
+            lfs::io::ColmapWriteOptions{.format = format});
+        ASSERT_TRUE(write_result.has_value()) << write_result.error().format();
+    }
+
+    const auto points = lfs::io::read_colmap_point_cloud(output_dir);
+    ASSERT_TRUE(points.has_value()) << points.error().format();
+    EXPECT_EQ(points->value.size(), 1);
+}
+
 TEST_F(ColmapImageLayoutTest, WriteBackRemovesStaleOppositeFormatSparseFiles) {
     if (!has_cuda_device()) {
         GTEST_SKIP() << "CUDA device required for Camera-backed COLMAP write-back";
