@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/parameters.hpp"
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
@@ -74,7 +75,7 @@ namespace lfs::training {
 
     /// Write `--export` formats next to project.licht after a terminal project
     /// save. No-op when `params.export_formats` is empty.
-    void export_final_splats(
+    [[nodiscard]] lfs::Status export_final_splats(
         const Trainer& trainer,
         const lfs::core::param::TrainingParameters& params);
 

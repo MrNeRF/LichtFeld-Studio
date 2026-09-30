@@ -135,12 +135,19 @@ namespace fast_lfs::rasterization::kernels::forward {
 
         // compute 3d covariance from raw scale and rotation
         const float3 raw_scale = active ? raw_scales[primitive_idx] : make_float3(0.0f, 0.0f, 0.0f);
+        const float4 raw_rotation = raw_rotations[primitive_idx];
+        if (!isfinite(mean3d.x) || !isfinite(mean3d.y) || !isfinite(mean3d.z) ||
+            !isfinite(raw_scale.x) || !isfinite(raw_scale.y) || !isfinite(raw_scale.z) ||
+            !isfinite(raw_rotation.x) || !isfinite(raw_rotation.y) ||
+            !isfinite(raw_rotation.z) || !isfinite(raw_rotation.w) || !isfinite(raw_opacity))
+            active = false;
+        if (__ballot_sync(0xffffffffu, active) == 0)
+            return;
         const float3 clamped_scale = make_float3(
             fminf(raw_scale.x, config::max_raw_scale),
             fminf(raw_scale.y, config::max_raw_scale),
             fminf(raw_scale.z, config::max_raw_scale));
         const float3 variance = make_float3(expf(2.0f * clamped_scale.x), expf(2.0f * clamped_scale.y), expf(2.0f * clamped_scale.z));
-        const float4 raw_rotation = raw_rotations[primitive_idx];
         const float qr = raw_rotation.x;
         const float qx = raw_rotation.y;
         const float qy = raw_rotation.z;

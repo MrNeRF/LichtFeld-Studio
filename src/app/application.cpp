@@ -817,6 +817,17 @@ namespace lfs::app {
             lfs::event::CommandCenterBridge::instance().set(&lfs::training::CommandCenter::instance());
             HeadlessRunCoordinator coordinator;
             HeadlessPluginSignalGuard plugin_signals;
+            const auto export_and_shutdown = [](std::unique_ptr<training::Trainer>& trainer,
+                                                const core::param::TrainingParameters& export_params) {
+                auto result = training::export_final_splats(*trainer, export_params);
+                trainer->shutdown();
+                static_cast<void>(trainer.release());
+                if (!result) {
+                    LOG_ERROR("{}", lfs::format_for_developer(result.error()));
+                    return false;
+                }
+                return true;
+            };
 
             {
                 core::Scene scene;
@@ -917,10 +928,8 @@ namespace lfs::app {
                                 rebound.error()));
                         return 1;
                     }
-                    training::export_final_splats(*trainer, *params);
-                    trainer->shutdown();
-                    static_cast<void>(
-                        trainer.release());
+                    if (!export_and_shutdown(trainer, *params))
+                        return 1;
                 } else if (params->resume_checkpoint) {
                     const auto ckpt_params_result = loadCheckpointParams(*params, scene);
                     if (!ckpt_params_result) {
@@ -967,9 +976,8 @@ namespace lfs::app {
                         }
                         return 1;
                     }
-                    training::export_final_splats(*trainer, *params);
-                    trainer->shutdown();
-                    static_cast<void>(trainer.release());
+                    if (!export_and_shutdown(trainer, *params))
+                        return 1;
                 } else {
                     LOG_INFO("Starting headless training...");
 
@@ -1017,9 +1025,8 @@ namespace lfs::app {
                         }
                         return 1;
                     }
-                    training::export_final_splats(*trainer, *params);
-                    trainer->shutdown();
-                    static_cast<void>(trainer.release());
+                    if (!export_and_shutdown(trainer, *params))
+                        return 1;
                 }
 
                 LOG_INFO("Headless training {}",
