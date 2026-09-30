@@ -1955,6 +1955,7 @@ namespace lfs::vis {
                     readback_ring_.markFailed(i, "Render target released");
             }
         }
+        gpu_lod_feedback_.release(output_slot);
         if (resident_raster_scratch_.target == output_slot)
             resident_raster_scratch_ = {};
 
@@ -2030,10 +2031,8 @@ namespace lfs::vis {
         lod_logical_indices_upload_pending_ = false;
         lod_levels_upload_pending_ = false;
         lod_weights_upload_pending_ = false;
-        gpu_lod_pixel_scale_feedback_ = 1.0f;
-        gpu_lod_frozen_frames_ = 0;
-        gpu_lod_last_candidate_count_ = 0;
-        gpu_lod_last_overflow_count_ = 0;
+        gpu_lod_feedback_.clear();
+        ++lod_feedback_model_generation_;
 
         lod_page_inputs_ = {};
         releaseGpuLodTreeStorage();
@@ -2201,10 +2200,8 @@ namespace lfs::vis {
         lod_logical_indices_upload_pending_ = false;
         lod_levels_upload_pending_ = false;
         lod_weights_upload_pending_ = false;
-        gpu_lod_pixel_scale_feedback_ = 1.0f;
-        gpu_lod_frozen_frames_ = 0;
-        gpu_lod_last_candidate_count_ = 0;
-        gpu_lod_last_overflow_count_ = 0;
+        gpu_lod_feedback_.clear();
+        ++lod_feedback_model_generation_;
         lod_page_cache_model_ = nullptr;
         lod_page_cache_.reset();
         gpu_lod_tree_ = {};
@@ -2214,23 +2211,26 @@ namespace lfs::vis {
     }
 
     VksplatViewportRenderer::GpuLodSelectionStatus
-    VksplatViewportRenderer::gpuLodSelectionStatus() const {
+    VksplatViewportRenderer::gpuLodSelectionStatus(RenderTargetId target) const {
+        const auto* feedback = gpu_lod_feedback_.find(target);
+        const GpuLodTargetFeedback empty;
+        const auto& lod_feedback = feedback ? *feedback : empty;
         GpuLodSelectionStatus status;
-        status.active = gpu_lod_selection_active_;
-        status.capacity = gpu_lod_render_capacity_last_;
-        status.selected = std::min(gpu_lod_last_candidate_count_, gpu_lod_render_capacity_last_);
-        status.overflow = gpu_lod_last_overflow_count_;
-        status.pixel_scale_feedback = gpu_lod_pixel_scale_feedback_;
+        status.active = lod_feedback.selection_active;
+        status.capacity = lod_feedback.render_capacity_last;
+        status.selected = std::min(lod_feedback.last_candidate_count, lod_feedback.render_capacity_last);
+        status.overflow = lod_feedback.last_overflow_count;
+        status.pixel_scale_feedback = lod_feedback.pixel_scale_feedback;
         if (lod_page_cache_.configured()) {
             status.resident_chunks = lod_page_cache_.snapshot().resident_chunks;
             status.chunk_count = lod_page_cache_.snapshot().logical_chunks;
             status.pool_pages = lod_page_cache_.snapshot().physical_pages;
             status.streaming_jobs = lod_page_cache_.outstandingWorkCount();
         }
-        status.touched_chunks = gpu_lod_protected_chunks_.size() + gpu_lod_prefetch_requests_.size();
-        status.miss_chunks = gpu_lod_last_miss_count_;
+        status.touched_chunks = lod_feedback.protected_chunks.size() + lod_feedback.prefetch_requests.size();
+        status.miss_chunks = lod_feedback.last_miss_count;
         status.deferred_requests = lod_page_cache_.deferredRequestCount();
-        status.admission_frozen = gpu_lod_frozen_frames_ >= kLodAdmissionFrozenFrames;
+        status.admission_frozen = lod_feedback.frozen_frames >= kLodAdmissionFrozenFrames;
         return status;
     }
 
@@ -8070,6 +8070,14 @@ namespace lfs::vis {
             RenderTargetId& target;
             ~TargetGuard() { target = {}; }
         } target_guard{rendering_target_};
+        const auto tree_generation = splat_data.lod_tree ? lodTreeSignature(*splat_data.lod_tree) : 0;
+        if (lod_feedback_model_ != &splat_data || lod_feedback_tree_generation_ != tree_generation) {
+            gpu_lod_feedback_.clear();
+            lod_feedback_model_ = &splat_data;
+            ++lod_feedback_model_generation_;
+            lod_feedback_tree_generation_ = tree_generation;
+        }
+        auto& lod_feedback = gpu_lod_feedback_.touch(output_slot, context.lastFrameSubmitSerial());
         const glm::ivec2 size = request.frame_view.size;
         if (size.x <= 0 || size.y <= 0) {
             return std::unexpected("VkSplat received an invalid viewport size");
@@ -8146,35 +8154,41 @@ namespace lfs::vis {
                     HIGS_DEPTH_WAVE_INSTANCES));
             }
         }
-        if (const auto lod_stats = renderer_.pollDeferredLodSelectionStats()) {
+        while (const auto lod_stats = renderer_.pollDeferredLodSelectionStats()) {
+            const auto& identity = lod_stats->identity;
+            auto* feedback = gpu_lod_feedback_.find({identity.target});
+            if (!feedback || identity.model_generation != lod_feedback_model_generation_ ||
+                identity.tree_generation != lod_feedback_tree_generation_)
+                continue;
+            auto& lod_feedback = *feedback;
             // Start the next frame at the threshold that actually fit. The
             // gradual controller can refine it, but cannot undo same-frame repair.
             if (std::isfinite(lod_stats->threshold_scale) && lod_stats->threshold_scale > 1.0f) {
-                gpu_lod_pixel_scale_feedback_ = std::min(
-                    64.0f, gpu_lod_pixel_scale_feedback_ * lod_stats->threshold_scale);
+                lod_feedback.pixel_scale_feedback = std::min(
+                    64.0f, lod_feedback.pixel_scale_feedback * lod_stats->threshold_scale);
             }
-            gpu_lod_last_candidate_count_ = lod_stats->candidate_count;
-            gpu_lod_last_overflow_count_ = lod_stats->overflow_count;
+            lod_feedback.last_candidate_count = lod_stats->candidate_count;
+            lod_feedback.last_overflow_count = lod_stats->overflow_count;
             const bool overflowed =
                 lod_stats->overflow_count > 0 ||
                 lod_stats->candidate_count > lod_stats->rendered_capacity;
 
             std::size_t miss_count = 0;
-            if (!lod_stats->protected_chunks.empty() || !lod_stats->miss_candidates.empty()) {
-                gpu_lod_protected_chunks_ = lod_stats->protected_chunks;
-                gpu_lod_prefetch_requests_.clear();
+            {
+                lod_feedback.protected_chunks = lod_stats->protected_chunks;
+                lod_feedback.prefetch_requests.clear();
                 // GPU compaction order is nondeterministic; restore the
                 // priority-descending order the pager's budget gate expects.
                 auto miss_candidates = lod_stats->miss_candidates;
                 std::sort(miss_candidates.begin(),
                           miss_candidates.end(),
                           [](const auto& a, const auto& b) { return a.second > b.second; });
-                gpu_lod_prefetch_requests_.reserve(miss_candidates.size());
+                lod_feedback.prefetch_requests.reserve(miss_candidates.size());
                 for (const auto& [chunk, priority] : miss_candidates) {
-                    gpu_lod_prefetch_requests_.push_back({.chunk = chunk, .priority = priority});
+                    lod_feedback.prefetch_requests.push_back({.chunk = chunk, .priority = priority});
                 }
                 miss_count = miss_candidates.size();
-                gpu_lod_prefetch_valid_ = true;
+                lod_feedback.prefetch_valid = true;
                 if (lod_stats->protected_overflow > 0 || lod_stats->miss_overflow > 0) {
                     LOG_PERF("vksplat.lod_compact_overflow protected_dropped={} miss_dropped={}",
                              lod_stats->protected_overflow, lod_stats->miss_overflow);
@@ -8184,11 +8198,11 @@ namespace lfs::vis {
                 if (!miss_candidates.empty() &&
                     (prefetch_log_counter <= 5u || (prefetch_log_counter % 60u) == 0u)) {
                     LOG_PERF("vksplat.lod_gpu_prefetch protected={} candidates={}",
-                             gpu_lod_protected_chunks_.size(),
+                             lod_feedback.protected_chunks.size(),
                              miss_candidates.size());
                 }
             }
-            gpu_lod_last_miss_count_ = miss_count;
+            lod_feedback.last_miss_count = miss_count;
 
             // Pool utilization is the treelet gate metric: the
             // fraction of resident pool nodes the live cut actually renders.
@@ -8199,7 +8213,7 @@ namespace lfs::vis {
                     std::min(cache_snapshot.resident_chunks, cache_snapshot.physical_pages);
                 const std::size_t pool_nodes = resident_pages * LodPageCache::kChunkSplats;
                 const std::size_t touched_pages =
-                    gpu_lod_protected_chunks_.size() + gpu_lod_prefetch_requests_.size();
+                    lod_feedback.protected_chunks.size() + lod_feedback.prefetch_requests.size();
                 if (pool_nodes > 0) {
                     LOG_PERF("vksplat.lod_utilization cut={} resident_pages={} pool_nodes={} "
                              "util={:.1f}% touched_pages={} cut_per_touched={}",
@@ -8216,7 +8230,7 @@ namespace lfs::vis {
             // Damped threshold controller with a wide deadband; the per-frame
             // rate clamp keeps the limit (and with it the global transition
             // band and the touch set) stable at rest.
-            const float previous_feedback = gpu_lod_pixel_scale_feedback_;
+            const float previous_feedback = lod_feedback.pixel_scale_feedback;
             // Admission freeze: wants deferred, zero admissions, nothing in
             // flight — every resident page is part of the live cut and can
             // never age out, so the deferred set is permanent at this
@@ -8226,18 +8240,18 @@ namespace lfs::vis {
                 lod_page_cache_.deferredRequestCount() > 0 &&
                 lod_page_cache_.admittedRequestCount() == 0 &&
                 !lod_page_cache_.hasOutstandingWork();
-            gpu_lod_frozen_frames_ = admission_frozen ? gpu_lod_frozen_frames_ + 1 : 0;
+            lod_feedback.frozen_frames = admission_frozen ? lod_feedback.frozen_frames + 1 : 0;
             if (lod_stats->rendered_capacity > 0) {
                 const bool converging = miss_count > 0 || lod_page_cache_.hasOutstandingWork();
                 const double fill_ratio =
                     static_cast<double>(lod_stats->candidate_count) /
                     static_cast<double>(lod_stats->rendered_capacity);
-                float target = gpu_lod_pixel_scale_feedback_;
+                float target = lod_feedback.pixel_scale_feedback;
                 if (overflowed) {
                     target *= static_cast<float>(
                         std::clamp(std::pow(std::max(fill_ratio / 0.97, 1.0), 0.85), 1.02, 1.15));
                 } else if (fill_ratio < 0.85 &&
-                           gpu_lod_frozen_frames_ < kLodAdmissionFrozenFrames) {
+                           lod_feedback.frozen_frames < kLodAdmissionFrozenFrames) {
                     // While streaming converges, parents stand in for missing
                     // children and the candidate count runs low — recover
                     // GENTLY rather than freezing: a coarse cut always has
@@ -8263,20 +8277,20 @@ namespace lfs::vis {
                 // times coarser to fit the cut, or capacity-clamp truncation
                 // punches holes in the image. Recovery handles coming back.
                 constexpr float kMaxRatePerFrame = 1.03f;
-                gpu_lod_pixel_scale_feedback_ = std::clamp(
+                lod_feedback.pixel_scale_feedback = std::clamp(
                     std::clamp(target,
-                               gpu_lod_pixel_scale_feedback_ / kMaxRatePerFrame,
-                               gpu_lod_pixel_scale_feedback_ * kMaxRatePerFrame),
+                               lod_feedback.pixel_scale_feedback / kMaxRatePerFrame,
+                               lod_feedback.pixel_scale_feedback * kMaxRatePerFrame),
                     0.05f,
                     64.0f);
             }
-            if (overflowed || std::abs(gpu_lod_pixel_scale_feedback_ - previous_feedback) > 0.01f) {
+            if (overflowed || std::abs(lod_feedback.pixel_scale_feedback - previous_feedback) > 0.01f) {
                 LOG_PERF(
                     "vksplat.lod_gpu_selection candidates={} capacity={} overflow={} feedback={:.3f}",
                     lod_stats->candidate_count,
                     lod_stats->rendered_capacity,
                     lod_stats->overflow_count,
-                    gpu_lod_pixel_scale_feedback_);
+                    lod_feedback.pixel_scale_feedback);
             }
         }
 
@@ -8304,9 +8318,10 @@ namespace lfs::vis {
         bool lod_page_inputs_active = false;
         bool partial_lod_page_inputs = false;
         bool queue_lod_prefetch_after_render = false;
+        const auto demand = gpu_lod_feedback_.demand(context.lastFrameSubmitSerial());
         const bool gpu_lod_prefetch_source =
             gpu_lod_requested &&
-            gpu_lod_prefetch_valid_;
+            demand.prefetch_valid;
         if (lod_request_active) {
             (void)ensureLodPageCacheSnapshot(splat_data);
             lod_page_inputs_active =
@@ -8325,8 +8340,8 @@ namespace lfs::vis {
                 if (queue_lod_prefetch_after_render) {
                     if (gpu_lod_prefetch_source) {
                         lod_page_cache_.submitTraversalPriority(
-                            std::span<const LodPageCache::ChunkRequest>(gpu_lod_prefetch_requests_),
-                            gpu_lod_protected_chunks_);
+                            std::span<const LodPageCache::ChunkRequest>(demand.prefetch_requests),
+                            demand.protected_chunks);
                     } else {
                         protected_lod_chunks =
                             collectProtectedLodChunks(request,
@@ -8438,8 +8453,8 @@ namespace lfs::vis {
         const std::size_t gpu_lod_render_capacity =
             gpu_lod_select_dispatch_active ? gpu_lod_select_capacity : 0u;
         const bool gpu_lod_render_active = gpu_lod_render_capacity > 0;
-        gpu_lod_selection_active_ = gpu_lod_render_active;
-        gpu_lod_render_capacity_last_ = gpu_lod_render_capacity;
+        lod_feedback.selection_active = gpu_lod_render_active;
+        lod_feedback.render_capacity_last = gpu_lod_render_capacity;
 
         const std::size_t active_splat_count =
             gpu_lod_render_active
@@ -8895,7 +8910,7 @@ namespace lfs::vis {
                     if (gpu_lod_select_dispatch_active) {
                         LOG_TIMER("vksplat.render.record.executeSelectLodThreshold");
                         auto gpu_lod_traversal = request.lod_gpu_traversal;
-                        gpu_lod_traversal.pixel_scale_limit *= gpu_lod_pixel_scale_feedback_;
+                        gpu_lod_traversal.pixel_scale_limit *= lod_feedback.pixel_scale_feedback;
                         const VulkanGSLodSelectUniforms lod_select_uniforms =
                             makeGpuLodSelectUniforms(gpu_lod_traversal,
                                                      gpu_lod_select_capacity,
@@ -9195,7 +9210,8 @@ namespace lfs::vis {
         }
 
         renderer_.tagDeferredVisibleCountReadback(render_complete_timeline_, completion_value);
-        renderer_.tagDeferredLodSelectionReadback(render_complete_timeline_, completion_value);
+        renderer_.tagDeferredLodSelectionReadback(render_complete_timeline_, completion_value,
+                                                  {output_slot.value, lod_feedback_model_generation_, lod_feedback_tree_generation_});
         renderer_.tagDeferredInstanceCountReadback(render_complete_timeline_, completion_value);
         if (lod_page_inputs_active) {
             last_lod_page_borrow_value_ = completion_value;
@@ -9231,7 +9247,7 @@ namespace lfs::vis {
             lod_page_inputs_active &&
             (lod_page_cache_.hasOutstandingWork() ||
              (lod_page_cache_.deferredRequestCount() > 0 &&
-              gpu_lod_frozen_frames_ < kLodAdmissionFrozenFrames) ||
+              lod_feedback.frozen_frames < kLodAdmissionFrozenFrames) ||
              !lod_upload_engine_.idle() ||
              lod_fades_active);
         return RenderResult{

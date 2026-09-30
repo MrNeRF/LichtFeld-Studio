@@ -4,6 +4,7 @@
 
 // Epic #1568 / #1567 — OutputSlotRing host bookkeeping (GPU-free).
 
+#include "rendering/gpu_lod_target_feedback.hpp"
 #include "rendering/output_slot_ring.hpp"
 
 #include <gtest/gtest.h>
@@ -198,4 +199,25 @@ TEST(RenderTargetRegistry, NeverReusesReleasedIds) {
     EXPECT_GT(b.value, a.value);
     EXPECT_FALSE(registry.contains(a));
     EXPECT_TRUE(registry.contains(b));
+}
+
+TEST(GpuLodTargetFeedback, IsolatesControllersAndUnionsRecentDemand) {
+    lfs::vis::GpuLodTargetFeedbackTable table;
+    auto& a = table.touch({1}, 10);
+    a.pixel_scale_feedback = 7.0f;
+    a.protected_chunks = {1, 3};
+    a.prefetch_requests = {{4, 2}, {5, 3}};
+    auto& b = table.touch({2}, 11);
+    EXPECT_EQ(b.pixel_scale_feedback, 1.0f);
+    b.protected_chunks = {2, 3};
+    b.prefetch_requests = {{4, 9}};
+    auto demand = table.demand(12);
+    EXPECT_EQ(demand.protected_chunks, (std::vector<std::uint32_t>{1, 2, 3}));
+    ASSERT_EQ(demand.prefetch_requests.size(), 2u);
+    EXPECT_EQ(demand.prefetch_requests[0].priority, 9u);
+    demand = table.demand(14);
+    EXPECT_EQ(demand.protected_chunks, (std::vector<std::uint32_t>{2, 3}));
+    table.release({2});
+    EXPECT_EQ(table.find({2}), nullptr);
+    EXPECT_TRUE(table.demand(14).protected_chunks.empty());
 }

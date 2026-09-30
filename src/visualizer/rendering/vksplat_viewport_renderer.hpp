@@ -9,6 +9,7 @@
 #include "core/exportable_storage.hpp"
 #include "core/rad_pool_quant.hpp"
 #include "core/splat_data.hpp"
+#include "gpu_lod_target_feedback.hpp"
 #include "lod_page_cache.hpp"
 #include "lod_upload_engine.hpp"
 #include "output_image_pool.hpp"
@@ -309,7 +310,7 @@ namespace lfs::vis {
             std::size_t pool_pages = 0;
             std::size_t streaming_jobs = 0;
         };
-        [[nodiscard]] GpuLodSelectionStatus gpuLodSelectionStatus() const;
+        [[nodiscard]] GpuLodSelectionStatus gpuLodSelectionStatus(RenderTargetId target) const;
 
     private:
         struct ResidentRasterScratchProvenance {
@@ -616,21 +617,10 @@ namespace lfs::vis {
         bool lod_logical_indices_upload_pending_ = false;
         bool lod_levels_upload_pending_ = false;
         bool lod_weights_upload_pending_ = false;
-        float gpu_lod_pixel_scale_feedback_ = 1.0f;
-        // Consecutive readback frames with deferred wants but zero
-        // admissions and nothing in flight; gates the threshold descent and
-        // the keep-rendering liveness once it crosses the frozen window.
-        std::uint32_t gpu_lod_frozen_frames_ = 0;
-        std::size_t gpu_lod_last_candidate_count_ = 0;
-        std::size_t gpu_lod_last_overflow_count_ = 0;
-        std::size_t gpu_lod_last_miss_count_ = 0;
-        // GPU traversal misses from the deferred selector readback, sorted by
-        // descending pixel-scale priority for LodPageCache decode scheduling.
-        std::vector<LodPageCache::ChunkRequest> gpu_lod_prefetch_requests_;
-        std::vector<std::uint32_t> gpu_lod_protected_chunks_;
-        bool gpu_lod_prefetch_valid_ = false;
-        bool gpu_lod_selection_active_ = false;
-        std::size_t gpu_lod_render_capacity_last_ = 0;
+        GpuLodTargetFeedbackTable gpu_lod_feedback_;
+        const lfs::core::SplatData* lod_feedback_model_ = nullptr;
+        std::uint64_t lod_feedback_model_generation_ = 0;
+        std::uint64_t lod_feedback_tree_generation_ = 0;
         const lfs::core::SplatData* lod_page_cache_model_ = nullptr;
         LodPageCache lod_page_cache_;
         std::size_t lod_page_pool_splats_ = 0;
