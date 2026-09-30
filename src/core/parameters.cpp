@@ -35,6 +35,24 @@ namespace lfs::core {
             using prop::PropertyRegistry;
             using prop::PropType;
 
+            [[nodiscard]] float mrnf_shs_lr_for_capacity(const int max_cap) {
+                constexpr double kReferenceCapacity = 1'000'000.0;
+                const double cap = std::max(static_cast<double>(max_cap), kReferenceCapacity);
+                return static_cast<float>(0.005 * std::sqrt(kReferenceCapacity / cap));
+            }
+
+            [[nodiscard]] float mrnf_grow_fraction_for_capacity(const int max_cap) {
+                constexpr double kReferenceCapacity = 1'000'000.0;
+                constexpr double kSaturationCapacity = 5'000'000.0;
+                constexpr double kAtReference = 0.0758;
+                constexpr double kAtSaturation = 0.12;
+                const double cap = std::clamp(static_cast<double>(max_cap),
+                                              kReferenceCapacity, kSaturationCapacity);
+                const double t = std::log(cap / kReferenceCapacity) /
+                                 std::log(kSaturationCapacity / kReferenceCapacity);
+                return static_cast<float>(kAtReference + t * (kAtSaturation - kAtReference));
+            }
+
             [[nodiscard]] std::string_view optimization_json_key(const PropertyMeta& meta) {
                 return meta.json_key.empty() ? std::string_view(meta.id) : std::string_view(meta.json_key);
             }
@@ -337,6 +355,19 @@ namespace lfs::core {
             return scale_reg * (p + 1.0f) * std::pow(1.0f - t, p);
         }
 
+        bool OptimizationParameters::mrnf_hard_clip_at(const int iter) const {
+            return hard_clip_stop_iter < 0 || iter <= hard_clip_stop_iter;
+        }
+
+        void OptimizationParameters::resolve_mrnf_capacity_defaults() {
+            if (canonical_strategy_name(strategy) != kStrategyMRNF)
+                return;
+            if (grow_fraction < 0.0f)
+                grow_fraction = mrnf_grow_fraction_for_capacity(max_cap);
+            if (shs_lr < 0.0f)
+                shs_lr = mrnf_shs_lr_for_capacity(max_cap);
+        }
+
         int OptimizationParameters::resolved_ppisp_controller_activation_step(const int total_iterations) const {
             if (ppisp_controller_activation_step >= 0)
                 return ppisp_controller_activation_step;
@@ -398,6 +429,8 @@ namespace lfs::core {
             if (start_refine > MAX_ITERATION_VALUE || stop_refine > MAX_ITERATION_VALUE ||
                 grow_until_iter > MAX_ITERATION_VALUE)
                 return "refinement iteration fields must fit in a signed int";
+            if (hard_clip_stop_iter < -1 || hard_clip_stop_iter > static_cast<int>(MAX_ITERATION_VALUE))
+                return "hard_clip_stop_iter must be -1 or a nonnegative signed int";
             if (max_cap < 0)
                 return std::format("max_cap must be nonnegative (got {})", max_cap);
             if (sh_degree < 0 || sh_degree > 3)
@@ -455,7 +488,10 @@ namespace lfs::core {
                 std::pair{"screen_share_penalty", screen_share_penalty},
             };
             for (const auto& [name, value] : nonnegative_fields) {
-                if (auto error = invalid_nonnegative(value, name); !error.empty())
+                const bool automatic_mrnf_value = is_mrnf_strategy(strategy) && value == -1.0f &&
+                                                  (name == "shs_lr");
+                if (auto error = invalid_nonnegative(value, name);
+                    !error.empty() && !automatic_mrnf_value)
                     return error;
             }
 
@@ -477,7 +513,10 @@ namespace lfs::core {
                 std::pair{"far_scene_min_fraction", far_scene_min_fraction},
             };
             for (const auto& [name, value] : probability_fields) {
-                if (auto error = invalid_probability(value, name); !error.empty())
+                const bool automatic_mrnf_value = is_mrnf_strategy(strategy) && value == -1.0f &&
+                                                  (name == "grow_fraction");
+                if (auto error = invalid_probability(value, name);
+                    !error.empty() && !automatic_mrnf_value)
                     return error;
             }
             for (size_t i = 0; i < bg_color.size(); ++i) {
@@ -680,15 +719,22 @@ namespace lfs::core {
             p.start_refine = 0;
             p.stop_refine = 28'500;
             p.max_cap = 5'000'000;
+            p.grow_fraction = -1.0f;
+            p.shs_lr = -1.0f;
             p.min_opacity = 1.0f / 255.0f;
-            p.means_lr = 2e-5f;
             p.means_lr_end = 2e-7f;
             p.opacity_lr = 0.012f;
-            p.scaling_lr = 7e-3f;
             p.scaling_lr_end = 5e-3f;
-            p.rotation_lr = 2e-3f;
-            p.shs_lr = 2e-3f;
-            p.lambda_dssim = 0.2f;
+            p.lambda_dssim = 0.22f;
+            p.growth_grad_threshold = 0.00309693f;
+            p.max_screen_share = 0.586511f;
+            p.screen_share_penalty = 0.847085f;
+            p.means_lr = 2.17871e-5f;
+            p.oversize_split_fraction = 0.0f;
+            p.refine_every = 163;
+            p.scaling_lr = 0.00828016f;
+            p.rotation_lr = 0.0015f;
+            p.hard_clip_stop_iter = 0;
             p.opacity_reg = 0.003f;
             p.scale_reg = 0.01f;
             p.scale_reg_decay_power = 0.4f;

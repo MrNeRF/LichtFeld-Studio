@@ -1264,6 +1264,7 @@ namespace lfs::training {
     lfs::core::param::OptimizationParameters Trainer::get_runtime_optimization_params() const {
         const auto params = getParams();
         auto runtime_params = params.optimization;
+        runtime_params.resolve_mrnf_capacity_defaults();
         const int sparsify_steps = runtime_params.enable_sparsity
                                        ? std::max(0, runtime_params.sparsify_steps)
                                        : 0;

@@ -36,7 +36,9 @@ namespace lfs::python {
         const OptimizationParameters& source) {
         if (!meta.getter)
             throw std::runtime_error("Optimization property has no getter: " + meta.id);
-        auto ref = PropertyObjectRef::cpp(const_cast<OptimizationParameters*>(&source));
+        auto resolved_source = source;
+        resolved_source.resolve_mrnf_capacity_defaults();
+        auto ref = PropertyObjectRef::cpp(&resolved_source);
         return meta.getter(ref);
     }
 
@@ -264,8 +266,9 @@ namespace lfs::python {
             throw std::runtime_error("Unknown property: " + prop_id);
         }
 
-        const auto& p = params();
-        auto ref = PropertyObjectRef::cpp(const_cast<OptimizationParameters*>(&p));
+        auto p = params();
+        p.resolve_mrnf_capacity_defaults();
+        auto ref = PropertyObjectRef::cpp(&p);
         std::any value = meta->getter(ref);
 
         switch (meta->type) {
@@ -423,7 +426,11 @@ namespace lfs::python {
         }
 
         const auto default_source = copy_optimization_default_source();
-        const std::any default_val = resolve_optimization_default(*meta, default_source);
+        std::any default_val = resolve_optimization_default(*meta, default_source);
+        if (is_mrnf_strategy(default_source.strategy) &&
+            (prop_id == "grow_fraction" || prop_id == "shs_lr")) {
+            default_val = -1.0f;
+        }
         std::any old_value;
         modify_params([&](auto& p) {
             auto ref = PropertyObjectRef::cpp(&p);

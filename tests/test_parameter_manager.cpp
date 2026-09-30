@@ -250,6 +250,30 @@ namespace {
         EXPECT_EQ(target.getCurrentParams("mcmc").iterations, 101u);
     }
 
+    TEST(ParameterManagerTest, ProjectResumeRetainsAutomaticCapacityValues) {
+        lfs::vis::ParameterManager source;
+        ASSERT_TRUE(source.ensureLoaded());
+        source.modifyActiveParams([](auto& params) {
+            params.max_cap = 1'000'000;
+            params.grow_fraction = -1.0f;
+            params.shs_lr = -1.0f;
+        });
+        auto captured = source.capturePendingProjectState();
+        ASSERT_TRUE(captured) << captured.error().user_message();
+
+        lfs::vis::ParameterManager resumed;
+        ASSERT_TRUE(resumed.ensureLoaded());
+        auto restored = resumed.restorePendingProjectState(*captured);
+        ASSERT_TRUE(restored) << restored.error().user_message();
+        auto params = resumed.copyActiveParams();
+        EXPECT_FLOAT_EQ(params.grow_fraction, -1.0f);
+        EXPECT_FLOAT_EQ(params.shs_lr, -1.0f);
+
+        params.resolve_mrnf_capacity_defaults();
+        EXPECT_NEAR(params.grow_fraction, 0.0758f, 1.0e-7f);
+        EXPECT_FLOAT_EQ(params.shs_lr, 0.005f);
+    }
+
     TEST(ParameterValidationTest, RejectsCrashProneIterationAndNumericValues) {
         lfs::core::param::OptimizationParameters params;
         EXPECT_TRUE(params.validate().empty());

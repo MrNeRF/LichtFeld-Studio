@@ -273,6 +273,7 @@ namespace lfs::core {
             // Dimensionless on-screen share cap. <=0 or >=1 disables the cap.
             float max_screen_share = 0.3f;
             float screen_share_penalty = 1.0f;
+            int hard_clip_stop_iter = 0;
             // Fraction of MRNF growth budget spent splitting over-cap splats. 0 disables.
             float oversize_split_fraction = 0.15f;
             bool use_edge_map = true;
@@ -310,6 +311,8 @@ namespace lfs::core {
             [[nodiscard]] int resolved_total_iterations() const;
             [[nodiscard]] bool normal_supervision_active(int iter) const;
             [[nodiscard]] float scale_reg_at(int iter) const;
+            [[nodiscard]] bool mrnf_hard_clip_at(int iter) const;
+            void resolve_mrnf_capacity_defaults();
             // Every test_every-th image is withheld from training for evaluation.
             [[nodiscard]] bool holds_out_eval_images() const { return enable_eval && !eval_all; }
             [[nodiscard]] int resolved_ppisp_controller_activation_step(int total_iterations) const;
