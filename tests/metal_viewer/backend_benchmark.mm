@@ -487,7 +487,7 @@ namespace {
             if (o.gpu_lod) {
                 const auto status = metal.gpuLodSelectionStatus(Slot::Main);
                 const size_t expected = o.gpu_lod_budget ? 1 : o.count - 1 - (o.count + 59999) / 60000;
-                if (!status.active || status.selected != expected || status.overflow || status.resident_chunks != (o.count + 65535) / 65536)
+                if (!status.active || status.selected != expected || status.overflow || status.resident_chunks != (o.count + core::SplatLodTree::kChunkSplats - 1) / core::SplatLodTree::kChunkSplats)
                     throw std::runtime_error("Native LOD diagnostics differ from the completed GPU cut");
             }
             std::vector<double> native_times, vulkan_times;

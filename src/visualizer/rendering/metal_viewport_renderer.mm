@@ -650,6 +650,7 @@ namespace lfs::vis {
                 lod_parameters.node_count = lod_parameters.physical_node_count = gpu_tree->nodes;
                 lod_parameters.output_capacity = draw_count;
                 lod_parameters.logical_chunk_count = gpu_tree->chunks;
+                lod_parameters.chunk_splats = uint32_t(core::SplatLodTree::kChunkSplats);
                 lod_parameters.pixel_scale_limit = p.pixel_scale_limit;
                 lod_parameters.object_scale = p.object_scale;
                 lod_parameters.behind_camera_penalty = p.behind_camera_penalty;

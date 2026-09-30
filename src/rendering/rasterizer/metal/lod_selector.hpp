@@ -6,7 +6,7 @@
 
 namespace lfs::rendering::metal {
     struct alignas(16) LodParameters {
-        uint32_t node_count = 0, output_capacity = 0, chunk_splats = 65536, invalid_page = 0xffffffffu;
+        uint32_t node_count = 0, output_capacity = 0, chunk_splats = 0, invalid_page = 0xffffffffu;
         float pixel_scale_limit = 0, object_scale = 1, behind_camera_penalty = .2f, cone_foveation = .4f;
         float cone_dot0 = 0, cone_dot = 0, cone_blend_denominator = 0, cone_tail_valid = 0;
         simd_float4 view_row0{}, view_row1{}, view_row2{};

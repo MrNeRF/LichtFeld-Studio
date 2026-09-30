@@ -175,6 +175,11 @@ if(TARGET lfs_visualizer)
                 set_tests_properties(MacViewerParity_gpu_lod_${_gpu_lod_mode} PROPERTIES
                     LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
             endforeach()
+            add_test(NAME MacViewerParity_gpu_lod_multichunk COMMAND mac_viewer_backend_benchmark
+                --smoke --gpu_lod --count 4099 --overlay selection
+                --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-gpu-lod-multichunk.json")
+            set_tests_properties(MacViewerParity_gpu_lod_multichunk PROPERTIES
+                LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
             foreach(_overlay IN ITEMS selection preview crop ellipsoid window markers flash affine)
                 add_test(NAME MacViewerParity_${_overlay} COMMAND mac_viewer_backend_benchmark
                     --smoke --overlay ${_overlay}
