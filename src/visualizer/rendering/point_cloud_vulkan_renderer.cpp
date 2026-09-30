@@ -2261,11 +2261,12 @@ namespace lfs::vis {
     PointCloudVulkanRenderer::render(VulkanContext& context, const RenderRequest& request,
                                      OutputSlot output_slot) {
 #ifdef __APPLE__
-        if (UserPreferences::instance().viewerBackend() == rendering::ViewerBackend::Metal && MetalViewportRenderer::supportsPoints(request)) {
+        const auto preference = UserPreferences::instance().viewerBackend();
+        if (preference == rendering::ViewerBackend::Metal && MetalViewportRenderer::supportsPoints(request)) {
             try {
                 if (!impl_->metal)
                     impl_->metal = std::make_unique<MetalViewportRenderer>();
-                auto result = impl_->metal->renderPoints(context, request, output_slot);
+                auto result = legacyMetalResult(impl_->metal->renderPoints(context, request, output_slot));
                 if (result) {
                     const auto slot = static_cast<size_t>(output_slot);
                     impl_->metal_output[slot] = true;
@@ -2278,19 +2279,28 @@ namespace lfs::vis {
             } catch (const std::exception& e) { return std::unexpected(e.what()); }
         }
         impl_->metal_output[static_cast<size_t>(output_slot)] = false;
-        const auto slot = static_cast<size_t>(output_slot);
-        if (UserPreferences::instance().viewerBackend() == rendering::ViewerBackend::Metal) {
-            if (impl_->metal_route[slot] != 1) {
-                LOG_INFO("Point viewer GPU backend: requested=metal effective=vulkan slot={} reason=unsupported tensor storage", slot);
-                impl_->metal_route[slot] = 1;
-            }
-        } else
-            impl_->metal_route[slot] = -1;
 #endif
         if (auto r = impl_->ensureInitialized(context); !r) {
             return std::unexpected<std::string>(r.error());
         }
+#ifdef __APPLE__
+        auto result = impl_->doRender(request, output_slot);
+        if (result) {
+            const auto slot = static_cast<size_t>(output_slot);
+            const int route = preference == rendering::ViewerBackend::Metal       ? 1
+                              : preference == rendering::ViewerBackend::Automatic ? 2
+                                                                                  : 3;
+            if (impl_->metal_route[slot] != route) {
+                impl_->metal_route[slot] = route;
+                LOG_INFO("Point viewer GPU backend: requested={} effective=vulkan slot={} reason={}",
+                         rendering::viewerBackendName(preference), slot,
+                         preference == rendering::ViewerBackend::Metal ? "unsupported tensor storage" : "none");
+            }
+        }
+        return result;
+#else
         return impl_->doRender(request, output_slot);
+#endif
     }
 
     std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
@@ -2300,7 +2310,7 @@ namespace lfs::vis {
             const auto slot = static_cast<VksplatViewportRenderer::OutputSlot>(output_slot);
             const auto size = impl_->metal->size(slot);
             auto image = core::Tensor::empty({size_t(size.y), size_t(size.x), 3}, core::Device::CPU, core::DataType::Float32);
-            const auto read = impl_->metal->readColor(slot, image, 0, 0);
+            const auto read = legacyMetalResult(impl_->metal->readColor(slot, image, 0, 0));
             if (!read)
                 return std::unexpected(read.error());
             return std::make_shared<core::Tensor>(std::move(image));

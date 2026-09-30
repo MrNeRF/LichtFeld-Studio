@@ -2005,7 +2005,7 @@ namespace lfs::vis {
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
 #ifdef __APPLE__
         if (metal_viewport_) {
-            const auto released = metal_viewport_->release(OutputSlot::Preview);
+            const auto released = legacyMetalResult(metal_viewport_->release(OutputSlot::Preview));
             if (!released)
                 LOG_WARN("Metal preview release failed: {}", released.error());
             else
@@ -2031,7 +2031,7 @@ namespace lfs::vis {
 #ifdef __APPLE__
         if (metal_viewport_) {
             for (const auto slot : {OutputSlot::SplitLeft, OutputSlot::SplitRight}) {
-                const auto released = metal_viewport_->release(slot);
+                const auto released = legacyMetalResult(metal_viewport_->release(slot));
                 if (!released)
                     LOG_WARN("Metal split release failed: {}", released.error());
                 else
@@ -2068,7 +2068,7 @@ namespace lfs::vis {
 #ifdef __APPLE__
         if (metal_viewport_) {
             for (const auto slot : {OutputSlot::Main, OutputSlot::SplitLeft, OutputSlot::SplitRight, OutputSlot::Preview}) {
-                const auto released = metal_viewport_->release(slot);
+                const auto released = legacyMetalResult(metal_viewport_->release(slot));
                 if (!released)
                     LOG_WARN("Metal scene release failed: {}", released.error());
                 else
@@ -6502,7 +6502,7 @@ namespace lfs::vis {
             std::lock_guard<std::mutex> lock(readback_mutex_);
             if (!metal_viewport_)
                 return std::unexpected("Metal readback renderer was reset");
-            return metal_viewport_->pollReadback(ticket, false);
+            return legacyMetalResult(metal_viewport_->pollReadback(ticket, false));
         }
 #endif
         std::lock_guard<std::mutex> lock(readback_mutex_);
@@ -6516,7 +6516,7 @@ namespace lfs::vis {
             std::lock_guard<std::mutex> lock(readback_mutex_);
             if (!metal_viewport_)
                 return std::unexpected("Metal readback renderer was reset");
-            const auto result = metal_viewport_->pollReadback(ticket, true);
+            const auto result = legacyMetalResult(metal_viewport_->pollReadback(ticket, true));
             if (!result)
                 return std::unexpected(result.error());
             return {};
@@ -6717,10 +6717,10 @@ namespace lfs::vis {
             if (metal_output_[static_cast<size_t>(output_slot)]) {
                 const auto extent = metal_viewport_->size(output_slot);
                 auto plane = core::Tensor::empty({size_t(extent.y), size_t(extent.x)}, core::Device::CPU, core::DataType::Float32);
-                const auto ticket = metal_viewport_->submitReadback(output_slot, plane, 0, 0, true);
+                const auto ticket = legacyMetalResult(metal_viewport_->submitReadback(output_slot, plane, 0, 0, true));
                 if (!ticket)
                     return std::unexpected(ticket.error());
-                const auto ready = metal_viewport_->pollReadback(*ticket, true);
+                const auto ready = legacyMetalResult(metal_viewport_->pollReadback(*ticket, true));
                 if (!ready)
                     return std::unexpected(ready.error());
                 return std::make_shared<core::Tensor>(std::move(plane));
@@ -6878,7 +6878,7 @@ namespace lfs::vis {
         {
             std::lock_guard<std::mutex> native_lock(readback_mutex_);
             if (metal_output_[static_cast<size_t>(output_slot)])
-                return metal_viewport_->submitReadback(output_slot, destination, 0, 0, true);
+                return legacyMetalResult(metal_viewport_->submitReadback(output_slot, destination, 0, 0, true));
         }
 #endif
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
@@ -7029,7 +7029,7 @@ namespace lfs::vis {
         {
             std::lock_guard<std::mutex> native_lock(readback_mutex_);
             if (metal_output_[static_cast<size_t>(output_slot)])
-                return metal_viewport_->submitReadback(output_slot, destination, destination_x, destination_y, false);
+                return legacyMetalResult(metal_viewport_->submitReadback(output_slot, destination, destination_x, destination_y, false));
         }
 #endif
         if (!destination.is_valid() ||
@@ -7198,7 +7198,7 @@ namespace lfs::vis {
         {
             std::lock_guard<std::mutex> native_lock(readback_mutex_);
             if (metal_output_[static_cast<size_t>(output_slot)])
-                return metal_viewport_->readColor(output_slot, destination, destination_x, destination_y);
+                return legacyMetalResult(metal_viewport_->readColor(output_slot, destination, destination_x, destination_y));
         }
 #endif
         const auto readback_t0 = std::chrono::steady_clock::now();
@@ -7224,7 +7224,7 @@ namespace lfs::vis {
         {
             std::lock_guard<std::mutex> native_lock(readback_mutex_);
             if (metal_output_[static_cast<size_t>(request.output_slot)])
-                return metal_viewport_->readDepth(request);
+                return legacyMetalResult(metal_viewport_->readDepth(request));
         }
 #endif
         const auto readback_t0 = std::chrono::steady_clock::now();
@@ -8202,7 +8202,7 @@ namespace lfs::vis {
             } catch (const std::exception& e) {
                 return std::unexpected(std::string("Metal viewport initialization failed: ") + e.what());
             }
-            auto result = metal_viewport_->render(context, splat_data, request, output_slot, depth_capture_expected_);
+            auto result = legacyMetalResult(metal_viewport_->render(context, splat_data, request, output_slot, depth_capture_expected_));
             if (!result)
                 return result;
             // Offline capture cannot publish the provisional overflow image used
@@ -8210,7 +8210,7 @@ namespace lfs::vis {
             if (deterministic_export || depth_capture_mode_ || output_slot == OutputSlot::Preview) {
                 bool complete = false;
                 for (int attempt = 0; attempt <= 4; ++attempt) {
-                    const auto status = metal_viewport_->outputComplete(output_slot);
+                    const auto status = legacyMetalResult(metal_viewport_->outputComplete(output_slot));
                     if (!status)
                         return std::unexpected(status.error());
                     if (*status) {
@@ -8219,7 +8219,7 @@ namespace lfs::vis {
                     }
                     if (attempt == 4)
                         break;
-                    result = metal_viewport_->render(context, splat_data, request, output_slot, depth_capture_expected_);
+                    result = legacyMetalResult(metal_viewport_->render(context, splat_data, request, output_slot, depth_capture_expected_));
                     if (!result)
                         return result;
                 }
@@ -8227,22 +8227,14 @@ namespace lfs::vis {
                     return std::unexpected("Metal export reservation did not converge");
             }
             metal_output_[static_cast<size_t>(output_slot)] = true;
-            if (metal_route_[static_cast<size_t>(output_slot)] != 0) {
+            const bool route_changed = metal_route_[static_cast<size_t>(output_slot)] != 0;
+            metal_route_[static_cast<size_t>(output_slot)] = 0;
+            native_lock.unlock();
+            if (route_changed)
                 LOG_INFO("Viewer GPU backend: requested=metal effective=metal slot={}", static_cast<size_t>(output_slot));
-                metal_route_[static_cast<size_t>(output_slot)] = 0;
-            }
             return result;
         }
         metal_output_[static_cast<size_t>(output_slot)] = false;
-        if (preference == rendering::ViewerBackend::Metal) {
-            const int reason = 1;
-            if (metal_route_[static_cast<size_t>(output_slot)] != reason) {
-                LOG_INFO("Viewer GPU backend: requested=metal effective=vulkan slot={} reason={}", static_cast<size_t>(output_slot),
-                         "unsupported frame or tensor storage");
-                metal_route_[static_cast<size_t>(output_slot)] = reason;
-            }
-        } else
-            metal_route_[static_cast<size_t>(output_slot)] = -1;
         native_lock.unlock();
 #endif
         const glm::ivec2 size = request.frame_view.size;
@@ -9370,6 +9362,20 @@ namespace lfs::vis {
         ring_.publishCompletion(ring_slot, completion_value);
         auto& output = ring_.slotAt(outputSlotIndex(output_slot), ring_slot);
         output.completion_value = completion_value;
+#ifdef __APPLE__
+        const int route = preference == rendering::ViewerBackend::Metal       ? 1
+                          : preference == rendering::ViewerBackend::Automatic ? 2
+                                                                              : 3;
+        native_lock.lock();
+        const bool route_changed = metal_route_[static_cast<size_t>(output_slot)] != route;
+        metal_route_[static_cast<size_t>(output_slot)] = route;
+        native_lock.unlock();
+        if (route_changed) {
+            LOG_INFO("Viewer GPU backend: requested={} effective=vulkan slot={} reason={}",
+                     rendering::viewerBackendName(preference), static_cast<size_t>(output_slot),
+                     preference == rendering::ViewerBackend::Metal ? "unsupported frame or tensor storage" : "none");
+        }
+#endif
         const std::uint64_t lod_page_generation =
             lod_request_active && lod_page_cache_.configured()
                 ? lod_page_cache_.snapshot().generation

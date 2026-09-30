@@ -33,27 +33,43 @@ static void run() {
     std::vector<glm::mat4> transforms(2, glm::mat4(1));
     request.scene.model_transforms = &transforms;
     require(!vis::MetalViewportRenderer::supports(model, request), "Multiple objects accepted without indices");
-    require(!renderer.render(context, model, request, vis::VksplatViewportRenderer::OutputSlot::Main),
-            "Malformed scene did not fail");
+    const auto malformed = renderer.render(context, model, request, vis::VksplatViewportRenderer::OutputSlot::Main);
+    require(!malformed && malformed.error().code() == lfs::ErrorCode::InvalidArgument &&
+                malformed.error().domain() == lfs::ErrorDomain::Rendering,
+            "Malformed scene lost its typed argument error");
+    const auto unknown = renderer.pollReadback(uint64_t{1} << 63, false);
+    require(!unknown && unknown.error().code() == lfs::ErrorCode::NotFound,
+            "Unknown ticket lost its typed lookup error");
+    auto empty_destination = Tensor::empty({64, 96, 3}, Device::CPU);
+    const auto empty_read = renderer.readColor(vis::VksplatViewportRenderer::OutputSlot::Main,
+                                               empty_destination, 0, 0);
+    require(!empty_read && empty_read.error().code() == lfs::ErrorCode::FailedPrecondition,
+            "Empty output lost its typed precondition error");
     // Desktop single-node scenes omit the per-primitive index table.
     transforms.resize(1);
     require(vis::MetalViewportRenderer::supports(model, request), "Implicit single-object frame rejected");
     for (int frame = 0; frame < 12; ++frame) {
         const auto output = renderer.render(context, model, request, vis::VksplatViewportRenderer::OutputSlot::Main);
         if (!output)
-            throw std::runtime_error(output.error());
+            throw std::runtime_error(lfs::format_for_developer(output.error()));
         require(output->image && output->image_view && output->completion_semaphore, "Missing native presentation handles");
         const auto size = request.frame_view.size;
         auto pixels = Tensor::empty({size_t(size.y), size_t(size.x), 4}, Device::CPU, core::DataType::Float32);
         auto read = renderer.readColor(vis::VksplatViewportRenderer::OutputSlot::Main, pixels, 0, 0);
         if (!read)
-            throw std::runtime_error(read.error());
+            throw std::runtime_error(lfs::format_for_developer(read.error()));
+        if (frame == 0) {
+            const auto invalid = renderer.readColor(vis::VksplatViewportRenderer::OutputSlot::Main,
+                                                    pixels, -1, 0);
+            require(!invalid && invalid.error().code() == lfs::ErrorCode::InvalidArgument,
+                    "Invalid readback destination lost its typed argument error");
+        }
         const size_t center = ((size.y / 2) * size.x + size.x / 2) * 4;
         require(pixels.ptr<float>()[center] > .5f, "Native camera or color transfer differs");
         require(pixels.ptr<float>()[center] > pixels.ptr<float>()[center + 1], "SH0 channels differ");
         const auto depth = renderer.readDepth({.pixel = size / 2, .source_size = size});
         if (!depth)
-            throw std::runtime_error(depth.error());
+            throw std::runtime_error(lfs::format_for_developer(depth.error()));
         require(std::abs(*depth - 3.f) < 1e-4f, "Native desktop depth differs");
         auto asynchronous = Tensor::full({size_t(size.y) + 2, size_t(size.x) + 2, 3}, -1.f, Device::CPU);
         const auto ticket = renderer.submitReadback(vis::VksplatViewportRenderer::OutputSlot::Main, asynchronous, 1, 1, false);
@@ -96,11 +112,11 @@ static void run() {
     const auto snapshot = [&](rendering::ViewportRenderRequest& r) {
         const auto frame = renderer.render(context, model, r, vis::VksplatViewportRenderer::OutputSlot::Main);
         if (!frame)
-            throw std::runtime_error(frame.error());
+            throw std::runtime_error(lfs::format_for_developer(frame.error()));
         auto pixels = Tensor::empty({64, 96, 3}, Device::CPU, core::DataType::Float32);
         const auto read = renderer.readColor(vis::VksplatViewportRenderer::OutputSlot::Main, pixels, 0, 0);
         if (!read)
-            throw std::runtime_error(read.error());
+            throw std::runtime_error(lfs::format_for_developer(read.error()));
         return pixels;
     };
     rendering::GaussianScopedBoxFilter crop;

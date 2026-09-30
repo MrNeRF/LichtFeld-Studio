@@ -97,10 +97,12 @@ def preferences_panel_module(monkeypatch):
 
     tensor_defaults = dict(backend="cuda", vulkan_device="", vulkan_validation=0,
                            force_fp32_half=False, force_no_atomic_float=False)
-    state.tensor_preferences = dict(tensor_defaults)
+    state.tensor_preferences = dict(tensor_defaults, cuda_available=True, metal_available=False)
+    state.backend_dialogs = []
+    state.viewer_backend = "auto"
 
     def set_tensor_backend_preferences(**values):
-        state.tensor_preferences = {**tensor_defaults, **values}
+        state.tensor_preferences.update({**tensor_defaults, **values})
 
     def set_project_location(path):
         state.project_location = str(path)
@@ -187,6 +189,9 @@ def preferences_panel_module(monkeypatch):
         take_preferences_section_request=take_preferences_section_request,
         get_tensor_backend_preferences=lambda: dict(state.tensor_preferences),
         set_tensor_backend_preferences=set_tensor_backend_preferences,
+        get_viewer_backend_preference=lambda: state.viewer_backend,
+        set_viewer_backend_preference=lambda value="auto": setattr(state, "viewer_backend", value),
+        message_dialog=lambda *args: state.backend_dialogs.append(args),
         tr=lambda key: key,
         get_scene_reconstruction_options=lambda: [
             {
@@ -1181,3 +1186,75 @@ def test_tensor_setting_preserves_other_pending_preferences(preferences_panel_mo
     assert state.tensor_preferences["backend"] == "vulkan"
     assert state.tensor_preferences["vulkan_validation"] == 2
     assert state.tensor_preferences["force_fp32_half"] is True
+
+
+@pytest.mark.parametrize("backend", ["cuda", "metal"])
+def test_unavailable_tensor_backend_restores_control_without_saving(preferences_panel_module, backend):
+    module, state = preferences_panel_module
+    state.tensor_preferences["backend"] = "auto"
+    state.tensor_preferences[f"{backend}_available"] = False
+    previous = dict(state.tensor_preferences)
+    panel = module.PreferencesPanel()
+    dirty = []
+    panel._handle = SimpleNamespace(dirty=dirty.append)
+    panel._set_tensor_preference("backend", backend)
+    assert state.tensor_preferences == previous
+    assert dirty == ["tensor_backend"]
+    assert state.backend_dialogs == [("preferences.tensor_backend", "preferences.backend_unavailable", "error")]
+
+
+def test_tensor_backend_native_rejection_is_presented_without_traceback(preferences_panel_module):
+    module, state = preferences_panel_module
+    previous = dict(state.tensor_preferences)
+    def reject(**_values):
+        raise ValueError("CUDA is not compiled into this build")
+    module.lf.ui.set_tensor_backend_preferences = reject
+    panel = module.PreferencesPanel()
+    panel._set_tensor_preference("backend", "cuda")
+    assert state.tensor_preferences == previous
+    assert state.backend_dialogs == [("preferences.tensor_backend", "preferences.backend_unavailable", "error")]
+
+
+def test_non_backend_validation_errors_are_not_hidden(preferences_panel_module):
+    module, state = preferences_panel_module
+    def reject(**_values):
+        raise ValueError("Validation must be 0, 1, or 2")
+    module.lf.ui.set_tensor_backend_preferences = reject
+    panel = module.PreferencesPanel()
+    with pytest.raises(ValueError, match="Validation"):
+        panel._set_tensor_preference("vulkan_validation", "3")
+    assert not state.backend_dialogs
+
+
+def test_unavailable_viewer_backend_keeps_previous_preference(preferences_panel_module):
+    module, state = preferences_panel_module
+    panel = module.PreferencesPanel()
+    dirty = []
+    panel._handle = SimpleNamespace(dirty=dirty.append)
+    panel._set_viewer_backend_preference("metal")
+    assert state.viewer_backend == "auto"
+    assert dirty == ["viewer_backend"]
+    assert state.backend_dialogs == [("preferences.viewer_backend", "preferences.backend_unavailable", "error")]
+
+
+def test_available_viewer_backend_and_automatic_can_be_selected(preferences_panel_module):
+    module, state = preferences_panel_module
+    state.tensor_preferences["metal_available"] = True
+    panel = module.PreferencesPanel()
+    panel._set_viewer_backend_preference("metal")
+    assert state.viewer_backend == "metal"
+    panel._set_viewer_backend_preference("auto")
+    assert state.viewer_backend == "auto"
+    assert not state.backend_dialogs
+
+
+def test_viewer_backend_native_rejection_preserves_setting(preferences_panel_module):
+    module, state = preferences_panel_module
+    state.tensor_preferences["metal_available"] = True
+    def reject(_value):
+        raise ValueError("Metal viewer requires macOS")
+    module.lf.ui.set_viewer_backend_preference = reject
+    panel = module.PreferencesPanel()
+    panel._set_viewer_backend_preference("metal")
+    assert state.viewer_backend == "auto"
+    assert state.backend_dialogs == [("preferences.viewer_backend", "preferences.backend_unavailable", "error")]

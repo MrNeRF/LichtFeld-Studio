@@ -256,6 +256,8 @@ namespace {
 
                 const bool viewer_only = lfs::app::training_params_are_viewer_only(*mode.params);
                 preflightGpuOrExit(interactive, viewer_only);
+                LOG_INFO("Tensor GPU backend selected: {}",
+                         lfs::core::gpu_backend_name(lfs::core::configured_gpu_backend()));
 
                 // Probe and decompose the CUDA driver's context-creation cost only for the
                 // GPU app path. CLI-only modes such as --help, convert, preprocess,

@@ -183,7 +183,7 @@ class PreferencesPanel(Panel):
             lambda: bool(lf.ui.get_tensor_backend_preferences()["metal_available"]),
         )
         model.bind("viewer_backend", lf.ui.get_viewer_backend_preference,
-                   lf.ui.set_viewer_backend_preference)
+                   self._set_viewer_backend_preference)
         model.bind_func("viewer_metal_available",
                         lambda: bool(lf.ui.get_tensor_backend_preferences()["metal_available"]))
         model.bind("theme_family_idx", self._theme_family_index, self._set_theme_family_index)
@@ -402,8 +402,29 @@ class PreferencesPanel(Panel):
         if self._section == "input" and "key_bindings" in self._expanded_sections:
             self._keymap.ensure_binding_rows()
 
+    def _reject_backend_preference(self, model_key, title_key):
+        if self._handle:
+            self._handle.dirty(model_key)
+        lf.ui.message_dialog(
+            lf.ui.tr(title_key), lf.ui.tr("preferences.backend_unavailable"), "error")
+
+    def _set_viewer_backend_preference(self, value):
+        if value == "metal" and not lf.ui.get_tensor_backend_preferences()["metal_available"]:
+            self._reject_backend_preference("viewer_backend", "preferences.viewer_backend")
+            return
+        try:
+            lf.ui.set_viewer_backend_preference(value)
+        except ValueError:
+            self._reject_backend_preference("viewer_backend", "preferences.viewer_backend")
+            return
+        if self._handle:
+            self._handle.dirty("viewer_backend")
+
     def _set_tensor_preference(self, key, value):
         state = dict(lf.ui.get_tensor_backend_preferences())
+        if key == "backend" and value in ("cuda", "metal") and not state[f"{value}_available"]:
+            self._reject_backend_preference("tensor_backend", "preferences.tensor_backend")
+            return
         state.pop("cuda_available", None)
         state.pop("metal_available", None)
         if key == "vulkan_validation":
@@ -411,7 +432,13 @@ class PreferencesPanel(Panel):
         elif key in ("force_fp32_half", "force_no_atomic_float"):
             value = bool(value)
         state[key] = value
-        lf.ui.set_tensor_backend_preferences(**state)
+        try:
+            lf.ui.set_tensor_backend_preferences(**state)
+        except ValueError:
+            if key != "backend":
+                raise
+            self._reject_backend_preference("tensor_backend", "preferences.tensor_backend")
+            return
         if self._handle:
             self._handle.dirty(f"tensor_{key}")
 

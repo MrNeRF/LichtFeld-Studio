@@ -278,7 +278,7 @@ namespace {
             if (!vis::MetalViewportRenderer::supports(model, request))
                 throw std::runtime_error("Unsupported native benchmark frame");
             auto frame = [&](bool native) {
-                auto result = native ? metal.render(context, model, request, Slot::Main)
+                auto result = native ? vis::legacyMetalResult(metal.render(context, model, request, Slot::Main))
                                      : vulkan.render(context, model, request, false, Slot::Main);
                 if (!result)
                     throw std::runtime_error(result.error());
@@ -287,7 +287,7 @@ namespace {
             auto complete = [&] {
                 const auto status = metal.outputComplete(Slot::Main);
                 if (!status)
-                    throw std::runtime_error(status.error());
+                    throw std::runtime_error(lfs::format_for_developer(status.error()));
                 return *status;
             };
             for (int n = 0; n < o.warmup; ++n) {
@@ -315,7 +315,7 @@ namespace {
             auto pixels = core::Tensor::empty({size_t(o.height), size_t(o.width), 3}, core::Device::CPU, core::DataType::Float32);
             const auto read = metal.readColor(Slot::Main, pixels, 0, 0);
             if (!read)
-                throw std::runtime_error(read.error());
+                throw std::runtime_error(lfs::format_for_developer(read.error()));
             const auto reference = vulkan.readOutputImage(context, Slot::Main);
             if (!reference)
                 throw std::runtime_error(reference.error());

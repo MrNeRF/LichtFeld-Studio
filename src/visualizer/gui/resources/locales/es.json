@@ -884,6 +884,7 @@
     "viewer_backend_description": "Automático utiliza Vulkan. Metal está disponible en Macs compatibles; las opciones de renderizado no compatibles utilizan Vulkan.",
     "tensor_backend": "Tensor backend",
     "tensor_restart": "Changes apply after restarting LichtFeld Studio. Automatic picks CUDA where it is built, else Metal where the GPU supports it, else Vulkan. Vulkan and Metal support viewing and inference; training requires CUDA.",
+    "backend_unavailable": "El backend seleccionado no está disponible en este dispositivo. La configuración no se ha modificado.",
     "tensor_device": "Vulkan device",
     "tensor_device_hint": "Leave empty for automatic selection, or enter a device index or UUID. CUDA rendering must use the CUDA device.",
     "tensor_validation": "Vulkan diagnostics",

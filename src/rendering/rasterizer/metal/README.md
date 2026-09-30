@@ -114,8 +114,21 @@ different pixels. A passing depth gate does not mean pixel-identical depth.
 A local macOS real-scene check imported a 1,179,648-splat SH0 PLY, rendered it
 with confirmed native routing, exercised selection and whole-node translation
 without point selection, exported SPZ, and activated spatial and temporal
-reconstruction, including convergence to zero remaining temporal samples. One fixed-view color comparison had max error 2/255 and PSNR
-65.6 dB. This validates that case, not every scene, camera or editor workflow.
+reconstruction, including convergence to zero remaining temporal samples. The
+fixed-view color comparisons had PSNR 65.54-65.56 dB. Three repeated native
+captures were identical. Repeated Vulkan captures varied at one pixel out of
+456,320 (maximum 6/255); comparisons against its stable captures had maximum
+error 2/255. The isolated reference variation remains undiagnosed. This is
+close visual parity, not pixel identity or a guarantee for every scene,
+camera or editor workflow. Synthetic maximum-error gates remain unchanged.
+
+The native desktop boundary returns structured `lfs::Result`/`lfs::Status`
+errors, preserving existing typed causes and classifying invalid arguments,
+missing tickets, empty output and memory admission failures. Explicit adapters
+retain the existing Vulkan-facing string contracts. Backend routing logs are
+emitted on successful frames and route changes, including Automatic and fallback;
+tensor selection is logged after startup preflight. Preferences reject unavailable
+CUDA/Metal choices with a localized dialog and preserve the previous settings.
 
 Remaining native work includes 3DGUT/equirectangular and portal profiles,
 LOD/RAD admission, page layouts and leases, selection-query kernels, pressure
