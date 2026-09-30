@@ -26,6 +26,7 @@
 #include "licht_matrix_test_data.hpp"
 #include "licht_test_support.hpp"
 #include "project/session_state.hpp"
+#include "rendering/dirty_flags.hpp"
 #include "rendering/rendering_types.hpp"
 #include "screen/screen.hpp"
 #include "screen/view3d_space.hpp"
@@ -40,6 +41,7 @@
 #include <array>
 #include <bit>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <limits>
@@ -83,6 +85,32 @@ namespace {
     using lfs::test::licht::rolled_panel_camera;
     using lfs::test::licht::TemporaryDirectory;
     using namespace lfs::vis::project;
+
+    class ScopedLfsHome {
+    public:
+        explicit ScopedLfsHome(const fs::path& path) {
+            if (const char* previous = std::getenv("LFS_HOME"))
+                previous_ = previous;
+#ifdef _WIN32
+            (void)_putenv_s("LFS_HOME", path.string().c_str());
+#else
+            (void)setenv("LFS_HOME", path.string().c_str(), 1);
+#endif
+        }
+        ~ScopedLfsHome() {
+#ifdef _WIN32
+            (void)_putenv_s("LFS_HOME", previous_ ? previous_->c_str() : "");
+#else
+            if (previous_)
+                (void)setenv("LFS_HOME", previous_->c_str(), 1);
+            else
+                (void)unsetenv("LFS_HOME");
+#endif
+        }
+
+    private:
+        std::optional<std::string> previous_;
+    };
 
     void overwrite_f32_le(
         std::vector<std::byte>& bytes,
@@ -2642,12 +2670,18 @@ namespace {
         second->settings.show_camera_frustums = true;
         second->settings.focal_length_mm = 24.0f;
 
+        auto& properties = viewer.getGuiManager()->screenHost().properties();
+        properties.setActiveTab("lfs.training");
+        properties.setScroll(0.375f);
+
         auto session = make_populated_session_chapters();
         const auto captured = require_result(captureGuiSession(viewer, session, {}));
         const Json gui = json_root(captured.gui_layout.dom());
         const Json screen_json = find_space_payload_for_test(gui, "screen");
         ASSERT_TRUE(screen_json.contains("layout"));
         ASSERT_TRUE(screen_json.contains("areas"));
+        EXPECT_EQ(screen_json["properties"]["active_tab"], "lfs.training");
+        EXPECT_FLOAT_EQ(screen_json["properties"]["scroll"].get<float>(), 0.375f);
         int view_count = 0;
         for (const auto& area : screen_json["areas"]) {
             if (area.value("editor", std::string{}) == "view3d")
@@ -2661,9 +2695,14 @@ namespace {
         EXPECT_TRUE(view_json["render_settings"].contains("antialiasing"));
 
         viewer.screens().resetToDefault();
+        properties.setActiveTab("lfs.preferences");
+        properties.setScroll(0.0f);
         auto prepared = require_result(prepareGuiSessionRestore(captured));
         std::vector<CameraBookmarkProjectState> bookmarks;
         applyGuiSession(viewer, prepared, bookmarks);
+
+        EXPECT_EQ(properties.activeTab(), "lfs.training");
+        EXPECT_FLOAT_EQ(properties.scroll(), 0.375f);
 
         auto* restored_first = viewer.screens().view3D(view);
         auto* restored_second = viewer.screens().view3D(other);
@@ -2680,6 +2719,29 @@ namespace {
         EXPECT_TRUE(restored_second->settings.show_camera_frustums);
         EXPECT_FLOAT_EQ(restored_second->settings.focal_length_mm, 24.0f);
         EXPECT_EQ(viewer.screens().screen().views().size(), 2u);
+    }
+
+    TEST(P5SessionChapterTest, ResetLayoutRestoresDefaultScreenAndMarksRenderingDirty) {
+        TemporaryDirectory temporary{"licht-screen-reset"};
+        const ScopedLfsHome home(temporary.path);
+        lfs::vis::ViewerOptions options;
+        options.show_startup_overlay = false;
+        lfs::vis::VisualizerImpl viewer(options);
+        auto* gui = viewer.getGuiManager();
+        auto* rendering = viewer.getRenderingManager();
+        ASSERT_NE(gui, nullptr);
+        ASSERT_NE(rendering, nullptr);
+
+        const auto initial_area_count = viewer.screens().screen().areas().size();
+        const auto active = viewer.screens().screen().activeView();
+        ASSERT_TRUE(viewer.screens().screen().split(active, lfs::vis::screen::SplitAxis::Columns, 0.5f).valid());
+        ASSERT_GT(viewer.screens().screen().areas().size(), initial_area_count);
+        (void)rendering->pollDirtyState();
+
+        const auto reset = gui->resetLayout();
+        ASSERT_TRUE(reset) << reset.error();
+        EXPECT_EQ(viewer.screens().screen().areas().size(), initial_area_count);
+        EXPECT_NE(rendering->pendingDirtyMask() & lfs::vis::DirtyFlag::ALL, 0u);
     }
 
     TEST(P5SessionChapterTest, OldFormatProjectOpensWithDefaultScreenAndLegacyView) {

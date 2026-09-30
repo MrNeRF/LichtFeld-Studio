@@ -2119,6 +2119,10 @@ namespace lfs::vis::project {
             gui_manager->getWindowStates();
         Json screen_payload =
             viewer.screens().read([](const screen::Screen& s) { return s.save(); });
+        screen_payload["properties"] = Json{
+            {"active_tab", gui_manager->screenHost().properties().activeTab()},
+            {"scroll", gui_manager->screenHost().properties().scroll()},
+        };
         screen_payload["system_console_visible"] =
             window_states.contains("system_console") &&
             window_states.at("system_console");
@@ -3070,6 +3074,14 @@ namespace lfs::vis::project {
                 if (!loaded)
                     return GuilApply::Failed;
                 viewer.screens().replace(std::move(*loaded));
+                if (const auto properties = find_required_object(screen_payload, "properties");
+                    properties != screen_payload.end()) {
+                    auto& editor = gui_manager->screenHost().properties();
+                    if (const auto active_tab = scalar<std::string>(*properties, "active_tab"))
+                        editor.setActiveTab(*active_tab);
+                    if (const auto scroll = scalar<float>(*properties, "scroll"))
+                        editor.setScroll(*scroll);
+                }
             } else {
                 viewer.screens().resetToDefault();
             }
@@ -3136,12 +3148,14 @@ namespace lfs::vis::project {
                 gui_manager->resetSceneTreeChrome();
             }
 
-            if (const auto tab_strip =
-                    scalar<float>(
-                        fixed, "tab_strip_scroll")) {
-                gui_manager->setTabStripScroll(*tab_strip);
-            } else {
-                gui_manager->setTabStripScroll(0.0f);
+            if (!has_screen) {
+                if (const auto tab_strip =
+                        scalar<float>(
+                            fixed, "tab_strip_scroll")) {
+                    gui_manager->setTabStripScroll(*tab_strip);
+                } else {
+                    gui_manager->setTabStripScroll(0.0f);
+                }
             }
 
             if (!has_screen) {

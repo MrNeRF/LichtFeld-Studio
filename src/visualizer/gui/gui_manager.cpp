@@ -8734,6 +8734,11 @@ namespace lfs::vis::gui {
             return std::unexpected(lfs::format_for_developer(backup.error()));
 
         panel_layout_.applyProjectState(PanelLayoutProjectState{});
+        if (viewer_) {
+            viewer_->screens().resetToDefault();
+            if (auto* rendering = viewer_->getRenderingManager())
+                rendering->markDirty(DirtyFlag::ALL);
+        }
         auto& registry = PanelRegistry::instance();
         registry.reset_project_state();
         registry.apply_panel_payloads({});

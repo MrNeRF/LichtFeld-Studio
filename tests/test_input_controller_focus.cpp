@@ -884,6 +884,7 @@ namespace lfs::vis {
     TEST_F(InputControllerFocusTest, FpvModePitchClampPreventsPoleFlip) {
         Viewport viewport(200, 200);
         SingleViewTargets views(viewport);
+        views.setInputBounds({-5000.0f, -5000.0f}, {10000.0f, 10000.0f});
         InputController controller(nullptr, views);
         viewport.camera.t = glm::vec3(0.0f, 0.0f, 5.0f);
         viewport.camera.setPivot(glm::vec3(0.0f));
@@ -932,6 +933,7 @@ namespace lfs::vis {
     TEST_F(InputControllerFocusTest, OrbitModePitchIntoLimitDoesNotFlip) {
         Viewport viewport(200, 200);
         SingleViewTargets views(viewport);
+        views.setInputBounds({-5000.0f, -5000.0f}, {10000.0f, 10000.0f});
         InputController controller(nullptr, views);
         viewport.camera.t = glm::vec3(0.0f, 0.0f, 5.0f);
         viewport.camera.setPivot(glm::vec3(0.0f));
@@ -966,6 +968,7 @@ namespace lfs::vis {
     TEST_F(InputControllerFocusTest, OrbitModeReachesNearTopDownView) {
         Viewport viewport(200, 200);
         SingleViewTargets views(viewport);
+        views.setInputBounds({-5000.0f, -5000.0f}, {10000.0f, 10000.0f});
         InputController controller(nullptr, views);
         viewport.camera.t = glm::vec3(0.0f, 0.0f, 5.0f);
         viewport.camera.setPivot(glm::vec3(0.0f));
