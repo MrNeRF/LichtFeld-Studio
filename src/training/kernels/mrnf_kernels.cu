@@ -48,48 +48,6 @@ namespace lfs::training::mrnf_strategy {
 
     } // namespace
 
-    __global__ void prune_bounds_or_kernel(
-        const float* __restrict__ means,
-        const float* __restrict__ max_log_scales,
-        bool* __restrict__ prune_mask,
-        size_t N,
-        float center_x,
-        float center_y,
-        float center_z,
-        float max_allowed,
-        float log_max_allowed) {
-        const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-        if (i >= N)
-            return;
-
-        const float dx = fabsf(means[3 * i] - center_x);
-        const float dy = fabsf(means[3 * i + 1] - center_y);
-        const float dz = fabsf(means[3 * i + 2] - center_z);
-        const bool distance_exceeds = !isnan(dx) && !isnan(dy) && !isnan(dz) &&
-                                      fmaxf(dx, fmaxf(dy, dz)) > max_allowed;
-        prune_mask[i] = prune_mask[i] || max_log_scales[i] > log_max_allowed || distance_exceeds;
-    }
-
-    void launch_prune_bounds_or(
-        const float* means,
-        const float* max_log_scales,
-        bool* prune_mask,
-        size_t N,
-        const float* center,
-        float max_allowed,
-        float log_max_allowed,
-        void* stream) {
-        if (N == 0)
-            return;
-        constexpr int threads = 256;
-        const int blocks = static_cast<int>((N + threads - 1) / threads);
-        cudaStream_t s = resolve_stream(stream);
-        prune_bounds_or_kernel<<<blocks, threads, 0, s>>>(
-            means, max_log_scales, prune_mask, N,
-            center[0], center[1], center[2], max_allowed, log_max_allowed);
-        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.prune_bounds_or");
-    }
-
     __global__ void replace_parent_weights_kernel(
         const float* __restrict__ opacities,
         const float* __restrict__ visibility,

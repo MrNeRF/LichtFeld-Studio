@@ -20,16 +20,6 @@ namespace lfs::training::mrnf_strategy {
         float max_extent;
     };
 
-    void launch_prune_bounds_or(
-        const float* means,
-        const float* max_log_scales,
-        bool* prune_mask,
-        size_t N,
-        const float* center,
-        float max_allowed,
-        float log_max_allowed,
-        void* stream = nullptr);
-
     void launch_replace_parent_weights(
         const float* opacities,
         const float* visibility,

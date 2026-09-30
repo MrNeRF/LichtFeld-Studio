@@ -1334,20 +1334,6 @@ namespace lfs::training {
                           compute_near_zero_rotation_mask(_splat_data->rotation_raw()) |
                           (scale_max < MRNF_LOG_MIN_SCALE_THRESHOLD);
 
-        // Bounds-dependent pruning is unsafe for one-point or colocated models:
-        // log(0) would classify every finite scale as oversized. Keep the
-        // bounds-independent safety checks active until a real scene extent exists.
-        if (_bounds_valid) {
-            const float max_allowed =
-                _bounds.max_extent <= std::numeric_limits<float>::max() / 100.0f
-                    ? _bounds.max_extent * 100.0f
-                    : std::numeric_limits<float>::max();
-            const float log_max_allowed = std::log(max_allowed);
-            mrnf_strategy::launch_prune_bounds_or(
-                means.ptr<float>(), scale_max.ptr<float>(), prune_mask.ptr<bool>(),
-                n, _bounds.center, max_allowed, log_max_allowed);
-        }
-
         if (_free_mask.is_valid() && n > 0) {
             auto active_mask = _free_mask.slice(0, 0, n).logical_not();
             prune_mask = prune_mask.logical_and(active_mask);
