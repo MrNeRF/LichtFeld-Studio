@@ -385,6 +385,20 @@ namespace lfs::vis {
         auto f = impl_->latest[static_cast<size_t>(slot)];
         return f ? f->size : glm::ivec2{};
     }
+    std::expected<bool, std::string> MetalViewportRenderer::outputComplete(Slot slot) const {
+        try {
+            auto frame = impl_->latest[static_cast<size_t>(slot)];
+            if (!frame)
+                throw std::runtime_error("Metal output slot is empty");
+            impl_->wait(frame->producer_value);
+            [frame->command waitUntilCompleted];
+            if (frame->command.status != MTLCommandBufferStatusCompleted)
+                throw std::runtime_error("Metal output command failed");
+            return frame->raster->status().error == RasterError::None;
+        } catch (const std::exception& error) {
+            return std::unexpected(error.what());
+        }
+    }
     std::expected<void, std::string> MetalViewportRenderer::readColor(Slot slot, core::Tensor& destination, int x, int y) const {
         try {
             auto f = impl_->latest[static_cast<size_t>(slot)];

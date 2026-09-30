@@ -51,6 +51,27 @@ if(TARGET lfs_visualizer)
         "${CMAKE_SOURCE_DIR}/src")
     set_target_properties(metal_viewport_contracts PROPERTIES OBJCXX_STANDARD 23)
     set_property(TEST MetalViewerViewportContracts APPEND PROPERTY LABELS metal4)
+    # The comparison uses the real desktop adapters and is never built on iOS,
+    # Windows or Linux. CI checks completion/report generation, not speed ratios.
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        option(LFS_BUILD_MAC_VIEWER_BENCHMARK "Build the native Metal versus Vulkan viewer benchmark" ON)
+        if(LFS_BUILD_MAC_VIEWER_BENCHMARK)
+            add_executable(mac_viewer_backend_benchmark backend_benchmark.mm)
+            target_link_libraries(mac_viewer_backend_benchmark PRIVATE lfs_metal_viewer lfs_visualizer lfs_core Python::Python)
+            target_compile_options(mac_viewer_backend_benchmark PRIVATE -fobjc-arc)
+            target_include_directories(mac_viewer_backend_benchmark PRIVATE
+                "${CMAKE_SOURCE_DIR}/src/visualizer/rendering"
+                "${CMAKE_SOURCE_DIR}/src/visualizer"
+                "${CMAKE_SOURCE_DIR}/src/io/include"
+                "${CMAKE_SOURCE_DIR}/src/rendering/include"
+                "${CMAKE_SOURCE_DIR}/src")
+            set_target_properties(mac_viewer_backend_benchmark PROPERTIES OBJCXX_STANDARD 23 OBJCXX_STANDARD_REQUIRED YES)
+            add_test(NAME MacViewerBackendBenchmarkSmoke COMMAND mac_viewer_backend_benchmark
+                --smoke --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-benchmark-smoke.json")
+            set_tests_properties(MacViewerBackendBenchmarkSmoke PROPERTIES
+                LABELS "benchmark;metal;gpu;metal4" TIMEOUT 180 SKIP_RETURN_CODE 77)
+        endif()
+    endif()
 endif()
 
 set(_interop_default OFF)

@@ -17,6 +17,9 @@ namespace lfs::vis {
             VulkanContext&, const core::SplatData&, const rendering::ViewportRenderRequest&,
             VksplatViewportRenderer::OutputSlot);
         glm::ivec2 size(VksplatViewportRenderer::OutputSlot) const;
+        // Explicit validation/readback boundary: waits for the native command and
+        // distinguishes a complete image from capacity-overflow fallback output.
+        std::expected<bool, std::string> outputComplete(VksplatViewportRenderer::OutputSlot) const;
         std::expected<void, std::string> readColor(VksplatViewportRenderer::OutputSlot,
                                                    core::Tensor&, int x, int y) const;
         std::expected<float, std::string> readDepth(const VksplatViewportRenderer::DepthSampleRequest&) const;

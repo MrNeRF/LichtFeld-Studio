@@ -89,10 +89,19 @@ jobs:
           VK_DRIVER_FILES="$icd" MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1 \
             ctest --test-dir build-macos-release -L viewer --no-tests=error --output-on-failure
 
+      - name: Check native Metal versus Vulkan benchmark
+        run: |
+          icd="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
+          test -f "$icd"
+          VK_DRIVER_FILES="$icd" ctest --test-dir build-macos-release \
+            -R '^MacViewerBackendBenchmarkSmoke$' --no-tests=error --output-on-failure
+
       - name: Upload test diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: macos-test-diagnostics
-          path: build-macos-release/Testing/Temporary/
+          path: |
+            build-macos-release/Testing/Temporary/
+            build-macos-release/tests/metal_viewer/mac-viewer-benchmark-smoke.json
           if-no-files-found: ignore

@@ -137,3 +137,36 @@ provide `Vulkan_INCLUDE_DIR`, `Vulkan_LIBRARY` and an existing macOS ICD through
 ordering with an exact readback comparison. It does not test a descriptor-based
 desktop draw or authorize rebuilding/installing MoltenVK. The texture is imported
 already backed by Metal memory, as specified by `VK_EXT_metal_objects`.
+
+## macOS Vulkan/Metal benchmark
+
+The macOS desktop test build adds `mac_viewer_backend_benchmark` by default
+(`LFS_BUILD_MAC_VIEWER_BENCHMARK=OFF` disables it). It is not built on Windows,
+Linux, iOS, or in the standalone raster contracts without the desktop adapter.
+
+```sh
+VK_DRIVER_FILES=/path/to/MoltenVK_icd.json ./build-macos-release/tests/metal_viewer/mac_viewer_backend_benchmark \
+  --count 100000 --width 1280 --height 720 --warmup 12 --samples 40 \
+  --output build-macos-release/mac-viewer-benchmark.json
+ctest --test-dir build-macos-release -R '^MacViewerBackendBenchmarkSmoke$' --output-on-failure
+```
+
+The deterministic fixture runs SH0 and SH3 with production Q16 on the same
+resident model, camera, extent and display settings. AB/BA pairs alternate APIs;
+warmup excludes shader compilation and initial reservations. Each measured frame
+waits for its actual GPU completion. Native overflow/error output is rejected.
+CPU image readback and complete desktop UI/composition are excluded. These are
+serial completed-frame wall latencies, not GPU kernel timestamps or pipelined
+viewer FPS. Safe mode isolates the process from saved user preferences.
+
+The JSON contains raw samples, median/p95, Vulkan/Metal median ratio, image
+MAE/RMSE/PSNR/max error, device/OS/compiler, validation environment, and combined
+process peak RSS. A ratio above one means Metal was faster for that case only.
+Disable GPU validation for performance runs; retain it for correctness checks.
+Synthetic scenes do not establish representative real-scene performance or
+visual parity. Inspect local image errors as well as aggregate PSNR.
+
+The Mac CI runs a small smoke case and uploads its report without a speed gate.
+It explicitly skips on hosts lacking the resident tensor Metal backend (currently
+macOS 26/Metal 4); the raster-only contracts still run on supported older hosts.
+Windows and Linux CI continue to run only the CPU backend-selection contract.
