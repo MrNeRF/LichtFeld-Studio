@@ -1,0 +1,62 @@
+/* Theme colours of the area gesture previews. */
+
+#active-outline {
+    border-color: @{alpha(primary,0.55)};
+}
+
+#divider-highlight {
+    background-color: @{alpha(primary,0.75)};
+}
+
+#corner-hint {
+    border-color: @{alpha(primary,0.9)};
+}
+
+#split-new {
+    background-color: @{alpha(primary,0.12)};
+    border-color: @{alpha(primary,0.6)};
+}
+
+#split-new.denied {
+    background-color: @{alpha(error,0.12)};
+    border-color: @{alpha(error,0.6)};
+}
+
+#split-line {
+    background-color: @{primary};
+}
+
+#join-target {
+    background-color: @{alpha(background,0.55)};
+    border-color: @{alpha(primary,0.7)};
+}
+
+#join-target.denied {
+    background-color: @{alpha(error,0.10)};
+    border-color: @{alpha(error,0.6)};
+}
+
+#join-arrow {
+    border-top-color: @{alpha(text,0.85)};
+    border-right-color: @{alpha(text,0.85)};
+}
+
+#join-target.denied #join-arrow {
+    border-top-color: @{alpha(error,0.8)};
+    border-right-color: @{alpha(error,0.8)};
+}
+
+#swap-source {
+    background-color: @{alpha(primary,0.10)};
+    border-color: @{alpha(primary,0.5)};
+}
+
+#swap-target {
+    background-color: @{alpha(primary,0.18)};
+    border-color: @{alpha(primary,0.8)};
+}
+
+#swap-target.denied {
+    background-color: @{alpha(error,0.10)};
+    border-color: @{alpha(error,0.6)};
+}

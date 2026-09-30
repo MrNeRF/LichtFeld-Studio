@@ -87,6 +87,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         screen/screen.cpp
         screen/view3d_space.cpp
         screen/area_gestures.cpp
+        screen/screen_service.cpp
 
         # Preferences and theme system
         preferences.cpp
@@ -102,6 +103,8 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/panel_registry.cpp
         gui/native_panels.cpp
         gui/layout_state.cpp
+        gui/screen_host.cpp
+        gui/area_editors.cpp
         gui/async_task_manager.cpp
         gui/gallery_scene_publication.cpp
         gui/bounds_gizmo.cpp

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "input/view_targets.hpp"
+
 #include "core/events.hpp"
 #include "core/export.hpp"
 #include "core/services.hpp"
@@ -54,7 +56,7 @@ namespace lfs::vis {
         [[nodiscard]] static std::optional<CameraNavigationMode>
         cameraNavigationModeFromName(std::string_view name);
 
-        InputController(SDL_Window* window, Viewport& viewport);
+        InputController(SDL_Window* window, ViewTargets& views);
         ~InputController();
 
         void initialize();
@@ -81,6 +83,10 @@ namespace lfs::vis {
             viewport_bounds_ = {x, y, w, h};
             cached_split_divider_screen_x_.reset();
         }
+
+        // Frames the selection (or the whole scene when nothing is selected, or
+        // when `selection` is false) in one 3D view.
+        bool frameView(ViewId view, bool selection);
 
         void setFocusedSplitPanel(const SplitViewPanelId panel) {
             focusSplitPanel(panel);
@@ -115,7 +121,7 @@ namespace lfs::vis {
             setCameraNavigationMode(mode);
             camera_view_snap_enabled_ =
                 view_snap_enabled;
-            viewport_.camera.clearTransientMotion();
+            viewport().camera.clearTransientMotion();
             clearViewportDragState();
             clearWasdMomentumViewport();
             depth_range_initialized_ = true;
@@ -265,7 +271,11 @@ namespace lfs::vis {
 
         // Core state
         SDL_Window* window_;
-        Viewport& viewport_;
+        ViewTargets& views_;
+        // The active 3D view's camera: the view keyboard navigation and
+        // panel-less commands act on.
+        [[nodiscard]] Viewport& viewport() { return *views_.activeView().viewport; }
+        [[nodiscard]] const Viewport& viewport() const { return *views_.activeView().viewport; }
         mutable std::optional<float> cached_split_divider_screen_x_;
 
         // Input bindings for customizable hotkeys

@@ -61,6 +61,7 @@ namespace lfs::vis::gui {
             handle.RegisterMember("is_submenu_item", &ContextMenuItem::is_submenu_item);
             handle.RegisterMember("is_active", &ContextMenuItem::is_active);
             handle.RegisterMember("icon", &ContextMenuItem::icon);
+            handle.RegisterMember("shortcut", &ContextMenuItem::shortcut);
         }
         ctor.RegisterArray<std::vector<ContextMenuItem>>();
         ctor.Bind("items", &items_);

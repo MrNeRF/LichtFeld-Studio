@@ -422,7 +422,6 @@ namespace lfs::vis::gui {
         ctor.Bind("menu_labels", &menu_labels_);
         ctor.Bind("dropdown_items", &dropdown_items_);
         ctor.Bind("menu_camera_buttons", &camera_buttons_);
-        ctor.Bind("menu_render_buttons", &render_buttons_);
         ctor.Bind("menu_projection_buttons", &projection_buttons_);
         ctor.Bind("portal_connection_label", &portal_connection_label_);
         ctor.Bind("portal_connection_tooltip", &portal_connection_tooltip_);
@@ -488,7 +487,6 @@ namespace lfs::vis::gui {
         menu_labels_.clear();
         dropdown_items_.clear();
         camera_buttons_.clear();
-        render_buttons_.clear();
         projection_buttons_.clear();
         open_menu_idname_.clear();
         if (rml_manager_)
@@ -614,7 +612,6 @@ namespace lfs::vis::gui {
         rebuildLabels();
         menu_model_.DirtyVariable("dropdown_items");
         menu_model_.DirtyVariable("menu_camera_buttons");
-        menu_model_.DirtyVariable("menu_render_buttons");
         menu_model_.DirtyVariable("menu_projection_buttons");
         updateTheme();
     }
@@ -987,7 +984,6 @@ namespace lfs::vis::gui {
 
     void RmlMenuBar::rebuildToolbarButtons() {
         std::vector<MenuToolbarButtonView> camera_buttons;
-        std::vector<MenuToolbarButtonView> render_buttons;
         std::vector<MenuToolbarButtonView> projection_buttons;
 
         const auto make = [](std::string id, std::string action, std::string value,
@@ -1040,38 +1036,8 @@ namespace lfs::vis::gui {
             }
         }
 
-        if (const auto* rm = lfs::vis::services().renderingOrNull()) {
-            const auto settings = rm->getSettings();
-
-            std::string active_mode = "splats";
-            if (settings.point_cloud_mode)
-                active_mode = "points";
-            else if (settings.show_rings)
-                active_mode = "rings";
-            else if (settings.show_center_markers)
-                active_mode = "centers";
-
-            render_buttons.push_back(make("menu-render-splats", "set_render_mode", "splats", "blob",
-                                          "toolbar.splat_rendering", "Splat Rendering",
-                                          active_mode == "splats"));
-            render_buttons.push_back(make("menu-render-points", "set_render_mode", "points",
-                                          "dots-diagonal", "toolbar.point_cloud", "Point Cloud",
-                                          active_mode == "points"));
-            render_buttons.push_back(make("menu-render-rings", "set_render_mode", "rings", "ring",
-                                          "toolbar.gaussian_rings", "Gaussian Rings",
-                                          active_mode == "rings"));
-            render_buttons.push_back(make("menu-render-centers", "set_render_mode", "centers",
-                                          "circle-dot", "toolbar.center_markers", "Center Markers",
-                                          active_mode == "centers"));
-
-            const bool ortho = settings.orthographic;
-            projection_buttons.push_back(make("menu-projection", "toggle_projection", "",
-                                              ortho ? "box" : "perspective",
-                                              ortho ? "toolbar.orthographic" : "toolbar.perspective",
-                                              ortho ? "Orthographic" : "Perspective", ortho));
-            projection_buttons.push_back(make("menu-depth-view", "toggle_depth_view", "", "depth-map",
-                                              "toolbar.depth_map", "Depth Map", settings.depth_view));
-
+        // Display mode, projection and depth belong to each 3D view's header.
+        {
             bool view_snap = false;
             if (const auto* ic = lfs::vis::InputController::instance())
                 view_snap = ic->cameraViewSnapEnabled();
@@ -1079,11 +1045,6 @@ namespace lfs::vis::gui {
                                               "", "Snap Axis Views", view_snap));
         }
 
-        if (render_buttons != render_buttons_) {
-            render_buttons_ = std::move(render_buttons);
-            menu_model_.DirtyVariable("menu_render_buttons");
-            render_needed_ = true;
-        }
         if (camera_buttons != camera_buttons_) {
             camera_buttons_ = std::move(camera_buttons);
             menu_model_.DirtyVariable("menu_camera_buttons");
@@ -1183,21 +1144,8 @@ namespace lfs::vis::gui {
     }
 
     void RmlMenuBar::dispatchToolbarAction(const std::string& action, const std::string& value) {
-        auto* rm = lfs::vis::services().renderingOrNull();
 
-        if (action == "set_render_mode") {
-            if (!rm)
-                return;
-            auto settings = rm->getSettings();
-            const bool enable_point_cloud = value == "points";
-            const bool point_cloud_changed = settings.point_cloud_mode != enable_point_cloud;
-            settings.point_cloud_mode = enable_point_cloud;
-            settings.show_rings = value == "rings";
-            settings.show_center_markers = value == "centers";
-            rm->updateSettings(settings,
-                               point_cloud_changed && enable_point_cloud
-                                   ? lfs::vis::DirtyFlag::ALL
-                                   : lfs::vis::DirtyFlag::SELECTION);
+        if (false) {
         } else if (action == "set_camera_navigation_mode") {
             auto* ic = lfs::vis::InputController::instance();
             if (!ic)
@@ -1206,25 +1154,6 @@ namespace lfs::vis::gui {
                 ic->setCameraNavigationMode(*mode);
                 lfs::vis::saveCameraNavigationPreference(value);
             }
-        } else if (action == "toggle_projection") {
-            if (!rm)
-                return;
-            const bool ortho = rm->getSettings().orthographic;
-            float viewport_height = 0.0f;
-            float distance_to_pivot = 0.0f;
-            if (const auto view = lfs::vis::get_current_view_info(); view.has_value()) {
-                viewport_height = static_cast<float>(view->height);
-                const glm::vec3 eye(view->translation[0], view->translation[1], view->translation[2]);
-                const glm::vec3 pivot(view->pivot[0], view->pivot[1], view->pivot[2]);
-                distance_to_pivot = glm::length(pivot - eye);
-            }
-            rm->setOrthographic(!ortho, viewport_height, distance_to_pivot);
-        } else if (action == "toggle_depth_view") {
-            if (!rm)
-                return;
-            auto settings = rm->getSettings();
-            settings.depth_view = !settings.depth_view;
-            rm->updateSettings(settings, lfs::vis::DirtyFlag::ALL);
         } else if (action == "toggle_camera_view_snap") {
             if (auto* ic = lfs::vis::InputController::instance())
                 ic->setCameraViewSnapEnabled(!ic->cameraViewSnapEnabled());

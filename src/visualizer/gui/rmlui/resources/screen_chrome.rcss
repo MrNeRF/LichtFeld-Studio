@@ -1,0 +1,144 @@
+/* Area frames and headers of the screen (layout only; colours live in the theme sheet). */
+
+body {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    font-family: Inter;
+    font-size: 12dp;
+}
+
+.area {
+    position: absolute;
+    box-sizing: border-box;
+    border-radius: 6dp;
+    overflow: hidden;
+}
+
+.area-header {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    padding: 0 6dp 0 8dp;
+    gap: 2dp;
+    border-top-left-radius: 6dp;
+    border-top-right-radius: 6dp;
+    border-bottom-width: 1dp;
+}
+
+.editor-switch {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    height: 20dp;
+    padding: 0 5dp 0 6dp;
+    margin-right: 6dp;
+    gap: 3dp;
+    border-radius: 4dp;
+    cursor: pointer;
+}
+
+.editor-icon {
+    width: 16dp;
+    height: 16dp;
+}
+
+.editor-caret,
+.hitem-caret {
+    width: 0;
+    height: 0;
+    border-left-width: 3dp;
+    border-right-width: 3dp;
+    border-top-width: 4dp;
+    border-bottom-width: 0;
+    margin-top: 1dp;
+}
+
+.header-items {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 2dp;
+    overflow: hidden;
+    height: 100%;
+}
+
+.header-right {
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 1dp;
+    height: 100%;
+}
+
+.hitem {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    height: 20dp;
+    padding: 0 7dp;
+    gap: 4dp;
+    border-radius: 4dp;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.hitem.toggle,
+.hitem.button,
+.hitem.menu.has-icon {
+    padding: 0 4dp;
+    min-width: 22dp;
+    justify-content: center;
+}
+
+.hitem.label {
+    cursor: default;
+    padding: 0 4dp;
+}
+
+.hitem.tab {
+    height: 100%;
+    padding: 0 12dp;
+    border-radius: 0;
+    border-bottom-width: 2dp;
+    box-sizing: border-box;
+}
+
+.hitem.tab.closeable {
+    padding-right: 5dp;
+}
+
+.hitem-icon {
+    width: 16dp;
+    height: 16dp;
+}
+
+.hitem-label {
+    line-height: 20dp;
+}
+
+.tab-close {
+    display: block;
+    width: 16dp;
+    height: 16dp;
+    margin: 0;
+    padding: 0;
+    border-width: 0;
+    border-radius: 4dp;
+    line-height: 16dp;
+    text-align: center;
+    font-size: 13dp;
+    font-weight: bold;
+    cursor: pointer;
+}

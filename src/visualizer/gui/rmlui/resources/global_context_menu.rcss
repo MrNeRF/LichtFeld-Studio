@@ -23,6 +23,23 @@ body {
     gap: 8dp;
 }
 
+.context-menu-item.has-shortcut {
+    display: flex;
+    align-items: center;
+    gap: 8dp;
+}
+
+.context-menu-item.has-shortcut .context-menu-text {
+    flex: 1 1 auto;
+}
+
+.context-menu-shortcut {
+    flex: 0 0 auto;
+    margin-left: 24dp;
+    font-size: 11dp;
+    white-space: nowrap;
+}
+
 .context-menu-icon {
     width: 16dp;
     height: 16dp;

@@ -3619,17 +3619,6 @@ namespace lfs::vis::gui {
             return DevResourceKind::None;
         }
 
-        std::string makeRmlTabDomId(const std::string& id) {
-            std::string result = "rp-tab-";
-            result.reserve(result.size() + id.size());
-            for (const char ch : id) {
-                const bool keep = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-                                  (ch >= '0' && ch <= '9') || ch == '-' || ch == '_';
-                result.push_back(keep ? ch : '-');
-            }
-            return result;
-        }
-
         PanelInputState maskPointerInputForUnderlay(PanelInputState input) {
             input.mouse_x = -1.0e9f;
             input.mouse_y = -1.0e9f;
@@ -3685,25 +3674,9 @@ namespace lfs::vis::gui {
             return input.mouse_clicked[0] || input.mouse_clicked[1] || input.mouse_clicked[2];
         }
 
-        [[nodiscard]] bool pointInRect(const float x, const float y,
-                                       const glm::vec2 pos, const glm::vec2 size,
-                                       const float extra = 0.0f) {
-            return x >= pos.x - extra &&
-                   x < pos.x + size.x + extra &&
-                   y >= pos.y - extra &&
-                   y < pos.y + size.y + extra;
-        }
-
-        void applyFrameInputCapture(RmlRightPanel* right_panel = nullptr,
-                                    RmlBottomDock* bottom_dock = nullptr) {
+        void applyFrameInputCapture() {
             const bool panel_hosts_want_keyboard = RmlPanelHost::consumeFrameWantsKeyboard();
             const bool panel_hosts_want_text_input = RmlPanelHost::consumeFrameWantsTextInput();
-            if (panel_hosts_want_keyboard || panel_hosts_want_text_input) {
-                if (right_panel)
-                    right_panel->blurFocus();
-                if (bottom_dock)
-                    bottom_dock->blurFocus();
-            }
 
             auto& focus = guiFocusState();
             if (panel_hosts_want_keyboard)
@@ -4094,11 +4067,11 @@ namespace lfs::vis::gui {
     }
 
     float GuiManager::tabStripScroll() const {
-        return rml_right_panel_.tabStripScroll();
+        return screen_host_.properties().scroll();
     }
 
     void GuiManager::setTabStripScroll(const float value) {
-        rml_right_panel_.setTabStripScroll(value);
+        screen_host_.properties().setScroll(value);
     }
 
     void GuiManager::initCustomCursors() {
@@ -4720,46 +4693,26 @@ namespace lfs::vis::gui {
             startup_overlay_.dismiss();
         }
         rml_shell_frame_.init(&rmlui_manager_);
-        rml_right_panel_.init(&rmlui_manager_);
-        rml_right_panel_.on_tab_changed = [this](const std::string& id) {
-            panel_layout_.setActiveTab(id);
-        };
-        rml_right_panel_.on_tab_closed = [this](const std::string& id) {
-            if (id.empty())
-                return;
-            PanelRegistry::instance().set_panel_enabled(id, false);
-            if (panel_layout_.getActiveTab() == id)
-                panel_layout_.setActiveTab({});
-            if (focus_panel_name_ == id)
-                focus_panel_name_.clear();
-        };
-        rml_right_panel_.on_splitter_height = [this](float height, float panel_height) {
-            viewer_->getRenderingManager()->setViewportResizeActive(true);
-            panel_layout_.setScenePanelHeight(height, panel_height);
-        };
-        rml_right_panel_.on_splitter_end = [this]() {
-            viewer_->getRenderingManager()->setViewportResizeActive(false);
-        };
-        rml_right_panel_.on_resize_width = [this](float width) {
-            viewer_->getRenderingManager()->setViewportResizeActive(true);
-            int ww = 0;
-            int wh = 0;
-            SDL_GetWindowSizeInPixels(viewer_->getWindow(), &ww, &wh);
-            ScreenState ss;
-            ss.work_pos = {0.0f, 0.0f};
-            ss.work_size = {static_cast<float>(ww), static_cast<float>(wh)};
-            panel_layout_.setRightPanelWidth(width, ss);
-        };
-        rml_right_panel_.on_resize_end = [this]() {
-            viewer_->getRenderingManager()->setViewportResizeActive(false);
-        };
-        rml_bottom_dock_.init(&rmlui_manager_);
-        rml_bottom_dock_.on_tab_changed = [this](const std::string& id) {
-            panel_layout_.setBottomDockActiveTab(id);
-        };
-        rml_bottom_dock_.on_tab_closed = [this](const std::string& id) {
-            hideBottomDockPanel(id);
-        };
+        screen_host_.setExternallyManaged({"native.sequencer"});
+        screen_host_.init({
+            .screens = &viewer_->screens(),
+            .rml = &rmlui_manager_,
+            .context_menu = global_context_menu_.get(),
+            .view_changed =
+                [this](screen::AreaId) {
+                    if (auto* const rendering = viewer_->getRenderingManager())
+                        rendering->markDirty(DirtyFlag::ALL);
+                },
+            .screen_changed =
+                [this]() {
+                    if (auto* const rendering = viewer_->getRenderingManager())
+                        rendering->markDirty(DirtyFlag::ALL);
+                },
+            .view_command =
+                [this](const screen::AreaId id, const std::string_view command) {
+                    viewer_->runViewCommand(id.value, command);
+                },
+        });
         rml_viewport_overlay_.init(&rmlui_manager_);
         rml_menu_bar_.init(&rmlui_manager_);
         rml_status_bar_.init(&rmlui_manager_, viewer_->options_.safe_mode,
@@ -5119,8 +5072,7 @@ namespace lfs::vis::gui {
 
         startup_overlay_.reloadResources();
         rml_shell_frame_.reloadResources();
-        rml_right_panel_.reloadResources();
-        rml_bottom_dock_.reloadResources();
+        screen_host_.reloadResources();
         rml_viewport_overlay_.reloadResources();
         rml_menu_bar_.reloadResources();
         rml_status_bar_.reloadResources();
@@ -5244,8 +5196,7 @@ namespace lfs::vis::gui {
         rml_status_bar_.shutdown();
         rml_menu_bar_.shutdown();
         rml_viewport_overlay_.shutdown();
-        rml_right_panel_.shutdown();
-        rml_bottom_dock_.shutdown();
+        screen_host_.shutdown();
         rml_shell_frame_.shutdown();
         startup_overlay_.shutdown();
         sequencer_ui_.destroyGraphicsResources();
@@ -6537,9 +6488,6 @@ namespace lfs::vis::gui {
             panel_animation_demand =
                 reg.animationDemandForVisiblePanels(panelAnimationVisibility());
         }
-        const bool panel_registry_needs_animation = panel_animation_demand.any();
-        const bool right_panel_registry_needs_animation = panel_animation_demand.rightPanel();
-        const bool bottom_dock_registry_needs_animation = panel_animation_demand.bottom_dock;
 
         if (!ui_hidden_) {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.shell_frame", 0.25);
@@ -6547,28 +6495,9 @@ namespace lfs::vis::gui {
             const float screen_w = static_cast<float>(sdl_input.window_w);
             const float screen_h = static_cast<float>(sdl_input.window_h);
             const float menu_h = rml_menu_bar_.barHeight();
-            const float panel_y = menu_h;
-            const float panel_h = std::max(0.0f, screen_h - menu_h - status_bar_h);
-            panel_layout_.enforceWidthConstraints(show_main_panel_, ui_hidden_,
-                                                  {
-                                                      .work_pos = {0.0f, panel_y},
-                                                      .work_size = {screen_w, panel_h},
-                                                      .any_item_active = rmlui_manager_.anyItemActive(),
-                                                  });
-
             ShellRegions shell_regions;
             shell_regions.screen = {0.0f, 0.0f, screen_w, screen_h};
             shell_regions.menu = {0.0f, 0.0f, screen_w, menu_h};
-
-            if (show_main_panel_) {
-                const float rpw = panel_layout_.getRightPanelWidth();
-                shell_regions.right_panel = {
-                    screen_w - rpw,
-                    panel_y,
-                    rpw,
-                    panel_h,
-                };
-            }
 
             shell_regions.status = {
                 0.0f,
@@ -6687,30 +6616,25 @@ namespace lfs::vis::gui {
             };
             screen.any_item_active = rmlui_manager_.anyItemActive();
         }
-        panel_layout_.enforceWidthConstraints(show_main_panel_, ui_hidden_, screen);
-        viewport_layout_ = panel_layout_.computeViewportLayout(
-            show_main_panel_, ui_hidden_, window_states_["python_console"], screen);
+        const screen::Rect work_rect{screen.work_pos.x, screen.work_pos.y, screen.work_size.x, screen.work_size.y};
+        syncEditorFlags();
+        if (!focus_panel_name_.empty() && screen_host_.properties().focusTab(focus_panel_name_)) {
+            viewer_->screens().edit([](screen::Screen& s) { s.openEditor(screen::editors::kProperties); });
+            focus_panel_name_.clear();
+        }
+        if (!ui_hidden_)
+            screen_host_.layout(work_rect, current_ui_scale_);
+        viewport_layout_ = activeViewportLayout(screen);
 
         constexpr uint8_t kUiLayoutSettleFrames = 3;
-        const bool python_console_visible = window_states_["python_console"];
+        const std::uint64_t screen_generation = viewer_->screens().screen().generation();
         const bool ui_layout_changed =
             std::abs(screen.work_pos.x - last_ui_layout_work_pos_.x) > 0.5f ||
             std::abs(screen.work_pos.y - last_ui_layout_work_pos_.y) > 0.5f ||
             std::abs(screen.work_size.x - last_ui_layout_work_size_.x) > 0.5f ||
             std::abs(screen.work_size.y - last_ui_layout_work_size_.y) > 0.5f ||
-            std::abs(panel_layout_.getRightPanelWidth() - last_ui_layout_right_panel_w_) > 0.5f ||
-            std::abs(panel_layout_.getScenePanelRatio() - last_ui_layout_scene_ratio_) > 0.0001f ||
-            std::abs(panel_layout_.getPythonConsoleWidth() - last_ui_layout_python_console_w_) > 0.5f ||
-            std::abs(panel_layout_.getBottomDockHeight() - last_ui_layout_bottom_dock_h_) > 0.5f ||
-            std::abs(panel_layout_.getLeftDockWidth() - last_ui_layout_left_dock_w_) > 0.5f ||
-            show_main_panel_ != last_ui_layout_show_main_panel_ ||
-            panel_layout_.isShowSequencer() != last_ui_layout_show_sequencer_ ||
             ui_hidden_ != last_ui_layout_ui_hidden_ ||
-            python_console_visible != last_ui_layout_python_console_visible_ ||
-            panel_layout_.isBottomDockVisible() != last_ui_layout_bottom_dock_visible_ ||
-            panel_layout_.isLeftDockVisible() != last_ui_layout_left_dock_visible_ ||
-            panel_layout_.getActiveTab() != last_ui_layout_active_tab_ ||
-            panel_layout_.getBottomDockActiveTab() != last_ui_layout_bottom_dock_active_tab_ ||
+            screen_generation != last_ui_layout_screen_generation_ ||
             reg.visibility_revision() != last_ui_layout_panel_visibility_revision_;
 
         if (ui_layout_changed) {
@@ -6724,416 +6648,37 @@ namespace lfs::vis::gui {
             }
             last_ui_layout_work_pos_ = screen.work_pos;
             last_ui_layout_work_size_ = screen.work_size;
-            last_ui_layout_right_panel_w_ = panel_layout_.getRightPanelWidth();
-            last_ui_layout_scene_ratio_ = panel_layout_.getScenePanelRatio();
-            last_ui_layout_python_console_w_ = panel_layout_.getPythonConsoleWidth();
-            last_ui_layout_bottom_dock_h_ = panel_layout_.getBottomDockHeight();
-            last_ui_layout_left_dock_w_ = panel_layout_.getLeftDockWidth();
-            last_ui_layout_show_main_panel_ = show_main_panel_;
-            last_ui_layout_show_sequencer_ = panel_layout_.isShowSequencer();
             last_ui_layout_ui_hidden_ = ui_hidden_;
-            last_ui_layout_python_console_visible_ = python_console_visible;
-            last_ui_layout_bottom_dock_visible_ = panel_layout_.isBottomDockVisible();
-            last_ui_layout_left_dock_visible_ = panel_layout_.isLeftDockVisible();
-            last_ui_layout_active_tab_ = panel_layout_.getActiveTab();
-            last_ui_layout_bottom_dock_active_tab_ = panel_layout_.getBottomDockActiveTab();
+            last_ui_layout_screen_generation_ = screen_generation;
             last_ui_layout_panel_visibility_revision_ = reg.visibility_revision();
         }
 
-        bool right_panel_requires_live_layout = false;
-        bool right_panel_active_tab_changed = false;
-        bool right_panel_was_dirty = false;
-        bool right_panel_needs_animation = false;
-        bool right_panel_layout_resize_active = false;
-        bool right_panel_pointer_activity = false;
-        bool right_panel_pointer_targets_panel = false;
-        bool right_panel_pointer_capture_active = false;
-        bool right_panel_wants_input = false;
-        bool right_panel_keyboard_activity = false;
-        bool right_panel_scene_header_live = false;
-        bool right_panel_active_tab_live = false;
-        bool right_panel_pointer_over_scene_header = false;
-        bool right_panel_pointer_over_active_tab = false;
-        if (show_main_panel_ && !ui_hidden_) {
-            LOG_TIMER_THRESHOLD("gui_render.panel_setup.rml_right_panel", 0.25);
-            const float rpw = panel_layout_.getRightPanelWidth();
-            const float ph = screen.work_size.y;
-            const float splitter_h = PanelLayoutManager::SPLITTER_H * current_ui_scale_;
-            const float tab_bar_h = PanelLayoutManager::TAB_BAR_H * current_ui_scale_;
-            const float avail_h = ph - 16.0f;
-            const float scene_h = panel_layout_.scenePanelHeight(avail_h, current_ui_scale_);
-
-            RightPanelLayout rp_layout;
-            rp_layout.pos = glm::vec2(screen.work_pos.x + screen.work_size.x - rpw, screen.work_pos.y);
-            rp_layout.size = glm::vec2(rpw, ph);
-            rp_layout.scene_h = scene_h + 8.0f;
-            rp_layout.splitter_h = splitter_h;
-            right_panel_was_dirty = rml_right_panel_.needsAnimationFrame();
-            const float right_panel_edge_grab_w =
-                PanelLayoutManager::RIGHT_PANEL_RESIZE_EDGE_HALF_WIDTH * current_ui_scale_;
-            const bool pointer_over_right_panel =
-                pointInRect(panel_input.mouse_x, panel_input.mouse_y,
-                            rp_layout.pos, rp_layout.size);
-            const bool pointer_over_right_panel_edge =
-                panel_input.mouse_x >= rp_layout.pos.x - right_panel_edge_grab_w &&
-                panel_input.mouse_x < rp_layout.pos.x + right_panel_edge_grab_w &&
-                panel_input.mouse_y >= rp_layout.pos.y &&
-                panel_input.mouse_y < rp_layout.pos.y + rp_layout.size.y;
-            const bool float_blocks_rp = has_floating_panels &&
-                                         reg.isPositionOverFloatingPanel(panel_input.mouse_x, panel_input.mouse_y);
-            // Keep a viewport drag captured by the viewport when it crosses
-            // the resize edge, rather than starting panel hover or resize UI.
+        if (!ui_hidden_) {
+            LOG_TIMER_THRESHOLD("gui_render.screen", 0.25);
+            const bool float_blocks_pointer =
+                has_floating_panels && reg.isPositionOverFloatingPanel(panel_input.mouse_x, panel_input.mouse_y);
             const bool viewport_pointer_captured =
                 hasMouseButtonDown(sdl_input) && window_manager &&
                 window_manager->inputRouter().state().pointer_capture == input::InputTarget::Viewport &&
-                !(panel_input.mouse_clicked[0] && pointer_over_right_panel_edge);
-            right_panel_resize_edge_was_hovered_ = !float_blocks_rp && !viewport_pointer_captured &&
-                                                   pointer_over_right_panel_edge;
-            constexpr float RIGHT_PANEL_PAD = 8.0f;
-            const float content_x = rp_layout.pos.x + RIGHT_PANEL_PAD;
-            const float content_top = screen.work_pos.y + RIGHT_PANEL_PAD;
-            const float content_w = rpw - 2.0f * RIGHT_PANEL_PAD;
-            const float tab_content_y = content_top + scene_h + splitter_h + tab_bar_h;
-            const float tab_content_h = std::max(0.0f, content_top + avail_h - tab_content_y);
-            right_panel_pointer_over_scene_header =
-                !pointer_over_right_panel_edge &&
-                pointInRect(panel_input.mouse_x, panel_input.mouse_y,
-                            glm::vec2{content_x, content_top},
-                            glm::vec2{content_w, scene_h});
-            right_panel_pointer_over_active_tab =
-                !pointer_over_right_panel_edge &&
-                pointInRect(panel_input.mouse_x, panel_input.mouse_y,
-                            glm::vec2{content_x, tab_content_y},
-                            glm::vec2{content_w, tab_content_h});
-
-            if ((float_blocks_rp || viewport_pointer_captured) &&
-                !rml_right_panel_.isResizeInteractionActive()) {
-                PanelInputState masked_input = panel_input;
-                masked_input.mouse_x = -1.0e9f;
-                masked_input.mouse_y = -1.0e9f;
-                for (auto& v : masked_input.mouse_clicked)
-                    v = false;
-                for (auto& v : masked_input.mouse_released)
-                    v = false;
-                for (auto& v : masked_input.mouse_down)
-                    v = false;
-                masked_input.mouse_wheel = 0;
-                masked_input.mouse_wheel_x = 0;
-                masked_input.mouse_button_events.clear();
-                rml_right_panel_.processInput(rp_layout, masked_input);
-            } else {
-                rml_right_panel_.processInput(rp_layout, panel_input);
-            }
-
-            if (rml_right_panel_.wantsInput() && !float_blocks_rp && !viewport_pointer_captured)
-                guiFocusState().want_capture_mouse = true;
-            if (rml_right_panel_.wantsKeyboard())
-                guiFocusState().want_capture_keyboard = true;
-
-            const auto main_tabs = reg.get_panels_for_space(PanelSpace::MainPanelTab);
-            right_panel_active_tab_changed = panel_layout_.syncActiveTab(main_tabs, focus_panel_name_);
-            std::vector<TabSnapshot> tab_snaps;
-            tab_snaps.reserve(main_tabs.size());
-            for (size_t i = 0; i < main_tabs.size(); ++i) {
-                const auto& t = main_tabs[i];
-                tab_snaps.push_back({
-                    .id = t.id,
-                    .label = t.label,
-                    .dom_id = makeRmlTabDomId(t.id),
-                    .closeable = t.tab_closeable,
-                });
-            }
-
-            const bool pointer_targets_right_panel =
-                !float_blocks_rp && !viewport_pointer_captured &&
-                (pointer_over_right_panel || pointer_over_right_panel_edge);
-            right_panel_pointer_targets_panel = pointer_targets_right_panel;
-            if (pointer_targets_right_panel &&
-                (hasMouseButtonClicked(sdl_input) || hasMouseButtonDown(sdl_input))) {
-                right_panel_pointer_live_capture_ = true;
-                if (pointer_over_right_panel_edge ||
-                    rml_right_panel_.getCursorRequest() != CursorRequest::None) {
-                    right_panel_pointer_capture_region_ = RightPanelPointerRegion::Resize;
-                } else if (right_panel_pointer_over_scene_header) {
-                    right_panel_pointer_capture_region_ = RightPanelPointerRegion::SceneHeader;
-                } else if (right_panel_pointer_over_active_tab) {
-                    right_panel_pointer_capture_region_ = RightPanelPointerRegion::ActiveTab;
-                } else {
-                    right_panel_pointer_capture_region_ = RightPanelPointerRegion::Chrome;
-                }
-            }
-            right_panel_pointer_capture_active = right_panel_pointer_live_capture_;
-            right_panel_wants_input = rml_right_panel_.wantsInput();
-            right_panel_pointer_activity =
-                hasPointerActivity(sdl_input) &&
-                (pointer_targets_right_panel || right_panel_wants_input ||
-                 right_panel_pointer_live_capture_);
-            right_panel_keyboard_activity = hasKeyboardActivity(sdl_input);
-            right_panel_needs_animation = rml_right_panel_.needsAnimationFrame();
-            right_panel_layout_resize_active = panel_layout_.isResizingPanel();
-
-            const bool force_full_panel_live =
-                ui_layout_changed || right_panel_active_tab_changed ||
-                right_panel_layout_resize_active ||
-                right_panel_pointer_capture_region_ == RightPanelPointerRegion::Resize;
-            right_panel_scene_header_live =
-                force_full_panel_live || panel_animation_demand.scene_header;
-            right_panel_active_tab_live =
-                force_full_panel_live || panel_animation_demand.main_panel_tab;
-
-            if (right_panel_pointer_activity) {
-                right_panel_scene_header_live =
-                    right_panel_scene_header_live || right_panel_pointer_over_scene_header ||
-                    right_panel_pointer_capture_region_ == RightPanelPointerRegion::SceneHeader;
-                right_panel_active_tab_live =
-                    right_panel_active_tab_live || right_panel_pointer_over_active_tab ||
-                    right_panel_pointer_capture_region_ == RightPanelPointerRegion::ActiveTab;
-            }
-
-            if (right_panel_keyboard_activity) {
-                right_panel_scene_header_live = true;
-                right_panel_active_tab_live = true;
-            }
-
-            right_panel_requires_live_layout =
-                right_panel_scene_header_live || right_panel_active_tab_live;
-
-            rml_right_panel_.render(rp_layout, tab_snaps, panel_layout_.getActiveTab(),
-                                    panel_input.screen_x, panel_input.screen_y,
-                                    panel_input.screen_w, panel_input.screen_h);
-        } else {
-            right_panel_pointer_live_capture_ = false;
-            right_panel_pointer_capture_region_ = RightPanelPointerRegion::None;
-            right_panel_resize_edge_was_hovered_ = false;
-        }
-        if (!hasMouseButtonDown(sdl_input)) {
-            right_panel_pointer_live_capture_ = false;
-            right_panel_pointer_capture_region_ = RightPanelPointerRegion::None;
-        }
-        if (block_underlay_input || !right_panel_requires_live_layout) {
-            panel_layout_.renderRightPanelCached(ctx, draw_ctx, show_main_panel_, ui_hidden_,
-                                                 window_states_, focus_panel_name_, panel_input, screen);
-        } else {
-            panel_layout_.renderRightPanel(ctx, draw_ctx, show_main_panel_, ui_hidden_,
-                                           window_states_, focus_panel_name_, panel_input, screen,
-                                           {
-                                               .scene_header_live = right_panel_scene_header_live,
-                                               .active_tab_live = right_panel_active_tab_live,
-                                           });
+                !screen_host_.gestureActive();
+            const bool pointer_free = !block_underlay_input && !float_blocks_pointer && !viewport_pointer_captured;
+            screen_host_.processInput(panel_input, pointer_free);
+            screen_host_.draw(ctx, draw_ctx, panel_input, ui_layout_changed || block_underlay_input,
+                              panel_animation_demand);
+            viewport_layout_ = activeViewportLayout(screen);
         }
 
-        const float bottom_dock_h = std::max(panel_layout_.getBottomDockHeight(), 0.0f);
-        const auto bottom_dock_layout = panel_layout_.computeBottomDockHorizontalLayout(
-            show_main_panel_, ui_hidden_, screen);
-        const float bottom_dock_x = bottom_dock_layout.x;
-        const float bottom_dock_w = bottom_dock_layout.width;
-        const float bottom_dock_y =
-            screen.work_pos.y + screen.work_size.y - bottom_dock_h;
-        const float bottom_dock_grip_h = PanelLayoutManager::DOCK_GRIP_H * current_ui_scale_;
-        const bool pointer_over_bottom_dock =
-            panel_layout_.isBottomDockVisible() &&
-            pointInRect(panel_input.mouse_x, panel_input.mouse_y,
-                        glm::vec2{bottom_dock_x, bottom_dock_y},
-                        glm::vec2{bottom_dock_w, bottom_dock_h});
-        const bool pointer_over_bottom_dock_edge =
-            panel_layout_.isBottomDockVisible() &&
-            panel_input.mouse_x >= bottom_dock_x &&
-            panel_input.mouse_x < bottom_dock_x + bottom_dock_w &&
-            bottomDockResizeHitZone(bottom_dock_y, current_ui_scale_, bottom_dock_grip_h)
-                .contains(panel_input.mouse_y);
-        const bool pointer_targets_bottom_dock =
-            pointer_over_bottom_dock || pointer_over_bottom_dock_edge;
-        if (pointer_targets_bottom_dock &&
-            (hasMouseButtonClicked(sdl_input) || hasMouseButtonDown(sdl_input))) {
-            bottom_dock_pointer_live_capture_ = true;
-        }
-        const bool panel_layout_resize_active = panel_layout_.isResizingPanel();
-        const bool bottom_dock_pointer_activity =
-            hasPointerActivity(sdl_input) &&
-            (pointer_targets_bottom_dock || bottom_dock_pointer_live_capture_ ||
-             panel_layout_resize_active);
-        const bool bottom_dock_input_activity =
-            bottom_dock_pointer_activity ||
-            hasKeyboardActivity(sdl_input);
-        const auto bottom_dock_active_before_input = panel_layout_.getBottomDockActiveTab();
-        rml_bottom_dock_.setVisible(panel_layout_.isBottomDockVisible());
-        if (panel_layout_.isBottomDockVisible()) {
-            BottomDockLayout bottom_dock_rml_layout;
-            bottom_dock_rml_layout.pos = {bottom_dock_x, bottom_dock_y};
-            bottom_dock_rml_layout.size = {bottom_dock_w, bottom_dock_h};
-            bottom_dock_rml_layout.grip_h = bottom_dock_grip_h;
-            bottom_dock_rml_layout.tab_bar_h = PanelLayoutManager::TAB_BAR_H * current_ui_scale_;
-            bottom_dock_rml_layout.separator_h = current_ui_scale_;
-            rml_bottom_dock_.processInput(bottom_dock_rml_layout, panel_input);
-            if (rml_bottom_dock_.wantsInput())
-                guiFocusState().want_capture_mouse = true;
-            if (rml_bottom_dock_.wantsKeyboard())
-                guiFocusState().want_capture_keyboard = true;
-        }
-        const bool bottom_dock_active_tab_changed =
-            bottom_dock_active_before_input != panel_layout_.getBottomDockActiveTab();
-        const bool bottom_dock_requires_live_layout =
-            ui_layout_changed || panel_layout_resize_active ||
-            bottom_dock_registry_needs_animation || sequencer_ui_.needsAnimationFrame() ||
-            bottom_dock_input_activity || rml_bottom_dock_.needsAnimationFrame() ||
-            bottom_dock_active_tab_changed;
-        if (block_underlay_input || !bottom_dock_requires_live_layout) {
-            panel_layout_.renderBottomDockCached(draw_ctx, show_main_panel_, ui_hidden_,
-                                                 panel_input, screen);
-        } else {
-            panel_layout_.renderBottomDock(draw_ctx, show_main_panel_, ui_hidden_,
-                                           panel_input, screen);
-        }
-        rml_bottom_dock_.setVisible(panel_layout_.isBottomDockVisible());
-        std::vector<TabSnapshot> bottom_dock_tab_snaps;
-        const auto& bottom_dock_tabs = panel_layout_.bottomDockTabs();
-        bottom_dock_tab_snaps.reserve(bottom_dock_tabs.size());
-        for (const auto& tab : bottom_dock_tabs) {
-            bottom_dock_tab_snaps.push_back({
-                .id = tab.id,
-                .label = tab.label,
-                .dom_id = makeRmlTabDomId(tab.id),
-                .closeable = true,
-            });
-        }
-        if (panel_layout_.isBottomDockVisible()) {
-            BottomDockLayout bottom_dock_rml_layout;
-            bottom_dock_rml_layout.pos = {bottom_dock_x, bottom_dock_y};
-            bottom_dock_rml_layout.size = {bottom_dock_w, bottom_dock_h};
-            bottom_dock_rml_layout.grip_h = bottom_dock_grip_h;
-            bottom_dock_rml_layout.tab_bar_h = PanelLayoutManager::TAB_BAR_H * current_ui_scale_;
-            bottom_dock_rml_layout.separator_h = current_ui_scale_;
-            bottom_dock_rml_layout.grip_hovered = panel_layout_.isBottomDockHoveringEdge();
-            bottom_dock_rml_layout.grip_active = panel_layout_.isBottomDockResizing();
-            rml_bottom_dock_.render(bottom_dock_rml_layout, bottom_dock_tab_snaps,
-                                    panel_layout_.getBottomDockActiveTab(),
-                                    panel_input.screen_x, panel_input.screen_y,
-                                    panel_input.screen_w, panel_input.screen_h);
-        }
-        if (!hasMouseButtonDown(sdl_input))
-            bottom_dock_pointer_live_capture_ = false;
-
-        // ── Left Dock ─────────────────────────────────────────────
-        auto left_dock_layout = panel_layout_.computeLeftDockLayout(show_main_panel_, ui_hidden_, screen);
-        const float left_dock_h = screen.work_size.y;
-        const bool pointer_over_left_dock =
-            left_dock_layout.panel_width > 0.0f &&
-            pointInRect(panel_input.mouse_x, panel_input.mouse_y,
-                        glm::vec2{left_dock_layout.panel_x, screen.work_pos.y},
-                        glm::vec2{left_dock_layout.panel_width, left_dock_h});
-        const bool pointer_over_left_dock_edge =
-            left_dock_layout.panel_width > 0.0f &&
-            PanelLayoutManager::leftDockResizeRect(screen.work_pos.x, screen.work_pos.y,
-                                                   left_dock_h, current_ui_scale_,
-                                                   left_dock_layout.panel_width)
-                .contains(panel_input.mouse_x, panel_input.mouse_y);
-        const bool pointer_targets_left_dock =
-            pointer_over_left_dock || pointer_over_left_dock_edge;
-        if (pointer_targets_left_dock &&
-            (hasMouseButtonClicked(sdl_input) || hasMouseButtonDown(sdl_input))) {
-            left_dock_pointer_live_capture_ = true;
-        }
-        const bool left_dock_pointer_activity =
-            hasPointerActivity(sdl_input) &&
-            (pointer_targets_left_dock || left_dock_pointer_live_capture_ ||
-             panel_layout_resize_active);
-        const bool left_dock_input_activity =
-            left_dock_pointer_activity ||
-            hasKeyboardActivity(sdl_input);
-        const bool left_dock_requires_live_layout =
-            ui_layout_changed || panel_layout_resize_active ||
-            panel_animation_demand.left_dock ||
-            left_dock_input_activity;
-        if (block_underlay_input || !left_dock_requires_live_layout) {
-            panel_layout_.renderLeftDockCached(draw_ctx, show_main_panel_, ui_hidden_,
-                                               panel_input, screen);
-        } else {
-            panel_layout_.renderLeftDock(draw_ctx, show_main_panel_, ui_hidden_,
-                                         panel_input, screen);
-        }
-        if (!hasMouseButtonDown(sdl_input))
-            left_dock_pointer_live_capture_ = false;
-
-        if (left_dock_requires_live_layout) {
-            left_dock_layout = panel_layout_.computeLeftDockLayout(show_main_panel_, ui_hidden_, screen);
+        const bool screen_resize_active = screen_host_.gestureActive();
+        if (screen_resize_active != dock_resize_interaction_active_) {
+            viewer_->getRenderingManager()->setViewportResizeActive(screen_resize_active);
+            dock_resize_interaction_active_ = screen_resize_active;
         }
 
-        const bool dock_resize_interaction_active = panel_layout_.isResizeInteractionActive();
-        if (dock_resize_interaction_active != dock_resize_interaction_active_) {
-            viewer_->getRenderingManager()->setViewportResizeActive(dock_resize_interaction_active);
-            dock_resize_interaction_active_ = dock_resize_interaction_active;
-        }
+        applyFrameInputCapture();
 
-        if (has_side_panel_plugins || has_floating_panels || has_status_bar_panels ||
-            right_panel_requires_live_layout || bottom_dock_requires_live_layout ||
-            left_dock_requires_live_layout ||
-            ui_layout_changed || panel_registry_needs_animation || block_underlay_input) {
-            LOG_PERF("gui_render.router side_panel_plugins={} floating_panels={} status_bar_panels={} viewport_overlay_panels={} editor_update={} right_live={} right_scene_live={} right_tab_live={} bottom_live={} layout_changed={} panel_registry_anim={} right_registry_anim={} bottom_registry_anim={} viewport_registry_anim={} block_underlay={}",
-                     has_side_panel_plugins,
-                     has_floating_panels,
-                     has_status_bar_panels,
-                     has_viewport_overlay_panels,
-                     update_editor_context,
-                     right_panel_requires_live_layout,
-                     right_panel_scene_header_live,
-                     right_panel_active_tab_live,
-                     bottom_dock_requires_live_layout,
-                     ui_layout_changed,
-                     panel_registry_needs_animation,
-                     right_panel_registry_needs_animation,
-                     bottom_dock_registry_needs_animation,
-                     panel_animation_demand.viewport_overlay,
-                     block_underlay_input);
-            if (right_panel_requires_live_layout) {
-                LOG_PERF("gui_render.router.right_panel_reasons layout={} tab={} dirty={} animation={} registry_anim={} resize={} pointer={} pointer_target={} pointer_scene={} pointer_tab={} pointer_capture={} capture_region={} wants_input={} keyboard={} scene_live={} active_tab_live={}",
-                         ui_layout_changed,
-                         right_panel_active_tab_changed,
-                         right_panel_was_dirty,
-                         right_panel_needs_animation,
-                         right_panel_registry_needs_animation,
-                         right_panel_layout_resize_active,
-                         right_panel_pointer_activity,
-                         right_panel_pointer_targets_panel,
-                         right_panel_pointer_over_scene_header,
-                         right_panel_pointer_over_active_tab,
-                         right_panel_pointer_capture_active,
-                         static_cast<int>(right_panel_pointer_capture_region_),
-                         right_panel_wants_input,
-                         right_panel_keyboard_activity,
-                         right_panel_scene_header_live,
-                         right_panel_active_tab_live);
-            }
-        }
-
-        applyFrameInputCapture(&rml_right_panel_, &rml_bottom_dock_);
-
-        auto apply_cursor = [](CursorRequest req) {
-            switch (req) {
-            case CursorRequest::ResizeEW: {
-                static SDL_Cursor* const cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_EW_RESIZE);
-                if (cursor)
-                    setCursorIfChanged(cursor);
-                break;
-            }
-            case CursorRequest::ResizeNS: {
-                static SDL_Cursor* const cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NS_RESIZE);
-                if (cursor)
-                    setCursorIfChanged(cursor);
-                break;
-            }
-            default: break;
-            }
-        };
-        viewport_layout_ = panel_layout_.computeViewportLayout(
-            show_main_panel_, ui_hidden_, window_states_["python_console"], screen);
         python::set_viewport_bounds(viewport_layout_.pos.x, viewport_layout_.pos.y,
                                     viewport_layout_.size.x, viewport_layout_.size.y);
-
-        // The render-mode toolbar anchors to the right panel's edge, so the docked
-        // editor console must not drag it left when it shrinks the viewport.
-        const ViewportLayout toolbar_layout = panel_layout_.computeViewportLayout(
-            show_main_panel_, ui_hidden_, false, screen);
-        menu_toolbar_right_edge_ = toolbar_layout.pos.x + toolbar_layout.size.x;
+        menu_toolbar_right_edge_ = screen.work_pos.x + screen.work_size.x;
 
         {
             LOG_TIMER_THRESHOLD("gui_render.gizmo_update", 0.25);
@@ -7141,41 +6686,13 @@ namespace lfs::vis::gui {
             gizmo_manager_.updateCropFlash();
         }
 
-        const float viewport_content_offset = viewport_layout_.pos.x - screen.work_pos.x;
-        float primary_toolbar_x = viewport_content_offset;
-        float primary_toolbar_width = viewport_layout_.size.x;
-        bool show_secondary_toolbar = false;
-        float secondary_toolbar_x = 0.0f;
-        float secondary_toolbar_width = 0.0f;
-        if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
-            rendering && rendering->isIndependentSplitViewActive() && !editor_ctx.isEmpty()) {
-            if (const auto primary_panel = rendering->resolveViewerPanel(
-                    viewer_->getViewport(),
-                    viewport_layout_.pos, viewport_layout_.size, std::nullopt, SplitViewPanelId::Left)) {
-                primary_toolbar_x = primary_panel->x - screen.work_pos.x;
-                primary_toolbar_width = primary_panel->width;
-            }
-            if (const auto secondary_panel = rendering->resolveViewerPanel(
-                    viewer_->getViewport(),
-                    viewport_layout_.pos, viewport_layout_.size, std::nullopt, SplitViewPanelId::Right)) {
-                show_secondary_toolbar = secondary_panel->valid();
-                secondary_toolbar_x = secondary_panel->x - screen.work_pos.x;
-                secondary_toolbar_width = secondary_panel->width;
-            }
-        }
-
-        rml_viewport_overlay_.setToolbarPanels(primary_toolbar_x,
-                                               primary_toolbar_width,
-                                               left_dock_layout.toolbar_x - left_dock_layout.panel_x - left_dock_layout.panel_width,
-                                               show_secondary_toolbar,
-                                               secondary_toolbar_x,
-                                               secondary_toolbar_width);
-        const glm::vec2 overlay_pos = {screen.work_pos.x, viewport_layout_.pos.y};
-        const glm::vec2 overlay_size = {viewport_layout_.size.x + viewport_content_offset, viewport_layout_.size.y};
+        // The viewport overlay (tool rail, gizmo toolbars, HUDs) lives in the
+        // active 3D view.
+        rml_viewport_overlay_.setToolbarPanels(0.0f, viewport_layout_.size.x, 0.0f, false, 0.0f, 0.0f);
         rml_viewport_overlay_.setViewportBounds(
-            overlay_pos, overlay_size,
+            viewport_layout_.pos, viewport_layout_.size,
             {panel_input.screen_x, panel_input.screen_y});
-        rml_viewport_overlay_.setViewportContentOffset(viewport_content_offset);
+        rml_viewport_overlay_.setViewportContentOffset(0.0f);
         RmlViewportOverlay::SplitDividerOverlayState split_divider_state;
         if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
             rendering && rendering->isSplitViewActive() && !rendering->isIndependentSplitViewActive()) {
@@ -7379,7 +6896,7 @@ namespace lfs::vis::gui {
                                                                            .menu_pointer = menu_blocks_underlay_pointer,
                                                                            .floating_panel = has_floating_panels &&
                                                                                              reg.isPositionOverFloatingPanel(sdl_input.mouse_x, sdl_input.mouse_y),
-                                                                           .left_dock = pointer_targets_left_dock,
+                                                                           .left_dock = !ui_hidden_ && screen_host_.blocksPress(static_cast<float>(sdl_input.mouse_x), static_cast<float>(sdl_input.mouse_y)),
                                                                        });
         }
         // Apply overlayPressMayFocusPanel (rml_viewport_overlay.hpp) after processInput,
@@ -7482,6 +6999,8 @@ namespace lfs::vis::gui {
         {
             LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render", 0.10);
             rml_viewport_overlay_.renderCached();
+            if (!ui_hidden_)
+                screen_host_.queueOverlay();
         }
 
         PanelInputState floating_input = panel_input;
@@ -7499,7 +7018,7 @@ namespace lfs::vis::gui {
         // so resolve a second time to consume a drag ending in this frame.
         resolve_project_asset_drag();
 
-        applyFrameInputCapture(&rml_right_panel_, &rml_bottom_dock_);
+        applyFrameInputCapture();
 
         if (!ui_hidden_) {
             LOG_TIMER_THRESHOLD("gui_render.status_bar_and_StatusBar", 0.10);
@@ -7579,16 +7098,12 @@ namespace lfs::vis::gui {
                 !floating_panel_cursor_hidden_ && has_floating_panels &&
                 reg.apply_floating_resize_cursor();
             if (!floating_resize_applied) {
-                const auto right_panel_cursor = rml_right_panel_.getCursorRequest();
-                const auto bottom_dock_cursor = rml_bottom_dock_.getCursorRequest();
-                const auto layout_cursor = panel_layout_.getCursorRequest();
+                const auto screen_cursor = screen_host_.cursor();
                 if (floating_panel_cursor_hidden_) {
                     last_selection_cursor_ = nullptr;
                 } else {
                     applyRmlCursorRequest(rml_cursor);
-                    apply_cursor(right_panel_cursor);
-                    apply_cursor(bottom_dock_cursor);
-                    apply_cursor(layout_cursor);
+                    applyScreenCursor(screen_cursor);
                     auto* const input_controller = viewer_->getInputController();
                     if (input_controller)
                         input_controller->applySplitterCursorOverride();
@@ -7602,9 +7117,7 @@ namespace lfs::vis::gui {
                     const bool higher_priority_cursor_applied =
                         (rml_cursor != RmlCursorRequest::None &&
                          rml_cursor != RmlCursorRequest::Arrow) ||
-                        right_panel_cursor != CursorRequest::None ||
-                        bottom_dock_cursor != CursorRequest::None ||
-                        layout_cursor != CursorRequest::None ||
+                        screen_cursor != screen::GestureCursor::Default ||
                         gizmo_cursor_applied ||
                         (input_controller && input_controller->hasViewportCursorOverride());
                     const auto pointer_hit = hitTestPointer(sdl_input.mouse_x, sdl_input.mouse_y);
@@ -8073,11 +7586,7 @@ namespace lfs::vis::gui {
             // Keep preview overlays inside the live viewport region so docked panels stay in front.
             const auto push_preview_clip = [&](const PreviewPanelContext& panel_ctx) {
                 const glm::vec2 clip_min(panel_ctx.x, panel_ctx.y);
-                float clip_bottom = panel_ctx.y + panel_ctx.height;
-                const float bottom_dock_top = panel_layout_.bottomDockTopY();
-                if (bottom_dock_top > 0.0f) {
-                    clip_bottom = std::min(clip_bottom, bottom_dock_top);
-                }
+                const float clip_bottom = panel_ctx.y + panel_ctx.height;
 
                 const glm::vec2 clip_max(panel_ctx.x + panel_ctx.width, clip_bottom);
                 if (clip_max.x <= clip_min.x || clip_max.y <= clip_min.y) {
@@ -8423,6 +7932,8 @@ namespace lfs::vis::gui {
     }
 
     bool GuiManager::isPositionInViewport(double x, double y) const {
+        if (!ui_hidden_)
+            return screen_host_.viewAt(static_cast<float>(x), static_cast<float>(y)).valid();
         return (x >= viewport_layout_.pos.x &&
                 x < viewport_layout_.pos.x + viewport_layout_.size.x &&
                 y >= viewport_layout_.pos.y &&
@@ -8433,33 +7944,13 @@ namespace lfs::vis::gui {
         return PanelRegistry::instance().isPositionOverFloatingPanel(x, y);
     }
 
-    bool GuiManager::isPositionOverRightPanelResizeEdge(const double x, const double y) const {
-        if (!show_main_panel_ || ui_hidden_ ||
-            last_ui_layout_work_size_.x <= 0.0f || last_ui_layout_work_size_.y <= 0.0f) {
-            return false;
-        }
-
-        const float panel_x = last_ui_layout_work_pos_.x + last_ui_layout_work_size_.x -
-                              panel_layout_.getRightPanelWidth();
-        const float strip_half_w =
-            PanelLayoutManager::RIGHT_PANEL_RESIZE_EDGE_HALF_WIDTH * current_ui_scale_;
-        return x >= panel_x - strip_half_w && x < panel_x + strip_half_w &&
-               y >= last_ui_layout_work_pos_.y &&
-               y < last_ui_layout_work_pos_.y + last_ui_layout_work_size_.y;
-    }
-
     GuiHitTestResult GuiManager::hitTestMouseButton(const double x, const double y) const {
         const auto hit = hitTestPointer(x, y);
         if (hit.blocks_pointer || hit.blocks_mouse_button)
             return hit;
 
-        // The resize hover latch may lag a press in the same SDL batch as motion.
-        // Hit-test the shared strip geometry so its viewport-overlapping half is
-        // GUI-owned even before the next renderLeftDock().
-        if (panel_layout_.isPositionOverLeftDockResizeEdge(
-                static_cast<float>(x), static_cast<float>(y),
-                last_ui_layout_work_pos_.x, last_ui_layout_work_pos_.y,
-                last_ui_layout_work_size_.y))
+        // Corner zones and dividers inside a 3D view take presses, not hover.
+        if (!ui_hidden_ && screen_host_.blocksPress(static_cast<float>(x), static_cast<float>(y)))
             return {.blocks_mouse_button = true};
         return hit;
     }
@@ -8483,18 +7974,17 @@ namespace lfs::vis::gui {
             return {.blocks_pointer = true, .takes_keyboard_focus = true};
         }
 
-        if (panel_layout_.isResizingPanel() || isPositionOverFloatingPanel(x, y)) {
+        if (isPositionOverFloatingPanel(x, y)) {
+            return {.blocks_pointer = true, .takes_keyboard_focus = true};
+        }
+
+        if (!ui_hidden_ && screen_host_.blocksPointer(static_cast<float>(x), static_cast<float>(y))) {
             return {.blocks_pointer = true, .takes_keyboard_focus = true};
         }
 
         if (sequencer_ui_.blocksPointer(x, y) || rml_viewport_overlay_.blocksPointer(x, y)) {
             return {.blocks_pointer = true, .takes_keyboard_focus = true};
         }
-
-        // Match the resize edge geometry used by the panel before routing a
-        // press, without treating hover or wheel input as panel interaction.
-        if (isPositionOverRightPanelResizeEdge(x, y))
-            return {.blocks_mouse_button = true};
 
         return {};
     }
@@ -8736,10 +8226,10 @@ namespace lfs::vis::gui {
             return true;
         }
 
-        // Wake a frame while the pointer is over the resize edge so the panel
-        // can update its cursor request even while the GUI is otherwise idle.
-        if (right_panel_resize_edge_was_hovered_ ||
-            isPositionOverRightPanelResizeEdge(mouse_x, mouse_y)) {
+        // Wake a frame over area chrome so hover feedback and cursors update
+        // while the GUI is otherwise idle.
+        if (screen_host_.blocksPress(static_cast<float>(mouse_x), static_cast<float>(mouse_y)) ||
+            screen_host_.cursor() != screen::GestureCursor::Default) {
             return true;
         }
 
@@ -8817,6 +8307,60 @@ namespace lfs::vis::gui {
 
     void GuiManager::showWindow(const std::string& name, bool show) {
         window_states_[name] = show;
+    }
+
+    ViewportLayout GuiManager::activeViewportLayout(const ScreenState& screen) const {
+        if (ui_hidden_)
+            return panel_layout_.computeViewportLayout(show_main_panel_, true, false, screen);
+        ViewportLayout layout;
+        const auto active = viewer_->screens().screen().activeView();
+        if (const auto rect = screen_host_.viewContent(active)) {
+            layout.pos = {rect->x, rect->y};
+            layout.size = {rect->w, rect->h};
+        }
+        layout.has_focus = viewport_layout_.has_focus;
+        return layout;
+    }
+
+    void GuiManager::syncEditorFlags() {
+        // The Python console and the sequencer are editors whose visibility is
+        // also a flag scripts, menus and shortcuts flip. A flipped flag opens or
+        // closes the editor; an area the user opened or closed updates the flag.
+        const auto sync = [this](const std::string_view editor, const bool flag, std::optional<bool>& seen) {
+            auto& screens = viewer_->screens();
+            if (seen && *seen != flag) {
+                screens.edit([&](screen::Screen& s) {
+                    if (flag)
+                        s.openEditor(editor);
+                    else
+                        s.closeEditor(editor);
+                });
+            }
+            const bool shown = screens.screen().findEditor(editor).valid();
+            seen = shown;
+            return shown;
+        };
+        window_states_["python_console"] =
+            sync(screen::editors::kConsole, window_states_["python_console"], console_flag_seen_);
+        panel_layout_.setShowSequencer(sync("native.sequencer", panel_layout_.isShowSequencer(), sequencer_flag_seen_));
+    }
+
+    void GuiManager::applyScreenCursor(const screen::GestureCursor cursor) {
+        SDL_SystemCursor system = SDL_SYSTEM_CURSOR_DEFAULT;
+        switch (cursor) {
+        case screen::GestureCursor::Default: return;
+        case screen::GestureCursor::ResizeColumns: system = SDL_SYSTEM_CURSOR_EW_RESIZE; break;
+        case screen::GestureCursor::ResizeRows: system = SDL_SYSTEM_CURSOR_NS_RESIZE; break;
+        case screen::GestureCursor::Crosshair: system = SDL_SYSTEM_CURSOR_CROSSHAIR; break;
+        case screen::GestureCursor::Move: system = SDL_SYSTEM_CURSOR_MOVE; break;
+        case screen::GestureCursor::NotAllowed: system = SDL_SYSTEM_CURSOR_NOT_ALLOWED; break;
+        }
+        static std::array<SDL_Cursor*, SDL_SYSTEM_CURSOR_COUNT> cursors{};
+        auto& cached = cursors[static_cast<std::size_t>(system)];
+        if (!cached)
+            cached = SDL_CreateSystemCursor(system);
+        if (cached)
+            setCursorIfChanged(cached);
     }
 
     void GuiManager::enqueueModal(lfs::core::ModalRequest request) {
@@ -9005,9 +8549,7 @@ namespace lfs::vis::gui {
             return true;
         if (rml_menu_bar_.needsAnimationFrame())
             return true;
-        if (rml_right_panel_.needsAnimationFrame())
-            return true;
-        if (rml_bottom_dock_.needsAnimationFrame())
+        if (screen_host_.needsAnimationFrame())
             return true;
         if (rml_status_bar_.animationFrameDue(now))
             return true;
@@ -9060,17 +8602,10 @@ namespace lfs::vis::gui {
         add(isVramHudPublishDue(now), "vram_hud");
         add(rml_viewport_overlay_.needsAnimationFrame(), "viewport_overlay");
         add(rml_menu_bar_.needsAnimationFrame(), "menu_bar");
-        if (const auto right_panel_demand = rml_right_panel_.animationDemandDescription();
-            !right_panel_demand.empty()) {
+        if (const auto screen_demand = screen_host_.animationDemandDescription(); !screen_demand.empty()) {
             if (!result.empty())
-                result += ',';
-            result += right_panel_demand;
-        }
-        if (const auto bottom_dock_demand = rml_bottom_dock_.animationDemandDescription();
-            !bottom_dock_demand.empty()) {
-            if (!result.empty())
-                result += ',';
-            result += bottom_dock_demand;
+                result += ' ';
+            result += screen_demand;
         }
         add(rml_status_bar_.animationFrameDue(now), "status_bar");
 
@@ -9097,11 +8632,12 @@ namespace lfs::vis::gui {
 
     PanelAnimationVisibility GuiManager::panelAnimationVisibility() const {
         return {
-            .active_main_tab = panel_layout_.getActiveTab(),
+            .active_main_tab = screen_host_.properties().activeTab(),
             .ui_visible = !ui_hidden_,
-            .right_panel_visible = show_main_panel_ && !ui_hidden_,
-            .bottom_dock_visible = panel_layout_.isBottomDockVisible(),
-            .left_dock_visible = panel_layout_.isLeftDockVisible(),
+            .right_panel_visible = !ui_hidden_ && (screen_host_.isEditorVisible(screen::editors::kScene) ||
+                                                   screen_host_.isEditorVisible(screen::editors::kProperties)),
+            .bottom_dock_visible = !ui_hidden_,
+            .left_dock_visible = !ui_hidden_,
         };
     }
 

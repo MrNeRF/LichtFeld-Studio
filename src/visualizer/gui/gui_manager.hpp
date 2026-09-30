@@ -15,17 +15,16 @@
 #include "gui/panel_registry.hpp"
 #include "gui/panels/menu_bar.hpp"
 #include "gui/perf_sampler.hpp"
-#include "gui/rml_bottom_dock.hpp"
 #include "gui/rml_menu_bar.hpp"
 #include "gui/rml_modal_overlay.hpp"
 #include "gui/rml_progress_overlay.hpp"
-#include "gui/rml_right_panel.hpp"
 #include "gui/rml_shell_frame.hpp"
 #include "gui/rml_status_bar.hpp"
 #include "gui/rml_toast_overlay.hpp"
 #include "gui/rml_viewport_overlay.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/scene_tree_session.hpp"
+#include "gui/screen_host.hpp"
 #include "gui/selection_cursor.hpp"
 #include "gui/sequencer_ui_manager.hpp"
 #include "gui/sequencer_ui_state.hpp"
@@ -136,6 +135,8 @@ namespace lfs::vis {
             [[nodiscard]] PanelLayoutManager& panelLayout() { return panel_layout_; }
             [[nodiscard]] const PanelLayoutManager& panelLayout() const { return panel_layout_; }
             [[nodiscard]] GlobalContextMenu& globalContextMenu() { return *global_context_menu_; }
+            [[nodiscard]] ScreenHost& screenHost() { return screen_host_; }
+            [[nodiscard]] const ScreenHost& screenHost() const { return screen_host_; }
 
             // State queries
             bool needsAnimationFrame(bool include_export_progress = true) const;
@@ -264,7 +265,9 @@ namespace lfs::vis {
             friend class lfs::vis::VisualizerImplResetTest_StartupScansLegacyRecoveryDirectory_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoverTempWithSidecarThenDiscardExitLeavesNoTempFiles_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoverLegacyScratchThenSaveAsRemovesLegacyFile_Test;
-            [[nodiscard]] bool isPositionOverRightPanelResizeEdge(double x, double y) const;
+            [[nodiscard]] ViewportLayout activeViewportLayout(const ScreenState& screen) const;
+            void syncEditorFlags();
+            void applyScreenCursor(screen::GestureCursor cursor);
             [[nodiscard]] VulkanViewportPassParams buildVulkanViewportParams(VkExtent2D extent,
                                                                              std::size_t frame_slot) const;
             void recordVulkanViewport(VkCommandBuffer command_buffer,
@@ -441,14 +444,13 @@ namespace lfs::vis {
 
             StartupOverlay startup_overlay_;
             RmlShellFrame rml_shell_frame_;
-            RmlRightPanel rml_right_panel_;
-            RmlBottomDock rml_bottom_dock_;
             RmlViewportOverlay rml_viewport_overlay_;
             RmlMenuBar rml_menu_bar_;
             bool menu_pointer_capture_active_ = false;
             bool startup_overlay_pointer_capture_active_ = false;
             RmlStatusBar rml_status_bar_;
             std::unique_ptr<GlobalContextMenu> global_context_menu_;
+            ScreenHost screen_host_;
             bool deferred_startup_work_pending_ = false;
             bool first_render_completed_ = false;
 
@@ -500,36 +502,14 @@ namespace lfs::vis {
             EditorContextUpdateStamp last_editor_context_update_stamp_;
             glm::vec2 last_ui_layout_work_pos_{-1.0f, -1.0f};
             glm::vec2 last_ui_layout_work_size_{-1.0f, -1.0f};
-            float last_ui_layout_right_panel_w_ = -1.0f;
-            float last_ui_layout_scene_ratio_ = -1.0f;
-            float last_ui_layout_python_console_w_ = -1.0f;
-            float last_ui_layout_bottom_dock_h_ = -1.0f;
-            float last_ui_layout_left_dock_w_ = -1.0f;
-            bool last_ui_layout_show_main_panel_ = false;
-            bool last_ui_layout_show_sequencer_ = false;
             bool last_ui_layout_ui_hidden_ = false;
-            bool last_ui_layout_python_console_visible_ = false;
-            bool last_ui_layout_bottom_dock_visible_ = false;
+            std::uint64_t last_ui_layout_screen_generation_ = 0;
             uint64_t last_ui_layout_panel_visibility_revision_ = 0;
-            bool last_ui_layout_left_dock_visible_ = false;
+            std::optional<bool> console_flag_seen_;
+            std::optional<bool> sequencer_flag_seen_;
             mutable std::chrono::steady_clock::time_point last_animation_demand_description_at_{};
             mutable std::string animation_demand_description_cache_;
-            enum class RightPanelPointerRegion : uint8_t {
-                None,
-                Resize,
-                SceneHeader,
-                ActiveTab,
-                Chrome,
-            };
-            bool right_panel_pointer_live_capture_ = false;
-            RightPanelPointerRegion right_panel_pointer_capture_region_ =
-                RightPanelPointerRegion::None;
-            bool right_panel_resize_edge_was_hovered_ = false;
-            bool bottom_dock_pointer_live_capture_ = false;
-            bool left_dock_pointer_live_capture_ = false;
             bool dock_resize_interaction_active_ = false;
-            std::string last_ui_layout_active_tab_;
-            std::string last_ui_layout_bottom_dock_active_tab_;
             std::uint64_t last_pre_scene_panel_sync_generation_ = 0;
 
             std::atomic<bool> camera_thumbnail_refresh_pending_{false};

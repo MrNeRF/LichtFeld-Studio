@@ -1,0 +1,47 @@
+<rml>
+<head>
+    <link type="text/rcss" href="screen_chrome.rcss"/>
+</head>
+<body id="screen-chrome" data-model="screen_chrome">
+    <div class="area" data-for="area : areas"
+         data-style-left="area.left" data-style-top="area.top"
+         data-style-width="area.width" data-style-height="area.height"
+         data-class-view="area.is_view" data-class-hovered="area.hovered"
+         data-class-active="area.active" data-class-maximized="area.maximized">
+        <div class="area-header" data-style-height="area.header_height">
+            <div class="editor-switch" data-attr-title="area.editor_label"
+                 data-event-click="area_action(area.id, 'editor')">
+                <img class="editor-icon" data-attr-src="area.editor_icon"/>
+                <div class="editor-caret"></div>
+            </div>
+            <div class="header-items">
+                <div class="hitem" data-for="item : area.items"
+                     data-class-menu="item.kind == 0" data-class-tab="item.kind == 1"
+                     data-class-toggle="item.kind == 2" data-class-button="item.kind == 3"
+                     data-class-label="item.kind == 4" data-class-active="item.active"
+                     data-class-closeable="item.closeable" data-class-has-icon="item.icon != ''"
+                     data-attr-title="item.tooltip"
+                     data-event-click="area_action(area.id, item.id)">
+                    <img class="hitem-icon" data-if="item.icon != ''" data-attr-src="item.icon"/>
+                    <span class="hitem-label" data-if="item.label != ''">{{ item.label }}</span>
+                    <div class="hitem-caret" data-if="item.kind == 0"></div>
+                    <button class="tab-close" data-if="item.closeable"
+                            data-event-click="close_tab(area.id, item.id)">&#215;</button>
+                </div>
+            </div>
+            <div class="header-right">
+                <div class="hitem" data-for="item : area.right_items"
+                     data-class-menu="item.kind == 0" data-class-toggle="item.kind == 2"
+                     data-class-button="item.kind == 3" data-class-active="item.active"
+                     data-class-has-icon="item.icon != ''"
+                     data-attr-title="item.tooltip"
+                     data-event-click="area_action(area.id, item.id)">
+                    <img class="hitem-icon" data-if="item.icon != ''" data-attr-src="item.icon"/>
+                    <span class="hitem-label" data-if="item.label != ''">{{ item.label }}</span>
+                    <div class="hitem-caret" data-if="item.kind == 0"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</rml>

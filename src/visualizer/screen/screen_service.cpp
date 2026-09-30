@@ -1,0 +1,68 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#include "screen/screen_service.hpp"
+
+#include <cassert>
+
+namespace lfs::vis::screen {
+
+    namespace {
+        EditorTypeRegistry makeRegistry() {
+            EditorTypeRegistry registry;
+            registerBuiltinEditorTypes(registry);
+            return registry;
+        }
+    } // namespace
+
+    ScreenService::ScreenService()
+        : editor_types_(makeRegistry()),
+          screen_(Screen::makeDefault(editor_types_)) {}
+
+    void ScreenService::replace(Screen screen) {
+        std::lock_guard lock(mutex_);
+        assert(&screen.registry() == &editor_types_);
+        screen_ = std::move(screen);
+    }
+
+    void ScreenService::resetToDefault() {
+        std::lock_guard lock(mutex_);
+        screen_ = Screen::makeDefault(editor_types_);
+    }
+
+    View3DSpace& ScreenService::activeView3D() {
+        auto* view = screen_.view(screen_.activeView());
+        assert(view);
+        return *view;
+    }
+
+    const View3DSpace& ScreenService::activeView3D() const {
+        const auto* view = screen_.view(screen_.activeView());
+        assert(view);
+        return *view;
+    }
+
+    ViewId ScreenService::activeView() const {
+        std::lock_guard lock(mutex_);
+        return screen_.activeView().value;
+    }
+
+    std::optional<ViewSettings> ScreenService::viewSettings(const ViewId view) const {
+        std::lock_guard lock(mutex_);
+        if (const auto* space = screen_.view(AreaId{view}))
+            return space->settings;
+        return std::nullopt;
+    }
+
+    bool ScreenService::editViewSettings(const ViewId view, const std::function<void(ViewSettings&)>& edit) {
+        std::lock_guard lock(mutex_);
+        auto* space = screen_.view(AreaId{view});
+        if (!space)
+            return false;
+        edit(space->settings);
+        sanitizeDepthViewSettings(space->settings);
+        return true;
+    }
+
+} // namespace lfs::vis::screen

@@ -21,6 +21,9 @@ namespace lfs::vis::screen {
 
         Viewport camera;
         ViewSettings settings;
+        // Set when an axis view switched the projection to orthographic, so
+        // orbiting away returns to perspective (Blender's auto perspective).
+        bool auto_orthographic = false;
 
         [[nodiscard]] std::unique_ptr<SpaceData> clone() const override;
         [[nodiscard]] nlohmann::json save() const override;
@@ -40,6 +43,15 @@ namespace lfs::vis::screen {
 
     // Blender-style view name, e.g. "Top Orthographic" or "User Perspective".
     [[nodiscard]] std::string viewLabel(const View3DSpace& view);
+
+    // Switches projection, keeping the apparent size of what is at the pivot
+    // when entering orthographic. `viewport_height` is in pixels.
+    void setOrthographic(View3DSpace& view, bool enabled, float viewport_height);
+    // Looks along `axis` at the pivot; like Blender's numpad views this also
+    // switches to orthographic.
+    void setAxisView(View3DSpace& view, ViewAxis axis, float viewport_height);
+    // Leaves an axis view: back to perspective if the axis view chose ortho.
+    void leaveAxisView(View3DSpace& view);
 
     [[nodiscard]] nlohmann::json viewSettingsToJson(const ViewSettings& settings);
     // Fields missing from `json` keep their value from `base`; present fields

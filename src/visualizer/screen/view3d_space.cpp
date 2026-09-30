@@ -4,6 +4,7 @@
 
 #include "screen/view3d_space.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <glm/gtc/quaternion.hpp>
 #include <nlohmann/json.hpp>
@@ -149,6 +150,7 @@ namespace lfs::vis::screen {
         copy->camera = camera;
         copy->camera.camera.clearTransientMotion();
         copy->settings = settings;
+        copy->auto_orthographic = auto_orthographic;
         return copy;
     }
 
@@ -157,7 +159,8 @@ namespace lfs::vis::screen {
                  {{"rotation", mat3Json(camera.camera.R)},
                   {"translation", vec3Json(camera.camera.t)},
                   {"pivot", vec3Json(camera.camera.pivot)}}},
-                {"settings", viewSettingsToJson(settings)}};
+                {"settings", viewSettingsToJson(settings)},
+                {"auto_orthographic", auto_orthographic}};
     }
 
     bool View3DSpace::load(const Json& json) {
@@ -178,9 +181,13 @@ namespace lfs::vis::screen {
             if (!restored)
                 return false;
         }
+        const auto auto_ortho = json.find("auto_orthographic");
+        if (auto_ortho != json.end() && !auto_ortho->is_boolean())
+            return false;
         camera.setViewMatrix(*rotation, *translation);
         camera.camera.pivot = *pivot;
         settings = *restored;
+        auto_orthographic = auto_ortho != json.end() && auto_ortho->get<bool>();
         return true;
     }
 
@@ -224,6 +231,48 @@ namespace lfs::vis::screen {
                                  : view.settings.orthographic  ? "Orthographic"
                                                                : "Perspective";
         return std::string(direction) + " " + projection;
+    }
+
+    void setOrthographic(View3DSpace& view, const bool enabled, const float viewport_height) {
+        auto& s = view.settings;
+        view.auto_orthographic = false;
+        if (enabled == s.orthographic)
+            return;
+        if (enabled) {
+            constexpr float kMinScale = 1.0f;
+            constexpr float kMaxScale = 10000.0f;
+            const float distance = glm::length(view.camera.camera.pivot - view.camera.camera.t);
+            const float half_tan = std::tan(lfs::rendering::focalLengthToVFovRad(s.focal_length_mm) * 0.5f);
+            if (viewport_height > 0.0f && std::isfinite(distance) && distance > 0.01f && half_tan > 0.0f)
+                s.ortho_scale = std::clamp(viewport_height / (2.0f * distance * half_tan), kMinScale, kMaxScale);
+        }
+        s.orthographic = enabled;
+    }
+
+    void setAxisView(View3DSpace& view, const ViewAxis axis, const float viewport_height) {
+        int index = 0;
+        bool negative = false;
+        switch (axis) {
+        case ViewAxis::Top: index = 1; break;
+        case ViewAxis::Bottom: index = 1, negative = true; break;
+        case ViewAxis::Front: index = 2; break;
+        case ViewAxis::Back: index = 2, negative = true; break;
+        case ViewAxis::Right: index = 0; break;
+        case ViewAxis::Left: index = 0, negative = true; break;
+        case ViewAxis::None: return;
+        }
+        view.camera.camera.setAxisAlignedView(index, negative);
+        if (!view.settings.orthographic && !view.settings.equirectangular) {
+            setOrthographic(view, true, viewport_height);
+            view.auto_orthographic = true;
+        }
+    }
+
+    void leaveAxisView(View3DSpace& view) {
+        if (!view.auto_orthographic)
+            return;
+        view.auto_orthographic = false;
+        view.settings.orthographic = false;
     }
 
     Json viewSettingsToJson(const ViewSettings& s) {

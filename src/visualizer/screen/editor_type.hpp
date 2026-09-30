@@ -42,7 +42,7 @@ namespace lfs::vis::screen {
         Anchor anchor = Anchor::ScreenEdge;
         Side side = Side::Right;
         float fraction = 0.25f;
-        std::string editor;
+        std::string editor{};
         // Used for ScreenEdge, and when the anchor area does not exist.
         Side edge_side = Side::Right;
         float edge_fraction = 0.22f;
@@ -63,7 +63,7 @@ namespace lfs::vis::screen {
         bool multi_instance = false;
         EditorPlacement placement;
         // Null for editors without per-area state.
-        std::function<std::unique_ptr<SpaceData>()> create_space;
+        std::function<std::unique_ptr<SpaceData>()> create_space{};
     };
 
     class EditorTypeRegistry {

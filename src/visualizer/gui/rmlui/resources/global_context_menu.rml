@@ -14,7 +14,8 @@
               data-class-submenu-item="item.is_submenu_item"
               data-class-active="item.is_active"
               data-class-has-icon="item.icon != ''"
-              data-attr-data-ctx-action="item.action"><img class="context-menu-icon" data-if="item.icon != ''" data-attr-src="item.icon"/><span>{{ item.label }}</span></button>
+              data-class-has-shortcut="item.shortcut != ''"
+              data-attr-data-ctx-action="item.action"><img class="context-menu-icon" data-if="item.icon != ''" data-attr-src="item.icon"/><span class="context-menu-text">{{ item.label }}</span><span class="context-menu-shortcut" data-if="item.shortcut != ''">{{ item.shortcut }}</span></button>
     </div>
   </div>
 </body>

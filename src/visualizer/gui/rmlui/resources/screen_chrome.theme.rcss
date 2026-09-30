@@ -1,0 +1,101 @@
+/* Theme colours of the area frames and headers. */
+
+.area {
+    @{panel.body_decor};
+}
+
+.area.view {
+    background-color: transparent;
+}
+
+.area-header {
+    background-color: @{blend(surface,background,0.35)};
+    border-bottom-color: @{alpha(border,0.4)};
+}
+
+.area.view .area-header {
+    background-color: @{blend(surface,background,0.2)};
+}
+
+.area.hovered .area-header {
+    background-color: @{blend(surface,background,0.2)};
+}
+
+.area.view.active .area-header {
+    border-bottom-color: @{alpha(primary,0.55)};
+}
+
+.editor-switch {
+    background-color: @{alpha(text,0.06)};
+}
+
+.editor-switch:hover,
+.hitem:hover {
+    background-color: @{alpha(text,0.1)};
+}
+
+.hitem.label:hover {
+    background-color: transparent;
+}
+
+.editor-icon,
+.hitem-icon {
+    image-color: @{text_dim};
+}
+
+.editor-switch:hover .editor-icon,
+.hitem:hover .hitem-icon {
+    image-color: @{text};
+}
+
+.editor-caret,
+.hitem-caret {
+    border-left-color: transparent;
+    border-right-color: transparent;
+    border-top-color: @{text_dim};
+}
+
+.hitem-label {
+    color: @{text_dim};
+}
+
+.hitem:hover .hitem-label,
+.hitem.menu .hitem-label {
+    color: @{text};
+}
+
+.hitem.active {
+    background-color: @{alpha(primary,0.22)};
+}
+
+.hitem.active .hitem-icon {
+    image-color: @{primary};
+}
+
+.hitem.active:hover {
+    background-color: @{alpha(primary,0.32)};
+}
+
+.hitem.tab {
+    background-color: transparent;
+    border-bottom-color: transparent;
+}
+
+.hitem.tab.active {
+    background-color: @{alpha(primary,0.10)};
+    border-bottom-color: @{primary};
+}
+
+.hitem.tab.active .hitem-label {
+    color: @{text};
+}
+
+.tab-close {
+    background-color: transparent;
+    color: @{text_dim};
+}
+
+.tab-close:hover {
+    background-color: @{alpha(text,0.12)};
+    color: @{text};
+}

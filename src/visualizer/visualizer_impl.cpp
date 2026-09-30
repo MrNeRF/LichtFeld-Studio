@@ -251,7 +251,6 @@ namespace lfs::vis {
 
     VisualizerImpl::VisualizerImpl(const ViewerOptions& options)
         : options_(options),
-          viewport_(options.width, options.height),
           window_manager_(std::make_unique<WindowManager>(options.title, options.width, options.height,
                                                           options.monitor_x, options.monitor_y,
                                                           options.monitor_width, options.monitor_height,
@@ -410,7 +409,7 @@ namespace lfs::vis {
         tool_context_ = std::make_unique<ToolContext>(
             rendering_manager_.get(),
             scene_manager_.get(),
-            &viewport_,
+            this,
             window_manager_->getWindow(),
             gui_manager_.get());
 
@@ -904,6 +903,97 @@ namespace lfs::vis {
         callback_cleanup_.add([] { python::set_export_callback(nullptr); });
     }
 
+    ViewTarget VisualizerImpl::activeView() {
+        return findView(screen_service_.screen().activeView().value);
+    }
+
+    ViewTarget VisualizerImpl::viewAt(const float x, const float y) {
+        if (!gui_manager_)
+            return {};
+        const auto id = gui_manager_->screenHost().viewAt(x, y);
+        return id.valid() ? findView(id.value) : ViewTarget{};
+    }
+
+    ViewTarget VisualizerImpl::findView(const ViewId id) {
+        auto* space = screen_service_.view3D(id);
+        if (!space)
+            return {};
+        ViewTarget target{.id = id, .viewport = &space->camera};
+        if (gui_manager_) {
+            if (const auto rect = gui_manager_->screenHost().viewContent(screen::AreaId{id})) {
+                target.pos = {rect->x, rect->y};
+                target.size = {rect->w, rect->h};
+            }
+        }
+        return target;
+    }
+
+    void VisualizerImpl::activateView(const ViewId id) {
+        if (screen_service_.screen().activeView().value == id)
+            return;
+        const bool changed =
+            screen_service_.edit([id](screen::Screen& screen) { return screen.setActiveView(screen::AreaId{id}); });
+        if (changed && rendering_manager_)
+            rendering_manager_->markDirty(DirtyFlag::ALL);
+    }
+
+    bool VisualizerImpl::runViewCommand(const ViewId id, const std::string_view command) {
+        if (!screen_service_.view3D(id))
+            return false;
+        if (command == "frame_all" || command == "frame_selected") {
+            activateView(id);
+            return input_controller_ && input_controller_->frameView(id, command == "frame_selected");
+        }
+        if (command == "area:quad") {
+            // Blender's four views: Top and Front on the left, the original
+            // perspective above Right on the right.
+            float height = 0.0f;
+            if (gui_manager_) {
+                if (const auto rect = gui_manager_->screenHost().viewContent(screen::AreaId{id}))
+                    height = rect->h * 0.5f;
+            }
+            const screen::AreaId original{id};
+            return screen_service_.edit([&](screen::Screen& screen) {
+                const auto left = screen.split(original, screen::SplitAxis::Columns, 0.5f, true);
+                if (!left.valid())
+                    return false;
+                const auto bottom_right = screen.split(original, screen::SplitAxis::Rows, 0.5f);
+                const auto bottom_left = screen.split(left, screen::SplitAxis::Rows, 0.5f);
+                const auto setup = [&](const screen::AreaId area, const screen::ViewAxis axis) {
+                    if (auto* view = screen.view(area)) {
+                        view->settings.orthographic = false;
+                        screen::setAxisView(*view, axis, height);
+                    }
+                };
+                setup(left, screen::ViewAxis::Top);
+                setup(bottom_left, screen::ViewAxis::Front);
+                setup(bottom_right, screen::ViewAxis::Right);
+                screen.setActiveView(original);
+                if (rendering_manager_)
+                    rendering_manager_->markDirty(DirtyFlag::ALL);
+                return true;
+            });
+        }
+        return false;
+    }
+
+    void VisualizerImpl::syncActiveViewSettings() {
+        if (!rendering_manager_)
+            return;
+        auto& view = screen_service_.activeView3D();
+        const ViewId active = screen_service_.screen().activeView().value;
+        const auto rendered = rendering_manager_->getSettings();
+        const std::string view_state = screen::viewSettingsToJson(view.settings).dump();
+        if (active != mirrored_view_ || view_state != mirrored_view_settings_) {
+            rendering_manager_->updateSettings(RenderSettings(rendered.scene(), view.settings), DirtyFlag::ALL);
+            view.settings = rendering_manager_->getSettings().view();
+        } else if (screen::viewSettingsToJson(rendered.view()).dump() != mirrored_view_settings_) {
+            view.settings = rendered.view();
+        }
+        mirrored_view_ = active;
+        mirrored_view_settings_ = screen::viewSettingsToJson(view.settings).dump();
+    }
+
     void VisualizerImpl::setupViewContextBridge() {
         if (view_context_bridge_initialized_)
             return;
@@ -915,21 +1005,21 @@ namespace lfs::vis {
                 return std::nullopt;
 
             const auto& settings = rendering_manager_->getSettings();
-            const auto R = viewport_.getRotationMatrix();
-            const auto T = viewport_.getTranslation();
+            const auto R = getViewport().getRotationMatrix();
+            const auto T = getViewport().getTranslation();
 
             vis::ViewInfo info;
             for (int i = 0; i < 3; ++i)
                 for (int j = 0; j < 3; ++j)
                     info.rotation[i * 3 + j] = R[j][i];
             info.translation = {T.x, T.y, T.z};
-            const auto P = viewport_.camera.getPivot();
+            const auto P = getViewport().camera.getPivot();
             info.pivot = {P.x, P.y, P.z};
-            info.width = viewport_.windowSize.x;
-            info.height = viewport_.windowSize.y;
+            info.width = getViewport().windowSize.x;
+            info.height = getViewport().windowSize.y;
             info.fov = lfs::rendering::focalLengthToVFov(settings.focal_length_mm);
             info.orthographic = settings.orthographic;
-            info.ortho_scale = viewport_.ortho_scale_override.value_or(settings.ortho_scale);
+            info.ortho_scale = getViewport().ortho_scale_override.value_or(settings.ortho_scale);
             return info;
         });
         callback_cleanup_.add([] { vis::set_view_callback(nullptr); });
@@ -939,7 +1029,7 @@ namespace lfs::vis {
                 return std::nullopt;
 
             const auto& settings = rendering_manager_->getSettings();
-            const Viewport& vp = rendering_manager_->resolvePanelViewport(viewport_, panel);
+            const Viewport& vp = rendering_manager_->resolvePanelViewport(getViewport(), panel);
             const auto R = vp.getRotationMatrix();
             const auto T = vp.getTranslation();
 
@@ -951,7 +1041,7 @@ namespace lfs::vis {
             const auto P = vp.camera.getPivot();
             info.pivot = {P.x, P.y, P.z};
 
-            const int total_width = viewport_.windowSize.x;
+            const int total_width = getViewport().windowSize.x;
             int panel_width = total_width;
             if (rendering_manager_->isSplitViewActive() && total_width > 0) {
                 const float split_pos = std::clamp(settings.split_position, 0.0f, 1.0f);
@@ -961,7 +1051,7 @@ namespace lfs::vis {
                                   : std::max(1, total_width - divider);
             }
             info.width = panel_width;
-            info.height = viewport_.windowSize.y;
+            info.height = getViewport().windowSize.y;
             info.fov = lfs::rendering::focalLengthToVFov(settings.focal_length_mm);
             info.orthographic = settings.orthographic;
             info.ortho_scale = vp.ortho_scale_override.value_or(settings.ortho_scale);
@@ -980,8 +1070,8 @@ namespace lfs::vis {
                 return;
             }
 
-            viewport_.setViewMatrix(*rotation, eye);
-            viewport_.camera.setPivot(target);
+            getViewport().setViewMatrix(*rotation, eye);
+            getViewport().camera.setPivot(target);
 
             if (rendering_manager_)
                 rendering_manager_->markCameraCut();
@@ -1003,7 +1093,7 @@ namespace lfs::vis {
                 return;
             }
 
-            Viewport& vp = rendering_manager_->resolvePanelViewport(viewport_, panel);
+            Viewport& vp = rendering_manager_->resolvePanelViewport(getViewport(), panel);
             vp.setViewMatrix(*rotation, eye);
             vp.camera.setPivot(target);
 
@@ -1018,7 +1108,7 @@ namespace lfs::vis {
         callback_cleanup_.add([] { vis::set_set_fov_callback(nullptr); });
 
         vis::set_set_ortho_scale_callback([this](std::optional<float> scale) {
-            viewport_.ortho_scale_override = scale;
+            getViewport().ortho_scale_override = scale;
             if (rendering_manager_)
                 rendering_manager_->markCameraPoseChanged();
         });
@@ -2066,18 +2156,18 @@ namespace lfs::vis {
             window_manager_->pollEvents();
             window_manager_->updateWindowSize();
 
-            viewport_.windowSize = window_manager_->getWindowSize();
-            viewport_.frameBufferSize = window_manager_->getFramebufferSize();
+            getViewport().windowSize = window_manager_->getWindowSize();
+            getViewport().frameBufferSize = window_manager_->getFramebufferSize();
 
-            if (viewport_.windowSize.x <= 0 || viewport_.windowSize.y <= 0) {
+            if (getViewport().windowSize.x <= 0 || getViewport().windowSize.y <= 0) {
                 LOG_WARN("Window manager returned invalid size, using options fallback: {}x{}",
                          options_.width, options_.height);
-                viewport_.windowSize = glm::ivec2(options_.width, options_.height);
-                viewport_.frameBufferSize = glm::ivec2(options_.width, options_.height);
+                getViewport().windowSize = glm::ivec2(options_.width, options_.height);
+                getViewport().frameBufferSize = glm::ivec2(options_.width, options_.height);
             }
 
             LOG_DEBUG("Window initialized with actual size: {}x{}",
-                      viewport_.windowSize.x, viewport_.windowSize.y);
+                      getViewport().windowSize.x, getViewport().windowSize.y);
         }
 
         // Initialize GUI systems.
@@ -2101,7 +2191,7 @@ namespace lfs::vis {
         // InputController requires the GUI focus state to be initialized.
         if (!input_controller_) {
             input_controller_ = std::make_unique<InputController>(
-                window_manager_->getWindow(), viewport_);
+                window_manager_->getWindow(), *this);
             input_controller_->setViewer(this);
             input_controller_->initialize();
             input_controller_->setTrackpadPreferences(loadTrackpadPreferences());
@@ -2214,11 +2304,11 @@ namespace lfs::vis {
 
         if (gui_manager_) {
             const auto& size = gui_manager_->getViewportSize();
-            viewport_.windowSize = {static_cast<int>(size.x), static_cast<int>(size.y)};
+            getViewport().windowSize = {static_cast<int>(size.x), static_cast<int>(size.y)};
         } else {
-            viewport_.windowSize = window_manager_->getWindowSize();
+            getViewport().windowSize = window_manager_->getWindowSize();
         }
-        viewport_.frameBufferSize = window_manager_->getFramebufferSize();
+        getViewport().frameBufferSize = window_manager_->getFramebufferSize();
 
         // Update editor context state from scene/trainer
         editor_context_.update(scene_manager_.get(), trainer_manager_.get());
@@ -2564,6 +2654,8 @@ namespace lfs::vis {
             }
         }
 
+        syncActiveViewSettings();
+
         // Update input controller with viewport bounds
         if (gui_manager_) {
             auto pos = gui_manager_->getViewportPos();
@@ -2605,7 +2697,7 @@ namespace lfs::vis {
 
             // A staged UI-visibility transition renders against its target extent
             // while input and presentation continue using the previous layout.
-            viewport_.windowSize = {
+            getViewport().windowSize = {
                 std::max(static_cast<int>(std::lround(size.x)), 1),
                 std::max(static_cast<int>(std::lround(size.y)), 1)};
 
@@ -2618,7 +2710,7 @@ namespace lfs::vis {
         }
 
         RenderingManager::RenderContext context{
-            .viewport = viewport_,
+            .viewport = getViewport(),
             .settings = rendering_manager_->getSettings(),
             .logical_screen_size = window_manager_->getFramebufferSize(),
             .viewport_region = has_viewport_region ? &viewport_region : nullptr,
@@ -4500,7 +4592,7 @@ namespace lfs::vis {
             return;
         }
 
-        const auto preserved_camera = viewport_.camera;
+        const auto preserved_camera = getViewport().camera;
         const auto preserved_transforms = collectResetTransforms(scene_manager_->getScene());
 
         const auto& init_path = data_loader_->getParameters().init_path;
@@ -4516,16 +4608,16 @@ namespace lfs::vis {
         }
 
         const auto restore_camera = [this, &preserved_camera]() {
-            viewport_.camera = preserved_camera;
+            getViewport().camera = preserved_camera;
             if (selection_tool_ && selection_tool_->isEnabled()) {
-                selection_tool_->syncDepthFilterToCamera(viewport_);
+                selection_tool_->syncDepthFilterToCamera(getViewport());
             }
             if (rendering_manager_) {
                 rendering_manager_->markCameraPoseChanged();
             }
             ui::CameraMove{
-                .rotation = viewport_.getRotationMatrix(),
-                .translation = viewport_.getTranslation()}
+                .rotation = getViewport().getRotationMatrix(),
+                .translation = getViewport().getTranslation()}
                 .emit();
             wakeMainLoop();
         };

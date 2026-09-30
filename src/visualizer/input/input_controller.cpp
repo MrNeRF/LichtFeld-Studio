@@ -407,21 +407,21 @@ namespace lfs::vis {
 
     InputController* InputController::instance_ = nullptr;
 
-    InputController::InputController(SDL_Window* window, Viewport& viewport)
+    InputController::InputController(SDL_Window* window, ViewTargets& views)
         : window_(window),
-          viewport_(viewport) {
+          views_(views) {
         go_to_cam_view_handler_id_ =
             cmd::GoToCamView::when([this](const auto& e) { handleGoToCamView(e); });
 
         // Panel-less reset targets the primary viewport; explicit-panel callers
         // use resetCameraForPanel.
         reset_camera_handler_id_ = cmd::ResetCamera::when([this](const auto&) {
-            handleResetCameraHome(viewport_);
+            handleResetCameraHome(viewport());
         });
 
         dataset_load_completed_handler_id_ = state::DatasetLoadCompleted::when([this](const auto& e) {
             if (e.success) {
-                viewport_.camera.resetToHome();
+                viewport().camera.resetToHome();
                 if (auto* const rendering = services().renderingOrNull())
                     rendering->markCameraCut();
                 publishCameraMove();
@@ -638,8 +638,8 @@ namespace lfs::vis {
 
     void InputController::applyNavigationSpeedPreferences(const float zoom_speed,
                                                           const float navigation_speed) {
-        viewport_.camera.setZoomSpeed(zoom_speed);
-        viewport_.camera.setWasdSpeed(navigation_speed);
+        viewport().camera.setZoomSpeed(zoom_speed);
+        viewport().camera.setWasdSpeed(navigation_speed);
         if (viewer_) {
             if (auto* const rendering = viewer_->getRenderingManager()) {
                 auto& secondary = rendering->projectSecondaryViewport();
@@ -1251,12 +1251,12 @@ namespace lfs::vis {
                 if (drag_viewport_) {
                     drag_viewport_->camera.endRotateAroundCenter();
                 } else {
-                    viewport_.camera.endRotateAroundCenter();
+                    viewport().camera.endRotateAroundCenter();
                 }
                 if (released_viewport) {
                     snapViewportToNearestAxis(*released_viewport, released_panel);
                 } else {
-                    snapViewportToNearestAxis(viewport_, released_panel);
+                    snapViewportToNearestAxis(viewport(), released_panel);
                 }
                 drag_mode_ = DragMode::None;
                 drag_button_ = -1;
@@ -1265,7 +1265,7 @@ namespace lfs::vis {
             drag_viewport_ = nullptr;
 
             if (was_dragging) {
-                auto* const moved_viewport = released_viewport ? released_viewport : &viewport_;
+                auto* const moved_viewport = released_viewport ? released_viewport : &viewport();
                 ui::CameraMove{
                     .rotation = moved_viewport->getRotationMatrix(),
                     .translation = moved_viewport->getTranslation()}
@@ -1350,7 +1350,7 @@ namespace lfs::vis {
                             if (isIndependentSplitViewActive()) {
                                 if (auto* const rendering = services().renderingOrNull()) {
                                     const auto panel_info = rendering->resolveViewerPanel(
-                                        viewport_,
+                                        viewport(),
                                         {viewport_bounds_.x, viewport_bounds_.y},
                                         {viewport_bounds_.width, viewport_bounds_.height},
                                         std::nullopt,
@@ -1369,9 +1369,9 @@ namespace lfs::vis {
                                 std::max(node_rect_start_.x, node_rect_end_.x) - vp_offset.x - panel_offset_x,
                                 std::max(node_rect_start_.y, node_rect_end_.y) - vp_offset.y);
 
-                            Viewport pick_viewport = viewport_;
+                            Viewport pick_viewport = viewport();
                             if (auto* const rendering = services().renderingOrNull()) {
-                                pick_viewport = rendering->resolvePanelViewport(viewport_, node_rect_panel_);
+                                pick_viewport = rendering->resolvePanelViewport(viewport(), node_rect_panel_);
                             }
                             pick_viewport.windowSize = glm::ivec2(
                                 std::max(static_cast<int>(panel_width), 1),
@@ -1613,7 +1613,7 @@ namespace lfs::vis {
         if (drag_mode_ != DragMode::None &&
             drag_mode_ != DragMode::Gizmo &&
             drag_mode_ != DragMode::Splitter) {
-            auto* const target_viewport = drag_viewport_ ? drag_viewport_ : &viewport_;
+            auto* const target_viewport = drag_viewport_ ? drag_viewport_ : &viewport();
 
             switch (drag_mode_) {
             case DragMode::Pan: {
@@ -1837,7 +1837,7 @@ namespace lfs::vis {
             return false;
         constexpr float MIN_ORTHO_SCALE = 1.0f;
         constexpr float MAX_ORTHO_SCALE = 10000.0f;
-        if (&target_viewport != &viewport_) {
+        if (&target_viewport != &viewport()) {
             const float current = target_viewport.ortho_scale_override.value_or(settings.ortho_scale);
             target_viewport.ortho_scale_override =
                 std::clamp(current * factor, MIN_ORTHO_SCALE, MAX_ORTHO_SCALE);
@@ -2408,14 +2408,14 @@ namespace lfs::vis {
 
         // Handle missed mouse release events (e.g., outside window)
         if (drag_mode_ == DragMode::Orbit && drag_button_released) {
-            auto* const released_viewport = drag_viewport_ ? drag_viewport_ : &viewport_;
+            auto* const released_viewport = drag_viewport_ ? drag_viewport_ : &viewport();
             const SplitViewPanelId released_panel = drag_split_panel_;
             if (drag_viewport_) {
                 drag_viewport_->camera.endRotateAroundCenter();
                 snapViewportToNearestAxis(*drag_viewport_, released_panel);
             } else {
-                viewport_.camera.endRotateAroundCenter();
-                snapViewportToNearestAxis(viewport_, released_panel);
+                viewport().camera.endRotateAroundCenter();
+                snapViewportToNearestAxis(viewport(), released_panel);
             }
             drag_mode_ = DragMode::None;
             drag_button_ = -1;
@@ -2881,7 +2881,7 @@ namespace lfs::vis {
             if (settings.orthographic && !is_equirectangular) {
                 const float distance_to_pivot = glm::length(target_viewport.camera.pivot - target_viewport.camera.t);
                 const float half_tan_fov = std::tan(glm::radians(fov_y_deg) * 0.5f);
-                const float viewport_height = static_cast<float>(viewport_.windowSize.y);
+                const float viewport_height = static_cast<float>(viewport().windowSize.y);
                 constexpr float MIN_SCALE = 1.0f;
                 constexpr float MAX_SCALE = 10000.0f;
                 settings.ortho_scale = std::clamp(
@@ -2940,6 +2940,23 @@ namespace lfs::vis {
                 return;
             }
         }
+    }
+
+    bool InputController::frameView(const ViewId view, const bool selection) {
+        const auto target = views_.findView(view);
+        if (!target.valid())
+            return false;
+        if (selection)
+            return handleFocusSelection(*target.viewport);
+        glm::vec3 bounds_min;
+        glm::vec3 bounds_max;
+        if (!computeWholeSceneBounds(bounds_min, bounds_max))
+            return false;
+        target.viewport->camera.focusOnBounds(bounds_min, bounds_max);
+        if (auto* const rendering = services().renderingOrNull())
+            rendering->markCameraCut();
+        publishCameraMove(target.viewport);
+        return true;
     }
 
     bool InputController::handleFocusSelection(Viewport& target_viewport,
@@ -3059,9 +3076,9 @@ namespace lfs::vis {
 
     Viewport& InputController::panelViewport(const SplitViewPanelId panel) {
         if (auto* const rendering = services().renderingOrNull()) {
-            return rendering->resolvePanelViewport(viewport_, panel);
+            return rendering->resolvePanelViewport(viewport(), panel);
         }
-        return viewport_;
+        return viewport();
     }
 
     void InputController::resetCameraForPanel(const SplitViewPanelId panel) {
@@ -3136,7 +3153,7 @@ namespace lfs::vis {
             }
         }
 
-        cmd::ToggleIndependentSplitView{.viewport = &viewport_}.emit();
+        cmd::ToggleIndependentSplitView{.viewport = &viewport()}.emit();
         focusSplitPanel(SplitViewPanelId::Left);
     }
 
@@ -3147,7 +3164,7 @@ namespace lfs::vis {
         }
 
         const auto panel = rendering->resolveViewerPanel(
-            viewport_,
+            viewport(),
             {viewport_bounds_.x, viewport_bounds_.y},
             {viewport_bounds_.width, viewport_bounds_.height},
             glm::vec2(static_cast<float>(x), viewport_bounds_.y + viewport_bounds_.height * 0.5f));
@@ -3162,7 +3179,7 @@ namespace lfs::vis {
 
         auto* const rendering = services().renderingOrNull();
         PanelInteractionState state;
-        state.viewport = &viewport_;
+        state.viewport = &viewport();
         if (!rendering) {
             state.panel = SplitViewPanelId::Left;
             state.local_x = static_cast<float>(x) - viewport_bounds_.x;
@@ -3173,7 +3190,7 @@ namespace lfs::vis {
         }
 
         const auto panel = rendering->resolveViewerPanel(
-            viewport_,
+            viewport(),
             {viewport_bounds_.x, viewport_bounds_.y},
             {viewport_bounds_.width, viewport_bounds_.height},
             glm::vec2(static_cast<float>(x), static_cast<float>(y)));
@@ -3225,7 +3242,7 @@ namespace lfs::vis {
             if (drag_viewport_) {
                 drag_viewport_->camera.endRotateAroundCenter();
             } else {
-                viewport_.camera.endRotateAroundCenter();
+                viewport().camera.endRotateAroundCenter();
             }
         }
 
@@ -3457,16 +3474,16 @@ namespace lfs::vis {
 
     Viewport& InputController::activeKeyboardViewport() {
         if (auto* const rendering = services().renderingOrNull()) {
-            return rendering->resolveFocusedViewport(viewport_);
+            return rendering->resolveFocusedViewport(viewport());
         }
-        return viewport_;
+        return viewport();
     }
 
     const Viewport& InputController::activeKeyboardViewport() const {
         if (auto* const rendering = services().renderingOrNull()) {
-            return rendering->resolveFocusedViewport(viewport_);
+            return rendering->resolveFocusedViewport(viewport());
         }
-        return viewport_;
+        return viewport();
     }
 
     void InputController::updateCameraSpeed(const bool increase) {
@@ -3505,7 +3522,7 @@ namespace lfs::vis {
     void InputController::publishCameraMove(Viewport* target_viewport,
                                             const std::optional<SplitViewPanelId> acted_panel) {
         LOG_PERF("InputController::publishCameraMove drag_mode={}", static_cast<int>(drag_mode_));
-        auto* const active_viewport = target_viewport ? target_viewport : &viewport_;
+        auto* const active_viewport = target_viewport ? target_viewport : &viewport();
         if (selection_tool_ && selection_tool_->isEnabled() &&
             !shouldSkipDepthAnchorSync(acted_panel)) {
             selection_tool_->syncDepthFilterToCamera(*active_viewport);
@@ -3563,12 +3580,12 @@ namespace lfs::vis {
         auto* const rendering = services().renderingOrNull();
         const auto interaction = rendering
                                      ? rendering->resolveViewerPanel(
-                                           viewport_,
+                                           viewport(),
                                            {viewport_bounds_.x, viewport_bounds_.y},
                                            {viewport_bounds_.width, viewport_bounds_.height},
                                            glm::vec2(static_cast<float>(x), static_cast<float>(y)))
                                      : std::nullopt;
-        const auto* const target_viewport = (interaction && interaction->valid()) ? interaction->viewport : &viewport_;
+        const auto* const target_viewport = (interaction && interaction->valid()) ? interaction->viewport : &viewport();
         if (!rendering || !interaction || !interaction->valid()) {
             const glm::vec3 forward = lfs::rendering::cameraForward(target_viewport->camera.R);
             return target_viewport->camera.t + forward * fallback_distance;
@@ -3627,12 +3644,12 @@ namespace lfs::vis {
         const auto* const rendering = services().renderingOrNull();
         const auto interaction = rendering
                                      ? rendering->resolveViewerPanel(
-                                           viewport_,
+                                           viewport(),
                                            {viewport_bounds_.x, viewport_bounds_.y},
                                            {viewport_bounds_.width, viewport_bounds_.height},
                                            glm::vec2(static_cast<float>(x), static_cast<float>(y)))
                                      : std::nullopt;
-        const auto* const target_viewport = (interaction && interaction->valid()) ? interaction->viewport : &viewport_;
+        const auto* const target_viewport = (interaction && interaction->valid()) ? interaction->viewport : &viewport();
         const glm::mat3 R = target_viewport->getRotationMatrix();
         const glm::vec3 camera_pos = target_viewport->getTranslation();
 
