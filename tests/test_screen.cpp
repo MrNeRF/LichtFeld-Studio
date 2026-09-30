@@ -270,7 +270,7 @@ namespace lfs::vis::screen {
         });
         ASSERT_NE(view_item, tiny.end());
         EXPECT_TRUE(view_item->label.empty());
-        EXPECT_EQ(view_item->icon, "editor-view3d");
+        EXPECT_EQ(view_item->icon, "camera-orbit");
     }
 
     TEST_F(ScreenTest, SplittingAViewCopiesItsCameraIndependently) {

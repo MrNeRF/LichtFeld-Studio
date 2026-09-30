@@ -168,6 +168,63 @@ namespace {
         lfs::vis::gui::RmlMenuBar bar_;
     };
 
+    TEST_F(MenuBarTitleTest, ContextMenuFitsShortcutColumns) {
+        auto* doc = context_->LoadDocumentFromMemory(
+            "<rml><body><div id='menu' class='context-menu visible has-shortcuts'>"
+            "<div><button class='context-menu-item has-shortcut'><span class='context-menu-text'>"
+            "Perspective</span><span class='context-menu-shortcut'>Numpad 5</span></button></div>"
+            "<div><button class='context-menu-item has-shortcut submenu-item active'>"
+            "<span class='context-menu-check'>&#x2713;</span><span class='context-menu-text'>"
+            "Bottom</span><span class='context-menu-shortcut'>Ctrl Numpad 7</span></button></div>"
+            "<div><button class='context-menu-item has-shortcut'><span class='context-menu-text'>"
+            "Maximize Area</span><span class='context-menu-shortcut'>Ctrl Space</span></button></div>"
+            "<div><button class='context-menu-item'>Split Horizontally</button></div>"
+            "</div></body></rml>");
+        ASSERT_NE(doc, nullptr);
+        doc->SetStyleSheetContainer(Rml::Factory::InstanceStyleSheetString(
+            resource("components.rcss") + "\n" + resource("global_context_menu.rcss")));
+        doc->Show();
+        auto* menu = doc->GetElementById("menu");
+        for (const float dp : {1.0f, 1.5f}) {
+            context_->SetDensityIndependentPixelRatio(dp);
+            for (const int width : {850, 1600}) {
+                context_->SetDimensions({width, 900});
+                menu->SetProperty("max-width", std::to_string(width - 8 * dp) + "px");
+                for (const int left : {20, width - 40}) {
+                    SCOPED_TRACE(::testing::Message() << width << " dp=" << dp << " left=" << left);
+                    menu->SetProperty("left", std::to_string(left) + "px");
+                    context_->Update();
+                    const auto menu_width = bounds(menu).right - bounds(menu).left;
+                    EXPECT_LE(menu_width, width - 8 * dp);
+                    Rml::ElementList rows;
+                    menu->GetElementsByClassName(rows, "context-menu-item");
+                    for (auto* row : rows) {
+                        EXPECT_LE(bounds(row).right, bounds(menu).right);
+                        auto* label = row->QuerySelector(".context-menu-text");
+                        auto* shortcut = row->QuerySelector(".context-menu-shortcut");
+                        if (!shortcut)
+                            continue;
+                        EXPECT_LE(bounds(label).right + 8 * dp, bounds(shortcut).left);
+                        EXPECT_LE(bounds(shortcut).right + 12 * dp, bounds(menu).right);
+                        EXPECT_LT(bounds(label).bottom - bounds(label).top, 20 * dp);
+                        EXPECT_LT(bounds(shortcut).bottom - bounds(shortcut).top, 20 * dp);
+                    }
+                }
+            }
+        }
+        // Equal byte counts with different glyph widths must size differently.
+        context_->SetDensityIndependentPixelRatio(1);
+        menu->SetProperty("left", "20px");
+        auto* label = menu->QuerySelector(".context-menu-text");
+        label->SetInnerRML("WWWWWWWWWWWWWWWWWWWW");
+        context_->Update();
+        const auto wide = bounds(menu).right - bounds(menu).left;
+        label->SetInnerRML("iiiiiiiiiiiiiiiiiiii");
+        context_->Update();
+        EXPECT_LT(bounds(menu).right - bounds(menu).left, wide);
+        doc->Close();
+    }
+
     TEST_F(MenuBarTitleTest, ConstrainsAndCentersTitleBetweenMenusAndControls) {
         for (float dp : {1.0f, 1.5f}) {
             for (int width : {1600, 1200, 1000}) {
