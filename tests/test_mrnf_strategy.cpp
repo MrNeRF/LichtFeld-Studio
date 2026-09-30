@@ -65,40 +65,6 @@ class MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Te
 using namespace lfs::core;
 using namespace lfs::training;
 
-TEST(MRNFStrategyTest, PruneBoundsOrMatchesTensorChain) {
-    constexpr size_t n = 513;
-    std::vector<float> means_values(n * 3);
-    std::vector<float> scale_values(n);
-    for (size_t i = 0; i < n; ++i) {
-        means_values[3 * i] = static_cast<float>(static_cast<int>(i % 13) - 6);
-        means_values[3 * i + 1] = static_cast<float>(static_cast<int>(i % 7) - 3);
-        means_values[3 * i + 2] = static_cast<float>(static_cast<int>(i % 5) - 2);
-        scale_values[i] = static_cast<float>(static_cast<int>(i % 11) - 5) * 0.4f;
-    }
-    means_values[3] = std::numeric_limits<float>::quiet_NaN();
-    means_values[4] = 100.0f;
-    means_values[6] = std::numeric_limits<float>::infinity();
-    scale_values[7] = std::numeric_limits<float>::quiet_NaN();
-
-    const auto means = Tensor::from_vector(means_values, TensorShape({n, 3}), Device::CUDA);
-    const auto scale_max = Tensor::from_vector(scale_values, TensorShape({n}), Device::CUDA);
-    const auto initial = scale_max < -1.0f;
-    auto actual = initial.clone();
-    constexpr float center_values[3] = {0.25f, -0.5f, 0.75f};
-    const auto center = Tensor::from_vector(
-        std::vector<float>{center_values[0], center_values[1], center_values[2]},
-        TensorShape({1, 3}), Device::CUDA);
-    const auto expected = initial | (scale_max > 1.25f) |
-                          ((means - center).abs().max(1) > 3.5f);
-
-    mrnf_strategy::launch_prune_bounds_or(
-        means.ptr<float>(), scale_max.ptr<float>(), actual.ptr<bool>(),
-        n, center_values, 3.5f, 1.25f);
-    const auto actual_host = actual.cpu();
-    const auto expected_host = expected.cpu();
-    EXPECT_EQ(std::memcmp(actual_host.ptr<bool>(), expected_host.ptr<bool>(), n * sizeof(bool)), 0);
-}
-
 TEST(MRNFStrategyTest, ReplaceParentWeightsMatchesTensorProducts) {
     constexpr size_t n = 513;
     std::vector<float> opacity_values(n);
@@ -166,72 +132,6 @@ namespace {
         return best;
     }
 } // namespace
-
-TEST(MRNFStrategyTest, RefinePredicatesAndIndicesMatchTensorReferenceOnRealScene) {
-    const auto scene = largest_scene_ply();
-    if (scene.empty())
-        GTEST_SKIP() << "no splat model in " << TEST_DATA_DIR;
-    const auto loaded = lfs::io::load_ply(scene);
-    ASSERT_TRUE(loaded.has_value()) << lfs::format_for_developer(loaded.error());
-    const SplatData& splat = loaded->value;
-    const size_t n = static_cast<size_t>(splat.size());
-    ASSERT_GT(n, 100000u);
-    const auto means = splat.means();
-    const auto scale_max = splat.scaling_raw().max(1);
-    const auto initial = splat.opacity_raw().squeeze(-1) < -2.0f;
-    const auto center_host = means.slice(0, 0, 1).contiguous().cpu();
-    const float center_values[3] = {center_host.ptr<float>()[0], center_host.ptr<float>()[1],
-                                    center_host.ptr<float>()[2]};
-    const auto center = Tensor::from_vector(
-        std::vector<float>{center_values[0], center_values[1], center_values[2]},
-        TensorShape({1, 3}), Device::CUDA);
-    auto opacities = splat.get_opacity().squeeze(-1);
-    const auto visibility = (scale_max > -10.0f).to(DataType::Float32);
-    const auto active = means.slice(1, 0, 1).squeeze(-1) > center_values[0];
-    const auto trainable = means.slice(1, 1, 2).squeeze(-1) > center_values[1];
-    const auto edge = scale_max.abs() + 0.25f;
-
-    for (const float max_allowed : {1.0f, 5.0f, 20.0f, 100.0f}) {
-        const float log_max_allowed = std::log(max_allowed);
-        auto actual_mask = initial.clone();
-        const auto reference_mask = initial | (scale_max > log_max_allowed) |
-                                    ((means - center).abs().max(1) > max_allowed);
-        mrnf_strategy::launch_prune_bounds_or(
-            means.ptr<float>(), scale_max.ptr<float>(), actual_mask.ptr<bool>(),
-            n, center_values, max_allowed, log_max_allowed);
-        const auto actual_mask_host = actual_mask.cpu();
-        const auto reference_mask_host = reference_mask.cpu();
-        EXPECT_EQ(std::memcmp(actual_mask_host.ptr<bool>(), reference_mask_host.ptr<bool>(), n), 0);
-
-        const size_t count = actual_mask.count_nonzero();
-        const auto reference_indices = actual_mask.nonzero().squeeze(-1);
-        auto indices = Tensor::empty({count}, Device::CUDA, DataType::Int64);
-        indices.set_stream(actual_mask.stream());
-        const size_t actual_count = tensor_ops::launch_nonzero_bool(
-            actual_mask.ptr<unsigned char>(), indices.ptr<int64_t>(), n, count,
-            actual_mask.stream());
-        ASSERT_EQ(actual_count, count);
-        ASSERT_EQ(reference_indices.numel(), count);
-        if (count) {
-            const auto indices_host = indices.cpu();
-            const auto reference_host = reference_indices.cpu();
-            EXPECT_EQ(std::memcmp(indices_host.ptr<int64_t>(), reference_host.ptr<int64_t>(),
-                                  count * sizeof(int64_t)),
-                      0);
-        }
-
-        const auto expected_weights = opacities * (visibility > 0.0f) * active * trainable * edge;
-        auto actual_weights = Tensor::empty({n}, Device::CUDA);
-        mrnf_strategy::launch_replace_parent_weights(
-            opacities.ptr<float>(), visibility.ptr<float>(), active.ptr<bool>(),
-            trainable.ptr<bool>(), edge.ptr<float>(), actual_weights.ptr<float>(), n);
-        const auto actual_weights_host = actual_weights.cpu();
-        const auto expected_weights_host = expected_weights.cpu();
-        EXPECT_EQ(std::memcmp(actual_weights_host.ptr<float>(), expected_weights_host.ptr<float>(),
-                              n * sizeof(float)),
-                  0);
-    }
-}
 
 TEST(MRNFStrategyTest, ShNBatchArenaMatchesCatFallbackOnRealScene) {
     struct QuantReset {
@@ -660,6 +560,33 @@ TEST(MRNFStrategyTest, RefinementPreservesThinSurfacesAndPrunesCollapsedSplats) 
     for (size_t i = 0; i < 8; ++i) {
         EXPECT_EQ(deleted[i], i >= 3 && i <= 6) << "splat " << i;
     }
+}
+
+TEST(MRNFStrategyTest, DistantBackgroundSurvivesRefinement) {
+    auto splat_data = create_mrnf_test_splat_data(8);
+    MRNF strategy(splat_data);
+    auto opt_params = vanilla_mrnf_params();
+    opt_params.iterations = 1'000;
+    opt_params.start_refine = 0;
+    opt_params.stop_refine = 900;
+    opt_params.refine_every = 10;
+    opt_params.grow_until_iter = 0;
+    opt_params.grow_fraction = 0.0f;
+    opt_params.max_cap = 32;
+    strategy.initialize(opt_params);
+
+    // Bounds for the initial scene are intentionally far behind this row.
+    splat_data.means().slice(0, 0, 1).copy_(Tensor::from_vector(
+        std::vector<float>{1.0e6f, 1.0e6f, 1.0e6f}, TensorShape({1, 3}), Device::CUDA));
+    splat_data._densification_info.zero_();
+
+    RenderOutput render_output;
+    strategy.post_backward(10, render_output);
+
+    ASSERT_EQ(splat_data.size(), 8u);
+    ASSERT_TRUE(splat_data.deleted().is_valid());
+    const auto deleted_cpu = splat_data.deleted().cpu();
+    EXPECT_FALSE(deleted_cpu.ptr<bool>()[0]);
 }
 
 TEST(MRNFStrategyTest, LineBoundsUseFiniteSceneScaleForMeanLearningRate) {
