@@ -90,6 +90,11 @@
     color: @{text};
 }
 
+.view-label {
+    color: @{text_dim};
+    text-shadow: 0 1dp 2dp @{alpha(background,0.85)};
+}
+
 .tab-close {
     background-color: transparent;
     color: @{text_dim};
