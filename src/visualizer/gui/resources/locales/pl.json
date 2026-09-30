@@ -678,7 +678,8 @@
     "button.stop": "Zatrzymaj Trening",
     "button.reset": "Resetuj Trening",
     "button.add": "Dodaj",
-    "button.remove": "Usuń"
+    "button.remove": "Usuń",
+    "advanced.hard_clip_stop_iter": "Ostatnia iteracja twardego limitu:"
   },
   "rendering": "Renderowanie",
   "scene": {
@@ -1367,7 +1368,8 @@
     "point_size": "Rozmiar Punktu",
     "scale_camera": "Skala",
     "fov": "Pole widzenia kamery w stopniach",
-    "selection_colors": "Kolory wizualizacji zaznaczenia"
+    "selection_colors": "Kolory wizualizacji zaznaczenia",
+    "hard_clip_stop_iter": "Ostatnia iteracja stosowania twardego limitu udziału ekranu. Ustaw -1, aby pozostawić go włączonym."
   },
   "exit_popup": {
     "title": "Zakończyć Aplikację?",

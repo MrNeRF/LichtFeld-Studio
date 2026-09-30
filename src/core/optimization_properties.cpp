@@ -581,6 +581,16 @@ namespace lfs::core::param {
             .ui_step(0.05)
             .flags(PROP_ADVANCED)
             .all_strategies()
+            .int_prop(&OptimizationParameters::hard_clip_stop_iter,
+                      "hard_clip_stop_iter", "Hard Clip Stop Iter", d.hard_clip_stop_iter, -1, 1000000,
+                      "Last iteration that applies the screen-share hard clip; -1 keeps it enabled")
+            .locale("training.advanced.hard_clip_stop_iter")
+            .tooltip("training.tooltip.hard_clip_stop_iter")
+            .precision(0)
+            .ui_step(100)
+            .flags(PROP_ADVANCED)
+            .strategies({"mrnf"})
+            .all_strategies()
             .float_prop(&OptimizationParameters::screen_share_penalty,
                         "screen_share_penalty", "Screen Share Penalty", d.screen_share_penalty,
                         0.0f, std::numeric_limits<float>::infinity(),

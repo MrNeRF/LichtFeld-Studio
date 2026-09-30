@@ -678,7 +678,8 @@
     "button.stop": "Interrompi Training",
     "button.reset": "Resetta Training",
     "button.add": "Aggiungi",
-    "button.remove": "Rimuovi"
+    "button.remove": "Rimuovi",
+    "advanced.hard_clip_stop_iter": "Iterazione finale del limite rigido:"
   },
   "rendering": "Rendering",
   "scene": {
@@ -1367,7 +1368,8 @@
     "point_size": "Dimensione Punto",
     "scale_camera": "Scala",
     "fov": "Campo visivo della fotocamera in gradi",
-    "selection_colors": "Colori per visualizzazione selezione"
+    "selection_colors": "Colori per visualizzazione selezione",
+    "hard_clip_stop_iter": "Ultima iterazione in cui si applica il limite rigido della porzione dello schermo. Usa -1 per mantenerlo sempre attivo."
   },
   "exit_popup": {
     "title": "Uscire dall'Applicazione?",

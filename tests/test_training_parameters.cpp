@@ -631,6 +631,7 @@ namespace {
         EXPECT_TRUE(params.validate().empty()) << params.validate();
         for (const auto* key : {"scale_reg_decay_power", "erank_reg", "dc_reg", "sh_rest_reg"})
             EXPECT_TRUE(PropertyRegistry::instance().get_property("optimization", key)) << key;
+        EXPECT_TRUE(PropertyRegistry::instance().get_property("optimization", "hard_clip_stop_iter"));
 
         const auto roundtrip = OptimizationParameters::from_json(params.to_json());
         EXPECT_FLOAT_EQ(roundtrip.scale_reg_decay_power, 0.4f);

@@ -678,7 +678,8 @@
     "button.stop": "Detener Entrenamiento",
     "button.reset": "Restablecer Entrenamiento",
     "button.add": "Añadir",
-    "button.remove": "Quitar"
+    "button.remove": "Quitar",
+    "advanced.hard_clip_stop_iter": "Iteración final del límite rígido:"
   },
   "rendering": "Renderizado",
   "scene": {
@@ -1367,7 +1368,8 @@
     "point_size": "Tamaño del Punto",
     "scale_camera": "Escala",
     "fov": "Campo de visión de la cámara en grados",
-    "selection_colors": "Colores para la visualización de la selección"
+    "selection_colors": "Colores para la visualización de la selección",
+    "hard_clip_stop_iter": "Última iteración en la que se aplica el límite rígido de proporción en pantalla. Usa -1 para mantenerlo siempre activo."
   },
   "exit_popup": {
     "title": "¿Salir de la Aplicación?",

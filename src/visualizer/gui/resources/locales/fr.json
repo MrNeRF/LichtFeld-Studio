@@ -678,7 +678,8 @@
     "button.stop": "Arrêter l'Entraînement",
     "button.reset": "Réinitialiser l'Entraînement",
     "button.add": "Ajouter",
-    "button.remove": "Retirer"
+    "button.remove": "Retirer",
+    "advanced.hard_clip_stop_iter": "Dernière itération du plafonnement strict :"
   },
   "rendering": "Rendu",
   "scene": {
@@ -1367,7 +1368,8 @@
     "point_size": "Taille du Point",
     "scale_camera": "Échelle",
     "fov": "Champ de vision de la caméra en degrés",
-    "selection_colors": "Couleurs pour la visualisation de sélection"
+    "selection_colors": "Couleurs pour la visualisation de sélection",
+    "hard_clip_stop_iter": "Dernière itération où le plafonnement strict de la part écran s’applique. Utilisez -1 pour le garder actif en permanence."
   },
   "exit_popup": {
     "title": "Quitter l'Application ?",
