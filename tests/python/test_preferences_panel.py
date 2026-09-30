@@ -309,8 +309,8 @@ def preferences_panel_module(monkeypatch):
             TOGGLE_SELECTION_DEPTH=SimpleNamespace(name="TOGGLE_SELECTION_DEPTH", value=48),
             TOGGLE_GRID=SimpleNamespace(name="TOGGLE_GRID", value=49),
             TOGGLE_SPLIT_VIEW=SimpleNamespace(name="TOGGLE_SPLIT_VIEW", value=50),
-            TOGGLE_INDEPENDENT_SPLIT_VIEW=SimpleNamespace(
-                name="TOGGLE_INDEPENDENT_SPLIT_VIEW", value=51
+            TOGGLE_SPLIT_VIEWPORT=SimpleNamespace(
+                name="TOGGLE_SPLIT_VIEWPORT", value=51
             ),
             TOGGLE_GT_COMPARISON=SimpleNamespace(name="TOGGLE_GT_COMPARISON", value=52),
             TOGGLE_CAMERA_FRUSTUMS=SimpleNamespace(name="TOGGLE_CAMERA_FRUSTUMS", value=53),
@@ -347,6 +347,15 @@ def preferences_panel_module(monkeypatch):
             ),
             DEPTH_ADJUST_SIZE=SimpleNamespace(name="DEPTH_ADJUST_SIZE", value=85),
             DEPTH_WINDOW_DRAG=SimpleNamespace(name="DEPTH_WINDOW_DRAG", value=86),
+            VIEW_AXIS_TOP=SimpleNamespace(name="VIEW_AXIS_TOP", value=87),
+            VIEW_AXIS_BOTTOM=SimpleNamespace(name="VIEW_AXIS_BOTTOM", value=88),
+            VIEW_AXIS_FRONT=SimpleNamespace(name="VIEW_AXIS_FRONT", value=89),
+            VIEW_AXIS_BACK=SimpleNamespace(name="VIEW_AXIS_BACK", value=90),
+            VIEW_AXIS_RIGHT=SimpleNamespace(name="VIEW_AXIS_RIGHT", value=91),
+            VIEW_AXIS_LEFT=SimpleNamespace(name="VIEW_AXIS_LEFT", value=92),
+            VIEW_TOGGLE_PERSPECTIVE=SimpleNamespace(name="VIEW_TOGGLE_PERSPECTIVE", value=93),
+            VIEW_FRAME_ALL=SimpleNamespace(name="VIEW_FRAME_ALL", value=94),
+            TOGGLE_QUAD_VIEW=SimpleNamespace(name="TOGGLE_QUAD_VIEW", value=95),
         ),
         get_available_profiles=lambda: ["Default"],
         get_current_profile=lambda: "Default",

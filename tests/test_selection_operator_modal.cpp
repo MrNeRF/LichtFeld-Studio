@@ -22,6 +22,7 @@
 #include "scene/scene_manager.hpp"
 #include "selection/depth_window_geometry.hpp"
 #include "selection/selection_service.hpp"
+#include "single_view_targets.hpp"
 #include "tools/selection_tool.hpp"
 #include "tools/tool_base.hpp"
 #include "visualizer/app_store.hpp"
@@ -332,7 +333,8 @@ TEST_F(SelectionOperatorModalTest, DepthFilterDoesNotOverrideGaussianRenderMode)
     rendering_manager_->updateSettings(settings);
 
     Viewport viewport(100, 100);
-    lfs::vis::ToolContext tool_context(rendering_manager_.get(), scene_manager_.get(), &viewport, nullptr);
+    lfs::vis::SingleViewTargets views(viewport);
+    lfs::vis::ToolContext tool_context(rendering_manager_.get(), scene_manager_.get(), &views, nullptr);
     tool_context.updateViewportBounds(0.0f, 0.0f, 100.0f, 100.0f);
 
     lfs::vis::tools::SelectionTool tool;
@@ -400,7 +402,8 @@ TEST_F(SelectionOperatorModalTest, ClosedPolygonVertexDragConsumesMouseMoveUntil
 
 TEST_F(SelectionOperatorModalTest, DepthFilterExtentsUseIndependentScaleAxes) {
     Viewport viewport(100, 100);
-    lfs::vis::ToolContext tool_context(rendering_manager_.get(), scene_manager_.get(), &viewport, nullptr);
+    lfs::vis::SingleViewTargets views(viewport);
+    lfs::vis::ToolContext tool_context(rendering_manager_.get(), scene_manager_.get(), &views, nullptr);
     tool_context.updateViewportBounds(0.0f, 0.0f, 100.0f, 100.0f);
 
     constexpr float k_scale_x = 0.4f;
@@ -1161,7 +1164,8 @@ TEST_F(DepthWindowDragLifecycleTest, FocusLossClearsDepthWindowDragPreview) {
     // constructed controller (its cancelModalOperator path is what terminates
     // the drag).
     Viewport focus_viewport(options_.width, options_.height);
-    lfs::vis::InputController input(nullptr, focus_viewport);
+    lfs::vis::SingleViewTargets views(focus_viewport);
+    lfs::vis::InputController input(nullptr, views);
     input.onWindowFocusLost();
     EXPECT_FALSE(rendering_manager_->depthWindowDragPreview());
     EXPECT_FALSE(lfs::vis::op::operators().hasModalOperator());
@@ -1175,7 +1179,8 @@ TEST_F(SelectionOperatorModalTest, PolygonIgnoresDockClicksAndContinuesInViewpor
                               [] { return std::make_unique<SelectionStrokeOperator>(); });
     Viewport viewport(100, 100);
     input::InputBindings::setPersistenceEnabled(false);
-    InputController controller(nullptr, viewport);
+    SingleViewTargets views(viewport);
+    InputController controller(nullptr, views);
     controller.initialize();
     controller.updateViewportBounds(0, 0, 100, 100);
     OperatorProperties props;
@@ -1226,10 +1231,11 @@ TEST_F(SelectionOperatorModalTest, CameraMotionClearsPassiveHoverWithoutChanging
     set_initial_selection({1, 0});
     Viewport viewport(100, 100);
     input::InputBindings::setPersistenceEnabled(false);
-    InputController controller(nullptr, viewport);
+    SingleViewTargets views(viewport);
+    InputController controller(nullptr, views);
     controller.initialize();
     controller.updateViewportBounds(0, 0, 100, 100);
-    ToolContext tool_context(rendering_manager_.get(), scene_manager_.get(), &viewport, nullptr);
+    ToolContext tool_context(rendering_manager_.get(), scene_manager_.get(), &views, nullptr);
     tool_context.updateViewportBounds(0, 0, 100, 100);
     tools::SelectionTool tool;
     EXPECT_TRUE(tool.initialize(tool_context));

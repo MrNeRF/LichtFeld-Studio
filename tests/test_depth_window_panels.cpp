@@ -442,7 +442,7 @@ namespace lfs::vis {
     }
 
     TEST_F(DepthWindowPanelsTest, StaleProxyWithoutSelectionMaskDoesNotMoveOtherPanel) {
-        ToolContext context(rendering_manager_, nullptr, &viewer_->getViewport(), nullptr);
+        ToolContext context(rendering_manager_, nullptr, viewer_.get(), nullptr);
         tools::SelectionTool tool;
         ASSERT_TRUE(tool.initialize(context));
         tool.setEnabled(true);

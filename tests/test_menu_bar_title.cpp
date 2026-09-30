@@ -29,9 +29,8 @@ namespace lfs::vis::gui {
             bar.rml_context_ = context;
             bar.bindModel();
             bar.camera_buttons_.resize(3);
-            bar.render_buttons_.resize(3);
             bar.projection_buttons_.resize(2);
-            for (const auto* name : {"menu_camera_buttons", "menu_render_buttons", "menu_projection_buttons"})
+            for (const auto* name : {"menu_camera_buttons", "menu_projection_buttons"})
                 bar.menu_model_.DirtyVariable(name);
         }
         static void attach(RmlMenuBar& bar, Rml::ElementDocument* doc, RmlUIManager& manager) {

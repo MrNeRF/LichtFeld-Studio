@@ -5247,8 +5247,6 @@ namespace lfs::vis::gui {
         } else {
             PanelRegistry::instance().set_panel_enabled(id, false);
         }
-        if (panel_layout_.getBottomDockActiveTab() == id)
-            panel_layout_.setBottomDockActiveTab({});
         if (focus_panel_name_ == id)
             focus_panel_name_.clear();
     }
@@ -5943,8 +5941,6 @@ namespace lfs::vis::gui {
                 ScreenState transition_screen;
                 transition_screen.work_pos = last_ui_layout_work_pos_;
                 transition_screen.work_size = last_ui_layout_work_size_;
-                panel_layout_.enforceWidthConstraints(
-                    show_main_panel_, ui_visibility_target_hidden_, transition_screen);
                 ui_visibility_target_layout_ = panel_layout_.computeViewportLayout(
                     show_main_panel_, ui_visibility_target_hidden_, window_states_["python_console"],
                     transition_screen);
@@ -8408,8 +8404,7 @@ namespace lfs::vis::gui {
             return;
         }
 
-        panel_layout_.syncActiveTab(main_tabs, focus_panel_name_);
-        const std::string& active_tab = panel_layout_.getActiveTab();
+        const std::string active_tab = main_tabs.front().id;
         if (active_tab.empty()) {
             return;
         }
@@ -8470,21 +8465,13 @@ namespace lfs::vis::gui {
 
         constexpr float kPanelPad = 8.0f;
         constexpr float kPreloadMaxHeight = 100000.0f;
-        const float content_w = panel_layout_.getRightPanelWidth() - 2.0f * kPanelPad;
+        const float content_w = 360.0f - 2.0f * kPanelPad;
         if (content_w <= 0.0f) {
             return;
         }
 
-        const float splitter_h = PanelLayoutManager::SPLITTER_H * dpi;
-        const float tab_bar_h = PanelLayoutManager::TAB_BAR_H * dpi;
-        const float avail_h = panel_h - 2.0f * kPanelPad;
-        const float scene_h = panel_layout_.scenePanelHeight(avail_h, dpi);
-        const float content_top = kPanelPad;
-        const float tab_content_y = content_top + scene_h + splitter_h + tab_bar_h;
-        const float tab_content_h =
-            std::max(0.0f, content_top + avail_h - tab_content_y);
-        const float clip_y_min = tab_content_y;
-        const float clip_y_max = tab_content_y + tab_content_h;
+        const float clip_y_min = 0.0f;
+        const float clip_y_max = kPreloadMaxHeight;
 
         reg.render_panels({
                               .target = PanelRenderTarget::for_panel(active_tab),

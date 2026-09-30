@@ -539,9 +539,6 @@ namespace lfs::vis {
             [](bool visible) {
                 if (auto* gm = python::get_gui_manager()) {
                     gm->panelLayout().setShowSequencer(visible);
-                    if (visible)
-                        gm->panelLayout().setBottomDockActiveTab(std::string(
-                            gui::native_panels::SEQUENCER_PANEL_ID));
                 }
             });
         callback_cleanup_.add([] { python::set_sequencer_callbacks(nullptr, nullptr); });
@@ -3889,20 +3886,9 @@ namespace lfs::vis {
         // its live width instead of replacing it with the target project's.
         const bool keep_asset_manager_open = std::exchange(
             keep_asset_manager_open_after_restore_, false);
-        const std::optional<float> asset_manager_width =
-            keep_asset_manager_open && gui_manager_
-                ? std::make_optional(
-                      gui_manager_->panelLayout()
-                          .getLeftDockPreferredWidth())
-                : std::nullopt;
         project::applyGuiSession(
             *this, *prepared, camera_bookmarks_);
         if (keep_asset_manager_open) {
-            if (asset_manager_width && gui_manager_) {
-                gui_manager_->panelLayout()
-                    .setLeftDockWidth(
-                        *asset_manager_width);
-            }
             auto& panels =
                 gui::PanelRegistry::instance();
             panels.set_panel_enabled(

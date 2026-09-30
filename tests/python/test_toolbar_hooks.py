@@ -28,8 +28,11 @@ def _install_stub_modules(monkeypatch):
         get_active_tool=lambda: "",
         get_active_submode=lambda: "",
         get_panel=lambda _panel_id: SimpleNamespace(space="BOTTOM_DOCK"),
-        get_bottom_dock_active_tab=lambda: "",
-        set_bottom_dock_active_tab=lambda _panel_id: None,
+        screen=SimpleNamespace(
+            areas=lambda: [],
+            open_editor=lambda _editor: 0,
+            close_editor=lambda _editor: False,
+        ),
         set_sequencer_visible=lambda _visible: None,
         is_sequencer_visible=lambda: False,
         set_panel_enabled=lambda _panel_id, _enabled: None,
@@ -326,39 +329,35 @@ def test_bottom_dock_toolbar_selection_and_dispatch_rules(toolbar_module, monkey
         module._SEQUENCER_PANEL_ID: lf_stub.ui.PanelSpace.BOTTOM_DOCK,
         module._HISTOGRAM_PANEL_ID: lf_stub.ui.PanelSpace.BOTTOM_DOCK,
     }
-    visible = {module._SEQUENCER_PANEL_ID: False, module._HISTOGRAM_PANEL_ID: False}
-    active = [""]
+    open_editors = []
     monkeypatch.setattr(
         lf_stub.ui,
         "get_panel",
         lambda panel_id: SimpleNamespace(space=spaces[panel_id]),
         raising=False,
     )
-    monkeypatch.setattr(lf_stub.ui, "get_bottom_dock_active_tab", lambda: active[0], raising=False)
+    lf_stub.ui.screen = SimpleNamespace(
+        areas=lambda: [{"editor": editor} for editor in open_editors],
+        open_editor=lambda editor: open_editors.append(editor) or 1,
+        close_editor=lambda editor: open_editors.remove(editor) if editor in open_editors else False,
+    )
 
     assert not module._bottom_dock_panel_selected(module._HISTOGRAM_PANEL_ID, False)
-    visible[module._HISTOGRAM_PANEL_ID] = True
     assert not module._bottom_dock_panel_selected(module._HISTOGRAM_PANEL_ID, True)
-    active[0] = module._HISTOGRAM_PANEL_ID
+    open_editors.append(module._HISTOGRAM_PANEL_ID)
     assert module._bottom_dock_panel_selected(module._HISTOGRAM_PANEL_ID, True)
 
     calls = []
     set_visible = lambda value: calls.append(("visible", value))
-    set_active = lambda panel_id: (calls.append(("active", panel_id)), active.__setitem__(0, panel_id))
-    monkeypatch.setattr(lf_stub.ui, "set_bottom_dock_active_tab", set_active, raising=False)
 
-    active[0] = ""
+    open_editors.clear()
     module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, False, set_visible)
-    assert calls[-2:] == [("visible", True), ("active", module._HISTOGRAM_PANEL_ID)]
+    assert module._HISTOGRAM_PANEL_ID in open_editors
+    assert calls[-1] == ("visible", True)
 
     calls.clear()
-    active[0] = module._SEQUENCER_PANEL_ID
     module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
-    assert calls == [("active", module._HISTOGRAM_PANEL_ID)]
-
-    calls.clear()
-    active[0] = module._HISTOGRAM_PANEL_ID
-    module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
+    assert module._HISTOGRAM_PANEL_ID not in open_editors
     assert calls == [("visible", False)]
 
     spaces[module._HISTOGRAM_PANEL_ID] = lf_stub.ui.PanelSpace.FLOATING
@@ -1820,144 +1819,38 @@ def test_python_theme_mutations_are_marshaled_to_viewer_thread():
     assert "def set_viewport_toolbar_position(position: str) -> None:" in ui_stub
 
 
-def test_empty_viewport_rejects_independent_split_activation_and_hides_orphan_ui():
+def test_split_viewport_action_is_wired():
     project_root = Path(__file__).parent.parent.parent
-    input_header = (
-        project_root / "src/visualizer/input/input_controller.hpp"
-    ).read_text(encoding="utf-8")
     input_source = (
         project_root / "src/visualizer/input/input_controller.cpp"
     ).read_text(encoding="utf-8")
-    gui_manager = (
-        project_root / "src/visualizer/gui/gui_manager.cpp"
-    ).read_text(encoding="utf-8")
-
-    assert "void toggleIndependentSplitView();" in input_header
-
-    toggle_start = input_source.index(
-        "void InputController::toggleIndependentSplitView()"
-    )
-    toggle_end = input_source.index(
-        "SplitViewPanelId InputController::splitPanelForScreenX", toggle_start
-    )
-    toggle_block = input_source[toggle_start:toggle_end]
-
-    assert "if (!isIndependentSplitViewActive())" in toggle_block
-    assert "services().sceneOrNull()" in toggle_block
-    assert "!scene_manager || scene_manager->isEmpty()" in toggle_block
-    assert "ToggleIndependentSplitView{.viewport = &viewport_}.emit();" in toggle_block
-
-    key_action_start = input_source.index(
-        "case input::Action::TOGGLE_INDEPENDENT_SPLIT_VIEW:"
-    )
-    key_action_end = input_source.index("return;", key_action_start)
-    key_action_block = input_source[key_action_start:key_action_end]
-    assert "toggleIndependentSplitView();" in key_action_block
-    assert "ToggleIndependentSplitView" not in key_action_block
-
-    toolbar_start = gui_manager.index("bool show_secondary_toolbar = false;")
-    toolbar_end = gui_manager.index(
-        "rml_viewport_overlay_.setToolbarPanels(", toolbar_start
-    )
-    toolbar_block = gui_manager[toolbar_start:toolbar_end]
-
-    assert "rendering->isIndependentSplitViewActive() && !editor_ctx.isEmpty()" in toolbar_block
-    assert "show_secondary_toolbar = secondary_panel->valid();" in toolbar_block
-
-    divider_start = gui_manager.index(
-        "RmlViewportOverlay::SplitDividerOverlayState split_divider_state;"
-    )
-    divider_end = gui_manager.index(
-        "rml_viewport_overlay_.setSplitDividerOverlay(split_divider_state);",
-        divider_start,
-    )
-    divider_block = gui_manager[divider_start:divider_end]
-
-    assert (
-        "rendering && rendering->isSplitViewActive() && "
-        "!rendering->isIndependentSplitViewActive())"
-        in divider_block
-    )
-    assert "rendering->getSplitDividerScreenX" in divider_block
-    assert "rendering->getContentBounds" in divider_block
+    assert "case input::Action::TOGGLE_SPLIT_VIEWPORT:" in input_source
+    assert "toggleSplitViewport();" in input_source
 
 
-def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
+def test_screen_chrome_view_label_is_pointer_transparent_and_themed():
     project_root = Path(__file__).parent.parent.parent
     resources = project_root / "src/visualizer/gui/rmlui/resources"
-    right_panel_rcss = (resources / "right_panel.rcss").read_text(encoding="utf-8")
-    panel_tabs_theme = (resources / "panel_tabs.theme.rcss").read_text(
-        encoding="utf-8"
-    )
-    right_panel_theme = (resources / "right_panel.theme.rcss").read_text(encoding="utf-8")
-    right_panel_rml = (resources / "right_panel.rml").read_text(encoding="utf-8")
-    right_panel_cpp = (
-        project_root / "src/visualizer/gui/rml_right_panel.cpp"
-    ).read_text(encoding="utf-8")
-    shell_theme = (resources / "shell.theme.rcss").read_text(encoding="utf-8")
-    panel_host_theme = (resources / "panel_host.theme.rcss").read_text(encoding="utf-8")
-    scene_tree_rcss = (resources / "scene_tree.rcss").read_text(encoding="utf-8")
-    scene_tree_theme = (resources / "scene_tree.theme.rcss").read_text(encoding="utf-8")
-    resolver = (
-        project_root / "src/visualizer/gui/rmlui/rml_theme.cpp"
-    ).read_text(encoding="utf-8")
+    rml = (resources / "screen_chrome.rml").read_text(encoding="utf-8")
+    rcss = (resources / "screen_chrome.rcss").read_text(encoding="utf-8")
+    theme = (resources / "screen_chrome.theme.rcss").read_text(encoding="utf-8")
 
-    tab_start = right_panel_rcss.index(".tab {")
-    tab_end = right_panel_rcss.index("\n}", tab_start)
-    tab_rule = right_panel_rcss[tab_start:tab_end]
-    assert "box-sizing: border-box;" in tab_rule
-    assert "border-width: 1dp;" in tab_rule
-    assert "border-bottom-width: 2dp;" in tab_rule
-    assert "transition: none;" in tab_rule
-    assert "0.15s" not in tab_rule
+    assert 'class="view-label"' in rml
+    assert "data-if=\"area.is_view\"" in rml
+    assert "{{ area.view_label }}" in rml
 
-    assert right_panel_rml.index('href="panel_tabs.rcss"') < right_panel_rml.index(
-        'href="right_panel.rcss"'
-    )
-    assert right_panel_cpp.index('loadBaseRCSS("rmlui/panel_tabs.rcss")') < (
-        right_panel_cpp.index('loadBaseRCSS("rmlui/right_panel.rcss")')
-    )
+    label_start = rcss.index(".view-label {")
+    label_end = rcss.index("\n}", label_start)
+    label_rule = rcss[label_start:label_end]
+    assert "pointer-events: none;" in label_rule
+    assert "color:" not in label_rule
+    assert "text-shadow:" not in label_rule
 
-    for token in (
-        "right_panel.tab_border",
-        "right_panel.tab_bottom_border",
-        "right_panel.tab_active_border",
-        "right_panel.tab_active_bottom_border",
-    ):
-        assert f"@{{{token}}}" in right_panel_theme
-        assert f'"{token}"' in resolver
-
-    for shared_token in (
-        "right_panel.tab_active_bg",
-        "right_panel.separator",
-    ):
-        assert f"@{{{shared_token}}}" in panel_tabs_theme
-        assert f'{{"{shared_token}"' in resolver
-
-    hover_start = right_panel_theme.index(".tab:hover {")
-    hover_end = right_panel_theme.index("\n}", hover_start)
-    hover_rule = right_panel_theme[hover_start:hover_end]
-    assert "border-color:" not in hover_rule
-    assert "border-bottom-color:" not in hover_rule
-
-    active_start = right_panel_theme.index(".tab.active {")
-    active_end = right_panel_theme.index("\n}", active_start)
-    active_rule = right_panel_theme[active_start:active_end]
-    assert "border-bottom-color: @{right_panel.tab_active_bottom_border};" in active_rule
-
-    assert "@{panel.body_decor};" in shell_theme
-    assert "@{chrome.right_panel_decor};" in right_panel_theme
-    assert "@{panel.host_body_decor};" in panel_host_theme
-    assert '{"panel.host_body_decor"' in resolver
-
-    scene_body_start = scene_tree_rcss.index("body {")
-    scene_body_end = scene_tree_rcss.index("\n}", scene_body_start)
-    scene_body_rule = scene_tree_rcss[scene_body_start:scene_body_end]
-    assert "box-sizing: border-box;" in scene_body_rule
-    assert "border-width: 1dp;" in scene_body_rule
-    assert "border-radius: 5dp;" in scene_body_rule
-    assert "overflow: hidden;" in scene_body_rule
-    assert "border-color: @{right_panel.border};" in scene_tree_theme
+    theme_start = theme.index(".view-label {")
+    theme_end = theme.index("\n}", theme_start)
+    theme_rule = theme[theme_start:theme_end]
+    assert "color:" in theme_rule
+    assert "text-shadow:" in theme_rule
 
 
 def test_every_depth_slider_carries_its_own_tooltip_in_every_locale():

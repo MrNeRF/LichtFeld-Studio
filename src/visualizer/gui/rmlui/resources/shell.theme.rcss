@@ -4,10 +4,6 @@
     @{chrome.menu_decor};
 }
 
-#right-panel-region {
-    @{panel.body_decor};
-}
-
 #status-region {
     @{chrome.status_decor};
 }

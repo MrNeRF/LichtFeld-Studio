@@ -675,8 +675,10 @@ def toggle_perf_hud_expanded() -> None:
 def is_perf_hud_visible() -> bool:
     """True when the performance HUD is currently shown"""
 
-def toggle_independent_split_view() -> None:
-    """Toggle independent split view"""
+def toggle_split_viewport() -> None:
+    """
+    Open a second 3D viewport beside the one under the pointer, or close it again
+    """
 
 def get_render_mode() -> RenderMode:
     """Get current render mode (Splats, Points, Rings, Centers)"""

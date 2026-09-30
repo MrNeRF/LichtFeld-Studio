@@ -87,11 +87,8 @@ def test_menubar_submenus_are_stacked_above_overlay_and_hit_testable():
     assert 'id="menu-window-toggle-ui"' in rml
     assert 'data-action="window_toggle_ui"' in rml
     assert rml.count('data-for="button : menu_camera_buttons"') == 1
-    assert rml.count('data-for="button : menu_render_buttons"') == 1
+    assert rml.count('data-for="button : menu_projection_buttons"') == 1
     assert rml.index('data-for="button : menu_camera_buttons"') < rml.index(
-        'data-for="button : menu_render_buttons"'
-    )
-    assert rml.index('data-for="button : menu_render_buttons"') < rml.index(
         'data-for="button : menu_projection_buttons"'
     )
     toolbar_button_rule = _rule_body(rcss, ".menu-toolbar-btn")
@@ -178,9 +175,6 @@ def test_optional_gradients_style_the_primary_application_chrome():
     consumers = {
         "chrome.menu_decor": ("shell.theme.rcss", "menubar.theme.rcss"),
         "chrome.status_decor": ("shell.theme.rcss", "statusbar.theme.rcss"),
-        "chrome.right_panel_decor": ("right_panel.theme.rcss",),
-        "chrome.right_panel_edge_shape": ("right_panel.theme.rcss",),
-        "chrome.right_panel_separator_decor": ("right_panel.theme.rcss",),
         "chrome.toolbar_decor": ("viewport_overlay.theme.rcss",),
         "controls.selected_decor": ("viewport_overlay.theme.rcss",),
         "controls.selected_icon": ("viewport_overlay.theme.rcss",),
@@ -369,7 +363,7 @@ def test_all_optional_theme_gradients_reach_rml_consumers():
 
     gradient_tokens = {
         "window_body": ("window.body_decor", "components.theme.rcss"),
-        "panel_body": ("panel.body_decor", "shell.theme.rcss"),
+        "panel_body": ("panel.body_decor", "screen_chrome.theme.rcss"),
         "window_title": ("window.title_decor", "components.theme.rcss"),
         "section_header": ("components.header_decor", "components.theme.rcss"),
         "section_header_hover": (
@@ -645,17 +639,14 @@ def test_menu_pointer_input_is_not_replayed_into_underlay_panels():
 
 
 def test_viewport_overlay_toolbar_origin_tracks_viewport_content_offset():
-    gui_manager_cpp = (
+    overlay_cpp = (
         PROJECT_ROOT
         / "src"
         / "visualizer"
         / "gui"
-        / "gui_manager.cpp"
+        / "rml_viewport_overlay.cpp"
     ).read_text(encoding="utf-8")
-
-    assert "const float viewport_content_offset = viewport_layout_.pos.x - screen.work_pos.x;" in gui_manager_cpp
-    assert "float primary_toolbar_x = viewport_content_offset;" in gui_manager_cpp
-    assert "rml_viewport_overlay_.setViewportContentOffset(viewport_content_offset);" in gui_manager_cpp
+    assert "setViewportContentOffset" in overlay_cpp
 
 
 def test_asset_manager_launcher_is_not_duplicated_in_scene_header():
