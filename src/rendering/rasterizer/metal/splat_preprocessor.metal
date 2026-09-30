@@ -23,7 +23,7 @@ struct Projection {
     uint4 extent;
     float4 rasterization, display, panorama;
 };
-struct InputLayout { uint count, rest, has_deleted, objects, half_attrs, overlay, object_indexed, draw_count, lod, page_splats; };
+struct InputLayout { uint count, rest, has_deleted, objects, half_attrs, overlay, object_indexed, draw_count, lod, page_splats, logical_count, deleted_count; };
 struct SceneObject { float4x4 model_to_world; float4 camera_local; uint4 flags; };
 struct GutSplat { float4 inverse0, inverse1, inverse2, mean_opacity; };
 struct ProjectedSplat { float4 mean_depth, conic_opacity, color; uint4 bounds; };
@@ -170,8 +170,11 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     if((layout.lod&32u) && (lod_count[0]>layout.draw_count || i>=lod_count[0]))return;
     const uint source=(layout.lod&1u)?lod_indices[i]:i;
     const uint logical=(layout.lod&2u)?logical_indices[i]:source;
-    if(source>=layout.count || logical>=layout.count)return;
-    if(layout.has_deleted && deleted[source]) return;
+    if(source>=layout.count || logical>=layout.logical_count)return;
+    if(layout.has_deleted) {
+        const uint deleted_id=sh_storage==4u?logical:source;
+        if(deleted_id<layout.deleted_count && deleted[deleted_id])return;
+    }
     const float3 p=float3(means[source]);
     float4x4 model_to_world=frame.model_to_world;
     float3 camera_local=frame.camera_local.xyz;

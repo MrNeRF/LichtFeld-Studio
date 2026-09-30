@@ -17,6 +17,7 @@ struct RasterParameters {
     float4 intrinsics, clip;
     uint4 camera;
     float4 panorama;
+    uint4 mask_limits;
 };
 struct RasterStatus { ulong required; uint error, unused; };
 uint4 clipped_bounds(ProjectedSplat s, constant RasterParameters& p) {
@@ -346,7 +347,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                 // only the 3DGS macro-relative path compresses them to half.
                 const float2 overlay_center=(p.mode==3u || (p.unused&16u))?means[j].xy:
                     float2(half2((means[j].xy+p.render_origin.xy-macro_origin)/overlay_tile_extent))*overlay_tile_extent+macro_origin-p.render_origin.xy;
-                const uint status=overlay_selection(overlay_params,logical,flags,overlay_center+(p.camera.z==2u?p.panorama.zw:float2(0)),selection,preview);
+                const uint status=overlay_selection(overlay_params,logical,flags,overlay_center+(p.camera.z==2u?p.panorama.zw:float2(0)),selection,preview,p.mask_limits.xy);
                 const bool selectable=(flags&2u)==0;
                 if(overlay_enabled(overlay_params[22].x)&&selectable){
                     const float gaussian=exp(-.5f*q);

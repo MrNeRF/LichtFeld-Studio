@@ -143,6 +143,8 @@ namespace lfs::rendering::metal {
         if (rad && (!in.rad_page_splats || in.rad_page_splats % 32))
             throw std::invalid_argument("RAD pool page size must be an explicit multiple of the SH cell width");
         const size_t n = in.count, draw_count = lod.enabled ? lod.count : n;
+        const uint32_t logical_count = lod.enabled && lod.logical_count ? lod.logical_count : in.count;
+        const uint32_t deleted_count = in.deleted_count ? in.deleted_count : in.count;
         if (lod.enabled && lod.source_count != in.count)
             throw std::invalid_argument("Metal resident LOD source extent mismatch");
         const std::array<BufferSlice, 4> lod_buffers = {lod.indices, lod.logical_indices, lod.levels, lod.weights};
@@ -189,7 +191,7 @@ namespace lfs::rendering::metal {
                                                     in.sh0, in.sh_rest, in.sh_bounds, in.deleted, scene.object_indices, scene.objects};
         const size_t attr = (rad || in.non_sh_attrs_f16) ? 2 : 4;
         const std::array<size_t, 10> lengths = {n * 12, gaussians ? n * (rad ? 8 : 3 * attr) : 0, gaussians ? n * 4 * attr : 0, n * attr, n * (rad ? 8 : 12),
-                                                rest_bytes, bounds_bytes, in.deleted.buffer ? n : 0, scene.count && scene.object_indices.buffer ? n * 4 : 0, size_t(scene.count) * sizeof(SceneObject)};
+                                                rest_bytes, bounds_bytes, in.deleted.buffer ? deleted_count : 0, scene.count && scene.object_indices.buffer ? size_t(logical_count) * 4 : 0, size_t(scene.count) * sizeof(SceneObject)};
         const std::array<NSUInteger, 10> alignments = {4, rad ? 8u : attr, 4 * attr, attr, rad ? 8u : 4u, 4, rad ? 16u : 8u, 1, 4, 16};
         const char* names[] = {"means", "scales", "rotations", "opacity", "SH0", "SH rest", "SH bounds", "deleted mask", "object indices", "scene objects"};
         check_slice(output, draw_count * sizeof(ProjectedSplat), 16, impl_->device, "projection output");
@@ -222,8 +224,8 @@ namespace lfs::rendering::metal {
             [encoder setBuffer:lengths[i] ? inputs[i].buffer : impl_->empty offset:lengths[i] ? inputs[i].offset : 0 atIndex:i < 8 ? i : i + 3];
         [encoder setBuffer:output.buffer offset:output.offset atIndex:8];
         [encoder setBytes:&projection length:sizeof(projection) atIndex:9];
-        const std::array<uint32_t, 10> layout = {in.count, in.layout_rest, in.deleted.buffer ? 1u : 0u, scene.count, (rad || in.non_sh_attrs_f16) ? 1u : 0u, overlay.parameter_count ? 1u : 0u, scene.object_indices.buffer ? 1u : 0u, uint32_t(draw_count),
-                                                 lod.enabled ? (1u | (lod.logical_indices.buffer ? 2u : 0u) | (lod.levels.buffer ? 4u : 0u) | (lod.weights.buffer ? 8u : 0u) | (lod.debug ? 16u : 0u) | (lod.counter.buffer ? 32u : 0u)) : 0u, in.rad_page_splats};
+        const std::array<uint32_t, 12> layout = {in.count, in.layout_rest, in.deleted.buffer ? 1u : 0u, scene.count, (rad || in.non_sh_attrs_f16) ? 1u : 0u, overlay.parameter_count ? 1u : 0u, scene.object_indices.buffer ? 1u : 0u, uint32_t(draw_count),
+                                                 lod.enabled ? (1u | (lod.logical_indices.buffer ? 2u : 0u) | (lod.levels.buffer ? 4u : 0u) | (lod.weights.buffer ? 8u : 0u) | (lod.debug ? 16u : 0u) | (lod.counter.buffer ? 32u : 0u)) : 0u, in.rad_page_splats, logical_count, deleted_count};
         [encoder setBytes:layout.data() length:sizeof(layout) atIndex:10];
         const std::array<BufferSlice, 3> overlays = {overlay.parameters, overlay.flags, overlay.node_mask};
         for (NSUInteger j = 0; j < overlays.size(); ++j)

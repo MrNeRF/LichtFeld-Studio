@@ -23,12 +23,12 @@ void overlay_filter(device const float4* p,uint base,bool ellipsoid,int node,flo
     }
 }
 uint overlay_selection(device const float4* p,uint source,uint flags,float2 center,
-                       device const uchar* selection,device const uchar* preview){
+                       device const uchar* selection,device const uchar* preview,uint2 mask_limits){
     if(overlay_enabled(p[21].y))return 0;
-    const uint group=overlay_enabled(p[24].x)?selection[source]&127u:0;
+    const uint group=(source<mask_limits.x && overlay_enabled(p[24].x))?selection[source]&127u:0;
     const bool selectable=(flags&2u)==0;
     const bool committed=group>0;
-    const bool in_preview=!overlay_enabled(p[206].z)&&overlay_enabled(p[24].y)&&preview[source]!=0;
+    const bool in_preview=!overlay_enabled(p[206].z)&&overlay_enabled(p[24].y)&&source<mask_limits.y&&preview[source]!=0;
     const float2 delta=center-p[23].xy;
     const bool brush=overlay_enabled(p[23].w)&&selectable&&dot(delta,delta)<=p[23].z*p[23].z;
     const bool additive=overlay_enabled(p[24].z);

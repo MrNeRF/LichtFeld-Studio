@@ -367,6 +367,36 @@ static void run(id<MTLDevice> device) {
     wait(command);
     const auto picked = reinterpret_cast<const uint32_t*>(static_cast<const char*>(lod_read.pick.contents) + 14 * lod_read.pick_stride) + 18;
     require(*picked == logical_id, "Resident LOD picking published a compact draw slot instead of its logical primitive");
+    // A logical scene need not fit in the physical page pool. The selection
+    // prefix can also be smaller than the scene; unknown IDs remain unselected.
+    lod.source_count = 1;
+    lod.logical_count = 8;
+    std::array<simd_float4, 207> bounded_params{};
+    bounded_params[24].x = 1;
+    std::array<simd_float4, 258> bounded_colors{};
+    bounded_colors[2] = {0, 1, 0, 1};
+    const std::array<uint8_t, 2> bounded_selection = {2, 2};
+    const uint32_t bounded_flags = 0;
+    OverlayBuffers bounded_overlay;
+    bounded_overlay.parameters = {[device newBufferWithBytes:bounded_params.data() length:sizeof(bounded_params) options:MTLResourceStorageModeShared]};
+    bounded_overlay.colors = {[device newBufferWithBytes:bounded_colors.data() length:sizeof(bounded_colors) options:MTLResourceStorageModeShared]};
+    bounded_overlay.flags = {[device newBufferWithBytes:&bounded_flags length:sizeof(bounded_flags) options:MTLResourceStorageModeShared]};
+    bounded_overlay.selection = {[device newBufferWithBytes:bounded_selection.data() length:sizeof(bounded_selection) options:MTLResourceStorageModeShared]};
+    bounded_overlay.parameter_count = 207;
+    bounded_overlay.selection_count = 2;
+    command = [queue commandBuffer];
+    raster.encode(command, {portal_input}, 1, RasterMode::Gaussian, {0, 0, 0, 0}, expected_frame, bounded_overlay, {}, camera, lod);
+    const auto bounded_read = readback(device, command, expected_frame);
+    wait(command);
+    const auto bounded_pick = reinterpret_cast<const uint32_t*>(static_cast<const char*>(bounded_read.pick.contents) + 14 * bounded_read.pick_stride) + 18;
+    const auto bounded_color = reinterpret_cast<const _Float16*>(static_cast<const char*>(bounded_read.color.contents) + 14 * bounded_read.color_stride) + 18 * 4;
+    require(*bounded_pick == 7 && std::abs(float(bounded_color[0]) - .8f) < .001 && bounded_color[1] == 0, "Logical pool ID was truncated or read outside its selection prefix");
+    bounded_overlay.selection_count = 8;
+    bool bounded_rejected = false;
+    try {
+        raster.encode([queue commandBuffer], { portal_input }, 1, RasterMode::Gaussian, bg, expected_frame, bounded_overlay, {}, camera, lod);
+    } catch (const std::invalid_argument&) { bounded_rejected = true; }
+    require(bounded_rejected, "Logical selection extent exceeded its resident buffer");
     // Spark high-opacity nodes encode a density kernel, not a probability.
     // Independent double-precision oracle checks the nonlinear saturation.
     ProjectedSplat density_splat = portal_splat;

@@ -154,7 +154,12 @@ adaptive-quality policy and does not measure driver memory exactly.
 Resident LOD cuts use compact draw reservations while directly addressing the
 original SplatData source, including Q16 cell swizzle and per-block bounds. Physical
 and logical indices remain distinct through projection, object transforms, masks
-and picking. Optional transition weights and level colors use cut-space metadata.
+and picking. Paged cuts carry an explicit logical scene extent independently
+of their smaller physical pool. Selection/preview and deletion masks may cover
+only a resident logical prefix: bounds are checked before reading, unseen IDs
+remain unselected, and RAD deletion addresses logical IDs. Independent GPU
+contracts cover IDs beyond the physical pool, short masks, picking and invalid
+logical IDs under Metal shader validation. Optional transition weights and level colors use cut-space metadata.
 Invalid source/logical IDs are culled before reads; empty cuts clear prior coverage.
 Buffers are retained/reused per output slot, with working-set checks on growth,
 and cut changes participate in refinement invalidation. No full-attribute gather,

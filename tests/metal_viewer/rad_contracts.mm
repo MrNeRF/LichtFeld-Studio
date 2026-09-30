@@ -91,6 +91,9 @@ static void run(id<MTLDevice> device) {
     }
     const std::array<uint32_t, 7> indices = {130, 127, 64, 63, 32, 31, 0};
     LodSelection cut{upload(indices.data(), sizeof(indices)), {}, {}, {}, 7, count, true, false};
+    const std::array<uint32_t, 7> logical_ids = {1000, 900, 800, 700, 2, 1, 0};
+    cut.logical_indices = upload(logical_ids.data(), sizeof(logical_ids));
+    cut.logical_count = 1001;
     auto command = [queue commandBuffer];
     projector.encode(command, input, view, 3, PrimitiveMode::Gaussian, {output}, {}, {}, {}, cut);
     [command commit];
@@ -107,6 +110,24 @@ static void run(id<MTLDevice> device) {
         }
         require(std::abs(selected[n].color.x - std::max(0., expected)) < 2e-6, "Sparse RAD cut used compact-slot rather than physical-page SH scale");
     }
+    // The logical scene can be larger than its physical pool. A small
+    // resident deletion prefix must not be read using physical slot IDs.
+    const std::array<uint8_t, 3> deleted = {1, 0, 0};
+    input.deleted = upload(deleted.data(), sizeof(deleted));
+    input.deleted_count = 3;
+    command = [queue commandBuffer];
+    projector.encode(command, input, view, 3, PrimitiveMode::Gaussian, {output}, {}, {}, {}, cut);
+    [command commit];
+    [command waitUntilCompleted];
+    require(command.status == MTLCommandBufferStatusCompleted, "Logical RAD deletion dispatch failed");
+    for (size_t n = 0; n < logical_ids.size(); ++n)
+        require((selected[n].bounds.z > selected[n].bounds.x) == (logical_ids[n] != 0), "RAD deletion used a physical ID or read beyond the logical mask prefix");
+    cut.logical_count = 1000;
+    command = [queue commandBuffer];
+    projector.encode(command, input, view, 3, PrimitiveMode::Gaussian, {output}, {}, {}, {}, cut);
+    [command commit];
+    [command waitUntilCompleted];
+    require(command.status == MTLCommandBufferStatusCompleted && selected[0].bounds.z == 0, "Out-of-range logical RAD node was not culled");
     for (uint32_t invalid : {0u, 63u}) {
         input.rad_page_splats = invalid;
         bool rejected = false;

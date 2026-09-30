@@ -40,6 +40,7 @@ namespace lfs::rendering::metal {
         ShStorage storage = ShStorage::Q16;
         bool non_sh_attrs_f16 = false;
         uint32_t rad_page_splats = 0; // RadSigned8: page-frame stride, explicitly supplied by the pool owner
+        uint32_t deleted_count = 0;   // zero uses source count; RAD deletion masks address logical IDs
     };
 
     struct alignas(16) SceneObject {
@@ -60,6 +61,7 @@ namespace lfs::rendering::metal {
         uint32_t parameter_count = 0;
         uint32_t node_count = 0;
         simd_float4 render_origin{};
+        uint32_t selection_count = 0, preview_count = 0; // zero infers the resident/logical source extent
     };
 
     // Draw a compact resident cut without copying/repacking SplatData. Physical
@@ -70,7 +72,8 @@ namespace lfs::rendering::metal {
         uint32_t source_count = 0;
         bool enabled = false;
         bool debug = false;
-        BufferSlice counter; // optional GPU-produced selected count, without host readback
+        BufferSlice counter;        // optional GPU-produced selected count, without host readback
+        uint32_t logical_count = 0; // zero uses source_count; paged pools have a larger logical scene
     };
 
     struct alignas(16) Projection {

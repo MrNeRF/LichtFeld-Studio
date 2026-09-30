@@ -20,8 +20,9 @@ namespace lfs::rendering::metal {
             simd_float4 intrinsics, clip;
             simd_uint4 camera;
             simd_float4 panorama;
+            simd_uint4 mask_limits;
         };
-        static_assert(sizeof(RasterParameters) == 128);
+        static_assert(sizeof(RasterParameters) == 144);
         struct SortParameters {
             uint32_t blocks, shift;
         };
@@ -227,6 +228,15 @@ namespace lfs::rendering::metal {
                             (count && (!logical.buffer || logical.buffer.device != impl_->device || logical.offset % 4 ||
                                        logical.offset > logical.buffer.length || size_t(count) * 4 > logical.buffer.length - logical.offset))))
             throw std::invalid_argument("Invalid native Metal LOD identifier mapping");
+        const uint32_t logical_count = lod.enabled ? (lod.logical_count ? lod.logical_count : lod.source_count) : count;
+        const uint32_t selection_count = overlay.selection.buffer ? (overlay.selection_count ? overlay.selection_count : logical_count) : 0;
+        const uint32_t preview_count = overlay.preview.buffer ? (overlay.preview_count ? overlay.preview_count : logical_count) : 0;
+        const auto check_mask = [&](BufferSlice mask, uint32_t extent) {
+            if (extent && (mask.buffer.device != impl_->device || mask.offset > mask.buffer.length || extent > mask.buffer.length - mask.offset))
+                throw std::invalid_argument("Metal logical selection mask exceeds its resident storage");
+        };
+        check_mask(overlay.selection, selection_count);
+        check_mask(overlay.preview, preview_count);
         if (f->in_flight.exchange(true, std::memory_order_acq_rel))
             throw std::logic_error("Metal viewer frame reservation is still in flight");
         f->completed.store(false, std::memory_order_release);
@@ -235,7 +245,7 @@ namespace lfs::rendering::metal {
             f->completed.store(finished.status == MTLCommandBufferStatusCompleted, std::memory_order_release);
             f->in_flight.store(false, std::memory_order_release);
         }];
-        const RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), (overlay.parameter_count ? 1u : 0u) | (expected_depth ? 2u : 0u) | (projection.rasterization.w == 1.f && projection.display.z == 0 ? 4u : 0u) | (lod.enabled ? 8u : 0u) | (projection.display.z == 1.f ? 16u : 0u), background, overlay.render_origin, projection.intrinsics, {projection.clip_scale.x, expected_depth ? projection.rasterization.z : projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w}, projection.extent, projection.panorama};
+        const RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), (overlay.parameter_count ? 1u : 0u) | (expected_depth ? 2u : 0u) | (projection.rasterization.w == 1.f && projection.display.z == 0 ? 4u : 0u) | (lod.enabled ? 8u : 0u) | (projection.display.z == 1.f ? 16u : 0u), background, overlay.render_origin, projection.intrinsics, {projection.clip_scale.x, expected_depth ? projection.rasterization.z : projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w}, projection.extent, projection.panorama, {selection_count, preview_count, 0, 0}};
         const auto dispatch = [](id<MTLComputeCommandEncoder> e, uint32_t n) {
             [e dispatchThreadgroups:MTLSizeMake(ceil_div(n, 256), 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
             [e endEncoding];
@@ -321,7 +331,7 @@ namespace lfs::rendering::metal {
         for (NSUInteger j = 0; j < overlays.size(); ++j)
             [e setBuffer:overlays[j].buffer ?: f->counts offset:overlays[j].buffer ? overlays[j].offset : 0 atIndex:5 + j];
         [e setBuffer:lod.enabled && logical.buffer ? logical.buffer : f->counts offset:lod.enabled && logical.buffer ? logical.offset : 0 atIndex:11];
-        [e setBytes:&lod.source_count length:sizeof(lod.source_count) atIndex:12];
+        [e setBytes:&logical_count length:sizeof(logical_count) atIndex:12];
         [e setTexture:f->color atIndex:0];
         [e setTexture:f->depth atIndex:1];
         [e setTexture:f->pick atIndex:2];

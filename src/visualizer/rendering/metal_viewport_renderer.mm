@@ -882,6 +882,8 @@ namespace lfs::vis {
                 scene.object_indices = slice(8);
                 overlay.selection = selection_enabled ? slice(9) : BufferSlice{};
                 overlay.preview = preview_enabled ? slice(10) : BufferSlice{};
+                overlay.selection_count = selection_enabled ? uint32_t(std::min<size_t>(views[9].bytes, std::numeric_limits<uint32_t>::max())) : 0;
+                overlay.preview_count = preview_enabled ? uint32_t(std::min<size_t>(views[10].bytes, std::numeric_limits<uint32_t>::max())) : 0;
                 i.preprocessor.encode(command, inputs, projection, degree, request.gut ? PrimitiveMode::Gut : PrimitiveMode::Gaussian, {f.projected, 0}, scene, overlay, request.gut ? BufferSlice{f.gut_geometry, 0} : BufferSlice{}, lod);
                 i.rasterizer.encode(command, {f.projected, 0}, draw_count, request.gut ? RasterMode::Gut : RasterMode::Gaussian,
                                     {background.x, background.y, background.z, request.transparent_background ? 0.f : 1.f}, *f.raster, overlay, request.gut ? BufferSlice{f.gut_geometry, 0} : BufferSlice{}, projection, lod);
