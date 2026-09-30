@@ -327,6 +327,16 @@ namespace lfs::core {
                    static_cast<float>(iter) < normal_end_fraction * total_f;
         }
 
+        float OptimizationParameters::scale_reg_at(const int iter) const {
+            if (scale_reg_decay_power < 0.0f)
+                return scale_reg;
+            const float p = std::max(scale_reg_decay_power, 0.0f);
+            const float t = std::clamp(static_cast<float>(iter) /
+                                           static_cast<float>(std::max<size_t>(iterations, 1)),
+                                       0.0f, 1.0f);
+            return scale_reg * (p + 1.0f) * std::pow(1.0f - t, p);
+        }
+
         int OptimizationParameters::resolved_ppisp_controller_activation_step(const int total_iterations) const {
             if (ppisp_controller_activation_step >= 0)
                 return ppisp_controller_activation_step;
@@ -412,6 +422,8 @@ namespace lfs::core {
                 return std::format("steps_scaler must be finite (got {})", steps_scaler);
             if (!std::isfinite(max_screen_share))
                 return std::format("max_screen_share must be finite (got {})", max_screen_share);
+            if (!std::isfinite(scale_reg_decay_power) || scale_reg_decay_power < -1.0f)
+                return std::format("scale_reg_decay_power must be finite and at least -1 (got {})", scale_reg_decay_power);
             if (ppisp_warmup_steps < 0)
                 return std::format("ppisp_warmup_steps must be nonnegative (got {})", ppisp_warmup_steps);
             if (debug_python && (debug_python_port <= 0 || debug_python_port > 65535))
@@ -427,6 +439,9 @@ namespace lfs::core {
                 std::pair{"rotation_lr", rotation_lr},
                 std::pair{"opacity_reg", opacity_reg},
                 std::pair{"scale_reg", scale_reg},
+                std::pair{"erank_reg", erank_reg},
+                std::pair{"dc_reg", dc_reg},
+                std::pair{"sh_rest_reg", sh_rest_reg},
                 std::pair{"mask_opacity_penalty_weight", mask_opacity_penalty_weight},
                 std::pair{"depth_loss_weight", depth_loss_weight},
                 std::pair{"bilateral_grid_lr", bilateral_grid_lr},
@@ -675,7 +690,11 @@ namespace lfs::core {
             p.shs_lr = 2e-3f;
             p.lambda_dssim = 0.2f;
             p.opacity_reg = 0.003f;
-            p.scale_reg = 0.0f;
+            p.scale_reg = 0.01f;
+            p.scale_reg_decay_power = 0.4f;
+            p.erank_reg = 0.001f;
+            p.dc_reg = 0.001f;
+            p.sh_rest_reg = 0.001f;
             p.use_error_map = true;
             p.use_edge_map = true;
             p.background_improvements = false;

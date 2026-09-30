@@ -594,6 +594,26 @@ namespace {
         EXPECT_FALSE(parsed.to_json().at("explore_starvation_weighting").get<bool>());
     }
 
+    TEST_F(TrainingParametersTest, MrnfRegularizationDefaultsAndSchedule) {
+        const auto params = OptimizationParameters::mrnf_defaults();
+        EXPECT_FLOAT_EQ(params.scale_reg, 0.01f);
+        EXPECT_FLOAT_EQ(params.scale_reg_decay_power, 0.4f);
+        EXPECT_FLOAT_EQ(params.erank_reg, 0.001f);
+        EXPECT_FLOAT_EQ(params.dc_reg, 0.001f);
+        EXPECT_FLOAT_EQ(params.sh_rest_reg, 0.001f);
+        EXPECT_NEAR(params.scale_reg_at(0), 0.014f, 1.0e-7f);
+        EXPECT_FLOAT_EQ(params.scale_reg_at(static_cast<int>(params.iterations)), 0.0f);
+        EXPECT_TRUE(params.validate().empty()) << params.validate();
+        for (const auto* key : {"scale_reg_decay_power", "erank_reg", "dc_reg", "sh_rest_reg"})
+            EXPECT_TRUE(PropertyRegistry::instance().get_property("optimization", key)) << key;
+
+        const auto roundtrip = OptimizationParameters::from_json(params.to_json());
+        EXPECT_FLOAT_EQ(roundtrip.scale_reg_decay_power, 0.4f);
+        EXPECT_FLOAT_EQ(roundtrip.erank_reg, 0.001f);
+        EXPECT_FLOAT_EQ(roundtrip.dc_reg, 0.001f);
+        EXPECT_FLOAT_EQ(roundtrip.sh_rest_reg, 0.001f);
+    }
+
     TEST_F(TrainingParametersTest, SaveLoadRoundTripPreservesParameters) {
         std::array<std::pair<std::string_view, OptimizationParameters>, 3> factories = {{
             {"mcmc", OptimizationParameters::mcmc_defaults()},
