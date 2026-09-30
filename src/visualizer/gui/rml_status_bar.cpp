@@ -548,6 +548,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlStatusBar::shutdown() {
+        resetTooltip();
         if (document_registered_)
             lfs::python::unregister_rml_document("status_bar");
         document_registered_ = false;
@@ -586,6 +587,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlStatusBar::reloadResources() {
+        resetTooltip();
         if (!rml_context_)
             return;
 
@@ -661,6 +663,8 @@ namespace lfs::vis::gui {
         bind(store.eval_lpips);
         bind(store.scene_generation);
         bind(store.selection_generation);
+        bind(store.viewer_backend_mask);
+        bind(store.language_generation);
         subscriptions_.push_back(store.fps.subscribe([this](const float& fps) {
             reactive_fps_available_ = true;
             reactive_fps_value_ = fps;
@@ -679,19 +683,25 @@ namespace lfs::vis::gui {
 
     bool RmlStatusBar::animationFrameDue(
         const std::chrono::steady_clock::time_point now) const {
-        return animation_active_ &&
-               (next_refresh_at_ == std::chrono::steady_clock::time_point{} ||
-                now >= next_refresh_at_);
+        const auto tooltip_deadline = tooltip_.revealDeadline();
+        return (tooltip_deadline && now >= *tooltip_deadline) ||
+               (animation_active_ &&
+                (next_refresh_at_ == std::chrono::steady_clock::time_point{} ||
+                 now >= next_refresh_at_));
     }
 
     std::optional<double> RmlStatusBar::secondsUntilAnimationFrame(
         const std::chrono::steady_clock::time_point now) const {
+        std::optional<double> delay;
+        if (const auto deadline = tooltip_.revealDeadline())
+            delay = std::max(0.0, std::chrono::duration<double>(*deadline - now).count());
         if (!animation_active_)
-            return std::nullopt;
-        if (next_refresh_at_ == std::chrono::steady_clock::time_point{} ||
-            now >= next_refresh_at_)
-            return 0.0;
-        return std::chrono::duration<double>(next_refresh_at_ - now).count();
+            return delay;
+        const double animation_delay =
+            next_refresh_at_ == std::chrono::steady_clock::time_point{} || now >= next_refresh_at_
+                ? 0.0
+                : std::chrono::duration<double>(next_refresh_at_ - now).count();
+        return delay ? std::min(*delay, animation_delay) : animation_delay;
     }
 
     void RmlStatusBar::postStatusMessage(std::string text, const ErrorNoticeLevel level) {
@@ -1683,10 +1693,48 @@ namespace lfs::vis::gui {
         setModelString("fps_label", model_.fps_label,
                        ui_only_fps ? std::format(" {}", LOC("status_bar.ui_fps"))
                                    : std::format(" {}", LOC(lichtfeld::Strings::Status::FPS)));
+        updateBackendContent();
+        setModelString("git_commit", model_.git_commit, GIT_COMMIT_HASH_SHORT);
+
+        section_signature_ =
+            (model_.show_training ? uint32_t{1} << 0 : 0) |
+            (model_.show_eval_metrics ? uint32_t{1} << 1 : 0) |
+            (model_.show_splats ? uint32_t{1} << 2 : 0) |
+            (model_.show_split ? uint32_t{1} << 3 : 0) |
+            (model_.show_wasd ? uint32_t{1} << 4 : 0) |
+            (model_.show_zoom ? uint32_t{1} << 5 : 0) |
+            (model_.preview_reduced ? uint32_t{1} << 10 : 0) |
+            (model_.show_status_message ? uint32_t{1} << 6 : 0) |
+            (model_.show_gpu_model ? uint32_t{1} << 7 : 0);
+
+        // A paused trainer has a static progress display. Keep the miner's
+        // periodic refresh armed only while its particles actually advance.
+        const bool miner_visible = progress_miner_pref_ && show_training &&
+                                   training_state == TrainingState::Running;
+        model_animation_active_ = wasd_visible || zoom_visible || status_msg.visible ||
+                                  miner_visible;
+        animation_active_ = model_animation_active_ || rml_animation_active_;
+        next_refresh_at_ = now + (miner_visible && training_state == TrainingState::Running
+                                      ? kBusyRefreshInterval
+                                  : miner_visible           ? kMiningRefreshInterval
+                                  : model_animation_active_ ? kAnimatedRefreshInterval
+                                  : ctx.is_training         ? kBusyRefreshInterval
+                                                            : kIdleRefreshInterval);
+        return model_dirty_;
+    }
+
+    void RmlStatusBar::updateBackendContent() {
         // Read published frame metadata, never predict the API from a preference
         // or initialize a GPU just to paint the status bar.
-        const uint32_t backend_mask = rm ? rm->activeViewerBackendMask() : 0;
+        const uint32_t backend_mask = lfs::vis::app_store().viewer_backend_mask.get();
         const auto requested = UserPreferences::instance().viewerBackend();
+        const auto tensor_backend = core::configured_gpu_backend();
+        const BackendStatusStamp stamp{backend_mask, static_cast<int>(requested),
+                                       static_cast<int>(tensor_backend),
+                                       lfs::vis::app_store().language_generation.get()};
+        if (backend_status_stamp_ == stamp)
+            return;
+        backend_status_stamp_ = stamp;
         const auto viewer_name = [](rendering::ViewerBackend backend) -> std::string {
             if (backend == rendering::ViewerBackend::Metal)
                 return "Metal";
@@ -1723,36 +1771,100 @@ namespace lfs::vis::gui {
         setModelString("renderer_tooltip", model_.renderer_tooltip, std::move(renderer_tooltip));
         setModelString("tensor_label", model_.tensor_label, LOC("status_bar.tensor_backend_short"));
         setModelString("tensor_value", model_.tensor_value,
-                       core::gpu_backend_name(core::configured_gpu_backend()));
+                       core::gpu_backend_name(tensor_backend));
         setModelString("tensor_tooltip", model_.tensor_tooltip,
                        std::string(LOC("status_bar.tensor_backend")) + ": " + LOC("status_bar.tensor_backend_tooltip"));
-        setModelString("git_commit", model_.git_commit, GIT_COMMIT_HASH_SHORT);
+    }
 
-        section_signature_ =
-            (model_.show_training ? uint32_t{1} << 0 : 0) |
-            (model_.show_eval_metrics ? uint32_t{1} << 1 : 0) |
-            (model_.show_splats ? uint32_t{1} << 2 : 0) |
-            (model_.show_split ? uint32_t{1} << 3 : 0) |
-            (model_.show_wasd ? uint32_t{1} << 4 : 0) |
-            (model_.show_zoom ? uint32_t{1} << 5 : 0) |
-            (model_.preview_reduced ? uint32_t{1} << 10 : 0) |
-            (model_.show_status_message ? uint32_t{1} << 6 : 0) |
-            (model_.show_gpu_model ? uint32_t{1} << 7 : 0);
+    void RmlStatusBar::resetTooltip() {
+        tooltip_ = {};
+        tooltip_target_ = nullptr;
+        tooltip_text_.clear();
+        tooltip_overlay_height_ = 0.0f;
+        pointer_inside_ = false;
+        updateTooltipScheduling();
+    }
 
-        // A paused trainer has a static progress display. Keep the miner's
-        // periodic refresh armed only while its particles actually advance.
-        const bool miner_visible = progress_miner_pref_ && show_training &&
-                                   training_state == TrainingState::Running;
-        model_animation_active_ = wasd_visible || zoom_visible || status_msg.visible ||
-                                  miner_visible;
-        animation_active_ = model_animation_active_ || rml_animation_active_;
-        next_refresh_at_ = now + (miner_visible && training_state == TrainingState::Running
-                                      ? kBusyRefreshInterval
-                                  : miner_visible           ? kMiningRefreshInterval
-                                  : model_animation_active_ ? kAnimatedRefreshInterval
-                                  : ctx.is_training         ? kBusyRefreshInterval
-                                                            : kIdleRefreshInterval);
-        return model_dirty_;
+    void RmlStatusBar::updateTooltipScheduling() {
+        if (!rml_manager_ || !rml_context_)
+            return;
+        rml_manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_, tooltip_.hasActiveState());
+        rml_manager_->setContextTooltipRevealDeadline(rml_context_, tooltip_.revealDeadline());
+    }
+
+    void RmlStatusBar::updateHoverTooltip() {
+        auto* target = pointer_inside_ ? rml_context_->GetHoverElement() : nullptr;
+        // Use the owner of the description as the target: moving between a
+        // badge's letter and value must not restart the reveal delay.
+        while (target && target->GetAttribute<Rml::String>("title", "").empty() &&
+               target->GetAttribute<Rml::String>("data-tooltip", "").empty())
+            target = target->GetParentNode();
+        const auto text = resolveRmlTooltip(target);
+        if (target != tooltip_target_ || text != tooltip_text_) {
+            tooltip_target_ = target;
+            tooltip_text_ = text;
+            tooltip_.setHover(text, target);
+            markModelDirty();
+        }
+        updateTooltipScheduling();
+    }
+
+    bool RmlStatusBar::applyHoverTooltip(const int doc_w, const int bar_h,
+                                         const int maximum_overlay_height,
+                                         const bool force_position) {
+        if (!rml_context_ || !document_)
+            return false;
+        const float dp_ratio = rml_context_->GetDensityIndependentPixelRatio();
+        const float maximum = static_cast<float>(std::max(0, maximum_overlay_height));
+        bool changed = false;
+        const auto resize_context = [&] {
+            const int height = bar_h + static_cast<int>(std::ceil(overlayHeight()));
+            const bool resized = rml_context_->GetDimensions() != Rml::Vector2i(doc_w, height);
+            if (resized) {
+                rml_context_->SetDimensions({doc_w, height});
+                document_->SetProperty("height", std::format("{}px", height));
+                rml_context_->Update();
+                changed = true;
+            }
+            if (pointer_inside_) {
+                rml_context_->ProcessMouseMove(last_mouse_x_,
+                                               last_mouse_bar_y_ + static_cast<int>(std::ceil(overlayHeight())),
+                                               last_mouse_modifiers_);
+                updateHoverTooltip();
+            }
+            return resized;
+        };
+
+        if (tooltip_.revealDue() && tooltip_overlay_height_ == 0.0f)
+            tooltip_overlay_height_ = std::min(150.0f * dp_ratio, maximum);
+        bool reposition = resize_context() || force_position;
+        auto* const body = document_->GetElementById("body");
+        const auto apply = [&] {
+            const auto dimensions = rml_context_->GetDimensions();
+            // Anchor row tooltips above the row, so their border never
+            // overlaps the badge itself. Popup controls keep their own position.
+            return tooltip_.apply(body, last_mouse_x_,
+                                  std::min(last_mouse_bar_y_, 0) + static_cast<int>(std::ceil(overlayHeight())),
+                                  dimensions.x, dimensions.y, reposition);
+        };
+        if (apply()) {
+            changed = true;
+            rml_context_->Update();
+        }
+        float measured_height = 0.0f;
+        if (auto* const element = document_->GetElementById("frame-tooltip");
+            element && element->IsVisible())
+            measured_height = std::min(std::ceil(element->GetOffsetHeight() + 20.0f * dp_ratio), maximum);
+        if (tooltip_overlay_height_ != measured_height) {
+            tooltip_overlay_height_ = measured_height;
+            reposition = resize_context();
+            if (apply()) {
+                changed = true;
+                rml_context_->Update();
+            }
+        }
+        updateTooltipScheduling();
+        return changed;
     }
 
     void RmlStatusBar::processInput(const PanelInputState& input, const float bar_x, const float bar_y,
@@ -1764,9 +1876,20 @@ namespace lfs::vis::gui {
         trackContextFrame(bar_x - input.screen_x,
                           bar_y - overlay_height - input.screen_y);
         const float local_x = input.mouse_x - bar_x;
-        const float local_y = input.mouse_y - (bar_y - overlay_height);
-        const bool is_inside = local_x >= 0.0f && local_x < bar_w &&
-                               local_y >= 0.0f && local_y < bar_h + overlay_height;
+        const float bar_local_y = input.mouse_y - bar_y;
+        const float local_y = bar_local_y + overlay_height;
+        const bool is_inside =
+            (local_x >= 0.0f && local_x < bar_w && bar_local_y >= 0.0f && bar_local_y < bar_h) ||
+            isOverlayPoint(local_x, bar_local_y, bar_w);
+        pointer_inside_ = is_inside;
+        last_mouse_x_ = static_cast<int>(local_x);
+        last_mouse_bar_y_ = static_cast<int>(bar_local_y);
+        last_mouse_modifiers_ = sdlModsToRml(input.key_ctrl, input.key_shift,
+                                             input.key_alt, input.key_super);
+        if (!is_inside) {
+            rml_context_->ProcessMouseLeave();
+            updateHoverTooltip();
+        }
         if (!is_inside && !input.mouse_released[0] && !input.mouse_released[1] &&
             !save_step_interaction_.dragging) {
             clearSaveStepHover();
@@ -1774,11 +1897,11 @@ namespace lfs::vis::gui {
         }
 
         handleSaveStepInteraction(input, local_x, local_y);
-
-        const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
-                                      input.key_alt, input.key_super);
-        rml_context_->ProcessMouseMove(static_cast<int>(local_x), static_cast<int>(local_y), mods);
-
+        const int mods = last_mouse_modifiers_;
+        if (is_inside) {
+            rml_context_->ProcessMouseMove(static_cast<int>(local_x), static_cast<int>(local_y), mods);
+            updateHoverTooltip();
+        }
         if (is_inside && input.mouse_clicked[0])
             rml_context_->ProcessMouseButtonDown(0, mods);
         if (input.mouse_released[0])
@@ -1790,24 +1913,18 @@ namespace lfs::vis::gui {
     }
 
     float RmlStatusBar::overlayHeight() const {
-        if (!model_.mcp_details_expanded)
-            return 0.0f;
-        const float dp_ratio = rml_context_
-                                   ? rml_context_->GetDensityIndependentPixelRatio()
-                                   : 1.0f;
-        const float fallback_height = 150.0f * dp_ratio;
-        if (!document_)
-            return fallback_height;
-
-        auto* const popup = document_->GetElementById("mcp-popup");
-        if (!popup || !popup->IsVisible())
-            return fallback_height;
-
-        // The popup sits 20dp above the status row. Keep the first-frame fallback,
-        // but grow the render/input surface when localized text, an error, or
-        // multiple network endpoints make the actual popup taller.
-        const float measured_height = popup->GetOffsetHeight() + 20.0f * dp_ratio;
-        return std::max(fallback_height, measured_height);
+        float popup_height = 0.0f;
+        if (model_.mcp_details_expanded) {
+            const float dp_ratio = rml_context_
+                                       ? rml_context_->GetDensityIndependentPixelRatio()
+                                       : 1.0f;
+            popup_height = 150.0f * dp_ratio;
+            if (auto* const popup = document_ ? document_->GetElementById("mcp-popup") : nullptr;
+                popup && popup->IsVisible())
+                popup_height = std::max(popup_height, popup->GetOffsetHeight() + 20.0f * dp_ratio);
+        }
+        // Only reserve the measured tooltip surface; it never captures input.
+        return std::max(popup_height, tooltip_overlay_height_);
     }
 
     bool RmlStatusBar::isOverlayPoint(const float local_x, const float local_y,
@@ -1887,9 +2004,10 @@ namespace lfs::vis::gui {
         if (w_px <= 0.0f || h_px <= 0.0f || screen_w <= 0 || screen_h <= 0)
             return;
 
+        updateBackendContent();
         const float overlay_height = overlayHeight();
         const int render_w = static_cast<int>(w_px);
-        const int render_h = static_cast<int>(h_px + overlay_height);
+        const int render_h = static_cast<int>(std::ceil(h_px + overlay_height));
         const float dp_ratio = rml_context_->GetDensityIndependentPixelRatio();
         const bool dp_changed = dp_ratio != last_dp_ratio_;
         const bool theme_current =
@@ -1904,6 +2022,7 @@ namespace lfs::vis::gui {
             next_refresh_at_ == std::chrono::steady_clock::time_point{} ||
             now >= next_refresh_at_;
         const bool can_reuse = theme_current && !dp_changed && !model_dirty_ && !refresh_due &&
+                               !tooltip_.revealDue() &&
                                render_w == last_render_w_ &&
                                render_h == last_render_h_;
         if (!can_reuse) {
@@ -1938,9 +2057,10 @@ namespace lfs::vis::gui {
             return;
         }
 
-        const float overlay_height = overlayHeight();
+        updateBackendContent();
+        float overlay_height = overlayHeight();
         const int render_w = static_cast<int>(w_px);
-        const int render_h = static_cast<int>(h_px + overlay_height);
+        int render_h = static_cast<int>(std::ceil(h_px + overlay_height));
         const bool size_changed = (render_w != last_render_w_ || render_h != last_render_h_);
         const float dp_ratio = rml_context_->GetDensityIndependentPixelRatio();
         const bool dp_changed = dp_ratio != last_dp_ratio_;
@@ -1954,7 +2074,7 @@ namespace lfs::vis::gui {
         const bool content_changed = updateContent(ctx, refresh_due);
         const bool section_signature_changed = section_signature_ != last_section_signature_;
         const bool needs_render = size_changed || dp_changed || theme_changed || had_pending_model_dirty ||
-                                  content_changed ||
+                                  content_changed || tooltip_.revealDue() ||
                                   (animation_active_ && refresh_due);
         if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface()) {
             rml_animation_active_ = false;
@@ -1970,6 +2090,12 @@ namespace lfs::vis::gui {
             }
             rml_context_->Update();
             fitToAvailableWidth(size_changed || dp_changed || theme_changed || section_signature_changed);
+            (void)applyHoverTooltip(render_w, static_cast<int>(h_px),
+                                    static_cast<int>(y), size_changed || dp_changed || theme_changed);
+            overlay_height = overlayHeight();
+            render_h = rml_context_->GetDimensions().y;
+            last_document_h_ = render_h;
+            rml_context_->Update();
 
             rml_animation_active_ = rml_context_->GetNextUpdateDelay() == 0;
             animation_active_ = model_animation_active_ || rml_animation_active_;

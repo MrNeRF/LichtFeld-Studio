@@ -60,6 +60,7 @@ namespace lfs::vis {
 
     private:
         void invalidateCapture();
+        void setMetadata(const CachedRenderMetadata& metadata);
         CachedRenderMetadata metadata_;
         std::optional<lfs::rendering::GpuFrame> gpu_frame_;
         glm::ivec2 rendered_size_{0};

@@ -231,6 +231,7 @@ namespace lfs::vis {
             GalleryStateValue,
             DepthWindowDrawGeneration,
             DepthWindowDrawCommitValue,
+            ViewerBackendMask,
         };
 
         AppStore();
@@ -275,6 +276,8 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<std::uint64_t> viewport_toolbar_generation;
         lfs::core::reactive::Observable<std::uint64_t> depth_window_draw_generation;
         lfs::core::reactive::Observable<DepthWindowDrawCommit> depth_window_draw_commit;
+        // API(s) of the published scene output; zero means compositor only.
+        lfs::core::reactive::Observable<std::uint32_t> viewer_backend_mask;
 
     private:
         lfs::core::reactive::Store store_;
