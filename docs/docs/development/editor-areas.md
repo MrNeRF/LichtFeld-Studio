@@ -115,3 +115,17 @@ The MCP surface exposes corresponding `screen.get`, `screen.split`,
 query or update one 3D view. Read
 `lichtfeld://scene/state` and the runtime catalog before using these tools;
 the MCP guide documents tool schemas and GUI-thread behavior.
+
+## Live view verification
+
+`scripts/verify_editor_area_views.py` checks camera, render target, and redraw
+isolation through MCP and real X11 mouse input. Start an MCP-enabled build, load
+a scene, and split it into at least two visible 3D areas. With `xdotool` installed,
+run the script against that app's display and MCP port:
+
+```sh
+python3 scripts/verify_editor_area_views.py --display :96 --port 45696 --output /tmp/editor-view-check
+```
+
+Use `--window` when the display contains multiple app windows. The tool orbits
+each view and writes before/after captures and JSON evidence to the output folder.

@@ -87,8 +87,8 @@ class Mcp:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--port", type=int, default=45697)
-    parser.add_argument("--display", default=":97")
+    parser.add_argument("--port", type=int, required=True)
+    parser.add_argument("--display", required=True)
     parser.add_argument("--window", help="X11 window ID; otherwise discover the visible app window")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
