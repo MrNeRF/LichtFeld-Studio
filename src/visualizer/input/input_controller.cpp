@@ -2492,19 +2492,19 @@ namespace lfs::vis {
             cmd::ShowLoadFileConfirmation{
                 .paths = splat_files,
                 .is_dataset = false,
-                .replace = false}
+                .replace = false,
+                .user_batch = splat_files.size() > 1}
                 .emit();
             LOG_INFO(
                 "Requesting confirmation before loading {} dropped splat/mesh file(s)",
                 splat_files.size());
         } else {
-            for (const auto& splat : splat_files) {
-                auto event = cmd::LoadFile{};
-                event.path = splat;
-                event.is_dataset = false;
-                event.emit();
-                LOG_INFO("Loading {} via drag-and-drop: {}",
-                         lfs::core::path_to_utf8(splat.extension()), lfs::core::path_to_utf8(splat.filename()));
+            if (!splat_files.empty()) {
+                cmd::LoadFile{.path = splat_files.front(),
+                              .is_dataset = false,
+                              .paths = splat_files,
+                              .user_batch = splat_files.size() > 1}
+                    .emit();
             }
         }
 

@@ -1868,6 +1868,13 @@ namespace lfs::vis {
         // NOTE: ui::RenderSettingsChanged, ui::CameraMove, state::SceneChanged,
         // ui::PointCloudModeChanged are handled by RenderingManager::setupEventHandlers()
 
+        state::CombinedModelBuildReady::when([this](const auto& event) {
+            postWork({.run = [this, scene = event.scene] {
+                if (scene_manager_ && scene == &scene_manager_->getScene() && rendering_manager_)
+                    rendering_manager_->markDirty(DirtyFlag::ALL);
+            }});
+        });
+
         // Window redraw requests on scene/mode changes
         state::SceneChanged::when([this](const auto& event) {
             python::set_scene_mutation_flags(event.mutation_flags);
@@ -2134,6 +2141,10 @@ namespace lfs::vis {
         const bool preload_running_at_start = python::is_plugin_preload_running();
         update_work_processed_ = false;
         window_manager_->updateWindowSize();
+
+        // Completion and allocation validation must also run while minimized.
+        if (gui_manager_ && gui_manager_->asyncTasks().hasPendingMainThreadCompletions())
+            gui_manager_->asyncTasks().pollImportCompletion();
 
         motion_only_wake_skipped_ = isMotionOnlyWake();
         if (motion_only_wake_skipped_)
@@ -3183,6 +3194,11 @@ namespace lfs::vis {
             return std::unexpected("No data loader available");
         }
 
+        if (scene_manager_ && scene_manager_->canClearScene()) {
+            data_loader_->cancelPendingImports();
+            if (gui_manager_)
+                gui_manager_->asyncTasks().cancelImport(false);
+        }
         if (data_loader_->clearScene()) {
             return {};
         }
@@ -3340,9 +3356,10 @@ namespace lfs::vis {
             return false;
         }
         lfs::core::events::cmd::ShowLoadFileConfirmation{
-            .paths = {cmd.path},
+            .paths = cmd.paths.empty() ? std::vector<std::filesystem::path>{cmd.path} : cmd.paths,
             .is_dataset = cmd.is_dataset,
-            .replace = cmd.replace}
+            .replace = cmd.replace,
+            .user_batch = cmd.user_batch}
             .emit();
         return true;
     }
@@ -3403,6 +3420,8 @@ namespace lfs::vis {
             return;
         }
         if (gui_manager_) {
+            if (data_loader_)
+                data_loader_->cancelPendingImports();
             gui_manager_->asyncTasks().cancelImport(false);
         }
 
@@ -3533,6 +3552,8 @@ namespace lfs::vis {
             return preflight;
         }
         if (gui_manager_) {
+            if (data_loader_)
+                data_loader_->cancelPendingImports();
             gui_manager_->asyncTasks().cancelImport(false);
         }
         pending_view_paths_.clear();
@@ -3651,10 +3672,6 @@ namespace lfs::vis {
             });
             return;
         }
-        if (gui_manager_) {
-            gui_manager_->asyncTasks().cancelImport(false);
-        }
-
         if (shouldDeferProjectSwitchForTraining()) {
             pending_training_action_ =
                 PendingTrainingAction::OpenProject;

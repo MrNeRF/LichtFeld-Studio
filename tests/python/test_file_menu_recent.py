@@ -1159,34 +1159,17 @@ def test_load_file_confirmation_title_for_splat_and_dataset(monkeypatch):
     assert dataset_title == "tr:load_dataset_popup.save_title"
 
 
-def test_load_file_confirmation_reissues_in_order_with_replace_on_first(
-    monkeypatch,
-):
+def test_load_file_confirmation_preserves_one_ordered_batch(monkeypatch):
     file_menu = _load_file_menu(monkeypatch)
-
+    calls = []
+    file_menu.lf.load_files = lambda *args, **kwargs: calls.append((args, kwargs))
     file_menu._show_load_file_confirmation(
-        ["/tmp/a.ply", "/tmp/b.ply"], False, True
+        ["/tmp/a.ply", "/tmp/b.ply"], False, True, True
     )
-
-    assert file_menu.lf.load_file_calls == [
-        (
-            ("/tmp/a.ply",),
-            {
-                "is_dataset": False,
-                "discard_changes": True,
-                "replace": True,
-                "stop_training": False,
-            },
-        ),
-        (
-            ("/tmp/b.ply",),
-            {
-                "is_dataset": False,
-                "discard_changes": True,
-                "replace": False,
-                "stop_training": False,
-            },
-        ),
+    assert file_menu.lf.load_file_calls == []
+    assert calls == [
+        ((["/tmp/a.ply", "/tmp/b.ply"],),
+         {"discard_changes": True, "replace": True, "stop_training": False, "_user_batch": True})
     ]
 
 

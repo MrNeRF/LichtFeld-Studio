@@ -16,7 +16,9 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/camera_thumbnail_policy.hpp"
 #include "gui/frustum_overlay_key.hpp"
+#include "gui/import_error.hpp"
 #include "preferences.hpp"
+#include "window/vulkan_result.hpp"
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include "core/tensor.hpp"
@@ -59,6 +61,7 @@
 #include "core/events.hpp"
 #include "core/parameters.hpp"
 #include "core/scene.hpp"
+#include "gui/error_surface_types.hpp"
 #include "python/gil.hpp"
 #include "python/package_manager.hpp"
 #include "python/python_runtime.hpp"
@@ -5976,7 +5979,6 @@ namespace lfs::vis::gui {
         // Check for async completions that must be applied on the main thread.
         if (async_tasks_.hasPendingMainThreadCompletions()) {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.async_poll", 0.25);
-            async_tasks_.pollImportCompletion();
             async_tasks_.pollMesh2SplatCompletion();
             async_tasks_.pollSplatSimplifyCompletion();
         }
@@ -7989,6 +7991,68 @@ namespace lfs::vis::gui {
         };
     }
 
+    void GuiManager::discardImportMesh(uint64_t mesh_id) {
+        if (vulkan_viewport_pass_)
+            vulkan_viewport_pass_->discardImportMesh(mesh_id);
+    }
+
+    void GuiManager::beginImportRenderCheck() {
+        endImportRenderCheck();
+        // Include uploads attempted by normal GUI frames between attachment and
+        // offscreen validation. The capture ends with this attachment, so old
+        // fallback errors cannot reject a later, unrelated import.
+        import_error_capture_ = std::make_unique<VulkanImportErrorScope>(import_render_error_);
+    }
+
+    void GuiManager::endImportRenderCheck() {
+        import_error_capture_.reset();
+        import_render_error_.clear();
+    }
+
+    std::optional<std::string> GuiManager::pollImportRenderCheck(const core::Uuid& provisional_node) {
+        if (!import_render_error_.empty())
+            return import_render_error_;
+
+        auto* rendering = viewer_->getRenderingManager();
+        auto* context = viewer_->getWindowManager()->getVulkanContext();
+        try {
+            const RenderingManager::RenderContext preparation{
+                .viewport = viewer_->getViewport(),
+                .settings = rendering->getSettings(),
+                .scene_manager = viewer_->getSceneManager(),
+                .vulkan_context = context,
+                .provisional_import_node = provisional_node};
+            auto result = rendering->pollImportRenderCheck(preparation, [&] {
+                const auto frame = rendering->getVulkanMeshFrame();
+                VulkanViewportPassParams params;
+                params.mesh_view_projection = frame.view_projection;
+                params.mesh_camera_position = frame.camera_position;
+                params.mesh_items = frame.items;
+                params.mesh_panels = frame.panels;
+                params.environment = frame.environment;
+                params.depth_blit = frame.depth_blit;
+                params.split_view = frame.split_view;
+                std::unique_ptr<VulkanViewportPass> validation_pass;
+                if (!vulkan_viewport_pass_)
+                    vulkan_viewport_pass_ = std::make_unique<VulkanViewportPass>();
+                if (!rendering->importUsesCombinedModel())
+                    validation_pass = std::make_unique<VulkanViewportPass>();
+                auto* pass = validation_pass ? validation_pass.get() : vulkan_viewport_pass_.get();
+                rendering->prepareViewportInterop(*context);
+                for (size_t slot = 0; slot < context->framesInFlight(); ++slot) {
+                    params.frame_slot = slot;
+                    rendering->bindViewportInteropParams(params, slot, false);
+                    pass->prepareImport(*context, params, validation_pass ? vulkan_viewport_pass_.get() : nullptr);
+                }
+            });
+            if (!import_render_error_.empty())
+                return import_render_error_;
+            return result;
+        } catch (const std::exception& error) {
+            return error.what();
+        }
+    }
+
     void GuiManager::setupEventHandlers() {
         using namespace lfs::core::events;
 
@@ -8163,6 +8227,31 @@ namespace lfs::vis::gui {
             if (e.success) {
                 focus_panel_name_ = "Training";
             }
+        });
+
+        state::SplatBatchLoadFailed::when([this](const auto& e) {
+            lfs::core::ModalRequest req;
+            req.title = lfs::event::formatLocalized(
+                importFailureTitleKey(lfs::event::LocalizationManager::getInstance().getCurrentLanguage(), e.failures.size()),
+                e.failures.size());
+            std::string body;
+            for (const auto& [path, reason] : e.failures) {
+                body += std::format("<div class=\"content-row error-text\">{}: {}</div>",
+                                    escapeRmlText(lfs::core::path_to_utf8(path.filename())),
+                                    escapeRmlText(isImportOutOfMemory(reason) ? LOC("runtime.import_out_of_memory") : reason));
+            }
+            const auto* const manager = viewer_->getSceneManager();
+            const bool has_retained_models = manager && std::ranges::any_of(manager->getScene().getNodes(), [](const auto* node) {
+                                                 return node->type == core::NodeType::SPLAT || node->type == core::NodeType::MESH;
+                                             });
+            if (e.loaded_count > 0 || has_retained_models)
+                body += std::format("<div class=\"content-row\">{}</div>",
+                                    escapeRmlText(LOC("runtime.import_batch_kept")));
+            req.body_rml = std::move(body);
+            req.style = lfs::core::ModalStyle::Error;
+            req.width_dp = 640;
+            req.buttons = {{"OK", "primary"}};
+            enqueueModal(std::move(req));
         });
 
         state::SplatFileLoadFailed::when([this](const auto& e) {

@@ -220,6 +220,7 @@ def test_counted_messages_use_supported_plural_forms():
 
     keys = dict(_flatten(_load("en")))
     for key in (
+        "runtime.import_batch_failed",
         "projects.status.showing_projects",
         "plugin_marketplace.registry_loaded",
         "plugin_marketplace.registry_unavailable",

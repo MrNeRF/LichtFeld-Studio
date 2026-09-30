@@ -3017,5 +3017,11 @@
     "canceling": "Canceling cleanup… Please wait."
   },
   "projects.gallery.review.unlinked_copy": "Die aktuelle Szene wird unverändert hochgeladen. Auf diesem Computer wird nichts gespeichert.",
-  "projects.gallery.state.live_snapshot": "Aus der aktuellen Szene veröffentlicht"
+  "projects.gallery.state.live_snapshot": "Aus der aktuellen Szene veröffentlicht",
+  "runtime.import_batch_failed.one": "{} Datei wurde nicht geladen",
+  "runtime.import_batch_failed.few": "{} Dateien wurden nicht geladen",
+  "runtime.import_batch_failed.other": "{} Dateien wurden nicht geladen",
+  "runtime.import_out_of_memory": "Nicht genügend Grafikspeicher",
+  "runtime.import_batch_kept": "Die anderen Dateien wurden geladen und sind weiterhin in der Szene verfügbar.",
+  "runtime.import_render_failed": "Diese Datei konnte nicht für die Darstellung vorbereitet werden"
 }

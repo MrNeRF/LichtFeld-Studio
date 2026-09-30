@@ -346,7 +346,7 @@ namespace lfs::core {
     NodeId Scene::insertNode(
         std::unique_ptr<SceneNode> node,
         const bool allow_duplicate_name,
-        const std::optional<NodeId> preferred_id) {
+        const std::optional<NodeId> preferred_id, Uuid* inserted_uuid) {
         if (!node) {
             LOG_WARN("Cannot add null scene node");
             return NULL_NODE;
@@ -414,6 +414,10 @@ namespace lfs::core {
         assert(uuid_inserted);
         node->initObservables(restore_target_ ? restore_target_ : this);
         nodes_.push_back(std::move(node));
+        // Mutation notifications may allocate selection masks or invoke observers.
+        // Publish identity first so a provisional import can roll back on failure.
+        if (inserted_uuid)
+            *inserted_uuid = nodes_.back()->uuid;
         notifyMutation(MutationType::NODE_ADDED);
         return id;
     }
@@ -756,7 +760,9 @@ namespace lfs::core {
         return node ? glm::mat4(node->local_transform) : glm::mat4(1.0f);
     }
 
-    void Scene::clear() {
+    void Scene::clear(const bool internal_import) {
+        if (!internal_import)
+            events::state::SceneReplacing{.scene = this}.emit();
         Transaction txn(*this);
         preserve_source_models_ = false;
 
@@ -858,6 +864,10 @@ namespace lfs::core {
 
     const lfs::core::SplatData* Scene::getCombinedModel() const {
         pollCombinedModelBuild();
+        if (combined_model_build_failure_ &&
+            combined_model_build_failure_->first == render_generation_.load(std::memory_order_acquire)) {
+            return nullptr; // Never pair stale geometry with current transform/mask metadata.
+        }
         if (!model_cache_valid_.load(std::memory_order_acquire)) {
             requestCombinedModelBuildIfNeeded();
             size_t visible_count = 0;
@@ -869,7 +879,8 @@ namespace lfs::core {
                     ++visible_node_count;
                 }
             }
-            if (visible_node_count > 1 && visible_count > 1'000'000) {
+            if (visible_node_count > 1 && (visible_count > 1'000'000 ||
+                                           (import_validation_.load() && combinedModelBuildPending()))) {
                 // A large invalidated multi-node cache is rebuilt by the worker.
                 // Keep the previous renderable cache (or the previous single
                 // node alias) until its replacement lands; on the first-ever
@@ -1264,6 +1275,14 @@ namespace lfs::core {
         combined_model_build_thread_.reset();
         {
             if (completed) {
+                if (import_validation_.load() && !completed->error.empty()) {
+                    combined_model_build_failure_ = std::pair{completed->generation, completed->error};
+                    if (completed->generation == render_generation_.load(std::memory_order_acquire))
+                        events::state::CombinedModelBuildFailed{
+                            .error = completed->error,
+                            .generation = completed->generation}
+                            .emit();
+                }
                 if (completed->ready_event) {
                     const auto status = cudaEventSynchronize(
                         reinterpret_cast<cudaEvent_t>(completed->ready_event.get()));
@@ -1296,6 +1315,8 @@ namespace lfs::core {
 
     void Scene::requestCombinedModelBuild(bool include_hidden_splats) const {
         pollCombinedModelBuild();
+        // An explicit request retries a failed generation; automatic frame polls do not.
+        combined_model_build_failure_.reset();
         requestCombinedModelBuildIfNeeded(include_hidden_splats);
     }
 
@@ -1307,7 +1328,18 @@ namespace lfs::core {
         return completed_combined_model_build_.has_value();
     }
 
+    std::string Scene::combinedModelBuildError() const {
+        pollCombinedModelBuild();
+        if (combined_model_build_failure_ &&
+            combined_model_build_failure_->first == render_generation_.load(std::memory_order_acquire))
+            return combined_model_build_failure_->second;
+        return {};
+    }
+
     void Scene::requestCombinedModelBuildIfNeeded(const bool include_hidden_splats) const {
+        if (combined_model_build_failure_ &&
+            combined_model_build_failure_->first == render_generation_.load(std::memory_order_acquire))
+            return;
         if (combined_model_build_running_.load(std::memory_order_acquire)) {
             return;
         }
@@ -1339,6 +1371,7 @@ namespace lfs::core {
         combined_model_build_thread_.emplace(
             [this, include_hidden_splats, snapshot = std::move(snapshot)]() mutable {
                 CombinedModelBuild built;
+                const auto generation = snapshot.generation;
                 try {
                     built = buildCombinedModelCache(
                         std::move(snapshot.inputs),
@@ -1350,15 +1383,21 @@ namespace lfs::core {
                 } catch (const std::exception& error) {
                     LOG_ERROR("Combined model worker failed: {}", error.what());
                     built = {};
+                    built.generation = generation;
+                    built.error = error.what();
                 } catch (...) {
                     LOG_ERROR("Combined model worker failed with an unknown exception");
                     built = {};
+                    built.generation = generation;
+                    built.error = "Could not prepare the imported models for rendering";
                 }
                 {
                     std::lock_guard<std::mutex> lock(combined_model_build_mutex_);
                     completed_combined_model_build_ = std::move(built);
                 }
                 combined_model_build_running_.store(false, std::memory_order_release);
+                if (import_validation_.load())
+                    events::state::CombinedModelBuildReady{.scene = this}.emit();
             });
     }
 
@@ -3699,7 +3738,7 @@ namespace lfs::core {
         return id;
     }
 
-    NodeId Scene::addSplat(const std::string& name, std::unique_ptr<lfs::core::SplatData> model, const NodeId parent) {
+    NodeId Scene::addSplat(const std::string& name, std::unique_ptr<lfs::core::SplatData> model, const NodeId parent, Uuid* inserted_uuid) {
         if (!model) {
             LOG_WARN("Cannot add splat node '{}': model is null", name);
             return NULL_NODE;
@@ -3728,7 +3767,7 @@ namespace lfs::core {
         node->centroid = centroid;
         node->payload_hydration = PayloadHydrationState::Loaded;
 
-        const NodeId id = insertNode(std::move(node));
+        const NodeId id = insertNode(std::move(node), false, std::nullopt, inserted_uuid);
         if (id != NULL_NODE)
             LOG_DEBUG("Added splat node '{}' (id={}, {} gaussians)", name, id, gaussian_count);
         return id;
@@ -3775,7 +3814,7 @@ namespace lfs::core {
         return id;
     }
 
-    NodeId Scene::addMesh(const std::string& name, std::shared_ptr<lfs::core::MeshData> mesh_data, const NodeId parent) {
+    NodeId Scene::addMesh(const std::string& name, std::shared_ptr<lfs::core::MeshData> mesh_data, const NodeId parent, Uuid* inserted_uuid) {
         if (!mesh_data) {
             LOG_WARN("Cannot add mesh node '{}': mesh data is null", name);
             return NULL_NODE;
@@ -3812,7 +3851,7 @@ namespace lfs::core {
         node->centroid = centroid;
         node->payload_hydration = PayloadHydrationState::Loaded;
 
-        const NodeId id = insertNode(std::move(node));
+        const NodeId id = insertNode(std::move(node), false, std::nullopt, inserted_uuid);
         if (id != NULL_NODE)
             LOG_DEBUG("Added mesh node '{}' (id={}, {} vertices, {} faces)", unique_name, id, nv, nf);
         return id;
