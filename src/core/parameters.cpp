@@ -489,7 +489,7 @@ namespace lfs::core {
             };
             for (const auto& [name, value] : nonnegative_fields) {
                 const bool automatic_mrnf_value = is_mrnf_strategy(strategy) && value == -1.0f &&
-                                                  (name == "shs_lr");
+                                                  (std::string_view{name} == "shs_lr");
                 if (auto error = invalid_nonnegative(value, name);
                     !error.empty() && !automatic_mrnf_value)
                     return error;
@@ -514,7 +514,7 @@ namespace lfs::core {
             };
             for (const auto& [name, value] : probability_fields) {
                 const bool automatic_mrnf_value = is_mrnf_strategy(strategy) && value == -1.0f &&
-                                                  (name == "grow_fraction");
+                                                  (std::string_view{name} == "grow_fraction");
                 if (auto error = invalid_probability(value, name);
                     !error.empty() && !automatic_mrnf_value)
                     return error;
