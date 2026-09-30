@@ -625,17 +625,59 @@ TEST(PlyToRadLod, VulkanViewportRadUsesInputBackend) {
         lfs::vis::VksplatViewportRenderer renderer;
         lfs::rendering::ViewportRenderRequest request;
         request.frame_view.size = {64, 64};
-        request.frame_view.translation = {0.0f, 0.0f, -200.0f};
+        request.frame_view.translation = {0.0f, 0.0f, 200.0f};
         request.sh_degree = 0;
+        request.scaling_modifier = 20.0f;
         request.lod_gpu_traversal.enabled = true;
         request.lod_gpu_traversal.node_count = model->lod_tree->total_nodes();
         request.lod_gpu_traversal.output_capacity = model->size();
         request.lod_gpu_traversal.pixel_scale_limit = 1.0f;
-        const auto rendered = renderer.render(context, *model, request, true);
+        request.lod_gpu_traversal.object_to_view = request.frame_view.getViewMatrix();
+        request.lod_gpu_traversal.view_origin = request.frame_view.translation;
+        request.lod_gpu_traversal.viewport_foveation = false;
+        lfs::vis::RenderTargetRegistry targets;
+        const auto primary = targets.allocate();
+        auto rendered = renderer.render(context, *model, request, true, primary);
         EXPECT_TRUE(rendered) << rendered.error();
         if (!rendered)
             continue;
+        // Exercise repeated resident-page uploads before checking output ownership.
+        for (int i = 0; i < 2; ++i) {
+            rendered = renderer.render(context, *model, request, false, primary);
+            ASSERT_TRUE(rendered) << rendered.error();
+        }
+        if (!upload)
+            continue;
+        // Isolate retained image contents from asynchronous page admission.
+        model->lod_tree.reset();
+        request.lod_gpu_traversal = {};
+        rendered = renderer.render(context, *model, request, true, primary);
+        ASSERT_TRUE(rendered) << rendered.error();
         EXPECT_NE(rendered->image, VK_NULL_HANDLE);
         EXPECT_GT(rendered->completion_value, 0u);
+        const auto before = renderer.readOutputImage(context, primary);
+        ASSERT_TRUE(before) << before.error();
+        const auto* pixels = (*before)->ptr<float>();
+        ASSERT_TRUE(std::any_of(pixels, pixels + (*before)->numel(), [](float value) { return value > 1e-6f; }));
+        std::vector<VkImage> images{rendered->image};
+        for (int i = 0; i < 9; ++i) {
+            (void)targets.allocate();
+            const auto target = targets.allocate();
+            request.frame_view.translation.x = static_cast<float>(i + 1);
+            request.lod_gpu_traversal.object_to_view = request.frame_view.getViewMatrix();
+            request.lod_gpu_traversal.view_origin = request.frame_view.translation;
+            const auto next = renderer.render(context, *model, request, false, target);
+            ASSERT_TRUE(next) << next.error();
+            for (const auto image : images)
+                EXPECT_NE(next->image, image);
+            images.push_back(next->image);
+        }
+        const auto retained = renderer.readOutputImage(context, primary);
+        ASSERT_TRUE(retained) << retained.error();
+        ASSERT_EQ((*before)->bytes(), (*retained)->bytes());
+        EXPECT_EQ(std::memcmp((*before)->data_ptr(), (*retained)->data_ptr(), (*before)->bytes()), 0);
+        EXPECT_TRUE(renderer.releaseRenderTarget(primary));
+        EXPECT_FALSE(renderer.hasRenderTarget(primary));
+        EXPECT_FALSE(renderer.readOutputImage(context, primary));
     }
 }

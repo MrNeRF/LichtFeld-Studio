@@ -29,6 +29,8 @@ namespace lfs::vis {
     // manager can route them through the same external-image plumbing as
     // VkSplat (no CUDA tensor staging on the display path).
     class LFS_VIS_API PointCloudVulkanRenderer {
+        friend struct PointCloudOutputOwnershipTestAccess;
+
     public:
         struct RenderResult {
             VkImage image = VK_NULL_HANDLE;
@@ -124,12 +126,18 @@ namespace lfs::vis {
             VulkanContext& context,
             RenderTargetId output_slot);
 
+        [[nodiscard]] bool hasRenderTarget(RenderTargetId target) const;
         [[nodiscard]] bool releaseRenderTarget(RenderTargetId target);
         void reset();
 
     private:
         struct Impl;
         std::unique_ptr<Impl> impl_;
+    };
+
+    struct LFS_VIS_API PointCloudOutputOwnershipTestAccess {
+        static const void* createEmptyOutput(PointCloudVulkanRenderer& renderer, RenderTargetId target);
+        static const void* outputIdentity(const PointCloudVulkanRenderer& renderer, RenderTargetId target);
     };
 
 } // namespace lfs::vis

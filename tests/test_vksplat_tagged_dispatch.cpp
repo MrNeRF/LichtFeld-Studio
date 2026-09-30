@@ -1163,6 +1163,29 @@ namespace {
             all_compute_pipelines.clear();
         }
 
+        void check_lod_identity_tags() {
+            const auto semaphore = fakeVkHandle<VkSemaphore>(0xAB10);
+            auto& a = lod_selection_readbacks_[0];
+            a.pending = true;
+            a.order = 1;
+            tagDeferredLodSelectionReadback(semaphore, 5, {17, 3, 8});
+            auto& b = lod_selection_readbacks_[1];
+            b.pending = true;
+            b.order = 2;
+            tagDeferredLodSelectionReadback(semaphore, 6, {9001, 4, 9});
+            EXPECT_EQ(a.value, 5u);
+            EXPECT_EQ(a.identity.target, 17u);
+            EXPECT_EQ(a.identity.model_generation, 3u);
+            EXPECT_EQ(a.identity.tree_generation, 8u);
+            EXPECT_EQ(b.value, 6u);
+            EXPECT_EQ(b.identity.target, 9001u);
+            // Counter is still zero: neither tagged copy can be consumed.
+            EXPECT_FALSE(pollDeferredLodSelectionStats());
+            EXPECT_TRUE(a.pending);
+            EXPECT_TRUE(b.pending);
+            b = {};
+        }
+
         [[nodiscard]] _VulkanBuffer& lod_readback() noexcept {
             return lod_selection_readbacks_[0].buffer;
         }
@@ -2823,4 +2846,13 @@ TEST(VkSplatTaggedDispatch, LegacyDepthWavesConditionalReadPerWave) {
 
     renderer.discard_timestamps();
     renderer.endCommandBatch(/*use_fence=*/false);
+}
+
+TEST(VkSplatTaggedDispatch, LodReadbackKeepsInFlightTargetAndGenerationTags) {
+    DispatchScript script;
+    BindScript bind(script);
+    TestableRenderer renderer;
+    renderer.install_fake_handles();
+    renderer.setVulkanDispatch(make_scripted_dispatch());
+    renderer.check_lod_identity_tags();
 }

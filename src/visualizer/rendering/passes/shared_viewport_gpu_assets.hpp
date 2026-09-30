@@ -6,6 +6,7 @@
 
 #include "core/export.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <glm/glm.hpp>
@@ -27,6 +28,11 @@ namespace lfs::vis {
         std::size_t material_index = 0;
     };
 
+    struct SharedMeshMaterial {
+        std::array<float, 16> uniform{};
+        std::array<VkDescriptorImageInfo, 3> textures{};
+    };
+
     struct SharedMeshDrawAsset {
         VkBuffer vertex_buffer = VK_NULL_HANDLE;
         VkBuffer index_buffer = VK_NULL_HANDLE;
@@ -35,7 +41,7 @@ namespace lfs::vis {
         glm::vec3 aabb_min{0.0f};
         glm::vec3 aabb_max{0.0f};
         std::vector<SharedMeshSubmesh> submeshes;
-        std::vector<VkDescriptorSet> material_descriptors;
+        std::vector<SharedMeshMaterial> materials;
     };
 
     struct SharedEnvironmentTexture {

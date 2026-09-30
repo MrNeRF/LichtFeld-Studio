@@ -2366,14 +2366,18 @@ namespace lfs::vis {
         std::optional<SplitViewInfo> rendered_split_info;
         VulkanSplitViewParams pending_split_view{};
         const auto release_inactive_split_outputs = [&] {
-            if (vksplat_viewport_renderer_ && !split_view_service_.isActive(frame_settings)) {
-                for (auto* target : {&split_left_render_target_, &split_right_render_target_}) {
-                    if (vksplat_viewport_renderer_->releaseRenderTarget(*target)) {
-                        if (point_cloud_vulkan_renderer_)
-                            (void)point_cloud_vulkan_renderer_->releaseRenderTarget(*target);
-                        render_targets_.release(*target);
-                        *target = render_targets_.allocate();
-                    }
+            if (split_view_service_.isActive(frame_settings))
+                return;
+            for (auto* target : {&split_left_render_target_, &split_right_render_target_}) {
+                const bool has_splats = vksplat_viewport_renderer_ && vksplat_viewport_renderer_->hasRenderTarget(*target);
+                const bool has_points = point_cloud_vulkan_renderer_ && point_cloud_vulkan_renderer_->hasRenderTarget(*target);
+                if (!has_splats && !has_points)
+                    continue;
+                const bool splats_released = !has_splats || vksplat_viewport_renderer_->releaseRenderTarget(*target);
+                const bool points_released = !has_points || point_cloud_vulkan_renderer_->releaseRenderTarget(*target);
+                if (splats_released && points_released) {
+                    render_targets_.release(*target);
+                    *target = render_targets_.allocate();
                 }
             }
         };

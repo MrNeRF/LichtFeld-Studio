@@ -320,11 +320,9 @@ namespace lfs::vis {
         return true;
     }
 
-    void SharedViewportGpuAssets::Impl::beginFrame(const std::size_t frame_slot) {
-        if (!epoch_frame_slot.has_value() || *epoch_frame_slot != frame_slot) {
-            ++epoch;
-            epoch_frame_slot = frame_slot;
-        }
+    void SharedViewportGpuAssets::Impl::beginFrame(const std::size_t) {
+        // All passes share this clock, including contexts with one frame slot.
+        epoch = context->lastFrameSubmitSerial() + 1;
     }
 
     void SharedViewportGpuAssets::Impl::shutdown() {
@@ -348,7 +346,6 @@ namespace lfs::vis {
         allocator = VK_NULL_HANDLE;
         graphics_queue = VK_NULL_HANDLE;
         epoch = 0;
-        epoch_frame_slot.reset();
     }
 
     bool SharedViewportGpuAssets::Impl::initMeshInfrastructure() {
@@ -369,8 +366,7 @@ namespace lfs::vis {
         context->setDebugObjectName(VK_OBJECT_TYPE_COMMAND_POOL,
                                     mesh_transfer_pool,
                                     "shared.mesh.transfer.pool");
-        return createMeshSampler() && createMaterialLayout() &&
-               createInitialMaterialDescriptorPool() && createWhitePixel();
+        return createMeshSampler() && createMaterialLayout() && createWhitePixel();
     }
 
     void SharedViewportGpuAssets::Impl::shutdownMeshes() {
@@ -382,12 +378,6 @@ namespace lfs::vis {
             destroyMesh(retired.mesh);
         retired_meshes.clear();
         destroyTexture(white_pixel);
-        for (const VkDescriptorPool pool : material_descriptor_pools) {
-            if (pool != VK_NULL_HANDLE) {
-                vkDestroyDescriptorPool(device, pool, nullptr);
-            }
-        }
-        material_descriptor_pools.clear();
         if (material_layout != VK_NULL_HANDLE) {
             vkDestroyDescriptorSetLayout(device, material_layout, nullptr);
             material_layout = VK_NULL_HANDLE;
@@ -518,105 +508,6 @@ namespace lfs::vis {
         context->setDebugObjectName(VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT,
                                     material_layout,
                                     "shared.mesh.material.descriptor.layout");
-        return true;
-    }
-
-    VkDescriptorPool SharedViewportGpuAssets::Impl::createMaterialDescriptorPool() {
-        constexpr std::uint32_t kMaxMaterials = 256;
-        std::array<VkDescriptorPoolSize, 2> sizes{};
-        sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        sizes[0].descriptorCount = kMaxMaterials;
-        sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[1].descriptorCount = kMaxMaterials * 3;
-        VkDescriptorPoolCreateInfo info{};
-        info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-        info.maxSets = kMaxMaterials;
-        info.poolSizeCount = static_cast<std::uint32_t>(sizes.size());
-        info.pPoolSizes = sizes.data();
-        VkDescriptorPool pool = VK_NULL_HANDLE;
-        const VkResult result = vkCreateDescriptorPool(device, &info, nullptr, &pool);
-        if (result != VK_SUCCESS) {
-            LOG_ERROR("Vulkan: {}",
-                      formatVkCheckFailure(
-                          "vkCreateDescriptorPool(device, &info, nullptr, &pool)",
-                          result,
-                          std::format("Shared mesh material descriptor-pool creation failed (device={:#x})",
-                                      vkHandleValue(device)),
-                          __FILE__,
-                          __LINE__));
-            return VK_NULL_HANDLE;
-        }
-        context->setDebugObjectNamef(VK_OBJECT_TYPE_DESCRIPTOR_POOL,
-                                     pool,
-                                     "shared.mesh.material.descriptor.pool[{}]",
-                                     material_descriptor_pools.size());
-        return pool;
-    }
-
-    bool SharedViewportGpuAssets::Impl::createInitialMaterialDescriptorPool() {
-        const VkDescriptorPool pool = createMaterialDescriptorPool();
-        if (pool == VK_NULL_HANDLE) {
-            return false;
-        }
-        material_descriptor_pools.push_back(pool);
-        return true;
-    }
-
-    bool SharedViewportGpuAssets::Impl::allocateMaterialDescriptor(GpuMaterial& material) {
-        VkDescriptorSetAllocateInfo alloc{};
-        alloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        alloc.descriptorSetCount = 1;
-        alloc.pSetLayouts = &material_layout;
-        for (const VkDescriptorPool pool : material_descriptor_pools) {
-            alloc.descriptorPool = pool;
-            const VkResult allocation_result =
-                vkAllocateDescriptorSets(device, &alloc, &material.descriptor);
-            if (allocation_result == VK_SUCCESS) {
-                material.descriptor_pool = pool;
-                context->setDebugObjectNamef(VK_OBJECT_TYPE_DESCRIPTOR_SET,
-                                             material.descriptor,
-                                             "shared.mesh.material.descriptor[{}]",
-                                             vkHandleValue(material.descriptor));
-                return true;
-            }
-            if (allocation_result != VK_ERROR_OUT_OF_POOL_MEMORY &&
-                allocation_result != VK_ERROR_FRAGMENTED_POOL) {
-                LOG_ERROR("Vulkan: {}",
-                          formatVkCheckFailure(
-                              "vkAllocateDescriptorSets(device, &alloc, &material.descriptor)",
-                              allocation_result,
-                              std::format("Shared mesh material descriptor allocation failed (device={:#x}, descriptor_pool={:#x})",
-                                          vkHandleValue(device),
-                                          vkHandleValue(pool)),
-                              __FILE__,
-                              __LINE__));
-                return false;
-            }
-        }
-
-        const VkDescriptorPool pool = createMaterialDescriptorPool();
-        if (pool == VK_NULL_HANDLE) {
-            return false;
-        }
-        material_descriptor_pools.push_back(pool);
-        alloc.descriptorPool = pool;
-        const VkResult allocation_result =
-            vkAllocateDescriptorSets(device, &alloc, &material.descriptor);
-        if (allocation_result != VK_SUCCESS) {
-            vkDestroyDescriptorPool(device, pool, nullptr);
-            material_descriptor_pools.pop_back();
-            return reportVkFailure(
-                "vkAllocateDescriptorSets(device, &alloc, &material.descriptor)",
-                allocation_result,
-                std::format("Shared mesh material descriptor allocation failed for a new pool (device={:#x})",
-                            vkHandleValue(device)));
-        }
-        material.descriptor_pool = pool;
-        context->setDebugObjectNamef(VK_OBJECT_TYPE_DESCRIPTOR_SET,
-                                     material.descriptor,
-                                     "shared.mesh.material.descriptor[{}]",
-                                     vkHandleValue(material.descriptor));
         return true;
     }
 
@@ -864,26 +755,6 @@ namespace lfs::vis {
                                                        GpuMaterial& out) {
         const auto& mat = material_index < mesh.materials.size() ? mesh.materials[material_index]
                                                                  : lfs::core::Material{};
-        VkBufferCreateInfo b{};
-        b.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        b.size = sizeof(SharedMaterialUbo);
-        b.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-        b.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        VmaAllocationCreateInfo a{};
-        a.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-        a.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-        if (!vk_try_bool(
-                vmaCreateBuffer(allocator, &b, &a, &out.ubo, &out.ubo_alloc, nullptr),
-                "vmaCreateBuffer(allocator, &b, &a, &out.ubo, &out.ubo_alloc, nullptr)",
-                lfs::rendering::formatVulkanDiagnostic(
-                    "Shared mesh material UBO allocation failed (material_index={}, requested_size={})",
-                    material_index, b.size),
-                std::source_location::current())) {
-            return false;
-        }
-        context->setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER, out.ubo, "shared.mesh.material[{}].ubo",
-                                     material_index);
-
         const bool has_albedo = uploadTextureFromMesh(mesh, mat.albedo_tex, out.albedo, "albedo");
         const bool has_normal = uploadTextureFromMesh(mesh, mat.normal_tex, out.normal, "normal");
         const bool has_mr = uploadTextureFromMesh(mesh, mat.metallic_roughness_tex, out.metallic_roughness,
@@ -904,22 +775,7 @@ namespace lfs::vis {
         ubo.roughness_flags[2] = has_normal ? 1.0f : 0.0f;
         ubo.roughness_flags[3] = has_mr ? 1.0f : 0.0f;
         ubo.vertex_color_flags[0] = has_vc ? 1.0f : 0.0f;
-        if (!writeBuffer(out.ubo_alloc, &ubo, sizeof(ubo))) {
-            destroyMaterial(out);
-            return false;
-        }
-        if (!allocateMaterialDescriptor(out)) {
-            LOG_ERROR("Shared mesh material descriptor allocation failed (material_index={}, descriptor_pool_count={})",
-                      material_index, material_descriptor_pools.size());
-            destroyMaterial(out);
-            return false;
-        }
-        context->setDebugObjectNamef(VK_OBJECT_TYPE_DESCRIPTOR_SET, out.descriptor,
-                                     "shared.mesh.material[{}].descriptor", material_index);
-
-        VkDescriptorBufferInfo bi{};
-        bi.buffer = out.ubo;
-        bi.range = sizeof(SharedMaterialUbo);
+        std::memcpy(out.binding.uniform.data(), &ubo, sizeof(ubo));
         const auto pick_view = [&](const GpuTexture& t) {
             return t.view != VK_NULL_HANDLE ? t.view : white_pixel.view;
         };
@@ -933,23 +789,7 @@ namespace lfs::vis {
         ii[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         ii[2].imageView = pick_view(out.metallic_roughness);
         ii[2].sampler = mesh_sampler;
-        std::array<VkWriteDescriptorSet, 4> writes{};
-        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[0].dstSet = out.descriptor;
-        writes[0].dstBinding = 0;
-        writes[0].descriptorCount = 1;
-        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        writes[0].pBufferInfo = &bi;
-        for (int i = 0; i < 3; ++i) {
-            writes[static_cast<std::size_t>(i) + 1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[static_cast<std::size_t>(i) + 1].dstSet = out.descriptor;
-            writes[static_cast<std::size_t>(i) + 1].dstBinding = static_cast<std::uint32_t>(i + 1);
-            writes[static_cast<std::size_t>(i) + 1].descriptorCount = 1;
-            writes[static_cast<std::size_t>(i) + 1].descriptorType =
-                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            writes[static_cast<std::size_t>(i) + 1].pImageInfo = &ii[static_cast<std::size_t>(i)];
-        }
-        vkUpdateDescriptorSets(device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
+        out.binding.textures = ii;
         return true;
     }
 
@@ -1212,23 +1052,6 @@ namespace lfs::vis {
     }
 
     void SharedViewportGpuAssets::Impl::destroyMaterial(GpuMaterial& material) const {
-        if (material.descriptor != VK_NULL_HANDLE && material.descriptor_pool != VK_NULL_HANDLE) {
-            const VkResult result =
-                vkFreeDescriptorSets(device, material.descriptor_pool, 1, &material.descriptor);
-            if (result != VK_SUCCESS) {
-                LOG_ERROR("Vulkan: {}",
-                          formatVkCheckFailure(
-                              "vkFreeDescriptorSets(device, material.descriptor_pool, 1, &material.descriptor)",
-                              result,
-                              std::format("Shared mesh material descriptor-set release failed (descriptor_set={:#x})",
-                                          vkHandleValue(material.descriptor)),
-                              __FILE__,
-                              __LINE__));
-            }
-        }
-        if (material.ubo != VK_NULL_HANDLE) {
-            vmaDestroyBuffer(allocator, material.ubo, material.ubo_alloc);
-        }
         destroyTexture(material.albedo);
         destroyTexture(material.normal);
         destroyTexture(material.metallic_roughness);
@@ -1295,10 +1118,10 @@ namespace lfs::vis {
         for (const auto& sm : gpu.submeshes) {
             out.submeshes.push_back({sm.start_index, sm.index_count, sm.material_index});
         }
-        out.material_descriptors.clear();
-        out.material_descriptors.reserve(gpu.materials.size());
+        out.materials.clear();
+        out.materials.reserve(gpu.materials.size());
         for (const auto& mat : gpu.materials) {
-            out.material_descriptors.push_back(mat.descriptor);
+            out.materials.push_back(mat.binding);
         }
         return true;
     }

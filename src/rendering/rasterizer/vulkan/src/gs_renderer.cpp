@@ -869,12 +869,17 @@ void VulkanGSRenderer::recordLodSelectionReadback(VulkanGSPipelineBuffers& buffe
     // pairs; independent of the logical chunk count.
     constexpr size_t kPayloadWords =
         4 + kLodCompactProtectedCap + 2 * kLodCompactMissCap;
+    // Untagged copies belong to a cancelled recording or an earlier traversal
+    // in this same command batch. Only submitted, tagged slots are in flight.
+    for (auto& prior : lod_selection_readbacks_)
+        if (prior.pending && prior.value == 0)
+            prior.pending = false;
     auto available = std::find_if(lod_selection_readbacks_.begin(), lod_selection_readbacks_.end(),
                                   [](const auto& slot) { return !slot.pending; });
-    // Feedback is optional; a busy ring must never overwrite a tagged GPU copy.
-    if (available == lod_selection_readbacks_.end())
-        return;
-    auto& slot = *available;
+    // Grow under multi-target load instead of overwriting a tagged GPU copy.
+    auto& slot = available == lod_selection_readbacks_.end()
+                     ? lod_selection_readbacks_.emplace_back()
+                     : *available;
     ensureLodSelectionReadback(slot, kPayloadWords);
     if (buffers.lod_gpu_counts.deviceBuffer.buffer == VK_NULL_HANDLE ||
         buffers.lod_compact_counts.deviceBuffer.buffer == VK_NULL_HANDLE)

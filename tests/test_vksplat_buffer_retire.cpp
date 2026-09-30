@@ -195,6 +195,18 @@ namespace {
             current_vram = 0;
         }
 
+        void seed_expanded_ring() {
+            command_batch_slots_.resize(32);
+            for (std::size_t i = 0; i < command_batch_slots_.size(); ++i) {
+                auto& slot = command_batch_slots_[i];
+                slot.command_buffer = fakeVkHandle<VkCommandBuffer>(0x2000 + i);
+                slot.timestamp_query_pool = fakeVkHandle<VkQueryPool>(0x3000 + i);
+                slot.pending_signal = fakeVkHandle<VkSemaphore>(0x4000);
+                slot.pending_signal_value = 5;
+            }
+            command_batch_slots_.back().pending_signal_value = 0;
+        }
+        std::uint32_t active_slot() const { return active_command_batch_slot_; }
         [[nodiscard]] std::size_t retired_shell_count() const {
             return retired_buffer_shells_.size();
         }
@@ -449,6 +461,70 @@ TEST(VkSplatBufferRetire, DrainForceMatchesCleanupContract) {
 
 namespace lfs::vis {
     struct VksplatScratchReleaseTestAccess {
+        static void checkTargetRetirement() {
+            VulkanContext context;
+            VksplatViewportRenderer renderer;
+            renderer.context_ = &context;
+            renderer.last_submitted_render_value_ = 7;
+            const auto cell = renderer.ring_.acquire({17});
+            VulkanContext::ExternalImage image;
+            image.image = fakeVkHandle<VkImage>(0xA123);
+            auto acquisition = renderer.output_pool_.registerCreated({}, std::move(image));
+            auto& output = renderer.ring_.slotAt({17}, cell);
+            output.image = acquisition.image;
+            output.color_pool_serial = acquisition.acquisition_serial;
+            ASSERT_TRUE(renderer.releaseRenderTarget({17}));
+            EXPECT_EQ(renderer.output_pool_.retiredCount(), 1u);
+            bool producer_done = false;
+            bool consumer_done = true;
+            int destroyed = 0;
+            auto drain = [&] {
+                renderer.output_pool_.drain(false, [&](const auto&, auto value) { EXPECT_EQ(value, 7u); return producer_done; }, [&](auto) { return consumer_done; }, [&](auto&) { ++destroyed; });
+            };
+            drain();
+            EXPECT_EQ(destroyed, 0);
+            producer_done = true;
+            consumer_done = false;
+            drain();
+            EXPECT_EQ(destroyed, 0);
+            consumer_done = true;
+            drain();
+            EXPECT_EQ(destroyed, 1);
+            renderer.context_ = nullptr;
+        }
+        static void checkTargetProvenance() {
+            VksplatViewportRenderer renderer;
+            lfs::rendering::ViewportRenderRequest request;
+            request.frame_view.size = {640, 480};
+            const auto original = renderer.makeResidentRasterScratchProvenance({1}, request, 100);
+            EXPECT_TRUE(renderer.residentRasterScratchCompatible(original, original));
+            EXPECT_FALSE(renderer.residentRasterScratchCompatible(original,
+                                                                  renderer.makeResidentRasterScratchProvenance({2}, request, 100)));
+            request.frame_view.translation.x += 1;
+            EXPECT_FALSE(renderer.residentRasterScratchCompatible(original,
+                                                                  renderer.makeResidentRasterScratchProvenance({1}, request, 100)));
+            request.frame_view.translation.x -= 1;
+            request.frame_view.focal_length_mm += 1;
+            EXPECT_FALSE(renderer.residentRasterScratchCompatible(original,
+                                                                  renderer.makeResidentRasterScratchProvenance({1}, request, 100)));
+            request.frame_view.focal_length_mm -= 1;
+            request.mip_filter = !request.mip_filter;
+            EXPECT_FALSE(renderer.residentRasterScratchCompatible(original,
+                                                                  renderer.makeResidentRasterScratchProvenance({1}, request, 100)));
+        }
+        static void checkInFlightRelease() {
+            VksplatViewportRenderer renderer;
+            const auto cell = renderer.ring_.acquire({17});
+            renderer.rendering_target_ = {17};
+            EXPECT_FALSE(renderer.releaseRenderTarget({17}));
+            EXPECT_TRUE(renderer.ring_.contains({17}));
+            renderer.rendering_target_ = {};
+            EXPECT_TRUE(renderer.releaseRenderTarget({17}));
+            EXPECT_FALSE(renderer.ring_.contains({17}));
+            renderer.ring_.markLatest({17}, cell);
+            EXPECT_FALSE(renderer.ring_.contains({17}));
+        }
+
         static void checkAliasesAreCleared() {
             VksplatViewportRenderer renderer;
             auto& keys = renderer.buffers_.primitive_depth_keys.deviceBuffer;
@@ -489,4 +565,29 @@ namespace lfs::vis {
 
 TEST(VksplatScratchReleaseTest, RetiresOwnersAndInvalidatesAliasesBeforeReuse) {
     lfs::vis::VksplatScratchReleaseTestAccess::checkAliasesAreCleared();
+}
+
+TEST(VksplatScratchReleaseTest, RejectsOtherTargetCameraAndProjectionScratch) {
+    lfs::vis::VksplatScratchReleaseTestAccess::checkTargetProvenance();
+}
+TEST(VksplatScratchReleaseTest, RefusesReleaseDuringRenderAndDropsLatePublish) {
+    lfs::vis::VksplatScratchReleaseTestAccess::checkInFlightRelease();
+}
+
+TEST(VkSplatBufferRetire, ViewerSubmissionRingSkipsBusyCells) {
+    DispatchScript script;
+    BindScript bind(script);
+    TestablePipeline pipeline;
+    pipeline.install_fake_handles();
+    pipeline.setVulkanDispatch(make_scripted_dispatch());
+    pipeline.seed_expanded_ring();
+    pipeline.setGrowCommandBatchRing(true);
+    pipeline.beginCommandBatch();
+    EXPECT_EQ(pipeline.active_slot(), 31u);
+    EXPECT_EQ(script.begin_calls, 1);
+    pipeline.cancelCommandBatch();
+}
+
+TEST(VksplatScratchReleaseTest, TargetImagesWaitForProducerAndPresentationRetirement) {
+    lfs::vis::VksplatScratchReleaseTestAccess::checkTargetRetirement();
 }

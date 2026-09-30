@@ -400,9 +400,8 @@ void VulkanGSPipeline::retireDeviceBufferForGrowth(_VulkanBuffer& deviceBuffer) 
     entry.key_count = 0;
     for (const CommandBatchSlot& slot : command_batch_slots_) {
         if (slot.pending_signal != VK_NULL_HANDLE && slot.pending_signal_value != 0) {
-            assert(entry.key_count < kCommandBatchSlotCount);
-            entry.keys[entry.key_count++] =
-                BufferRetireKey{slot.pending_signal, slot.pending_signal_value};
+            entry.keys.push_back(BufferRetireKey{slot.pending_signal, slot.pending_signal_value});
+            ++entry.key_count;
         }
     }
 

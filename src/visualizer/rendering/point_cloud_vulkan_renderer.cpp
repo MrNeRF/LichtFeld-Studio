@@ -2296,12 +2296,27 @@ namespace lfs::vis {
         return impl_->readOutputImage(context, output_slot);
     }
 
+    bool PointCloudVulkanRenderer::hasRenderTarget(RenderTargetId target) const {
+        std::lock_guard lock(impl_->command_mutex);
+        return impl_->slots.contains(target);
+    }
+
     bool PointCloudVulkanRenderer::releaseRenderTarget(RenderTargetId target) {
         return impl_->releaseRenderTarget(target);
     }
 
     void PointCloudVulkanRenderer::reset() {
         impl_->destroy();
+    }
+
+    const void* PointCloudOutputOwnershipTestAccess::createEmptyOutput(PointCloudVulkanRenderer& renderer, RenderTargetId target) {
+        if (!target.valid() || renderer.impl_->released_targets.contains(target))
+            return nullptr;
+        return &renderer.impl_->slots[target];
+    }
+    const void* PointCloudOutputOwnershipTestAccess::outputIdentity(const PointCloudVulkanRenderer& renderer, RenderTargetId target) {
+        const auto it = renderer.impl_->slots.find(target);
+        return it == renderer.impl_->slots.end() ? nullptr : &it->second;
     }
 
 } // namespace lfs::vis

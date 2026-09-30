@@ -883,7 +883,8 @@ namespace lfs::vis {
 
     void RenderingManager::releasePreviewImageResources() {
         if (vksplat_viewport_renderer_) {
-            if (vksplat_viewport_renderer_->releaseRenderTarget(preview_render_target_)) {
+            if (vksplat_viewport_renderer_->hasRenderTarget(preview_render_target_) &&
+                vksplat_viewport_renderer_->releaseRenderTarget(preview_render_target_)) {
                 render_targets_.release(preview_render_target_);
                 preview_render_target_ = render_targets_.allocate();
             }

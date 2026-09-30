@@ -87,6 +87,7 @@ public:
     template <typename T>
     _VulkanBuffer& resizeAndCopyDeviceBuffer(Buffer<T>& buffer, size_t new_size, bool clear);
     void beginCommandBatch();
+    void setGrowCommandBatchRing(bool enabled) { grow_command_batch_ring_ = enabled; }
     void endCommandBatch(bool use_fence = true,
                          VkSemaphore signal_semaphore = VK_NULL_HANDLE,
                          std::uint64_t signal_value = 0);
@@ -196,7 +197,9 @@ protected:
         std::uint32_t pending_timestamp_count = 0;
         std::vector<std::pair<int, int>> pending_timestamp_marks;
     };
-    std::array<CommandBatchSlot, kCommandBatchSlotCount> command_batch_slots_{};
+    std::vector<CommandBatchSlot> command_batch_slots_{kCommandBatchSlotCount};
+    bool grow_command_batch_ring_ = false;
+    void appendCommandBatchSlot();
     std::uint32_t next_command_batch_slot_ = 0;
     std::uint32_t active_command_batch_slot_ = 0;
 
@@ -209,7 +212,7 @@ protected:
     };
     struct RetiredBufferShell {
         _VulkanBuffer shell;
-        std::array<BufferRetireKey, kCommandBatchSlotCount> keys{};
+        std::vector<BufferRetireKey> keys;
         std::uint32_t key_count = 0;
     };
     std::vector<RetiredBufferShell> retired_buffer_shells_;

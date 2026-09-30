@@ -129,6 +129,101 @@ namespace lfs::vis {
         VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
 
         VkDescriptorSetLayout light_layout = VK_NULL_HANDLE;
+        struct MaterialBinding {
+            VkBuffer buffer = VK_NULL_HANDLE;
+            VmaAllocation allocation = VK_NULL_HANDLE;
+            VkDescriptorSet descriptor = VK_NULL_HANDLE;
+        };
+        struct MaterialBindings {
+            VkDescriptorPool pool = VK_NULL_HANDLE;
+            std::vector<MaterialBinding> materials;
+            std::uint32_t generation = 0;
+            std::uint64_t last_used = 0;
+        };
+        std::unordered_map<std::uint64_t, MaterialBindings> material_bindings;
+        struct RetiredMaterials {
+            MaterialBindings bindings;
+            std::uint64_t consumer = 0;
+        };
+        std::vector<RetiredMaterials> retired_materials;
+
+        void destroyMaterials(MaterialBindings& bindings) {
+            if (bindings.pool != VK_NULL_HANDLE)
+                vkDestroyDescriptorPool(device, bindings.pool, nullptr);
+            for (auto& material : bindings.materials)
+                if (material.buffer != VK_NULL_HANDLE)
+                    vmaDestroyBuffer(allocator, material.buffer, material.allocation);
+            bindings = {};
+        }
+
+        bool prepareMaterials(std::uint64_t id, const SharedMeshDrawAsset& mesh) {
+            auto& current = material_bindings[id];
+            current.last_used = context->lastFrameSubmitSerial();
+            if (current.pool != VK_NULL_HANDLE && current.generation == mesh.generation)
+                return true;
+            MaterialBindings bindings;
+            bindings.generation = mesh.generation;
+            bindings.last_used = current.last_used;
+            const auto count = static_cast<std::uint32_t>(mesh.materials.size());
+            if (count == 0)
+                return false;
+            const std::array<VkDescriptorPoolSize, 2> sizes{{{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, count},
+                                                             {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, count * 3}}};
+            VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+            pool.maxSets = count;
+            pool.poolSizeCount = sizes.size();
+            pool.pPoolSizes = sizes.data();
+            if (!vk_try_bool(vkCreateDescriptorPool(device, &pool, nullptr, &bindings.pool),
+                             "vkCreateDescriptorPool", "Mesh material descriptors"))
+                return false;
+            bindings.materials.resize(count);
+            for (std::size_t i = 0; i < count; ++i) {
+                auto& material = bindings.materials[i];
+                VkBufferCreateInfo buffer{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+                buffer.size = sizeof(mesh.materials[i].uniform);
+                buffer.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+                buffer.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+                VmaAllocationCreateInfo allocation{};
+                allocation.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+                allocation.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+                if (!vk_try_bool(vmaCreateBuffer(allocator, &buffer, &allocation, &material.buffer,
+                                                 &material.allocation, nullptr),
+                                 "vmaCreateBuffer", "Mesh material uniform") ||
+                    !writeBuffer(material.allocation, mesh.materials[i].uniform.data(), buffer.size)) {
+                    destroyMaterials(bindings);
+                    return false;
+                }
+                VkDescriptorSetAllocateInfo descriptor{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+                descriptor.descriptorPool = bindings.pool;
+                descriptor.descriptorSetCount = 1;
+                descriptor.pSetLayouts = &material_layout;
+                if (!vk_try_bool(vkAllocateDescriptorSets(device, &descriptor, &material.descriptor),
+                                 "vkAllocateDescriptorSets", "Mesh material descriptor")) {
+                    destroyMaterials(bindings);
+                    return false;
+                }
+                VkDescriptorBufferInfo info{material.buffer, 0, buffer.size};
+                std::array<VkWriteDescriptorSet, 4> writes{};
+                for (std::size_t binding = 0; binding < writes.size(); ++binding) {
+                    auto& write = writes[binding];
+                    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    write.dstSet = material.descriptor;
+                    write.dstBinding = binding;
+                    write.descriptorCount = 1;
+                    write.descriptorType = binding == 0 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    if (binding == 0)
+                        write.pBufferInfo = &info;
+                    else
+                        write.pImageInfo = &mesh.materials[i].textures[binding - 1];
+                }
+                vkUpdateDescriptorSets(device, writes.size(), writes.data(), 0, nullptr);
+            }
+            if (current.pool != VK_NULL_HANDLE)
+                retired_materials.push_back({std::move(current), context->lastFrameSubmitSerial() + 1});
+            current = std::move(bindings);
+            return true;
+        }
+
         VkDescriptorSetLayout material_layout = VK_NULL_HANDLE;
         VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
         VkPipeline pipeline_cull = VK_NULL_HANDLE;    // backface culling (default)
@@ -455,6 +550,12 @@ namespace lfs::vis {
                     *l = VK_NULL_HANDLE;
                 }
             }
+            for (auto& [id, bindings] : material_bindings)
+                destroyMaterials(bindings);
+            material_bindings.clear();
+            for (auto& retired : retired_materials)
+                destroyMaterials(retired.bindings);
+            retired_materials.clear();
             material_layout = VK_NULL_HANDLE;
             if (light_layout != VK_NULL_HANDLE) {
                 vkDestroyDescriptorSetLayout(device, light_layout, nullptr);
@@ -1575,6 +1676,25 @@ namespace lfs::vis {
                 }
             }
             assets->prepareMeshes(params.items, params.frame_slot);
+            std::erase_if(retired_materials, [this](auto& retired) {
+                if (retired.consumer > context->retiredFrameSubmitSerial())
+                    return false;
+                destroyMaterials(retired.bindings);
+                return true;
+            });
+            for (const auto& item : params.items) {
+                SharedMeshDrawAsset mesh;
+                if (item.mesh && assets->findMesh(item.mesh->id(), mesh))
+                    (void)prepareMaterials(item.mesh->id(), mesh);
+            }
+            for (auto it = material_bindings.begin(); it != material_bindings.end();) {
+                if (context->retiredFrameSubmitSerial() > it->second.last_used + 120) {
+                    destroyMaterials(it->second);
+                    it = material_bindings.erase(it);
+                } else {
+                    ++it;
+                }
+            }
             if (!params.items.empty() &&
                 params.draw_group_count > std::numeric_limits<std::size_t>::max() / params.items.size()) {
                 LOG_ERROR("VulkanMeshPass: draw resource count overflow");
@@ -1789,12 +1909,16 @@ namespace lfs::vis {
                 vkCmdBindVertexBuffers(cb, 0, 1, &vbuf, &voff);
                 vkCmdBindIndexBuffer(cb, mesh.index_buffer, 0, VK_INDEX_TYPE_UINT32);
 
+                const auto materials = material_bindings.find(item.mesh->id());
+                if (materials == material_bindings.end() || materials->second.materials.empty() ||
+                    materials->second.generation != mesh.generation)
+                    continue;
                 for (const auto& sm : mesh.submeshes) {
                     if (sm.index_count == 0)
                         continue;
                     const std::size_t mat_idx =
-                        std::min(sm.material_index, mesh.material_descriptors.size() - 1);
-                    const VkDescriptorSet material_descriptor = mesh.material_descriptors[mat_idx];
+                        std::min(sm.material_index, materials->second.materials.size() - 1);
+                    const VkDescriptorSet material_descriptor = materials->second.materials[mat_idx].descriptor;
                     if (material_descriptor == VK_NULL_HANDLE) {
                         continue;
                     }

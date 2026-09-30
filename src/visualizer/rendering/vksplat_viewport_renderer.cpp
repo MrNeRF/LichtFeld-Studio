@@ -2372,6 +2372,7 @@ namespace lfs::vis {
         // any queued timeline waits before destroying the engine or storage.
         renderer_.waitForPendingBatch();
         discardLodEngineResults(lod_upload_engine_.configure({}), reason);
+        resident_page_uploads_.clear();
         lod_sink_model_ = nullptr;
     }
 
@@ -3025,6 +3026,15 @@ namespace lfs::vis {
         std::vector<LodUploadEngine::ResidentPage> pages;
         uint64_t signal = 0;
         try {
+            std::erase_if(resident_page_uploads_, [](const auto& upload) { return upload.first.ready(); });
+            bool staged = false;
+            for (auto* tensor : {&source.means, &source.sh0, &source.shN, &source.rotation,
+                                 &source.scaling, &source.opacity, &source.shN_bounds}) {
+                if (tensor->is_valid() && tensor->device() == lfs::core::Device::CPU) {
+                    *tensor = tensor->to(lfs::core::Device::GPU);
+                    staged = true;
+                }
+            }
             for (const auto& upload : uploads) {
                 if (!upload.error.empty())
                     return std::unexpected(upload.error);
@@ -3035,8 +3045,13 @@ namespace lfs::vis {
                                  static_cast<uint32_t>(std::min(LodPageCache::kChunkSplats, size_t(splat_data.size()) - start))});
                 completed.push_back(upload);
             }
-            if (!pages.empty())
-                signal = lod_upload_engine_.quantizeResident(source, pages).timeline().value;
+            if (!pages.empty()) {
+                auto completion = lod_upload_engine_.quantizeResident(source, pages);
+                signal = completion.timeline().value;
+                // A later target can submit while this upload still reads its staging tensors.
+                if (staged)
+                    resident_page_uploads_.emplace_back(std::move(completion), std::move(source));
+            }
         } catch (const std::exception& e) { return std::unexpected(std::format("LOD resident page quantize failed: {}", e.what())); }
         if (signal)
             renderer_.addTimelineWait(static_cast<VkSemaphore>(lod_upload_engine_.timeline()), signal,
@@ -6570,6 +6585,9 @@ namespace lfs::vis {
 
     std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
     VksplatViewportRenderer::readPreviewDepth(VulkanContext& context, const RenderTargetId output_slot) const {
+        std::lock_guard target_lock(target_mutex_);
+        if (!output_slot.valid() || resident_raster_scratch_.target != output_slot)
+            return std::unexpected("Raw depth scratch belongs to a different render target");
         const auto readback_t0 = std::chrono::steady_clock::now();
         const auto size = latestOutputImageSize(output_slot);
         if (!size) {
@@ -7263,6 +7281,8 @@ namespace lfs::vis {
         if (input_binding->model_snapshot_changed) {
             macro_chain_warmup_pending_ = true;
         }
+        if (input_binding->model_snapshot_changed)
+            resident_raster_scratch_ = {};
         // Model snapshots invalidate bindings; tensor readiness orders producer writes.
 
         auto& slot = selection_query_;
@@ -7759,13 +7779,21 @@ namespace lfs::vis {
         identity.ortho_scale = request.frame_view.ortho_scale;
         identity.intrinsics = request.frame_view.getCameraIntrinsics();
         identity.scaling_modifier = request.scaling_modifier;
+        identity.sh_degree = request.sh_degree;
+        if (request.scene.model_transforms)
+            identity.model_transforms = *request.scene.model_transforms;
+        identity.node_visibility = request.scene.node_visibility_mask;
+        identity.transform_indices = request.scene.transform_indices ? request.scene.transform_indices->data_ptr() : nullptr;
         identity.gut = request.gut;
         identity.equirectangular = request.equirectangular;
         identity.mip_filter = request.mip_filter;
         identity.antialiasing = request.antialiasing;
         identity.num_splats = num_splats;
         identity.valid = target.valid() && num_splats > 0 && identity.size.x > 0 &&
-                         identity.size.y > 0;
+                         identity.size.y > 0 && !request.lod_gpu_traversal.enabled && request.lod_count == 0 &&
+                         !request.filters.crop_region && !request.filters.ellipsoid_region &&
+                         request.filters.crop_regions.empty() && request.filters.ellipsoid_regions.empty() &&
+                         !request.filters.view_volume && !request.filters.screen_window;
         return identity;
     }
 
@@ -7789,6 +7817,10 @@ namespace lfs::vis {
                published.intrinsics.center_x == requested.intrinsics.center_x &&
                published.intrinsics.center_y == requested.intrinsics.center_y &&
                published.scaling_modifier == requested.scaling_modifier &&
+               published.sh_degree == requested.sh_degree &&
+               published.model_transforms == requested.model_transforms &&
+               published.node_visibility == requested.node_visibility &&
+               published.transform_indices == requested.transform_indices &&
                published.gut == requested.gut &&
                published.equirectangular == requested.equirectangular &&
                published.mip_filter == requested.mip_filter &&
@@ -7804,9 +7836,12 @@ namespace lfs::vis {
         const RenderTargetId output_slot,
         const bool synchronize_input_read) {
         std::lock_guard target_lock(target_mutex_);
+        if (rendering_target_.valid())
+            return std::unexpected("A render target is already being rendered");
         if (!output_slot.valid() || ring_.released(output_slot))
             return std::unexpected("Invalid or released render target");
-        if (!residentRasterScratchCompatible(resident_raster_scratch_,
+        if (resident_model_snapshot_ != makeModelInputSnapshot(splat_data) ||
+            !residentRasterScratchCompatible(resident_raster_scratch_,
                                              makeResidentRasterScratchProvenance(output_slot, request, splat_data.size())))
             return render(context, splat_data, request, false, output_slot, synchronize_input_read);
         rendering_target_ = output_slot;
@@ -7833,6 +7868,7 @@ namespace lfs::vis {
         active_tensor_backend_ = lfs::core::gpu_backend_of(splat_data.means_raw()).value_or(lfs::core::default_gpu_backend());
         const auto tensor_scope = context.tensorInterop().execution_scope(active_tensor_backend_);
 
+        renderer_.setGrowCommandBatchRing(true);
         const std::size_t ring_slot = acquireRingSlot(output_slot);
         if (auto ok = waitForRingSlot(ring_slot, "selection overlay"); !ok) {
             return std::unexpected(legacyErrorString(ok.error()));
@@ -8005,6 +8041,7 @@ namespace lfs::vis {
             // is needed on either path.
             if (renderer_.wasTimelineSignalSubmitted(render_complete_timeline_, completion_value)) {
                 last_submitted_render_value_ = completion_value;
+                ring_.publishCompletion(ring_slot, completion_value);
 #if LFS_BUILD_TRAINER && LFS_HAS_CUDA
                 if (overlay_arena_guard) {
                     overlay_arena_guard->noteVulkanRelease(renderCompleteFence(), completion_value);
@@ -8022,6 +8059,7 @@ namespace lfs::vis {
                 last_submitted_render_value_));
         }
         last_submitted_render_value_ = completion_value;
+        ring_.publishCompletion(ring_slot, completion_value);
 #if LFS_BUILD_TRAINER && LFS_HAS_CUDA
         if (overlay_arena_guard) {
             overlay_arena_guard->noteVulkanRelease(renderCompleteFence(), completion_value);
@@ -8034,7 +8072,6 @@ namespace lfs::vis {
             return std::unexpected(legacyErrorString(compose_status.error()));
         }
 
-        ring_.publishCompletion(ring_slot, completion_value);
         auto& updated_output = ring_.slotAt(output_slot, ring_slot);
         updated_output.completion_value = completion_value;
         return RenderResult{
@@ -8063,6 +8100,8 @@ namespace lfs::vis {
         const bool synchronize_input_upload,
         const bool deterministic_export) {
         std::lock_guard target_lock(target_mutex_);
+        if (rendering_target_.valid())
+            return std::unexpected("A render target is already being rendered");
         if (!output_slot.valid() || ring_.released(output_slot))
             return std::unexpected("Invalid or released render target");
         rendering_target_ = output_slot;
@@ -8070,14 +8109,6 @@ namespace lfs::vis {
             RenderTargetId& target;
             ~TargetGuard() { target = {}; }
         } target_guard{rendering_target_};
-        const auto tree_generation = splat_data.lod_tree ? lodTreeSignature(*splat_data.lod_tree) : 0;
-        if (lod_feedback_model_ != &splat_data || lod_feedback_tree_generation_ != tree_generation) {
-            gpu_lod_feedback_.clear();
-            lod_feedback_model_ = &splat_data;
-            ++lod_feedback_model_generation_;
-            lod_feedback_tree_generation_ = tree_generation;
-        }
-        auto& lod_feedback = gpu_lod_feedback_.touch(output_slot, context.lastFrameSubmitSerial());
         const glm::ivec2 size = request.frame_view.size;
         if (size.x <= 0 || size.y <= 0) {
             return std::unexpected("VkSplat received an invalid viewport size");
@@ -8097,6 +8128,14 @@ namespace lfs::vis {
         if (auto ok = ensureInitialized(context); !ok) {
             return std::unexpected(ok.error());
         }
+        const auto tree_generation = splat_data.lod_tree ? lodTreeSignature(*splat_data.lod_tree) : 0;
+        if (lod_feedback_model_ != &splat_data || lod_feedback_tree_generation_ != tree_generation) {
+            gpu_lod_feedback_.clear();
+            lod_feedback_model_ = &splat_data;
+            ++lod_feedback_model_generation_;
+            lod_feedback_tree_generation_ = tree_generation;
+        }
+        auto& lod_feedback = gpu_lod_feedback_.touch(output_slot, context.lastFrameSubmitSerial());
         const auto completion_candidate = nextRenderCompletionValue("forward pass");
         if (!completion_candidate) {
             return std::unexpected(legacyErrorString(completion_candidate.error()));
@@ -8119,6 +8158,7 @@ namespace lfs::vis {
         drainOutputImagePool(false);
         trimOutputImagePoolAged();
 
+        renderer_.setGrowCommandBatchRing(true);
         const std::size_t ring_slot = acquireRingSlot(output_slot);
         if (auto ok = waitForRingSlot(ring_slot, "render"); !ok) {
             return std::unexpected(legacyErrorString(ok.error()));
@@ -9168,6 +9208,9 @@ namespace lfs::vis {
             // host-side submission record, so neither path waits on the GPU.
             if (renderer_.wasTimelineSignalSubmitted(render_complete_timeline_, completion_value)) {
                 last_submitted_render_value_ = completion_value;
+                ring_.publishCompletion(ring_slot, completion_value);
+                renderer_.tagDeferredLodSelectionReadback(render_complete_timeline_, completion_value,
+                                                          {output_slot.value, lod_feedback_model_generation_, lod_feedback_tree_generation_});
 #if LFS_BUILD_TRAINER && LFS_HAS_CUDA
                 if (shared_arena_guard) {
                     shared_arena_guard->noteVulkanRelease(renderCompleteFence(), completion_value);
@@ -9191,11 +9234,13 @@ namespace lfs::vis {
         // the arena and the trainer before the guard/locks let them reuse the
         // scratch this batch still reads.
         last_submitted_render_value_ = completion_value;
+        ring_.publishCompletion(ring_slot, completion_value);
         lod_tree_updates_.clear();
         last_render_used_macro_chain_ = higs_active;
         resident_depth_wave_armed_ = armed_depth_waves;
         resident_sort_bits_ = depth_wave_sort_bits;
         resident_raster_scratch_ = makeResidentRasterScratchProvenance(output_slot, request, splat_data.size());
+        resident_model_snapshot_ = makeModelInputSnapshot(splat_data);
 #if LFS_BUILD_TRAINER && LFS_HAS_CUDA
         if (shared_arena_guard) {
             shared_arena_guard->noteVulkanRelease(renderCompleteFence(), completion_value);
@@ -9205,14 +9250,14 @@ namespace lfs::vis {
             live_submit_callback_(completion_value);
         }
         logVramBreakdownIfChanged("render");
-        if (!compose_status) {
-            return std::unexpected(legacyErrorString(compose_status.error()));
-        }
-
         renderer_.tagDeferredVisibleCountReadback(render_complete_timeline_, completion_value);
         renderer_.tagDeferredLodSelectionReadback(render_complete_timeline_, completion_value,
                                                   {output_slot.value, lod_feedback_model_generation_, lod_feedback_tree_generation_});
         renderer_.tagDeferredInstanceCountReadback(render_complete_timeline_, completion_value);
+        if (!compose_status) {
+            return std::unexpected(legacyErrorString(compose_status.error()));
+        }
+
         if (lod_page_inputs_active) {
             last_lod_page_borrow_value_ = completion_value;
             lod_upload_engine_.noteRendererCompletion(completion_value);
@@ -9220,7 +9265,6 @@ namespace lfs::vis {
         if (higs_warmup_frame) {
             macro_chain_warmup_pending_ = false;
         }
-        ring_.publishCompletion(ring_slot, completion_value);
         auto& output = ring_.slotAt(output_slot, ring_slot);
         output.completion_value = completion_value;
         const std::uint64_t lod_page_generation =

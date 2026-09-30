@@ -1,4 +1,5 @@
 #pragma once
+#include <deque>
 
 #include "gs_pipeline.h"
 
@@ -575,7 +576,7 @@ protected:
         std::uint64_t order = 0;
         LodSelectionReadbackIdentity identity{};
     };
-    std::array<LodSelectionReadbackSlot, 8> lod_selection_readbacks_{};
+    std::deque<LodSelectionReadbackSlot> lod_selection_readbacks_{3};
     std::uint64_t lod_selection_readback_order_ = 0;
 
     void ensureVisibleCountReadback();

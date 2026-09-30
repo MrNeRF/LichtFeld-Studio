@@ -6,6 +6,8 @@
 
 #include "rendering/gpu_lod_target_feedback.hpp"
 #include "rendering/output_slot_ring.hpp"
+#include "rendering/passes/vulkan_viewport_pass.hpp"
+#include "rendering/point_cloud_vulkan_renderer.hpp"
 
 #include <gtest/gtest.h>
 
@@ -220,4 +222,56 @@ TEST(GpuLodTargetFeedback, IsolatesControllersAndUnionsRecentDemand) {
     table.release({2});
     EXPECT_EQ(table.find({2}), nullptr);
     EXPECT_TRUE(table.demand(14).protected_chunks.empty());
+}
+
+TEST(PointCloudRenderTargets, SparseOutputsStayIndependentAfterRelease) {
+    using Access = lfs::vis::PointCloudOutputOwnershipTestAccess;
+    lfs::vis::PointCloudVulkanRenderer renderer;
+    const auto a = Access::createEmptyOutput(renderer, {17});
+    const auto b = Access::createEmptyOutput(renderer, {9001});
+    ASSERT_NE(a, nullptr);
+    ASSERT_NE(b, nullptr);
+    EXPECT_NE(a, b);
+    EXPECT_TRUE(renderer.releaseRenderTarget({17}));
+    EXPECT_EQ(Access::outputIdentity(renderer, {17}), nullptr);
+    EXPECT_EQ(Access::outputIdentity(renderer, {9001}), b);
+    EXPECT_EQ(Access::createEmptyOutput(renderer, {17}), nullptr);
+    EXPECT_NE(Access::createEmptyOutput(renderer, {18}), b);
+}
+
+TEST(SharedViewportGpuAssets, RemainAliveUntilLastPassReleasesOwnership) {
+    auto assets = std::make_shared<lfs::vis::SharedViewportGpuAssets>();
+    std::weak_ptr<lfs::vis::SharedViewportGpuAssets> weak = assets;
+    auto a = std::make_unique<lfs::vis::VulkanViewportPass>(assets);
+    auto b = std::make_unique<lfs::vis::VulkanViewportPass>(assets);
+    assets.reset();
+    EXPECT_FALSE(weak.expired());
+    a.reset();
+    EXPECT_FALSE(weak.expired());
+    b.reset();
+    EXPECT_TRUE(weak.expired());
+}
+
+TEST(OutputSlotRing, LatestGenerationAndResetKeepTargetIdentity) {
+    OutputSlotRing ring;
+    const lfs::vis::RenderTargetId a{101}, b{99991};
+    auto cell = ring.acquire(a);
+    auto other = ring.acquire(b);
+    ring.slotAt(a, cell) = makeSlot(0x101);
+    ring.slotAt(b, other) = makeSlot(0x102);
+    ring.markLatest(a, cell);
+    EXPECT_EQ(ring.latestRingSlot(a), cell);
+    EXPECT_EQ(ring.bumpGeneration(a), 1u);
+    EXPECT_EQ(ring.bumpGeneration(a), 2u);
+    EXPECT_EQ(ring.bumpGeneration(b), 1u);
+    EXPECT_EQ(ring.generation(a), 2u);
+    EXPECT_EQ(ring.latestSlot(a).image.image, fakeImage(0x101));
+    EXPECT_THROW((void)ring.slotAt(a, other), std::out_of_range);
+    EXPECT_THROW((void)ring.acquire({}), std::invalid_argument);
+    EXPECT_TRUE(ring.releaseRenderTarget(a, [](auto&) {}));
+    ring.reset();
+    EXPECT_TRUE(ring.table().empty());
+    EXPECT_EQ(ring.submissionCount(), 0u);
+    EXPECT_THROW((void)ring.acquire(a), std::invalid_argument);
+    EXPECT_EQ(ring.acquire(b), 0u);
 }

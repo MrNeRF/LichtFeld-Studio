@@ -275,7 +275,11 @@ namespace lfs::vis {
             const SelectionMaskRequest& request,
             bool force_input_upload);
 
-        [[nodiscard]] bool releaseRenderTarget(RenderTargetId target);
+        [[nodiscard]] bool hasRenderTarget(RenderTargetId target) const {
+            std::lock_guard lock(target_mutex_);
+            return ring_.contains(target);
+        }
+        [[nodiscard]] LFS_VIS_API bool releaseRenderTarget(RenderTargetId target);
         void releaseSceneResources();
         void reset();
         [[nodiscard]] std::optional<LodPageCache::Snapshot> ensureLodPageCacheSnapshot(
@@ -325,6 +329,10 @@ namespace lfs::vis {
             float ortho_scale = 0.0f;
             lfs::rendering::CameraIntrinsics intrinsics{};
             float scaling_modifier = 1.0f;
+            int sh_degree = 0;
+            std::vector<glm::mat4> model_transforms;
+            std::vector<bool> node_visibility;
+            const void* transform_indices = nullptr;
             bool gut = false;
             bool equirectangular = false;
             bool mip_filter = false;
@@ -333,10 +341,11 @@ namespace lfs::vis {
             bool valid = false;
         };
         ResidentRasterScratchProvenance resident_raster_scratch_{};
-        [[nodiscard]] ResidentRasterScratchProvenance makeResidentRasterScratchProvenance(
+        ModelInputSnapshot resident_model_snapshot_{};
+        [[nodiscard]] LFS_VIS_API ResidentRasterScratchProvenance makeResidentRasterScratchProvenance(
             RenderTargetId target, const lfs::rendering::ViewportRenderRequest& request, std::size_t num_splats) const;
-        [[nodiscard]] bool residentRasterScratchCompatible(const ResidentRasterScratchProvenance& published,
-                                                           const ResidentRasterScratchProvenance& requested) const;
+        [[nodiscard]] LFS_VIS_API bool residentRasterScratchCompatible(const ResidentRasterScratchProvenance& published,
+                                                                       const ResidentRasterScratchProvenance& requested) const;
         struct ComposePipeline;
         struct InputBindingResult {
             bool model_snapshot_changed = false;
@@ -784,6 +793,7 @@ namespace lfs::vis {
         // Async RAD page streaming: decoded pages are packed and copied on the
         // engine's own thread/stream; render frames only publish completions.
         LodUploadEngine lod_upload_engine_;
+        std::vector<std::pair<lfs::core::TensorCompletion, lfs::core::RadPageSources>> resident_page_uploads_;
         // Last completion value whose frame read the LOD pool; pool reuse waits on it GPU-side.
         std::uint64_t last_lod_page_borrow_value_ = 0;
         std::uint64_t lod_upload_log_batches_ = 0;

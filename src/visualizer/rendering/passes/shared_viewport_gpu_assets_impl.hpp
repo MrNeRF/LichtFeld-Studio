@@ -57,11 +57,9 @@ namespace lfs::vis {
         VkQueue graphics_queue = VK_NULL_HANDLE;
 
         std::uint64_t epoch = 0;
-        std::optional<std::size_t> epoch_frame_slot;
 
         VkSampler mesh_sampler = VK_NULL_HANDLE;
         VkDescriptorSetLayout material_layout = VK_NULL_HANDLE;
-        std::vector<VkDescriptorPool> material_descriptor_pools;
         VkCommandPool mesh_transfer_pool = VK_NULL_HANDLE;
 
         struct GpuTexture {
@@ -73,10 +71,7 @@ namespace lfs::vis {
         GpuTexture white_pixel{};
 
         struct GpuMaterial {
-            VkBuffer ubo = VK_NULL_HANDLE;
-            VmaAllocation ubo_alloc = VK_NULL_HANDLE;
-            VkDescriptorSet descriptor = VK_NULL_HANDLE;
-            VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
+            SharedMeshMaterial binding;
             GpuTexture albedo{};
             GpuTexture normal{};
             GpuTexture metallic_roughness{};
@@ -160,9 +155,6 @@ namespace lfs::vis {
 
         [[nodiscard]] bool createMeshSampler();
         [[nodiscard]] bool createMaterialLayout();
-        [[nodiscard]] VkDescriptorPool createMaterialDescriptorPool();
-        [[nodiscard]] bool createInitialMaterialDescriptorPool();
-        [[nodiscard]] bool allocateMaterialDescriptor(GpuMaterial& material);
         [[nodiscard]] bool writeBuffer(VmaAllocation alloc, const void* src, std::size_t bytes) const;
         [[nodiscard]] bool createTexture(const std::uint8_t* rgba,
                                          int w,
