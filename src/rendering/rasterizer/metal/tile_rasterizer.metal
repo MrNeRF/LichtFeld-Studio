@@ -16,11 +16,18 @@ struct RasterParameters {
     float4 render_origin;
     float4 intrinsics, clip;
     uint4 camera;
+    float4 panorama;
 };
 struct RasterStatus { ulong required; uint error, unused; };
 uint4 clipped_bounds(ProjectedSplat s, constant RasterParameters& p) {
     if (!all(isfinite(s.mean_depth)) || s.mean_depth.z <= 0 ||
         !all(isfinite(s.conic_opacity)) || !all(isfinite(s.color))) return uint4(0);
+    if(p.mode==3u && p.camera.z==2u) {
+        const uint span=p.columns*16u;
+        if(s.bounds.x>=span || s.bounds.z<s.bounds.x || s.bounds.z-s.bounds.x>span ||
+           (s.bounds.x%16u) || (s.bounds.z%16u))return uint4(0);
+        return uint4(s.bounds.x,min(s.bounds.y,p.height),s.bounds.z,min(s.bounds.w,p.height));
+    }
     return min(s.bounds, uint4(p.width,p.height,p.width,p.height));
 }
 
@@ -94,7 +101,8 @@ kernel void tile_instances(device const ProjectedSplat* splats [[buffer(0)]],
     ulong at = offsets[i];
     for (uint y = bounds.y / 16; y < (bounds.w + 15) / 16; ++y)
         for (uint x = bounds.x / 16; x < (bounds.z + 15) / 16; ++x) {
-            keys[at] = (ulong(y * p.columns + x) << 32) | as_type<uint>(s.color.w);
+            const uint column=p.mode==3u && p.camera.z==2u?x%p.columns:x;
+            keys[at] = (ulong(y * p.columns + column) << 32) | as_type<uint>(s.color.w);
             indices[at++] = i;
         }
 }
@@ -221,6 +229,21 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
     uint picked = 0xffffffff;
     const uint begin = status.error ? 0 : ranges[2 * tile];
     const uint end = status.error ? 0 : ranges[2 * tile + 1];
+    // A camera ray is invariant across every Gaussian and tile batch. Compute
+    // spherical trigonometry once per live pixel, never inside the hot loop.
+    float3 gut_origin=0,gut_direction=float3(0,0,1);
+    if(p.mode==3u && valid && end>begin) {
+        const bool orthographic=p.camera.z==1u;
+        if(p.camera.z==2u) {
+            const float2 angle=((float2(pixel)+.5f+p.panorama.zw)/p.panorama.xy-.5f)*float2(2.f*M_PI_F,M_PI_F);
+            const float elevation_cos=cos(angle.y);
+            gut_direction=float3(sin(angle.x)*elevation_cos,sin(angle.y),cos(angle.x)*elevation_cos);
+        } else {
+            const float2 xy=(float2(pixel)+.5f-p.intrinsics.zw)/p.intrinsics.xy;
+            gut_origin=orthographic?float3(xy,0):float3(0);
+            gut_direction=orthographic?float3(0,0,1):float3(xy,1);
+        }
+    }
     for (ulong batch = begin; batch < end; batch += 256) {
         const bool all_done = simd_all(done);
         if ((lane & 31) == 0) finished[sg] = all_done;
@@ -250,18 +273,15 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
             else if (p.mode == 2) alpha = q <= 9 ? c.w : 0;
             else if(p.mode==3u) {
                 const auto g=gut[ids[j]];
-                const float2 xy=(float2(pixel)+.5f-p.intrinsics.zw)/p.intrinsics.xy;
-                const float3 origin=p.camera.z?float3(xy,0):float3(0);
-                const float3 direction=p.camera.z?float3(0,0,1):float3(xy,1);
-                const float3 delta=origin-g.mean_opacity.xyz;
+                const float3 delta=gut_origin-g.mean_opacity.xyz;
                 const float3 local_origin=float3(dot(g.inverse0.xyz,delta),dot(g.inverse1.xyz,delta),dot(g.inverse2.xyz,delta));
-                const float3 local_direction=float3(dot(g.inverse0.xyz,direction),dot(g.inverse1.xyz,direction),dot(g.inverse2.xyz,direction));
+                const float3 local_direction=float3(dot(g.inverse0.xyz,gut_direction),dot(g.inverse1.xyz,gut_direction),dot(g.inverse2.xyz,gut_direction));
                 const float denom=dot(local_direction,local_direction);
                 if(!isfinite(denom)||denom<=1e-12f)continue;
                 const float3 distance=cross(local_direction*rsqrt(denom),local_origin);
                 alpha=g.mean_opacity.w*exp(-.5f*dot(distance,distance));
                 const float t=-dot(local_direction,local_origin)/denom;
-                const float z=origin.z+t*direction.z;
+                const float z=gut_origin.z+t*gut_direction.z;
                 splat_depth=t>0 && z>p.clip.x && isfinite(z)?z:1e10f;
             } else alpha = c.w * exp(-.5f * q);
             alpha = min(alpha, .999f);
@@ -290,7 +310,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                 // only the 3DGS macro-relative path compresses them to half.
                 const float2 overlay_center=p.mode==3u?means[j].xy:
                     float2(half2((means[j].xy+p.render_origin.xy-macro_origin)/overlay_tile_extent))*overlay_tile_extent+macro_origin-p.render_origin.xy;
-                const uint status=overlay_selection(overlay_params,ids[j],flags,overlay_center,selection,preview);
+                const uint status=overlay_selection(overlay_params,ids[j],flags,overlay_center+(p.camera.z==2u?p.panorama.zw:float2(0)),selection,preview);
                 const bool selectable=(flags&2u)==0;
                 if(overlay_enabled(overlay_params[22].x)&&selectable){
                     const float gaussian=exp(-.5f*q);
@@ -305,8 +325,11 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                     // Desktop marker mode contributes dots only, without the
                     // Gaussian body outside the marker's circular support.
                     const float2 marker_delta=float2(pixel)-overlay_center;
-                    if(dot(marker_delta,marker_delta)>6.25f)continue;
-                    rgb=overlay_target(status,selection_colors)*(dot(marker_delta,marker_delta)>2.25f?.4f:1.f);
+                    // Match the desktop's rounded distance comparisons at
+                    // the hard marker boundaries, rather than squared radii.
+                    const float marker_distance=length(marker_delta);
+                    if(marker_distance>2.5f)continue;
+                    rgb=overlay_target(status,selection_colors)*(marker_distance>1.5f?.4f:1.f);
                     if(transmittance>.5f)median=splat_depth;
                     transmittance=0; done=true; break;
                 }

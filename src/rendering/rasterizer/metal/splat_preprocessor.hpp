@@ -20,6 +20,12 @@ namespace lfs::rendering::metal {
                                           Discs,
                                           Gut };
 
+    inline constexpr float kViewerNearClip = LFS_METAL_VIEWER_NEAR_CLIP;
+
+    enum class CameraModel : uint32_t { Perspective,
+                                        Orthographic,
+                                        Equirectangular };
+
     struct BufferSlice {
         id<MTLBuffer> buffer = nil;
         NSUInteger offset = 0;
@@ -60,10 +66,11 @@ namespace lfs::rendering::metal {
         simd_float4 camera_local;              // SH direction uses the source/model coordinate frame
         simd_float4 intrinsics;                // fx, fy, cx, cy in render pixels
         simd_float4 clip_scale;                // near, far, scale modifier, pixel dilation variance
-        simd_uint4 extent;                     // width, height, orthographic (0/1), mip antialiasing (0/1)
+        simd_uint4 extent;                     // width, height, CameraModel, mip antialiasing (0/1)
         simd_float4 rasterization{1, 0, 0, 0}; // output pixels per source viewport pixel
+        simd_float4 panorama{};                // full camera width/height and subregion origin in output pixels
     };
-    static_assert(sizeof(Projection) == 208);
+    static_assert(sizeof(Projection) == 224);
 
     // Normalized local-frame inverse rows in camera coordinates. Independent of
     // projected covariance and mip compensation: 3DGUT evaluates the pixel ray.
@@ -76,7 +83,7 @@ namespace lfs::rendering::metal {
         simd_float4 mean_depth;    // x, y, linear view depth, contribution radius in pixels
         simd_float4 conic_opacity; // inverse covariance xx,xy,yy and activated opacity
         simd_float4 color;         // RGB radiance; w is radial sort distance squared, not alpha
-        simd_uint4 bounds;         // exclusive pixel AABB; empty means culled
+        simd_uint4 bounds;         // exclusive pixel AABB; panorama X is a wrapped tile span; empty means culled
     };
     static_assert(sizeof(ProjectedSplat) == 64);
 

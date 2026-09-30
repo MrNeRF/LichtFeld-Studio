@@ -75,13 +75,13 @@ if(TARGET lfs_visualizer)
                 --smoke --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-benchmark-smoke.json")
             set_tests_properties(MacViewerBackendBenchmarkSmoke PROPERTIES
                 LABELS "benchmark;metal;gpu;metal4" TIMEOUT 180 SKIP_RETURN_CODE 77)
-            foreach(_mode IN ITEMS mip ortho depth export_scale gut)
+            foreach(_mode IN ITEMS mip ortho depth export_scale gut equirect near)
                 add_test(NAME MacViewerParity_${_mode} COMMAND mac_viewer_backend_benchmark
                     --smoke --${_mode} --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-${_mode}.json")
                 set_tests_properties(MacViewerParity_${_mode} PROPERTIES
                     LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
             endforeach()
-            foreach(_gut_mode IN ITEMS mip ortho depth export_scale)
+            foreach(_gut_mode IN ITEMS mip ortho depth export_scale near)
                 add_test(NAME MacViewerParity_gut_${_gut_mode} COMMAND mac_viewer_backend_benchmark
                     --smoke --gut --${_gut_mode}
                     --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-gut-${_gut_mode}.json")
@@ -93,6 +93,20 @@ if(TARGET lfs_visualizer)
                     --smoke --gut --overlay ${_gut_overlay}
                     --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-gut-${_gut_overlay}.json")
                 set_tests_properties(MacViewerParity_gut_${_gut_overlay} PROPERTIES
+                    LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
+            endforeach()
+            foreach(_panorama_mode IN ITEMS mip depth export_scale subregion)
+                add_test(NAME MacViewerParity_equirect_${_panorama_mode} COMMAND mac_viewer_backend_benchmark
+                    --smoke --equirect --${_panorama_mode}
+                    --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-equirect-${_panorama_mode}.json")
+                set_tests_properties(MacViewerParity_equirect_${_panorama_mode} PROPERTIES
+                    LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
+            endforeach()
+            foreach(_panorama_overlay IN ITEMS affine selection crop window markers)
+                add_test(NAME MacViewerParity_equirect_${_panorama_overlay} COMMAND mac_viewer_backend_benchmark
+                    --smoke --equirect --overlay ${_panorama_overlay}
+                    --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-equirect-${_panorama_overlay}.json")
+                set_tests_properties(MacViewerParity_equirect_${_panorama_overlay} PROPERTIES
                     LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
             endforeach()
             foreach(_overlay IN ITEMS selection preview crop ellipsoid window markers flash affine)

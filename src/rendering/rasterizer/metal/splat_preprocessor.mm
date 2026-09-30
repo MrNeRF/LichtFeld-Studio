@@ -45,9 +45,19 @@ namespace lfs::rendering::metal {
                          std::isfinite(p.clip_scale[i]) && std::isfinite(p.camera_local[i]);
             if (!finite || !finite_matrix(p.model_to_world) || !finite_matrix(p.world_to_camera) ||
                 !p.extent.x || !p.extent.y || p.extent.x > 65535 || p.extent.y > 65535 ||
-                p.extent.z > 1 || p.extent.w > 1 || p.intrinsics.x <= 0 || p.intrinsics.y <= 0 || p.clip_scale.x <= 0 ||
+                p.extent.z > uint32_t(CameraModel::Equirectangular) || p.extent.w > 1 || p.intrinsics.x <= 0 || p.intrinsics.y <= 0 || p.clip_scale.x <= 0 ||
                 p.clip_scale.y <= p.clip_scale.x || p.clip_scale.z <= 0 || p.clip_scale.w < 0)
                 throw std::invalid_argument("Invalid Metal splat projection");
+            if (p.extent.z == uint32_t(CameraModel::Equirectangular)) {
+                for (int i = 0; i < 4; ++i)
+                    if (!std::isfinite(p.panorama[i]))
+                        throw std::invalid_argument("Invalid Metal panorama dimensions");
+                if (p.panorama.x < p.extent.x || p.panorama.y < p.extent.y ||
+                    p.panorama.x > 65535 || p.panorama.y > 65535 ||
+                    p.panorama.z < 0 || p.panorama.w < 0 ||
+                    p.panorama.z + p.extent.x > p.panorama.x || p.panorama.w + p.extent.y > p.panorama.y)
+                    throw std::invalid_argument("Invalid Metal panorama subregion");
+            }
         }
     } // namespace
 
@@ -123,6 +133,8 @@ namespace lfs::rendering::metal {
             static_cast<uint32_t>(mode) > 3)
             throw std::invalid_argument("Active SH degree does not fit resident Metal storage");
         check_projection(projection);
+        if (projection.extent.z == uint32_t(CameraModel::Equirectangular) && mode != PrimitiveMode::Gut)
+            throw std::invalid_argument("Metal panoramas require the 3DGUT ray rasterizer");
         if (!in.count)
             return;
         const size_t n = in.count;

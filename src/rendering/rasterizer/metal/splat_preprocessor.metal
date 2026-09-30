@@ -12,12 +12,42 @@ struct Projection {
     float4x4 model_to_world, world_to_camera;
     float4 camera_local, intrinsics, clip_scale;
     uint4 extent;
-    float4 rasterization;
+    float4 rasterization, panorama;
 };
 struct InputLayout { uint count, rest, has_deleted, objects, half_attrs, overlay, object_indexed; };
 struct SceneObject { float4x4 model_to_world; float4 camera_local; uint4 flags; };
 struct GutSplat { float4 inverse0, inverse1, inverse2, mean_opacity; };
 struct ProjectedSplat { float4 mean_depth, conic_opacity, color; uint4 bounds; };
+
+// Full camera coordinates are retained when rendering a subregion.
+float2 panorama_project(float3 view, float2 extent) {
+    const float distance=length(view);
+    const float3 direction=view/max(distance,1e-8f);
+    return float2(atan2(direction.x,direction.z)/(2.f*M_PI_F)+.5f,
+                  asin(clamp(direction.y,-1.f,1.f))/M_PI_F+.5f)*extent;
+}
+
+// Intersect periodic support with the actual pixel viewport before converting
+// to tiles. Wrapping the padded tile grid instead loses pixels at odd widths.
+uint2 panorama_tile_span(float center, float radius, float period, uint width) {
+    const uint columns=(width+15u)/16u;
+    if(2.f*radius>=period)return uint2(0,columns*16u);
+    center+=period*round((.5f*float(width)-center)/period);
+    uint first=columns, end=0, second=columns, second_end=0;
+    for(int shift=-1;shift<=1;++shift) {
+        const float lo=max(0.f,center+float(shift)*period-radius);
+        const float hi=min(float(width),center+float(shift)*period+radius);
+        if(lo>=hi)continue;
+        const uint x0=uint(floor(lo/16.f)),x1=min(columns,uint(ceil(hi/16.f)));
+        if(first==columns){first=x0;end=x1;}
+        else {second=x0;second_end=x1;}
+    }
+    if(first==columns)return uint2(0);
+    if(second==columns)return uint2(first,end)*16u;
+    if(second<first){const uint a=first,b=end;first=second;end=second_end;second=a;second_end=b;}
+    if(end>=second)return uint2(0,columns*16u);
+    return uint2(second,columns+end)*16u;
+}
 
 // Matches the Studio reference's covariance extent limit before inversion.
 float3 clamp_covariance_extent(float3 covariance, float opacity) {
@@ -114,7 +144,10 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     }
     const float4x4 matrix=frame.world_to_camera*model_to_world;
     const float3 view=(matrix*float4(p,1)).xyz;
-    if(!all(isfinite(view)) || view.z<=frame.clip_scale.x || view.z>=frame.clip_scale.y) return;
+    const bool equirectangular=frame.extent.z==2u;
+    const bool orthographic=frame.extent.z==1u;
+    const float projection_depth=equirectangular?length(view):view.z;
+    if(!all(isfinite(view)) || projection_depth<=frame.clip_scale.x || projection_depth>=frame.clip_scale.y) return;
     uint flags=0;
     if(layout.overlay){
         bool active=true;
@@ -126,11 +159,12 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
         if(active&&overlay_enabled(params[13].x)){
             float4 k=params[12];
             if(k.x<=0)k=float4(frame.intrinsics.xy,float2(frame.extent.xy)*.5f);
-            if(frame.extent.z)k=float4(frame.intrinsics.xy,float2(frame.extent.xy)*.5f);
-            const float2 center=k.xy*view.xy/(frame.extent.z?1.f:view.z)+k.zw;
-            const float2 half_extent=.5f*float2(frame.extent.xy)*params[206].xy;
-            const float2 window=.5f*float2(frame.extent.xy)+float2(params[14].w,params[15].w)*(.5f*float2(frame.extent.xy)-half_extent);
-            const bool inside=all(abs(center-window)<=half_extent)&&view.z>=-params[15].z&&view.z<=-params[14].z;
+            if(orthographic)k=float4(frame.intrinsics.xy,float2(frame.extent.xy)*.5f);
+            const float2 full_extent=equirectangular?frame.panorama.xy:float2(frame.extent.xy);
+            const float2 center=equirectangular?panorama_project(view,full_extent):k.xy*view.xy/(orthographic?1.f:view.z)+k.zw;
+            const float2 half_extent=.5f*full_extent*params[206].xy;
+            const float2 window=.5f*full_extent+float2(params[14].w,params[15].w)*(.5f*full_extent-half_extent);
+            const bool inside=all(abs(center-window)<=half_extent)&&projection_depth>=-params[15].z&&projection_depth<=-params[14].z;
             if(!inside){flags|=2u;if(overlay_enabled(params[13].z))flags|=1u;if(overlay_enabled(params[13].y))active=false;}
         }
         const float4 emphasis=params[20];
@@ -144,11 +178,13 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     const float logit=layout.half_attrs?float(reinterpret_cast<device const half*>(opacity)[i]):opacity[i];
     float alpha=1.0f/(1.0f+exp(-logit));
     if(!isfinite(alpha) || alpha<0.5f/255.0f) return;
-    const bool orthographic=frame.extent.z!=0;
+    const float source_alpha=alpha;
     // Vulkan's project_splat subtracts half a pixel before integer sampling.
-    float2 center=frame.intrinsics.xy*view.xy/(orthographic?1.0f:view.z)+frame.intrinsics.zw-.5f;
+    float2 center=equirectangular?panorama_project(view,frame.panorama.xy)-frame.panorama.zw-.5f:
+        frame.intrinsics.xy*view.xy/(orthographic?1.0f:view.z)+frame.intrinsics.zw-.5f;
     float3 conic;
     float radius;
+    float2 panorama_radius=0;
     if(primitive_mode==1u) {
         // Independent point path: no covariance, quaternion or Gaussian scale work.
         radius=2.0f;
@@ -161,20 +197,23 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
         const float3 log_scale=layout.half_attrs?float3(reinterpret_cast<device const packed_half3*>(scales)[i]):float3(scales[i]);
         const float3 s=exp(min(log_scale,float3(20.f)))*frame.clip_scale.z;
         if(!all(isfinite(s))) return;
-        // Bound the covariance Jacobian near the frustum, as in 3DGS projection.
-        const float2 margin=.3f*.5f*float2(frame.extent.xy)/frame.intrinsics.xy;
-        const float2 positive=(float2(frame.extent.xy)-frame.intrinsics.zw)/frame.intrinsics.xy+margin;
-        const float2 negative=frame.intrinsics.zw/frame.intrinsics.xy+margin;
-        const float2 ratio=clamp(view.xy/view.z,-negative,positive);
-        const float3 jx=orthographic?float3(frame.intrinsics.x,0,0):float3(frame.intrinsics.x/view.z,0,-frame.intrinsics.x*ratio.x/view.z);
-        const float3 jy=orthographic?float3(0,frame.intrinsics.y,0):float3(0,frame.intrinsics.y/view.z,-frame.intrinsics.y*ratio.y/view.z);
         const float3x3 linear=float3x3(matrix[0].xyz,matrix[1].xyz,matrix[2].xyz);
         const float3 a=linear*rotate_axis(q,float3(s.x,0,0));
         const float3 b=linear*rotate_axis(q,float3(0,s.y,0));
         const float3 c=linear*rotate_axis(q,float3(0,0,s.z));
-        float3 u=float3(dot(jx,a),dot(jx,b),dot(jx,c));
-        float3 v=float3(dot(jy,a),dot(jy,b),dot(jy,c));
-        float3 raw_covariance=float3(dot(u,u),dot(u,v),dot(v,v));
+        float3 raw_covariance;
+        if(primitive_mode!=3u) {
+            // Bound the covariance Jacobian near the frustum, as in 3DGS projection.
+            const float2 margin=.3f*.5f*float2(frame.extent.xy)/frame.intrinsics.xy;
+            const float2 positive=(float2(frame.extent.xy)-frame.intrinsics.zw)/frame.intrinsics.xy+margin;
+            const float2 negative=frame.intrinsics.zw/frame.intrinsics.xy+margin;
+            const float2 ratio=clamp(view.xy/view.z,-negative,positive);
+            const float3 jx=orthographic?float3(frame.intrinsics.x,0,0):float3(frame.intrinsics.x/view.z,0,-frame.intrinsics.x*ratio.x/view.z);
+            const float3 jy=orthographic?float3(0,frame.intrinsics.y,0):float3(0,frame.intrinsics.y/view.z,-frame.intrinsics.y*ratio.y/view.z);
+            const float3 u=float3(dot(jx,a),dot(jx,b),dot(jx,c));
+            const float3 v=float3(dot(jy,a),dot(jy,b),dot(jy,c));
+            raw_covariance=float3(dot(u,u),dot(u,v),dot(v,v));
+        }
         if(primitive_mode==3u) {
             // Match project_gaussian_to_camera_gut, including FP32 UT weights.
             const float lambda=.1f*.1f*3.f-3.f;
@@ -186,18 +225,36 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
             const float3 sigma[7]={view,view+sigma_scale*a,view+sigma_scale*b,view+sigma_scale*c,
                                  view-sigma_scale*a,view-sigma_scale*b,view-sigma_scale*c};
             float2 image[7];
+            const float raster_scale=frame.rasterization.x>0?frame.rasterization.x:1.f;
+            const float2 panorama_extent=max(float2(1),round(frame.panorama.xy/raster_scale))*raster_scale;
             for(uint n=0;n<7;++n) {
-                if(sigma[n].z<=frame.clip_scale.x || !all(isfinite(sigma[n])))return;
-                image[n]=frame.intrinsics.xy*sigma[n].xy/(orthographic?1.f:sigma[n].z)+frame.intrinsics.zw;
+                if(!all(isfinite(sigma[n])) || (equirectangular?length(sigma[n])<=1e-8f:sigma[n].z<=frame.clip_scale.x))return;
+                image[n]=equirectangular?panorama_project(sigma[n],panorama_extent):
+                    frame.intrinsics.xy*sigma[n].xy/(orthographic?1.f:sigma[n].z)+frame.intrinsics.zw;
+                if(equirectangular && n) {
+                    float dx=image[n].x-image[0].x;
+                    dx-=panorama_extent.x*round(dx/panorama_extent.x);
+                    image[n].x=image[0].x+dx;
+                }
             }
+            // Accumulate relative offsets for the spherical projection: the
+            // UT weights sum to one but a negative weight near -99 amplifies
+            // cancellation of absolute pixel coordinates at large extents.
             float2 mean=0;
-            for(uint n=0;n<7;++n)mean+=(n? sigma_weight:mean_weight)*image[n];
+            if(equirectangular) {
+                float2 offset=0;
+                for(uint n=1;n<7;++n)offset+=image[n]-image[0];
+                mean=fma(float2(sigma_weight),offset,image[0]);
+            } else {
+                for(uint n=0;n<7;++n)mean+=(n? sigma_weight:mean_weight)*image[n];
+            }
             raw_covariance=0;
             for(uint n=0;n<7;++n) {
                 const float2 d=image[n]-mean;
                 raw_covariance+=(n?sigma_weight:covariance_weight)*float3(d.x*d.x,d.x*d.y,d.y*d.y);
             }
-            center=mean-.5f;
+            if(equirectangular)mean.x-=panorama_extent.x*floor(mean.x/panorama_extent.x);
+            center=mean-.5f-(equirectangular?frame.panorama.zw:float2(0));
             // Actual 3D alpha uses source scale, independently of binning scale
             // modifier/mip compensation, matching load_splat_gut_alphablend.
             const float3 base_scale=max(exp(log_scale),float3(1e-8f));
@@ -225,10 +282,20 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
         conic=float3(yy,-xy,xx)/det;
         const float eigen=.5f*(xx+yy)+sqrt(max(0.0f,.25f*(xx-yy)*(xx-yy)+xy*xy));
         radius=primitive_mode==2u?3.0f*sqrt(eigen):sqrt(2.0f*max(4.0f,log(alpha*510.0f))*eigen);
+        if(equirectangular) {
+            const float extent_factor=sqrt(2.f*max(4.f,log(source_alpha*510.f)));
+            panorama_radius=min(sqrt(float2(xx,yy))*extent_factor,frame.panorama.xy*float2(1.f,.49f));
+            radius=max(panorama_radius.x,panorama_radius.y);
+        }
     }
     if(!all(isfinite(center)) || !isfinite(radius)) return;
     const float2 extent=float2(frame.extent.xy);
-    const float2 lo=clamp(floor(center-radius),0.0f,extent),hi=clamp(ceil(center+radius),0.0f,extent);
+    const float2 support=equirectangular?panorama_radius:float2(radius);
+    float2 lo=clamp(floor(center-support),0.0f,extent),hi=clamp(ceil(center+support),0.0f,extent);
+    if(equirectangular) {
+        const uint2 span=panorama_tile_span(center.x,support.x,frame.panorama.x,frame.extent.x);
+        lo.x=float(span.x);hi.x=float(span.y);
+    }
     if(any(lo>=hi)) return;
     // Match view_direction_to_point + extract_rotation_rows in Vulkan.
     // SH follows the object's rotation; nonuniform scale must not distort it.
@@ -239,9 +306,10 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     if(all(axis_lengths>1e-8f))direction=float3(dot(model_linear[0]/axis_lengths.x,direction),
         dot(model_linear[1]/axis_lengths.y,direction),dot(model_linear[2]/axis_lengths.z,direction));
     float3 color=evaluate_sh(float3(sh0[i]),direction,rest,bounds,i,layout.rest,active_degree);
-    if(layout.overlay)color=overlay_projection_color(color,center,flags,params);
+    if(layout.overlay)color=overlay_projection_color(color,center+(equirectangular?frame.panorama.zw:float2(0)),flags,params);
     if(!all(isfinite(color))) return;
     // The viewer reference sorts by radial distance squared, not camera Z.
-    // Keep linear Z for depth/picking; color.w is reserved for the sort metric.
-    output[i]={float4(center,view.z,radius),float4(conic,alpha),float4(color,dot(view,view)),uint4(uint2(lo),uint2(hi))};
+    // Retain positive projection depth for admission; the ray path evaluates view-Z depth.
+    // color.w is reserved for the radial sort metric.
+    output[i]={float4(center,projection_depth,radius),float4(conic,alpha),float4(color,dot(view,view)),uint4(uint2(lo),uint2(hi))};
 }

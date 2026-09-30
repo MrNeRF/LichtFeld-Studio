@@ -19,7 +19,9 @@ namespace lfs::rendering::metal {
             simd_float4 render_origin;
             simd_float4 intrinsics, clip;
             simd_uint4 camera;
+            simd_float4 panorama;
         };
+        static_assert(sizeof(RasterParameters) == 128);
         struct SortParameters {
             uint32_t blocks, shift;
         };
@@ -204,8 +206,17 @@ namespace lfs::rendering::metal {
             for (int component = 0; component < 4; ++component)
                 if (!std::isfinite(projection.intrinsics[component]) || !std::isfinite(projection.clip_scale[component]))
                     throw std::invalid_argument("Invalid native 3DGUT ray parameters");
-            if (projection.intrinsics.x <= 0 || projection.intrinsics.y <= 0 || projection.clip_scale.x <= 0 || projection.extent.z > 1)
+            if (projection.intrinsics.x <= 0 || projection.intrinsics.y <= 0 || projection.clip_scale.x <= 0 || projection.extent.z > uint32_t(CameraModel::Equirectangular))
                 throw std::invalid_argument("Invalid native 3DGUT camera");
+            if (projection.extent.z == uint32_t(CameraModel::Equirectangular)) {
+                for (int component = 0; component < 4; ++component)
+                    if (!std::isfinite(projection.panorama[component]))
+                        throw std::invalid_argument("Invalid native 3DGUT panorama");
+                const auto panorama = projection.panorama;
+                if (panorama.x < f->width || panorama.y < f->height || panorama.x > 65535 || panorama.y > 65535 ||
+                    panorama.z < 0 || panorama.w < 0 || panorama.z + f->width > panorama.x || panorama.w + f->height > panorama.y)
+                    throw std::invalid_argument("Invalid native 3DGUT panorama subregion");
+            }
         }
         if (f->in_flight.exchange(true, std::memory_order_acq_rel))
             throw std::logic_error("Metal viewer frame reservation is still in flight");
@@ -215,7 +226,7 @@ namespace lfs::rendering::metal {
             f->completed.store(finished.status == MTLCommandBufferStatusCompleted, std::memory_order_release);
             f->in_flight.store(false, std::memory_order_release);
         }];
-        const RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), overlay.parameter_count ? 1u : 0u, background, overlay.render_origin, projection.intrinsics, projection.clip_scale, projection.extent};
+        const RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), overlay.parameter_count ? 1u : 0u, background, overlay.render_origin, projection.intrinsics, projection.clip_scale, projection.extent, projection.panorama};
         const auto dispatch = [](id<MTLComputeCommandEncoder> e, uint32_t n) {
             [e dispatchThreadgroups:MTLSizeMake(ceil_div(n, 256), 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
             [e endEncoding];

@@ -21,6 +21,11 @@ math(EXPR _overlay_macro_height "${_HIGS_TILE_HEIGHT} * ${_HIGS_MACRO_TILE_HEIGH
 string(REPLACE "@LFS_METAL_MACRO_LAYOUT@"
     "constant float2 overlay_macro_extent=float2(${_overlay_macro_width},${_overlay_macro_height});\nconstant float2 overlay_tile_extent=float2(${_HIGS_TILE_WIDTH},${_HIGS_TILE_HEIGHT});"
     LFS_METAL_OVERLAY_SOURCE "${LFS_METAL_OVERLAY_SOURCE}")
+string(REGEX MATCH "#define NEAR_CLIP ([0-9.]+)f" _near_clip_match "${_viewer_reference_source}")
+if(NOT _near_clip_match)
+    message(FATAL_ERROR "Missing Vulkan viewer near-clip contract")
+endif()
+set(_viewer_near_clip "${CMAKE_MATCH_1}f")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_viewer_reference_config}")
 string(REPLACE "@LFS_METAL_OVERLAY@" "${LFS_METAL_OVERLAY_SOURCE}" LFS_METAL_PREPROCESS_SOURCE "${LFS_METAL_PREPROCESS_SOURCE}")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
@@ -40,5 +45,5 @@ target_include_directories(lfs_metal_viewer PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
 target_compile_features(lfs_metal_viewer PUBLIC cxx_std_20)
 set_target_properties(lfs_metal_viewer PROPERTIES OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED YES)
 target_compile_options(lfs_metal_viewer PRIVATE -fobjc-arc)
-target_compile_definitions(lfs_metal_viewer PRIVATE LFS_HAS_CUDA=0)
+target_compile_definitions(lfs_metal_viewer PRIVATE LFS_HAS_CUDA=0 PUBLIC LFS_METAL_VIEWER_NEAR_CLIP=${_viewer_near_clip})
 target_link_libraries(lfs_metal_viewer PUBLIC "-framework Metal" "-framework Foundation")

@@ -54,7 +54,7 @@ Callers can precompile cached specializations with `prepare` before interaction.
   point and disc specializations, and mip covariance/opacity compensation.
 - Native 3DGUT uses seven unscented-transform samples for projection and retained
   inverse-Gaussian geometry for per-pixel 3D ray alpha/depth evaluation.
-  Perspective and orthographic, affine/Q16/SH, mip, crop, selection and center
+  Perspective, orthographic and equirectangular, affine/Q16/SH, mip, crop, selection and center
   markers share the existing tensor/filter contracts; interactive work performs
   no CPU geometry copies, sorting or per-frame readback.
 
@@ -87,7 +87,7 @@ rewrite the saved request when a backend is unavailable. The resolver reports a
 fallback reason. Desktop routing and the preferences UI are connected.
 
 The native desktop adapter supports Studio 3DGS and 3DGUT color/depth, perspective and
-orthographic views, resident float32/half geometry, Q16/half/float SH storage,
+orthographic and equirectangular views, resident float32/half geometry, Q16/half/float SH storage,
 node transforms/visibility/SH limits, deletion, crop boxes and ellipsoids,
 screen depth windows, dimming, committed/preview selection, brushes, node flash,
 rings and center markers. SH evaluation removes object scale from its direction
@@ -95,6 +95,16 @@ in the same way as Vulkan. A single object can omit per-primitive object indices
 Point-cloud display uses a native hardware point pipeline and depth testing,
 avoiding Gaussian tile expansion and sorting; its synchronous completion matches
 the current desktop point-renderer contract.
+
+Equirectangular 3DGUT keeps full-camera dimensions/origin when exporting tiles,
+unwraps sigma points across longitude, admits both view-Z hemispheres by radial
+distance, and wraps physical pixel support before tile conversion. Odd widths
+do not wrap at the padded GPU-grid period. Camera rays are computed once per
+live pixel and reused across Gaussian batches. The spherical UT accumulates
+relative offsets to avoid cancellation from its large negative central weight.
+The viewer's fixed raster near threshold is derived from the existing Vulkan
+shader configuration; desktop projection near/far planes do not incorrectly
+cull native Gaussian input. Separate close-range parity cases cover this.
 
 Main, split-left, split-right and preview outputs have independent reservations.
 Native median and normalized alpha-weighted depth capture, deterministic export,
@@ -112,8 +122,8 @@ recommended working set, accounting for allocations already on the shared
 device. This guards large growth before allocation; it is not an eviction or
 adaptive-quality policy and does not measure driver memory exactly.
 
-Unsupported requests, including equirectangular, standard portal profile
-and LOD/RAD traversal/paging, retain the existing Vulkan path. Selection queries,
+Unsupported requests, including the standard portal profile and LOD/RAD
+traversal/paging, retain the existing Vulkan path. Selection queries,
 the desktop UI, grid, gizmos and final composition also remain on Vulkan. This
 backend is not yet a fully independent Metal desktop presentation/editor stack.
 Automatic continues to use Vulkan, and no global Vulkan shader is modified.
@@ -129,6 +139,18 @@ An independent analytic ray reference exercises native 3DGUT color, first,
 weighted and median depth, IDs and reservation validation. The macOS-only parity
 suite also compares 3DGUT SH0/Q16 and its mip, orthographic, depth, export-scale,
 affine, selection, crop and marker variants against Vulkan.
+
+The panorama tests include an independent double-precision projected-center
+oracle, spherical alpha/depth/ID rays, rear/longitude seam coverage at odd widths,
+and full-image versus native subregion equivalence. The macOS parity fixtures
+include spherical mip/depth/export, transforms, selection, crop/window and markers.
+Panorama subregion parity uses a crop of the full Vulkan reference camera: its
+legacy subregion path wraps the local grid and can clip a seam. That reference
+path is not modified here. Subregion timing ratios are omitted because the two
+render extents differ. Hard marker core/edge transitions can differ at individual
+pixels from subpixel FP32 projection rounding. Those exact flat-color boundary
+pairs are reported separately and bounded to 0.1% of pixels; full-image RMS and
+the stable-color max gate remain enforced. This is not pixel identity.
 
 The deterministic Vulkan comparisons cover SH0 and SH3 Q16, mip, orthographic,
 depth, crop/ellipsoid/window, committed/preview selection, center markers, flash

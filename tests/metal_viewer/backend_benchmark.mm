@@ -29,7 +29,7 @@ namespace {
         int width = 1280, height = 720, warmup = 12, samples = 40;
         std::string output, images, overlay;
         bool verify_parity = false;
-        bool mip = false, ortho = false, depth = false, export_scale = false, gut = false;
+        bool mip = false, ortho = false, depth = false, export_scale = false, gut = false, equirect = false, subregion = false, near = false;
     };
     Options options(int argc, char** argv) {
         Options o;
@@ -42,6 +42,18 @@ namespace {
                 o.warmup = 6;
                 o.samples = 4;
                 o.verify_parity = true;
+                continue;
+            }
+            if (arg == "--equirect") {
+                o.equirect = o.gut = true;
+                continue;
+            }
+            if (arg == "--subregion") {
+                o.subregion = true;
+                continue;
+            }
+            if (arg == "--near") {
+                o.near = true;
                 continue;
             }
             if (arg == "--gut") {
@@ -106,7 +118,7 @@ namespace {
             throw std::runtime_error("Benchmark reservation limit exceeded");
         return o;
     }
-    core::SplatData scene(size_t count, int degree, float rest_amplitude = .1f) {
+    core::SplatData scene(size_t count, int degree, float rest_amplitude = .1f, bool panorama = false, bool near = false) {
         std::mt19937 random(1939);
         std::uniform_real_distribution<float> unit(0.f, 1.f);
         std::vector<float> means(count * 3), sh0(count * 3), scales(count * 3), rotation(count * 4, 0), opacity(count);
@@ -118,6 +130,28 @@ namespace {
             for (int c = 0; c < 3; ++c) {
                 sh0[3 * i + c] = (unit(random) - .5f) * 2.f;
                 scales[3 * i + c] = -4.8f + unit(random) * .4f;
+            }
+            if (panorama) {
+                const float azimuth = (unit(random) - .5f) * float(2 * M_PI);
+                const float elevation = std::asin(2.f * unit(random) - 1.f);
+                const float radius = 3.f + unit(random);
+                means[3 * i] = radius * std::sin(azimuth) * std::cos(elevation);
+                means[3 * i + 1] = radius * std::sin(elevation);
+                means[3 * i + 2] = -radius * std::cos(azimuth) * std::cos(elevation);
+                // Both sides of the longitude seam, including negative view Z.
+                if (i < 16) {
+                    means[3 * i] = (i % 2 ? 1.f : -1.f) * (.02f + .01f * float(i / 2));
+                    means[3 * i + 1] = (float(i / 2) - 3.5f) * .15f;
+                    means[3 * i + 2] = 3.f;
+                }
+                for (int c = 0; c < 3; ++c)
+                    scales[3 * i + c] = -2.8f + unit(random) * .4f;
+            }
+            if (near) {
+                means[3 * i] *= .006f;
+                means[3 * i + 1] *= .006f;
+                means[3 * i + 2] = -.03f - .05f * unit(random);
+                for (int c = 0; c < 3; ++c) scales[3 * i + c] -= 2.5f;
             }
             rotation[4 * i] = 1.f;
             opacity[i] = 1.f + unit(random);
@@ -217,14 +251,20 @@ namespace {
             throw std::runtime_error("Benchmark preferences must be isolated");
         Json cases = Json::array();
         for (int degree : {0, 3}) {
-            auto model = scene(o.count, degree, o.overlay == "affine" ? 1.f : .1f);
+            auto model = scene(o.count, degree, o.overlay == "affine" ? 1.f : .1f, o.equirect, o.near);
             vis::MetalViewportRenderer metal;
             vis::VksplatViewportRenderer vulkan;
             rendering::ViewportRenderRequest request;
             request.frame_view.size = {o.width, o.height};
+            if (o.near) request.frame_view.far_plane = .06f;
             request.frame_view.rasterization_scale = o.export_scale ? 2.f : 1.f;
             request.sh_degree = degree;
             request.gut = o.gut;
+            request.equirectangular = o.equirect;
+            if (o.subregion) {
+                request.frame_view.subregion_full_size = {o.width * 2, o.height * 2};
+                request.frame_view.subregion_origin = {o.width, o.height / 2};
+            }
             request.raster_backend = o.gut ? rendering::GaussianRasterBackend::ThreeDgut : rendering::GaussianRasterBackend::ThreeDgs;
             request.frame_view.background_color = {.02f, .03f, .04f};
             request.mip_filter = o.mip;
@@ -283,9 +323,17 @@ namespace {
             }
             if (!vis::MetalViewportRenderer::supports(model, request))
                 throw std::runtime_error("Unsupported native benchmark frame");
+            // Compare tiled export against the full reference camera. The
+            // legacy Vulkan panorama subregion wraps its local tile grid;
+            // comparing that output would bless a clipped reference seam.
+            auto reference_request = request;
+            if (o.equirect && o.subregion) {
+                reference_request.frame_view.size = request.frame_view.cameraSize();
+                reference_request.frame_view.subregion_full_size = reference_request.frame_view.subregion_origin = {0, 0};
+            }
             auto frame = [&](bool native) {
                 auto result = native ? vis::legacyMetalResult(metal.render(context, model, request, Slot::Main))
-                                     : vulkan.render(context, model, request, false, Slot::Main);
+                                     : vulkan.render(context, model, reference_request, false, Slot::Main);
                 if (!result)
                     throw std::runtime_error(result.error());
                 wait(context, *result);
@@ -322,9 +370,18 @@ namespace {
             const auto read = metal.readColor(Slot::Main, pixels, 0, 0);
             if (!read)
                 throw std::runtime_error(lfs::format_for_developer(read.error()));
-            const auto reference = vulkan.readOutputImage(context, Slot::Main);
+            auto reference = vulkan.readOutputImage(context, Slot::Main);
             if (!reference)
                 throw std::runtime_error(reference.error());
+            if (o.equirect && o.subregion) {
+                auto cropped = std::make_shared<core::Tensor>(core::Tensor::empty({size_t(o.height), size_t(o.width), 3}, core::Device::CPU, core::DataType::Float32));
+                const auto origin = request.frame_view.subregion_origin;
+                const size_t stride = reference_request.frame_view.size.x;
+                for (size_t y = 0; y < size_t(o.height); ++y)
+                    std::copy_n((*reference)->ptr<float>() + ((y + origin.y) * stride + origin.x) * 3,
+                                size_t(o.width) * 3, cropped->ptr<float>() + y * o.width * 3);
+                *reference = std::move(cropped);
+            }
             if (!o.images.empty()) {
                 const auto save = [&](const core::Tensor& image, const char* backend) {
                     std::ofstream stream(o.images + "-sh" + std::to_string(degree) + "-" + backend + ".ppm", std::ios::binary);
@@ -340,23 +397,56 @@ namespace {
                 save(pixels, "metal");
                 save(**reference, "vulkan");
             }
-            const auto difference = quality(pixels, **reference, request.frame_view.background_color, o.depth);
+            auto difference = quality(pixels, **reference, request.frame_view.background_color, o.depth);
+            if (o.equirect && o.overlay == "markers") {
+                const auto a = pixels.ptr<float>(), b = (*reference)->ptr<float>();
+                // Center markers have two flat colors separated by a hard
+                // 1.5-pixel boundary. Subpixel FP32 UT rounding can flip a
+                // boundary pixel; require the exact flat-color pair and keep
+                // its disagreement count explicit, as for median depth.
+                glm::vec3 marker(0);
+                for (size_t i = 0; i < pixels.numel(); i += 3)
+                    if (glm::dot(glm::vec3(b[i], b[i + 1], b[i + 2]), glm::vec3(1)) > glm::dot(marker, glm::vec3(1)))
+                        marker = {b[i], b[i + 1], b[i + 2]};
+                const auto matches = [&](const float* rgb, glm::vec3 expected) {
+                    for (int c = 0; c < 3; ++c)
+                        if (std::abs(rgb[c] - expected[c]) > 2.f / 255)
+                            return false;
+                    return true;
+                };
+                size_t boundary = 0;
+                double stable_max = 0;
+                for (size_t i = 0; i < pixels.numel(); i += 3) {
+                    const bool edge = (matches(a + i, marker) && matches(b + i, marker * .4f)) ||
+                                      (matches(b + i, marker) && matches(a + i, marker * .4f));
+                    if (edge)
+                        ++boundary;
+                    else
+                        for (size_t c = 0; c < 3; ++c)
+                            stable_max = std::max(stable_max, std::abs(double(a[i + c]) - b[i + c]));
+                }
+                difference["marker_boundary_disagreement_pixels"] = boundary;
+                difference["marker_boundary_disagreement_fraction"] = 3. * boundary / pixels.numel();
+                difference["marker_stable_max_error"] = stable_max;
+            }
             // The production Vulkan reference blends in FP16; bit equality with the
             // native FP32 blend is not its contract. Bound both local and RMS error.
             // Median depth has a hard coverage boundary at 0.5. FP16 reference and
             // FP32 native can disagree on boundary pixels; record the full image
             // error and enforce a separate bound, never silently drop those pixels.
-            const double local_error = o.depth ? double(difference["depth_valid_max_error"]) : double(difference["max_error"]);
+            const double local_error = o.depth ? double(difference["depth_valid_max_error"]) : o.equirect && o.overlay == "markers" ? double(difference["marker_stable_max_error"])
+                                                                                                                                    : double(difference["max_error"]);
             if (o.verify_parity && (local_error > 4. / 255 + 1e-7 ||
                                     double(difference["depth_coverage_disagreement_fraction"]) > .001 ||
+                                    (difference.contains("marker_boundary_disagreement_fraction") && double(difference["marker_boundary_disagreement_fraction"]) > .001) ||
                                     double(difference[o.depth ? "depth_valid_rmse" : "rmse"]) > 1. / 255))
-                throw std::runtime_error("Native image exceeds FP16-reference parity bounds (valid max 4/255, RMS 1/255, depth coverage 0.1%)");
+                throw std::runtime_error("Native image exceeds FP16-reference parity bounds (valid max 4/255, RMS 1/255, depth coverage 0.1%): SH" + std::to_string(degree) + " " + difference.dump());
             const auto native_stats = statistics(native_times), vulkan_stats = statistics(vulkan_times);
-            cases.push_back({{"sh_degree", degree}, {"storage", degree ? "q16" : "sh0"}, {"metal", native_stats}, {"vulkan", vulkan_stats}, {"speedup_vulkan_over_metal", double(vulkan_stats["median_ms"]) / double(native_stats["median_ms"])}, {"image_difference", difference}});
+            cases.push_back({{"sh_degree", degree}, {"storage", degree ? "q16" : "sh0"}, {"metal", native_stats}, {"vulkan", vulkan_stats}, {"speedup_vulkan_over_metal", o.subregion ? Json(nullptr) : Json(double(vulkan_stats["median_ms"]) / double(native_stats["median_ms"]))}, {"image_difference", difference}});
         }
         rusage usage{};
         getrusage(RUSAGE_SELF, &usage);
-        return {{"schema_version", 1}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", 1939}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"gut", o.gut}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
+        return {{"schema_version", 1}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", 1939}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"gut", o.gut}, {"equirectangular", o.equirect}, {"near_fixture", o.near}, {"subregion", o.subregion}, {"reference_full_frame_crop", o.equirect && o.subregion}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
     }
 } // namespace
 int main(int argc, char** argv) {

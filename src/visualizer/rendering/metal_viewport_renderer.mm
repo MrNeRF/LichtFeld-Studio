@@ -476,7 +476,7 @@ namespace lfs::vis {
             return false;
         return resident_mask(r.overlay.emphasis.mask.get()) && resident_mask(r.overlay.emphasis.transient_mask.mask) &&
                core::gpu_backend_of(model.means_raw()) == core::GpuBackend::Metal &&
-               !r.equirectangular && r.splat_render_profile == 0 &&
+               (!r.equirectangular || r.gut) && r.splat_render_profile == 0 &&
                !r.lod_indices && !r.lod_gpu_traversal.enabled && !r.lod_debug_mode &&
                model.means_raw().dtype() == core::DataType::Float32 && model.sh0_raw().dtype() == core::DataType::Float32 &&
                ((model.scaling_raw().dtype() == core::DataType::Float32 && model.rotation_raw().dtype() == core::DataType::Float32 &&
@@ -535,9 +535,15 @@ namespace lfs::vis {
             auto intrinsics = request.frame_view.getCameraIntrinsics();
             projection.intrinsics = {intrinsics.focal_x, intrinsics.focal_y,
                                      intrinsics.center_x - request.frame_view.subregion_origin.x, intrinsics.center_y - request.frame_view.subregion_origin.y};
-            projection.clip_scale = {request.frame_view.near_plane, request.frame_view.far_plane, request.scaling_modifier, request.mip_filter ? .1f : .3f};
-            projection.extent = {uint32_t(f.size.x), uint32_t(f.size.y), uint32_t(request.frame_view.orthographic), uint32_t(request.mip_filter)};
+            // Viewer raster clipping differs from the desktop projection matrix's
+            // near/far planes. Derive the reference near threshold at configure.
+            projection.clip_scale = {kViewerNearClip, std::numeric_limits<float>::max(), request.scaling_modifier, request.mip_filter ? .1f : .3f};
+            projection.extent = {uint32_t(f.size.x), uint32_t(f.size.y), uint32_t(request.equirectangular ? CameraModel::Equirectangular : request.frame_view.orthographic ? CameraModel::Orthographic
+                                                                                                                                                                           : CameraModel::Perspective),
+                                 uint32_t(request.mip_filter)};
             projection.rasterization = {request.frame_view.rasterization_scale, 0, 0, 0};
+            const auto panorama_size = request.frame_view.cameraSize();
+            projection.panorama = {float(panorama_size.x), float(panorama_size.y), float(request.frame_view.subregion_origin.x), float(request.frame_view.subregion_origin.y)};
             SceneBuffers scene{};
             OverlayBuffers overlay{};
             if (request.scene.model_transforms && !request.scene.model_transforms->empty()) {

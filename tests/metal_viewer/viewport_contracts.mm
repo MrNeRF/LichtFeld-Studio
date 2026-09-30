@@ -152,7 +152,37 @@ static void run() {
     require(gut_depth.has_value() && std::abs(*gut_depth - analytic_depth) < 1e-4f,
             "3DGUT depth did not use the closest point on the pixel ray");
     request.equirectangular = true;
-    require(!vis::MetalViewportRenderer::supports(model, request), "Unsupported panorama silently accepted");
+    require(vis::MetalViewportRenderer::supports(model, request), "Native panorama rejected");
+    require(snapshot(request).ptr<float>()[center] > .3f, "Panorama lost the forward hemisphere");
+    const float azimuth = float(2 * M_PI) * (48.5f / 96.f - .5f);
+    const float elevation = float(M_PI) * (32.5f / 64.f - .5f);
+    const float ray_z = std::cos(azimuth) * std::cos(elevation);
+    const auto panorama_depth = renderer.readDepth({.pixel = {48, 32}, .source_size = {96, 64}});
+    require(panorama_depth.has_value() && std::abs(*panorama_depth - 3.f * ray_z * ray_z) < 1e-4f,
+            "Panorama depth did not use its spherical pixel ray");
+    model.means_raw() = Tensor::from_vector(std::vector<float>{0, 0, 3}, {1, 3}, Device::GPU);
+    const auto seam = snapshot(request);
+    const size_t seam_row = size_t(32) * 96 * 3;
+    require(seam.ptr<float>()[seam_row] > .3f && seam.ptr<float>()[seam_row + 95 * 3] > .3f,
+            "Panorama clipped the rear hemisphere or lost a longitude seam");
+    // Exporting a tile must keep full-camera rays and produce the same pixels.
+    request.frame_view.size = {31, 33};
+    request.frame_view.subregion_full_size = {96, 64};
+    request.frame_view.subregion_origin = {65, 15};
+    auto tile = Tensor::empty({33, 31, 3}, Device::CPU, core::DataType::Float32);
+    require(renderer.render(context, model, request, vis::VksplatViewportRenderer::OutputSlot::Main).has_value(), "Panorama subregion failed");
+    require(renderer.readColor(vis::VksplatViewportRenderer::OutputSlot::Main, tile, 0, 0).has_value(), "Panorama subregion readback failed");
+    for (size_t y = 0; y < 33; ++y)
+        for (size_t x = 0; x < 31; ++x)
+            for (size_t c = 0; c < 3; ++c)
+                require(std::abs(tile.ptr<float>()[(y * 31 + x) * 3 + c] - seam.ptr<float>()[((y + 15) * 96 + x + 65) * 3 + c]) < 1.f / 255,
+                        "Panorama subregion changed the full-camera image");
+    request.frame_view.size = {96, 64};
+    request.frame_view.subregion_full_size = request.frame_view.subregion_origin = {0, 0};
+    model.means_raw() = Tensor::from_vector(std::vector<float>{0, 0, -3}, {1, 3}, Device::GPU);
+    request.gut = false;
+    require(!vis::MetalViewportRenderer::supports(model, request), "Panorama accepted a rasterizer without spherical rays");
+    request.gut = true;
     request.equirectangular = false;
     require(renderer.release(vis::VksplatViewportRenderer::OutputSlot::Main).has_value(), "Native release failed");
     require(renderer.size(vis::VksplatViewportRenderer::OutputSlot::Main) == glm::ivec2(0), "Released slot retained output");

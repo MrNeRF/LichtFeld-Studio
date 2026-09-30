@@ -202,6 +202,70 @@ static void run(id<MTLDevice> device) {
         [command waitUntilCompleted];
         require(command.status == MTLCommandBufferStatusCompleted, "Empty scene dispatch failed");
     }
+    // Double-precision spherical UT oracle: check actual projected centers,
+    // including rear hemisphere, longitude seam and near-pole directions.
+    auto panorama = frame();
+    panorama.extent = {128, 96, uint32_t(CameraModel::Equirectangular), 0};
+    panorama.panorama = {128, 96, 0, 0};
+    const std::array<float, 3> logs{std::log(.05f), std::log(.07f), std::log(.08f)}, dc{};
+    const std::array<float, 4> quaternion{1, 0, 0, 0};
+    const float logit = 2;
+    SplatBuffers spherical;
+    spherical.count = 1;
+    spherical.log_scales = {buffer(device, logs.data(), sizeof(logs))};
+    spherical.rotations = {buffer(device, quaternion.data(), sizeof(quaternion))};
+    spherical.opacity_logits = {buffer(device, &logit, sizeof(logit))};
+    spherical.sh0 = {buffer(device, dc.data(), sizeof(dc))};
+    auto projected = [device newBufferWithLength:sizeof(ProjectedSplat) options:MTLResourceStorageModeShared];
+    auto geometry = [device newBufferWithLength:sizeof(GutSplat) options:MTLResourceStorageModeShared];
+    const float lambda = .1f * .1f * 3.f - 3.f;
+    const float denominator = 3.f + lambda;
+    const double scale = std::sqrt(denominator), central = lambda / denominator, weight = 1.f / (2.f * denominator);
+    for (const std::array<float, 3> mean : {std::array<float, 3>{1, .5f, 3}, {-1, -.5f, -3}, {.01f, .2f, -3}, {-.01f, .2f, -3}, {3, .1f, .2f}, {.1f, 3, .1f}}) {
+        spherical.means = {buffer(device, mean.data(), sizeof(mean))};
+        auto command = [queue commandBuffer];
+        pipeline.encode(command, spherical, panorama, 0, PrimitiveMode::Gut, {projected}, {}, {}, {geometry});
+        [command commit];
+        [command waitUntilCompleted];
+        require(command.status == MTLCommandBufferStatusCompleted, "Spherical projection failed");
+        std::array<std::array<double, 2>, 7> image{};
+        for (size_t n = 0; n < image.size(); ++n) {
+            std::array<double, 3> point{mean[0], mean[1], mean[2]};
+            if (n) {
+                const size_t axis = (n - 1) % 3;
+                point[axis] += (n < 4 ? 1 : -1) * scale * std::exp(double(logs[axis]));
+            }
+            const double norm = std::sqrt(point[0] * point[0] + point[1] * point[1] + point[2] * point[2]);
+            image[n] = {(std::atan2(point[0], point[2]) / (2 * M_PI) + .5) * 128,
+                        (std::asin(point[1] / norm) / M_PI + .5) * 96};
+            if (n)
+                image[n][0] -= 128 * std::round((image[n][0] - image[0][0]) / 128);
+        }
+        std::array<double, 2> expected{};
+        for (size_t n = 0; n < image.size(); ++n)
+            for (size_t c = 0; c < 2; ++c)
+                expected[c] += (n ? weight : central) * image[n][c];
+        expected[0] -= 128 * std::floor(expected[0] / 128);
+        const auto result = static_cast<const ProjectedSplat*>(projected.contents);
+        require(result->bounds.z > result->bounds.x, "Spherical projection rejected valid rear/polar geometry");
+        for (size_t c = 0; c < 2; ++c)
+            require(std::abs(result->mean_depth[c] - (expected[c] - .5)) < .005,
+                    "Spherical UT center differs from the double-precision oracle");
+        require(std::abs(result->mean_depth.z - std::sqrt(mean[0] * mean[0] + mean[1] * mean[1] + mean[2] * mean[2])) < 1e-5,
+                "Spherical binning uses view Z instead of radial depth");
+    }
+    auto invalid_panorama = panorama;
+    invalid_panorama.panorama.x = 0;
+    reject([&] { pipeline.encode([queue commandBuffer], spherical, invalid_panorama, 0, PrimitiveMode::Gut, { projected }, {}, {}, {geometry}); });
+    reject([&] { pipeline.encode([queue commandBuffer], spherical, panorama, 0, PrimitiveMode::Gaussian, { projected }); });
+    const std::array<float, 3> nonfinite{NAN, 0, 3};
+    spherical.means = {buffer(device, nonfinite.data(), sizeof(nonfinite))};
+    auto invalid_command = [queue commandBuffer];
+    pipeline.encode(invalid_command, spherical, panorama, 0, PrimitiveMode::Gut, {projected}, {}, {}, {geometry});
+    [invalid_command commit];
+    [invalid_command waitUntilCompleted];
+    require(invalid_command.status == MTLCommandBufferStatusCompleted && static_cast<const ProjectedSplat*>(projected.contents)->bounds.z == 0,
+            "Nonfinite spherical input retained an earlier projection");
     std::printf("Metal projection contracts passed: %zu SH component comparisons; 4 storage formats; SH0-3; boundary, point and clipping checks.\n", comparisons);
 }
 int main() {

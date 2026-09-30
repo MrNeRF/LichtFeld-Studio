@@ -2,8 +2,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "tile_rasterizer.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <random>
 #include <stdexcept>
 #include <vector>
@@ -215,6 +217,91 @@ static void run(id<MTLDevice> device) {
                 require(a > .5 ? std::abs(depth[3] - z) < 1e-4 : depth[3] >= 1e9, "3DGUT independent median depth differs");
             }
         }
+    // Independent spherical ray reference at a width that is not tile-aligned.
+    // The wrapped span visits each column exactly once, including both edges.
+    camera.extent.z = uint32_t(CameraModel::Equirectangular);
+    gut_projected.bounds = {32, 0, 80, height};
+    std::memcpy(gut_input.contents, &gut_projected, sizeof(gut_projected));
+    for (bool subregion : {false, true}) {
+        camera.panorama = subregion ? simd_float4{float(width * 2), float(height * 2), float(width), float(height) / 2} : simd_float4{float(width), float(height), 0, 0};
+        command = [queue commandBuffer];
+        raster.encode(command, {gut_input}, 1, RasterMode::Gut, bg, gut_frame, {}, {geometry}, camera);
+        const auto spherical = readback(device, command, gut_frame);
+        wait(command);
+        require(gut_frame.status().error == RasterError::None && gut_frame.status().required_instances == 6,
+                "Panorama duplicated wrapped tile instances");
+        for (uint32_t y = 0; y < height; ++y)
+            for (uint32_t x = 0; x < width; ++x) {
+                const double azimuth = 2 * M_PI * ((x + .5 + camera.panorama.z) / camera.panorama.x - .5);
+                const double elevation = M_PI * ((y + .5 + camera.panorama.w) / camera.panorama.y - .5);
+                const double ray_z = std::cos(azimuth) * std::cos(elevation);
+                const double alpha = .8 * std::exp(-18 * (1 - ray_z * ray_z));
+                const bool contributes = alpha >= .5 / 255;
+                const double a = contributes ? alpha : 0;
+                const auto color = reinterpret_cast<const _Float16*>(static_cast<const char*>(spherical.color.contents) + y * spherical.color_stride) + x * 4;
+                const auto depth = reinterpret_cast<const float*>(static_cast<const char*>(spherical.depth.contents) + y * spherical.depth_stride) + x * 4;
+                const auto id = reinterpret_cast<const uint32_t*>(static_cast<const char*>(spherical.pick.contents) + y * spherical.pick_stride)[x];
+                require(std::abs(float(color[0]) - (a + bg.x * bg.w * (1 - a))) < .001, "Independent spherical ray color differs");
+                require(std::abs(depth[1] - a) < 1e-5, "Independent spherical ray alpha differs");
+                require(id == (contributes ? 0u : 0xffffffffu), "Independent spherical ray picking differs");
+                if (contributes) {
+                    const double z = 3 * ray_z * ray_z;
+                    if (ray_z > 0 && z > camera.clip_scale.x)
+                        require(std::abs(depth[2] - z) < 1e-4, "Independent spherical ray depth differs");
+                    else
+                        require(depth[2] >= 1e9, "Panorama lost the desktop invalid-depth sentinel");
+                }
+            }
+    }
+    // Run projection and binning together: a rear splat straddles both edges
+    // of a 37-pixel camera, whose padded tile grid has a different period.
+    SplatPreprocessor projector(device);
+    const std::array<float, 3> seam_mean{0, 0, -3}, seam_scale{-.69314718056f, -.69314718056f, -.69314718056f}, seam_dc{0, 0, 0};
+    const simd_float4 seam_rotation{1, 0, 0, 0};
+    const float seam_logit = 4;
+    const auto upload = [&](const void* data, size_t bytes) {
+        return BufferSlice{[device newBufferWithBytes:data length:bytes options:MTLResourceStorageModeShared], 0};
+    };
+    SplatBuffers seam_source;
+    seam_source.count = 1;
+    seam_source.means = upload(&seam_mean, sizeof(seam_mean));
+    seam_source.log_scales = upload(&seam_scale, sizeof(seam_scale));
+    seam_source.sh0 = upload(&seam_dc, sizeof(seam_dc));
+    seam_source.rotations = upload(&seam_rotation, sizeof(seam_rotation));
+    seam_source.opacity_logits = upload(&seam_logit, sizeof(seam_logit));
+    camera.model_to_world = camera.world_to_camera = matrix_identity_float4x4;
+    camera.panorama = {float(width), float(height), 0, 0};
+    command = [queue commandBuffer];
+    projector.encode(command, seam_source, camera, 0, PrimitiveMode::Gut, {gut_input}, {}, {}, {geometry});
+    raster.encode(command, {gut_input}, 1, RasterMode::Gut, {0, 0, 0, 0}, gut_frame, {}, {geometry}, camera);
+    const auto seam_read = readback(device, command, gut_frame);
+    wait(command);
+    require(gut_frame.status().error == RasterError::None, "Odd-width seam overflowed its reservation");
+    for (uint32_t y = 0; y < height; ++y)
+        for (uint32_t x = 0; x < width; ++x) {
+            const double azimuth = 2 * M_PI * ((x + .5) / width - .5);
+            const double elevation = M_PI * ((y + .5) / height - .5);
+            const double ray_z = std::cos(azimuth) * std::cos(elevation);
+            // The desktop GUT evaluator measures distance to a line. Its
+            // 16-pixel projected support prevents unrelated tiles contributing.
+            double alpha = (x < 16 || x >= 32) ? 1 / (1 + std::exp(-4.)) * std::exp(-18 * (1 - ray_z * ray_z)) : 0;
+            if (alpha < .5 / 255)
+                alpha = 0;
+            const auto color = reinterpret_cast<const _Float16*>(static_cast<const char*>(seam_read.color.contents) + y * seam_read.color_stride) + x * 4;
+            if (std::abs(float(color[3]) - alpha) >= .001)
+                std::fprintf(stderr, "Seam pixel %u,%u: alpha %.9g expected %.9g, bounds %u,%u,%u,%u\n", x, y, float(color[3]), alpha,
+                             static_cast<const ProjectedSplat*>(gut_input.contents)->bounds.x, static_cast<const ProjectedSplat*>(gut_input.contents)->bounds.y,
+                             static_cast<const ProjectedSplat*>(gut_input.contents)->bounds.z, static_cast<const ProjectedSplat*>(gut_input.contents)->bounds.w);
+            require(std::abs(float(color[3]) - alpha) < .001, "Odd-width panorama seam lost or duplicated a contribution");
+        }
+    // Invalid requests fail before consuming the reusable frame.
+    camera.panorama.x = 0;
+    command = [queue commandBuffer];
+    rejected = false;
+    try {
+        raster.encode(command, {gut_input}, 1, RasterMode::Gut, bg, gut_frame, {}, {geometry}, camera);
+    } catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected && !gut_frame.busy(), "Invalid panorama consumed its frame reservation");
     std::puts("Metal tile raster contracts passed: stable depth, RGB/alpha/depth/pick, modes, scan/block boundaries, overflow and frame reuse.");
 }
 int main() {
