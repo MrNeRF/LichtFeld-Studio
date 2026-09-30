@@ -153,10 +153,14 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     device const uint* logical_indices [[buffer(18)]],
     device const uint* lod_levels [[buffer(19)]],
     device const float* lod_weights [[buffer(20)]],
+    device const uint* lod_count [[buffer(21)]],
     uint i [[thread_position_in_grid]]) {
     if(i>=layout.draw_count) return;
     output[i]=ProjectedSplat{};
     if(layout.overlay)overlay_flags[i]=0;
+    // Clear unused slots before reading GPU-private indirection. An overflow
+    // cannot publish a truncated cut; the selector retries its budget on GPU.
+    if((layout.lod&32u) && (lod_count[0]>layout.draw_count || i>=lod_count[0]))return;
     const uint source=(layout.lod&1u)?lod_indices[i]:i;
     const uint logical=(layout.lod&2u)?logical_indices[i]:source;
     if(source>=layout.count || logical>=layout.count)return;

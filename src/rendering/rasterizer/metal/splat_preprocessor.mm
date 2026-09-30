@@ -152,6 +152,11 @@ namespace lfs::rendering::metal {
             if (input.buffer && (input.buffer == output.buffer || input.buffer == gut_output.buffer || input.buffer == overlay.flags.buffer))
                 throw std::invalid_argument("Metal LOD input overlaps projection output");
         }
+        if (lod.enabled && lod.counter.buffer) {
+            check_slice(lod.counter, 4, 4, impl_->device, "GPU LOD count");
+            if (lod.counter.buffer == output.buffer || lod.counter.buffer == gut_output.buffer || lod.counter.buffer == overlay.flags.buffer)
+                throw std::invalid_argument("Metal GPU LOD counter overlaps projection output");
+        }
         if (!draw_count)
             return;
         if (overlay.parameter_count) {
@@ -212,7 +217,7 @@ namespace lfs::rendering::metal {
         [encoder setBuffer:output.buffer offset:output.offset atIndex:8];
         [encoder setBytes:&projection length:sizeof(projection) atIndex:9];
         const std::array<uint32_t, 9> layout = {in.count, in.layout_rest, in.deleted.buffer ? 1u : 0u, scene.count, in.non_sh_attrs_f16 ? 1u : 0u, overlay.parameter_count ? 1u : 0u, scene.object_indices.buffer ? 1u : 0u, uint32_t(draw_count),
-                                                lod.enabled ? (1u | (lod.logical_indices.buffer ? 2u : 0u) | (lod.levels.buffer ? 4u : 0u) | (lod.weights.buffer ? 8u : 0u) | (lod.debug ? 16u : 0u)) : 0u};
+                                                lod.enabled ? (1u | (lod.logical_indices.buffer ? 2u : 0u) | (lod.levels.buffer ? 4u : 0u) | (lod.weights.buffer ? 8u : 0u) | (lod.debug ? 16u : 0u) | (lod.counter.buffer ? 32u : 0u)) : 0u};
         [encoder setBytes:layout.data() length:sizeof(layout) atIndex:10];
         const std::array<BufferSlice, 3> overlays = {overlay.parameters, overlay.flags, overlay.node_mask};
         for (NSUInteger j = 0; j < overlays.size(); ++j)
@@ -222,6 +227,9 @@ namespace lfs::rendering::metal {
             [encoder setBuffer:lod.enabled && lod_buffers[j].buffer ? lod_buffers[j].buffer : impl_->empty
                         offset:lod.enabled && lod_buffers[j].buffer ? lod_buffers[j].offset : 0
                        atIndex:17 + j];
+        [encoder setBuffer:lod.enabled && lod.counter.buffer ? lod.counter.buffer : impl_->empty
+                    offset:lod.enabled && lod.counter.buffer ? lod.counter.offset : 0
+                   atIndex:21];
         const NSUInteger width = std::min(NSUInteger(256), pipeline.maxTotalThreadsPerThreadgroup);
         [encoder dispatchThreads:MTLSizeMake(draw_count, 1, 1) threadsPerThreadgroup:MTLSizeMake(width, 1, 1)];
         [encoder endEncoding];

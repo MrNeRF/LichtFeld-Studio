@@ -4,12 +4,14 @@
 #include "core/tensor_backend.hpp"
 #include "core/tensor_metal_reader.hpp"
 #include "frame_budget.hpp"
+#include "lod_selector.hpp"
 #include "metal_present_source.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "splat_preprocessor.hpp"
 #include "tile_rasterizer.hpp"
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <map>
@@ -130,12 +132,23 @@ namespace lfs::vis {
             std::array<id<MTLBuffer>, 4> lod_buffers;
             id<MTLCommandBuffer> command;
             id<MTLTexture> point_depth;
+            std::unique_ptr<LodCutFrame> gpu_lod;
+            bool gpu_lod_active = false;
+            uint64_t gpu_tree_signature = 0;
+            uint32_t gpu_capacity = 0, gpu_source_count = 0, gpu_chunks = 0;
             bool points = false;
             Image color, depth;
         };
     } // namespace
     struct MetalViewportRenderer::Impl {
         VulkanContext* context = nullptr;
+        struct NativeLodTree {
+            LodTreeBuffers buffers;
+            uint64_t signature = 0, last_used = 0;
+            uint32_t nodes = 0, chunks = 0, roots = 0;
+        };
+        std::map<const core::SplatLodTree*, NativeLodTree> lod_trees;
+        std::unique_ptr<LodSelector> lod_selector;
         core::MetalTensorReader reader;
         SplatPreprocessor preprocessor{reader.device()};
         TileRasterizer rasterizer{reader.device()};
@@ -245,6 +258,106 @@ namespace lfs::vis {
             check(vkCreateSemaphore(ctx.device(), &info, nullptr, &completion), "Native presentation timeline");
             context = &ctx;
         }
+        NativeLodTree& prepareLodTree(const core::SplatData& model) {
+            const auto& tree = *model.lod_tree;
+            const size_t n = tree.total_nodes(), chunk_size = core::SplatLodTree::kChunkSplats;
+            uint64_t signature = 1469598103934665603ull;
+            const auto mix = [&](uint64_t word) {signature^=word;signature*=1099511628211ull; };
+            mix(n);
+            mix(tree.centers.size());
+            mix(tree.sizes.size());
+            mix(tree.lod_level.size());
+            mix(reinterpret_cast<uintptr_t>(tree.child_count.data()));
+            mix(reinterpret_cast<uintptr_t>(tree.child_start.data()));
+            mix(reinterpret_cast<uintptr_t>(tree.centers.data()));
+            mix(reinterpret_cast<uintptr_t>(tree.sizes.data()));
+            mix(reinterpret_cast<uintptr_t>(tree.lod_level.data()));
+            mix(reinterpret_cast<uintptr_t>(model.means_raw().data_ptr()));
+            mix(reinterpret_cast<uintptr_t>(model.scaling_raw().data_ptr()));
+            if (auto cached = lod_trees.find(&tree); cached != lod_trees.end() && cached->second.signature == signature) {
+                cached->second.last_used = serial;
+                return cached->second;
+            }
+            if (!n || n > size_t(model.size()) || n > std::numeric_limits<uint32_t>::max() || tree.child_start.size() < n || tree.child_count.size() < n)
+                throw std::invalid_argument("Native GPU LOD requires a resident ordered hierarchy");
+            const size_t chunks = (n + chunk_size - 1) / chunk_size;
+            std::vector<uint32_t> parents(n, 0xffffffffu), links(n * 3), bounds(n * 2), maps(chunks), age(chunks, 0);
+            uint32_t roots = 0;
+            for (size_t node = 0; node < n; ++node) {
+                const size_t first = tree.child_start[node], count = tree.child_count[node];
+                if (count && (first <= node || first >= n || count > n - first))
+                    throw std::invalid_argument("Invalid native LOD child range");
+                for (size_t child = first; child < first + count; ++child) {
+                    if (parents[child] != 0xffffffffu)
+                        throw std::invalid_argument("Native LOD node has multiple parents");
+                    parents[child] = uint32_t(node);
+                }
+            }
+            core::Tensor means_cpu, scales_cpu;
+            if (tree.centers.size() < n)
+                means_cpu = model.means_raw().cpu();
+            if (tree.sizes.size() < n)
+                scales_cpu = model.scaling_raw().to(core::DataType::Float32).cpu();
+            const auto center = [&](size_t node) { return tree.centers.size() >= n ? tree.centers[node] : glm::vec3(means_cpu.ptr<float>()[node * 3], means_cpu.ptr<float>()[node * 3 + 1], means_cpu.ptr<float>()[node * 3 + 2]); };
+            const auto size = [&](size_t node) { return tree.sizes.size() >= n ? tree.sizes[node] : 2.f * std::exp(std::max({scales_cpu.ptr<float>()[node * 3], scales_cpu.ptr<float>()[node * 3 + 1], scales_cpu.ptr<float>()[node * 3 + 2]})); };
+            std::vector<simd_float4> frames(chunks * 4);
+            for (size_t page = 0; page < chunks; ++page) {
+                maps[page] = uint32_t(page);
+                const size_t begin = page * chunk_size, end = std::min(begin + chunk_size, n);
+                glm::vec3 lo(std::numeric_limits<float>::max()), hi(std::numeric_limits<float>::lowest());
+                float log_lo = INFINITY, log_hi = -INFINITY;
+                for (size_t node = begin; node < end; ++node) {
+                    const auto c = center(node);
+                    const float extent = size(node);
+                    if (!std::isfinite(c.x) || !std::isfinite(c.y) || !std::isfinite(c.z) || !std::isfinite(extent) || extent <= 0)
+                        throw std::invalid_argument("Invalid native LOD node bounds");
+                    lo = glm::min(lo, c);
+                    hi = glm::max(hi, c);
+                    const float value = std::log(std::max(extent, 1e-8f));
+                    log_lo = std::min(log_lo, value);
+                    log_hi = std::max(log_hi, value);
+                }
+                const auto extent = glm::max(hi - lo, glm::vec3(0));
+                const float log_range = std::max(log_hi - log_lo, 0.f);
+                frames[page * 4 + 1] = {lo.x, lo.y, lo.z, log_lo};
+                frames[page * 4 + 2] = {extent.x, extent.y, extent.z, log_range};
+                const auto quant = [](float value, float base, float range) { return range > 0 ? uint32_t(std::lround(std::clamp((value - base) / range, 0.f, 1.f) * 65535.f)) : 0u; };
+                for (size_t node = begin; node < end; ++node) {
+                    const auto c = center(node);
+                    bounds[node * 2] = quant(c.x, lo.x, extent.x) | (quant(c.y, lo.y, extent.y) << 16u);
+                    bounds[node * 2 + 1] = quant(c.z, lo.z, extent.z) | (quant(std::log(std::max(size(node), 1e-8f)), log_lo, log_range) << 16u);
+                    links[node * 3] = tree.child_start[node];
+                    links[node * 3 + 1] = uint32_t(tree.child_count[node]) | (uint32_t(node < tree.lod_level.size() ? tree.lod_level[node] : 0) << 16u);
+                    links[node * 3 + 2] = parents[node];
+                    if (parents[node] == 0xffffffffu)
+                        ++roots;
+                }
+            }
+            NativeLodTree metadata;
+            metadata.signature = signature;
+            metadata.nodes = uint32_t(n);
+            metadata.chunks = uint32_t(chunks);
+            metadata.roots = roots;
+            metadata.last_used = serial;
+            const auto upload = [&](const void* data, size_t bytes) {
+                const auto device = reader.device();
+                if (!frameFitsWorkingSet(device.currentAllocatedSize, bytes, device.recommendedMaxWorkingSetSize))
+                    throw std::bad_alloc();
+                auto buffer = [device newBufferWithBytes:data length:bytes options:MTLResourceStorageModeShared];
+                if (!buffer)
+                    throw std::bad_alloc();
+                return BufferSlice{buffer};
+            };
+            metadata.buffers = {upload(bounds.data(), bounds.size() * 4), upload(links.data(), links.size() * 4), upload(maps.data(), maps.size() * 4),
+                                upload(age.data(), age.size() * 4), upload(frames.data(), frames.size() * 16), upload(maps.data(), maps.size() * 4)};
+            // Four output slots can use independent models. Bound the metadata
+            // cache; command buffers retain evicted resources until GPU completion.
+            if (!lod_trees.contains(&tree) && lod_trees.size() >= 4) {
+                auto oldest = std::min_element(lod_trees.begin(), lod_trees.end(), [](const auto& a, const auto& b) { return a.second.last_used < b.second.last_used; });
+                lod_trees.erase(oldest);
+            }
+            return lod_trees.insert_or_assign(&tree, std::move(metadata)).first->second;
+        }
         Frame& acquire(Slot output, const rendering::ViewportRenderRequest& request, uint32_t count, bool points = false) {
             const size_t slot = static_cast<size_t>(output);
             auto& frame = frames[slot][next[slot]++ % 3];
@@ -262,7 +375,7 @@ namespace lfs::vis {
                     throw std::runtime_error(frame->command.error.localizedDescription.UTF8String ?: "Metal command failed");
                 if (!context->waitForRetiredFrameSubmitSerial(frame->consumer_serial))
                     throw std::runtime_error(context->lastError());
-                if (frame->raster && frame->raster->busy())
+                if ((frame->raster && frame->raster->busy()) || (frame->gpu_lod && frame->gpu_lod->busy()))
                     [frame->command waitUntilCompleted];
                 const auto status = frame->raster ? frame->raster->status() : RasterStatus{};
                 if (status.error != RasterError::None) {
@@ -478,7 +591,9 @@ namespace lfs::vis {
         return resident_mask(r.overlay.emphasis.mask.get()) && resident_mask(r.overlay.emphasis.transient_mask.mask) &&
                core::gpu_backend_of(model.means_raw()) == core::GpuBackend::Metal &&
                (!r.equirectangular || r.gut) && (r.splat_render_profile == 0 || r.splat_render_profile == 1) &&
-               !r.lod_gpu_traversal.enabled &&
+               (!r.lod_gpu_traversal.enabled || (model.lod_tree && model.lod_tree->has_tree() &&
+                                                 r.lod_gpu_traversal.node_count == model.lod_tree->total_nodes() && model.lod_tree->total_nodes() <= size_t(model.size()) &&
+                                                 r.lod_gpu_traversal.output_capacity > 0 && r.lod_gpu_traversal.output_capacity <= std::numeric_limits<uint32_t>::max())) &&
                (!model.lod_tree || (!model.lod_tree->rad_source.valid() && (!model.lod_tree->lod_opacity_encoded || !r.gut))) &&
                (!r.lod_indices || r.lod_count <= std::numeric_limits<uint32_t>::max()) &&
                model.means_raw().dtype() == core::DataType::Float32 && model.sh0_raw().dtype() == core::DataType::Float32 &&
@@ -513,10 +628,50 @@ namespace lfs::vis {
             }
             if (i.frames[static_cast<size_t>(slot)][i.next[static_cast<size_t>(slot)] % 3].get() == previous)
                 previous = nullptr;
-            const uint32_t draw_count = uint32_t(request.lod_indices ? request.lod_count : model.size());
+            const bool gpu_lod = request.lod_gpu_traversal.enabled;
+            auto* gpu_tree = gpu_lod ? &i.prepareLodTree(model) : nullptr;
+            const uint32_t draw_count = gpu_lod ? uint32_t(std::clamp<size_t>(request.lod_gpu_traversal.output_capacity, gpu_tree->roots, gpu_tree->nodes)) : uint32_t(request.lod_indices ? request.lod_count : model.size());
             auto& f = i.acquire(slot, request, draw_count);
+            f.gpu_lod_active = gpu_lod;
             LodSelection lod{};
-            if (request.lod_indices) {
+            LodParameters lod_parameters{};
+            if (gpu_lod) {
+                if (!i.lod_selector)
+                    i.lod_selector = std::make_unique<LodSelector>(i.reader.device());
+                if (!f.gpu_lod || f.gpu_capacity != draw_count || f.gpu_source_count != uint32_t(model.size()) || f.gpu_tree_signature != gpu_tree->signature) {
+                    f.gpu_lod = std::make_unique<LodCutFrame>(i.reader.device(), draw_count, uint32_t(model.size()), gpu_tree->chunks);
+                    f.gpu_capacity = draw_count;
+                    f.gpu_source_count = uint32_t(model.size());
+                    f.gpu_tree_signature = gpu_tree->signature;
+                    f.gpu_chunks = gpu_tree->chunks;
+                }
+                lod = f.gpu_lod->selection(request.lod_debug_mode);
+                const auto& p = request.lod_gpu_traversal;
+                lod_parameters.node_count = lod_parameters.physical_node_count = gpu_tree->nodes;
+                lod_parameters.output_capacity = draw_count;
+                lod_parameters.logical_chunk_count = gpu_tree->chunks;
+                lod_parameters.pixel_scale_limit = p.pixel_scale_limit;
+                lod_parameters.object_scale = p.object_scale;
+                lod_parameters.behind_camera_penalty = p.behind_camera_penalty;
+                lod_parameters.cone_foveation = p.cone_foveation;
+                lod_parameters.cone_dot0 = std::cos(glm::radians(std::clamp(p.cone_inner_degrees, 0.f, 180.f) * .5f));
+                lod_parameters.cone_dot = std::min(lod_parameters.cone_dot0, std::cos(glm::radians(std::clamp(p.cone_outer_degrees, 0.f, 180.f) * .5f)));
+                lod_parameters.cone_blend_denominator = lod_parameters.cone_dot0 - lod_parameters.cone_dot;
+                lod_parameters.cone_tail_valid = lod_parameters.cone_dot >= 1e-6f ? 1.f : 0.f;
+                for (size_t row = 0; row < 3; ++row) {
+                    auto& dest = row == 0 ? lod_parameters.view_row0 : row == 1 ? lod_parameters.view_row1
+                                                                                : lod_parameters.view_row2;
+                    for (size_t col = 0; col < 4; ++col)
+                        dest[col] = p.object_to_view[col][row];
+                }
+                lod_parameters.outside_view_foveation = std::clamp(p.outside_view_foveation, 0.f, 1.f);
+                lod_parameters.viewport_half_tan_x = p.viewport_half_tan_x;
+                lod_parameters.viewport_half_tan_y = p.viewport_half_tan_y;
+                lod_parameters.ortho_half_width = p.ortho_half_width;
+                lod_parameters.ortho_half_height = p.ortho_half_height;
+                lod_parameters.viewport_foveation = uint32_t(p.viewport_foveation);
+                lod_parameters.orthographic = uint32_t(p.orthographic);
+            } else if (request.lod_indices) {
                 lod.enabled = true;
                 lod.debug = request.lod_debug_mode;
                 lod.count = draw_count;
@@ -568,7 +723,7 @@ namespace lfs::vis {
             // Viewer raster clipping differs from the desktop projection matrix's
             // near/far planes. Derive the reference near threshold at configure.
             const bool portal = request.splat_render_profile == 1;
-            const bool spark = (request.lod_indices && request.lod_count) && model.lod_tree && model.lod_tree->lod_opacity_encoded;
+            const bool spark = (gpu_lod || (request.lod_indices && request.lod_count)) && model.lod_tree && model.lod_tree->lod_opacity_encoded;
             const bool portal_math = portal && !spark;
             const bool mip = request.mip_filter && !(portal_math && request.gut);
             const float dilation = portal_math && !request.gut ? .075f : mip ? .1f
@@ -674,7 +829,10 @@ namespace lfs::vis {
             hash(&lod.enabled, sizeof(lod.enabled));
             hash(&lod.debug, sizeof(lod.debug));
             hash(&draw_count, sizeof(draw_count));
-            if (lod.enabled)
+            if (gpu_lod) {
+                hash(&lod_parameters, sizeof(lod_parameters));
+                hash(&gpu_tree->signature, sizeof(gpu_tree->signature));
+            } else if (lod.enabled)
                 for (const auto slice : {lod.indices, lod.logical_indices, lod.levels, lod.weights}) {
                     const bool present = slice.buffer != nil;
                     hash(&present, sizeof(present));
@@ -715,6 +873,8 @@ namespace lfs::vis {
                 // GPU ordering protects it without waiting on the host each frame.
                 if (i.next_readback)
                     [command encodeWaitForEvent:i.readback_event value:i.next_readback];
+                if (gpu_lod)
+                    i.lod_selector->encode(command, gpu_tree->buffers, lod_parameters, *f.gpu_lod);
                 auto slice = [&](size_t n) { return BufferSlice{views[n].buffer, views[n].offset}; };
                 SplatBuffers inputs{slice(0), slice(1), slice(2), slice(3), slice(4), slice(5), slice(6), slice(7),
                                     uint32_t(model.size()), uint32_t(model.max_sh_coeffs_rest()), storage, model.non_sh_attrs_f16()};
@@ -881,6 +1041,37 @@ namespace lfs::vis {
             return {};
         } catch (const std::exception& e) { return lfs::Status::failure(nativeError(e)); }
     }
+    VksplatViewportRenderer::GpuLodSelectionStatus MetalViewportRenderer::gpuLodSelectionStatus(Slot slot) const {
+        auto& i = *impl_;
+        std::lock_guard lock(i.readback_mutex);
+        VksplatViewportRenderer::GpuLodSelectionStatus status;
+        const auto latest = i.latest[static_cast<size_t>(slot)];
+        if (!latest || !latest->gpu_lod_active)
+            return status;
+        status.active = true;
+        status.capacity = latest->gpu_capacity;
+        const Frame* completed = nullptr;
+        for (const auto& candidate : i.frames[static_cast<size_t>(slot)]) {
+            if (candidate && candidate->gpu_lod_active && candidate->gpu_lod && !candidate->gpu_lod->busy() &&
+                candidate->gpu_tree_signature == latest->gpu_tree_signature &&
+                candidate->command.status == MTLCommandBufferStatusCompleted &&
+                (!completed || candidate->producer_value > completed->producer_value))
+                completed = candidate.get();
+        }
+        if (!completed)
+            return status;
+        const auto cut = completed->gpu_lod->status();
+        status.capacity = completed->gpu_capacity;
+        status.selected = std::min(cut.selected, completed->gpu_capacity);
+        status.overflow = cut.overflow;
+        status.pixel_scale_feedback = cut.threshold_multiplier;
+        const auto touches = completed->gpu_lod->touches();
+        status.resident_chunks = status.chunk_count = status.pool_pages = completed->gpu_chunks;
+        const auto values = static_cast<const uint32_t*>(touches.buffer.contents);
+        for (size_t n = 0; n < status.chunk_count; ++n)
+            status.touched_chunks += values[n] != 0;
+        return status;
+    }
     lfs::Result<bool> MetalViewportRenderer::outputComplete(Slot slot) const {
         try {
             auto frame = impl_->latest[static_cast<size_t>(slot)];
@@ -890,6 +1081,8 @@ namespace lfs::vis {
             [frame->command waitUntilCompleted];
             if (frame->command.status != MTLCommandBufferStatusCompleted)
                 throw std::runtime_error("Metal output command failed");
+            if (frame->gpu_lod && frame->gpu_lod_active && frame->gpu_lod->status().overflow)
+                return false;
             return !frame->raster || frame->raster->status().error == RasterError::None;
         } catch (const std::exception& error) {
             return nativeError(error);

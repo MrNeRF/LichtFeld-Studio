@@ -68,6 +68,7 @@ namespace lfs::rendering::metal {
         uint32_t source_count = 0;
         bool enabled = false;
         bool debug = false;
+        BufferSlice counter; // optional GPU-produced selected count, without host readback
     };
 
     struct alignas(16) Projection {

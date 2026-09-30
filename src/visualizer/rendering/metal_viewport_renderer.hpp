@@ -33,6 +33,8 @@ namespace lfs::vis {
         // Explicit validation/readback boundary: waits for the native command and
         // distinguishes a complete image from capacity-overflow fallback output.
         lfs::Result<bool> outputComplete(VksplatViewportRenderer::OutputSlot) const;
+        // Deferred diagnostic readback: never waits for the live GPU cut.
+        VksplatViewportRenderer::GpuLodSelectionStatus gpuLodSelectionStatus(VksplatViewportRenderer::OutputSlot) const;
         lfs::Status readColor(VksplatViewportRenderer::OutputSlot,
                               core::Tensor&, int x, int y) const;
         lfs::Result<float> readDepth(const VksplatViewportRenderer::DepthSampleRequest&) const;

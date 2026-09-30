@@ -164,8 +164,26 @@ remains per Gaussian while its compact probability codecs/tails are disabled
 for Spark. Eight real-reference comparisons and analytic activation/alpha
 oracles exercise this separately from the ordinary sigmoid path.
 
-Unsupported GPU LOD traversal, Spark-encoded 3DGUT and RAD traversal/paging
-requests retain the existing Vulkan path. Selection queries,
+Resident ordered hierarchies now select their cut entirely on Metal GPU,
+including root reachability, threshold transitions, page fade, missing-page
+interest and up to sixteen budget retries. GPU indirect retries stop once the
+cut fits, with a final root cut for pathological size ordering. Projection reads
+the live GPU count, clears unused slots and rejects an overflowed cut without
+reading unwritten private indices. Source tensors/Q16 remain in their original
+layout; no CPU cut traversal or attribute repack occurs per frame. Residency
+checks operate once per covered page, preserving partial-page bounds while
+avoiding repeated checks per child. Shared counters are read only for deferred
+diagnostics after completion, never to drive projection. Per-output reservations
+reject in-flight reuse; metadata is cached for four independent models.
+
+Independent GPU contracts cover coarse/fine/non-monotone cuts, transition
+complements, missing/partial pages, fade, budget retries, lifetimes and dynamic
+GPU count-to-projection reuse. Eleven real Metal/Vulkan comparisons cover SH0/Q16,
+budget, mip, orthographic, depth, export, portal/tone, Spark, selection and transforms.
+GPU tests and comparison binaries are restricted to macOS; CPU policy tests
+remain available to Windows/Linux CI without a GPU.
+
+Spark-encoded 3DGUT and RAD traversal/paging requests retain the existing Vulkan path. Selection queries,
 the desktop UI, grid, gizmos and final composition also remain on Vulkan. This
 backend is not yet a fully independent Metal desktop presentation/editor stack.
 Automatic continues to use Vulkan, and no global Vulkan shader is modified.

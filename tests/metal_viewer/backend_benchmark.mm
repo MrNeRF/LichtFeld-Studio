@@ -29,7 +29,7 @@ namespace {
         int width = 1280, height = 720, warmup = 12, samples = 40;
         std::string output, images, overlay;
         bool verify_parity = false;
-        bool mip = false, ortho = false, depth = false, export_scale = false, gut = false, equirect = false, subregion = false, near = false, portal = false, portal_tone = false, lod = false, lod_logical = false, lod_weights = false, lod_debug = false, spark = false;
+        bool mip = false, ortho = false, depth = false, export_scale = false, gut = false, equirect = false, subregion = false, near = false, portal = false, portal_tone = false, lod = false, lod_logical = false, lod_weights = false, lod_debug = false, spark = false, gpu_lod = false, gpu_lod_budget = false;
     };
     Options options(int argc, char** argv) {
         Options o;
@@ -54,6 +54,11 @@ namespace {
                 o.lod_logical = arg == "--lod_logical";
                 o.lod_weights = arg == "--lod_weights";
                 o.lod_debug = arg == "--lod_debug";
+                continue;
+            }
+            if (arg == "--gpu_lod" || arg == "--gpu_lod_budget") {
+                o.gpu_lod = true;
+                o.gpu_lod_budget = arg == "--gpu_lod_budget";
                 continue;
             }
             if (arg == "--spark") {
@@ -134,7 +139,7 @@ namespace {
             throw std::runtime_error("Benchmark reservation limit exceeded");
         return o;
     }
-    core::SplatData scene(size_t count, int degree, float rest_amplitude = .1f, bool panorama = false, bool near = false, const Options* reference_cut = nullptr, bool spark = false) {
+    core::SplatData scene(size_t count, int degree, float rest_amplitude = .1f, bool panorama = false, bool near = false, const Options* reference_cut = nullptr, bool spark = false, bool gpu_lod = false) {
         std::mt19937 random(1939);
         std::uniform_real_distribution<float> unit(0.f, 1.f);
         std::vector<float> means(count * 3), sh0(count * 3), scales(count * 3), rotation(count * 4, 0), opacity(count);
@@ -220,10 +225,10 @@ namespace {
             if (!model.shN_value_quantized())
                 throw std::runtime_error("SH3 fixture must use production Q16 storage");
         }
-        if (spark) {
+        if (spark || gpu_lod) {
             model.lod_tree = std::make_unique<core::SplatLodTree>();
             auto& tree = *model.lod_tree;
-            tree.lod_opacity_encoded = true;
+            tree.lod_opacity_encoded = spark;
             tree.child_count.assign(count, 0);
             tree.child_start.assign(count, 0);
             tree.lod_level.assign(count, 0);
@@ -232,6 +237,25 @@ namespace {
             for (size_t n = 0; n < count; ++n) {
                 tree.centers[n] = {means[n * 3], means[n * 3 + 1], means[n * 3 + 2]};
                 tree.sizes[n] = 2.f * std::exp(std::max({scales[n * 3], scales[n * 3 + 1], scales[n * 3 + 2]}));
+            }
+            if (gpu_lod) {
+                const size_t groups = (count + 59999) / 60000;
+                if (count <= groups + 1)
+                    throw std::runtime_error("GPU LOD fixture requires leaves");
+                tree.child_start[0] = 1;
+                tree.child_count[0] = uint16_t(groups);
+                tree.lod_level[0] = 2;
+                tree.sizes[0] = 8;
+                const size_t leaves = count - groups - 1;
+                size_t first = groups + 1;
+                for (size_t g = 0; g < groups; ++g) {
+                    const size_t length = leaves / groups + (g < leaves % groups);
+                    tree.child_start[g + 1] = uint32_t(first);
+                    tree.child_count[g + 1] = uint16_t(length);
+                    tree.lod_level[g + 1] = 1;
+                    tree.sizes[g + 1] = 4;
+                    first += length;
+                }
             }
         }
         return model;
@@ -313,13 +337,13 @@ namespace {
             throw std::runtime_error("Benchmark preferences must be isolated");
         Json cases = Json::array();
         for (int degree : {0, 3}) {
-            auto model = scene(o.count, degree, o.overlay == "affine" ? 1.f : .1f, o.equirect, o.near, nullptr, o.spark);
+            auto model = scene(o.count, degree, o.overlay == "affine" ? 1.f : .1f, o.equirect, o.near, nullptr, o.spark, o.gpu_lod);
             vis::MetalViewportRenderer metal;
             vis::VksplatViewportRenderer vulkan;
             rendering::ViewportRenderRequest request;
             std::vector<uint32_t> lod_indices, lod_logical, lod_levels;
             std::vector<float> lod_weights;
-            if (o.lod) {
+            if (o.lod && !o.gpu_lod) {
                 // Reverse, sparse source cut: never a contiguous prefix. Q16
                 // reads must retain original cell swizzle and block bounds.
                 for (size_t n = 0; n < o.count; n += 2) {
@@ -336,6 +360,16 @@ namespace {
                 request.lod_levels = lod_levels.data();
                 request.lod_debug_mode = o.lod_debug;
                 request.lod_weights = o.lod_weights ? lod_weights.data() : nullptr;
+            }
+            if (o.gpu_lod) {
+                auto& lod = request.lod_gpu_traversal;
+                lod.enabled = true;
+                lod.node_count = o.count;
+                lod.output_capacity = o.gpu_lod_budget ? 1 : o.count;
+                lod.pixel_scale_limit = .001f;
+                lod.object_scale = 1;
+                lod.behind_camera_penalty = lod.cone_foveation = 1;
+                lod.viewport_foveation = false;
             }
             request.frame_view.size = {o.width, o.height};
             if (o.near)
@@ -450,6 +484,12 @@ namespace {
             }
             if (!complete())
                 throw std::runtime_error("Native reservation did not converge during warmup");
+            if (o.gpu_lod) {
+                const auto status = metal.gpuLodSelectionStatus(Slot::Main);
+                const size_t expected = o.gpu_lod_budget ? 1 : o.count - 1 - (o.count + 59999) / 60000;
+                if (!status.active || status.selected != expected || status.overflow || status.resident_chunks != (o.count + 65535) / 65536)
+                    throw std::runtime_error("Native LOD diagnostics differ from the completed GPU cut");
+            }
             std::vector<double> native_times, vulkan_times;
             for (int n = 0; n < o.samples; ++n) {
                 // AB/BA pairs reduce order, thermal and drift bias; keep every raw sample.
@@ -546,7 +586,7 @@ namespace {
         }
         rusage usage{};
         getrusage(RUSAGE_SELF, &usage);
-        return {{"schema_version", 1}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", 1939}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"profile", o.portal ? "portal" : "studio"}, {"tone_fixture", o.portal_tone}, {"reference_resident_cut", o.gut && o.lod}, {"spark_opacity", o.spark}, {"lod", o.lod}, {"lod_logical", o.lod_logical}, {"lod_weights", o.lod_weights}, {"lod_debug", o.lod_debug}, {"gut", o.gut}, {"equirectangular", o.equirect}, {"near_fixture", o.near}, {"subregion", o.subregion}, {"reference_full_frame_crop", o.equirect && o.subregion}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
+        return {{"schema_version", 1}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", 1939}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"profile", o.portal ? "portal" : "studio"}, {"tone_fixture", o.portal_tone}, {"reference_resident_cut", o.gut && o.lod}, {"gpu_lod", o.gpu_lod}, {"gpu_lod_budget", o.gpu_lod_budget}, {"spark_opacity", o.spark}, {"lod", o.lod}, {"lod_logical", o.lod_logical}, {"lod_weights", o.lod_weights}, {"lod_debug", o.lod_debug}, {"gut", o.gut}, {"equirectangular", o.equirect}, {"near_fixture", o.near}, {"subregion", o.subregion}, {"reference_full_frame_crop", o.equirect && o.subregion}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
     }
 } // namespace
 int main(int argc, char** argv) {

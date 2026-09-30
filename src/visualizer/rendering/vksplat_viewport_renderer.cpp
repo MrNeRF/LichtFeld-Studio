@@ -2312,6 +2312,10 @@ namespace lfs::vis {
 
     VksplatViewportRenderer::GpuLodSelectionStatus
     VksplatViewportRenderer::gpuLodSelectionStatus() const {
+#ifdef __APPLE__
+        if (metal_viewport_ && metal_output_[static_cast<size_t>(OutputSlot::Main)])
+            return metal_viewport_->gpuLodSelectionStatus(OutputSlot::Main);
+#endif
         GpuLodSelectionStatus status;
         status.active = gpu_lod_selection_active_;
         status.capacity = gpu_lod_render_capacity_last_;
