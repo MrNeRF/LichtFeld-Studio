@@ -422,7 +422,7 @@ namespace lfs::vis::gui {
         ctor.Bind("menu_labels", &menu_labels_);
         ctor.Bind("dropdown_items", &dropdown_items_);
         ctor.Bind("menu_camera_buttons", &camera_buttons_);
-        ctor.Bind("menu_projection_buttons", &projection_buttons_);
+        ctor.Bind("menu_snap_buttons", &snap_buttons_);
         ctor.Bind("portal_connection_label", &portal_connection_label_);
         ctor.Bind("portal_connection_tooltip", &portal_connection_tooltip_);
         ctor.Bind("portal_connection_icon", &portal_connection_icon_);
@@ -486,7 +486,7 @@ namespace lfs::vis::gui {
         menu_labels_.clear();
         dropdown_items_.clear();
         camera_buttons_.clear();
-        projection_buttons_.clear();
+        snap_buttons_.clear();
         open_menu_idname_.clear();
         if (rml_manager_)
             rml_manager_->releaseCachedVulkanContext(direct_cache_);
@@ -606,7 +606,7 @@ namespace lfs::vis::gui {
         rebuildLabels();
         menu_model_.DirtyVariable("dropdown_items");
         menu_model_.DirtyVariable("menu_camera_buttons");
-        menu_model_.DirtyVariable("menu_projection_buttons");
+        menu_model_.DirtyVariable("menu_snap_buttons");
         updateTheme();
     }
 
@@ -978,7 +978,7 @@ namespace lfs::vis::gui {
 
     void RmlMenuBar::rebuildToolbarButtons() {
         std::vector<MenuToolbarButtonView> camera_buttons;
-        std::vector<MenuToolbarButtonView> projection_buttons;
+        std::vector<MenuToolbarButtonView> snap_buttons;
 
         const auto make = [](std::string id, std::string action, std::string value,
                              std::string icon, std::string tooltip_key,
@@ -1030,13 +1030,12 @@ namespace lfs::vis::gui {
             }
         }
 
-        // Display mode, projection and depth belong to each 3D view's header.
         {
             bool view_snap = false;
             if (const auto* ic = lfs::vis::InputController::instance())
                 view_snap = ic->cameraViewSnapEnabled();
-            projection_buttons.push_back(make("menu-view-snap", "toggle_camera_view_snap", "", "check",
-                                              "", "Snap Axis Views", view_snap));
+            snap_buttons.push_back(make("menu-view-snap", "toggle_camera_view_snap", "", "check",
+                                        "", "Snap Axis Views", view_snap));
         }
 
         if (camera_buttons != camera_buttons_) {
@@ -1044,9 +1043,9 @@ namespace lfs::vis::gui {
             menu_model_.DirtyVariable("menu_camera_buttons");
             render_needed_ = true;
         }
-        if (projection_buttons != projection_buttons_) {
-            projection_buttons_ = std::move(projection_buttons);
-            menu_model_.DirtyVariable("menu_projection_buttons");
+        if (snap_buttons != snap_buttons_) {
+            snap_buttons_ = std::move(snap_buttons);
+            menu_model_.DirtyVariable("menu_snap_buttons");
             render_needed_ = true;
         }
     }

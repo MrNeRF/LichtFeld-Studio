@@ -381,8 +381,7 @@ namespace lfs::vis::gui {
                    isTranslationGizmoActive();
         }
 
-        struct VulkanGuidePanelTarget {
-            SplitViewPanelId panel = SplitViewPanelId::Left;
+        struct VulkanGuideView {
             const Viewport* viewport = nullptr;
             glm::vec2 pos{0.0f};
             glm::vec2 size{0.0f};
@@ -1068,29 +1067,28 @@ namespace lfs::vis::gui {
             }
         }
 
-        [[nodiscard]] std::vector<VulkanGuidePanelTarget> collectVulkanGuidePanels(
+        [[nodiscard]] std::vector<VulkanGuideView> collectVulkanGuideViews(
             const Viewport& viewport,
             const ViewportLayout& viewport_layout) {
-            std::vector<VulkanGuidePanelTarget> panels;
+            std::vector<VulkanGuideView> views;
 
             const glm::ivec2 render_size(
                 std::max(static_cast<int>(std::round(viewport_layout.size.x)), 1),
                 std::max(static_cast<int>(std::round(viewport_layout.size.y)), 1));
-            panels.push_back({
-                .panel = SplitViewPanelId::Left,
+            views.push_back({
                 .viewport = &viewport,
                 .pos = viewport_layout.pos,
                 .size = viewport_layout.size,
                 .render_size = render_size,
             });
-            return panels;
+            return views;
         }
 
-        [[nodiscard]] glm::vec2 renderToPanelScreen(const VulkanGuidePanelTarget& panel,
-                                                    const glm::vec2& projected) {
-            const float sx = panel.size.x / static_cast<float>(std::max(panel.render_size.x, 1));
-            const float sy = panel.size.y / static_cast<float>(std::max(panel.render_size.y, 1));
-            return glm::vec2(panel.pos.x + projected.x * sx, panel.pos.y + projected.y * sy);
+        [[nodiscard]] glm::vec2 renderToViewScreen(const VulkanGuideView& guide_view,
+                                                   const glm::vec2& projected) {
+            const float sx = guide_view.size.x / static_cast<float>(std::max(guide_view.render_size.x, 1));
+            const float sy = guide_view.size.y / static_cast<float>(std::max(guide_view.render_size.y, 1));
+            return glm::vec2(guide_view.pos.x + projected.x * sx, guide_view.pos.y + projected.y * sy);
         }
 
         struct ProjectedSegment {
@@ -1101,13 +1099,13 @@ namespace lfs::vis::gui {
         };
 
         [[nodiscard]] std::optional<ProjectedSegment> projectSegmentToScreenClipped(
-            const VulkanGuidePanelTarget& panel,
+            const VulkanGuideView& guide_view,
             const RenderSettings& settings,
             const glm::vec3& world_a,
             const glm::vec3& world_b) {
             if (settings.equirectangular) {
-                const glm::mat3 rotation = panel.viewport->getRotationMatrix();
-                const glm::vec3 translation = panel.viewport->getTranslation();
+                const glm::mat3 rotation = guide_view.viewport->getRotationMatrix();
+                const glm::vec3 translation = guide_view.viewport->getTranslation();
 
                 struct EquirectProjected {
                     glm::vec2 screen;
@@ -1127,23 +1125,23 @@ namespace lfs::vis::gui {
                         return std::nullopt;
                     }
                     return EquirectProjected{
-                        .screen = panel.pos + glm::vec2((ndc_x * 0.5f + 0.5f) * panel.size.x,
-                                                        (ndc_y * 0.5f + 0.5f) * panel.size.y),
+                        .screen = guide_view.pos + glm::vec2((ndc_x * 0.5f + 0.5f) * guide_view.size.x,
+                                                             (ndc_y * 0.5f + 0.5f) * guide_view.size.y),
                         .depth = len,
                     };
                 };
 
                 const auto pa = project_equirect(world_a);
                 const auto pb = project_equirect(world_b);
-                if (!pa || !pb || std::abs((pa->screen.x - panel.pos.x) / panel.size.x - (pb->screen.x - panel.pos.x) / panel.size.x) > 0.5f) {
+                if (!pa || !pb || std::abs((pa->screen.x - guide_view.pos.x) / guide_view.size.x - (pb->screen.x - guide_view.pos.x) / guide_view.size.x) > 0.5f) {
                     return std::nullopt;
                 }
                 return ProjectedSegment{.a = pa->screen, .b = pb->screen, .depth_a = pa->depth, .depth_b = pb->depth};
             }
 
             constexpr float kMinViewZ = -1e-4f;
-            const glm::mat3 rotation = panel.viewport->getRotationMatrix();
-            const glm::vec3 translation = panel.viewport->getTranslation();
+            const glm::mat3 rotation = guide_view.viewport->getRotationMatrix();
+            const glm::vec3 translation = guide_view.viewport->getTranslation();
             glm::vec3 view_a = glm::transpose(rotation) * (world_a - translation);
             glm::vec3 view_b = glm::transpose(rotation) * (world_b - translation);
 
@@ -1168,8 +1166,8 @@ namespace lfs::vis::gui {
             }
 
             const auto project_view = [&](const glm::vec3& view) -> std::optional<glm::vec2> {
-                const float width = static_cast<float>(std::max(panel.render_size.x, 1));
-                const float height = static_cast<float>(std::max(panel.render_size.y, 1));
+                const float width = static_cast<float>(std::max(guide_view.render_size.x, 1));
+                const float height = static_cast<float>(std::max(guide_view.render_size.y, 1));
                 const float cx = width * 0.5f;
                 const float cy = height * 0.5f;
                 if (settings.orthographic) {
@@ -1180,7 +1178,7 @@ namespace lfs::vis::gui {
                                      cy - view.y * settings.ortho_scale);
                 }
                 const auto [fx, fy] = lfs::rendering::computePixelFocalLengths(
-                    panel.render_size, settings.focal_length_mm);
+                    guide_view.render_size, settings.focal_length_mm);
                 const float depth = -view.z;
                 if (depth <= 0.0f) {
                     return std::nullopt;
@@ -1195,15 +1193,15 @@ namespace lfs::vis::gui {
                 return std::nullopt;
             }
             return ProjectedSegment{
-                .a = renderToPanelScreen(panel, *pa),
-                .b = renderToPanelScreen(panel, *pb),
+                .a = renderToViewScreen(guide_view, *pa),
+                .b = renderToViewScreen(guide_view, *pb),
                 .depth_a = -view_a.z,
                 .depth_b = -view_b.z,
             };
         }
 
         [[nodiscard]] bool projectedQuadVisible(const std::array<glm::vec2, 4>& points,
-                                                const VulkanGuidePanelTarget& panel) {
+                                                const VulkanGuideView& guide_view) {
             glm::vec2 min_point(std::numeric_limits<float>::max());
             glm::vec2 max_point(-std::numeric_limits<float>::max());
             float area_twice = 0.0f;
@@ -1218,18 +1216,18 @@ namespace lfs::vis::gui {
                 area_twice += p.x * q.y - q.x * p.y;
             }
 
-            const glm::vec2 panel_min = panel.pos;
-            const glm::vec2 panel_max = panel.pos + panel.size;
-            if (max_point.x < panel_min.x || max_point.y < panel_min.y ||
-                min_point.x > panel_max.x || min_point.y > panel_max.y) {
+            const glm::vec2 view_min = guide_view.pos;
+            const glm::vec2 view_max = guide_view.pos + guide_view.size;
+            if (max_point.x < view_min.x || max_point.y < view_min.y ||
+                min_point.x > view_max.x || min_point.y > view_max.y) {
                 return false;
             }
 
             const glm::vec2 extent = max_point - min_point;
-            const float panel_limit = std::max(panel.size.x, panel.size.y) * 8.0f;
+            const float view_limit = std::max(guide_view.size.x, guide_view.size.y) * 8.0f;
             return std::abs(area_twice) >= 2.0f &&
-                   extent.x <= panel_limit &&
-                   extent.y <= panel_limit;
+                   extent.x <= view_limit &&
+                   extent.y <= view_limit;
         }
 
         void appendTexturedOverlayQuad(const VulkanViewportPassParams& params,
@@ -1307,23 +1305,23 @@ namespace lfs::vis::gui {
         }
 
         [[nodiscard]] std::optional<VulkanViewportGizmoLayout> buildViewportGizmoLayout(
-            const VulkanGuidePanelTarget& panel,
+            const VulkanGuideView& guide_view,
             const float size,
             const float margin_x,
             const float margin_y) {
-            if (!panel.valid() || size <= 0.0f) {
+            if (!guide_view.valid() || size <= 0.0f) {
                 return std::nullopt;
             }
 
             VulkanViewportGizmoLayout layout;
             layout.size = size;
             layout.top_left = {
-                panel.pos.x + panel.size.x - size - margin_x,
-                panel.pos.y + margin_y,
+                guide_view.pos.x + guide_view.size.x - size - margin_x,
+                guide_view.pos.y + margin_y,
             };
             layout.center = layout.top_left + glm::vec2(size * 0.5f);
 
-            glm::mat4 view = lfs::rendering::makeViewMatrix(panel.viewport->getRotationMatrix(), glm::vec3(0.0f));
+            glm::mat4 view = lfs::rendering::makeViewMatrix(guide_view.viewport->getRotationMatrix(), glm::vec3(0.0f));
             view[3][2] = -kViewportGizmoDistance;
             const glm::mat4 proj =
                 glm::perspective(glm::radians(kViewportGizmoFovDegrees), 1.0f, 0.1f, 10.0f);
@@ -1468,8 +1466,8 @@ namespace lfs::vis::gui {
                 return;
             }
 
-            const auto panels = collectVulkanGuidePanels(camera, viewport_layout);
-            if (panels.empty()) {
+            const auto views = collectVulkanGuideViews(camera, viewport_layout);
+            if (views.empty()) {
                 return;
             }
             const float gizmo_scale = std::max(1.0f, ui_scale);
@@ -1478,16 +1476,15 @@ namespace lfs::vis::gui {
             const float gizmo_margin_y = kViewportGizmoMarginY * gizmo_scale;
 
             int hovered_axis = -1;
-            SplitViewPanelId hovered_panel = SplitViewPanelId::Left;
-            bool has_hovered_panel = false;
+            bool has_hovered_view = false;
             if (!guiFocusState().want_capture_mouse) {
                 if (auto* const window_manager = viewer.getWindowManager()) {
                     const auto& frame_input = window_manager->frameInput();
                     const glm::vec2 mouse(frame_input.mouse_x, frame_input.mouse_y);
-                    for (const auto& panel : panels) {
-                        const float gizmo_x = panel.pos.x + panel.size.x -
+                    for (const auto& guide_view : views) {
+                        const float gizmo_x = guide_view.pos.x + guide_view.size.x -
                                               gizmo_size - gizmo_margin_x;
-                        const float gizmo_y = panel.pos.y + gizmo_margin_y;
+                        const float gizmo_y = guide_view.pos.y + gizmo_margin_y;
                         const bool mouse_in_gizmo = mouse.x >= gizmo_x &&
                                                     mouse.x <= gizmo_x + gizmo_size &&
                                                     mouse.y >= gizmo_y &&
@@ -1496,24 +1493,23 @@ namespace lfs::vis::gui {
                             continue;
                         }
                         if (const auto layout = buildViewportGizmoLayout(
-                                panel, gizmo_size, gizmo_margin_x, gizmo_margin_y)) {
+                                guide_view, gizmo_size, gizmo_margin_x, gizmo_margin_y)) {
                             hovered_axis = hitTestViewportGizmoLayout(*layout, mouse);
                         }
-                        hovered_panel = panel.panel;
-                        has_hovered_panel = true;
+                        has_hovered_view = true;
                         break;
                     }
                 }
             }
 
-            for (const auto& panel : panels) {
+            for (const auto& guide_view : views) {
                 if (const auto layout = buildViewportGizmoLayout(
-                        panel, gizmo_size, gizmo_margin_x, gizmo_margin_y)) {
+                        guide_view, gizmo_size, gizmo_margin_x, gizmo_margin_y)) {
                     appendViewportGizmoLayout(params.ui_shape_overlay_triangles,
                                               params,
                                               *layout,
-                                              has_hovered_panel && hovered_panel == panel.panel ? hovered_axis : -1);
-                    if (dragging && (!has_hovered_panel || hovered_panel == panel.panel)) {
+                                              has_hovered_view ? hovered_axis : -1);
+                    if (dragging) {
                         appendShapeOverlayCircle(params.ui_shape_overlay_triangles,
                                                  params,
                                                  layout->center,
@@ -1525,14 +1521,14 @@ namespace lfs::vis::gui {
         }
 
         void addProjectedOverlayLine(VulkanViewportPassParams& params,
-                                     const VulkanGuidePanelTarget& panel,
+                                     const VulkanGuideView& guide_view,
                                      const RenderSettings& settings,
                                      const glm::vec3& a,
                                      const glm::vec3& b,
                                      const glm::vec4& color,
                                      const float thickness,
                                      const bool depth_aware = false) {
-            if (const auto projected = projectSegmentToScreenClipped(panel, settings, a, b)) {
+            if (const auto projected = projectSegmentToScreenClipped(guide_view, settings, a, b)) {
                 appendShapeOverlayLine(params.shape_overlay_triangles,
                                        params,
                                        projected->a,
@@ -1565,7 +1561,7 @@ namespace lfs::vis::gui {
         }
 
         void appendProjectedBox(VulkanViewportPassParams& params,
-                                const VulkanGuidePanelTarget& panel,
+                                const VulkanGuideView& guide_view,
                                 const RenderSettings& settings,
                                 const glm::vec3& min,
                                 const glm::vec3& max,
@@ -1589,7 +1585,7 @@ namespace lfs::vis::gui {
 
             const auto corners = boxCorners(min, max, box_to_world);
             for (const auto& [a, b] : edges) {
-                addProjectedOverlayLine(params, panel, settings,
+                addProjectedOverlayLine(params, guide_view, settings,
                                         corners[static_cast<size_t>(a)],
                                         corners[static_cast<size_t>(b)],
                                         color, thickness);
@@ -2619,7 +2615,7 @@ namespace lfs::vis::gui {
         }
 
         void appendEquirectangularCameraFrustum(VulkanViewportPassParams& params,
-                                                const VulkanGuidePanelTarget& panel,
+                                                const VulkanGuideView& guide_view,
                                                 const RenderSettings& settings,
                                                 const glm::mat4& model,
                                                 const glm::vec4& color) {
@@ -2644,7 +2640,7 @@ namespace lfs::vis::gui {
                 glm::vec3 previous = point(lat, 0);
                 for (int lon = 1; lon <= kLonSegments; ++lon) {
                     const glm::vec3 current = point(lat, lon);
-                    addProjectedOverlayLine(params, panel, settings,
+                    addProjectedOverlayLine(params, guide_view, settings,
                                             previous, current, color, 1.5f, true);
                     previous = current;
                 }
@@ -2653,7 +2649,7 @@ namespace lfs::vis::gui {
                 glm::vec3 previous = point(0, lon);
                 for (int lat = 1; lat <= kLatSegments; ++lat) {
                     const glm::vec3 current = point(lat, lon);
-                    addProjectedOverlayLine(params, panel, settings,
+                    addProjectedOverlayLine(params, guide_view, settings,
                                             previous, current, color, 1.5f, true);
                     previous = current;
                 }
@@ -2662,7 +2658,7 @@ namespace lfs::vis::gui {
             const glm::vec3 apex = glm::vec3(model * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
             for (int lon = 0; lon < kLonSegments; lon += kLonSegments / 4) {
                 addProjectedOverlayLine(params,
-                                        panel,
+                                        guide_view,
                                         settings,
                                         apex,
                                         point(kLatSegments / 2, lon),
@@ -2673,7 +2669,7 @@ namespace lfs::vis::gui {
         }
 
         void appendCameraFrustumOverlays(VulkanViewportPassParams& params,
-                                         const std::vector<VulkanGuidePanelTarget>& panels,
+                                         const std::vector<VulkanGuideView>& views,
                                          const RenderSettings& settings,
                                          RenderingManager& rendering_manager,
                                          const SceneManager& scene_manager,
@@ -2810,19 +2806,19 @@ namespace lfs::vis::gui {
                 .thumbnail_atlas_generation = thumbnail_atlas_generation,
                 .overlay_settings_hash = frustumOverlaySettingsHash(settings),
             };
-            for (const auto& panel : panels) {
-                if (!panel.valid())
+            for (const auto& guide_view : views) {
+                if (!guide_view.valid())
                     continue;
-                hashCombine(key.view_projection_hash, hashViewportPose(*panel.viewport));
+                hashCombine(key.view_projection_hash, hashViewportPose(*guide_view.viewport));
                 // The overlay is rasterized in screen space. Quantizing layout
                 // values removes sub-pixel churn from repeated UI layout solves
                 // without hiding a meaningful viewport-size change.
-                hashCombine(key.view_projection_hash, hashQuantizedFloat(panel.pos.x, 1.0e-4f));
-                hashCombine(key.view_projection_hash, hashQuantizedFloat(panel.pos.y, 1.0e-4f));
-                hashCombine(key.view_projection_hash, hashQuantizedFloat(panel.size.x, 1.0e-4f));
-                hashCombine(key.view_projection_hash, hashQuantizedFloat(panel.size.y, 1.0e-4f));
-                hashCombine(key.view_projection_hash, static_cast<std::uint64_t>(panel.render_size.x));
-                hashCombine(key.view_projection_hash, static_cast<std::uint64_t>(panel.render_size.y));
+                hashCombine(key.view_projection_hash, hashQuantizedFloat(guide_view.pos.x, 1.0e-4f));
+                hashCombine(key.view_projection_hash, hashQuantizedFloat(guide_view.pos.y, 1.0e-4f));
+                hashCombine(key.view_projection_hash, hashQuantizedFloat(guide_view.size.x, 1.0e-4f));
+                hashCombine(key.view_projection_hash, hashQuantizedFloat(guide_view.size.y, 1.0e-4f));
+                hashCombine(key.view_projection_hash, static_cast<std::uint64_t>(guide_view.render_size.x));
+                hashCombine(key.view_projection_hash, static_cast<std::uint64_t>(guide_view.render_size.y));
             }
 
             FrustumOverlayInputKey geometry_key = key;
@@ -2859,7 +2855,7 @@ namespace lfs::vis::gui {
             }
 
             const size_t camera_count = cache.cameras.size();
-            const size_t panel_count = panels.size();
+            const size_t view_count = views.size();
             if (geometry_changed) {
                 cache.data->overlay_triangles.clear();
                 cache.data->textured_overlays.clear();
@@ -2868,15 +2864,15 @@ namespace lfs::vis::gui {
                 cache.instance_camera_indices.clear();
                 cache.textured_camera_indices.clear();
                 cache.has_equirectangular_lines = false;
-                cache.data->textured_overlays.reserve(camera_count * panel_count);
-                cache.data->frustum_instances.reserve(camera_count * panel_count);
-                cache.data->frustum_batches.reserve(panel_count);
-                cache.instance_camera_indices.reserve(camera_count * panel_count);
-                cache.textured_camera_indices.reserve(camera_count * panel_count);
-                cache.projected_points.resize(panel_count * camera_count);
-                cache.projected_depths.resize(panel_count * camera_count);
-                cache.projected_visible.assign(panel_count * camera_count, 0);
-                cache.camera_colors.resize(panel_count * camera_count);
+                cache.data->textured_overlays.reserve(camera_count * view_count);
+                cache.data->frustum_instances.reserve(camera_count * view_count);
+                cache.data->frustum_batches.reserve(view_count);
+                cache.instance_camera_indices.reserve(camera_count * view_count);
+                cache.textured_camera_indices.reserve(camera_count * view_count);
+                cache.projected_points.resize(view_count * camera_count);
+                cache.projected_depths.resize(view_count * camera_count);
+                cache.projected_visible.assign(view_count * camera_count, 0);
+                cache.camera_colors.resize(view_count * camera_count);
 
                 VulkanViewportPassParams line_params{};
                 line_params.viewport_pos = params.viewport_pos;
@@ -2884,19 +2880,19 @@ namespace lfs::vis::gui {
                 line_params.framebuffer_scale = params.framebuffer_scale;
                 line_params.overlay_triangles.swap(cache.data->overlay_triangles);
                 line_params.overlay_triangles.clear();
-                for (size_t panel_index = 0; panel_index < panel_count; ++panel_index) {
-                    const auto& panel = panels[panel_index];
-                    if (!panel.valid())
+                for (size_t view_index = 0; view_index < view_count; ++view_index) {
+                    const auto& guide_view = views[view_index];
+                    if (!guide_view.valid())
                         continue;
-                    const glm::mat3 rotation = panel.viewport->getRotationMatrix();
-                    const glm::vec3 translation = panel.viewport->getTranslation();
+                    const glm::mat3 rotation = guide_view.viewport->getRotationMatrix();
+                    const glm::vec3 translation = guide_view.viewport->getTranslation();
                     const glm::mat3 world_to_panel_rotation = glm::transpose(rotation);
-                    const float width = static_cast<float>(std::max(panel.render_size.x, 1));
-                    const float height = static_cast<float>(std::max(panel.render_size.y, 1));
+                    const float width = static_cast<float>(std::max(guide_view.render_size.x, 1));
+                    const float height = static_cast<float>(std::max(guide_view.render_size.y, 1));
                     const float cx = width * 0.5f;
                     const float cy = height * 0.5f;
                     const auto [fx, fy] = lfs::rendering::computePixelFocalLengths(
-                        panel.render_size, settings.focal_length_mm);
+                        guide_view.render_size, settings.focal_length_mm);
                     const std::uint32_t first_instance =
                         static_cast<std::uint32_t>(cache.data->frustum_instances.size());
                     for (size_t camera_index = 0; camera_index < camera_count; ++camera_index) {
@@ -2921,11 +2917,11 @@ namespace lfs::vis::gui {
                             emphasized);
                         if (color.a <= 0.01f)
                             continue;
-                        const size_t projected_index = panel_index * camera_count + camera_index;
+                        const size_t projected_index = view_index * camera_count + camera_index;
                         cache.camera_colors[projected_index] = color;
                         if (cache.equirectangular_cameras[camera_index]) {
                             appendEquirectangularCameraFrustum(
-                                line_params, panel, settings, cache.models[camera_index], color);
+                                line_params, guide_view, settings, cache.models[camera_index], color);
                             cache.has_equirectangular_lines = true;
                             continue;
                         }
@@ -2989,9 +2985,9 @@ namespace lfs::vis::gui {
                                 const float ndc_x = std::atan2(direction.x, -direction.z) / glm::pi<float>();
                                 const float ndc_y = -std::asin(std::clamp(direction.y, -1.0f, 1.0f)) /
                                                     (glm::pi<float>() * 0.5f);
-                                screen_points[corner] = panel.pos + glm::vec2(
-                                                                        (ndc_x * 0.5f + 0.5f) * panel.size.x,
-                                                                        (ndc_y * 0.5f + 0.5f) * panel.size.y);
+                                screen_points[corner] = guide_view.pos + glm::vec2(
+                                                                             (ndc_x * 0.5f + 0.5f) * guide_view.size.x,
+                                                                             (ndc_y * 0.5f + 0.5f) * guide_view.size.y);
                                 depths[corner] = len;
                             } else {
                                 if (view.z >= -1e-4f) {
@@ -3003,11 +2999,11 @@ namespace lfs::vis::gui {
                                                                             cy - view.y * settings.ortho_scale)
                                                                 : glm::vec2(cx + view.x * fx / -view.z,
                                                                             cy - view.y * fy / -view.z);
-                                screen_points[corner] = renderToPanelScreen(panel, projected);
+                                screen_points[corner] = renderToViewScreen(guide_view, projected);
                                 depths[corner] = -view.z;
                             }
                         }
-                        quad_visible = quad_visible && projectedQuadVisible(screen_points, panel);
+                        quad_visible = quad_visible && projectedQuadVisible(screen_points, guide_view);
                         cache.projected_points[projected_index] = screen_points;
                         cache.projected_depths[projected_index] = depths;
                         cache.projected_visible[projected_index] = quad_visible;
@@ -3036,9 +3032,9 @@ namespace lfs::vis::gui {
                         const glm::mat4 view = lfs::rendering::makeViewMatrix(rotation, translation);
                         cache.data->frustum_batches.push_back({
                             .view = view,
-                            .viewport_pos = panel.pos,
-                            .viewport_size = panel.size,
-                            .render_size = glm::vec2(panel.render_size),
+                            .viewport_pos = guide_view.pos,
+                            .viewport_size = guide_view.size,
+                            .render_size = glm::vec2(guide_view.render_size),
                             .focal_x = settings.orthographic ? settings.ortho_scale : fx,
                             .focal_y = settings.orthographic ? settings.ortho_scale : fy,
                             .orthographic = settings.orthographic,
@@ -3053,11 +3049,11 @@ namespace lfs::vis::gui {
                                                 cache.data->overlay_triangles.begin(),
                                                 cache.data->overlay_triangles.end());
             } else if (loss_changed) {
-                for (size_t panel_index = 0; panel_index < panel_count; ++panel_index) {
-                    const auto& panel = panels[panel_index];
-                    if (!panel.valid())
+                for (size_t view_index = 0; view_index < view_count; ++view_index) {
+                    const auto& guide_view = views[view_index];
+                    if (!guide_view.valid())
                         continue;
-                    const glm::vec3 view_position = panel.viewport->getTranslation();
+                    const glm::vec3 view_position = guide_view.viewport->getTranslation();
                     for (size_t camera_index = 0; camera_index < camera_count; ++camera_index) {
                         if (!cache.valid_cameras[camera_index])
                             continue;
@@ -3065,7 +3061,7 @@ namespace lfs::vis::gui {
                         const float alpha = cameraFrustumVisibilityAlpha(
                             cache.positions[camera_index], view_position,
                             settings.camera_frustum_scale, disabled);
-                        cache.camera_colors[panel_index * camera_count + camera_index] =
+                        cache.camera_colors[view_index * camera_count + camera_index] =
                             cachedCameraFrustumColor(
                                 cache.validation_cameras[camera_index] != 0,
                                 cache.loss_colors,
@@ -3153,7 +3149,7 @@ namespace lfs::vis::gui {
         }
 
         void appendProjectedEllipsoid(VulkanViewportPassParams& params,
-                                      const VulkanGuidePanelTarget& panel,
+                                      const VulkanGuideView& guide_view,
                                       const RenderSettings& settings,
                                       const glm::vec3& radii,
                                       const glm::mat4& ellipsoid_to_world,
@@ -3179,7 +3175,7 @@ namespace lfs::vis::gui {
                 glm::vec3 previous = point(lat, 0);
                 for (int lon = 1; lon <= lon_segments; ++lon) {
                     const glm::vec3 current = point(lat, lon % lon_segments);
-                    addProjectedOverlayLine(params, panel, settings, previous, current, color, thickness);
+                    addProjectedOverlayLine(params, guide_view, settings, previous, current, color, thickness);
                     previous = current;
                 }
             }
@@ -3187,17 +3183,15 @@ namespace lfs::vis::gui {
                 glm::vec3 previous = point(0, lon);
                 for (int lat = 1; lat <= lat_segments; ++lat) {
                     const glm::vec3 current = point(lat, lon);
-                    addProjectedOverlayLine(params, panel, settings, previous, current, color, thickness);
+                    addProjectedOverlayLine(params, guide_view, settings, previous, current, color, thickness);
                     previous = current;
                 }
             }
         }
 
-        // The depth-window rectangle. Extracted so the GT compare panel can own it without
-        // duplicating the crop/ellipsoid/frustum/axis/pivot overlays that the shared panel
-        // collector drives. The math is byte-identical to its previous inline form (F7).
+        // Comparison views can draw the depth window without other scene guides.
         void appendScreenWindowOverlay(VulkanViewportPassParams& params,
-                                       const VulkanGuidePanelTarget& panel,
+                                       const VulkanGuideView& guide_view,
                                        const RenderSettings& settings,
                                        const float scale_x,
                                        const float scale_y,
@@ -3215,17 +3209,17 @@ namespace lfs::vis::gui {
             // copies; the splat projection uses the displayed camera's real
             // unjittered intrinsics; jitter moves the draw sample, not the
             // containment boundary.
-            const float W = static_cast<float>(std::max(panel.render_size.x, 1));
-            const float H = static_cast<float>(std::max(panel.render_size.y, 1));
+            const float W = static_cast<float>(std::max(guide_view.render_size.x, 1));
+            const float H = static_cast<float>(std::max(guide_view.render_size.y, 1));
 
             const float half_w = 0.5f * scale_x * W;
             const float half_h = 0.5f * scale_y * H;
             const float cx = 0.5f * W + offset_x * (0.5f * W - half_w);
             const float cy = 0.5f * H + offset_y * (0.5f * H - half_h);
             const glm::vec2 min_screen =
-                renderToPanelScreen(panel, glm::vec2(cx - half_w, cy - half_h));
+                renderToViewScreen(guide_view, glm::vec2(cx - half_w, cy - half_h));
             const glm::vec2 max_screen =
-                renderToPanelScreen(panel, glm::vec2(cx + half_w, cy + half_h));
+                renderToViewScreen(guide_view, glm::vec2(cx + half_w, cy + half_h));
             const glm::vec2 tl{min_screen.x, min_screen.y};
             const glm::vec2 tr{max_screen.x, min_screen.y};
             const glm::vec2 br{max_screen.x, max_screen.y};
@@ -3242,7 +3236,7 @@ namespace lfs::vis::gui {
         }
 
         void appendCropAndFilterOverlays(VulkanViewportPassParams& params, ViewId view,
-                                         const VulkanGuidePanelTarget& panel,
+                                         const VulkanGuideView& guide_view,
                                          const RenderSettings& settings,
                                          const SceneRenderState* scene_state,
                                          const SceneManager* scene_manager,
@@ -3253,18 +3247,18 @@ namespace lfs::vis::gui {
                                          const float depth_window_offset_y,
                                          const bool suppress_screen_window = false) {
             if (!suppress_screen_window) {
-                appendScreenWindowOverlay(params, panel, settings,
+                appendScreenWindowOverlay(params, guide_view, settings,
                                           depth_window_scale_x, depth_window_scale_y,
                                           depth_window_offset_x, depth_window_offset_y);
                 if (settings.depth_filter_enabled) {
                     const op::DepthWindowViewMapping window_panel{
                         .view = view,
-                        .x = panel.pos.x,
-                        .y = panel.pos.y,
-                        .width = panel.size.x,
-                        .height = panel.size.y,
-                        .render_width = panel.render_size.x,
-                        .render_height = panel.render_size.y,
+                        .x = guide_view.pos.x,
+                        .y = guide_view.pos.y,
+                        .width = guide_view.size.x,
+                        .height = guide_view.size.y,
+                        .render_width = guide_view.render_size.x,
+                        .render_height = guide_view.render_size.y,
                     };
                     const auto screen_rect = op::depthWindowScreenRect(
                         window_panel,
@@ -3385,7 +3379,7 @@ namespace lfs::vis::gui {
             };
 
             if (gizmo.cropbox_active && selected_cropbox_is_visible()) {
-                appendProjectedBox(params, panel, settings,
+                appendProjectedBox(params, guide_view, settings,
                                    gizmo.cropbox_min,
                                    gizmo.cropbox_max,
                                    gizmo.cropbox_transform,
@@ -3394,7 +3388,7 @@ namespace lfs::vis::gui {
             }
 
             if (gizmo.ellipsoid_active && selected_ellipsoid_is_visible()) {
-                appendProjectedEllipsoid(params, panel, settings,
+                appendProjectedEllipsoid(params, guide_view, settings,
                                          gizmo.ellipsoid_radii,
                                          gizmo.ellipsoid_transform,
                                          cropGuideColor(glm::vec3(0.5f, 0.85f, 1.0f), false, 0.0f),
@@ -3415,7 +3409,7 @@ namespace lfs::vis::gui {
                 const glm::vec3 box_max = use_pending ? gizmo.cropbox_max : cb.data->max;
                 const glm::mat4 world_transform = use_pending ? gizmo.cropbox_transform : cb.world_transform;
                 const float flash = std::clamp(cb.data->flash_intensity, 0.0f, 1.0f);
-                appendProjectedBox(params, panel, settings,
+                appendProjectedBox(params, guide_view, settings,
                                    box_min,
                                    box_max,
                                    world_transform,
@@ -3432,7 +3426,7 @@ namespace lfs::vis::gui {
                 const glm::vec3 radii = use_pending ? gizmo.ellipsoid_radii : el.data->radii;
                 const glm::mat4 world_transform = use_pending ? gizmo.ellipsoid_transform : el.world_transform;
                 const float flash = std::clamp(el.data->flash_intensity, 0.0f, 1.0f);
-                appendProjectedEllipsoid(params, panel, settings,
+                appendProjectedEllipsoid(params, guide_view, settings,
                                          radii,
                                          world_transform,
                                          cropGuideColor(el.data->color, el.data->inverse, flash),
@@ -3441,7 +3435,7 @@ namespace lfs::vis::gui {
         }
 
         void appendPivotShaderOverlay(VulkanViewportPassParams& params,
-                                      const VulkanGuidePanelTarget& panel,
+                                      const VulkanGuideView& guide_view,
                                       const RenderSettings& settings,
                                       const glm::vec3& pivot_world,
                                       const float opacity) {
@@ -3449,9 +3443,9 @@ namespace lfs::vis::gui {
             constexpr glm::vec3 kPivotColor{0.26f, 0.59f, 0.98f};
 
             const glm::mat4 view =
-                lfs::rendering::makeViewMatrix(panel.viewport->getRotationMatrix(), panel.viewport->getTranslation());
+                lfs::rendering::makeViewMatrix(guide_view.viewport->getRotationMatrix(), guide_view.viewport->getTranslation());
             const glm::mat4 projection = lfs::rendering::createProjectionMatrixFromFocal(
-                panel.render_size,
+                guide_view.render_size,
                 settings.focal_length_mm,
                 settings.orthographic,
                 settings.ortho_scale,
@@ -3464,9 +3458,9 @@ namespace lfs::vis::gui {
             }
 
             const glm::vec2 gl_ndc = glm::vec2(clip) / clip.w;
-            const glm::vec2 screen = panel.pos + glm::vec2(
-                                                     (gl_ndc.x * 0.5f + 0.5f) * panel.size.x,
-                                                     (1.0f - (gl_ndc.y * 0.5f + 0.5f)) * panel.size.y);
+            const glm::vec2 screen = guide_view.pos + glm::vec2(
+                                                          (gl_ndc.x * 0.5f + 0.5f) * guide_view.size.x,
+                                                          (1.0f - (gl_ndc.y * 0.5f + 0.5f)) * guide_view.size.y);
             const glm::vec2 framebuffer_scale(
                 params.framebuffer_scale.x > 0.0f ? params.framebuffer_scale.x : 1.0f,
                 params.framebuffer_scale.y > 0.0f ? params.framebuffer_scale.y : 1.0f);
@@ -3492,8 +3486,8 @@ namespace lfs::vis::gui {
                 return;
             }
 
-            const auto panels = collectVulkanGuidePanels(camera, viewport_layout);
-            if (panels.empty()) {
+            const auto views = collectVulkanGuideViews(camera, viewport_layout);
+            if (views.empty()) {
                 return;
             }
 
@@ -3508,14 +3502,13 @@ namespace lfs::vis::gui {
                 glm::vec3(0.0f, 0.0f, 1.0f),
             };
 
-            for (const auto& panel : panels) {
-                if (!panel.valid()) {
+            for (const auto& guide_view : views) {
+                if (!guide_view.valid()) {
                     continue;
                 }
 
-                // The depth window (rect + handles) draws on no panel while GT
-                // comparison mode is active — see depthWindowOverlaySuppressed.
-                const lfs::vis::DepthWindowState panel_depth_window =
+                // GT comparison suppresses the depth window and its handles.
+                const lfs::vis::DepthWindowState depth_window =
                     lfs::vis::DepthWindowState{
                         .near_plane = -settings.depth_filter_max.z,
                         .far_plane = -settings.depth_filter_min.z,
@@ -3524,16 +3517,16 @@ namespace lfs::vis::gui {
                         .offset_x = settings.depth_filter_offset_x,
                         .offset_y = settings.depth_filter_offset_y,
                     };
-                appendCropAndFilterOverlays(params, viewport_layout.view, panel, settings, scene_state, scene_manager, gizmo,
-                                            panel_depth_window.scale_x,
-                                            panel_depth_window.scale_y,
-                                            panel_depth_window.offset_x,
-                                            panel_depth_window.offset_y,
+                appendCropAndFilterOverlays(params, viewport_layout.view, guide_view, settings, scene_state, scene_manager, gizmo,
+                                            depth_window.scale_x,
+                                            depth_window.scale_y,
+                                            depth_window.offset_x,
+                                            depth_window.offset_y,
                                             op::depthWindowOverlaySuppressed(splitViewUsesGTComparison(settings.split_view_mode)));
                 if (settings.show_coord_axes) {
                     for (size_t axis = 0; axis < axes.size(); ++axis) {
                         if (settings.axes_visibility[axis]) {
-                            addProjectedOverlayLine(params, panel, settings,
+                            addProjectedOverlayLine(params, guide_view, settings,
                                                     glm::vec3(0.0f),
                                                     axes[axis] * settings.axes_size,
                                                     axis_colors[axis], 3.0f);
@@ -3542,7 +3535,7 @@ namespace lfs::vis::gui {
                 }
 
                 constexpr float kPivotDurationSec = 0.5f;
-                const float time_since_set = panel.viewport->camera.getSecondsSincePivotSet();
+                const float time_since_set = guide_view.viewport->camera.getSecondsSincePivotSet();
                 const bool pivot_animation_active = time_since_set < kPivotDurationSec;
                 if (pivot_animation_active) {
                     const auto remaining_ms = static_cast<int>(
@@ -3554,12 +3547,12 @@ namespace lfs::vis::gui {
                     const float opacity = settings.show_pivot
                                               ? 1.0f
                                               : 1.0f - std::clamp(time_since_set / kPivotDurationSec, 0.0f, 1.0f);
-                    appendPivotShaderOverlay(params, panel, settings, panel.viewport->camera.getPivot(), opacity);
+                    appendPivotShaderOverlay(params, guide_view, settings, guide_view.viewport->camera.getPivot(), opacity);
                 }
             }
             if (scene_manager) {
                 appendCameraFrustumOverlays(params,
-                                            panels,
+                                            views,
                                             settings,
                                             rendering_manager,
                                             *scene_manager,
@@ -3826,7 +3819,6 @@ namespace lfs::vis::gui {
           gizmo_manager_(viewer),
           async_tasks_(viewer) {
 
-        panel_layout_.loadState();
         if (const auto saved_window = loadWindowState()) {
             if (auto* const window_manager = viewer_ ? viewer_->getWindowManager() : nullptr)
                 window_manager->setInitialWindowState(*saved_window);
@@ -4452,6 +4444,13 @@ namespace lfs::vis::gui {
         selection_ring_cursor_ = cursor;
     }
 
+    void GuiManager::setSequencerVisible(const bool visible) {
+        if (sequencer_visible_ == visible)
+            return;
+        sequencer_visible_ = visible;
+        publish_viewport_toolbar_generation();
+    }
+
     void GuiManager::applyRmlCursorRequest(const RmlCursorRequest req) {
         SDL_Cursor* cursor = nullptr;
         if (req != RmlCursorRequest::Pipette && pipette_cursor_)
@@ -4665,11 +4664,6 @@ namespace lfs::vis::gui {
             .screens = &viewer_->screens(),
             .rml = &rmlui_manager_,
             .context_menu = global_context_menu_.get(),
-            .view_changed =
-                [this](screen::AreaId id) {
-                    if (auto* const rendering = viewer_->getRenderingManager())
-                        rendering->markViewDirty(id.value, DirtyFlag::ALL);
-                },
             .screen_changed =
                 [this]() {
                     if (auto* const rendering = viewer_->getRenderingManager())
@@ -5208,19 +5202,6 @@ namespace lfs::vis::gui {
         viewport_gpu_assets_.reset();
     }
 
-    void GuiManager::hideBottomDockPanel(const std::string& id) {
-        if (id.empty())
-            return;
-        if (id == native_panels::SEQUENCER_PANEL_ID) {
-            panel_layout_.setShowSequencer(false);
-            sequencer_ui_.setSequencerEnabled(false);
-        } else {
-            PanelRegistry::instance().set_panel_enabled(id, false);
-        }
-        if (focus_panel_name_ == id)
-            focus_panel_name_.clear();
-    }
-
     void GuiManager::registerNativePanels() {
         using namespace native_panels;
         auto& reg = PanelRegistry::instance();
@@ -5281,8 +5262,8 @@ namespace lfs::vis::gui {
                   PanelSpace::ViewportOverlay, 302);
 
         reg_panel(std::string(native_panels::SEQUENCER_PANEL_ID), "Sequencer",
-                  make_panel(SequencerPanel(&sequencer_ui_, &panel_layout_)),
-                  PanelSpace::BottomDock, 500,
+                  make_panel(SequencerPanel(&sequencer_ui_, this)),
+                  PanelSpace::BottomArea, 500,
                   static_cast<uint32_t>(PanelOption::FLOAT_IN_VIEWPORT),
                   8192.0f);
 
@@ -5347,30 +5328,30 @@ namespace lfs::vis::gui {
             params.grid_opacity = std::clamp(settings.grid_opacity, 0.0f, 1.0f);
 
             if (params.grid_enabled && viewer_) {
-                const auto panels = collectVulkanGuidePanels(camera, layout);
-                params.grid_overlays.reserve(panels.size());
-                for (const auto& panel : panels) {
-                    if (!panel.valid()) {
+                const auto views = collectVulkanGuideViews(camera, layout);
+                params.grid_overlays.reserve(views.size());
+                for (const auto& guide_view : views) {
+                    if (!guide_view.valid()) {
                         continue;
                     }
                     const glm::mat4 view =
-                        lfs::rendering::makeViewMatrix(panel.viewport->getRotationMatrix(),
-                                                       panel.viewport->getTranslation());
+                        lfs::rendering::makeViewMatrix(guide_view.viewport->getRotationMatrix(),
+                                                       guide_view.viewport->getTranslation());
                     const glm::mat4 proj = lfs::rendering::createProjectionMatrixFromFocal(
-                        panel.render_size,
+                        guide_view.render_size,
                         settings.focal_length_mm,
                         settings.orthographic,
                         settings.ortho_scale,
                         lfs::rendering::DEFAULT_NEAR_PLANE,
                         settings.depth_clip_enabled ? settings.depth_clip_far : lfs::rendering::DEFAULT_FAR_PLANE);
                     VulkanViewportGridOverlay grid{};
-                    grid.viewport_pos = panel.pos;
-                    grid.viewport_size = panel.size;
-                    grid.render_size = panel.render_size;
+                    grid.viewport_pos = guide_view.pos;
+                    grid.viewport_size = guide_view.size;
+                    grid.render_size = guide_view.render_size;
                     grid.view = view;
                     grid.projection = proj;
                     grid.view_projection = proj * view;
-                    grid.view_position = panel.viewport->getTranslation();
+                    grid.view_position = guide_view.viewport->getTranslation();
                     grid.plane = settings.grid_plane;
                     grid.opacity = params.grid_opacity;
                     grid.orthographic = settings.orthographic;
@@ -5898,9 +5879,8 @@ namespace lfs::vis::gui {
         ui_visibility_target_hidden_ = !ui_hidden_;
         if (auto* const rendering = viewer_->getRenderingManager()) {
             // Hiding the editor chrome changes the viewport extent without an SDL
-            // window-resize event. Use the same begin/end resize contract as dock
-            // splitters so cached single and dual-view output is retired only after
-            // the guarded layout transition has settled.
+            // window-resize event. Retire cached output after the guarded layout
+            // transition has settled.
             rendering->setViewportResizeActive(
                 true, ViewportResizeRenderPolicy::FullResolution);
             ui_visibility_resize_active_ = true;
@@ -5913,12 +5893,11 @@ namespace lfs::vis::gui {
             // previous layout continues to display the matching previous image.
             if (last_ui_layout_work_size_.x > 0.0f &&
                 last_ui_layout_work_size_.y > 0.0f) {
-                ScreenState transition_screen;
-                transition_screen.work_pos = last_ui_layout_work_pos_;
-                transition_screen.work_size = last_ui_layout_work_size_;
-                ui_visibility_target_layout_ = panel_layout_.computeViewportLayout(
-                    show_main_panel_, ui_visibility_target_hidden_, window_states_["python_console"],
-                    transition_screen);
+                ui_visibility_target_layout_ = {
+                    .pos = last_ui_layout_work_pos_,
+                    .size = last_ui_layout_work_size_,
+                    .has_focus = true,
+                };
                 ui_visibility_target_ready_ =
                     ui_visibility_target_layout_.size.x > 0.0f &&
                     ui_visibility_target_layout_.size.y > 0.0f;
@@ -6417,7 +6396,7 @@ namespace lfs::vis::gui {
                 guiFocusState().want_capture_mouse = true;
 
             if (!vulkan_gui_) {
-                rml_menu_bar_.setViewportRightEdge(menu_toolbar_right_edge_ - menu_input.screen_x);
+                rml_menu_bar_.setViewportRightEdge(menu_input.screen_w);
                 rml_menu_bar_.draw(menu_input.screen_w, menu_input.screen_h);
             }
         } else {
@@ -6462,7 +6441,7 @@ namespace lfs::vis::gui {
 
         if (!ui_hidden_) {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.shell_frame", 0.25);
-            const float status_bar_h = PanelLayoutManager::STATUS_BAR_HEIGHT * current_ui_scale_;
+            const float status_bar_h = kStatusBarHeight * current_ui_scale_;
             const float screen_w = static_cast<float>(sdl_input.window_w);
             const float screen_h = static_cast<float>(sdl_input.window_h);
             const float menu_h = rml_menu_bar_.barHeight();
@@ -6579,7 +6558,7 @@ namespace lfs::vis::gui {
         {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.panel_input_state", 0.25);
             const float menu_h = rml_menu_bar_.barHeight();
-            const float status_h = PanelLayoutManager::STATUS_BAR_HEIGHT * current_ui_scale_;
+            const float status_h = kStatusBarHeight * current_ui_scale_;
             screen.work_pos = {0.0f, menu_h};
             screen.work_size = {
                 static_cast<float>(sdl_input.window_w),
@@ -6653,7 +6632,6 @@ namespace lfs::vis::gui {
 
         python::set_viewport_bounds(viewport_layout_.pos.x, viewport_layout_.pos.y,
                                     viewport_layout_.size.x, viewport_layout_.size.y);
-        menu_toolbar_right_edge_ = screen.work_pos.x + screen.work_size.x;
 
         {
             LOG_TIMER_THRESHOLD("gui_render.gizmo_update", 0.25);
@@ -6663,11 +6641,10 @@ namespace lfs::vis::gui {
 
         // The viewport overlay (tool rail, gizmo toolbars, HUDs) lives in the
         // active 3D view.
-        rml_viewport_overlay_.setToolbarPanels(0.0f, viewport_layout_.size.x, 0.0f);
+        rml_viewport_overlay_.setToolbarBounds(0.0f, viewport_layout_.size.x, 0.0f);
         rml_viewport_overlay_.setViewportBounds(
             viewport_layout_.pos, viewport_layout_.size,
             {panel_input.screen_x, panel_input.screen_y});
-        rml_viewport_overlay_.setViewportContentOffset(0.0f);
         rml_viewport_overlay_.setSplitDividerOverlay({});
         RmlViewportOverlay::LodStatsOverlayState lod_stats_state;
         if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr) {
@@ -6851,42 +6828,8 @@ namespace lfs::vis::gui {
                                                                            .menu_pointer = menu_blocks_underlay_pointer,
                                                                            .floating_panel = has_floating_panels &&
                                                                                              reg.isPositionOverFloatingPanel(sdl_input.mouse_x, sdl_input.mouse_y),
-                                                                           .left_dock = !ui_hidden_ && screen_host_.blocksPress(static_cast<float>(sdl_input.mouse_x), static_cast<float>(sdl_input.mouse_y)),
+                                                                           .area_chrome = !ui_hidden_ && screen_host_.blocksPress(static_cast<float>(sdl_input.mouse_x), static_cast<float>(sdl_input.mouse_y)),
                                                                        });
-        }
-        // Apply overlayPressMayFocusPanel (rml_viewport_overlay.hpp) after processInput,
-        // so text blur and its commit handler run before focus moves.
-        // Match overlay entry i to this frame's i-th left DOWN, using that event's
-        // coordinates and GUI ownership together. The overlay spans the dock, and the
-        // latest cursor position or wantsInput alone cannot identify where a press landed.
-        // Process every left DOWN in SDL order. Refused presses (controls, GUI-owned
-        // or outside the viewport) leave focus unchanged; the last eligible press wins.
-        // With no eligible press, keep the existing focus.
-        // Explicit blockers or invalid bounds produce no classifications. External
-        // capture still classifies earlier viewport presses before blocking motion,
-        // allowing their text edits to commit before the corresponding focus changes.
-        const auto& overlay_left_presses = rml_viewport_overlay_.leftPressClassifications();
-        std::size_t overlay_press_index = 0;
-        for (const auto& overlay_event : viewport_overlay_input.mouse_button_events) {
-            if (!overlay_event.down || overlay_event.button != 0)
-                continue;
-            if (overlay_press_index >= overlay_left_presses.size())
-                break;
-            const auto& overlay_press_class = overlay_left_presses[overlay_press_index++];
-            const auto* const overlay_press = &overlay_event;
-            const glm::vec2 overlay_press_point{overlay_press->x, overlay_press->y};
-            if (!overlayPressMayFocusPanel({
-                    .left_pressed = true,
-                    .overlay_wants_input = rml_viewport_overlay_.wantsInput(),
-                    .pressed_interactive_control = overlay_press_class.on_interactive_control,
-                    .press_blurred_text_input = overlay_press_class.blurred_text_input,
-                    .press_inside_viewport = pointInsideViewport(overlay_press_point,
-                                                                 viewport_layout_.pos,
-                                                                 viewport_layout_.size),
-                    .press_gui_owned = overlay_press->gui_owned,
-                })) {
-                continue;
-            }
         }
         const bool has_python_overlay_hooks =
             !startup_plugin_preload_blocking_python &&
@@ -6917,12 +6860,13 @@ namespace lfs::vis::gui {
             overlay_info.fov = lfs::rendering::focalLengthToVFov(overlay_settings.focal_length_mm);
             overlay_info.orthographic = overlay_settings.orthographic;
             overlay_info.ortho_scale = overlay_settings.ortho_scale;
-            const ScopedOverlayView overlay_view(overlay_info);
-            sequencer_ui_.renderViewOverlay(ctx, overlay_layout);
             lfs::rendering::ScreenOverlayRenderer* overlay_renderer = nullptr;
             if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr) {
                 overlay_renderer = &rendering->viewState(view_id.value).screen_overlay_renderer_;
             }
+            const python::ScopedOverlayDrawContext overlay_context(
+                {.renderer = overlay_renderer, .view = view_id.value, .frame_input = &sdl_input, .viewport_bounds = std::array<float, 4>{target.pos.x, target.pos.y, target.size.x, target.size.y}, .camera = &overlay_info});
+            sequencer_ui_.renderViewOverlay(ctx, overlay_layout);
             const bool needs_screen_overlay_frame =
                 has_viewport_overlay_panels || has_python_overlay_hooks || has_overlay_popups ||
                 (floating_panel_cursor_hidden_ && !vulkan_gui_);
@@ -6952,13 +6896,7 @@ namespace lfs::vis::gui {
                 }
             };
 
-            if (overlay_renderer && needs_screen_overlay_frame) {
-                const python::ScopedOverlayDrawContext overlay_context(
-                    {.renderer = overlay_renderer, .view = view_id.value, .frame_input = &sdl_input, .viewport_bounds = std::array<float, 4>{target.pos.x, target.pos.y, target.size.x, target.size.y}});
-                draw_screen_overlay_content();
-            } else {
-                draw_screen_overlay_content();
-            }
+            draw_screen_overlay_content();
 
             view_overlay_commands_[view_id.value] = consumeLineRendererCommands();
         }
@@ -6992,7 +6930,7 @@ namespace lfs::vis::gui {
         if (!ui_hidden_) {
             LOG_TIMER_THRESHOLD("gui_render.status_bar_and_StatusBar", 0.10);
             const float status_bar_height =
-                PanelLayoutManager::STATUS_BAR_HEIGHT * lfs::python::get_shared_dpi_scale();
+                kStatusBarHeight * lfs::python::get_shared_dpi_scale();
             const float status_bar_x = screen.work_pos.x;
             const float status_bar_y = screen.work_pos.y + screen.work_size.y;
             const float status_bar_w = screen.work_size.x;
@@ -7181,7 +7119,7 @@ namespace lfs::vis::gui {
             if (menu_bar_) {
                 LOG_TIMER_THRESHOLD("gui_render.menu_context_modal_render.menu_bar", 0.25);
                 rml_menu_bar_.setUiHidden(ui_hidden_);
-                rml_menu_bar_.setViewportRightEdge(menu_toolbar_right_edge_ - panel_input.screen_x);
+                rml_menu_bar_.setViewportRightEdge(panel_input.screen_w);
                 rml_menu_bar_.draw(panel_input.screen_w, panel_input.screen_h);
             }
             if (startup_overlay_.isVisible()) {
@@ -7840,18 +7778,6 @@ namespace lfs::vis::gui {
         return viewport_layout_.size;
     }
 
-    glm::vec2 GuiManager::getSceneRenderViewportPos() const {
-        return ui_visibility_target_ready_ && !ui_visibility_layout_committed_
-                   ? ui_visibility_target_layout_.pos
-                   : viewport_layout_.pos;
-    }
-
-    glm::vec2 GuiManager::getSceneRenderViewportSize() const {
-        return ui_visibility_target_ready_ && !ui_visibility_layout_committed_
-                   ? ui_visibility_target_layout_.size
-                   : viewport_layout_.size;
-    }
-
     void GuiManager::commitUiVisibilityTransitionIfFrameReady(const bool frame_ready) {
         if (!frame_ready || !ui_visibility_resize_active_ ||
             !ui_visibility_target_ready_ || ui_visibility_layout_committed_) {
@@ -7873,10 +7799,6 @@ namespace lfs::vis::gui {
             LOG_WARN("UI visibility transition timed out before a matching viewport frame; committed the requested layout and retained the pending scene render: ui_hidden={}",
                      ui_hidden_);
         }
-    }
-
-    bool GuiManager::isViewportFocused() const {
-        return viewport_layout_.has_focus;
     }
 
     screen::AreaId GuiManager::viewAt(const float x, const float y) const {
@@ -8306,7 +8228,7 @@ namespace lfs::vis::gui {
         };
         window_states_["python_console"] =
             sync(screen::editors::kConsole, window_states_["python_console"], console_flag_seen_);
-        panel_layout_.setShowSequencer(sync("native.sequencer", panel_layout_.isShowSequencer(), sequencer_flag_seen_));
+        setSequencerVisible(sync("native.sequencer", isSequencerVisible(), sequencer_flag_seen_));
     }
 
     void GuiManager::applyScreenCursor(const screen::GestureCursor cursor) {
@@ -8426,7 +8348,7 @@ namespace lfs::vis::gui {
         input.screen_h = window_h;
 
         const float dpi = lfs::python::get_shared_dpi_scale();
-        const float panel_h = work_h - PanelLayoutManager::STATUS_BAR_HEIGHT * dpi;
+        const float panel_h = work_h - kStatusBarHeight * dpi;
         if (panel_h <= 0.0f) {
             return;
         }
@@ -8589,10 +8511,10 @@ namespace lfs::vis::gui {
         return {
             .active_main_tab = screen_host_.properties().activeTab(),
             .ui_visible = !ui_hidden_,
-            .right_panel_visible = !ui_hidden_ && (screen_host_.isEditorVisible(screen::editors::kScene) ||
-                                                   screen_host_.isEditorVisible(screen::editors::kProperties)),
-            .bottom_dock_visible = !ui_hidden_,
-            .left_dock_visible = !ui_hidden_,
+            .properties_or_scene_visible = !ui_hidden_ && (screen_host_.isEditorVisible(screen::editors::kScene) ||
+                                                           screen_host_.isEditorVisible(screen::editors::kProperties)),
+            .bottom_editor_visible = !ui_hidden_,
+            .left_editor_visible = !ui_hidden_,
         };
     }
 
@@ -8701,7 +8623,7 @@ namespace lfs::vis::gui {
         if (const auto backup = paths->resetLayout(); !backup)
             return std::unexpected(lfs::format_for_developer(backup.error()));
 
-        panel_layout_.applyProjectState(PanelLayoutProjectState{});
+        setSequencerVisible(false);
         if (viewer_) {
             viewer_->screens().resetToDefault();
             if (auto* rendering = viewer_->getRenderingManager())

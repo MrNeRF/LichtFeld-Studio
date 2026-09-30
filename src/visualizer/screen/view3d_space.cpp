@@ -268,13 +268,6 @@ namespace lfs::vis::screen {
         }
     }
 
-    void leaveAxisView(View3DSpace& view) {
-        if (!view.auto_orthographic)
-            return;
-        view.auto_orthographic = false;
-        view.settings.orthographic = false;
-    }
-
     bool applyViewCommand(View3DSpace& view, const std::string_view command, const float viewport_height) {
         auto& s = view.settings;
         if (command.starts_with("display:")) {

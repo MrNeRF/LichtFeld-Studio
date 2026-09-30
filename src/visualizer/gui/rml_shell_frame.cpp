@@ -137,7 +137,6 @@ namespace lfs::vis::gui {
             .height = px(full_h),
             .menu_top = px(regions.menu.y - regions.screen.y),
             .menu_height = px(regions.menu.h),
-            .work_top = px(regions.menu.y + regions.menu.h - regions.screen.y),
             .status_height = px(regions.status.h),
         };
         const bool layout_changed = !has_layout_signature_ || !(layout == last_layout_signature_);

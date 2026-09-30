@@ -5,7 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
-#include "gui/panel_layout.hpp"
+#include "gui/gui_input.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 
@@ -182,7 +182,7 @@ namespace lfs::vis::gui {
         std::vector<MenuLabelView> menu_labels_;
         std::vector<MenuDropdownRootView> dropdown_items_;
         std::vector<MenuToolbarButtonView> camera_buttons_;
-        std::vector<MenuToolbarButtonView> projection_buttons_;
+        std::vector<MenuToolbarButtonView> snap_buttons_;
         std::array<std::string, 4> navigation_tooltips_;
         std::uint64_t navigation_tooltip_language_generation_ = 0;
         bool has_navigation_tooltip_language_generation_ = false;

@@ -202,7 +202,6 @@ namespace lfs::vis {
         void maybeInitializeDepthViewRange();
 
         // WASD processing with proper frame timing
-        void processWASDMovement();
 
         // Helpers
         bool isInViewport(double x, double y) const;

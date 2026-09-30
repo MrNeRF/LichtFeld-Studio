@@ -34,8 +34,8 @@ namespace lfs::vis::gui {
                 {"menu-camera-fpv", "set_camera_navigation_mode", "fpv"},
                 {"menu-camera-drone", "set_camera_navigation_mode", "drone"},
             };
-            bar.projection_buttons_ = {{"menu-view-snap", "toggle_camera_view_snap"}};
-            for (const auto* name : {"menu_camera_buttons", "menu_projection_buttons"})
+            bar.snap_buttons_ = {{"menu-view-snap", "toggle_camera_view_snap"}};
+            for (const auto* name : {"menu_camera_buttons", "menu_snap_buttons"})
                 bar.menu_model_.DirtyVariable(name);
         }
         static void attach(RmlMenuBar& bar, Rml::ElementDocument* doc, RmlUIManager& manager) {

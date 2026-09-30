@@ -89,4 +89,5 @@ namespace lfs::vis {
         std::vector<std::uint64_t> completions_;
         std::vector<std::size_t> transient_cells_;
     };
+
 } // namespace lfs::vis

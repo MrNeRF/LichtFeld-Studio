@@ -67,7 +67,6 @@ namespace lfs::vis {
         SceneManager* getSceneManager() const { return scene_manager; }
         // The active 3D view's camera.
         const Viewport& getViewport() const { return *views->activeView().viewport; }
-        [[nodiscard]] ViewTargets& getViews() const { return *views; }
         SDL_Window* getWindow() const { return window; }
         gui::GuiManager* getGuiManager() const { return gui_manager; }
         const ViewportBounds& getViewportBounds() const { return viewport_bounds_; }

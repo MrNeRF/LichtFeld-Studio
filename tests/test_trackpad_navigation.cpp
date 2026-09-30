@@ -12,7 +12,6 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "screen/screen_service.hpp"
-#include "single_view_targets.hpp"
 #include "visualizer/app_store.hpp"
 
 #include <SDL3/SDL_keyboard.h>

@@ -5,9 +5,6 @@
 #pragma once
 #include "rendering/view_source.hpp"
 
-#include "core/export.hpp"
-#include "gui/panel_registry.hpp"
-#include "gui/ui_context.hpp"
 #include "input/frame_input_buffer.hpp"
 #include <cstdint>
 #include <glm/glm.hpp>
@@ -16,16 +13,14 @@
 
 namespace lfs::vis::gui {
 
+    inline constexpr float kStatusBarHeight = 22.0f;
+
     struct ViewportLayout {
         ViewId view = kNoView;
         glm::vec2 pos{0, 0};
         glm::vec2 size{0, 0};
         bool has_focus = false;
     };
-
-    enum class CursorRequest : uint8_t { None,
-                                         ResizeEW,
-                                         ResizeNS };
 
     struct PanelInputState {
         float mouse_x = 0;
@@ -72,37 +67,6 @@ namespace lfs::vis::gui {
         glm::vec2 work_pos{0, 0};
         glm::vec2 work_size{0, 0};
         bool any_item_active = false;
-    };
-
-    struct PanelLayoutProjectState {
-        bool show_sequencer = false;
-        std::string active_tab_id;
-    };
-
-    class LFS_VIS_API PanelLayoutManager {
-    public:
-        PanelLayoutManager();
-
-        void loadState();
-        [[nodiscard]] PanelLayoutProjectState captureProjectState() const;
-        void applyProjectState(const PanelLayoutProjectState& state);
-
-        ViewportLayout computeViewportLayout(bool show_main_panel, bool ui_hidden,
-                                             bool python_console_visible,
-                                             const ScreenState& screen) const;
-
-        bool isResizingPanel() const { return false; }
-        bool isResizeInteractionActive() const { return false; }
-        CursorRequest getCursorRequest() const { return CursorRequest::None; }
-
-        bool isShowSequencer() const { return show_sequencer_; }
-        void setShowSequencer(bool v);
-
-        static constexpr float STATUS_BAR_HEIGHT = 22.0f;
-        static constexpr float PANEL_GAP = 2.0f;
-
-    private:
-        bool show_sequencer_ = false;
     };
 
 } // namespace lfs::vis::gui

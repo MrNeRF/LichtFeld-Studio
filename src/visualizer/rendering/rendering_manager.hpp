@@ -308,10 +308,6 @@ namespace lfs::vis {
             this->state().animation_state_.setOverlayAnimationActive(active);
         }
 
-        [[nodiscard]] float getSelectionFlashIntensity() const {
-            return this->state().animation_state_.selectionFlashIntensity();
-        }
-
         // Settings management
         void updateSettings(const RenderSettings& settings);
         void updateSettings(
@@ -326,7 +322,7 @@ namespace lfs::vis {
         // preparation. Rendering uses this feedback on the next frame so a failed
         // reconstruction pipeline never receives a reduced-resolution image.
         void reportSceneUpscalerRuntimeSelection(ViewId view, SceneUpscalerSelection selection);
-        [[nodiscard]] SceneUpscalerSelection sceneUpscalerRuntimeSelection() const;
+        [[nodiscard]] SceneUpscalerSelection sceneUpscalerRuntimeSelection(ViewId view = kNoView) const;
 
         // Entering computes ortho_scale so the view at the pivot matches the current
         // lens. Leaving ortho keeps the focal length the user set.
@@ -342,7 +338,7 @@ namespace lfs::vis {
         [[nodiscard]] bool isSplitViewActive() const;
         [[nodiscard]] bool isGTComparisonActive() const;
         [[nodiscard]] bool isPLYComparisonActive() const;
-        [[nodiscard]] bool depthWindowDragPreview() const;
+        [[nodiscard]] bool depthWindowDragPreview(ViewId view = kNoView) const;
         void beginDepthWindowDrag(ViewId view, uint64_t& out_drag_token);
         void endDepthWindowDrag(ViewId view, uint64_t drag_token);
         void beginDepthWindowPreview(ViewId view);
@@ -413,13 +409,13 @@ namespace lfs::vis {
             }
         };
         [[nodiscard]] std::optional<MutableViewerPanelInfo> resolveViewerPanel(
-            ViewId view, Viewport& primary_viewport,
+            ViewId view, Viewport& viewport,
             const glm::vec2& viewport_pos,
             const glm::vec2& viewport_size,
             std::optional<glm::vec2> screen_point = std::nullopt,
             std::optional<SplitViewPanelId> panel_override = std::nullopt);
         [[nodiscard]] std::optional<ViewerPanelInfo> resolveViewerPanel(
-            ViewId view, const Viewport& primary_viewport,
+            ViewId view, const Viewport& viewport,
             const glm::vec2& viewport_pos,
             const glm::vec2& viewport_size,
             std::optional<glm::vec2> screen_point = std::nullopt,
@@ -533,9 +529,6 @@ namespace lfs::vis {
                             bool track_cursor = false);
         void clearRectPreview();
         [[nodiscard]] bool isRectPreviewActive() const { return this->state().viewport_overlay_service_.isRectPreviewActive(); }
-        [[nodiscard]] std::optional<SplitViewPanelId> getRectPreviewPanel() const {
-            return this->state().viewport_overlay_service_.rectPanel();
-        }
         void getRectPreview(float& x0, float& y0, float& x1, float& y1, bool& add_mode) const {
             x0 = this->state().viewport_overlay_service_.rectX0();
             y0 = this->state().viewport_overlay_service_.rectY0();
@@ -556,9 +549,6 @@ namespace lfs::vis {
                                          std::optional<SplitViewPanelId> panel = std::nullopt);
         void clearPolygonPreview();
         [[nodiscard]] bool isPolygonPreviewActive() const { return this->state().viewport_overlay_service_.isPolygonPreviewActive(); }
-        [[nodiscard]] std::optional<SplitViewPanelId> getPolygonPreviewPanel() const {
-            return this->state().viewport_overlay_service_.polygonPanel();
-        }
         [[nodiscard]] const std::vector<std::pair<float, float>>& getPolygonPoints() const {
             return this->state().viewport_overlay_service_.polygonPoints();
         }
@@ -577,9 +567,6 @@ namespace lfs::vis {
                              bool track_cursor = false);
         void clearLassoPreview();
         [[nodiscard]] bool isLassoPreviewActive() const { return this->state().viewport_overlay_service_.isLassoPreviewActive(); }
-        [[nodiscard]] std::optional<SplitViewPanelId> getLassoPreviewPanel() const {
-            return this->state().viewport_overlay_service_.lassoPanel();
-        }
         [[nodiscard]] const std::vector<std::pair<float, float>>& getLassoPoints() const {
             return this->state().viewport_overlay_service_.lassoPoints();
         }
@@ -591,17 +578,13 @@ namespace lfs::vis {
         // Vulkan mesh frame — populated by `renderVulkanFrame` when there are meshes in
         // the scene, consumed by gui_manager to feed `vulkan_viewport_pass.mesh_items`.
 
-        void setVulkanMeshFrame(VulkanMeshFrame frame) {
-            std::lock_guard lock(this->state().vulkan_mesh_frame_mutex_);
-            this->state().vulkan_mesh_frame_ = std::move(frame);
+        void setVulkanMeshFrame(ViewRenderState& view, VulkanMeshFrame frame) {
+            std::lock_guard lock(view.vulkan_mesh_frame_mutex_);
+            view.vulkan_mesh_frame_ = std::move(frame);
         }
-        [[nodiscard]] VulkanMeshFrame getVulkanMeshFrame() const {
-            std::lock_guard lock(this->state().vulkan_mesh_frame_mutex_);
-            return this->state().vulkan_mesh_frame_;
-        }
-        void clearVulkanMeshFrame() {
-            std::lock_guard lock(this->state().vulkan_mesh_frame_mutex_);
-            this->state().vulkan_mesh_frame_ = {};
+        void clearVulkanMeshFrame(ViewRenderState& view) {
+            std::lock_guard lock(view.vulkan_mesh_frame_mutex_);
+            view.vulkan_mesh_frame_ = {};
         }
 
         // Preview selection
@@ -704,8 +687,6 @@ namespace lfs::vis {
         std::uint64_t screen_epoch_ = 0;
         std::uint64_t view_lifetime_epoch_ = 0;
         mutable std::unordered_map<ViewId, std::pair<uint64_t, uint64_t>> depth_window_epochs_;
-        static thread_local RenderingManager* rendering_owner_;
-        static thread_local ViewRenderState* rendering_view_;
         enum class PreviewImageReadback {
             FloatRgb,
             UInt8Rgb,
@@ -721,7 +702,7 @@ namespace lfs::vis {
         [[nodiscard]] static PreviewImageReadbackConfig previewImageReadbackConfig(
             PreviewImageReadback readback,
             bool has_background_color_override);
-        void clearVulkanViewportImageState(glm::ivec2 size = {0, 0},
+        void clearVulkanViewportImageState(ViewRenderState& view, glm::ivec2 size = {0, 0},
                                            bool flip_y = false,
                                            glm::ivec2 alloc_size = {0, 0});
         [[nodiscard]] float exportRasterizationScale(int target_height, int reference_height) const;
@@ -837,17 +818,16 @@ namespace lfs::vis {
         static constexpr auto GT_COMPARISON_IMAGE_RETRY_COOLDOWN = std::chrono::seconds(2);
 
         void applySplitModeChange(const SplitViewService::ModeChangeResult& result);
-        void queueCameraMetricsRefreshIfStale(SceneManager* scene_manager);
+        void queueCameraMetricsRefreshIfStale(ViewId view, SceneManager* scene_manager);
         void invalidateCameraMetricsRequests(bool clear_latest = false);
-        void requestRenderFollowUp();
-        void requestTemporalFollowUp();
-        void queueSharedScratchRetry(DirtyMask retry_dirty);
+        void requestViewFollowUp(ViewRenderState& view, DirtyMask flags);
+        void queueSharedScratchRetry(ViewRenderState& view, DirtyMask retry_dirty);
         void notifyAsyncLodResultsReady();
         void cameraMetricsWorkerLoop(std::stop_token stop_token);
         [[nodiscard]] GTComparisonImageLookup getOrQueueGTComparisonImage(
             GTComparisonImageJobRequest request);
         void queueGTComparisonImagePrefetch(GTComparisonImageJobRequest request);
-        void invalidateGTComparisonImageCache();
+        void invalidateGTComparisonImageCache(ViewRenderState& view);
         void insertGTComparisonImageCacheEntry(
             const GTComparisonImageJobRequest& request,
             std::shared_ptr<lfs::core::Tensor> image,
@@ -1004,7 +984,6 @@ namespace lfs::vis {
 
         friend class RenderingManagerEventsTest_SceneClearedResetsFrustumLoaderSyncCache_Test;
         friend class SceneManager;
-        friend class ViewRenderStateTestAccess;
     };
 
 } // namespace lfs::vis

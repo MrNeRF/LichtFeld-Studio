@@ -7,7 +7,7 @@
 #include "core/export.hpp"
 #include "core/scene.hpp"
 #include "gui/gizmo_transform.hpp"
-#include "gui/panel_layout.hpp"
+#include "gui/gui_input.hpp"
 #include "gui/pie_menu.hpp"
 #include "gui/ui_context.hpp"
 #include "rendering/rendering_types.hpp"

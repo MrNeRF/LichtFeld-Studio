@@ -321,8 +321,7 @@ namespace lfs::vis {
 
     } // namespace
 
-    std::optional<SplitViewCompositionPlan>
-    buildSplitViewCompositionPlan(
+    std::optional<SplitViewCompositionPlan> buildSplitViewCompositionPlan(
         const FrameContext& ctx,
         const FrameResources& res) {
         switch (ctx.settings.split_view_mode) {

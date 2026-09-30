@@ -129,7 +129,7 @@ namespace lfs::vis {
             // Coordinate space of `pixel`. When positive, the renderer maps the
             // sample into the actual output image size for the selected slot.
             glm::ivec2 source_size{0, 0};
-            RenderTargetId output_slot{};
+            RenderTargetId target{};
         };
 
         LFS_VIS_API VksplatViewportRenderer();
@@ -146,14 +146,14 @@ namespace lfs::vis {
             const lfs::core::SplatData& splat_data,
             const lfs::rendering::ViewportRenderRequest& request,
             bool force_input_upload,
-            RenderTargetId output_slot,
+            RenderTargetId target,
             bool synchronize_input_upload = false,
             bool deterministic_export = false);
         [[nodiscard]] std::expected<RenderResult, std::string> rerenderSelectionOverlay(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
             const lfs::rendering::ViewportRenderRequest& request,
-            RenderTargetId output_slot,
+            RenderTargetId target,
             bool synchronize_input_read = false);
 #if LFS_BUILD_TRAINER && LFS_HAS_CUDA
         [[nodiscard]] cudaExternalSemaphore_t renderCompleteFence() const {
@@ -200,26 +200,26 @@ namespace lfs::vis {
 
         [[nodiscard]] bool nextOutputImagesNeedResize(
             glm::ivec2 size,
-            RenderTargetId output_slot) const;
+            RenderTargetId target) const;
         [[nodiscard]] LFS_VIS_API std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
             VulkanContext& context,
-            RenderTargetId output_slot) const;
+            RenderTargetId target) const;
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgba(
             VulkanContext& context,
-            RenderTargetId output_slot) const;
+            RenderTargetId target) const;
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgb8(
             VulkanContext& context,
-            RenderTargetId output_slot) const;
+            RenderTargetId target) const;
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgba8(
             VulkanContext& context,
-            RenderTargetId output_slot) const;
+            RenderTargetId target) const;
         // Reads the most recent render's raw per-pixel linear depth (the
         // final_pixel_depth buffer every chain writes) into an [H,W] CPU float32
         // tensor. Valid only directly after a render into this slot, before the
         // next render reuses the pixel_depth scratch.
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readPreviewDepth(
             VulkanContext& context,
-            RenderTargetId output_slot) const;
+            RenderTargetId target) const;
         // Forces the non-batched per-pixel rasterizer chain (not the macro-tile
         // HiGS chain, whose depth is one median per macro-tile, nor the batched
         // compose, which covers only a subset of pixels) so readPreviewDepth gets
@@ -232,7 +232,7 @@ namespace lfs::vis {
         }
         [[nodiscard]] std::expected<void, std::string> readOutputImageIntoCpuHwc(
             VulkanContext& context,
-            RenderTargetId output_slot,
+            RenderTargetId target,
             lfs::core::Tensor& destination,
             int destination_x,
             int destination_y) const;
@@ -249,13 +249,13 @@ namespace lfs::vis {
         };
         [[nodiscard]] std::expected<std::uint64_t, std::string> submitReadOutputImageIntoCpuHwcTicket(
             VulkanContext& context,
-            RenderTargetId output_slot,
+            RenderTargetId target,
             lfs::core::Tensor& destination,
             int destination_x,
             int destination_y) const;
         [[nodiscard]] std::expected<std::uint64_t, std::string> submitReadOutputDepthImageTicket(
             VulkanContext& context,
-            RenderTargetId output_slot,
+            RenderTargetId target,
             lfs::core::Tensor& destination) const;
         [[nodiscard]] std::expected<ReadbackTicketStatus, std::string> pollReadbackTicket(
             std::uint64_t ticket) const;
@@ -393,11 +393,11 @@ namespace lfs::vis {
             const lfs::rendering::ViewportRenderRequest& request,
             std::size_t num_splats,
             std::size_t ring_slot,
-            RenderTargetId output_slot);
+            RenderTargetId target);
         [[nodiscard]] lfs::Status ensureOutputImages(
             VulkanContext& context,
             glm::ivec2 size,
-            RenderTargetId output_slot,
+            RenderTargetId target,
             std::size_t ring_slot);
         [[nodiscard]] std::expected<void, std::string> ensureComposePipeline(VulkanContext& context);
         [[nodiscard]] lfs::Status composePixelState(
@@ -405,7 +405,7 @@ namespace lfs::vis {
             VkCommandBuffer cmd,
             const VulkanGSRendererUniforms& uniforms,
             const glm::vec3& background,
-            RenderTargetId output_slot,
+            RenderTargetId target,
             std::size_t output_ring_slot,
             bool transparent_background,
             bool depth_view,
@@ -416,7 +416,6 @@ namespace lfs::vis {
             std::size_t ring_slot,
             std::string_view reason);
         [[nodiscard]] std::size_t acquireRingSlot(RenderTargetId target = {});
-        [[nodiscard]] std::size_t latestOutputRingSlot(RenderTargetId output_slot) const;
 
         static constexpr std::size_t kInputRegionCount = 7;
         static constexpr std::size_t kOverlayRegionCount = 7;
@@ -453,7 +452,7 @@ namespace lfs::vis {
             // Fingerprint of emphasized_node_mask currently staged in the
             // interop buffer.
             std::vector<bool> cached_emphasized_node_mask;
-            RenderTargetId cached_node_mask_output_slot{};
+            RenderTargetId cached_node_mask_target{};
             bool node_mask_uploaded = false;
             std::vector<float> overlay_params_upload_cpu;
             // Output-byte fingerprint of the overlay-params table currently
@@ -589,7 +588,7 @@ namespace lfs::vis {
             std::string_view fingerprint) const;
         // Ring-cell pin: block OutputSlotRing reuse until readbacks sourcing the cell retire.
         [[nodiscard]] lfs::Status waitReadbackPinsForFrameRingCell(std::size_t ring_slot) const;
-        [[nodiscard]] lfs::Result<glm::ivec2> latestOutputImageSize(RenderTargetId output_slot) const;
+        [[nodiscard]] lfs::Result<glm::ivec2> latestOutputImageSize(RenderTargetId target) const;
 
         VulkanContext* context_ = nullptr;
         bool initialized_ = false;

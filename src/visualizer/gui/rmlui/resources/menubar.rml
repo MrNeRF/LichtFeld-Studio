@@ -26,7 +26,7 @@
             </div>
             <div class="menu-toolbar-separator"></div>
             <div class="icon-btn menu-toolbar-btn"
-                 data-for="button : menu_projection_buttons"
+                 data-for="button : menu_snap_buttons"
                  data-attr-id="button.button_id"
                  data-class-selected="button.selected"
                  data-attr-data-action="button.action"

@@ -1259,7 +1259,7 @@ def test_histogram_owned_modifier_selection_survives_two_follow_up_updates(histo
     assert panel._histogram_overlay_bounds == (5, 5)
 
 
-def test_histogram_panel_can_toggle_between_bottom_dock_and_floating(histogram_panel_module, lf):
+def test_histogram_panel_can_toggle_between_area_and_floating(histogram_panel_module, lf):
     panel = histogram_panel_module.HistogramPanel()
     state = {"space": lf.ui.PanelSpace.BOTTOM_DOCK}
 

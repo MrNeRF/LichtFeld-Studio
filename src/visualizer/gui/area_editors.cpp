@@ -48,7 +48,7 @@ namespace lfs::vis::gui {
     } // namespace
 
     bool isPanelEditorSpace(const PanelSpace space) {
-        return space == PanelSpace::BottomDock || space == PanelSpace::LeftDock;
+        return space == PanelSpace::BottomArea || space == PanelSpace::LeftArea;
     }
 
     // ---- 3D viewport -------------------------------------------------------
@@ -214,17 +214,10 @@ namespace lfs::vis::gui {
         return items;
     }
 
-    void View3DEditor::headerAction(const AreaFrame& area, screen::Screen& screen, const std::string_view action,
+    void View3DEditor::headerAction(const AreaFrame& area, screen::Screen&, const std::string_view action,
                                     float, float) {
-        auto* view = screen.view(area.id);
-        if (!view)
-            return;
-        if (screen::applyViewCommand(*view, action, area.content.h)) {
-            if (changed_)
-                changed_(area.id);
-        } else if (command_) {
+        if (command_)
             command_(area.id, action);
-        }
     }
 
     // ---- Properties ------------------------------------------------------
@@ -423,7 +416,7 @@ namespace lfs::vis::gui {
 
     void installPanelEditorTypes(screen::EditorTypeRegistry& registry) {
         const auto make = [](const PanelDetails& details) {
-            const bool left = details.space == PanelSpace::LeftDock;
+            const bool left = details.space == PanelSpace::LeftArea;
             screen::EditorType type;
             type.id = details.id;
             type.label = details.label;
@@ -452,7 +445,7 @@ namespace lfs::vis::gui {
                 std::vector<screen::EditorType> out;
                 auto& reg = PanelRegistry::instance();
                 std::vector<PanelDetails> panels;
-                for (const PanelSpace space : {PanelSpace::LeftDock, PanelSpace::BottomDock}) {
+                for (const PanelSpace space : {PanelSpace::LeftArea, PanelSpace::BottomArea}) {
                     for (const auto& id : reg.get_panel_names(space)) {
                         if (auto details = reg.get_panel(id); details && details->parent_id.empty())
                             panels.push_back(std::move(*details));

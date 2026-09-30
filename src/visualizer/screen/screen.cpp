@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "screen/screen.hpp"
+#include "screen/json_id.hpp"
 #include "screen/view3d_space.hpp"
 
 #include <algorithm>
@@ -15,17 +16,6 @@ namespace lfs::vis::screen {
     namespace {
         constexpr int kFormatVersion = 1;
 
-        // Chapter merge dump/parse turns uint32 ids into signed JSON integers.
-        bool readAreaId(const nlohmann::json& json, AreaId& out) {
-            if (!json.is_number_integer() && !json.is_number_unsigned())
-                return false;
-            const auto raw = json.get<std::int64_t>();
-            // The largest id would leave no room to allocate another.
-            if (raw <= 0 || raw >= static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max()))
-                return false;
-            out = AreaId{static_cast<std::uint32_t>(raw)};
-            return true;
-        }
     } // namespace
 
     SpaceData* Area::space(const std::string_view editor_id) const {
@@ -437,7 +427,7 @@ namespace lfs::vis::screen {
             const auto id_it = item.find("id");
             const auto editor_it = item.find("editor");
             AreaId id;
-            if (id_it == item.end() || !readAreaId(*id_it, id) || editor_it == item.end() ||
+            if (id_it == item.end() || !detail::readId(*id_it, id.value, false) || editor_it == item.end() ||
                 !editor_it->is_string() || editor_it->get<std::string>().empty())
                 return std::nullopt;
             if (!screen.layout_.contains(id) || screen.areas_.contains(id))
@@ -474,13 +464,13 @@ namespace lfs::vis::screen {
         screen.next_area_ = largest + 1;
         if (const auto active_it = json.find("active_view"); active_it != json.end()) {
             AreaId active;
-            if (!readAreaId(*active_it, active))
+            if (!detail::readId(*active_it, active.value, false))
                 return std::nullopt;
             screen.active_view_ = active;
         }
         if (const auto max_it = json.find("maximized"); max_it != json.end() && !max_it->is_null()) {
             AreaId maximized;
-            if (!readAreaId(*max_it, maximized))
+            if (!detail::readId(*max_it, maximized.value, false))
                 return std::nullopt;
             screen.maximized_ = maximized;
         }

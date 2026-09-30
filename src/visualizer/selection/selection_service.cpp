@@ -1820,10 +1820,6 @@ namespace lfs::vis {
         testing_hovered_gaussian_id_ = hovered_gaussian_id;
     }
 
-    void SelectionService::setTestingPanel(const SplitViewPanelId panel) {
-        testing_panel_ = panel;
-    }
-
     bool SelectionService::hasTestingScreenPositionsForCamera(const int camera_index) const {
         if (camera_index < 0) {
             return false;
@@ -2161,7 +2157,7 @@ namespace lfs::vis {
 
         if (testing_viewport_ && testing_viewport_->valid()) {
             static Viewport testing_viewport_source(1, 1);
-            context.panel = testing_panel_.value_or(SplitViewPanelId::Left);
+            context.panel = SplitViewPanelId::Left;
             context.info = *testing_viewport_;
             context.viewport = &testing_viewport_source;
             return context;

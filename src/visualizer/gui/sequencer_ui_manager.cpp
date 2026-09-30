@@ -505,7 +505,7 @@ namespace lfs::vis::gui {
                                     const float panel_width, const float panel_height,
                                     const PanelInputState& panel_input) {
         const auto* const gui = viewer_->getGuiManager();
-        const bool sequencer_enabled = gui && gui->panelLayout().isShowSequencer();
+        const bool sequencer_enabled = gui && gui->isSequencerVisible();
         if (!sequencer_enabled) {
             setSequencerEnabled(false);
             return;
@@ -1341,7 +1341,7 @@ namespace lfs::vis::gui {
         }
 
         if (panel_->consumeDockToggleRequest()) {
-            const PanelSpace target = panel_->isFloating() ? PanelSpace::BottomDock : PanelSpace::Floating;
+            const PanelSpace target = panel_->isFloating() ? PanelSpace::BottomArea : PanelSpace::Floating;
             if (!PanelRegistry::instance().set_panel_space("native.sequencer", target)) {
                 LOG_ERROR("Failed to move sequencer panel to {}",
                           target == PanelSpace::Floating ? "floating" : "bottom dock");
@@ -1350,7 +1350,7 @@ namespace lfs::vis::gui {
 
         if (panel_->consumeClosePanelRequest()) {
             if (auto* const gui = viewer_->getGuiManager())
-                gui->panelLayout().setShowSequencer(false);
+                gui->setSequencerVisible(false);
             setSequencerEnabled(false);
         }
 
@@ -1516,7 +1516,6 @@ namespace lfs::vis::gui {
         const glm::ivec2 vp_size(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
 
         struct CameraPathPanel {
-            SplitViewPanelId panel_id = SplitViewPanelId::Left;
             const Viewport* viewport = nullptr;
             glm::vec2 projection_pos{0.0f};
             glm::vec2 projection_size{0.0f};
@@ -1567,7 +1566,6 @@ namespace lfs::vis::gui {
 
             for (size_t i = 0; i < clip_rects.size(); ++i) {
                 panels.push_back(CameraPathPanel{
-                    .panel_id = (i == 0) ? SplitViewPanelId::Left : SplitViewPanelId::Right,
                     .viewport = &vp,
                     .projection_pos = viewport.pos,
                     .projection_size = viewport.size,

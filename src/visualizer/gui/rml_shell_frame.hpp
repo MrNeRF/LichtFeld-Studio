@@ -46,7 +46,6 @@ namespace lfs::vis::gui {
             int height = 0;
             int menu_top = 0;
             int menu_height = 0;
-            int work_top = 0;
             int status_height = 0;
 
             bool operator==(const LayoutSignature&) const = default;

@@ -5,7 +5,7 @@
 #pragma once
 
 #include "gui/area_editors.hpp"
-#include "gui/panel_layout.hpp"
+#include "gui/gui_input.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "screen/area_gestures.hpp"
@@ -68,8 +68,6 @@ namespace lfs::vis::gui {
             screen::ScreenService* screens = nullptr;
             RmlUIManager* rml = nullptr;
             GlobalContextMenu* context_menu = nullptr;
-            // A 3D view's settings or camera changed outside the renderer.
-            std::function<void(screen::AreaId)> view_changed;
             // The screen's structure changed (areas, editors, active view).
             std::function<void()> screen_changed;
             // Runs a view command such as "view.frame_all" on a 3D view.
@@ -116,7 +114,6 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool blocksPress(float x, float y) const;
         [[nodiscard]] bool cornerGestureAt(float x, float y) const;
         [[nodiscard]] bool gestureActive() const { return gestures_.active(); }
-        [[nodiscard]] bool wantsKeyboard() const { return false; }
         [[nodiscard]] bool needsAnimationFrame() const;
         [[nodiscard]] std::string animationDemandDescription() const;
         [[nodiscard]] screen::GestureCursor cursor() const { return cursor_; }
@@ -142,7 +139,6 @@ namespace lfs::vis::gui {
         AreaEditor& editorFor(std::string_view editor);
         void syncPanelEditors();
         void rebuildChrome();
-        void syncChromeGeometry();
         void updateOverlay();
         void handleAction(int area, const std::string& action, float x, float y);
         void applyGesture(const screen::GestureCommand& command);
@@ -164,7 +160,6 @@ namespace lfs::vis::gui {
         screen::AreaId hovered_area_;
         screen::AreaId live_capture_area_;
 
-        View3DEditor* view3d_editor_ = nullptr;
         std::unique_ptr<View3DEditor> view3d_;
         PropertiesEditor properties_;
         ScenePanelEditor scene_;

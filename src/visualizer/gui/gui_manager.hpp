@@ -12,7 +12,7 @@
 #include "gui/gizmo_manager.hpp"
 #include "gui/global_context_menu.hpp"
 #include "gui/gui_error_consumer.hpp"
-#include "gui/panel_layout.hpp"
+#include "gui/gui_input.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/panels/menu_bar.hpp"
 #include "gui/perf_sampler.hpp"
@@ -119,7 +119,6 @@ namespace lfs::vis {
             // Called after a bounded main-thread upload batch. The next frame
             // is requested immediately while decoded thumbnails remain ready.
             void notifyCameraThumbnailBatchReady();
-            void setRmlResizeDeferring(bool defer) { rmlui_manager_.setResizeDeferring(defer); }
             void ensureCjkFontsLoaded() { rmlui_manager_.ensureCjkFontsLoaded(); }
 
             // Sub-manager access
@@ -133,8 +132,8 @@ namespace lfs::vis {
             void enqueueToast(ToastRequest request);
             [[nodiscard]] GizmoManager& gizmo() { return gizmo_manager_; }
             [[nodiscard]] const GizmoManager& gizmo() const { return gizmo_manager_; }
-            [[nodiscard]] PanelLayoutManager& panelLayout() { return panel_layout_; }
-            [[nodiscard]] const PanelLayoutManager& panelLayout() const { return panel_layout_; }
+            [[nodiscard]] bool isSequencerVisible() const { return sequencer_visible_; }
+            void setSequencerVisible(bool visible);
             [[nodiscard]] GlobalContextMenu& globalContextMenu() { return *global_context_menu_; }
             [[nodiscard]] ScreenHost& screenHost() { return screen_host_; }
             [[nodiscard]] const ScreenHost& screenHost() const { return screen_host_; }
@@ -155,10 +154,7 @@ namespace lfs::vis {
             // Viewport region access
             glm::vec2 getViewportPos() const;
             glm::vec2 getViewportSize() const;
-            glm::vec2 getSceneRenderViewportPos() const;
-            glm::vec2 getSceneRenderViewportSize() const;
             void commitUiVisibilityTransitionIfFrameReady(bool frame_ready);
-            bool isViewportFocused() const;
             [[nodiscard]] bool isUiHidden() const { return ui_hidden_; }
             [[nodiscard]] ViewportLayout viewportLayout() const { return viewport_layout_; }
             [[nodiscard]] screen::AreaId viewAt(float x, float y) const;
@@ -278,7 +274,6 @@ namespace lfs::vis {
             void applyDefaultStyle();
             void initMenuBar();
             void registerNativePanels();
-            void hideBottomDockPanel(const std::string& id);
             void updateInputOverrides(const PanelInputState& input, bool mouse_in_viewport);
             void applyUiScale(float scale);
             void rebuildFonts(float scale);
@@ -413,9 +408,8 @@ namespace lfs::vis {
             std::uint64_t synced_menu_language_generation_ = 0;
 
             // Panel layout and viewport
-            PanelLayoutManager panel_layout_;
+            bool sequencer_visible_ = false;
             ViewportLayout viewport_layout_;
-            float menu_toolbar_right_edge_ = 0.0f;
             bool force_exit_ = false;
             bool exit_confirmation_requested_ = false;
             bool exit_confirmation_dismissed_ = false;

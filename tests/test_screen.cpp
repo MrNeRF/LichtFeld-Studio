@@ -219,7 +219,7 @@ namespace lfs::vis::screen {
     TEST_F(ScreenTest, ViewHeaderCollapsesAtStableDpThresholds) {
         Screen screen = Screen::makeDefault(registry);
         const auto view = screen.activeView();
-        gui::View3DEditor editor({}, {});
+        gui::View3DEditor editor({});
         const auto header_for_width = [&](const float width) {
             gui::AreaFrame area{.id = view,
                                 .rect = {0.0f, 0.0f, width, 500.0f},

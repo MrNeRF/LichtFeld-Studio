@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "screen/screen_layout.hpp"
+#include "screen/json_id.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -20,19 +21,6 @@ namespace lfs::vis::screen {
 
         constexpr float kMinWeight = 1e-4f;
         constexpr int kMaxJsonDepth = 32;
-
-        bool readUint(const nlohmann::json& json, std::uint32_t& out, const bool allow_zero) {
-            if (!json.is_number_integer() && !json.is_number_unsigned())
-                return false;
-            const auto raw = json.get<std::int64_t>();
-            // The largest id would leave no room to allocate another.
-            if (raw < 0 || raw >= static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max()))
-                return false;
-            if (!allow_zero && raw == 0)
-                return false;
-            out = static_cast<std::uint32_t>(raw);
-            return true;
-        }
 
         Node makeLeaf(const AreaId area) {
             Node node;
@@ -282,7 +270,7 @@ namespace lfs::vis::screen {
                 return std::nullopt;
             if (const auto it = json.find("area"); it != json.end()) {
                 std::uint32_t id = 0;
-                if (!readUint(*it, id, false))
+                if (!detail::readId(*it, id, false))
                     return std::nullopt;
                 return makeLeaf(AreaId{id});
             }
@@ -293,7 +281,7 @@ namespace lfs::vis::screen {
             if (split == json.end() || axis == json.end() || weights == json.end() || children == json.end())
                 return std::nullopt;
             std::uint32_t split_id = 0;
-            if (!readUint(*split, split_id, true) || !axis->is_string() || !weights->is_array() ||
+            if (!detail::readId(*split, split_id, true) || !axis->is_string() || !weights->is_array() ||
                 !children->is_array())
                 return std::nullopt;
             Node node;

@@ -1938,15 +1938,15 @@ namespace lfs::vis {
 #endif
     }
 
-    bool VksplatViewportRenderer::releaseRenderTarget(const RenderTargetId output_slot) {
+    bool VksplatViewportRenderer::releaseRenderTarget(const RenderTargetId target) {
         std::unique_lock target_lock(target_mutex_, std::try_to_lock);
-        if (!target_lock || rendering_target_ == output_slot)
+        if (!target_lock || rendering_target_ == target)
             return false;
         std::lock_guard readback_lock(readback_mutex_);
         if (!context_)
-            return ring_.releaseRenderTarget(output_slot, {});
-        if (ring_.contains(output_slot)) {
-            const auto& column = ring_.table().at(output_slot);
+            return ring_.releaseRenderTarget(target, {});
+        if (ring_.contains(target)) {
+            const auto& column = ring_.table().at(target);
             retired_inputs_.push_back({column.base, last_submitted_render_value_});
             for (std::size_t i = 0; i < ReadbackTicketRing::kRingSize; ++i) {
                 const auto& ticket = readback_ring_.cell(i);
@@ -1955,11 +1955,11 @@ namespace lfs::vis {
                     readback_ring_.markFailed(i, "Render target released");
             }
         }
-        gpu_lod_feedback_.release(output_slot);
-        if (resident_raster_scratch_.target == output_slot)
+        gpu_lod_feedback_.release(target);
+        if (resident_raster_scratch_.target == target)
             resident_raster_scratch_ = {};
 
-        const RenderTargetId output_index = output_slot;
+        const RenderTargetId output_index = target;
         const std::uint64_t producer = last_submitted_render_value_;
         const std::uint64_t consumer = context_->lastFrameSubmitSerial() + (context_->hasActiveFrame() ? 1 : 0);
         return ring_.releaseRenderTarget(output_index, [&](OutputImageSlot& slot) {
@@ -4141,7 +4141,7 @@ namespace lfs::vis {
         const lfs::rendering::ViewportRenderRequest& request,
         const std::size_t num_splats,
         const std::size_t ring_slot,
-        const RenderTargetId output_slot) {
+        const RenderTargetId target) {
         if (num_splats == 0) {
             return std::unexpected("VkSplat overlay bindings cannot bind an empty model");
         }
@@ -4342,7 +4342,7 @@ namespace lfs::vis {
             // Node-mask uploads are keyed by the output slot and mask bytes.
             const bool node_mask_cache_hit =
                 !slot.node_mask_upload_cpu.empty() &&
-                slot.cached_node_mask_output_slot == output_slot &&
+                slot.cached_node_mask_target == target &&
                 slot.cached_emphasized_node_mask == forward_node_mask_source;
             if (!node_mask_cache_hit) {
                 LOG_TIMER("uploadOverlayBindings.prepare_sources.node_mask");
@@ -4350,7 +4350,7 @@ namespace lfs::vis {
                                  forward_node_mask_source,
                                  slot.region_bytes[OverlayNodeMask]);
                 slot.cached_emphasized_node_mask = forward_node_mask_source;
-                slot.cached_node_mask_output_slot = output_slot;
+                slot.cached_node_mask_target = target;
                 slot.node_mask_uploaded = false;
             }
             {
@@ -4803,22 +4803,18 @@ namespace lfs::vis {
         return cell;
     }
 
-    std::size_t VksplatViewportRenderer::latestOutputRingSlot(const RenderTargetId output_slot) const {
-        return ring_.latestRingSlot(output_slot);
-    }
-
     bool VksplatViewportRenderer::nextOutputImagesNeedResize(
         const glm::ivec2 size,
-        const RenderTargetId output_slot) const {
+        const RenderTargetId target) const {
         if (size.x <= 0 || size.y <= 0) {
             return false;
         }
         const int bucket_w = static_cast<int>(ceil64(static_cast<std::uint32_t>(size.x)));
         const int bucket_h = static_cast<int>(ceil64(static_cast<std::uint32_t>(size.y)));
         const glm::ivec2 bucket{bucket_w, bucket_h};
-        if (!ring_.contains(output_slot))
+        if (!ring_.contains(target))
             return false;
-        const auto& output_ring = ring_.table().at(output_slot).slots;
+        const auto& output_ring = ring_.table().at(target).slots;
         for (std::size_t ring_slot = 0; ring_slot < output_ring.size(); ++ring_slot) {
             const auto& slot = output_ring[ring_slot];
             const bool replacing_existing_output =
@@ -5271,17 +5267,17 @@ namespace lfs::vis {
     lfs::Status VksplatViewportRenderer::ensureOutputImages(
         VulkanContext& context,
         const glm::ivec2 size,
-        const RenderTargetId output_slot,
+        const RenderTargetId target,
         const std::size_t ring_slot) {
-        const RenderTargetId output_index = output_slot;
+        const RenderTargetId output_index = target;
         if (!output_index.valid() ||
             ring_slot >= ring_.submissionCount() || size.x <= 0 || size.y <= 0) {
             return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::InvalidArgument,
                 .domain = lfs::ErrorDomain::Rendering,
                 .user_message = std::format(
-                    "VkSplat output allocation requires valid slot/ring indices and positive dimensions (output_slot={}, output_index={}, output_slot_count={}, ring_slot={}, ring_size={}, requested_size={}x{}) ({}:{})",
-                    outputSlotDiagnosticName(output_slot),
+                    "VkSplat output allocation requires valid slot/ring indices and positive dimensions (target={}, output_index={}, output_slot_count={}, ring_slot={}, ring_size={}, requested_size={}x{}) ({}:{})",
+                    outputSlotDiagnosticName(target),
                     output_index.value,
                     ring_.table().size(),
                     ring_slot,
@@ -5372,7 +5368,7 @@ namespace lfs::vis {
 
         auto color = acquire_or_create(
             color_key,
-            std::format("{}.color.ring{}", outputSlotDiagnosticName(output_slot), ring_slot));
+            std::format("{}.color.ring{}", outputSlotDiagnosticName(target), ring_slot));
         if (!color) {
             return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::ResourceExhausted,
@@ -5383,7 +5379,7 @@ namespace lfs::vis {
         }
         auto depth = acquire_or_create(
             depth_key,
-            std::format("{}.depth.ring{}", outputSlotDiagnosticName(output_slot), ring_slot));
+            std::format("{}.depth.ring{}", outputSlotDiagnosticName(target), ring_slot));
         if (!depth) {
             const std::string error = context.lastError();
             // Color is live in the pool; release with trivial predicates so the
@@ -5408,32 +5404,32 @@ namespace lfs::vis {
                                     slot.image.image,
                                     "vksplat.output[{}].{}.color",
                                     ring_slot,
-                                    outputSlotDiagnosticName(output_slot));
+                                    outputSlotDiagnosticName(target));
         context.setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE_VIEW,
                                     slot.image.view,
                                     "vksplat.output[{}].{}.color.view",
                                     ring_slot,
-                                    outputSlotDiagnosticName(output_slot));
+                                    outputSlotDiagnosticName(target));
         context.setDebugObjectNamef(VK_OBJECT_TYPE_DEVICE_MEMORY,
                                     slot.image.memory,
                                     "vksplat.output[{}].{}.color.memory",
                                     ring_slot,
-                                    outputSlotDiagnosticName(output_slot));
+                                    outputSlotDiagnosticName(target));
         context.setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE,
                                     slot.depth_image.image,
                                     "vksplat.output[{}].{}.depth",
                                     ring_slot,
-                                    outputSlotDiagnosticName(output_slot));
+                                    outputSlotDiagnosticName(target));
         context.setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE_VIEW,
                                     slot.depth_image.view,
                                     "vksplat.output[{}].{}.depth.view",
                                     ring_slot,
-                                    outputSlotDiagnosticName(output_slot));
+                                    outputSlotDiagnosticName(target));
         context.setDebugObjectNamef(VK_OBJECT_TYPE_DEVICE_MEMORY,
                                     slot.depth_image.memory,
                                     "vksplat.output[{}].{}.depth.memory",
                                     ring_slot,
-                                    outputSlotDiagnosticName(output_slot));
+                                    outputSlotDiagnosticName(target));
         context.imageBarriers().registerImage(slot.image.image,
                                               slot.image_generation,
                                               VK_IMAGE_ASPECT_COLOR_BIT,
@@ -5572,7 +5568,7 @@ namespace lfs::vis {
         VkCommandBuffer cmd,
         const VulkanGSRendererUniforms& uniforms,
         const glm::vec3& background,
-        const RenderTargetId output_slot,
+        const RenderTargetId target,
         const std::size_t output_ring_slot,
         const bool transparent_background,
         const bool depth_view,
@@ -5587,16 +5583,16 @@ namespace lfs::vis {
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             }));
         }
-        const RenderTargetId output_index = output_slot;
+        const RenderTargetId output_index = target;
         if (cmd == VK_NULL_HANDLE || !output_index.valid() ||
             output_ring_slot >= ring_.submissionCount()) {
             return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
                 .code = lfs::ErrorCode::InvalidArgument,
                 .domain = lfs::ErrorDomain::Rendering,
                 .user_message = std::format(
-                    "VkSplat composition requires a command buffer and in-range output slot (command_buffer={:#x}, output_slot={}, output_index={}, output_slot_count={}, ring_slot={}, ring_size={}) ({}:{})",
+                    "VkSplat composition requires a command buffer and in-range output slot (command_buffer={:#x}, target={}, output_index={}, output_slot_count={}, ring_slot={}, ring_size={}) ({}:{})",
                     vkHandleValue(cmd),
-                    outputSlotDiagnosticName(output_slot),
+                    outputSlotDiagnosticName(target),
                     output_index.value,
                     ring_.table().size(),
                     output_ring_slot,
@@ -5613,8 +5609,8 @@ namespace lfs::vis {
                 .code = lfs::ErrorCode::FailedPrecondition,
                 .domain = lfs::ErrorDomain::Rendering,
                 .user_message = std::format(
-                    "VkSplat composition requires complete color/depth output images (output_slot={}, ring_slot={}, color_image={:#x}, color_view={:#x}, depth_image={:#x}, depth_view={:#x}, size={}x{}) ({}:{})",
-                    outputSlotDiagnosticName(output_slot),
+                    "VkSplat composition requires complete color/depth output images (target={}, ring_slot={}, color_image={:#x}, color_view={:#x}, depth_image={:#x}, depth_view={:#x}, size={}x{}) ({}:{})",
+                    outputSlotDiagnosticName(target),
                     output_ring_slot,
                     vkHandleValue(output.image.image),
                     vkHandleValue(output.image.view),
@@ -6462,7 +6458,7 @@ namespace lfs::vis {
     }
 
     lfs::Result<glm::ivec2> VksplatViewportRenderer::latestOutputImageSize(
-        const RenderTargetId output_slot) const {
+        const RenderTargetId target) const {
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
         if (!context_) {
             return lfs::make_error(lfs::ErrorInit{
@@ -6473,7 +6469,7 @@ namespace lfs::vis {
             });
         }
 
-        const auto& output = std::as_const(ring_).latestSlot(output_slot);
+        const auto& output = std::as_const(ring_).latestSlot(target);
         if (output.image.image == VK_NULL_HANDLE ||
             output.size.x <= 0 ||
             output.size.y <= 0) {
@@ -6496,8 +6492,8 @@ namespace lfs::vis {
     }
 
     std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
-    VksplatViewportRenderer::readOutputImage(VulkanContext& context, const RenderTargetId output_slot) const {
-        const auto size = latestOutputImageSize(output_slot);
+    VksplatViewportRenderer::readOutputImage(VulkanContext& context, const RenderTargetId target) const {
+        const auto size = latestOutputImageSize(target);
         if (!size) {
             return std::unexpected(legacyErrorString(size.error()));
         }
@@ -6510,7 +6506,7 @@ namespace lfs::vis {
             return std::unexpected("VkSplat output readback failed to allocate CPU float RGB tensor");
         }
 
-        auto ok = readOutputImageIntoCpuHwc(context, output_slot, tensor, 0, 0);
+        auto ok = readOutputImageIntoCpuHwc(context, target, tensor, 0, 0);
         if (!ok) {
             return std::unexpected(ok.error());
         }
@@ -6518,8 +6514,8 @@ namespace lfs::vis {
     }
 
     std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
-    VksplatViewportRenderer::readOutputImageRgba(VulkanContext& context, const RenderTargetId output_slot) const {
-        const auto size = latestOutputImageSize(output_slot);
+    VksplatViewportRenderer::readOutputImageRgba(VulkanContext& context, const RenderTargetId target) const {
+        const auto size = latestOutputImageSize(target);
         if (!size) {
             return std::unexpected(legacyErrorString(size.error()));
         }
@@ -6532,7 +6528,7 @@ namespace lfs::vis {
             return std::unexpected("VkSplat output readback failed to allocate CPU float RGBA tensor");
         }
 
-        auto ok = readOutputImageIntoCpuHwc(context, output_slot, tensor, 0, 0);
+        auto ok = readOutputImageIntoCpuHwc(context, target, tensor, 0, 0);
         if (!ok) {
             return std::unexpected(ok.error());
         }
@@ -6540,8 +6536,8 @@ namespace lfs::vis {
     }
 
     std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
-    VksplatViewportRenderer::readOutputImageRgb8(VulkanContext& context, const RenderTargetId output_slot) const {
-        const auto size = latestOutputImageSize(output_slot);
+    VksplatViewportRenderer::readOutputImageRgb8(VulkanContext& context, const RenderTargetId target) const {
+        const auto size = latestOutputImageSize(target);
         if (!size) {
             return std::unexpected(legacyErrorString(size.error()));
         }
@@ -6554,7 +6550,7 @@ namespace lfs::vis {
             return std::unexpected("VkSplat output readback failed to allocate CPU uint8 RGB tensor");
         }
 
-        auto ok = readOutputImageIntoCpuHwc(context, output_slot, tensor, 0, 0);
+        auto ok = readOutputImageIntoCpuHwc(context, target, tensor, 0, 0);
         if (!ok) {
             return std::unexpected(ok.error());
         }
@@ -6562,8 +6558,8 @@ namespace lfs::vis {
     }
 
     std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
-    VksplatViewportRenderer::readOutputImageRgba8(VulkanContext& context, const RenderTargetId output_slot) const {
-        const auto size = latestOutputImageSize(output_slot);
+    VksplatViewportRenderer::readOutputImageRgba8(VulkanContext& context, const RenderTargetId target) const {
+        const auto size = latestOutputImageSize(target);
         if (!size) {
             return std::unexpected(legacyErrorString(size.error()));
         }
@@ -6576,7 +6572,7 @@ namespace lfs::vis {
             return std::unexpected("VkSplat output readback failed to allocate CPU uint8 RGBA tensor");
         }
 
-        auto ok = readOutputImageIntoCpuHwc(context, output_slot, tensor, 0, 0);
+        auto ok = readOutputImageIntoCpuHwc(context, target, tensor, 0, 0);
         if (!ok) {
             return std::unexpected(ok.error());
         }
@@ -6584,12 +6580,12 @@ namespace lfs::vis {
     }
 
     std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
-    VksplatViewportRenderer::readPreviewDepth(VulkanContext& context, const RenderTargetId output_slot) const {
+    VksplatViewportRenderer::readPreviewDepth(VulkanContext& context, const RenderTargetId target) const {
         std::lock_guard target_lock(target_mutex_);
-        if (!output_slot.valid() || resident_raster_scratch_.target != output_slot)
+        if (!target.valid() || resident_raster_scratch_.target != target)
             return std::unexpected("Raw depth scratch belongs to a different render target");
         const auto readback_t0 = std::chrono::steady_clock::now();
-        const auto size = latestOutputImageSize(output_slot);
+        const auto size = latestOutputImageSize(target);
         if (!size) {
             return std::unexpected(legacyErrorString(size.error()));
         }
@@ -6603,7 +6599,7 @@ namespace lfs::vis {
         }
         // Produce ordering is the timeline wait on the readback submit.
 
-        const auto& output = std::as_const(ring_).latestSlot(output_slot);
+        const auto& output = std::as_const(ring_).latestSlot(target);
         const std::uint64_t completion_value =
             std::max(output.completion_value, last_submitted_render_value_);
         if (render_complete_timeline_ == VK_NULL_HANDLE || completion_value == 0) {
@@ -6700,7 +6696,7 @@ namespace lfs::vis {
         }
 
         ReadbackTicketRing::TicketMeta meta{};
-        meta.ring_cell = ring_.latestRingSlot(output_slot);
+        meta.ring_cell = ring_.latestRingSlot(target);
         meta.byte_count = byte_count;
         meta.width = size->x;
         meta.height = size->y;
@@ -6733,7 +6729,7 @@ namespace lfs::vis {
     std::expected<std::uint64_t, std::string>
     VksplatViewportRenderer::submitReadOutputDepthImageTicket(
         VulkanContext& context,
-        const RenderTargetId output_slot,
+        const RenderTargetId target,
         lfs::core::Tensor& destination) const {
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
         if (!context_) {
@@ -6744,7 +6740,7 @@ namespace lfs::vis {
         }
         // Produce ordering is the timeline wait on the readback submit.
 
-        const auto& output = std::as_const(ring_).latestSlot(output_slot);
+        const auto& output = std::as_const(ring_).latestSlot(target);
         if (output.depth_image.image == VK_NULL_HANDLE ||
             output.size.x <= 0 ||
             output.size.y <= 0) {
@@ -6767,7 +6763,7 @@ namespace lfs::vis {
             return std::unexpected(
                 "VkSplat output depth ticket destination must be a contiguous CPU [H,W] float32 matching the slot");
         }
-        if (!waitForOutputImageConsumers(context, output_slot)) {
+        if (!waitForOutputImageConsumers(context, target)) {
             return std::unexpected(context.lastError());
         }
 
@@ -6852,7 +6848,7 @@ namespace lfs::vis {
         }
 
         ReadbackTicketRing::TicketMeta meta{};
-        meta.ring_cell = ring_.latestRingSlot(output_slot);
+        meta.ring_cell = ring_.latestRingSlot(target);
         meta.source_depth_image = output.depth_image.image;
         meta.byte_count = byte_count;
         meta.width = output.size.x;
@@ -6875,7 +6871,7 @@ namespace lfs::vis {
     std::expected<std::uint64_t, std::string>
     VksplatViewportRenderer::submitReadOutputImageIntoCpuHwcTicket(
         VulkanContext& context,
-        const RenderTargetId output_slot,
+        const RenderTargetId target,
         lfs::core::Tensor& destination,
         const int destination_x,
         const int destination_y) const {
@@ -6903,7 +6899,7 @@ namespace lfs::vis {
         }
         // Produce ordering is the timeline wait on the readback submit.
 
-        const auto& output = std::as_const(ring_).latestSlot(output_slot);
+        const auto& output = std::as_const(ring_).latestSlot(target);
         if (output.image.image == VK_NULL_HANDLE ||
             output.size.x <= 0 ||
             output.size.y <= 0) {
@@ -6925,7 +6921,7 @@ namespace lfs::vis {
             return std::unexpected("VkSplat output readback destination region is too small");
         }
 
-        if (!waitForOutputImageConsumers(context, output_slot)) {
+        if (!waitForOutputImageConsumers(context, target)) {
             return std::unexpected(context.lastError());
         }
 
@@ -7010,7 +7006,7 @@ namespace lfs::vis {
         }
 
         ReadbackTicketRing::TicketMeta meta{};
-        meta.ring_cell = ring_.latestRingSlot(output_slot);
+        meta.ring_cell = ring_.latestRingSlot(target);
         meta.source_image = output.image.image;
         meta.byte_count = byte_count;
         meta.width = output.size.x;
@@ -7037,13 +7033,13 @@ namespace lfs::vis {
 
     std::expected<void, std::string> VksplatViewportRenderer::readOutputImageIntoCpuHwc(
         VulkanContext& context,
-        const RenderTargetId output_slot,
+        const RenderTargetId target,
         lfs::core::Tensor& destination,
         const int destination_x,
         const int destination_y) const {
         const auto readback_t0 = std::chrono::steady_clock::now();
         const auto ticket = submitReadOutputImageIntoCpuHwcTicket(
-            context, output_slot, destination, destination_x, destination_y);
+            context, target, destination, destination_x, destination_y);
         if (!ticket) {
             return std::unexpected(ticket.error());
         }
@@ -7070,7 +7066,7 @@ namespace lfs::vis {
         }
         // Produce ordering is the timeline wait on the readback submit.
 
-        const auto& output = ring_.latestSlot(request.output_slot);
+        const auto& output = ring_.latestSlot(request.target);
         if (output.depth_image.image == VK_NULL_HANDLE ||
             output.size.x <= 0 ||
             output.size.y <= 0) {
@@ -7102,7 +7098,7 @@ namespace lfs::vis {
         // Wait until graphics submits that may still fragment-sample this depth
         // image have retired (serial watermark). Producer timeline below covers
         // the independent compute queue.
-        if (!waitForOutputImageConsumers(context, request.output_slot)) {
+        if (!waitForOutputImageConsumers(context, request.target)) {
             return std::unexpected(context.lastError());
         }
 
@@ -7177,7 +7173,7 @@ namespace lfs::vis {
 
         float depth = -1.0f;
         ReadbackTicketRing::TicketMeta meta{};
-        meta.ring_cell = ring_.latestRingSlot(request.output_slot);
+        meta.ring_cell = ring_.latestRingSlot(request.target);
         meta.source_depth_image = output.depth_image.image;
         meta.byte_count = byte_count;
         meta.width = 1;
@@ -7833,18 +7829,18 @@ namespace lfs::vis {
         VulkanContext& context,
         const lfs::core::SplatData& splat_data,
         const lfs::rendering::ViewportRenderRequest& request,
-        const RenderTargetId output_slot,
+        const RenderTargetId target,
         const bool synchronize_input_read) {
         std::lock_guard target_lock(target_mutex_);
         if (rendering_target_.valid())
             return std::unexpected("A render target is already being rendered");
-        if (!output_slot.valid() || ring_.released(output_slot))
+        if (!target.valid() || ring_.released(target))
             return std::unexpected("Invalid or released render target");
         if (resident_model_snapshot_ != makeModelInputSnapshot(splat_data) ||
             !residentRasterScratchCompatible(resident_raster_scratch_,
-                                             makeResidentRasterScratchProvenance(output_slot, request, splat_data.size())))
-            return render(context, splat_data, request, false, output_slot, synchronize_input_read);
-        rendering_target_ = output_slot;
+                                             makeResidentRasterScratchProvenance(target, request, splat_data.size())))
+            return render(context, splat_data, request, false, target, synchronize_input_read);
+        rendering_target_ = target;
         struct TargetGuard {
             RenderTargetId& target;
             ~TargetGuard() { target = {}; }
@@ -7869,18 +7865,18 @@ namespace lfs::vis {
         const auto tensor_scope = context.tensorInterop().execution_scope(active_tensor_backend_);
 
         renderer_.setGrowCommandBatchRing(true);
-        const std::size_t ring_slot = acquireRingSlot(output_slot);
+        const std::size_t ring_slot = acquireRingSlot(target);
         if (auto ok = waitForRingSlot(ring_slot, "selection overlay"); !ok) {
             return std::unexpected(legacyErrorString(ok.error()));
         }
         {
             LOG_TIMER("vksplat.selection_overlay.ensureOutputImages");
-            if (auto ok = ensureOutputImages(context, size, output_slot, ring_slot); !ok) {
+            if (auto ok = ensureOutputImages(context, size, target, ring_slot); !ok) {
                 return std::unexpected(legacyErrorString(ok.error()));
             }
         }
 
-        const auto& output = ring_.slotAt(output_slot, ring_slot);
+        const auto& output = ring_.slotAt(target, ring_slot);
         if (output.image.image == VK_NULL_HANDLE ||
             output.image.view == VK_NULL_HANDLE ||
             output.depth_image.image == VK_NULL_HANDLE ||
@@ -7916,7 +7912,7 @@ namespace lfs::vis {
 
         auto overlay_bindings = [&] {
             LOG_TIMER("vksplat.selection_overlay.uploadOverlayBindings");
-            return uploadOverlayBindings(context, request, num_splats, ring_slot, output_slot);
+            return uploadOverlayBindings(context, request, num_splats, ring_slot, target);
         }();
         if (!overlay_bindings) {
             return std::unexpected(overlay_bindings.error());
@@ -8023,7 +8019,7 @@ namespace lfs::vis {
                         renderer_.activeCommandBuffer(),
                         uniforms,
                         request.frame_view.background_color,
-                        output_slot,
+                        target,
                         ring_slot,
                         request.transparent_background,
                         request.depth_view,
@@ -8072,7 +8068,7 @@ namespace lfs::vis {
             return std::unexpected(legacyErrorString(compose_status.error()));
         }
 
-        auto& updated_output = ring_.slotAt(output_slot, ring_slot);
+        auto& updated_output = ring_.slotAt(target, ring_slot);
         updated_output.completion_value = completion_value;
         return RenderResult{
             .image = updated_output.image.image,
@@ -8096,15 +8092,15 @@ namespace lfs::vis {
         const lfs::core::SplatData& splat_data,
         const lfs::rendering::ViewportRenderRequest& request,
         const bool force_input_upload,
-        const RenderTargetId output_slot,
+        const RenderTargetId target,
         const bool synchronize_input_upload,
         const bool deterministic_export) {
         std::lock_guard target_lock(target_mutex_);
         if (rendering_target_.valid())
             return std::unexpected("A render target is already being rendered");
-        if (!output_slot.valid() || ring_.released(output_slot))
+        if (!target.valid() || ring_.released(target))
             return std::unexpected("Invalid or released render target");
-        rendering_target_ = output_slot;
+        rendering_target_ = target;
         struct TargetGuard {
             RenderTargetId& target;
             ~TargetGuard() { target = {}; }
@@ -8135,7 +8131,7 @@ namespace lfs::vis {
             ++lod_feedback_model_generation_;
             lod_feedback_tree_generation_ = tree_generation;
         }
-        auto& lod_feedback = gpu_lod_feedback_.touch(output_slot, context.lastFrameSubmitSerial());
+        auto& lod_feedback = gpu_lod_feedback_.touch(target, context.lastFrameSubmitSerial());
         const auto completion_candidate = nextRenderCompletionValue("forward pass");
         if (!completion_candidate) {
             return std::unexpected(legacyErrorString(completion_candidate.error()));
@@ -8159,7 +8155,7 @@ namespace lfs::vis {
         trimOutputImagePoolAged();
 
         renderer_.setGrowCommandBatchRing(true);
-        const std::size_t ring_slot = acquireRingSlot(output_slot);
+        const std::size_t ring_slot = acquireRingSlot(target);
         if (auto ok = waitForRingSlot(ring_slot, "render"); !ok) {
             return std::unexpected(legacyErrorString(ok.error()));
         }
@@ -8866,14 +8862,14 @@ namespace lfs::vis {
         auto overlay_bindings = [&] {
             LOG_TIMER("vksplat.render.uploadOverlayBindings");
             return uploadOverlayBindings(
-                context, request, static_cast<std::size_t>(splat_data.size()), ring_slot, output_slot);
+                context, request, static_cast<std::size_t>(splat_data.size()), ring_slot, target);
         }();
         if (!overlay_bindings) {
             return std::unexpected(overlay_bindings.error());
         }
         {
             LOG_TIMER("vksplat.render.ensureOutputImages");
-            if (auto ok = ensureOutputImages(context, size, output_slot, ring_slot); !ok) {
+            if (auto ok = ensureOutputImages(context, size, target, ring_slot); !ok) {
                 return std::unexpected(legacyErrorString(ok.error()));
             }
         }
@@ -9189,7 +9185,7 @@ namespace lfs::vis {
                     renderer_.activeCommandBuffer(),
                     uniforms,
                     request.frame_view.background_color,
-                    output_slot,
+                    target,
                     ring_slot,
                     request.transparent_background,
                     request.depth_view,
@@ -9210,7 +9206,7 @@ namespace lfs::vis {
                 last_submitted_render_value_ = completion_value;
                 ring_.publishCompletion(ring_slot, completion_value);
                 renderer_.tagDeferredLodSelectionReadback(render_complete_timeline_, completion_value,
-                                                          {output_slot.value, lod_feedback_model_generation_, lod_feedback_tree_generation_});
+                                                          {target.value, lod_feedback_model_generation_, lod_feedback_tree_generation_});
 #if LFS_BUILD_TRAINER && LFS_HAS_CUDA
                 if (shared_arena_guard) {
                     shared_arena_guard->noteVulkanRelease(renderCompleteFence(), completion_value);
@@ -9239,7 +9235,7 @@ namespace lfs::vis {
         last_render_used_macro_chain_ = higs_active;
         resident_depth_wave_armed_ = armed_depth_waves;
         resident_sort_bits_ = depth_wave_sort_bits;
-        resident_raster_scratch_ = makeResidentRasterScratchProvenance(output_slot, request, splat_data.size());
+        resident_raster_scratch_ = makeResidentRasterScratchProvenance(target, request, splat_data.size());
         resident_model_snapshot_ = makeModelInputSnapshot(splat_data);
 #if LFS_BUILD_TRAINER && LFS_HAS_CUDA
         if (shared_arena_guard) {
@@ -9252,7 +9248,7 @@ namespace lfs::vis {
         logVramBreakdownIfChanged("render");
         renderer_.tagDeferredVisibleCountReadback(render_complete_timeline_, completion_value);
         renderer_.tagDeferredLodSelectionReadback(render_complete_timeline_, completion_value,
-                                                  {output_slot.value, lod_feedback_model_generation_, lod_feedback_tree_generation_});
+                                                  {target.value, lod_feedback_model_generation_, lod_feedback_tree_generation_});
         renderer_.tagDeferredInstanceCountReadback(render_complete_timeline_, completion_value);
         if (!compose_status) {
             return std::unexpected(legacyErrorString(compose_status.error()));
@@ -9265,7 +9261,7 @@ namespace lfs::vis {
         if (higs_warmup_frame) {
             macro_chain_warmup_pending_ = false;
         }
-        auto& output = ring_.slotAt(output_slot, ring_slot);
+        auto& output = ring_.slotAt(target, ring_slot);
         output.completion_value = completion_value;
         const std::uint64_t lod_page_generation =
             lod_request_active && lod_page_cache_.configured()

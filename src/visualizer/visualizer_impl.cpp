@@ -534,11 +534,11 @@ namespace lfs::vis {
         python::set_sequencer_callbacks(
             []() {
                 const auto* gm = python::get_gui_manager();
-                return gm ? gm->panelLayout().isShowSequencer() : false;
+                return gm ? gm->isSequencerVisible() : false;
             },
             [](bool visible) {
                 if (auto* gm = python::get_gui_manager()) {
-                    gm->panelLayout().setShowSequencer(visible);
+                    gm->setSequencerVisible(visible);
                 }
             });
         callback_cleanup_.add([] { python::set_sequencer_callbacks(nullptr, nullptr); });
@@ -949,6 +949,15 @@ namespace lfs::vis {
             rendering_manager_->markViewDirty(id, DirtyFlag::OVERLAY);
     }
 
+    screen::Rect VisualizerImpl::areaRect(const screen::AreaId id) {
+        if (gui_manager_)
+            return gui_manager_->screenHost().currentAreaRect(id);
+        const auto geometry = screens().screen().solve({0.0f, 0.0f, 1.0f, 1.0f}, {});
+        if (const auto* area = geometry.find(id))
+            return area->rect;
+        return {};
+    }
+
     bool VisualizerImpl::runViewCommand(const ViewId id, const std::string_view command) {
         auto* view = screen_service_.view3D(id);
         if (!view)
@@ -1041,8 +1050,7 @@ namespace lfs::vis {
 
         vis::set_set_fov_callback([this](float fov_degrees) {
             if (rendering_manager_)
-                rendering_manager_->setFocalLength(
-                    lfs::rendering::vFovToFocalLength(fov_degrees));
+                rendering_manager_->setFocalLength(lfs::rendering::vFovToFocalLength(fov_degrees));
         });
         callback_cleanup_.add([] { vis::set_set_fov_callback(nullptr); });
 
@@ -2633,10 +2641,8 @@ namespace lfs::vis {
         rendering_manager_->retainVisibleViews(visible_views);
 
         if (gui_manager_) {
-            rendering_manager_->setCropboxGizmoActive(
-                gui_manager_->gizmo().isCropboxGizmoActive());
-            rendering_manager_->setEllipsoidGizmoActive(
-                gui_manager_->gizmo().isEllipsoidGizmoActive());
+            rendering_manager_->setCropboxGizmoActive(gui_manager_->gizmo().isCropboxGizmoActive());
+            rendering_manager_->setEllipsoidGizmoActive(gui_manager_->gizmo().isEllipsoidGizmoActive());
         }
 
         bool store_dirty = false;
@@ -2649,15 +2655,12 @@ namespace lfs::vis {
         if (gui_manager_)
             gui_manager_->sequencerUI().tickPlaybackBeforeSceneRender();
 
-        const bool is_training =
-            trainer_manager_ && trainer_manager_->isTrainingActive();
+        const bool is_training = trainer_manager_ && trainer_manager_->isTrainingActive();
         if (rendering_manager_) {
-            rendering_manager_->pollTrainingRefresh(trainer_manager_ &&
-                                                    trainer_manager_->isRunning());
+            rendering_manager_->pollTrainingRefresh(trainer_manager_ && trainer_manager_->isRunning());
             rendering_manager_->pollParkedArenaRetry();
         }
-        const FrameDemand frame_demand =
-            collectFrameDemand(viewport_export_locked, store_dirty);
+        const FrameDemand frame_demand = collectFrameDemand(viewport_export_locked, store_dirty);
         if (gui_frame_rendered_ && !frame_demand.shouldRenderFrame()) {
             LOG_PERF(
                 "loop_idle skip_gui_render=true needs_render={} continuous_input={} "
@@ -2687,11 +2690,11 @@ namespace lfs::vis {
             return;
         }
 
-        std::optional<std::chrono::steady_clock::time_point> project_frame_started;
+        std::optional<std::chrono::steady_clock::time_point>
+            project_frame_started;
         if (!viewport_export_locked && !interactive_transition_settling &&
             !frame_state_.scene_render_suspended()) {
-            if (!python::is_plugin_preload_running() && frame_demand.python_redraw &&
-                gui_manager_)
+            if (!python::is_plugin_preload_running() && frame_demand.python_redraw && gui_manager_)
                 gui_manager_->syncVisiblePanelsBeforeSceneRender();
 
             project_frame_started = std::chrono::steady_clock::now();

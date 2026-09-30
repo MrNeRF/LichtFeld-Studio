@@ -1649,12 +1649,12 @@ namespace lfs::vis {
         }
 
         std::expected<RenderResult, std::string> doRender(const RenderRequest& req,
-                                                          RenderTargetId output_slot) {
+                                                          RenderTargetId target) {
             std::lock_guard<std::mutex> command_lock(command_mutex);
-            const auto slot_idx = output_slot.value;
-            if (!output_slot.valid() || released_targets.contains(output_slot)) {
+            const auto slot_idx = target.value;
+            if (!target.valid() || released_targets.contains(target)) {
                 return std::unexpected<std::string>(std::format(
-                    "Point-cloud render output slot is out of range (output_slot={}, slot_count={}) ({}:{})",
+                    "Point-cloud render output slot is out of range (target={}, slot_count={}) ({}:{})",
                     slot_idx,
                     slots.size(),
                     __FILE__,
@@ -1662,7 +1662,7 @@ namespace lfs::vis {
             }
             if (req.size.x <= 0 || req.size.y <= 0) {
                 return std::unexpected<std::string>(std::format(
-                    "Point-cloud render size must be positive (observed_width={}, observed_height={}, output_slot={}) ({}:{})",
+                    "Point-cloud render size must be positive (observed_width={}, observed_height={}, target={}) ({}:{})",
                     req.size.x,
                     req.size.y,
                     slot_idx,
@@ -1689,10 +1689,10 @@ namespace lfs::vis {
                 }
             }
 
-            auto& slot = slots[output_slot];
+            auto& slot = slots[target];
             completed = submitted;
             drainOutputs();
-            if (auto ensure = ensureOutputImages(slot, req.size, output_slot); !ensure)
+            if (auto ensure = ensureOutputImages(slot, req.size, target); !ensure)
                 return std::unexpected<std::string>(ensure.error());
             for (auto& s : pending_stagings) {
                 destroyBuffer(allocator, s);
@@ -2000,7 +2000,7 @@ namespace lfs::vis {
 
         std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
             VulkanContext& ctx,
-            RenderTargetId output_slot) {
+            RenderTargetId target) {
             std::lock_guard<std::mutex> command_lock(command_mutex);
             if (!initialized || context == nullptr) {
                 return std::unexpected<std::string>("Point-cloud output readback requested before renderer initialization");
@@ -2009,16 +2009,16 @@ namespace lfs::vis {
                 return std::unexpected<std::string>("Point-cloud output readback received a different Vulkan context");
             }
 
-            const auto slot_idx = output_slot.value;
-            if (!output_slot.valid() || released_targets.contains(output_slot)) {
+            const auto slot_idx = target.value;
+            if (!target.valid() || released_targets.contains(target)) {
                 return std::unexpected<std::string>(std::format(
-                    "Point-cloud readback output slot is out of range (output_slot={}, slot_count={}) ({}:{})",
+                    "Point-cloud readback output slot is out of range (target={}, slot_count={}) ({}:{})",
                     slot_idx,
                     slots.size(),
                     __FILE__,
                     __LINE__));
             }
-            auto& slot = slots[output_slot];
+            auto& slot = slots[target];
             if (slot.color_image == VK_NULL_HANDLE || slot.size.x <= 0 || slot.size.y <= 0) {
                 return std::unexpected<std::string>("Point-cloud output readback requested for an empty output slot");
             }
@@ -2284,16 +2284,16 @@ namespace lfs::vis {
 
     std::expected<PointCloudVulkanRenderer::RenderResult, std::string>
     PointCloudVulkanRenderer::render(VulkanContext& context, const RenderRequest& request,
-                                     RenderTargetId output_slot) {
+                                     RenderTargetId target) {
         if (auto r = impl_->ensureInitialized(context); !r) {
             return std::unexpected<std::string>(r.error());
         }
-        return impl_->doRender(request, output_slot);
+        return impl_->doRender(request, target);
     }
 
     std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
-    PointCloudVulkanRenderer::readOutputImage(VulkanContext& context, RenderTargetId output_slot) {
-        return impl_->readOutputImage(context, output_slot);
+    PointCloudVulkanRenderer::readOutputImage(VulkanContext& context, RenderTargetId target) {
+        return impl_->readOutputImage(context, target);
     }
 
     bool PointCloudVulkanRenderer::hasRenderTarget(RenderTargetId target) const {

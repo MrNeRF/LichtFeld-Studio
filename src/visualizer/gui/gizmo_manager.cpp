@@ -989,7 +989,7 @@ namespace lfs::vis::gui {
             // not mutate the live workspace.
             if (tool != ToolType::None) {
                 if (auto* gui = viewer_->getGuiManager()) {
-                    gui->panelLayout().setShowSequencer(false);
+                    gui->setSequencerVisible(false);
                 }
             }
         });

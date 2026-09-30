@@ -121,10 +121,10 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<RenderResult, std::string> render(
             VulkanContext& context,
             const RenderRequest& request,
-            RenderTargetId output_slot);
+            RenderTargetId target);
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
             VulkanContext& context,
-            RenderTargetId output_slot);
+            RenderTargetId target);
 
         [[nodiscard]] bool hasRenderTarget(RenderTargetId target) const;
         [[nodiscard]] bool releaseRenderTarget(RenderTargetId target);

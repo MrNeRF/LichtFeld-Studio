@@ -38,6 +38,7 @@
 #include "py_store.hpp"
 #include "py_tensor.hpp"
 #include "py_uilist.hpp"
+#include "py_viewer_dispatch.hpp"
 #include "py_viewport.hpp"
 #include "python/gil.hpp"
 #include "python/python_runtime.hpp"
@@ -113,43 +114,6 @@ namespace lfs::python {
     using lfs::training::CommandCenter;
 
     namespace {
-
-        template <typename F>
-            requires(!std::is_void_v<std::invoke_result_t<F>>)
-        auto invoke_on_viewer(F&& fn, std::invoke_result_t<F> fallback) {
-            auto* const viewer = get_visualizer();
-            if (!viewer || viewer->isOnViewerThread())
-                return std::invoke(std::forward<F>(fn));
-            if (!viewer->acceptsPostedWork())
-                return fallback;
-
-            nb::gil_scoped_release release;
-            return lfs::vis::post_work_and_wait(
-                [viewer](lfs::vis::Visualizer::WorkItem work) {
-                    return viewer->postWork(std::move(work));
-                },
-                std::forward<F>(fn),
-                [fallback]() { return fallback; });
-        }
-
-        template <typename F>
-            requires(std::is_void_v<std::invoke_result_t<F>>)
-        void invoke_on_viewer(F&& fn) {
-            auto* const viewer = get_visualizer();
-            if (!viewer || viewer->isOnViewerThread()) {
-                std::invoke(std::forward<F>(fn));
-                return;
-            }
-            if (!viewer->acceptsPostedWork())
-                return;
-
-            nb::gil_scoped_release release;
-            lfs::vis::post_work_and_wait(
-                [viewer](lfs::vis::Visualizer::WorkItem work) {
-                    return viewer->postWork(std::move(work));
-                },
-                std::forward<F>(fn), [] {});
-        }
 
         std::string get_class_id(nb::object cls) {
             auto mod = nb::cast<std::string>(cls.attr("__module__"));

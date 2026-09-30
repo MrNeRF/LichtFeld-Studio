@@ -29,25 +29,6 @@ body {
     z-index: 1;
 }
 
-.viewport-frame-border {
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: 4dp;
-    pointer-events: none;
-    z-index: 1;
-}
-
-.left-dock-resize-indicator {
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    pointer-events: none;
-    z-index: 12;
-}
-
 /* Centered in the viewport; the side padding keeps the wrapped lines clear of
    the docked tool rail. */
 .empty-state-hint {
@@ -594,8 +575,6 @@ body {
     width: 50dp;
     min-width: 50dp;
 }
-
-
 
 #selection-block .depth-axis-size > .number-input.viewport-selection-depth-input {
     /* Wide enough for the anisotropic "63x45%" Size readout at 1.5x UI scale. */

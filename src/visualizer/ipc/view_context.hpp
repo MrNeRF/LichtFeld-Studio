@@ -28,17 +28,6 @@ namespace lfs::vis {
         float ortho_scale = 100.0f;
     };
 
-    class LFS_VIS_API ScopedOverlayView {
-    public:
-        explicit ScopedOverlayView(ViewInfo view);
-        ~ScopedOverlayView();
-        ScopedOverlayView(const ScopedOverlayView&) = delete;
-        ScopedOverlayView& operator=(const ScopedOverlayView&) = delete;
-
-    private:
-        std::optional<ViewInfo> previous_;
-    };
-
     struct SetViewParams {
         std::array<float, 3> eye;
         std::array<float, 3> target;
@@ -63,8 +52,7 @@ namespace lfs::vis {
     LFS_VIS_API void set_capture_viewport_render_callback(CaptureViewportRenderCallback callback);
     [[nodiscard]] LFS_VIS_API std::optional<ViewInfo> get_current_view_info();
     [[nodiscard]] LFS_VIS_API std::optional<ViewportRender> get_viewport_render();
-    [[nodiscard]] LFS_VIS_API std::optional<ViewportRender>
-    capture_viewport_render();
+    [[nodiscard]] LFS_VIS_API std::optional<ViewportRender> capture_viewport_render();
 
     LFS_VIS_API void set_set_view_callback(SetViewCallback callback);
     LFS_VIS_API void set_set_fov_callback(SetFovCallback callback);
@@ -98,7 +86,8 @@ namespace lfs::vis {
         int color_tonemapping = 0;
         int splat_render_profile = 0; // 0: Studio, 1: standard portal
         int environment_mode = 0;
-        std::string environment_map_path{std::string(kDefaultEnvironmentMapPath)};
+        std::string environment_map_path{
+            std::string(kDefaultEnvironmentMapPath)};
         float environment_exposure = 0.0f;
         float environment_rotation_degrees = 0.0f;
         bool show_coord_axes = false;
@@ -180,14 +169,11 @@ namespace lfs::vis {
         bool scene_upscaler_preset_explicit = false;
     };
 
-    using GetRenderSettingsCallback =
-        std::function<std::optional<RenderSettingsProxy>()>;
-    using SetRenderSettingsCallback = std::function<void(
-        const RenderSettingsProxy&, RenderSettingsUpdateIntent)>;
+    using GetRenderSettingsCallback = std::function<std::optional<RenderSettingsProxy>()>;
+    using SetRenderSettingsCallback =
+        std::function<void(const RenderSettingsProxy&, RenderSettingsUpdateIntent)>;
 
-    LFS_VIS_API void
-    set_render_settings_callbacks(GetRenderSettingsCallback get_cb,
-                                  SetRenderSettingsCallback set_cb);
+    LFS_VIS_API void set_render_settings_callbacks(GetRenderSettingsCallback get_cb, SetRenderSettingsCallback set_cb);
     [[nodiscard]] LFS_VIS_API std::optional<RenderSettingsProxy> get_render_settings();
     LFS_VIS_API void update_render_settings(
         const RenderSettingsProxy& settings,

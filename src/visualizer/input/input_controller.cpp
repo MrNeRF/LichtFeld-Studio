@@ -462,17 +462,16 @@ namespace lfs::vis {
             depth_range_initialized_ = false;
         });
 
-        window_focus_lost_handler_id_ =
-            internal::WindowFocusLost::when([this](const auto&) {
-                drag_mode_ = DragMode::None;
-                clearSelectedCameraContextMenuGesture();
-                press_selected_camera_frustum_ = false;
-                pressed_camera_frustum_id_ = -1;
-                pressed_camera_frustum_modifiers_ = input::MODIFIER_NONE;
-                std::fill(std::begin(keys_movement_), std::end(keys_movement_), false);
-                clearWasdMomentumViewport();
-                hovered_camera_id_ = -1;
-            });
+        window_focus_lost_handler_id_ = internal::WindowFocusLost::when([this](const auto&) {
+            drag_mode_ = DragMode::None;
+            clearSelectedCameraContextMenuGesture();
+            press_selected_camera_frustum_ = false;
+            pressed_camera_frustum_id_ = -1;
+            pressed_camera_frustum_modifiers_ = input::MODIFIER_NONE;
+            std::fill(std::begin(keys_movement_), std::end(keys_movement_), false);
+            clearWasdMomentumViewport();
+            hovered_camera_id_ = -1;
+        });
     }
 
     InputController::~InputController() {
@@ -1316,12 +1315,10 @@ namespace lfs::vis {
                             float panel_width = viewport_bounds_.width;
 
                             const glm::vec2 rect_min(
-                                std::min(node_rect_start_.x, node_rect_end_.x) - vp_offset.x -
-                                    panel_offset_x,
+                                std::min(node_rect_start_.x, node_rect_end_.x) - vp_offset.x - panel_offset_x,
                                 std::min(node_rect_start_.y, node_rect_end_.y) - vp_offset.y);
                             const glm::vec2 rect_max(
-                                std::max(node_rect_start_.x, node_rect_end_.x) - vp_offset.x -
-                                    panel_offset_x,
+                                std::max(node_rect_start_.x, node_rect_end_.x) - vp_offset.x - panel_offset_x,
                                 std::max(node_rect_start_.y, node_rect_end_.y) - vp_offset.y);
 
                             Viewport pick_viewport = viewport();
@@ -3080,8 +3077,7 @@ namespace lfs::vis {
         if (!gui)
             return false;
 
-        return gui->panelLayout().isResizingPanel() ||
-               gui->isPositionOverFloatingPanel(x, y);
+        return gui->isPositionOverFloatingPanel(x, y);
     }
 
     bool InputController::isPointerOverUiHover(const double x, const double y) const {

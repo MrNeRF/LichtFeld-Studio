@@ -8,8 +8,8 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "gui/gui_focus_state.hpp"
+#include "gui/gui_input.hpp"
 #include "gui/panel_input_utils.hpp"
-#include "gui/panel_layout.hpp"
 #include "gui/rml_progress_overlay.hpp"
 #include "gui/rml_viewport_overlay.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
@@ -1277,7 +1277,6 @@ namespace lfs::vis {
         EXPECT_TRUE(bar_->IsPseudoClassSet("active"));
         EXPECT_EQ(range_->GetValue(), "50.000000");
         EXPECT_TRUE(recorder_.log().empty()) << recorder_.joined();
-        EXPECT_TRUE(overlay_->leftPressClassifications().empty());
 
         auto released = inputAt({390.0f, 280.0f});
         released.mouse_button_events = {transition(false, range_point_)};
@@ -1301,7 +1300,6 @@ namespace lfs::vis {
         route(released, GetParam().blockers);
         EXPECT_FALSE(owns());
         EXPECT_TRUE(recorder_.log().empty()) << recorder_.joined();
-        EXPECT_TRUE(overlay_->leftPressClassifications().empty());
     }
 
     INSTANTIATE_TEST_SUITE_P(
@@ -1344,7 +1342,6 @@ namespace lfs::vis {
         EXPECT_EQ(recorder_.countOf("action:mousedown"), 0) << recorder_.joined();
         // A replacement DOWN cancels the old press without borrowing its UP.
         EXPECT_FALSE(button_->IsPseudoClassSet("active"));
-        EXPECT_TRUE(overlay_->leftPressClassifications().empty());
     }
 
     TEST_F(RmlViewportInputRoutingTest, BlockedReleasesRemainIndependentAcrossButtons) {
@@ -1449,16 +1446,10 @@ namespace lfs::vis {
         gui::guiFocusState().want_capture_mouse = true;
         route(input);
 
-        // Blur listeners commit synchronously, before GuiManager consumes this
-        // classification and decides whether that original press may focus.
         EXPECT_NE(context_->GetFocusElement(), text_);
         EXPECT_EQ(recorder_.countOf("text:blur"), 1) << recorder_.joined();
         EXPECT_FALSE(owns());
         EXPECT_EQ(recorder_.countOf(bare_element->GetId() + ":mousedown"), 0) << recorder_.joined();
-        ASSERT_EQ(overlay_->leftPressClassifications().size(), 1u);
-        const auto& classification = overlay_->leftPressClassifications()[0];
-        EXPECT_FALSE(classification.on_interactive_control);
-        EXPECT_TRUE(classification.blurred_text_input);
     }
 
     TEST_F(RmlViewportInputRoutingTest, BlockedTextInputNeitherBlursNorReceivesKeys) {
@@ -1473,7 +1464,6 @@ namespace lfs::vis {
         EXPECT_EQ(context_->GetFocusElement(), text_);
         EXPECT_EQ(text_->GetValue(), value);
         EXPECT_EQ(recorder_.countOf("text:keydown"), 0);
-        EXPECT_TRUE(overlay_->leftPressClassifications().empty());
         input.mouse_button_events.clear();
         input.keys_pressed.clear();
         route(input);
@@ -1496,8 +1486,6 @@ namespace lfs::vis {
         route(input);
         EXPECT_FALSE(overlay_->wantsInput());
         EXPECT_FALSE(gui::guiFocusState().want_capture_mouse);
-        ASSERT_EQ(overlay_->leftPressClassifications().size(), 1);
-        EXPECT_FALSE(overlay_->leftPressClassifications()[0].on_interactive_control);
         EXPECT_FALSE(owns());
         EXPECT_FALSE(bar_->IsPseudoClassSet("active"));
         recorder_.clear();

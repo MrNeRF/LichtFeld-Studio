@@ -39,21 +39,10 @@ namespace lfs::app {
             return vis::screen::AreaId{value > 0 ? static_cast<std::uint32_t>(value) : 0};
         }
 
-        vis::screen::Rect area_rect(vis::VisualizerImpl& impl, const vis::screen::AreaId id) {
-            if (auto* gui = impl.getGuiManager()) {
-                return gui->screenHost().currentAreaRect(id);
-            }
-            const auto geometry = impl.screens().screen().solve(
-                vis::screen::Rect{0.0f, 0.0f, 1.0f, 1.0f}, vis::screen::LayoutMetrics{});
-            if (const auto* found = geometry.find(id))
-                return found->rect;
-            return {};
-        }
-
         json area_json(vis::VisualizerImpl& impl, const vis::screen::AreaId id) {
             const auto& screen = impl.screens().screen();
             const auto* area = screen.area(id);
-            const auto rect = area_rect(impl, id);
+            const auto rect = impl.areaRect(id);
             const bool is_view = area && area->editor == vis::screen::editors::kView3D;
             return json{
                 {"id", id.value},

@@ -5,7 +5,7 @@
 #pragma once
 
 #include "gui/global_context_menu.hpp"
-#include "gui/panel_layout.hpp"
+#include "gui/gui_input.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/ui_context.hpp"
 #include "screen/screen.hpp"
@@ -86,11 +86,8 @@ namespace lfs::vis::gui {
     class View3DEditor final : public AreaEditor {
     public:
         using Command = std::function<void(screen::AreaId, std::string_view)>;
-        using Changed = std::function<void(screen::AreaId)>;
 
-        View3DEditor(Command command, Changed changed)
-            : command_(std::move(command)),
-              changed_(std::move(changed)) {}
+        explicit View3DEditor(Command command) : command_(std::move(command)) {}
 
         void header(const AreaFrame& area, const screen::Screen& screen,
                     std::vector<HeaderItem>& items) const override;
@@ -101,7 +98,6 @@ namespace lfs::vis::gui {
 
     private:
         Command command_;
-        Changed changed_;
     };
 
     class PropertiesEditor final : public AreaEditor {
@@ -141,17 +137,17 @@ namespace lfs::vis::gui {
     };
 
     // Any registered panel shown as an editor of its own (the sequencer,
-    // histogram, asset browser and plugin panels that used to live in docks).
+    // histogram, asset browser and plugin panels).
     class PanelEditor final : public AreaEditor {
     public:
         void header(const AreaFrame& area, const screen::Screen& screen,
                     std::vector<HeaderItem>& items) const override;
         void draw(const AreaDrawContext& ctx) override;
-        [[nodiscard]] std::optional<PanelSpace> panelSpace() const override { return PanelSpace::BottomDock; }
+        [[nodiscard]] std::optional<PanelSpace> panelSpace() const override { return PanelSpace::BottomArea; }
     };
 
     // Registers the editor types backed by registered panels: panels in the
-    // BottomDock and LeftDock spaces become editors named after the panel.
+    // BottomArea and LeftArea spaces become editors named after the panel.
     void installPanelEditorTypes(screen::EditorTypeRegistry& registry);
 
     [[nodiscard]] bool isPanelEditorSpace(PanelSpace space);

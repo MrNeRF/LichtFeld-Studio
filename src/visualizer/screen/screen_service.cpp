@@ -53,7 +53,7 @@ namespace lfs::vis::screen {
     std::optional<ViewSettings> ScreenService::viewSettings(const ViewId view) const {
         std::lock_guard lock(mutex_);
         if (const auto* area = screen_.area(AreaId{view})) {
-            if (const auto* space = dynamic_cast<const View3DSpace*>(area->space("view3d")))
+            if (const auto* space = dynamic_cast<const View3DSpace*>(area->space(editors::kView3D)))
                 return space->settings;
         }
         return std::nullopt;
@@ -62,7 +62,7 @@ namespace lfs::vis::screen {
     bool ScreenService::editViewSettings(const ViewId view, const std::function<void(ViewSettings&)>& edit) {
         std::lock_guard lock(mutex_);
         auto* area = screen_.area(AreaId{view});
-        auto* space = area ? dynamic_cast<View3DSpace*>(area->space("view3d")) : nullptr;
+        auto* space = area ? dynamic_cast<View3DSpace*>(area->space(editors::kView3D)) : nullptr;
         if (!space)
             return false;
         edit(space->settings);
@@ -70,7 +70,7 @@ namespace lfs::vis::screen {
         if (splitViewEnabled(space->settings.split_view_mode)) {
             for (const auto id : screen_.areas()) {
                 if (id.value != view) {
-                    if (auto* other = dynamic_cast<View3DSpace*>(screen_.area(id)->space("view3d")))
+                    if (auto* other = dynamic_cast<View3DSpace*>(screen_.area(id)->space(editors::kView3D)))
                         other->settings.split_view_mode = SplitViewMode::Disabled;
                 }
             }

@@ -43,6 +43,7 @@
 #include "py_tensor.hpp"
 #include "py_ui.hpp"
 #include "py_uilist.hpp"
+#include "py_viewer_dispatch.hpp"
 #include "py_viewport.hpp"
 #include "python/viewport_overlay.hpp"
 #include "visualizer/app_store.hpp"
@@ -885,8 +886,6 @@ namespace {
         return viewer->projectTrainingSessionState();
     }
 
-    // Keyword-only panel= matches depth-window actions: None uses the legacy path;
-    // main explicitly requests focus; left/right name a panel. None and main
     int scene_training_gaussian_count() {
         if (auto* const scene = get_scene_internal()) {
             return static_cast<int>(scene->getTrainingModelGaussianCount());
@@ -2970,26 +2969,12 @@ NB_MODULE(lichtfeld, m) {
         "True when the performance HUD is currently shown");
     m.def(
         "toggle_split_viewport", []() {
-            auto toggle = [] {
-                if (auto* controller = lfs::vis::InputController::instance())
-                    controller->toggleSplitViewport();
-            };
-            auto* const viewer = lfs::python::get_visualizer();
-            if (!viewer)
-                return;
-            if (viewer->isOnViewerThread()) {
-                toggle();
-                return;
+            if (lfs::python::get_visualizer()) {
+                lfs::python::invoke_on_viewer([] {
+                    if (auto* controller = lfs::vis::InputController::instance())
+                        controller->toggleSplitViewport();
+                });
             }
-            if (!viewer->acceptsPostedWork())
-                return;
-
-            nb::gil_scoped_release release;
-            (void)lfs::vis::post_work_and_wait(
-                [viewer](lfs::vis::Visualizer::WorkItem work) {
-                    return viewer->postWork(std::move(work));
-                },
-                toggle, [] {});
         },
         "Open a second 3D viewport beside the one under the pointer, or close it again");
 

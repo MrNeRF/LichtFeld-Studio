@@ -15,18 +15,6 @@
     color: @{text};
 }
 
-.viewport-frame-border {
-    background-color: @{menu.background};
-}
-
-.left-dock-resize-indicator {
-    background-color: @{alpha(info,0.30)};
-}
-
-.left-dock-resize-indicator.active {
-    background-color: @{alpha(info,0.50)};
-}
-
 .viewport-split-divider {
     background-color: @{menu.background};
 }
@@ -575,8 +563,6 @@
 .perf-hud-meter-track {
     background-color: @{statusbar.progress_bg};
 }
-
-
 
 .toolbar-hcenter .align-toolbar {
     decorator: none;

@@ -213,6 +213,7 @@ namespace lfs::vis {
         void activateView(ViewId id) override;
         // Runs a named command on one 3D view: frame_all, frame_selected,
         // area:quad. Returns false for unknown commands or views.
+        [[nodiscard]] screen::Rect areaRect(screen::AreaId id);
         bool runViewCommand(ViewId id, std::string_view command) override;
         // Until every view renders on its own, the renderer's settings carry the
         // active view's half; this keeps the two in step each frame.

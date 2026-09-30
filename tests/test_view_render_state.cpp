@@ -13,12 +13,6 @@
 #include <gtest/gtest.h>
 
 namespace lfs::vis {
-    class ViewRenderStateTestAccess {
-    public:
-        static bool targetExists(const RenderingManager& renderer, RenderTargetId target) {
-            return renderer.render_targets_.contains(target);
-        }
-    };
     namespace {
         class ViewRenderStateTest : public ::testing::Test {
         protected:
@@ -74,7 +68,7 @@ namespace lfs::vis {
             const auto first_target = rendering.viewState(first).main_render_target_;
             const auto second_target = rendering.viewState(second).main_render_target_;
             EXPECT_TRUE(first_target.valid());
-            EXPECT_TRUE(ViewRenderStateTestAccess::targetExists(rendering, second_target));
+            EXPECT_TRUE(second_target.valid());
             EXPECT_NE(first_target, second_target);
             EXPECT_FALSE(rendering.viewState(first).split_left_render_target_.valid());
             rendering.retainVisibleViews({first, second});
@@ -83,8 +77,7 @@ namespace lfs::vis {
             rendering.viewState(second).last_visible -= std::chrono::seconds(1);
             rendering.retainVisibleViews({first});
             EXPECT_FALSE(rendering.hasViewState(second));
-            EXPECT_FALSE(ViewRenderStateTestAccess::targetExists(rendering, second_target));
-            EXPECT_TRUE(ViewRenderStateTestAccess::targetExists(rendering, first_target));
+            EXPECT_EQ(rendering.viewState(first).main_render_target_, first_target);
             renderEmpty(second);
             EXPECT_NE(rendering.viewState(second).main_render_target_, second_target);
         }
@@ -301,14 +294,12 @@ namespace lfs::vis {
             outer.translation = {1, 2, 3};
             const auto original = get_current_view_info();
             {
-                ScopedOverlayView camera(outer);
-                python::ScopedOverlayDrawContext context({.viewport_bounds = std::array<float, 4>{10, 20, 640, 480}});
+                python::ScopedOverlayDrawContext context({.viewport_bounds = std::array<float, 4>{10, 20, 640, 480}, .camera = &outer});
                 EXPECT_EQ(get_current_view_info()->translation, outer.translation);
                 {
                     auto inner = outer;
                     inner.translation = {4, 5, 6};
-                    ScopedOverlayView nested_camera(inner);
-                    python::ScopedOverlayDrawContext nested_context({.viewport_bounds = std::array<float, 4>{660, 20, 320, 480}});
+                    python::ScopedOverlayDrawContext nested_context({.viewport_bounds = std::array<float, 4>{660, 20, 320, 480}, .camera = &inner});
                     EXPECT_EQ(get_current_view_info()->translation, inner.translation);
                     float x, y, w, h;
                     python::get_viewport_bounds(x, y, w, h);

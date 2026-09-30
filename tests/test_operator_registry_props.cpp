@@ -119,7 +119,7 @@ protected:
         lfs::vis::op::undoHistory().clear();
         lfs::vis::op::operators().clear();
 
-        rendering_manager_ = std::make_unique<lfs::vis::RenderingManager>(rendering_manager__views);
+        rendering_manager_ = std::make_unique<lfs::vis::RenderingManager>(screens_);
         scene_manager_ = std::make_unique<lfs::vis::SceneManager>();
         lfs::vis::services().set(rendering_manager_.get());
         lfs::vis::services().set(scene_manager_.get());
@@ -184,7 +184,7 @@ protected:
         }
     }
 
-    lfs::vis::screen::ScreenService rendering_manager__views;
+    lfs::vis::screen::ScreenService screens_;
 
     std::unique_ptr<lfs::vis::RenderingManager> rendering_manager_;
     std::unique_ptr<lfs::vis::SceneManager> scene_manager_;

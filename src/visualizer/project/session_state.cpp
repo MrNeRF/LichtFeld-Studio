@@ -13,8 +13,8 @@
 #include "core/scene.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "gui/error_event_bridge.hpp"
+#include "gui/gui_input.hpp"
 #include "gui/gui_manager.hpp"
-#include "gui/panel_layout.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/panels/python_console_panel.hpp"
 #include "gui/panels/windows_console_utils.hpp"
@@ -1716,9 +1716,9 @@ namespace lfs::vis::project {
                 return "main_panel_tab";
             case gui::PanelSpace::SceneHeader:
                 return "scene_header";
-            case gui::PanelSpace::BottomDock:
+            case gui::PanelSpace::BottomArea:
                 return "bottom_dock";
-            case gui::PanelSpace::LeftDock:
+            case gui::PanelSpace::LeftArea:
                 return "left_dock";
             case gui::PanelSpace::StatusBar:
                 return "status_bar";
@@ -1740,9 +1740,9 @@ namespace lfs::vis::project {
             if (name == "scene_header")
                 return gui::PanelSpace::SceneHeader;
             if (name == "bottom_dock")
-                return gui::PanelSpace::BottomDock;
+                return gui::PanelSpace::BottomArea;
             if (name == "left_dock")
-                return gui::PanelSpace::LeftDock;
+                return gui::PanelSpace::LeftArea;
             if (name == "status_bar")
                 return gui::PanelSpace::StatusBar;
             return std::nullopt;
@@ -1754,11 +1754,16 @@ namespace lfs::vis::project {
                        : Json(nullptr);
         }
 
+        struct LegacyLayoutState {
+            bool show_sequencer = false;
+            std::string active_tab_id;
+        };
+
         const auto& fixed_layout_fields() {
             static const std::vector<
-                JsonField<gui::PanelLayoutProjectState>>
+                JsonField<LegacyLayoutState>>
                 fields{
-                    optional_field("sequencer_visible", &gui::PanelLayoutProjectState::show_sequencer),
+                    optional_field("sequencer_visible", &LegacyLayoutState::show_sequencer),
                 };
             return fields;
         }
@@ -2102,9 +2107,6 @@ namespace lfs::vis::project {
             omit_filter(
                 viewer.getScene(), omit_node_uuids);
 
-        const auto layout =
-            gui_manager->panelLayout()
-                .captureProjectState();
         const auto& window_states =
             gui_manager->getWindowStates();
         Json screen_payload =
@@ -2158,7 +2160,7 @@ namespace lfs::vis::project {
             {"active_tabs",
              {
                  {"main_panel",
-                  layout.active_tab_id},
+                  std::string{}},
                  {"scene_panel",
                   gui_manager
                       ->scenePanelActiveTab()},
@@ -3062,9 +3064,7 @@ namespace lfs::vis::project {
                     viewer.getRenderingManager())
                 rendering->markDirty(DirtyFlag::ALL);
 
-            gui::PanelLayoutProjectState layout =
-                gui_manager->panelLayout()
-                    .captureProjectState();
+            LegacyLayoutState layout{.show_sequencer = gui_manager->isSequencerVisible()};
             if (!has_screen) {
                 (void)read_fields(
                     fixed,
@@ -3132,8 +3132,7 @@ namespace lfs::vis::project {
             }
 
             if (!has_screen) {
-                gui_manager->panelLayout()
-                    .applyProjectState(layout);
+                gui_manager->setSequencerVisible(layout.show_sequencer);
             }
 
             std::vector<gui::PanelProjectState>
@@ -3579,15 +3578,13 @@ namespace lfs::vis::project {
                 return;
             }
             const bool sequencer_visible =
-                gui_manager->panelLayout().isShowSequencer();
+                gui_manager->isSequencerVisible();
             const auto finish = [&] {
-                // Seed both slots from final restored tool values with sync off on every exit.
                 rendering
                     ->restoreDepthWindowStateFromProject();
                 viewer.getEditorContext()
                     .armToolRestoreGuard();
-                gui_manager->panelLayout()
-                    .setShowSequencer(sequencer_visible);
+                gui_manager->setSequencerVisible(sequencer_visible);
                 rendering->markDirty(DirtyFlag::ALL);
             };
 
@@ -4036,14 +4033,13 @@ namespace lfs::vis::project {
         auto* gui_manager = viewer.getGuiManager();
         const bool sequencer_visible =
             gui_manager &&
-            gui_manager->panelLayout().isShowSequencer();
+            gui_manager->isSequencerVisible();
         auto view = chapter_root(
             prepared.chapters.view.dom(), "VIEW");
         if (!view) {
             deactivate_tool(viewer);
             if (gui_manager) {
-                gui_manager->panelLayout()
-                    .setShowSequencer(sequencer_visible);
+                gui_manager->setSequencerVisible(sequencer_visible);
             }
             return;
         }

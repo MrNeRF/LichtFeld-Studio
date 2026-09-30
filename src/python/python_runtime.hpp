@@ -45,6 +45,7 @@ namespace lfs::rendering {
 namespace lfs::vis {
     class Visualizer;
     struct FrameInputBuffer;
+    struct ViewInfo;
     class SceneManager;
     class TrainerManager;
     class ParameterManager;
@@ -584,6 +585,7 @@ namespace lfs::python {
         std::uint32_t view = 0;
         const vis::FrameInputBuffer* frame_input = nullptr;
         std::optional<std::array<float, 4>> viewport_bounds;
+        const vis::ViewInfo* camera = nullptr;
     };
 
     LFS_PYTHON_RUNTIME_API void set_overlay_draw_context(OverlayDrawContext context);

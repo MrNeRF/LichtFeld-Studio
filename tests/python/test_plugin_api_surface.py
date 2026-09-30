@@ -238,8 +238,7 @@ def test_panel_core_sources_use_v1_internal_names():
     panel_core_files = [
         "src/visualizer/gui/panel_registry.hpp",
         "src/visualizer/gui/panel_registry.cpp",
-        "src/visualizer/gui/panel_layout.hpp",
-        "src/visualizer/gui/panel_layout.cpp",
+        "src/visualizer/gui/gui_input.hpp",
         "src/visualizer/gui/screen_host.hpp",
         "src/visualizer/gui/screen_host.cpp",
         "src/visualizer/gui/rmlui/resources/screen_chrome.rml",

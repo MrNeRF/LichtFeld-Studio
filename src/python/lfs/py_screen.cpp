@@ -5,6 +5,7 @@
 #include "py_screen.hpp"
 
 #include "py_ui.hpp"
+#include "py_viewer_dispatch.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/render_constants.hpp"
@@ -38,43 +39,6 @@ namespace lfs::python {
             return dynamic_cast<vis::VisualizerImpl*>(get_visualizer());
         }
 
-        template <typename F>
-            requires(!std::is_void_v<std::invoke_result_t<F>>)
-        auto invoke_on_viewer(F&& fn, std::invoke_result_t<F> fallback) {
-            auto* const viewer = get_visualizer();
-            if (!viewer || viewer->isOnViewerThread())
-                return std::invoke(std::forward<F>(fn));
-            if (!viewer->acceptsPostedWork())
-                return fallback;
-
-            nb::gil_scoped_release release;
-            return vis::post_work_and_wait(
-                [viewer](vis::Visualizer::WorkItem work) {
-                    return viewer->postWork(std::move(work));
-                },
-                std::forward<F>(fn),
-                [fallback]() { return fallback; });
-        }
-
-        template <typename F>
-            requires(std::is_void_v<std::invoke_result_t<F>>)
-        void invoke_on_viewer(F&& fn) {
-            auto* const viewer = get_visualizer();
-            if (!viewer || viewer->isOnViewerThread()) {
-                std::invoke(std::forward<F>(fn));
-                return;
-            }
-            if (!viewer->acceptsPostedWork())
-                return;
-
-            nb::gil_scoped_release release;
-            vis::post_work_and_wait(
-                [viewer](vis::Visualizer::WorkItem work) {
-                    return viewer->postWork(std::move(work));
-                },
-                std::forward<F>(fn), [] {});
-        }
-
         void notify_screen_changed(vis::VisualizerImpl* impl) {
             if (auto* rendering = impl->getRenderingManager())
                 rendering->markDirty(vis::DirtyFlag::ALL);
@@ -84,24 +48,13 @@ namespace lfs::python {
             return vis::screen::AreaId{id > 0 ? static_cast<std::uint32_t>(id) : 0};
         }
 
-        vis::screen::Rect area_rect(vis::VisualizerImpl& impl, const vis::screen::AreaId id) {
-            if (auto* gui = impl.getGuiManager()) {
-                return gui->screenHost().currentAreaRect(id);
-            }
-            const auto geometry = impl.screens().screen().solve(
-                vis::screen::Rect{0.0f, 0.0f, 1.0f, 1.0f}, vis::screen::LayoutMetrics{});
-            if (const auto* found = geometry.find(id))
-                return found->rect;
-            return {};
-        }
-
         nb::dict area_dict(vis::VisualizerImpl& impl, const vis::screen::AreaId id) {
             const auto& screen = impl.screens().screen();
             const auto* area = screen.area(id);
             nb::dict out;
             out["id"] = static_cast<int>(id.value);
             out["editor"] = area ? nb::cast(area->editor) : nb::str();
-            const auto rect = area_rect(impl, id);
+            const auto rect = impl.areaRect(id);
             out["x"] = rect.x;
             out["y"] = rect.y;
             out["width"] = rect.w;

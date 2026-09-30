@@ -355,7 +355,7 @@ def _scan_result(**overrides):
         setattr(value, key, item)
     return value
 
-def test_panel_contract_polls_preference_and_remains_left_dock(panel_module, monkeypatch):
+def test_panel_contract_polls_preference_and_keeps_area_placement(panel_module, monkeypatch):
     panel_type = panel_module.AssetManagerPanel
     assert panel_type.update_policy == "dirty"
     assert panel_type.space == panel_module.lf.ui.PanelSpace.LEFT_DOCK

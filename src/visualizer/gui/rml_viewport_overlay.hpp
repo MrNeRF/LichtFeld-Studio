@@ -46,61 +46,12 @@ namespace lfs::vis::gui {
         bool context_menu = false;
         bool menu_pointer = false;
         bool floating_panel = false;
-        bool left_dock = false;
+        bool area_chrome = false;
 
         [[nodiscard]] bool blocksInput() const {
-            return startup || progress || modal || pending_modal || context_menu || menu_pointer || floating_panel || left_dock;
+            return startup || progress || modal || pending_modal || context_menu || menu_pointer || floating_panel || area_chrome;
         }
     };
-
-    // Test window-coordinate `point` against the rectangle resolveViewerPanel splits.
-    // The overlay also covers the left dock for toolbars (gui_manager.cpp,
-    // setViewportBounds), so an overlay press need not be a viewport press.
-    [[nodiscard]] inline bool pointInsideViewport(const glm::vec2 point,
-                                                  const glm::vec2 viewport_pos,
-                                                  const glm::vec2 viewport_size) {
-        if (viewport_size.x <= 0.0f || viewport_size.y <= 0.0f)
-            return false;
-        return point.x >= viewport_pos.x && point.x < viewport_pos.x + viewport_size.x &&
-               point.y >= viewport_pos.y && point.y < viewport_pos.y + viewport_size.y;
-    }
-
-    // Overlay-only facts: whether a left DOWN hit a control or dismissed focused text.
-    // One entry per left DOWN in the last processed frame, in SDL order.
-    // Pair entry i with that frame's i-th canonical left DOWN for its coordinates
-    // and GUI ownership.
-    struct OverlayLeftPressClassification {
-        bool on_interactive_control = false;
-        bool blurred_text_input = false;
-    };
-
-    // Classify all inputs from the same DOWN's coordinates, not the latest cursor.
-    struct OverlayPressFocusInputs {
-        bool left_pressed = false;
-        bool overlay_wants_input = false;
-        bool pressed_interactive_control = false;
-        bool press_blurred_text_input = false;
-        bool press_inside_viewport = false;
-        // Event-time GUI ownership of this DOWN.
-        bool press_gui_owned = false;
-    };
-
-    // Only a left DOWN inside the viewport, outside interactive controls and not
-    // GUI-owned at press time may change panel focus. The overlay also covers the
-    // dock, and its resize strip overlaps the viewport; dismissing text must not
-    // turn either into a focus target. Ownership captured at BUTTON_DOWN remains
-    // valid after layout changes.
-    // Toolbar actions must use existing focus, regardless of where controls appear.
-    // Otherwise, allow focus when the overlay consumes the press or it blurred text.
-    // Blur and its commit run first, so the edit reaches its original panel.
-    // Process each DOWN in SDL order; each allowed press moves focus, while refusal
-    // leaves any earlier focus change intact.
-    [[nodiscard]] inline bool overlayPressMayFocusPanel(const OverlayPressFocusInputs& press) {
-        if (!press.left_pressed || !press.press_inside_viewport ||
-            press.press_gui_owned || press.pressed_interactive_control)
-            return false;
-        return press.overlay_wants_input || press.press_blurred_text_input;
-    }
 
     class RmlViewportOverlay {
     public:
@@ -157,9 +108,7 @@ namespace lfs::vis::gui {
         void init(RmlUIManager* mgr);
         LFS_VIS_API void shutdown();
         LFS_VIS_API void setViewportBounds(glm::vec2 pos, glm::vec2 size, glm::vec2 screen_origin);
-        void setViewportContentOffset(float x);
-        void setToolbarPanels(float primary_x, float primary_width, float inset);
-        void setLeftDockResizeIndicator(bool visible, bool active, float thickness);
+        void setToolbarBounds(float x, float width, float inset);
         void setSplitDividerOverlay(SplitDividerOverlayState state);
         void setGTMetricsOverlay(GTMetricsOverlayState state);
         void setLodStatsOverlay(LodStatsOverlayState state);
@@ -174,12 +123,6 @@ namespace lfs::vis::gui {
         LFS_VIS_API void processInput(const PanelInputState& input,
                                       const ViewportOverlayInputBlockers& blockers = {});
         bool wantsInput() const { return wants_input_; }
-        // Left DOWNs from the last processInput(), classified at their own points
-        // in arrival order; empty with no left press or an early blocked return.
-        [[nodiscard]] const std::vector<OverlayLeftPressClassification>&
-        leftPressClassifications() const {
-            return left_press_classifications_;
-        }
         [[nodiscard]] bool needsAnimationFrame() const {
             return render_needed_ || document_sync_dirty_ || animation_active_ || tooltip_.revealDue() ||
                    toolbar_drag_active_ ||
@@ -212,12 +155,10 @@ namespace lfs::vis::gui {
         [[nodiscard]] float toolbarFreeGap(float toolbar_height) const;
         [[nodiscard]] float toolbarFreeTop(float toolbar_height) const;
         [[nodiscard]] float toolbarFreeTravel(float toolbar_height) const;
-        void updateViewportContentOffset();
         void updateViewportContentClasses(float dp_ratio);
         void bindReactiveStore();
         void refreshGTMetricsOverlayFromStore();
         void applySplitDividerOverlay();
-        void applyLeftDockResizeIndicator();
         void applyGTMetricsOverlay();
         void applyLodStatsOverlay();
         void applyProjectDragOverlay();
@@ -240,7 +181,6 @@ namespace lfs::vis::gui {
             PointerDrag = 1u << 13,
             Keyboard = 1u << 14,
             LodStats = 1u << 15,
-            LeftDockResize = 1u << 16,
             PerfHud = 1u << 17,
             ProjectDrag = 1u << 18,
             ThemePresentation = 1u << 19,
@@ -262,11 +202,11 @@ namespace lfs::vis::gui {
         // A collapsed layout leaves the live Rml context at its previous size.
         // Its outstanding releases still use that last valid window origin.
         std::optional<glm::vec2> last_valid_input_origin_;
-        float primary_toolbar_x_ = 0.0f;
+        float toolbar_x_ = 0.0f;
         float toolbar_inset_ = 0.0f;
-        float primary_toolbar_width_ = 0.0f;
-        float applied_primary_toolbar_x_ = 0.0f;
-        float applied_primary_toolbar_width_ = -1.0f;
+        float toolbar_width_ = 0.0f;
+        float applied_toolbar_x_ = 0.0f;
+        float applied_toolbar_width_ = -1.0f;
         bool toolbar_roots_dirty_ = true;
         bool toolbar_rail_layout_dirty_ = true;
         float last_toolbar_dpi_ = 0.0f;
@@ -274,23 +214,20 @@ namespace lfs::vis::gui {
         std::string viewport_toolbar_position_ = "centered";
         std::string applied_viewport_toolbar_position_;
         float viewport_toolbar_free_y_ = 0.5f;
-        float applied_primary_toolbar_top_ = std::numeric_limits<float>::quiet_NaN();
-        Rml::Element* primary_toolbar_drag_handle_ = nullptr;
+        float applied_toolbar_top_ = std::numeric_limits<float>::quiet_NaN();
+        Rml::Element* toolbar_drag_handle_ = nullptr;
         ToolbarDragListener toolbar_drag_listener_;
         bool toolbar_drag_active_ = false;
         bool applied_toolbar_drag_active_ = false;
         bool toolbar_drag_moved_ = false;
         float toolbar_drag_start_top_ = 0.0f;
         float toolbar_drag_start_mouse_y_ = 0.0f;
-        float viewport_content_offset_ = 0.0f;
-        bool viewport_content_offset_dirty_ = true;
         std::size_t last_theme_signature_ = 0;
         bool has_theme_signature_ = false;
         std::string viewport_chrome_style_ = "translucent";
         std::string base_rcss_;
         std::string body_template_rml_;
         bool wants_input_ = false;
-        std::vector<OverlayLeftPressClassification> left_press_classifications_;
         // Per-button DOWN delivery to this RmlUi context; the matching UP is owed
         // wherever it lands. Persist across frames; clear the whole array only on
         // context destruction (rml_pointer_dispatch.hpp).
@@ -310,9 +247,6 @@ namespace lfs::vis::gui {
         int last_render_w_ = 0;
         int last_render_h_ = 0;
         CachedVulkanContextRender direct_cache_;
-        bool left_dock_resize_visible_ = false;
-        bool left_dock_resize_active_ = false;
-        float left_dock_resize_thickness_ = 0.0f;
         SplitDividerOverlayState split_divider_overlay_;
         GTMetricsOverlayState gt_metrics_overlay_;
         LodStatsOverlayState lod_stats_overlay_;

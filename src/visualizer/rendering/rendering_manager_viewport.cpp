@@ -190,7 +190,7 @@ namespace lfs::vis {
     }
 
     std::optional<RenderingManager::MutableViewerPanelInfo> RenderingManager::resolveViewerPanel(
-        ViewId view, Viewport& primary_viewport,
+        ViewId view, Viewport& viewport,
         const glm::vec2& viewport_pos,
         const glm::vec2& viewport_size,
         const std::optional<glm::vec2> screen_point,
@@ -203,7 +203,7 @@ namespace lfs::vis {
 
         MutableViewerPanelInfo info{
             .panel = SplitViewPanelId::Left,
-            .viewport = &primary_viewport,
+            .viewport = &viewport,
             .x = viewport_pos.x,
             .y = viewport_pos.y,
             .width = viewport_size.x,
@@ -225,7 +225,7 @@ namespace lfs::vis {
     }
 
     std::optional<RenderingManager::ViewerPanelInfo> RenderingManager::resolveViewerPanel(
-        ViewId view, const Viewport& primary_viewport,
+        ViewId view, const Viewport& viewport,
         const glm::vec2& viewport_pos,
         const glm::vec2& viewport_size,
         const std::optional<glm::vec2> screen_point,
@@ -238,7 +238,7 @@ namespace lfs::vis {
 
         ViewerPanelInfo info{
             .panel = SplitViewPanelId::Left,
-            .viewport = &primary_viewport,
+            .viewport = &viewport,
             .x = viewport_pos.x,
             .y = viewport_pos.y,
             .width = viewport_size.x,
@@ -1267,7 +1267,7 @@ namespace lfs::vis {
             return -1.0f;
         }
 
-        RenderTargetId output_slot = viewState(view).main_render_target_;
+        RenderTargetId target = viewState(view).main_render_target_;
 
         glm::ivec2 source_size = viewState(view).frame_lifecycle_service_.lastViewportSize();
 
@@ -1276,7 +1276,7 @@ namespace lfs::vis {
             VksplatViewportRenderer::DepthSampleRequest{
                 .pixel = {x, y},
                 .source_size = source_size,
-                .output_slot = output_slot,
+                .target = target,
             });
         if (!depth) {
             LOG_TRACE("VkSplat depth sample failed: {}", depth.error());

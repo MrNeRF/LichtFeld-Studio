@@ -6,7 +6,7 @@
 #include "core/logger.hpp"
 #include "gui/context_menu_placement.hpp"
 #include "gui/gui_focus_state.hpp"
-#include "gui/panel_layout.hpp"
+#include "gui/gui_input.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"

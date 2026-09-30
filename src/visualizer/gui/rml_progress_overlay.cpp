@@ -7,7 +7,7 @@
 #include "core/logger.hpp"
 #include "core/number_format.hpp"
 #include "gui/gui_focus_state.hpp"
-#include "gui/panel_layout.hpp"
+#include "gui/gui_input.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_pointer_dispatch.hpp"
 #include "gui/rmlui/rml_theme.hpp"

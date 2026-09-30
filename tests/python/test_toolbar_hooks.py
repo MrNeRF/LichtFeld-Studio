@@ -322,7 +322,7 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "viewport_export_action" in model.bound_events
 
 
-def test_bottom_dock_toolbar_selection_and_dispatch_rules(toolbar_module, monkeypatch):
+def test_editor_toolbar_selection_and_dispatch_rules(toolbar_module, monkeypatch):
     module, _hook_calls, _remove_calls = toolbar_module
     lf_stub = sys.modules["lichtfeld"]
     spaces = {
@@ -342,27 +342,27 @@ def test_bottom_dock_toolbar_selection_and_dispatch_rules(toolbar_module, monkey
         close_editor=lambda editor: open_editors.remove(editor) if editor in open_editors else False,
     )
 
-    assert not module._bottom_dock_panel_selected(module._HISTOGRAM_PANEL_ID, False)
-    assert not module._bottom_dock_panel_selected(module._HISTOGRAM_PANEL_ID, True)
+    assert not module._editor_panel_selected(module._HISTOGRAM_PANEL_ID, False)
+    assert not module._editor_panel_selected(module._HISTOGRAM_PANEL_ID, True)
     open_editors.append(module._HISTOGRAM_PANEL_ID)
-    assert module._bottom_dock_panel_selected(module._HISTOGRAM_PANEL_ID, True)
+    assert module._editor_panel_selected(module._HISTOGRAM_PANEL_ID, True)
 
     calls = []
     set_visible = lambda value: calls.append(("visible", value))
 
     open_editors.clear()
-    module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, False, set_visible)
+    module._toggle_editor_panel(module._HISTOGRAM_PANEL_ID, False, set_visible)
     assert module._HISTOGRAM_PANEL_ID in open_editors
     assert calls[-1] == ("visible", True)
 
     calls.clear()
-    module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
+    module._toggle_editor_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
     assert module._HISTOGRAM_PANEL_ID not in open_editors
     assert calls == [("visible", False)]
 
     spaces[module._HISTOGRAM_PANEL_ID] = lf_stub.ui.PanelSpace.FLOATING
     calls.clear()
-    module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
+    module._toggle_editor_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
     assert calls == [("visible", False)]
 
 
@@ -1443,7 +1443,7 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert "viewport-nav-toolbar" not in rml
     assert "viewport-nav-separator" not in rml
     primary_left = rml[
-        rml.index('id="primary-utility-toolbar"') : rml.index('id="primary-transform-toolbar"')
+        rml.index('id="view-utility-toolbar"') : rml.index('id="primary-transform-toolbar"')
     ]
     for toolbar_markup in (primary_left,):
         assert 'data-for="button : camera_mode_buttons"' not in toolbar_markup
@@ -1791,16 +1791,20 @@ def test_python_theme_mutations_are_marshaled_to_viewer_thread():
         project_root / "src/python/stubs/lichtfeld/ui/__init__.pyi"
     ).read_text(encoding="utf-8")
 
+    dispatch = (
+        project_root / "src/python/lfs/py_viewer_dispatch.hpp"
+    ).read_text(encoding="utf-8")
+    assert "viewer->isOnViewerThread()" in dispatch
+    assert "nb::gil_scoped_release release;" in dispatch
+    assert "vis::post_work_and_wait(" in dispatch
     for source in (py_ui, py_ui_theme):
-        assert "viewer->isOnViewerThread()" in source
-        assert "nb::gil_scoped_release release;" in source
-        assert "vis::post_work_and_wait(" in source
+        assert '#include "py_viewer_dispatch.hpp"' in source
 
     for source, binding, helper in (
         (py_ui, "set_theme", "invoke_on_viewer("),
         (py_ui, "set_theme_family", "invoke_on_viewer("),
-        (py_ui_theme, "set_viewport_chrome_style", "invoke_on_viewer_thread("),
-        (py_ui_theme, "set_viewport_toolbar_position", "invoke_on_viewer_thread("),
+        (py_ui_theme, "set_viewport_chrome_style", "invoke_on_viewer("),
+        (py_ui_theme, "set_viewport_toolbar_position", "invoke_on_viewer("),
     ):
         start = source.index(f'"{binding}",')
         end = source.index("nb::arg", start)
@@ -1812,9 +1816,7 @@ def test_python_theme_mutations_are_marshaled_to_viewer_thread():
     assert "def set_viewport_toolbar_position(position: str) -> None:" in ui_stub
 
 
-
-
-def test_screen_chrome_view_label_is_pointer_transparent_and_themed():
+def test_screen_chrome_view_label_is_pointer_transparent_and_legible():
     project_root = Path(__file__).parent.parent.parent
     resources = project_root / "src/visualizer/gui/rmlui/resources"
     rml = (resources / "screen_chrome.rml").read_text(encoding="utf-8")
@@ -1836,7 +1838,10 @@ def test_screen_chrome_view_label_is_pointer_transparent_and_themed():
     theme_end = theme.index("\n}", theme_start)
     theme_rule = theme[theme_start:theme_end]
     assert "color:" in theme_rule
-    assert "background-color: @{alpha(background,0.42)}" in theme_rule
+    assert "background-color: #00000040;" in theme_rule
+    assert "font-effect: shadow(" in theme_rule
+    assert "border:" not in label_rule + theme_rule
+    assert "border-color:" not in label_rule + theme_rule
     assert "border-radius:" in theme_rule
 
 

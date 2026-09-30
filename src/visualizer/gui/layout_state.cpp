@@ -123,24 +123,6 @@ namespace lfs::vis::gui {
                         nlohmann::json::parse(file);
 
                     if (legacy_layout) {
-                        right_panel_width = j.value(
-                            "right_panel_width",
-                            right_panel_width);
-                        scene_panel_ratio = j.value(
-                            "scene_panel_ratio",
-                            scene_panel_ratio);
-                        python_console_width = j.value(
-                            "python_console_width",
-                            python_console_width);
-                        bottom_dock_height = j.value(
-                            "bottom_dock_height",
-                            bottom_dock_height);
-                        left_dock_width = j.value(
-                            "left_dock_width",
-                            left_dock_width);
-                        show_sequencer = j.value(
-                            "show_sequencer",
-                            show_sequencer);
                         if (j.contains("windows") &&
                             j["windows"].is_object()) {
                             for (const auto& [key, val] :

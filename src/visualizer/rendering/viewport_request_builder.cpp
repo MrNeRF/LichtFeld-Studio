@@ -244,8 +244,7 @@ namespace lfs::vis {
             }
         }
         void applyGaussianViewVolume(lfs::rendering::GaussianFilterState& filters,
-                                     const FrameContext& ctx,
-                                     const std::optional<SplitViewPanelId> render_panel) {
+                                     const FrameContext& ctx) {
             // While GT comparison mode is active the depth filter's render effect
             // (dim/hide/containment, and the drag-preview lane with it) is fully
             // suspended. Settings are never mutated — dropping the filters from the
@@ -393,7 +392,7 @@ namespace lfs::vis {
 
         applyGaussianCropBox(request.filters, ctx);
         applyGaussianEllipsoid(request.filters, ctx);
-        applyGaussianViewVolume(request.filters, ctx, render_panel);
+        applyGaussianViewVolume(request.filters, ctx);
         request.frame_view.subregion_origin = subregion_origin;
         request.frame_view.subregion_full_size = subregion_full_size;
         return request;

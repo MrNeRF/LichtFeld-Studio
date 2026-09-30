@@ -115,14 +115,7 @@ namespace lfs::vis {
         bool gt_async_ticket_flip_y_ = false;
         lfs::rendering::FrameMetadata gt_async_ticket_metadata_{};
         std::optional<GTPresentedView> gt_async_ticket_view_;
-        // Panel keeps gt_async_held_display_ until the next ticket delivers (never
-        // blank).
-
-        // The GT camera and size that produced a given async depth/normal image.
-        // Carried with the ticket and promoted with the held display, so the
-        // selection lane can only ever see the camera of the image the panel is
-        // ACTUALLY showing (#1574 hold-then-swap).
-
+        // Keep the displayed image and its camera together until the next ticket arrives.
         std::shared_ptr<lfs::core::Tensor> gt_async_held_display_;
         bool gt_async_held_flip_y_ = false;
         lfs::rendering::FrameMetadata gt_async_held_metadata_{};

@@ -52,7 +52,6 @@ namespace lfs::vis::screen {
     // switches to orthographic.
     void setAxisView(View3DSpace& view, ViewAxis axis, float viewport_height);
     // Leaves an axis view: back to perspective if the axis view chose ortho.
-    void leaveAxisView(View3DSpace& view);
 
     // Applies a view command that only touches the view itself:
     //   display:splats|points|rings|centers, depth, projection,

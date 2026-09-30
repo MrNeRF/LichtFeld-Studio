@@ -8,15 +8,6 @@ namespace lfs::vis {
 
     namespace py = lfs::python;
 
-    namespace {
-        thread_local std::optional<ViewInfo> overlay_view;
-    }
-
-    ScopedOverlayView::ScopedOverlayView(ViewInfo view) : previous_(std::move(overlay_view)) {
-        overlay_view = std::move(view);
-    }
-    ScopedOverlayView::~ScopedOverlayView() { overlay_view = std::move(previous_); }
-
     struct ViewContextState {
         GetViewCallback view_callback;
         GetViewportRenderCallback viewport_render_callback;
@@ -50,8 +41,8 @@ namespace lfs::vis {
     }
 
     std::optional<ViewInfo> get_current_view_info() {
-        if (overlay_view)
-            return overlay_view;
+        if (const auto* camera = py::get_overlay_draw_context().camera)
+            return *camera;
         const auto& s = state();
         if (!s.view_callback)
             return std::nullopt;

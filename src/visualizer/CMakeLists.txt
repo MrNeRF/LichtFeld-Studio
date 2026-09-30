@@ -100,7 +100,6 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/global_context_menu.cpp
         gui/gizmo_manager.cpp
         gui/pie_menu.cpp
-        gui/panel_layout.cpp
         gui/panel_registry.cpp
         gui/native_panels.cpp
         gui/layout_state.cpp

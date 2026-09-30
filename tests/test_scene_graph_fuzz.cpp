@@ -227,7 +227,7 @@ namespace {
             lfs::vis::services().clear();
             lfs::vis::op::undoHistory().clear();
             manager_ = std::make_unique<lfs::vis::SceneManager>();
-            rendering_ = std::make_unique<lfs::vis::RenderingManager>(rendering__views);
+            rendering_ = std::make_unique<lfs::vis::RenderingManager>(screens_);
             lfs::vis::services().set(manager_.get());
             lfs::vis::services().set(rendering_.get());
             manager_->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
@@ -254,7 +254,7 @@ namespace {
         }
 
         std::unique_ptr<lfs::vis::SceneManager> manager_;
-        lfs::vis::screen::ScreenService rendering__views;
+        lfs::vis::screen::ScreenService screens_;
         std::unique_ptr<lfs::vis::RenderingManager> rendering_;
     };
 

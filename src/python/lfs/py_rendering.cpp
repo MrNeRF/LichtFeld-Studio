@@ -1948,7 +1948,6 @@ Args:
     eye: camera position (x, y, z).
     target: look-at target (x, y, z).
     up: world up vector (default (0, 1, 0)).
-
 )doc");
 
         m.def("set_camera_fov", &set_camera_fov,

@@ -79,13 +79,8 @@ namespace lfs::vis::gui {
             [this](const screen::AreaId id, const std::string_view action) {
                 if (services_.view_command)
                     services_.view_command(id, action);
-            },
-            [this](const screen::AreaId id) {
                 chrome_dirty_ = true;
-                if (services_.view_changed)
-                    services_.view_changed(id);
             });
-        view3d_editor_ = view3d_.get();
         installPanelEditorTypes(services_.screens->editorTypes());
 
         chrome_context_ = services_.rml->createContext("screen_chrome", 800, 600);
@@ -724,7 +719,7 @@ namespace lfs::vis::gui {
                 switch (*space) {
                 case PanelSpace::MainPanelTab: space_demand = demand.main_panel_tab; break;
                 case PanelSpace::SceneHeader: space_demand = demand.scene_header; break;
-                default: space_demand = demand.bottom_dock || demand.left_dock; break;
+                default: space_demand = demand.bottom_editor || demand.left_editor; break;
                 }
             }
             const bool pointer_here = frame.rect.contains(input.mouse_x, input.mouse_y);

@@ -109,9 +109,9 @@ def test_menubar_submenus_are_stacked_above_overlay_and_hit_testable():
     assert 'id="menu-window-toggle-ui"' in rml
     assert 'data-action="window_toggle_ui"' in rml
     assert rml.count('data-for="button : menu_camera_buttons"') == 1
-    assert rml.count('data-for="button : menu_projection_buttons"') == 1
+    assert rml.count('data-for="button : menu_snap_buttons"') == 1
     assert rml.index('data-for="button : menu_camera_buttons"') < rml.index(
-        'data-for="button : menu_projection_buttons"'
+        'data-for="button : menu_snap_buttons"'
     )
     toolbar_button_rule = _rule_body(rcss, ".menu-toolbar-btn")
     assert "transition: none;" in toolbar_button_rule
@@ -213,7 +213,6 @@ def test_optional_gradients_style_the_primary_application_chrome():
     assert '{"panel.host_body_decor"' in rml_theme_cpp
     assert '"decorator: none; background-color: transparent"' in rml_theme_cpp
     assert "@{panel.host_body_decor}" in panel_host_theme
-    assert '"width: 1dp; height: 100%' in rml_theme_cpp
 
 
 def test_rml_tooltips_request_only_pending_animation_frames():
@@ -659,16 +658,6 @@ def test_menu_pointer_input_is_not_replayed_into_underlay_panels():
     assert "input.keys_pressed" not in pointer_mask
     assert "input.text_inputs" not in pointer_mask
 
-
-def test_viewport_overlay_toolbar_origin_tracks_viewport_content_offset():
-    overlay_cpp = (
-        PROJECT_ROOT
-        / "src"
-        / "visualizer"
-        / "gui"
-        / "rml_viewport_overlay.cpp"
-    ).read_text(encoding="utf-8")
-    assert "setViewportContentOffset" in overlay_cpp
 
 
 def test_asset_manager_launcher_is_not_duplicated_in_scene_header():

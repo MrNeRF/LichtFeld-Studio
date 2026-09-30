@@ -89,15 +89,6 @@ namespace lfs::vis {
         std::vector<FrameViewPanel> view_panels;
         glm::vec2 scene_jitter_pixels{0.0f};
 
-        [[nodiscard]] const FrameViewPanel* findViewPanel(const SplitViewPanelId panel_id) const {
-            for (const auto& panel : view_panels) {
-                if (panel.panel == panel_id && panel.valid()) {
-                    return &panel;
-                }
-            }
-            return nullptr;
-        }
-
         [[nodiscard]] lfs::rendering::FrameView makeFrameView(const Viewport& source,
                                                               const glm::ivec2 size) const {
             std::optional<lfs::rendering::CameraIntrinsics> containment_intrinsics;

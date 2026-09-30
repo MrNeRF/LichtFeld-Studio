@@ -241,7 +241,7 @@ namespace lfs::vis {
 
     RenderingManager::~RenderingManager() {
         event_handlers_ = lfs::event::ScopedHandler{};
-        invalidateGTComparisonImageCache();
+        invalidateGTComparisonImageCache(state());
         gt_comparison_image_worker_.request_stop();
         gt_comparison_image_cv_.notify_all();
         if (gt_comparison_image_worker_.joinable()) {
@@ -303,9 +303,6 @@ namespace lfs::vis {
         markDirty(DirtyFlag::ALL);
     }
 
-    thread_local RenderingManager* RenderingManager::rendering_owner_ = nullptr;
-    thread_local ViewRenderState* RenderingManager::rendering_view_ = nullptr;
-
     ViewRenderState& RenderingManager::viewState(ViewId id) const {
         std::lock_guard lock(views_mutex_);
         auto& entry = view_states_[id];
@@ -322,7 +319,7 @@ namespace lfs::vis {
     }
 
     ViewRenderState& RenderingManager::state() const {
-        return rendering_owner_ == this ? *rendering_view_ : viewState(view_source_.activeView());
+        return viewState(view_source_.activeView());
     }
 
     void RenderingManager::markDirty(const DirtyMask flags) {
@@ -410,21 +407,8 @@ namespace lfs::vis {
         });
     }
 
-    void RenderingManager::requestRenderFollowUp() {
-        this->state().dirty_mask_.fetch_or(DirtyFlag::CAMERA, std::memory_order_relaxed);
-
-        std::function<void()> wake_callback;
-        {
-            std::scoped_lock lock(wake_callback_mutex_);
-            wake_callback = wake_callback_;
-        }
-        if (wake_callback) {
-            wake_callback();
-        }
-    }
-
-    void RenderingManager::requestTemporalFollowUp() {
-        this->state().dirty_mask_.fetch_or(DirtyFlag::TEMPORAL, std::memory_order_relaxed);
+    void RenderingManager::requestViewFollowUp(ViewRenderState& view, const DirtyMask flags) {
+        view.dirty_mask_.fetch_or(flags, std::memory_order_relaxed);
 
         std::function<void()> wake_callback;
         {
@@ -558,23 +542,23 @@ namespace lfs::vis {
         }
     }
 
-    void RenderingManager::clearVulkanViewportImageState(const glm::ivec2 size,
+    void RenderingManager::clearVulkanViewportImageState(ViewRenderState& view, const glm::ivec2 size,
                                                          const bool flip_y,
                                                          const glm::ivec2 alloc_size) {
-        this->state().vulkan_viewport_image_.reset();
-        this->state().vulkan_external_viewport_image_ = VK_NULL_HANDLE;
-        this->state().vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
-        this->state().vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
-        this->state().vulkan_external_viewport_image_generation_ = 0;
-        this->state().vulkan_viewport_image_size_ = size;
-        this->state().vulkan_viewport_image_alloc_size_ = alloc_size.x > 0 && alloc_size.y > 0 ? alloc_size : size;
-        this->state().vulkan_viewport_image_flip_y_ = flip_y;
-        this->state().vulkan_gt_comparison_content_size_ = {0, 0};
-        this->state().vulkan_gt_comparison_selection_view_.reset();
+        view.vulkan_viewport_image_.reset();
+        view.vulkan_external_viewport_image_ = VK_NULL_HANDLE;
+        view.vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
+        view.vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+        view.vulkan_external_viewport_image_generation_ = 0;
+        view.vulkan_viewport_image_size_ = size;
+        view.vulkan_viewport_image_alloc_size_ = alloc_size.x > 0 && alloc_size.y > 0 ? alloc_size : size;
+        view.vulkan_viewport_image_flip_y_ = flip_y;
+        view.vulkan_gt_comparison_content_size_ = {0, 0};
+        view.vulkan_gt_comparison_selection_view_.reset();
     }
 
     void RenderingManager::releaseSceneRenderResources() {
-        invalidateGTComparisonImageCache();
+        invalidateGTComparisonImageCache(state());
         dropViewStates();
         point_cloud_colors_cache_ = {};
         point_cloud_colors_cache_key_ = nullptr;
@@ -777,7 +761,7 @@ namespace lfs::vis {
     }
 
     RenderSettings RenderingManager::activeSettingsLocked() const {
-        return RenderSettings(settings_, view_source_.viewSettings(rendering_owner_ == this ? rendering_view_->id : view_source_.activeView()).value());
+        return RenderSettings(settings_, view_source_.viewSettings(view_source_.activeView()).value());
     }
 
     void RenderingManager::storeActiveSettingsLocked(const RenderSettings& settings) {
@@ -819,9 +803,9 @@ namespace lfs::vis {
             markViewDirty(id, DirtyFlag::TEMPORAL);
     }
 
-    SceneUpscalerSelection RenderingManager::sceneUpscalerRuntimeSelection() const {
+    SceneUpscalerSelection RenderingManager::sceneUpscalerRuntimeSelection(const ViewId view) const {
         std::lock_guard lock(settings_mutex_);
-        return this->state().scene_upscaler_runtime_selection_;
+        return viewState(view == kNoView ? view_source_.activeView() : view).scene_upscaler_runtime_selection_;
     }
 
     void RenderingManager::setOrthographic(const bool enabled, const float viewport_height, const float distance_to_pivot) {
@@ -916,9 +900,9 @@ namespace lfs::vis {
         markViewDirty(viewState(view).id, DirtyFlag::OVERLAY);
     }
 
-    bool RenderingManager::depthWindowDragPreview() const {
+    bool RenderingManager::depthWindowDragPreview(const ViewId view) const {
         std::lock_guard lock(settings_mutex_);
-        return this->state().depth_window_preview_count_ > 0;
+        return viewState(view == kNoView ? view_source_.activeView() : view).depth_window_preview_count_ > 0;
     }
 
     GTComparisonMode RenderingManager::getGTComparisonMode() const {
@@ -1099,7 +1083,7 @@ namespace lfs::vis {
             app_store().camera_metrics.set(std::optional<AppStore::CameraMetrics>{});
     }
 
-    void RenderingManager::queueCameraMetricsRefreshIfStale(SceneManager* const scene_manager) {
+    void RenderingManager::queueCameraMetricsRefreshIfStale(ViewId view, SceneManager* const scene_manager) {
         if (!scene_manager) {
             return;
         }
@@ -1109,7 +1093,7 @@ namespace lfs::vis {
             return;
         }
 
-        const auto settings = settingsForView(this->state().id);
+        const auto settings = settingsForView(view);
         if (!splitViewUsesGTComparison(settings.split_view_mode) ||
             settings.camera_metrics_mode == RenderSettings::CameraMetricsMode::Off) {
             return;

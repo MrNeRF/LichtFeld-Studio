@@ -4,9 +4,9 @@
 
 #include "gui/native_panels.hpp"
 #include "gui/gizmo_manager.hpp"
+#include "gui/gui_input.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/line_renderer.hpp"
-#include "gui/panel_layout.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/rml_status_bar.hpp"
 #include "gui/sequencer_ui_manager.hpp"
@@ -153,9 +153,9 @@ namespace lfs::vis::gui::native_panels {
         (void)ctx;
     }
 
-    SequencerPanel::SequencerPanel(SequencerUIManager* seq, const PanelLayoutManager* layout)
+    SequencerPanel::SequencerPanel(SequencerUIManager* seq, const GuiManager* gui)
         : seq_(seq),
-          layout_(layout) {}
+          gui_(gui) {}
 
     void SequencerPanel::draw(const PanelDrawContext& ctx) {
         (void)ctx;
@@ -242,7 +242,7 @@ namespace lfs::vis::gui::native_panels {
         // having to switch to Edit mode (which tears the trainer down).
         const bool training_active = ctx.ui && ctx.ui->editor && ctx.ui->editor->isTraining();
         const bool is_enabled = !ctx.ui_hidden && ctx.ui && ctx.ui->editor &&
-                                !training_active && layout_->isShowSequencer();
+                                !training_active && gui_->isSequencerVisible();
         if (!is_enabled && seq_)
             seq_->setSequencerEnabled(false);
         return is_enabled;

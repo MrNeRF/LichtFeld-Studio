@@ -4,10 +4,10 @@
 
 #include "core/logger.hpp"
 #include "py_ui.hpp"
+#include "py_viewer_dispatch.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/rml_modal_overlay.hpp"
-#include "visualizer/post_work_utils.hpp"
 #include "visualizer/visualizer.hpp"
 
 #include <algorithm>
@@ -60,20 +60,6 @@ namespace lfs::python {
             std::optional<vis::gui::ModalSnapshot> snap;
             std::size_t pending = 0;
         };
-
-        template <typename F>
-        auto invoke_on_viewer(F&& fn, std::invoke_result_t<F> fallback) {
-            auto* const viewer = get_visualizer();
-            if (!viewer || viewer->isOnViewerThread())
-                return std::invoke(std::forward<F>(fn));
-            if (!viewer->acceptsPostedWork())
-                return fallback;
-            nb::gil_scoped_release release;
-            return vis::post_work_and_wait(
-                [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
-                std::forward<F>(fn),
-                [fallback]() { return fallback; });
-        }
 
         ModalView read_modal_view() {
             auto* const gui = get_gui_manager();

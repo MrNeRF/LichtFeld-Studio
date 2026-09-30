@@ -6,6 +6,7 @@
 #include "core/tensor.hpp"
 #include "geometry/euclidean_transform.hpp"
 #include "py_tensor.hpp"
+#include "py_viewer_dispatch.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/selection_ops.hpp"
 #include "visualizer/gui/gui_manager.hpp"
@@ -13,7 +14,6 @@
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/operation/undo_entry.hpp"
 #include "visualizer/operation/undo_history.hpp"
-#include "visualizer/post_work_utils.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/selection/selection_service.hpp"
@@ -55,21 +55,6 @@ namespace lfs::python {
 
         vis::RenderingManager* get_rm() { return get_rendering_manager(); }
 
-        // Marshal unprotected, viewer-owned state reads to the viewer thread.
-        template <typename F>
-        auto invoke_on_viewer(F&& fn, std::invoke_result_t<F> fallback) {
-            auto* const viewer = get_visualizer();
-            if (!viewer || viewer->isOnViewerThread())
-                return std::invoke(std::forward<F>(fn));
-            if (!viewer->acceptsPostedWork())
-                return fallback;
-            nb::gil_scoped_release release;
-            return vis::post_work_and_wait(
-                [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
-                std::forward<F>(fn),
-                [fallback]() { return fallback; });
-        }
-
         vis::SceneManager* get_sm() { return get_scene_manager(); }
 
         vis::SelectionService* get_ss() { return get_selection_service(); }
@@ -95,10 +80,7 @@ namespace lfs::python {
             return view.has_value() && view->width > 0 && view->height > 0;
         }
 
-        // KEEP IN SYNC: this converter pair inverts the far-plane width mapping
-        // that depthWindowFarPlaneHalfExtents (selection_tool.cpp) computes from
-        // pixel focal lengths / ortho scale. Known divergence: the tool honors
-        // viewport.ortho_scale_override; these use the main view's ortho_scale.
+        // Invert the far-plane width mapping used by depthWindowFarPlaneHalfExtents.
         [[nodiscard]] float convert_legacy_half_width_to_scale(const float half_width,
                                                                const float depth_far,
                                                                const vis::RenderSettings& settings) {

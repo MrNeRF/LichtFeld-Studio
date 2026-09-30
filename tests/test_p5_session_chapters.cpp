@@ -1008,7 +1008,7 @@ namespace {
         auto prepared = require_result(
             prepareGuiSessionRestore(std::move(session)));
 
-        viewer.getGuiManager()->panelLayout().setShowSequencer(true);
+        viewer.getGuiManager()->setSequencerVisible(true);
         applyGuiSessionTools(viewer, prepared);
 
         EXPECT_EQ(
@@ -1026,7 +1026,7 @@ namespace {
             viewer.getGuiManager()->gizmo().getSelectionSubMode(),
             lfs::vis::SelectionSubMode::Rectangle);
         EXPECT_TRUE(
-            viewer.getGuiManager()->panelLayout().isShowSequencer());
+            viewer.getGuiManager()->isSequencerVisible());
     }
 
     TEST(P5SessionChapterTest,
@@ -1270,7 +1270,7 @@ namespace {
         lfs::vis::ViewerOptions options;
         options.show_startup_overlay = false;
         lfs::vis::VisualizerImpl viewer(options);
-        viewer.getGuiManager()->panelLayout().setShowSequencer(true);
+        viewer.getGuiManager()->setSequencerVisible(true);
 
         auto session = make_populated_session_chapters();
         auto view = json_root(session.view.dom());
@@ -1285,7 +1285,7 @@ namespace {
             viewer.getEditorContext().getActiveTool(),
             lfs::vis::ToolType::None);
         EXPECT_TRUE(
-            viewer.getGuiManager()->panelLayout().isShowSequencer());
+            viewer.getGuiManager()->isSequencerVisible());
     }
 
     TEST(P5SessionChapterTest,
