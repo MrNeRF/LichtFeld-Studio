@@ -40,6 +40,17 @@ Callers can precompile cached specializations with `prepare` before interaction.
   padding, one float2 bound per 256 primitives. Decode uses the existing codec's
   fused multiply-add. RAD's signed-byte/page-frame pool is a **different layout**
   and is not accepted as Q16.
+- RAD pool storage has a separate `RadSigned8` specialization: signed-byte
+  swizzled SH with per-page/per-degree maxima, padded half SH0/log scale,
+  half quaternion/opacity and float32 xyz. Its page size is supplied explicitly
+  by the pool owner and validated against the 32-row SH cell width. It is never
+  interpreted as Q16 or expanded into a whole-scene float32 SH array. Independent
+  analytic contracts exercise degree/band/sign/cell/page boundaries, non-prefix
+  physical cuts, half padding and Gaussian/point/disc/GUT modes. A real tensor
+  uploader contract quantizes production Q16 and SH0 sources into the pool,
+  submits the native consumer without a host producer wait, and mutates the same
+  pool afterward to verify generation ordering. Desktop RAD paging integration
+  remains separate from this low-level decoder contract.
 - SH0 specialization does not bind/read SH rest or bounds; points specialization
   does not bind/read Gaussian scales or rotations.
 - Affine object transforms, positive-view-Z perspective projection, normalized
@@ -178,7 +189,7 @@ reject in-flight reuse; metadata is cached for four independent models.
 
 Independent GPU contracts cover coarse/fine/non-monotone cuts, transition
 complements, missing/partial pages, fade, budget retries, lifetimes and dynamic
-GPU count-to-projection reuse. Eleven real Metal/Vulkan comparisons cover SH0/Q16,
+GPU count-to-projection reuse. Twelve real Metal/Vulkan comparisons cover SH0/Q16,
 budget, mip, orthographic, depth, export, portal/tone, Spark, selection and transforms.
 GPU tests and comparison binaries are restricted to macOS; CPU policy tests
 remain available to Windows/Linux CI without a GPU.

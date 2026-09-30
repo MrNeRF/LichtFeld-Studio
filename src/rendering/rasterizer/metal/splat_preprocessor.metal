@@ -23,7 +23,7 @@ struct Projection {
     uint4 extent;
     float4 rasterization, display, panorama;
 };
-struct InputLayout { uint count, rest, has_deleted, objects, half_attrs, overlay, object_indexed, draw_count, lod; };
+struct InputLayout { uint count, rest, has_deleted, objects, half_attrs, overlay, object_indexed, draw_count, lod, page_splats; };
 struct SceneObject { float4x4 model_to_world; float4 camera_local; uint4 flags; };
 struct GutSplat { float4 inverse0, inverse1, inverse2, mean_opacity; };
 struct ProjectedSplat { float4 mean_depth, conic_opacity, color; uint4 bounds; };
@@ -96,7 +96,7 @@ float3 portal_covariance(float3 covariance, float2 extent) {
 // Same cell swizzle and per-256 bounds as core/sh_value_codec.cuh.
 // Q16 stores integer codes; it MUST NOT be interpreted as IEEE half.
 float sh_component(device const uchar* bytes, device const float2* bounds,
-                   uint primitive, uint component, uint rest) {
+                   uint primitive, uint component, uint rest, uint page_splats) {
     const uint block=primitive/32u, lane=primitive%32u;
     if(sh_storage==3u) {
         const ulong index=ulong(block)*(rest*3u*32u)+component*32u+lane;
@@ -107,12 +107,19 @@ float sh_component(device const uchar* bytes, device const float2* bounds,
     const uint slots=(rest*3u+3u)/4u;
     const ulong index=sh_storage==0u ? ulong(primitive)*rest*3u+component
         : (ulong(block)*slots*32u+(component/4u)*32u+lane)*4u+component%4u;
+    if(sh_storage==4u) {
+        // RAD uses signed-byte components in the same 32-row float4 cell
+        // swizzle, with separate scales for SH degrees one, two and three.
+        const float4 maxima=reinterpret_cast<device const float4*>(bounds)[(primitive/page_splats)*4u];
+        const uint band=component<9u?0u:component<24u?1u:2u;
+        return (float(reinterpret_cast<device const char*>(bytes)[index])/127.f)*maxima[band];
+    }
     if(sh_storage==2u) return float(reinterpret_cast<device const half*>(bytes)[index]);
     return reinterpret_cast<device const float*>(bytes)[index];
 }
 
 float3 evaluate_sh(float3 dc, float3 direction, device const uchar* rest,
-                   device const float2* bounds, uint primitive, uint layout_rest, uint active_degree) {
+                   device const float2* bounds, uint primitive, uint layout_rest, uint active_degree, uint page_splats) {
     float3 color=0.5f+0.28209479177387814f*dc;
     if(sh_degree==0u || active_degree==0u) return max(color,0.0f);
     const float norm2=dot(direction,direction);
@@ -128,9 +135,9 @@ float3 evaluate_sh(float3 dc, float3 direction, device const uchar* rest,
     const uint count=(active_degree+1u)*(active_degree+1u)-1u;
     for(uint k=0;k<count;++k) {
         const uint c=k*3u;
-        color+=basis[k]*float3(sh_component(rest,bounds,primitive,c,layout_rest),
-            sh_component(rest,bounds,primitive,c+1u,layout_rest),
-            sh_component(rest,bounds,primitive,c+2u,layout_rest));
+        color+=basis[k]*float3(sh_component(rest,bounds,primitive,c,layout_rest,page_splats),
+            sh_component(rest,bounds,primitive,c+1u,layout_rest,page_splats),
+            sh_component(rest,bounds,primitive,c+2u,layout_rest,page_splats));
     }
     return max(color,0.0f);
 }
@@ -240,7 +247,8 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
         if(!isfinite(norm2)) return;
         q=norm2>1e-8f?q*rsqrt(norm2):float4(1,0,0,0);
         if(portal){q=lfsPortalCompactRotation(q);q*=rsqrt(max(dot(q,q),1e-8f));}
-        const float3 log_scale=layout.half_attrs?float3(reinterpret_cast<device const packed_half3*>(scales)[source]):float3(scales[source]);
+        const float3 log_scale=sh_storage==4u?float3(reinterpret_cast<device const half4*>(scales)[source].xyz):
+            layout.half_attrs?float3(reinterpret_cast<device const packed_half3*>(scales)[source]):float3(scales[source]);
         float3 s=exp(min(log_scale,float3(20.f)))*frame.clip_scale.z;
         if(portal)s=lfsPortalCompactScales(s);
         if(!all(isfinite(s))) return;
@@ -373,7 +381,7 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     const float3 axis_lengths=float3(length(model_linear[0]),length(model_linear[1]),length(model_linear[2]));
     if(all(axis_lengths>1e-8f))direction=float3(dot(model_linear[0]/axis_lengths.x,direction),
         dot(model_linear[1]/axis_lengths.y,direction),dot(model_linear[2]/axis_lengths.z,direction));
-    float3 color=evaluate_sh(float3(sh0[source]),direction,rest,bounds,source,layout.rest,active_degree);
+    float3 color=evaluate_sh(sh_storage==4u?float3(reinterpret_cast<device const half4*>(sh0)[source].xyz):float3(sh0[source]),direction,rest,bounds,source,layout.rest,active_degree,layout.page_splats);
     if(layout.lod&16u) {
         const uint level=(layout.lod&4u)?lod_levels[i]%5u:0u;
         const float3 palette[5]={float3(1,0,0),float3(0,1,0),float3(0,0,1),float3(1,1,0),float3(1,0,1)};

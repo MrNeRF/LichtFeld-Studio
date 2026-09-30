@@ -80,6 +80,7 @@ static void run(id<MTLDevice> device) {
                 case ShStorage::SwizzledFloat32: input.sh_rest = {buffer(device, swizzled.data(), swizzled.size() * 4)}; break;
                 case ShStorage::SwizzledFloat16: input.sh_rest = {buffer(device, halves.data(), halves.size() * 2)}; break;
                 case ShStorage::Q16: input.sh_rest = {buffer(device, codes.data(), codes.size() * 2)}; break;
+                case ShStorage::RadSigned8: throw std::logic_error("RAD has separate page-frame contracts");
                 }
                 for (uint32_t degree = 0; degree <= 3; ++degree) {
                     if ((degree + 1) * (degree + 1) - 1 > rest)

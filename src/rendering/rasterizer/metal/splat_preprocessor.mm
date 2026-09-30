@@ -72,7 +72,7 @@ namespace lfs::rendering::metal {
 
         id<MTLComputePipelineState> pipeline(ShStorage storage, uint32_t degree, PrimitiveMode mode) {
             const uint32_t format = static_cast<uint32_t>(storage), primitive = static_cast<uint32_t>(mode);
-            if (format > 3 || degree > 3 || primitive > 3)
+            if (format > 4 || degree > 3 || primitive > 3)
                 throw std::invalid_argument("Unsupported Metal splat specialization");
             const uint32_t key = format * 16 + degree * 4 + primitive;
             std::lock_guard lock(mutex);
@@ -131,7 +131,7 @@ namespace lfs::rendering::metal {
         if (!command || command.commandQueue.device != impl_->device || command.status != MTLCommandBufferStatusNotEnqueued)
             throw std::invalid_argument("Metal viewer requires an uncommitted command buffer on the same device");
         if (degree > 3 || (in.layout_rest != 0 && in.layout_rest != 3 && in.layout_rest != 8 && in.layout_rest != 15) ||
-            core::sh_rest_coefficients_for_degree(degree) > in.layout_rest || static_cast<uint32_t>(in.storage) > 3 ||
+            core::sh_rest_coefficients_for_degree(degree) > in.layout_rest || static_cast<uint32_t>(in.storage) > 4 ||
             static_cast<uint32_t>(mode) > 3)
             throw std::invalid_argument("Active SH degree does not fit resident Metal storage");
         check_projection(projection);
@@ -139,6 +139,9 @@ namespace lfs::rendering::metal {
             throw std::invalid_argument("Metal panoramas require the 3DGUT ray rasterizer");
         if (!in.count)
             return;
+        const bool rad = in.storage == ShStorage::RadSigned8;
+        if (rad && (!in.rad_page_splats || in.rad_page_splats % 32))
+            throw std::invalid_argument("RAD pool page size must be an explicit multiple of the SH cell width");
         const size_t n = in.count, draw_count = lod.enabled ? lod.count : n;
         if (lod.enabled && lod.source_count != in.count)
             throw std::invalid_argument("Metal resident LOD source extent mismatch");
@@ -173,6 +176,9 @@ namespace lfs::rendering::metal {
             if (in.storage == ShStorage::Q16) {
                 rest_bytes = core::sh_value_quant::sh_value_u16_count(n, in.layout_rest) * sizeof(uint16_t);
                 bounds_bytes = core::sh_value_quant::n_bounds_for_prims(n) * 2u * sizeof(float);
+            } else if (rad) {
+                rest_bytes = core::sh_swizzled_float_count(n, in.layout_rest);
+                bounds_bytes = ((n + in.rad_page_splats - 1) / in.rad_page_splats) * 64;
             } else if (in.storage == ShStorage::CanonicalFloat32)
                 rest_bytes = n * in.layout_rest * 3u * sizeof(float);
             else
@@ -181,10 +187,10 @@ namespace lfs::rendering::metal {
         }
         const std::array<BufferSlice, 10> inputs = {in.means, in.log_scales, in.rotations, in.opacity_logits,
                                                     in.sh0, in.sh_rest, in.sh_bounds, in.deleted, scene.object_indices, scene.objects};
-        const size_t attr = in.non_sh_attrs_f16 ? 2 : 4;
-        const std::array<size_t, 10> lengths = {n * 12, gaussians ? n * 3 * attr : 0, gaussians ? n * 4 * attr : 0, n * attr, n * 12,
+        const size_t attr = (rad || in.non_sh_attrs_f16) ? 2 : 4;
+        const std::array<size_t, 10> lengths = {n * 12, gaussians ? n * (rad ? 8 : 3 * attr) : 0, gaussians ? n * 4 * attr : 0, n * attr, n * (rad ? 8 : 12),
                                                 rest_bytes, bounds_bytes, in.deleted.buffer ? n : 0, scene.count && scene.object_indices.buffer ? n * 4 : 0, size_t(scene.count) * sizeof(SceneObject)};
-        const std::array<NSUInteger, 10> alignments = {4, attr, 4 * attr, attr, 4, 4, 8, 1, 4, 16};
+        const std::array<NSUInteger, 10> alignments = {4, rad ? 8u : attr, 4 * attr, attr, rad ? 8u : 4u, 4, rad ? 16u : 8u, 1, 4, 16};
         const char* names[] = {"means", "scales", "rotations", "opacity", "SH0", "SH rest", "SH bounds", "deleted mask", "object indices", "scene objects"};
         check_slice(output, draw_count * sizeof(ProjectedSplat), 16, impl_->device, "projection output");
         if (mode == PrimitiveMode::Gut) {
@@ -216,8 +222,8 @@ namespace lfs::rendering::metal {
             [encoder setBuffer:lengths[i] ? inputs[i].buffer : impl_->empty offset:lengths[i] ? inputs[i].offset : 0 atIndex:i < 8 ? i : i + 3];
         [encoder setBuffer:output.buffer offset:output.offset atIndex:8];
         [encoder setBytes:&projection length:sizeof(projection) atIndex:9];
-        const std::array<uint32_t, 9> layout = {in.count, in.layout_rest, in.deleted.buffer ? 1u : 0u, scene.count, in.non_sh_attrs_f16 ? 1u : 0u, overlay.parameter_count ? 1u : 0u, scene.object_indices.buffer ? 1u : 0u, uint32_t(draw_count),
-                                                lod.enabled ? (1u | (lod.logical_indices.buffer ? 2u : 0u) | (lod.levels.buffer ? 4u : 0u) | (lod.weights.buffer ? 8u : 0u) | (lod.debug ? 16u : 0u) | (lod.counter.buffer ? 32u : 0u)) : 0u};
+        const std::array<uint32_t, 10> layout = {in.count, in.layout_rest, in.deleted.buffer ? 1u : 0u, scene.count, (rad || in.non_sh_attrs_f16) ? 1u : 0u, overlay.parameter_count ? 1u : 0u, scene.object_indices.buffer ? 1u : 0u, uint32_t(draw_count),
+                                                 lod.enabled ? (1u | (lod.logical_indices.buffer ? 2u : 0u) | (lod.levels.buffer ? 4u : 0u) | (lod.weights.buffer ? 8u : 0u) | (lod.debug ? 16u : 0u) | (lod.counter.buffer ? 32u : 0u)) : 0u, in.rad_page_splats};
         [encoder setBytes:layout.data() length:sizeof(layout) atIndex:10];
         const std::array<BufferSlice, 3> overlays = {overlay.parameters, overlay.flags, overlay.node_mask};
         for (NSUInteger j = 0; j < overlays.size(); ++j)

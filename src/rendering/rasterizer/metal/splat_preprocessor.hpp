@@ -14,7 +14,8 @@ namespace lfs::rendering::metal {
     enum class ShStorage : uint32_t { CanonicalFloat32,
                                       SwizzledFloat32,
                                       SwizzledFloat16,
-                                      Q16 };
+                                      Q16,
+                                      RadSigned8 };
     enum class PrimitiveMode : uint32_t { Gaussian,
                                           Points,
                                           Discs,
@@ -38,6 +39,7 @@ namespace lfs::rendering::metal {
         uint32_t layout_rest = 0; // maximum/resident degree, independent of active degree
         ShStorage storage = ShStorage::Q16;
         bool non_sh_attrs_f16 = false;
+        uint32_t rad_page_splats = 0; // RadSigned8: page-frame stride, explicitly supplied by the pool owner
     };
 
     struct alignas(16) SceneObject {
