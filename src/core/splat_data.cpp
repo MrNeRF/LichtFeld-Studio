@@ -278,7 +278,8 @@ namespace {
 
             nanoflann::KNNResultSet<float> result_set(num_results);
             result_set.init(&ret_indices[0], &out_dists_sqr[0]);
-            index.findNeighbors(result_set, &query_pt[0], nanoflann::SearchParameters(10));
+            // SearchParameters takes an approximation epsilon; zero requests an exact KNN result.
+            index.findNeighbors(result_set, &query_pt[0], nanoflann::SearchParameters(0));
 
             const float a1 = std::sqrt(std::max(out_dists_sqr[1], 0.0f));
             const float a2 = std::sqrt(std::max(out_dists_sqr[2], 0.0f));
