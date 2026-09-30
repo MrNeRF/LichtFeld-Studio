@@ -24,7 +24,7 @@
 namespace lfs::core::internal {
     namespace {
         constexpr VkDeviceSize kMib = 1024ull * 1024ull;
-        constexpr VkDeviceSize kPoolBlockSize = 64ull * kMib;
+        constexpr VkDeviceSize kMaxExportSize = 64ull * kMib;
         constexpr VkDeviceSize kInitialStagingSize = 64ull * kMib;
         constexpr size_t kTransferChunk = 8 * 1024 * 1024;
         static_assert(kInitialStagingSize >= 2 * kTransferChunk);
@@ -116,6 +116,15 @@ namespace lfs::core::internal {
             bool operator==(const Access&) const = default;
         };
 
+        struct PrivatePool {
+            VmaAllocator allocator;
+            VmaPool pool = VK_NULL_HANDLE;
+            ~PrivatePool() {
+                if (pool != VK_NULL_HANDLE)
+                    vmaDestroyPool(allocator, pool);
+            }
+        };
+        std::unique_ptr<PrivatePool> private_pool;
         VkBuffer buffer = VK_NULL_HANDLE;
         VmaAllocation allocation = VK_NULL_HANDLE;
         VkDeviceSize requested_size = 0;
@@ -198,7 +207,7 @@ namespace lfs::core::internal {
         vk_check(&context_, find_result, "vmaFindMemoryTypeIndexForBufferInfo");
         VmaPoolCreateInfo pool_info{};
         pool_info.memoryTypeIndex = memory_type;
-        pool_info.blockSize = kPoolBlockSize;
+        pool_info.blockSize = kDirectLimit;
         if (want_export && buffer_info.pNext != nullptr) {
 #if LFS_HAS_CUDA
             export_alloc_info_.sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO;
@@ -417,7 +426,7 @@ namespace lfs::core::internal {
             buffer_info.queueFamilyIndexCount = families.size() > 1 ? families.size() : 0;
             buffer_info.pQueueFamilyIndices = families.data();
             const bool pooled_export =
-                exports_memory_ && !host_visible && record->allocated_size <= kPoolBlockSize;
+                exports_memory_ && !host_visible && record->allocated_size <= kMaxExportSize;
             if (pooled_export) {
 #if LFS_HAS_CUDA
                 buffer_info.pNext = &external_buffer;
@@ -434,12 +443,44 @@ namespace lfs::core::internal {
             } else {
                 allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
                 allocation_info.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-                // A custom VMA pool cannot hold an allocation above its block
-                // size and the driver refuses dedicated exportable memory, so
-                // only allocations that fit a block are pooled (and exportable);
-                // larger ones stay direct and are not exportable.
-                if (!direct || pooled_export) {
+                if (!direct)
                     allocation_info.pool = device_pool_;
+            }
+            if (direct) {
+                if (!pooled_export) {
+                    allocation_info.pool = VK_NULL_HANDLE;
+                    allocation_info.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+                } else {
+                    // Exportable buffers need ordinary memory rather than Vulkan's
+                    // dedicated-allocation chain. Give this large buffer one block
+                    // sized to its requirements, released with the allocation.
+                    const auto check_setup = [&](const VkResult result, const char* operation) {
+                        if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
+                            result == VK_ERROR_OUT_OF_HOST_MEMORY ||
+                            result == VK_ERROR_OUT_OF_POOL_MEMORY ||
+                            result == VK_ERROR_FRAGMENTED_POOL)
+                            throw_storage_allocation_error(bytes, alignment, context, result);
+                        vk_check(&context_, result, operation);
+                    };
+                    VkBuffer probe = VK_NULL_HANDLE;
+                    check_setup(vkCreateBuffer(context_.device(), &buffer_info, nullptr, &probe),
+                                "vkCreateBuffer(export requirements)");
+                    VkMemoryRequirements requirements{};
+                    vkGetBufferMemoryRequirements(context_.device(), probe, &requirements);
+                    vkDestroyBuffer(context_.device(), probe, nullptr);
+                    VmaPoolCreateInfo pool_info{};
+                    check_setup(vmaFindMemoryTypeIndexForBufferInfo(
+                                    context_.allocator(), &buffer_info, &allocation_info,
+                                    &pool_info.memoryTypeIndex),
+                                "vmaFindMemoryTypeIndexForBufferInfo(export block)");
+                    pool_info.blockSize = align_up(requirements.size, std::max<VkDeviceSize>(requirements.alignment, 65536));
+                    pool_info.maxBlockCount = 1;
+                    pool_info.pMemoryAllocateNext = &export_alloc_info_;
+                    record->private_pool = std::make_unique<AllocationRecord::PrivatePool>();
+                    record->private_pool->allocator = context_.allocator();
+                    check_setup(vmaCreatePool(context_.allocator(), &pool_info, &record->private_pool->pool),
+                                "vmaCreatePool(export block)");
+                    allocation_info.pool = record->private_pool->pool;
                 }
             }
             VkResult result = vmaCreateBuffer(
@@ -552,7 +593,7 @@ namespace lfs::core::internal {
             .dedicated = info.dedicatedMemory == VK_TRUE,
             .host_visible = record.host_visible,
             .exportable = exports_memory_ && !record.host_visible &&
-                          record.allocated_size <= kPoolBlockSize,
+                          record.allocated_size <= kMaxExportSize,
         };
     }
 
@@ -921,6 +962,10 @@ namespace lfs::core::internal {
 #endif
         std::lock_guard lock(allocations_mutex_);
         collect_retired_locked(context_.completed_timeline());
+        // A trim also discards buffers whose last GPU use is still pending.
+        // Reclaim them after completion instead of repopulating the cache.
+        for (auto& record : retired_)
+            record->cacheable = false;
         destroy_free_when_idle_locked();
     }
 

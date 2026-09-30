@@ -38,6 +38,8 @@ namespace lfs::gpu_ops {
         // Backends with persistent private workspaces can relinquish them
         // between training and evaluation, then recreate them on resume.
         bool release_workspaces_before_evaluation = false;
+        // Row reordering temporarily duplicates model and optimizer storage.
+        bool release_workspaces_before_reorder = false;
     };
 
     class ScopedArenaTimeout {

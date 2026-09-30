@@ -488,14 +488,17 @@ namespace lfs::core::nn::models {
         const std::size_t max_feature_elems = 64ULL * crop_height * crop_width;
         const bool share_rgb_features = dispatch_ && gpu_backend_of(pred) == GpuBackend::Vulkan;
         if (share_rgb_features) {
+            fast_features_[1] = Tensor{};
             for (std::size_t i = 0; i < fast_features_.size(); ++i) {
                 auto& buffer = fast_features_[i];
+                if (i == 1) {
+                    // After the RGB block, each side needs at most half of the
+                    // shared RGB scratch. Keep the two regions disjoint.
+                    buffer = fast_features_[0].slice(0, max_feature_elems / 2, max_feature_elems);
+                    continue;
+                }
                 // Complete the first block for one image before starting the other.
-                // Its RGB intermediate can be shared; the second scratch buffer is
-                // only needed after pooling, where features use at most half as much.
-                const std::size_t elements = share_rgb_features && i == 1
-                                                 ? std::max<std::size_t>(1, max_feature_elems / 2)
-                                                 : max_feature_elems;
+                const std::size_t elements = max_feature_elems;
                 if (!buffer.is_valid() || buffer.numel() < elements)
                     buffer = Tensor::empty(shape_of({elements}), Device::GPU, DataType::Float16);
                 buffer.set_stream(stream);

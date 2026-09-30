@@ -9,6 +9,7 @@
 #include "lfs/training/sh_value_storage.hpp"
 
 #include "core/assert.hpp"
+#include "core/gpu_device_runtime.hpp"
 #include "core/sh_layout.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor_completion.hpp"
@@ -164,6 +165,8 @@ namespace lfs::training {
                 return {};
             if (count > UINT32_MAX)
                 throw std::invalid_argument("Morton permutation exceeds uint32 indexing");
+            // Reordering temporarily duplicates parameter and optimizer buffers.
+            core::gpu_trim_cached_memory(core::GpuBackend::Vulkan);
             const Tensor input = means.contiguous();
             const Tensor minimum = input.min(0).contiguous();
             const Tensor maximum = input.max(0).contiguous();

@@ -223,7 +223,7 @@ namespace lfs::training {
                                                               : 4;
             const size_t tile_pixels = 64;
             const size_t tile_channels = cooperative ? 64 : 16;
-            const size_t spatial_tiles = halo ? ((size_t(p.out_height) + 7) / 8) * ((size_t(p.out_width) + 7) / 8)
+            const size_t spatial_tiles = halo ? ((size_t(p.out_height) + 3) / 4) * ((size_t(p.out_width) + 15) / 16)
                                               : (size_t(p.out_height) * p.out_width + tile_pixels - 1) / tile_pixels;
             const size_t work = spatial_tiles *
                                 ((size_t(p.out_channels) + tile_channels - 1) / tile_channels) * input.size(0) * (cooperative ? 512 : 256);

@@ -8,6 +8,7 @@
 #include "cuda_backend_test.hpp"
 #include "lfs/training/ops/registry.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -183,6 +184,84 @@ namespace {
             const auto reason = unavailable_training_family(backend, Family::Lpips);
             ASSERT_TRUE(reason);
             EXPECT_NE(reason->find("Lpips"), std::string::npos);
+        }
+    }
+
+    TEST(LpipsVulkanRuntime, HalfConvolutionChunksSpatialTilesAcrossBatches) {
+        if (!gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP();
+        const lfs::test::DefaultGpuBackendForTesting backend(GpuBackend::Vulkan);
+        ASSERT_TRUE(backend.switched());
+        constexpr size_t batch = 32769, width = 17;
+        const auto& table = *lfs::training::training_ops(GpuBackend::Vulkan).lpips;
+        auto input = Tensor::ones({batch, 32, 1, width}, Device::GPU, DataType::Float16);
+        auto weight = Tensor::ones({1, 32, 3, 3}, Device::GPU, DataType::Float16);
+        auto actual = Tensor::empty({batch, 1, 1, width}, Device::GPU, DataType::Float16);
+        Tensor absent, scratch;
+        lfs::gpu_ops::ConvParams params;
+        params.pad_h = params.pad_w = 1;
+        table.convolution(input, weight, absent, absent, actual, scratch, params);
+        const auto values = actual.to(DataType::Float32).cpu().to_vector();
+        for (size_t i = 0; i < values.size(); ++i) {
+            const size_t x = i % width;
+            ASSERT_EQ(values[i], x == 0 || x == width - 1 ? 64.f : 96.f) << i;
+        }
+    }
+
+    TEST(LpipsVulkanRuntime, HalfConvolutionMatchesExactBorderReference) {
+        if (!gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP();
+        const lfs::test::DefaultGpuBackendForTesting backend(GpuBackend::Vulkan);
+        ASSERT_TRUE(backend.switched());
+        constexpr size_t batch = 2, height = 5, width = 19;
+        const auto& table = *lfs::training::training_ops(GpuBackend::Vulkan).lpips;
+        for (const size_t channels : {32u, 64u, 96u, 128u}) {
+            constexpr size_t outputs = 96;
+            auto x = pattern({batch, channels, height, width}, 1);
+            auto w = pattern({outputs, channels, 3, 3}, 2);
+            auto bias = pattern({outputs}, 3);
+            const auto hx = x.to(DataType::Float32).cpu().to_vector();
+            const auto hw = w.to(DataType::Float32).cpu().to_vector();
+            const auto hb = bias.to(DataType::Float32).cpu().to_vector();
+            auto taps = Tensor::empty({9, outputs, channels}, Device::GPU, DataType::Float16);
+            table.weight_taps(w, taps);
+            auto actual = Tensor::empty({batch, outputs, height, width}, Device::GPU, DataType::Float16);
+            Tensor absent, scratch;
+            for (const bool replicate : {false, true}) {
+                lfs::gpu_ops::ConvParams params;
+                params.pad_h = params.pad_w = 1;
+                params.pad_mode = replicate ? nn::ConvPadMode::Replicate : nn::ConvPadMode::Zeros;
+                params.activation = nn::Activation::Relu;
+                std::vector<float> reference(actual.numel());
+                // Dyadic inputs keep these sums exact in float, independently
+                // of the matrix reduction order; compare the final half bits.
+                for (size_t n = 0; n < batch; ++n)
+                    for (size_t oc = 0; oc < outputs; ++oc)
+                        for (size_t y = 0; y < height; ++y)
+                            for (size_t xout = 0; xout < width; ++xout) {
+                                float sum = hb[oc];
+                                for (size_t ic = 0; ic < channels; ++ic)
+                                    for (int ky = 0; ky < 3; ++ky)
+                                        for (int kx = 0; kx < 3; ++kx) {
+                                            int iy = int(y) + ky - 1, ix = int(xout) + kx - 1;
+                                            if (replicate) {
+                                                iy = std::clamp(iy, 0, int(height) - 1);
+                                                ix = std::clamp(ix, 0, int(width) - 1);
+                                            }
+                                            if (iy >= 0 && iy < int(height) && ix >= 0 && ix < int(width))
+                                                sum += hx[((n * channels + ic) * height + size_t(iy)) * width + size_t(ix)] *
+                                                       hw[((oc * channels + ic) * 3 + size_t(ky)) * 3 + size_t(kx)];
+                                        }
+                                reference[((n * outputs + oc) * height + y) * width + xout] = std::max(0.f, sum);
+                            }
+                const auto expected = Tensor::from_vector(reference, actual.shape(), Device::CPU).to(DataType::Float16);
+                for (const bool cached : {false, true}) {
+                    SCOPED_TRACE(::testing::Message() << channels << " channels, replicate=" << replicate << ", cached=" << cached);
+                    table.convolution(x, w, cached ? taps : absent, bias, actual, scratch, params);
+                    const auto result = actual.cpu();
+                    EXPECT_EQ(std::memcmp(result.data_ptr(), expected.data_ptr(), expected.bytes()), 0);
+                }
+            }
         }
     }
 

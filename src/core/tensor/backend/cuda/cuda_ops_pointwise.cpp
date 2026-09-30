@@ -295,18 +295,6 @@ namespace lfs::core::internal {
         }
 
         template <class BinaryOp>
-        void dispatch_scalar_integer_only(const PointwiseProgram& program,
-                                          const StorageRef input, const StorageRef output,
-                                          const size_t count, const ExecContext context) {
-            LFS_ASSERT_MSG(program.scalar.scalar_on_right &&
-                               program.scalar.kind == ScalarKind::Int32,
-                           "scalar op has no CUDA instantiation for this scalar type");
-            launch_scalar_right_same<BinaryOp>(
-                program, input, output, count, context,
-                program.scalar.value.int32_value);
-        }
-
-        template <class BinaryOp>
         void dispatch_scalar_comparison(const PointwiseProgram& program,
                                         const StorageRef input, const StorageRef output,
                                         const size_t count, const ExecContext context) {
@@ -444,10 +432,10 @@ namespace lfs::core::internal {
             dispatch_scalar_arithmetic<ops::mod_op, false>(program, input, output, count, context);
             return;
         case PointwiseOp::MaximumScalar:
-            dispatch_scalar_integer_only<ops::maximum_op>(program, input, output, count, context);
+            dispatch_scalar_arithmetic<ops::maximum_op, false>(program, input, output, count, context);
             return;
         case PointwiseOp::MinimumScalar:
-            dispatch_scalar_integer_only<ops::minimum_op>(program, input, output, count, context);
+            dispatch_scalar_arithmetic<ops::minimum_op, false>(program, input, output, count, context);
             return;
         case PointwiseOp::EqualScalar:
             dispatch_scalar_comparison<ops::equal_op>(program, input, output, count, context);

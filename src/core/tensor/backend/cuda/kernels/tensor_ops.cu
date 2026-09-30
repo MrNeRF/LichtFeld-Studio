@@ -3067,6 +3067,14 @@ namespace lfs::core::tensor_ops {
         const float*, float*, size_t, ops::scalar_right_op<ops::mod_op, float>, cudaStream_t);
     template LFS_CORE_API void launch_unary_op_generic<int, int, ops::scalar_right_op<ops::mod_op, float>>(
         const int*, int*, size_t, ops::scalar_right_op<ops::mod_op, float>, cudaStream_t);
+    template LFS_CORE_API void launch_unary_op_generic<float, float, ops::scalar_right_op<ops::maximum_op, float>>(
+        const float*, float*, size_t, ops::scalar_right_op<ops::maximum_op, float>, cudaStream_t);
+    template LFS_CORE_API void launch_unary_op_generic<int, int, ops::scalar_right_op<ops::maximum_op, float>>(
+        const int*, int*, size_t, ops::scalar_right_op<ops::maximum_op, float>, cudaStream_t);
+    template LFS_CORE_API void launch_unary_op_generic<float, float, ops::scalar_right_op<ops::minimum_op, float>>(
+        const float*, float*, size_t, ops::scalar_right_op<ops::minimum_op, float>, cudaStream_t);
+    template LFS_CORE_API void launch_unary_op_generic<int, int, ops::scalar_right_op<ops::minimum_op, float>>(
+        const int*, int*, size_t, ops::scalar_right_op<ops::minimum_op, float>, cudaStream_t);
 
 #define LFS_INSTANTIATE_TYPED_SCALAR_ARITHMETIC(OP)                                             \
     template LFS_CORE_API void launch_unary_op_generic<float, float,                            \
