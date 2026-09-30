@@ -434,7 +434,7 @@ namespace lfs::vis {
         }
 
         if (gpu_selection_eligible && vksplat_viewport_renderer_) {
-            const auto gpu = vksplat_viewport_renderer_->gpuLodSelectionStatus();
+            const auto gpu = vksplat_viewport_renderer_->gpuLodSelectionStatus(main_render_target_);
             if (gpu.active) {
                 // The CPU controller is frozen at its bootstrap cut in GPU
                 // mode; report the selector's live numbers instead.

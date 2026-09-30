@@ -2199,7 +2199,7 @@ namespace lfs::vis {
             vksplat_viewport_renderer_ != nullptr &&
             vksplat_viewport_renderer_->nextOutputImagesNeedResize(
                 render_size,
-                VksplatViewportRenderer::OutputSlot::Main) &&
+                main_render_target_) &&
             lfs::rendering::isVkSplatBackend(frame_settings.raster_backend);
         if (vksplat_viewport_resize) {
             // While the viewport size is moving, return cached frames without
@@ -2366,8 +2366,19 @@ namespace lfs::vis {
         std::optional<SplitViewInfo> rendered_split_info;
         VulkanSplitViewParams pending_split_view{};
         const auto release_inactive_split_outputs = [&] {
-            if (vksplat_viewport_renderer_ && !split_view_service_.isActive(frame_settings)) {
-                vksplat_viewport_renderer_->releaseSplitOutputResources();
+            if (split_view_service_.isActive(frame_settings))
+                return;
+            for (auto* target : {&split_left_render_target_, &split_right_render_target_}) {
+                const bool has_splats = vksplat_viewport_renderer_ && vksplat_viewport_renderer_->hasRenderTarget(*target);
+                const bool has_points = point_cloud_vulkan_renderer_ && point_cloud_vulkan_renderer_->hasRenderTarget(*target);
+                if (!has_splats && !has_points)
+                    continue;
+                const bool splats_released = !has_splats || vksplat_viewport_renderer_->releaseRenderTarget(*target);
+                const bool points_released = !has_points || point_cloud_vulkan_renderer_->releaseRenderTarget(*target);
+                if (splats_released && points_released) {
+                    render_targets_.release(*target);
+                    *target = render_targets_.allocate();
+                }
             }
         };
 
@@ -2419,7 +2430,7 @@ namespace lfs::vis {
 
         const auto render_native_point_cloud =
             [&](const lfs::rendering::PointCloudRenderRequest& pc_request,
-                const PointCloudVulkanRenderer::OutputSlot slot)
+                const RenderTargetId slot)
             -> lfs::Result<PointCloudVulkanRenderer::RenderResult> {
             const auto fail = [](std::string message) -> lfs::Result<PointCloudVulkanRenderer::RenderResult> {
                 return lfs::make_error({
@@ -2639,7 +2650,7 @@ namespace lfs::vis {
                 const std::optional<std::vector<bool>>& node_visibility_override,
                 const lfs::core::SplatData* model_override = nullptr,
                 const std::vector<glm::mat4>* model_transforms_override = nullptr,
-                const std::optional<VksplatViewportRenderer::OutputSlot> vksplat_output_slot = std::nullopt,
+                const std::optional<RenderTargetId> vksplat_output_slot = std::nullopt,
                 const lfs::rendering::ViewportRenderRequest* request_override = nullptr)
             -> std::expected<RenderedPanel, std::string> {
             const lfs::core::SplatData* const panel_model = model_override ? model_override : model;
@@ -3348,7 +3359,7 @@ namespace lfs::vis {
                                             std::nullopt,
                                             nullptr,
                                             nullptr,
-                                            VksplatViewportRenderer::OutputSlot::Preview,
+                                            preview_render_target_,
                                             &request);
                                         if (!rendered) {
                                             compare_error = rendered.error();
@@ -3365,7 +3376,7 @@ namespace lfs::vis {
                                                 auto ticket =
                                                     vksplat_viewport_renderer_->submitReadOutputDepthImageTicket(
                                                         *context.vulkan_context,
-                                                        VksplatViewportRenderer::OutputSlot::Preview,
+                                                        preview_render_target_,
                                                         gt_async_depth_dest_);
                                                 if (!ticket) {
                                                     compare_error = ticket.error();
@@ -3423,7 +3434,7 @@ namespace lfs::vis {
                                         frame_ctx, render_gt_size, transforms);
                                     point_request.frame_view = request.frame_view;
                                     auto rendered = render_native_point_cloud(
-                                        point_request, PointCloudVulkanRenderer::OutputSlot::SplitRight);
+                                        point_request, split_right_render_target_);
                                     if (rendered) {
                                         compare_panel.metadata.valid = true;
                                         compare_panel.metadata.flip_y = rendered->flip_y;
@@ -3445,7 +3456,7 @@ namespace lfs::vis {
                                         std::nullopt,
                                         nullptr,
                                         nullptr,
-                                        VksplatViewportRenderer::OutputSlot::SplitRight,
+                                        split_right_render_target_,
                                         &request);
                                     if (rendered) {
                                         compare_panel = std::move(*rendered);
@@ -3474,7 +3485,7 @@ namespace lfs::vis {
                                         context.vulkan_context) {
                                         auto image = vksplat_viewport_renderer_->readOutputImage(
                                             *context.vulkan_context,
-                                            VksplatViewportRenderer::OutputSlot::SplitRight);
+                                            split_right_render_target_);
                                         if (image && *image) {
                                             compare_panel.image = applyViewportAppearanceCorrection(
                                                 std::move(*image),
@@ -3610,7 +3621,7 @@ namespace lfs::vis {
                     std::nullopt,
                     nullptr,
                     nullptr,
-                    VksplatViewportRenderer::OutputSlot::SplitLeft);
+                    split_left_render_target_);
                 auto right = render_panel_image(
                     split_view_service_.secondaryViewport(),
                     panel_render_extent(1),
@@ -3618,7 +3629,7 @@ namespace lfs::vis {
                     std::nullopt,
                     nullptr,
                     nullptr,
-                    VksplatViewportRenderer::OutputSlot::SplitRight);
+                    split_right_render_target_);
                 if (left && right) {
                     if (left->temporal_input) {
                         left->temporal_input->output_extent = {
@@ -3716,7 +3727,7 @@ namespace lfs::vis {
                         left_visibility,
                         left_model,
                         left_transform_override,
-                        VksplatViewportRenderer::OutputSlot::SplitLeft);
+                        split_left_render_target_);
                     auto right = render_panel_image(
                         context.viewport,
                         {std::max(right_layout.panel.width, 1), render_size.y},
@@ -3724,7 +3735,7 @@ namespace lfs::vis {
                         right_visibility,
                         right_model,
                         right_transform_override,
-                        VksplatViewportRenderer::OutputSlot::SplitRight);
+                        split_right_render_target_);
                     if (left && right) {
                         if (left->temporal_input)
                             left->temporal_input->output_extent = current_size;
@@ -3840,7 +3851,7 @@ namespace lfs::vis {
                     return std::nullopt;
                 }
                 auto render_result = render_native_point_cloud(
-                    pc_request, PointCloudVulkanRenderer::OutputSlot::Main);
+                    pc_request, main_render_target_);
                 if (!render_result) {
                     LOG_ERROR("Point cloud Vulkan render failed: {}", lfs::format_for_developer(render_result.error()));
                     return std::nullopt;
@@ -3865,7 +3876,7 @@ namespace lfs::vis {
                         }
                         auto image = point_cloud_vulkan_renderer_->readOutputImage(
                             *last_vulkan_context_,
-                            PointCloudVulkanRenderer::OutputSlot::Main);
+                            main_render_target_);
                         if (!image) {
                             LOG_ERROR("Failed to capture point-cloud Vulkan viewport image: {}",
                                       image.error());
@@ -4275,10 +4286,10 @@ namespace lfs::vis {
                             auto image = transparent_viewer_compositing
                                              ? vksplat_viewport_renderer_->readOutputImageRgba(
                                                    *context.vulkan_context,
-                                                   VksplatViewportRenderer::OutputSlot::Main)
+                                                   main_render_target_)
                                              : vksplat_viewport_renderer_->readOutputImage(
                                                    *context.vulkan_context,
-                                                   VksplatViewportRenderer::OutputSlot::Main);
+                                                   main_render_target_);
                             if (image && *image) {
                                 auto corrected_image = applyViewportAppearanceCorrection(
                                     std::move(*image),
@@ -4387,10 +4398,10 @@ namespace lfs::vis {
                                 auto image = transparent_viewer_compositing
                                                  ? vksplat_viewport_renderer_->readOutputImageRgba(
                                                        *last_vulkan_context_,
-                                                       VksplatViewportRenderer::OutputSlot::Main)
+                                                       main_render_target_)
                                                  : vksplat_viewport_renderer_->readOutputImage(
                                                        *last_vulkan_context_,
-                                                       VksplatViewportRenderer::OutputSlot::Main);
+                                                       main_render_target_);
                                 if (!image) {
                                     LOG_ERROR("Failed to capture VkSplat viewport image: {}", image.error());
                                     return {};
@@ -4477,7 +4488,7 @@ namespace lfs::vis {
                                 *context.vulkan_context,
                                 *model,
                                 request,
-                                VksplatViewportRenderer::OutputSlot::Main,
+                                main_render_target_,
                                 synchronize_vksplat_input_upload);
                         } catch (const std::exception& e) {
                             overlay_result = std::unexpected(
@@ -4504,7 +4515,7 @@ namespace lfs::vis {
                             *model,
                             request,
                             force_input_upload,
-                            VksplatViewportRenderer::OutputSlot::Main,
+                            main_render_target_,
                             synchronize_vksplat_input_upload);
                     } catch (const std::exception& e) {
                         render_result = std::unexpected(std::format("VkSplat render threw: {}", e.what()));
@@ -4639,7 +4650,7 @@ namespace lfs::vis {
                                 capture_params = vulkan_mesh_frame_.split_view;
                             }
                         }
-                        const auto read_panel = [this](const VksplatViewportRenderer::OutputSlot slot)
+                        const auto read_panel = [this](const RenderTargetId slot)
                             -> std::shared_ptr<lfs::core::Tensor> {
                             if (!vksplat_viewport_renderer_ || !last_vulkan_context_) {
                                 return {};
@@ -4656,19 +4667,19 @@ namespace lfs::vis {
                         if (!capture_params.left.image &&
                             capture_params.left.external_image_view != VK_NULL_HANDLE) {
                             capture_params.left.image =
-                                read_panel(VksplatViewportRenderer::OutputSlot::SplitLeft);
+                                read_panel(split_left_render_target_);
                         }
                         if (!capture_params.right.image &&
                             capture_params.right.external_image_view != VK_NULL_HANDLE) {
                             if (gt_native_point_cloud_panel && point_cloud_vulkan_renderer_ && last_vulkan_context_) {
                                 auto image = point_cloud_vulkan_renderer_->readOutputImage(
-                                    *last_vulkan_context_, PointCloudVulkanRenderer::OutputSlot::SplitRight);
+                                    *last_vulkan_context_, split_right_render_target_);
                                 if (image) {
                                     capture_params.right.image = std::move(*image);
                                 }
                             } else {
                                 capture_params.right.image =
-                                    read_panel(VksplatViewportRenderer::OutputSlot::SplitRight);
+                                    read_panel(split_right_render_target_);
                             }
                         }
                         if (!capture_params.left.image || !capture_params.right.image) {

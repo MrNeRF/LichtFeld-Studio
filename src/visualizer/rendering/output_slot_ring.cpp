@@ -9,46 +9,44 @@
 
 namespace lfs::vis {
 
-    void OutputSlotRing::checkLogical(const std::size_t logical, const std::string_view what) const {
-        if (logical >= kOutputSlotCount) [[unlikely]] {
-            throw std::out_of_range(std::format(
-                "OutputSlotRing {}: logical slot out of range (logical={}, count={})",
-                what,
-                logical,
-                kOutputSlotCount));
+    std::size_t OutputSlotRing::acquire(RenderTargetId target) {
+        if (!target.valid() || released(target))
+            throw std::invalid_argument("Invalid or released render target");
+        auto [it, inserted] = slots_.try_emplace(target);
+        auto& column = it->second;
+        if (inserted) {
+            column.base = completions_.size();
+            column.latest = column.base;
+            completions_.resize(column.base + kFrameRingSize);
         }
+        const auto cell = column.base + column.cursor;
+        column.cursor = (column.cursor + 1) % kFrameRingSize;
+        return cell;
     }
-
-    void OutputSlotRing::checkRing(const std::size_t ring, const std::string_view what) const {
-        if (ring >= kFrameRingSize) [[unlikely]] {
-            throw std::out_of_range(std::format(
-                "OutputSlotRing {}: ring slot out of range (ring={}, size={})",
-                what,
-                ring,
-                kFrameRingSize));
+    std::size_t OutputSlotRing::acquireTransient(const TimelineCompleteFn& complete) {
+        for (auto cell : transient_cells_) {
+            if (!completions_[cell] || complete(completions_[cell]))
+                return cell;
         }
+        const auto cell = completions_.size();
+        completions_.push_back(0);
+        transient_cells_.push_back(cell);
+        return cell;
     }
-
-    std::size_t OutputSlotRing::acquire() noexcept {
-        const std::size_t slot = next_ring_slot_;
-        next_ring_slot_ = (next_ring_slot_ + 1) % kFrameRingSize;
-        return slot;
-    }
-
     lfs::Status OutputSlotRing::waitUntilReusable(const std::size_t ring_slot,
                                                   const std::string_view reason,
                                                   const TimelineCompleteFn& complete_fn,
                                                   const TimelineWaitFn& wait_fn) {
-        if (ring_slot >= kFrameRingSize) {
+        if (ring_slot >= completions_.size()) {
             return {};
         }
-        const std::uint64_t value = ring_completion_values_[ring_slot];
+        const std::uint64_t value = completions_[ring_slot];
         if (value == 0) {
             return {};
         }
         try {
             if (complete_fn && complete_fn(value)) {
-                ring_completion_values_[ring_slot] = 0;
+                completions_[ring_slot] = 0;
                 return {};
             }
         } catch (const std::exception& e) {
@@ -75,7 +73,7 @@ namespace lfs::vis {
             }));
         }
 
-        // Non-Ready leaves ring_completion_values_[slot] unchanged
+        // Non-Ready leaves completions_[slot] unchanged
         // (no manufactured free slot).
         try {
             auto wait_status = wait_fn(value);
@@ -92,99 +90,74 @@ namespace lfs::vis {
                 .detection = LFS_SOURCE_SITE_CURRENT(),
             }));
         }
-        ring_completion_values_[ring_slot] = 0;
+        completions_[ring_slot] = 0;
         return {};
     }
 
-    void OutputSlotRing::publishCompletion(const std::size_t ring_slot,
-                                           const std::uint64_t value) noexcept {
-        if (ring_slot < kFrameRingSize) {
-            ring_completion_values_[ring_slot] = value;
-        }
+    void OutputSlotRing::publishCompletion(std::size_t cell, std::uint64_t value) noexcept {
+        if (cell < completions_.size())
+            completions_[cell] = value;
     }
-
-    void OutputSlotRing::clearSlotCompletion(const std::size_t logical, const std::size_t ring) {
-        slotAt(logical, ring).completion_value = 0;
+    void OutputSlotRing::clearSlotCompletion(RenderTargetId target, std::size_t cell) {
+        slotAt(target, cell).completion_value = 0;
     }
-
-    void OutputSlotRing::markLatest(const std::size_t logical, const std::size_t ring) {
-        checkLogical(logical, "markLatest");
-        checkRing(ring, "markLatest");
-        latest_output_ring_slot_[logical] = ring;
+    void OutputSlotRing::markLatest(RenderTargetId target, std::size_t cell) {
+        if (released(target))
+            return;
+        (void)slotAt(target, cell);
+        slots_.at(target).latest = cell;
     }
-
-    std::uint64_t OutputSlotRing::bumpGeneration(const std::size_t logical) {
-        checkLogical(logical, "bumpGeneration");
-        return ++output_generations_[logical];
+    std::uint64_t OutputSlotRing::bumpGeneration(RenderTargetId target) {
+        if (released(target))
+            return 0;
+        return ++slots_.at(target).generation;
     }
-
-    OutputImageSlot& OutputSlotRing::slotAt(const std::size_t logical, const std::size_t ring) {
-        checkLogical(logical, "slotAt");
-        checkRing(ring, "slotAt");
-        return slots_[logical][ring];
+    OutputImageSlot& OutputSlotRing::slotAt(RenderTargetId target, std::size_t cell) {
+        auto& column = slots_.at(target);
+        return column.slots.at(cell - column.base);
     }
-
-    const OutputImageSlot& OutputSlotRing::slotAt(const std::size_t logical,
-                                                  const std::size_t ring) const {
-        checkLogical(logical, "slotAt");
-        checkRing(ring, "slotAt");
-        return slots_[logical][ring];
+    const OutputImageSlot& OutputSlotRing::slotAt(RenderTargetId target, std::size_t cell) const {
+        const auto& column = slots_.at(target);
+        return column.slots.at(cell - column.base);
     }
-
-    std::size_t OutputSlotRing::latestRingSlot(const std::size_t logical) const {
-        checkLogical(logical, "latestRingSlot");
-        const std::size_t ring_slot = latest_output_ring_slot_[logical];
-        if (ring_slot >= kFrameRingSize) [[unlikely]] {
-            throw std::out_of_range(std::format(
-                "VkSplat latest output ring slot is outside the ring "
-                "(output_index={}, observed_ring_slot={}, ring_size={})",
-                logical,
-                ring_slot,
-                kFrameRingSize));
-        }
-        return ring_slot;
+    std::size_t OutputSlotRing::latestRingSlot(RenderTargetId target) const {
+        return slots_.at(target).latest;
     }
-
-    OutputImageSlot& OutputSlotRing::latestSlot(const std::size_t logical) {
-        return slotAt(logical, latestRingSlot(logical));
+    OutputImageSlot& OutputSlotRing::latestSlot(RenderTargetId target) {
+        return slotAt(target, latestRingSlot(target));
     }
-
-    const OutputImageSlot& OutputSlotRing::latestSlot(const std::size_t logical) const {
-        return slotAt(logical, latestRingSlot(logical));
+    const OutputImageSlot& OutputSlotRing::latestSlot(RenderTargetId target) const {
+        static const OutputImageSlot empty;
+        return contains(target) ? slotAt(target, latestRingSlot(target)) : empty;
     }
-
-    void OutputSlotRing::clearLogical(const std::size_t logical, const PerSlotFn& per_slot_fn) {
-        checkLogical(logical, "clearLogical");
-        for (auto& slot : slots_[logical]) {
-            if (per_slot_fn) {
-                per_slot_fn(slot);
-            }
+    void OutputSlotRing::clearLogical(RenderTargetId target, const PerSlotFn& release) {
+        auto it = slots_.find(target);
+        if (it == slots_.end())
+            return;
+        for (auto& slot : it->second.slots) {
+            if (release)
+                release(slot);
             slot = {};
         }
-        latest_output_ring_slot_[logical] = 0;
-        output_generations_[logical] = 0;
     }
-
+    bool OutputSlotRing::releaseRenderTarget(RenderTargetId target, const PerSlotFn& release) {
+        if (!target.valid() || released(target))
+            return false;
+        clearLogical(target, release);
+        slots_.erase(target);
+        released_.insert(target);
+        return true;
+    }
     void OutputSlotRing::reset() noexcept {
-        slots_ = {};
-        ring_completion_values_ = {};
-        next_ring_slot_ = 0;
-        latest_output_ring_slot_ = {};
-        output_generations_ = {};
+        slots_.clear();
+        completions_.clear();
+        transient_cells_.clear();
     }
-
-    std::uint64_t OutputSlotRing::ringCompletionValue(const std::size_t ring_slot) const noexcept {
-        if (ring_slot >= kFrameRingSize) {
-            return 0;
-        }
-        return ring_completion_values_[ring_slot];
+    std::uint64_t OutputSlotRing::ringCompletionValue(std::size_t cell) const noexcept {
+        return cell < completions_.size() ? completions_[cell] : 0;
     }
-
-    std::uint64_t OutputSlotRing::generation(const std::size_t logical) const noexcept {
-        if (logical >= kOutputSlotCount) {
-            return 0;
-        }
-        return output_generations_[logical];
+    std::uint64_t OutputSlotRing::generation(RenderTargetId target) const noexcept {
+        auto it = slots_.find(target);
+        return it == slots_.end() ? 0 : it->second.generation;
     }
-
 } // namespace lfs::vis

@@ -470,6 +470,7 @@ namespace lfs::vis {
 
             // RmlUI integration
             RmlUIManager rmlui_manager_;
+            std::shared_ptr<lfs::vis::SharedViewportGpuAssets> viewport_gpu_assets_;
             std::unique_ptr<lfs::vis::VulkanViewportPass> vulkan_viewport_pass_;
             bool vulkan_gui_ = false;
             SDL_Cursor* pipette_cursor_ = nullptr;

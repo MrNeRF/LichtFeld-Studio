@@ -4,7 +4,10 @@
 
 // Epic #1568 / #1567 — OutputSlotRing host bookkeeping (GPU-free).
 
+#include "rendering/gpu_lod_target_feedback.hpp"
 #include "rendering/output_slot_ring.hpp"
+#include "rendering/passes/vulkan_viewport_pass.hpp"
+#include "rendering/point_cloud_vulkan_renderer.hpp"
 
 #include <gtest/gtest.h>
 
@@ -40,16 +43,16 @@ namespace {
 
 TEST(OutputSlotRing, AcquireRoundRobinWraps) {
     OutputSlotRing ring;
-    EXPECT_EQ(ring.acquire(), 0u);
-    EXPECT_EQ(ring.acquire(), 1u);
-    EXPECT_EQ(ring.acquire(), 2u);
-    EXPECT_EQ(ring.acquire(), 0u);
-    EXPECT_EQ(ring.acquire(), 1u);
-    EXPECT_EQ(ring.nextRingSlot(), 2u);
+    EXPECT_EQ(ring.acquire({1}), 0u);
+    EXPECT_EQ(ring.acquire({1}), 1u);
+    EXPECT_EQ(ring.acquire({1}), 2u);
+    EXPECT_EQ(ring.acquire({1}), 0u);
+    EXPECT_EQ(ring.acquire({1}), 1u);
 }
 
 TEST(OutputSlotRing, WaitNoOpOnZeroWatermark) {
     OutputSlotRing ring;
+    (void)ring.acquire({1});
     bool complete_called = false;
     bool wait_called = false;
     auto status = ring.waitUntilReusable(
@@ -70,6 +73,7 @@ TEST(OutputSlotRing, WaitNoOpOnZeroWatermark) {
 
 TEST(OutputSlotRing, WaitClearsWatermarkWhenCompletePredTrue) {
     OutputSlotRing ring;
+    (void)ring.acquire({1});
     ring.publishCompletion(1, 42);
     EXPECT_EQ(ring.ringCompletionValue(1), 42u);
 
@@ -92,6 +96,7 @@ TEST(OutputSlotRing, WaitClearsWatermarkWhenCompletePredTrue) {
 
 TEST(OutputSlotRing, NonReadyWaitLeavesWatermarkIntact) {
     OutputSlotRing ring;
+    (void)ring.acquire({1});
     ring.publishCompletion(2, 99);
     EXPECT_EQ(ring.ringCompletionValue(2), 99u);
 
@@ -116,6 +121,7 @@ TEST(OutputSlotRing, NonReadyWaitLeavesWatermarkIntact) {
 
 TEST(OutputSlotRing, ThrowingWaitFnBecomesFailureAndLeavesWatermark) {
     OutputSlotRing ring;
+    (void)ring.acquire({1});
     ring.publishCompletion(1, 42);
 
     auto status = ring.waitUntilReusable(
@@ -130,6 +136,7 @@ TEST(OutputSlotRing, ThrowingWaitFnBecomesFailureAndLeavesWatermark) {
 
 TEST(OutputSlotRing, WaitClearsWatermarkOnReadyWaitFn) {
     OutputSlotRing ring;
+    (void)ring.acquire({1});
     ring.publishCompletion(0, 7);
     auto status = ring.waitUntilReusable(
         0,
@@ -142,6 +149,7 @@ TEST(OutputSlotRing, WaitClearsWatermarkOnReadyWaitFn) {
 
 TEST(OutputSlotRing, CompleteFnExceptionBecomesStatusAndLeavesWatermark) {
     OutputSlotRing ring;
+    (void)ring.acquire({1});
     ring.publishCompletion(0, 11);
     auto status = ring.waitUntilReusable(
         0,
@@ -154,127 +162,116 @@ TEST(OutputSlotRing, CompleteFnExceptionBecomesStatusAndLeavesWatermark) {
     EXPECT_EQ(ring.ringCompletionValue(0), 11u);
 }
 
-TEST(OutputSlotRing, PublishCompletionAndClearOnComposeStart) {
+TEST(OutputSlotRing, SparseTargetsDoNotWaitOnNeighbours) {
     OutputSlotRing ring;
-    constexpr std::size_t logical = 0;
-    constexpr std::size_t ring_i = 1;
-    ring.slotAt(logical, ring_i).completion_value = 5;
-    ring.publishCompletion(ring_i, 50);
-    EXPECT_EQ(ring.ringCompletionValue(ring_i), 50u);
-    EXPECT_EQ(ring.slotAt(logical, ring_i).completion_value, 5u);
-
-    ring.clearSlotCompletion(logical, ring_i);
-    EXPECT_EQ(ring.slotAt(logical, ring_i).completion_value, 0u);
-    // Ring watermark is independent of per-slot clear.
-    EXPECT_EQ(ring.ringCompletionValue(ring_i), 50u);
-}
-
-TEST(OutputSlotRing, LatestPublishAndBoundsCheck) {
-    OutputSlotRing ring;
-    ring.markLatest(/*logical=*/2, /*ring=*/1);
-    EXPECT_EQ(ring.latestRingSlot(2), 1u);
-    ring.slotAt(2, 1) = makeSlot(0xBEEF);
-    EXPECT_EQ(ring.latestSlot(2).image.image, fakeImage(0xBEEF));
-
-    // Corrupt the stored latest beyond ring size → throw.
-    // Direct write via reset-path simulation: mark then poke table.
-    // latest_output_ring_slot_ is private; force via clearLogical + manual
-    // poke is not available — use a known-good then verify out_of_range on
-    // bogus logical index.
-    EXPECT_THROW((void)ring.latestRingSlot(OutputSlotRing::kOutputSlotCount), std::out_of_range);
-    EXPECT_THROW((void)ring.slotAt(0, OutputSlotRing::kFrameRingSize), std::out_of_range);
-    EXPECT_THROW((void)ring.slotAt(OutputSlotRing::kOutputSlotCount, 0), std::out_of_range);
-}
-
-TEST(OutputSlotRing, ClearLogicalInvokesPerSlotCallbackAndZerosColumn) {
-    OutputSlotRing ring;
-    constexpr std::size_t logical = 1;
-    ring.slotAt(logical, 0) = makeSlot(0x10, 1);
-    ring.slotAt(logical, 1) = makeSlot(0x20, 2);
-    ring.slotAt(logical, 2) = makeSlot(0x30, 3);
-    ring.markLatest(logical, 2);
-    (void)ring.bumpGeneration(logical);
-    (void)ring.bumpGeneration(logical);
-    EXPECT_EQ(ring.generation(logical), 2u);
-
-    // Unrelated logical column must survive.
-    ring.slotAt(0, 0) = makeSlot(0xAA);
-    ring.markLatest(0, 0);
-
-    std::vector<std::uint64_t> released_serials;
-    ring.clearLogical(logical, [&](OutputImageSlot& slot) {
-        if (slot.color_pool_serial != 0) {
-            released_serials.push_back(slot.color_pool_serial);
-        }
-    });
-
-    ASSERT_EQ(released_serials.size(), 3u);
-    EXPECT_EQ(released_serials[0], 0x10u);
-    EXPECT_EQ(released_serials[1], 0x20u);
-    EXPECT_EQ(released_serials[2], 0x30u);
-
-    for (std::size_t r = 0; r < OutputSlotRing::kFrameRingSize; ++r) {
-        EXPECT_EQ(ring.slotAt(logical, r).image.image, VK_NULL_HANDLE);
-        EXPECT_EQ(ring.slotAt(logical, r).completion_value, 0u);
-        EXPECT_EQ(ring.slotAt(logical, r).color_pool_serial, 0u);
+    for (std::uint32_t id = 1; id < 100; ++id) {
+        const auto cell = ring.acquire({id * 101});
+        ASSERT_TRUE(ring.waitUntilReusable(cell, "render", [](auto) { return false; }, [](auto) -> lfs::Status { ADD_FAILURE() << "Cross-target wait"; return {}; }));
+        ring.publishCompletion(cell, id);
     }
-    EXPECT_EQ(ring.latestRingSlot(logical), 0u);
-    EXPECT_EQ(ring.generation(logical), 0u);
-
-    // Other column intact.
-    EXPECT_EQ(ring.slotAt(0, 0).image.image, fakeImage(0xAA));
-    EXPECT_EQ(ring.latestRingSlot(0), 0u);
+    EXPECT_EQ(ring.table().size(), 99u);
 }
 
-TEST(OutputSlotRing, ResetZerosEverything) {
+TEST(OutputSlotRing, ReleaseKeepsNeighbourAndDropsLatePublication) {
     OutputSlotRing ring;
-    ring.slotAt(0, 0) = makeSlot(1);
-    ring.slotAt(3, 2) = makeSlot(2, 9);
-    ring.publishCompletion(0, 100);
-    ring.publishCompletion(2, 200);
-    ring.markLatest(0, 1);
-    (void)ring.bumpGeneration(0);
-    (void)ring.acquire();
-    (void)ring.acquire();
-    EXPECT_NE(ring.nextRingSlot(), 0u);
+    const lfs::vis::RenderTargetId a{17}, b{9001};
+    auto acell = ring.acquire(a);
+    auto bcell = ring.acquire(b);
+    ring.slotAt(a, acell) = makeSlot(12, 77);
+    ring.slotAt(b, bcell) = makeSlot(13, 78);
+    ring.publishCompletion(acell, 77);
+    std::vector<OutputImageSlot> retired;
+    ASSERT_TRUE(ring.releaseRenderTarget(a, [&](auto& slot) { retired.push_back(slot); }));
+    EXPECT_EQ(retired.front().completion_value, 77u);
+    EXPECT_EQ(ring.slotAt(b, bcell).image.image, fakeImage(13));
+    EXPECT_EQ(ring.ringCompletionValue(acell), 77u);
+    ring.markLatest(a, acell);
+    EXPECT_EQ(ring.bumpGeneration(a), 0u);
+    EXPECT_THROW((void)ring.acquire(a), std::invalid_argument);
+    EXPECT_FALSE(ring.contains(a));
+    EXPECT_NE(ring.acquire({18}), acell);
+}
 
+TEST(RenderTargetRegistry, NeverReusesReleasedIds) {
+    lfs::vis::RenderTargetRegistry registry;
+    auto a = registry.allocate();
+    EXPECT_TRUE(a.valid());
+    EXPECT_TRUE(registry.release(a));
+    auto b = registry.allocate();
+    EXPECT_GT(b.value, a.value);
+    EXPECT_FALSE(registry.contains(a));
+    EXPECT_TRUE(registry.contains(b));
+}
+
+TEST(GpuLodTargetFeedback, IsolatesControllersAndUnionsRecentDemand) {
+    lfs::vis::GpuLodTargetFeedbackTable table;
+    auto& a = table.touch({1}, 10);
+    a.pixel_scale_feedback = 7.0f;
+    a.protected_chunks = {1, 3};
+    a.prefetch_requests = {{4, 2}, {5, 3}};
+    auto& b = table.touch({2}, 11);
+    EXPECT_EQ(b.pixel_scale_feedback, 1.0f);
+    b.protected_chunks = {2, 3};
+    b.prefetch_requests = {{4, 9}};
+    auto demand = table.demand(12);
+    EXPECT_EQ(demand.protected_chunks, (std::vector<std::uint32_t>{1, 2, 3}));
+    ASSERT_EQ(demand.prefetch_requests.size(), 2u);
+    EXPECT_EQ(demand.prefetch_requests[0].priority, 9u);
+    demand = table.demand(14);
+    EXPECT_EQ(demand.protected_chunks, (std::vector<std::uint32_t>{2, 3}));
+    table.release({2});
+    EXPECT_EQ(table.find({2}), nullptr);
+    EXPECT_TRUE(table.demand(14).protected_chunks.empty());
+}
+
+TEST(PointCloudRenderTargets, SparseOutputsStayIndependentAfterRelease) {
+    using Access = lfs::vis::PointCloudOutputOwnershipTestAccess;
+    lfs::vis::PointCloudVulkanRenderer renderer;
+    const auto a = Access::createEmptyOutput(renderer, {17});
+    const auto b = Access::createEmptyOutput(renderer, {9001});
+    ASSERT_NE(a, nullptr);
+    ASSERT_NE(b, nullptr);
+    EXPECT_NE(a, b);
+    EXPECT_TRUE(renderer.releaseRenderTarget({17}));
+    EXPECT_EQ(Access::outputIdentity(renderer, {17}), nullptr);
+    EXPECT_EQ(Access::outputIdentity(renderer, {9001}), b);
+    EXPECT_EQ(Access::createEmptyOutput(renderer, {17}), nullptr);
+    EXPECT_NE(Access::createEmptyOutput(renderer, {18}), b);
+}
+
+TEST(SharedViewportGpuAssets, RemainAliveUntilLastPassReleasesOwnership) {
+    auto assets = std::make_shared<lfs::vis::SharedViewportGpuAssets>();
+    std::weak_ptr<lfs::vis::SharedViewportGpuAssets> weak = assets;
+    auto a = std::make_unique<lfs::vis::VulkanViewportPass>(assets);
+    auto b = std::make_unique<lfs::vis::VulkanViewportPass>(assets);
+    assets.reset();
+    EXPECT_FALSE(weak.expired());
+    a.reset();
+    EXPECT_FALSE(weak.expired());
+    b.reset();
+    EXPECT_TRUE(weak.expired());
+}
+
+TEST(OutputSlotRing, LatestGenerationAndResetKeepTargetIdentity) {
+    OutputSlotRing ring;
+    const lfs::vis::RenderTargetId a{101}, b{99991};
+    auto cell = ring.acquire(a);
+    auto other = ring.acquire(b);
+    ring.slotAt(a, cell) = makeSlot(0x101);
+    ring.slotAt(b, other) = makeSlot(0x102);
+    ring.markLatest(a, cell);
+    EXPECT_EQ(ring.latestRingSlot(a), cell);
+    EXPECT_EQ(ring.bumpGeneration(a), 1u);
+    EXPECT_EQ(ring.bumpGeneration(a), 2u);
+    EXPECT_EQ(ring.bumpGeneration(b), 1u);
+    EXPECT_EQ(ring.generation(a), 2u);
+    EXPECT_EQ(ring.latestSlot(a).image.image, fakeImage(0x101));
+    EXPECT_THROW((void)ring.slotAt(a, other), std::out_of_range);
+    EXPECT_THROW((void)ring.acquire({}), std::invalid_argument);
+    EXPECT_TRUE(ring.releaseRenderTarget(a, [](auto&) {}));
     ring.reset();
-
-    EXPECT_EQ(ring.nextRingSlot(), 0u);
-    for (std::size_t r = 0; r < OutputSlotRing::kFrameRingSize; ++r) {
-        EXPECT_EQ(ring.ringCompletionValue(r), 0u);
-    }
-    for (std::size_t L = 0; L < OutputSlotRing::kOutputSlotCount; ++L) {
-        EXPECT_EQ(ring.generation(L), 0u);
-        EXPECT_EQ(ring.latestRingSlot(L), 0u);
-        for (std::size_t r = 0; r < OutputSlotRing::kFrameRingSize; ++r) {
-            EXPECT_EQ(ring.slotAt(L, r).image.image, VK_NULL_HANDLE);
-            EXPECT_EQ(ring.slotAt(L, r).completion_value, 0u);
-        }
-    }
-}
-
-TEST(OutputSlotRing, GenerationBumpMonotonic) {
-    OutputSlotRing ring;
-    EXPECT_EQ(ring.generation(0), 0u);
-    EXPECT_EQ(ring.bumpGeneration(0), 1u);
-    EXPECT_EQ(ring.bumpGeneration(0), 2u);
-    EXPECT_EQ(ring.bumpGeneration(0), 3u);
-    EXPECT_EQ(ring.generation(0), 3u);
-    // Independent per logical slot.
-    EXPECT_EQ(ring.bumpGeneration(1), 1u);
-    EXPECT_EQ(ring.generation(0), 3u);
-    EXPECT_EQ(ring.generation(1), 1u);
-}
-
-TEST(OutputSlotRing, OutOfRangeWaitIsNoOpSuccess) {
-    OutputSlotRing ring;
-    ring.publishCompletion(0, 5);
-    auto status = ring.waitUntilReusable(
-        OutputSlotRing::kFrameRingSize,
-        "test",
-        [](std::uint64_t) { return true; },
-        [](std::uint64_t) -> lfs::Status { return {}; });
-    EXPECT_TRUE(status);
-    EXPECT_EQ(ring.ringCompletionValue(0), 5u);
+    EXPECT_TRUE(ring.table().empty());
+    EXPECT_EQ(ring.submissionCount(), 0u);
+    EXPECT_THROW((void)ring.acquire(a), std::invalid_argument);
+    EXPECT_EQ(ring.acquire(b), 0u);
 }

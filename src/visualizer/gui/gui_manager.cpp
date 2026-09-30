@@ -5236,6 +5236,7 @@ namespace lfs::vis::gui {
 
     void GuiManager::shutdownVulkanViewportPass() {
         vulkan_viewport_pass_.reset();
+        viewport_gpu_assets_.reset();
     }
 
     void GuiManager::hideBottomDockPanel(const std::string& id) {
@@ -7341,7 +7342,9 @@ namespace lfs::vis::gui {
                 }
                 bool viewport_pass_ready = false;
                 if (!vulkan_viewport_pass_) {
-                    vulkan_viewport_pass_ = std::make_unique<VulkanViewportPass>();
+                    if (!viewport_gpu_assets_)
+                        viewport_gpu_assets_ = std::make_shared<SharedViewportGpuAssets>();
+                    vulkan_viewport_pass_ = std::make_unique<VulkanViewportPass>(viewport_gpu_assets_);
                 }
                 viewport_pass_ready = vulkan_viewport_pass_->init(*vulkan_context);
                 if (viewport_pass_ready) {

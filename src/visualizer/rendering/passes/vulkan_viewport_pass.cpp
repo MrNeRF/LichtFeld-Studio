@@ -10,6 +10,7 @@
 #include "rendering/nvidia_dlss_plugin.hpp"
 #include "rendering/output_image_pool.hpp"
 #include "rendering/vulkan_wait.hpp"
+#include "shared_viewport_gpu_assets.hpp"
 #include "viewport_pass_graph.hpp"
 #include "vulkan_environment_pass.hpp"
 #include "vulkan_mesh_pass.hpp"
@@ -40,6 +41,7 @@
 #include <cstring>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <span>
 #include <stop_token>
 #include <string>
@@ -237,6 +239,7 @@ namespace lfs::vis {
         VkDescriptorSetLayout scene_descriptor_layout = VK_NULL_HANDLE;
         VkDescriptorPool scene_descriptor_pool = VK_NULL_HANDLE;
         VulkanSceneImageUploader scene_image_uploader;
+        std::shared_ptr<SharedViewportGpuAssets> gpu_assets;
         VulkanMeshPass mesh_pass;
         VulkanEnvironmentPass environment_pass;
         VulkanDepthBlitPass depth_blit_pass;
@@ -329,12 +332,20 @@ namespace lfs::vis {
                 reset();
                 return false;
             }
-            if (!mesh_pass.init(ctx, color_format, depth_stencil_format)) {
+            if (!gpu_assets) {
+                gpu_assets = std::make_shared<SharedViewportGpuAssets>();
+            }
+            if (!gpu_assets->ensureContext(ctx)) {
+                LOG_ERROR("Vulkan viewport pass: shared scene GPU assets init failed");
+                reset();
+                return false;
+            }
+            if (!mesh_pass.init(ctx, color_format, depth_stencil_format, gpu_assets)) {
                 LOG_ERROR("Vulkan viewport pass: mesh sub-pass init failed");
                 reset();
                 return false;
             }
-            if (!environment_pass.init(ctx, color_format, depth_stencil_format, quad_buffer)) {
+            if (!environment_pass.init(ctx, color_format, depth_stencil_format, quad_buffer, gpu_assets)) {
                 LOG_ERROR("Vulkan viewport pass: environment sub-pass init failed");
                 reset();
                 return false;
@@ -3192,6 +3203,11 @@ namespace lfs::vis {
 
     VulkanViewportPass::VulkanViewportPass() = default;
 
+    VulkanViewportPass::VulkanViewportPass(std::shared_ptr<SharedViewportGpuAssets> shared_assets)
+        : impl_(std::make_unique<Impl>()) {
+        impl_->gpu_assets = std::move(shared_assets);
+    }
+
     VulkanViewportPass::~VulkanViewportPass() {
         shutdown();
     }
@@ -3204,7 +3220,17 @@ namespace lfs::vis {
     }
 
     void VulkanViewportPass::prepare(VulkanContext& context, const VulkanViewportPassParams& params) {
-        if (!impl_ && !init(context)) {
+        if (!impl_) {
+            impl_ = std::make_unique<Impl>();
+        }
+        if (impl_->device != VK_NULL_HANDLE &&
+            (impl_->context != &context || impl_->device != context.device() ||
+             impl_->allocator != context.allocator())) {
+            auto assets = impl_->gpu_assets;
+            impl_->reset();
+            impl_->gpu_assets = std::move(assets);
+        }
+        if (impl_->device == VK_NULL_HANDLE && !impl_->init(context)) {
             return;
         }
         impl_->prepare(params);

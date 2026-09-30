@@ -1173,6 +1173,8 @@ namespace lfs::app {
                      total_frames, duration, cfg.fps,
                      core::path_to_utf8(cfg.camera_path), core::path_to_utf8(cfg.output_path));
 
+            vis::RenderTargetRegistry targets;
+            const auto target = targets.allocate();
             for (int frame = 0; frame < total_frames; ++frame) {
                 const float t = std::min(static_cast<float>(frame) / static_cast<float>(cfg.fps), duration);
                 const auto cam_state = timeline.evaluate(t);
@@ -1186,12 +1188,12 @@ namespace lfs::app {
                 // The loaded scene is immutable for the whole path. The live-training
                 // upload flag shares the training arena and disables the immutable HiGS chain.
                 auto rendered = renderer.render(context, *model, request, frame == 0,
-                                                vis::VksplatViewportRenderer::OutputSlot::Preview, false, true);
+                                                target, false, true);
                 if (!rendered) {
                     LOG_ERROR("Failed to render frame {}: {}", frame, rendered.error());
                     return 1;
                 }
-                auto image = renderer.readOutputImage(context, vis::VksplatViewportRenderer::OutputSlot::Preview);
+                auto image = renderer.readOutputImage(context, target);
                 if (!image) {
                     LOG_ERROR("Failed to read frame {}: {}", frame, image.error());
                     return 1;
