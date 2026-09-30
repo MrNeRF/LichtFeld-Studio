@@ -82,7 +82,8 @@ namespace lfs::vis::gui {
         items.push_back({.kind = HeaderItem::Kind::Menu,
                          .id = "view",
                          .label = icon_only_view ? "" : LOC("view3d.view"),
-                         .icon = icon_only_view ? "editor-view3d" : ""});
+                         .icon = icon_only_view ? "editor-view3d" : "",
+                         .tooltip = LOC("view3d.view")});
         const auto display_icon = mode == "points"    ? "dots-diagonal"
                                   : mode == "rings"   ? "ring"
                                   : mode == "centers" ? "circle-dot"
@@ -90,7 +91,11 @@ namespace lfs::vis::gui {
         if (compact_display) {
             items.push_back({.kind = HeaderItem::Kind::Menu,
                              .id = "display",
-                             .icon = display_icon});
+                             .icon = display_icon,
+                             .tooltip = LOC(mode == "points"    ? "view3d.point_cloud"
+                                            : mode == "rings"   ? "view3d.rings"
+                                            : mode == "centers" ? "view3d.centers"
+                                                                : "view3d.splats")});
         } else {
             items.push_back({.kind = HeaderItem::Kind::Toggle,
                              .id = "display:splats",
@@ -255,6 +260,7 @@ namespace lfs::vis::gui {
             items.push_back({.kind = HeaderItem::Kind::Tab,
                              .id = "tab:" + tab.id,
                              .label = tab.label,
+                             .tooltip = tab.label,
                              .active = tab.id == active,
                              .closeable = tab.tab_closeable});
         }
@@ -386,7 +392,7 @@ namespace lfs::vis::gui {
 
     void PanelEditor::header(const AreaFrame& area, const screen::Screen&, std::vector<HeaderItem>& items) const {
         if (const auto details = PanelRegistry::instance().get_panel(area.editor))
-            items.push_back({.kind = HeaderItem::Kind::Label, .id = "title", .label = details->label});
+            items.push_back({.kind = HeaderItem::Kind::Label, .id = "title", .label = details->label, .tooltip = details->label});
     }
 
     void PanelEditor::draw(const AreaDrawContext& ctx) {

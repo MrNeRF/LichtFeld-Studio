@@ -158,6 +158,7 @@ namespace lfs::vis::gui {
     }
 
     void ScreenHost::shutdown() {
+        chrome_tooltip_.setHover({}, nullptr);
         if (services_.rml) {
             services_.rml->releaseCachedVulkanContext(chrome_cache_);
             services_.rml->releaseCachedVulkanContext(overlay_cache_);
@@ -175,6 +176,7 @@ namespace lfs::vis::gui {
     }
 
     void ScreenHost::reloadResources() {
+        chrome_tooltip_.setHover({}, nullptr);
         if (!chrome_context_ || !overlay_context_)
             return;
         if (services_.rml) {
@@ -555,6 +557,17 @@ namespace lfs::vis::gui {
             }
         }
 
+        if (chrome_context_ && over_header) {
+            auto* hover = chrome_context_->GetHoverElement();
+            chrome_tooltip_.setHover(hover ? resolveRmlTooltip(hover) : std::string{}, hover);
+        } else {
+            chrome_tooltip_.setHover({}, nullptr);
+        }
+        if (services_.rml && chrome_context_) {
+            services_.rml->setContextNeedsPassiveMouseMoveFrames(chrome_context_, chrome_tooltip_.hasActiveState());
+            services_.rml->setContextTooltipRevealDeadline(chrome_context_, chrome_tooltip_.revealDeadline());
+        }
+
         const auto* press = input.lastPress(0);
         if (pointer_free && !gestures_.active() && press) {
             const bool press_over_corner = screen_host_detail::cornerGestureZone(
@@ -658,12 +671,21 @@ namespace lfs::vis::gui {
             const int w = static_cast<int>(work_.w);
             const int h = static_cast<int>(work_.h);
             const bool dims_changed = chrome_cache_.width != w || chrome_cache_.height != h;
-            const bool refresh = chrome_dirty_ || dims_changed || chrome_cache_.texture == 0;
+            const bool refresh = chrome_dirty_ || dims_changed || chrome_cache_.texture == 0 ||
+                                 chrome_tooltip_.revealDue();
             if (refresh) {
                 chrome_context_->SetDimensions(Rml::Vector2i(w, h));
                 chrome_context_->Update();
                 chrome_dirty_ = false;
             }
+            if (chrome_tooltip_.apply(chrome_document_->GetElementById("screen-chrome"),
+                                      static_cast<int>(input.mouse_x - work_.x),
+                                      static_cast<int>(input.mouse_y - work_.y), w, h)) {
+                chrome_context_->Update();
+                chrome_dirty_ = false;
+            }
+            services_.rml->setContextNeedsPassiveMouseMoveFrames(chrome_context_, chrome_tooltip_.hasActiveState());
+            services_.rml->setContextTooltipRevealDeadline(chrome_context_, chrome_tooltip_.revealDeadline());
             services_.rml->trackContextFrame(chrome_context_, static_cast<int>(work_.x), static_cast<int>(work_.y));
             services_.rml->queueCachedVulkanContext({
                 .context = chrome_context_,
@@ -921,7 +943,8 @@ namespace lfs::vis::gui {
     }
 
     bool ScreenHost::needsAnimationFrame() const {
-        return chrome_dirty_ || overlay_dirty_ || gestures_.active() || !pending_actions_.empty();
+        return chrome_dirty_ || overlay_dirty_ || gestures_.active() || !pending_actions_.empty() ||
+               chrome_tooltip_.needsFrame();
     }
 
     std::string ScreenHost::animationDemandDescription() const {

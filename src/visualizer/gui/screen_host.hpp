@@ -6,6 +6,7 @@
 
 #include "gui/area_editors.hpp"
 #include "gui/panel_layout.hpp"
+#include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "screen/area_gestures.hpp"
 #include "screen/screen_service.hpp"
@@ -180,6 +181,7 @@ namespace lfs::vis::gui {
         Rml::Context* chrome_context_ = nullptr;
         Rml::ElementDocument* chrome_document_ = nullptr;
         Rml::DataModelHandle chrome_model_;
+        RmlTooltipController chrome_tooltip_;
         std::vector<ChromeArea> chrome_areas_;
         CachedVulkanContextRender chrome_cache_;
         bool chrome_dirty_ = true;
