@@ -1672,6 +1672,7 @@ TEST_P(GutScreenShare, MrnfClipsAfterGrowthAndLeavesUnsetLimitUnchanged) {
             params.iterations = 30000;
             params.max_screen_share = enabled ? .0001f : 0.f;
             params.screen_share_penalty = 0.f;
+            params.hard_clip_stop_iter = -1;
             params.means_noise_weight = 0.f;
             params.scale_decay = 0.f;
             params.opacity_decay = 0.f;
@@ -1784,6 +1785,7 @@ TEST(GutScreenShareStrategy, MatureRefinementsReduceActualProjectedAreaBelowLimi
         params.iterations = 30000;
         params.max_screen_share = enabled ? .1f : 0.f;
         params.screen_share_penalty = 0.f;
+        params.hard_clip_stop_iter = -1;
         params.means_noise_weight = 0.f;
         params.scale_decay = 0.f;
         params.opacity_decay = 0.f;

@@ -637,6 +637,31 @@ TEST(ArgumentParserTest, MrnfKnobFlagsParseAndPopulateExplicitOverrides) {
     EXPECT_EQ(restored.optimization.far_seed_dose, 500u);
 }
 
+TEST(ArgumentParserTest, MrnfCapacityDefaultsResolveAfterCliOverrides) {
+    const auto data_path = make_test_path("lfs_arg_parser_mrnf_capacity_data");
+    const auto output_path = make_test_path("lfs_arg_parser_mrnf_capacity_output");
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--strategy",
+        "mrnf",
+        "--max-cap",
+        "1000000"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_FLOAT_EQ((*parsed)->optimization.grow_fraction, -1.0f);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.shs_lr, -1.0f);
+
+    (*parsed)->optimization.resolve_mrnf_capacity_defaults();
+    EXPECT_NEAR((*parsed)->optimization.grow_fraction, 0.0758f, 1.0e-7f);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.shs_lr, 0.005f);
+}
+
 TEST(ArgumentParserTest, SafeModeIsProcessLocalAndNotATrainingConfigurationOption) {
     const auto data_path = make_test_path("lfs_arg_parser_safe_mode_data");
     const auto output_path = make_test_path("lfs_arg_parser_safe_mode_output");

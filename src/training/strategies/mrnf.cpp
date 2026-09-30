@@ -608,7 +608,10 @@ namespace lfs::training {
         _densify_n_allocated_peak_bytes = 0;
         _densify_child_required_peak_bytes = 0;
         _densify_child_allocated_peak_bytes = 0;
-        _params = std::make_unique<const lfs::core::param::OptimizationParameters>(optimParams);
+        auto resolved_params = optimParams;
+        resolved_params.resolve_mrnf_capacity_defaults();
+        _params = std::make_unique<const lfs::core::param::OptimizationParameters>(
+            std::move(resolved_params));
 
         if (_params->max_cap > 0) {
             const size_t capacity = static_cast<size_t>(_params->max_cap);
@@ -1293,7 +1296,7 @@ namespace lfs::training {
                                "wait fused adam before screen-share mutate");
         }
 
-        if (_params && screen_share_shrink_active(iter) &&
+        if (_params && _params->mrnf_hard_clip_at(iter) && screen_share_shrink_active(iter) &&
             screen_share_cap_active(_params->max_screen_share) &&
             _splat_data->_max_screen_share.is_valid() &&
             _splat_data->_max_screen_share.numel() == n) {

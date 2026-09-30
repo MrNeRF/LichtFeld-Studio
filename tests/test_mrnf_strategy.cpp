@@ -558,7 +558,7 @@ TEST(MRNFStrategyTest, RefinementPreservesThinSurfacesAndPrunesCollapsedSplats) 
     const auto deleted_cpu = splat_data.deleted().cpu();
     const bool* deleted = deleted_cpu.ptr<bool>();
     for (size_t i = 0; i < 8; ++i) {
-        EXPECT_EQ(deleted[i], i >= 3 && i <= 6) << "splat " << i;
+        EXPECT_EQ(deleted[i], i >= 3 && i <= 5) << "splat " << i;
     }
 }
 
@@ -1087,7 +1087,7 @@ TEST(MRNFStrategyTest, StepScalingDoesNotScaleSparsifySteps) {
 
     EXPECT_EQ(params.grow_until_iter, 7500u);
     EXPECT_EQ(params.sparsify_steps, 15000);
-    EXPECT_EQ(params.refine_every, 100u);
+    EXPECT_EQ(params.refine_every, 82u);
     EXPECT_EQ(params.stop_refine, 14250u);
 }
 
@@ -2528,7 +2528,7 @@ TEST(MRNFStrategyTest, MeanStepFarMaskEmptyBindingsClearExplicitAndFusedAdam) {
     EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 }
 
-TEST(MRNFStrategyTest, BackgroundToggleBuildsAndClearsFarMaskBeforeNextAdamStep) {
+TEST(MRNFStrategyTest, BackgroundTogglePreservesFarMeanStepMask) {
     auto splat = create_mrnf_test_splat_data(4, 0);
     auto params = vanilla_mrnf_params();
     params.far_scene_min_fraction = 0.0f;
@@ -2536,7 +2536,9 @@ TEST(MRNFStrategyTest, BackgroundToggleBuildsAndClearsFarMaskBeforeNextAdamStep)
     strategy.initialize(params);
     install_test_camera_hull(strategy);
     auto& optimizer = strategy.get_optimizer();
-    EXPECT_EQ(optimizer.mean_step_far_mask(), nullptr);
+    ASSERT_NE(optimizer.mean_step_far_mask(), nullptr);
+    ASSERT_EQ(optimizer.mean_step_far_mask_n(), 4);
+    EXPECT_TRUE(optimizer.per_splat_mean_step());
 
     for (int iteration = 1; iteration <= 2; ++iteration) {
         params.background_improvements = true;
@@ -2556,9 +2558,9 @@ TEST(MRNFStrategyTest, BackgroundToggleBuildsAndClearsFarMaskBeforeNextAdamStep)
 
         params.background_improvements = false;
         strategy.set_optimization_params(params);
-        EXPECT_EQ(optimizer.mean_step_far_mask(), nullptr);
-        EXPECT_EQ(optimizer.mean_step_far_mask_n(), 0);
-        EXPECT_FALSE(optimizer.per_splat_mean_step());
+        EXPECT_NE(optimizer.mean_step_far_mask(), nullptr);
+        EXPECT_EQ(optimizer.mean_step_far_mask_n(), 4);
+        EXPECT_TRUE(optimizer.per_splat_mean_step());
     }
     EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 }
