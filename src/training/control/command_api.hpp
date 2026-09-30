@@ -120,6 +120,8 @@ namespace lfs::training {
         float loss;
     };
 
+    LFS_BRIDGE_API core::Tensor expand_row_mask(const core::Tensor& row_mask, const core::TensorShape& target_shape);
+
     class CommandCenter {
     public:
         static LFS_BRIDGE_API CommandCenter& instance();

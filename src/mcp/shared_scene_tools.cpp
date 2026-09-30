@@ -63,8 +63,12 @@ namespace lfs::mcp {
 
             if (args.contains("images_folder"))
                 params.dataset.images = args["images_folder"].get<std::string>();
-            if (args.contains("max_iterations"))
-                params.optimization.iterations = args["max_iterations"].get<size_t>();
+            if (args.contains("max_iterations")) {
+                const auto max_iterations = args["max_iterations"].get<int64_t>();
+                if (max_iterations < 1)
+                    return std::unexpected("max_iterations must be 1 or greater");
+                params.optimization.iterations = static_cast<size_t>(max_iterations);
+            }
             if (args.contains("output_path"))
                 params.dataset.output_path = args["output_path"].get<std::string>();
             if (args.contains("min_track_length")) {
@@ -75,6 +79,9 @@ namespace lfs::mcp {
             }
             if (params.dataset.output_path.empty())
                 params.dataset.output_path = core::param::default_dataset_output_path(params.dataset.data_path);
+
+            if (auto invalid = params.optimization.validate(); !invalid.empty())
+                return std::unexpected(std::move(invalid));
 
             return {};
         }
@@ -95,7 +102,7 @@ namespace lfs::mcp {
                         {"images_folder", json{{"type", "string"}, {"description", "Images subfolder (default: images)"}}},
                         {"output_path", json{{"type", "string"}, {"description", "Optional output directory for project saves and exports (default: <dataset>/output)"}}},
                         {"min_track_length", json{{"type", "integer"}, {"minimum", 0}, {"description", "Minimum COLMAP track length for sparse point import; 0 disables filtering"}}},
-                        {"max_iterations", json{{"type", "integer"}, {"description", "Maximum training iterations (default: 30000)"}}},
+                        {"max_iterations", json{{"type", "integer"}, {"minimum", 1}, {"description", "Maximum training iterations (default: 30000)"}}},
                         {"strategy", json{{"type", "string"}, {"enum", json::array({"default", "mcmc", "mrnf", "igs+"})}, {"description", "Training strategy or 'default' to keep the built-in default"}}}},
                     .required = {"path"}},
                 .metadata = command_metadata(backend, "scene", true)},

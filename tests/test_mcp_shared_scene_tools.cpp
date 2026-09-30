@@ -221,3 +221,18 @@ TEST(McpSharedSceneToolsTest, GetLastErrorReturnsNullWhenNoFailureLatched) {
     EXPECT_TRUE(result["last_error"].is_null());
     EXPECT_TRUE(result["last_error_message"].is_null());
 }
+
+TEST(McpSharedSceneToolsTest, LoadDatasetRejectsInvalidParametersBeforeReachingTheBackend) {
+    ScopedSharedSceneToolRegistration cleanup;
+    FakeSharedSceneBackend backend;
+    lfs::mcp::register_shared_scene_tools(backend.backend());
+
+    const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
+        "scene.load_dataset",
+        json{{"path", "/tmp/mcp_dataset"}, {"strategy", "igs+"}, {"max_iterations", 0}});
+
+    ASSERT_TRUE(result.contains("error_message")) << result.dump();
+    EXPECT_NE(result["error_message"].get<std::string>().find("iterations"), std::string::npos)
+        << result.dump();
+    EXPECT_FALSE(backend.load_dataset_called);
+}
