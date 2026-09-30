@@ -178,14 +178,19 @@ namespace {
         lfs::vis::FrameInputBuffer buffer;
         buffer.beginFrame();
         const auto previous = SDL_GetModState();
-        SDL_SetModState(SDL_KMOD_CTRL);
+        SDL_Event ctrl_down{};
+        ctrl_down.type = SDL_EVENT_KEY_DOWN;
+        ctrl_down.key.scancode = SDL_SCANCODE_LCTRL;
+        ctrl_down.key.mod = SDL_KMOD_CTRL;
+        buffer.processEvent(ctrl_down);
+        SDL_SetModState(previous);
+        buffer.beginFrame();
         SDL_Event event{};
         event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
         event.button.button = SDL_BUTTON_LEFT;
         event.button.x = 20.0f;
         event.button.y = 30.0f;
         buffer.processEvent(event);
-        SDL_SetModState(previous);
 
         ASSERT_EQ(buffer.mouse_button_events.size(), 1u);
         EXPECT_TRUE(buffer.mouse_button_events.front().ctrl);

@@ -114,6 +114,7 @@ namespace lfs::vis::gui {
         // Divider and corner zones inside a 3D view only block presses, so
         // hovering there still reaches the viewport.
         [[nodiscard]] bool blocksPress(float x, float y) const;
+        [[nodiscard]] bool cornerGestureAt(float x, float y) const;
         [[nodiscard]] bool gestureActive() const { return gestures_.active(); }
         [[nodiscard]] bool wantsKeyboard() const { return false; }
         [[nodiscard]] bool needsAnimationFrame() const;

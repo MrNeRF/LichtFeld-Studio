@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "gui/panel_input_utils.hpp"
 #include "gui/screen_host.hpp"
 #include "gui/screen_host_logic.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -121,26 +122,82 @@ namespace lfs::vis::screen {
         const float target_x = viewport_geometry->rect.x + viewport_geometry->rect.w * 0.5f;
         const float target_y = viewport_geometry->rect.y + viewport_geometry->rect.h * 0.5f;
 
-        gui::PanelInputState press{};
+        FrameInputBuffer buffer;
+        buffer.beginFrame();
+        SDL_Event ctrl_down{};
+        ctrl_down.type = SDL_EVENT_KEY_DOWN;
+        ctrl_down.key.scancode = SDL_SCANCODE_LCTRL;
+        ctrl_down.key.mod = SDL_KMOD_CTRL;
+        buffer.processEvent(ctrl_down);
+        SDL_Event mouse_down{};
+        mouse_down.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        mouse_down.button.button = SDL_BUTTON_LEFT;
+        mouse_down.button.x = press_x;
+        mouse_down.button.y = press_y;
+        buffer.processEvent(mouse_down);
+        buffer.notePressOwner(SDL_BUTTON_LEFT, true);
+        auto press = gui::buildPanelInputFromSDL(buffer);
         press.mouse_x = target_x;
         press.mouse_y = target_y;
-        press.mouse_clicked[0] = true;
         press.mouse_down[0] = true;
-        press.mouse_button_events.push_back(
-            {.button = 0, .down = true, .x = press_x, .y = press_y, .ctrl = true, .gui_owned = true});
-        host.processInput(press, true);
+        host.processInput(press, false);
         ASSERT_TRUE(host.gestureActive());
         EXPECT_EQ(host.areaAt(target_x, target_y), viewport);
         EXPECT_EQ(host.cursor(), screen::GestureCursor::Move);
 
-        gui::PanelInputState release{};
+        buffer.beginFrame();
+        SDL_Event mouse_up = mouse_down;
+        mouse_up.type = SDL_EVENT_MOUSE_BUTTON_UP;
+        buffer.processEvent(mouse_up);
+        auto release = gui::buildPanelInputFromSDL(buffer);
         release.mouse_x = target_x;
         release.mouse_y = target_y;
-        release.mouse_released[0] = true;
         host.processInput(release, true);
         EXPECT_FALSE(host.gestureActive());
         EXPECT_EQ(host.geometry().find(scene)->rect, viewport_geometry->rect);
         EXPECT_EQ(host.geometry().find(viewport)->rect, scene_geometry->rect);
+    }
+
+    TEST_F(ScreenTest, DividerPressMarkedByHitTestStillStartsResizeGesture) {
+        ScreenService source;
+        gui::ScreenHost host(source);
+        const Rect bounds{0.0f, 0.0f, 1600.0f, 900.0f};
+        host.layout(bounds, 1.0f);
+        const auto initial = host.geometry();
+        const auto divider = std::find_if(initial.dividers.begin(), initial.dividers.end(),
+                                          [](const DividerGeometry& d) {
+                                              return d.axis == SplitAxis::Columns;
+                                          });
+        ASSERT_NE(divider, initial.dividers.end());
+        const auto view = source.screen().activeView();
+        const auto initial_width = initial.find(view)->rect.w;
+        const float x = divider->rect.x;
+        const float y = 330.0f;
+
+        gui::PanelInputState press{};
+        press.mouse_x = x;
+        press.mouse_y = y;
+        press.mouse_clicked[0] = true;
+        press.mouse_down[0] = true;
+        press.mouse_button_events.push_back(
+            {.button = 0, .down = true, .x = x, .y = y, .gui_owned = true});
+        ASSERT_TRUE(host.blocksPress(x, y));
+        host.processInput(press, false);
+        ASSERT_TRUE(host.gestureActive());
+
+        gui::PanelInputState move{};
+        move.mouse_x = x - 160.0f;
+        move.mouse_y = y;
+        move.mouse_down[0] = true;
+        host.processInput(move, true);
+        gui::PanelInputState release{};
+        release.mouse_x = x - 160.0f;
+        release.mouse_y = y;
+        release.mouse_released[0] = true;
+        host.processInput(release, true);
+
+        EXPECT_FALSE(host.gestureActive());
+        EXPECT_NEAR(initial_width - host.geometry().find(view)->rect.w, 160.0f, 1.0f);
     }
 
     TEST_F(ScreenTest, MaximizeAtPointerTargetsPanelEditorArea) {

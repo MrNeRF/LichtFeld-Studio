@@ -353,6 +353,11 @@ namespace lfs::vis::gui {
                geometry_.dividerAt(x, y, gestures_.metrics().divider_slop) != nullptr;
     }
 
+    bool ScreenHost::cornerGestureAt(const float x, const float y) const {
+        return screen_host_detail::cornerGestureZone(geometry_, geometry_.maximized.valid(),
+                                                     gestures_.metrics().corner_size, x, y);
+    }
+
     bool ScreenHost::isEditorVisible(const std::string_view editor) const {
         return std::any_of(frames_.begin(), frames_.end(), [editor](const AreaFrame& f) { return f.editor == editor; });
     }
@@ -569,12 +574,18 @@ namespace lfs::vis::gui {
         }
 
         const auto* press = input.lastPress(0);
-        if (pointer_free && !gestures_.active() && press) {
+        if (!gestures_.active() && press) {
             const bool press_over_corner = screen_host_detail::cornerGestureZone(
                 geometry_, geometry_.maximized.valid(), gestures_.metrics().corner_size, press->x, press->y);
+            const bool press_over_divider = !geometry_.maximized.valid() &&
+                                            geometry_.dividerAt(press->x, press->y,
+                                                                gestures_.metrics().divider_slop) != nullptr;
             const bool press_over_header = !press_over_corner && pointerOverHeader(press->x, press->y);
-            if (press_over_corner || (!press->gui_owned && !press_over_header)) {
-                if (gestures_.press(geometry_, press->x, press->y, press->ctrl)) {
+            const bool screen_gesture_press = press_over_corner || press_over_divider;
+            if ((pointer_free || screen_gesture_press) &&
+                (screen_gesture_press || (!press->gui_owned && !press_over_header))) {
+                const bool accepted = gestures_.press(geometry_, press->x, press->y, press->ctrl);
+                if (accepted) {
                     overlay_dirty_ = true;
                     if (x != press->x || y != press->y) {
                         applyGesture(gestures_.move(geometry_, screen, x, y));
