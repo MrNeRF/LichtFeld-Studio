@@ -235,6 +235,7 @@ namespace lfs::training {
                     diagnostics::VramProfiler::instance().setVulkanVmaUsed(stats.allocated_bytes);
                 } },
             .release_workspaces_before_evaluation = true,
+            .release_workspaces_before_reorder = true,
         };
         return ops;
     }

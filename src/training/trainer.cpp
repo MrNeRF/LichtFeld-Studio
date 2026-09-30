@@ -1765,6 +1765,18 @@ namespace lfs::training {
         if (!morton_reorder_due(iter) || !strategy_) {
             return;
         }
+        if (training_session_ops().release_workspaces_before_reorder) {
+            // Backward has consumed the saved frame; its inputs and scratch
+            // must not overlap the temporary reordered model and optimizer.
+            if (training_ops_ && training_ops_->fast) {
+                training_ops_->fast->release(fast_saved_);
+                training_ops_->fast->release_caches(fast_saved_);
+            }
+            if (training_ops_ && training_ops_->gsplat) {
+                training_ops_->gsplat->release(gsplat_saved_);
+                training_ops_->gsplat->release_caches(gsplat_saved_);
+            }
+        }
         auto& model = strategy_->get_model();
         const auto result = morton::apply_morton_reorder(model, &strategy_->get_optimizer());
         if (!result.applied) {
