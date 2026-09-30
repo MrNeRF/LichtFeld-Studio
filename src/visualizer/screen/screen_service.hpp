@@ -8,6 +8,7 @@
 #include "screen/screen.hpp"
 #include "screen/view3d_space.hpp"
 
+#include <atomic>
 #include <core/export.hpp>
 #include <mutex>
 #include <utility>
@@ -55,10 +56,12 @@ namespace lfs::vis::screen {
 
         // ViewSource
         [[nodiscard]] ViewId activeView() const override;
+        [[nodiscard]] std::uint64_t screenEpoch() const override { return epoch_.load(); }
         [[nodiscard]] std::optional<ViewSettings> viewSettings(ViewId view) const override;
         bool editViewSettings(ViewId view, const std::function<void(ViewSettings&)>& edit) override;
 
     private:
+        std::atomic<std::uint64_t> epoch_{1};
         EditorTypeRegistry editor_types_;
         Screen screen_;
         mutable std::recursive_mutex mutex_;

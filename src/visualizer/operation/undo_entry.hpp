@@ -335,6 +335,9 @@ namespace lfs::vis::op {
     };
 
     struct DepthWindowModeSnapshot {
+        std::uint32_t view = 0;
+        std::uint64_t screen_epoch = 0;
+        std::uint64_t lifetime_epoch = 0;
         DepthWindowState window{};
         std::uint64_t mode_epoch = 0;
         friend bool operator==(const DepthWindowModeSnapshot&,

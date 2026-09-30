@@ -952,16 +952,9 @@ namespace lfs::vis::project {
         const Viewport& viewport,
         const std::optional<float> fallback_ortho_scale) {
         const auto& camera = viewport.camera;
-        // Same effective scale the renderer uses: per-viewport override, else
-        // RenderSettings.ortho_scale (lf.set_orthographic writes the latter).
-        std::optional<float> scale = viewport.ortho_scale_override;
-        if (!scale || !std::isfinite(*scale) || *scale <= 0.0f) {
-            if (fallback_ortho_scale && std::isfinite(*fallback_ortho_scale) &&
-                *fallback_ortho_scale > 0.0f)
-                scale = fallback_ortho_scale;
-            else
-                scale.reset();
-        }
+        std::optional<float> scale = fallback_ortho_scale;
+        if (scale && (!std::isfinite(*scale) || *scale <= 0.0f))
+            scale.reset();
         std::optional<float> extent;
         if (scale && viewport.windowSize.y > 0)
             extent = static_cast<float>(viewport.windowSize.y) / *scale;
@@ -987,13 +980,14 @@ namespace lfs::vis::project {
             .wasd_speed = camera.wasdSpeed,
             .max_wasd_speed = camera.maxWasdSpeed,
             .ortho_scale =
-                viewport.ortho_scale_override,
+                scale,
             .ortho_extent_world = extent,
         };
     }
 
     void applyPanelCameraProjectState(
         Viewport& viewport,
+        ViewSettings& settings,
         const PanelCameraProjectState& state) {
         viewport.setViewMatrix(
             array_matrix(state.rotation),
@@ -1018,10 +1012,10 @@ namespace lfs::vis::project {
         camera.wasdSpeed = state.wasd_speed;
         camera.maxWasdSpeed =
             state.max_wasd_speed;
-        viewport.ortho_scale_override =
-            state.ortho_scale;
+        if (state.ortho_scale)
+            settings.ortho_scale = *state.ortho_scale;
         if (state.ortho_extent_world && viewport.windowSize.y > 0)
-            viewport.ortho_scale_override = static_cast<float>(viewport.windowSize.y) / *state.ortho_extent_world;
+            settings.ortho_scale = static_cast<float>(viewport.windowSize.y) / *state.ortho_extent_world;
         camera.clearTransientMotion();
     }
 
@@ -3342,6 +3336,7 @@ namespace lfs::vis::project {
                     camera) {
                     applyPanelCameraProjectState(
                         viewer.getViewport(),
+                        viewer.screens().activeView3D().settings,
                         *camera);
                 }
             }

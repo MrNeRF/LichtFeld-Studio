@@ -2950,7 +2950,7 @@ namespace lfs::vis::gui {
                     auto updated_settings = rendering_manager->getSettings();
                     updated_settings.grid_plane = axis;
                     rendering_manager->updateSettings(updated_settings, DirtyFlag::OVERLAY);
-                    rendering_manager->markCameraPoseChanged();
+                    rendering_manager->markCameraPoseChanged(rendering_manager->activeViewId());
                 } else {
                     viewport_gizmo_dragging_ = true;
                     viewport_gizmo_active_panel_ = hovered_panel->panel;
@@ -2975,7 +2975,7 @@ namespace lfs::vis::gui {
                     } else {
                         active_panel->viewport->camera.updateRotateAroundCenter(capture_mouse_pos, time);
                     }
-                    rendering_manager->markCameraPoseChanged();
+                    rendering_manager->markCameraPoseChanged(rendering_manager->activeViewId());
                 } else {
                     if (auto* const released_panel = find_panel(viewport_gizmo_active_panel_)) {
                         released_panel->viewport->camera.endRotateAroundCenter();
@@ -2989,10 +2989,10 @@ namespace lfs::vis::gui {
                                 updated_settings.grid_plane = snapped_axis;
                                 rendering_manager->updateSettings(updated_settings,
                                                                   DirtyFlag::OVERLAY);
-                                rendering_manager->markCameraCut();
+                                rendering_manager->markCameraCut(rendering_manager->activeViewId());
                             }
                         }
-                        rendering_manager->markCameraPoseChanged();
+                        rendering_manager->markCameraPoseChanged(rendering_manager->activeViewId());
                     }
                     viewport_gizmo_dragging_ = false;
 

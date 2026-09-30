@@ -2801,7 +2801,7 @@ namespace lfs::vis {
     }
 
     TEST_F(RenderingManagerEventsTest,
-           RenderSettingsChangedEquirectangularForcesGutBackend) {
+           RenderSettingsChangedEquirectangularPreservesSceneBackend) {
         using Backend = lfs::rendering::GaussianRasterBackend;
 
         lfs::vis::screen::ScreenService manager_views;
@@ -2819,6 +2819,9 @@ namespace lfs::vis {
 
         settings = manager.getSettings();
         EXPECT_TRUE(settings.equirectangular);
+        EXPECT_EQ(settings.raster_backend, Backend::ThreeDgs);
+        EXPECT_FALSE(settings.gut);
+        lfs::vis::enforceProjectionBackend(settings);
         EXPECT_EQ(settings.raster_backend, Backend::ThreeDgut);
         EXPECT_TRUE(settings.gut);
     }

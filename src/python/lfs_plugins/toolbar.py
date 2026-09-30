@@ -1343,14 +1343,12 @@ class _UtilityToolbarController:
             "utility_bottom_buttons": utility_bottom_buttons,
         }
 
-    def dispatch(self, action, value, panel=""):
+    def dispatch(self, action, value):
         import lichtfeld as lf
 
         if action == "set_camera_navigation_mode":
             lf.set_camera_navigation_mode(value)
             return
-        # Gizmo events name their panel; other actions keep the legacy call
-        # without a panel keyword.
         if action == "home":
             lf.reset_camera()
             return
@@ -1955,7 +1953,7 @@ class _ViewportToolbarController:
             self._viewport_export_controls.close(notify=False)
             self._gizmo.dispatch(action, value)
         else:
-            self._utility.dispatch(action, value, panel)
+            self._utility.dispatch(action, value)
         self._last_toolbar_signature = None
         self._sync_toolbar_state()
         self._sync_tool_overlays_now()

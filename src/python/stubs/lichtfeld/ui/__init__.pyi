@@ -2962,6 +2962,8 @@ def get_split_view_info() -> dict:
 def get_current_camera_id() -> int:
     """Get current camera ID for GT comparison"""
 
+def get_active_view_id() -> int: ...
+
 def get_split_view_mode() -> str:
     """Get split view mode (none, gt_comparison, ply_comparison)"""
 

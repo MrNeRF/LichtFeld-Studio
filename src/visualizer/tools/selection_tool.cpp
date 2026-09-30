@@ -59,7 +59,7 @@ namespace lfs::vis::tools {
             const float half_h_pixels = 0.5f * window_scale_y * static_cast<float>(size.y);
             if (settings.orthographic) {
                 const float pixels_per_world =
-                    viewport.ortho_scale_override.value_or(settings.ortho_scale);
+                    settings.ortho_scale;
                 const float valid_scale = std::max(pixels_per_world, 1.0e-5f);
                 return {half_w_pixels / valid_scale, half_h_pixels / valid_scale};
             }
@@ -116,6 +116,8 @@ namespace lfs::vis::tools {
     }
 
     void SelectionTool::update(const ToolContext& ctx) {
+        if (auto* rm = ctx.getRenderingManager(); rm && depth_projection_view_ != rm->activeViewId())
+            syncViewSettings();
         if (!isEnabled()) {
             return;
         }
@@ -276,33 +278,37 @@ namespace lfs::vis::tools {
         }
     }
 
-    void SelectionTool::syncDepthFilterToCamera(const Viewport& viewport) {
-        if (!tool_context_ || !isEnabled() || !depth_filter_enabled_) {
+    void SelectionTool::syncViewSettings() {
+        if (!tool_context_)
             return;
+        if (auto* rm = tool_context_->getRenderingManager()) {
+            const auto settings = rm->getSettings();
+            depth_projection_view_ = rm->activeViewId();
+            depth_filter_enabled_ = settings.depth_filter_enabled;
+            depth_near_ = std::clamp(-settings.depth_filter_max.z, 0.0f, DEPTH_MAX - DEPTH_MIN);
+            depth_far_ = std::clamp(-settings.depth_filter_min.z, depth_near_ + DEPTH_MIN, DEPTH_MAX);
+            depth_projection_generation_ = rm->depthWindowProjectionGeneration();
         }
+    }
 
+    void SelectionTool::syncDepthFilterToCamera(const ViewId view, const Viewport& viewport) {
+        if (!tool_context_ || !isEnabled())
+            return;
         auto* const rm = tool_context_->getRenderingManager();
-        if (!rm) {
+        if (!rm)
             return;
-        }
-
-        refreshDepthNearFarFromProjection(*tool_context_);
-        auto settings = rm->getSettings();
-        settings.crop_filter_for_selection = crop_filter_enabled_;
-        if (crop_filter_enabled_) {
-            settings.show_crop_box = true;
-            settings.show_ellipsoid = true;
-        }
-        settings.depth_filter_enabled = depth_filter_enabled_;
-        const glm::quat camera_quat = glm::quat_cast(viewport.camera.R);
-        const glm::vec2 half_extents =
-            depthWindowFarPlaneHalfExtents(viewport, settings, depth_far_, settings.depth_filter_scale_x,
-                                           settings.depth_filter_scale_y);
-        settings.depth_filter_transform = lfs::geometry::EuclideanTransform(camera_quat, viewport.camera.t);
-        settings.depth_filter_min = glm::vec3(-half_extents.x, -half_extents.y, -depth_far_);
-        settings.depth_filter_max = glm::vec3(half_extents.x, half_extents.y, -depth_near_);
-        rm->updateSettings(settings);
-        rm->markDirty(DirtyFlag::SELECTION);
+        const auto settings = rm->settingsForView(view);
+        if (!settings.depth_filter_enabled)
+            return;
+        const float near = std::clamp(-settings.depth_filter_max.z, 0.0f, DEPTH_MAX - DEPTH_MIN);
+        const float far = std::clamp(-settings.depth_filter_min.z, near + DEPTH_MIN, DEPTH_MAX);
+        const auto half_extents = depthWindowFarPlaneHalfExtents(viewport, settings, far,
+                                                                 settings.depth_filter_scale_x, settings.depth_filter_scale_y);
+        rm->editViewSettings(view, [&](ViewSettings& target) {
+            target.depth_filter_transform = lfs::geometry::EuclideanTransform(glm::quat_cast(viewport.camera.R), viewport.camera.t);
+            target.depth_filter_min = glm::vec3(-half_extents.x, -half_extents.y, -far);
+            target.depth_filter_max = glm::vec3(half_extents.x, half_extents.y, -near);
+        });
     }
 
     void SelectionTool::setDepthWindowDragInProgress(const bool in_progress) {
@@ -351,7 +357,8 @@ namespace lfs::vis::tools {
             return;
         }
 
-        auto settings = rm->getSettings();
+        const auto previous = rm->getSettings();
+        auto settings = previous;
         settings.crop_filter_for_selection = crop_filter_enabled_;
         if (crop_filter_enabled_) {
             settings.show_crop_box = true;
@@ -378,8 +385,8 @@ namespace lfs::vis::tools {
             settings.depth_filter_min = glm::vec3(-half_extents.x, -half_extents.y, -depth_far_);
             settings.depth_filter_max = glm::vec3(half_extents.x, half_extents.y, -depth_near_);
         }
-        rm->updateSettings(settings);
-        rm->markDirty(DirtyFlag::SELECTION);
+        if (settings.scene() != previous.scene() || settings.view() != previous.view())
+            rm->updateSettings(settings);
     }
 
     void SelectionTool::clearSelectionRenderState(const ToolContext& ctx) const {

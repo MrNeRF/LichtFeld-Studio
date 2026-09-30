@@ -339,6 +339,43 @@ namespace lfs::vis {
         float depth_filter_offset_x = 0.0f;
         float depth_filter_offset_y = 0.0f;
         int depth_filter_viz_mode = 1;
+        [[nodiscard]] bool operator==(const ViewSettings& other) const {
+            return focal_length_mm == other.focal_length_mm &&
+                   equirectangular == other.equirectangular &&
+                   orthographic == other.orthographic &&
+                   ortho_scale == other.ortho_scale &&
+                   show_coord_axes == other.show_coord_axes &&
+                   axes_size == other.axes_size &&
+                   axes_visibility == other.axes_visibility &&
+                   show_grid == other.show_grid &&
+                   grid_plane == other.grid_plane &&
+                   grid_opacity == other.grid_opacity &&
+                   point_cloud_mode == other.point_cloud_mode &&
+                   voxel_size == other.voxel_size &&
+                   show_rings == other.show_rings &&
+                   ring_width == other.ring_width &&
+                   show_center_markers == other.show_center_markers &&
+                   show_camera_frustums == other.show_camera_frustums &&
+                   camera_frustum_scale == other.camera_frustum_scale &&
+                   show_pivot == other.show_pivot &&
+                   split_view_mode == other.split_view_mode &&
+                   gt_comparison_mode == other.gt_comparison_mode &&
+                   split_position == other.split_position &&
+                   split_view_offset == other.split_view_offset &&
+                   depth_view == other.depth_view &&
+                   depth_view_min == other.depth_view_min &&
+                   depth_view_max == other.depth_view_max &&
+                   depth_visualization_mode == other.depth_visualization_mode &&
+                   depth_filter_enabled == other.depth_filter_enabled &&
+                   depth_filter_min == other.depth_filter_min &&
+                   depth_filter_max == other.depth_filter_max &&
+                   depth_filter_transform.toMat4() == other.depth_filter_transform.toMat4() &&
+                   depth_filter_scale_x == other.depth_filter_scale_x &&
+                   depth_filter_scale_y == other.depth_filter_scale_y &&
+                   depth_filter_offset_x == other.depth_filter_offset_x &&
+                   depth_filter_offset_y == other.depth_filter_offset_y &&
+                   depth_filter_viz_mode == other.depth_filter_viz_mode;
+        }
     };
 
     // Settings shared by every view of the scene.

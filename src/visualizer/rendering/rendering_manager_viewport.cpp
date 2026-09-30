@@ -130,12 +130,12 @@ namespace lfs::vis {
             static_cast<float>(viewport_height),
             false};
 
-        if (split_view_service_.isGTComparisonActive(getSettings())) {
+        if (this->state().split_view_service_.isGTComparisonActive(settingsForView(this->state().id))) {
             glm::ivec2 content_dims{0, 0};
-            if (const auto service_dims = split_view_service_.gtContentDimensions()) {
+            if (const auto service_dims = this->state().split_view_service_.gtContentDimensions()) {
                 content_dims = *service_dims;
             } else {
-                content_dims = vulkan_gt_comparison_content_size_;
+                content_dims = this->state().vulkan_gt_comparison_content_size_;
             }
             if (content_dims.x <= 0 || content_dims.y <= 0 ||
                 viewport_width <= 0 || viewport_height <= 0) {
@@ -171,17 +171,17 @@ namespace lfs::vis {
 
     std::optional<RenderingManager::GTSelectionContext> RenderingManager::gtComparisonSelectionContext() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        if (!split_view_service_.isGTComparisonActive(activeSettingsLocked())) {
+        if (!this->state().split_view_service_.isGTComparisonActive(activeSettingsLocked())) {
             return std::nullopt;
         }
-        if (!vulkan_gt_comparison_selection_view_.has_value()) {
+        if (!this->state().vulkan_gt_comparison_selection_view_.has_value()) {
             return std::nullopt;
         }
-        const auto& view = *vulkan_gt_comparison_selection_view_;
+        const auto& view = *this->state().vulkan_gt_comparison_selection_view_;
         if (view.size.x <= 0 || view.size.y <= 0) {
             return std::nullopt;
         }
-        if (view.size != vulkan_gt_comparison_content_size_) {
+        if (view.size != this->state().vulkan_gt_comparison_content_size_) {
             return std::nullopt;
         }
         // Fallback contract: when any condition fails the accessor returns nullopt and every
@@ -190,12 +190,12 @@ namespace lfs::vis {
     }
 
     std::optional<RenderingManager::MutableViewerPanelInfo> RenderingManager::resolveViewerPanel(
-        Viewport& primary_viewport,
+        ViewId view, Viewport& primary_viewport,
         const glm::vec2& viewport_pos,
         const glm::vec2& viewport_size,
         const std::optional<glm::vec2> screen_point,
         const std::optional<SplitViewPanelId> panel_override) {
-        const glm::ivec2 rendered_size = getRenderedSize();
+        const glm::ivec2 rendered_size = viewState(view).viewport_artifact_service_.renderedSize();
         const int full_render_width =
             rendered_size.x > 0 ? rendered_size.x : std::max(static_cast<int>(viewport_size.x), 1);
         const int full_render_height =
@@ -216,12 +216,12 @@ namespace lfs::vis {
     }
 
     std::optional<RenderingManager::ViewerPanelInfo> RenderingManager::resolveViewerPanel(
-        const Viewport& primary_viewport,
+        ViewId view, const Viewport& primary_viewport,
         const glm::vec2& viewport_pos,
         const glm::vec2& viewport_size,
         const std::optional<glm::vec2> screen_point,
         const std::optional<SplitViewPanelId> panel_override) const {
-        const glm::ivec2 rendered_size = getRenderedSize();
+        const glm::ivec2 rendered_size = viewState(view).viewport_artifact_service_.renderedSize();
         const int full_render_width =
             rendered_size.x > 0 ? rendered_size.x : std::max(static_cast<int>(viewport_size.x), 1);
         const int full_render_height =
@@ -237,6 +237,7 @@ namespace lfs::vis {
             .render_width = full_render_width,
             .render_height = full_render_height,
         };
+
         return info.valid() ? std::optional<ViewerPanelInfo>(info) : std::nullopt;
     }
 
@@ -252,51 +253,51 @@ namespace lfs::vis {
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::getViewportImageIfAvailable() const {
-        return viewport_artifact_service_.getCapturedImageIfCurrent();
+        return this->state().viewport_artifact_service_.getCapturedImageIfCurrent();
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::captureViewportImage() {
-        if (viewport_artifact_service_.hasLazyCapture()) {
-            return viewport_artifact_service_.resolveLazyCapture();
+        if (this->state().viewport_artifact_service_.hasLazyCapture()) {
+            return this->state().viewport_artifact_service_.resolveLazyCapture();
         }
 
         if (auto image = getViewportImageIfAvailable()) {
             return image;
         }
 
-        if (!engine_ || !viewport_artifact_service_.hasGpuFrame()) {
+        if (!engine_ || !this->state().viewport_artifact_service_.hasGpuFrame()) {
             return {};
         }
 
         std::optional<std::shared_lock<std::shared_mutex>> render_lock;
 #if LFS_BUILD_TRAINER
-        if (const auto* tm = viewport_interaction_context_.scene_manager
-                                 ? viewport_interaction_context_.scene_manager->getTrainerManager()
-                                 : nullptr) {
+        if (const auto* tm =
+                this->state().viewport_interaction_context_.scene_manager
+                    ? this->state().viewport_interaction_context_.scene_manager->getTrainerManager()
+                    : nullptr) {
             if (const auto* trainer = tm->getTrainer()) {
                 render_lock.emplace(trainer->getRenderMutex());
             }
         }
 #endif
 
-        auto readback_result = engine_->readbackGpuFrameColor(*viewport_artifact_service_.gpuFrame());
+        auto readback_result = engine_->readbackGpuFrameColor(*this->state().viewport_artifact_service_.gpuFrame());
         if (!readback_result) {
             LOG_ERROR("Failed to capture viewport image from GPU frame: {}", readback_result.error());
             return {};
         }
 
-        viewport_artifact_service_.storeCapturedImage(*readback_result);
-        return viewport_artifact_service_.getCapturedImageIfCurrent();
+        this->state().viewport_artifact_service_.storeCapturedImage(*readback_result);
+        return this->state().viewport_artifact_service_.getCapturedImageIfCurrent();
     }
 
-    int RenderingManager::pickCameraFrustum(const glm::vec2& mouse_pos) {
+    int RenderingManager::pickCameraFrustum(ViewId view, const glm::vec2& mouse_pos) {
         const int previous_hovered_camera = camera_interaction_service_.hoveredCameraId();
         bool hover_changed = false;
         auto* const engine = getRenderingEngine();
         const int hovered_camera = camera_interaction_service_.pickCameraFrustum(
-            engine,
-            viewport_interaction_context_.scene_manager,
-            viewport_interaction_context_, getSettings(),
+            engine, viewState(view).viewport_interaction_context_.scene_manager,
+            viewState(view).viewport_interaction_context_, settingsForView(view),
             mouse_pos,
             hover_changed);
 
@@ -546,8 +547,8 @@ namespace lfs::vis {
         }
         // Use the actual viewport render resolution, including render scale.
         // The caller's reference height covers exports before a frame is ready.
-        const int source_height = vulkan_viewport_image_size_.y > 0
-                                      ? vulkan_viewport_image_size_.y
+        const int source_height = this->state().vulkan_viewport_image_size_.y > 0
+                                      ? this->state().vulkan_viewport_image_size_.y
                                       : reference_height;
         return static_cast<float>(target_height) / source_height;
     }
@@ -560,8 +561,8 @@ namespace lfs::vis {
         }
         // Orthographic intrinsics are pixels per world unit at the actual
         // viewport render resolution. Scale once to avoid double rounding.
-        const int source_height = vulkan_viewport_image_size_.y > 0
-                                      ? vulkan_viewport_image_size_.y
+        const int source_height = this->state().vulkan_viewport_image_size_.y > 0
+                                      ? this->state().vulkan_viewport_image_size_.y
                                       : reference_height;
         return static_cast<float>(static_cast<double>(*scale) * target_height / source_height);
     }
@@ -888,7 +889,7 @@ namespace lfs::vis {
             .rotation = request.rotation,
             .focal_length_mm = request.focal_length_mm,
             .equirectangular_view = settings.equirectangular,
-            .controller_predict_size = frame_lifecycle_service_.lastViewportSize(),
+            .controller_predict_size = this->state().frame_lifecycle_service_.lastViewportSize(),
         };
         return applyExportPostProcess(
             std::move(image), scene_manager, settings, getCurrentCameraId(), request.mode, view);
@@ -1228,12 +1229,11 @@ namespace lfs::vis {
         return std::make_shared<lfs::core::Tensor>(std::move(output));
     }
 
-    float RenderingManager::getDepthAtPixel(const int x, const int y,
+    float RenderingManager::getDepthAtPixel(ViewId view, const int x, const int y,
                                             const std::optional<SplitViewPanelId> panel) const {
-        const float cached_depth = viewport_artifact_service_.sampleLinearDepthAt(
+        const float cached_depth = viewState(view).viewport_artifact_service_.sampleLinearDepthAt(
             x,
-            y,
-            frame_lifecycle_service_.lastViewportSize(),
+            y, viewState(view).frame_lifecycle_service_.lastViewportSize(),
             panel);
         if (cached_depth > 0.0f) {
             return cached_depth;
@@ -1243,9 +1243,9 @@ namespace lfs::vis {
             return -1.0f;
         }
 
-        RenderTargetId output_slot = main_render_target_;
+        RenderTargetId output_slot = viewState(view).main_render_target_;
 
-        glm::ivec2 source_size = frame_lifecycle_service_.lastViewportSize();
+        glm::ivec2 source_size = viewState(view).frame_lifecycle_service_.lastViewportSize();
 
         const auto depth = vksplat_viewport_renderer_->sampleDepthAtPixel(
             *last_vulkan_context_,

@@ -13,6 +13,7 @@ namespace lfs::vis {
             return view.contains(x, y) ? view : ViewTarget{};
         }
         ViewTarget findView(ViewId id) override { return id == 1 ? activeView() : ViewTarget{}; }
+        ViewId viewId(const Viewport&) const override { return 1; }
         void activateView(ViewId) override {}
         bool runViewCommand(ViewId, std::string_view) override { return false; }
 

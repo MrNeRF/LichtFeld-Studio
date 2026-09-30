@@ -196,14 +196,8 @@ namespace lfs::vis {
         };
 
         void handleGoToCamView(const lfs::core::events::cmd::GoToCamView& event);
-        // Optional action identity guards only the shared-anchor side effect in
-        // publishCameraMove; panel-less paths pass nullopt. It never selects a viewport.
-        bool handleFocusSelection(Viewport& target_viewport,
-                                  std::optional<SplitViewPanelId> acted_panel = std::nullopt);
-        // Shared home reset: the legacy event passes viewport_; explicit-panel
-        // callers pass the resolved panel viewport.
-        void handleResetCameraHome(Viewport& target_viewport,
-                                   std::optional<SplitViewPanelId> acted_panel = std::nullopt);
+        bool handleFocusSelection(Viewport& target_viewport);
+        void handleResetCameraHome(Viewport& target_viewport);
         bool computeWholeSceneBounds(glm::vec3& out_min, glm::vec3& out_max, bool use_percentile = false) const;
         float sceneExtent();
         void maybeInitializeDepthViewRange();
@@ -227,8 +221,7 @@ namespace lfs::vis {
         bool scaleOrthographicView(Viewport& target_viewport, float factor);
         // Middle-drag style orbit/look by drag pixels, without release momentum.
         void orbitViewport(Viewport& target_viewport, const glm::vec2& drag);
-        void publishCameraMove(Viewport* target_viewport = nullptr,
-                               std::optional<SplitViewPanelId> acted_panel = std::nullopt);
+        void publishCameraMove(Viewport* target_viewport = nullptr);
         // Suppress shared transform/x-y re-anchoring only for an explicitly
         // that panel's camera; this predicate neither selects a viewport nor changes
         // focus.
@@ -251,7 +244,7 @@ namespace lfs::vis {
         [[nodiscard]] bool canOpenSelectedCameraContextMenu(int hovered_camera_uid) const;
         void openSelectedCameraContextMenu(int hovered_camera_uid, float screen_x, float screen_y);
         void applyCameraTrainingStateToSelection(const std::vector<std::string>& selected_names, bool enabled);
-        bool snapViewportToNearestAxis(Viewport& target_viewport, SplitViewPanelId panel);
+        bool snapViewportToNearestAxis(Viewport& target_viewport);
 
         // Camera motion tracking (flag + idle timeout; does not pause training)
         void onCameraMovementStart();
@@ -314,7 +307,6 @@ namespace lfs::vis {
         // radius the first frame the extent is known after a load, then left to
         // the user. Reset on scene load/clear.
         bool depth_range_initialized_ = false;
-        SplitViewPanelId drag_split_panel_ = SplitViewPanelId::Left;
         SplitViewPanelId node_rect_panel_ = SplitViewPanelId::Left;
         int node_rect_button_ = -1;
         int node_rect_modifiers_ = input::MODIFIER_NONE;

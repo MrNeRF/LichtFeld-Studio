@@ -16,7 +16,6 @@ except Exception:
     def _native_store_value(_field, fallback):
         return fallback
 
-
 def _split_view_mode():
     # Test stubs may expose only the getters they need.
     query = getattr(lf.ui, "get_split_view_mode", None)
@@ -27,30 +26,13 @@ def _split_view_mode():
     except Exception:
         return "none"
 
-
-
-
-
-
-
-
-
-
-
-
 def _gt_comparison_active():
     # Broad GT-comparison-mode query; defensive because test stubs replace lf.ui
     # with a bare namespace.
     query = getattr(lf.ui, "is_gt_comparison_active", None)
     return bool(query()) if query else False
 
-
 _SELECTION_TOOL_ID = "builtin.select"
-_PANEL_LEFT = "left"
-_PANEL_RIGHT = "right"
-# Size's 100% reference is per panel; sync ON and single-window modes use
-# this shared entry instead.
-_PANEL_SHARED = "shared"
 _GT_COMPARISON = "gt_comparison"
 # Deferred records distinguish live edits from completed blurs.
 _DEFERRED_LIVE = "live"
@@ -107,7 +89,6 @@ def _ui_label(key: str, fallback: str) -> str:
         return value
     return fallback
 
-
 def _parse_float(value, fallback):
     try:
         parsed = float(value)
@@ -117,10 +98,8 @@ def _parse_float(value, fallback):
         return fallback
     return parsed
 
-
 def _clamp(value, lower, upper):
     return min(max(value, lower), upper)
-
 
 def _slider_bounds(center, lower, upper):
     lower = min(lower, upper)
@@ -143,7 +122,6 @@ def _slider_bounds(center, lower, upper):
             low = max(lower, upper - min_span)
     return low, high
 
-
 def _execute_stage(stage):
     result = stage.execute()
     result_get = getattr(result, "get", None)
@@ -153,7 +131,6 @@ def _execute_stage(stage):
         return None
     error = str(result_get("error", "") or "").strip()
     return error or "Operation failed."
-
 
 class SelectionControlsController:
     _DIRTY_FIELDS = (
@@ -212,13 +189,9 @@ class SelectionControlsController:
         self._frustum_half_width = _DEFAULT_FRUSTUM_HALF_WIDTH
         self._window_scale = _DEFAULT_WINDOW_SCALE
         self._window_scale_y = _DEFAULT_WINDOW_SCALE
-        self._ref_scale_x = {
-            _PANEL_SHARED: _DEFAULT_WINDOW_SCALE,
-            _PANEL_LEFT: _DEFAULT_WINDOW_SCALE,
-            _PANEL_RIGHT: _DEFAULT_WINDOW_SCALE,
-        }
+        self._ref_scale_x = {}
         self._ref_scale_y = dict(self._ref_scale_x)
-        self._focused_panel = _PANEL_LEFT
+        self._active_view = int(lf.ui.get_active_view_id())
         self._split_mode = "none"
         # An exhausted refresh leaves cached state untouched and forbids writes.
         self._context_read_exhausted = False
@@ -239,8 +212,8 @@ class SelectionControlsController:
         self._editing_depth_text = set()
         # Track each live edit's current target through focus retargeting. Blur
         # commits before clearing edit state, so validate the origin and revert stale
-        # text before that commit can write to a different panel.
-        self._depth_text_edit_panel = {}
+        # text before that commit can write to a different view.
+        self._depth_text_edit_view = {}
         # Deferred records preserve two different edit lifetimes:
         # * live: read the current buffer at flush; typing/Escape and retargeting apply.
         # * blurred: freeze payload and target at blur; clear live edit state so later
@@ -336,7 +309,6 @@ class SelectionControlsController:
         model.bind_func("selection_depth_offset_y_slider_max", lambda: f"{_OFFSET_PERCENT_MAX:.0f}")
         model.bind_func("selection_viz_mode_label", self._viz_mode_label)
         model.bind_func("selection_viz_mode_icon", self._viz_mode_icon)
-        # The chip and the sync toggle exist only where per-panel windows do.
         model.bind_func("ui_size_label", lambda: _ui_label("ui.selection_depth_size", "Size"))
         model.bind_func("ui_offset_x_label", lambda: _ui_label("ui.selection_depth_offset_x", "X"))
         model.bind_func("ui_offset_y_label", lambda: _ui_label("ui.selection_depth_offset_y", "Y"))
@@ -416,8 +388,8 @@ class SelectionControlsController:
                 "depth_window_draw_generation" in changed_before
                 or "depth_window_draw_commit" in changed_before
             ):
-                # Rebase the signal's panel; undo on Right must not rebase displayed Left.
-                self._rebase_panel_reference(self._rebase_target_panel())
+                # Rebase the view identified by the completed draw or undo.
+                self._rebase_view_reference(self._rebase_target_view())
         state_key = self._state_key(state_items)
         if state_key != self._last_state_key:
             changed_fields = self._changed_state_fields(state_items)
@@ -436,7 +408,7 @@ class SelectionControlsController:
         self._depth_echo_holdoff = 0
         self._depth_user_edit_pending.clear()
         self._editing_depth_text.clear()
-        self._depth_text_edit_panel.clear()
+        self._depth_text_edit_view.clear()
         self._deferred_depth_commits.clear()
         self._escape_revert.clear()
 
@@ -464,23 +436,23 @@ class SelectionControlsController:
         except Exception:
             return ""
 
-    def _refresh_panel_context(self):
+    def _refresh_view_context(self):
         previous = self._split_mode
+        old_view = self._active_view
+        self._active_view = int(lf.ui.get_active_view_id())
         self._split_mode = _split_view_mode()
-        if (previous == _GT_COMPARISON) != (self._split_mode == _GT_COMPARISON):
+        if old_view != self._active_view or (previous == _GT_COMPARISON) != (self._split_mode == _GT_COMPARISON):
             self._refresh_depth_state()
             self._cancel_foreign_depth_text_edits(force=True)
-        return None, False, previous
 
     def _refresh_state(self):
         self._active_mode = self._get_active_mode()
-        panel_context = self._refresh_panel_context()
+        self._refresh_view_context()
         self._has_scene = self._scene_available()
         self._has_selection = self._scene_has_selection()
         self._can_undo = self._undo_available()
         self._can_redo = self._redo_available()
         self._refresh_depth_state()
-        return panel_context
 
     def _refresh_depth_state(self):
         try:
@@ -551,17 +523,16 @@ class SelectionControlsController:
             self._offset_y,
         )
 
-    # ---- per-panel Size references ------------------------------------
-
+    # ---- per-view Size references ------------------------------------
 
     def _ref_key(self):
-        return _PANEL_SHARED
+        return self._active_view
 
     def _ref_scale(self, table):
         return table.get(self._ref_key(), _DEFAULT_WINDOW_SCALE)
 
-    def _rebase_target_panel(self):
-        """Return the draw signal's panel only when its generation matches.
+    def _rebase_target_view(self):
+        """Return the draw signal's view only when its generation matches.
 
         A missing or stale companion dict returns None, selecting the displayed entry.
         """
@@ -573,8 +544,7 @@ class SelectionControlsController:
             return None
         if commit_generation != current_generation:
             return None
-        return self._draw_commit_panel()
-
+        return self._draw_commit_view()
 
     def _native_window_scales(self):
         """Read current projected scales before the displayed cache is refreshed.
@@ -593,33 +563,26 @@ class SelectionControlsController:
                 pass
         return self._window_scale, self._window_scale_y
 
-    def _rebase_panel_reference(self, panel):
-        self._ref_scale_x[_PANEL_SHARED] = self._window_scale
-        self._ref_scale_y[_PANEL_SHARED] = self._window_scale_y
+    def _rebase_view_reference(self, view):
+        commit = self._draw_commit_value()
+        key = self._active_view if view is None else view
+        self._ref_scale_x[key] = float(commit.get("scale_x", self._window_scale))
+        self._ref_scale_y[key] = float(commit.get("scale_y", self._window_scale_y))
 
     def _seed_all_references(self, scale_x, scale_y):
-        self._ref_scale_x[_PANEL_SHARED] = scale_x
-        self._ref_scale_y[_PANEL_SHARED] = scale_y
-
-
+        self._ref_scale_x[self._active_view] = scale_x
+        self._ref_scale_y[self._active_view] = scale_y
 
     def _draw_commit_value(self):
         value = RuntimeState.depth_window_draw_commit.value
         return value if isinstance(value, dict) else {}
 
-    def _draw_commit_panel(self):
-        panel = str(self._draw_commit_value().get("panel", _PANEL_LEFT))
-        return panel if panel in (_PANEL_LEFT, _PANEL_RIGHT) else _PANEL_LEFT
+    def _draw_commit_view(self):
+        return int(self._draw_commit_value().get("view", self._active_view))
 
     def _draw_commit_items(self):
         commit = self._draw_commit_value()
-        return (int(commit.get("generation", 0) or 0), self._draw_commit_panel())
-
-    # ---- chip + sync toggle -------------------------------------------
-
-
-
-
+        return (int(commit.get("generation", 0) or 0), self._draw_commit_view())
 
     # ---- text-edit guard ----------------------------------------------
 
@@ -631,15 +594,14 @@ class SelectionControlsController:
         recapture Escape and keep it registered as live. This protects later typing
         from polling and allows repeated retargets; later commits use canonical text
         or whatever the user types next.
-        force also retargets same-panel edits when a mode/lineage boundary changes
-        their window. RmlUi applies the value update even while the input is focused.
+        force also retargets edits when the projection changes. RmlUi applies the value update even while the input is focused.
         """
         for key in list(self._editing_depth_text):
-            if not force and self._depth_text_edit_panel.get(key) == self._focused_panel:
+            if not force and self._depth_text_edit_view.get(key) == self._active_view:
                 continue
-            self._depth_text_edit_panel[key] = self._focused_panel
+            self._depth_text_edit_view[key] = self._active_view
             self._depth_text_bufs[key] = self._canonical_depth_text_value(key)
-            # Recapture Escape against the newly displayed panel's canonical text.
+            # Recapture Escape against the newly displayed view's canonical text.
             self._escape_revert.recapture(key)
             if self._handle:
                 self._handle.dirty(key)
@@ -663,13 +625,13 @@ class SelectionControlsController:
             ("window_scale", round(self._window_scale, 4)),
             ("window_scale_y", round(self._window_scale_y, 4)),
             ("depth_window_draw_generation", RuntimeState.depth_window_draw_generation.value),
-            # Compare panel and generation so repeated commits on one panel still register.
+            # Compare view and generation so repeated commits on one view still register.
             ("depth_window_draw_commit", self._draw_commit_items()),
             ("offset_x", round(self._offset_x, 4)),
             ("offset_y", round(self._offset_y, 4)),
             ("viz_mode", int(self._viz_mode)),
             # Focus must dirty the chip even when both windows have identical values.
-            ("focused_panel", self._focused_panel),
+            ("active_view", self._active_view),
             ("split_mode", self._split_mode),
         )
 
@@ -967,7 +929,7 @@ class SelectionControlsController:
         if record is not None and record.get("kind") == _DEFERRED_BLURRED:
             self._deferred_depth_commits.pop(key, None)
         self._editing_depth_text.add(key)
-        self._depth_text_edit_panel[key] = self._focused_panel
+        self._depth_text_edit_view[key] = self._active_view
 
     def _end_depth_text_edit(self, key):
         # The widget always calls commit before on_blur. Freeze any deferred value
@@ -977,15 +939,15 @@ class SelectionControlsController:
         if record is not None:
             record["kind"] = _DEFERRED_BLURRED
             record["payload"] = self._depth_text_bufs.get(key)
-            record["panel"] = self._depth_text_edit_panel.get(key)
+            record["view"] = self._depth_text_edit_view.get(key)
         self._editing_depth_text.discard(key)
-        self._depth_text_edit_panel.pop(key, None)
+        self._depth_text_edit_view.pop(key, None)
 
     def _flush_deferred_depth_commits(self):
         """Flush deferred commits after update() has refreshed the context.
 
         Live records revalidate and read the current buffer; blurred records keep
-        their frozen payload and panel. Pending keys remain protected from text sync.
+        their frozen payload and view. Pending keys remain protected from text sync.
 
         Group by write target. Near/Far clamp against each other, so resolve their
         latest intended pair before one combined write. Even insertion order fails
@@ -1061,7 +1023,7 @@ class SelectionControlsController:
         return [(target, grouped[target]) for target in targets]
 
     def _deferred_write_target(self, record):
-        return None
+        return record.get("view", self._active_view) if record.get("kind") == _DEFERRED_BLURRED else self._active_view
 
     def _deferred_write_destination(self, record):
         """Resolve a setter target to a window identity for revalidation.
@@ -1086,7 +1048,7 @@ class SelectionControlsController:
             return _COMMIT_DONE
         if key in self._editing_depth_text:
             destination = self._deferred_write_destination(record)
-            self._refresh_panel_context()
+            self._refresh_view_context()
             if self._context_read_exhausted:
                 # Preserve the pending record and stop the flush on exhaustion.
                 if key not in self._deferred_depth_commits:
@@ -1103,10 +1065,10 @@ class SelectionControlsController:
         self._commit_depth_text_key(key)
         return _COMMIT_DONE
 
-    def _commit_paired_depth_range(self, panel, near_record, far_record):
+    def _commit_paired_depth_range(self, view, near_record, far_record):
         """Resolve one target's intended Near/Far pair before a combined write.
 
-        Normal refusals, such as invalid text or a hidden panel, consume both records.
+        Normal refusals, such as invalid text or a hidden view, consume both records.
         An exhausted live refresh preserves the pair. After revalidation, a changed
         record identity or target returns retargeted without writing or consuming it.
         """
@@ -1121,7 +1083,7 @@ class SelectionControlsController:
                 payload = record.get("payload")
             else:
                 if key in self._editing_depth_text:
-                    self._refresh_panel_context()
+                    self._refresh_view_context()
                     revalidated = True
                     if self._context_read_exhausted:
                         return _COMMIT_DEFERRED
@@ -1131,7 +1093,7 @@ class SelectionControlsController:
             for key, record in pairing:
                 if self._deferred_depth_commits.get(key) is not record:
                     return _COMMIT_RETARGETED
-                if self._deferred_write_target(record) != panel:
+                if self._deferred_write_target(record) != view:
                     return _COMMIT_RETARGETED
         self._deferred_depth_commits.pop("selection_depth_near_str", None)
         self._deferred_depth_commits.pop("selection_depth_far_str", None)
@@ -1141,7 +1103,7 @@ class SelectionControlsController:
             return _COMMIT_DONE
         # Arm before dirtying sliders so their old positions cannot echo into setters.
         self._depth_echo_holdoff = 2
-        if panel is None:
+        if view == self._active_view:
             self._refresh_depth_state()
             near = _clamp(
                 values.get("selection_depth_near_str", self._depth_near),
@@ -1160,9 +1122,13 @@ class SelectionControlsController:
     def _commit_blurred_depth_record(self, key, record):
         """Apply a completed blur's frozen payload to its frozen target.
 
-        Consume the record even for invalid text or a hidden panel, as ordinary
+        Consume the record even for invalid text or a hidden view, as ordinary
         commit refusals do not require another retry.
         """
+        if record.get("view", self._active_view) != self._active_view:
+            self._deferred_depth_commits.pop(key, None)
+            return _COMMIT_DONE
+
         self._deferred_depth_commits.pop(key, None)
         parsed = self._parse_depth_text_value(key, record.get("payload"))
         if parsed is None or not self._visible or self._last_state_key is None:
@@ -1187,7 +1153,7 @@ class SelectionControlsController:
 
     def _commit_depth_text_key(self, key, revalidated=False):
         # Validate live edit origins before reading their buffers. Focus, mode or
-        # lineage may have changed before the poll; the shared refresh retargets to
+        # view may have changed before the poll; the shared refresh retargets to
         # canonical text first. A commit uses that value or subsequent typing.
         # The overlay's model hook runs before Context::Update(), and RmlUi applies
         # data-value even to focused inputs. Keys with no live origin keep the buffer
@@ -1200,7 +1166,7 @@ class SelectionControlsController:
         # revalidated is set only after the flush wrapper checks context: refreshing
         # again here could invalidate its destination check.
         if not revalidated and key in self._editing_depth_text:
-            self._refresh_panel_context()
+            self._refresh_view_context()
             if self._context_read_exhausted:
                 if key not in self._deferred_depth_commits:
                     self._deferred_depth_commits[key] = {"kind": _DEFERRED_LIVE}
@@ -1212,11 +1178,11 @@ class SelectionControlsController:
             if parsed is None:
                 self._sync_depth_text_bufs(force=True)
                 return
-            # The cores below refuse while the panel is hidden or before the
+            # The cores below refuse while the view is hidden or before the
             # first update lands. Refuse here too, ahead of the arming: arming
             # for a write that is then refused would leave the holdoff set, and a
             # hidden update returns before the decrement, so it would still be
-            # armed when the panel comes back.
+            # armed when the view comes back.
             if not self._visible or self._last_state_key is None:
                 self._sync_depth_text_bufs(force=True)
                 return
@@ -1404,20 +1370,13 @@ class SelectionControlsController:
                 "selection_depth_scale_slider_min",
                 "selection_depth_scale_slider_max",
             ),
-            "focused_panel": (
-                # Sync-off's filled half follows the focused panel, like the chip.
+            "active_view": (
                 "selection_depth_scale_str",
                 "selection_depth_scale_value",
                 "selection_depth_scale_slider_min",
                 "selection_depth_scale_slider_max",
             ),
             "split_mode": (
-            ),
-            "depth_sync": (
-                "selection_depth_scale_str",
-                "selection_depth_scale_value",
-                "selection_depth_scale_slider_min",
-                "selection_depth_scale_slider_max",
             ),
             "offset_x": (
                 "selection_depth_offset_x_str",

@@ -213,11 +213,11 @@ namespace lfs::vis::op {
                 return std::nullopt;
             }
 
-            const auto panel = rendering->resolveViewerPanel(
-                viewer->getViewport(),
-                {viewport_bounds.x, viewport_bounds.y},
-                {viewport_bounds.z, viewport_bounds.w},
-                screen);
+            const auto panel = rendering->resolveViewerPanel(rendering->activeViewId(),
+                                                             viewer->getViewport(),
+                                                             {viewport_bounds.x, viewport_bounds.y},
+                                                             {viewport_bounds.z, viewport_bounds.w},
+                                                             screen);
             return panel && panel->valid()
                        ? std::optional(toPanelMapping(*panel))
                        : std::nullopt;
@@ -838,7 +838,7 @@ namespace lfs::vis::op {
                 }
                 finishLatch();
                 if (drag_kind_ == DragKind::Draw) {
-                    publish_depth_window_draw_commit(panel_.panel);
+                    publish_depth_window_draw_commit(after.view, after.window.scale_x, after.window.scale_y);
                 }
                 transition_lock.unlock();
                 if (auto* const selection = ctx.scene().getSelectionService()) {

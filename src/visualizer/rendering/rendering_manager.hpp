@@ -6,6 +6,7 @@
 
 #include "render_target_id.hpp"
 
+#include "view_render_state.hpp"
 #include "view_source.hpp"
 
 #include "camera_interaction_service.hpp"
@@ -100,6 +101,7 @@ namespace lfs::vis {
     class LFS_VIS_API RenderingManager {
     public:
         struct RenderContext {
+            ViewId view;
             const Viewport& viewport;
             const RenderSettings& settings;
             glm::ivec2 logical_screen_size{0, 0};
@@ -271,34 +273,43 @@ namespace lfs::vis {
 
         void markDirty();
         void markDirty(DirtyMask flags);
-        void markCameraPoseChanged();
+        void markViewDirty(ViewId view, DirtyMask flags);
+        void markCameraPoseChanged(ViewId view);
         // Marks a discontinuous camera jump. Unlike interactive camera motion,
         // the next successfully published temporal frame must not reproject
         // history across this boundary.
-        void markCameraCut();
+        void markCameraCut(ViewId view);
 
         [[nodiscard]] bool pollDirtyState();
-        [[nodiscard]] DirtyMask pendingDirtyMask() const { return dirty_mask_.load(std::memory_order_relaxed); }
+        [[nodiscard]] DirtyMask pendingDirtyMask() const;
         // The training preview refreshes on its own cadence, not only when an
         // unrelated redraw happens to notice it is due.
         void pollTrainingRefresh(bool is_training);
         [[nodiscard]] double secondsUntilTrainingRefresh() const;
         // Re-arms a parked passive training refresh once its render can claim the arena.
         void pollParkedArenaRetry();
-        [[nodiscard]] bool hasParkedArenaRetry() const { return parked_arena_retry_ != 0; }
+        [[nodiscard]] bool hasParkedArenaRetry() const {
+            std::lock_guard lock(views_mutex_);
+            for (const auto& [id, view] : view_states_)
+                if (view->parked_arena_retry_ != 0)
+                    return true;
+            return false;
+        }
 
         void setPivotAnimationEndTime(const std::chrono::steady_clock::time_point end_time) {
-            animation_state_.setPivotAnimationEndTime(end_time);
+            this->state().animation_state_.setPivotAnimationEndTime(end_time);
         }
 
         void triggerSelectionFlash() {
-            markDirty(animation_state_.triggerSelectionFlash());
+            markDirty(this->state().animation_state_.triggerSelectionFlash());
         }
 
-        void setOverlayAnimationActive(const bool active) { animation_state_.setOverlayAnimationActive(active); }
+        void setOverlayAnimationActive(const bool active) {
+            this->state().animation_state_.setOverlayAnimationActive(active);
+        }
 
         [[nodiscard]] float getSelectionFlashIntensity() const {
-            return animation_state_.selectionFlashIntensity();
+            return this->state().animation_state_.selectionFlashIntensity();
         }
 
         // Settings management
@@ -309,6 +320,7 @@ namespace lfs::vis {
             SceneUpscalerPresetUpdate preset_update = SceneUpscalerPresetUpdate::UseRequested);
         RenderSettings getSettings() const;
         RenderSettings settingsForView(ViewId view) const;
+        void editViewSettings(ViewId view, const std::function<void(ViewSettings&)>& edit);
         [[nodiscard]] ViewId activeViewId() const { return view_source_.activeView(); }
         // The presentation pass reports its actual runtime choice after pipeline
         // preparation. Rendering uses this feedback on the next frame so a failed
@@ -354,7 +366,7 @@ namespace lfs::vis {
                                       uint64_t drag_token,
                                       op::DepthWindowModeSnapshot& out_snapshot);
         [[nodiscard]] std::unique_lock<std::mutex> acquireDepthWindowTransitionLock() {
-            return std::unique_lock<std::mutex>(depth_window_transition_mutex_);
+            return std::unique_lock<std::mutex>(this->state().depth_window_transition_mutex_);
         }
         [[nodiscard]] op::DepthWindowModeSnapshot depthWindowSnapshot() const;
         [[nodiscard]] op::DepthWindowModeSnapshot
@@ -402,13 +414,13 @@ namespace lfs::vis {
             }
         };
         [[nodiscard]] std::optional<MutableViewerPanelInfo> resolveViewerPanel(
-            Viewport& primary_viewport,
+            ViewId view, Viewport& primary_viewport,
             const glm::vec2& viewport_pos,
             const glm::vec2& viewport_size,
             std::optional<glm::vec2> screen_point = std::nullopt,
             std::optional<SplitViewPanelId> panel_override = std::nullopt);
         [[nodiscard]] std::optional<ViewerPanelInfo> resolveViewerPanel(
-            const Viewport& primary_viewport,
+            ViewId view, const Viewport& primary_viewport,
             const glm::vec2& viewport_pos,
             const glm::vec2& viewport_size,
             std::optional<glm::vec2> screen_point = std::nullopt,
@@ -449,12 +461,12 @@ namespace lfs::vis {
         void clearLatestCameraMetrics();
 
         // FPS monitoring (scene renders vs. swapchain-presented GUI frames)
-        float getAverageFPS() const { return framerate_controller_.getAverageFPS(); }
+        float getAverageFPS() const { return this->state().framerate_controller_.getAverageFPS(); }
         float getPresentedAverageFPS() const {
             return presented_framerate_controller_.getAverageFPS();
         }
         [[nodiscard]] std::uint32_t temporalConvergenceRemaining() const {
-            return temporal_convergence_.remaining();
+            return this->state().temporal_convergence_.remaining();
         }
         // Measurement only — does not affect scene render pacing/limiting.
         void notePresentedFrame() { presented_framerate_controller_.beginFrame(); }
@@ -462,14 +474,14 @@ namespace lfs::vis {
         // Access to the auxiliary rendering engine used by point-cloud, mesh, and readback paths.
         lfs::rendering::RenderingEngine* getRenderingEngine();
         [[nodiscard]] lfs::rendering::ScreenOverlayRenderer* getScreenOverlayRenderer() {
-            return &screen_overlay_renderer_;
+            return &this->state().screen_overlay_renderer_;
         }
 
         // Camera frustum picking
-        int pickCameraFrustum(const glm::vec2& mouse_pos);
+        int pickCameraFrustum(ViewId view, const glm::vec2& mouse_pos);
 
         // Depth access for tools (returns camera-space depth at pixel, or -1 if invalid).
-        float getDepthAtPixel(int x, int y, std::optional<SplitViewPanelId> panel = std::nullopt) const;
+        float getDepthAtPixel(ViewId view, int x, int y, std::optional<SplitViewPanelId> panel = std::nullopt) const;
         struct ExpectedDepthSampleRequest {
             SceneManager* scene_manager = nullptr;
             const Viewport* viewport = nullptr;
@@ -482,24 +494,19 @@ namespace lfs::vis {
         };
         // Renders a fresh expected-depth preview for precise picking on sparse or low-opacity splats.
         float renderExpectedDepthAtPixel(const ExpectedDepthSampleRequest& request);
-        glm::ivec2 getRenderedSize() const { return viewport_artifact_service_.renderedSize(); }
+        glm::ivec2 getRenderedSize() const { return this->state().viewport_artifact_service_.renderedSize(); }
         std::shared_ptr<lfs::core::Tensor> getViewportImageIfAvailable() const;
         std::shared_ptr<lfs::core::Tensor> captureViewportImage();
 
         // Where the 3D viewport sat inside the window framebuffer on the last frame,
         // top-left origin. Lets callers crop a full-window readback down to the viewport
         // when no render path published an offscreen image to capture.
-        struct FramebufferViewportRect {
-            glm::ivec2 top_left{0, 0};
-            glm::ivec2 size{0, 0};
 
-            [[nodiscard]] bool valid() const { return size.x > 0 && size.y > 0; }
-        };
         [[nodiscard]] FramebufferViewportRect framebufferViewportRect() const {
-            return framebuffer_viewport_rect_;
+            return this->state().framebuffer_viewport_rect_;
         }
         [[nodiscard]] uint64_t getViewportProjectionGeneration() const {
-            return viewport_projection_generation_;
+            return this->state().viewport_projection_generation_;
         }
 
         void setCursorPreviewState(bool active, float x, float y, float radius, bool add_mode = true,
@@ -508,12 +515,12 @@ namespace lfs::vis {
                                    std::optional<SplitViewPanelId> panel = std::nullopt,
                                    int focused_gaussian_id = -1, bool request_render = true);
         void clearCursorPreviewState();
-        [[nodiscard]] bool isCursorPreviewActive() const { return viewport_overlay_service_.isCursorPreviewActive(); }
+        [[nodiscard]] bool isCursorPreviewActive() const { return this->state().viewport_overlay_service_.isCursorPreviewActive(); }
         [[nodiscard]] std::optional<SplitViewPanelId> getCursorPreviewPanel() const {
-            return viewport_overlay_service_.cursorPreview().panel;
+            return this->state().viewport_overlay_service_.cursorPreview().panel;
         }
         void getCursorPreviewState(float& x, float& y, float& radius, bool& add_mode) const {
-            const auto& cursor = viewport_overlay_service_.cursorPreview();
+            const auto& cursor = this->state().viewport_overlay_service_.cursorPreview();
             x = cursor.x;
             y = cursor.y;
             radius = cursor.radius;
@@ -525,19 +532,19 @@ namespace lfs::vis {
                             std::optional<SplitViewPanelId> panel = std::nullopt,
                             bool track_cursor = false);
         void clearRectPreview();
-        [[nodiscard]] bool isRectPreviewActive() const { return viewport_overlay_service_.isRectPreviewActive(); }
+        [[nodiscard]] bool isRectPreviewActive() const { return this->state().viewport_overlay_service_.isRectPreviewActive(); }
         [[nodiscard]] std::optional<SplitViewPanelId> getRectPreviewPanel() const {
-            return viewport_overlay_service_.rectPanel();
+            return this->state().viewport_overlay_service_.rectPanel();
         }
         void getRectPreview(float& x0, float& y0, float& x1, float& y1, bool& add_mode) const {
-            x0 = viewport_overlay_service_.rectX0();
-            y0 = viewport_overlay_service_.rectY0();
-            x1 = viewport_overlay_service_.rectX1();
-            y1 = viewport_overlay_service_.rectY1();
-            add_mode = viewport_overlay_service_.rectAddMode();
+            x0 = this->state().viewport_overlay_service_.rectX0();
+            y0 = this->state().viewport_overlay_service_.rectY0();
+            x1 = this->state().viewport_overlay_service_.rectX1();
+            y1 = this->state().viewport_overlay_service_.rectY1();
+            add_mode = this->state().viewport_overlay_service_.rectAddMode();
         }
         [[nodiscard]] bool rectPreviewTracksCursor() const {
-            return viewport_overlay_service_.rectTracksCursor();
+            return this->state().viewport_overlay_service_.rectTracksCursor();
         }
 
         // Polygon preview (render-space points, same coordinate system as screen_positions output)
@@ -548,20 +555,20 @@ namespace lfs::vis {
                                          bool add_mode = true,
                                          std::optional<SplitViewPanelId> panel = std::nullopt);
         void clearPolygonPreview();
-        [[nodiscard]] bool isPolygonPreviewActive() const { return viewport_overlay_service_.isPolygonPreviewActive(); }
+        [[nodiscard]] bool isPolygonPreviewActive() const { return this->state().viewport_overlay_service_.isPolygonPreviewActive(); }
         [[nodiscard]] std::optional<SplitViewPanelId> getPolygonPreviewPanel() const {
-            return viewport_overlay_service_.polygonPanel();
+            return this->state().viewport_overlay_service_.polygonPanel();
         }
         [[nodiscard]] const std::vector<std::pair<float, float>>& getPolygonPoints() const {
-            return viewport_overlay_service_.polygonPoints();
+            return this->state().viewport_overlay_service_.polygonPoints();
         }
         [[nodiscard]] const std::vector<glm::vec3>& getPolygonWorldPoints() const {
-            return viewport_overlay_service_.polygonWorldPoints();
+            return this->state().viewport_overlay_service_.polygonWorldPoints();
         }
-        [[nodiscard]] bool isPolygonClosed() const { return viewport_overlay_service_.polygonClosed(); }
-        [[nodiscard]] bool isPolygonAddMode() const { return viewport_overlay_service_.polygonAddMode(); }
+        [[nodiscard]] bool isPolygonClosed() const { return this->state().viewport_overlay_service_.polygonClosed(); }
+        [[nodiscard]] bool isPolygonAddMode() const { return this->state().viewport_overlay_service_.polygonAddMode(); }
         [[nodiscard]] bool isPolygonPreviewWorldSpace() const {
-            return viewport_overlay_service_.polygonWorldSpace();
+            return this->state().viewport_overlay_service_.polygonWorldSpace();
         }
 
         // Lasso preview
@@ -569,89 +576,80 @@ namespace lfs::vis {
                              std::optional<SplitViewPanelId> panel = std::nullopt,
                              bool track_cursor = false);
         void clearLassoPreview();
-        [[nodiscard]] bool isLassoPreviewActive() const { return viewport_overlay_service_.isLassoPreviewActive(); }
+        [[nodiscard]] bool isLassoPreviewActive() const { return this->state().viewport_overlay_service_.isLassoPreviewActive(); }
         [[nodiscard]] std::optional<SplitViewPanelId> getLassoPreviewPanel() const {
-            return viewport_overlay_service_.lassoPanel();
+            return this->state().viewport_overlay_service_.lassoPanel();
         }
         [[nodiscard]] const std::vector<std::pair<float, float>>& getLassoPoints() const {
-            return viewport_overlay_service_.lassoPoints();
+            return this->state().viewport_overlay_service_.lassoPoints();
         }
-        [[nodiscard]] bool isLassoAddMode() const { return viewport_overlay_service_.lassoAddMode(); }
+        [[nodiscard]] bool isLassoAddMode() const { return this->state().viewport_overlay_service_.lassoAddMode(); }
         [[nodiscard]] bool lassoPreviewTracksCursor() const {
-            return viewport_overlay_service_.lassoTracksCursor();
+            return this->state().viewport_overlay_service_.lassoTracksCursor();
         }
 
         // Vulkan mesh frame — populated by `renderVulkanFrame` when there are meshes in
         // the scene, consumed by gui_manager to feed `vulkan_viewport_pass.mesh_items`.
-        struct VulkanMeshFrame {
-            struct TemporalFrame {
-                TemporalFrameInput input;
-                SceneTemporalResolveSettings resolve_settings;
-                SceneTemporalQuality quality = SceneTemporalQuality::Balanced;
-            };
 
-            glm::mat4 view_projection{1.0f};
-            glm::vec3 camera_position{0.0f};
-            std::vector<lfs::vis::VulkanMeshDrawItem> items;
-            std::vector<lfs::vis::VulkanMeshViewportPanel> panels;
-            lfs::vis::VulkanEnvironmentParams environment;
-            lfs::vis::VulkanDepthBlitParams depth_blit;
-            lfs::vis::VulkanSplitViewParams split_view;
-            std::optional<TemporalFrame> temporal;
-        };
         void setVulkanMeshFrame(VulkanMeshFrame frame) {
-            std::lock_guard lock(vulkan_mesh_frame_mutex_);
-            vulkan_mesh_frame_ = std::move(frame);
+            std::lock_guard lock(this->state().vulkan_mesh_frame_mutex_);
+            this->state().vulkan_mesh_frame_ = std::move(frame);
         }
         [[nodiscard]] VulkanMeshFrame getVulkanMeshFrame() const {
-            std::lock_guard lock(vulkan_mesh_frame_mutex_);
-            return vulkan_mesh_frame_;
+            std::lock_guard lock(this->state().vulkan_mesh_frame_mutex_);
+            return this->state().vulkan_mesh_frame_;
         }
         void clearVulkanMeshFrame() {
-            std::lock_guard lock(vulkan_mesh_frame_mutex_);
-            vulkan_mesh_frame_ = {};
+            std::lock_guard lock(this->state().vulkan_mesh_frame_mutex_);
+            this->state().vulkan_mesh_frame_ = {};
         }
 
         // Preview selection
         void setPreviewSelection(lfs::core::Tensor* preview, bool add_mode = true) {
-            viewport_overlay_service_.setPreviewSelection(preview, add_mode);
+            this->state().viewport_overlay_service_.setPreviewSelection(preview, add_mode);
             markDirty(DirtyFlag::SELECTION);
         }
         void clearPreviewSelection() {
-            viewport_overlay_service_.clearPreviewSelection();
+            this->state().viewport_overlay_service_.clearPreviewSelection();
             markDirty(DirtyFlag::SELECTION);
         }
         void clearSelectionPreviews();
 
         // Selection preview mode for viewport interaction overlays
         void setSelectionPreviewMode(SelectionPreviewMode mode) {
-            viewport_overlay_service_.setSelectionPreviewMode(mode);
+            this->state().viewport_overlay_service_.setSelectionPreviewMode(mode);
         }
         [[nodiscard]] SelectionPreviewMode getSelectionPreviewMode() const {
-            return viewport_overlay_service_.selectionPreviewMode();
+            return this->state().viewport_overlay_service_.selectionPreviewMode();
         }
-        [[nodiscard]] int getHoveredGaussianId() const { return viewport_overlay_service_.hoveredGaussianId(); }
+        [[nodiscard]] int getHoveredGaussianId() const { return this->state().viewport_overlay_service_.hoveredGaussianId(); }
 
-        // Gizmo state for wireframe sync during manipulation
         void setCropboxGizmoState(bool active, const glm::vec3& min, const glm::vec3& max,
-                                  const glm::mat4& world_transform, bool affects_render,
-                                  int parent_node_index) {
-            viewport_overlay_service_.setCropbox(active, min, max, world_transform, affects_render, parent_node_index);
+                                  const glm::mat4& transform, bool affects_render, int parent_node_index) {
+            gizmo_state_.cropbox_active = active;
+            gizmo_state_.cropbox_min = min;
+            gizmo_state_.cropbox_max = max;
+            gizmo_state_.cropbox_transform = transform;
+            gizmo_state_.cropbox_affects_render = affects_render;
+            gizmo_state_.cropbox_parent_node_index = parent_node_index;
         }
         void setEllipsoidGizmoState(bool active, const glm::vec3& radii,
-                                    const glm::mat4& world_transform, bool affects_render,
-                                    int parent_node_index) {
-            viewport_overlay_service_.setEllipsoid(active, radii, world_transform, affects_render, parent_node_index);
+                                    const glm::mat4& transform, bool affects_render, int parent_node_index) {
+            gizmo_state_.ellipsoid_active = active;
+            gizmo_state_.ellipsoid_radii = radii;
+            gizmo_state_.ellipsoid_transform = transform;
+            gizmo_state_.ellipsoid_affects_render = affects_render;
+            gizmo_state_.ellipsoid_parent_node_index = parent_node_index;
         }
-        void setCropboxGizmoActive(bool active) { viewport_overlay_service_.setCropboxActive(active); }
-        void setEllipsoidGizmoActive(bool active) { viewport_overlay_service_.setEllipsoidActive(active); }
-        [[nodiscard]] GizmoState getGizmoState() const { return viewport_overlay_service_.makeFrameGizmoState(); }
+        void setCropboxGizmoActive(bool active) { gizmo_state_.cropbox_active = active; }
+        void setEllipsoidGizmoActive(bool active) { gizmo_state_.ellipsoid_active = active; }
+        [[nodiscard]] GizmoState getGizmoState() const { return gizmo_state_; }
 
         void setViewportResizeActive(
             bool active,
             ViewportResizeRenderPolicy render_policy = ViewportResizeRenderPolicy::InteractivePreview);
         [[nodiscard]] bool isViewportResizeDeferring() const {
-            return frame_lifecycle_service_.isResizeDeferring();
+            return this->state().frame_lifecycle_service_.isResizeDeferring();
         }
 
         [[nodiscard]] ViewportInteropService& viewportInterop();
@@ -662,20 +660,52 @@ namespace lfs::vis {
                                        bool export_locked);
         void shutdownViewportInterop(VulkanContext* context = nullptr);
         [[nodiscard]] bool hasPendingViewportResizeSettle() const {
-            return frame_lifecycle_service_.hasPendingResizeSettle();
+            std::lock_guard lock(views_mutex_);
+            for (const auto& [id, view] : view_states_)
+                if (view->frame_lifecycle_service_.hasPendingResizeSettle())
+                    return true;
+            return false;
         }
         [[nodiscard]] bool viewportResizeSettleReady() const {
-            return frame_lifecycle_service_.resizeSettleReady();
+            std::lock_guard lock(views_mutex_);
+            for (const auto& [id, view] : view_states_)
+                if (view->frame_lifecycle_service_.resizeSettleReady())
+                    return true;
+            return false;
         }
         [[nodiscard]] double secondsUntilViewportResizeSettleReady() const {
-            return frame_lifecycle_service_.secondsUntilResizeSettleReady();
+            std::lock_guard lock(views_mutex_);
+            double wait = 1.0;
+            for (const auto& [id, view] : view_states_)
+                if (view->frame_lifecycle_service_.hasPendingResizeSettle())
+                    wait = std::min(wait, view->frame_lifecycle_service_.secondsUntilResizeSettleReady());
+            return wait;
         }
         // LOD management
         void setLodAvailable(bool available);
         void setLodEnabled(bool enabled);
         [[nodiscard]] SparkLodController::Stats getLodStats() const;
 
+        ViewRenderState& viewState(ViewId view) const;
+        void retainVisibleViews(const std::vector<ViewId>& views);
+        void dropViewStates();
+        bool depthWindowSnapshotCurrent(const op::DepthWindowModeSnapshot& snapshot) const;
+        bool hasViewState(ViewId view) const {
+            std::lock_guard lock(views_mutex_);
+            return view_states_.contains(view);
+        }
+
     private:
+        ViewRenderState& state() const;
+        bool releaseViewTargets(ViewRenderState& view);
+        mutable std::recursive_mutex views_mutex_;
+        mutable std::unordered_map<ViewId, std::unique_ptr<ViewRenderState>> view_states_;
+        std::vector<std::unique_ptr<ViewRenderState>> retired_view_states_;
+        std::uint64_t screen_epoch_ = 0;
+        std::uint64_t view_lifetime_epoch_ = 0;
+        mutable std::unordered_map<ViewId, std::pair<uint64_t, uint64_t>> depth_window_epochs_;
+        static thread_local RenderingManager* rendering_owner_;
+        static thread_local ViewRenderState* rendering_view_;
         enum class PreviewImageReadback {
             FloatRgb,
             UInt8Rgb,
@@ -850,30 +880,12 @@ namespace lfs::vis {
 
         // Core components
         std::unique_ptr<lfs::rendering::RenderingEngine> engine_;
-        lfs::rendering::ScreenOverlayRenderer screen_overlay_renderer_;
-        mutable FramerateController framerate_controller_;
+
         // Parallel presented-frame counter (GUI-only frames included). Does not
-        // drive pacing — scene path still uses framerate_controller_ alone.
+        // drive pacing — scene path still uses this->state().framerate_controller_ alone.
         mutable FramerateController presented_framerate_controller_;
 
-        std::shared_ptr<const lfs::core::Tensor> vulkan_viewport_image_;
-        std::uint64_t vulkan_viewport_image_generation_ = 0;
-        std::string last_logged_vksplat_render_error_;
-        StaleFrameGuard vksplat_stale_frame_guard_;
-        DirtyMask parked_arena_retry_ = 0;
-        std::atomic<DirtyMask> training_refresh_dirty_{0};
-        std::uint64_t viewport_projection_generation_ = 1;
-        std::uint64_t temporal_scene_revision_ = 1;
-        TemporalConvergenceController temporal_convergence_;
-        std::atomic<std::uint64_t> temporal_camera_cut_generation_{0};
-        std::uint64_t consumed_temporal_camera_cut_generation_ = 0;
-        bool scene_reconstruction_request_logged_ = false;
-        std::string last_scene_reconstruction_backend_;
-        std::string last_scene_reconstruction_preset_;
         RenderTargetRegistry render_targets_;
-        RenderTargetId main_render_target_ = render_targets_.allocate();
-        RenderTargetId split_left_render_target_ = render_targets_.allocate();
-        RenderTargetId split_right_render_target_ = render_targets_.allocate();
         RenderTargetId preview_render_target_ = render_targets_.allocate();
         std::unique_ptr<VksplatViewportRenderer> vksplat_viewport_renderer_;
         std::unique_ptr<PointCloudVulkanRenderer> point_cloud_vulkan_renderer_;
@@ -895,19 +907,8 @@ namespace lfs::vis {
         VulkanContext* last_vulkan_context_ = nullptr;
         std::atomic<bool> vksplat_terminal_release_pending_{false};
         std::uint32_t vksplat_idle_frame_count_ = 0;
-        VkImage vulkan_external_viewport_image_ = VK_NULL_HANDLE;
-        VkImageView vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
-        VkImageLayout vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
-        std::uint64_t vulkan_external_viewport_image_generation_ = 0;
+
         static constexpr std::uint64_t SPLIT_LEFT_GENERATION_BIT = 1ULL << 63;
-        std::uint64_t split_view_image_generation_ = 0;
-        std::uint64_t split_left_image_generation_ = 0;
-        std::uint64_t split_right_image_generation_ = 0;
-        const lfs::core::Tensor* split_left_source_ = nullptr;
-        glm::ivec2 split_left_source_size_{0, 0};
-        int split_left_source_camera_uid_ = -1;
-        bool split_left_source_undistorted_ = false;
-        glm::ivec2 split_right_source_size_{0, 0};
         const lfs::core::Scene* gt_camera_index_scene_ = nullptr;
         std::uint64_t gt_camera_index_generation_ = 0;
         std::vector<std::shared_ptr<lfs::core::Camera>> gt_camera_index_cameras_;
@@ -924,18 +925,11 @@ namespace lfs::vis {
         glm::ivec2 gt_comparison_failed_placeholder_size_{0, 0};
         std::mutex wake_callback_mutex_;
         std::function<void()> wake_callback_;
-        glm::ivec2 vulkan_viewport_image_size_{0, 0};
-        glm::ivec2 vulkan_viewport_image_alloc_size_{0, 0};
-        glm::ivec2 vulkan_viewport_coordinate_size_{0, 0};
-        bool vulkan_viewport_image_flip_y_ = false;
-        glm::ivec2 vulkan_gt_comparison_content_size_{0, 0};
-        // GT compare-panel camera for the frame currently presented, for the selection lane.
-        // Written and cleared at exactly the same sites as vulkan_gt_comparison_content_size_.
-        struct GTPresentedView {
-            GTRenderCamera camera;
-            glm::ivec2 size{0, 0};
-        };
-        std::optional<GTPresentedView> vulkan_gt_comparison_selection_view_;
+
+        // GT compare-panel camera for the frame currently presented, for the
+        // selection lane. Written and cleared at exactly the same sites as
+        // this->state().vulkan_gt_comparison_content_size_.
+
         struct GTComparisonImageCacheEntry {
             int camera_uid = -1;
             GTComparisonMode mode = GTComparisonMode::RGB;
@@ -968,33 +962,10 @@ namespace lfs::vis {
         std::condition_variable_any gt_comparison_image_cv_;
         std::jthread gt_comparison_image_worker_;
         // #1574 GT depth/normal async hold-then-swap: at most one outstanding ticket.
-        // Panel keeps gt_async_held_display_ until the next ticket delivers (never blank).
-        std::uint64_t gt_async_depth_ticket_ = 0;
-        lfs::core::Tensor gt_async_depth_dest_{};
-        GTComparisonMode gt_async_ticket_mode_ = GTComparisonMode::RGB;
-        std::optional<lfs::rendering::CameraIntrinsics> gt_async_ticket_intrinsics_;
-        bool gt_async_ticket_flip_y_ = false;
-        lfs::rendering::FrameMetadata gt_async_ticket_metadata_{};
-        // The GT camera and size that produced a given async depth/normal image. Carried with
-        // the ticket and promoted with the held display, so the selection lane can only ever see
-        // the camera of the image the panel is ACTUALLY showing (#1574 hold-then-swap).
-        std::optional<GTPresentedView> gt_async_ticket_view_;
-        std::shared_ptr<lfs::core::Tensor> gt_async_held_display_;
-        bool gt_async_held_flip_y_ = false;
-        lfs::rendering::FrameMetadata gt_async_held_metadata_{};
-        std::optional<GTPresentedView> gt_async_held_view_;
 
         // Granular dirty tracking
-        std::atomic<uint32_t> dirty_mask_{DirtyFlag::ALL};
-
-        RenderAnimationState animation_state_;
-        FramebufferViewportRect framebuffer_viewport_rect_;
-        ViewportArtifactService viewport_artifact_service_;
-        std::unique_ptr<ViewportInteropService> viewport_interop_;
 
         CameraInteractionService camera_interaction_service_;
-        SplitViewService split_view_service_;
-        ViewportFrameLifecycleService frame_lifecycle_service_;
 
         RenderSettings activeSettingsLocked() const;
         void storeActiveSettingsLocked(const RenderSettings& settings);
@@ -1002,23 +973,13 @@ namespace lfs::vis {
         // Settings
         ViewSource& view_source_;
         SceneRenderSettings settings_;
-        int depth_window_preview_count_ = 0;
-        std::optional<DepthWindowState> depth_window_drag_backup_;
-        uint64_t depth_window_drag_owner_ = 0;
-        uint64_t depth_window_last_drag_token_ = 0;
-        uint64_t depth_window_projection_generation_ = 0;
-        uint64_t depth_window_mode_epoch_ = 0;
-        SceneUpscalerSelection scene_upscaler_runtime_selection_{};
         mutable std::mutex settings_mutex_;
         // Serializes release commit/undo/publication with mode transitions.
         // Acquire transition before settings; never while holding settings/history locks.
         // Release settings before pushing history. updateSettings releases settings,
         // acquires transition, then rechecks the mode. Equal-mode writes bypass this
         // nonrecursive lock for latch-release reentrancy.
-        mutable std::mutex depth_window_transition_mutex_;
         mutable std::mutex camera_metrics_mutex_;
-        mutable std::mutex vulkan_mesh_frame_mutex_;
-        VulkanMeshFrame vulkan_mesh_frame_;
         std::optional<CameraMetricsOverlayState> latest_camera_metrics_;
         std::optional<CameraMetricsJobRequest> pending_camera_metrics_request_;
         std::optional<CameraMetricsJobRequest> active_camera_metrics_request_;
@@ -1034,9 +995,7 @@ namespace lfs::vis {
         bool initialized_ = false;
         bool lod_available_ = false;
 
-        ViewportInteractionContext viewport_interaction_context_;
-
-        ViewportOverlayService viewport_overlay_service_;
+        GizmoState gizmo_state_;
 
         lfs::event::ScopedHandler event_handlers_;
 

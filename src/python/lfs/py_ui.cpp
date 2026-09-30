@@ -6154,6 +6154,11 @@ namespace lfs::python {
             },
             "Get current camera ID for GT comparison");
 
+        m.def("get_active_view_id", []() {
+            auto* rendering = lfs::vis::services().renderingOrNull();
+            return rendering ? rendering->activeViewId() : lfs::vis::kNoView;
+        });
+
         m.def(
             "get_split_view_mode", []() -> const char* {
                 auto* rm = get_rendering_manager();

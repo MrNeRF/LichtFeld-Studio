@@ -228,7 +228,7 @@ namespace lfs::vis {
 
     // RenderingManager Implementation
     RenderingManager::RenderingManager(ViewSource& views) : view_source_(views) {
-        viewport_interop_ = std::make_unique<ViewportInteropService>();
+
         gt_comparison_image_worker_ = std::jthread([this](std::stop_token stop_token) {
             gtComparisonImageWorkerLoop(stop_token);
         });
@@ -256,13 +256,13 @@ namespace lfs::vis {
     }
 
     ViewportInteropService& RenderingManager::viewportInterop() {
-        assert(viewport_interop_ && "ViewportInteropService not initialized");
-        return *viewport_interop_;
+
+        return this->state().viewport_interop_;
     }
 
     const ViewportInteropService& RenderingManager::viewportInterop() const {
-        assert(viewport_interop_ && "ViewportInteropService not initialized");
-        return *viewport_interop_;
+
+        return this->state().viewport_interop_;
     }
 
     void RenderingManager::prepareViewportInterop(VulkanContext& context) {
@@ -277,9 +277,11 @@ namespace lfs::vis {
     }
 
     void RenderingManager::shutdownViewportInterop(VulkanContext* context) {
-        if (viewport_interop_) {
-            viewport_interop_->shutdown(context);
-        }
+        std::lock_guard lock(views_mutex_);
+        for (auto& [id, view] : view_states_)
+            view->viewport_interop_.shutdown(context);
+        for (auto& view : retired_view_states_)
+            view->viewport_interop_.shutdown(context);
     }
 
     void RenderingManager::setWakeCallback(std::function<void()> callback) {
@@ -311,35 +313,115 @@ namespace lfs::vis {
         markDirty(DirtyFlag::ALL);
     }
 
+    thread_local RenderingManager* RenderingManager::rendering_owner_ = nullptr;
+    thread_local ViewRenderState* RenderingManager::rendering_view_ = nullptr;
+
+    ViewRenderState& RenderingManager::viewState(ViewId id) const {
+        std::lock_guard lock(views_mutex_);
+        auto& entry = view_states_[id];
+        if (!entry) {
+            entry = std::make_unique<ViewRenderState>();
+            entry->id = id;
+            if (const auto saved = depth_window_epochs_.find(id); saved != depth_window_epochs_.end()) {
+                entry->depth_window_mode_epoch_ = saved->second.first;
+                entry->depth_window_projection_generation_ = saved->second.second;
+            }
+            entry->last_visible = std::chrono::steady_clock::now();
+        }
+        return *entry;
+    }
+
+    ViewRenderState& RenderingManager::state() const {
+        return rendering_owner_ == this ? *rendering_view_ : viewState(view_source_.activeView());
+    }
+
     void RenderingManager::markDirty(const DirtyMask flags) {
-        dirty_mask_.fetch_or(flags, std::memory_order_relaxed);
-
-        LOG_TRACE("Render marked dirty (flags: 0x{:x})", flags);
+        std::lock_guard lock(views_mutex_);
+        for (auto& [id, view] : view_states_)
+            view->dirty_mask_.fetch_or(flags, std::memory_order_relaxed);
     }
 
-    void RenderingManager::markCameraPoseChanged() {
-        markDirty(DirtyFlag::CAMERA);
+    void RenderingManager::markViewDirty(ViewId view, DirtyMask flags) {
+        viewState(view).dirty_mask_.fetch_or(flags, std::memory_order_relaxed);
     }
 
-    void RenderingManager::markCameraCut() {
-        temporal_camera_cut_generation_.fetch_add(1, std::memory_order_release);
-        markCameraPoseChanged();
+    void RenderingManager::markCameraPoseChanged(ViewId view) { markViewDirty(view, DirtyFlag::CAMERA); }
+
+    void RenderingManager::markCameraCut(ViewId view) {
+        viewState(view).temporal_camera_cut_generation_.fetch_add(1, std::memory_order_release);
+        markCameraPoseChanged(view);
+    }
+
+    DirtyMask RenderingManager::pendingDirtyMask() const {
+        std::lock_guard lock(views_mutex_);
+        DirtyMask mask = 0;
+        for (auto& [id, view] : view_states_)
+            mask |= view->dirty_mask_.load(std::memory_order_relaxed);
+        return mask;
     }
 
     bool RenderingManager::pollDirtyState() {
-        if (const DirtyMask animation_dirty = animation_state_.pollDirtyState(); animation_dirty) {
-            dirty_mask_.fetch_or(animation_dirty, std::memory_order_relaxed);
-            return true;
+        std::lock_guard lock(views_mutex_);
+        for (auto& [id, view] : view_states_)
+            view->dirty_mask_.fetch_or(view->animation_state_.pollDirtyState(), std::memory_order_relaxed);
+        if (lod_controller_ && lod_controller_->hasReadyResults())
+            markDirty(DirtyFlag::CAMERA);
+        return pendingDirtyMask() != 0;
+    }
+
+    bool RenderingManager::releaseViewTargets(ViewRenderState& view) {
+        bool ready = true;
+        for (auto* target : {&view.main_render_target_, &view.split_left_render_target_, &view.split_right_render_target_}) {
+            if (!target->valid())
+                continue;
+            const bool splat_ready = !vksplat_viewport_renderer_ || vksplat_viewport_renderer_->releaseRenderTarget(*target);
+            const bool point_ready = !point_cloud_vulkan_renderer_ || point_cloud_vulkan_renderer_->releaseRenderTarget(*target);
+            if (splat_ready && point_ready) {
+                render_targets_.release(*target);
+                *target = {};
+            } else
+                ready = false;
         }
-        if (lod_controller_ && lod_controller_->hasReadyResults()) {
-            dirty_mask_.fetch_or(DirtyFlag::CAMERA, std::memory_order_relaxed);
-            return true;
+        return ready;
+    }
+
+    void RenderingManager::dropViewStates() {
+        std::lock_guard lock(views_mutex_);
+        for (auto& [id, view] : view_states_)
+            retired_view_states_.push_back(std::move(view));
+        view_states_.clear();
+        depth_window_epochs_.clear();
+        ++view_lifetime_epoch_;
+    }
+
+    void RenderingManager::retainVisibleViews(const std::vector<ViewId>& visible) {
+        std::lock_guard lock(views_mutex_);
+        const auto epoch = view_source_.screenEpoch();
+        if (screen_epoch_ != epoch) {
+            dropViewStates();
+            screen_epoch_ = epoch;
         }
-        return dirty_mask_.load(std::memory_order_relaxed) != 0;
+        const auto now = std::chrono::steady_clock::now();
+        for (auto id : visible)
+            viewState(id).last_visible = now;
+        for (auto it = view_states_.begin(); it != view_states_.end();) {
+            if (now - it->second->last_visible > std::chrono::milliseconds(300)) {
+                depth_window_epochs_[it->first] = {it->second->depth_window_mode_epoch_, it->second->depth_window_projection_generation_};
+                retired_view_states_.push_back(std::move(it->second));
+                it = view_states_.erase(it);
+            } else
+                ++it;
+        }
+        std::erase_if(retired_view_states_, [&](auto& view) {
+            if (!releaseViewTargets(*view))
+                return false;
+            view->viewport_interop_.shutdown(last_vulkan_context_);
+            return true;
+        });
     }
 
     void RenderingManager::requestRenderFollowUp() {
-        dirty_mask_.fetch_or(DirtyFlag::CAMERA, std::memory_order_relaxed);
+        this->state().dirty_mask_.fetch_or(DirtyFlag::CAMERA, std::memory_order_relaxed);
 
         std::function<void()> wake_callback;
         {
@@ -352,7 +434,7 @@ namespace lfs::vis {
     }
 
     void RenderingManager::requestTemporalFollowUp() {
-        dirty_mask_.fetch_or(DirtyFlag::TEMPORAL, std::memory_order_relaxed);
+        this->state().dirty_mask_.fetch_or(DirtyFlag::TEMPORAL, std::memory_order_relaxed);
 
         std::function<void()> wake_callback;
         {
@@ -365,23 +447,20 @@ namespace lfs::vis {
     }
 
     void RenderingManager::notifyAsyncLodResultsReady() {
-        requestRenderFollowUp();
+        markDirty(DirtyFlag::CAMERA);
+        std::function<void()> wake;
+        {
+            std::lock_guard lock(wake_callback_mutex_);
+            wake = wake_callback_;
+        }
+        if (wake)
+            wake();
     }
 
-    void RenderingManager::setViewportResizeActive(
-        const bool active,
-        const ViewportResizeRenderPolicy render_policy) {
-        if (const DirtyMask dirty = frame_lifecycle_service_.setViewportResizeActive(active, render_policy); dirty) {
-            markDirty(dirty);
-            std::function<void()> wake_callback;
-            {
-                std::scoped_lock lock(wake_callback_mutex_);
-                wake_callback = wake_callback_;
-            }
-            if (wake_callback) {
-                wake_callback();
-            }
-        }
+    void RenderingManager::setViewportResizeActive(bool active, ViewportResizeRenderPolicy policy) {
+        std::lock_guard lock(views_mutex_);
+        for (auto& [id, view] : view_states_)
+            view->dirty_mask_.fetch_or(view->frame_lifecycle_service_.setViewportResizeActive(active, policy));
     }
 
     void RenderingManager::setLodAvailable(bool available) {
@@ -428,7 +507,7 @@ namespace lfs::vis {
         }
 
         if (gpu_selection_eligible && vksplat_viewport_renderer_) {
-            const auto gpu = vksplat_viewport_renderer_->gpuLodSelectionStatus(main_render_target_);
+            const auto gpu = vksplat_viewport_renderer_->gpuLodSelectionStatus(this->state().main_render_target_);
             if (gpu.active) {
                 // The CPU controller is frozen at its bootstrap cut in GPU
                 // mode; report the selector's live numbers instead.
@@ -473,7 +552,7 @@ namespace lfs::vis {
     }
 
     void RenderingManager::releaseSceneModelResources() {
-        clearVulkanMeshFrame();
+        dropViewStates();
 
         point_cloud_colors_cache_ = {};
         point_cloud_colors_cache_key_ = nullptr;
@@ -487,65 +566,37 @@ namespace lfs::vis {
         if (point_cloud_vulkan_renderer_) {
             point_cloud_vulkan_renderer_->reset();
         }
-        frame_lifecycle_service_.resetModelTracking();
     }
 
     void RenderingManager::clearVulkanViewportImageState(const glm::ivec2 size,
                                                          const bool flip_y,
                                                          const glm::ivec2 alloc_size) {
-        vulkan_viewport_image_.reset();
-        vulkan_external_viewport_image_ = VK_NULL_HANDLE;
-        vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
-        vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
-        vulkan_external_viewport_image_generation_ = 0;
-        vulkan_viewport_image_size_ = size;
-        vulkan_viewport_image_alloc_size_ = alloc_size.x > 0 && alloc_size.y > 0 ? alloc_size : size;
-        vulkan_viewport_image_flip_y_ = flip_y;
-        vulkan_gt_comparison_content_size_ = {0, 0};
-        vulkan_gt_comparison_selection_view_.reset();
+        this->state().vulkan_viewport_image_.reset();
+        this->state().vulkan_external_viewport_image_ = VK_NULL_HANDLE;
+        this->state().vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
+        this->state().vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+        this->state().vulkan_external_viewport_image_generation_ = 0;
+        this->state().vulkan_viewport_image_size_ = size;
+        this->state().vulkan_viewport_image_alloc_size_ = alloc_size.x > 0 && alloc_size.y > 0 ? alloc_size : size;
+        this->state().vulkan_viewport_image_flip_y_ = flip_y;
+        this->state().vulkan_gt_comparison_content_size_ = {0, 0};
+        this->state().vulkan_gt_comparison_selection_view_.reset();
     }
 
     void RenderingManager::releaseSceneRenderResources() {
-        vksplat_stale_frame_guard_.onSuccess();
-        viewport_artifact_service_.clearViewportOutput();
         invalidateGTComparisonImageCache();
-        clearVulkanViewportImageState();
-        vulkan_viewport_coordinate_size_ = {0, 0};
-        last_logged_vksplat_render_error_.clear();
-        vulkan_viewport_image_generation_ = 0;
-        split_view_image_generation_ = 0;
-
-        clearVulkanMeshFrame();
-
+        dropViewStates();
         point_cloud_colors_cache_ = {};
         point_cloud_colors_cache_key_ = nullptr;
         point_cloud_colors_cache_size_ = 0;
         ++point_cloud_data_revision_;
         ++point_cloud_preview_selection_revision_;
-
-        if (vksplat_viewport_renderer_) {
+        if (vksplat_viewport_renderer_)
             vksplat_viewport_renderer_->reset();
-        }
-        // Renderer reset frees ring cells; clear manager GT ticket state so the
-        // next frame does not poll a stale ticket id against a fresh ring.
-        gt_async_depth_ticket_ = 0;
-        gt_async_depth_dest_ = {};
-        gt_async_ticket_mode_ = GTComparisonMode::RGB;
-        gt_async_ticket_intrinsics_.reset();
-        gt_async_ticket_flip_y_ = false;
-        gt_async_ticket_metadata_ = {};
-        gt_async_held_display_.reset();
-        gt_async_held_flip_y_ = false;
-        gt_async_held_metadata_ = {};
-        gt_async_ticket_view_.reset();
-        gt_async_held_view_.reset();
-        if (point_cloud_vulkan_renderer_) {
+        if (point_cloud_vulkan_renderer_)
             point_cloud_vulkan_renderer_->reset();
-        }
-        frame_lifecycle_service_.resetModelTracking();
-        if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
+        if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA))
             lfs::core::Tensor::trim_memory_pool();
-        }
     }
 
     void RenderingManager::noteVksplatIdleFrame(const bool training_active) {
@@ -555,7 +606,7 @@ namespace lfs::vis {
         }
         // A parked refresh polls for its turn on the training arena; releasing
         // here would cancel the reservation it is waiting on.
-        if (parked_arena_retry_ != 0) {
+        if (this->state().parked_arena_retry_ != 0) {
             return;
         }
 
@@ -639,14 +690,15 @@ namespace lfs::vis {
                 settings.split_view_mode != sanitized_settings.split_view_mode;
             if (split_mode_changes && !transition_lock.owns_lock()) {
                 lock.unlock();
-                transition_lock = std::unique_lock<std::mutex>(depth_window_transition_mutex_);
+                transition_lock = std::unique_lock<std::mutex>(this->state().depth_window_transition_mutex_);
                 continue;
             }
             const SplitViewMode previous_split_mode = settings.split_view_mode;
-            if (split_view_service_.isGTComparisonActive(settings) ||
-                split_view_service_.isGTComparisonActive(sanitized_settings)) {
+            if (this->state().split_view_service_.isGTComparisonActive(settings) ||
+                this->state().split_view_service_.isGTComparisonActive(sanitized_settings)) {
                 sanitized_settings.show_camera_frustums = false;
             }
+
             const float previous_depth_filter_scale_x = settings.depth_filter_scale_x;
             const float previous_depth_filter_scale_y = settings.depth_filter_scale_y;
             const float previous_depth_filter_offset_x =
@@ -699,19 +751,23 @@ namespace lfs::vis {
                 previous_depth_filter_max_z != settings.depth_filter_max.z;
 
             if (depth_window_projection_changed) {
-                depth_window_drag_owner_ = 0;
-                depth_window_drag_backup_.reset();
+                this->state().depth_window_drag_owner_ = 0;
+                this->state().depth_window_drag_backup_.reset();
             }
             if (settings.depth_filter_min.z != previous_depth_min_z ||
                 settings.depth_filter_max.z != previous_depth_max_z) {
-                ++depth_window_projection_generation_;
+                ++this->state().depth_window_projection_generation_;
             }
             if (split_mode_changes)
                 applyDepthWindowModeTransitionLocked(
                     previous_split_mode,
                     settings.split_view_mode);
+            const bool scene_changed = settings_ != settings.scene();
             storeActiveSettingsLocked(settings);
-            markDirty(dirty_flags);
+            if (scene_changed)
+                markDirty(dirty_flags);
+            else
+                markViewDirty(view_source_.activeView(), dirty_flags);
             break;
         }
 
@@ -731,12 +787,18 @@ namespace lfs::vis {
     }
 
     RenderSettings RenderingManager::activeSettingsLocked() const {
-        return RenderSettings(settings_, view_source_.viewSettings(view_source_.activeView()).value());
+        return RenderSettings(settings_, view_source_.viewSettings(rendering_owner_ == this ? rendering_view_->id : view_source_.activeView()).value());
     }
 
     void RenderingManager::storeActiveSettingsLocked(const RenderSettings& settings) {
         settings_ = settings.scene();
         view_source_.editViewSettings(view_source_.activeView(), [&](ViewSettings& view) { view = settings.view(); });
+    }
+
+    void RenderingManager::editViewSettings(ViewId view, const std::function<void(ViewSettings&)>& edit) {
+        std::lock_guard lock(settings_mutex_);
+        if (view_source_.editViewSettings(view, edit))
+            markViewDirty(view, DirtyFlag::ALL);
     }
 
     RenderSettings RenderingManager::settingsForView(const ViewId view) const {
@@ -746,7 +808,7 @@ namespace lfs::vis {
 
     RenderSettings RenderingManager::getSettings() const {
         std::lock_guard lock(settings_mutex_);
-        return activeSettingsLocked();
+        return RenderSettings(settings_, view_source_.viewSettings(view_source_.activeView()).value());
     }
 
     void RenderingManager::reportSceneUpscalerRuntimeSelection(
@@ -754,8 +816,8 @@ namespace lfs::vis {
         bool changed = false;
         {
             std::lock_guard lock(settings_mutex_);
-            changed = scene_upscaler_runtime_selection_ != selection;
-            scene_upscaler_runtime_selection_ = selection;
+            changed = this->state().scene_upscaler_runtime_selection_ != selection;
+            this->state().scene_upscaler_runtime_selection_ = selection;
         }
         // The renderer chooses its source resolution before the presentation pass
         // proves whether reconstruction is available. A real active/fallback
@@ -769,7 +831,7 @@ namespace lfs::vis {
 
     SceneUpscalerSelection RenderingManager::sceneUpscalerRuntimeSelection() const {
         std::lock_guard lock(settings_mutex_);
-        return scene_upscaler_runtime_selection_;
+        return this->state().scene_upscaler_runtime_selection_;
     }
 
     void RenderingManager::setOrthographic(const bool enabled, const float viewport_height, const float distance_to_pivot) {
@@ -805,27 +867,27 @@ namespace lfs::vis {
 
     void RenderingManager::advanceSplitOffset() {
         auto settings = getSettings();
-        split_view_service_.advanceSplitOffset(settings);
+        this->state().split_view_service_.advanceSplitOffset(settings);
         updateSettings(settings, DirtyFlag::SPLIT_VIEW);
     }
 
     SplitViewInfo RenderingManager::getSplitViewInfo() const {
-        return split_view_service_.getInfo();
+        return this->state().split_view_service_.getInfo();
     }
 
     std::optional<SplitViewInfo> RenderingManager::getSplitViewInfoIfChanged(
         std::uint64_t& generation) const {
-        return split_view_service_.getInfoIfChanged(generation);
+        return this->state().split_view_service_.getInfoIfChanged(generation);
     }
 
     bool RenderingManager::isSplitViewActive() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        return split_view_service_.isActive(activeSettingsLocked());
+        return this->state().split_view_service_.isActive(activeSettingsLocked());
     }
 
     bool RenderingManager::isGTComparisonActive() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        return split_view_service_.isGTComparisonActive(activeSettingsLocked());
+        return this->state().split_view_service_.isGTComparisonActive(activeSettingsLocked());
     }
 
     bool RenderingManager::isPLYComparisonActive() const {
@@ -835,34 +897,34 @@ namespace lfs::vis {
 
     void RenderingManager::beginDepthWindowDrag(uint64_t& out_drag_token) {
         std::lock_guard lock(settings_mutex_);
-        if (!depth_window_drag_owner_)
-            depth_window_drag_backup_ = depthWindowFromProjection(activeSettingsLocked());
-        out_drag_token = depth_window_drag_owner_ = ++depth_window_last_drag_token_;
+        if (!this->state().depth_window_drag_owner_)
+            this->state().depth_window_drag_backup_ = depthWindowFromProjection(activeSettingsLocked());
+        out_drag_token = this->state().depth_window_drag_owner_ = ++this->state().depth_window_last_drag_token_;
     }
 
     void RenderingManager::endDepthWindowDrag(const uint64_t drag_token) {
         std::lock_guard lock(settings_mutex_);
-        if (depth_window_drag_owner_ == drag_token) {
-            depth_window_drag_owner_ = 0;
-            depth_window_drag_backup_.reset();
+        if (this->state().depth_window_drag_owner_ == drag_token) {
+            this->state().depth_window_drag_owner_ = 0;
+            this->state().depth_window_drag_backup_.reset();
         }
     }
 
     void RenderingManager::beginDepthWindowPreview() {
         std::lock_guard lock(settings_mutex_);
-        ++depth_window_preview_count_;
-        markDirty(DirtyFlag::OVERLAY);
+        ++this->state().depth_window_preview_count_;
+        markViewDirty(this->state().id, DirtyFlag::OVERLAY);
     }
 
     void RenderingManager::endDepthWindowPreview() {
         std::lock_guard lock(settings_mutex_);
-        depth_window_preview_count_ = std::max(0, depth_window_preview_count_ - 1);
-        markDirty(DirtyFlag::OVERLAY);
+        this->state().depth_window_preview_count_ = std::max(0, this->state().depth_window_preview_count_ - 1);
+        markViewDirty(this->state().id, DirtyFlag::OVERLAY);
     }
 
     bool RenderingManager::depthWindowDragPreview() const {
         std::lock_guard lock(settings_mutex_);
-        return depth_window_preview_count_ > 0;
+        return this->state().depth_window_preview_count_ > 0;
     }
 
     GTComparisonMode RenderingManager::getGTComparisonMode() const {
@@ -890,9 +952,9 @@ namespace lfs::vis {
         clampDepthWindowState(clamped);
         std::lock_guard lock(settings_mutex_);
         applyDepthWindowProjectionLocked(clamped);
-        depth_window_drag_owner_ = 0;
-        depth_window_drag_backup_.reset();
-        markDirty(DirtyFlag::ALL);
+        this->state().depth_window_drag_owner_ = 0;
+        this->state().depth_window_drag_backup_.reset();
+        markViewDirty(this->state().id, DirtyFlag::ALL);
     }
 
     bool RenderingManager::applyDepthWindowIfEpoch(const DepthWindowState& state,
@@ -901,11 +963,11 @@ namespace lfs::vis {
         auto clamped = state;
         clampDepthWindowState(clamped);
         std::lock_guard lock(settings_mutex_);
-        if (depth_window_mode_epoch_ != expected_epoch || !drag_token ||
-            depth_window_drag_owner_ != drag_token)
+        if (this->state().depth_window_mode_epoch_ != expected_epoch || !drag_token ||
+            this->state().depth_window_drag_owner_ != drag_token)
             return false;
         applyDepthWindowProjectionLocked(clamped);
-        markDirty(DirtyFlag::ALL);
+        markViewDirty(this->state().id, DirtyFlag::ALL);
         return true;
     }
 
@@ -916,27 +978,25 @@ namespace lfs::vis {
     }
 
     bool RenderingManager::commitDepthWindowIfEpoch(
-        const DepthWindowState& state,
-        const uint64_t expected_epoch,
+        const DepthWindowState& state, const uint64_t expected_epoch,
         const uint64_t drag_token, op::DepthWindowModeSnapshot& out_snapshot) {
         auto clamped = state;
         clampDepthWindowState(clamped);
         std::lock_guard lock(settings_mutex_);
-        if (depth_window_mode_epoch_ != expected_epoch || !drag_token ||
-            depth_window_drag_owner_ != drag_token)
+        if (this->state().depth_window_mode_epoch_ != expected_epoch || !drag_token ||
+            this->state().depth_window_drag_owner_ != drag_token)
             return false;
         applyDepthWindowProjectionLocked(clamped);
-        depth_window_drag_owner_ = 0;
-        depth_window_drag_backup_.reset();
+        this->state().depth_window_drag_owner_ = 0;
+        this->state().depth_window_drag_backup_.reset();
         out_snapshot = depthWindowSnapshotLocked();
-        markDirty(DirtyFlag::ALL);
+        markViewDirty(this->state().id, DirtyFlag::ALL);
         return true;
     }
 
     op::DepthWindowModeSnapshot
     RenderingManager::depthWindowSnapshotLocked() const {
-        return {.window = depthWindowFromProjection(activeSettingsLocked()),
-                .mode_epoch = depth_window_mode_epoch_};
+        return {.view = this->state().id, .screen_epoch = view_source_.screenEpoch(), .lifetime_epoch = view_lifetime_epoch_, .window = depthWindowFromProjection(activeSettingsLocked()), .mode_epoch = this->state().depth_window_mode_epoch_};
     }
 
     op::DepthWindowModeSnapshot RenderingManager::depthWindowSnapshot() const {
@@ -949,42 +1009,60 @@ namespace lfs::vis {
         const uint64_t drag_token) const {
         std::lock_guard lock(settings_mutex_);
         auto snapshot = depthWindowSnapshotLocked();
-        if (drag_token && depth_window_drag_owner_ == drag_token &&
-            depth_window_drag_backup_)
-            snapshot.window = *depth_window_drag_backup_;
+        if (drag_token && this->state().depth_window_drag_owner_ == drag_token &&
+            this->state().depth_window_drag_backup_)
+            snapshot.window = *this->state().depth_window_drag_backup_;
         return snapshot;
     }
 
     void RenderingManager::restoreDepthWindowStateFromProject() {
         const auto transition_lock = acquireDepthWindowTransitionLock();
         std::lock_guard lock(settings_mutex_);
-        depth_window_drag_owner_ = 0;
-        depth_window_drag_backup_.reset();
-        ++depth_window_projection_generation_;
-        ++depth_window_mode_epoch_;
+        this->state().depth_window_drag_owner_ = 0;
+        this->state().depth_window_drag_backup_.reset();
+        ++this->state().depth_window_projection_generation_;
+        ++this->state().depth_window_mode_epoch_;
+    }
+
+    bool RenderingManager::depthWindowSnapshotCurrent(const op::DepthWindowModeSnapshot& snapshot) const {
+        std::lock_guard lock(views_mutex_);
+        if (snapshot.screen_epoch != view_source_.screenEpoch() || snapshot.lifetime_epoch != view_lifetime_epoch_ || !view_source_.viewSettings(snapshot.view))
+            return false;
+        if (const auto view = view_states_.find(snapshot.view); view != view_states_.end())
+            return snapshot.mode_epoch == view->second->depth_window_mode_epoch_;
+        const auto saved = depth_window_epochs_.find(snapshot.view);
+        return saved != depth_window_epochs_.end() && snapshot.mode_epoch == saved->second.first;
     }
 
     bool RenderingManager::restoreDepthWindowSnapshotIfEpoch(
-        const op::DepthWindowModeSnapshot& snapshot,
-        const uint64_t expected_epoch) {
-        std::lock_guard lock(settings_mutex_);
-        if (depth_window_mode_epoch_ != expected_epoch)
+        const op::DepthWindowModeSnapshot& snapshot, const uint64_t expected_epoch) {
+        if (!depthWindowSnapshotCurrent(snapshot))
             return false;
-        applyDepthWindowProjectionLocked(snapshot.window);
-        depth_window_drag_owner_ = 0;
-        depth_window_drag_backup_.reset();
-        markDirty(DirtyFlag::ALL);
+        auto& view = viewState(snapshot.view);
+        std::lock_guard transition(view.depth_window_transition_mutex_);
+        std::lock_guard lock(settings_mutex_);
+        if (view.depth_window_mode_epoch_ != expected_epoch)
+            return false;
+        view_source_.editViewSettings(snapshot.view, [&](ViewSettings& settings) {
+            RenderSettings composed(settings_, settings);
+            applyDepthWindowToProjection(composed, snapshot.window);
+            settings = composed.view();
+        });
+        ++view.depth_window_projection_generation_;
+        view.depth_window_drag_owner_ = 0;
+        view.depth_window_drag_backup_.reset();
+        markViewDirty(snapshot.view, DirtyFlag::ALL);
         return true;
     }
 
     uint64_t RenderingManager::depthWindowProjectionGeneration() const {
         std::lock_guard lock(settings_mutex_);
-        return depth_window_projection_generation_;
+        return this->state().depth_window_projection_generation_;
     }
 
     uint64_t RenderingManager::depthWindowModeEpoch() const {
         std::lock_guard lock(settings_mutex_);
-        return depth_window_mode_epoch_;
+        return this->state().depth_window_mode_epoch_;
     }
 
     void RenderingManager::applyDepthWindowProjectionLocked(const DepthWindowState& state) {
@@ -993,22 +1071,21 @@ namespace lfs::vis {
         applyDepthWindowToProjection(settings, state);
         storeActiveSettingsLocked(settings);
         if (previous.near_plane != state.near_plane || previous.far_plane != state.far_plane)
-            ++depth_window_projection_generation_;
+            ++this->state().depth_window_projection_generation_;
     }
 
     void RenderingManager::applyDepthWindowModeTransitionLocked(
-        const SplitViewMode previous_mode,
-        const SplitViewMode new_mode) {
+        const SplitViewMode previous_mode, const SplitViewMode new_mode) {
         if (splitViewUsesGTComparison(previous_mode) ==
             splitViewUsesGTComparison(new_mode))
             return;
         // GT suspends selection filtering; an old drag must not overwrite its
         // successor.
-        if (depth_window_drag_owner_ && depth_window_drag_backup_)
-            applyDepthWindowProjectionLocked(*depth_window_drag_backup_);
-        depth_window_drag_owner_ = 0;
-        depth_window_drag_backup_.reset();
-        ++depth_window_mode_epoch_;
+        if (this->state().depth_window_drag_owner_ && this->state().depth_window_drag_backup_)
+            applyDepthWindowProjectionLocked(*this->state().depth_window_drag_backup_);
+        this->state().depth_window_drag_owner_ = 0;
+        this->state().depth_window_drag_backup_.reset();
+        ++this->state().depth_window_mode_epoch_;
     }
 
     void RenderingManager::clearLatestCameraMetrics() {
@@ -1043,7 +1120,7 @@ namespace lfs::vis {
             return;
         }
 
-        const auto settings = getSettings();
+        const auto settings = settingsForView(this->state().id);
         if (!splitViewUsesGTComparison(settings.split_view_mode) ||
             settings.camera_metrics_mode == RenderSettings::CameraMetricsMode::Off) {
             return;
@@ -1221,10 +1298,10 @@ namespace lfs::vis {
 
     std::optional<float> RenderingManager::getSplitDividerScreenX(const glm::vec2& viewport_pos,
                                                                   const glm::vec2& viewport_size) const {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        if (!split_view_service_.isActive(activeSettingsLocked()) ||
-            (splitViewUsesGTComparison(activeSettingsLocked().split_view_mode) &&
-             gtComparisonShowsLoss(activeSettingsLocked().gt_comparison_mode))) {
+        const auto settings = getSettings();
+        if (!this->state().split_view_service_.isActive(settings) ||
+            (splitViewUsesGTComparison(settings.split_view_mode) &&
+             gtComparisonShowsLoss(settings.gt_comparison_mode))) {
             return std::nullopt;
         }
 
@@ -1237,7 +1314,7 @@ namespace lfs::vis {
         }
 
         return viewport_pos.x + content_bounds.x +
-               static_cast<float>(splitViewDividerPixel(content_width, activeSettingsLocked().split_position));
+               static_cast<float>(splitViewDividerPixel(content_width, settings.split_position));
     }
 
     void RenderingManager::applySplitModeChange(const SplitViewService::ModeChangeResult& result) {
@@ -1249,11 +1326,11 @@ namespace lfs::vis {
         // viewport output is cleared: clear_viewport_output is only set for
         // enabled -> disabled (split_view_service.cpp:202), so re-entering GT would otherwise
         // expose the previous session's camera until the next GT frame is presented.
-        vulkan_gt_comparison_selection_view_.reset();
-        vulkan_gt_comparison_content_size_ = {0, 0};
+        this->state().vulkan_gt_comparison_selection_view_.reset();
+        this->state().vulkan_gt_comparison_content_size_ = {0, 0};
 
         if (result.clear_viewport_output) {
-            viewport_artifact_service_.clearViewportOutput();
+            this->state().viewport_artifact_service_.clearViewportOutput();
         }
 
         if (result.restore_equirectangular) {
@@ -1273,55 +1350,59 @@ namespace lfs::vis {
                                                  const bool saturation_mode, const float saturation_amount,
                                                  const std::optional<SplitViewPanelId> panel,
                                                  const int focused_gaussian_id, const bool request_render) {
-        viewport_overlay_service_.setCursorPreview(active, x, y, radius, add_mode, selection_tensor,
-                                                   saturation_mode, saturation_amount, panel, focused_gaussian_id);
+        this->state().viewport_overlay_service_.setCursorPreview(active, x, y, radius, add_mode, selection_tensor,
+                                                                 saturation_mode, saturation_amount, panel, focused_gaussian_id);
         if (request_render)
-            markDirty(DirtyFlag::SELECTION);
+            markViewDirty(this->state().id, DirtyFlag::SELECTION);
     }
 
     void RenderingManager::clearCursorPreviewState() {
-        viewport_overlay_service_.clearCursorPreview();
-        markDirty(DirtyFlag::SELECTION);
+        this->state().viewport_overlay_service_.clearCursorPreview();
+        markViewDirty(this->state().id, DirtyFlag::SELECTION);
     }
 
     void RenderingManager::setRectPreview(float x0, float y0, float x1, float y1, bool add_mode,
                                           const std::optional<SplitViewPanelId> panel,
                                           const bool track_cursor) {
-        viewport_overlay_service_.setRect(x0, y0, x1, y1, add_mode, panel, track_cursor);
+        this->state().viewport_overlay_service_.setRect(x0, y0, x1, y1, add_mode, panel, track_cursor);
     }
 
     void RenderingManager::clearRectPreview() {
-        viewport_overlay_service_.clearRect();
+        this->state().viewport_overlay_service_.clearRect();
     }
 
     void RenderingManager::setPolygonPreview(const std::vector<std::pair<float, float>>& points, bool closed,
                                              bool add_mode, const std::optional<SplitViewPanelId> panel) {
-        viewport_overlay_service_.setPolygon(points, closed, add_mode, panel);
+        this->state().viewport_overlay_service_.setPolygon(points, closed, add_mode, panel);
     }
 
     void RenderingManager::setPolygonPreviewWorldSpace(const std::vector<glm::vec3>& world_points,
                                                        const bool closed, const bool add_mode,
                                                        const std::optional<SplitViewPanelId> panel) {
-        viewport_overlay_service_.setPolygonWorldSpace(world_points, closed, add_mode, panel);
+        this->state().viewport_overlay_service_.setPolygonWorldSpace(world_points, closed, add_mode, panel);
     }
 
     void RenderingManager::clearPolygonPreview() {
-        viewport_overlay_service_.clearPolygon();
+        this->state().viewport_overlay_service_.clearPolygon();
     }
 
     void RenderingManager::setLassoPreview(const std::vector<std::pair<float, float>>& points, bool add_mode,
                                            const std::optional<SplitViewPanelId> panel,
                                            const bool track_cursor) {
-        viewport_overlay_service_.setLasso(points, add_mode, panel, track_cursor);
+        this->state().viewport_overlay_service_.setLasso(points, add_mode, panel, track_cursor);
     }
 
     void RenderingManager::clearLassoPreview() {
-        viewport_overlay_service_.clearLasso();
+        this->state().viewport_overlay_service_.clearLasso();
     }
 
     void RenderingManager::clearSelectionPreviews() {
-        viewport_overlay_service_.clearSelectionPreviews();
-        markDirty(DirtyFlag::SELECTION);
+        auto& overlay = this->state().viewport_overlay_service_;
+        const bool had_preview = overlay.isCursorPreviewActive() || overlay.isRectPreviewActive() ||
+                                 overlay.isPolygonPreviewActive() || overlay.isLassoPreviewActive() || overlay.cursorPreview().preview_selection;
+        overlay.clearSelectionPreviews();
+        if (had_preview)
+            markViewDirty(this->state().id, DirtyFlag::SELECTION);
     }
 
 } // namespace lfs::vis

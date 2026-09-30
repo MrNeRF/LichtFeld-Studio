@@ -25,6 +25,7 @@ def _install_stub_modules(monkeypatch):
         remove_hook=lambda panel, section, callback: remove_calls.append(
             (panel, section, callback)
         ),
+        get_active_view_id=lambda: 1,
         get_active_tool=lambda: "",
         get_active_submode=lambda: "",
         get_panel=lambda _panel_id: SimpleNamespace(space="BOTTOM_DOCK"),
@@ -2366,27 +2367,8 @@ def _real_lichtfeld():
 
 
 @pytest.mark.parametrize("action_name", ["reset_camera", "focus_selection"])
-def test_camera_actions_accept_the_main_panel_token(action_name):
-    """Accept None for legacy routing, main for explicit focused-panel routing, and
-    left/right for named panels. No visualizer is attached, so this checks parser
-    acceptance only.
-    """
-    action = getattr(_real_lichtfeld(), action_name)
-    for token in ("main", "left", "right"):
-        action(panel=token)
-    action(panel=None)
-    action()
-
-
-@pytest.mark.parametrize("action_name", ["reset_camera", "focus_selection"])
-def test_camera_actions_reject_an_unknown_panel_token(action_name):
-    """The rejection message names the full panel vocabulary, so a caller that
-    guesses wrong is told what 'main' is. Same wording py_selection.cpp's
-    parseDepthWindowPanelArg already uses."""
-    action = getattr(_real_lichtfeld(), action_name)
-    with pytest.raises(ValueError) as excinfo:
-        action(panel="middle")
-    assert "'main', 'left', or 'right'" in str(excinfo.value)
+def test_camera_actions_use_the_active_view(action_name):
+    getattr(_real_lichtfeld(), action_name)()
 
 
 def test_align_toolbar_signature_tracks_can_apply(toolbar_module):

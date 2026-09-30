@@ -20,7 +20,7 @@ namespace lfs::vis::op {
           rebase_readout_(rebase_readout) {}
 
     bool DepthWindowSettingsUndoEntry::isExpired() const {
-        return before_.mode_epoch != rendering_manager_.depthWindowModeEpoch();
+        return !rendering_manager_.depthWindowSnapshotCurrent(before_);
     }
 
     bool DepthWindowSettingsUndoEntry::apply(const DepthWindowModeSnapshot& state) {
@@ -33,7 +33,7 @@ namespace lfs::vis::op {
             return;
         }
         if (rebase_readout_) {
-            publish_depth_window_draw_commit(SplitViewPanelId::Left);
+            publish_depth_window_draw_commit(before_.view, before_.window.scale_x, before_.window.scale_y);
         }
     }
 
@@ -42,7 +42,7 @@ namespace lfs::vis::op {
             return;
         }
         if (rebase_readout_) {
-            publish_depth_window_draw_commit(SplitViewPanelId::Left);
+            publish_depth_window_draw_commit(after_.view, after_.window.scale_x, after_.window.scale_y);
         }
     }
 

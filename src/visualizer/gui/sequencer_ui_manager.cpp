@@ -373,7 +373,7 @@ namespace lfs::vis::gui {
 
         if (auto* const rm = viewer_->getRenderingManager()) {
             rm->setFocalLength(state.focal_length_mm);
-            rm->markCameraCut();
+            rm->markCameraCut(rm->activeViewId());
         }
     }
 
@@ -1163,7 +1163,7 @@ namespace lfs::vis::gui {
         auto& vp = viewer_->getViewport();
         vp.setViewMatrix(glm::mat3_cast(state.rotation), state.position);
         rm->setFocalLength(state.focal_length_mm);
-        rm->markCameraPoseChanged();
+        rm->markCameraPoseChanged(rm->activeViewId());
         return true;
     }
 

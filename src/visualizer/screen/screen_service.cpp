@@ -24,11 +24,13 @@ namespace lfs::vis::screen {
         std::lock_guard lock(mutex_);
         assert(&screen.registry() == &editor_types_);
         screen_ = std::move(screen);
+        ++epoch_;
     }
 
     void ScreenService::resetToDefault() {
         std::lock_guard lock(mutex_);
         screen_ = Screen::makeDefault(editor_types_);
+        ++epoch_;
     }
 
     View3DSpace& ScreenService::activeView3D() {

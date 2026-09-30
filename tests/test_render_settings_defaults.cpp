@@ -164,7 +164,7 @@ TEST(RenderSettingsProxy, GutMirrorStillSwitchesViewerBackend) {
     EXPECT_FALSE(settings.gut);
 }
 
-TEST(RenderSettingsProxy, EquirectangularForcesGutBackend) {
+TEST(RenderSettingsProxy, EquirectangularPreservesSceneBackend) {
     using Backend = lfs::rendering::GaussianRasterBackend;
 
     lfs::vis::RenderSettings settings;
@@ -177,6 +177,9 @@ TEST(RenderSettingsProxy, EquirectangularForcesGutBackend) {
     lfs::vis::apply_proxy(settings, proxy);
 
     EXPECT_TRUE(settings.equirectangular);
+    EXPECT_EQ(settings.raster_backend, Backend::ThreeDgs);
+    EXPECT_FALSE(settings.gut);
+    lfs::vis::enforceProjectionBackend(settings);
     EXPECT_EQ(settings.raster_backend, Backend::ThreeDgut);
     EXPECT_TRUE(settings.gut);
 }
@@ -205,7 +208,7 @@ TEST(RenderSettingsBackendNormalization, RenderingManagerCanSwitchBackFromGutTo3
     EXPECT_FALSE(settings.gut);
 }
 
-TEST(RenderSettingsBackendNormalization, RenderingManagerEquirectangularUpdateForcesGutBackend) {
+TEST(RenderSettingsBackendNormalization, RenderingManagerEquirectangularUpdatePreservesSceneBackend) {
     using Backend = lfs::rendering::GaussianRasterBackend;
 
     lfs::vis::screen::ScreenService manager_views;
@@ -219,6 +222,9 @@ TEST(RenderSettingsBackendNormalization, RenderingManagerEquirectangularUpdateFo
 
     settings = manager.getSettings();
     EXPECT_TRUE(settings.equirectangular);
+    EXPECT_EQ(settings.raster_backend, Backend::ThreeDgs);
+    EXPECT_FALSE(settings.gut);
+    lfs::vis::enforceProjectionBackend(settings);
     EXPECT_EQ(settings.raster_backend, Backend::ThreeDgut);
     EXPECT_TRUE(settings.gut);
 }

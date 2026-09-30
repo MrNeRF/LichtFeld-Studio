@@ -4295,12 +4295,12 @@ namespace lfs::vis::gui {
         [[maybe_unused]] float cursor_x = 0.0f;
         [[maybe_unused]] float cursor_y = 0.0f;
         rendering->getCursorPreviewState(cursor_x, cursor_y, render_radius, add_mode);
-        const auto panel = rendering->resolveViewerPanel(
-            viewer_->getViewport(),
-            viewport_layout_.pos,
-            viewport_layout_.size,
-            std::nullopt,
-            rendering->getCursorPreviewPanel());
+        const auto panel = rendering->resolveViewerPanel(rendering->activeViewId(),
+                                                         viewer_->getViewport(),
+                                                         viewport_layout_.pos,
+                                                         viewport_layout_.size,
+                                                         std::nullopt,
+                                                         rendering->getCursorPreviewPanel());
         if (!panel || !panel->valid()) {
             return std::nullopt;
         }
@@ -4686,9 +4686,9 @@ namespace lfs::vis::gui {
             .rml = &rmlui_manager_,
             .context_menu = global_context_menu_.get(),
             .view_changed =
-                [this](screen::AreaId) {
+                [this](screen::AreaId id) {
                     if (auto* const rendering = viewer_->getRenderingManager())
-                        rendering->markDirty(DirtyFlag::ALL);
+                        rendering->markViewDirty(id.value, DirtyFlag::ALL);
                 },
             .screen_changed =
                 [this]() {

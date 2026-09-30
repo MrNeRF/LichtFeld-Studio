@@ -728,8 +728,8 @@ namespace lfs::python {
                 const float local_x = screen_x - vx;
                 const float local_y = screen_y - vy;
 
-                const float depth = rm->getDepthAtPixel(
-                    static_cast<int>(local_x), static_cast<int>(local_y));
+                const float depth = rm->getDepthAtPixel(rm->activeViewId(),
+                                                        static_cast<int>(local_x), static_cast<int>(local_y));
                 if (depth <= 0.0f)
                     return std::nullopt;
 

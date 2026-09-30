@@ -14,6 +14,7 @@ import pytest
 def _install_lf_stub(monkeypatch):
     state = SimpleNamespace(
         active_tool="builtin.select",
+        active_view=1,
         active_submode="rectangle",
         has_scene=True,
         has_selection=True,
@@ -60,6 +61,7 @@ def _install_lf_stub(monkeypatch):
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(
         get_active_tool=lambda: state.active_tool,
+        get_active_view_id=lambda: state.active_view,
         get_active_submode=lambda: state.active_submode,
         message_dialog=lambda *_args, **_kwargs: None,
         get_split_view_mode=lambda: state.split_view_mode,
@@ -1282,50 +1284,18 @@ def test_the_three_viz_frames_are_one_family_around_one_unchanging_box(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("panel", ["", "middle", "Left", "LEFT", "both", "0"])
-def test_depth_filter_window_rejects_unknown_panel_tokens(lf, panel):
-    with pytest.raises(ValueError):
-        lf.selection.get_depth_filter_window(panel=panel)
-    with pytest.raises(ValueError):
-        lf.selection.set_depth_filter_window(False, panel=panel)
-
-
-def test_panel_is_keyword_only_on_the_depth_window_calls(lf):
-    """The positional signature is frozen: panel must never be reachable by
-    position, or an eighth positional argument would silently change meaning."""
-    with pytest.raises(TypeError):
-        lf.selection.get_depth_filter_window("left")
-    with pytest.raises(TypeError):
-        lf.selection.set_depth_filter_window(
-            False, 0.0, 100.0, 0.35, 0.0, 0.0, None, "left"
-        )
-
-
-def test_legacy_depth_calls_gained_no_panel_argument(lf):
-    """The compat surface stays projection-only."""
-    with pytest.raises(TypeError):
-        lf.selection.set_depth_filter_range(False, 0.0, 100.0, 50.0, panel="left")
-    with pytest.raises(TypeError):
-        lf.selection.get_depth_filter_range(panel="left")
-    with pytest.raises(TypeError):
-        lf.selection.get_depth_filter(panel="left")
-    with pytest.raises(TypeError):
-        lf.selection.set_depth_filter(False, 100.0, 1.35, 0.0, panel="left")
-
-
-@pytest.mark.parametrize("panel", ["left", "right"])
-def test_native_draw_commit_store_field_round_trips_its_panel(lf, panel):
-    """Test gap: exercise the panel-tagged draw-commit binding
-    (py_store.cpp) end to end -- dict in, same dict out, panel preserved."""
+@pytest.mark.parametrize("view", [1, 7])
+def test_native_draw_commit_store_field_round_trips_its_view(lf, view):
+    """Draw commits preserve the owning view through the native store."""
     store = lf.ui.store
     before = store.get("depth_window_draw_commit")
     try:
-        store.set("depth_window_draw_commit", {"generation": 41, "panel": panel})
+        store.set("depth_window_draw_commit", {"generation": 41, "view": view, "scale_x": 0.4, "scale_y": 0.6})
         after = store.get("depth_window_draw_commit")
 
         assert isinstance(after, dict)
         assert after["generation"] == 41
-        assert after["panel"] == panel
+        assert after["view"] == view
     finally:
         store.set("depth_window_draw_commit", before)
 

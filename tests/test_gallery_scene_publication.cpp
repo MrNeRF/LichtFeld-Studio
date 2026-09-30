@@ -217,14 +217,7 @@ TEST(GalleryScenePublicationTest, PublishedCameraRecordsWorldExtentFromSettingsS
     const auto json = lfs::vis::project::panelCameraProjectStateToJson("primary", state);
     ASSERT_TRUE(json.contains("ortho_extent_world"));
     EXPECT_FLOAT_EQ(json["ortho_extent_world"].get<float>(), 6.25f);
-    EXPECT_TRUE(json["ortho_scale"].is_null());
-
-    Viewport secondary(960, 540);
-    secondary.ortho_scale_override = 540.0f / 3.0f;
-    const auto secondary_state =
-        lfs::vis::project::capturePanelCameraProjectState(secondary, settings_scale);
-    ASSERT_TRUE(secondary_state.ortho_extent_world.has_value());
-    EXPECT_FLOAT_EQ(*secondary_state.ortho_extent_world, 3.0f);
+    EXPECT_FLOAT_EQ(json["ortho_scale"].get<float>(), settings_scale);
 }
 
 TEST(GalleryScenePublicationTest, StudioPreservesCleanCompressedSourceAndExplicitSogMatchesSog) {

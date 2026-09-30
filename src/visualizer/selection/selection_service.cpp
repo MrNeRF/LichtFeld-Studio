@@ -683,9 +683,6 @@ namespace lfs::vis {
 
         // Single source for the effective orthographic scale: the per-panel override when a
         // panel has one, otherwise the global setting.
-        [[nodiscard]] float effectiveOrthoScale(const Viewport& viewport, const RenderSettings& settings) {
-            return viewport.ortho_scale_override.value_or(settings.ortho_scale);
-        }
 
         [[nodiscard]] rendering::ViewportData viewportDataFromViewer(
             const Viewport& viewport,
@@ -697,7 +694,7 @@ namespace lfs::vis {
                 .size = glm::ivec2(info.render_width, info.render_height),
                 .focal_length_mm = settings.focal_length_mm,
                 .orthographic = settings.orthographic,
-                .ortho_scale = effectiveOrthoScale(viewport, settings),
+                .ortho_scale = settings.ortho_scale,
             };
         }
 
@@ -2207,12 +2204,12 @@ namespace lfs::vis {
 
         const auto viewport_pos = gm->getViewportPos();
         const auto viewport_size = gm->getViewportSize();
-        const auto panel = rendering_manager_->resolveViewerPanel(
-            gm->getViewer()->getViewport(),
-            {viewport_pos.x, viewport_pos.y},
-            {viewport_size.x, viewport_size.y},
-            screen_point,
-            panel_override);
+        const auto panel = rendering_manager_->resolveViewerPanel(rendering_manager_->activeViewId(),
+                                                                  gm->getViewer()->getViewport(),
+                                                                  {viewport_pos.x, viewport_pos.y},
+                                                                  {viewport_size.x, viewport_size.y},
+                                                                  screen_point,
+                                                                  panel_override);
         if (!panel) {
             return std::nullopt;
         }
@@ -3908,9 +3905,9 @@ namespace lfs::vis {
             }
         }
 
-        const float depth = rendering_manager_->getDepthAtPixel(
-            static_cast<int>(render_point.x), static_cast<int>(render_point.y), viewport_context->panel);
-        const float ortho_scale = effectiveOrthoScale(projection_viewport, settings);
+        const float depth = rendering_manager_->getDepthAtPixel(rendering_manager_->activeViewId(),
+                                                                static_cast<int>(render_point.x), static_cast<int>(render_point.y), viewport_context->panel);
+        const float ortho_scale = settings.ortho_scale;
 
         if (depth > 0.0f) {
             const glm::vec3 world = projection_viewport.unprojectPixel(
@@ -3954,7 +3951,7 @@ namespace lfs::vis {
         Viewport projection_viewport = *viewport_context->viewport;
         projection_viewport.windowSize = {info.render_width, info.render_height};
         const auto settings = rendering_manager_->getSettings();
-        const float ortho_scale = effectiveOrthoScale(projection_viewport, settings);
+        const float ortho_scale = settings.ortho_scale;
 
         if (const auto gt = rendering_manager_->gtComparisonSelectionContext()) {
             // Forward of core::filter_points's equirect branch. Must

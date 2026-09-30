@@ -40,7 +40,8 @@ namespace lfs::vis::tools {
         void toggleDepthFilter() { setDepthFilterEnabled(!depth_filter_enabled_); }
         void adjustDepthFar(float scale);
         void adjustWindowScale(float factor);
-        void syncDepthFilterToCamera(const Viewport& viewport);
+        void syncDepthFilterToCamera(ViewId view, const Viewport& viewport);
+        void syncViewSettings();
         void setDepthWindowDragInProgress(bool in_progress);
 
         // Crop filter (use scene crop box/ellipsoid as selection filter)
@@ -78,6 +79,7 @@ namespace lfs::vis::tools {
         const ToolContext* tool_context_ = nullptr;
 
         // Depth filter
+        ViewId depth_projection_view_ = kNoView;
         bool depth_filter_enabled_ = false;
         float depth_near_ = 0.0f;
         float depth_far_ = DEFAULT_DEPTH_FAR;

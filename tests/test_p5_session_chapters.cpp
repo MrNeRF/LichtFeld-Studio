@@ -804,13 +804,14 @@ namespace {
         EXPECT_TRUE(restored->gut);
 
         Viewport viewport;
+        lfs::vis::ViewSettings view_settings;
         auto expected = rolled_panel_camera(7.0f);
         expected.ortho_extent_world = static_cast<float>(viewport.windowSize.y) / *expected.ortho_scale;
         applyPanelCameraProjectState(
-            viewport, expected);
+            viewport, view_settings, expected);
         EXPECT_EQ(
             capturePanelCameraProjectState(
-                viewport),
+                viewport, view_settings.ortho_scale),
             expected);
     }
 
@@ -823,15 +824,15 @@ namespace {
         EXPECT_EQ(restored->ortho_extent_world, state.ortho_extent_world);
         for (const int height : {480, 1080}) {
             Viewport viewport(1280, height);
-            applyPanelCameraProjectState(viewport, *restored);
-            ASSERT_TRUE(viewport.ortho_scale_override);
-            EXPECT_FLOAT_EQ(height / *viewport.ortho_scale_override, 6.25f);
-            const auto saved = capturePanelCameraProjectState(viewport);
+            lfs::vis::ViewSettings settings;
+            applyPanelCameraProjectState(viewport, settings, *restored);
+            EXPECT_FLOAT_EQ(height / settings.ortho_scale, 6.25f);
+            const auto saved = capturePanelCameraProjectState(viewport, settings.ortho_scale);
             ASSERT_TRUE(saved.ortho_extent_world);
             EXPECT_FLOAT_EQ(*saved.ortho_extent_world, 6.25f);
             Viewport reopened(1280, height * 2);
-            applyPanelCameraProjectState(reopened, saved);
-            EXPECT_FLOAT_EQ(reopened.windowSize.y / *reopened.ortho_scale_override, 6.25f);
+            applyPanelCameraProjectState(reopened, settings, saved);
+            EXPECT_FLOAT_EQ(reopened.windowSize.y / settings.ortho_scale, 6.25f);
         }
         json["ortho_extent_world"] = -1;
         EXPECT_FALSE(panelCameraProjectStateFromJson(json));
@@ -839,20 +840,13 @@ namespace {
         EXPECT_TRUE(panelCameraProjectStateFromJson(json));
     }
 
-    TEST(P5SessionChapterTest, CaptureUsesRenderSettingsOrthoScaleWhenOverrideMissing) {
+    TEST(P5SessionChapterTest, CaptureUsesViewSettingsOrthoScale) {
         Viewport viewport(1280, 720);
         const float fallback = 720.0f / 6.25f;
         auto captured = capturePanelCameraProjectState(viewport, fallback);
-        EXPECT_FALSE(captured.ortho_scale.has_value());
+        EXPECT_EQ(captured.ortho_scale, fallback);
         ASSERT_TRUE(captured.ortho_extent_world.has_value());
         EXPECT_FLOAT_EQ(*captured.ortho_extent_world, 6.25f);
-
-        viewport.ortho_scale_override = 720.0f / 5.0f;
-        captured = capturePanelCameraProjectState(viewport, fallback);
-        ASSERT_TRUE(captured.ortho_scale.has_value());
-        EXPECT_FLOAT_EQ(*captured.ortho_scale, 720.0f / 5.0f);
-        ASSERT_TRUE(captured.ortho_extent_world.has_value());
-        EXPECT_FLOAT_EQ(*captured.ortho_extent_world, 5.0f);
 
         Viewport empty(1280, 0);
         captured = capturePanelCameraProjectState(empty, fallback);
