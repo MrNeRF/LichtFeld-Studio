@@ -1560,13 +1560,6 @@ namespace lfs::vis::gui {
             });
         };
 
-        if (rm->isIndependentSplitViewActive()) {
-            add_viewer_panel(rendering_manager->resolveViewerPanel(
-                vp, viewport.pos, viewport.size, std::nullopt, SplitViewPanelId::Left));
-            add_viewer_panel(rendering_manager->resolveViewerPanel(
-                vp, viewport.pos, viewport.size, std::nullopt, SplitViewPanelId::Right));
-        }
-
         if (panels.empty()) {
             const int clip_x = static_cast<int>(std::round(viewport.pos.x));
             const int clip_y = static_cast<int>(std::round(viewport.pos.y));
@@ -1915,25 +1908,6 @@ namespace lfs::vis::gui {
         glm::vec2 rect_size = viewport.size;
         glm::ivec2 render_size(static_cast<int>(std::round(viewport.size.x)),
                                static_cast<int>(std::round(viewport.size.y)));
-
-        if (rendering_manager->isIndependentSplitViewActive()) {
-            auto panel = rendering_manager->resolveViewerPanel(
-                primary_viewport, viewport.pos, viewport.size, screen_point, std::nullopt);
-            if (!panel || !panel->valid()) {
-                panel = rendering_manager->resolveViewerPanel(
-                    primary_viewport,
-                    viewport.pos,
-                    viewport.size,
-                    std::nullopt,
-                    rendering_manager->getFocusedSplitPanel());
-            }
-            if (panel && panel->valid()) {
-                gizmo_viewport = panel->viewport;
-                rect_pos = {panel->x, panel->y};
-                rect_size = {panel->width, panel->height};
-                render_size = {panel->render_width, panel->render_height};
-            }
-        }
 
         if (!gizmo_viewport || rect_size.x <= 0.0f || rect_size.y <= 0.0f ||
             render_size.x <= 0 || render_size.y <= 0) {

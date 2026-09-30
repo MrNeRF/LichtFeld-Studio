@@ -445,41 +445,8 @@ namespace lfs::vis {
         EXPECT_EQ(settings.split_view_offset, 0);
     }
 
-    TEST(SplitViewServiceTest, IndependentDualCopiesPrimaryViewportAndResetsFocus) {
-        SplitViewService service;
-        RenderSettings settings;
-        Viewport primary_viewport(640, 480);
-        primary_viewport.setViewMatrix(glm::mat3(1.0f), glm::vec3(1.0f, 2.0f, 3.0f));
-        service.setFocusedPanel(SplitViewPanelId::Right);
-
-        const auto result = service.toggleMode(
-            settings, SplitViewMode::IndependentDual, &primary_viewport);
-
-        EXPECT_TRUE(result.mode_changed);
-        EXPECT_EQ(settings.split_view_mode, SplitViewMode::IndependentDual);
-        EXPECT_EQ(service.focusedPanel(), SplitViewPanelId::Left);
-        EXPECT_EQ(service.secondaryViewport().getTranslation(), primary_viewport.getTranslation());
-        EXPECT_EQ(service.secondaryViewport().getRotationMatrix(), primary_viewport.getRotationMatrix());
-    }
-
-    TEST(SplitViewServiceTest, IndependentDualToggleOffDisablesModeAndResetsFocus) {
-        SplitViewService service;
-        RenderSettings settings;
-        Viewport primary_viewport(640, 480);
-
-        ASSERT_TRUE(service.toggleMode(settings, SplitViewMode::IndependentDual, &primary_viewport).mode_changed);
-        service.setFocusedPanel(SplitViewPanelId::Right);
-
-        const auto result = service.toggleMode(
-            settings, SplitViewMode::IndependentDual, &primary_viewport);
-
-        EXPECT_TRUE(result.mode_changed);
-        EXPECT_EQ(result.current_mode, SplitViewMode::Disabled);
-        EXPECT_EQ(settings.split_view_mode, SplitViewMode::Disabled);
-        EXPECT_EQ(service.focusedPanel(), SplitViewPanelId::Left);
-    }
-
-    TEST(SplitViewServiceTest, GtRenderCameraUsesVisualizerCameraAxesAndNormalizedSceneRotation) {
+    TEST(SplitViewServiceTest,
+         GtRenderCameraUsesVisualizerCameraAxesAndNormalizedSceneRotation) {
         using lfs::core::Camera;
         using lfs::core::CameraModelType;
         using lfs::core::Device;
@@ -2821,99 +2788,8 @@ namespace lfs::vis {
         EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
     }
 
-    TEST_F(RenderingManagerEventsTest, ToggleIndependentSplitViewInitializesSecondaryViewport) {
-        RenderingManager manager;
-        Viewport primary_viewport(800, 600);
-        primary_viewport.setViewMatrix(glm::mat3(1.0f), glm::vec3(4.0f, 5.0f, 6.0f));
-
-        lfs::core::events::cmd::ToggleIndependentSplitView{
-            .viewport = &primary_viewport,
-        }
-            .emit();
-
-        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::IndependentDual);
-        const auto& secondary = manager.resolvePanelViewport(primary_viewport, SplitViewPanelId::Right);
-        EXPECT_EQ(secondary.getTranslation(), primary_viewport.getTranslation());
-        EXPECT_EQ(secondary.getRotationMatrix(), primary_viewport.getRotationMatrix());
-    }
-
-    TEST_F(RenderingManagerEventsTest, ToggleIndependentSplitViewTwiceDisablesMode) {
-        RenderingManager manager;
-        Viewport primary_viewport(800, 600);
-
-        lfs::core::events::cmd::ToggleIndependentSplitView{
-            .viewport = &primary_viewport,
-        }
-            .emit();
-        ASSERT_EQ(manager.getSettings().split_view_mode, SplitViewMode::IndependentDual);
-
-        lfs::core::events::cmd::ToggleIndependentSplitView{
-            .viewport = &primary_viewport,
-        }
-            .emit();
-
-        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
-        EXPECT_EQ(manager.getFocusedSplitPanel(), SplitViewPanelId::Left);
-    }
-
-    TEST_F(RenderingManagerEventsTest, IndependentSplitGridPlaneTracksPanelsIndependently) {
-        RenderingManager manager;
-        Viewport primary_viewport(800, 600);
-
-        auto settings = manager.getSettings();
-        settings.grid_plane = 2;
-        manager.updateSettings(settings);
-
-        lfs::core::events::cmd::ToggleIndependentSplitView{
-            .viewport = &primary_viewport,
-        }
-            .emit();
-
-        ASSERT_EQ(manager.getSettings().split_view_mode, SplitViewMode::IndependentDual);
-        EXPECT_EQ(manager.getGridPlaneForPanel(SplitViewPanelId::Left), 2);
-        EXPECT_EQ(manager.getGridPlaneForPanel(SplitViewPanelId::Right), 2);
-
-        manager.setGridPlaneForPanel(SplitViewPanelId::Left, 0);
-        manager.setGridPlaneForPanel(SplitViewPanelId::Right, 1);
-
-        EXPECT_EQ(manager.getGridPlaneForPanel(SplitViewPanelId::Left), 0);
-        EXPECT_EQ(manager.getGridPlaneForPanel(SplitViewPanelId::Right), 1);
-
-        manager.setFocusedSplitPanel(SplitViewPanelId::Left);
-        EXPECT_EQ(manager.getSettings().grid_plane, 0);
-
-        manager.setFocusedSplitPanel(SplitViewPanelId::Right);
-        EXPECT_EQ(manager.getSettings().grid_plane, 1);
-    }
-
-    TEST_F(RenderingManagerEventsTest, GridSettingsChangedOnlyUpdatesFocusedPanelInIndependentSplit) {
-        RenderingManager manager;
-        Viewport primary_viewport(800, 600);
-
-        lfs::core::events::cmd::ToggleIndependentSplitView{
-            .viewport = &primary_viewport,
-        }
-            .emit();
-
-        ASSERT_EQ(manager.getSettings().split_view_mode, SplitViewMode::IndependentDual);
-
-        manager.setGridPlaneForPanel(SplitViewPanelId::Left, 0);
-        manager.setGridPlaneForPanel(SplitViewPanelId::Right, 1);
-        manager.setFocusedSplitPanel(SplitViewPanelId::Right);
-
-        lfs::core::events::ui::GridSettingsChanged{
-            .enabled = true,
-            .plane = 2,
-            .opacity = 0.25f,
-        }
-            .emit();
-
-        EXPECT_EQ(manager.getGridPlaneForPanel(SplitViewPanelId::Left), 0);
-        EXPECT_EQ(manager.getGridPlaneForPanel(SplitViewPanelId::Right), 2);
-        EXPECT_EQ(manager.getSettings().grid_plane, 2);
-    }
-
-    TEST_F(RenderingManagerEventsTest, RenderSettingsChangedEquirectangularForcesGutBackend) {
+    TEST_F(RenderingManagerEventsTest,
+           RenderSettingsChangedEquirectangularForcesGutBackend) {
         using Backend = lfs::rendering::GaussianRasterBackend;
 
         RenderingManager manager;

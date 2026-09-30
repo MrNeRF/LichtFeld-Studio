@@ -344,7 +344,6 @@ namespace lfs::io::project {
                 {"panel_cameras",
                  Json::array({
                      default_panel_camera("primary"),
-                     default_panel_camera("secondary"),
                  })},
                 {"navigation",
                  {
@@ -353,10 +352,7 @@ namespace lfs::io::project {
                  }},
                 {"split",
                  {
-                     {"focused_panel", "left"},
                      {"gt_camera_id", nullptr},
-                     {"panel_grid_planes",
-                      Json::array({1, 1})},
                  }},
                 {"camera_bookmarks", Json::array()},
                 {"tools",
@@ -882,7 +878,7 @@ namespace lfs::io::project {
                 !root["render_settings"].is_object() ||
                 !root.contains("panel_cameras") ||
                 !root["panel_cameras"].is_array() ||
-                root["panel_cameras"].size() != 2 ||
+                root["panel_cameras"].empty() ||
                 !root.contains("navigation") ||
                 !root["navigation"].is_object() ||
                 !root.contains("split") ||
@@ -939,12 +935,10 @@ namespace lfs::io::project {
                 panels.insert(
                     camera["panel"].get<std::string>());
             }
-            if (panels !=
-                std::set<std::string>{
-                    "primary", "secondary"}) {
+            if (!panels.contains("primary")) {
                 return fail<void>(
                     lfs::ErrorCode::DataLoss,
-                    "VIEW needs exactly primary and secondary camera state",
+                    "VIEW needs its primary camera state",
                     "VIEW.panel_cameras.panel");
             }
             return {};

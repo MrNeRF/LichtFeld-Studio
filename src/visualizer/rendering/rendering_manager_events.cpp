@@ -25,13 +25,11 @@ namespace lfs::vis {
             if (current_mode == target_mode) {
                 return;
             }
-            const bool involves_independent = splitViewUsesIndependentPanels(current_mode) ||
-                                              splitViewUsesIndependentPanels(target_mode);
             // Entering or leaving GT ends the drag lifetime because GT suspends filtering.
             // Cancel before changing mode so restoration cannot write into the new epoch.
             const bool involves_gt = splitViewUsesGTComparison(current_mode) ||
                                      splitViewUsesGTComparison(target_mode);
-            if (!involves_independent && !involves_gt) {
+            if (!involves_gt) {
                 return;
             }
             if (op::operators().activeModalId() == "selection.depth_window_drag") {
@@ -79,31 +77,29 @@ namespace lfs::vis {
 
     void RenderingManager::setupEventHandlers() {
         event_handlers_.subscribe<cmd::ToggleSplitView>([this](const auto&) { handleToggleSplitView(); });
-        event_handlers_.subscribe<cmd::ToggleIndependentSplitView>(
-            [this](const auto& event) { handleToggleIndependentSplitView(event); });
-        event_handlers_.subscribe<cmd::ToggleGTComparison>([this](const auto&) { handleToggleGTComparison(); });
+        event_handlers_.subscribe<cmd::ToggleGTComparison>(
+            [this](const auto&) { handleToggleGTComparison(); });
         event_handlers_.subscribe<cmd::GoToCamView>([this](const auto& event) { handleGoToCamView(event.cam_id); });
-        event_handlers_.subscribe<ui::SplitPositionChanged>(
-            [this](const auto& event) { handleSplitPositionChanged(event.position); });
+        event_handlers_.subscribe<ui::SplitPositionChanged>([this](const auto& event) { handleSplitPositionChanged(event.position); });
         event_handlers_.subscribe<ui::RenderSettingsChanged>(
             [this](const auto& event) { handleRenderSettingsChanged(event); });
-        event_handlers_.subscribe<ui::WindowResized>([this](const auto&) { handleWindowResized(); });
-        event_handlers_.subscribe<ui::WindowResizeInteraction>(
-            [this](const auto& event) { setViewportResizeActive(event.active); });
+        event_handlers_.subscribe<ui::WindowResized>(
+            [this](const auto&) { handleWindowResized(); });
+        event_handlers_.subscribe<ui::WindowResizeInteraction>([this](const auto& event) { setViewportResizeActive(event.active); });
         event_handlers_.subscribe<ui::GridSettingsChanged>(
             [this](const auto& event) { handleGridSettingsChanged(event); });
-        event_handlers_.subscribe<ui::NodeSelected>([this](const auto&) { triggerSelectionFlash(); });
+        event_handlers_.subscribe<ui::NodeSelected>(
+            [this](const auto&) { triggerSelectionFlash(); });
         event_handlers_.subscribe<state::TrainingStarted>([this](const auto&) { handleTrainingStarted(); });
         event_handlers_.subscribe<state::TrainingCompleted>([this](const auto&) { handleTrainingCompleted(); });
         event_handlers_.subscribe<state::SceneLoaded>([this](const auto&) { handleSceneLoaded(); });
-        event_handlers_.subscribe<state::SceneChanged>(
-            [this](const auto& event) { handleSceneChanged(event.mutation_flags); });
-        event_handlers_.subscribe<state::SceneCleared>([this](const auto&) { handleSceneCleared(); });
+        event_handlers_.subscribe<state::SceneChanged>([this](const auto& event) { handleSceneChanged(event.mutation_flags); });
+        event_handlers_.subscribe<state::SceneCleared>(
+            [this](const auto&) { handleSceneCleared(); });
         event_handlers_.subscribe<cmd::SetPLYVisibility>([this](const auto&) { handlePLYVisibilityChanged(); });
         event_handlers_.subscribe<state::PLYAdded>([this](const auto&) { handlePLYAdded(); });
         event_handlers_.subscribe<state::PLYRemoved>([this](const auto&) { handlePLYRemoved(); });
-        event_handlers_.subscribe<ui::CropBoxChanged>(
-            [this](const auto& event) { handleCropBoxChanged(event.enabled); });
+        event_handlers_.subscribe<ui::CropBoxChanged>([this](const auto& event) { handleCropBoxChanged(event.enabled); });
         event_handlers_.subscribe<ui::EllipsoidChanged>(
             [this](const auto& event) { handleEllipsoidChanged(event.enabled); });
         event_handlers_.subscribe<ui::PointCloudModeChanged>(
@@ -122,43 +118,13 @@ namespace lfs::vis {
         SplitViewService::ModeChangeResult result;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
-            const SplitViewPanelId pre_transition_focus = split_view_service_.focusedPanel();
             const SplitViewMode previous_mode = settings_.split_view_mode;
             result = split_view_service_.toggleMode(settings_, SplitViewMode::PLYComparison);
-            applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode, pre_transition_focus);
+            applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode);
             markDirty(DirtyFlag::SPLIT_VIEW);
         }
         applySplitModeChange(result);
         LOG_INFO("Split view: {}", result.current_mode == SplitViewMode::PLYComparison ? "PLY comparison mode" : "disabled");
-    }
-
-    void RenderingManager::handleToggleIndependentSplitView(const cmd::ToggleIndependentSplitView& event) {
-        // Hold across cancellation and mode change to exclude drag release sequences.
-        // Acquire transition before settings/history locks; release settings before
-        // pushing history.
-        const auto transition_lock = acquireDepthWindowTransitionLock();
-        const SplitViewMode current_mode = getSettings().split_view_mode;
-        // Reject a null viewport before cancelling any active drag.
-        if (!event.viewport) {
-            return;
-        }
-        cancelDepthWindowDragBeforeSplitModeChange(
-            current_mode, toggledSplitViewTarget(current_mode, SplitViewMode::IndependentDual));
-
-        SplitViewService::ModeChangeResult result;
-        {
-            std::lock_guard<std::mutex> lock(settings_mutex_);
-            const SplitViewPanelId pre_transition_focus = split_view_service_.focusedPanel();
-            const SplitViewMode previous_mode = settings_.split_view_mode;
-            result = split_view_service_.toggleMode(settings_, SplitViewMode::IndependentDual, event.viewport);
-            applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode, pre_transition_focus);
-            syncGridPlanesLocked(settings_.grid_plane);
-            markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::CAMERA);
-        }
-        applySplitModeChange(result);
-        LOG_INFO("Split view: {}", result.current_mode == SplitViewMode::IndependentDual
-                                       ? "independent dual-camera mode"
-                                       : "disabled");
     }
 
     void RenderingManager::handleToggleGTComparison() {
@@ -171,13 +137,11 @@ namespace lfs::vis {
             current_mode, toggledSplitViewTarget(current_mode, SplitViewMode::GTComparison));
 
         SplitViewService::ModeChangeResult result;
-
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
-            const SplitViewPanelId pre_transition_focus = split_view_service_.focusedPanel();
             const SplitViewMode previous_mode = settings_.split_view_mode;
             result = split_view_service_.toggleMode(settings_, SplitViewMode::GTComparison);
-            applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode, pre_transition_focus);
+            applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode);
             markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::SPLATS);
         }
 
@@ -193,18 +157,17 @@ namespace lfs::vis {
                     input->releaseDepthWindowCursor();
                 }
             }
-            // Do not reset the drag counter here; beginDepthWindowDrag/endDepthWindowDrag
-            // own its lifetime. Pre-transition cancellation and the new epoch handle
-            // racing drags; the transition handles their backups.
+            // Do not reset the drag counter here;
+            // beginDepthWindowDrag/endDepthWindowDrag own its lifetime. Pre-transition
+            // cancellation and the new epoch handle racing drags; the transition
+            // handles their backups.
         }
         if (!splitViewUsesGTComparison(result.current_mode)) {
             invalidateCameraMetricsRequests(true);
         }
     }
 
-    void RenderingManager::restoreSplitViewMode(
-        const SplitViewMode mode,
-        Viewport& primary_viewport) {
+    void RenderingManager::restoreSplitViewMode(const SplitViewMode mode) {
         // Hold across cancellation and mode change to exclude drag release sequences.
         // Acquire transition before settings/history locks; release settings before
         // pushing history.
@@ -217,28 +180,27 @@ namespace lfs::vis {
             }
             current_mode = settings_.split_view_mode;
         }
-        cancelDepthWindowDragBeforeSplitModeChange(current_mode, mode);
+        cancelDepthWindowDragBeforeSplitModeChange(
+            current_mode, mode);
 
         std::vector<SplitViewService::ModeChangeResult> changes;
+
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
-            const SplitViewPanelId pre_transition_focus = split_view_service_.focusedPanel();
             SplitViewMode previous_mode = settings_.split_view_mode;
             if (settings_.split_view_mode != SplitViewMode::Disabled) {
                 changes.push_back(split_view_service_.toggleMode(
-                    settings_, settings_.split_view_mode, &primary_viewport));
+                    settings_, settings_.split_view_mode));
                 applyDepthWindowModeTransitionLocked(
-                    previous_mode, settings_.split_view_mode, pre_transition_focus);
+                    previous_mode, settings_.split_view_mode);
                 previous_mode = settings_.split_view_mode;
             }
             if (mode != SplitViewMode::Disabled) {
                 changes.push_back(split_view_service_.toggleMode(
-                    settings_, mode, &primary_viewport));
+                    settings_, mode));
                 applyDepthWindowModeTransitionLocked(
-                    previous_mode, settings_.split_view_mode, pre_transition_focus);
+                    previous_mode, settings_.split_view_mode);
             }
-            if (mode == SplitViewMode::IndependentDual)
-                syncGridPlanesLocked(settings_.grid_plane);
             markDirty(DirtyFlag::ALL);
         }
         for (const auto& change : changes)
@@ -303,11 +265,6 @@ namespace lfs::vis {
         settings_.show_grid = event.enabled;
         settings_.grid_plane = clampGridPlane(event.plane);
         settings_.grid_opacity = event.opacity;
-        if (split_view_service_.isIndependentDualActive(settings_)) {
-            panel_grid_planes_[splitViewPanelIndex(split_view_service_.focusedPanel())] = settings_.grid_plane;
-        } else {
-            syncGridPlanesLocked(settings_.grid_plane);
-        }
         LOG_TRACE("Grid settings updated - enabled: {}, plane: {}, opacity: {}",
                   event.enabled, settings_.grid_plane, event.opacity);
         markDirty(DirtyFlag::OVERLAY);
@@ -346,12 +303,9 @@ namespace lfs::vis {
         SplitViewService::ModeChangeResult result;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
-            const SplitViewPanelId pre_transition_focus = split_view_service_.focusedPanel();
             const SplitViewMode previous_mode = settings_.split_view_mode;
             result = split_view_service_.handleSceneLoaded(settings_);
-            discardRetainedDepthWindowPairLocked(pre_transition_focus);
-            applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode, pre_transition_focus);
-            syncGridPlanesLocked(settings_.grid_plane);
+            applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode);
         }
         applySplitModeChange(result);
         if (splitViewUsesGTComparison(result.previous_mode) && !splitViewUsesGTComparison(result.current_mode)) {
@@ -376,12 +330,9 @@ namespace lfs::vis {
         SplitViewService::ModeChangeResult result;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
-            const SplitViewPanelId pre_transition_focus = split_view_service_.focusedPanel();
             const SplitViewMode previous_mode = settings_.split_view_mode;
             result = split_view_service_.handleSceneCleared(settings_);
-            discardRetainedDepthWindowPairLocked(pre_transition_focus);
-            applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode, pre_transition_focus);
-            syncGridPlanesLocked(settings_.grid_plane);
+            applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode);
         }
         camera_interaction_service_.clearCurrentCamera();
         camera_interaction_service_.clearHoveredCamera();
@@ -417,10 +368,10 @@ namespace lfs::vis {
         SplitViewService::ModeChangeResult result;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
-            const SplitViewPanelId pre_transition_focus = split_view_service_.focusedPanel();
             const SplitViewMode previous_mode = settings_.split_view_mode;
-            result = split_view_service_.handlePLYRemoved(settings_, services().sceneOrNull());
-            applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode, pre_transition_focus);
+            result = split_view_service_.handlePLYRemoved(settings_,
+                                                          services().sceneOrNull());
+            applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode);
             markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY | DirtyFlag::SPLIT_VIEW);
         }
         applySplitModeChange(result);

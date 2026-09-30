@@ -473,7 +473,6 @@ namespace lfs::vis::gui {
         project_title_el_ = document_->GetElementById("project-title-content");
         menu_toolbar_ = document_->GetElementById("menu-toolbar");
         menu_window_controls_ = document_->GetElementById("menu-window-controls");
-        menu_window_split_view_ = document_->GetElementById("menu-window-split-view");
         menu_window_toggle_ui_ = document_->GetElementById("menu-window-toggle-ui");
         menu_window_maximize_ = document_->GetElementById("menu-window-maximize");
         body_el_ = document_->GetElementById("body");
@@ -504,14 +503,12 @@ namespace lfs::vis::gui {
         project_title_el_ = nullptr;
         menu_toolbar_ = nullptr;
         menu_window_controls_ = nullptr;
-        menu_window_split_view_ = nullptr;
         menu_window_toggle_ui_ = nullptr;
         menu_window_maximize_ = nullptr;
         body_el_ = nullptr;
         project_title_has_room_ = false;
         applied_project_title_left_ = -1.0f;
         applied_project_title_width_ = -1.0f;
-        last_window_split_view_ = false;
         last_ui_hidden_ = false;
         last_window_maximized_ = false;
         clearTitlebarDragRegion();
@@ -554,7 +551,6 @@ namespace lfs::vis::gui {
         project_title_el_ = nullptr;
         menu_toolbar_ = nullptr;
         menu_window_controls_ = nullptr;
-        menu_window_split_view_ = nullptr;
         menu_window_toggle_ui_ = nullptr;
         menu_window_maximize_ = nullptr;
         body_el_ = nullptr;
@@ -597,7 +593,6 @@ namespace lfs::vis::gui {
         project_title_el_ = document_->GetElementById("project-title-content");
         menu_toolbar_ = document_->GetElementById("menu-toolbar");
         menu_window_controls_ = document_->GetElementById("menu-window-controls");
-        menu_window_split_view_ = document_->GetElementById("menu-window-split-view");
         menu_window_toggle_ui_ = document_->GetElementById("menu-window-toggle-ui");
         menu_window_maximize_ = document_->GetElementById("menu-window-maximize");
         body_el_ = document_->GetElementById("body");
@@ -605,7 +600,6 @@ namespace lfs::vis::gui {
         applied_project_title_left_ = -1.0f;
         applied_project_title_width_ = -1.0f;
         toolbar_fits_ = true;
-        last_window_split_view_ = false;
         last_ui_hidden_ = false;
         last_window_maximized_ = false;
 
@@ -1433,22 +1427,6 @@ namespace lfs::vis::gui {
         const bool theme_changed = updateTheme();
         rebuildToolbarButtons();
         rebuildPortalStatus();
-
-        if (menu_window_split_view_) {
-            const bool split_view = [&] {
-                if (auto* rm = lfs::vis::services().renderingOrNull())
-                    return rm->getSettings().split_view_mode == lfs::vis::SplitViewMode::IndependentDual;
-                return false;
-            }();
-            if (split_view != last_window_split_view_) {
-                menu_window_split_view_->SetClass("selected", split_view);
-                menu_window_split_view_->SetAttribute(
-                    "title", lfs::event::LocalizationManager::getInstance().get(
-                                 split_view ? "ui.exit_independent_split_view" : "ui.independent_split_view"));
-                last_window_split_view_ = split_view;
-                render_needed_ = true;
-            }
-        }
 
         if (menu_window_toggle_ui_ && ui_hidden_ != last_ui_hidden_) {
             menu_window_toggle_ui_->SetClass("selected", ui_hidden_);

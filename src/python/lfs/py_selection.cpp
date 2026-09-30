@@ -287,40 +287,6 @@ namespace lfs::python {
             rm->updateSettings(settings);
         }
 
-        // Keyword-only panel= defaults to None for the legacy projection path, unlike
-        // py_rendering.cpp's main default. Explicit main resolves focus; main/left/right
-        // use the panel-targeted manager API.
-        [[nodiscard]] std::optional<vis::SplitViewPanelId>
-        parseDepthWindowPanelArg(const std::string& panel) {
-            if (panel == "left")
-                return vis::SplitViewPanelId::Left;
-            if (panel == "right")
-                return vis::SplitViewPanelId::Right;
-            if (panel == "main")
-                return std::nullopt; // resolved to the focused panel by the caller
-            throw std::invalid_argument("panel must be 'main', 'left', or 'right'");
-        }
-
-        // Resolve a slot or nullopt for projection. Unknown tokens raise ValueError
-        // before state access, preventing partial application.
-        [[nodiscard]] std::optional<vis::SplitViewPanelId>
-        resolveDepthWindowPanel(const std::optional<std::string>& panel) {
-            if (!panel.has_value())
-                return std::nullopt;
-            const auto parsed = parseDepthWindowPanelArg(*panel);
-            if (parsed)
-                return parsed;
-            // Resolve explicit main on the viewer thread; focused_panel_ is unprotected.
-            return invoke_on_viewer(
-                []() -> std::optional<vis::SplitViewPanelId> {
-                    auto* const rm = get_rm();
-                    if (!rm)
-                        return std::nullopt;
-                    return rm->getFocusedSplitPanel();
-                },
-                std::optional<vis::SplitViewPanelId>{});
-        }
-
         [[nodiscard]] std::tuple<float, float> fallback_depth_near_far(const vis::RenderSettings& settings) {
             // The constructor default is not in the near/far encoding - session
             // restore makes the same distinction before decoding a box. Decoding
@@ -341,79 +307,6 @@ namespace lfs::python {
             const float depth_near = std::max(-settings.depth_filter_max.z, 0.0f);
             const float depth_far = std::max(-settings.depth_filter_min.z, depth_near);
             return {depth_near, depth_far};
-        }
-
-        // Use the panel setter so near/far update the projection generation.
-        // Apply global enabled afterward, preserving the band's resulting position;
-        // the legacy setDepthFilterRange protection covers only the projection path.
-        void apply_depth_filter_window_panel(const vis::SplitViewPanelId panel,
-                                             const bool enabled,
-                                             const float depth_near,
-                                             const float depth_far,
-                                             const float scale,
-                                             const float offset_x,
-                                             const float offset_y,
-                                             const std::optional<float> scale_y) {
-            auto* const tool = get_selection_tool();
-            if (tool && !tool->isEnabled()) {
-                // Same atomicity contract as the projection path.
-                if (!enabled) {
-                    return;
-                }
-                throw std::runtime_error("Selection tool is not active/enabled; activate it before setting the depth filter window");
-            }
-            auto* const rm = get_rm();
-            if (!rm) {
-                return;
-            }
-
-            vis::DepthWindowState state = rm->getDepthWindowForPanel(panel);
-            state.near_plane = depth_near;
-            state.far_plane = depth_far;
-            state.scale_x = std::clamp(scale, MIN_WINDOW_SCALE, MAX_WINDOW_SCALE);
-            state.scale_y = std::clamp(scale_y.value_or(scale), MIN_WINDOW_SCALE, MAX_WINDOW_SCALE);
-            state.offset_x = std::clamp(offset_x, -1.0f, 1.0f);
-            state.offset_y = std::clamp(offset_y, -1.0f, 1.0f);
-            // The manager clamps near/far with the tool's clamps and bumps the
-            // projection generation whenever it touches the projection.
-            if (!rm->setDepthWindowForPanel(panel, state)) {
-                if (enabled) {
-                    throw std::runtime_error("Panel depth windows are suspended while an independent pair is parked in GT comparison");
-                }
-                return;
-            }
-
-            // Carry the global enabled flag without moving the band: re-read the
-            // projection the write just settled and hand those values back.
-            const auto& settings = rm->getSettings();
-            const auto [projected_near, projected_far] = fallback_depth_near_far(settings);
-            const float informational_half_width = std::max(
-                informational_half_width_from_settings(settings, std::max(projected_far, 0.0f)), 0.05f);
-            if (tool) {
-                tool->setDepthFilterRange(enabled, projected_near, projected_far, informational_half_width);
-                return;
-            }
-            auto write = rm->getSettings();
-            configure_depth_filter(write, enabled, projected_near, projected_far, informational_half_width);
-            rm->updateSettings(write);
-        }
-
-        [[nodiscard]] std::tuple<bool, float, float, float, float, float, float>
-        read_depth_filter_window_panel(const vis::SplitViewPanelId panel) {
-            auto* const rm = get_rm();
-            if (!rm)
-                return {false, 0.0f, 100.0f, DEFAULT_WINDOW_SCALE, DEFAULT_WINDOW_SCALE, 0.0f, 0.0f};
-            const auto state = rm->getDepthWindowForPanel(panel);
-            const auto* const tool = get_selection_tool();
-            const bool enabled = tool ? tool->isDepthFilterEnabled()
-                                      : rm->getSettings().depth_filter_enabled;
-            return {enabled,
-                    state.near_plane,
-                    state.far_plane,
-                    state.scale_x,
-                    state.scale_y,
-                    state.offset_x,
-                    state.offset_y};
         }
     } // namespace
 
@@ -639,37 +532,25 @@ namespace lfs::python {
                                                                                                                                     "Prefer set_depth_filter_window.");
 
         sel.def(
-            "set_depth_filter_window", [](bool enabled, float depth_near, float depth_far, float scale, float offset_x, float offset_y, std::optional<float> scale_y, std::optional<std::string> panel) {
+            "set_depth_filter_window", [](bool enabled, float depth_near, float depth_far, float scale, float offset_x, float offset_y, std::optional<float> scale_y) {
                 // None resolves without state access and retains the legacy projection path.
-                if (const auto slot = resolveDepthWindowPanel(panel)) {
-                    apply_depth_filter_window_panel(*slot, enabled, depth_near, depth_far, scale, offset_x, offset_y, scale_y);
-                    return;
-                }
+
                 apply_depth_filter_window(enabled, depth_near, depth_far, scale, offset_x, offset_y, scale_y);
             },
-            nb::arg("enabled"), nb::arg("depth_near") = 0.0f, nb::arg("depth_far") = 100.0f, nb::arg("scale") = 0.35f, nb::arg("offset_x") = 0.0f, nb::arg("offset_y") = 0.0f, nb::arg("scale_y") = nb::none(), nb::kw_only(), nb::arg("panel") = nb::none(), "Set the screen-space selection depth window.\n"
-                                                                                                                                                                                                                                                              "scale is the X-axis on-screen fraction of the viewport (0.05-1.0, default 0.35).\n"
-                                                                                                                                                                                                                                                              "scale_y is the Y-axis fraction; None uses scale for isotropic compatibility.\n"
-                                                                                                                                                                                                                                                              "offset_x/offset_y are fractions of available travel (-1 to 1, default 0).\n"
-                                                                                                                                                                                                                                                              "When the Selection tool exists but is not active/enabled, enable/modify\n"
-                                                                                                                                                                                                                                                              "requests (enabled=True) raise RuntimeError because they cannot be applied\n"
-                                                                                                                                                                                                                                                              "atomically; disable requests (enabled=False) are silent atomic no-ops,\n"
-                                                                                                                                                                                                                                                              "matching the legacy calls' contract.\n"
-                                                                                                                                                                                                                                                              "panel (keyword-only) selects which split panel the window belongs to:\n"
-                                                                                                                                                                                                                                                              "- None (default): today's behavior -- writes the projection, which is the\n"
-                                                                                                                                                                                                                                                              "  focused panel in unsynced independent-dual split and the single global\n"
-                                                                                                                                                                                                                                                              "  window everywhere else.\n"
-                                                                                                                                                                                                                                                              "- 'main': the focused panel, addressed explicitly.\n"
-                                                                                                                                                                                                                                                              "- 'left' / 'right': that panel's own window. Outside unsynced\n"
-                                                                                                                                                                                                                                                              "  independent-dual split, or while panel sync is on, the write fans out\n"
-                                                                                                                                                                                                                                                              "  to both panels exactly as a global write does.\n"
-                                                                                                                                                                                                                                                              "Explicit panel requests are refused while an independent pair is parked\n"
-                                                                                                                                                                                                                                                              "in GT: enabled=True raises RuntimeError; enabled=False is a silent atomic\n"
-                                                                                                                                                                                                                                                              "no-op, including the global enabled flag. panel=None remains global.\n"
-                                                                                                                                                                                                                                                              "A retained Disabled interval accepts global edits; changed geometry\n"
-                                                                                                                                                                                                                                                              "discards the retained pair. No-op geometry and enable-only edits retain it.\n"
-                                                                                                                                                                                                                                                              "Any other string raises ValueError. The enabled flag is global in every\n"
-                                                                                                                                                                                                                                                              "case; only the window geometry is per-panel.");
+            nb::arg("enabled"), nb::arg("depth_near") = 0.0f, nb::arg("depth_far") = 100.0f, nb::arg("scale") = 0.35f, nb::arg("offset_x") = 0.0f, nb::arg("offset_y") = 0.0f, nb::arg("scale_y") = nb::none(), "Set the screen-space selection depth window.\n"
+                                                                                                                                                                                                                "scale is the X-axis on-screen fraction of the viewport (0.05-1.0, "
+                                                                                                                                                                                                                "default 0.35).\n"
+                                                                                                                                                                                                                "scale_y is the Y-axis fraction; None uses scale for isotropic "
+                                                                                                                                                                                                                "compatibility.\n"
+                                                                                                                                                                                                                "offset_x/offset_y are fractions of available travel (-1 to 1, default "
+                                                                                                                                                                                                                "0).\n"
+                                                                                                                                                                                                                "When the Selection tool exists but is not active/enabled, "
+                                                                                                                                                                                                                "enable/modify\n"
+                                                                                                                                                                                                                "requests (enabled=True) raise RuntimeError because they cannot be "
+                                                                                                                                                                                                                "applied\n"
+                                                                                                                                                                                                                "atomically; disable requests (enabled=False) are silent atomic no-ops,\n"
+                                                                                                                                                                                                                "matching the legacy calls' contract.\n"
+                                                                                                                                                                                                                "The window belongs to the active 3D view.");
 
         sel.def(
             "get_depth_filter", []() -> std::tuple<bool, float, float> {
@@ -724,10 +605,7 @@ namespace lfs::python {
             "window half-width (inverse of the set_depth_filter_range conversion).");
 
         sel.def(
-            "get_depth_filter_window", [](std::optional<std::string> panel) -> std::tuple<bool, float, float, float, float, float, float> {
-                if (const auto slot = resolveDepthWindowPanel(panel)) {
-                    return read_depth_filter_window_panel(*slot);
-                }
+            "get_depth_filter_window", []() -> std::tuple<bool, float, float, float, float, float, float> {
                 if (const auto* const tool = get_selection_tool()) {
                     const auto* const rm = get_rm();
                     float scale_x = DEFAULT_WINDOW_SCALE;
@@ -762,16 +640,8 @@ namespace lfs::python {
                         settings.depth_filter_offset_x,
                         settings.depth_filter_offset_y};
             },
-            nb::kw_only(), nb::arg("panel") = nb::none(), "Get the screen-space selection depth window:\n"
-                                                          "(enabled, near, far, scale_x, scale_y, offset_x, offset_y).\n"
-                                                          "panel (keyword-only) selects which split panel is read:\n"
-                                                          "- None (default): today's behavior -- the projection, which is the\n"
-                                                          "  focused panel in unsynced independent-dual split and the single\n"
-                                                          "  global window everywhere else.\n"
-                                                          "- 'main': the focused panel, addressed explicitly.\n"
-                                                          "- 'left' / 'right': that panel's own stored window, whatever the\n"
-                                                          "  split mode. Any other string raises ValueError.\n"
-                                                          "The enabled flag is global in every case.");
+            "Get the active view's selection depth window: (enabled, near, far, "
+            "scale_x, scale_y, offset_x, offset_y).");
 
         // ─────────────────────────────────────────────────────────────────────
         // CROP FILTER

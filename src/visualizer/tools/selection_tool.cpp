@@ -39,7 +39,7 @@ namespace lfs::vis::tools {
         [[nodiscard]] const Viewport& selectionFilterViewport(const ToolContext& ctx) {
             auto* const rm = ctx.getRenderingManager();
             if (rm) {
-                return rm->resolveFocusedViewport(ctx.getViewport());
+                return ctx.getViewport();
             }
             return ctx.getViewport();
         }

@@ -10,13 +10,11 @@ namespace lfs::vis {
 
     struct ViewContextState {
         GetViewCallback view_callback;
-        GetViewForPanelCallback view_for_panel_callback;
         GetViewportRenderCallback viewport_render_callback;
         CaptureViewportRenderCallback capture_viewport_render_callback;
         GetRenderSettingsCallback get_render_settings_callback;
         SetRenderSettingsCallback set_render_settings_callback;
         SetViewCallback set_view_callback;
-        SetViewForPanelCallback set_view_for_panel_callback;
         SetFovCallback set_fov_callback;
         SetOrthoScaleCallback set_ortho_scale_callback;
     };
@@ -34,10 +32,6 @@ namespace lfs::vis {
         state().view_callback = std::move(callback);
     }
 
-    void set_view_for_panel_callback(GetViewForPanelCallback callback) {
-        state().view_for_panel_callback = std::move(callback);
-    }
-
     void set_viewport_render_callback(GetViewportRenderCallback callback) {
         state().viewport_render_callback = std::move(callback);
     }
@@ -51,15 +45,6 @@ namespace lfs::vis {
         if (!s.view_callback)
             return std::nullopt;
         return s.view_callback();
-    }
-
-    std::optional<ViewInfo> get_view_info_for_panel(const SplitViewPanelId panel) {
-        const auto& s = state();
-        if (s.view_for_panel_callback)
-            return s.view_for_panel_callback(panel);
-        if (s.view_callback)
-            return s.view_callback();
-        return std::nullopt;
     }
 
     std::optional<ViewportRender> get_viewport_render() {
@@ -80,10 +65,6 @@ namespace lfs::vis {
         state().set_view_callback = std::move(callback);
     }
 
-    void set_set_view_for_panel_callback(SetViewForPanelCallback callback) {
-        state().set_view_for_panel_callback = std::move(callback);
-    }
-
     void set_set_fov_callback(SetFovCallback callback) {
         state().set_fov_callback = std::move(callback);
     }
@@ -94,17 +75,6 @@ namespace lfs::vis {
 
     void apply_set_view(const SetViewParams& params) {
         const auto& s = state();
-        if (s.set_view_callback) {
-            s.set_view_callback(params);
-        }
-    }
-
-    void apply_set_view_for_panel(const SplitViewPanelId panel, const SetViewParams& params) {
-        const auto& s = state();
-        if (s.set_view_for_panel_callback) {
-            s.set_view_for_panel_callback(panel, params);
-            return;
-        }
         if (s.set_view_callback) {
             s.set_view_callback(params);
         }

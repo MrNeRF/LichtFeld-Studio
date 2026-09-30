@@ -395,17 +395,11 @@ namespace lfs::vis::gui {
 
     void RmlViewportOverlay::setToolbarPanels(const float primary_x,
                                               const float primary_width,
-                                              const float inset,
-                                              const bool show_secondary,
-                                              const float secondary_x,
-                                              const float secondary_width) {
+                                              const float inset) {
         const bool changed =
             std::abs(toolbar_inset_ - inset) > 0.5f ||
             std::abs(primary_toolbar_x_ - primary_x) > 0.5f ||
-            std::abs(primary_toolbar_width_ - primary_width) > 0.5f ||
-            show_secondary_toolbar_ != show_secondary ||
-            std::abs(secondary_toolbar_x_ - secondary_x) > 0.5f ||
-            std::abs(secondary_toolbar_width_ - secondary_width) > 0.5f;
+            std::abs(primary_toolbar_width_ - primary_width) > 0.5f;
         if (!changed) {
             return;
         }
@@ -413,9 +407,6 @@ namespace lfs::vis::gui {
         toolbar_inset_ = inset;
         primary_toolbar_x_ = primary_x;
         primary_toolbar_width_ = primary_width;
-        show_secondary_toolbar_ = show_secondary;
-        secondary_toolbar_x_ = secondary_x;
-        secondary_toolbar_width_ = secondary_width;
         markRenderNeeded(RenderReason::ToolbarLayout);
         toolbar_roots_dirty_ = true;
         toolbar_rail_layout_dirty_ = true;
@@ -621,10 +612,7 @@ namespace lfs::vis::gui {
         const bool changed =
             toolbar_roots_dirty_ ||
             std::abs(applied_primary_toolbar_x_ - primary_toolbar_x_) > 0.5f ||
-            std::abs(applied_primary_toolbar_width_ - primary_toolbar_width_) > 0.5f ||
-            applied_show_secondary_toolbar_ != show_secondary_toolbar_ ||
-            std::abs(applied_secondary_toolbar_x_ - secondary_toolbar_x_) > 0.5f ||
-            std::abs(applied_secondary_toolbar_width_ - secondary_toolbar_width_) > 0.5f;
+            std::abs(applied_primary_toolbar_width_ - primary_toolbar_width_) > 0.5f;
         if (!changed)
             return false;
 
@@ -640,24 +628,16 @@ namespace lfs::vis::gui {
         };
 
         apply_root("primary-toolbar-root", primary_toolbar_x_, primary_toolbar_width_, primary_toolbar_width_ > 0.0f);
-        apply_root("secondary-toolbar-root",
-                   secondary_toolbar_x_,
-                   secondary_toolbar_width_,
-                   show_secondary_toolbar_ && secondary_toolbar_width_ > 0.0f);
         const auto apply_left_toolbar_offset = [&](const char* element_id, const float x) {
             if (auto* const element = document_->GetElementById(element_id)) {
                 element->SetProperty("left", std::format("{:.1f}px", x));
             }
         };
         apply_left_toolbar_offset("primary-utility-toolbar", toolbar_inset_);
-        apply_left_toolbar_offset("secondary-utility-toolbar", toolbar_inset_);
         attachToolbarDragListeners();
         applyToolbarPosition();
         applied_primary_toolbar_x_ = primary_toolbar_x_;
         applied_primary_toolbar_width_ = primary_toolbar_width_;
-        applied_show_secondary_toolbar_ = show_secondary_toolbar_;
-        applied_secondary_toolbar_x_ = secondary_toolbar_x_;
-        applied_secondary_toolbar_width_ = secondary_toolbar_width_;
         toolbar_roots_dirty_ = false;
         toolbar_rail_layout_dirty_ = true;
         return true;
@@ -669,20 +649,12 @@ namespace lfs::vis::gui {
 
         const float available_height = std::max(0.0f, vp_size_.y - 2.0f * toolbar_inset_);
         auto* const primary_toolbar = document_->GetElementById("primary-utility-toolbar");
-        auto* const secondary_toolbar = document_->GetElementById("secondary-utility-toolbar");
         auto* const primary_tools = document_->GetElementById("primary-rail-tools");
         auto* const primary_panels = document_->GetElementById("primary-rail-panels");
-        auto* const secondary_tools = document_->GetElementById("secondary-rail-tools");
-        auto* const secondary_panels = document_->GetElementById("secondary-rail-panels");
 
         auto* toolbar = primary_toolbar;
         auto* tools = primary_tools;
         auto* panels = primary_panels;
-        if (primary_toolbar_width_ <= 0.0f && show_secondary_toolbar_ && secondary_toolbar) {
-            toolbar = secondary_toolbar;
-            tools = secondary_tools;
-            panels = secondary_panels;
-        }
         if (!toolbar || !tools || !panels)
             return false;
 
@@ -701,7 +673,6 @@ namespace lfs::vis::gui {
                 class_changed = true;
             };
             set_class(primary_toolbar);
-            set_class(secondary_toolbar);
             return class_changed;
         };
 
@@ -770,7 +741,6 @@ namespace lfs::vis::gui {
                 }
             };
             apply_root_classes("primary-toolbar-root");
-            apply_root_classes("secondary-toolbar-root");
         }
 
         float fallback_height = 0.0f;
@@ -800,7 +770,6 @@ namespace lfs::vis::gui {
             }
         };
         apply_toolbar("primary-utility-toolbar", applied_primary_toolbar_top_);
-        apply_toolbar("secondary-utility-toolbar", applied_secondary_toolbar_top_);
 
         applied_viewport_toolbar_position_ = viewport_toolbar_position_;
         applied_toolbar_drag_active_ = toolbar_drag_active_;
@@ -821,20 +790,17 @@ namespace lfs::vis::gui {
             cached = handle;
         };
         attach("primary-utility-toolbar-handle", primary_toolbar_drag_handle_);
-        attach("secondary-utility-toolbar-handle", secondary_toolbar_drag_handle_);
     }
 
     void RmlViewportOverlay::resetToolbarDragListeners() {
         if (toolbar_drag_moved_ && viewport_toolbar_position_ == "free")
             saveViewportToolbarFreeYPreference(viewport_toolbar_free_y_);
         primary_toolbar_drag_handle_ = nullptr;
-        secondary_toolbar_drag_handle_ = nullptr;
         toolbar_drag_active_ = false;
         applied_toolbar_drag_active_ = false;
         toolbar_drag_moved_ = false;
         applied_viewport_toolbar_position_.clear();
         applied_primary_toolbar_top_ = std::numeric_limits<float>::quiet_NaN();
-        applied_secondary_toolbar_top_ = std::numeric_limits<float>::quiet_NaN();
     }
 
     void RmlViewportOverlay::ToolbarDragListener::ProcessEvent(Rml::Event& event) {
@@ -851,9 +817,7 @@ namespace lfs::vis::gui {
         if (type == Rml::EventId::Dragstart) {
             auto* const handle = event.GetCurrentElement();
             auto* const toolbar = handle ? handle->GetParentNode() : nullptr;
-            if (!toolbar ||
-                (toolbar->GetId() != "primary-utility-toolbar" &&
-                 toolbar->GetId() != "secondary-utility-toolbar")) {
+            if (!toolbar || toolbar->GetId() != "primary-utility-toolbar") {
                 return;
             }
             toolbar_drag_active_ = true;
@@ -1540,15 +1504,11 @@ namespace lfs::vis::gui {
             });
         };
 
-        constexpr std::array<std::string_view, 8> toolbar_ids = {
+        constexpr std::array<std::string_view, 4> toolbar_ids = {
             "primary-utility-toolbar",
-            "secondary-utility-toolbar",
             "primary-transform-toolbar",
             "primary-mirror-toolbar",
             "primary-crop-toolbar",
-            "secondary-transform-toolbar",
-            "secondary-mirror-toolbar",
-            "secondary-crop-toolbar",
         };
         for (const std::string_view id : toolbar_ids)
             append_region(document_->GetElementById(std::string(id)), 9.0f);

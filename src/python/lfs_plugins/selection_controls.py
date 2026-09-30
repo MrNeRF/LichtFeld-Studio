@@ -28,99 +28,14 @@ def _split_view_mode():
         return "none"
 
 
-def _focused_split_panel():
-    query = getattr(lf.ui, "get_focused_split_panel", None)
-    if not callable(query):
-        return _PANEL_LEFT
-    try:
-        value = str(query() or _PANEL_LEFT)
-    except Exception:
-        return _PANEL_LEFT
-    return value if value in (_PANEL_LEFT, _PANEL_RIGHT) else _PANEL_LEFT
 
 
-def _depth_window_sync():
-    query = getattr(lf.ui, "get_depth_window_sync", None)
-    if not callable(query):
-        return False
-    try:
-        return bool(query())
-    except Exception:
-        return False
 
 
-def _depth_window_collapse_source():
-    """Return the last collapse's source panel, or None if unavailable.
-
-    Collapse uses pre-transition focus; the split service resets focus to Left.
-    Polling can miss both changes, so cached/current focus cannot recover the
-    source (applyDepthWindowModeTransitionLocked). Without the binding in older
-    modules or test stubs, callers use cached pre-transition focus.
-    """
-    query = getattr(lf.ui, "get_depth_window_collapse_source", None)
-    if not callable(query):
-        return None
-    try:
-        value = str(query() or "")
-    except Exception:
-        return None
-    return value if value in (_PANEL_LEFT, _PANEL_RIGHT) else None
 
 
-def _depth_window_collapse_record():
-    """Return the atomic lineage record (source, generation, kind).
-
-    Source alone hides a leave -> enter -> leave cycle between 100ms polls,
-    leaving cached panel values stale. Generation counts cache-invalidating
-    writes, including retained-pair discards; its delta reveals missed changes.
-    Valid GT/Disabled excursions and pair restoration do not stamp.
-    Kind identifies leave collapse, sync-ON copy, fresh-baseline restore
-    (project load or sync undo/redo), or retained-pair discard for recovery.
-
-    stampDepthWindowLineageLocked updates all fields under settings_mutex_.
-    Invalidating writes stamp with slot changes, except sync undo/redo, which
-    stamps afterward under a second acquisition. The record is consistent but
-    not always atomic with the slots; _refresh_panel_context rechecks generation
-    around its endpoint reads.
-
-    Without the binding (older modules/test stubs), use the single-source getter
-    and None for generation/kind, preserving pre-lineage behavior. A two-item
-    record retains source/generation and supplies None for kind.
-    """
-    query = getattr(lf.ui, "get_depth_window_collapse_record", None)
-    if callable(query):
-        source, generation, kind = None, None, None
-        try:
-            record = tuple(query())
-        except Exception:
-            record = ()
-        if len(record) >= 2:
-            source = str(record[0] or "")
-            source = source if source in (_PANEL_LEFT, _PANEL_RIGHT) else None
-            try:
-                generation = int(record[1])
-            except (TypeError, ValueError):
-                generation = None
-            if len(record) >= 3:
-                kind = str(record[2] or "")
-                kind = kind if kind in _LINEAGE_KINDS else None
-            return source, generation, kind
-    return _depth_window_collapse_source(), None, None
 
 
-def _split_mode_touches_depth_window(previous_mode, new_mode):
-    """Detect independent-dual or GT boundaries, matching native transitions.
-
-    Independent-dual uses per-panel windows; GT suspends filtering
-    (applyDepthWindowModeTransitionLocked). Other mode changes normally do nothing.
-    Disabled -> PLYComparison may discard a retained pair, reported by a separate
-    lineage stamp; without one, that edge must not cancel a valid edit.
-    """
-    if previous_mode == new_mode:
-        return False
-    if (previous_mode == _INDEPENDENT_DUAL) != (new_mode == _INDEPENDENT_DUAL):
-        return True
-    return (previous_mode == _GT_COMPARISON) != (new_mode == _GT_COMPARISON)
 
 
 def _gt_comparison_active():
@@ -136,7 +51,6 @@ _PANEL_RIGHT = "right"
 # Size's 100% reference is per panel; sync ON and single-window modes use
 # this shared entry instead.
 _PANEL_SHARED = "shared"
-_INDEPENDENT_DUAL = "independent_dual"
 _GT_COMPARISON = "gt_comparison"
 # Deferred records distinguish live edits from completed blurs.
 _DEFERRED_LIVE = "live"
@@ -150,21 +64,6 @@ _DEFERRED_BLURRED = "blurred"
 _COMMIT_DONE = "done"
 _COMMIT_DEFERRED = "deferred"
 _COMMIT_RETARGETED = "retargeted"
-# Native reference invalidations (rendering_manager.hpp, DepthWindowLineageKind).
-# Sync undo/redo shares the project-restore recovery of absolute windows.
-_LINEAGE_LEAVE_COLLAPSE = "leave_collapse"
-_LINEAGE_SYNC_COPY = "sync_copy"
-_LINEAGE_PROJECT_RESTORE = "project_restore"
-_LINEAGE_RETAINED_PAIR_DISCARD = "retained_pair_discard"
-_LINEAGE_KINDS = (
-    _LINEAGE_LEAVE_COLLAPSE,
-    _LINEAGE_SYNC_COPY,
-    _LINEAGE_PROJECT_RESTORE,
-    _LINEAGE_RETAINED_PAIR_DISCARD,
-)
-# Bound context-read retries. Exhaustion leaves the entire tick inert,
-# with its lineage delta pending until a later comparable read.
-_CONTEXT_READ_ATTEMPTS = 3
 _DEPTH_MIN = 0.0
 _DEPTH_MAX = 1000.0
 _DEPTH_GAP = 0.01
@@ -196,20 +95,6 @@ _VIZ_MODE_LABELS = {
     1: ("main_panel.depth_filter_viz_mode_dim", "Dim outside"),
     2: ("main_panel.depth_filter_viz_mode_hide", "Hide outside"),
 }
-_PANEL_CHIP_LABELS = {
-    _PANEL_LEFT: ("ui.selection_depth_panel_left", "L"),
-    _PANEL_RIGHT: ("ui.selection_depth_panel_right", "R"),
-}
-_SYNC_ICON_ON = "../icon/layout-columns.png"
-# Shown only in independent-dual split: sync-off fills the focused half of
-# the two-column glyph, identifying the sliders' target. Sync-on leaves both
-# halves unfilled because the panels share one window.
-_SYNC_ICON_OFF = {
-    _PANEL_LEFT: "../icon/layout-columns-left.png",
-    _PANEL_RIGHT: "../icon/layout-columns-right.png",
-}
-
-
 def _ui_label(key: str, fallback: str) -> str:
     tr = getattr(lf.ui, "tr", None)
     if not callable(tr):
@@ -300,11 +185,6 @@ class SelectionControlsController:
         "selection_depth_offset_y_slider_max",
         "selection_viz_mode_label",
         "selection_viz_mode_icon",
-        "selection_panel_chip_visible",
-        "selection_panel_chip_label",
-        "selection_depth_sync_active",
-        "selection_depth_sync_label",
-        "selection_depth_sync_icon",
         "selection_depth_toggle_label",
         "ui_size_label",
         "ui_offset_x_label",
@@ -332,24 +212,14 @@ class SelectionControlsController:
         self._frustum_half_width = _DEFAULT_FRUSTUM_HALF_WIDTH
         self._window_scale = _DEFAULT_WINDOW_SCALE
         self._window_scale_y = _DEFAULT_WINDOW_SCALE
-        # Independent, unsynced panels keep separate Size references; other modes
-        # use shared. Focus selects an entry without rebasing it.
         self._ref_scale_x = {
             _PANEL_SHARED: _DEFAULT_WINDOW_SCALE,
             _PANEL_LEFT: _DEFAULT_WINDOW_SCALE,
             _PANEL_RIGHT: _DEFAULT_WINDOW_SCALE,
         }
         self._ref_scale_y = dict(self._ref_scale_x)
-        # Keep the retained pair's lineage witness separate from the current record;
-        # any native invalidation ends its reference lifetime.
-        self._retained_reference_generation = None
-        # First-observed GT has no prior baselines; recover each restored slot on return.
-        self._gt_baseline_pending = False
         self._focused_panel = _PANEL_LEFT
         self._split_mode = "none"
-        self._depth_sync = False
-        # Retain the consumed generation to detect invalidations between polls.
-        self._collapse_generation = None
         # An exhausted refresh leaves cached state untouched and forbids writes.
         self._context_read_exhausted = False
         self._offset_x = _DEFAULT_WINDOW_OFFSET
@@ -467,11 +337,6 @@ class SelectionControlsController:
         model.bind_func("selection_viz_mode_label", self._viz_mode_label)
         model.bind_func("selection_viz_mode_icon", self._viz_mode_icon)
         # The chip and the sync toggle exist only where per-panel windows do.
-        model.bind_func("selection_panel_chip_visible", self._panel_controls_visible)
-        model.bind_func("selection_panel_chip_label", self._panel_chip_label)
-        model.bind_func("selection_depth_sync_active", lambda: self._depth_sync)
-        model.bind_func("selection_depth_sync_label", self._sync_toggle_label)
-        model.bind_func("selection_depth_sync_icon", self._sync_toggle_icon)
         model.bind_func("ui_size_label", lambda: _ui_label("ui.selection_depth_size", "Size"))
         model.bind_func("ui_offset_x_label", lambda: _ui_label("ui.selection_depth_offset_x", "X"))
         model.bind_func("ui_offset_y_label", lambda: _ui_label("ui.selection_depth_offset_y", "Y"))
@@ -600,78 +465,12 @@ class SelectionControlsController:
             return ""
 
     def _refresh_panel_context(self):
-        """Refresh panel context, reconcile references, then retarget live edits.
-
-        Polls, sync toggles and toolbar actions (including Undo/Redo) share this path.
-        Edge guards prevent duplicate reconciliation; all callers consume focus changes
-        before a live edit can commit to the wrong panel. Return the previous
-        (panel, sync, mode) triple for callers that need the transition.
-        """
-        previous_panel = self._focused_panel
-        previous_sync = self._depth_sync
-        previous_mode = self._split_mode
-        previous_generation = self._collapse_generation
-        # Mode, focus, sync and lineage are separate native reads. Bracket endpoint
-        # reads with lineage records and retry the whole set if generations differ.
-        # Sync undo restores before its separate stamp, so equal generations do not
-        # close that interval; a later stamp remains pending for normal delta recovery.
-        #
-        # Exhaustion consumes no record, endpoint, references or edit targets and
-        # permits no write. For example, reading restored L=.60/R=.20 with stale
-        # sync=true seeds every reference from .20; later sync-off preserves the
-        # mistake and Left displays 300%. A larger delta cannot repair a torn set.
-        #
-        # Reconcile references before canonicalizing text. Caching only the endpoint
-        # could turn native .20 against stale reference .90 into 22% text that a later
-        # commit writes back. Keep the previous cache and draft until a comparable read.
-        # Quiet native state alone is insufficient: alternating failed/successful
-        # record reads can exhaust without a generation change. The next usable read
-        # processes its actual pending delta; retry count implies no minimum delta.
-        exhausted = True
-        for _attempt in range(_CONTEXT_READ_ATTEMPTS):
-            record = _depth_window_collapse_record()
-            split_mode = _split_view_mode()
-            focused_panel = _focused_split_panel()
-            depth_sync = _depth_window_sync()
-            revalidated = _depth_window_collapse_record()
-            stable = revalidated[1] == record[1]
-            # Retain the post-endpoint record, including older bindings with no counter.
-            # A leave between reads can change its source even when both generations are None.
-            record = revalidated
-            if stable:
-                exhausted = False
-                break
-        # The commit path must not write after an exhausted context read.
-        self._context_read_exhausted = exhausted
-        if exhausted:
-            return previous_panel, previous_sync, previous_mode
-        self._split_mode = split_mode
-        self._focused_panel = focused_panel
-        self._depth_sync = depth_sync
-        source, self._collapse_generation, kind = record
-        delta = (
-            None
-            if previous_generation is None or self._collapse_generation is None
-            else self._collapse_generation - previous_generation
-        )
-        self._reconcile_panel_references(
-            previous_panel, previous_sync, previous_mode, previous_generation,
-            source=source, kind=kind, delta=delta,
-        )
-        # Mode/lineage can change the edited window without changing observed focus:
-        # a coalesced focus move and mode leave may reset focus to its cached value.
-        # Retarget even same-panel edits so stale text cannot reach the surviving window.
-        mode_boundary = (
-            _split_mode_touches_depth_window(previous_mode, self._split_mode)
-            or delta not in (None, 0)
-        )
-        if self._focused_panel != previous_panel or mode_boundary:
-            # Read current window values before producing the retargeted canonical text.
+        previous = self._split_mode
+        self._split_mode = _split_view_mode()
+        if (previous == _GT_COMPARISON) != (self._split_mode == _GT_COMPARISON):
             self._refresh_depth_state()
-            # Focus changes retarget foreign edits; mode/lineage boundaries force
-            # retargeting regardless of the edit's recorded panel.
-            self._cancel_foreign_depth_text_edits(force=mode_boundary)
-        return previous_panel, previous_sync, previous_mode
+            self._cancel_foreign_depth_text_edits(force=True)
+        return None, False, previous
 
     def _refresh_state(self):
         self._active_mode = self._get_active_mode()
@@ -754,14 +553,8 @@ class SelectionControlsController:
 
     # ---- per-panel Size references ------------------------------------
 
-    def _panel_controls_visible(self):
-        """The chip and the sync toggle exist only in independent-dual split."""
-        return self._split_mode == _INDEPENDENT_DUAL
 
     def _ref_key(self):
-        """Return the focused panel only in unsynced independent view; otherwise shared."""
-        if self._split_mode == _INDEPENDENT_DUAL and not self._depth_sync:
-            return self._focused_panel
         return _PANEL_SHARED
 
     def _ref_scale(self, table):
@@ -782,25 +575,6 @@ class SelectionControlsController:
             return None
         return self._draw_commit_panel()
 
-    def _panel_window_scales(self, panel, fallback=None):
-        """Read a panel's scales, or fall back if invalid or unavailable.
-
-        The default fallback is displayed scales. Fresh-baseline callers must supply
-        fresh native scales because the displayed cache still predates reconciliation.
-        """
-        getter = getattr(lf.selection, "get_depth_filter_window", None)
-        if callable(getter) and panel in (_PANEL_LEFT, _PANEL_RIGHT):
-            try:
-                _enabled, _near, _far, scale_x, scale_y, _ox, _oy = getter(panel=panel)
-                return (
-                    _clamp(_parse_float(scale_x, _DEFAULT_WINDOW_SCALE), 0.05, 1.0),
-                    _clamp(_parse_float(scale_y, _DEFAULT_WINDOW_SCALE), 0.05, 1.0),
-                )
-            except Exception:
-                pass
-        if fallback is not None:
-            return fallback
-        return self._window_scale, self._window_scale_y
 
     def _native_window_scales(self):
         """Read current projected scales before the displayed cache is refreshed.
@@ -820,177 +594,14 @@ class SelectionControlsController:
         return self._window_scale, self._window_scale_y
 
     def _rebase_panel_reference(self, panel):
-        """Rebase the addressed panel from its own scales, not the displayed window.
-
-        This keeps undo on an unfocused panel from borrowing the focused panel's size.
-        """
-        current = self._ref_key()
-        if current == _PANEL_SHARED:
-            # Single-window controls use shared regardless of the signal's panel.
-            self._ref_scale_x[_PANEL_SHARED] = self._window_scale
-            self._ref_scale_y[_PANEL_SHARED] = self._window_scale_y
-            return
-        key = panel if panel in (_PANEL_LEFT, _PANEL_RIGHT) else current
-        if key == current:
-            scale_x, scale_y = self._window_scale, self._window_scale_y
-        else:
-            scale_x, scale_y = self._panel_window_scales(key)
-        self._ref_scale_x[key] = scale_x
-        self._ref_scale_y[key] = scale_y
+        self._ref_scale_x[_PANEL_SHARED] = self._window_scale
+        self._ref_scale_y[_PANEL_SHARED] = self._window_scale_y
 
     def _seed_all_references(self, scale_x, scale_y):
-        """Seed all entries from the one window surviving a leave or sync copy.
+        self._ref_scale_x[_PANEL_SHARED] = scale_x
+        self._ref_scale_y[_PANEL_SHARED] = scale_y
 
-        This also prevents a later transition from promoting a stale entry.
-        Restores that can leave separate absolute windows use _fresh_baseline_references.
-        """
-        for key in (_PANEL_SHARED, _PANEL_LEFT, _PANEL_RIGHT):
-            self._ref_scale_x[key] = scale_x
-            self._ref_scale_y[key] = scale_y
 
-    def _fresh_baseline_references(self, scale_x, scale_y):
-        """Baseline current windows; scale_x/scale_y are the fresh projection.
-
-        In unsynced independent view, restore can leave unequal slots. Read each
-        panel's own scales and use the projection only for shared: L=.60/R=.20 with
-        Right focused would otherwise show Left at 300%. Other endpoints seed every
-        entry from projection.
-        """
-        if self._split_mode == _INDEPENDENT_DUAL and not self._depth_sync:
-            for key in (_PANEL_LEFT, _PANEL_RIGHT):
-                panel_x, panel_y = self._panel_window_scales(
-                    key, fallback=(scale_x, scale_y)
-                )
-                self._ref_scale_x[key] = panel_x
-                self._ref_scale_y[key] = panel_y
-            self._ref_scale_x[_PANEL_SHARED] = scale_x
-            self._ref_scale_y[_PANEL_SHARED] = scale_y
-            return
-        self._seed_all_references(scale_x, scale_y)
-
-    def _reconcile_panel_references(
-        self, previous_panel, previous_sync, previous_mode, previous_generation=None,
-        *, source, kind, delta,
-    ):
-        """Reconcile endpoint changes and every native reference-lineage advance.
-
-        Focus alone selects an existing reference. On leave, prefer the native source;
-        previous_panel is the cached pre-transition fallback, since focus can reset.
-        """
-        entering_two = (
-            self._split_mode == _INDEPENDENT_DUAL
-            and not self._depth_sync
-            and (previous_mode != _INDEPENDENT_DUAL or previous_sync)
-        )
-        leaving_two = (
-            (previous_mode == _INDEPENDENT_DUAL and not previous_sync)
-            and (self._split_mode != _INDEPENDENT_DUAL or self._depth_sync)
-        )
-        observed_leave = (
-            leaving_two
-            and previous_mode == _INDEPENDENT_DUAL
-            and self._split_mode != _INDEPENDENT_DUAL
-        )
-        # Check every lineage advance: hidden leave/enter, sync cycles or restores
-        # can invalidate references without changing the observed endpoint.
-        if delta not in (None, 0) or previous_sync != self._depth_sync:
-            self._retained_reference_generation = None
-            self._gt_baseline_pending = False
-        if self._split_mode == _GT_COMPARISON:
-            # First-observed GT lacks prior user baselines. A known shared reference
-            # from global-origin GT instead follows normal seeding.
-            if previous_generation is None:
-                self._gt_baseline_pending = True
-        elif self._split_mode not in ("none", _INDEPENDENT_DUAL):
-            self._retained_reference_generation = None
-            self._gt_baseline_pending = False
-        retained_leave = (
-            previous_mode == _INDEPENDENT_DUAL
-            and self._split_mode in (_GT_COMPARISON, "none")
-            and delta == 0
-        )
-        if retained_leave:
-            # Ordinary Independent -> Disabled leave stamps. No stamp identifies a
-            # coalesced GT park, possibly including its retained Disabled interval.
-            self._retained_reference_generation = previous_generation
-            if previous_sync:
-                # Save the synced baseline in the pair while GT edits may rebase shared.
-                for key in (_PANEL_LEFT, _PANEL_RIGHT):
-                    self._ref_scale_x[key] = self._ref_scale_x[_PANEL_SHARED]
-                    self._ref_scale_y[key] = self._ref_scale_y[_PANEL_SHARED]
-        retained_return = (
-            self._split_mode == _INDEPENDENT_DUAL
-            and previous_mode != _INDEPENDENT_DUAL
-            and self._retained_reference_generation is not None
-            and self._retained_reference_generation == self._collapse_generation
-        )
-        baseline_gt_return = (
-            self._split_mode == _INDEPENDENT_DUAL
-            and previous_mode != _INDEPENDENT_DUAL
-            and self._gt_baseline_pending
-        )
-        if self._split_mode == _INDEPENDENT_DUAL:
-            self._retained_reference_generation = None
-            self._gt_baseline_pending = False
-        # One observed leave explains one collapse stamp. Older records without
-        # kind retain source-only behavior; unexplained advances require recovery.
-        explained = (
-            observed_leave
-            and delta == 1
-            and kind in (None, _LINEAGE_LEAVE_COLLAPSE)
-        )
-        if delta is not None and delta > 0 and not explained:
-            if delta == 1 and kind == _LINEAGE_SYNC_COPY:
-                # One sync copy preserves the recorded source's reference: that window
-                # now occupies both slots and shared.
-                source = (
-                    source
-                    if source in (_PANEL_LEFT, _PANEL_RIGHT)
-                    else self._focused_panel
-                )
-                self._seed_all_references(
-                    self._ref_scale_x[source], self._ref_scale_y[source]
-                )
-            else:
-                # Restores, larger deltas and unobserved collapses need fresh baselines.
-                # Only current windows are recoverable; unequal restored slots must each
-                # supply their own reference instead of sharing the focused projection.
-                scale_x, scale_y = self._native_window_scales()
-                self._fresh_baseline_references(scale_x, scale_y)
-            return
-        if retained_return:
-            if self._depth_sync:
-                self._ref_scale_x[_PANEL_SHARED] = self._ref_scale_x[_PANEL_LEFT]
-                self._ref_scale_y[_PANEL_SHARED] = self._ref_scale_y[_PANEL_LEFT]
-            return
-        if baseline_gt_return:
-            self._fresh_baseline_references(*self._native_window_scales())
-            return
-        if entering_two:
-            # Ordinary shared -> independent entry seeds both slots from the global
-            # window, so copy its shared reference to both panel entries too.
-            for key in (_PANEL_LEFT, _PANEL_RIGHT):
-                self._ref_scale_x[key] = self._ref_scale_x[_PANEL_SHARED]
-                self._ref_scale_y[key] = self._ref_scale_y[_PANEL_SHARED]
-        elif leaving_two:
-            # After unexplained lineage has been handled, select the surviving
-            # reference for an observed leave/sync edge or source-only fallback.
-            if observed_leave:
-                # Focus may reset on leave, and cached focus can miss an earlier change.
-                # The native collapse source is authoritative; cache is the older-binding fallback.
-                candidate = source or previous_panel
-            else:
-                # Sync copies the focus at set time. In this fallback, use refreshed focus
-                # rather than the previous poll's value when focus and sync change together.
-                # It cannot recover an unrecorded source if focus moved again after the copy.
-                candidate = self._focused_panel
-            source = (
-                candidate
-                if candidate in (_PANEL_LEFT, _PANEL_RIGHT)
-                else self._focused_panel
-            )
-            self._ref_scale_x[_PANEL_SHARED] = self._ref_scale_x[source]
-            self._ref_scale_y[_PANEL_SHARED] = self._ref_scale_y[source]
 
     def _draw_commit_value(self):
         value = RuntimeState.depth_window_draw_commit.value
@@ -1006,42 +617,9 @@ class SelectionControlsController:
 
     # ---- chip + sync toggle -------------------------------------------
 
-    def _panel_chip_label(self):
-        key, fallback = _PANEL_CHIP_LABELS.get(
-            self._focused_panel, _PANEL_CHIP_LABELS[_PANEL_LEFT]
-        )
-        return _ui_label(key, fallback)
 
-    def _sync_toggle_label(self):
-        return _ui_label("toolbar.depth_window_sync", "Sync Panel Depth Windows")
 
-    def _sync_toggle_icon(self):
-        if self._depth_sync:
-            return _SYNC_ICON_ON
-        # Use the chip's focused-panel source and Left fallback for the icon too.
-        return _SYNC_ICON_OFF.get(self._focused_panel, _SYNC_ICON_OFF[_PANEL_LEFT])
 
-    def _toggle_depth_window_sync(self):
-        # Refresh before inverting sync so an external change is reconciled once
-        # and the request toggles the manager's current flag.
-        self._refresh_panel_context()
-        # Exhaustion leaves a stale flag. Drop this click without writing;
-        # the next stable poll restores the button's actual state.
-        if self._context_read_exhausted:
-            return
-        setter = getattr(lf.ui, "set_depth_window_sync", None)
-        if callable(setter):
-            try:
-                setter(not self._depth_sync)
-            except Exception as exc:
-                self._report_error(
-                    str(exc).strip()
-                    or _ui_label("selection.update_depth_failed", "Could not update selection depth filter.")
-                )
-        # Drag ownership and parked GT refuse sync changes. In retained Disabled,
-        # an actual change discards retention and applies; same-value requests preserve it.
-        # Re-read and reconcile the actual result rather than assuming a toggle.
-        self._refresh_panel_context()
 
     # ---- text-edit guard ----------------------------------------------
 
@@ -1093,7 +671,6 @@ class SelectionControlsController:
             # Focus must dirty the chip even when both windows have identical values.
             ("focused_panel", self._focused_panel),
             ("split_mode", self._split_mode),
-            ("depth_sync", self._depth_sync),
         )
 
     def _state_key(self, state_items=None):
@@ -1484,15 +1061,6 @@ class SelectionControlsController:
         return [(target, grouped[target]) for target in targets]
 
     def _deferred_write_target(self, record):
-        """Return the setter target: a frozen off-focus panel, or current context.
-
-        Only blurred records need panel= when the ordinary setter would miss their
-        origin. Live records use the context they are currently editing (None).
-        """
-        if record.get("kind") == _DEFERRED_BLURRED:
-            panel = record.get("panel")
-            if self._panel_addressed_write_needed(panel):
-                return panel
         return None
 
     def _deferred_write_destination(self, record):
@@ -1586,8 +1154,6 @@ class SelectionControlsController:
                 _DEPTH_MAX,
             )
             self._apply_depth_range(self._depth_enabled, near, far)
-        else:
-            self._apply_foreign_panel_depth_values(values, panel)
         self._sync_depth_text_bufs(force=True)
         return _COMMIT_DONE
 
@@ -1604,73 +1170,8 @@ class SelectionControlsController:
             return
         # Arm before dirtying sliders so their old positions cannot echo into setters.
         self._depth_echo_holdoff = 2
-        panel = record.get("panel")
-        if self._panel_addressed_write_needed(panel):
-            self._apply_foreign_panel_depth_values({key: parsed}, panel)
-        else:
-            # The ordinary setter reaches the frozen target here, including shared
-            # mode; displayed state follows the write normally.
-            self._dispatch_depth_setter(key, parsed)
+        self._dispatch_depth_setter(key, parsed)
         self._sync_depth_text_bufs(force=True)
-
-    def _panel_addressed_write_needed(self, panel):
-        """Return whether an unsynced independent write needs the off-focus panel= route."""
-        return (
-            panel in (_PANEL_LEFT, _PANEL_RIGHT)
-            and self._split_mode == _INDEPENDENT_DUAL
-            and not self._depth_sync
-            and panel != self._focused_panel
-        )
-
-    def _apply_foreign_panel_depth_values(self, values, panel):
-        """Patch an unfocused panel from its own native window and Size reference.
-
-        values maps field keys to parsed numbers; absent fields keep current values.
-        The panel= route leaves the displayed window alone. Apply Near before Far
-        so a paired update clamps Far against the intended Near; lone fields still
-        clamp against the current counterpart.
-        """
-        getter = getattr(lf.selection, "get_depth_filter_window", None)
-        setter = getattr(lf.selection, "set_depth_filter_window", None)
-        if not callable(getter) or not callable(setter):
-            return
-        try:
-            enabled, near, far, scale_x, scale_y, offset_x, offset_y = getter(panel=panel)
-        except Exception:
-            return
-        enabled = bool(enabled)
-        near = _clamp(_parse_float(near, self._depth_near), _DEPTH_MIN, _DEPTH_MAX - _DEPTH_GAP)
-        far = _clamp(_parse_float(far, self._depth_far), near + _DEPTH_GAP, _DEPTH_MAX)
-        scale_x = _clamp(_parse_float(scale_x, _DEFAULT_WINDOW_SCALE), 0.05, 1.0)
-        scale_y = _clamp(_parse_float(scale_y, _DEFAULT_WINDOW_SCALE), 0.05, 1.0)
-        offset_x = _clamp(_parse_float(offset_x, 0.0), -1.0, 1.0)
-        offset_y = _clamp(_parse_float(offset_y, 0.0), -1.0, 1.0)
-        if "selection_depth_near_str" in values:
-            near = _clamp(values["selection_depth_near_str"], _DEPTH_MIN, _DEPTH_MAX - _DEPTH_GAP)
-            far = max(far, near + _DEPTH_GAP)
-        if "selection_depth_far_str" in values:
-            far = _clamp(values["selection_depth_far_str"], near + _DEPTH_GAP, _DEPTH_MAX)
-        if "selection_depth_scale_str" in values:
-            parsed = values["selection_depth_scale_str"]
-            ref_x = max(self._ref_scale_x.get(panel, _DEFAULT_WINDOW_SCALE), 1.0e-6)
-            ref_y = max(self._ref_scale_y.get(panel, _DEFAULT_WINDOW_SCALE), 1.0e-6)
-            f_min = max(0.05 / ref_x, 0.05 / ref_y)
-            f_max = max(f_min, min(1.0 / ref_x, 1.0 / ref_y))
-            percent = _clamp(parsed, _SCALE_PERCENT_MIN, _SCALE_PERCENT_MAX)
-            factor = _clamp(percent / 100.0, f_min, f_max)
-            scale_x = _clamp(ref_x * factor, 0.05, 1.0)
-            scale_y = _clamp(ref_y * factor, 0.05, 1.0)
-        if "selection_depth_offset_x_str" in values:
-            offset_x = _clamp(values["selection_depth_offset_x_str"], _OFFSET_PERCENT_MIN, _OFFSET_PERCENT_MAX) / 100.0
-        if "selection_depth_offset_y_str" in values:
-            offset_y = _clamp(values["selection_depth_offset_y_str"], _OFFSET_PERCENT_MIN, _OFFSET_PERCENT_MAX) / 100.0
-        try:
-            setter(enabled, near, far, scale_x, offset_x, offset_y, scale_y, panel=panel)
-        except Exception as exc:
-            self._report_error(
-                str(exc).strip()
-                or _ui_label("selection.update_depth_failed", "Could not update selection depth filter.")
-            )
 
     def _capture_depth_text_snapshot(self, key):
         return self._canonical_depth_text_value(key)
@@ -1797,8 +1298,6 @@ class SelectionControlsController:
             self._apply_depth_range(not self._depth_enabled, self._depth_near, self._depth_far)
         elif action == "cycle_viz":
             self._cycle_viz_mode()
-        elif action == "toggle_sync":
-            self._toggle_depth_window_sync()
         elif action == "delete":
             self._execute_selection_stage(lambda: lf.pipeline.edit.delete_())
         elif action == "select_all":
@@ -1906,23 +1405,15 @@ class SelectionControlsController:
                 "selection_depth_scale_slider_max",
             ),
             "focused_panel": (
-                "selection_panel_chip_label",
                 # Sync-off's filled half follows the focused panel, like the chip.
-                "selection_depth_sync_icon",
                 "selection_depth_scale_str",
                 "selection_depth_scale_value",
                 "selection_depth_scale_slider_min",
                 "selection_depth_scale_slider_max",
             ),
             "split_mode": (
-                "selection_panel_chip_visible",
-                "selection_panel_chip_label",
-                "selection_depth_sync_active",
-                "selection_depth_sync_icon",
             ),
             "depth_sync": (
-                "selection_depth_sync_active",
-                "selection_depth_sync_icon",
                 "selection_depth_scale_str",
                 "selection_depth_scale_value",
                 "selection_depth_scale_slider_min",

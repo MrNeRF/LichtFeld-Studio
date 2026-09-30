@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "test_view_targets.hpp"
 #include <SDL3/SDL.h>
 
 #include "core/checkpoint_format.hpp"
@@ -1697,7 +1698,7 @@ namespace lfs::vis {
         ASSERT_NE(viewer.getRenderingManager(), nullptr);
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         ASSERT_NE(viewer.getInputController(), nullptr);
 
         const auto kept_id =
@@ -2415,7 +2416,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto untitled = viewer.projectGetInfo();
             ASSERT_TRUE(untitled);
             ASSERT_EQ(untitled->hydration_state,
@@ -2494,7 +2495,7 @@ namespace lfs::vis {
                 viewer.getParameterManager()->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
 
             auto untitled = viewer.projectGetInfo();
             ASSERT_TRUE(untitled);
@@ -2619,7 +2620,7 @@ namespace lfs::vis {
                 viewer.getParameterManager()->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             ASSERT_TRUE(viewer.projectOpen(
                 reopened_path,
                 ProjectSwitchDisposition::DiscardChanges));
@@ -3377,7 +3378,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_NE(
                 viewer.getScene().addGroup(
                     "Untitled dirty"),
@@ -3420,7 +3421,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_NE(
                 viewer.getScene().addGroup(
                     "Untitled dirty"),
@@ -3658,7 +3659,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -3704,7 +3705,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_NE(
                 viewer.getScene().addGroup(
                     "Untitled dirty maintenance"),
@@ -3757,7 +3758,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_NE(
                 viewer.getScene().addGroup(
                     "Untitled quiet maintenance"),
@@ -3827,7 +3828,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_NE(
                 viewer.getScene().addGroup(
                     "Untitled before save as"),
@@ -4254,7 +4255,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_NE(
                 viewer.getScene().addGroup(
                     "Crash untitled"),
@@ -4423,7 +4424,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -4555,7 +4556,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             ASSERT_NE(viewer.getScene().addGroup(
                           "Settlement ordering"),
                       lfs::core::NULL_NODE);
@@ -5228,7 +5229,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_NE(
                 viewer.getScene().addGroup(
                     "Unsaved current project"),
@@ -5347,7 +5348,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_NE(
                 viewer.getScene().addGroup(
                     "Unsaved current project"),
@@ -5383,7 +5384,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_TRUE(arm_running_trainer(viewer));
             ASSERT_NE(
                 viewer.getScene().addGroup(
@@ -5447,7 +5448,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_TRUE(viewer.projectOpen(
                 project_path,
                 ProjectSwitchDisposition::
@@ -5514,7 +5515,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_TRUE(arm_running_trainer(viewer));
             ASSERT_NE(
                 viewer.getScene().addGroup(
@@ -5581,7 +5582,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_TRUE(viewer.projectOpen(
                 current_path,
                 ProjectSwitchDisposition::
@@ -5645,7 +5646,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_TRUE(arm_running_trainer(viewer));
             ASSERT_NE(
                 viewer.getScene().addGroup(
@@ -6126,7 +6127,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             ASSERT_TRUE(viewer.projectOpen(
                 project_path,
                 ProjectSwitchDisposition::DiscardChanges));
@@ -6228,7 +6229,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             const auto project_path =
                 temporary / "params-titled.licht";
             write_empty_project(project_path);
@@ -6315,7 +6316,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -6567,7 +6568,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_TRUE(arm_running_trainer(viewer));
             auto* const trainer_manager =
                 viewer.getTrainerManager();
@@ -6799,7 +6800,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             const auto opened =
                 viewer.projectOpen(project_path);
             ASSERT_TRUE(opened)
@@ -6870,7 +6871,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             const auto opened =
                 viewer.projectOpen(project_path);
             ASSERT_TRUE(opened)
@@ -6963,7 +6964,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_NE(
                 viewer.getScene().addGroup(
                     "Unsaved before Save As exit"),
@@ -7018,7 +7019,7 @@ namespace lfs::vis {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
             viewer.input_controller_ =
-                std::make_unique<InputController>(nullptr, viewer.getViewport());
+                std::make_unique<InputController>(nullptr, viewer);
             ASSERT_TRUE(viewer.projectOpen(source_path));
             ASSERT_NE(viewer.getScene().addGroup("Selectable"),
                       lfs::core::NULL_NODE);
@@ -7073,7 +7074,7 @@ namespace lfs::vis {
                 ->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         ASSERT_TRUE(viewer.projectOpen(
             source_path,
             ProjectSwitchDisposition::DiscardChanges));
@@ -7129,7 +7130,7 @@ namespace lfs::vis {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
             viewer.input_controller_ =
-                std::make_unique<InputController>(nullptr, viewer.getViewport());
+                std::make_unique<InputController>(nullptr, viewer);
             ASSERT_TRUE(viewer.projectOpen(source_path));
             ASSERT_TRUE(viewer.projectSave(false));
             ASSERT_TRUE(pumpUntil(
@@ -7171,7 +7172,7 @@ namespace lfs::vis {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
             viewer.input_controller_ =
-                std::make_unique<InputController>(nullptr, viewer.getViewport());
+                std::make_unique<InputController>(nullptr, viewer);
             ASSERT_NE(viewer.getScene().addGroup("Dialog save"),
                       lfs::core::NULL_NODE);
 
@@ -7202,7 +7203,7 @@ namespace lfs::vis {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
             viewer.input_controller_ =
-                std::make_unique<InputController>(nullptr, viewer.getViewport());
+                std::make_unique<InputController>(nullptr, viewer);
             ASSERT_NE(viewer.getScene().addGroup("MCP save"),
                       lfs::core::NULL_NODE);
 
@@ -7231,7 +7232,7 @@ namespace lfs::vis {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
             viewer.input_controller_ =
-                std::make_unique<InputController>(nullptr, viewer.getViewport());
+                std::make_unique<InputController>(nullptr, viewer);
             ASSERT_NE(viewer.getScene().addGroup("MCP implicit save"),
                       lfs::core::NULL_NODE);
 
@@ -7269,7 +7270,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             const auto opened =
                 viewer.projectOpen(project_path);
             ASSERT_TRUE(opened)
@@ -7372,7 +7373,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_NE(
                 viewer.getScene().addGroup("Saved"),
                 lfs::core::NULL_NODE);
@@ -7612,7 +7613,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             const auto opened =
                 viewer.projectOpen(
                     project_path,
@@ -7739,7 +7740,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             const auto opened =
                 viewer.projectOpen(
                     project_path,
@@ -8550,7 +8551,8 @@ namespace lfs::vis {
         write_minimal_transforms_dataset(dataset_path);
 
         VisualizerImpl viewer(options);
-        InputController controller(nullptr, viewer.getViewport());
+        lfs::vis::TestViewTargets controller_views{viewer.getViewport()};
+        InputController controller{nullptr, controller_views};
 
         viewer.getSceneManager()->changeContentType(SceneManager::ContentType::Dataset);
         viewer.getSceneManager()->setDatasetPath(dataset_path);
@@ -8655,7 +8657,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_TRUE(viewer.projectOpen(
                 project_path,
                 ProjectSwitchDisposition::
@@ -8845,7 +8847,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -8928,7 +8930,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -8990,7 +8992,7 @@ namespace lfs::vis {
             params.use_depth_loss = true;
         });
         viewer.input_controller_ =
-            std::make_unique<InputController>(nullptr, viewer.getViewport());
+            std::make_unique<InputController>(nullptr, viewer);
         auto* const lifecycle = viewer.project_lifecycle_.get();
         ASSERT_NE(lifecycle, nullptr);
         ASSERT_FALSE(lifecycle->hasSourcePath());
@@ -9028,7 +9030,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -9092,7 +9094,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -9140,7 +9142,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -9218,7 +9220,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             auto& scene = viewer.getScene();
@@ -9283,7 +9285,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             auto& scene = viewer.getScene();
@@ -9363,7 +9365,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             auto& scene = viewer.getScene();
@@ -9399,7 +9401,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             auto& scene = viewer.getScene();
@@ -9467,7 +9469,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             auto& scene = viewer.getScene();
@@ -9503,7 +9505,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             auto& scene = viewer.getScene();
@@ -9575,7 +9577,7 @@ namespace lfs::vis {
             ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle = viewer.project_lifecycle_.get();
             auto& scene = viewer.getScene();
             scene.addCamera(
@@ -9603,7 +9605,7 @@ namespace lfs::vis {
             ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle = viewer.project_lifecycle_.get();
             auto& scene = viewer.getScene();
             scene.addCamera(
@@ -9763,7 +9765,7 @@ namespace lfs::vis {
                 viewer.getParameterManager()->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const gui = viewer.getGuiManager();
             ASSERT_NE(gui, nullptr);
             installModalOverlay(
@@ -9833,7 +9835,7 @@ namespace lfs::vis {
             ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle = viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
             ASSERT_TRUE(lifecycle->openScratchRecovered(
@@ -9870,7 +9872,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -9966,7 +9968,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_TRUE(viewer.projectOpen(
                 project_path,
                 ProjectSwitchDisposition::
@@ -10135,7 +10137,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -10223,7 +10225,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -10361,7 +10363,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -10465,7 +10467,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -10734,7 +10736,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -10826,7 +10828,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -10935,7 +10937,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -11035,7 +11037,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -11533,7 +11535,7 @@ namespace lfs::vis {
                 }));
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -11626,7 +11628,7 @@ namespace lfs::vis {
                 }));
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -11705,7 +11707,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
 
         auto created = viewer.projectCreateAt(path);
         ASSERT_TRUE(created)
@@ -11734,7 +11736,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         ASSERT_NE(viewer.getScene().addGroup("keep-me"),
                   lfs::core::NULL_NODE);
 
@@ -11761,7 +11763,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
 
         auto created = viewer.projectCreateAt(
             path, ProjectSwitchDisposition::DiscardChanges, true);
@@ -11789,7 +11791,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         ASSERT_NE(viewer.getScene().addGroup("keep-me"),
                   lfs::core::NULL_NODE);
 
@@ -11818,7 +11820,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         ASSERT_NE(viewer.getScene().addGroup("keep-me"),
                   lfs::core::NULL_NODE);
 
@@ -11838,7 +11840,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         const auto scratch = lfs::io::project::scratch_autosave_path(
             viewer.project_lifecycle_->temp_project_directory_,
             lfs::core::generate_uuid_v4());
@@ -11862,7 +11864,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         ASSERT_NE(viewer.getScene().addGroup("dirty"),
                   lfs::core::NULL_NODE);
         auto blocked = viewer.projectCreateAt(path);
@@ -11888,7 +11890,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         auto& scene = viewer.getScene();
         scene.addCamera(
             "camera.png", scene.addGroup("Train cameras"),
@@ -11915,7 +11917,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         ASSERT_TRUE(viewer.projectCreateAt(path));
         ASSERT_TRUE(viewer.resetUntitledSessionForReplaceLoad());
         const auto info = viewer.projectGetInfo();
@@ -11932,7 +11934,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         ASSERT_NE(viewer.getScene().addGroup("dirty"),
                   lfs::core::NULL_NODE);
         bool prompted = false;
@@ -11958,7 +11960,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         ASSERT_NE(viewer.getScene().addGroup("dirty"),
                   lfs::core::NULL_NODE);
         bool prompted = false;
@@ -11993,7 +11995,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         ASSERT_TRUE(arm_running_trainer(viewer));
         bool prompted = false;
         std::filesystem::path create_path;
@@ -12024,7 +12026,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         ASSERT_TRUE(arm_running_trainer(viewer));
         ASSERT_NE(viewer.getScene().addGroup("keep-me"),
                   lfs::core::NULL_NODE);
@@ -12055,7 +12057,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         ASSERT_TRUE(arm_running_trainer(viewer));
         ASSERT_NE(viewer.getScene().addGroup("keep-me"),
                   lfs::core::NULL_NODE);
@@ -12144,7 +12146,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -12247,7 +12249,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_TRUE(viewer.projectOpen(
                 project_path,
                 ProjectSwitchDisposition::
@@ -12431,7 +12433,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_TRUE(viewer.projectOpen(
                 project_path,
                 ProjectSwitchDisposition::
@@ -12756,7 +12758,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             ASSERT_TRUE(viewer.projectOpen(
                 project_path,
                 ProjectSwitchDisposition::
@@ -12846,7 +12848,7 @@ namespace lfs::vis {
                             ->ensureLoaded());
             viewer.input_controller_ =
                 std::make_unique<InputController>(
-                    nullptr, viewer.getViewport());
+                    nullptr, viewer);
 
             auto& scene = viewer.getScene();
             const auto splat = scene.addSplat(
@@ -14157,7 +14159,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getWindowManager()->init());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         auto opened = viewer.projectOpen(
             project_path,
             ProjectSwitchDisposition::DiscardChanges);
@@ -14285,7 +14287,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getWindowManager()->init());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         auto opened = viewer.projectOpen(
             project_path,
             ProjectSwitchDisposition::DiscardChanges);
@@ -14330,7 +14332,7 @@ namespace lfs::vis {
         VisualizerImpl viewer(projectOptions());
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         ASSERT_TRUE(viewer.getWindowManager()->init());
-        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer);
         ASSERT_TRUE(viewer.projectOpen(project_path, ProjectSwitchDisposition::DiscardChanges));
         // The viewer queue has not committed hydration yet.
         const auto loading_start = viewer.startTraining();
@@ -14369,7 +14371,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getWindowManager()->init());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         auto opened = viewer.projectOpen(
             project_path,
             ProjectSwitchDisposition::DiscardChanges);
@@ -14421,7 +14423,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getWindowManager()->init());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         auto opened = viewer.projectOpen(
             project_path,
             ProjectSwitchDisposition::DiscardChanges);
@@ -14473,7 +14475,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getWindowManager()->init());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         auto opened = viewer.projectOpen(
             project_path,
             ProjectSwitchDisposition::DiscardChanges);
@@ -14567,7 +14569,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getWindowManager()->init());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         auto opened = viewer.projectOpen(
             project_path,
             ProjectSwitchDisposition::DiscardChanges);
@@ -14641,7 +14643,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getWindowManager()->init());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         auto opened = viewer.projectOpen(
             project_path,
             ProjectSwitchDisposition::DiscardChanges);
@@ -14722,7 +14724,7 @@ namespace lfs::vis {
         ASSERT_TRUE(viewer.getWindowManager()->init());
         viewer.input_controller_ =
             std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         auto opened = viewer.projectOpen(
             project_path,
             ProjectSwitchDisposition::DiscardChanges);
@@ -14975,7 +14977,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto* const lifecycle =
                 viewer.project_lifecycle_.get();
             ASSERT_NE(lifecycle, nullptr);
@@ -15052,7 +15054,7 @@ namespace lfs::vis {
         VisualizerImpl viewer(options);
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ = std::make_unique<InputController>(
-            nullptr, viewer.getViewport());
+            nullptr, viewer);
         auto* const lifecycle = viewer.project_lifecycle_.get();
         ASSERT_NE(lifecycle, nullptr);
 
@@ -15118,7 +15120,7 @@ namespace lfs::vis {
             viewer.input_controller_ =
                 std::make_unique<InputController>(
                     nullptr,
-                    viewer.getViewport());
+                    viewer);
             auto untitled = viewer.projectGetInfo();
             ASSERT_TRUE(untitled);
             ASSERT_FALSE(untitled->path.has_value());
@@ -15456,7 +15458,7 @@ namespace lfs::vis {
         VisualizerImpl viewer(projectOptions());
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
-            std::make_unique<InputController>(nullptr, viewer.getViewport());
+            std::make_unique<InputController>(nullptr, viewer);
         viewer.getParameterManager()->getDatasetConfig().images = "images_8";
         ASSERT_TRUE(viewer.projectCreateAt(project_path));
 
@@ -15503,7 +15505,7 @@ namespace lfs::vis {
         VisualizerImpl viewer(projectOptions());
         ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
         viewer.input_controller_ =
-            std::make_unique<InputController>(nullptr, viewer.getViewport());
+            std::make_unique<InputController>(nullptr, viewer);
         viewer.getParameterManager()->getDatasetConfig().images = "images_8";
         ASSERT_TRUE(viewer.projectCreateAt(project_path));
 

@@ -63,7 +63,7 @@ namespace lfs::vis {
             // arrives during initialize(). Capture needs its real state, not
             // a window, an event loop, or GPU initialization.
             viewer.input_controller_ = std::make_unique<InputController>(
-                nullptr, viewer.getViewport());
+                nullptr, viewer);
         }
     };
 
@@ -1280,8 +1280,7 @@ namespace {
         staged.split_view_offset = saved_offset;
         rendering->updateSettings(staged);
         rendering->restoreSplitViewMode(
-            lfs::vis::SplitViewMode::PLYComparison,
-            viewer.getViewport());
+            lfs::vis::SplitViewMode::PLYComparison);
         EXPECT_EQ(
             rendering->getSettings().split_view_offset,
             0u);
@@ -2227,7 +2226,7 @@ namespace {
         expect_bool(render, "/show_camera_frustums", true);
         expect_bool(render, "/show_pivot", true);
         prove("VIEW-197");
-        expect_json(render, "/split_view_mode", 3);
+        expect_json(render, "/split_view_mode", 1);
         expect_json(render, "/gt_comparison_mode", 2);
         expect_json(render, "/raster_backend", "3dgut");
         EXPECT_FALSE(render.contains("gut"));
@@ -2253,17 +2252,17 @@ namespace {
         expect_json(render, "/lod_page_pool_splats", 765'432);
         expect_bool(render, "/lod_debug_colors", true);
         prove("VIEW-202");
-        expect_json(view, "/split/panel_grid_planes", Json::array({0, 2}));
+        EXPECT_FALSE(at(view, "/split").contains("panel_grid_planes"));
         prove("VIEW-203");
-        ASSERT_EQ(at(view, "/panel_cameras").size(), 2u);
+        ASSERT_EQ(at(view, "/panel_cameras").size(), 1u);
         expect_json(view, "/panel_cameras/0/R",
                     Json::array({0.0f, 1.0f, 0.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f}));
-        EXPECT_TRUE(at(view, "/panel_cameras/1/ortho_scale").is_number());
+        EXPECT_TRUE(at(view, "/panel_cameras/0/ortho_scale").is_number());
         prove("VIEW-204");
         expect_json(view, "/navigation/mode", "drone");
         expect_bool(view, "/navigation/view_snap", true);
         prove("VIEW-205");
-        expect_json(view, "/split/focused_panel", "right");
+        EXPECT_FALSE(at(view, "/split").contains("focused_panel"));
         expect_json(view, "/split/gt_camera_id", 41);
         prove("VIEW-206");
         ASSERT_EQ(at(view, "/camera_bookmarks").size(), 1u);

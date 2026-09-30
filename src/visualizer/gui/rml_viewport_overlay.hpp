@@ -158,10 +158,7 @@ namespace lfs::vis::gui {
         LFS_VIS_API void shutdown();
         LFS_VIS_API void setViewportBounds(glm::vec2 pos, glm::vec2 size, glm::vec2 screen_origin);
         void setViewportContentOffset(float x);
-        void setToolbarPanels(float primary_x, float primary_width, float inset,
-                              bool show_secondary = false,
-                              float secondary_x = 0.0f,
-                              float secondary_width = 0.0f);
+        void setToolbarPanels(float primary_x, float primary_width, float inset);
         void setLeftDockResizeIndicator(bool visible, bool active, float thickness);
         void setSplitDividerOverlay(SplitDividerOverlayState state);
         void setGTMetricsOverlay(GTMetricsOverlayState state);
@@ -268,14 +265,8 @@ namespace lfs::vis::gui {
         float primary_toolbar_x_ = 0.0f;
         float toolbar_inset_ = 0.0f;
         float primary_toolbar_width_ = 0.0f;
-        bool show_secondary_toolbar_ = false;
-        float secondary_toolbar_x_ = 0.0f;
-        float secondary_toolbar_width_ = 0.0f;
         float applied_primary_toolbar_x_ = 0.0f;
         float applied_primary_toolbar_width_ = -1.0f;
-        bool applied_show_secondary_toolbar_ = false;
-        float applied_secondary_toolbar_x_ = 0.0f;
-        float applied_secondary_toolbar_width_ = -1.0f;
         bool toolbar_roots_dirty_ = true;
         bool toolbar_rail_layout_dirty_ = true;
         float last_toolbar_dpi_ = 0.0f;
@@ -284,9 +275,7 @@ namespace lfs::vis::gui {
         std::string applied_viewport_toolbar_position_;
         float viewport_toolbar_free_y_ = 0.5f;
         float applied_primary_toolbar_top_ = std::numeric_limits<float>::quiet_NaN();
-        float applied_secondary_toolbar_top_ = std::numeric_limits<float>::quiet_NaN();
         Rml::Element* primary_toolbar_drag_handle_ = nullptr;
-        Rml::Element* secondary_toolbar_drag_handle_ = nullptr;
         ToolbarDragListener toolbar_drag_listener_;
         bool toolbar_drag_active_ = false;
         bool applied_toolbar_drag_active_ = false;

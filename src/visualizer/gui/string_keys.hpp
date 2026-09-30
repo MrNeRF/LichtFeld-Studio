@@ -486,8 +486,6 @@ namespace lichtfeld::Strings {
             "selection.history_depth_window_expired";
         inline constexpr const char* HISTORY_DEPTH_WINDOW_DRAG =
             "selection.history_depth_window_drag";
-        inline constexpr const char* HISTORY_DEPTH_WINDOW_SYNC =
-            "selection.history_depth_window_sync";
     } // namespace Selection
 
     namespace TrainingPanel {

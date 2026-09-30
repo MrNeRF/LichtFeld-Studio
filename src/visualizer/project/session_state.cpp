@@ -1299,10 +1299,10 @@ namespace lfs::vis::project {
                 find_required_array(
                     root, "panel_cameras");
             if (cameras == root.end() ||
-                cameras->size() != 2) {
+                cameras->size() != 1) {
                 return fail<void>(
                     lfs::ErrorCode::DataLoss,
-                    "VIEW must contain two panel cameras",
+                    "VIEW must contain one camera",
                     "VIEW.panel_cameras");
             }
             for (const auto& camera : *cameras) {
@@ -2323,11 +2323,6 @@ namespace lfs::vis::project {
         const auto primary =
             capturePanelCameraProjectState(
                 viewer.getViewport(), settings.ortho_scale);
-        const auto secondary =
-            capturePanelCameraProjectState(
-                rendering_manager
-                    ->projectSecondaryViewport(),
-                settings.ortho_scale);
         const auto& tool_registry =
             UnifiedToolRegistry::instance();
         const auto& gizmo =
@@ -2398,8 +2393,6 @@ namespace lfs::vis::project {
              Json::array({
                  panelCameraProjectStateToJson(
                      "primary", primary),
-                 panelCameraProjectStateToJson(
-                     "secondary", secondary),
              })},
             {"navigation",
              {
@@ -2414,12 +2407,6 @@ namespace lfs::vis::project {
              }},
             {"split",
              {
-                 {"focused_panel",
-                  rendering_manager
-                              ->getFocusedSplitPanel() ==
-                          SplitViewPanelId::Right
-                      ? "right"
-                      : "left"},
                  {"gt_camera_id",
                   rendering_manager
                               ->getCurrentCameraId() >=
@@ -2428,17 +2415,6 @@ namespace lfs::vis::project {
                             rendering_manager
                                 ->getCurrentCameraId())
                       : Json(nullptr)},
-                 {"panel_grid_planes",
-                  Json::array({
-                      rendering_manager
-                          ->getGridPlaneForPanel(
-                              SplitViewPanelId::
-                                  Left),
-                      rendering_manager
-                          ->getGridPlaneForPanel(
-                              SplitViewPanelId::
-                                  Right),
-                  })},
              }},
             {"camera_bookmarks",
              std::move(bookmarks_json)},
@@ -3332,11 +3308,8 @@ namespace lfs::vis::project {
                     restored->raster_backend);
             rendering->updateSettings(*restored);
 
-            // The service transition creates/copies secondary panel state;
-            // saved cameras therefore apply only after this call.
             rendering->restoreSplitViewMode(
-                desired_split,
-                viewer.getViewport());
+                desired_split);
             auto split_settings =
                 rendering->getSettings();
             split_settings.split_view_offset =
@@ -3353,46 +3326,11 @@ namespace lfs::vis::project {
                     find_required_object(
                         root, "split");
                 split != root.end()) {
-                if (const auto planes =
-                        find_required_array(
-                            *split,
-                            "panel_grid_planes");
-                    planes != split->end() &&
-                    planes->size() == 2) {
-                    if (planes->at(0)
-                            .is_number_integer()) {
-                        rendering
-                            ->setGridPlaneForPanel(
-                                SplitViewPanelId::
-                                    Left,
-                                planes->at(0)
-                                    .get<int>());
-                    }
-                    if (planes->at(1)
-                            .is_number_integer()) {
-                        rendering
-                            ->setGridPlaneForPanel(
-                                SplitViewPanelId::
-                                    Right,
-                                planes->at(1)
-                                    .get<int>());
-                    }
-                }
-                const auto focused =
-                    scalar<std::string>(
-                        *split,
-                        "focused_panel");
-                rendering->setFocusedSplitPanel(
-                    focused &&
-                            *focused == "right"
-                        ? SplitViewPanelId::Right
-                        : SplitViewPanelId::Left);
-                const auto camera_id =
-                    scalar<int>(
-                        *split,
-                        "gt_camera_id");
-                rendering->setCurrentCameraId(
-                    camera_id.value_or(-1));
+                const auto camera_id = scalar<int>(
+                    *split, "gt_camera_id");
+                rendering
+                    ->setCurrentCameraId(
+                        camera_id.value_or(-1));
             }
 
             if (const auto primary_json =
@@ -3404,19 +3342,6 @@ namespace lfs::vis::project {
                     camera) {
                     applyPanelCameraProjectState(
                         viewer.getViewport(),
-                        *camera);
-                }
-            }
-            if (const auto secondary_json =
-                    panel_camera_json(
-                        root, "secondary")) {
-                if (auto camera =
-                        panelCameraProjectStateFromJson(
-                            *secondary_json);
-                    camera) {
-                    applyPanelCameraProjectState(
-                        rendering
-                            ->projectSecondaryViewport(),
                         *camera);
                 }
             }

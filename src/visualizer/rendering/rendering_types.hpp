@@ -38,8 +38,7 @@ namespace lfs::vis {
     enum class SplitViewMode {
         Disabled,
         PLYComparison,
-        GTComparison,
-        IndependentDual
+        GTComparison
     };
 
     enum class GTComparisonMode {
@@ -149,10 +148,6 @@ namespace lfs::vis {
 
     [[nodiscard]] inline bool splitViewUsesGTComparison(const SplitViewMode mode) {
         return mode == SplitViewMode::GTComparison;
-    }
-
-    [[nodiscard]] inline bool splitViewUsesIndependentPanels(const SplitViewMode mode) {
-        return mode == SplitViewMode::IndependentDual;
     }
 
     [[nodiscard]] inline float effectiveSceneRenderScale(

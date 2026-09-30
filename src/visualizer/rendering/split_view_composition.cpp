@@ -319,65 +319,10 @@ namespace lfs::vis {
             return plan;
         }
 
-        [[nodiscard]] std::optional<SplitViewCompositionPlan> buildIndependentDualPlan(
-            const FrameContext& ctx) {
-            if (!ctx.model || ctx.render_size.x <= 1 || ctx.render_size.y <= 0) {
-                return std::nullopt;
-            }
-
-            const auto* left_panel = ctx.findViewPanel(SplitViewPanelId::Left);
-            const auto* right_panel = ctx.findViewPanel(SplitViewPanelId::Right);
-            if (!left_panel || !right_panel) {
-                return std::nullopt;
-            }
-
-            auto plan = makePlan(
-                std::array<SplitViewPanelPlan, 2>{
-                    SplitViewPanelPlan{
-                        .label = LOC(lichtfeld::Strings::StatusBar::PRIMARY_VIEW),
-                        .panel =
-                            {.content =
-                                 buildModelPanelContent(
-                                     ctx,
-                                     *left_panel->viewport,
-                                     left_panel->render_size,
-                                     *ctx.model,
-                                     glm::mat4(1.0f),
-                                     true,
-                                     SplitViewPanelId::Left),
-                             .presentation =
-                                 {.start_position = left_panel->start_position,
-                                  .end_position = left_panel->end_position,
-                                  .texcoord_scale = glm::vec2(1.0f, 1.0f),
-                                  .flip_y = std::nullopt,
-                                  .normalize_x_to_panel = true}}},
-                    SplitViewPanelPlan{
-                        .label = LOC(lichtfeld::Strings::StatusBar::SECONDARY_VIEW),
-                        .panel =
-                            {.content =
-                                 buildModelPanelContent(
-                                     ctx,
-                                     *right_panel->viewport,
-                                     right_panel->render_size,
-                                     *ctx.model,
-                                     glm::mat4(1.0f),
-                                     true,
-                                     SplitViewPanelId::Right),
-                             .presentation =
-                                 {.start_position = right_panel->start_position,
-                                  .end_position = right_panel->end_position,
-                                  .texcoord_scale = glm::vec2(1.0f, 1.0f),
-                                  .flip_y = std::nullopt,
-                                  .normalize_x_to_panel = true}}}},
-                ctx.render_size,
-                ctx.settings.background_color);
-            plan.mode_label = LOC(lichtfeld::Strings::StatusBar::SPLIT_VIEW);
-            plan.detail_label = std::format("{} | {}", plan.panels[0].label, plan.panels[1].label);
-            return plan;
-        }
     } // namespace
 
-    std::optional<SplitViewCompositionPlan> buildSplitViewCompositionPlan(
+    std::optional<SplitViewCompositionPlan>
+    buildSplitViewCompositionPlan(
         const FrameContext& ctx,
         const FrameResources& res) {
         switch (ctx.settings.split_view_mode) {
@@ -385,8 +330,6 @@ namespace lfs::vis {
             return buildGTComparisonPlan(ctx, res);
         case SplitViewMode::PLYComparison:
             return buildPLYComparisonPlan(ctx);
-        case SplitViewMode::IndependentDual:
-            return buildIndependentDualPlan(ctx);
         case SplitViewMode::Disabled:
         default:
             return std::nullopt;

@@ -334,31 +334,18 @@ namespace lfs::vis::op {
         std::optional<SceneTopologyProof> expected_topology_;
     };
 
-    struct DepthWindowSettingsState {
-        std::array<DepthWindowState, 2> panels{};
-        DepthWindowState projection{};
-        bool sync = false;
-        SplitViewPanelId panel = SplitViewPanelId::Left;
-        std::uint64_t mode_epoch = 0;
-        bool independent_dual_snapshot = false;
-
-        friend bool operator==(const DepthWindowSettingsState&,
-                               const DepthWindowSettingsState&) = default;
-    };
-
     struct DepthWindowModeSnapshot {
-        std::array<DepthWindowState, 2> panels{};
-        bool sync = false;
-        DepthWindowState projection{};
+        DepthWindowState window{};
         std::uint64_t mode_epoch = 0;
-        bool independent_dual = false;
+        friend bool operator==(const DepthWindowModeSnapshot&,
+                               const DepthWindowModeSnapshot&) = default;
     };
 
     class LFS_VIS_API DepthWindowSettingsUndoEntry : public UndoEntry {
     public:
         DepthWindowSettingsUndoEntry(RenderingManager& rendering_manager,
-                                     DepthWindowSettingsState before,
-                                     DepthWindowSettingsState after,
+                                     DepthWindowModeSnapshot before,
+                                     DepthWindowModeSnapshot after,
                                      bool rebase_readout);
 
         void undo() override;
@@ -370,34 +357,12 @@ namespace lfs::vis::op {
 
     private:
         [[nodiscard]] bool isExpired() const;
-        bool apply(const DepthWindowSettingsState& state);
-
-        RenderingManager& rendering_manager_;
-        DepthWindowSettingsState before_;
-        DepthWindowSettingsState after_;
-        bool rebase_readout_ = false;
-    };
-
-    class LFS_VIS_API DepthWindowSyncUndoEntry : public UndoEntry {
-    public:
-        DepthWindowSyncUndoEntry(RenderingManager& rendering_manager,
-                                 DepthWindowModeSnapshot before,
-                                 DepthWindowModeSnapshot after);
-
-        void undo() override;
-        void redo() override;
-        [[nodiscard]] std::string name() const override { return "selection.depth_window_sync"; }
-        [[nodiscard]] UndoMetadata metadata() const override;
-        [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this); }
-        [[nodiscard]] DirtyMask dirtyFlags() const override { return DirtyFlag::SELECTION; }
-
-    private:
-        [[nodiscard]] bool isExpired() const;
-        bool apply(const DepthWindowModeSnapshot& snapshot);
+        bool apply(const DepthWindowModeSnapshot& state);
 
         RenderingManager& rendering_manager_;
         DepthWindowModeSnapshot before_;
         DepthWindowModeSnapshot after_;
+        bool rebase_readout_ = false;
     };
 
     class LFS_VIS_API CropBoxUndoEntry : public UndoEntry {

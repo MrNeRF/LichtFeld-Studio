@@ -19,6 +19,19 @@
 namespace lfs::vis {
 
     namespace {
+        struct TestViewTargets final : ViewTargets {
+            explicit TestViewTargets(Viewport& camera) : camera(camera) {}
+            ViewTarget activeView() override { return {1, &camera, {0, 0}, {200, 200}}; }
+            ViewTarget viewAt(float x, float y) override {
+                auto target = activeView();
+                return target.contains(x, y) ? target : ViewTarget{};
+            }
+            ViewTarget findView(ViewId id) override { return id == 1 ? activeView() : ViewTarget{}; }
+            void activateView(ViewId) override {}
+            bool runViewCommand(ViewId, std::string_view) override { return false; }
+            Viewport& camera;
+        };
+
         constexpr float kStartDistance = 5.0f;
 
         class TrackpadNavigationTest : public ::testing::Test {
@@ -47,7 +60,8 @@ namespace lfs::vis {
             }
 
             Viewport viewport{200, 200};
-            InputController controller{nullptr, viewport};
+            TestViewTargets views{viewport};
+            InputController controller{nullptr, views};
         };
     } // namespace
 

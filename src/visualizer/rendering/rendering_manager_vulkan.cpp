@@ -497,21 +497,7 @@ namespace lfs::vis {
                 });
             };
 
-            const auto layouts = split_view_service.panelLayouts(settings, full_screen_width);
-            if (!layouts || full_screen_width <= 1) {
-                make_panel(SplitViewPanelId::Left, &primary_viewport, 0.0f, screen_viewport_size.x);
-                return panels;
-            }
-
-            panels.reserve(layouts->size());
-            make_panel(SplitViewPanelId::Left,
-                       &primary_viewport,
-                       static_cast<float>((*layouts)[0].x),
-                       static_cast<float>((*layouts)[0].width));
-            make_panel(SplitViewPanelId::Right,
-                       &split_view_service.secondaryViewport(),
-                       static_cast<float>((*layouts)[1].x),
-                       static_cast<float>((*layouts)[1].width));
+            make_panel(SplitViewPanelId::Left, &primary_viewport, 0.0f, screen_viewport_size.x);
             return panels;
         }
 
@@ -1523,28 +1509,8 @@ namespace lfs::vis {
 #endif
             vksplat_viewport_renderer_->releaseScratchOnIdle(true);
         }
-        const auto [frame_settings, frame_depth_window_drag_preview, frame_panel_depth_windows] = [this] {
-            std::lock_guard lock(settings_mutex_);
-            std::array<DepthWindowState, 2> resolved_depth_windows{};
-            if (split_view_service_.isIndependentDualActive(settings_)) {
-                resolved_depth_windows = panel_depth_windows_;
-            } else {
-                const auto projection_window = [&]() {
-                    return DepthWindowState{
-                        .near_plane = -settings_.depth_filter_max.z,
-                        .far_plane = -settings_.depth_filter_min.z,
-                        .scale_x = settings_.depth_filter_scale_x,
-                        .scale_y = settings_.depth_filter_scale_y,
-                        .offset_x = settings_.depth_filter_offset_x,
-                        .offset_y = settings_.depth_filter_offset_y,
-                    };
-                }();
-                resolved_depth_windows = {projection_window, projection_window};
-            }
-            // The preview gate is a counter (nested/replacing modals); the
-            // frame only cares whether any drag is live.
-            return std::tuple(settings_, depthWindowDragActiveLocked(), resolved_depth_windows);
-        }();
+        const auto frame_settings = getSettings();
+        const bool frame_depth_window_drag_preview = depthWindowDragPreview();
         SceneManager* const scene_manager = context.scene_manager;
         auto* const trainer_manager = scene_manager ? scene_manager->getTrainerManager() : nullptr;
         const bool is_training = scene_manager && scene_manager->hasDataset() &&
@@ -1835,10 +1801,7 @@ namespace lfs::vis {
         const DirtyMask pending_dirty = dirty_mask_.load(std::memory_order_relaxed);
         const bool only_split_position_pending =
             (pending_dirty & ~DirtyFlag::SPLIT_POSITION) == 0;
-        const bool split_position_requires_panel_rerender =
-            split_view_service_.isIndependentDualActive(frame_settings);
         if ((pending_dirty & DirtyFlag::SPLIT_POSITION) != 0 &&
-            !split_position_requires_panel_rerender &&
             vulkan_viewport_image_size_ == render_size &&
             has_cached_split_view_output() &&
             update_cached_split_position(!only_split_position_pending)) {
@@ -2060,7 +2023,6 @@ namespace lfs::vis {
         }
         const bool temporal_split_supported =
             !split_view_service_.isActive(frame_settings) ||
-            splitViewUsesIndependentPanels(frame_settings.split_view_mode) ||
             splitViewUsesPLYComparison(frame_settings.split_view_mode);
         const bool temporal_backend_requested =
             requested_upscaler == SceneUpscalerBackend::Temporal ||
@@ -2163,7 +2125,6 @@ namespace lfs::vis {
 
         const DirtyMask split_deferred_dirty = frame_dirty & ~DirtyFlag::SPLIT_POSITION;
         if ((frame_dirty & DirtyFlag::SPLIT_POSITION) != 0 &&
-            !split_position_requires_panel_rerender &&
             has_cached_viewport_output &&
             update_cached_split_position(split_deferred_dirty != 0)) {
             const DirtyMask deferred_dirty = split_deferred_dirty;
@@ -2179,9 +2140,7 @@ namespace lfs::vis {
         if (resize_deferring &&
             has_cached_viewport_output &&
             !resize_result.render_resized_frame) {
-            if (!splitViewUsesIndependentPanels(frame_settings.split_view_mode)) {
-                update_cached_split_position(false);
-            }
+            update_cached_split_position(false);
             constexpr DirtyMask resize_defer_consumed_dirty =
                 DirtyFlag::CAMERA | DirtyFlag::VIEWPORT | DirtyFlag::OVERLAY;
             const DirtyMask deferred_dirty = frame_dirty & ~resize_defer_consumed_dirty;
@@ -2342,7 +2301,7 @@ namespace lfs::vis {
             .selection_flash_intensity = getSelectionFlashIntensity(),
             .view_panels = {},
             .scene_jitter_pixels = applied_temporal_jitter_pixels,
-            .panel_depth_windows = frame_panel_depth_windows};
+        };
 
         const auto complete_temporal_convergence_frame =
             [this, temporal_camera_cut_generation]() {
@@ -2381,32 +2340,6 @@ namespace lfs::vis {
                 }
             }
         };
-
-        const auto populate_independent_split_mesh_panels =
-            [&](VulkanMeshFrame& frame) {
-                if (!pending_split_view.enabled ||
-                    !splitViewUsesIndependentPanels(frame_settings.split_view_mode)) {
-                    return;
-                }
-                const auto layouts = split_view_service_.panelLayouts(frame_settings, render_size.x);
-                if (!layouts || render_size.y <= 0) {
-                    return;
-                }
-                frame.panels.clear();
-                const auto append_panel =
-                    [&](const Viewport& viewport, const std::size_t index) {
-                        const auto& layout = (*layouts)[index];
-                        const glm::ivec2 panel_size{std::max(layout.width, 1), render_size.y};
-                        const auto panel_view = frame_ctx.makeViewportData(viewport, panel_size);
-                        frame.panels.push_back(lfs::vis::VulkanMeshViewportPanel{
-                            .start_position = layout.start_position,
-                            .end_position = layout.end_position,
-                            .view_projection = panel_view.getProjectionMatrix() * panel_view.getViewMatrix(),
-                            .camera_position = panel_view.translation});
-                    };
-                append_panel(context.viewport, 0);
-                append_panel(split_view_service_.secondaryViewport(), 1);
-            };
 
         struct RenderedPanel {
             std::shared_ptr<lfs::core::Tensor> image;
@@ -3598,66 +3531,6 @@ namespace lfs::vis {
                     LOG_WARN("{}", render_error);
                 }
             }
-        } else if (splitViewUsesIndependentPanels(frame_settings.split_view_mode)) {
-            const auto layouts = split_view_service_.panelLayouts(frame_settings, render_size.x);
-            const auto output_layouts =
-                split_view_service_.panelLayouts(frame_settings, current_size.x);
-            if (layouts && output_layouts && render_size.x > 1 && current_size.x > 1) {
-                const auto panel_render_extent =
-                    [&](const std::size_t index) -> glm::ivec2 {
-                    const glm::ivec2 proportional{std::max((*layouts)[index].width, 1),
-                                                  render_size.y};
-                    if (!nvidia_dlss_optimal_query_allowed)
-                        return proportional;
-                    const glm::ivec2 panel_output{std::max((*output_layouts)[index].width, 1),
-                                                  current_size.y};
-                    return nvidiaDlssOptimalRenderExtent(panel_output, nvidia_dlss_quality)
-                        .value_or(proportional);
-                };
-                auto left = render_panel_image(
-                    context.viewport,
-                    panel_render_extent(0),
-                    SplitViewPanelId::Left,
-                    std::nullopt,
-                    nullptr,
-                    nullptr,
-                    split_left_render_target_);
-                auto right = render_panel_image(
-                    split_view_service_.secondaryViewport(),
-                    panel_render_extent(1),
-                    SplitViewPanelId::Right,
-                    std::nullopt,
-                    nullptr,
-                    nullptr,
-                    split_right_render_target_);
-                if (left && right) {
-                    if (left->temporal_input) {
-                        left->temporal_input->output_extent = {
-                            std::max((*output_layouts)[0].width, 1), current_size.y};
-                    }
-                    if (right->temporal_input) {
-                        right->temporal_input->output_extent = {
-                            std::max((*output_layouts)[1].width, 1), current_size.y};
-                    }
-                    pending_split_view.enabled = true;
-                    pending_split_view.split_position = frame_settings.split_position;
-                    pending_split_view.background = frame_settings.background_color;
-                    pending_split_view.content_rect = {0, 0, render_size.x, render_size.y};
-                    pending_split_view.left = make_split_panel(
-                        *left, (*layouts)[0].start_position, (*layouts)[0].end_position, true);
-                    pending_split_view.right = make_split_panel(
-                        *right, (*layouts)[1].start_position, (*layouts)[1].end_position, true);
-                    rendered_metadata = makeSplitMetadata(left->metadata, right->metadata, frame_settings.split_position);
-                    rendered_split_info = SplitViewInfo{
-                        .enabled = true,
-                        .mode_label = "Split View",
-                        .detail_label = "Primary | Secondary",
-                        .left_name = "Primary View",
-                        .right_name = "Secondary View"};
-                } else {
-                    render_error = left ? right.error() : left.error();
-                }
-            }
         } else if (splitViewUsesPLYComparison(frame_settings.split_view_mode) && scene_manager && has_visible_gaussian_model) {
             const auto& scene = scene_manager->getScene();
             const auto visible_nodes = scene.getVisibleSplatNodeSlots();
@@ -3897,7 +3770,6 @@ namespace lfs::vis {
                 if (!frame_ctx.scene_state.meshes.empty() ||
                     environmentBackgroundEnabled(frame_settings)) {
                     auto mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view);
-                    populate_independent_split_mesh_panels(mesh_frame);
                     if (render_result->depth_image_view != VK_NULL_HANDLE) {
                         // Hardware depth attachment stores Vulkan-native NDC z; the
                         // depth-blit pass can use it directly without near/far conversion.
@@ -3938,13 +3810,7 @@ namespace lfs::vis {
                 render_error = "Point-cloud Vulkan render failed";
             }
         } else if (has_visible_gaussian_model && hasRenderableGaussians(model)) {
-            // The main render is Left in independent-dual mode. Tag it explicitly
-            // so the builder cannot substitute Right's window when Right has focus.
-            const std::optional<SplitViewPanelId> main_render_panel =
-                splitViewUsesIndependentPanels(frame_settings.split_view_mode)
-                    ? std::optional<SplitViewPanelId>(SplitViewPanelId::Left)
-                    : std::nullopt;
-            auto request = buildViewportRenderRequest(frame_ctx, render_size, nullptr, main_render_panel);
+            auto request = buildViewportRenderRequest(frame_ctx, render_size, nullptr);
             request.raster_backend =
                 lfs::rendering::normalizeViewerRasterBackend(request.raster_backend, request.gut);
             request.gut = lfs::rendering::isGutBackend(request.raster_backend);
@@ -4189,7 +4055,6 @@ namespace lfs::vis {
                                 pending_split_view.enabled;
                             if (publish_mesh_frame) {
                                 auto mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view);
-                                populate_independent_split_mesh_panels(mesh_frame);
                                 if (render_result.depth_image_view != VK_NULL_HANDLE) {
                                     mesh_frame.depth_blit.external_image = render_result.depth_image;
                                     mesh_frame.depth_blit.external_image_view = render_result.depth_image_view;
@@ -4583,7 +4448,6 @@ namespace lfs::vis {
             (environmentBackgroundEnabled(frame_settings) || !frame_ctx.scene_state.meshes.empty() ||
              pending_split_view.enabled)) {
             VulkanMeshFrame gpu_mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view);
-            populate_independent_split_mesh_panels(gpu_mesh_frame);
 
             // Splat depth -> mesh-pass z-test source. Only meaningful when the
             // active render path produced a tensor-backed depth output.

@@ -1090,15 +1090,6 @@ namespace lfs::vis::gui {
             panels.reserve(2);
 
             const auto& viewport = viewer.getViewport();
-            if (rendering_manager.isIndependentSplitViewActive()) {
-                addResolvedVulkanPanel(panels, rendering_manager.resolveViewerPanel(
-                                                   viewport, viewport_layout.pos, viewport_layout.size,
-                                                   std::nullopt, SplitViewPanelId::Left));
-                addResolvedVulkanPanel(panels, rendering_manager.resolveViewerPanel(
-                                                   viewport, viewport_layout.pos, viewport_layout.size,
-                                                   std::nullopt, SplitViewPanelId::Right));
-            }
-
             if (!panels.empty()) {
                 return panels;
             }
@@ -3514,9 +3505,7 @@ namespace lfs::vis::gui {
                                             const VisualizerImpl& viewer,
                                             const ViewportLayout& viewport_layout,
                                             const RenderSettings& settings,
-                                            RenderingManager& rendering_manager,
-                                            const RenderingManager::DepthWindowOverlaySnapshot& depth_window_snapshot,
-                                            SceneManager* scene_manager,
+                                            RenderingManager& rendering_manager, SceneManager* scene_manager,
                                             const SceneRenderState* scene_state,
                                             const GizmoState& gizmo) {
             if (params.viewport_size.x <= 0.0f || params.viewport_size.y <= 0.0f) {
@@ -3547,16 +3536,14 @@ namespace lfs::vis::gui {
                 // The depth window (rect + handles) draws on no panel while GT
                 // comparison mode is active — see depthWindowOverlaySuppressed.
                 const lfs::vis::DepthWindowState panel_depth_window =
-                    depth_window_snapshot.independent_dual_active
-                        ? depth_window_snapshot.panel_windows[splitViewPanelIndex(panel.panel)]
-                        : lfs::vis::DepthWindowState{
-                              .near_plane = -settings.depth_filter_max.z,
-                              .far_plane = -settings.depth_filter_min.z,
-                              .scale_x = settings.depth_filter_scale_x,
-                              .scale_y = settings.depth_filter_scale_y,
-                              .offset_x = settings.depth_filter_offset_x,
-                              .offset_y = settings.depth_filter_offset_y,
-                          };
+                    lfs::vis::DepthWindowState{
+                        .near_plane = -settings.depth_filter_max.z,
+                        .far_plane = -settings.depth_filter_min.z,
+                        .scale_x = settings.depth_filter_scale_x,
+                        .scale_y = settings.depth_filter_scale_y,
+                        .offset_x = settings.depth_filter_offset_x,
+                        .offset_y = settings.depth_filter_offset_y,
+                    };
                 appendCropAndFilterOverlays(params, panel, settings, scene_state, scene_manager, gizmo,
                                             panel_depth_window.scale_x,
                                             panel_depth_window.scale_y,
@@ -4863,7 +4850,8 @@ namespace lfs::vis::gui {
     void GuiManager::initDevResourceHotReload() {
         dev_resource_watch_ = {};
 
-#if !defined(LFS_BUILD_PORTABLE) && (defined(LFS_DEV_RMLUI_SOURCE_DIR) || defined(LFS_DEV_LOCALE_SOURCE_DIR))
+#if !defined(LFS_BUILD_PORTABLE) && \
+    (defined(LFS_DEV_RMLUI_SOURCE_DIR) || defined(LFS_DEV_LOCALE_SOURCE_DIR))
         if (!lfs::core::environment::flag("LFS_DEV_HOT_RELOAD", true))
             return;
 
@@ -5352,7 +5340,6 @@ namespace lfs::vis::gui {
 
         if (auto* const rendering_manager = viewer_ ? viewer_->getRenderingManager() : nullptr) {
             const auto settings = rendering_manager->getSettings();
-            const auto depth_window_snapshot = rendering_manager->getDepthWindowOverlaySnapshot();
             params.scene_upscaler = sceneUpscalerBackendFromId(settings.scene_upscaler)
                                         .value_or(SceneUpscalerBackend::Native);
             params.background_color = settings.background_color;
@@ -5389,7 +5376,7 @@ namespace lfs::vis::gui {
                     grid.projection = proj;
                     grid.view_projection = proj * view;
                     grid.view_position = panel.viewport->getTranslation();
-                    grid.plane = rendering_manager->getGridPlaneForPanel(panel.panel);
+                    grid.plane = settings.grid_plane;
                     grid.opacity = params.grid_opacity;
                     grid.orthographic = settings.orthographic;
                     params.grid_overlays.push_back(grid);
@@ -5418,7 +5405,6 @@ namespace lfs::vis::gui {
                                                viewport_layout_,
                                                settings,
                                                *rendering_manager,
-                                               depth_window_snapshot,
                                                scene_manager,
                                                overlay_scene_state ? &*overlay_scene_state : nullptr,
                                                gizmo_state);
@@ -6689,14 +6675,14 @@ namespace lfs::vis::gui {
 
         // The viewport overlay (tool rail, gizmo toolbars, HUDs) lives in the
         // active 3D view.
-        rml_viewport_overlay_.setToolbarPanels(0.0f, viewport_layout_.size.x, 0.0f, false, 0.0f, 0.0f);
+        rml_viewport_overlay_.setToolbarPanels(0.0f, viewport_layout_.size.x, 0.0f);
         rml_viewport_overlay_.setViewportBounds(
             viewport_layout_.pos, viewport_layout_.size,
             {panel_input.screen_x, panel_input.screen_y});
         rml_viewport_overlay_.setViewportContentOffset(0.0f);
         RmlViewportOverlay::SplitDividerOverlayState split_divider_state;
         if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
-            rendering && rendering->isSplitViewActive() && !rendering->isIndependentSplitViewActive()) {
+            rendering && rendering->isSplitViewActive()) {
             const auto divider_x = rendering->getSplitDividerScreenX(viewport_layout_.pos, viewport_layout_.size);
             const auto content_bounds = rendering->getContentBounds(glm::ivec2(
                 std::max(static_cast<int>(viewport_layout_.size.x), 0),
@@ -6932,20 +6918,6 @@ namespace lfs::vis::gui {
                     .press_gui_owned = overlay_press->gui_owned,
                 })) {
                 continue;
-            }
-            if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
-                rendering && rendering->isIndependentSplitViewActive()) {
-                if (const auto target_panel = rendering->resolveViewerPanel(
-                        viewer_->getViewport(),
-                        viewport_layout_.pos,
-                        viewport_layout_.size,
-                        overlay_press_point)) {
-                    if (auto* const input_controller = viewer_->getInputController()) {
-                        input_controller->setFocusedSplitPanel(target_panel->panel);
-                    } else {
-                        rendering->setFocusedSplitPanel(target_panel->panel);
-                    }
-                }
             }
         }
         const bool has_python_overlay_hooks =
@@ -7551,27 +7523,6 @@ namespace lfs::vis::gui {
                         rendered_size.y > 0 ? rendered_size.y : static_cast<int>(ctx.viewer->getViewport().windowSize.y),
                     .viewport = &ctx.viewer->getViewport(),
                 };
-                if (!rm || !panel || !rm->isIndependentSplitViewActive()) {
-                    return panel_ctx;
-                }
-
-                const auto info = rm->resolveViewerPanel(
-                    ctx.viewer->getViewport(),
-                    {viewport_layout_.pos.x, viewport_layout_.pos.y},
-                    {viewport_layout_.size.x, viewport_layout_.size.y},
-                    std::nullopt,
-                    panel);
-                if (!info) {
-                    return panel_ctx;
-                }
-
-                panel_ctx.x = info->x;
-                panel_ctx.y = info->y;
-                panel_ctx.width = info->width;
-                panel_ctx.height = info->height;
-                panel_ctx.render_width = info->render_width;
-                panel_ctx.render_height = info->render_height;
-                panel_ctx.viewport = info->viewport;
                 return panel_ctx;
             };
             const auto render_to_screen = [&](const PreviewPanelContext& panel_ctx, const float x, const float y) {

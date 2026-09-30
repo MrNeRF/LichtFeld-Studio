@@ -212,50 +212,10 @@ namespace lfs::vis::gui {
                 return panels;
             }
 
-            auto* const rendering_manager = viewer->getRenderingManager();
-            if (!rendering_manager || !rendering_manager->isIndependentSplitViewActive()) {
-                panels.push_back({
-                    .panel = SplitViewPanelId::Left,
-                    .viewport = &viewer->getViewport(),
-                    .pos = viewport_pos,
-                    .size = viewport_size,
-                });
-                return panels;
-            }
-
-            if (const auto left_panel = rendering_manager->resolveViewerPanel(
-                    viewer->getViewport(),
-                    viewport_pos, viewport_size, std::nullopt, SplitViewPanelId::Left);
-                left_panel && left_panel->valid()) {
-                panels.push_back(ViewportGizmoPanelTarget{
-                    .panel = SplitViewPanelId::Left,
-                    .viewport = left_panel->viewport,
-                    .pos = {left_panel->x, left_panel->y},
-                    .size = {left_panel->width, left_panel->height},
-                });
-            }
-
-            if (const auto right_panel = rendering_manager->resolveViewerPanel(
-                    viewer->getViewport(),
-                    viewport_pos, viewport_size, std::nullopt, SplitViewPanelId::Right);
-                right_panel && right_panel->valid()) {
-                panels.push_back(ViewportGizmoPanelTarget{
-                    .panel = SplitViewPanelId::Right,
-                    .viewport = right_panel->viewport,
-                    .pos = {right_panel->x, right_panel->y},
-                    .size = {right_panel->width, right_panel->height},
-                });
-            }
-
-            if (panels.empty()) {
-                panels.push_back({
-                    .panel = SplitViewPanelId::Left,
-                    .viewport = &viewer->getViewport(),
-                    .pos = viewport_pos,
-                    .size = viewport_size,
-                });
-            }
-
+            panels.push_back({.panel = SplitViewPanelId::Left,
+                              .viewport = &viewer->getViewport(),
+                              .pos = viewport_pos,
+                              .size = viewport_size});
             return panels;
         }
 
@@ -268,18 +228,6 @@ namespace lfs::vis::gui {
                 {viewport.size.x, viewport.size.y});
             if (panels.empty()) {
                 return std::nullopt;
-            }
-
-            auto* const rendering_manager = viewer ? viewer->getRenderingManager() : nullptr;
-            if (!rendering_manager || !rendering_manager->isIndependentSplitViewActive()) {
-                return panels.front();
-            }
-
-            const auto focused_panel = rendering_manager->getFocusedSplitPanel();
-            for (const auto& panel : panels) {
-                if (panel.panel == focused_panel && panel.valid()) {
-                    return panel;
-                }
             }
 
             return panels.front();
@@ -2994,18 +2942,14 @@ namespace lfs::vis::gui {
             const float time = static_cast<float>(SDL_GetTicks()) / 1000.0f;
 
             if (frame_input.mouse_clicked[0] && hovered_panel) {
-                if (auto* const input_controller = viewer_->getInputController()) {
-                    input_controller->setFocusedSplitPanel(hovered_panel->panel);
-                } else {
-                    rendering_manager->setFocusedSplitPanel(hovered_panel->panel);
-                }
-
                 auto& active_viewport = *hovered_panel->viewport;
                 if (hovered_axis >= 0 && hovered_axis <= 5) {
                     const int axis = hovered_axis % 3;
                     const bool negative = hovered_axis >= 3;
                     active_viewport.camera.setAxisAlignedView(axis, negative);
-                    rendering_manager->setGridPlaneForPanel(hovered_panel->panel, axis);
+                    auto updated_settings = rendering_manager->getSettings();
+                    updated_settings.grid_plane = axis;
+                    rendering_manager->updateSettings(updated_settings, DirtyFlag::OVERLAY);
                     rendering_manager->markCameraPoseChanged();
                 } else {
                     viewport_gizmo_dragging_ = true;
@@ -3041,7 +2985,10 @@ namespace lfs::vis::gui {
                             int snapped_axis = -1;
                             if (released_panel->viewport->camera.snapToNearestAxisView(
                                     kAxisSnapAngleDegrees, &snapped_axis, nullptr)) {
-                                rendering_manager->setGridPlaneForPanel(released_panel->panel, snapped_axis);
+                                auto updated_settings = rendering_manager->getSettings();
+                                updated_settings.grid_plane = snapped_axis;
+                                rendering_manager->updateSettings(updated_settings,
+                                                                  DirtyFlag::OVERLAY);
                                 rendering_manager->markCameraCut();
                             }
                         }

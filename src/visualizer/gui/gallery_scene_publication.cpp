@@ -416,10 +416,8 @@ namespace lfs::vis::gui {
         checked(document.edit_view().dom().set_json("render_settings", render));
         auto published_camera =
             request.published_camera.is_null() ? project::SessionJson{{"panel", "primary"}} : request.published_camera;
-        auto right_camera = published_camera;
-        right_camera["panel"] = "secondary";
         checked(document.edit_view().dom().set_json("panel_cameras",
-                                                    project::SessionJson::array({published_camera, right_camera})));
+                                                    project::SessionJson::array({published_camera})));
         const auto add_reference = [&](const std::string& file, const std::string& kind) {
             const auto id = core::generate_uuid_v4();
             auto fingerprint = pj::fingerprint_path(request.path / file, true);

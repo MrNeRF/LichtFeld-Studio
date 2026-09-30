@@ -90,9 +90,6 @@ namespace lfs::vis {
         // Makes the 3D view under a window point the active one.
         void activateViewAt(double x, double y);
 
-        void setFocusedSplitPanel(const SplitViewPanelId panel) {
-            focusSplitPanel(panel);
-        }
         void applySplitterCursorOverride() const;
         void releaseDepthWindowCursor();
         bool applyDepthWindowHoverCursor(double x, double y, bool modifiers_held);
@@ -186,12 +183,6 @@ namespace lfs::vis {
         void onWindowFocusLost();
         bool focusSelection();
 
-        // Toolbar actions target their named panel's camera without moving focus.
-        // Outside independent-dual mode, resolvePanelViewport returns the primary
-        // viewport for either panel.
-        void resetCameraForPanel(SplitViewPanelId panel);
-        bool focusSelectionForPanel(SplitViewPanelId panel);
-
     private:
         struct PanelInteractionState {
             SplitViewPanelId panel = SplitViewPanelId::Left;
@@ -213,11 +204,7 @@ namespace lfs::vis {
         // callers pass the resolved panel viewport.
         void handleResetCameraHome(Viewport& target_viewport,
                                    std::optional<SplitViewPanelId> acted_panel = std::nullopt);
-        // The panel's viewport, or the primary one when rendering is unavailable
-        // or the mode is not independent-dual. Reads no focus state.
-        Viewport& panelViewport(SplitViewPanelId panel);
-        bool computeWholeSceneBounds(glm::vec3& out_min, glm::vec3& out_max,
-                                     bool use_percentile = false) const;
+        bool computeWholeSceneBounds(glm::vec3& out_min, glm::vec3& out_max, bool use_percentile = false) const;
         float sceneExtent();
         void maybeInitializeDepthViewRange();
 
@@ -242,19 +229,16 @@ namespace lfs::vis {
         void orbitViewport(Viewport& target_viewport, const glm::vec2& drag);
         void publishCameraMove(Viewport* target_viewport = nullptr,
                                std::optional<SplitViewPanelId> acted_panel = std::nullopt);
-        // Suppress shared transform/x-y re-anchoring only for an explicitly addressed,
-        // off-focus panel in independent-dual mode. Home/Eye still move that panel's
-        // camera; this predicate neither selects a viewport nor changes focus.
-        [[nodiscard]] bool shouldSkipDepthAnchorSync(std::optional<SplitViewPanelId> acted_panel) const;
+        // Suppress shared transform/x-y re-anchoring only for an explicitly
+        // that panel's camera; this predicate neither selects a viewport nor changes
+        // focus.
         bool isNearSplitter(double x, double y) const;
         void refreshSplitDividerCache() const;
         int getModifierKeys() const;
         bool isKeyPressed(int app_key) const;
         bool isMouseButtonPressed(int app_button) const;
-        [[nodiscard]] bool isIndependentSplitViewActive() const;
         [[nodiscard]] SplitViewPanelId splitPanelForScreenX(double x) const;
         [[nodiscard]] std::optional<PanelInteractionState> resolvePanelInteraction(double x, double y);
-        void focusSplitPanel(SplitViewPanelId panel);
         [[nodiscard]] Viewport& activeKeyboardViewport();
         [[nodiscard]] const Viewport& activeKeyboardViewport() const;
         glm::vec3 unprojectScreenPoint(double x, double y, float fallback_distance = 5.0f) const;
@@ -435,7 +419,6 @@ namespace lfs::vis {
         std::size_t dataset_load_completed_handler_id_ = 0;
         std::size_t window_focus_lost_handler_id_ = 0;
         std::size_t split_toggle_handler_id_ = 0;
-        std::size_t independent_split_toggle_handler_id_ = 0;
         std::size_t gt_comparison_toggle_handler_id_ = 0;
         std::size_t scene_cleared_handler_id_ = 0;
         std::size_t scene_loaded_handler_id_ = 0;
