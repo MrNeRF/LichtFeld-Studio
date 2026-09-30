@@ -678,7 +678,8 @@
     "button.stop": "Training stoppen",
     "button.reset": "Training resetten",
     "button.add": "Toevoegen",
-    "button.remove": "Verwijderen"
+    "button.remove": "Verwijderen",
+    "advanced.hard_clip_stop_iter": "Laatste iteratie harde begrenzing:"
   },
   "rendering": "Renderen",
   "scene": {
@@ -1367,7 +1368,8 @@
     "point_size": "Punt Grootte",
     "scale_camera": "Schaal",
     "fov": "Camera gezichtsveld in graden",
-    "selection_colors": "Kleuren voor selectie visualisatie"
+    "selection_colors": "Kleuren voor selectie visualisatie",
+    "hard_clip_stop_iter": "Laatste iteratie waarin de harde begrenzing van het schermaandeel geldt. Stel in op -1 om deze actief te houden."
   },
   "exit_popup": {
     "title": "Applicatie Afsluiten?",

@@ -678,7 +678,8 @@
     "button.stop": "Training stoppen",
     "button.reset": "Training zurücksetzen",
     "button.add": "Hinzufügen",
-    "button.remove": "Entfernen"
+    "button.remove": "Entfernen",
+    "advanced.hard_clip_stop_iter": "Hard Clip Enditeration:"
   },
   "rendering": "Rendering",
   "scene": {
@@ -1367,7 +1368,8 @@
     "point_size": "Punktgröße",
     "scale_camera": "Skalieren",
     "fov": "Kamera-Sichtfeld in Grad",
-    "selection_colors": "Farben für Auswahl-Visualisierung"
+    "selection_colors": "Farben für Auswahl-Visualisierung",
+    "hard_clip_stop_iter": "Letzte Iteration, in der die harte Bildschirmanteilsbegrenzung angewendet wird. Mit -1 bleibt sie dauerhaft aktiv."
   },
   "exit_popup": {
     "title": "Anwendung beenden?",

@@ -674,7 +674,8 @@
     "button.stop": "Stop Training",
     "button.reset": "Reset Training",
     "button.add": "Add",
-    "button.remove": "Remove"
+    "button.remove": "Remove",
+    "advanced.hard_clip_stop_iter": "Hard Clip Stop Iter:"
   },
   "rendering": "Rendering",
   "scene": {
@@ -1365,7 +1366,8 @@
     "point_size": "Point Size",
     "scale_camera": "Scale",
     "fov": "Camera field of view in degrees",
-    "selection_colors": "Colors for selection visualization"
+    "selection_colors": "Colors for selection visualization",
+    "hard_clip_stop_iter": "Last iteration that applies the screen-share hard clip. Set to -1 to keep it enabled."
   },
   "exit_popup": {
     "title": "Exit Application?",

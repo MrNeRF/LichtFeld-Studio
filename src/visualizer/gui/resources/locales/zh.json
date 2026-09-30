@@ -678,7 +678,8 @@
     "button.stop": "停止训练",
     "button.reset": "重置训练",
     "button.add": "添加",
-    "button.remove": "移除"
+    "button.remove": "移除",
+    "advanced.hard_clip_stop_iter": "硬裁剪截止迭代："
   },
   "rendering": "渲染",
   "scene": {
@@ -1367,7 +1368,8 @@
     "point_size": "点大小",
     "scale_camera": "缩放",
     "fov": "相机视场角（度）",
-    "selection_colors": "选区可视化颜色"
+    "selection_colors": "选区可视化颜色",
+    "hard_clip_stop_iter": "应用屏幕占比硬裁剪的最后一次迭代。设为 -1 可保持始终启用。"
   },
   "exit_popup": {
     "title": "退出应用程序？",

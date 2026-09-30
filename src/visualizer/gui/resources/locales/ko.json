@@ -678,7 +678,8 @@
     "button.stop": "학습 중지",
     "button.reset": "학습 재설정",
     "button.add": "추가",
-    "button.remove": "제거"
+    "button.remove": "제거",
+    "advanced.hard_clip_stop_iter": "하드 클립 종료 반복:"
   },
   "rendering": "렌더링",
   "scene": {
@@ -1367,7 +1368,8 @@
     "point_size": "포인트 크기",
     "scale_camera": "크기 조절",
     "fov": "카메라 시야각 (도)",
-    "selection_colors": "선택 영역 시각화 색상"
+    "selection_colors": "선택 영역 시각화 색상",
+    "hard_clip_stop_iter": "화면 점유율 하드 클립을 적용할 마지막 반복입니다. 계속 적용하려면 -1을 설정하세요."
   },
   "exit_popup": {
     "title": "애플리케이션을 종료하시겠습니까?",

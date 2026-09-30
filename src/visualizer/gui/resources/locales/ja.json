@@ -678,7 +678,8 @@
     "button.stop": "トレーニングを停止",
     "button.reset": "トレーニングをリセット",
     "button.add": "追加",
-    "button.remove": "削除"
+    "button.remove": "削除",
+    "advanced.hard_clip_stop_iter": "ハードクリップ終了反復:"
   },
   "rendering": "レンダリング",
   "scene": {
@@ -1367,7 +1368,8 @@
     "point_size": "ポイントサイズ",
     "scale_camera": "スケール",
     "fov": "カメラの視野角（度）",
-    "selection_colors": "選択範囲の可視化色"
+    "selection_colors": "選択範囲の可視化色",
+    "hard_clip_stop_iter": "画面占有率のハードクリップを適用する最終反復です。常に有効にするには -1 を指定します。"
   },
   "exit_popup": {
     "title": "アプリケーションを終了しますか？",
