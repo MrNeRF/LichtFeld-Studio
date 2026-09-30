@@ -2602,6 +2602,82 @@ TEST(NormalLossHunt, JointRotationCuda100kSteps) {
     EXPECT_NEAR(resumed.ptr<float>()[8] - pc.ptr<float>()[8], -expected_delta, 1e-8f);
 }
 
+TEST(ScreenShareAdamHingeTest, HingeDoesNotInflateSecondMoment) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+
+    constexpr int steps = 400;
+    constexpr float lr = 0.001f;
+    constexpr float beta1 = 0.9f;
+    constexpr float beta2 = 0.999f;
+    constexpr float eps = 1e-15f;
+    constexpr float limit = 0.3f;
+    constexpr float penalty = 10.0f;
+    constexpr float share = 0.6f;
+    constexpr float hinge = penalty * 1.0f; // log2(share / limit)
+
+    for (const bool batched : {false, true}) {
+        SCOPED_TRACE(batched ? "batched Adam" : "raw Adam");
+        auto param = Tensor::zeros({size_t{1}}, Device::CUDA);
+        auto grad = Tensor::zeros({size_t{1}}, Device::CUDA);
+        auto packed = Tensor::zeros({size_t{1}, size_t{4}}, Device::CUDA, DataType::UInt8);
+        auto bounds = Tensor::from_vector(std::vector<float>{-1.0f, 1.0f, 0.0f, 2.0f},
+                                          {size_t{1}, size_t{4}}, Device::CUDA);
+        auto screen_share = Tensor::from_vector(std::vector<float>{share}, {size_t{1}}, Device::CUDA);
+        std::vector<std::uint8_t> initial_packed(4);
+        joint_adam::Codec16::encode_g1g2(initial_packed.data(), 0, 0.0f, 1.0f,
+                                         -1.0f, 1.0f, 0.0f, 2.0f);
+        ASSERT_EQ(cudaMemcpy(packed.data_ptr(), initial_packed.data(), initial_packed.size(),
+                             cudaMemcpyHostToDevice),
+                  cudaSuccess);
+
+        fast_lfs::optimizer::JointContiguousBatchEntry entry{};
+        entry.param = param.ptr<float>();
+        entry.packed = packed.ptr<std::uint8_t>();
+        entry.bounds = bounds.ptr<float>();
+        entry.grad = grad.ptr<float>();
+        entry.n_prims = 1;
+        entry.n_attr = 1;
+        entry.lr = lr;
+        entry.apply_screen_share = 1;
+
+        for (int step = 1; step <= steps; ++step) {
+            const float bc1 = 1.0f / (1.0f - std::pow(beta1, step));
+            const float bc2 = 1.0f / std::sqrt(1.0f - std::pow(beta2, step));
+            if (batched) {
+                entry.bias_correction1_rcp = bc1;
+                entry.bias_correction2_sqrt_rcp = bc2;
+                fast_lfs::optimizer::adam_step_joint_contiguous_batched(
+                    &entry, 1, nullptr, 0, 1.0f, nullptr, 0, 1.0f,
+                    beta1, beta2, eps, nullptr, nullptr, 0, 0.0f, 1.0f, 300.0f,
+                    nullptr, 0, screen_share.ptr<float>(), 1, limit, penalty);
+            } else {
+                fast_lfs::optimizer::adam_step_joint_contiguous_raw(
+                    param.ptr<float>(), packed.ptr<std::uint8_t>(), bounds.ptr<float>(), grad.ptr<float>(),
+                    nullptr, 0, 1.0f, nullptr, 0, 1.0f, 1, 1, 16, lr,
+                    beta1, beta2, eps, bc1, bc2, nullptr,
+                    nullptr, 0, 0.0f, 1.0f, 300.0f, nullptr, 0,
+                    screen_share.ptr<float>(), 1, limit, penalty);
+            }
+        }
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+        auto param_cpu = param.cpu();
+        auto packed_cpu = packed.cpu();
+        auto bounds_cpu = bounds.cpu();
+        float m = 0.0f, v = 0.0f;
+        const float* b = bounds_cpu.ptr<float>();
+        joint_adam::Codec16::decode_g1g2(packed_cpu.ptr<std::uint8_t>(), 0,
+                                         b[0], b[1], b[2], b[3], m, v);
+        ASSERT_TRUE(std::isfinite(param_cpu.ptr<float>()[0]));
+        EXPECT_TRUE(std::isfinite(m));
+        EXPECT_TRUE(std::isfinite(v));
+        EXPECT_LT(v, 2.0f);
+        EXPECT_NEAR(-param_cpu.ptr<float>()[0] / (steps * lr), hinge, 1.5f);
+    }
+}
+
 TEST(JointAdamUpdates, ZeroHistoryStaysFixedInOrdinaryAndFusedAllGroups) {
     if (!torch::cuda::is_available()) {
         GTEST_SKIP() << "CUDA not available";
