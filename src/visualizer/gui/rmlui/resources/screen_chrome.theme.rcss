@@ -91,8 +91,9 @@
 }
 
 .view-label {
-    color: @{text_dim};
-    text-shadow: 0 1dp 2dp @{alpha(background,0.85)};
+    color: @{text};
+    background-color: @{alpha(background,0.42)};
+    border-radius: @{num(size.frame_rounding)}dp;
 }
 
 .tab-close {

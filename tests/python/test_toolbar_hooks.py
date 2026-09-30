@@ -1836,7 +1836,8 @@ def test_screen_chrome_view_label_is_pointer_transparent_and_themed():
     theme_end = theme.index("\n}", theme_start)
     theme_rule = theme[theme_start:theme_end]
     assert "color:" in theme_rule
-    assert "text-shadow:" in theme_rule
+    assert "background-color: @{alpha(background,0.42)}" in theme_rule
+    assert "border-radius:" in theme_rule
 
 
 def test_every_depth_slider_carries_its_own_tooltip_in_every_locale():
