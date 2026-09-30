@@ -141,7 +141,19 @@ static void run() {
     const auto marker = snapshot(request);
     require(marker.ptr<float>()[center + 1] > .5f && marker.ptr<float>()[center] < .1f, "Native center marker missing");
     request.gut = true;
-    require(!vis::MetalViewportRenderer::supports(model, request), "Unsupported 3DGUT silently accepted");
+    require(vis::MetalViewportRenderer::supports(model, request), "Native 3DGUT frame rejected");
+    request.overlay.markers.show_center_markers = false;
+    const auto gut_pixels = snapshot(request);
+    require(gut_pixels.ptr<float>()[center] > .5f, "Native 3DGUT ray contribution missing");
+    const auto gut_depth = renderer.readDepth({.pixel = {48, 32}, .source_size = {96, 64}});
+    const auto k = request.frame_view.getCameraIntrinsics();
+    const float x = (48.5f - k.center_x) / k.focal_x, y = (32.5f - k.center_y) / k.focal_y;
+    const float analytic_depth = 3.f / (1.f + x * x + y * y);
+    require(gut_depth.has_value() && std::abs(*gut_depth - analytic_depth) < 1e-4f,
+            "3DGUT depth did not use the closest point on the pixel ray");
+    request.equirectangular = true;
+    require(!vis::MetalViewportRenderer::supports(model, request), "Unsupported panorama silently accepted");
+    request.equirectangular = false;
     require(renderer.release(vis::VksplatViewportRenderer::OutputSlot::Main).has_value(), "Native release failed");
     require(renderer.size(vis::VksplatViewportRenderer::OutputSlot::Main) == glm::ivec2(0), "Released slot retained output");
     request.gut = false;

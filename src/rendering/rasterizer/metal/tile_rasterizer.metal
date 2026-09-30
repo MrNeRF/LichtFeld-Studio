@@ -8,11 +8,14 @@ struct ProjectedSplat {
     float4 mean_depth, conic_opacity, color;
     uint4 bounds;
 };
+struct GutSplat { float4 inverse0, inverse1, inverse2, mean_opacity; };
 struct RasterParameters {
     uint count, width, height, columns;
     uint tiles, capacity, mode, unused;
     float4 background;
     float4 render_origin;
+    float4 intrinsics, clip;
+    uint4 camera;
 };
 struct RasterStatus { ulong required; uint error, unused; };
 uint4 clipped_bounds(ProjectedSplat s, constant RasterParameters& p) {
@@ -200,6 +203,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                        device const uchar* selection [[buffer(7)]],
                        device const uchar* preview [[buffer(8)]],
                        device const float4* selection_colors [[buffer(9)]],
+                       device const GutSplat* gut [[buffer(10)]],
                        texture2d<float, access::write> color [[texture(0)]],
                        texture2d<float, access::write> depth [[texture(1)]],
                        texture2d<uint, access::write> pick [[texture(2)]],
@@ -241,11 +245,27 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
             const float q = c.x*d.x*d.x + 2*c.y*d.x*d.y + c.z*d.y*d.y;
             if (q < 0 || !isfinite(q)) continue;
             float alpha;
+            float splat_depth=means[j].z;
             if (p.mode == 1) alpha = dot(d,d) <= means[j].w*means[j].w ? c.w : 0;
             else if (p.mode == 2) alpha = q <= 9 ? c.w : 0;
-            else alpha = c.w * exp(-.5f * q);
+            else if(p.mode==3u) {
+                const auto g=gut[ids[j]];
+                const float2 xy=(float2(pixel)+.5f-p.intrinsics.zw)/p.intrinsics.xy;
+                const float3 origin=p.camera.z?float3(xy,0):float3(0);
+                const float3 direction=p.camera.z?float3(0,0,1):float3(xy,1);
+                const float3 delta=origin-g.mean_opacity.xyz;
+                const float3 local_origin=float3(dot(g.inverse0.xyz,delta),dot(g.inverse1.xyz,delta),dot(g.inverse2.xyz,delta));
+                const float3 local_direction=float3(dot(g.inverse0.xyz,direction),dot(g.inverse1.xyz,direction),dot(g.inverse2.xyz,direction));
+                const float denom=dot(local_direction,local_direction);
+                if(!isfinite(denom)||denom<=1e-12f)continue;
+                const float3 distance=cross(local_direction*rsqrt(denom),local_origin);
+                alpha=g.mean_opacity.w*exp(-.5f*dot(distance,distance));
+                const float t=-dot(local_direction,local_origin)/denom;
+                const float z=origin.z+t*direction.z;
+                splat_depth=t>0 && z>p.clip.x && isfinite(z)?z:1e10f;
+            } else alpha = c.w * exp(-.5f * q);
             alpha = min(alpha, .999f);
-            if(p.unused && overlay_enabled(overlay_params[22].y) && !(overlay_flags[ids[j]]&2u)){
+            if(p.mode!=3u && p.unused && overlay_enabled(overlay_params[22].y) && !(overlay_flags[ids[j]]&2u)){
                 const float2 origin=floor((float2(pixel)+p.render_origin.xy)/overlay_macro_extent)*overlay_macro_extent;
                 const half2 center=half2((means[j].xy+p.render_origin.xy-origin)/overlay_tile_extent);
                 const half2 coord=half2((float2(pixel)+p.render_origin.xy-origin)/overlay_tile_extent);
@@ -266,7 +286,10 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                 // as the desktop reference. Keep Gaussian blending in FP32.
                 // KEEP IN SYNC with Vulkan config.slang: tile 8x8, macro 8x4 tiles.
                 const float2 macro_origin=floor((float2(pixel)+p.render_origin.xy)/overlay_macro_extent)*overlay_macro_extent;
-                const float2 overlay_center=float2(half2((means[j].xy+p.render_origin.xy-macro_origin)/overlay_tile_extent))*overlay_tile_extent+macro_origin-p.render_origin.xy;
+                // Vulkan's 3DGUT shared-struct path retains full float centers;
+                // only the 3DGS macro-relative path compresses them to half.
+                const float2 overlay_center=p.mode==3u?means[j].xy:
+                    float2(half2((means[j].xy+p.render_origin.xy-macro_origin)/overlay_tile_extent))*overlay_tile_extent+macro_origin-p.render_origin.xy;
                 const uint status=overlay_selection(overlay_params,ids[j],flags,overlay_center,selection,preview);
                 const bool selectable=(flags&2u)==0;
                 if(overlay_enabled(overlay_params[22].x)&&selectable){
@@ -284,7 +307,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                     const float2 marker_delta=float2(pixel)-overlay_center;
                     if(dot(marker_delta,marker_delta)>6.25f)continue;
                     rgb=overlay_target(status,selection_colors)*(dot(marker_delta,marker_delta)>2.25f?.4f:1.f);
-                    if(transmittance>.5f)median=means[j].z;
+                    if(transmittance>.5f)median=splat_depth;
                     transmittance=0; done=true; break;
                 }
                 if(status&128u)radiance=mix(radiance,overlay_target(status,selection_colors),.9f);
@@ -292,11 +315,11 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                 if((flags&4u)&&overlay_params[20].w>0)radiance=mix(radiance,float3(1,.95f,.6f),overlay_params[20].w*.5f);
             }
             const float weight = alpha * transmittance;
-            if (picked == 0xffffffff) { picked = ids[j]; nearest = means[j].z; }
+            if (picked == 0xffffffff) { picked = ids[j]; nearest = splat_depth; }
             rgb += radiance * weight;
-            weighted_depth += means[j].z * weight;
+            weighted_depth += splat_depth * weight;
             const float next_transmittance = transmittance * (1 - alpha);
-            if (transmittance > .5f && next_transmittance <= .5f) median = means[j].z;
+            if (transmittance > .5f && next_transmittance <= .5f) median = splat_depth;
             transmittance = next_transmittance;
             if (transmittance < 1e-4f) { done = true; break; }
         }

@@ -111,6 +111,16 @@
             <span class="separator thin">|</span>
         </div>
         <span id="gpu-mem" data-style-color="gpu_mem_color">{{ gpu_mem_text }}</span>
+        <div id="renderer-backend-chip" class="backend-chip" data-attr-title="renderer_tooltip">
+            <img class="backend-icon" src="../icon/device-laptop.png" alt=""/>
+            <span class="backend-label">{{ renderer_label }}</span>
+            <span class="backend-value">{{ renderer_value }}</span>
+        </div>
+        <div id="tensor-backend-chip" class="backend-chip" data-attr-title="tensor_tooltip">
+            <img class="backend-icon" src="../icon/gpu.png" alt=""/>
+            <span class="backend-label">{{ tensor_label }}</span>
+            <span class="backend-value">{{ tensor_value }}</span>
+        </div>
         <div id="fps-group" class="status-item">
             <span id="fps-value" data-style-color="fps_color">{{ fps_value }}</span>
             <span id="fps-label" class="dim">{{ fps_label }}</span>

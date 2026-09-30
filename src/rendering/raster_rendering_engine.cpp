@@ -258,6 +258,7 @@ namespace lfs::rendering {
         [[nodiscard]] FrameMetadata makePointCloudFrameMetadata(
             const RasterImageResult& result) {
             return FrameMetadata{
+                .viewer_backend_mask = softwareViewerBackendBit,
                 .depth_panels = {FramePanelMetadata{
                     .depth = result.depth.is_valid() ? std::make_shared<Tensor>(result.depth) : nullptr,
                     .start_position = 0.0f,

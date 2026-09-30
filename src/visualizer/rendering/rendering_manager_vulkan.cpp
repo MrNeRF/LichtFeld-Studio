@@ -802,6 +802,7 @@ namespace lfs::vis {
             const lfs::rendering::FrameMetadata& right,
             const float split_position) {
             lfs::rendering::FrameMetadata metadata{
+                .viewer_backend_mask = left.viewer_backend_mask | right.viewer_backend_mask,
                 .depth_panels =
                     {lfs::rendering::FramePanelMetadata{
                          .depth = left.depth_panel_count > 0 ? left.depth_panels[0].depth : nullptr,
@@ -2865,6 +2866,7 @@ namespace lfs::vis {
                     lfs::rendering::FrameMetadata metadata{};
                     metadata.valid = true;
                     metadata.flip_y = result->flip_y;
+                    metadata.viewer_backend_mask = rendering::viewerBackendBit(result->viewer_backend);
                     return RenderedPanel{.image = nullptr,
                                          .metadata = std::move(metadata),
                                          .external_image = result->image,
@@ -3427,6 +3429,7 @@ namespace lfs::vis {
                                     if (rendered) {
                                         compare_panel.metadata.valid = true;
                                         compare_panel.metadata.flip_y = rendered->flip_y;
+                                        compare_panel.metadata.viewer_backend_mask = rendering::viewerBackendBit(rendered->viewer_backend);
                                         compare_panel.external_image = rendered->image;
                                         compare_panel.external_image_view = rendered->image_view;
                                         compare_panel.external_image_layout = rendered->image_layout;
@@ -3857,6 +3860,7 @@ namespace lfs::vis {
                 lfs::rendering::FrameMetadata metadata{};
                 metadata.valid = true;
                 metadata.flip_y = render_result->flip_y;
+                metadata.viewer_backend_mask = rendering::viewerBackendBit(render_result->viewer_backend);
                 viewport_artifact_service_.clearViewportOutput();
                 viewport_artifact_service_.setLazyCapture(
                     [this]() -> std::shared_ptr<lfs::core::Tensor> {
@@ -4162,6 +4166,7 @@ namespace lfs::vis {
                         lfs::rendering::FrameMetadata metadata{};
                         metadata.valid = true;
                         metadata.flip_y = render_result.flip_y;
+                        metadata.viewer_backend_mask = rendering::viewerBackendBit(render_result.viewer_backend);
                         bool temporal_frame_published =
                             pending_split_view.enabled &&
                             pending_split_view.left.temporal_input.has_value() &&

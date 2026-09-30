@@ -10,6 +10,7 @@
 #include "core/memory_pressure.hpp"
 #include "core/number_format.hpp"
 #include "core/services.hpp"
+#include "core/tensor_backend.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/gpu_memory_query.hpp"
 #include "gui/gui_manager.hpp"
@@ -501,6 +502,12 @@ namespace lfs::vis::gui {
         ctor.Bind("show_status_message", &model_.show_status_message);
         ctor.Bind("status_message_text", &model_.status_message_text);
         ctor.Bind("status_message_color", &model_.status_message_color);
+        ctor.Bind("renderer_label", &model_.renderer_label);
+        ctor.Bind("renderer_value", &model_.renderer_value);
+        ctor.Bind("renderer_tooltip", &model_.renderer_tooltip);
+        ctor.Bind("tensor_label", &model_.tensor_label);
+        ctor.Bind("tensor_value", &model_.tensor_value);
+        ctor.Bind("tensor_tooltip", &model_.tensor_tooltip);
         model_handle_ = ctor.GetModelHandle();
 
         try {
@@ -1676,6 +1683,44 @@ namespace lfs::vis::gui {
         setModelString("fps_label", model_.fps_label,
                        ui_only_fps ? std::format(" {}", LOC("status_bar.ui_fps"))
                                    : std::format(" {}", LOC(lichtfeld::Strings::Status::FPS)));
+        // Read published frame metadata, never predict the API from a preference
+        // or initialize a GPU just to paint the status bar.
+        const uint32_t backend_mask = rm ? rm->activeViewerBackendMask() : 0;
+        const auto requested = UserPreferences::instance().viewerBackend();
+        const auto viewer_name = [](rendering::ViewerBackend backend) -> std::string {
+            if (backend == rendering::ViewerBackend::Metal)
+                return "Metal";
+            if (backend == rendering::ViewerBackend::Vulkan)
+                return "Vulkan";
+            return LOC("preferences.tensor_auto");
+        };
+        std::string active_renderer;
+        const auto append_backend = [&](const uint32_t bit, const char* name) {
+            if (backend_mask & bit) {
+                if (!active_renderer.empty())
+                    active_renderer += " / ";
+                active_renderer += name;
+            }
+        };
+        append_backend(rendering::viewerBackendBit(rendering::ViewerBackend::Metal), "Metal");
+        append_backend(rendering::viewerBackendBit(rendering::ViewerBackend::Vulkan), "Vulkan");
+        append_backend(rendering::softwareViewerBackendBit, "CPU");
+        if (active_renderer.empty())
+            active_renderer = "—";
+        setModelString("renderer_label", model_.renderer_label, LOC("status_bar.renderer_backend"));
+        setModelString("renderer_value", model_.renderer_value, active_renderer);
+        auto renderer_tooltip = std::string(LOC("status_bar.renderer_backend_tooltip")) + "\n" +
+                                formatLocalizedValue(LOC("status_bar.backend_requested"), viewer_name(requested));
+        if (!backend_mask)
+            renderer_tooltip += std::string("\n") + LOC("status_bar.backend_no_frame");
+        else if (requested == rendering::ViewerBackend::Metal &&
+                 backend_mask == rendering::viewerBackendBit(rendering::ViewerBackend::Vulkan))
+            renderer_tooltip += std::string("\n") + LOC("status_bar.backend_fallback");
+        setModelString("renderer_tooltip", model_.renderer_tooltip, std::move(renderer_tooltip));
+        setModelString("tensor_label", model_.tensor_label, LOC("status_bar.tensor_backend"));
+        setModelString("tensor_value", model_.tensor_value,
+                       core::gpu_backend_name(core::configured_gpu_backend()));
+        setModelString("tensor_tooltip", model_.tensor_tooltip, LOC("status_bar.tensor_backend_tooltip"));
         setModelString("git_commit", model_.git_commit, GIT_COMMIT_HASH_SHORT);
 
         section_signature_ =

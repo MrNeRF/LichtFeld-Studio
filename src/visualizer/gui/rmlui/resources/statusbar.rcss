@@ -525,3 +525,46 @@ body.fit-9 #gpu-mem {
     overflow: hidden;
     text-overflow: ellipsis;
 }
+
+.backend-chip {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 5dp;
+    align-self: center;
+    height: 18dp;
+    margin-left: 8dp;
+    padding: 0 6dp;
+    border-width: 1dp;
+    border-radius: 4dp;
+    box-sizing: border-box;
+    flex-shrink: 0;
+}
+
+.backend-label {
+    font-size: 10dp;
+}
+
+.backend-value {
+    font-size: 11dp;
+    font-weight: bold;
+}
+
+.backend-icon {
+    display: none;
+    width: 12dp;
+    height: 12dp;
+}
+
+body.fit-4 .backend-label {
+    display: none;
+}
+
+body.fit-4 .backend-icon {
+    display: block;
+}
+
+body.fit-8 .backend-chip {
+    margin-left: 4dp;
+    padding: 0 4dp;
+}

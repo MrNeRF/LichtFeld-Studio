@@ -16,6 +16,7 @@ struct Projection {
 };
 struct InputLayout { uint count, rest, has_deleted, objects, half_attrs, overlay, object_indexed; };
 struct SceneObject { float4x4 model_to_world; float4 camera_local; uint4 flags; };
+struct GutSplat { float4 inverse0, inverse1, inverse2, mean_opacity; };
 struct ProjectedSplat { float4 mean_depth, conic_opacity, color; uint4 bounds; };
 
 // Matches the Studio reference's covariance extent limit before inversion.
@@ -90,6 +91,7 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     device const uint* object_indices [[buffer(11)]], device const SceneObject* objects [[buffer(12)]],
     device const float4* params [[buffer(13)]], device uint* overlay_flags [[buffer(14)]],
     device const uchar* node_mask [[buffer(15)]],
+    device GutSplat* gut_output [[buffer(16)]],
     uint i [[thread_position_in_grid]]) {
     if(i>=layout.count) return;
     output[i]=ProjectedSplat{};
@@ -144,7 +146,7 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     if(!isfinite(alpha) || alpha<0.5f/255.0f) return;
     const bool orthographic=frame.extent.z!=0;
     // Vulkan's project_splat subtracts half a pixel before integer sampling.
-    const float2 center=frame.intrinsics.xy*view.xy/(orthographic?1.0f:view.z)+frame.intrinsics.zw-.5f;
+    float2 center=frame.intrinsics.xy*view.xy/(orthographic?1.0f:view.z)+frame.intrinsics.zw-.5f;
     float3 conic;
     float radius;
     if(primitive_mode==1u) {
@@ -170,19 +172,54 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
         const float3 a=linear*rotate_axis(q,float3(s.x,0,0));
         const float3 b=linear*rotate_axis(q,float3(0,s.y,0));
         const float3 c=linear*rotate_axis(q,float3(0,0,s.z));
-        const float3 u=float3(dot(jx,a),dot(jx,b),dot(jx,c));
-        const float3 v=float3(dot(jy,a),dot(jy,b),dot(jy,c));
+        float3 u=float3(dot(jx,a),dot(jx,b),dot(jx,c));
+        float3 v=float3(dot(jy,a),dot(jy,b),dot(jy,c));
+        float3 raw_covariance=float3(dot(u,u),dot(u,v),dot(v,v));
+        if(primitive_mode==3u) {
+            // Match project_gaussian_to_camera_gut, including FP32 UT weights.
+            const float lambda=.1f*.1f*3.f-3.f;
+            const float denominator=3.f+lambda;
+            const float sigma_scale=sqrt(denominator);
+            const float mean_weight=lambda/denominator;
+            const float covariance_weight=mean_weight+(1.f-.1f*.1f+2.f);
+            const float sigma_weight=1.f/(2.f*denominator);
+            const float3 sigma[7]={view,view+sigma_scale*a,view+sigma_scale*b,view+sigma_scale*c,
+                                 view-sigma_scale*a,view-sigma_scale*b,view-sigma_scale*c};
+            float2 image[7];
+            for(uint n=0;n<7;++n) {
+                if(sigma[n].z<=frame.clip_scale.x || !all(isfinite(sigma[n])))return;
+                image[n]=frame.intrinsics.xy*sigma[n].xy/(orthographic?1.f:sigma[n].z)+frame.intrinsics.zw;
+            }
+            float2 mean=0;
+            for(uint n=0;n<7;++n)mean+=(n? sigma_weight:mean_weight)*image[n];
+            raw_covariance=0;
+            for(uint n=0;n<7;++n) {
+                const float2 d=image[n]-mean;
+                raw_covariance+=(n?sigma_weight:covariance_weight)*float3(d.x*d.x,d.x*d.y,d.y*d.y);
+            }
+            center=mean-.5f;
+            // Actual 3D alpha uses source scale, independently of binning scale
+            // modifier/mip compensation, matching load_splat_gut_alphablend.
+            const float3 base_scale=max(exp(log_scale),float3(1e-8f));
+            const float3 ga=linear*rotate_axis(q,float3(base_scale.x,0,0));
+            const float3 gb=linear*rotate_axis(q,float3(0,base_scale.y,0));
+            const float3 gc=linear*rotate_axis(q,float3(0,0,base_scale.z));
+            const float determinant=dot(ga,cross(gb,gc));
+            if(!isfinite(determinant)||abs(determinant)<=1e-30f)return;
+            gut_output[i]={float4(cross(gb,gc)/determinant,0),float4(cross(gc,ga)/determinant,0),
+                           float4(cross(ga,gb)/determinant,0),float4(view,alpha)};
+        }
         // Dilation and the covariance cap use source viewport pixels,
         // then scale to output pixels, matching high-resolution Vulkan exports.
         const float raster_scale=isfinite(frame.rasterization.x)&&frame.rasterization.x>0?frame.rasterization.x:1.f;
         const float variance_scale=raster_scale*raster_scale;
-        const float raw_xx=dot(u,u)/variance_scale,raw_yy=dot(v,v)/variance_scale;
-        float3 covariance=float3(raw_xx+frame.clip_scale.w,dot(u,v)/variance_scale,raw_yy+frame.clip_scale.w);
+        const float raw_xx=raw_covariance.x/variance_scale,raw_yy=raw_covariance.z/variance_scale;
+        float3 covariance=float3(raw_xx+frame.clip_scale.w,raw_covariance.y/variance_scale,raw_yy+frame.clip_scale.w);
         float det=covariance.x*covariance.z-covariance.y*covariance.y;
         if(!isfinite(det) || det<=1e-12f) return;
         if(frame.extent.w) alpha*=sqrt(max((raw_xx*raw_yy-covariance.y*covariance.y)/det,0.f));
         if(alpha<0.5f/255.0f) return;
-        covariance=clamp_covariance_extent(covariance,alpha)*variance_scale;
+        covariance=(primitive_mode==3u?covariance:clamp_covariance_extent(covariance,alpha))*variance_scale;
         const float xx=covariance.x,xy=covariance.y,yy=covariance.z;
         det=xx*yy-xy*xy;
         conic=float3(yy,-xy,xx)/det;

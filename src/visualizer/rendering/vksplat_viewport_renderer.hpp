@@ -69,6 +69,7 @@ namespace lfs::vis {
             std::uint64_t lod_page_generation = 0;
             // True while page decodes/uploads are still in flight.
             bool lod_streaming_active = false;
+            rendering::ViewerBackend viewer_backend = rendering::ViewerBackend::Vulkan;
         };
 
         struct ModelInputSnapshot {
@@ -325,8 +326,8 @@ namespace lfs::vis {
     private:
 #ifdef __APPLE__
         std::unique_ptr<MetalViewportRenderer> metal_viewport_;
-        std::array<bool,4> metal_output_{};
-        std::array<int,4> metal_route_{-1,-1,-1,-1};
+        std::array<bool, 4> metal_output_{};
+        std::array<int, 4> metal_route_{-1, -1, -1, -1};
 #endif
         struct ComposePipeline;
         struct InputBindingResult {

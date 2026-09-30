@@ -60,7 +60,7 @@ namespace lfs::rendering::metal {
 
         id<MTLComputePipelineState> pipeline(ShStorage storage, uint32_t degree, PrimitiveMode mode) {
             const uint32_t format = static_cast<uint32_t>(storage), primitive = static_cast<uint32_t>(mode);
-            if (format > 3 || degree > 3 || primitive > 2)
+            if (format > 3 || degree > 3 || primitive > 3)
                 throw std::invalid_argument("Unsupported Metal splat specialization");
             const uint32_t key = format * 16 + degree * 4 + primitive;
             std::lock_guard lock(mutex);
@@ -115,12 +115,12 @@ namespace lfs::rendering::metal {
     }
 
     void SplatPreprocessor::encode(id<MTLCommandBuffer> command, const SplatBuffers& in,
-                                   const Projection& projection, uint32_t degree, PrimitiveMode mode, BufferSlice output, const SceneBuffers& scene, const OverlayBuffers& overlay) {
+                                   const Projection& projection, uint32_t degree, PrimitiveMode mode, BufferSlice output, const SceneBuffers& scene, const OverlayBuffers& overlay, BufferSlice gut_output) {
         if (!command || command.commandQueue.device != impl_->device || command.status != MTLCommandBufferStatusNotEnqueued)
             throw std::invalid_argument("Metal viewer requires an uncommitted command buffer on the same device");
         if (degree > 3 || (in.layout_rest != 0 && in.layout_rest != 3 && in.layout_rest != 8 && in.layout_rest != 15) ||
             core::sh_rest_coefficients_for_degree(degree) > in.layout_rest || static_cast<uint32_t>(in.storage) > 3 ||
-            static_cast<uint32_t>(mode) > 2)
+            static_cast<uint32_t>(mode) > 3)
             throw std::invalid_argument("Active SH degree does not fit resident Metal storage");
         check_projection(projection);
         if (!in.count)
@@ -154,6 +154,14 @@ namespace lfs::rendering::metal {
         const std::array<NSUInteger, 10> alignments = {4, attr, 4 * attr, attr, 4, 4, 8, 1, 4, 16};
         const char* names[] = {"means", "scales", "rotations", "opacity", "SH0", "SH rest", "SH bounds", "deleted mask", "object indices", "scene objects"};
         check_slice(output, n * sizeof(ProjectedSplat), 16, impl_->device, "projection output");
+        if (mode == PrimitiveMode::Gut) {
+            check_slice(gut_output, n * sizeof(GutSplat), 16, impl_->device, "3DGUT output");
+            if (gut_output.buffer == output.buffer)
+                throw std::invalid_argument("Metal 3DGUT geometry overlaps projection output");
+            for (const auto input : inputs)
+                if (input.buffer && input.buffer == gut_output.buffer)
+                    throw std::invalid_argument("Metal 3DGUT geometry overlaps source storage");
+        }
         for (size_t i = 0; i < inputs.size(); ++i) {
             if (!lengths[i])
                 continue;
@@ -180,6 +188,7 @@ namespace lfs::rendering::metal {
         const std::array<BufferSlice, 3> overlays = {overlay.parameters, overlay.flags, overlay.node_mask};
         for (NSUInteger j = 0; j < overlays.size(); ++j)
             [encoder setBuffer:overlays[j].buffer ?: impl_->empty offset:overlays[j].buffer ? overlays[j].offset : 0 atIndex:13 + j];
+        [encoder setBuffer:gut_output.buffer ?: impl_->empty offset:gut_output.buffer ? gut_output.offset : 0 atIndex:16];
         const NSUInteger width = std::min(NSUInteger(256), pipeline.maxTotalThreadsPerThreadgroup);
         [encoder dispatchThreads:MTLSizeMake(n, 1, 1) threadsPerThreadgroup:MTLSizeMake(width, 1, 1)];
         [encoder endEncoding];

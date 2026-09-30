@@ -17,7 +17,8 @@ namespace lfs::rendering::metal {
                                       Q16 };
     enum class PrimitiveMode : uint32_t { Gaussian,
                                           Points,
-                                          Discs };
+                                          Discs,
+                                          Gut };
 
     struct BufferSlice {
         id<MTLBuffer> buffer = nil;
@@ -64,6 +65,13 @@ namespace lfs::rendering::metal {
     };
     static_assert(sizeof(Projection) == 208);
 
+    // Normalized local-frame inverse rows in camera coordinates. Independent of
+    // projected covariance and mip compensation: 3DGUT evaluates the pixel ray.
+    struct alignas(16) GutSplat {
+        simd_float4 inverse0, inverse1, inverse2, mean_opacity;
+    };
+    static_assert(sizeof(GutSplat) == 64);
+
     struct alignas(16) ProjectedSplat {
         simd_float4 mean_depth;    // x, y, linear view depth, contribution radius in pixels
         simd_float4 conic_opacity; // inverse covariance xx,xy,yy and activated opacity
@@ -85,7 +93,7 @@ namespace lfs::rendering::metal {
         void prepare(ShStorage storage, uint32_t active_degree, PrimitiveMode mode);
         void encode(id<MTLCommandBuffer> command, const SplatBuffers& inputs,
                     const Projection& projection, uint32_t active_degree,
-                    PrimitiveMode mode, BufferSlice output, const SceneBuffers& scene = {}, const OverlayBuffers& overlay = {});
+                    PrimitiveMode mode, BufferSlice output, const SceneBuffers& scene = {}, const OverlayBuffers& overlay = {}, BufferSlice gut_output = {});
 
     private:
         struct Impl;

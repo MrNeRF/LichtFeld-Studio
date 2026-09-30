@@ -29,7 +29,7 @@ namespace {
         int width = 1280, height = 720, warmup = 12, samples = 40;
         std::string output, images, overlay;
         bool verify_parity = false;
-        bool mip = false, ortho = false, depth = false, export_scale = false;
+        bool mip = false, ortho = false, depth = false, export_scale = false, gut = false;
     };
     Options options(int argc, char** argv) {
         Options o;
@@ -42,6 +42,10 @@ namespace {
                 o.warmup = 6;
                 o.samples = 4;
                 o.verify_parity = true;
+                continue;
+            }
+            if (arg == "--gut") {
+                o.gut = true;
                 continue;
             }
             if (arg == "--export_scale") {
@@ -220,6 +224,8 @@ namespace {
             request.frame_view.size = {o.width, o.height};
             request.frame_view.rasterization_scale = o.export_scale ? 2.f : 1.f;
             request.sh_degree = degree;
+            request.gut = o.gut;
+            request.raster_backend = o.gut ? rendering::GaussianRasterBackend::ThreeDgut : rendering::GaussianRasterBackend::ThreeDgs;
             request.frame_view.background_color = {.02f, .03f, .04f};
             request.mip_filter = o.mip;
             request.depth_view = o.depth;
@@ -350,7 +356,7 @@ namespace {
         }
         rusage usage{};
         getrusage(RUSAGE_SELF, &usage);
-        return {{"schema_version", 1}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", 1939}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
+        return {{"schema_version", 1}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", 1939}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"gut", o.gut}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
     }
 } // namespace
 int main(int argc, char** argv) {

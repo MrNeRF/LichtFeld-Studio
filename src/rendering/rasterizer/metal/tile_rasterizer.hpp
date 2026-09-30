@@ -6,7 +6,8 @@
 namespace lfs::rendering::metal {
     enum class RasterMode : uint32_t { Gaussian,
                                        Points,
-                                       Discs };
+                                       Discs,
+                                       Gut };
     enum class RasterError : uint32_t { None,
                                         InstanceCapacityExceeded };
     struct RasterStatus {
@@ -48,7 +49,8 @@ namespace lfs::rendering::metal {
         TileRasterizer(const TileRasterizer&) = delete;
         TileRasterizer& operator=(const TileRasterizer&) = delete;
         void encode(id<MTLCommandBuffer> command, BufferSlice projected, uint32_t count,
-                    RasterMode mode, simd_float4 background, RasterFrame& frame, const OverlayBuffers& overlay = {});
+                    RasterMode mode, simd_float4 background, RasterFrame& frame, const OverlayBuffers& overlay = {},
+                    BufferSlice gut = {}, const Projection& projection = {});
 
     private:
         struct Impl;

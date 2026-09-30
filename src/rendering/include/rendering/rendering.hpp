@@ -7,6 +7,7 @@
 #include "core/tensor.hpp"
 #include "frame_contract.hpp"
 #include "render_constants.hpp"
+#include "viewer_backend.hpp"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -287,6 +288,7 @@ namespace lfs::rendering {
     };
 
     struct FrameMetadata {
+        uint32_t viewer_backend_mask = 0;
         std::array<FramePanelMetadata, 2> depth_panels{};
         size_t depth_panel_count = 0;
         bool valid = false;

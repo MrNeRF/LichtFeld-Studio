@@ -536,6 +536,9 @@ namespace lfs::vis {
 
         // FPS monitoring (scene renders vs. swapchain-presented GUI frames)
         float getAverageFPS() const { return framerate_controller_.getAverageFPS(); }
+        [[nodiscard]] uint32_t activeViewerBackendMask() const {
+            return viewport_artifact_service_.viewerBackendMask();
+        }
         float getPresentedAverageFPS() const {
             return presented_framerate_controller_.getAverageFPS();
         }

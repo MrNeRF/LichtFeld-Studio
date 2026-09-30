@@ -174,6 +174,47 @@ static void run(id<MTLDevice> device) {
     raster.encode(command, {}, 0, RasterMode::Gaussian, bg, small);
     wait(command);
     require(small.status().error == RasterError::None, "Empty scene did not recover");
+    // Independent 3D ray reference deliberately disagrees with the projected
+    // conic/center depth: the raster must evaluate the normalized 3D Gaussian.
+    RasterFrame gut_frame(device, width, height, 1, 6);
+    ProjectedSplat gut_projected{{float(width) / 2 - .5f, float(height) / 2 - .5f, 99, 100},
+                                 {1000, 0, 1000, .1f},
+                                 {1, .25f, .125f, 9},
+                                 {0, 0, width, height}};
+    GutSplat gut_geometry{{2, 0, 0, 0}, {0, 2, 0, 0}, {0, 0, 2, 0}, {0, 0, 3, .8f}};
+    auto gut_input = [device newBufferWithBytes:&gut_projected length:sizeof(gut_projected) options:MTLResourceStorageModeShared];
+    auto geometry = [device newBufferWithBytes:&gut_geometry length:sizeof(gut_geometry) options:MTLResourceStorageModeShared];
+    Projection camera{};
+    camera.intrinsics = {32, 32, float(width) / 2, float(height) / 2};
+    camera.clip_scale = {.01f, 100, 1, .3f};
+    camera.extent = {width, height, 0, 0};
+    command = [queue commandBuffer];
+    bool rejected = false;
+    try {
+        raster.encode(command, {gut_input}, 1, RasterMode::Gut, bg, gut_frame, {}, {}, camera);
+    } catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected && !gut_frame.busy(), "Missing 3DGUT geometry consumed reservation");
+    raster.encode(command, {gut_input}, 1, RasterMode::Gut, bg, gut_frame, {}, {geometry}, camera);
+    const auto gut_read = readback(device, command, gut_frame);
+    wait(command);
+    for (uint32_t y = 0; y < height; ++y)
+        for (uint32_t x = 0; x < width; ++x) {
+            const double u = (x + .5 - double(width) / 2) / 32, v = (y + .5 - double(height) / 2) / 32;
+            const double alpha = .8 * std::exp(-18 * (1 - 1 / (1 + u * u + v * v)));
+            const bool contributes = alpha >= .5 / 255;
+            const auto color = reinterpret_cast<const _Float16*>(static_cast<const char*>(gut_read.color.contents) + y * gut_read.color_stride) + x * 4;
+            const auto depth = reinterpret_cast<const float*>(static_cast<const char*>(gut_read.depth.contents) + y * gut_read.depth_stride) + x * 4;
+            const auto id = reinterpret_cast<const uint32_t*>(static_cast<const char*>(gut_read.pick.contents) + y * gut_read.pick_stride)[x];
+            const double a = contributes ? alpha : 0;
+            require(std::abs(float(color[0]) - (a + bg.x * bg.w * (1 - a))) < .001, "3DGUT independent ray color differs");
+            require(std::abs(depth[1] - a) < 1e-5, "3DGUT independent ray alpha differs");
+            require(id == (contributes ? 0u : 0xffffffffu), "3DGUT independent ray picking differs");
+            if (contributes) {
+                const double z = 3 / (1 + u * u + v * v);
+                require(std::abs(depth[0] - z * a) < 1e-4 && std::abs(depth[2] - z) < 1e-4, "3DGUT independent ray depth differs");
+                require(a > .5 ? std::abs(depth[3] - z) < 1e-4 : depth[3] >= 1e9, "3DGUT independent median depth differs");
+            }
+        }
     std::puts("Metal tile raster contracts passed: stable depth, RGB/alpha/depth/pick, modes, scan/block boundaries, overflow and frame reuse.");
 }
 int main() {

@@ -155,6 +155,11 @@ namespace {
         std::string zoom_text = "Zoom: 100";
         std::string zoom_color = "#ffffff";
         std::string zoom_sep_color = "#ffffff";
+        bool show_lfs_memory = true;
+        bool preview_reduced = false;
+        std::string preview_reduced_text = "Reduced preview resolution";
+        std::string input_device = "mouse";
+        std::string input_device_tooltip = "Mouse navigation";
         std::string lfs_mem_text = "LFS 12.34 GiB";
         std::string lfs_mem_color = "#ffffff";
         bool show_gpu_model = true;
@@ -165,6 +170,12 @@ namespace {
         std::string fps_value = "144";
         std::string fps_color = "#ffffff";
         std::string fps_label = " FPS";
+        std::string renderer_label = "Renderer";
+        std::string renderer_value = "Metal / Vulkan";
+        std::string renderer_tooltip = "Scene renderer";
+        std::string tensor_label = "Tensors";
+        std::string tensor_value = "CUDA";
+        std::string tensor_tooltip = "Tensor compute backend";
         std::string git_commit = "abcdef12";
         bool mcp_details_expanded = false;
         std::string mcp_summary = "MCP Local";
@@ -287,6 +298,11 @@ namespace {
             bound &= constructor.Bind("zoom_text", &model_.zoom_text);
             bound &= constructor.Bind("zoom_color", &model_.zoom_color);
             bound &= constructor.Bind("zoom_sep_color", &model_.zoom_sep_color);
+            bound &= constructor.Bind("show_lfs_memory", &model_.show_lfs_memory);
+            bound &= constructor.Bind("preview_reduced", &model_.preview_reduced);
+            bound &= constructor.Bind("preview_reduced_text", &model_.preview_reduced_text);
+            bound &= constructor.Bind("input_device", &model_.input_device);
+            bound &= constructor.Bind("input_device_tooltip", &model_.input_device_tooltip);
             bound &= constructor.Bind("lfs_mem_text", &model_.lfs_mem_text);
             bound &= constructor.Bind("lfs_mem_color", &model_.lfs_mem_color);
             bound &= constructor.Bind("show_gpu_model", &model_.show_gpu_model);
@@ -297,6 +313,12 @@ namespace {
             bound &= constructor.Bind("fps_value", &model_.fps_value);
             bound &= constructor.Bind("fps_color", &model_.fps_color);
             bound &= constructor.Bind("fps_label", &model_.fps_label);
+            bound &= constructor.Bind("renderer_label", &model_.renderer_label);
+            bound &= constructor.Bind("renderer_value", &model_.renderer_value);
+            bound &= constructor.Bind("renderer_tooltip", &model_.renderer_tooltip);
+            bound &= constructor.Bind("tensor_label", &model_.tensor_label);
+            bound &= constructor.Bind("tensor_value", &model_.tensor_value);
+            bound &= constructor.Bind("tensor_tooltip", &model_.tensor_tooltip);
             bound &= constructor.Bind("git_commit", &model_.git_commit);
             bound &= constructor.Bind("mcp_details_expanded", &model_.mcp_details_expanded);
             bound &= constructor.Bind("mcp_summary", &model_.mcp_summary);
@@ -348,7 +370,7 @@ namespace {
     };
 
     TEST_F(StatusBarFitTest, KeepsSingleLineNonOverlappingLayoutAcrossWidths) {
-        const std::vector<int> widths = {2400, 1600, 1200, 900, 700, 500, 320};
+        const std::vector<int> widths = {3000, 2400, 1600, 1200, 900, 700, 500, 320};
         int previous_fit_level = 0;
 
         for (const int width : widths) {
@@ -370,6 +392,40 @@ namespace {
         const int expanded_fit_level =
             lfs::vis::gui::RmlStatusBarTestAccess::fit(status_bar_, true);
         EXPECT_LT(expanded_fit_level, previous_fit_level);
+        assertNoVerticalOverflow(document_);
+        assertFlexSiblingsDoNotOverlap(document_);
+    }
+
+    TEST_F(StatusBarFitTest, BackendBadgesKeepDistinctRolesAndUpdateTooltips) {
+        auto* renderer = document_->GetElementById("renderer-backend-chip");
+        auto* tensor = document_->GetElementById("tensor-backend-chip");
+        auto* fps = document_->GetElementById("fps-group");
+        ASSERT_NE(renderer, nullptr);
+        ASSERT_NE(tensor, nullptr);
+        ASSERT_NE(fps, nullptr);
+        EXPECT_EQ(renderer->GetAttribute<Rml::String>("title", ""), model_.renderer_tooltip);
+        EXPECT_EQ(tensor->GetAttribute<Rml::String>("title", ""), model_.tensor_tooltip);
+        EXPECT_LT(renderer->GetAbsoluteOffset().x, tensor->GetAbsoluteOffset().x);
+        EXPECT_LT(tensor->GetAbsoluteOffset().x, fps->GetAbsoluteOffset().x);
+
+        model_.renderer_value = "Vulkan";
+        model_.renderer_tooltip = "Metal requested; Vulkan fallback";
+        model_handle_.DirtyVariable("renderer_value");
+        model_handle_.DirtyVariable("renderer_tooltip");
+        context_->Update();
+        EXPECT_EQ(renderer->GetAttribute<Rml::String>("title", ""), model_.renderer_tooltip);
+        EXPECT_NE(renderer->GetInnerRML().find("Vulkan"), Rml::String::npos);
+        EXPECT_EQ(renderer->GetInnerRML().find("Metal / Vulkan"), Rml::String::npos);
+
+        context_->SetDimensions({320, 22});
+        context_->Update();
+        lfs::vis::gui::RmlStatusBarTestAccess::fit(status_bar_);
+        EXPECT_TRUE(renderer->IsVisible(true));
+        EXPECT_TRUE(tensor->IsVisible(true));
+        EXPECT_TRUE(renderer->GetChild(0)->IsVisible(true));
+        EXPECT_TRUE(tensor->GetChild(0)->IsVisible(true));
+        EXPECT_LE(tensor->GetAbsoluteOffset().x + tensor->GetOffsetWidth(), 320.5f);
+        EXPECT_EQ(renderer->GetAttribute<Rml::String>("title", ""), model_.renderer_tooltip);
         assertNoVerticalOverflow(document_);
         assertFlexSiblingsDoNotOverlap(document_);
     }

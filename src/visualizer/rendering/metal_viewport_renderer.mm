@@ -126,7 +126,7 @@ namespace lfs::vis {
             uint64_t generation = 0, consumer_serial = 0, producer_value = 0;
             uint64_t request_key = 0;
             std::unique_ptr<RasterFrame> raster;
-            id<MTLBuffer> projected, objects, overlay_parameters, overlay_flags, overlay_nodes, selection_colors;
+            id<MTLBuffer> projected, gut_geometry, objects, overlay_parameters, overlay_flags, overlay_nodes, selection_colors;
             id<MTLCommandBuffer> command;
             id<MTLTexture> point_depth;
             bool points = false;
@@ -458,7 +458,7 @@ namespace lfs::vis {
             [f.command waitUntilCompleted];
             if (f.command.status != MTLCommandBufferStatusCompleted)
                 throw std::runtime_error("Metal point raster failed");
-            return PointCloudVulkanRenderer::RenderResult{.image = f.color.image, .image_view = f.color.view, .image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .generation = f.generation, .depth_image = f.depth.image, .depth_image_view = f.depth.view, .depth_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .depth_generation = f.generation, .size = f.size, .flip_y = false};
+            return PointCloudVulkanRenderer::RenderResult{.image = f.color.image, .image_view = f.color.view, .image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .generation = f.generation, .depth_image = f.depth.image, .depth_image_view = f.depth.view, .depth_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .depth_generation = f.generation, .size = f.size, .flip_y = false, .viewer_backend = rendering::ViewerBackend::Metal};
         } catch (const std::exception& e) { return nativeError(e); }
     }
     bool MetalViewportRenderer::supports(const core::SplatData& model, const rendering::ViewportRenderRequest& r) {
@@ -476,7 +476,7 @@ namespace lfs::vis {
             return false;
         return resident_mask(r.overlay.emphasis.mask.get()) && resident_mask(r.overlay.emphasis.transient_mask.mask) &&
                core::gpu_backend_of(model.means_raw()) == core::GpuBackend::Metal &&
-               !r.gut && !r.equirectangular && r.splat_render_profile == 0 &&
+               !r.equirectangular && r.splat_render_profile == 0 &&
                !r.lod_indices && !r.lod_gpu_traversal.enabled && !r.lod_debug_mode &&
                model.means_raw().dtype() == core::DataType::Float32 && model.sh0_raw().dtype() == core::DataType::Float32 &&
                ((model.scaling_raw().dtype() == core::DataType::Float32 && model.rotation_raw().dtype() == core::DataType::Float32 &&
@@ -511,6 +511,15 @@ namespace lfs::vis {
             if (i.frames[static_cast<size_t>(slot)][i.next[static_cast<size_t>(slot)] % 3].get() == previous)
                 previous = nullptr;
             auto& f = i.acquire(slot, request, static_cast<uint32_t>(model.size()));
+            if (request.gut && (!f.gut_geometry || f.gut_geometry.length < size_t(model.size()) * sizeof(GutSplat))) {
+                const size_t bytes = std::max<size_t>(16, size_t(model.size()) * sizeof(GutSplat));
+                const auto device = i.reader.device();
+                if (!frameFitsWorkingSet(device.currentAllocatedSize, bytes, device.recommendedMaxWorkingSetSize))
+                    throw lfs::Exception(nativeError("Metal 3DGUT reservation exceeds the recommended GPU working set", lfs::ErrorCode::ResourceExhausted));
+                f.gut_geometry = [device newBufferWithLength:bytes options:MTLResourceStorageModePrivate];
+                if (!f.gut_geometry)
+                    throw lfs::Exception(nativeError("Metal 3DGUT geometry allocation failed", lfs::ErrorCode::ResourceExhausted));
+            }
             const int node_degree = request.scene.node_active_sh_degrees.empty() ? model.get_active_sh_degree() : *std::max_element(request.scene.node_active_sh_degrees.begin(), request.scene.node_active_sh_degrees.end());
             const int max_degree = std::clamp(node_degree, 0, std::min(3, model.get_max_sh_degree()));
             const uint32_t degree = static_cast<uint32_t>(std::clamp(request.sh_degree, 0, max_degree));
@@ -618,6 +627,7 @@ namespace lfs::vis {
             hash(&present.depth_min, sizeof(PresentParameters) - 16);
             const auto mask_version = model.deleted_mask_version();
             hash(&mask_version, sizeof(mask_version));
+            hash(&request.gut, sizeof(request.gut));
             if (scene.count)
                 hash(f.objects.contents, scene.count * sizeof(SceneObject));
             if (needs_overlay) {
@@ -644,9 +654,9 @@ namespace lfs::vis {
                 scene.object_indices = slice(8);
                 overlay.selection = selection_enabled ? slice(9) : BufferSlice{};
                 overlay.preview = preview_enabled ? slice(10) : BufferSlice{};
-                i.preprocessor.encode(command, inputs, projection, degree, PrimitiveMode::Gaussian, {f.projected, 0}, scene, overlay);
-                i.rasterizer.encode(command, {f.projected, 0}, uint32_t(model.size()), RasterMode::Gaussian,
-                                    {background.x, background.y, background.z, request.transparent_background ? 0.f : 1.f}, *f.raster, overlay);
+                i.preprocessor.encode(command, inputs, projection, degree, request.gut ? PrimitiveMode::Gut : PrimitiveMode::Gaussian, {f.projected, 0}, scene, overlay, request.gut ? BufferSlice{f.gut_geometry, 0} : BufferSlice{});
+                i.rasterizer.encode(command, {f.projected, 0}, uint32_t(model.size()), request.gut ? RasterMode::Gut : RasterMode::Gaussian,
+                                    {background.x, background.y, background.z, request.transparent_background ? 0.f : 1.f}, *f.raster, overlay, request.gut ? BufferSlice{f.gut_geometry, 0} : BufferSlice{}, projection);
                 auto encoder = [command computeCommandEncoder];
                 [encoder setComputePipelineState:i.present];
                 [encoder setTexture:f.raster->color() atIndex:0];
@@ -672,7 +682,7 @@ namespace lfs::vis {
             i.serial = serial;
             f.consumer_serial = slot == Slot::Preview ? 0 : context.lastFrameSubmitSerial() + 1;
             i.latest[static_cast<size_t>(slot)] = &f;
-            return VksplatViewportRenderer::RenderResult{.image = f.color.image, .image_view = f.color.view, .image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .generation = f.generation, .depth_image = f.depth.image, .depth_image_view = f.depth.view, .depth_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .depth_generation = f.generation, .size = f.size, .alloc_size = f.size, .flip_y = false, .completion_semaphore = i.completion, .completion_value = serial, .lod_streaming_active = refine};
+            return VksplatViewportRenderer::RenderResult{.image = f.color.image, .image_view = f.color.view, .image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .generation = f.generation, .depth_image = f.depth.image, .depth_image_view = f.depth.view, .depth_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .depth_generation = f.generation, .size = f.size, .alloc_size = f.size, .flip_y = false, .completion_semaphore = i.completion, .completion_value = serial, .lod_streaming_active = refine, .viewer_backend = rendering::ViewerBackend::Metal};
         } catch (const std::exception& e) { return nativeError(e); }
     }
     glm::ivec2 MetalViewportRenderer::size(Slot slot) const {

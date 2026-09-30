@@ -17,6 +17,14 @@ destination and the existing single import path, including hover/cancel feedback
 `MacNativeDragDropContracts` exercises that event bridge without a GPU in macOS CI;
 actual Finder interaction remains a manual UI check.
 
+The shared desktop status bar shows compact Renderer and Tensors badges beside
+FPS on all platforms. Renderer telemetry comes from published frame metadata,
+including mixed split frames and software point-cloud panels, rather than from
+the saved preference. The tensor badge reports the current process backend.
+Localized hover tooltips explain independent routing and restart semantics;
+compact layouts retain distinct display and compute icons. CPU visualizer
+contracts cover metadata propagation/reset and status-bar sizing without a GPU.
+
 ## Implemented and GPU-tested
 
 `SplatPreprocessor` encodes a GPU projection into the caller's command buffer.
@@ -42,6 +50,11 @@ Callers can precompile cached specializations with `prepare` before interaction.
 - Per-object transforms, visibility and active SH limit without rewriting source
   positions; invalid object indices are culled. Orthographic projection, Gaussian,
   point and disc specializations, and mip covariance/opacity compensation.
+- Native 3DGUT uses seven unscented-transform samples for projection and retained
+  inverse-Gaussian geometry for per-pixel 3D ray alpha/depth evaluation.
+  Perspective and orthographic, affine/Q16/SH, mip, crop, selection and center
+  markers share the existing tensor/filter contracts; interactive work performs
+  no CPU geometry copies, sorting or per-frame readback.
 
 `TileRasterizer` consumes the resident projected splats:
 
@@ -71,7 +84,7 @@ under `viewer_backend`, defaults missing/invalid values to automatic, and does n
 rewrite the saved request when a backend is unavailable. The resolver reports a
 fallback reason. Desktop routing and the preferences UI are connected.
 
-The native desktop adapter supports Studio 3DGS color/depth, perspective and
+The native desktop adapter supports Studio 3DGS and 3DGUT color/depth, perspective and
 orthographic views, resident float32/half geometry, Q16/half/float SH storage,
 node transforms/visibility/SH limits, deletion, crop boxes and ellipsoids,
 screen depth windows, dimming, committed/preview selection, brushes, node flash,
@@ -97,7 +110,7 @@ recommended working set, accounting for allocations already on the shared
 device. This guards large growth before allocation; it is not an eviction or
 adaptive-quality policy and does not measure driver memory exactly.
 
-Unsupported requests, including 3DGUT/equirectangular, standard portal profile
+Unsupported requests, including equirectangular, standard portal profile
 and LOD/RAD traversal/paging, retain the existing Vulkan path. Selection queries,
 the desktop UI, grid, gizmos and final composition also remain on Vulkan. This
 backend is not yet a fully independent Metal desktop presentation/editor stack.
@@ -110,6 +123,10 @@ ordering, interop, native hardware point coverage, resize/reuse, failed-encode
 recovery, adapter routing, four output slots, asynchronous ticket delivery and
 abandonment, median/expected depth capture and resource release. CPU contracts
 cover backend selection and working-set admission, including 64-bit overflow.
+An independent analytic ray reference exercises native 3DGUT color, first,
+weighted and median depth, IDs and reservation validation. The macOS-only parity
+suite also compares 3DGUT SH0/Q16 and its mip, orthographic, depth, export-scale,
+affine, selection, crop and marker variants against Vulkan.
 
 The deterministic Vulkan comparisons cover SH0 and SH3 Q16, mip, orthographic,
 depth, crop/ellipsoid/window, committed/preview selection, center markers, flash

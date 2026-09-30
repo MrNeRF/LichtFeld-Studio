@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
+#include <cstdint>
 #include <optional>
 #include <string_view>
 
@@ -26,6 +27,15 @@ namespace lfs::rendering {
             return ViewerBackend::Metal;
         return std::nullopt;
     }
+    // A presented split can contain both APIs. Zero means no scene backend was
+    // published; it must never be interpreted as the requested Automatic policy.
+    [[nodiscard]] constexpr uint32_t viewerBackendBit(ViewerBackend backend) {
+        return backend == ViewerBackend::Vulkan ? 1u : backend == ViewerBackend::Metal ? 2u
+                                                                                       : 0u;
+    }
+    // Software point-cloud panels can participate in a mixed split frame.
+    inline constexpr uint32_t softwareViewerBackendBit = 4u;
+
     struct ViewerBackendCapabilities {
         bool vulkan = false;
         bool metal = false;

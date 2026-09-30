@@ -17,6 +17,8 @@ namespace lfs::rendering::metal {
             uint32_t count, width, height, columns, tiles, capacity, mode, unused;
             simd_float4 background;
             simd_float4 render_origin;
+            simd_float4 intrinsics, clip;
+            simd_uint4 camera;
         };
         struct SortParameters {
             uint32_t blocks, shift;
@@ -182,10 +184,10 @@ namespace lfs::rendering::metal {
     }
     TileRasterizer::~TileRasterizer() = default;
     void TileRasterizer::encode(id<MTLCommandBuffer> command, BufferSlice projected, uint32_t count,
-                                RasterMode mode, simd_float4 background, RasterFrame& frame, const OverlayBuffers& overlay) {
+                                RasterMode mode, simd_float4 background, RasterFrame& frame, const OverlayBuffers& overlay, BufferSlice gut, const Projection& projection) {
         auto f = frame.impl_;
         if (!command || command.device != impl_->device || f->device != impl_->device ||
-            command.status != MTLCommandBufferStatusNotEnqueued || count > f->max_splats || uint32_t(mode) > 2)
+            command.status != MTLCommandBufferStatusNotEnqueued || count > f->max_splats || uint32_t(mode) > 3)
             throw std::invalid_argument("Invalid Metal viewer frame submission");
         for (int i = 0; i < 4; ++i)
             if (!std::isfinite(background[i]) || background[i] < 0 || (i == 3 && background[i] > 1))
@@ -194,6 +196,17 @@ namespace lfs::rendering::metal {
                       projected.offset > projected.buffer.length ||
                       size_t(count) * sizeof(ProjectedSplat) > projected.buffer.length - projected.offset))
             throw std::invalid_argument("Invalid Metal viewer projected splat buffer");
+        if (mode == RasterMode::Gut && count &&
+            (!gut.buffer || gut.buffer.device != impl_->device || gut.offset % 16 ||
+             gut.offset > gut.buffer.length || size_t(count) * sizeof(GutSplat) > gut.buffer.length - gut.offset))
+            throw std::invalid_argument("Invalid native 3DGUT geometry buffer");
+        if (mode == RasterMode::Gut) {
+            for (int component = 0; component < 4; ++component)
+                if (!std::isfinite(projection.intrinsics[component]) || !std::isfinite(projection.clip_scale[component]))
+                    throw std::invalid_argument("Invalid native 3DGUT ray parameters");
+            if (projection.intrinsics.x <= 0 || projection.intrinsics.y <= 0 || projection.clip_scale.x <= 0 || projection.extent.z > 1)
+                throw std::invalid_argument("Invalid native 3DGUT camera");
+        }
         if (f->in_flight.exchange(true, std::memory_order_acq_rel))
             throw std::logic_error("Metal viewer frame reservation is still in flight");
         f->completed.store(false, std::memory_order_release);
@@ -202,7 +215,7 @@ namespace lfs::rendering::metal {
             f->completed.store(finished.status == MTLCommandBufferStatusCompleted, std::memory_order_release);
             f->in_flight.store(false, std::memory_order_release);
         }];
-        const RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), overlay.parameter_count ? 1u : 0u, background, overlay.render_origin};
+        const RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), overlay.parameter_count ? 1u : 0u, background, overlay.render_origin, projection.intrinsics, projection.clip_scale, projection.extent};
         const auto dispatch = [](id<MTLComputeCommandEncoder> e, uint32_t n) {
             [e dispatchThreadgroups:MTLSizeMake(ceil_div(n, 256), 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
             [e endEncoding];
@@ -279,6 +292,7 @@ namespace lfs::rendering::metal {
         e = impl_->begin(command, "tile_blend");
         set_projected(e);
         const uint32_t sorted = (4 + (std::bit_width(f->tiles - 1) + 7) / 8) % 2;
+        [e setBuffer:gut.buffer ?: f->counts offset:gut.buffer ? gut.offset : 0 atIndex:10];
         [e setBuffer:f->indices[sorted] offset:0 atIndex:1];
         [e setBuffer:f->ranges offset:0 atIndex:2];
         [e setBuffer:f->status offset:0 atIndex:3];

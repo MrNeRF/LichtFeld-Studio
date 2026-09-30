@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include "rendering/viewer_backend.hpp"
 
 #include "core/export.hpp"
 #include "core/tensor.hpp"
@@ -40,6 +41,7 @@ namespace lfs::vis {
             std::uint64_t depth_generation = 0;
             glm::ivec2 size{0, 0};
             bool flip_y = false;
+            rendering::ViewerBackend viewer_backend = rendering::ViewerBackend::Vulkan;
         };
 
         struct CropBox {
