@@ -12,6 +12,7 @@ add_subdirectory(rasterization/gsplat)
 set(LFS_TRAINING_KERNEL_SOURCES
     kernels/loss_tensor_contract.cpp
     kernels/camera_loss_heatmap.cu
+    kernels/thin_structure.cu
     kernels/ssim.cu
     kernels/l1_loss.cu
     kernels/ssim_reduction.cu

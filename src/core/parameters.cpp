@@ -455,6 +455,8 @@ namespace lfs::core {
                 return std::format("steps_scaler must be finite (got {})", steps_scaler);
             if (!std::isfinite(max_screen_share))
                 return std::format("max_screen_share must be finite (got {})", max_screen_share);
+            if (!std::isfinite(thin_structure_weight) || thin_structure_weight < 0.0f || thin_structure_weight > 4.0f)
+                return std::format("thin_structure_weight must be finite and within [0, 4] (got {})", thin_structure_weight);
             if (!std::isfinite(scale_reg_decay_power) || scale_reg_decay_power < -1.0f)
                 return std::format("scale_reg_decay_power must be finite and at least -1 (got {})", scale_reg_decay_power);
             if (ppisp_warmup_steps < 0)
@@ -721,6 +723,7 @@ namespace lfs::core {
             p.max_cap = 5'000'000;
             p.grow_fraction = -1.0f;
             p.shs_lr = -1.0f;
+            p.thin_structure_weight = 1.0f;
             p.min_opacity = 1.0f / 255.0f;
             p.means_lr_end = 2e-7f;
             p.opacity_lr = 0.012f;

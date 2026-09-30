@@ -16,6 +16,7 @@
 #include "dataset.hpp"
 #include "io/project_recovery.hpp"
 #include "kernels/depth_loss.hpp"
+#include "kernels/thin_structure.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "lfs/training/refine_scratch.hpp"
 #include "losses/mask_loss.hpp"
@@ -517,6 +518,9 @@ namespace lfs::training {
         void clearBackgroundImageCache();
         lfs::core::Tensor get_edge_weight_map(int camera_uid, const lfs::core::Tensor& gt_image);
         void clearEdgeWeightCache();
+        core::Tensor get_thin_structure_map(int camera_uid, const core::Tensor& image, float weight);
+        void clear_thin_structure_cache();
+        friend struct TrainerThinStructureTestAccess;
 
         // Release GPU state that is only needed while a train step is active.
         // The model, optimizer, and source background image remain resident so
@@ -579,7 +583,8 @@ namespace lfs::training {
             const lfs::core::Tensor& roi_weight,
             const lfs::core::Tensor& alpha,
             const lfs::core::param::OptimizationParameters& opt_params,
-            const lfs::core::Tensor& raw_rendered);
+            const lfs::core::Tensor& raw_rendered,
+            const lfs::core::Tensor& structure_map = {});
 
         // Validate masks exist for all cameras when mask mode is enabled
         std::expected<void, std::string> validate_masks();
@@ -916,6 +921,14 @@ namespace lfs::training {
         uint64_t edge_weight_cache_clock_ = 0;
         uint64_t edge_weight_preprocessing_generation_ = 0;
         bool edge_weight_scoring_active_ = false;
+
+        std::unordered_map<int, EdgeWeightCacheEntry> thin_structure_cache_;
+        size_t thin_structure_cache_bytes_ = 0;
+        uint64_t thin_structure_cache_clock_ = 0;
+        uint64_t thin_structure_map_computations_ = 0;
+        kernels::RidgeWorkspace thin_structure_workspace_;
+        core::Tensor thin_structure_map_buffer_;
+        core::Tensor thin_structure_weight_buffer_;
 
         // Metrics evaluator - handles all evaluation logic
         std::unique_ptr<lfs::training::MetricsEvaluator> evaluator_;

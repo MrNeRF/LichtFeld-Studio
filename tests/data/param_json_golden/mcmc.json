@@ -105,6 +105,7 @@
   "steps_scaler": 1.0,
   "stop_refine": 25000,
   "strategy": "mcmc",
+  "thin_structure_weight": 0.0,
   "tv_loss_weight": 10.0,
   "undistort": false,
   "use_alpha_as_mask": true,

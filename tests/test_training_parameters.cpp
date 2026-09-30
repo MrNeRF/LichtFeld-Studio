@@ -242,6 +242,7 @@ namespace {
     TEST_F(TrainingParametersTest, SerializedSurfaceHasRegistryCoverage) {
         OptimizationParameters serialization_probe{};
         serialization_probe.bg_image_path = "coverage-background.png";
+        serialization_probe.thin_structure_weight = 1.0f;
         const auto serialized = serialization_probe.to_json();
 
         const auto group = PropertyRegistry::instance().get_group_snapshot("optimization");

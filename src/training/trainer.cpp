@@ -1135,6 +1135,7 @@ namespace lfs::training {
         densification_ssim_workspace_ = {};
         densification_error_map_ = {};
         clearEdgeWeightCache();
+        clear_thin_structure_cache();
         mask_preprocess_workspace_ = {};
     }
 
@@ -1819,7 +1820,8 @@ namespace lfs::training {
         const lfs::core::Tensor& roi_weight,
         const lfs::core::Tensor& alpha,
         const lfs::core::param::OptimizationParameters& opt_params,
-        const lfs::core::Tensor& raw_rendered) {
+        const lfs::core::Tensor& raw_rendered,
+        const lfs::core::Tensor& structure_map) {
 
         using namespace lfs::core;
         constexpr float ALPHA_CONSISTENCY_WEIGHT = 10.0f;
@@ -1848,12 +1850,25 @@ namespace lfs::training {
 
         // Fused mask preprocess: SegmentAndIgnore band remap + optional ROI → one kernel.
         // Steady state is allocation-free via mask_preprocess_workspace_ (grow-only).
-        const Tensor photometric_weight = losses::fuse_photometric_mask_weight(
+        const Tensor base_photometric_weight = losses::fuse_photometric_mask_weight(
             mask_preprocess_workspace_,
             user_masks_photometric ? mask_2d : Tensor{},
             roi_weight,
             mode == param::MaskMode::SegmentAndIgnore,
             user_masks_photometric && normal_terms_on);
+
+        Tensor photometric_weight = base_photometric_weight;
+        float base_denominator = 0.0f;
+        if (structure_map.is_valid()) {
+            kernels::structure_photometric_weight(
+                structure_map, base_photometric_weight, thin_structure_weight_buffer_,
+                opt_params.thin_structure_weight,
+                !base_photometric_weight.is_valid() && opt_params.lambda_dssim > 0.0f);
+            photometric_weight = thin_structure_weight_buffer_;
+            base_denominator = kernels::structure_base_denominator(
+                base_photometric_weight, static_cast<int>(gt_image.shape()[1]),
+                static_cast<int>(gt_image.shape()[2]), opt_params.lambda_dssim > 0.0f);
+        }
 
         Tensor loss, grad_corrected, grad_raw, grad_alpha;
         const bool use_decoupled_appearance_loss =
@@ -1867,6 +1882,10 @@ namespace lfs::training {
                 auto [loss_tensor, ctx] = lfs::training::kernels::masked_decoupled_fused_l1_ssim_forward(
                     corrected, raw_rendered, gt_image, photometric_weight, opt_params.lambda_dssim,
                     masked_decoupled_ws);
+                if (structure_map.is_valid()) {
+                    loss_tensor = loss_tensor * (ctx.mask_sum_value / base_denominator);
+                    ctx.mask_sum_value = base_denominator;
+                }
                 auto grads = lfs::training::kernels::masked_decoupled_fused_l1_ssim_backward(
                     ctx, masked_decoupled_ws);
 
@@ -1885,6 +1904,10 @@ namespace lfs::training {
                 auto [loss_tensor, ctx] = lfs::training::kernels::masked_fused_l1_ssim_forward(
                     corrected, gt_image, photometric_weight, opt_params.lambda_dssim, masked_ws);
 
+                if (structure_map.is_valid()) {
+                    loss_tensor = loss_tensor * (ctx.mask_sum_value / base_denominator);
+                    ctx.mask_sum_value = base_denominator;
+                }
                 grad_corrected = lfs::training::kernels::masked_fused_l1_ssim_backward(ctx, masked_ws);
                 loss = loss_tensor;
 
@@ -1945,7 +1968,7 @@ namespace lfs::training {
             .grad_corrected = grad_corrected,
             .grad_raw = grad_raw,
             .grad_alpha = grad_alpha,
-            .normal_pixel_weight = user_masks_photometric && normal_terms_on ? photometric_weight : Tensor{}};
+            .normal_pixel_weight = user_masks_photometric && normal_terms_on ? base_photometric_weight : Tensor{}};
     }
 
     // Returns GPU tensor for loss - NO SYNC!
@@ -3570,6 +3593,7 @@ namespace lfs::training {
         densification_ssim_workspace_ = {};
         densification_error_map_ = {};
         clearEdgeWeightCache();
+        clear_thin_structure_cache();
         strategy_.reset();
         bilateral_grid_.reset();
         ppisp_.reset();
@@ -5681,6 +5705,53 @@ namespace lfs::training {
         bg_image_cache_clock_ = 0;
     }
 
+    void Trainer::clear_thin_structure_cache() {
+        thin_structure_cache_.clear();
+        thin_structure_cache_bytes_ = 0;
+        thin_structure_cache_clock_ = 0;
+        thin_structure_workspace_ = {};
+        thin_structure_map_buffer_ = {};
+        thin_structure_weight_buffer_ = {};
+    }
+
+    core::Tensor Trainer::get_thin_structure_map(const int camera_uid, const core::Tensor& image, const float weight) {
+        if (weight == 0.0f)
+            return {};
+        using namespace lfs::core;
+        LFS_ASSERT(image.ndim() == 3 && image.shape()[0] == 3);
+        const size_t height = image.shape()[1], width = image.shape()[2];
+        const size_t bytes = height * width * sizeof(float);
+        if (auto it = thin_structure_cache_.find(camera_uid); it != thin_structure_cache_.end()) {
+            if (it->second.height == height && it->second.width == width &&
+                it->second.preprocessing_generation == edge_weight_preprocessing_generation_) {
+                it->second.last_used = ++thin_structure_cache_clock_;
+                it->second.tensor.sync_to_stream(image.stream());
+                return it->second.tensor;
+            }
+            thin_structure_cache_bytes_ -= it->second.allocation_bytes;
+            thin_structure_cache_.erase(it);
+        }
+        if (!thin_structure_map_buffer_.is_valid() || thin_structure_map_buffer_.shape() != TensorShape{height, width})
+            thin_structure_map_buffer_ = Tensor::empty({height, width}, Device::CUDA);
+        kernels::ridge_structure_map(image, thin_structure_map_buffer_, thin_structure_workspace_);
+        ++thin_structure_map_computations_;
+        if (bytes > EDGE_WEIGHT_CACHE_BUDGET_BYTES)
+            return thin_structure_map_buffer_;
+        while (!thin_structure_cache_.empty() &&
+               (thin_structure_cache_.size() >= EDGE_WEIGHT_CACHE_MAX_ENTRIES ||
+                thin_structure_cache_bytes_ > EDGE_WEIGHT_CACHE_BUDGET_BYTES - bytes)) {
+            const auto oldest = std::min_element(thin_structure_cache_.begin(), thin_structure_cache_.end(),
+                                                 [](const auto& a, const auto& b) { return a.second.last_used < b.second.last_used; });
+            thin_structure_cache_bytes_ -= oldest->second.allocation_bytes;
+            thin_structure_cache_.erase(oldest);
+        }
+        auto map = thin_structure_map_buffer_.clone();
+        thin_structure_cache_.insert_or_assign(camera_uid, EdgeWeightCacheEntry{
+                                                               map, height, width, bytes, edge_weight_preprocessing_generation_, ++thin_structure_cache_clock_});
+        thin_structure_cache_bytes_ += bytes;
+        return map;
+    }
+
     void Trainer::clearEdgeWeightCache() {
         edge_weight_cache_.clear();
         edge_weight_cache_bytes_ = 0;
@@ -6728,7 +6799,9 @@ namespace lfs::training {
                             LOG_VRAM_DIFF("train.photometric_loss");
                             const bool use_mask = params_.optimization.mask_mode != lfs::core::param::MaskMode::None &&
                                                   (cam->has_mask() || (params_.optimization.use_alpha_as_mask && cam->has_alpha()));
-                            if (use_mask || roi_weight.is_valid()) {
+                            const auto structure_map = get_thin_structure_map(
+                                cam->uid(), gt_tile, params_.optimization.thin_structure_weight);
+                            if (use_mask || roi_weight.is_valid() || structure_map.is_valid()) {
                                 lfs::core::Tensor mask;
                                 if (use_mask) {
                                     if (pipelined_mask_.is_valid() && pipelined_mask_.numel() > 0) {
@@ -6747,7 +6820,7 @@ namespace lfs::training {
 
                                 auto result = compute_photometric_loss_with_mask(
                                     corrected_image, gt_tile, mask_tile, roi_weight, output.alpha,
-                                    params_.optimization, raw_loss_input);
+                                    params_.optimization, raw_loss_input, structure_map);
                                 if (!result) {
                                     nvtxRangePop();
                                     nvtxRangePop();
@@ -6956,7 +7029,7 @@ namespace lfs::training {
                         const bool use_mask = params_.optimization.mask_mode != lfs::core::param::MaskMode::None &&
                                               (cam->has_mask() || (params_.optimization.use_alpha_as_mask && cam->has_alpha()));
                         const bool used_masked_fused =
-                            (roi_weight.is_valid() ||
+                            (params_.optimization.thin_structure_weight > 0.0f || roi_weight.is_valid() ||
                              (use_mask &&
                               (params_.optimization.mask_mode == lfs::core::param::MaskMode::Segment ||
                                params_.optimization.mask_mode == lfs::core::param::MaskMode::Ignore ||
@@ -6965,7 +7038,9 @@ namespace lfs::training {
                         {
                             LFS_VRAM_SCOPE("train.photometric_loss");
                             LOG_VRAM_DIFF("train.photometric_loss");
-                            if (use_mask || roi_weight.is_valid()) {
+                            const auto structure_map = get_thin_structure_map(
+                                cam->uid(), gt_tile, params_.optimization.thin_structure_weight);
+                            if (use_mask || roi_weight.is_valid() || structure_map.is_valid()) {
                                 lfs::core::Tensor mask;
                                 if (use_mask) {
                                     if (pipelined_mask_.is_valid() && pipelined_mask_.numel() > 0) {
@@ -6984,7 +7059,7 @@ namespace lfs::training {
 
                                 auto result = compute_photometric_loss_with_mask(
                                     corrected_image, gt_tile, mask_tile, roi_weight, output.alpha,
-                                    params_.optimization, raw_loss_input);
+                                    params_.optimization, raw_loss_input, structure_map);
                                 if (!result) {
                                     nvtxRangePop();
                                     nvtxRangePop();
