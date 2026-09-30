@@ -211,7 +211,6 @@ namespace lfs::vis::gui {
         Rml::Element* project_title_el_ = nullptr;
         Rml::Element* menu_toolbar_ = nullptr;
         Rml::Element* menu_window_controls_ = nullptr;
-        Rml::Element* menu_window_split_view_ = nullptr;
         Rml::Element* menu_window_toggle_ui_ = nullptr;
         Rml::Element* menu_window_maximize_ = nullptr;
         Rml::Element* body_el_ = nullptr;
@@ -223,7 +222,6 @@ namespace lfs::vis::gui {
         bool project_title_has_room_ = false;
         bool toolbar_fits_ = true;
         bool ui_hidden_ = false;
-        bool last_window_split_view_ = false;
         bool last_ui_hidden_ = false;
         bool last_window_maximized_ = false;
 

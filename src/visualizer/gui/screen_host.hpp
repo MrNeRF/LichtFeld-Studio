@@ -76,6 +76,7 @@ namespace lfs::vis::gui {
         };
 
         ScreenHost();
+        explicit ScreenHost(screen::ScreenService& screens) { services_.screens = &screens; }
         ~ScreenHost();
 
         void init(Services services);
@@ -84,6 +85,11 @@ namespace lfs::vis::gui {
 
         // Lays the screen out inside `work` (window pixels) for this frame.
         void layout(const screen::Rect& work, float ui_scale);
+        // Re-solve after an API-driven screen mutation using the latest window work rect.
+        void refreshLayout() {
+            if (services_.screens)
+                layout(work_, ui_scale_);
+        }
         // Runs gestures and header input. `pointer_free` is false while
         // something above the screen (menu, modal, floating panel) owns the
         // pointer.
@@ -95,6 +101,7 @@ namespace lfs::vis::gui {
 
         [[nodiscard]] const std::vector<AreaFrame>& areas() const { return frames_; }
         [[nodiscard]] const AreaFrame* area(screen::AreaId id) const;
+        [[nodiscard]] screen::Rect currentAreaRect(screen::AreaId id);
         [[nodiscard]] screen::AreaId areaAt(float x, float y) const;
         [[nodiscard]] screen::AreaId viewAt(float x, float y) const;
         [[nodiscard]] std::optional<screen::Rect> viewContent(screen::AreaId id) const;

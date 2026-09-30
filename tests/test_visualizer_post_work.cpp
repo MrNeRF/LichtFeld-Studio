@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "test_view_targets.hpp"
 #include <SDL3/SDL.h>
 
 #include "core/checkpoint_format.hpp"
@@ -8499,7 +8500,8 @@ namespace lfs::vis {
         write_minimal_transforms_dataset(dataset_path);
 
         VisualizerImpl viewer(options);
-        InputController controller(nullptr, viewer);
+        lfs::vis::TestViewTargets controller_views{viewer.getViewport()};
+        InputController controller{nullptr, controller_views};
 
         viewer.getSceneManager()->changeContentType(SceneManager::ContentType::Dataset);
         viewer.getSceneManager()->setDatasetPath(dataset_path);

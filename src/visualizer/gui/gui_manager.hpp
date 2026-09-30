@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include "gui/line_renderer.hpp"
 
 #include "core/error_bus.hpp"
 #include "core/events.hpp"
@@ -32,6 +33,7 @@
 #include "gui/ui_context.hpp"
 #include "gui/utils/drag_drop_native.hpp"
 #include "rendering/passes/vulkan_viewport_pass.hpp"
+#include "rendering/render_target_id.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 
@@ -157,6 +159,9 @@ namespace lfs::vis {
             glm::vec2 getSceneRenderViewportSize() const;
             void commitUiVisibilityTransitionIfFrameReady(bool frame_ready);
             bool isViewportFocused() const;
+            [[nodiscard]] bool isUiHidden() const { return ui_hidden_; }
+            [[nodiscard]] ViewportLayout viewportLayout() const { return viewport_layout_; }
+            [[nodiscard]] screen::AreaId viewAt(float x, float y) const;
             bool isPositionInViewport(double x, double y) const;
             bool isPositionOverFloatingPanel(double x, double y) const;
             [[nodiscard]] GuiHitTestResult hitTestPointer(double x, double y) const;
@@ -266,11 +271,9 @@ namespace lfs::vis {
             [[nodiscard]] ViewportLayout activeViewportLayout(const ScreenState& screen) const;
             void syncEditorFlags();
             void applyScreenCursor(screen::GestureCursor cursor);
-            [[nodiscard]] VulkanViewportPassParams buildVulkanViewportParams(VkExtent2D extent,
+            [[nodiscard]] VulkanViewportPassParams buildVulkanViewportParams(ViewId id, VkExtent2D extent,
                                                                              std::size_t frame_slot) const;
-            void recordVulkanViewport(VkCommandBuffer command_buffer,
-                                      VkExtent2D extent,
-                                      const VulkanViewportPassParams& params);
+
             void setupEventHandlers();
             void applyDefaultStyle();
             void initMenuBar();
@@ -469,7 +472,9 @@ namespace lfs::vis {
             // RmlUI integration
             RmlUIManager rmlui_manager_;
             std::shared_ptr<lfs::vis::SharedViewportGpuAssets> viewport_gpu_assets_;
-            std::unique_ptr<lfs::vis::VulkanViewportPass> vulkan_viewport_pass_;
+            std::unordered_map<ViewId, std::unique_ptr<lfs::vis::VulkanViewportPass>> vulkan_viewport_passes_;
+            std::unordered_map<ViewId, RenderTargetId> viewport_pass_targets_;
+            std::unordered_map<ViewId, std::vector<LineRendererCommand>> view_overlay_commands_;
             bool vulkan_gui_ = false;
             SDL_Cursor* pipette_cursor_ = nullptr;
             SDL_Cursor* selection_add_cursor_ = nullptr;

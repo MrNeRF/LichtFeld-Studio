@@ -1385,6 +1385,14 @@ namespace lfs::python {
     }
 
     void get_viewport_bounds(float& x, float& y, float& w, float& h) {
+        if (g_overlay_draw_context.viewport_bounds) {
+            const auto& bounds = *g_overlay_draw_context.viewport_bounds;
+            x = bounds[0];
+            y = bounds[1];
+            w = bounds[2];
+            h = bounds[3];
+            return;
+        }
         std::lock_guard lock(g_viewport.mutex);
         x = g_viewport.x;
         y = g_viewport.y;
@@ -1393,6 +1401,8 @@ namespace lfs::python {
     }
 
     bool has_viewport_bounds() {
+        if (g_overlay_draw_context.viewport_bounds)
+            return true;
         std::lock_guard lock(g_viewport.mutex);
         return g_viewport.is_set;
     }

@@ -10,6 +10,7 @@
 #include "operation/undo_history.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "screen/screen_service.hpp"
 #include "visualizer/gui_capabilities.hpp"
 
 #include <algorithm>
@@ -226,7 +227,7 @@ namespace {
             lfs::vis::services().clear();
             lfs::vis::op::undoHistory().clear();
             manager_ = std::make_unique<lfs::vis::SceneManager>();
-            rendering_ = std::make_unique<lfs::vis::RenderingManager>();
+            rendering_ = std::make_unique<lfs::vis::RenderingManager>(rendering__views);
             lfs::vis::services().set(manager_.get());
             lfs::vis::services().set(rendering_.get());
             manager_->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
@@ -253,6 +254,7 @@ namespace {
         }
 
         std::unique_ptr<lfs::vis::SceneManager> manager_;
+        lfs::vis::screen::ScreenService rendering__views;
         std::unique_ptr<lfs::vis::RenderingManager> rendering_;
     };
 

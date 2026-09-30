@@ -41,8 +41,7 @@ namespace lfs::app {
 
         vis::screen::Rect area_rect(vis::VisualizerImpl& impl, const vis::screen::AreaId id) {
             if (auto* gui = impl.getGuiManager()) {
-                if (const auto* frame = gui->screenHost().area(id))
-                    return frame->rect;
+                return gui->screenHost().currentAreaRect(id);
             }
             const auto geometry = impl.screens().screen().solve(
                 vis::screen::Rect{0.0f, 0.0f, 1.0f, 1.0f}, vis::screen::LayoutMetrics{});

@@ -175,7 +175,7 @@ namespace lfs::vis::op {
                         flags |= entry->dirtyFlags();
                     }
                 }
-                return flags == 0 ? DirtyFlag::ALL : flags;
+                return flags;
             }
 
         private:
@@ -192,7 +192,7 @@ namespace lfs::vis::op {
         void refreshAfterHistoryPlayback(const DirtyMask flags = DirtyFlag::ALL) {
             invalidateUndoRedoPollState();
             if (auto* rm = services().renderingOrNull()) {
-                rm->markDirty(flags == 0 ? DirtyFlag::ALL : flags);
+                rm->markDirty(flags);
             }
         }
 

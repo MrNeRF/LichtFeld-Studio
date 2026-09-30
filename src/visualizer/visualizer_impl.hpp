@@ -208,13 +208,14 @@ namespace lfs::vis {
         [[nodiscard]] ViewTarget activeView() override;
         [[nodiscard]] ViewTarget viewAt(float x, float y) override;
         [[nodiscard]] ViewTarget findView(ViewId id) override;
+        [[nodiscard]] ViewId viewId(const Viewport& viewport) const override;
+        [[nodiscard]] std::uint64_t viewEpoch() const override { return screen_service_.screenEpoch(); }
         void activateView(ViewId id) override;
         // Runs a named command on one 3D view: frame_all, frame_selected,
         // area:quad. Returns false for unknown commands or views.
         bool runViewCommand(ViewId id, std::string_view command) override;
         // Until every view renders on its own, the renderer's settings carry the
         // active view's half; this keeps the two in step each frame.
-        void syncActiveViewSettings();
         [[nodiscard]] lfs::Result<
             lfs::io::project::ProjectSessionChapters>
         captureProjectSession(
@@ -651,8 +652,6 @@ namespace lfs::vis {
 
         // Core components
         screen::ScreenService screen_service_;
-        ViewId mirrored_view_ = kNoView;
-        std::string mirrored_view_settings_;
         std::unique_ptr<WindowManager> window_manager_;
         std::unique_ptr<InputController> input_controller_;
         std::unique_ptr<RenderingManager> rendering_manager_;

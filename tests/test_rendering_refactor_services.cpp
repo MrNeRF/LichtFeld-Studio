@@ -22,6 +22,7 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/render_constants.hpp"
 #include "rendering/vksplat_viewport_renderer.hpp"
+#include "screen/screen_service.hpp"
 #include "selection/selection_service.hpp"
 #include "tools/selection_tool.hpp"
 #include "visualizer/gui_capabilities.hpp"
@@ -419,17 +420,18 @@ namespace lfs::vis {
     }
 
     TEST_F(RenderingManagerEventsTest, LossModeDoesNotExposeDraggableDivider) {
-        RenderingManager manager;
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
         auto settings = manager.getSettings();
         settings.split_view_mode = SplitViewMode::GTComparison;
         settings.gt_comparison_mode = GTComparisonMode::RGB;
         manager.updateSettings(settings);
-        ASSERT_TRUE(manager.getSplitDividerScreenX({10.0f, 20.0f}, {800.0f, 600.0f}).has_value());
+        ASSERT_TRUE(manager.getSplitDividerScreenX(manager.activeViewId(), {10.0f, 20.0f}, {800.0f, 600.0f}).has_value());
 
         settings.gt_comparison_mode = GTComparisonMode::Loss;
         manager.updateSettings(settings);
 
-        EXPECT_FALSE(manager.getSplitDividerScreenX({10.0f, 20.0f}, {800.0f, 600.0f}).has_value());
+        EXPECT_FALSE(manager.getSplitDividerScreenX(manager.activeViewId(), {10.0f, 20.0f}, {800.0f, 600.0f}).has_value());
     }
 
     TEST(SplitViewServiceTest, SceneClearedDisablesSplitViewAndResetsOffset) {
@@ -443,40 +445,6 @@ namespace lfs::vis {
         EXPECT_TRUE(result.mode_changed);
         EXPECT_EQ(settings.split_view_mode, SplitViewMode::Disabled);
         EXPECT_EQ(settings.split_view_offset, 0);
-    }
-
-    TEST(SplitViewServiceTest, IndependentDualCopiesPrimaryViewportAndResetsFocus) {
-        SplitViewService service;
-        RenderSettings settings;
-        Viewport primary_viewport(640, 480);
-        primary_viewport.setViewMatrix(glm::mat3(1.0f), glm::vec3(1.0f, 2.0f, 3.0f));
-        service.setFocusedPanel(SplitViewPanelId::Right);
-
-        const auto result = service.toggleMode(
-            settings, SplitViewMode::IndependentDual, &primary_viewport);
-
-        EXPECT_TRUE(result.mode_changed);
-        EXPECT_EQ(settings.split_view_mode, SplitViewMode::IndependentDual);
-        EXPECT_EQ(service.focusedPanel(), SplitViewPanelId::Left);
-        EXPECT_EQ(service.secondaryViewport().getTranslation(), primary_viewport.getTranslation());
-        EXPECT_EQ(service.secondaryViewport().getRotationMatrix(), primary_viewport.getRotationMatrix());
-    }
-
-    TEST(SplitViewServiceTest, IndependentDualToggleOffDisablesModeAndResetsFocus) {
-        SplitViewService service;
-        RenderSettings settings;
-        Viewport primary_viewport(640, 480);
-
-        ASSERT_TRUE(service.toggleMode(settings, SplitViewMode::IndependentDual, &primary_viewport).mode_changed);
-        service.setFocusedPanel(SplitViewPanelId::Right);
-
-        const auto result = service.toggleMode(
-            settings, SplitViewMode::IndependentDual, &primary_viewport);
-
-        EXPECT_TRUE(result.mode_changed);
-        EXPECT_EQ(result.current_mode, SplitViewMode::Disabled);
-        EXPECT_EQ(settings.split_view_mode, SplitViewMode::Disabled);
-        EXPECT_EQ(service.focusedPanel(), SplitViewPanelId::Left);
     }
 
     TEST(SplitViewServiceTest, GtRenderCameraUsesVisualizerCameraAxesAndNormalizedSceneRotation) {
@@ -598,7 +566,8 @@ namespace lfs::vis {
     }
 
     TEST_F(RenderingManagerEventsTest, OrthographicEnterSetsScaleFromCurrentFocal) {
-        RenderingManager manager;
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
         auto settings = manager.getSettings();
         settings.focal_length_mm = 50.0f;
         manager.updateSettings(settings);
@@ -617,7 +586,8 @@ namespace lfs::vis {
     }
 
     TEST_F(RenderingManagerEventsTest, OrthographicLeaveKeepsFocalLength) {
-        RenderingManager manager;
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
         auto settings = manager.getSettings();
         settings.focal_length_mm = 35.0f;
         manager.updateSettings(settings);
@@ -1711,7 +1681,8 @@ namespace lfs::vis {
     }
     TEST_F(SceneManagerRenderStateTest, EnsureEllipsoidConvertsExistingCropBoxInPlace) {
         SceneManager manager;
-        RenderingManager rendering_manager;
+        lfs::vis::screen::ScreenService rendering_manager_views;
+        RenderingManager rendering_manager{rendering_manager_views};
         auto& scene = manager.getScene();
         const auto parent_id = scene.addPointCloud("Model", makeTestPointCloud());
         ASSERT_NE(parent_id, lfs::core::NULL_NODE);
@@ -1773,7 +1744,8 @@ namespace lfs::vis {
 
     TEST_F(SceneManagerRenderStateTest, DefaultCropBoxConvertsToEllipsoidAtCropCenter) {
         SceneManager manager;
-        RenderingManager rendering_manager;
+        lfs::vis::screen::ScreenService rendering_manager_views;
+        RenderingManager rendering_manager{rendering_manager_views};
         auto& scene = manager.getScene();
         const auto parent_id = scene.addPointCloud("Model", makeTestPointCloud());
         ASSERT_NE(parent_id, lfs::core::NULL_NODE);
@@ -1803,7 +1775,8 @@ namespace lfs::vis {
 
     TEST_F(SceneManagerRenderStateTest, AddCropCommandsConvertSelectedCropVolumeViaParent) {
         SceneManager manager;
-        RenderingManager rendering_manager;
+        lfs::vis::screen::ScreenService rendering_manager_views;
+        RenderingManager rendering_manager{rendering_manager_views};
         services().set(&rendering_manager);
         EditorContext editor;
         services().set(&editor);
@@ -1841,7 +1814,8 @@ namespace lfs::vis {
 
     TEST_F(SceneManagerRenderStateTest, AddCropCommandsRevealExistingHiddenCropVolume) {
         SceneManager manager;
-        RenderingManager rendering_manager;
+        lfs::vis::screen::ScreenService rendering_manager_views;
+        RenderingManager rendering_manager{rendering_manager_views};
         services().set(&rendering_manager);
         auto& scene = manager.getScene();
         const auto parent_id = scene.addPointCloud("Model", makeTestPointCloud());
@@ -1875,7 +1849,8 @@ namespace lfs::vis {
 
     TEST_F(SceneManagerRenderStateTest, ResetAndFitPreserveEnabledCropEffects) {
         SceneManager manager;
-        RenderingManager rendering_manager;
+        lfs::vis::screen::ScreenService rendering_manager_views;
+        RenderingManager rendering_manager{rendering_manager_views};
         services().set(&rendering_manager);
         auto& scene = manager.getScene();
         const auto parent_id = scene.addSplat("Model", makeTestSplat(0.0f));
@@ -1968,7 +1943,8 @@ namespace lfs::vis {
 
     TEST_F(SceneManagerRenderStateTest, DeletingSelectedCropVolumeSelectsParentAndClearsRenderState) {
         SceneManager manager;
-        RenderingManager rendering_manager;
+        lfs::vis::screen::ScreenService rendering_manager_views;
+        RenderingManager rendering_manager{rendering_manager_views};
         services().set(&manager);
         services().set(&rendering_manager);
         auto& scene = manager.getScene();
@@ -1999,7 +1975,8 @@ namespace lfs::vis {
 
     TEST_F(SceneManagerRenderStateTest, EnsureCropBoxConvertsExistingEllipsoidAndUndoRedoRestoresShape) {
         SceneManager manager;
-        RenderingManager rendering_manager;
+        lfs::vis::screen::ScreenService rendering_manager_views;
+        RenderingManager rendering_manager{rendering_manager_views};
         auto& scene = manager.getScene();
         const auto parent_id = scene.addPointCloud("Model", makeTestPointCloud());
         ASSERT_NE(parent_id, lfs::core::NULL_NODE);
@@ -2797,7 +2774,8 @@ namespace lfs::vis {
     }
 
     TEST_F(RenderingManagerEventsTest, SceneLoadedDisablesGtComparison) {
-        RenderingManager manager;
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
         lfs::core::events::cmd::ToggleGTComparison{}.emit();
         EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::GTComparison);
 
@@ -2812,7 +2790,8 @@ namespace lfs::vis {
     }
 
     TEST_F(RenderingManagerEventsTest, SceneClearedDisablesGtComparison) {
-        RenderingManager manager;
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
         lfs::core::events::cmd::ToggleGTComparison{}.emit();
         EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::GTComparison);
 
@@ -2821,102 +2800,13 @@ namespace lfs::vis {
         EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
     }
 
-    TEST_F(RenderingManagerEventsTest, ToggleIndependentSplitViewInitializesSecondaryViewport) {
-        RenderingManager manager;
-        Viewport primary_viewport(800, 600);
-        primary_viewport.setViewMatrix(glm::mat3(1.0f), glm::vec3(4.0f, 5.0f, 6.0f));
-
-        lfs::core::events::cmd::ToggleIndependentSplitView{
-            .viewport = &primary_viewport,
-        }
-            .emit();
-
-        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::IndependentDual);
-        const auto& secondary = manager.resolvePanelViewport(primary_viewport, SplitViewPanelId::Right);
-        EXPECT_EQ(secondary.getTranslation(), primary_viewport.getTranslation());
-        EXPECT_EQ(secondary.getRotationMatrix(), primary_viewport.getRotationMatrix());
-    }
-
-    TEST_F(RenderingManagerEventsTest, ToggleIndependentSplitViewTwiceDisablesMode) {
-        RenderingManager manager;
-        Viewport primary_viewport(800, 600);
-
-        lfs::core::events::cmd::ToggleIndependentSplitView{
-            .viewport = &primary_viewport,
-        }
-            .emit();
-        ASSERT_EQ(manager.getSettings().split_view_mode, SplitViewMode::IndependentDual);
-
-        lfs::core::events::cmd::ToggleIndependentSplitView{
-            .viewport = &primary_viewport,
-        }
-            .emit();
-
-        EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
-        EXPECT_EQ(manager.getFocusedSplitPanel(), SplitViewPanelId::Left);
-    }
-
-    TEST_F(RenderingManagerEventsTest, IndependentSplitGridPlaneTracksPanelsIndependently) {
-        RenderingManager manager;
-        Viewport primary_viewport(800, 600);
-
-        auto settings = manager.getSettings();
-        settings.grid_plane = 2;
-        manager.updateSettings(settings);
-
-        lfs::core::events::cmd::ToggleIndependentSplitView{
-            .viewport = &primary_viewport,
-        }
-            .emit();
-
-        ASSERT_EQ(manager.getSettings().split_view_mode, SplitViewMode::IndependentDual);
-        EXPECT_EQ(manager.getGridPlaneForPanel(SplitViewPanelId::Left), 2);
-        EXPECT_EQ(manager.getGridPlaneForPanel(SplitViewPanelId::Right), 2);
-
-        manager.setGridPlaneForPanel(SplitViewPanelId::Left, 0);
-        manager.setGridPlaneForPanel(SplitViewPanelId::Right, 1);
-
-        EXPECT_EQ(manager.getGridPlaneForPanel(SplitViewPanelId::Left), 0);
-        EXPECT_EQ(manager.getGridPlaneForPanel(SplitViewPanelId::Right), 1);
-
-        manager.setFocusedSplitPanel(SplitViewPanelId::Left);
-        EXPECT_EQ(manager.getSettings().grid_plane, 0);
-
-        manager.setFocusedSplitPanel(SplitViewPanelId::Right);
-        EXPECT_EQ(manager.getSettings().grid_plane, 1);
-    }
-
-    TEST_F(RenderingManagerEventsTest, GridSettingsChangedOnlyUpdatesFocusedPanelInIndependentSplit) {
-        RenderingManager manager;
-        Viewport primary_viewport(800, 600);
-
-        lfs::core::events::cmd::ToggleIndependentSplitView{
-            .viewport = &primary_viewport,
-        }
-            .emit();
-
-        ASSERT_EQ(manager.getSettings().split_view_mode, SplitViewMode::IndependentDual);
-
-        manager.setGridPlaneForPanel(SplitViewPanelId::Left, 0);
-        manager.setGridPlaneForPanel(SplitViewPanelId::Right, 1);
-        manager.setFocusedSplitPanel(SplitViewPanelId::Right);
-
-        lfs::core::events::ui::GridSettingsChanged{
-            .enabled = true,
-            .plane = 2,
-            .opacity = 0.25f,
-        }
-            .emit();
-
-        EXPECT_EQ(manager.getGridPlaneForPanel(SplitViewPanelId::Left), 0);
-        EXPECT_EQ(manager.getGridPlaneForPanel(SplitViewPanelId::Right), 2);
-        EXPECT_EQ(manager.getSettings().grid_plane, 2);
-    }
-
-    TEST_F(RenderingManagerEventsTest, RenderSettingsChangedEquirectangularForcesGutBackend) {
+    TEST_F(RenderingManagerEventsTest,
+           RenderSettingsChangedEquirectangularPreservesSceneBackend) {
         using Backend = lfs::rendering::GaussianRasterBackend;
 
-        RenderingManager manager;
+        lfs::vis::screen::ScreenService manager_views;
+
+        RenderingManager manager{manager_views};
         auto settings = manager.getSettings();
         settings.raster_backend = Backend::ThreeDgs;
         settings.gut = false;
@@ -2929,12 +2819,17 @@ namespace lfs::vis {
 
         settings = manager.getSettings();
         EXPECT_TRUE(settings.equirectangular);
+        EXPECT_EQ(settings.raster_backend, Backend::ThreeDgs);
+        EXPECT_FALSE(settings.gut);
+        lfs::vis::enforceProjectionBackend(settings);
         EXPECT_EQ(settings.raster_backend, Backend::ThreeDgut);
         EXPECT_TRUE(settings.gut);
     }
 
-    TEST_F(RenderingManagerEventsTest, EnablingDepthFilterMigratesConstructorDefaultPositiveZBox) {
-        RenderingManager manager;
+    TEST_F(RenderingManagerEventsTest,
+           EnablingDepthFilterMigratesConstructorDefaultPositiveZBox) {
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
         auto settings = manager.getSettings();
         ASSERT_FALSE(settings.depth_filter_enabled);
         ASSERT_EQ(settings.depth_filter_min.z, 0.0f);
@@ -3227,10 +3122,10 @@ namespace lfs::vis {
         };
         ASSERT_EQ(op::operators().dispatchModalEvent(move), op::OperatorResult::RUNNING_MODAL);
         ASSERT_TRUE(rendering_manager_->depthWindowDragPreview());
-        (void)lfs::vis::op::updateDepthWindowHover(
-            glm::vec2(50.0f, 50.0f),
-            glm::vec4(0.0f, 0.0f, static_cast<float>(options_.width), static_cast<float>(options_.height)),
-            true);
+        (void)lfs::vis::op::updateDepthWindowHover(rendering_manager_->activeViewId(),
+                                                   glm::vec2(50.0f, 50.0f),
+                                                   glm::vec4(0.0f, 0.0f, static_cast<float>(options_.width), static_cast<float>(options_.height)),
+                                                   true);
 
         lfs::core::events::cmd::ToggleGTComparison{}.emit();
 

@@ -1012,7 +1012,6 @@ public:
     glm::ivec2 windowSize;
     glm::ivec2 frameBufferSize;
     CameraMotion camera;
-    std::optional<float> ortho_scale_override;
 
     Viewport(size_t width = 1280, size_t height = 720) {
         windowSize = glm::ivec2(width, height);

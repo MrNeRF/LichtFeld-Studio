@@ -28,6 +28,17 @@ namespace lfs::vis {
         float ortho_scale = 100.0f;
     };
 
+    class LFS_VIS_API ScopedOverlayView {
+    public:
+        explicit ScopedOverlayView(ViewInfo view);
+        ~ScopedOverlayView();
+        ScopedOverlayView(const ScopedOverlayView&) = delete;
+        ScopedOverlayView& operator=(const ScopedOverlayView&) = delete;
+
+    private:
+        std::optional<ViewInfo> previous_;
+    };
+
     struct SetViewParams {
         std::array<float, 3> eye;
         std::array<float, 3> target;
@@ -35,7 +46,6 @@ namespace lfs::vis {
     };
 
     using SetViewCallback = std::function<void(const SetViewParams&)>;
-    using SetViewForPanelCallback = std::function<void(SplitViewPanelId, const SetViewParams&)>;
     using SetFovCallback = std::function<void(float)>;
     using SetOrthoScaleCallback = std::function<void(std::optional<float>)>;
 
@@ -45,25 +55,21 @@ namespace lfs::vis {
     };
 
     using GetViewCallback = std::function<std::optional<ViewInfo>()>;
-    using GetViewForPanelCallback = std::function<std::optional<ViewInfo>(SplitViewPanelId)>;
     using GetViewportRenderCallback = std::function<std::optional<ViewportRender>()>;
     using CaptureViewportRenderCallback = std::function<std::optional<ViewportRender>()>;
 
     LFS_VIS_API void set_view_callback(GetViewCallback callback);
-    LFS_VIS_API void set_view_for_panel_callback(GetViewForPanelCallback callback);
     LFS_VIS_API void set_viewport_render_callback(GetViewportRenderCallback callback);
     LFS_VIS_API void set_capture_viewport_render_callback(CaptureViewportRenderCallback callback);
     [[nodiscard]] LFS_VIS_API std::optional<ViewInfo> get_current_view_info();
-    [[nodiscard]] LFS_VIS_API std::optional<ViewInfo> get_view_info_for_panel(SplitViewPanelId panel);
     [[nodiscard]] LFS_VIS_API std::optional<ViewportRender> get_viewport_render();
-    [[nodiscard]] LFS_VIS_API std::optional<ViewportRender> capture_viewport_render();
+    [[nodiscard]] LFS_VIS_API std::optional<ViewportRender>
+    capture_viewport_render();
 
     LFS_VIS_API void set_set_view_callback(SetViewCallback callback);
-    LFS_VIS_API void set_set_view_for_panel_callback(SetViewForPanelCallback callback);
     LFS_VIS_API void set_set_fov_callback(SetFovCallback callback);
     LFS_VIS_API void set_set_ortho_scale_callback(SetOrthoScaleCallback callback);
     LFS_VIS_API void apply_set_view(const SetViewParams& params);
-    LFS_VIS_API void apply_set_view_for_panel(SplitViewPanelId panel, const SetViewParams& params);
     LFS_VIS_API void apply_set_fov(float fov_degrees);
     LFS_VIS_API void apply_set_ortho_scale(std::optional<float> scale);
 
@@ -86,13 +92,13 @@ namespace lfs::vis {
         bool desaturate_cropping = false;
         bool crop_filter_for_selection = false;
         std::array<float, 3> background_color{0.0f, 0.0f, 0.0f};
-        // Display color: tone IDs match none, linear, filmic, hejl, aces, aces2, neutral.
+        // Display color: tone IDs match none, linear, filmic, hejl, aces, aces2,
+        // neutral.
         float color_exposure = 1.0f;
         int color_tonemapping = 0;
         int splat_render_profile = 0; // 0: Studio, 1: standard portal
         int environment_mode = 0;
-        std::string environment_map_path{
-            std::string(kDefaultEnvironmentMapPath)};
+        std::string environment_map_path{std::string(kDefaultEnvironmentMapPath)};
         float environment_exposure = 0.0f;
         float environment_rotation_degrees = 0.0f;
         bool show_coord_axes = false;
@@ -174,11 +180,14 @@ namespace lfs::vis {
         bool scene_upscaler_preset_explicit = false;
     };
 
-    using GetRenderSettingsCallback = std::function<std::optional<RenderSettingsProxy>()>;
-    using SetRenderSettingsCallback =
-        std::function<void(const RenderSettingsProxy&, RenderSettingsUpdateIntent)>;
+    using GetRenderSettingsCallback =
+        std::function<std::optional<RenderSettingsProxy>()>;
+    using SetRenderSettingsCallback = std::function<void(
+        const RenderSettingsProxy&, RenderSettingsUpdateIntent)>;
 
-    LFS_VIS_API void set_render_settings_callbacks(GetRenderSettingsCallback get_cb, SetRenderSettingsCallback set_cb);
+    LFS_VIS_API void
+    set_render_settings_callbacks(GetRenderSettingsCallback get_cb,
+                                  SetRenderSettingsCallback set_cb);
     [[nodiscard]] LFS_VIS_API std::optional<RenderSettingsProxy> get_render_settings();
     LFS_VIS_API void update_render_settings(
         const RenderSettingsProxy& settings,

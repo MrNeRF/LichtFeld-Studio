@@ -25,6 +25,7 @@ namespace lfs::vis {
         // The 3D view the user last worked in; the one "the viewport" means
         // in panels, Python and MCP.
         [[nodiscard]] virtual ViewId activeView() const = 0;
+        [[nodiscard]] virtual std::uint64_t screenEpoch() const = 0;
         [[nodiscard]] virtual std::optional<ViewSettings> viewSettings(ViewId view) const = 0;
         // Returns false when the view does not exist.
         virtual bool editViewSettings(ViewId view, const std::function<void(ViewSettings&)>& edit) = 0;

@@ -8,6 +8,14 @@
 
 namespace lfs::vis::gui::screen_host_detail {
 
+    inline screen::AreaId displayedViewAt(const bool ui_hidden, const screen::AreaId active_view,
+                                          const screen::AreaId screen_view, const screen::Rect& viewport_rect,
+                                          const float x, const float y) {
+        if (ui_hidden)
+            return viewport_rect.contains(x, y) ? active_view : screen::AreaId{};
+        return screen_view;
+    }
+
     inline bool cornerGestureZone(const screen::LayoutGeometry& geometry, const bool maximized,
                                   const float corner_size, const float x, const float y) {
         return !maximized && screen::cornerAt(geometry, x, y, corner_size).has_value();

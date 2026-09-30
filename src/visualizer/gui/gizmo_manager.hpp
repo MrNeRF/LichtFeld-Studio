@@ -91,7 +91,7 @@ namespace lfs::vis {
             [[nodiscard]] LFS_VIS_API std::string cropToolOperation() const;
             LFS_VIS_API void applyActiveCropTool();
             LFS_VIS_API void deleteActiveCropToolVolume();
-            [[nodiscard]] bool isViewportGizmoDragging() const { return viewport_gizmo_dragging_; }
+            [[nodiscard]] ViewId viewportGizmoDragView() const { return viewport_gizmo_dragging_ ? viewport_gizmo_view_ : kNoView; }
             [[nodiscard]] bool isPositionInViewportGizmo(double x, double y) const;
             [[nodiscard]] ToolType getCurrentToolMode() const;
 
@@ -182,7 +182,8 @@ namespace lfs::vis {
 
             // Viewport gizmo
             bool viewport_gizmo_dragging_ = false;
-            SplitViewPanelId viewport_gizmo_active_panel_ = SplitViewPanelId::Left;
+            ViewId viewport_gizmo_view_ = kNoView;
+            ViewId transform_gizmo_view_ = kNoView;
             glm::dvec2 gizmo_drag_start_cursor_{0.0, 0.0};
             bool show_viewport_gizmo_ = true;
             static constexpr float VIEWPORT_GIZMO_SIZE = 95.0f;

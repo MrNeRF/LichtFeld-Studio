@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include "rendering/view_source.hpp"
 
 #include "core/export.hpp"
 #include "gui/panel_registry.hpp"
@@ -16,6 +17,7 @@
 namespace lfs::vis::gui {
 
     struct ViewportLayout {
+        ViewId view = kNoView;
         glm::vec2 pos{0, 0};
         glm::vec2 size{0, 0};
         bool has_focus = false;

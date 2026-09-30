@@ -62,7 +62,7 @@ namespace lfs::vis {
 
         [[nodiscard]] DepthWindowState depthWindowFromProjection(const RenderSettings& settings) {
             // Fresh disabled settings still carry the legacy positive-Z sentinel.
-            // Decode it before seeding panel slots, just as the legacy getter does.
+            // Decode it into a forward depth interval before the first edit.
             const bool legacy_default = !settings.depth_filter_enabled &&
                                         settings.depth_filter_min.z == 0.0f &&
                                         settings.depth_filter_max.z == 100.0f;
@@ -226,21 +226,16 @@ namespace lfs::vis {
         return std::clamp(plane, 0, 2);
     }
 
-    void RenderingManager::syncGridPlanesLocked(const int plane) {
-        panel_grid_planes_.fill(clampGridPlane(plane));
-    }
-
     // RenderingManager Implementation
-    RenderingManager::RenderingManager() {
-        viewport_interop_ = std::make_unique<ViewportInteropService>();
+    RenderingManager::RenderingManager(ViewSource& views) : view_source_(views) {
+        screen_epoch_ = views.screenEpoch();
+
         gt_comparison_image_worker_ = std::jthread([this](std::stop_token stop_token) {
             gtComparisonImageWorkerLoop(stop_token);
         });
         camera_metrics_worker_ = std::jthread([this](std::stop_token stop_token) {
             cameraMetricsWorkerLoop(stop_token);
         });
-        const auto initial_depth_window = depthWindowFromProjection(settings_);
-        panel_depth_windows_ = {initial_depth_window, initial_depth_window};
         setupEventHandlers();
     }
 
@@ -262,30 +257,21 @@ namespace lfs::vis {
     }
 
     ViewportInteropService& RenderingManager::viewportInterop() {
-        assert(viewport_interop_ && "ViewportInteropService not initialized");
-        return *viewport_interop_;
+
+        return this->state().viewport_interop_;
     }
 
     const ViewportInteropService& RenderingManager::viewportInterop() const {
-        assert(viewport_interop_ && "ViewportInteropService not initialized");
-        return *viewport_interop_;
-    }
 
-    void RenderingManager::prepareViewportInterop(VulkanContext& context) {
-        viewportInterop().prepareFrame(context, isViewportResizeDeferring());
-    }
-
-    void RenderingManager::bindViewportInteropParams(VulkanViewportPassParams& params,
-                                                     const std::size_t frame_slot,
-                                                     const bool export_locked) {
-        viewportInterop().bindViewportParams(params, frame_slot, export_locked,
-                                             isViewportResizeDeferring());
+        return this->state().viewport_interop_;
     }
 
     void RenderingManager::shutdownViewportInterop(VulkanContext* context) {
-        if (viewport_interop_) {
-            viewport_interop_->shutdown(context);
-        }
+        std::lock_guard lock(views_mutex_);
+        for (auto& [id, view] : view_states_)
+            view->viewport_interop_.shutdown(context);
+        for (auto& view : retired_view_states_)
+            view->viewport_interop_.shutdown(context);
     }
 
     void RenderingManager::setWakeCallback(std::function<void()> callback) {
@@ -317,35 +303,115 @@ namespace lfs::vis {
         markDirty(DirtyFlag::ALL);
     }
 
+    thread_local RenderingManager* RenderingManager::rendering_owner_ = nullptr;
+    thread_local ViewRenderState* RenderingManager::rendering_view_ = nullptr;
+
+    ViewRenderState& RenderingManager::viewState(ViewId id) const {
+        std::lock_guard lock(views_mutex_);
+        auto& entry = view_states_[id];
+        if (!entry) {
+            entry = std::make_unique<ViewRenderState>();
+            entry->id = id;
+            if (const auto saved = depth_window_epochs_.find(id); saved != depth_window_epochs_.end()) {
+                entry->depth_window_mode_epoch_ = saved->second.first;
+                entry->depth_window_projection_generation_ = saved->second.second;
+            }
+            entry->last_visible = std::chrono::steady_clock::now();
+        }
+        return *entry;
+    }
+
+    ViewRenderState& RenderingManager::state() const {
+        return rendering_owner_ == this ? *rendering_view_ : viewState(view_source_.activeView());
+    }
+
     void RenderingManager::markDirty(const DirtyMask flags) {
-        dirty_mask_.fetch_or(flags, std::memory_order_relaxed);
-
-        LOG_TRACE("Render marked dirty (flags: 0x{:x})", flags);
+        std::lock_guard lock(views_mutex_);
+        for (auto& [id, view] : view_states_)
+            view->dirty_mask_.fetch_or(flags, std::memory_order_relaxed);
     }
 
-    void RenderingManager::markCameraPoseChanged() {
-        markDirty(DirtyFlag::CAMERA);
+    void RenderingManager::markViewDirty(ViewId view, DirtyMask flags) {
+        viewState(view).dirty_mask_.fetch_or(flags, std::memory_order_relaxed);
     }
 
-    void RenderingManager::markCameraCut() {
-        temporal_camera_cut_generation_.fetch_add(1, std::memory_order_release);
-        markCameraPoseChanged();
+    void RenderingManager::markCameraPoseChanged(ViewId view) { markViewDirty(view, DirtyFlag::CAMERA); }
+
+    void RenderingManager::markCameraCut(ViewId view) {
+        viewState(view).temporal_camera_cut_generation_.fetch_add(1, std::memory_order_release);
+        markCameraPoseChanged(view);
+    }
+
+    DirtyMask RenderingManager::pendingDirtyMask() const {
+        std::lock_guard lock(views_mutex_);
+        DirtyMask mask = 0;
+        for (auto& [id, view] : view_states_)
+            mask |= view->dirty_mask_.load(std::memory_order_relaxed);
+        return mask;
     }
 
     bool RenderingManager::pollDirtyState() {
-        if (const DirtyMask animation_dirty = animation_state_.pollDirtyState(); animation_dirty) {
-            dirty_mask_.fetch_or(animation_dirty, std::memory_order_relaxed);
-            return true;
+        std::lock_guard lock(views_mutex_);
+        for (auto& [id, view] : view_states_)
+            view->dirty_mask_.fetch_or(view->animation_state_.pollDirtyState(), std::memory_order_relaxed);
+        if (lod_controller_ && lod_controller_->hasReadyResults())
+            markDirty(DirtyFlag::CAMERA);
+        return pendingDirtyMask() != 0;
+    }
+
+    bool RenderingManager::releaseViewTargets(ViewRenderState& view) {
+        bool ready = true;
+        for (auto* target : {&view.main_render_target_, &view.split_left_render_target_, &view.split_right_render_target_}) {
+            if (!target->valid())
+                continue;
+            const bool splat_ready = !vksplat_viewport_renderer_ || vksplat_viewport_renderer_->releaseRenderTarget(*target);
+            const bool point_ready = !point_cloud_vulkan_renderer_ || point_cloud_vulkan_renderer_->releaseRenderTarget(*target);
+            if (splat_ready && point_ready) {
+                render_targets_.release(*target);
+                *target = {};
+            } else
+                ready = false;
         }
-        if (lod_controller_ && lod_controller_->hasReadyResults()) {
-            dirty_mask_.fetch_or(DirtyFlag::CAMERA, std::memory_order_relaxed);
-            return true;
+        return ready;
+    }
+
+    void RenderingManager::dropViewStates() {
+        std::lock_guard lock(views_mutex_);
+        for (auto& [id, view] : view_states_)
+            retired_view_states_.push_back(std::move(view));
+        view_states_.clear();
+        depth_window_epochs_.clear();
+        ++view_lifetime_epoch_;
+    }
+
+    void RenderingManager::retainVisibleViews(const std::vector<ViewId>& visible) {
+        std::lock_guard lock(views_mutex_);
+        const auto epoch = view_source_.screenEpoch();
+        if (screen_epoch_ != epoch) {
+            dropViewStates();
+            screen_epoch_ = epoch;
         }
-        return dirty_mask_.load(std::memory_order_relaxed) != 0;
+        const auto now = std::chrono::steady_clock::now();
+        for (auto id : visible)
+            viewState(id).last_visible = now;
+        for (auto it = view_states_.begin(); it != view_states_.end();) {
+            if (now - it->second->last_visible > std::chrono::milliseconds(300)) {
+                depth_window_epochs_[it->first] = {it->second->depth_window_mode_epoch_, it->second->depth_window_projection_generation_};
+                retired_view_states_.push_back(std::move(it->second));
+                it = view_states_.erase(it);
+            } else
+                ++it;
+        }
+        std::erase_if(retired_view_states_, [&](auto& view) {
+            if (!releaseViewTargets(*view))
+                return false;
+            view->viewport_interop_.shutdown(last_vulkan_context_);
+            return true;
+        });
     }
 
     void RenderingManager::requestRenderFollowUp() {
-        dirty_mask_.fetch_or(DirtyFlag::CAMERA, std::memory_order_relaxed);
+        this->state().dirty_mask_.fetch_or(DirtyFlag::CAMERA, std::memory_order_relaxed);
 
         std::function<void()> wake_callback;
         {
@@ -358,7 +424,7 @@ namespace lfs::vis {
     }
 
     void RenderingManager::requestTemporalFollowUp() {
-        dirty_mask_.fetch_or(DirtyFlag::TEMPORAL, std::memory_order_relaxed);
+        this->state().dirty_mask_.fetch_or(DirtyFlag::TEMPORAL, std::memory_order_relaxed);
 
         std::function<void()> wake_callback;
         {
@@ -371,23 +437,20 @@ namespace lfs::vis {
     }
 
     void RenderingManager::notifyAsyncLodResultsReady() {
-        requestRenderFollowUp();
+        markDirty(DirtyFlag::CAMERA);
+        std::function<void()> wake;
+        {
+            std::lock_guard lock(wake_callback_mutex_);
+            wake = wake_callback_;
+        }
+        if (wake)
+            wake();
     }
 
-    void RenderingManager::setViewportResizeActive(
-        const bool active,
-        const ViewportResizeRenderPolicy render_policy) {
-        if (const DirtyMask dirty = frame_lifecycle_service_.setViewportResizeActive(active, render_policy); dirty) {
-            markDirty(dirty);
-            std::function<void()> wake_callback;
-            {
-                std::scoped_lock lock(wake_callback_mutex_);
-                wake_callback = wake_callback_;
-            }
-            if (wake_callback) {
-                wake_callback();
-            }
-        }
+    void RenderingManager::setViewportResizeActive(bool active, ViewportResizeRenderPolicy policy) {
+        std::lock_guard lock(views_mutex_);
+        for (auto& [id, view] : view_states_)
+            view->dirty_mask_.fetch_or(view->frame_lifecycle_service_.setViewportResizeActive(active, policy));
     }
 
     void RenderingManager::setLodAvailable(bool available) {
@@ -434,7 +497,7 @@ namespace lfs::vis {
         }
 
         if (gpu_selection_eligible && vksplat_viewport_renderer_) {
-            const auto gpu = vksplat_viewport_renderer_->gpuLodSelectionStatus(main_render_target_);
+            const auto gpu = vksplat_viewport_renderer_->gpuLodSelectionStatus(this->state().main_render_target_);
             if (gpu.active) {
                 // The CPU controller is frozen at its bootstrap cut in GPU
                 // mode; report the selector's live numbers instead.
@@ -479,7 +542,7 @@ namespace lfs::vis {
     }
 
     void RenderingManager::releaseSceneModelResources() {
-        clearVulkanMeshFrame();
+        dropViewStates();
 
         point_cloud_colors_cache_ = {};
         point_cloud_colors_cache_key_ = nullptr;
@@ -493,65 +556,37 @@ namespace lfs::vis {
         if (point_cloud_vulkan_renderer_) {
             point_cloud_vulkan_renderer_->reset();
         }
-        frame_lifecycle_service_.resetModelTracking();
     }
 
     void RenderingManager::clearVulkanViewportImageState(const glm::ivec2 size,
                                                          const bool flip_y,
                                                          const glm::ivec2 alloc_size) {
-        vulkan_viewport_image_.reset();
-        vulkan_external_viewport_image_ = VK_NULL_HANDLE;
-        vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
-        vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
-        vulkan_external_viewport_image_generation_ = 0;
-        vulkan_viewport_image_size_ = size;
-        vulkan_viewport_image_alloc_size_ = alloc_size.x > 0 && alloc_size.y > 0 ? alloc_size : size;
-        vulkan_viewport_image_flip_y_ = flip_y;
-        vulkan_gt_comparison_content_size_ = {0, 0};
-        vulkan_gt_comparison_selection_view_.reset();
+        this->state().vulkan_viewport_image_.reset();
+        this->state().vulkan_external_viewport_image_ = VK_NULL_HANDLE;
+        this->state().vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
+        this->state().vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+        this->state().vulkan_external_viewport_image_generation_ = 0;
+        this->state().vulkan_viewport_image_size_ = size;
+        this->state().vulkan_viewport_image_alloc_size_ = alloc_size.x > 0 && alloc_size.y > 0 ? alloc_size : size;
+        this->state().vulkan_viewport_image_flip_y_ = flip_y;
+        this->state().vulkan_gt_comparison_content_size_ = {0, 0};
+        this->state().vulkan_gt_comparison_selection_view_.reset();
     }
 
     void RenderingManager::releaseSceneRenderResources() {
-        vksplat_stale_frame_guard_.onSuccess();
-        viewport_artifact_service_.clearViewportOutput();
         invalidateGTComparisonImageCache();
-        clearVulkanViewportImageState();
-        vulkan_viewport_coordinate_size_ = {0, 0};
-        last_logged_vksplat_render_error_.clear();
-        vulkan_viewport_image_generation_ = 0;
-        split_view_image_generation_ = 0;
-
-        clearVulkanMeshFrame();
-
+        dropViewStates();
         point_cloud_colors_cache_ = {};
         point_cloud_colors_cache_key_ = nullptr;
         point_cloud_colors_cache_size_ = 0;
         ++point_cloud_data_revision_;
         ++point_cloud_preview_selection_revision_;
-
-        if (vksplat_viewport_renderer_) {
+        if (vksplat_viewport_renderer_)
             vksplat_viewport_renderer_->reset();
-        }
-        // Renderer reset frees ring cells; clear manager GT ticket state so the
-        // next frame does not poll a stale ticket id against a fresh ring.
-        gt_async_depth_ticket_ = 0;
-        gt_async_depth_dest_ = {};
-        gt_async_ticket_mode_ = GTComparisonMode::RGB;
-        gt_async_ticket_intrinsics_.reset();
-        gt_async_ticket_flip_y_ = false;
-        gt_async_ticket_metadata_ = {};
-        gt_async_held_display_.reset();
-        gt_async_held_flip_y_ = false;
-        gt_async_held_metadata_ = {};
-        gt_async_ticket_view_.reset();
-        gt_async_held_view_.reset();
-        if (point_cloud_vulkan_renderer_) {
+        if (point_cloud_vulkan_renderer_)
             point_cloud_vulkan_renderer_->reset();
-        }
-        frame_lifecycle_service_.resetModelTracking();
-        if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
+        if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA))
             lfs::core::Tensor::trim_memory_pool();
-        }
     }
 
     void RenderingManager::noteVksplatIdleFrame(const bool training_active) {
@@ -561,7 +596,7 @@ namespace lfs::vis {
         }
         // A parked refresh polls for its turn on the training arena; releasing
         // here would cancel the reservation it is waiting on.
-        if (parked_arena_retry_ != 0) {
+        if (this->state().parked_arena_retry_ != 0) {
             return;
         }
 
@@ -640,139 +675,89 @@ namespace lfs::vis {
         std::unique_lock<std::mutex> transition_lock;
         for (;;) {
             std::unique_lock<std::mutex> lock(settings_mutex_);
+            auto settings = activeSettingsLocked();
             const bool split_mode_changes =
-                settings_.split_view_mode != sanitized_settings.split_view_mode;
+                settings.split_view_mode != sanitized_settings.split_view_mode;
             if (split_mode_changes && !transition_lock.owns_lock()) {
                 lock.unlock();
-                transition_lock = std::unique_lock<std::mutex>(depth_window_transition_mutex_);
+                transition_lock = std::unique_lock<std::mutex>(this->state().depth_window_transition_mutex_);
                 continue;
             }
-            const SplitViewPanelId pre_transition_focus = split_view_service_.focusedPanel();
-            const SplitViewMode previous_split_mode = settings_.split_view_mode;
-            if (split_view_service_.isGTComparisonActive(settings_) ||
-                split_view_service_.isGTComparisonActive(sanitized_settings)) {
+            const SplitViewMode previous_split_mode = settings.split_view_mode;
+            if (this->state().split_view_service_.isGTComparisonActive(settings) ||
+                this->state().split_view_service_.isGTComparisonActive(sanitized_settings)) {
                 sanitized_settings.show_camera_frustums = false;
             }
-            const int focused_panel_index =
-                static_cast<int>(splitViewPanelIndex(split_view_service_.focusedPanel()));
 
-            // Without selection intent, a same-mode unsynced write must retain
-            // the current projection, including any active drag preview.
-            if (!split_mode_changes && !depth_window_sync_ &&
-                split_view_service_.isIndependentDualActive(settings_) &&
-                (dirty_flags & DirtyFlag::SELECTION) == 0) {
-                applyDepthWindowToProjection(sanitized_settings, depthWindowFromProjection(settings_));
-            }
-
-            const float previous_depth_filter_scale_x = settings_.depth_filter_scale_x;
-            const float previous_depth_filter_scale_y = settings_.depth_filter_scale_y;
-            const float previous_depth_filter_offset_x = settings_.depth_filter_offset_x;
-            const float previous_depth_filter_offset_y = settings_.depth_filter_offset_y;
-            const float previous_depth_filter_min_z = settings_.depth_filter_min.z;
-            const float previous_depth_filter_max_z = settings_.depth_filter_max.z;
-            const bool grid_plane_changed = settings_.grid_plane != sanitized_settings.grid_plane;
-            lod_enabled_turned_on = !settings_.lod_enabled && sanitized_settings.lod_enabled;
+            const float previous_depth_filter_scale_x = settings.depth_filter_scale_x;
+            const float previous_depth_filter_scale_y = settings.depth_filter_scale_y;
+            const float previous_depth_filter_offset_x =
+                settings.depth_filter_offset_x;
+            const float previous_depth_filter_offset_y =
+                settings.depth_filter_offset_y;
+            const float previous_depth_filter_min_z = settings.depth_filter_min.z;
+            const float previous_depth_filter_max_z = settings.depth_filter_max.z;
+            lod_enabled_turned_on =
+                !settings.lod_enabled && sanitized_settings.lod_enabled;
             lod_request_changed =
-                settings_.lod_enabled != sanitized_settings.lod_enabled ||
-                settings_.lod_max_splats != sanitized_settings.lod_max_splats ||
-                settings_.lod_render_scale != sanitized_settings.lod_render_scale ||
-                settings_.lod_behind_camera_penalty != sanitized_settings.lod_behind_camera_penalty ||
-                settings_.lod_cone_foveation != sanitized_settings.lod_cone_foveation ||
-                settings_.lod_cone_inner_degrees != sanitized_settings.lod_cone_inner_degrees ||
-                settings_.lod_cone_outer_degrees != sanitized_settings.lod_cone_outer_degrees;
+                settings.lod_enabled != sanitized_settings.lod_enabled ||
+                settings.lod_max_splats != sanitized_settings.lod_max_splats ||
+                settings.lod_render_scale != sanitized_settings.lod_render_scale ||
+                settings.lod_behind_camera_penalty != sanitized_settings.lod_behind_camera_penalty ||
+                settings.lod_cone_foveation != sanitized_settings.lod_cone_foveation ||
+                settings.lod_cone_inner_degrees != sanitized_settings.lod_cone_inner_degrees ||
+                settings.lod_cone_outer_degrees != sanitized_settings.lod_cone_outer_degrees;
 
             if (sanitized_settings.camera_metrics_mode == RenderSettings::CameraMetricsMode::Off) {
                 clear_metrics = true;
             } else if (camera_interaction_service_.currentCameraId() >= 0 &&
-                       shouldRefreshCameraMetricsForSettings(settings_, sanitized_settings)) {
+                       shouldRefreshCameraMetricsForSettings(settings, sanitized_settings)) {
                 clear_metrics = true;
             }
 
-            const float previous_depth_min_z = settings_.depth_filter_min.z;
-            const float previous_depth_max_z = settings_.depth_filter_max.z;
-            const auto previous_backend = settings_.raster_backend;
-            const bool previous_gut = settings_.gut;
-            settings_ = sanitized_settings;
-            const bool gut_toggle_only =
-                settings_.raster_backend == previous_backend && settings_.gut != previous_gut;
-            settings_.raster_backend = gut_toggle_only
-                                           ? lfs::rendering::viewerRasterBackendForGutMode(settings_.gut)
-                                           : lfs::rendering::normalizeViewerRasterBackend(
-                                                 settings_.raster_backend, settings_.gut);
-            settings_.gut = lfs::rendering::isGutBackend(settings_.raster_backend);
-            enforceProjectionBackend(settings_);
-            sanitizeDepthViewSettings(settings_);
-            sanitizeGTComparisonSettings(settings_);
-            sanitizeSelectionWindowSettings(settings_);
-            settings_.grid_plane = clampGridPlane(settings_.grid_plane);
+            const float previous_depth_min_z = settings.depth_filter_min.z;
+            const float previous_depth_max_z = settings.depth_filter_max.z;
+            const auto previous_backend = settings.raster_backend;
+            const bool previous_gut = settings.gut;
+            settings = sanitized_settings;
+            const bool gut_toggle_only = settings.raster_backend == previous_backend &&
+                                         settings.gut != previous_gut;
+            settings.raster_backend = gut_toggle_only
+                                          ? lfs::rendering::viewerRasterBackendForGutMode(settings.gut)
+                                          : lfs::rendering::normalizeViewerRasterBackend(
+                                                settings.raster_backend, settings.gut);
+            settings.gut = lfs::rendering::isGutBackend(settings.raster_backend);
+            sanitizeDepthViewSettings(settings);
+            sanitizeGTComparisonSettings(settings);
+            sanitizeSelectionWindowSettings(settings);
+            settings.grid_plane = clampGridPlane(settings.grid_plane);
 
             const bool depth_window_projection_changed =
-                previous_depth_filter_scale_x != settings_.depth_filter_scale_x ||
-                previous_depth_filter_scale_y != settings_.depth_filter_scale_y ||
-                previous_depth_filter_offset_x != settings_.depth_filter_offset_x ||
-                previous_depth_filter_offset_y != settings_.depth_filter_offset_y ||
-                previous_depth_filter_min_z != settings_.depth_filter_min.z ||
-                previous_depth_filter_max_z != settings_.depth_filter_max.z;
+                previous_depth_filter_scale_x != settings.depth_filter_scale_x ||
+                previous_depth_filter_scale_y != settings.depth_filter_scale_y ||
+                previous_depth_filter_offset_x != settings.depth_filter_offset_x ||
+                previous_depth_filter_offset_y != settings.depth_filter_offset_y ||
+                previous_depth_filter_min_z != settings.depth_filter_min.z ||
+                previous_depth_filter_max_z != settings.depth_filter_max.z;
 
-            if (settings_.split_view_mode == SplitViewMode::Disabled && depth_window_projection_changed) {
-                discardRetainedDepthWindowPairLocked(pre_transition_focus);
+            if (depth_window_projection_changed) {
+                this->state().depth_window_drag_owner_ = 0;
+                this->state().depth_window_drag_backup_.reset();
             }
-
-            if (split_view_service_.isIndependentDualActive(settings_)) {
-                if (grid_plane_changed) {
-                    panel_grid_planes_[focused_panel_index] = settings_.grid_plane;
-                }
-                if (depth_window_projection_changed) {
-                    const auto projection_window = depthWindowFromProjection(settings_);
-                    // These non-drag projection writes supersede backups and ownership for
-                    // every slot written.
-                    if (depth_window_sync_) {
-                        panel_depth_windows_ = {projection_window, projection_window};
-                        releaseDepthWindowBackupsLocked(split_view_service_.focusedPanel(),
-                                                        /*fan_out=*/true);
-                    } else if ((dirty_flags & DirtyFlag::SELECTION) != 0) {
-                        panel_depth_windows_[focused_panel_index] = projection_window;
-                        releaseDepthWindowBackupsLocked(split_view_service_.focusedPanel(),
-                                                        /*fan_out=*/false);
-                    }
-                }
-            } else {
-                syncGridPlanesLocked(settings_.grid_plane);
-                // settings_ already has the new mode. A write that enters GT from independent-dual
-                // and changes projection must not copy that projection into both slots before
-                // they are parked below. Treat its depth change as a GT-time global write:
-                // preserve the dormant pair.
-                const bool entering_gt_from_independent_panels =
-                    split_mode_changes &&
-                    splitViewUsesIndependentPanels(previous_split_mode) &&
-                    splitViewUsesGTComparison(settings_.split_view_mode);
-                if (depth_window_projection_changed && !entering_gt_from_independent_panels) {
-                    const auto projection_window = depthWindowFromProjection(settings_);
-                    panel_depth_windows_ = {projection_window, projection_window};
-                    releaseDepthWindowBackupsLocked(split_view_service_.focusedPanel(),
-                                                    /*fan_out=*/true);
-                }
+            if (settings.depth_filter_min.z != previous_depth_min_z ||
+                settings.depth_filter_max.z != previous_depth_max_z) {
+                ++this->state().depth_window_projection_generation_;
             }
-
-            if (settings_.depth_filter_min.z != previous_depth_min_z ||
-                settings_.depth_filter_max.z != previous_depth_max_z) {
-                ++depth_window_projection_generation_;
-            }
-            // After applying settings, run the event paths' transition logic: epoch bump,
-            // backup restoration and seed/collapse. On independent entry, sync grid planes
-            // as handleToggleIndependentSplitView and restoreSplitViewMode do.
-            // The non-independent branch above already handles grid planes on exit.
-            if (split_mode_changes) {
-                // Only this call can combine a mode change with a global depth write.
-                // Pass the change flag so GT parking preserves the incoming projection in settings_.
+            if (split_mode_changes)
                 applyDepthWindowModeTransitionLocked(
-                    previous_split_mode, settings_.split_view_mode, pre_transition_focus,
-                    depth_window_projection_changed);
-                if (splitViewUsesIndependentPanels(settings_.split_view_mode)) {
-                    syncGridPlanesLocked(settings_.grid_plane);
-                }
-            }
-            markDirty(dirty_flags);
+                    previous_split_mode,
+                    settings.split_view_mode);
+            const bool scene_changed = settings_ != settings.scene();
+            storeActiveSettingsLocked(settings);
+            if (scene_changed)
+                markDirty(dirty_flags);
+            else
+                markViewDirty(view_source_.activeView(), dirty_flags);
             break;
         }
 
@@ -791,18 +776,38 @@ namespace lfs::vis {
         }
     }
 
+    RenderSettings RenderingManager::activeSettingsLocked() const {
+        return RenderSettings(settings_, view_source_.viewSettings(rendering_owner_ == this ? rendering_view_->id : view_source_.activeView()).value());
+    }
+
+    void RenderingManager::storeActiveSettingsLocked(const RenderSettings& settings) {
+        settings_ = settings.scene();
+        view_source_.editViewSettings(view_source_.activeView(), [&](ViewSettings& view) { view = settings.view(); });
+    }
+
+    void RenderingManager::editViewSettings(ViewId view, const std::function<void(ViewSettings&)>& edit) {
+        std::lock_guard lock(settings_mutex_);
+        if (view_source_.editViewSettings(view, edit))
+            markViewDirty(view, DirtyFlag::ALL);
+    }
+
+    RenderSettings RenderingManager::settingsForView(const ViewId view) const {
+        std::lock_guard lock(settings_mutex_);
+        return RenderSettings(settings_, view_source_.viewSettings(view).value());
+    }
+
     RenderSettings RenderingManager::getSettings() const {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        return settings_;
+        std::lock_guard lock(settings_mutex_);
+        return RenderSettings(settings_, view_source_.viewSettings(view_source_.activeView()).value());
     }
 
     void RenderingManager::reportSceneUpscalerRuntimeSelection(
-        const SceneUpscalerSelection selection) {
+        const ViewId id, const SceneUpscalerSelection selection) {
         bool changed = false;
         {
             std::lock_guard lock(settings_mutex_);
-            changed = scene_upscaler_runtime_selection_ != selection;
-            scene_upscaler_runtime_selection_ = selection;
+            changed = viewState(id).scene_upscaler_runtime_selection_ != selection;
+            viewState(id).scene_upscaler_runtime_selection_ = selection;
         }
         // The renderer chooses its source resolution before the presentation pass
         // proves whether reconstruction is available. A real active/fallback
@@ -811,736 +816,265 @@ namespace lfs::vis {
         // a full-resolution native frame. TEMPORAL deliberately avoids restarting
         // the convergence sequence as CAMERA would.
         if (changed)
-            requestTemporalFollowUp();
+            markViewDirty(id, DirtyFlag::TEMPORAL);
     }
 
     SceneUpscalerSelection RenderingManager::sceneUpscalerRuntimeSelection() const {
         std::lock_guard lock(settings_mutex_);
-        return scene_upscaler_runtime_selection_;
+        return this->state().scene_upscaler_runtime_selection_;
     }
 
     void RenderingManager::setOrthographic(const bool enabled, const float viewport_height, const float distance_to_pivot) {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-
-        constexpr float MIN_DISTANCE = 0.01f;
-        constexpr float MIN_SCALE = 1.0f;
-        constexpr float MAX_SCALE = 10000.0f;
-        constexpr float DEFAULT_SCALE = 100.0f;
-
-        if (viewport_height <= 0.0f || distance_to_pivot <= MIN_DISTANCE) {
-            LOG_WARN("setOrthographic: invalid viewport_height={} or distance={}", viewport_height, distance_to_pivot);
-            if (enabled && !settings_.orthographic) {
-                settings_.ortho_scale = DEFAULT_SCALE;
-            }
-            settings_.orthographic = enabled;
-            markDirty(DirtyFlag::CAMERA);
-            return;
+        auto settings = getSettings();
+        if (enabled && !settings.orthographic) {
+            const float vfov = lfs::rendering::focalLengthToVFov(settings.focal_length_mm);
+            settings.ortho_scale = viewport_height > 0.0f && distance_to_pivot > 0.01f
+                                       ? std::clamp(
+                                             viewport_height / (2.0f * distance_to_pivot * std::tan(glm::radians(vfov) * 0.5f)), 1.0f, 10000.0f)
+                                       : 100.0f;
         }
-
-        if (enabled && !settings_.orthographic) {
-            const float vfov = lfs::rendering::focalLengthToVFov(settings_.focal_length_mm);
-            const float half_tan_fov = std::tan(glm::radians(vfov) * 0.5f);
-            settings_.ortho_scale = std::clamp(
-                viewport_height / (2.0f * distance_to_pivot * half_tan_fov),
-                MIN_SCALE, MAX_SCALE);
-        }
-
-        settings_.orthographic = enabled;
-        markDirty(DirtyFlag::CAMERA);
+        settings.orthographic = enabled;
+        updateSettings(settings, DirtyFlag::CAMERA);
     }
 
     float RenderingManager::getFovDegrees() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        return lfs::rendering::focalLengthToVFov(settings_.focal_length_mm);
+        return lfs::rendering::focalLengthToVFov(activeSettingsLocked().focal_length_mm);
     }
 
     float RenderingManager::getFocalLengthMm() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        return settings_.focal_length_mm;
+        return activeSettingsLocked().focal_length_mm;
     }
 
     void RenderingManager::setFocalLength(const float focal_mm) {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        settings_.focal_length_mm = std::clamp(focal_mm,
-                                               lfs::rendering::MIN_FOCAL_LENGTH_MM,
-                                               lfs::rendering::MAX_FOCAL_LENGTH_MM);
-        markDirty(DirtyFlag::CAMERA);
+        auto settings = getSettings();
+        settings.focal_length_mm = std::clamp(focal_mm,
+                                              lfs::rendering::MIN_FOCAL_LENGTH_MM,
+                                              lfs::rendering::MAX_FOCAL_LENGTH_MM);
+        updateSettings(settings, DirtyFlag::CAMERA);
     }
 
     void RenderingManager::advanceSplitOffset() {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        split_view_service_.advanceSplitOffset(settings_);
-        markDirty(DirtyFlag::SPLIT_VIEW);
+        auto settings = getSettings();
+        this->state().split_view_service_.advanceSplitOffset(settings);
+        updateSettings(settings, DirtyFlag::SPLIT_VIEW);
     }
 
     SplitViewInfo RenderingManager::getSplitViewInfo() const {
-        return split_view_service_.getInfo();
+        return this->state().split_view_service_.getInfo();
     }
 
     std::optional<SplitViewInfo> RenderingManager::getSplitViewInfoIfChanged(
         std::uint64_t& generation) const {
-        return split_view_service_.getInfoIfChanged(generation);
+        return this->state().split_view_service_.getInfoIfChanged(generation);
     }
 
     bool RenderingManager::isSplitViewActive() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        return split_view_service_.isActive(settings_);
+        return this->state().split_view_service_.isActive(activeSettingsLocked());
     }
 
     bool RenderingManager::isGTComparisonActive() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        return split_view_service_.isGTComparisonActive(settings_);
+        return this->state().split_view_service_.isGTComparisonActive(activeSettingsLocked());
     }
 
     bool RenderingManager::isPLYComparisonActive() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        return splitViewUsesPLYComparison(settings_.split_view_mode);
+        return splitViewUsesPLYComparison(activeSettingsLocked().split_view_mode);
     }
 
-    bool RenderingManager::depthWindowDragActiveLocked() const {
-        // Preview counters track latched drags that crossed the draw threshold.
-        // Frame capture uses this signal; the sync gate uses ownership instead.
-        return depth_window_preview_counts_[0] > 0 || depth_window_preview_counts_[1] > 0;
+    void RenderingManager::beginDepthWindowDrag(ViewId view, uint64_t& out_drag_token) {
+        std::lock_guard lock(settings_mutex_);
+        if (!viewState(view).depth_window_drag_owner_)
+            viewState(view).depth_window_drag_backup_ = depthWindowFromProjection(RenderSettings(settings_, view_source_.viewSettings(view).value()));
+        out_drag_token = viewState(view).depth_window_drag_owner_ = ++viewState(view).depth_window_last_drag_token_;
     }
 
-    bool RenderingManager::depthWindowDragOwnedLocked() const {
-        // Ownership lasts from invoke to destruction, including subthreshold presses.
-        // The sync gate uses this lifetime so before_ capture cannot straddle a sync change.
-        return depth_window_drag_counts_[0] > 0 || depth_window_drag_counts_[1] > 0;
-    }
-
-    bool RenderingManager::beginDepthWindowDrag(const SplitViewPanelId panel,
-                                                uint64_t& out_drag_token) {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        const size_t index = splitViewPanelIndex(panel);
-        // Mint a unique, monotonic token under the same lock as its slot claims.
-        const uint64_t token = ++depth_window_last_drag_token_;
-        out_drag_token = token;
-        // CLAIM RULE: retain the original backup when taking over an owned slot.
-        // For an unowned slot, refresh from live state so an old backup cannot
-        // become the new drag's undo baseline. Until the next claim, that old
-        // backup remains available for transition folding.
-        if (!depth_window_pin_owners_[index]) {
-            depth_window_drag_backups_[index] = panel_depth_windows_[index];
-        }
-        // Take ownership while retaining the first backup. Ownership keeps it
-        // non-idle regardless of drag count and excludes other tokens' writes,
-        // restores and per-slot releases until takeover or supersession.
-        depth_window_pin_owners_[index] = token;
-        // Sync or a non-independent mode makes previews write both slots.
-        // Both need pre-drag backups before the shared value changes; otherwise a
-        // replacement drag on the other panel could save the preview as its backup
-        // and restore it at the next mode transition.
-        const bool fans_out =
-            !split_view_service_.isIndependentDualActive(settings_) || depth_window_sync_;
-        if (fans_out) {
-            const size_t other_index = index == 0 ? 1 : 0;
-            // Same claim rule, asked independently of the own slot.
-            if (!depth_window_pin_owners_[other_index]) {
-                depth_window_drag_backups_[other_index] = panel_depth_windows_[other_index];
-            }
-            // The other slot has no count for this drag; ownership preserves its
-            // backup even through a same-epoch history restore.
-            depth_window_pin_owners_[other_index] = token;
-        }
-        ++depth_window_drag_counts_[index];
-        // Report ownership of the other slot so teardown restores every slot
-        // this drag's writes may have touched.
-        return fans_out;
-    }
-
-    void RenderingManager::endDepthWindowDrag(const SplitViewPanelId panel,
-                                              const uint64_t drag_token) {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        const size_t index = splitViewPanelIndex(panel);
-        if (depth_window_drag_counts_[index] == 0) {
+    void RenderingManager::endDepthWindowDrag(ViewId view, const uint64_t drag_token) {
+        if (!hasViewState(view))
             return;
-        }
-        --depth_window_drag_counts_[index];
-        // IDENTITY GATE: release only slots this drag still owns.
-        // Mode transitions, project restore and non-drag writes can clear ownership;
-        // later drags can take it over. Per-slot checks protect new owners while
-        // ensuring this drag releases every slot it still owns.
-        for (size_t slot = 0; slot < depth_window_pin_owners_.size(); ++slot) {
-            if (depth_window_pin_owners_[slot] != drag_token) {
-                continue;
-            }
-            depth_window_pin_owners_[slot].reset();
-            // Keep the backup after ownership ends. Mode transitions and project restore
-            // cancel drags before folding backups; clearing it here would leave only the
-            // drag's preview. The next claim refreshes an unowned slot's backup from live
-            // state, preventing a stale undo baseline for the new drag.
+        std::lock_guard lock(settings_mutex_);
+        if (viewState(view).depth_window_drag_owner_ == drag_token) {
+            viewState(view).depth_window_drag_owner_ = 0;
+            viewState(view).depth_window_drag_backup_.reset();
         }
     }
 
-    void RenderingManager::beginDepthWindowPreview(const SplitViewPanelId panel) {
-        {
-            std::lock_guard<std::mutex> lock(settings_mutex_);
-            ++depth_window_preview_counts_[splitViewPanelIndex(panel)];
-        }
-        markDirty(DirtyFlag::OVERLAY);
+    void RenderingManager::beginDepthWindowPreview(ViewId view) {
+        std::lock_guard lock(settings_mutex_);
+        ++viewState(view).depth_window_preview_count_;
+        markViewDirty(viewState(view).id, DirtyFlag::OVERLAY);
     }
 
-    void RenderingManager::endDepthWindowPreview(const SplitViewPanelId panel) {
-        {
-            std::lock_guard<std::mutex> lock(settings_mutex_);
-            const size_t index = splitViewPanelIndex(panel);
-            if (depth_window_preview_counts_[index] == 0) {
-                return;
-            }
-            --depth_window_preview_counts_[index];
-        }
-        markDirty(DirtyFlag::OVERLAY);
+    void RenderingManager::endDepthWindowPreview(ViewId view) {
+        if (!hasViewState(view))
+            return;
+        std::lock_guard lock(settings_mutex_);
+        viewState(view).depth_window_preview_count_ = std::max(0, viewState(view).depth_window_preview_count_ - 1);
+        markViewDirty(viewState(view).id, DirtyFlag::OVERLAY);
     }
 
     bool RenderingManager::depthWindowDragPreview() const {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        return depthWindowDragActiveLocked();
+        std::lock_guard lock(settings_mutex_);
+        return this->state().depth_window_preview_count_ > 0;
     }
 
     GTComparisonMode RenderingManager::getGTComparisonMode() const {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        return settings_.gt_comparison_mode;
+        std::lock_guard lock(settings_mutex_);
+        return activeSettingsLocked().gt_comparison_mode;
     }
 
     SplitViewMode RenderingManager::getSplitViewMode() const {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        return settings_.split_view_mode;
-    }
-
-    bool RenderingManager::isIndependentSplitViewActive() const {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        return split_view_service_.isIndependentDualActive(settings_);
+        std::lock_guard lock(settings_mutex_);
+        return activeSettingsLocked().split_view_mode;
     }
 
     float RenderingManager::getSplitPosition() const {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        return settings_.split_position;
+        std::lock_guard lock(settings_mutex_);
+        return activeSettingsLocked().split_position;
     }
 
-    void RenderingManager::setFocusedSplitPanel(const SplitViewPanelId panel) {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        split_view_service_.setFocusedPanel(panel);
-        if (split_view_service_.isIndependentDualActive(settings_)) {
-            settings_.grid_plane = panel_grid_planes_[splitViewPanelIndex(panel)];
-            applyDepthWindowProjectionLocked(panel_depth_windows_[splitViewPanelIndex(panel)]);
-        }
+    DepthWindowState RenderingManager::getDepthWindow() const {
+        std::lock_guard lock(settings_mutex_);
+        return depthWindowFromProjection(activeSettingsLocked());
     }
 
-    int RenderingManager::getGridPlaneForPanel(const SplitViewPanelId panel) const {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        return panel_grid_planes_[splitViewPanelIndex(panel)];
-    }
-
-    DepthWindowState RenderingManager::getDepthWindowForPanel(const SplitViewPanelId panel) const {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        return panel_depth_windows_[splitViewPanelIndex(panel)];
-    }
-
-    RenderingManager::DepthWindowOverlaySnapshot RenderingManager::getDepthWindowOverlaySnapshot() const {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        return {
-            .independent_dual_active = split_view_service_.isIndependentDualActive(settings_),
-            .panel_windows = panel_depth_windows_,
-        };
-    }
-
-    void RenderingManager::releaseDepthWindowBackupsLocked(const SplitViewPanelId panel,
-                                                           const bool fan_out) {
-        // Callers have replaced these slots with a commit or deliberate non-drag write
-        // (settings, panel setter or sync copy). Clear stale backups and ownership,
-        // regardless of drag counts, so the old drag cannot overwrite the new value
-        // through preview or teardown (restorePinnedDepthWindowSlots).
-        // Drag preview writes never call this helper.
-        const auto supersede = [this](const size_t slot) {
-            depth_window_drag_backups_[slot].reset();
-            depth_window_pin_owners_[slot].reset();
-        };
-        const size_t index = splitViewPanelIndex(panel);
-        supersede(index);
-        if (!fan_out) {
-            return;
-        }
-        supersede(index == 0 ? 1 : 0);
-    }
-
-    bool RenderingManager::restorePinnedDepthWindowSlots(
-        const SplitViewPanelId panel,
-        const DepthWindowState& own_state,
-        const std::optional<DepthWindowState>& other_state,
-        const uint64_t expected_epoch,
-        const uint64_t drag_token) {
-        DepthWindowState clamped_own = own_state;
-        clampDepthWindowState(clamped_own);
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        if (depth_window_mode_epoch_ != expected_epoch) {
-            return false;
-        }
-        const size_t index = splitViewPanelIndex(panel);
-        const size_t other_index = index == 0 ? 1 : 0;
-        const bool owns_addressed_slot = depth_window_pin_owners_[index] == drag_token;
-        bool wrote = false;
-        // Under one lock, restore only slots still owned by this drag.
-        // Skip slots whose ownership was cleared by a newer write or taken by another
-        // drag, preserving their newer values.
-        if (owns_addressed_slot) {
-            applyDepthWindowForPanelLocked(panel, clamped_own, /*restore_mode=*/true);
-            wrote = true;
-        }
-        if (other_state && depth_window_pin_owners_[other_index] == drag_token) {
-            DepthWindowState clamped_other = *other_state;
-            clampDepthWindowState(clamped_other);
-            applyDepthWindowForPanelLocked(
-                other_index == 0 ? SplitViewPanelId::Left : SplitViewPanelId::Right,
-                clamped_other, /*restore_mode=*/true);
-            wrote = true;
-        }
-        if (wrote) {
-            markDirty(DirtyFlag::ALL);
-        }
-        return owns_addressed_slot;
-    }
-
-    void RenderingManager::releaseIdleDepthWindowBackupsLocked() {
-        for (size_t index = 0; index < depth_window_drag_backups_.size(); ++index) {
-            // A drag writing both slots can own a backup where the drag count is zero.
-            // Keep owned backups so the next transition can restore pre-drag state.
-            if (depth_window_drag_counts_[index] == 0 &&
-                !depth_window_pin_owners_[index]) {
-                depth_window_drag_backups_[index].reset();
-            }
-        }
-    }
-
-    bool RenderingManager::applyDepthWindowForPanelLocked(const SplitViewPanelId panel,
-                                                          const DepthWindowState& clamped,
-                                                          const bool restore_mode) {
-        const bool independent_dual = split_view_service_.isIndependentDualActive(settings_);
-        // Restore one slot regardless of sync: this undoes the drag's preview,
-        // not a user edit.
-        const bool fan_out = !restore_mode && (!independent_dual || depth_window_sync_);
-        const size_t panel_index = splitViewPanelIndex(panel);
-        if (fan_out) {
-            panel_depth_windows_.fill(clamped);
-        } else {
-            panel_depth_windows_[panel_index] = clamped;
-        }
-        // Outside independent-dual, the projection is the window.
-        // Even a single-slot restore must update it.
-        const bool updates_projection = fan_out ||
-                                        split_view_service_.focusedPanel() == panel ||
-                                        (restore_mode && !independent_dual);
-        if (updates_projection) {
-            applyDepthWindowProjectionLocked(clamped);
-        }
-        return fan_out;
-    }
-
-    // Depth-window writes need DirtyFlag::ALL, as in one-argument updateSettings.
-    // SELECTION re-rasterizes cached per-splat containment, leaving stale
-    // classifications on screen until a full render.
-    bool RenderingManager::setDepthWindowForPanel(const SplitViewPanelId panel, const DepthWindowState& state) {
-        DepthWindowState clamped = state;
+    void RenderingManager::setDepthWindow(const DepthWindowState& state) {
+        auto clamped = state;
         clampDepthWindowState(clamped);
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        if (depth_window_dormant_panels_ && splitViewUsesGTComparison(settings_.split_view_mode)) {
+        std::lock_guard lock(settings_mutex_);
+        applyDepthWindowProjectionLocked(this->state().id, clamped);
+        this->state().depth_window_drag_owner_ = 0;
+        this->state().depth_window_drag_backup_.reset();
+        markViewDirty(this->state().id, DirtyFlag::ALL);
+    }
+
+    bool RenderingManager::applyDepthWindowIfEpoch(ViewId view, const DepthWindowState& state,
+                                                   const uint64_t expected_epoch,
+                                                   const uint64_t drag_token) {
+        auto clamped = state;
+        clampDepthWindowState(clamped);
+        std::lock_guard lock(settings_mutex_);
+        if (viewState(view).depth_window_mode_epoch_ != expected_epoch || !drag_token ||
+            viewState(view).depth_window_drag_owner_ != drag_token)
             return false;
-        }
-        if (settings_.split_view_mode == SplitViewMode::Disabled && clamped != depthWindowFromProjection(settings_)) {
-            discardRetainedDepthWindowPairLocked(split_view_service_.focusedPanel());
-        }
-        const bool fan_out = applyDepthWindowForPanelLocked(panel, clamped);
-        releaseDepthWindowBackupsLocked(panel, fan_out);
-        markDirty(DirtyFlag::ALL);
+        applyDepthWindowProjectionLocked(view, clamped);
+        markViewDirty(viewState(view).id, DirtyFlag::ALL);
         return true;
     }
 
-    bool RenderingManager::applyDepthWindowForPanelIfEpoch(const SplitViewPanelId panel,
-                                                           const DepthWindowState& state,
-                                                           const uint64_t expected_epoch,
-                                                           const uint64_t drag_token) {
-        DepthWindowState clamped = state;
+    bool RenderingManager::restorePinnedDepthWindow(ViewId view, const DepthWindowState& state,
+                                                    const uint64_t expected_epoch,
+                                                    const uint64_t drag_token) {
+        return applyDepthWindowIfEpoch(view, state, expected_epoch, drag_token);
+    }
+
+    bool RenderingManager::commitDepthWindowIfEpoch(ViewId view,
+                                                    const DepthWindowState& state, const uint64_t expected_epoch,
+                                                    const uint64_t drag_token, op::DepthWindowModeSnapshot& out_snapshot) {
+        auto clamped = state;
         clampDepthWindowState(clamped);
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        if (depth_window_mode_epoch_ != expected_epoch) {
+        std::lock_guard lock(settings_mutex_);
+        if (viewState(view).depth_window_mode_epoch_ != expected_epoch || !drag_token ||
+            viewState(view).depth_window_drag_owner_ != drag_token)
             return false;
-        }
-        // A drag may write only while it owns its panel's slot. Non-drag writes clear
-        // ownership; replacement drags take it over. Refuse superseded writes without
-        // changing state, just as for a stale epoch.
-        if (depth_window_pin_owners_[splitViewPanelIndex(panel)] != drag_token) {
-            return false;
-        }
-        applyDepthWindowForPanelLocked(panel, clamped);
-        markDirty(DirtyFlag::ALL);
+        applyDepthWindowProjectionLocked(view, clamped);
+        viewState(view).depth_window_drag_owner_ = 0;
+        viewState(view).depth_window_drag_backup_.reset();
+        out_snapshot = depthWindowSnapshotLocked(view);
+        markViewDirty(viewState(view).id, DirtyFlag::ALL);
         return true;
-    }
-
-    bool RenderingManager::commitDepthWindowForPanelIfEpoch(
-        const SplitViewPanelId panel,
-        const DepthWindowState& state,
-        const uint64_t expected_epoch,
-        const uint64_t drag_token,
-        op::DepthWindowModeSnapshot& out_snapshot) {
-        DepthWindowState clamped = state;
-        clampDepthWindowState(clamped);
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        if (depth_window_mode_epoch_ != expected_epoch) {
-            return false;
-        }
-        // Like preview writes, commits require this drag to own the panel's slot.
-        // Refuse a superseded drag's release without side effects, as for a stale epoch.
-        if (depth_window_pin_owners_[splitViewPanelIndex(panel)] != drag_token) {
-            return false;
-        }
-        // Compare a commit with committed pre-drag geometry, not its preview.
-        const auto& backup = depth_window_drag_backups_[splitViewPanelIndex(panel)];
-        if (settings_.split_view_mode == SplitViewMode::Disabled &&
-            clamped != backup.value_or(depthWindowFromProjection(settings_))) {
-            discardRetainedDepthWindowPairLocked(split_view_service_.focusedPanel());
-        }
-        const bool fan_out = applyDepthWindowForPanelLocked(panel, clamped);
-        // The value is now committed. Discard its pre-drag backup so a later mode
-        // transition cannot roll it back as an uncommitted preview.
-        releaseDepthWindowBackupsLocked(panel, fan_out);
-        // Keep the epoch check, write and undo snapshot under one lock so no mode
-        // transition can intervene.
-        out_snapshot = depthWindowSnapshotLocked();
-        markDirty(DirtyFlag::ALL);
-        return true;
-    }
-
-    void RenderingManager::setDepthWindowSync(const bool sync) {
-        std::optional<std::pair<op::DepthWindowModeSnapshot, op::DepthWindowModeSnapshot>> undo_snapshots;
-        {
-            std::lock_guard<std::mutex> lock(settings_mutex_);
-            if (depth_window_sync_ == sync) {
-                return;
-            }
-            // Ignore sync changes from drag invoke to destruction, including subthreshold
-            // presses. Otherwise the toggle's undo snapshot could capture preview geometry,
-            // and the drag's before_ baseline could disagree with the new sync state.
-            if (depthWindowDragOwnedLocked()) {
-                return;
-            }
-            if (settings_.split_view_mode == SplitViewMode::Disabled) {
-                // An actual global sync edit ends retention before the GT guard.
-                discardRetainedDepthWindowPairLocked(split_view_service_.focusedPanel());
-            }
-            // GT has no per-panel edit target. Refuse while it parks a pair: sync undo
-            // restores live slots, not that pair, and could leave unequal windows with
-            // sync on. GT without a parked pair is unaffected.
-            if (depth_window_dormant_panels_) {
-                return;
-            }
-            bool slots_changed = false;
-            if (sync && split_view_service_.isIndependentDualActive(settings_)) {
-                const size_t focused_index =
-                    splitViewPanelIndex(split_view_service_.focusedPanel());
-                const size_t other_index = focused_index == 0 ? 1 : 0;
-                if (panel_depth_windows_[focused_index] != panel_depth_windows_[other_index]) {
-                    const op::DepthWindowModeSnapshot before_snapshot = depthWindowSnapshotLocked();
-                    panel_depth_windows_[other_index] = panel_depth_windows_[focused_index];
-                    // Discard stale backups after this sync copy, as setDepthWindowForPanel does,
-                    // so a later transition cannot restore the pre-drag window over the copied value.
-                    releaseIdleDepthWindowBackupsLocked();
-                    // Like collapse on leaving independent-dual, this copy replaces the other
-                    // panel's window with the focused one. Stamp lineage under the copy's lock
-                    // so cached per-panel state cannot reuse the discarded window after a hidden
-                    // ON -> OFF -> focus-change -> ON cycle. Equal slots need no copy or stamp.
-                    stampDepthWindowLineageLocked(split_view_service_.focusedPanel(),
-                                                  DepthWindowLineageKind::SyncCopy);
-                    slots_changed = true;
-                    op::DepthWindowModeSnapshot after_snapshot = depthWindowSnapshotLocked();
-                    after_snapshot.sync = true;
-                    undo_snapshots = {before_snapshot, after_snapshot};
-                }
-            }
-            depth_window_sync_ = sync;
-            if (slots_changed) {
-                markDirty(DirtyFlag::ALL);
-            }
-        }
-        if (undo_snapshots) {
-            op::undoHistory().push(std::make_unique<op::DepthWindowSyncUndoEntry>(
-                *this, undo_snapshots->first, undo_snapshots->second));
-        }
-    }
-
-    bool RenderingManager::getDepthWindowSync() const {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        return depth_window_sync_;
-    }
-
-    SplitViewPanelId RenderingManager::getDepthWindowCollapseSource() const {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        return depth_window_collapse_source_;
-    }
-
-    RenderingManager::DepthWindowCollapseRecord
-    RenderingManager::getDepthWindowCollapseRecord() const {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        return {depth_window_collapse_source_,
-                depth_window_collapse_generation_,
-                depth_window_collapse_kind_};
-    }
-
-    void RenderingManager::discardRetainedDepthWindowPairLocked(const SplitViewPanelId source) {
-        if (!depth_window_dormant_panels_) {
-            return;
-        }
-        depth_window_dormant_panels_.reset();
-        stampDepthWindowLineageLocked(source, DepthWindowLineageKind::RetainedPairDiscard);
-    }
-
-    void RenderingManager::stampDepthWindowLineageLocked(
-        const SplitViewPanelId source,
-        const DepthWindowLineageKind kind) {
-        // Sole writer of source, generation and kind; settings_mutex_ keeps them consistent.
-        // Invalidating writes stamp under the same lock as slot changes, except sync
-        // undo/redo, which stamps under a second acquisition (DepthWindowSyncUndoEntry::apply).
-        // The record is self-consistent, but not atomic with the slots. Consumers reading
-        // them separately must revalidate generation around their reads.
-        depth_window_collapse_source_ = source;
-        depth_window_collapse_kind_ = kind;
-        ++depth_window_collapse_generation_;
-    }
-
-    op::DepthWindowModeSnapshot RenderingManager::depthWindowSnapshotLocked() const {
-        return {
-            .panels = panel_depth_windows_,
-            .sync = depth_window_sync_,
-            .projection = depthWindowFromProjection(settings_),
-            .mode_epoch = depth_window_mode_epoch_,
-            .independent_dual = split_view_service_.isIndependentDualActive(settings_),
-        };
-    }
-
-    op::DepthWindowModeSnapshot RenderingManager::depthWindowSnapshot() const {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        return depthWindowSnapshotLocked();
     }
 
     op::DepthWindowModeSnapshot
-    RenderingManager::depthWindowBaselineSnapshotForDrag(const uint64_t drag_token) const {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        auto snapshot = depthWindowSnapshotLocked();
-        if (drag_token == 0) {
-            return snapshot;
-        }
-        for (size_t i = 0; i < snapshot.panels.size(); ++i) {
-            if (depth_window_pin_owners_[i] == drag_token && depth_window_drag_backups_[i]) {
-                snapshot.panels[i] = *depth_window_drag_backups_[i];
-            }
-        }
+    RenderingManager::depthWindowSnapshotLocked(ViewId view) const {
+        return {.view = viewState(view).id, .screen_epoch = view_source_.screenEpoch(), .lifetime_epoch = view_lifetime_epoch_, .window = depthWindowFromProjection(RenderSettings(settings_, view_source_.viewSettings(view).value())), .mode_epoch = viewState(view).depth_window_mode_epoch_};
+    }
+
+    op::DepthWindowModeSnapshot RenderingManager::depthWindowSnapshot(ViewId view) const {
+        std::lock_guard lock(settings_mutex_);
+        return depthWindowSnapshotLocked(view);
+    }
+
+    op::DepthWindowModeSnapshot
+    RenderingManager::depthWindowBaselineSnapshotForDrag(ViewId view,
+                                                         const uint64_t drag_token) const {
+        std::lock_guard lock(settings_mutex_);
+        auto snapshot = depthWindowSnapshotLocked(view);
+        if (drag_token && viewState(view).depth_window_drag_owner_ == drag_token &&
+            viewState(view).depth_window_drag_backup_)
+            snapshot.window = *viewState(view).depth_window_drag_backup_;
         return snapshot;
     }
 
     void RenderingManager::restoreDepthWindowStateFromProject() {
-        // Project restore advances the epoch; serialize it with drag release sequences.
-        // Acquire transition before settings/history locks; release settings before
-        // pushing history.
-        const auto transition_lock = acquireDepthWindowTransitionLock();
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        const auto projection_window = depthWindowFromProjection(settings_);
-        restoreDepthWindowStateLocked({projection_window, projection_window}, false, projection_window);
-        ++depth_window_projection_generation_;
-        // Project restore advances the epoch, expiring drags and undo entries from
-        // the previous session. Clear their pre-drag backups so later mode transitions
-        // cannot restore old windows over the loaded state.
-        depth_window_drag_backups_ = {};
-        // Clear ownership with the backups. endDepthWindowDrag releases only slots
-        // it still owns, so surviving drags leave these slots untouched.
-        depth_window_pin_owners_ = {};
-        // Like the backups, the parked pair belongs to the previous session.
-        // Discard it so leaving GT cannot overwrite the restored windows.
-        depth_window_dormant_panels_.reset();
-        // Restore seeds both slots from the project's projection, invalidating cached
-        // panel references. Stamp this even if independent-dual, sync OFF and focus
-        // stay unchanged, so polling detects the reset. The source names the focused
-        // panel only to complete the record; consumers ignore it for ProjectRestore.
-        stampDepthWindowLineageLocked(split_view_service_.focusedPanel(),
-                                      DepthWindowLineageKind::ProjectRestore);
-        ++depth_window_mode_epoch_;
+        const auto transition_lock = acquireDepthWindowTransitionLock(this->state().id);
+        std::lock_guard lock(settings_mutex_);
+        this->state().depth_window_drag_owner_ = 0;
+        this->state().depth_window_drag_backup_.reset();
+        ++this->state().depth_window_projection_generation_;
+        ++this->state().depth_window_mode_epoch_;
+    }
+
+    bool RenderingManager::depthWindowSnapshotCurrent(const op::DepthWindowModeSnapshot& snapshot) const {
+        std::lock_guard lock(views_mutex_);
+        if (snapshot.screen_epoch != view_source_.screenEpoch() || snapshot.lifetime_epoch != view_lifetime_epoch_ || !view_source_.viewSettings(snapshot.view))
+            return false;
+        if (const auto view = view_states_.find(snapshot.view); view != view_states_.end())
+            return snapshot.mode_epoch == view->second->depth_window_mode_epoch_;
+        const auto saved = depth_window_epochs_.find(snapshot.view);
+        return saved != depth_window_epochs_.end() && snapshot.mode_epoch == saved->second.first;
     }
 
     bool RenderingManager::restoreDepthWindowSnapshotIfEpoch(
-        const op::DepthWindowModeSnapshot& snapshot,
-        const uint64_t expected_epoch,
-        const bool restore_sync) {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        if (depth_window_mode_epoch_ != expected_epoch) {
+        const op::DepthWindowModeSnapshot& snapshot, const uint64_t expected_epoch) {
+        if (!depthWindowSnapshotCurrent(snapshot))
             return false;
-        }
-        // Focus may have changed: restore projection from the currently focused
-        // panel's snapshot slot. restore_sync restores the saved sync flag for sync
-        // entries; drag entries restore slots only and preserve the current flag.
-        const auto& focused_slot =
-            snapshot.panels[splitViewPanelIndex(split_view_service_.focusedPanel())];
-        restoreDepthWindowStateLocked(snapshot.panels,
-                                      restore_sync ? snapshot.sync : depth_window_sync_,
-                                      focused_slot);
-        markDirty(DirtyFlag::ALL);
+        auto& view = viewState(snapshot.view);
+        std::lock_guard transition(view.depth_window_transition_mutex_);
+        std::lock_guard lock(settings_mutex_);
+        if (view.depth_window_mode_epoch_ != expected_epoch)
+            return false;
+        view_source_.editViewSettings(snapshot.view, [&](ViewSettings& settings) {
+            RenderSettings composed(settings_, settings);
+            applyDepthWindowToProjection(composed, snapshot.window);
+            settings = composed.view();
+        });
+        ++view.depth_window_projection_generation_;
+        view.depth_window_drag_owner_ = 0;
+        view.depth_window_drag_backup_.reset();
+        markViewDirty(snapshot.view, DirtyFlag::ALL);
         return true;
     }
 
-    void RenderingManager::stampDepthWindowSyncRestoreLineage() {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        // ProjectRestore means "fresh baseline required" here: sync undo/redo restores
-        // both absolute window snapshots, invalidating cached panel references.
-        // This is not a project load. The focused source only completes the record;
-        // consumers ignore it for this kind.
-        stampDepthWindowLineageLocked(split_view_service_.focusedPanel(),
-                                      DepthWindowLineageKind::ProjectRestore);
-    }
-
     uint64_t RenderingManager::depthWindowProjectionGeneration() const {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        return depth_window_projection_generation_;
+        std::lock_guard lock(settings_mutex_);
+        return this->state().depth_window_projection_generation_;
     }
 
-    uint64_t RenderingManager::depthWindowModeEpoch() const {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        return depth_window_mode_epoch_;
-    }
-
-    void RenderingManager::applyDepthWindowProjectionLocked(const DepthWindowState& state) {
-        const float previous_depth_min_z = settings_.depth_filter_min.z;
-        const float previous_depth_max_z = settings_.depth_filter_max.z;
-        applyDepthWindowToProjection(settings_, state);
-        if (settings_.depth_filter_min.z != previous_depth_min_z ||
-            settings_.depth_filter_max.z != previous_depth_max_z) {
-            ++depth_window_projection_generation_;
-        }
-    }
-
-    void RenderingManager::restoreDepthWindowStateLocked(
-        const std::array<DepthWindowState, 2>& panels,
-        const bool sync,
-        const DepthWindowState& projection) {
-        panel_depth_windows_ = panels;
-        depth_window_sync_ = sync;
-        // Undo/redo and project restore replace both slots with valid state.
-        // Discard stale backups only for unowned slots with a zero drag count.
-        releaseIdleDepthWindowBackupsLocked();
-        applyDepthWindowProjectionLocked(projection);
+    void RenderingManager::applyDepthWindowProjectionLocked(ViewId view, const DepthWindowState& state) {
+        auto settings = RenderSettings(settings_, view_source_.viewSettings(view).value());
+        const auto previous = depthWindowFromProjection(settings);
+        applyDepthWindowToProjection(settings, state);
+        view_source_.editViewSettings(view, [&](ViewSettings& target) { target = settings.view(); });
+        if (previous.near_plane != state.near_plane || previous.far_plane != state.far_plane)
+            ++viewState(view).depth_window_projection_generation_;
     }
 
     void RenderingManager::applyDepthWindowModeTransitionLocked(
-        const SplitViewMode previous_mode,
-        const SplitViewMode new_mode,
-        const SplitViewPanelId pre_transition_focus,
-        const bool boundary_carries_global_depth_write) {
-        // Other comparison modes first invalidate any retained pair. Only an
-        // independent/GT boundary expires drags and folds their previews;
-        // Disabled <-> PLY otherwise preserves the global drag lifetime.
-        const bool was_independent = splitViewUsesIndependentPanels(previous_mode);
-        const bool is_independent = splitViewUsesIndependentPanels(new_mode);
-        if (!is_independent && !splitViewUsesGTComparison(new_mode) && new_mode != SplitViewMode::Disabled) {
-            discardRetainedDepthWindowPairLocked(pre_transition_focus);
-        }
-        const bool independent_boundary = was_independent != is_independent;
-        const bool gt_boundary =
-            splitViewUsesGTComparison(previous_mode) != splitViewUsesGTComparison(new_mode);
-        if (!independent_boundary && !gt_boundary) {
+        const SplitViewMode previous_mode, const SplitViewMode new_mode) {
+        if (splitViewUsesGTComparison(previous_mode) ==
+            splitViewUsesGTComparison(new_mode))
             return;
-        }
-
-        // GT suspends filtering. Park and restore the panel pair separately
-        // from ordinary collapse/seed transitions, which would homogenize it.
-        const bool is_gt = splitViewUsesGTComparison(new_mode);
-        const bool park_dormant_panels = was_independent && is_gt;
-        const bool restore_dormant_panels =
-            is_independent && depth_window_dormant_panels_.has_value();
-
-        // A modal checked out before cancellation can race this transition and write
-        // a preview. Restore all recorded backups first so both panels collapse from
-        // pre-drag state whichever operation won the mutex. Discard the backups so no
-        // surviving or replacement drag inherits them across the epoch boundary.
-        const size_t focused_index = splitViewPanelIndex(split_view_service_.focusedPanel());
-        for (size_t index = 0; index < depth_window_drag_backups_.size(); ++index) {
-            if (!depth_window_drag_backups_[index]) {
-                continue;
-            }
-            const DepthWindowState backup_window = *depth_window_drag_backups_[index];
-            panel_depth_windows_[index] = backup_window;
-            // Parking sets projection below from pre-transition focus or an explicit boundary
-            // write. Events may have reset current focus; direct updateSettings keeps it.
-            if (index == focused_index && !park_dormant_panels) {
-                applyDepthWindowProjectionLocked(backup_window);
-            }
-            depth_window_drag_backups_[index].reset();
-        }
-        // All backups are consumed; clear all slot ownership. Surviving drags have
-        // no slots to release, and further writes fail both ownership and epoch checks.
-        depth_window_pin_owners_ = {};
-
-        if (park_dormant_panels) {
-            // Backups are restored and ownership cleared. Park both pre-drag windows;
-            // their references survive, so no lineage stamp is needed.
-            depth_window_dormant_panels_ = panel_depth_windows_;
-            // Preserve an explicit GT-boundary projection. Otherwise remove
-            // any abandoned preview using the clean pre-transition focused slot.
-            if (!boundary_carries_global_depth_write) {
-                const auto parked_focused_window =
-                    panel_depth_windows_[splitViewPanelIndex(pre_transition_focus)];
-                applyDepthWindowProjectionLocked(parked_focused_window);
-            }
-        } else if (restore_dormant_panels) {
-            // On independent entry, restore the exact retained pair over slot values from
-            // GT-time global writes. Projection follows current focus: event-driven
-            // transitions reset it to Left; direct settings writes keep it.
-            // Neither restores pre-GT focus.
-            panel_depth_windows_ = *depth_window_dormant_panels_;
-            const auto focused_window =
-                panel_depth_windows_[splitViewPanelIndex(split_view_service_.focusedPanel())];
-            applyDepthWindowProjectionLocked(focused_window);
-        } else if (splitViewUsesGTComparison(previous_mode) && new_mode == SplitViewMode::Disabled) {
-            // Disabled drags back up live slots, so align both with the global projection.
-            // Keep the retained pair separate for the next independent entry.
-            panel_depth_windows_.fill(depthWindowFromProjection(settings_));
-        } else if (!was_independent && is_independent) {
-            const auto projection_window = depthWindowFromProjection(settings_);
-            panel_depth_windows_ = {projection_window, projection_window};
-        } else if (was_independent && !is_independent) {
-            // Record the source from before the focus reset to Left so toolbar Size references
-            // follow its window. Stamp source, generation and kind under the collapse lock.
-            // Source alone hides intermediate transitions in a leave -> enter -> leave cycle.
-            // Comparing the generation delta with the observed transition reveals missed
-            // transitions; kind tells the poller how to recover.
-            stampDepthWindowLineageLocked(pre_transition_focus,
-                                          DepthWindowLineageKind::LeaveCollapse);
-            const auto collapsed =
-                panel_depth_windows_[splitViewPanelIndex(pre_transition_focus)];
-            applyDepthWindowProjectionLocked(collapsed);
-            panel_depth_windows_ = {collapsed, collapsed};
-        }
-
-        // GT -> Disabled and repeated GT entry retain the original pair until
-        // an invalidating edit or comparison mode. Independent entry consumes it.
-        if (restore_dormant_panels) {
-            depth_window_dormant_panels_.reset();
-        }
-
-        // For the boundary detected above, advance the epoch to reject further writes
-        // and commits from drags that survive cancellation, and expire pre-transition
-        // undo entries.
-        ++depth_window_mode_epoch_;
-    }
-
-    void RenderingManager::setGridPlaneForPanel(const SplitViewPanelId panel, const int plane) {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        const int clamped_plane = clampGridPlane(plane);
-        const bool independent_split_active = split_view_service_.isIndependentDualActive(settings_);
-        if (independent_split_active) {
-            panel_grid_planes_[splitViewPanelIndex(panel)] = clamped_plane;
-        } else {
-            syncGridPlanesLocked(clamped_plane);
-        }
-        if (!independent_split_active || split_view_service_.focusedPanel() == panel) {
-            settings_.grid_plane = clamped_plane;
-        }
-        markDirty(DirtyFlag::OVERLAY);
+        // GT suspends selection filtering; an old drag must not overwrite its
+        // successor.
+        if (this->state().depth_window_drag_owner_ && this->state().depth_window_drag_backup_)
+            applyDepthWindowProjectionLocked(this->state().id, *this->state().depth_window_drag_backup_);
+        this->state().depth_window_drag_owner_ = 0;
+        this->state().depth_window_drag_backup_.reset();
+        ++this->state().depth_window_mode_epoch_;
     }
 
     void RenderingManager::clearLatestCameraMetrics() {
@@ -1575,7 +1109,7 @@ namespace lfs::vis {
             return;
         }
 
-        const auto settings = getSettings();
+        const auto settings = settingsForView(this->state().id);
         if (!splitViewUsesGTComparison(settings.split_view_mode) ||
             settings.camera_metrics_mode == RenderSettings::CameraMetricsMode::Off) {
             return;
@@ -1751,45 +1285,25 @@ namespace lfs::vis {
         }
     }
 
-    std::optional<float> RenderingManager::getSplitDividerScreenX(const glm::vec2& viewport_pos,
+    std::optional<float> RenderingManager::getSplitDividerScreenX(ViewId view, const glm::vec2& viewport_pos,
                                                                   const glm::vec2& viewport_size) const {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        if (!split_view_service_.isActive(settings_) ||
-            (splitViewUsesGTComparison(settings_.split_view_mode) &&
-             gtComparisonShowsLoss(settings_.gt_comparison_mode))) {
+        const auto settings = settingsForView(view);
+        if (!viewState(view).split_view_service_.isActive(settings) ||
+            (splitViewUsesGTComparison(settings.split_view_mode) &&
+             gtComparisonShowsLoss(settings.gt_comparison_mode))) {
             return std::nullopt;
         }
 
-        const auto content_bounds = getContentBounds(glm::ivec2(
-            std::max(static_cast<int>(viewport_size.x), 0),
-            std::max(static_cast<int>(viewport_size.y), 0)));
+        const auto content_bounds = getContentBounds(viewState(view).id, glm::ivec2(
+                                                                             std::max(static_cast<int>(viewport_size.x), 0),
+                                                                             std::max(static_cast<int>(viewport_size.y), 0)));
         const int content_width = std::max(static_cast<int>(std::lround(content_bounds.width)), 0);
         if (content_width <= 0) {
             return std::nullopt;
         }
 
         return viewport_pos.x + content_bounds.x +
-               static_cast<float>(splitViewDividerPixel(content_width, settings_.split_position));
-    }
-
-    Viewport& RenderingManager::resolvePanelViewport(Viewport& primary_viewport, const SplitViewPanelId panel) {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        if (split_view_service_.isIndependentDualActive(settings_) &&
-            panel == SplitViewPanelId::Right) {
-            return split_view_service_.secondaryViewport();
-        }
-        return primary_viewport;
-    }
-
-    const Viewport& RenderingManager::resolvePanelViewport(
-        const Viewport& primary_viewport,
-        const SplitViewPanelId panel) const {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        if (split_view_service_.isIndependentDualActive(settings_) &&
-            panel == SplitViewPanelId::Right) {
-            return split_view_service_.secondaryViewport();
-        }
-        return primary_viewport;
+               static_cast<float>(splitViewDividerPixel(content_width, settings.split_position));
     }
 
     void RenderingManager::applySplitModeChange(const SplitViewService::ModeChangeResult& result) {
@@ -1801,11 +1315,11 @@ namespace lfs::vis {
         // viewport output is cleared: clear_viewport_output is only set for
         // enabled -> disabled (split_view_service.cpp:202), so re-entering GT would otherwise
         // expose the previous session's camera until the next GT frame is presented.
-        vulkan_gt_comparison_selection_view_.reset();
-        vulkan_gt_comparison_content_size_ = {0, 0};
+        this->state().vulkan_gt_comparison_selection_view_.reset();
+        this->state().vulkan_gt_comparison_content_size_ = {0, 0};
 
         if (result.clear_viewport_output) {
-            viewport_artifact_service_.clearViewportOutput();
+            this->state().viewport_artifact_service_.clearViewportOutput();
         }
 
         if (result.restore_equirectangular) {
@@ -1820,68 +1334,64 @@ namespace lfs::vis {
         }
     }
 
-    Viewport& RenderingManager::resolveFocusedViewport(Viewport& primary_viewport) {
-        return resolvePanelViewport(primary_viewport, split_view_service_.focusedPanel());
-    }
-
-    const Viewport& RenderingManager::resolveFocusedViewport(const Viewport& primary_viewport) const {
-        return resolvePanelViewport(primary_viewport, split_view_service_.focusedPanel());
-    }
-
     void RenderingManager::setCursorPreviewState(const bool active, const float x, const float y, const float radius,
                                                  const bool add_mode, lfs::core::Tensor* selection_tensor,
                                                  const bool saturation_mode, const float saturation_amount,
                                                  const std::optional<SplitViewPanelId> panel,
                                                  const int focused_gaussian_id, const bool request_render) {
-        viewport_overlay_service_.setCursorPreview(active, x, y, radius, add_mode, selection_tensor,
-                                                   saturation_mode, saturation_amount, panel, focused_gaussian_id);
+        this->state().viewport_overlay_service_.setCursorPreview(active, x, y, radius, add_mode, selection_tensor,
+                                                                 saturation_mode, saturation_amount, panel, focused_gaussian_id);
         if (request_render)
-            markDirty(DirtyFlag::SELECTION);
+            markViewDirty(this->state().id, DirtyFlag::SELECTION);
     }
 
     void RenderingManager::clearCursorPreviewState() {
-        viewport_overlay_service_.clearCursorPreview();
-        markDirty(DirtyFlag::SELECTION);
+        this->state().viewport_overlay_service_.clearCursorPreview();
+        markViewDirty(this->state().id, DirtyFlag::SELECTION);
     }
 
     void RenderingManager::setRectPreview(float x0, float y0, float x1, float y1, bool add_mode,
                                           const std::optional<SplitViewPanelId> panel,
                                           const bool track_cursor) {
-        viewport_overlay_service_.setRect(x0, y0, x1, y1, add_mode, panel, track_cursor);
+        this->state().viewport_overlay_service_.setRect(x0, y0, x1, y1, add_mode, panel, track_cursor);
     }
 
     void RenderingManager::clearRectPreview() {
-        viewport_overlay_service_.clearRect();
+        this->state().viewport_overlay_service_.clearRect();
     }
 
     void RenderingManager::setPolygonPreview(const std::vector<std::pair<float, float>>& points, bool closed,
                                              bool add_mode, const std::optional<SplitViewPanelId> panel) {
-        viewport_overlay_service_.setPolygon(points, closed, add_mode, panel);
+        this->state().viewport_overlay_service_.setPolygon(points, closed, add_mode, panel);
     }
 
     void RenderingManager::setPolygonPreviewWorldSpace(const std::vector<glm::vec3>& world_points,
                                                        const bool closed, const bool add_mode,
                                                        const std::optional<SplitViewPanelId> panel) {
-        viewport_overlay_service_.setPolygonWorldSpace(world_points, closed, add_mode, panel);
+        this->state().viewport_overlay_service_.setPolygonWorldSpace(world_points, closed, add_mode, panel);
     }
 
     void RenderingManager::clearPolygonPreview() {
-        viewport_overlay_service_.clearPolygon();
+        this->state().viewport_overlay_service_.clearPolygon();
     }
 
     void RenderingManager::setLassoPreview(const std::vector<std::pair<float, float>>& points, bool add_mode,
                                            const std::optional<SplitViewPanelId> panel,
                                            const bool track_cursor) {
-        viewport_overlay_service_.setLasso(points, add_mode, panel, track_cursor);
+        this->state().viewport_overlay_service_.setLasso(points, add_mode, panel, track_cursor);
     }
 
     void RenderingManager::clearLassoPreview() {
-        viewport_overlay_service_.clearLasso();
+        this->state().viewport_overlay_service_.clearLasso();
     }
 
     void RenderingManager::clearSelectionPreviews() {
-        viewport_overlay_service_.clearSelectionPreviews();
-        markDirty(DirtyFlag::SELECTION);
+        auto& overlay = this->state().viewport_overlay_service_;
+        const bool had_preview = overlay.isCursorPreviewActive() || overlay.isRectPreviewActive() ||
+                                 overlay.isPolygonPreviewActive() || overlay.isLassoPreviewActive() || overlay.cursorPreview().preview_selection;
+        overlay.clearSelectionPreviews();
+        if (had_preview)
+            markViewDirty(this->state().id, DirtyFlag::SELECTION);
     }
 
 } // namespace lfs::vis

@@ -82,6 +82,9 @@ def test_screen_layout_and_view_settings_round_trip(lf):
     assert added > 0
     after_split = lf.ui.screen.areas()
     assert len(after_split) == len(areas) + 1
+    added_area = next(area for area in after_split if area["id"] == added)
+    assert added_area["width"] > 0.0
+    assert added_area["height"] > 0.0
 
     settings = lf.ui.screen.view_settings(view)
     assert "show_grid" in settings

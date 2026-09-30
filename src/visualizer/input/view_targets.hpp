@@ -30,12 +30,14 @@ namespace lfs::vis {
     class ViewTargets {
     public:
         virtual ~ViewTargets() = default;
+        [[nodiscard]] virtual std::uint64_t viewEpoch() const = 0;
 
         // The view the user last worked in. Always valid.
         [[nodiscard]] virtual ViewTarget activeView() = 0;
         // The view whose content is under a window point, if any.
         [[nodiscard]] virtual ViewTarget viewAt(float x, float y) = 0;
         [[nodiscard]] virtual ViewTarget findView(ViewId id) = 0;
+        [[nodiscard]] virtual ViewId viewId(const Viewport& viewport) const = 0;
         // Makes a view the active one (a press in it does this).
         virtual void activateView(ViewId id) = 0;
         // Runs a view command (see screen::applyViewCommand, plus frame_all,

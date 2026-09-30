@@ -12,6 +12,7 @@
 #include "rendering/rendering_manager.hpp"
 #include "rendering/rendering_types.hpp"
 #include "scene/scene_manager.hpp"
+#include "screen/screen_service.hpp"
 #include "selection/selection_service.hpp"
 #include <filesystem>
 
@@ -159,7 +160,7 @@ protected:
         lfs::vis::op::undoHistory().clear();
 
         scene_manager_ = std::make_unique<lfs::vis::SceneManager>();
-        rendering_manager_ = std::make_unique<lfs::vis::RenderingManager>();
+        rendering_manager_ = std::make_unique<lfs::vis::RenderingManager>(rendering_manager__views);
         lfs::vis::services().set(scene_manager_.get());
         lfs::vis::services().set(rendering_manager_.get());
 
@@ -200,6 +201,7 @@ protected:
     }
 
     std::unique_ptr<lfs::vis::SceneManager> scene_manager_;
+    lfs::vis::screen::ScreenService rendering_manager__views;
     std::unique_ptr<lfs::vis::RenderingManager> rendering_manager_;
     std::unique_ptr<lfs::vis::SelectionService> service_;
 };

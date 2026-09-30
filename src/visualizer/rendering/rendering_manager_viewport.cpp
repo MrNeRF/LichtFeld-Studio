@@ -120,7 +120,7 @@ namespace lfs::vis {
 
     } // namespace
 
-    RenderingManager::ContentBounds RenderingManager::getContentBounds(const glm::ivec2& viewport_size) const {
+    RenderingManager::ContentBounds RenderingManager::getContentBounds(ViewId view, const glm::ivec2& viewport_size) const {
         const int viewport_width = std::max(viewport_size.x, 0);
         const int viewport_height = std::max(viewport_size.y, 0);
         ContentBounds bounds{
@@ -130,12 +130,12 @@ namespace lfs::vis {
             static_cast<float>(viewport_height),
             false};
 
-        if (split_view_service_.isGTComparisonActive(settings_)) {
+        if (viewState(view).split_view_service_.isGTComparisonActive(settingsForView(viewState(view).id))) {
             glm::ivec2 content_dims{0, 0};
-            if (const auto service_dims = split_view_service_.gtContentDimensions()) {
+            if (const auto service_dims = viewState(view).split_view_service_.gtContentDimensions()) {
                 content_dims = *service_dims;
             } else {
-                content_dims = vulkan_gt_comparison_content_size_;
+                content_dims = viewState(view).vulkan_gt_comparison_content_size_;
             }
             if (content_dims.x <= 0 || content_dims.y <= 0 ||
                 viewport_width <= 0 || viewport_height <= 0) {
@@ -171,17 +171,17 @@ namespace lfs::vis {
 
     std::optional<RenderingManager::GTSelectionContext> RenderingManager::gtComparisonSelectionContext() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        if (!split_view_service_.isGTComparisonActive(settings_)) {
+        if (!this->state().split_view_service_.isGTComparisonActive(activeSettingsLocked())) {
             return std::nullopt;
         }
-        if (!vulkan_gt_comparison_selection_view_.has_value()) {
+        if (!this->state().vulkan_gt_comparison_selection_view_.has_value()) {
             return std::nullopt;
         }
-        const auto& view = *vulkan_gt_comparison_selection_view_;
+        const auto& view = *this->state().vulkan_gt_comparison_selection_view_;
         if (view.size.x <= 0 || view.size.y <= 0) {
             return std::nullopt;
         }
-        if (view.size != vulkan_gt_comparison_content_size_) {
+        if (view.size != this->state().vulkan_gt_comparison_content_size_) {
             return std::nullopt;
         }
         // Fallback contract: when any condition fails the accessor returns nullopt and every
@@ -190,12 +190,12 @@ namespace lfs::vis {
     }
 
     std::optional<RenderingManager::MutableViewerPanelInfo> RenderingManager::resolveViewerPanel(
-        Viewport& primary_viewport,
+        ViewId view, Viewport& primary_viewport,
         const glm::vec2& viewport_pos,
         const glm::vec2& viewport_size,
         const std::optional<glm::vec2> screen_point,
         const std::optional<SplitViewPanelId> panel_override) {
-        const glm::ivec2 rendered_size = getRenderedSize();
+        const glm::ivec2 rendered_size = viewState(view).viewport_artifact_service_.renderedSize();
         const int full_render_width =
             rendered_size.x > 0 ? rendered_size.x : std::max(static_cast<int>(viewport_size.x), 1);
         const int full_render_height =
@@ -212,45 +212,25 @@ namespace lfs::vis {
             .render_height = full_render_height,
         };
 
-        const auto screen_layouts = split_view_service_.panelLayouts(
-            settings_,
-            std::max(static_cast<int>(viewport_size.x), 1));
-        if (!screen_layouts || viewport_size.x <= 1.0f) {
-            return info.valid() ? std::optional<MutableViewerPanelInfo>(info) : std::nullopt;
+        const auto settings = settingsForView(view);
+        if (splitViewUsesComparisonPanels(settings.split_view_mode)) {
+            const auto bounds = getContentBounds(view, glm::ivec2(viewport_size));
+            const float divider = viewport_pos.x + bounds.x + bounds.width * settings.split_position;
+            info.panel = panel_override.value_or(screen_point && screen_point->x >= divider
+                                                     ? SplitViewPanelId::Right
+                                                     : SplitViewPanelId::Left);
         }
 
-        const auto render_layouts = split_view_service_.panelLayouts(settings_, full_render_width);
-        if (!render_layouts) {
-            return info.valid() ? std::optional<MutableViewerPanelInfo>(info) : std::nullopt;
-        }
-
-        SplitViewPanelId panel = panel_override.value_or(split_view_service_.focusedPanel());
-        if (screen_point && !panel_override) {
-            const float divider_x = viewport_pos.x + (*screen_layouts)[0].width;
-            panel = screen_point->x >= divider_x ? SplitViewPanelId::Right : SplitViewPanelId::Left;
-        }
-
-        const size_t index = splitViewPanelIndex(panel);
-        info.panel = panel;
-        info.viewport = (panel == SplitViewPanelId::Right)
-                            ? &split_view_service_.secondaryViewport()
-                            : &primary_viewport;
-        info.x = viewport_pos.x + static_cast<float>((*screen_layouts)[index].x);
-        info.y = viewport_pos.y;
-        info.width = static_cast<float>((*screen_layouts)[index].width);
-        info.height = viewport_size.y;
-        info.render_width = std::max((*render_layouts)[index].width, 1);
-        info.render_height = full_render_height;
         return info.valid() ? std::optional<MutableViewerPanelInfo>(info) : std::nullopt;
     }
 
     std::optional<RenderingManager::ViewerPanelInfo> RenderingManager::resolveViewerPanel(
-        const Viewport& primary_viewport,
+        ViewId view, const Viewport& primary_viewport,
         const glm::vec2& viewport_pos,
         const glm::vec2& viewport_size,
         const std::optional<glm::vec2> screen_point,
         const std::optional<SplitViewPanelId> panel_override) const {
-        const glm::ivec2 rendered_size = getRenderedSize();
+        const glm::ivec2 rendered_size = viewState(view).viewport_artifact_service_.renderedSize();
         const int full_render_width =
             rendered_size.x > 0 ? rendered_size.x : std::max(static_cast<int>(viewport_size.x), 1);
         const int full_render_height =
@@ -267,35 +247,15 @@ namespace lfs::vis {
             .render_height = full_render_height,
         };
 
-        const auto screen_layouts = split_view_service_.panelLayouts(
-            settings_,
-            std::max(static_cast<int>(viewport_size.x), 1));
-        if (!screen_layouts || viewport_size.x <= 1.0f) {
-            return info.valid() ? std::optional<ViewerPanelInfo>(info) : std::nullopt;
+        const auto settings = settingsForView(view);
+        if (splitViewUsesComparisonPanels(settings.split_view_mode)) {
+            const auto bounds = getContentBounds(view, glm::ivec2(viewport_size));
+            const float divider = viewport_pos.x + bounds.x + bounds.width * settings.split_position;
+            info.panel = panel_override.value_or(screen_point && screen_point->x >= divider
+                                                     ? SplitViewPanelId::Right
+                                                     : SplitViewPanelId::Left);
         }
 
-        const auto render_layouts = split_view_service_.panelLayouts(settings_, full_render_width);
-        if (!render_layouts) {
-            return info.valid() ? std::optional<ViewerPanelInfo>(info) : std::nullopt;
-        }
-
-        SplitViewPanelId panel = panel_override.value_or(split_view_service_.focusedPanel());
-        if (screen_point && !panel_override) {
-            const float divider_x = viewport_pos.x + (*screen_layouts)[0].width;
-            panel = screen_point->x >= divider_x ? SplitViewPanelId::Right : SplitViewPanelId::Left;
-        }
-
-        const size_t index = splitViewPanelIndex(panel);
-        info.panel = panel;
-        info.viewport = (panel == SplitViewPanelId::Right)
-                            ? &split_view_service_.secondaryViewport()
-                            : &primary_viewport;
-        info.x = viewport_pos.x + static_cast<float>((*screen_layouts)[index].x);
-        info.y = viewport_pos.y;
-        info.width = static_cast<float>((*screen_layouts)[index].width);
-        info.height = viewport_size.y;
-        info.render_width = std::max((*render_layouts)[index].width, 1);
-        info.render_height = full_render_height;
         return info.valid() ? std::optional<ViewerPanelInfo>(info) : std::nullopt;
     }
 
@@ -311,52 +271,51 @@ namespace lfs::vis {
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::getViewportImageIfAvailable() const {
-        return viewport_artifact_service_.getCapturedImageIfCurrent();
+        return this->state().viewport_artifact_service_.getCapturedImageIfCurrent();
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::captureViewportImage() {
-        if (viewport_artifact_service_.hasLazyCapture()) {
-            return viewport_artifact_service_.resolveLazyCapture();
+        if (this->state().viewport_artifact_service_.hasLazyCapture()) {
+            return this->state().viewport_artifact_service_.resolveLazyCapture();
         }
 
         if (auto image = getViewportImageIfAvailable()) {
             return image;
         }
 
-        if (!engine_ || !viewport_artifact_service_.hasGpuFrame()) {
+        if (!engine_ || !this->state().viewport_artifact_service_.hasGpuFrame()) {
             return {};
         }
 
         std::optional<std::shared_lock<std::shared_mutex>> render_lock;
 #if LFS_BUILD_TRAINER
-        if (const auto* tm = viewport_interaction_context_.scene_manager
-                                 ? viewport_interaction_context_.scene_manager->getTrainerManager()
-                                 : nullptr) {
+        if (const auto* tm =
+                this->state().viewport_interaction_context_.scene_manager
+                    ? this->state().viewport_interaction_context_.scene_manager->getTrainerManager()
+                    : nullptr) {
             if (const auto* trainer = tm->getTrainer()) {
                 render_lock.emplace(trainer->getRenderMutex());
             }
         }
 #endif
 
-        auto readback_result = engine_->readbackGpuFrameColor(*viewport_artifact_service_.gpuFrame());
+        auto readback_result = engine_->readbackGpuFrameColor(*this->state().viewport_artifact_service_.gpuFrame());
         if (!readback_result) {
             LOG_ERROR("Failed to capture viewport image from GPU frame: {}", readback_result.error());
             return {};
         }
 
-        viewport_artifact_service_.storeCapturedImage(*readback_result);
-        return viewport_artifact_service_.getCapturedImageIfCurrent();
+        this->state().viewport_artifact_service_.storeCapturedImage(*readback_result);
+        return this->state().viewport_artifact_service_.getCapturedImageIfCurrent();
     }
 
-    int RenderingManager::pickCameraFrustum(const glm::vec2& mouse_pos) {
+    int RenderingManager::pickCameraFrustum(ViewId view, const glm::vec2& mouse_pos) {
         const int previous_hovered_camera = camera_interaction_service_.hoveredCameraId();
         bool hover_changed = false;
         auto* const engine = getRenderingEngine();
         const int hovered_camera = camera_interaction_service_.pickCameraFrustum(
-            engine,
-            viewport_interaction_context_.scene_manager,
-            viewport_interaction_context_,
-            settings_,
+            engine, viewState(view).viewport_interaction_context_.scene_manager,
+            viewState(view).viewport_interaction_context_, settingsForView(view),
             mouse_pos,
             hover_changed);
 
@@ -483,6 +442,7 @@ namespace lfs::vis {
     }
 
     std::expected<void, std::string> RenderingManager::renderDepthCaptureToPreviewSlotWithState(
+        const RenderSettings& settings,
         SceneManager* const scene_manager,
         const lfs::core::SplatData& model,
         SceneRenderState scene_state,
@@ -522,6 +482,7 @@ namespace lfs::vis {
         } depth_capture_guard{vksplat_viewport_renderer_.get()};
 
         auto rendered = renderPreviewImageToPreviewSlotWithState(
+            settings,
             scene_manager,
             model,
             scene_state,
@@ -562,6 +523,7 @@ namespace lfs::vis {
         }
 
         auto rendered = renderDepthCaptureToPreviewSlotWithState(
+            getSettings(),
             scene_manager,
             *model,
             std::move(render_state),
@@ -606,8 +568,8 @@ namespace lfs::vis {
         }
         // Use the actual viewport render resolution, including render scale.
         // The caller's reference height covers exports before a frame is ready.
-        const int source_height = vulkan_viewport_image_size_.y > 0
-                                      ? vulkan_viewport_image_size_.y
+        const int source_height = this->state().vulkan_viewport_image_size_.y > 0
+                                      ? this->state().vulkan_viewport_image_size_.y
                                       : reference_height;
         return static_cast<float>(target_height) / source_height;
     }
@@ -620,8 +582,8 @@ namespace lfs::vis {
         }
         // Orthographic intrinsics are pixels per world unit at the actual
         // viewport render resolution. Scale once to avoid double rounding.
-        const int source_height = vulkan_viewport_image_size_.y > 0
-                                      ? vulkan_viewport_image_size_.y
+        const int source_height = this->state().vulkan_viewport_image_size_.y > 0
+                                      ? this->state().vulkan_viewport_image_size_.y
                                       : reference_height;
         return static_cast<float>(static_cast<double>(*scale) * target_height / source_height);
     }
@@ -948,7 +910,7 @@ namespace lfs::vis {
             .rotation = request.rotation,
             .focal_length_mm = request.focal_length_mm,
             .equirectangular_view = settings.equirectangular,
-            .controller_predict_size = frame_lifecycle_service_.lastViewportSize(),
+            .controller_predict_size = this->state().frame_lifecycle_service_.lastViewportSize(),
         };
         return applyExportPostProcess(
             std::move(image), scene_manager, settings, getCurrentCameraId(), request.mode, view);
@@ -976,6 +938,7 @@ namespace lfs::vis {
         // Image exports need stable ties. Float previews (including sequencer
         // thumbnails) keep the interactive sort and cold-frame warmup.
         auto rendered = renderPreviewImageToPreviewSlotWithState(
+            getSettings(),
             scene_manager,
             model,
             scene_state,
@@ -1041,6 +1004,7 @@ namespace lfs::vis {
     }
 
     std::expected<void, std::string> RenderingManager::renderPreviewImageToPreviewSlotWithState(
+        const RenderSettings& settings,
         SceneManager* const scene_manager,
         const lfs::core::SplatData& model,
         SceneRenderState scene_state,
@@ -1075,7 +1039,7 @@ namespace lfs::vis {
             scene_state.combined_model = &model;
         }
 
-        RenderSettings preview_settings = getSettings();
+        RenderSettings preview_settings = settings;
         preview_settings.focal_length_mm = std::clamp(
             focal_length_mm,
             lfs::rendering::MIN_FOCAL_LENGTH_MM,
@@ -1211,6 +1175,7 @@ namespace lfs::vis {
                 focal_length_mm);
             while (true) {
                 auto rendered = renderPreviewImageToPreviewSlotWithState(
+                    getSettings(),
                     scene_manager,
                     model,
                     scene_state,
@@ -1288,12 +1253,11 @@ namespace lfs::vis {
         return std::make_shared<lfs::core::Tensor>(std::move(output));
     }
 
-    float RenderingManager::getDepthAtPixel(const int x, const int y,
+    float RenderingManager::getDepthAtPixel(ViewId view, const int x, const int y,
                                             const std::optional<SplitViewPanelId> panel) const {
-        const float cached_depth = viewport_artifact_service_.sampleLinearDepthAt(
+        const float cached_depth = viewState(view).viewport_artifact_service_.sampleLinearDepthAt(
             x,
-            y,
-            frame_lifecycle_service_.lastViewportSize(),
+            y, viewState(view).frame_lifecycle_service_.lastViewportSize(),
             panel);
         if (cached_depth > 0.0f) {
             return cached_depth;
@@ -1303,20 +1267,9 @@ namespace lfs::vis {
             return -1.0f;
         }
 
-        RenderTargetId output_slot = main_render_target_;
-        if (panel && isIndependentSplitViewActive()) {
-            output_slot = *panel == SplitViewPanelId::Right
-                              ? split_right_render_target_
-                              : split_left_render_target_;
-        }
+        RenderTargetId output_slot = viewState(view).main_render_target_;
 
-        glm::ivec2 source_size = frame_lifecycle_service_.lastViewportSize();
-        if (source_size.x > 0 && source_size.y > 0 && panel && isIndependentSplitViewActive()) {
-            if (const auto layouts = split_view_service_.panelLayouts(settings_, source_size.x)) {
-                const auto& layout = (*layouts)[splitViewPanelIndex(*panel)];
-                source_size.x = std::max(layout.width, 1);
-            }
-        }
+        glm::ivec2 source_size = viewState(view).frame_lifecycle_service_.lastViewportSize();
 
         const auto depth = vksplat_viewport_renderer_->sampleDepthAtPixel(
             *last_vulkan_context_,
@@ -1345,7 +1298,7 @@ namespace lfs::vis {
         }
 
         auto render_lock = acquireLiveModelRenderLock(request.scene_manager);
-        const auto settings = getSettings();
+        const auto settings = settingsForView(request.view);
         SceneRenderState scene_state;
         const lfs::core::SplatData* model = nullptr;
         if (splitViewUsesPLYComparison(settings.split_view_mode)) {
@@ -1382,6 +1335,7 @@ namespace lfs::vis {
         }
 
         auto rendered = renderDepthCaptureToPreviewSlotWithState(
+            settings,
             request.scene_manager,
             *model,
             std::move(scene_state),

@@ -301,6 +301,13 @@ namespace lfs::vis::gui {
         return it != frames_.end() ? &*it : nullptr;
     }
 
+    screen::Rect ScreenHost::currentAreaRect(const screen::AreaId id) {
+        refreshLayout();
+        if (const auto* frame = area(id))
+            return frame->rect;
+        return {};
+    }
+
     screen::AreaId ScreenHost::areaAt(const float x, const float y) const {
         for (const auto& f : frames_) {
             if (f.rect.contains(x, y))

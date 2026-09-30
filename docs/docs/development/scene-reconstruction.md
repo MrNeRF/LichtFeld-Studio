@@ -68,8 +68,7 @@ SSIM against a high-resolution reference and exercise moving-history
 reprojection to detect blur and ghosting regressions.
 
 The temporal path is available for the regular and training viewports,
-including orthographic projection, Independent Dual split view, and PLY
-comparison. Orthographic frames explicitly declare that no perspective jitter
+including orthographic projection and PLY comparison. Orthographic frames explicitly declare that no perspective jitter
 was applied while retaining motion and depth history. Ground-truth comparisons
 deliberately preserve their reference image. Equirectangular projection and
 appearance-corrected readback currently remain native because their projection

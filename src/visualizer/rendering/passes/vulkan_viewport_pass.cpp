@@ -1839,9 +1839,7 @@ namespace lfs::vis {
                 return true;
             }
 
-            // The guide-panel producer emits one grid normally and two for an
-            // independent split view. Reserve both slots up front so toggling
-            // split view does not replace a descriptor-backed buffer mid-run.
+            // Reserve spare overlay slots to avoid replacing a descriptor-backed buffer.
             std::size_t capacity = 2;
             while (capacity < grid_count) {
                 capacity *= 2;

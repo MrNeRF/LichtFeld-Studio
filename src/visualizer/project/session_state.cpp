@@ -1010,16 +1010,9 @@ namespace lfs::vis::project {
         const Viewport& viewport,
         const std::optional<float> fallback_ortho_scale) {
         const auto& camera = viewport.camera;
-        // Same effective scale the renderer uses: per-viewport override, else
-        // RenderSettings.ortho_scale (lf.set_orthographic writes the latter).
-        std::optional<float> scale = viewport.ortho_scale_override;
-        if (!scale || !std::isfinite(*scale) || *scale <= 0.0f) {
-            if (fallback_ortho_scale && std::isfinite(*fallback_ortho_scale) &&
-                *fallback_ortho_scale > 0.0f)
-                scale = fallback_ortho_scale;
-            else
-                scale.reset();
-        }
+        std::optional<float> scale = fallback_ortho_scale;
+        if (scale && (!std::isfinite(*scale) || *scale <= 0.0f))
+            scale.reset();
         std::optional<float> extent;
         if (scale && viewport.windowSize.y > 0)
             extent = static_cast<float>(viewport.windowSize.y) / *scale;
@@ -1045,13 +1038,14 @@ namespace lfs::vis::project {
             .wasd_speed = camera.wasdSpeed,
             .max_wasd_speed = camera.maxWasdSpeed,
             .ortho_scale =
-                viewport.ortho_scale_override,
+                scale,
             .ortho_extent_world = extent,
         };
     }
 
     void applyPanelCameraProjectState(
         Viewport& viewport,
+        ViewSettings& settings,
         const PanelCameraProjectState& state) {
         viewport.setViewMatrix(
             array_matrix(state.rotation),
@@ -1076,10 +1070,10 @@ namespace lfs::vis::project {
         camera.wasdSpeed = state.wasd_speed;
         camera.maxWasdSpeed =
             state.max_wasd_speed;
-        viewport.ortho_scale_override =
-            state.ortho_scale;
+        if (state.ortho_scale)
+            settings.ortho_scale = *state.ortho_scale;
         if (state.ortho_extent_world && viewport.windowSize.y > 0)
-            viewport.ortho_scale_override = static_cast<float>(viewport.windowSize.y) / *state.ortho_extent_world;
+            settings.ortho_scale = static_cast<float>(viewport.windowSize.y) / *state.ortho_extent_world;
         camera.clearTransientMotion();
     }
 
@@ -1373,23 +1367,19 @@ namespace lfs::vis::project {
                 return lfs::Status::failure(
                     std::move(settings).error());
 
-            const auto cameras =
-                find_required_array(
-                    root, "panel_cameras");
-            if (cameras != root.end()) {
-                if (cameras->size() != 2) {
-                    return fail<void>(
-                        lfs::ErrorCode::DataLoss,
-                        "VIEW must contain two panel cameras",
-                        "VIEW.panel_cameras");
+            // Older projects stored camera state here. New projects keep it
+            // with each 3D view in GUIL screen state.
+            if (const auto cameras = root.find("panel_cameras");
+                cameras != root.end()) {
+                if (!cameras->is_array() || cameras->empty() || cameras->size() > 2) {
+                    return fail<void>(lfs::ErrorCode::DataLoss,
+                                      "VIEW legacy panel cameras are malformed",
+                                      "VIEW.panel_cameras");
                 }
                 for (const auto& camera : *cameras) {
-                    auto parsed =
-                        panelCameraProjectStateFromJson(
-                            camera);
+                    auto parsed = panelCameraProjectStateFromJson(camera);
                     if (!parsed)
-                        return lfs::Status::failure(
-                            std::move(parsed).error());
+                        return lfs::Status::failure(std::move(parsed).error());
                 }
             }
 
@@ -2501,12 +2491,6 @@ namespace lfs::vis::project {
              }},
             {"split",
              {
-                 {"focused_panel",
-                  rendering_manager
-                              ->getFocusedSplitPanel() ==
-                          SplitViewPanelId::Right
-                      ? "right"
-                      : "left"},
                  {"gt_camera_id",
                   rendering_manager
                               ->getCurrentCameraId() >=
@@ -2515,17 +2499,6 @@ namespace lfs::vis::project {
                             rendering_manager
                                 ->getCurrentCameraId())
                       : Json(nullptr)},
-                 {"panel_grid_planes",
-                  Json::array({
-                      rendering_manager
-                          ->getGridPlaneForPanel(
-                              SplitViewPanelId::
-                                  Left),
-                      rendering_manager
-                          ->getGridPlaneForPanel(
-                              SplitViewPanelId::
-                                  Right),
-                  })},
              }},
             {"camera_bookmarks",
              std::move(bookmarks_json)},
@@ -3473,7 +3446,7 @@ namespace lfs::vis::project {
                     if (auto camera =
                             panelCameraProjectStateFromJson(*primary_json);
                         camera) {
-                        applyPanelCameraProjectState(view3d->camera, *camera);
+                        applyPanelCameraProjectState(view3d->camera, view3d->settings, *camera);
                     }
                 }
             }
@@ -3481,24 +3454,6 @@ namespace lfs::vis::project {
                 view3d ? view3d->settings : restored->view();
             rendering->updateSettings(RenderSettings(restored->scene(), view_settings));
 
-            if (!loaded_screen) {
-                const auto desired_split = restored->split_view_mode;
-                const auto saved_split_offset = restored->split_view_offset;
-                rendering->restoreSplitViewMode(
-                    desired_split, viewer.getViewport());
-                auto split_settings = rendering->getSettings();
-                split_settings.split_view_offset = saved_split_offset;
-                rendering->updateSettings(split_settings);
-                if (const auto secondary_json =
-                        panel_camera_json(root, "secondary")) {
-                    if (auto camera =
-                            panelCameraProjectStateFromJson(*secondary_json);
-                        camera) {
-                        applyPanelCameraProjectState(
-                            rendering->projectSecondaryViewport(), *camera);
-                    }
-                }
-            }
             if (auto* selection_tool =
                     viewer.getSelectionTool()) {
                 selection_tool
@@ -3509,48 +3464,11 @@ namespace lfs::vis::project {
                     find_required_object(
                         root, "split");
                 split != root.end()) {
-                if (!loaded_screen) {
-                    if (const auto planes =
-                            find_required_array(
-                                *split,
-                                "panel_grid_planes");
-                        planes != split->end() &&
-                        planes->size() == 2) {
-                        if (planes->at(0)
-                                .is_number_integer()) {
-                            rendering
-                                ->setGridPlaneForPanel(
-                                    SplitViewPanelId::
-                                        Left,
-                                    planes->at(0)
-                                        .get<int>());
-                        }
-                        if (planes->at(1)
-                                .is_number_integer()) {
-                            rendering
-                                ->setGridPlaneForPanel(
-                                    SplitViewPanelId::
-                                        Right,
-                                    planes->at(1)
-                                        .get<int>());
-                        }
-                    }
-                    const auto focused =
-                        scalar<std::string>(
-                            *split,
-                            "focused_panel");
-                    rendering->setFocusedSplitPanel(
-                        focused &&
-                                *focused == "right"
-                            ? SplitViewPanelId::Right
-                            : SplitViewPanelId::Left);
-                }
-                const auto camera_id =
-                    scalar<int>(
-                        *split,
-                        "gt_camera_id");
-                rendering->setCurrentCameraId(
-                    camera_id.value_or(-1));
+                const auto camera_id = scalar<int>(
+                    *split, "gt_camera_id");
+                rendering
+                    ->setCurrentCameraId(
+                        camera_id.value_or(-1));
             }
 
             if (const auto navigation =

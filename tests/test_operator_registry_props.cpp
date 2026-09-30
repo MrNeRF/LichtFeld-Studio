@@ -22,6 +22,7 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "screen/screen_service.hpp"
 #include "training/trainer.hpp"
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/gui_capabilities.hpp"
@@ -118,7 +119,7 @@ protected:
         lfs::vis::op::undoHistory().clear();
         lfs::vis::op::operators().clear();
 
-        rendering_manager_ = std::make_unique<lfs::vis::RenderingManager>();
+        rendering_manager_ = std::make_unique<lfs::vis::RenderingManager>(rendering_manager__views);
         scene_manager_ = std::make_unique<lfs::vis::SceneManager>();
         lfs::vis::services().set(rendering_manager_.get());
         lfs::vis::services().set(scene_manager_.get());
@@ -182,6 +183,8 @@ protected:
             scene_manager_->setNodeTransform(transform.name, transform.local_transform);
         }
     }
+
+    lfs::vis::screen::ScreenService rendering_manager__views;
 
     std::unique_ptr<lfs::vis::RenderingManager> rendering_manager_;
     std::unique_ptr<lfs::vis::SceneManager> scene_manager_;

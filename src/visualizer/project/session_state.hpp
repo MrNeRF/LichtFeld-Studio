@@ -84,6 +84,7 @@ namespace lfs::vis {
             std::optional<float> fallback_ortho_scale = {});
         LFS_VIS_API void applyPanelCameraProjectState(
             Viewport& viewport,
+            ViewSettings& settings,
             const PanelCameraProjectState& state);
         [[nodiscard]] LFS_VIS_API SessionJson
         panelCameraProjectStateToJson(

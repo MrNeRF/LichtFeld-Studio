@@ -2,9 +2,12 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "gui/screen_host.hpp"
 #include "gui/screen_host_logic.hpp"
+#include "rendering/rendering_manager.hpp"
 #include "screen/area_gestures.hpp"
 #include "screen/screen.hpp"
+#include "screen/screen_service.hpp"
 #include "screen/view3d_space.hpp"
 
 #include <gtest/gtest.h>
@@ -323,6 +326,18 @@ namespace lfs::vis::screen {
         EXPECT_TRUE(dirty);
     }
 
+    TEST(ScreenHostLogic, HiddenUiTargetsTheFullDisplayedViewport) {
+        const AreaId active{7};
+        const AreaId stale_area{2};
+        const Rect full_window{0.0f, 0.0f, 1920.0f, 1080.0f};
+        EXPECT_EQ(gui::screen_host_detail::displayedViewAt(true, active, {}, full_window, 1200.0f, 700.0f),
+                  active);
+        EXPECT_FALSE(gui::screen_host_detail::displayedViewAt(true, active, {}, full_window, 1920.0f, 700.0f)
+                         .valid());
+        EXPECT_EQ(gui::screen_host_detail::displayedViewAt(false, active, stale_area, full_window, 1200.0f, 700.0f),
+                  stale_area);
+    }
+
     TEST(ScreenHostLogic, DisappearedPanelEditorIsIdentifiedFromHistory) {
         EXPECT_TRUE(gui::screen_host_detail::shouldCloseMissingPanelEditor(false, true));
         EXPECT_FALSE(gui::screen_host_detail::shouldCloseMissingPanelEditor(false, false));
@@ -562,4 +577,60 @@ namespace lfs::vis::screen {
         EXPECT_EQ(gestures.release(g, *screen, r.x + 20.0f, r.y + 3.0f).kind, GestureCommand::Kind::None);
     }
 
+} // namespace lfs::vis::screen
+
+namespace lfs::vis::screen {
+    TEST(ViewSettingsOwnershipTest, ComposesSceneWithEachViewsOwnSettings) {
+        ScreenService source;
+        const auto first = source.screen().activeView();
+        const auto second = source.screen().split(first, SplitAxis::Columns, 0.5f);
+        ASSERT_TRUE(second.valid());
+        RenderingManager renderer(source);
+        source.editViewSettings(first.value, [](ViewSettings& s) { s.focal_length_mm = 21.0f; });
+        source.editViewSettings(second.value, [](ViewSettings& s) { s.focal_length_mm = 80.0f; s.point_cloud_mode = true; });
+        auto settings = renderer.getSettings();
+        settings.background_color = {0.1f, 0.2f, 0.3f};
+        renderer.updateSettings(settings);
+        const auto other = renderer.settingsForView(second.value);
+        EXPECT_FLOAT_EQ(other.focal_length_mm, 80.0f);
+        EXPECT_TRUE(other.point_cloud_mode);
+        EXPECT_EQ(other.background_color, settings.background_color);
+        source.screen().setActiveView(second);
+        EXPECT_FLOAT_EQ(renderer.getSettings().focal_length_mm, 80.0f);
+        settings = renderer.getSettings();
+        settings.focal_length_mm = 55.0f;
+        renderer.updateSettings(settings);
+        EXPECT_FLOAT_EQ(source.viewSettings(second.value)->focal_length_mm, 55.0f);
+        EXPECT_FLOAT_EQ(source.viewSettings(first.value)->focal_length_mm, 21.0f);
+    }
+
+    TEST(ScreenAreaQueryTest, StructuralMutationReturnsRectsSolvedAgainstCurrentWorkArea) {
+        ScreenService source;
+        gui::ScreenHost host(source);
+        const Rect work{17.0f, 31.0f, 1280.0f, 720.0f};
+        host.layout(work, 1.0f);
+
+        const auto added = source.screen().split(source.screen().activeView(), SplitAxis::Columns, 0.4f);
+        ASSERT_TRUE(added.valid());
+        const auto rect = host.currentAreaRect(added);
+
+        EXPECT_GE(rect.x, work.x);
+        EXPECT_GE(rect.y, work.y);
+        EXPECT_GT(rect.w, 0.0f);
+        EXPECT_GT(rect.h, 0.0f);
+        EXPECT_LE(rect.x + rect.w, work.x + work.w);
+        EXPECT_LE(rect.y + rect.h, work.y + work.h);
+    }
+
+    TEST(ViewSettingsOwnershipTest, ComparisonBelongsToOnlyOneViewAndIsNotCloned) {
+        ScreenService source;
+        const auto first = source.screen().activeView();
+        source.editViewSettings(first.value, [](ViewSettings& s) { s.split_view_mode = SplitViewMode::GTComparison; });
+        const auto second = source.screen().split(first, SplitAxis::Columns, 0.5f);
+        ASSERT_TRUE(second.valid());
+        EXPECT_EQ(source.viewSettings(second.value)->split_view_mode, SplitViewMode::Disabled);
+        source.editViewSettings(second.value, [](ViewSettings& s) { s.split_view_mode = SplitViewMode::PLYComparison; });
+        EXPECT_EQ(source.viewSettings(first.value)->split_view_mode, SplitViewMode::Disabled);
+        EXPECT_EQ(source.viewSettings(second.value)->split_view_mode, SplitViewMode::PLYComparison);
+    }
 } // namespace lfs::vis::screen

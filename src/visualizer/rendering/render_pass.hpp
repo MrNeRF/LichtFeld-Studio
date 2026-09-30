@@ -88,7 +88,6 @@ namespace lfs::vis {
         float selection_flash_intensity = 0;
         std::vector<FrameViewPanel> view_panels;
         glm::vec2 scene_jitter_pixels{0.0f};
-        std::array<DepthWindowState, 2> panel_depth_windows{};
 
         [[nodiscard]] const FrameViewPanel* findViewPanel(const SplitViewPanelId panel_id) const {
             for (const auto& panel : view_panels) {
@@ -122,7 +121,7 @@ namespace lfs::vis {
                     .far_plane = settings.depth_clip_enabled ? settings.depth_clip_far
                                                              : lfs::rendering::DEFAULT_FAR_PLANE,
                     .orthographic = settings.orthographic,
-                    .ortho_scale = source.ortho_scale_override.value_or(settings.ortho_scale),
+                    .ortho_scale = settings.ortho_scale,
                     .background_color = settings.background_color};
         }
 

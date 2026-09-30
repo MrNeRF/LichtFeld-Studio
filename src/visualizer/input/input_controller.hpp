@@ -81,7 +81,6 @@ namespace lfs::vis {
         // Called every frame by GUI manager to update viewport bounds
         void updateViewportBounds(float x, float y, float w, float h) {
             viewport_bounds_ = {x, y, w, h};
-            cached_split_divider_screen_x_.reset();
         }
 
         // Frames the selection (or the whole scene when nothing is selected, or
@@ -90,9 +89,6 @@ namespace lfs::vis {
         // Makes the 3D view under a window point the active one.
         void activateViewAt(double x, double y);
 
-        void setFocusedSplitPanel(const SplitViewPanelId panel) {
-            focusSplitPanel(panel);
-        }
         void applySplitterCursorOverride() const;
         void releaseDepthWindowCursor();
         bool applyDepthWindowHoverCursor(double x, double y, bool modifiers_held);
@@ -140,19 +136,19 @@ namespace lfs::vis {
         [[nodiscard]] bool isContinuousInputActive() const {
             const bool movement_active = keys_movement_[0] || keys_movement_[1] || keys_movement_[2] ||
                                          keys_movement_[3] || keys_movement_[4] || keys_movement_[5];
-            const bool camera_drag = drag_mode_ == DragMode::Orbit ||
-                                     drag_mode_ == DragMode::Pan ||
-                                     drag_mode_ == DragMode::Rotate;
+            const bool camera_drag = dragViewport() && (drag_mode_ == DragMode::Orbit ||
+                                                        drag_mode_ == DragMode::Pan ||
+                                                        drag_mode_ == DragMode::Rotate);
             auto& keyboard_camera = activeKeyboardViewport().camera;
             const bool orbit_coasting =
-                orbit_coast_viewport_ && orbit_coast_viewport_->camera.hasOrbitMomentum();
+                orbitCoastViewport() && orbitCoastViewport()->camera.hasOrbitMomentum();
             const bool pan_coasting =
-                pan_coast_viewport_ && pan_coast_viewport_->camera.hasPanMomentum();
+                panCoastViewport() && panCoastViewport()->camera.hasPanMomentum();
             const bool wasd_coasting =
-                (wasd_momentum_viewport_ && wasd_momentum_viewport_->camera.hasWasdMomentum()) ||
+                (wasdMomentumViewport() && wasdMomentumViewport()->camera.hasWasdMomentum()) ||
                 keyboard_camera.hasWasdMomentum();
             const bool drone_settling =
-                (wasd_momentum_viewport_ && wasd_momentum_viewport_->camera.hasDroneMotion()) ||
+                (wasdMomentumViewport() && wasdMomentumViewport()->camera.hasDroneMotion()) ||
                 keyboard_camera.hasDroneMotion();
             return movement_active || camera_drag || orbit_coasting || pan_coasting ||
                    keyboard_camera.isGliding() || wasd_coasting || drone_settling;
@@ -186,12 +182,6 @@ namespace lfs::vis {
         void onWindowFocusLost();
         bool focusSelection();
 
-        // Toolbar actions target their named panel's camera without moving focus.
-        // Outside independent-dual mode, resolvePanelViewport returns the primary
-        // viewport for either panel.
-        void resetCameraForPanel(SplitViewPanelId panel);
-        bool focusSelectionForPanel(SplitViewPanelId panel);
-
     private:
         struct PanelInteractionState {
             SplitViewPanelId panel = SplitViewPanelId::Left;
@@ -205,19 +195,9 @@ namespace lfs::vis {
         };
 
         void handleGoToCamView(const lfs::core::events::cmd::GoToCamView& event);
-        // Optional action identity guards only the shared-anchor side effect in
-        // publishCameraMove; panel-less paths pass nullopt. It never selects a viewport.
-        bool handleFocusSelection(Viewport& target_viewport,
-                                  std::optional<SplitViewPanelId> acted_panel = std::nullopt);
-        // Shared home reset: the legacy event passes viewport_; explicit-panel
-        // callers pass the resolved panel viewport.
-        void handleResetCameraHome(Viewport& target_viewport,
-                                   std::optional<SplitViewPanelId> acted_panel = std::nullopt);
-        // The panel's viewport, or the primary one when rendering is unavailable
-        // or the mode is not independent-dual. Reads no focus state.
-        Viewport& panelViewport(SplitViewPanelId panel);
-        bool computeWholeSceneBounds(glm::vec3& out_min, glm::vec3& out_max,
-                                     bool use_percentile = false) const;
+        bool handleFocusSelection(Viewport& target_viewport);
+        void handleResetCameraHome(Viewport& target_viewport);
+        bool computeWholeSceneBounds(glm::vec3& out_min, glm::vec3& out_max, bool use_percentile = false) const;
         float sceneExtent();
         void maybeInitializeDepthViewRange();
 
@@ -240,21 +220,16 @@ namespace lfs::vis {
         bool scaleOrthographicView(Viewport& target_viewport, float factor);
         // Middle-drag style orbit/look by drag pixels, without release momentum.
         void orbitViewport(Viewport& target_viewport, const glm::vec2& drag);
-        void publishCameraMove(Viewport* target_viewport = nullptr,
-                               std::optional<SplitViewPanelId> acted_panel = std::nullopt);
-        // Suppress shared transform/x-y re-anchoring only for an explicitly addressed,
-        // off-focus panel in independent-dual mode. Home/Eye still move that panel's
-        // camera; this predicate neither selects a viewport nor changes focus.
-        [[nodiscard]] bool shouldSkipDepthAnchorSync(std::optional<SplitViewPanelId> acted_panel) const;
+        void publishCameraMove(Viewport* target_viewport = nullptr);
+        // Suppress shared transform/x-y re-anchoring only for an explicitly
+        // that panel's camera; this predicate neither selects a viewport nor changes
+        // focus.
         bool isNearSplitter(double x, double y) const;
-        void refreshSplitDividerCache() const;
         int getModifierKeys() const;
         bool isKeyPressed(int app_key) const;
         bool isMouseButtonPressed(int app_button) const;
-        [[nodiscard]] bool isIndependentSplitViewActive() const;
         [[nodiscard]] SplitViewPanelId splitPanelForScreenX(double x) const;
         [[nodiscard]] std::optional<PanelInteractionState> resolvePanelInteraction(double x, double y);
-        void focusSplitPanel(SplitViewPanelId panel);
         [[nodiscard]] Viewport& activeKeyboardViewport();
         [[nodiscard]] const Viewport& activeKeyboardViewport() const;
         glm::vec3 unprojectScreenPoint(double x, double y, float fallback_distance = 5.0f) const;
@@ -267,7 +242,7 @@ namespace lfs::vis {
         [[nodiscard]] bool canOpenSelectedCameraContextMenu(int hovered_camera_uid) const;
         void openSelectedCameraContextMenu(int hovered_camera_uid, float screen_x, float screen_y);
         void applyCameraTrainingStateToSelection(const std::vector<std::string>& selected_names, bool enabled);
-        bool snapViewportToNearestAxis(Viewport& target_viewport, SplitViewPanelId panel);
+        bool snapViewportToNearestAxis(Viewport& target_viewport);
 
         // Camera motion tracking (flag + idle timeout; does not pause training)
         void onCameraMovementStart();
@@ -281,7 +256,6 @@ namespace lfs::vis {
         // panel-less commands act on.
         [[nodiscard]] Viewport& viewport() { return *views_.activeView().viewport; }
         [[nodiscard]] const Viewport& viewport() const { return *views_.activeView().viewport; }
-        mutable std::optional<float> cached_split_divider_screen_x_;
 
         // Input bindings for customizable hotkeys
         input::InputBindings bindings_;
@@ -317,10 +291,17 @@ namespace lfs::vis {
         glm::dvec2 hover_pos_{-1.0, -1.0};
         float splitter_start_pos_ = 0.5f;
         double splitter_start_x_ = 0.0;
-        Viewport* drag_viewport_ = nullptr;
-        Viewport* orbit_coast_viewport_ = nullptr;
-        Viewport* pan_coast_viewport_ = nullptr;
-        Viewport* wasd_momentum_viewport_ = nullptr;
+        std::uint64_t camera_view_epoch_ = 0;
+        Viewport* rememberedViewport(ViewId id) const;
+        ViewId rememberViewport(Viewport* camera);
+        ViewId drag_view_ = kNoView;
+        Viewport* dragViewport() const { return rememberedViewport(drag_view_); }
+        ViewId orbit_coast_view_ = kNoView;
+        Viewport* orbitCoastViewport() const { return rememberedViewport(orbit_coast_view_); }
+        ViewId pan_coast_view_ = kNoView;
+        Viewport* panCoastViewport() const { return rememberedViewport(pan_coast_view_); }
+        ViewId wasd_momentum_view_ = kNoView;
+        Viewport* wasdMomentumViewport() const { return rememberedViewport(wasd_momentum_view_); }
 
         // Cached whole-scene radius (half the bounds diagonal) that scales WASD
         // speed and caps pan distance by splat size; 0 means "recompute" (after scene
@@ -330,7 +311,6 @@ namespace lfs::vis {
         // radius the first frame the extent is known after a load, then left to
         // the user. Reset on scene load/clear.
         bool depth_range_initialized_ = false;
-        SplitViewPanelId drag_split_panel_ = SplitViewPanelId::Left;
         SplitViewPanelId node_rect_panel_ = SplitViewPanelId::Left;
         int node_rect_button_ = -1;
         int node_rect_modifiers_ = input::MODIFIER_NONE;
@@ -435,7 +415,6 @@ namespace lfs::vis {
         std::size_t dataset_load_completed_handler_id_ = 0;
         std::size_t window_focus_lost_handler_id_ = 0;
         std::size_t split_toggle_handler_id_ = 0;
-        std::size_t independent_split_toggle_handler_id_ = 0;
         std::size_t gt_comparison_toggle_handler_id_ = 0;
         std::size_t scene_cleared_handler_id_ = 0;
         std::size_t scene_loaded_handler_id_ = 0;

@@ -255,24 +255,12 @@ namespace lfs::vis {
                 return;
             }
 
-            const bool use_panel_slots =
-                splitViewUsesIndependentPanels(ctx.settings.split_view_mode) && render_panel;
             float depth_near = -ctx.settings.depth_filter_max.z;
             float depth_far = -ctx.settings.depth_filter_min.z;
             float scale_x = ctx.settings.depth_filter_scale_x;
             float scale_y = ctx.settings.depth_filter_scale_y;
             float offset_x = ctx.settings.depth_filter_offset_x;
             float offset_y = ctx.settings.depth_filter_offset_y;
-            if (use_panel_slots) {
-                const DepthWindowState& window =
-                    ctx.panel_depth_windows[splitViewPanelIndex(*render_panel)];
-                depth_near = window.near_plane;
-                depth_far = window.far_plane;
-                scale_x = window.scale_x;
-                scale_y = window.scale_y;
-                offset_x = window.offset_x;
-                offset_y = window.offset_y;
-            }
 
             filters.view_volume = lfs::rendering::BoundingBox{
                 .min = {ctx.settings.depth_filter_min.x,

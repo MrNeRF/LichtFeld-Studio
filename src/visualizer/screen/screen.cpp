@@ -152,6 +152,8 @@ namespace lfs::vis::screen {
         } else if (auto space = newSpace(editor)) {
             copy.spaces.emplace(editor, std::move(space));
         }
+        if (auto* view = dynamic_cast<View3DSpace*>(copy.space(editors::kView3D)))
+            view->settings.split_view_mode = SplitViewMode::Disabled;
         areas_.emplace(added, std::move(copy));
         if (maximized_.valid())
             maximized_ = {};
@@ -212,6 +214,8 @@ namespace lfs::vis::screen {
             if (editor == editors::kView3D) {
                 if (const auto* active = view(active_view_))
                     space = active->clone();
+                if (auto* view = dynamic_cast<View3DSpace*>(space.get()))
+                    view->settings.split_view_mode = SplitViewMode::Disabled;
             }
             if (!space)
                 space = newSpace(editor);
@@ -263,6 +267,8 @@ namespace lfs::vis::screen {
         if (editor == editors::kView3D) {
             if (const auto* active = view(active_view_))
                 space = active->clone();
+            if (auto* view = dynamic_cast<View3DSpace*>(space.get()))
+                view->settings.split_view_mode = SplitViewMode::Disabled;
         }
         if (!space)
             space = newSpace(editor);

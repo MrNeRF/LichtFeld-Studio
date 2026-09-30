@@ -43,6 +43,8 @@ namespace lfs::vis::gui {
         glm::mat3 delta_rotation{1.0f};
     };
 
+    LFS_VIS_API void beginRotationGizmoFrame();
+
     LFS_VIS_API RotationGizmoResult drawRotationGizmo(const RotationGizmoConfig& config);
 
     [[nodiscard]] bool isRotationGizmoHovered();

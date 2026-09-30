@@ -24,11 +24,13 @@ namespace lfs::vis::screen {
         std::lock_guard lock(mutex_);
         assert(&screen.registry() == &editor_types_);
         screen_ = std::move(screen);
+        ++epoch_;
     }
 
     void ScreenService::resetToDefault() {
         std::lock_guard lock(mutex_);
         screen_ = Screen::makeDefault(editor_types_);
+        ++epoch_;
     }
 
     View3DSpace& ScreenService::activeView3D() {
@@ -50,18 +52,29 @@ namespace lfs::vis::screen {
 
     std::optional<ViewSettings> ScreenService::viewSettings(const ViewId view) const {
         std::lock_guard lock(mutex_);
-        if (const auto* space = screen_.view(AreaId{view}))
-            return space->settings;
+        if (const auto* area = screen_.area(AreaId{view})) {
+            if (const auto* space = dynamic_cast<const View3DSpace*>(area->space("view3d")))
+                return space->settings;
+        }
         return std::nullopt;
     }
 
     bool ScreenService::editViewSettings(const ViewId view, const std::function<void(ViewSettings&)>& edit) {
         std::lock_guard lock(mutex_);
-        auto* space = screen_.view(AreaId{view});
+        auto* area = screen_.area(AreaId{view});
+        auto* space = area ? dynamic_cast<View3DSpace*>(area->space("view3d")) : nullptr;
         if (!space)
             return false;
         edit(space->settings);
         sanitizeDepthViewSettings(space->settings);
+        if (splitViewEnabled(space->settings.split_view_mode)) {
+            for (const auto id : screen_.areas()) {
+                if (id.value != view) {
+                    if (auto* other = dynamic_cast<View3DSpace*>(screen_.area(id)->space("view3d")))
+                        other->settings.split_view_mode = SplitViewMode::Disabled;
+                }
+            }
+        }
         return true;
     }
 

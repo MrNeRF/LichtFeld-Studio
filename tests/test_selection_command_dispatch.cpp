@@ -10,6 +10,7 @@
 #include "operation/undo_history.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "screen/screen_service.hpp"
 
 #include <algorithm>
 #include <gtest/gtest.h>
@@ -82,7 +83,7 @@ protected:
         lfs::vis::services().clear();
         lfs::vis::op::undoHistory().clear();
 
-        rendering_manager_ = std::make_unique<lfs::vis::RenderingManager>();
+        rendering_manager_ = std::make_unique<lfs::vis::RenderingManager>(rendering_manager__views);
         scene_manager_ = std::make_unique<lfs::vis::SceneManager>();
         lfs::vis::services().set(rendering_manager_.get());
         lfs::vis::services().set(scene_manager_.get());
@@ -127,6 +128,8 @@ protected:
     lfs::vis::SelectionService& service() {
         return *scene_manager_->getSelectionService();
     }
+
+    lfs::vis::screen::ScreenService rendering_manager__views;
 
     std::unique_ptr<lfs::vis::RenderingManager> rendering_manager_;
     std::unique_ptr<lfs::vis::SceneManager> scene_manager_;

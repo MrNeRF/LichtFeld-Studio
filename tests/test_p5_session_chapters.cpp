@@ -834,13 +834,14 @@ namespace {
         EXPECT_TRUE(restored->gut);
 
         Viewport viewport;
+        lfs::vis::ViewSettings view_settings;
         auto expected = rolled_panel_camera(7.0f);
         expected.ortho_extent_world = static_cast<float>(viewport.windowSize.y) / *expected.ortho_scale;
         applyPanelCameraProjectState(
-            viewport, expected);
+            viewport, view_settings, expected);
         EXPECT_EQ(
             capturePanelCameraProjectState(
-                viewport),
+                viewport, view_settings.ortho_scale),
             expected);
     }
 
@@ -853,15 +854,15 @@ namespace {
         EXPECT_EQ(restored->ortho_extent_world, state.ortho_extent_world);
         for (const int height : {480, 1080}) {
             Viewport viewport(1280, height);
-            applyPanelCameraProjectState(viewport, *restored);
-            ASSERT_TRUE(viewport.ortho_scale_override);
-            EXPECT_FLOAT_EQ(height / *viewport.ortho_scale_override, 6.25f);
-            const auto saved = capturePanelCameraProjectState(viewport);
+            lfs::vis::ViewSettings settings;
+            applyPanelCameraProjectState(viewport, settings, *restored);
+            EXPECT_FLOAT_EQ(height / settings.ortho_scale, 6.25f);
+            const auto saved = capturePanelCameraProjectState(viewport, settings.ortho_scale);
             ASSERT_TRUE(saved.ortho_extent_world);
             EXPECT_FLOAT_EQ(*saved.ortho_extent_world, 6.25f);
             Viewport reopened(1280, height * 2);
-            applyPanelCameraProjectState(reopened, saved);
-            EXPECT_FLOAT_EQ(reopened.windowSize.y / *reopened.ortho_scale_override, 6.25f);
+            applyPanelCameraProjectState(reopened, settings, saved);
+            EXPECT_FLOAT_EQ(reopened.windowSize.y / settings.ortho_scale, 6.25f);
         }
         json["ortho_extent_world"] = -1;
         EXPECT_FALSE(panelCameraProjectStateFromJson(json));
@@ -869,20 +870,13 @@ namespace {
         EXPECT_TRUE(panelCameraProjectStateFromJson(json));
     }
 
-    TEST(P5SessionChapterTest, CaptureUsesRenderSettingsOrthoScaleWhenOverrideMissing) {
+    TEST(P5SessionChapterTest, CaptureUsesViewSettingsOrthoScale) {
         Viewport viewport(1280, 720);
         const float fallback = 720.0f / 6.25f;
         auto captured = capturePanelCameraProjectState(viewport, fallback);
-        EXPECT_FALSE(captured.ortho_scale.has_value());
+        EXPECT_EQ(captured.ortho_scale, fallback);
         ASSERT_TRUE(captured.ortho_extent_world.has_value());
         EXPECT_FLOAT_EQ(*captured.ortho_extent_world, 6.25f);
-
-        viewport.ortho_scale_override = 720.0f / 5.0f;
-        captured = capturePanelCameraProjectState(viewport, fallback);
-        ASSERT_TRUE(captured.ortho_scale.has_value());
-        EXPECT_FLOAT_EQ(*captured.ortho_scale, 720.0f / 5.0f);
-        ASSERT_TRUE(captured.ortho_extent_world.has_value());
-        EXPECT_FLOAT_EQ(*captured.ortho_extent_world, 5.0f);
 
         Viewport empty(1280, 0);
         captured = capturePanelCameraProjectState(empty, fallback);
@@ -1310,8 +1304,7 @@ namespace {
         staged.split_view_offset = saved_offset;
         rendering->updateSettings(staged);
         rendering->restoreSplitViewMode(
-            lfs::vis::SplitViewMode::PLYComparison,
-            viewer.getViewport());
+            lfs::vis::SplitViewMode::PLYComparison);
         EXPECT_EQ(
             rendering->getSettings().split_view_offset,
             0u);
@@ -2257,7 +2250,7 @@ namespace {
         expect_bool(render, "/show_camera_frustums", true);
         expect_bool(render, "/show_pivot", true);
         prove("VIEW-197");
-        expect_json(render, "/split_view_mode", 3);
+        expect_json(render, "/split_view_mode", 1);
         expect_json(render, "/gt_comparison_mode", 2);
         expect_json(render, "/raster_backend", "3dgut");
         EXPECT_FALSE(render.contains("gut"));
@@ -2283,17 +2276,17 @@ namespace {
         expect_json(render, "/lod_page_pool_splats", 765'432);
         expect_bool(render, "/lod_debug_colors", true);
         prove("VIEW-202");
-        expect_json(view, "/split/panel_grid_planes", Json::array({0, 2}));
+        EXPECT_FALSE(at(view, "/split").contains("panel_grid_planes"));
         prove("VIEW-203");
-        ASSERT_EQ(at(view, "/panel_cameras").size(), 2u);
+        ASSERT_EQ(at(view, "/panel_cameras").size(), 1u);
         expect_json(view, "/panel_cameras/0/R",
                     Json::array({0.0f, 1.0f, 0.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f}));
-        EXPECT_TRUE(at(view, "/panel_cameras/1/ortho_scale").is_number());
+        EXPECT_TRUE(at(view, "/panel_cameras/0/ortho_scale").is_number());
         prove("VIEW-204");
         expect_json(view, "/navigation/mode", "drone");
         expect_bool(view, "/navigation/view_snap", true);
         prove("VIEW-205");
-        expect_json(view, "/split/focused_panel", "right");
+        EXPECT_FALSE(at(view, "/split").contains("focused_panel"));
         expect_json(view, "/split/gt_camera_id", 41);
         prove("VIEW-206");
         ASSERT_EQ(at(view, "/camera_bookmarks").size(), 1u);
