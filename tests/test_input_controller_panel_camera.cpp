@@ -17,6 +17,7 @@
 #include "rendering/rendering_manager.hpp"
 #include "rendering/rendering_types.hpp"
 #include "scene/scene_manager.hpp"
+#include "single_view_targets.hpp"
 #include "tools/selection_tool.hpp"
 #include "tools/tool_base.hpp"
 
@@ -86,8 +87,9 @@ namespace lfs::vis {
             Viewport primary_viewport{200, 200};
             RenderingManager rendering_manager;
             SceneManager scene_manager;
-            InputController controller{nullptr, primary_viewport};
-            ToolContext tool_context{&rendering_manager, &scene_manager, &primary_viewport, nullptr};
+            SingleViewTargets views{primary_viewport};
+            InputController controller{nullptr, views};
+            ToolContext tool_context{&rendering_manager, &scene_manager, &views, nullptr};
             std::shared_ptr<tools::SelectionTool> selection_tool =
                 std::make_shared<tools::SelectionTool>();
             Viewport* secondary_viewport = nullptr;
@@ -180,7 +182,8 @@ namespace lfs::vis {
     // instead.
     TEST_F(InputControllerPanelCameraTest, HomeResetsTheAddressedPanelInIndependentDual) {
         Viewport primary_viewport(200, 200);
-        InputController controller(nullptr, primary_viewport);
+        SingleViewTargets views(primary_viewport);
+        InputController controller(nullptr, views);
         RenderingManager rendering_manager;
         services().set(&rendering_manager);
 
@@ -206,7 +209,8 @@ namespace lfs::vis {
 
     TEST_F(InputControllerPanelCameraTest, HomeAddressedLeftResetsThePrimaryPanelInIndependentDual) {
         Viewport primary_viewport(200, 200);
-        InputController controller(nullptr, primary_viewport);
+        SingleViewTargets views(primary_viewport);
+        InputController controller(nullptr, views);
         RenderingManager rendering_manager;
         services().set(&rendering_manager);
 
@@ -231,7 +235,8 @@ namespace lfs::vis {
     // behavior and panel addressing keeps it.
     TEST_F(InputControllerPanelCameraTest, HomeOutsideIndependentDualAlwaysReachesThePrimaryCamera) {
         Viewport primary_viewport(200, 200);
-        InputController controller(nullptr, primary_viewport);
+        SingleViewTargets views(primary_viewport);
+        InputController controller(nullptr, views);
         RenderingManager rendering_manager;
         services().set(&rendering_manager);
 
@@ -250,7 +255,8 @@ namespace lfs::vis {
     // independent-dual with Right focused.
     TEST_F(InputControllerPanelCameraTest, PanelLessResetCameraEventStillTargetsThePrimaryViewport) {
         Viewport primary_viewport(200, 200);
-        InputController controller(nullptr, primary_viewport);
+        SingleViewTargets views(primary_viewport);
+        InputController controller(nullptr, views);
         RenderingManager rendering_manager;
         services().set(&rendering_manager);
 
@@ -272,12 +278,13 @@ namespace lfs::vis {
     // panel holds focus. Before panel addressing this followed focus.
     TEST_F(InputControllerPanelCameraTest, FocusSelectionAddressesItsOwnPanelNotTheFocusedOne) {
         Viewport primary_viewport(200, 200);
-        InputController controller(nullptr, primary_viewport);
+        SingleViewTargets views(primary_viewport);
+        InputController controller(nullptr, views);
         RenderingManager rendering_manager;
         services().set(&rendering_manager);
         SceneManager scene_manager;
         scene_manager.getScene().addPointCloud("points", makePointCloud());
-        ToolContext tool_context(nullptr, &scene_manager, &primary_viewport, nullptr);
+        ToolContext tool_context(nullptr, &scene_manager, &views, nullptr);
         controller.setToolContext(&tool_context);
 
         enableIndependentDual(primary_viewport);
@@ -299,12 +306,13 @@ namespace lfs::vis {
     // Neither action may move the focused panel, in either direction.
     TEST_F(InputControllerPanelCameraTest, PanelAddressedCameraActionsNeverMoveTheFocusedPanel) {
         Viewport primary_viewport(200, 200);
-        InputController controller(nullptr, primary_viewport);
+        SingleViewTargets views(primary_viewport);
+        InputController controller(nullptr, views);
         RenderingManager rendering_manager;
         services().set(&rendering_manager);
         SceneManager scene_manager;
         scene_manager.getScene().addPointCloud("points", makePointCloud());
-        ToolContext tool_context(nullptr, &scene_manager, &primary_viewport, nullptr);
+        ToolContext tool_context(nullptr, &scene_manager, &views, nullptr);
         controller.setToolContext(&tool_context);
 
         enableIndependentDual(primary_viewport);

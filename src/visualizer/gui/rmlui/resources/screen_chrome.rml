@@ -42,6 +42,7 @@
                 </div>
             </div>
         </div>
+        <div class="view-label" data-if="area.is_view">{{ area.view_label }}</div>
     </div>
 </body>
 </rml>

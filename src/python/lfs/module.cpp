@@ -3042,10 +3042,26 @@ NB_MODULE(lichtfeld, m) {
         "True when the performance HUD is currently shown");
     m.def(
         "toggle_split_viewport", []() {
-            auto* controller = lfs::vis::InputController::instance();
-            if (!controller)
+            auto toggle = [] {
+                if (auto* controller = lfs::vis::InputController::instance())
+                    controller->toggleSplitViewport();
+            };
+            auto* const viewer = lfs::python::get_visualizer();
+            if (!viewer)
                 return;
-            controller->toggleSplitViewport();
+            if (viewer->isOnViewerThread()) {
+                toggle();
+                return;
+            }
+            if (!viewer->acceptsPostedWork())
+                return;
+
+            nb::gil_scoped_release release;
+            (void)lfs::vis::post_work_and_wait(
+                [viewer](lfs::vis::Visualizer::WorkItem work) {
+                    return viewer->postWork(std::move(work));
+                },
+                toggle, [] {});
         },
         "Open a second 3D viewport beside the one under the pointer, or close it again");
 

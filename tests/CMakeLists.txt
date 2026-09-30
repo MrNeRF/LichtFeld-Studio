@@ -47,7 +47,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
 
     set(LICHTFELD_VISUALIZER_TEST_SOURCES
         test_menu_bar_title.cpp
-        test_panel_layout_render_demand.cpp
+
         test_preferences_migration.cpp
         test_screen_layout.cpp
         test_screen.cpp
@@ -105,7 +105,7 @@ endif()
 
 if(BUILD_PANEL_LAYOUT_TESTS)
     add_executable(panel_layout_tests EXCLUDE_FROM_ALL
-        test_panel_layout_render_demand.cpp
+
         test_panel_registry_animation_demand.cpp
         test_panel_registry_default_closed.cpp
     )
@@ -742,6 +742,7 @@ set(TEST_FILES
     test_mcp_operator_schema.cpp
     test_mcp_shared_scene_tools.cpp
     test_mcp_sequencer_tools.cpp
+    test_mcp_screen_tools.cpp
     test_mcp_render_capture_utils.cpp
     test_tcp_publisher.cpp
     test_view_info_json.cpp
@@ -753,7 +754,7 @@ set(TEST_FILES
     test_visualizer_post_work.cpp
     test_panel_registry_animation_demand.cpp
     test_panel_registry_default_closed.cpp
-    test_panel_layout_render_demand.cpp
+
     test_number_format.cpp
     test_reactive_store.cpp
     test_video_color_convert.cpp
@@ -998,6 +999,7 @@ list(APPEND TEST_SOURCES
     ${CMAKE_SOURCE_DIR}/src/python/lfs/py_ui_modals.cpp
     ${CMAKE_SOURCE_DIR}/src/python/lfs/rml_im_mode_layout.cpp
     ${CMAKE_SOURCE_DIR}/src/app/mcp_sequencer_tools.cpp
+    ${CMAKE_SOURCE_DIR}/src/app/mcp_screen_tools.cpp
     ${CMAKE_SOURCE_DIR}/src/app/mcp_operator_schema.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter_output_paths.cpp

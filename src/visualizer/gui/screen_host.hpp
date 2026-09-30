@@ -53,6 +53,7 @@ namespace lfs::vis::gui {
         bool hovered = false;
         bool active = false;
         bool maximized = false;
+        Rml::String view_label;
 
         bool operator==(const ChromeArea&) const = default;
     };

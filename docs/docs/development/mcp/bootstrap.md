@@ -12,7 +12,7 @@ Use this when you want the shortest reliable path from connection to action.
 2. Call `resources/list` and `tools/list` once.
 3. Read `lichtfeld://runtime/catalog`.
 4. Read `lichtfeld://runtime/state`.
-5. Read `lichtfeld://ui/state` if the task touches the interactive GUI.
+5. Read `lichtfeld://ui/state` if the task touches the interactive GUI. Read `lichtfeld://ui/screen` for editor areas and 3D views.
 6. Read `lichtfeld://scene/state` and `lichtfeld://selection/current` if the task touches training or Gaussian selection.
 7. Only then choose a tool namespace and act.
 
@@ -33,6 +33,7 @@ For most tasks, resources answer the first two questions an agent needs:
 
 - Need dataset import, training, or export progress: start with `runtime_*`
 - Need toolbar, menu, or panel actions: start with `ui_*`
+- Need editor areas or 3D views: start with `screen_*`, `view_*`, or `lichtfeld://ui/screen`
 - Need operator ids or schemas: start with `operator_*` or `lichtfeld://operators/registry`
 - Need visible Gaussians or scene nodes: start with `selection_*`, `gaussians_*`, or `scene_*`
 - Need Python execution inside the app: start with `editor_*`

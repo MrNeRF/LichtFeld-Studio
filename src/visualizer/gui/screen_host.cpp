@@ -122,6 +122,7 @@ namespace lfs::vis::gui {
             h.RegisterMember("hovered", &ChromeArea::hovered);
             h.RegisterMember("active", &ChromeArea::active);
             h.RegisterMember("maximized", &ChromeArea::maximized);
+            h.RegisterMember("view_label", &ChromeArea::view_label);
         }
         ctor.RegisterArray<std::vector<ChromeArea>>();
         ctor.Bind("areas", &chrome_areas_);
@@ -721,6 +722,24 @@ namespace lfs::vis::gui {
             a.hovered = hovered_area_ == frame.id;
             a.active = a.is_view && several_views && screen.activeView() == frame.id;
             a.maximized = screen.maximized() == frame.id;
+            if (a.is_view) {
+                if (const auto* view = screen.view(frame.id)) {
+                    const char* direction_key = "view3d.user";
+                    switch (screen::alignedViewAxis(view->camera.camera.R)) {
+                    case screen::ViewAxis::Top: direction_key = "view3d.top"; break;
+                    case screen::ViewAxis::Bottom: direction_key = "view3d.bottom"; break;
+                    case screen::ViewAxis::Front: direction_key = "view3d.front"; break;
+                    case screen::ViewAxis::Back: direction_key = "view3d.back"; break;
+                    case screen::ViewAxis::Right: direction_key = "view3d.right"; break;
+                    case screen::ViewAxis::Left: direction_key = "view3d.left"; break;
+                    case screen::ViewAxis::None: break;
+                    }
+                    const char* projection_key = view->settings.equirectangular ? "view3d.panorama"
+                                                 : view->settings.orthographic  ? "view3d.orthographic"
+                                                                                : "view3d.perspective";
+                    a.view_label = std::string(LOC(direction_key)) + " " + LOC(projection_key);
+                }
+            }
             if (const auto type = types.find(frame.editor)) {
                 a.editor_icon = iconPath(type->icon.empty() ? "layout-rows" : type->icon);
                 a.editor_label = localizedLabel(*type);

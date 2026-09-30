@@ -976,6 +976,23 @@ result_values = [float(viewport.image.cpu().sum().item())]
     EXPECT_EQ(viewer.post_work_calls, 1);
 }
 
+TEST_F(PythonIntegrationTest, ScreenMutationsPostToViewerThreadWhenOffThread) {
+    TestVisualizer viewer;
+    const ScopedVisualizer scoped_viewer(&viewer);
+
+    const auto result = runPythonTensorSnippet(R"PY(
+import lichtfeld as lf
+lf.ui.screen.reset()
+lf.toggle_split_viewport()
+result_shape = (1,)
+result_values = [1.0]
+)PY");
+
+    ASSERT_EQ(result.values.size(), 1u);
+    EXPECT_FLOAT_EQ(result.values[0], 1.0F);
+    EXPECT_EQ(viewer.post_work_calls, 2);
+}
+
 TEST_F(PythonIntegrationTest,
        ProjectOpenSurfacesRecoveryPromptPendingOutcome) {
     TestVisualizer viewer;

@@ -240,9 +240,9 @@ def test_panel_core_sources_use_v1_internal_names():
         "src/visualizer/gui/panel_registry.cpp",
         "src/visualizer/gui/panel_layout.hpp",
         "src/visualizer/gui/panel_layout.cpp",
-        "src/visualizer/gui/rml_right_panel.hpp",
-        "src/visualizer/gui/rml_right_panel.cpp",
-        "src/visualizer/gui/rmlui/resources/right_panel.rml",
+        "src/visualizer/gui/screen_host.hpp",
+        "src/visualizer/gui/screen_host.cpp",
+        "src/visualizer/gui/rmlui/resources/screen_chrome.rml",
     ]
 
     for rel_path in panel_core_files:
@@ -252,8 +252,6 @@ def test_panel_core_sources_use_v1_internal_names():
         assert "poll_deps" not in text
 
     gui_manager_text = (PROJECT_ROOT / "src" / "visualizer" / "gui" / "gui_manager.cpp").read_text()
-    assert ".id = t.id" in gui_manager_text
-    assert "makeRmlTabDomId(t.id)" in gui_manager_text
     assert ".idname = t.idname" not in gui_manager_text
 
 

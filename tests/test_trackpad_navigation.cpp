@@ -10,6 +10,7 @@
 #include "input/key_codes.hpp"
 #include "internal/viewport.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "single_view_targets.hpp"
 
 #include <SDL3/SDL_keyboard.h>
 #include <cmath>
@@ -47,7 +48,8 @@ namespace lfs::vis {
             }
 
             Viewport viewport{200, 200};
-            InputController controller{nullptr, viewport};
+            SingleViewTargets views{viewport};
+            InputController controller{nullptr, views};
         };
     } // namespace
 

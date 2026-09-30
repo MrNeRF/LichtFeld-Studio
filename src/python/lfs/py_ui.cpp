@@ -33,6 +33,7 @@
 #include "py_params.hpp"
 #include "py_prop_registry.hpp"
 #include "py_rml.hpp"
+#include "py_screen.hpp"
 #include "py_signals.hpp"
 #include "py_store.hpp"
 #include "py_tensor.hpp"
@@ -2782,6 +2783,7 @@ namespace lfs::python {
         register_ui_context(m);
         register_ui_theme(m);
         register_ui_panels(m);
+        register_ui_screen(m);
         register_rml_im_mode_layout(m);
         register_ui_hooks(m);
         register_ui_menus(m);

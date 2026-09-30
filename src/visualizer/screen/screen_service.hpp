@@ -52,6 +52,7 @@ namespace lfs::vis::screen {
         [[nodiscard]] View3DSpace& activeView3D();
         [[nodiscard]] const View3DSpace& activeView3D() const;
         [[nodiscard]] View3DSpace* view3D(ViewId view) const { return screen_.view(AreaId{view}); }
+        [[nodiscard]] View3DSpace* view3D(AreaId view) const { return screen_.view(view); }
 
         // ViewSource
         [[nodiscard]] ViewId activeView() const override;

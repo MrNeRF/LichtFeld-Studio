@@ -5,17 +5,12 @@
 #pragma once
 
 #include "core/export.hpp"
-#include "gui/layout_state.hpp"
 #include "gui/panel_registry.hpp"
-#include "gui/resize_geometry.hpp"
 #include "gui/ui_context.hpp"
 #include "input/frame_input_buffer.hpp"
-#include <algorithm>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <string>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 namespace lfs::vis::gui {
@@ -24,19 +19,6 @@ namespace lfs::vis::gui {
         glm::vec2 pos{0, 0};
         glm::vec2 size{0, 0};
         bool has_focus = false;
-    };
-
-    struct DockHorizontalLayout {
-        float x = 0.0f;
-        float width = 0.0f;
-    };
-
-    struct LeftDockLayout {
-        float panel_x = 0.0f;
-        float panel_width = 0.0f;
-        float toolbar_x = 0.0f;
-        float edge_min_x = 0.0f;
-        float edge_max_x = 0.0f;
     };
 
     enum class CursorRequest : uint8_t { None,
@@ -73,12 +55,6 @@ namespace lfs::vis::gui {
         void* bg_draw_list = nullptr;
         void* fg_draw_list = nullptr;
 
-        // Return this frame's last DOWN for `button`, or nullptr if none.
-        // Read-only convenience lookup; do not use it to replace per-press decisions.
-        // The overlay classification and GuiManager focus loops process each press
-        // in arrival order (rml_viewport_overlay.cpp / gui_manager.cpp).
-        // Keep the canonical vector intact. Use the returned event's own coordinates
-        // and ownership together: mouse_x/mouse_y may have moved since the press.
         [[nodiscard]] const FrameMouseButtonEvent* lastPress(const int button) const {
             if (button < 0 || button > 2)
                 return nullptr;
@@ -96,21 +72,9 @@ namespace lfs::vis::gui {
         bool any_item_active = false;
     };
 
-    struct RightPanelRenderDemand {
-        bool scene_header_live = true;
-        bool active_tab_live = true;
-    };
-
     struct PanelLayoutProjectState {
-        float right_panel_width = 360.0f;
-        float scene_panel_ratio = 0.4f;
-        float python_console_width = -1.0f;
-        float bottom_dock_height = 320.0f;
-        float left_dock_width = 320.0f;
         bool show_sequencer = false;
         std::string active_tab_id;
-        std::string bottom_dock_active_tab_id;
-        float tab_scroll_offset = 0.0f;
     };
 
     class LFS_VIS_API PanelLayoutManager {
@@ -121,198 +85,22 @@ namespace lfs::vis::gui {
         [[nodiscard]] PanelLayoutProjectState captureProjectState() const;
         void applyProjectState(const PanelLayoutProjectState& state);
 
-        void renderRightPanel(const UIContext& ctx, const PanelDrawContext& draw_ctx,
-                              bool show_main_panel, bool ui_hidden,
-                              std::unordered_map<std::string, bool>& window_states,
-                              std::string& focus_panel_name,
-                              const PanelInputState& input,
-                              const ScreenState& screen,
-                              RightPanelRenderDemand demand = {});
-        void renderRightPanelCached(const UIContext& ctx, const PanelDrawContext& draw_ctx,
-                                    bool show_main_panel, bool ui_hidden,
-                                    std::unordered_map<std::string, bool>& window_states,
-                                    std::string& focus_panel_name,
-                                    const PanelInputState& input,
-                                    const ScreenState& screen);
-
-        void renderBottomDock(const PanelDrawContext& draw_ctx, bool show_main_panel,
-                              bool ui_hidden, const PanelInputState& input,
-                              const ScreenState& screen);
-        void renderBottomDockCached(const PanelDrawContext& draw_ctx, bool show_main_panel,
-                                    bool ui_hidden, const PanelInputState& input,
-                                    const ScreenState& screen);
-
-        void renderLeftDock(const PanelDrawContext& draw_ctx, bool show_main_panel,
-                            bool ui_hidden, const PanelInputState& input,
-                            const ScreenState& screen);
-        void renderLeftDockCached(const PanelDrawContext& draw_ctx, bool show_main_panel,
-                                  bool ui_hidden, const PanelInputState& input,
-                                  const ScreenState& screen);
-
         ViewportLayout computeViewportLayout(bool show_main_panel, bool ui_hidden,
                                              bool python_console_visible,
                                              const ScreenState& screen) const;
-        DockHorizontalLayout computeBottomDockHorizontalLayout(
-            bool show_main_panel, bool ui_hidden, const ScreenState& screen) const;
-        LeftDockLayout computeLeftDockLayout(
-            bool show_main_panel, bool ui_hidden, const ScreenState& screen) const;
 
-        bool isResizingPanel() const {
-            return python_console_resizing_ || python_console_hovering_edge_ ||
-                   bottom_dock_resizing_ || bottom_dock_hovering_edge_ ||
-                   left_dock_resizing_ || left_dock_hovering_edge_;
-        }
+        bool isResizingPanel() const { return false; }
+        bool isResizeInteractionActive() const { return false; }
+        CursorRequest getCursorRequest() const { return CursorRequest::None; }
 
-        // Window-space resize strip from renderLeftDock()'s geometry lies outside
-        // the dock; direct hit-testing works before a GUI frame updates
-        // the isResizingPanel() hover latch.
-        [[nodiscard]] bool isPositionOverLeftDockResizeEdge(float x, float y,
-                                                            float work_x, float work_y,
-                                                            float work_h) const;
-
-        // Shared strip rectangle for the press-time hit test and render-time hover.
-        struct LeftDockResizeRect {
-            float x0 = 0.0f;
-            float x1 = 0.0f;
-            float y0 = 0.0f;
-            float y1 = 0.0f;
-
-            [[nodiscard]] bool contains(const float x, const float y) const {
-                return x >= x0 && x <= x1 && y >= y0 && y <= y1;
-            }
-        };
-
-        [[nodiscard]] static LeftDockResizeRect leftDockResizeRect(float work_x, float work_y,
-                                                                   float work_h, float dpi,
-                                                                   float dock_width) {
-            // The dock content stops before the inner half of this zone, so scrollbar drags never start a resize.
-            const auto edge_zone = resizeHitZone(work_x + dock_width, dpi);
-            return LeftDockResizeRect{
-                .x0 = edge_zone.min,
-                .x1 = edge_zone.max,
-                .y0 = work_y,
-                .y1 = work_y + work_h,
-            };
-        }
-
-        bool isResizeInteractionActive() const {
-            return python_console_resizing_ || bottom_dock_resizing_ || left_dock_resizing_;
-        }
-
-        CursorRequest getCursorRequest() const { return cursor_request_; }
-
-        void setRightPanelWidth(float width, const ScreenState& screen);
-        void enforceWidthConstraints(bool show_main_panel, bool ui_hidden,
-                                     const ScreenState& screen);
-
-        float getRightPanelWidth() const { return right_panel_width_; }
-        float getScenePanelRatio() const { return scene_panel_ratio_; }
-        [[nodiscard]] float scenePanelHeight(float avail_h, float dpi) const;
-        void setScenePanelHeight(float height, float panel_height);
-        float getPythonConsoleWidth() const { return python_console_width_; }
-        float getBottomDockHeight() const { return bottom_dock_height_; }
-        bool isBottomDockVisible() const { return bottom_dock_visible_; }
-        float bottomDockTopY() const { return bottom_dock_top_y_; }
-        const std::vector<PanelSummary>& bottomDockTabs() const { return bottom_dock_tabs_; }
-        const std::string& getBottomDockActiveTab() const { return bottom_dock_active_tab_id_; }
-        bool isBottomDockHoveringEdge() const { return bottom_dock_hovering_edge_; }
-        bool isBottomDockResizing() const { return bottom_dock_resizing_; }
-        void setBottomDockActiveTab(const std::string& id);
-        bool bottomDockActiveTabChanged() const { return bottom_dock_active_tab_changed_; }
-        PanelDrawBounds bottomDockTabBarRect() const { return bottom_dock_tab_bar_rect_; }
-        float getLeftDockWidth() const { return left_dock_width_; }
-        float getLeftDockPreferredWidth() const { return left_dock_preferred_width_; }
-        void setLeftDockWidth(float width);
-        bool isLeftDockVisible() const { return left_dock_visible_; }
         bool isShowSequencer() const { return show_sequencer_; }
         void setShowSequencer(bool v);
 
-        const std::string& getActiveTab() const { return active_tab_id_; }
-        void setActiveTab(const std::string& id) { active_tab_id_ = id; }
-        bool syncActiveTab(const std::vector<PanelSummary>& main_tabs,
-                           std::string& focus_panel_name);
-
-        static constexpr float SPLITTER_H = 6.0f;
-        // Scene tabs, filter chips, search and footer take about 130 dp; this keeps
-        // three tree rows visible under them.
-        static constexpr float SCENE_PANEL_MIN_HEIGHT = 200.0f;
-        static constexpr float DOCK_GRIP_H = 8.0f;
-        static constexpr float TAB_BAR_H = 28.0f;
         static constexpr float STATUS_BAR_HEIGHT = 22.0f;
         static constexpr float PANEL_GAP = 2.0f;
-        // Matches #resize-handle in right_panel.rcss: left: -4dp; width: 8dp.
-        static constexpr float RIGHT_PANEL_RESIZE_EDGE_HALF_WIDTH = 4.0f;
 
     private:
-        void renderDockedPythonConsole(const UIContext& ctx, float panel_x, float panel_h,
-                                       const PanelInputState& input, const ScreenState& screen);
-        float computeViewportWidth(bool show_main_panel, bool ui_hidden,
-                                   bool python_console_visible,
-                                   const ScreenState& screen) const;
-        float computeBottomDockReservedHeight(bool show_main_panel, bool ui_hidden,
-                                              const ScreenState& screen) const;
-        float computeLeftDockReservedWidth(bool show_main_panel, bool ui_hidden,
-                                           const ScreenState& screen) const;
-        [[nodiscard]] bool shouldReserveLeftDockWidth() const;
-        [[nodiscard]] bool willRenderLeftDock(bool show_main_panel, bool ui_hidden,
-                                              const ScreenState& screen) const;
-        [[nodiscard]] float maxLeftDockPanelWidth(bool show_main_panel, bool ui_hidden,
-                                                  const ScreenState& screen) const;
-        [[nodiscard]] float maxRightPanelWidth(bool show_main_panel, bool ui_hidden,
-                                               const ScreenState& screen) const;
-
-        // Effective widths are clamped to the window every frame; preferred widths
-        // hold the user's choice so the panels grow back when the window does.
-        float right_panel_width_ = 360.0f;
-        float right_panel_preferred_width_ = 360.0f;
-        float scene_panel_ratio_ = 0.4f;
-
-        float python_console_width_ = -1.0f;
-        bool python_console_resizing_ = false;
-        bool python_console_hovering_edge_ = false;
-        ResizeDrag python_console_drag_{};
-        float bottom_dock_height_ = 320.0f;
-        bool bottom_dock_resizing_ = false;
-        bool bottom_dock_hovering_edge_ = false;
-        ResizeDrag bottom_dock_drag_{};
-        bool bottom_dock_visible_ = false;
-        float bottom_dock_top_y_ = -1.0f;
-
-        float left_dock_width_ = 320.0f;
-        float left_dock_preferred_width_ = 320.0f;
-        bool left_dock_resizing_ = false;
-        bool left_dock_hovering_edge_ = false;
-        ResizeDrag left_dock_drag_{};
-        bool left_dock_visible_ = false;
-
         bool show_sequencer_ = false;
-        std::string active_tab_id_;
-        std::string bottom_dock_active_tab_id_;
-        std::vector<PanelSummary> bottom_dock_tabs_;
-        std::unordered_set<std::string> previous_bottom_docked_ids_;
-        bool bottom_dock_sync_seeded_ = false;
-        bool bottom_dock_active_tab_changed_ = false;
-        PanelDrawBounds bottom_dock_tab_bar_rect_;
-
-        float tab_scroll_offset_ = 0.0f;
-        float tab_content_total_h_ = 0.0f;
-
-        CursorRequest cursor_request_ = CursorRequest::None;
-
-        static constexpr float RIGHT_PANEL_MIN_RATIO = 0.01f;
-        static constexpr float RIGHT_PANEL_MAX_RATIO = 0.99f;
-        static constexpr float RIGHT_PANEL_MIN_VISIBLE_WIDTH = 260.0f;
-        static constexpr float PYTHON_CONSOLE_MIN_WIDTH = 200.0f;
-        static constexpr float PYTHON_CONSOLE_MAX_RATIO = 0.5f;
-        static constexpr float BOTTOM_DOCK_MIN_HEIGHT = 180.0f;
-        static constexpr float BOTTOM_DOCK_DEFAULT_HEIGHT = 440.0f;
-        static constexpr float BOTTOM_DOCK_MAX_RATIO = 0.65f;
-        static constexpr float MIN_VIEWPORT_HEIGHT = 140.0f;
-        static constexpr float MIN_VIEWPORT_WIDTH = 180.0f;
-        static constexpr float LEFT_DOCK_MIN_WIDTH = 180.0f;
-        static constexpr float LEFT_DOCK_MIN_VISIBLE_WIDTH = 220.0f;
-        static constexpr float LEFT_DOCK_DEFAULT_WIDTH = 320.0f;
-        static constexpr float TOOLBAR_INSET = 8.0f;
     };
 
 } // namespace lfs::vis::gui

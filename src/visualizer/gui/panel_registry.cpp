@@ -6,6 +6,7 @@
 #include "core/logger.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_layout.hpp"
+#include "gui/resize_geometry.hpp"
 #include "gui/ui_context.hpp"
 #include "gui/ui_widgets.hpp"
 #include "python/python_runtime.hpp"

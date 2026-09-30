@@ -28,10 +28,14 @@ namespace lfs::vis::gui {
         static void bind(RmlMenuBar& bar, Rml::Context* context) {
             bar.rml_context_ = context;
             bar.bindModel();
-            bar.camera_buttons_.resize(3);
-            bar.render_buttons_.resize(3);
-            bar.projection_buttons_.resize(2);
-            for (const auto* name : {"menu_camera_buttons", "menu_render_buttons", "menu_projection_buttons"})
+            bar.camera_buttons_ = {
+                {"menu-camera-orbit", "set_camera_navigation_mode", "orbit"},
+                {"menu-camera-trackball", "set_camera_navigation_mode", "trackball"},
+                {"menu-camera-fpv", "set_camera_navigation_mode", "fpv"},
+                {"menu-camera-drone", "set_camera_navigation_mode", "drone"},
+            };
+            bar.projection_buttons_ = {{"menu-view-snap", "toggle_camera_view_snap"}};
+            for (const auto* name : {"menu_camera_buttons", "menu_projection_buttons"})
                 bar.menu_model_.DirtyVariable(name);
         }
         static void attach(RmlMenuBar& bar, Rml::ElementDocument* doc, RmlUIManager& manager) {
@@ -206,6 +210,30 @@ namespace {
                 EXPECT_LE(bounds(el("menu-window-close")).right, width * dp + 0.5f);
             }
         }
+    }
+
+    TEST_F(MenuBarTitleTest, ToolbarKeepsNavigationAndViewSnapOnly) {
+        context_->Update();
+        for (const auto* id : {"menu-camera-orbit", "menu-camera-trackball", "menu-camera-fpv",
+                               "menu-camera-drone", "menu-view-snap"})
+            EXPECT_NE(el(id), nullptr) << id;
+
+        Rml::ElementList buttons;
+        document_->GetElementsByClassName(buttons, "menu-toolbar-btn");
+        std::vector<Rml::Element*> rendered_buttons;
+        for (auto* button : buttons) {
+            if (button->GetAttribute<Rml::String>("id", "").empty())
+                continue; // Rml keeps the two data-for templates in the tree.
+            rendered_buttons.push_back(button);
+            const auto action = button->GetAttribute<Rml::String>("data-action", "");
+            EXPECT_NE(action, "set_render_mode");
+            EXPECT_NE(action, "set_projection");
+            EXPECT_NE(action, "toggle_depth_view");
+        }
+        EXPECT_EQ(rendered_buttons.size(), 5u);
+        for (const auto* id : {"menu-render-mode", "menu-projection-perspective", "menu-projection-orthographic",
+                               "menu-depth-view"})
+            EXPECT_EQ(el(id), nullptr) << id;
     }
 
     TEST_F(MenuBarTitleTest, ClippingStyleContractForThePaintBackend) {

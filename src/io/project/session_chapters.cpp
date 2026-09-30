@@ -551,6 +551,7 @@ namespace lfs::io::project {
             const auto& payload =
                 space["opaque_payload"];
             if (type != "fixed_arrangement" &&
+                type != "screen" &&
                 type != "panel_registry" &&
                 type != "python_console") {
                 return {};
@@ -560,6 +561,17 @@ namespace lfs::io::project {
                     lfs::ErrorCode::Unsupported,
                     "Known GUIL spaces require version 1 object payloads",
                     "GUIL.layouts.areas.spaces");
+            }
+            if (type == "screen") {
+                if (!payload.contains("layout") ||
+                    !payload.contains("areas") ||
+                    !payload["areas"].is_array()) {
+                    return fail<void>(
+                        lfs::ErrorCode::DataLoss,
+                        "The GUIL screen payload is invalid",
+                        "GUIL.layouts.areas.spaces.screen");
+                }
+                return {};
             }
             if (type == "fixed_arrangement") {
                 if (payload.contains("window")) {
@@ -880,9 +892,6 @@ namespace lfs::io::project {
             if (!root.contains(
                     "render_settings") ||
                 !root["render_settings"].is_object() ||
-                !root.contains("panel_cameras") ||
-                !root["panel_cameras"].is_array() ||
-                root["panel_cameras"].size() != 2 ||
                 !root.contains("navigation") ||
                 !root["navigation"].is_object() ||
                 !root.contains("split") ||
@@ -897,6 +906,14 @@ namespace lfs::io::project {
                     "VIEW is missing one of its required state groups",
                     "VIEW");
             }
+            if (root.contains("panel_cameras") &&
+                (!root["panel_cameras"].is_array() ||
+                 root["panel_cameras"].size() != 2)) {
+                return fail<void>(
+                    lfs::ErrorCode::DataLoss,
+                    "VIEW panel_cameras must be a two-element array when present",
+                    "VIEW.panel_cameras");
+            }
             const auto& settings =
                 root["render_settings"];
             if (!settings.contains(
@@ -909,6 +926,8 @@ namespace lfs::io::project {
                     "VIEW must store canonical raster_backend and must not serialize the gut mirror",
                     "VIEW.render_settings.raster_backend");
             }
+            if (!root.contains("panel_cameras"))
+                return {};
             std::set<std::string> panels;
             for (const auto& camera :
                  root["panel_cameras"]) {

@@ -128,6 +128,16 @@ body {
     line-height: 20dp;
 }
 
+.view-label {
+    position: absolute;
+    left: 8dp;
+    top: 32dp;
+    font-size: 11dp;
+    line-height: 14dp;
+    pointer-events: none;
+    z-index: 1;
+}
+
 .tab-close {
     display: block;
     width: 16dp;
