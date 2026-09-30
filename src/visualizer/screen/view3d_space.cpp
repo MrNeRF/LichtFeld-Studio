@@ -396,7 +396,7 @@ namespace lfs::vis::screen {
         r.boolean("show_camera_frustums", s.show_camera_frustums);
         r.number("camera_frustum_scale", s.camera_frustum_scale, 0.0f, kHuge);
         r.boolean("show_pivot", s.show_pivot);
-        r.enumeration("split_view_mode", s.split_view_mode, 0, static_cast<int>(SplitViewMode::GTComparison));
+        r.enumeration("split_view_mode", s.split_view_mode, 0, static_cast<int>(SplitViewMode::IndependentDual));
         r.enumeration("gt_comparison_mode", s.gt_comparison_mode, 0, static_cast<int>(GTComparisonMode::Loss));
         r.number("split_position", s.split_position, 0.0f, 1.0f);
         r.count("split_view_offset", s.split_view_offset);

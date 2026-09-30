@@ -21,6 +21,18 @@ namespace lfs::vis::screen {
         constexpr float kMinWeight = 1e-4f;
         constexpr int kMaxJsonDepth = 32;
 
+        bool readUint(const nlohmann::json& json, std::uint32_t& out, const bool allow_zero) {
+            if (!json.is_number_integer() && !json.is_number_unsigned())
+                return false;
+            const auto raw = json.get<std::int64_t>();
+            if (raw < 0 || raw > static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max()))
+                return false;
+            if (!allow_zero && raw == 0)
+                return false;
+            out = static_cast<std::uint32_t>(raw);
+            return true;
+        }
+
         Node makeLeaf(const AreaId area) {
             Node node;
             node.area = area;
@@ -255,10 +267,10 @@ namespace lfs::vis::screen {
             if (depth > kMaxJsonDepth || !json.is_object())
                 return std::nullopt;
             if (const auto it = json.find("area"); it != json.end()) {
-                if (!it->is_number_unsigned() || it->get<std::uint64_t>() == 0 ||
-                    it->get<std::uint64_t>() > std::numeric_limits<std::uint32_t>::max())
+                std::uint32_t id = 0;
+                if (!readUint(*it, id, false))
                     return std::nullopt;
-                return makeLeaf(AreaId{it->get<std::uint32_t>()});
+                return makeLeaf(AreaId{id});
             }
             const auto split = json.find("split");
             const auto axis = json.find("axis");
@@ -266,12 +278,12 @@ namespace lfs::vis::screen {
             const auto children = json.find("children");
             if (split == json.end() || axis == json.end() || weights == json.end() || children == json.end())
                 return std::nullopt;
-            if (!split->is_number_unsigned() || !axis->is_string() || !weights->is_array() || !children->is_array())
-                return std::nullopt;
-            if (split->get<std::uint64_t>() > std::numeric_limits<std::uint32_t>::max())
+            std::uint32_t split_id = 0;
+            if (!readUint(*split, split_id, true) || !axis->is_string() || !weights->is_array() ||
+                !children->is_array())
                 return std::nullopt;
             Node node;
-            node.split = SplitId{split->get<std::uint32_t>()};
+            node.split = SplitId{split_id};
             const auto axis_name = axis->get<std::string>();
             if (axis_name == "columns")
                 node.axis = SplitAxis::Columns;

@@ -13,6 +13,17 @@ namespace lfs::vis::screen {
 
     namespace {
         constexpr int kFormatVersion = 1;
+
+        // Chapter merge dump/parse turns uint32 ids into signed JSON integers.
+        bool readAreaId(const nlohmann::json& json, AreaId& out) {
+            if (!json.is_number_integer() && !json.is_number_unsigned())
+                return false;
+            const auto raw = json.get<std::int64_t>();
+            if (raw <= 0 || raw > static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max()))
+                return false;
+            out = AreaId{static_cast<std::uint32_t>(raw)};
+            return true;
+        }
     } // namespace
 
     SpaceData* Area::space(const std::string_view editor_id) const {
@@ -382,10 +393,13 @@ namespace lfs::vis::screen {
             }
             areas.push_back({{"id", id.value}, {"editor", a->editor}, {"spaces", std::move(spaces)}});
         }
-        return {{"version", kFormatVersion},
-                {"layout", layout_.toJson()},
-                {"areas", std::move(areas)},
-                {"active_view", active_view_.value}};
+        nlohmann::json out{{"version", kFormatVersion},
+                           {"layout", layout_.toJson()},
+                           {"areas", std::move(areas)},
+                           {"active_view", active_view_.value}};
+        if (maximized_.valid())
+            out["maximized"] = maximized_.value;
+        return out;
     }
 
     std::optional<Screen> Screen::load(const nlohmann::json& json, const EditorTypeRegistry& registry) {
@@ -407,13 +421,10 @@ namespace lfs::vis::screen {
                 return std::nullopt;
             const auto id_it = item.find("id");
             const auto editor_it = item.find("editor");
-            if (id_it == item.end() || !id_it->is_number_unsigned() || editor_it == item.end() ||
+            AreaId id;
+            if (id_it == item.end() || !readAreaId(*id_it, id) || editor_it == item.end() ||
                 !editor_it->is_string() || editor_it->get<std::string>().empty())
                 return std::nullopt;
-            const auto raw_id = id_it->get<std::uint64_t>();
-            if (raw_id == 0 || raw_id > std::numeric_limits<std::uint32_t>::max())
-                return std::nullopt;
-            const AreaId id{static_cast<std::uint32_t>(raw_id)};
             if (!screen.layout_.contains(id) || screen.areas_.contains(id))
                 return std::nullopt;
             Area restored;
@@ -443,10 +454,17 @@ namespace lfs::vis::screen {
         if (screen.areas_.size() != screen.layout_.areaCount() || screen.views().empty())
             return std::nullopt;
         screen.next_area_ = largest + 1;
-        if (const auto active_it = json.find("active_view");
-            active_it != json.end() && active_it->is_number_unsigned() &&
-            active_it->get<std::uint64_t>() <= std::numeric_limits<std::uint32_t>::max()) {
-            screen.active_view_ = AreaId{active_it->get<std::uint32_t>()};
+        if (const auto active_it = json.find("active_view"); active_it != json.end()) {
+            AreaId active;
+            if (!readAreaId(*active_it, active))
+                return std::nullopt;
+            screen.active_view_ = active;
+        }
+        if (const auto max_it = json.find("maximized"); max_it != json.end() && !max_it->is_null()) {
+            AreaId maximized;
+            if (!readAreaId(*max_it, maximized))
+                return std::nullopt;
+            screen.maximized_ = maximized;
         }
         screen.repair();
         return screen;
