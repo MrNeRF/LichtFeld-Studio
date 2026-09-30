@@ -2184,7 +2184,8 @@ namespace lfs::training::kernels {
         const lfs::core::Tensor& img2_input,
         const lfs::core::Tensor& mask_input,
         float ssim_weight,
-        MaskedFusedL1SSIMWorkspace& workspace) {
+        MaskedFusedL1SSIMWorkspace& workspace, float denominator) {
+        LFS_ASSERT(std::isfinite(denominator) && denominator >= 0.0f);
 
         constexpr float C1 = 0.01f * 0.01f;
         constexpr float C2 = 0.03f * 0.03f;
@@ -2229,12 +2230,12 @@ namespace lfs::training::kernels {
                     workspace.masked_loss.ptr<float>(),
                     workspace.mask_sum.ptr<float>(),
                     N, C, H, W,
-                    stream);
+                    stream, denominator);
             });
         });
 
         auto loss_scalar = workspace.masked_loss;
-        const float mask_sum = workspace.mask_sum.item<float>();
+        const float mask_sum = denominator > 0.0f ? denominator : workspace.mask_sum.item<float>();
 
         MaskedFusedL1SSIMContext ctx{
             .img1 = img1,
@@ -2296,7 +2297,8 @@ namespace lfs::training::kernels {
         const lfs::core::Tensor& gt_input,
         const lfs::core::Tensor& mask_input,
         float ssim_weight,
-        MaskedDecoupledFusedL1SSIMWorkspace& workspace) {
+        MaskedDecoupledFusedL1SSIMWorkspace& workspace, float denominator) {
+        LFS_ASSERT(std::isfinite(denominator) && denominator >= 0.0f);
 
         constexpr float C1 = 0.01f * 0.01f;
         constexpr float C2 = 0.03f * 0.03f;
@@ -2347,12 +2349,12 @@ namespace lfs::training::kernels {
                     workspace.masked_loss.ptr<float>(),
                     workspace.mask_sum.ptr<float>(),
                     N, C, H, W,
-                    stream);
+                    stream, denominator);
             });
         });
 
         auto loss_scalar = workspace.masked_loss;
-        const float mask_sum = workspace.mask_sum.item<float>();
+        const float mask_sum = denominator > 0.0f ? denominator : workspace.mask_sum.item<float>();
 
         MaskedDecoupledFusedL1SSIMContext ctx{
             .corrected_img = corrected,

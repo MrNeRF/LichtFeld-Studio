@@ -1881,11 +1881,7 @@ namespace lfs::training {
                 auto& masked_decoupled_ws = photometric_loss_.arena().masked_decoupled();
                 auto [loss_tensor, ctx] = lfs::training::kernels::masked_decoupled_fused_l1_ssim_forward(
                     corrected, raw_rendered, gt_image, photometric_weight, opt_params.lambda_dssim,
-                    masked_decoupled_ws);
-                if (structure_map.is_valid()) {
-                    loss_tensor = loss_tensor * (ctx.mask_sum_value / base_denominator);
-                    ctx.mask_sum_value = base_denominator;
-                }
+                    masked_decoupled_ws, base_denominator);
                 auto grads = lfs::training::kernels::masked_decoupled_fused_l1_ssim_backward(
                     ctx, masked_decoupled_ws);
 
@@ -1902,12 +1898,7 @@ namespace lfs::training {
             } else {
                 auto& masked_ws = photometric_loss_.arena().masked_fused();
                 auto [loss_tensor, ctx] = lfs::training::kernels::masked_fused_l1_ssim_forward(
-                    corrected, gt_image, photometric_weight, opt_params.lambda_dssim, masked_ws);
-
-                if (structure_map.is_valid()) {
-                    loss_tensor = loss_tensor * (ctx.mask_sum_value / base_denominator);
-                    ctx.mask_sum_value = base_denominator;
-                }
+                    corrected, gt_image, photometric_weight, opt_params.lambda_dssim, masked_ws, base_denominator);
                 grad_corrected = lfs::training::kernels::masked_fused_l1_ssim_backward(ctx, masked_ws);
                 loss = loss_tensor;
 

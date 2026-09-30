@@ -119,7 +119,7 @@ namespace {
 
     float weighted_value(const Tensor& prediction, const Tensor& target, const Tensor& weight,
                          MaskedFusedL1SSIMWorkspace& workspace, float denominator) {
-        auto [loss, ctx] = masked_fused_l1_ssim_forward(prediction, target, weight, 0.22f, workspace);
+        auto [loss, ctx] = masked_fused_l1_ssim_forward(prediction, target, weight, 0.22f, workspace, denominator);
         return loss.item<float>() * ctx.mask_sum_value / denominator;
     }
 } // namespace
@@ -168,7 +168,7 @@ TEST(ThinStructure, ConstantResponseScalesFusedAndBothDecoupledOutputs) {
         auto [plain_loss, plain_ctx] = fused_l1_ssim_forward(image.tensor, target.tensor, 0.22f, plain_ws, true);
         const float baseline = plain_loss.item<float>();
         auto plain_gradient = fused_l1_ssim_backward(plain_ctx, plain_ws).clone();
-        auto [loss, ctx] = masked_fused_l1_ssim_forward(image.tensor, target.tensor, weight, 0.22f, weighted_ws);
+        auto [loss, ctx] = masked_fused_l1_ssim_forward(image.tensor, target.tensor, weight, 0.22f, weighted_ws, denominator);
         const float value = loss.item<float>() * ctx.mask_sum_value / denominator;
         ctx.mask_sum_value = denominator;
         if (response == 0.0f)
@@ -181,7 +181,7 @@ TEST(ThinStructure, ConstantResponseScalesFusedAndBothDecoupledOutputs) {
         MaskedDecoupledFusedL1SSIMWorkspace weighted_dec_ws;
         auto [dec_loss, dec_ctx] = decoupled_fused_l1_ssim_forward(image.tensor, raw.tensor, target.tensor, 0.22f, dec_ws, true);
         auto dec_gradient = decoupled_fused_l1_ssim_backward(dec_ctx, dec_ws);
-        auto [weighted_loss, weighted_ctx] = masked_decoupled_fused_l1_ssim_forward(image.tensor, raw.tensor, target.tensor, weight, 0.22f, weighted_dec_ws);
+        auto [weighted_loss, weighted_ctx] = masked_decoupled_fused_l1_ssim_forward(image.tensor, raw.tensor, target.tensor, weight, 0.22f, weighted_dec_ws, denominator);
         EXPECT_NEAR(weighted_loss.item<float>() * weighted_ctx.mask_sum_value / denominator, dec_loss.item<float>() * scale, 2e-6f);
         if (response == 0.0f)
             EXPECT_EQ(weighted_loss.item<float>() * weighted_ctx.mask_sum_value / denominator, dec_loss.item<float>());
@@ -204,7 +204,7 @@ TEST(ThinStructure, WeightedFusedGradientMatchesFiniteDifference) {
     structure_photometric_weight(structure, {}, weight, 1.0f, true);
     const float denominator = structure_base_denominator({}, 32, 32, true);
     MaskedFusedL1SSIMWorkspace workspace;
-    auto [loss, ctx] = masked_fused_l1_ssim_forward(image.tensor, target.tensor, weight, 0.22f, workspace);
+    auto [loss, ctx] = masked_fused_l1_ssim_forward(image.tensor, target.tensor, weight, 0.22f, workspace, denominator);
     ctx.mask_sum_value = denominator;
     const auto gradient = masked_fused_l1_ssim_backward(ctx, workspace).cpu().to_vector();
     constexpr float epsilon = 0.002f;
@@ -322,7 +322,7 @@ TEST(ThinStructure, BaseMaskCompositionAndUnitWeightL1Gradient) {
     MaskedFusedL1SSIMWorkspace weighted_ws;
     auto [baseline_loss, baseline_context] = fused_l1_ssim_forward(image.tensor, target.tensor, 0.0f, plain_ws, false);
     const auto plain = fused_l1_ssim_backward(baseline_context, plain_ws).cpu().to_vector();
-    auto [loss, ctx] = masked_fused_l1_ssim_forward(image.tensor, target.tensor, weight, 0.0f, weighted_ws);
+    auto [loss, ctx] = masked_fused_l1_ssim_forward(image.tensor, target.tensor, weight, 0.0f, weighted_ws, structure_base_denominator({}, 32, 32, false));
     ctx.mask_sum_value = structure_base_denominator({}, 32, 32, false);
     const auto gradient = masked_fused_l1_ssim_backward(ctx, weighted_ws).cpu().to_vector();
     for (int c = 0; c < 3; ++c)
