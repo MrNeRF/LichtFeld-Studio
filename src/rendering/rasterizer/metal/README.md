@@ -40,7 +40,7 @@ Callers can precompile cached specializations with `prepare` before interaction.
 - GPU tile counts and hierarchical uint64 exclusive scan. SIMD reductions use
   16-bit limbs because MSL 2.4 does not provide ulong SIMD reductions.
 - Bounded instance generation, stable GPU radix sort by tile and full float32
-  positive depth, tile ranges, front-to-back composition and transmittance exit.
+  positive radial distance squared, tile ranges, front-to-back composition and transmittance exit.
   The radix sort reuses the algorithm in `training/kernels/metal/fast_raster.metal`,
   without depending on the trainer. It only sorts the tile-ID bytes actually used.
 - Color/alpha, weighted depth, first-contributor depth/ID and median depth.
@@ -61,46 +61,68 @@ discard its reservation too.
 tensor backend and the 3DGS/3DGUT algorithm. `UserPreferences` persists the request
 under `viewer_backend`, defaults missing/invalid values to automatic, and does not
 rewrite the saved request when a backend is unavailable. The resolver reports a
-fallback reason. Desktop routing and the preferences UI are connected. Native rendering supports
-Studio 3DGS color/depth, perspective/orthographic views, Gaussian/point/disc
-projection, node transforms and visibility, resident float32/half geometry and
-Q16/half/float SH storage. Unsupported requests (including 3DGUT, LOD/RAD,
-crop/clipping and editor selection overlays) retain the existing Vulkan path.
-Preview and deterministic export also retain Vulkan. This is an incremental
-native raster integration, not a complete replacement of the desktop renderer.
+fallback reason. Desktop routing and the preferences UI are connected.
 
-The GPU contracts cover projection, stable sorting/composition, tensor producer
-ordering, interop and native viewport readback/resize. Full workflow and visual
-parity, memory-budget behavior and representative performance remain validation
-requirements. Passing contracts alone is not evidence of a speed advantage.
+The native desktop adapter supports Studio 3DGS color/depth, perspective and
+orthographic views, resident float32/half geometry, Q16/half/float SH storage,
+node transforms/visibility/SH limits, deletion, crop boxes and ellipsoids,
+screen depth windows, dimming, committed/preview selection, brushes, node flash,
+rings and center markers. SH evaluation removes object scale from its direction
+in the same way as Vulkan. A single object can omit per-primitive object indices.
+Point-cloud display uses a native hardware point pipeline and depth testing,
+avoiding Gaussian tile expansion and sorting; its synchronous completion matches
+the current desktop point-renderer contract.
 
-## Remaining integration, in order
+Main, split-left, split-right and preview outputs have independent reservations.
+Native median and normalized alpha-weighted depth capture, deterministic export,
+synchronous reads and asynchronous color/depth tickets use the actual native
+output. High-resolution export dilation and covariance caps remain calibrated
+to source viewport pixels. Temporal jitter is excluded from scene-refinement
+invalidation so reconstruction can finish converging. Offline captures check completion and retry overflow before publication.
+Abandoned tickets release their destination pointer while retaining GPU staging.
+Native ticket identities remain unique across renderer reset and recreation.
+Resource release waits for both native producers and graphics consumers. A
+failed encode with no submitted command cannot expose uninitialized GPU status.
 
-1. **Capacity policy:** connect typed overflow to the host retry/budget policy;
-   evaluate compaction and bounded depth waves on representative large scenes.
-2. **Frame contract:** native color, linear depth/alpha, completion and resource
-   leases; independent output slots for main/split/preview/export. Shared events
-   and bounded buffers across in-flight frames; no reuse while a consumer owns
-   the frame. Keep rendering separate from desktop Vulkan composition. A temporary
-   GPU interop presenter may integrate it with that compositor, but must be named
-   accurately: it is not yet a fully native Metal UI/presentation stack.
-3. **Scene adapter:** consume existing ViewportRenderRequest, model transforms,
-   node visibility, SH active degree, selection/deleted masks and original IDs.
-   Preserve Q16, tensor storage generations and producer completion. Do not
-   reintroduce the iOS flat CPU scene or per-frame canonical SH materialization.
-4. **Desktop integration:** explicit backend selection with capability reporting;
-   never silently ignore unsupported filters, modes or projections. Vulkan remains
-   the unchanged default until reference comparisons and workflow gates pass.
-5. **Parity:** Studio/profile behavior, points/discs, depth, orthographic camera,
-   antialiasing/mip compensation, selection/gizmo/grid depth, crop/clipping,
-   resolution changes, split views and export. RAD/LOD admission, paging and
-   eviction must respect their own quantized layout and resource ownership.
-6. **Performance:** representative SH0/SH3 Q16 scenes at multiple sizes/resolutions,
-   camera entering closed scenes, sustained navigation, RSS/GPU buffer peaks,
-   per-stage GPU timings, queue depth and p50/p95 frame times against Vulkan.
-   Avoid claiming "faster" from a shader-only test or a simulator.
-7. **iOS reuse:** share the backend and scene/edit contracts. UIKit owns controls
-   and input mapping only. Object transforms do not require point selection.
+New reservations are admitted conservatively against 80% of the device's
+recommended working set, accounting for allocations already on the shared
+device. This guards large growth before allocation; it is not an eviction or
+adaptive-quality policy and does not measure driver memory exactly.
+
+Unsupported requests, including 3DGUT/equirectangular, standard portal profile
+and LOD/RAD traversal/paging, retain the existing Vulkan path. Selection queries,
+the desktop UI, grid, gizmos and final composition also remain on Vulkan. This
+backend is not yet a fully independent Metal desktop presentation/editor stack.
+Automatic continues to use Vulkan, and no global Vulkan shader is modified.
+
+## Verification and remaining native work
+
+GPU contracts cover projection, stable sorting/composition, tensor producer
+ordering, interop, native hardware point coverage, resize/reuse, failed-encode
+recovery, adapter routing, four output slots, asynchronous ticket delivery and
+abandonment, median/expected depth capture and resource release. CPU contracts
+cover backend selection and working-set admission, including 64-bit overflow.
+
+The deterministic Vulkan comparisons cover SH0 and SH3 Q16, mip, orthographic,
+depth, crop/ellipsoid/window, committed/preview selection, center markers, flash
+and affine transforms. Color gates are max 4/255 and RMS 1/255. Depth separately
+reports full-image error, same-coverage error and coverage disagreement; its
+gate allows at most 0.1% disagreement, max 4/255 and RMS 1/255 on shared coverage.
+FP32 native and FP16 reference blending can cross the 50% median boundary on
+different pixels. A passing depth gate does not mean pixel-identical depth.
+
+A local macOS real-scene check imported a 1,179,648-splat SH0 PLY, rendered it
+with confirmed native routing, exercised selection and whole-node translation
+without point selection, exported SPZ, and activated spatial and temporal
+reconstruction, including convergence to zero remaining temporal samples. One fixed-view color comparison had max error 2/255 and PSNR
+65.6 dB. This validates that case, not every scene, camera or editor workflow.
+
+Remaining native work includes 3DGUT/equirectangular and portal profiles,
+LOD/RAD admission, page layouts and leases, selection-query kernels, pressure
+eviction and adaptive reservation, and representative sustained performance
+across large scenes. RAD's signed-byte/page-frame layout must not be decoded as
+SplatData Q16. iOS can reuse projection/raster/scene contracts but needs direct
+Metal presentation and its own device/simulator verification.
 
 The existing tensor Metal backend's OS/feature requirements do not automatically
 become this viewer's requirements. This module currently compiles MSL 2.4 and
@@ -166,7 +188,8 @@ Disable GPU validation for performance runs; retain it for correctness checks.
 Synthetic scenes do not establish representative real-scene performance or
 visual parity. Inspect local image errors as well as aggregate PSNR.
 
-The Mac CI runs a small smoke case and uploads its report without a speed gate.
+The Mac CI runs a small smoke case and the parity fixtures, and uploads
+all JSON reports without a speed gate.
 It explicitly skips on hosts lacking the resident tensor Metal backend (currently
 macOS 26/Metal 4); the raster-only contracts still run on supported older hosts.
 Windows and Linux CI continue to run only the CPU backend-selection contract.

@@ -55,19 +55,20 @@ namespace lfs::rendering::metal {
 
     struct alignas(16) Projection {
         simd_float4x4 model_to_world;
-        simd_float4x4 world_to_camera; // positive view Z, as in the desktop rasterizer
-        simd_float4 camera_local;      // SH direction uses the source/model coordinate frame
-        simd_float4 intrinsics;        // fx, fy, cx, cy in render pixels
-        simd_float4 clip_scale;        // near, far, scale modifier, pixel dilation variance
-        simd_uint4 extent;             // width, height, orthographic (0/1), mip antialiasing (0/1)
+        simd_float4x4 world_to_camera;         // positive view Z, as in the desktop rasterizer
+        simd_float4 camera_local;              // SH direction uses the source/model coordinate frame
+        simd_float4 intrinsics;                // fx, fy, cx, cy in render pixels
+        simd_float4 clip_scale;                // near, far, scale modifier, pixel dilation variance
+        simd_uint4 extent;                     // width, height, orthographic (0/1), mip antialiasing (0/1)
+        simd_float4 rasterization{1, 0, 0, 0}; // output pixels per source viewport pixel
     };
-    static_assert(sizeof(Projection) == 192);
+    static_assert(sizeof(Projection) == 208);
 
     struct alignas(16) ProjectedSplat {
         simd_float4 mean_depth;    // x, y, linear view depth, contribution radius in pixels
         simd_float4 conic_opacity; // inverse covariance xx,xy,yy and activated opacity
-        simd_float4 color; // RGB radiance; w is radial sort distance squared, not alpha
-        simd_uint4 bounds; // exclusive pixel AABB; empty means culled
+        simd_float4 color;         // RGB radiance; w is radial sort distance squared, not alpha
+        simd_uint4 bounds;         // exclusive pixel AABB; empty means culled
     };
     static_assert(sizeof(ProjectedSplat) == 64);
 

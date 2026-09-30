@@ -246,12 +246,12 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
             else alpha = c.w * exp(-.5f * q);
             alpha = min(alpha, .999f);
             if(p.unused && overlay_enabled(overlay_params[22].y) && !(overlay_flags[ids[j]]&2u)){
-                const float2 origin=floor((float2(pixel)+p.render_origin.xy)/float2(64,32))*float2(64,32);
-                const half2 center=half2((means[j].xy+p.render_origin.xy-origin)/8.f);
-                const half2 coord=half2((float2(pixel)+p.render_origin.xy-origin)/8.f);
+                const float2 origin=floor((float2(pixel)+p.render_origin.xy)/overlay_macro_extent)*overlay_macro_extent;
+                const half2 center=half2((means[j].xy+p.render_origin.xy-origin)/overlay_tile_extent);
+                const half2 coord=half2((float2(pixel)+p.render_origin.xy-origin)/overlay_tile_extent);
                 const float l00=sqrt(max(c.x,1e-12f)),l01=c.y/l00,l11=sqrt(max(c.z-l01*l01,0.f));
-                const half4 chol=half4(float4(l00*8*.849321800288019f,l01*8*.849321800288019f,
-                    l11*8*.849321800288019f,max(4.f,log(c.w*510.f))*1.4426950408889634f));
+                const half4 chol=half4(float4(l00*overlay_tile_extent.x*.849321800288019f,l01*overlay_tile_extent.y*.849321800288019f,
+                    l11*overlay_tile_extent.y*.849321800288019f,max(4.f,log(c.w*510.f))*1.4426950408889634f));
                 const half2 delta=coord-center;
                 const half u=chol.x*delta.x+chol.y*delta.y,v=chol.z*delta.y;
                 const half power=u*u+v*v;
@@ -265,8 +265,8 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                 // Pixel-sized overlays use the same macro-relative half position
                 // as the desktop reference. Keep Gaussian blending in FP32.
                 // KEEP IN SYNC with Vulkan config.slang: tile 8x8, macro 8x4 tiles.
-                const float2 macro_origin=floor((float2(pixel)+p.render_origin.xy)/float2(64,32))*float2(64,32);
-                const float2 overlay_center=float2(half2((means[j].xy+p.render_origin.xy-macro_origin)/8.f))*8.f+macro_origin-p.render_origin.xy;
+                const float2 macro_origin=floor((float2(pixel)+p.render_origin.xy)/overlay_macro_extent)*overlay_macro_extent;
+                const float2 overlay_center=float2(half2((means[j].xy+p.render_origin.xy-macro_origin)/overlay_tile_extent))*overlay_tile_extent+macro_origin-p.render_origin.xy;
                 const uint status=overlay_selection(overlay_params,ids[j],flags,overlay_center,selection,preview);
                 const bool selectable=(flags&2u)==0;
                 if(overlay_enabled(overlay_params[22].x)&&selectable){

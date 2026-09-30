@@ -12,8 +12,9 @@ struct Projection {
     float4x4 model_to_world, world_to_camera;
     float4 camera_local, intrinsics, clip_scale;
     uint4 extent;
+    float4 rasterization;
 };
-struct InputLayout { uint count, rest, has_deleted, objects, half_attrs, overlay; };
+struct InputLayout { uint count, rest, has_deleted, objects, half_attrs, overlay, object_indexed; };
 struct SceneObject { float4x4 model_to_world; float4 camera_local; uint4 flags; };
 struct ProjectedSplat { float4 mean_depth, conic_opacity, color; uint4 bounds; };
 
@@ -100,7 +101,7 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     uint active_degree=sh_degree;
     int node=0;
     if(layout.objects) {
-        const uint index=object_indices[i];
+        const uint index=layout.object_indexed?object_indices[i]:0;
         node=int(index);
         if(index>=layout.objects) return;
         const auto object=objects[index];
@@ -156,7 +157,7 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
         if(!isfinite(norm2)) return;
         q=norm2>1e-8f?q*rsqrt(norm2):float4(1,0,0,0);
         const float3 log_scale=layout.half_attrs?float3(reinterpret_cast<device const packed_half3*>(scales)[i]):float3(scales[i]);
-        const float3 s=exp(log_scale)*frame.clip_scale.z;
+        const float3 s=exp(min(log_scale,float3(20.f)))*frame.clip_scale.z;
         if(!all(isfinite(s))) return;
         // Bound the covariance Jacobian near the frustum, as in 3DGS projection.
         const float2 margin=.3f*.5f*float2(frame.extent.xy)/frame.intrinsics.xy;
@@ -171,13 +172,17 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
         const float3 c=linear*rotate_axis(q,float3(0,0,s.z));
         const float3 u=float3(dot(jx,a),dot(jx,b),dot(jx,c));
         const float3 v=float3(dot(jy,a),dot(jy,b),dot(jy,c));
-        const float raw_xx=dot(u,u),raw_yy=dot(v,v);
-        float3 covariance=float3(raw_xx+frame.clip_scale.w,dot(u,v),raw_yy+frame.clip_scale.w);
+        // Dilation and the covariance cap use source viewport pixels,
+        // then scale to output pixels, matching high-resolution Vulkan exports.
+        const float raster_scale=isfinite(frame.rasterization.x)&&frame.rasterization.x>0?frame.rasterization.x:1.f;
+        const float variance_scale=raster_scale*raster_scale;
+        const float raw_xx=dot(u,u)/variance_scale,raw_yy=dot(v,v)/variance_scale;
+        float3 covariance=float3(raw_xx+frame.clip_scale.w,dot(u,v)/variance_scale,raw_yy+frame.clip_scale.w);
         float det=covariance.x*covariance.z-covariance.y*covariance.y;
         if(!isfinite(det) || det<=1e-12f) return;
         if(frame.extent.w) alpha*=sqrt(max((raw_xx*raw_yy-covariance.y*covariance.y)/det,0.f));
         if(alpha<0.5f/255.0f) return;
-        covariance=clamp_covariance_extent(covariance,alpha);
+        covariance=clamp_covariance_extent(covariance,alpha)*variance_scale;
         const float xx=covariance.x,xy=covariance.y,yy=covariance.z;
         det=xx*yy-xy*xy;
         conic=float3(yy,-xy,xx)/det;
@@ -188,9 +193,15 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     const float2 extent=float2(frame.extent.xy);
     const float2 lo=clamp(floor(center-radius),0.0f,extent),hi=clamp(ceil(center+radius),0.0f,extent);
     if(any(lo>=hi)) return;
-    float3 color=evaluate_sh(float3(sh0[i]),orthographic?
-        normalize(float3(matrix[0].z,matrix[1].z,matrix[2].z)):p-camera_local,
-        rest,bounds,i,layout.rest,active_degree);
+    // Match view_direction_to_point + extract_rotation_rows in Vulkan.
+    // SH follows the object's rotation; nonuniform scale must not distort it.
+    const float3x3 model_linear=float3x3(model_to_world[0].xyz,model_to_world[1].xyz,model_to_world[2].xyz);
+    float3 direction=orthographic?float3(frame.world_to_camera[0].z,frame.world_to_camera[1].z,frame.world_to_camera[2].z):
+        model_linear*(p-camera_local);
+    const float3 axis_lengths=float3(length(model_linear[0]),length(model_linear[1]),length(model_linear[2]));
+    if(all(axis_lengths>1e-8f))direction=float3(dot(model_linear[0]/axis_lengths.x,direction),
+        dot(model_linear[1]/axis_lengths.y,direction),dot(model_linear[2]/axis_lengths.z,direction));
+    float3 color=evaluate_sh(float3(sh0[i]),direction,rest,bounds,i,layout.rest,active_degree);
     if(layout.overlay)color=overlay_projection_color(color,center,flags,params);
     if(!all(isfinite(color))) return;
     // The viewer reference sorts by radial distance squared, not camera Z.

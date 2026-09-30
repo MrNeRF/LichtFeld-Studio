@@ -149,15 +149,15 @@ static void run(id<MTLDevice> device) {
     }
     // Exact 50% crossing is inclusive, matching desktop median depth. This
     // analytic case catches a wrong strict comparison independently of Vulkan.
-    const std::vector<ProjectedSplat> threshold_splats={
-        {{18,14,3,3},{1,0,1,.5f},{1,0,0,9},{16,12,21,17}},
-        {{18,14,6,3},{1,0,1,.9f},{0,1,0,36},{16,12,21,17}}};
-    auto threshold_input=[device newBufferWithBytes:threshold_splats.data() length:threshold_splats.size()*sizeof(ProjectedSplat) options:MTLResourceStorageModeShared];
-    auto threshold_command=[queue commandBuffer];
-    raster.encode(threshold_command,{threshold_input},2,RasterMode::Gaussian,bg,frame);
-    const auto threshold_read=readback(device,threshold_command,frame);
+    const std::vector<ProjectedSplat> threshold_splats = {
+        {{18, 14, 3, 3}, {1, 0, 1, .5f}, {1, 0, 0, 9}, {16, 12, 21, 17}},
+        {{18, 14, 6, 3}, {1, 0, 1, .9f}, {0, 1, 0, 36}, {16, 12, 21, 17}}};
+    auto threshold_input = [device newBufferWithBytes:threshold_splats.data() length:threshold_splats.size() * sizeof(ProjectedSplat) options:MTLResourceStorageModeShared];
+    auto threshold_command = [queue commandBuffer];
+    raster.encode(threshold_command, {threshold_input}, 2, RasterMode::Gaussian, bg, frame);
+    const auto threshold_read = readback(device, threshold_command, frame);
     wait(threshold_command);
-    compare(threshold_read,threshold_splats,width,height,bg,RasterMode::Gaussian);
+    compare(threshold_read, threshold_splats, width, height, bg, RasterMode::Gaussian);
     // Overflow cannot publish only part of a scene. Reusing that reservation for
     // an empty scene must clear stale ranges and recover a successful status.
     RasterFrame small(device, width, height, 1, 1);

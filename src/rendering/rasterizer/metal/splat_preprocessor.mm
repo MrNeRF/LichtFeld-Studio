@@ -126,11 +126,13 @@ namespace lfs::rendering::metal {
         if (!in.count)
             return;
         const size_t n = in.count;
-        if(overlay.parameter_count){
-            if(overlay.parameter_count!=207)throw std::invalid_argument("Metal overlay parameter ABI mismatch");
-            check_slice(overlay.parameters,207*16,16,impl_->device,"overlay parameters");
-            check_slice(overlay.flags,n*4,4,impl_->device,"overlay flags");
-            if(overlay.node_count)check_slice(overlay.node_mask,overlay.node_count,1,impl_->device,"node emphasis mask");
+        if (overlay.parameter_count) {
+            if (overlay.parameter_count != 207)
+                throw std::invalid_argument("Metal overlay parameter ABI mismatch");
+            check_slice(overlay.parameters, 207 * 16, 16, impl_->device, "overlay parameters");
+            check_slice(overlay.flags, n * 4, 4, impl_->device, "overlay flags");
+            if (overlay.node_count)
+                check_slice(overlay.node_mask, overlay.node_count, 1, impl_->device, "node emphasis mask");
         }
         const bool gaussians = mode != PrimitiveMode::Points;
         size_t rest_bytes = 0, bounds_bytes = 0;
@@ -148,7 +150,7 @@ namespace lfs::rendering::metal {
                                                     in.sh0, in.sh_rest, in.sh_bounds, in.deleted, scene.object_indices, scene.objects};
         const size_t attr = in.non_sh_attrs_f16 ? 2 : 4;
         const std::array<size_t, 10> lengths = {n * 12, gaussians ? n * 3 * attr : 0, gaussians ? n * 4 * attr : 0, n * attr, n * 12,
-                                                rest_bytes, bounds_bytes, in.deleted.buffer ? n : 0, scene.count ? n * 4 : 0, size_t(scene.count) * sizeof(SceneObject)};
+                                                rest_bytes, bounds_bytes, in.deleted.buffer ? n : 0, scene.count && scene.object_indices.buffer ? n * 4 : 0, size_t(scene.count) * sizeof(SceneObject)};
         const std::array<NSUInteger, 10> alignments = {4, attr, 4 * attr, attr, 4, 4, 8, 1, 4, 16};
         const char* names[] = {"means", "scales", "rotations", "opacity", "SH0", "SH rest", "SH bounds", "deleted mask", "object indices", "scene objects"};
         check_slice(output, n * sizeof(ProjectedSplat), 16, impl_->device, "projection output");
@@ -160,6 +162,8 @@ namespace lfs::rendering::metal {
                 output.offset < inputs[i].offset + lengths[i])
                 throw std::invalid_argument("Metal projection output overlaps input");
         }
+        if (scene.count > 1 && !scene.object_indices.buffer)
+            throw std::invalid_argument("Multiple Metal scene objects require primitive indices");
         // Resolve/compile before opening an encoder so failure leaves the command usable.
         auto pipeline = impl_->pipeline(in.storage, degree, mode);
         id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
@@ -171,11 +175,11 @@ namespace lfs::rendering::metal {
             [encoder setBuffer:lengths[i] ? inputs[i].buffer : impl_->empty offset:lengths[i] ? inputs[i].offset : 0 atIndex:i < 8 ? i : i + 3];
         [encoder setBuffer:output.buffer offset:output.offset atIndex:8];
         [encoder setBytes:&projection length:sizeof(projection) atIndex:9];
-        const std::array<uint32_t, 6> layout = {in.count, in.layout_rest, in.deleted.buffer ? 1u : 0u, scene.count, in.non_sh_attrs_f16 ? 1u : 0u, overlay.parameter_count?1u:0u};
+        const std::array<uint32_t, 7> layout = {in.count, in.layout_rest, in.deleted.buffer ? 1u : 0u, scene.count, in.non_sh_attrs_f16 ? 1u : 0u, overlay.parameter_count ? 1u : 0u, scene.object_indices.buffer ? 1u : 0u};
         [encoder setBytes:layout.data() length:sizeof(layout) atIndex:10];
-        const std::array<BufferSlice,3> overlays={overlay.parameters,overlay.flags,overlay.node_mask};
-        for(NSUInteger j=0;j<overlays.size();++j)
-            [encoder setBuffer:overlays[j].buffer?:impl_->empty offset:overlays[j].buffer?overlays[j].offset:0 atIndex:13+j];
+        const std::array<BufferSlice, 3> overlays = {overlay.parameters, overlay.flags, overlay.node_mask};
+        for (NSUInteger j = 0; j < overlays.size(); ++j)
+            [encoder setBuffer:overlays[j].buffer ?: impl_->empty offset:overlays[j].buffer ? overlays[j].offset : 0 atIndex:13 + j];
         const NSUInteger width = std::min(NSUInteger(256), pipeline.maxTotalThreadsPerThreadgroup);
         [encoder dispatchThreads:MTLSizeMake(n, 1, 1) threadsPerThreadgroup:MTLSizeMake(width, 1, 1)];
         [encoder endEncoding];

@@ -104,4 +104,5 @@ jobs:
           path: |
             build-macos-release/Testing/Temporary/
             build-macos-release/tests/metal_viewer/mac-viewer-benchmark-smoke.json
+            build-macos-release/tests/metal_viewer/mac-viewer-parity-*.json
           if-no-files-found: ignore

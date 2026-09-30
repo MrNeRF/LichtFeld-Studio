@@ -12,6 +12,7 @@ struct PresentParameters {
     float exposure; uint tone; uint transparent; uint has_previous;
     float depth_min,depth_max; uint depth_view,depth_mode;
     float4 background;
+    uint4 capture;
 };
 struct FrameStatus { ulong required; uint error; uint unused; };
 float normalized_depth(float depth,float lo,float hi) {
@@ -119,7 +120,10 @@ kernel void present_viewer(texture2d<float, access::read> color [[texture(0)]],
     }
     float4 c=color.read(pixel);
     const float4 d=depth.read(pixel);
-    linear_depth.write(float4(d.w),pixel);
+    // Match expected_depth_finalize.slang: normalized alpha-weighted view Z,
+    // with the same empty-coverage sentinel. Display depth remains median.
+    const float output_depth=p.capture.x?(d.y>1e-4f?d.x/d.y:1e10f):d.w;
+    linear_depth.write(float4(output_depth),pixel);
     if(p.depth_view) {
         const bool empty=d.y<.02f || d.w>=1e9f || d.w<=0;
         const float hi=p.depth_max<=p.depth_min+1e-5f?p.depth_min+1:p.depth_max;

@@ -3,6 +3,7 @@
 #include "metal_viewport_renderer.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_metal_reader.hpp"
+#include "frame_budget.hpp"
 #include "metal_present_source.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "splat_preprocessor.hpp"
@@ -21,6 +22,16 @@ namespace lfs::vis {
         using namespace rendering::metal;
         using Slot = VksplatViewportRenderer::OutputSlot;
         std::atomic<uint64_t> generation{uint64_t{1} << 63};
+        std::atomic<uint64_t> native_ticket_serial{0};
+        uint64_t reserveNativeTicket() {
+            auto value = native_ticket_serial.load(std::memory_order_relaxed);
+            for (;;) {
+                if (value == ((uint64_t{1} << 63) - 1))
+                    throw std::runtime_error("Native readback ticket identity exhausted");
+                if (native_ticket_serial.compare_exchange_weak(value, value + 1, std::memory_order_relaxed))
+                    return (uint64_t{1} << 63) | (value + 1);
+            }
+        }
         void check(VkResult r, const char* label) {
             if (r != VK_SUCCESS)
                 throw std::runtime_error(std::string(label) + ": " + std::to_string(r));
@@ -37,13 +48,14 @@ namespace lfs::vis {
             float depth_min, depth_max;
             uint32_t depth_view, depth_mode;
             simd_float4 background;
+            simd_uint4 capture;
         };
         struct PointParameters {
-            simd_float4x4 view_projection,view,crop_to_local;
-            simd_float4 crop_min,crop_max,voxel_focal_ortho;
+            simd_float4x4 view_projection, view, crop_to_local;
+            simd_float4 crop_min, crop_max, voxel_focal_ortho;
             simd_uint4 counts;
         };
-        static_assert(sizeof(PointParameters)==256);
+        static_assert(sizeof(PointParameters) == 256);
         struct Image {
             VkDevice device = VK_NULL_HANDLE;
             id<MTLTexture> texture;
@@ -98,7 +110,7 @@ namespace lfs::vis {
             id<MTLBuffer> projected, objects, overlay_parameters, overlay_flags, overlay_nodes, selection_colors;
             id<MTLCommandBuffer> command;
             id<MTLTexture> point_depth;
-            bool points=false;
+            bool points = false;
             Image color, depth;
         };
     } // namespace
@@ -185,19 +197,21 @@ namespace lfs::vis {
             present = [reader.device() newComputePipelineStateWithFunction:[library newFunctionWithName:@"present_viewer"] error:&error];
             if (!present)
                 throw std::runtime_error(error.localizedDescription.UTF8String);
-            auto point_descriptor=[MTLRenderPipelineDescriptor new];
-            point_descriptor.vertexFunction=[library newFunctionWithName:@"point_vertex"];
-            point_descriptor.fragmentFunction=[library newFunctionWithName:@"point_fragment"];
-            point_descriptor.colorAttachments[0].pixelFormat=MTLPixelFormatRGBA8Unorm;
-            point_descriptor.colorAttachments[1].pixelFormat=MTLPixelFormatR32Float;
-            point_descriptor.depthAttachmentPixelFormat=MTLPixelFormatDepth32Float;
-            point_pipeline=[reader.device() newRenderPipelineStateWithDescriptor:point_descriptor error:&error];
-            if(!point_pipeline)throw std::runtime_error(error.localizedDescription.UTF8String);
-            auto depth_descriptor=[MTLDepthStencilDescriptor new];
-            depth_descriptor.depthCompareFunction=MTLCompareFunctionLess;
-            depth_descriptor.depthWriteEnabled=YES;
-            point_depth_state=[reader.device() newDepthStencilStateWithDescriptor:depth_descriptor];
-            if(!point_depth_state)throw std::runtime_error("Metal point depth state unavailable");
+            auto point_descriptor = [MTLRenderPipelineDescriptor new];
+            point_descriptor.vertexFunction = [library newFunctionWithName:@"point_vertex"];
+            point_descriptor.fragmentFunction = [library newFunctionWithName:@"point_fragment"];
+            point_descriptor.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;
+            point_descriptor.colorAttachments[1].pixelFormat = MTLPixelFormatR32Float;
+            point_descriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+            point_pipeline = [reader.device() newRenderPipelineStateWithDescriptor:point_descriptor error:&error];
+            if (!point_pipeline)
+                throw std::runtime_error(error.localizedDescription.UTF8String);
+            auto depth_descriptor = [MTLDepthStencilDescriptor new];
+            depth_descriptor.depthCompareFunction = MTLCompareFunctionLess;
+            depth_descriptor.depthWriteEnabled = YES;
+            point_depth_state = [reader.device() newDepthStencilStateWithDescriptor:depth_descriptor];
+            if (!point_depth_state)
+                throw std::runtime_error("Metal point depth state unavailable");
             event = [reader.device() newSharedEvent];
             if (!event)
                 throw std::runtime_error("Metal presentation timeline allocation failed");
@@ -211,10 +225,17 @@ namespace lfs::vis {
             check(vkCreateSemaphore(ctx.device(), &info, nullptr, &completion), "Native presentation timeline");
             context = &ctx;
         }
-        Frame& acquire(Slot output, const rendering::ViewportRenderRequest& request, uint32_t count,bool points=false) {
+        Frame& acquire(Slot output, const rendering::ViewportRenderRequest& request, uint32_t count, bool points = false) {
             const size_t slot = static_cast<size_t>(output);
             auto& frame = frames[slot][next[slot]++ % 3];
             uint32_t capacity = std::max(needed_capacity[slot], static_cast<uint32_t>(std::min<uint64_t>(uint64_t(count) * 16 + 4096, 16u * 1024u * 1024u)));
+            // A failed encode may leave a reservation without a submitted producer.
+            // Such a frame has no readable GPU status and must be recreated.
+            if (frame && !frame->command) {
+                if (latest[slot] == frame.get())
+                    latest[slot] = nullptr;
+                frame.reset();
+            }
             if (frame) {
                 wait(frame->producer_value);
                 if (frame->command.status == MTLCommandBufferStatusError)
@@ -223,36 +244,45 @@ namespace lfs::vis {
                     throw std::runtime_error(context->lastError());
                 if (frame->raster && frame->raster->busy())
                     [frame->command waitUntilCompleted];
-                const auto status = frame->raster?frame->raster->status():RasterStatus{};
+                const auto status = frame->raster ? frame->raster->status() : RasterStatus{};
                 if (status.error != RasterError::None) {
                     if (status.required_instances > std::numeric_limits<uint32_t>::max())
                         throw std::runtime_error("Metal viewport instance count exceeds 32-bit indexing");
                     capacity = std::max(capacity, static_cast<uint32_t>(status.required_instances));
                 }
-                if (frame->points==points && frame->size == request.frame_view.size && frame->count >= count && frame->capacity >= capacity)
+                if (frame->points == points && frame->size == request.frame_view.size && frame->count >= count && frame->capacity >= capacity)
                     return *frame;
                 if (latest[slot] == frame.get())
                     latest[slot] = nullptr;
                 frame.reset();
             }
+            // Account for all Metal allocations on the shared device, including
+            // resident tensors and Vulkan presentation. Fail before a large growth
+            // can exhaust unified memory; retain the last completed output.
+            const auto device = reader.device();
+            const auto reservation = frameReservationBytes(request.frame_view.size.x,
+                                                           request.frame_view.size.y, count, capacity, points);
+            if (!frameFitsWorkingSet(device.currentAllocatedSize, reservation, device.recommendedMaxWorkingSetSize))
+                throw std::runtime_error("Metal viewport reservation exceeds the recommended GPU working set");
             frame = std::make_unique<Frame>();
             auto& f = *frame;
             f.size = request.frame_view.size;
             f.count = count;
             f.capacity = capacity;
             f.generation = ++generation;
-            f.points=points;
-            auto device = reader.device();
-            if(!points){
+            f.points = points;
+            if (!points) {
                 f.raster = std::make_unique<RasterFrame>(device, f.size.x, f.size.y, count, capacity);
                 f.projected = [device newBufferWithLength:std::max<size_t>(16, size_t(count) * sizeof(ProjectedSplat)) options:MTLResourceStorageModePrivate];
-                if (!f.projected)throw std::runtime_error("Metal projected buffer allocation failed");
-            }else{
-                auto depth_descriptor=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float width:f.size.x height:f.size.y mipmapped:NO];
-                depth_descriptor.storageMode=MTLStorageModePrivate;
-                depth_descriptor.usage=MTLTextureUsageRenderTarget;
-                f.point_depth=[device newTextureWithDescriptor:depth_descriptor];
-                if(!f.point_depth)throw std::runtime_error("Metal point depth allocation failed");
+                if (!f.projected)
+                    throw std::runtime_error("Metal projected buffer allocation failed");
+            } else {
+                auto depth_descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float width:f.size.x height:f.size.y mipmapped:NO];
+                depth_descriptor.storageMode = MTLStorageModePrivate;
+                depth_descriptor.usage = MTLTextureUsageRenderTarget;
+                f.point_depth = [device newTextureWithDescriptor:depth_descriptor];
+                if (!f.point_depth)
+                    throw std::runtime_error("Metal point depth allocation failed");
             }
             f.color.init(*context, device, f.size.x, f.size.y, MTLPixelFormatRGBA8Unorm, VK_FORMAT_R8G8B8A8_UNORM);
             f.depth.init(*context, device, f.size.x, f.size.y, MTLPixelFormatR32Float, VK_FORMAT_R32_SFLOAT);
@@ -290,107 +320,141 @@ namespace lfs::vis {
     };
     MetalViewportRenderer::MetalViewportRenderer() : impl_(std::make_unique<Impl>()) {}
     MetalViewportRenderer::~MetalViewportRenderer() = default;
-    bool MetalViewportRenderer::supportsPoints(const PointCloudVulkanRenderer::RenderRequest& r){
-        const auto resident=[](const core::Tensor* t){return t && t->is_valid() && t->is_contiguous() && core::gpu_backend_of(*t)==core::GpuBackend::Metal;};
-        if(!resident(r.positions)||!resident(r.colors)||r.positions->dtype()!=core::DataType::Float32||
-            r.colors->dtype()!=core::DataType::Float32||r.positions->ndim()!=2||r.colors->ndim()!=2||
-            r.positions->size(1)!=3||r.colors->size(1)!=3||r.positions->size(0)!=r.colors->size(0))return false;
-        const size_t count=r.positions->size(0);
-        for(auto t:{r.selection_mask,r.preview_selection_mask,r.deleted_mask})
-            if(t&&t->is_valid()&&(!resident(t)||t->bytes()<count||(t->dtype()!=core::DataType::UInt8&&t->dtype()!=core::DataType::Bool)))return false;
-        if(r.transform_indices&&r.transform_indices->is_valid()&&(!resident(r.transform_indices)||
-            r.transform_indices->bytes()<count*4||r.transform_indices->dtype()!=core::DataType::Int32))return false;
-        return count<=std::numeric_limits<uint32_t>::max() && r.size.x>0 && r.size.y>0;
+    bool MetalViewportRenderer::supportsPoints(const PointCloudVulkanRenderer::RenderRequest& r) {
+        const auto resident = [](const core::Tensor* t) { return t && t->is_valid() && t->is_contiguous() && core::gpu_backend_of(*t) == core::GpuBackend::Metal; };
+        if (!resident(r.positions) || !resident(r.colors) || r.positions->dtype() != core::DataType::Float32 ||
+            r.colors->dtype() != core::DataType::Float32 || r.positions->ndim() != 2 || r.colors->ndim() != 2 ||
+            r.positions->size(1) != 3 || r.colors->size(1) != 3 || r.positions->size(0) != r.colors->size(0))
+            return false;
+        const size_t count = r.positions->size(0);
+        for (auto t : {r.selection_mask, r.preview_selection_mask, r.deleted_mask})
+            if (t && t->is_valid() && (!resident(t) || t->bytes() < count || (t->dtype() != core::DataType::UInt8 && t->dtype() != core::DataType::Bool)))
+                return false;
+        if (r.transform_indices && r.transform_indices->is_valid() && (!resident(r.transform_indices) || r.transform_indices->bytes() < count * 4 || r.transform_indices->dtype() != core::DataType::Int32))
+            return false;
+        return count <= std::numeric_limits<uint32_t>::max() && r.size.x > 0 && r.size.y > 0;
     }
-    std::expected<PointCloudVulkanRenderer::RenderResult,std::string> MetalViewportRenderer::renderPoints(
-        VulkanContext& context,const PointCloudVulkanRenderer::RenderRequest& r,PointCloudVulkanRenderer::OutputSlot output){
-        try{
-            if(!supportsPoints(r))throw std::invalid_argument("Unsupported native Metal point request");
-            auto& i=*impl_;
+    std::expected<PointCloudVulkanRenderer::RenderResult, std::string> MetalViewportRenderer::renderPoints(
+        VulkanContext& context, const PointCloudVulkanRenderer::RenderRequest& r, PointCloudVulkanRenderer::OutputSlot output) {
+        try {
+            if (!supportsPoints(r))
+                throw std::invalid_argument("Unsupported native Metal point request");
+            auto& i = *impl_;
             std::lock_guard lock(i.readback_mutex);
             i.initialize(context);
-            for(auto frame:i.latest)if(frame)frame->consumer_serial=std::max(frame->consumer_serial,context.lastFrameSubmitSerial());
-            const auto slot=static_cast<Slot>(output);
-            rendering::ViewportRenderRequest request; request.frame_view.size=r.size;
-            auto& f=i.acquire(slot,request,uint32_t(r.positions->size(0)),true);
-            const auto valid=[](const core::Tensor* t){return t&&t->is_valid();};
-            const size_t nodes=r.model_transforms?r.model_transforms->size():0;
-            if(nodes>std::numeric_limits<uint32_t>::max())throw std::runtime_error("Metal point object count exceeds indexing");
-            const auto allocate=[&](id<MTLBuffer> __strong& buffer,size_t bytes){
-                if(!buffer||buffer.length<bytes)buffer=[i.reader.device() newBufferWithLength:std::max<size_t>(bytes,16) options:MTLResourceStorageModeShared];
-                if(!buffer)throw std::runtime_error("Metal point allocation failed");
+            for (auto frame : i.latest)
+                if (frame)
+                    frame->consumer_serial = std::max(frame->consumer_serial, context.lastFrameSubmitSerial());
+            const auto slot = static_cast<Slot>(output);
+            rendering::ViewportRenderRequest request;
+            request.frame_view.size = r.size;
+            auto& f = i.acquire(slot, request, uint32_t(r.positions->size(0)), true);
+            const auto valid = [](const core::Tensor* t) { return t && t->is_valid(); };
+            const size_t nodes = r.model_transforms ? r.model_transforms->size() : 0;
+            if (nodes > std::numeric_limits<uint32_t>::max())
+                throw std::runtime_error("Metal point object count exceeds indexing");
+            const auto allocate = [&](id<MTLBuffer> __strong& buffer, size_t bytes) {
+                if (!buffer || buffer.length < bytes)
+                    buffer = [i.reader.device() newBufferWithLength:std::max<size_t>(bytes, 16) options:MTLResourceStorageModeShared];
+                if (!buffer)
+                    throw std::runtime_error("Metal point allocation failed");
             };
-            allocate(f.objects,std::max<size_t>(1,nodes)*sizeof(SceneObject));
-            auto objects=static_cast<SceneObject*>(f.objects.contents);
-            for(size_t n=0;n<nodes;++n){
-                const bool visible=!r.node_visibility_mask||n>=r.node_visibility_mask->size()||(*r.node_visibility_mask)[n];
-                objects[n]={matrix((*r.model_transforms)[n]),{}, {uint32_t(visible),0,0,0}};
+            allocate(f.objects, std::max<size_t>(1, nodes) * sizeof(SceneObject));
+            auto objects = static_cast<SceneObject*>(f.objects.contents);
+            for (size_t n = 0; n < nodes; ++n) {
+                const bool visible = !r.node_visibility_mask || n >= r.node_visibility_mask->size() || (*r.node_visibility_mask)[n];
+                objects[n] = {matrix((*r.model_transforms)[n]), {}, {uint32_t(visible), 0, 0, 0}};
             }
-            const auto palette=r.selection_colors?*r.selection_colors:rendering::defaultSelectionColorTable();
-            allocate(f.selection_colors,sizeof(palette));
-            std::memcpy(f.selection_colors.contents,palette.data(),sizeof(palette));
-            uint32_t flags=(r.orthographic?8u:0u)|(valid(r.transform_indices)?16u:0u)|
-                (valid(r.selection_mask)?32u:0u)|(valid(r.preview_selection_mask)?64u:0u)|
-                (r.preview_selection_additive?128u:0u)|(uint32_t(r.depth_visualization_mode)==1?256u:0u)|
-                (valid(r.deleted_mask)?512u:0u);
-            PointParameters p{matrix(r.view_projection),matrix(r.view),matrix(glm::mat4(1)),{}, {},
-                {r.voxel_size*r.scaling_modifier,r.focal_y,float(r.size.y)/std::max(r.ortho_scale,1e-5f),float(r.depth_view)},
-                {uint32_t(nodes),0,flags,511}};
+            const auto palette = r.selection_colors ? *r.selection_colors : rendering::defaultSelectionColorTable();
+            allocate(f.selection_colors, sizeof(palette));
+            std::memcpy(f.selection_colors.contents, palette.data(), sizeof(palette));
+            uint32_t flags = (r.orthographic ? 8u : 0u) | (valid(r.transform_indices) ? 16u : 0u) |
+                             (valid(r.selection_mask) ? 32u : 0u) | (valid(r.preview_selection_mask) ? 64u : 0u) |
+                             (r.preview_selection_additive ? 128u : 0u) | (uint32_t(r.depth_visualization_mode) == 1 ? 256u : 0u) |
+                             (valid(r.deleted_mask) ? 512u : 0u);
+            PointParameters p{matrix(r.view_projection), matrix(r.view), matrix(glm::mat4(1)), {}, {}, {r.voxel_size * r.scaling_modifier, r.focal_y, float(r.size.y) / std::max(r.ortho_scale, 1e-5f), float(r.depth_view)}, {uint32_t(nodes), 0, flags, 511}};
             VkPhysicalDeviceProperties props{};
-            vkGetPhysicalDeviceProperties(context.physicalDevice(),&props);
-            p.counts.w=uint32_t(std::min(511.f,props.limits.pointSizeRange[1]));
-            if(r.crop){p.counts.z|=1u|(r.crop->inverse?2u:0u)|(r.crop->desaturate?4u:0u);p.crop_to_local=matrix(r.crop->to_local);
-                p.crop_min={r.crop->min.x,r.crop->min.y,r.crop->min.z,0};p.crop_max={r.crop->max.x,r.crop->max.y,r.crop->max.z,0};}
-            else if(r.crop_ellipsoid){p.counts.z|=1025u|(r.crop_ellipsoid->inverse?2u:0u)|(r.crop_ellipsoid->desaturate?4u:0u);
-                p.crop_to_local=matrix(r.crop_ellipsoid->to_local);p.crop_min={r.crop_ellipsoid->radii.x,r.crop_ellipsoid->radii.y,r.crop_ellipsoid->radii.z,0};}
-            p.crop_min.w=r.depth_view_min;p.crop_max.w=r.depth_view_max;
-            std::array<const core::Tensor*,6> tensors={r.positions,r.colors,r.transform_indices,r.selection_mask,r.preview_selection_mask,r.deleted_mask};
-            if(i.serial==std::numeric_limits<uint64_t>::max())throw std::runtime_error("Metal point timeline exhausted");
-            const uint64_t serial=i.serial+1;
-            const auto event=i.event;
-            f.command=i.reader.submit(tensors,[&](id<MTLCommandBuffer> command,std::span<const core::MetalTensorView> views){
-                if(i.next_readback)[command encodeWaitForEvent:i.readback_event value:i.next_readback];
-                auto pass=[MTLRenderPassDescriptor new];
-                pass.colorAttachments[0].texture=f.color.texture;
-                pass.colorAttachments[0].loadAction=MTLLoadActionClear;pass.colorAttachments[0].storeAction=MTLStoreActionStore;
-                pass.colorAttachments[0].clearColor=MTLClearColorMake(r.background_color.x,r.background_color.y,r.background_color.z,r.transparent_background?0:1);
-                pass.colorAttachments[1].texture=f.depth.texture;
-                pass.colorAttachments[1].loadAction=MTLLoadActionClear;pass.colorAttachments[1].storeAction=MTLStoreActionStore;
-                pass.colorAttachments[1].clearColor=MTLClearColorMake(-1,0,0,0);
-                pass.depthAttachment.texture=f.point_depth;pass.depthAttachment.loadAction=MTLLoadActionClear;
-                pass.depthAttachment.storeAction=MTLStoreActionDontCare;pass.depthAttachment.clearDepth=1;
-                auto encoder=[command renderCommandEncoderWithDescriptor:pass];
-                if(!encoder)throw std::runtime_error("Metal point render encoder failed");
-                [encoder setRenderPipelineState:i.point_pipeline];[encoder setDepthStencilState:i.point_depth_state];
-                const NSUInteger bindings[]={0,1,3,4,5,7};
-                for(size_t n=0;n<views.size();++n)[encoder setVertexBuffer:views[n].buffer?:f.objects offset:views[n].buffer?views[n].offset:0 atIndex:bindings[n]];
-                [encoder setVertexBuffer:f.objects offset:0 atIndex:2];[encoder setVertexBuffer:f.selection_colors offset:0 atIndex:6];
-                [encoder setVertexBytes:&p length:sizeof(p) atIndex:8];[encoder setFragmentBytes:&p length:sizeof(p) atIndex:0];
-                [encoder drawPrimitives:MTLPrimitiveTypePoint vertexStart:0 vertexCount:r.positions->size(0)];[encoder endEncoding];
+            vkGetPhysicalDeviceProperties(context.physicalDevice(), &props);
+            p.counts.w = uint32_t(std::min(511.f, props.limits.pointSizeRange[1]));
+            if (r.crop) {
+                p.counts.z |= 1u | (r.crop->inverse ? 2u : 0u) | (r.crop->desaturate ? 4u : 0u);
+                p.crop_to_local = matrix(r.crop->to_local);
+                p.crop_min = {r.crop->min.x, r.crop->min.y, r.crop->min.z, 0};
+                p.crop_max = {r.crop->max.x, r.crop->max.y, r.crop->max.z, 0};
+            } else if (r.crop_ellipsoid) {
+                p.counts.z |= 1025u | (r.crop_ellipsoid->inverse ? 2u : 0u) | (r.crop_ellipsoid->desaturate ? 4u : 0u);
+                p.crop_to_local = matrix(r.crop_ellipsoid->to_local);
+                p.crop_min = {r.crop_ellipsoid->radii.x, r.crop_ellipsoid->radii.y, r.crop_ellipsoid->radii.z, 0};
+            }
+            p.crop_min.w = r.depth_view_min;
+            p.crop_max.w = r.depth_view_max;
+            std::array<const core::Tensor*, 6> tensors = {r.positions, r.colors, r.transform_indices, r.selection_mask, r.preview_selection_mask, r.deleted_mask};
+            if (i.serial == std::numeric_limits<uint64_t>::max())
+                throw std::runtime_error("Metal point timeline exhausted");
+            const uint64_t serial = i.serial + 1;
+            const auto event = i.event;
+            f.command = i.reader.submit(tensors, [&](id<MTLCommandBuffer> command, std::span<const core::MetalTensorView> views) {
+                if (i.next_readback)
+                    [command encodeWaitForEvent:i.readback_event value:i.next_readback];
+                auto pass = [MTLRenderPassDescriptor new];
+                pass.colorAttachments[0].texture = f.color.texture;
+                pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+                pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+                pass.colorAttachments[0].clearColor = MTLClearColorMake(r.background_color.x, r.background_color.y, r.background_color.z, r.transparent_background ? 0 : 1);
+                pass.colorAttachments[1].texture = f.depth.texture;
+                pass.colorAttachments[1].loadAction = MTLLoadActionClear;
+                pass.colorAttachments[1].storeAction = MTLStoreActionStore;
+                pass.colorAttachments[1].clearColor = MTLClearColorMake(-1, 0, 0, 0);
+                pass.depthAttachment.texture = f.point_depth;
+                pass.depthAttachment.loadAction = MTLLoadActionClear;
+                pass.depthAttachment.storeAction = MTLStoreActionDontCare;
+                pass.depthAttachment.clearDepth = 1;
+                auto encoder = [command renderCommandEncoderWithDescriptor:pass];
+                if (!encoder)
+                    throw std::runtime_error("Metal point render encoder failed");
+                [encoder setRenderPipelineState:i.point_pipeline];
+                [encoder setDepthStencilState:i.point_depth_state];
+                const NSUInteger bindings[] = {0, 1, 3, 4, 5, 7};
+                for (size_t n = 0; n < views.size(); ++n)
+                    [encoder setVertexBuffer:views[n].buffer ?: f.objects offset:views[n].buffer ? views[n].offset : 0 atIndex:bindings[n]];
+                [encoder setVertexBuffer:f.objects offset:0 atIndex:2];
+                [encoder setVertexBuffer:f.selection_colors offset:0 atIndex:6];
+                [encoder setVertexBytes:&p length:sizeof(p) atIndex:8];
+                [encoder setFragmentBytes:&p length:sizeof(p) atIndex:0];
+                [encoder drawPrimitives:MTLPrimitiveTypePoint vertexStart:0 vertexCount:r.positions->size(0)];
+                [encoder endEncoding];
                 [command encodeSignalEvent:event value:serial];
-                [command addCompletedHandler:^(id<MTLCommandBuffer> completed){
-                    if(completed.status==MTLCommandBufferStatusError && event.signaledValue<serial)event.signaledValue=serial;
+                [command addCompletedHandler:^(id<MTLCommandBuffer> completed) {
+                    if (completed.status == MTLCommandBufferStatusError && event.signaledValue < serial)
+                        event.signaledValue = serial;
                 }];
             });
-            f.producer_value=serial;i.serial=serial;f.consumer_serial=context.lastFrameSubmitSerial()+1;
-            i.latest[static_cast<size_t>(slot)]=&f;
+            f.producer_value = serial;
+            i.serial = serial;
+            f.consumer_serial = context.lastFrameSubmitSerial() + 1;
+            i.latest[static_cast<size_t>(slot)] = &f;
             // Preserve the existing synchronous point-cloud presentation contract.
             // The Gaussian path continues to expose its asynchronous GPU timeline.
             i.wait(serial);
             [f.command waitUntilCompleted];
-            if(f.command.status!=MTLCommandBufferStatusCompleted)throw std::runtime_error("Metal point raster failed");
-            return PointCloudVulkanRenderer::RenderResult{.image=f.color.image,.image_view=f.color.view,
-                .image_layout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,.generation=f.generation,
-                .depth_image=f.depth.image,.depth_image_view=f.depth.view,.depth_image_layout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                .depth_generation=f.generation,.size=f.size,.flip_y=false};
-        }catch(const std::exception& e){return std::unexpected(e.what());}
+            if (f.command.status != MTLCommandBufferStatusCompleted)
+                throw std::runtime_error("Metal point raster failed");
+            return PointCloudVulkanRenderer::RenderResult{.image = f.color.image, .image_view = f.color.view, .image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .generation = f.generation, .depth_image = f.depth.image, .depth_image_view = f.depth.view, .depth_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .depth_generation = f.generation, .size = f.size, .flip_y = false};
+        } catch (const std::exception& e) { return std::unexpected(e.what()); }
     }
     bool MetalViewportRenderer::supports(const core::SplatData& model, const rendering::ViewportRenderRequest& r) {
         // Every unsupported contract is routed to the existing renderer; never silently
         // drop filters, display settings or editor overlays from a requested frame.
-        const auto resident_mask=[&](const core::Tensor* mask){return !mask || !mask->is_valid() ||
-            (core::gpu_backend_of(*mask)==core::GpuBackend::Metal && mask->is_contiguous() && mask->bytes()>=size_t(model.size()) &&
-             (mask->dtype()==core::DataType::UInt8 || mask->dtype()==core::DataType::Bool));};
+        const auto resident_mask = [&](const core::Tensor* mask) { return !mask || !mask->is_valid() ||
+                                                                          (core::gpu_backend_of(*mask) == core::GpuBackend::Metal && mask->is_contiguous() && mask->bytes() >= size_t(model.size()) &&
+                                                                           (mask->dtype() == core::DataType::UInt8 || mask->dtype() == core::DataType::Bool)); };
+        const auto indices = r.scene.transform_indices.get();
+        const size_t objects = r.scene.model_transforms ? r.scene.model_transforms->size() : 0;
+        const bool indexed = indices && indices->is_valid();
+        if ((objects > 1 && !indexed) || (indexed &&
+                                          (core::gpu_backend_of(*indices) != core::GpuBackend::Metal || !indices->is_contiguous() ||
+                                           indices->dtype() != core::DataType::Int32 || indices->bytes() < size_t(model.size()) * 4)))
+            return false;
         return resident_mask(r.overlay.emphasis.mask.get()) && resident_mask(r.overlay.emphasis.transient_mask.mask) &&
                core::gpu_backend_of(model.means_raw()) == core::GpuBackend::Metal &&
                !r.gut && !r.equirectangular && r.splat_render_profile == 0 &&
@@ -401,7 +465,7 @@ namespace lfs::vis {
                 model.non_sh_attrs_f16());
     }
     std::expected<VksplatViewportRenderer::RenderResult, std::string> MetalViewportRenderer::render(
-        VulkanContext& context, const core::SplatData& model, const rendering::ViewportRenderRequest& request, Slot slot) {
+        VulkanContext& context, const core::SplatData& model, const rendering::ViewportRenderRequest& request, Slot slot, bool expected_depth) {
         try {
             auto& i = *impl_;
             std::lock_guard lock(i.readback_mutex);
@@ -411,11 +475,13 @@ namespace lfs::vis {
             // replacing latest, rather than retiring against the first consumer.
             const auto graphics_serial = context.lastFrameSubmitSerial();
             for (auto frame : i.latest)
-                if (frame) frame->consumer_serial = std::max(frame->consumer_serial, graphics_serial);
+                if (frame)
+                    frame->consumer_serial = std::max(frame->consumer_serial, graphics_serial);
             if (model.size() > std::numeric_limits<uint32_t>::max())
                 throw std::runtime_error("Metal primitive count exceeds indexing capacity");
             auto previous = i.latest[static_cast<size_t>(slot)];
-            if(previous && previous->points)previous=nullptr;
+            if (previous && previous->points)
+                previous = nullptr;
             if (previous && !previous->raster->busy()) {
                 const auto status = previous->raster->status();
                 if (status.required_instances > std::numeric_limits<uint32_t>::max())
@@ -443,12 +509,13 @@ namespace lfs::vis {
                                      intrinsics.center_x - request.frame_view.subregion_origin.x, intrinsics.center_y - request.frame_view.subregion_origin.y};
             projection.clip_scale = {request.frame_view.near_plane, request.frame_view.far_plane, request.scaling_modifier, request.mip_filter ? .1f : .3f};
             projection.extent = {uint32_t(f.size.x), uint32_t(f.size.y), uint32_t(request.frame_view.orthographic), uint32_t(request.mip_filter)};
+            projection.rasterization = {request.frame_view.rasterization_scale, 0, 0, 0};
             SceneBuffers scene{};
             OverlayBuffers overlay{};
             if (request.scene.model_transforms && !request.scene.model_transforms->empty()) {
                 const auto& transforms = *request.scene.model_transforms;
-                if (!request.scene.transform_indices)
-                    throw std::runtime_error("Metal scene transforms require primitive indices");
+                if (transforms.size() > 1 && (!request.scene.transform_indices || !request.scene.transform_indices->is_valid()))
+                    throw std::runtime_error("Multiple Metal scene transforms require primitive indices");
                 const size_t bytes = transforms.size() * sizeof(SceneObject);
                 if (!f.objects || f.objects.length < bytes)
                     f.objects = [i.reader.device() newBufferWithLength:bytes options:MTLResourceStorageModeShared];
@@ -464,47 +531,51 @@ namespace lfs::vis {
                 scene.objects = {f.objects, 0};
                 scene.count = static_cast<uint32_t>(transforms.size());
             }
-            const auto selection=request.overlay.emphasis.mask.get();
-            const auto preview=request.overlay.emphasis.transient_mask.mask;
-            const bool selection_enabled=request.overlay.has_selection && selection && selection->is_valid();
-            const bool preview_enabled=preview && preview->is_valid();
-            const size_t node_count=request.overlay.emphasis.emphasized_node_mask.size();
-            const bool needs_overlay=request.filters.crop_region || request.filters.ellipsoid_region ||
-                !request.filters.crop_regions.empty() || !request.filters.ellipsoid_regions.empty() ||
-                request.filters.view_volume || selection_enabled || preview_enabled || node_count ||
-                request.overlay.emphasis.dim_non_emphasized || request.overlay.emphasis.flash_intensity>0 ||
-                request.overlay.emphasis.focused_gaussian_id>=0 || request.overlay.cursor.enabled ||
-                request.overlay.markers.show_rings || request.overlay.markers.show_center_markers;
-            if(needs_overlay){
-                static_assert(detail::ParamCount==207);
-                static_assert(detail::ViewWindow==206 && detail::SelectionFlags==24 && detail::EmphasisFlags==20);
-                const auto params=detail::buildOverlayParamsCpuFloats(request,selection_enabled,preview_enabled,scene.count>0,node_count,false);
-                if(!params)throw std::runtime_error(params.error());
-                const auto allocate=[&](id<MTLBuffer> __strong& buffer,size_t bytes,MTLResourceOptions options){
-                    if(!buffer || buffer.length<bytes)buffer=[i.reader.device() newBufferWithLength:std::max<size_t>(bytes,16) options:options];
-                    if(!buffer)throw std::runtime_error("Metal overlay allocation failed");
+            const auto selection = request.overlay.emphasis.mask.get();
+            const auto preview = request.overlay.emphasis.transient_mask.mask;
+            const bool selection_enabled = request.overlay.has_selection && selection && selection->is_valid();
+            const bool preview_enabled = preview && preview->is_valid();
+            const size_t node_count = request.overlay.emphasis.emphasized_node_mask.size();
+            const bool needs_overlay = request.filters.crop_region || request.filters.ellipsoid_region ||
+                                       !request.filters.crop_regions.empty() || !request.filters.ellipsoid_regions.empty() ||
+                                       request.filters.view_volume || selection_enabled || preview_enabled || node_count ||
+                                       request.overlay.emphasis.dim_non_emphasized || request.overlay.emphasis.flash_intensity > 0 ||
+                                       request.overlay.emphasis.focused_gaussian_id >= 0 || request.overlay.cursor.enabled ||
+                                       request.overlay.markers.show_rings || request.overlay.markers.show_center_markers;
+            if (needs_overlay) {
+                static_assert(detail::ParamCount == 207);
+                static_assert(detail::ViewWindow == 206 && detail::SelectionFlags == 24 && detail::EmphasisFlags == 20);
+                const auto params = detail::buildOverlayParamsCpuFloats(request, selection_enabled, preview_enabled, scene.count > 0, node_count, false);
+                if (!params)
+                    throw std::runtime_error(params.error());
+                const auto allocate = [&](id<MTLBuffer> __strong& buffer, size_t bytes, MTLResourceOptions options) {
+                    if (!buffer || buffer.length < bytes)
+                        buffer = [i.reader.device() newBufferWithLength:std::max<size_t>(bytes, 16) options:options];
+                    if (!buffer)
+                        throw std::runtime_error("Metal overlay allocation failed");
                 };
-                allocate(f.overlay_parameters,params->size()*sizeof(float),MTLResourceStorageModeShared);
-                std::memcpy(f.overlay_parameters.contents,params->data(),params->size()*sizeof(float));
-                allocate(f.overlay_flags,size_t(model.size())*4,MTLResourceStorageModePrivate);
-                allocate(f.overlay_nodes,node_count,MTLResourceStorageModeShared);
-                auto nodes=static_cast<uint8_t*>(f.overlay_nodes.contents);
-                for(size_t n=0;n<node_count;++n)nodes[n]=request.overlay.emphasis.emphasized_node_mask[n];
-                allocate(f.selection_colors,sizeof(request.overlay.selection_colors),MTLResourceStorageModeShared);
-                std::memcpy(f.selection_colors.contents,request.overlay.selection_colors.data(),sizeof(request.overlay.selection_colors));
-                overlay={{f.overlay_parameters,0},{f.overlay_flags,0},{},{},{f.overlay_nodes,0},{f.selection_colors,0},207,uint32_t(node_count)};
-                overlay.render_origin={float(request.frame_view.subregion_origin.x),float(request.frame_view.subregion_origin.y),0,0};
+                allocate(f.overlay_parameters, params->size() * sizeof(float), MTLResourceStorageModeShared);
+                std::memcpy(f.overlay_parameters.contents, params->data(), params->size() * sizeof(float));
+                allocate(f.overlay_flags, size_t(model.size()) * 4, MTLResourceStorageModePrivate);
+                allocate(f.overlay_nodes, node_count, MTLResourceStorageModeShared);
+                auto nodes = static_cast<uint8_t*>(f.overlay_nodes.contents);
+                for (size_t n = 0; n < node_count; ++n)
+                    nodes[n] = request.overlay.emphasis.emphasized_node_mask[n];
+                allocate(f.selection_colors, sizeof(request.overlay.selection_colors), MTLResourceStorageModeShared);
+                std::memcpy(f.selection_colors.contents, request.overlay.selection_colors.data(), sizeof(request.overlay.selection_colors));
+                overlay = {{f.overlay_parameters, 0}, {f.overlay_flags, 0}, {}, {}, {f.overlay_nodes, 0}, {f.selection_colors, 0}, 207, uint32_t(node_count)};
+                overlay.render_origin = {float(request.frame_view.subregion_origin.x), float(request.frame_view.subregion_origin.y), 0, 0};
             }
             std::array<const core::Tensor*, 11> tensors{&model.means_raw(), &model.scaling_raw(), &model.rotation_raw(),
-                                                       &model.opacity_raw(), &model.sh0_raw(), degree ? &model.shN_raw() : nullptr,
-                                                       degree ? &model.shN_value_bounds() : nullptr, &model.deleted(), scene.count ? request.scene.transform_indices.get() : nullptr,
-                                                       selection_enabled?selection:nullptr, preview_enabled?preview:nullptr};
+                                                        &model.opacity_raw(), &model.sh0_raw(), degree ? &model.shN_raw() : nullptr,
+                                                        degree ? &model.shN_value_bounds() : nullptr, &model.deleted(), scene.count ? request.scene.transform_indices.get() : nullptr,
+                                                        selection_enabled ? selection : nullptr, preview_enabled ? preview : nullptr};
             if (i.serial == std::numeric_limits<uint64_t>::max())
                 throw std::runtime_error("Metal viewport timeline exhausted");
             const uint64_t serial = i.serial + 1;
             const auto background = request.frame_view.background_color;
             const auto event = i.event;
-            const PresentParameters present{request.color_exposure, uint32_t(request.color_tonemapping), uint32_t(request.transparent_background), uint32_t(previous != nullptr), request.depth_view_min, request.depth_view_max, uint32_t(request.depth_view), uint32_t(request.depth_visualization_mode), {background.x, background.y, background.z, 1}};
+            const PresentParameters present{request.color_exposure, uint32_t(request.color_tonemapping), uint32_t(request.transparent_background), uint32_t(previous != nullptr), request.depth_view_min, request.depth_view_max, uint32_t(request.depth_view), uint32_t(request.depth_visualization_mode), {background.x, background.y, background.z, 1}, {uint32_t(expected_depth), 0, 0, 0}};
             uint64_t key = 1469598103934665603ull;
             const auto hash = [&](const void* bytes, size_t length) {
                 const auto data = static_cast<const uint8_t*>(bytes);
@@ -513,17 +584,28 @@ namespace lfs::vis {
                     key *= 1099511628211ull;
                 }
             };
-            hash(&projection, sizeof(projection));
+            // Temporal reconstruction jitters only the draw intrinsics. It must
+            // not look like scene/camera invalidation and request fresh content
+            // forever. Retain the jitter in projection, exclude it from this key.
+            auto stable_projection = projection;
+            const auto camera_size = request.frame_view.cameraSize();
+            const auto containment = request.frame_view.containment_intrinsics;
+            stable_projection.intrinsics.z = containment ? containment->center_x : float(camera_size.x) * .5f;
+            stable_projection.intrinsics.w = containment ? containment->center_y : float(camera_size.y) * .5f;
+            stable_projection.intrinsics.z -= request.frame_view.subregion_origin.x;
+            stable_projection.intrinsics.w -= request.frame_view.subregion_origin.y;
+            hash(&stable_projection, sizeof(stable_projection));
             hash(&present, 12);
             hash(&present.depth_min, sizeof(PresentParameters) - 16);
             const auto mask_version = model.deleted_mask_version();
             hash(&mask_version, sizeof(mask_version));
             if (scene.count)
                 hash(f.objects.contents, scene.count * sizeof(SceneObject));
-            if(needs_overlay){
-                hash(f.overlay_parameters.contents,207*16);
-                hash(f.selection_colors.contents,sizeof(request.overlay.selection_colors));
-                if(node_count)hash(f.overlay_nodes.contents,node_count);
+            if (needs_overlay) {
+                hash(f.overlay_parameters.contents, 207 * 16);
+                hash(f.selection_colors.contents, sizeof(request.overlay.selection_colors));
+                if (node_count)
+                    hash(f.overlay_nodes.contents, node_count);
             }
             for (const auto tensor : tensors)
                 if (tensor && tensor->is_valid()) {
@@ -535,16 +617,17 @@ namespace lfs::vis {
             f.command = i.reader.submit(tensors, [&](id<MTLCommandBuffer> command, std::span<const core::MetalTensorView> views) {
                 // A blit on the readback queue may still sample a recycled slot.
                 // GPU ordering protects it without waiting on the host each frame.
-                if(i.next_readback) [command encodeWaitForEvent:i.readback_event value:i.next_readback];
+                if (i.next_readback)
+                    [command encodeWaitForEvent:i.readback_event value:i.next_readback];
                 auto slice = [&](size_t n) { return BufferSlice{views[n].buffer, views[n].offset}; };
                 SplatBuffers inputs{slice(0), slice(1), slice(2), slice(3), slice(4), slice(5), slice(6), slice(7),
                                     uint32_t(model.size()), uint32_t(model.max_sh_coeffs_rest()), storage, model.non_sh_attrs_f16()};
                 scene.object_indices = slice(8);
-                overlay.selection=selection_enabled?slice(9):BufferSlice{};
-                overlay.preview=preview_enabled?slice(10):BufferSlice{};
-                i.preprocessor.encode(command, inputs, projection, degree, PrimitiveMode::Gaussian, {f.projected, 0}, scene,overlay);
+                overlay.selection = selection_enabled ? slice(9) : BufferSlice{};
+                overlay.preview = preview_enabled ? slice(10) : BufferSlice{};
+                i.preprocessor.encode(command, inputs, projection, degree, PrimitiveMode::Gaussian, {f.projected, 0}, scene, overlay);
                 i.rasterizer.encode(command, {f.projected, 0}, uint32_t(model.size()), RasterMode::Gaussian,
-                                    {background.x, background.y, background.z, request.transparent_background ? 0.f : 1.f}, *f.raster,overlay);
+                                    {background.x, background.y, background.z, request.transparent_background ? 0.f : 1.f}, *f.raster, overlay);
                 auto encoder = [command computeCommandEncoder];
                 [encoder setComputePipelineState:i.present];
                 [encoder setTexture:f.raster->color() atIndex:0];
@@ -580,103 +663,127 @@ namespace lfs::vis {
     std::expected<uint64_t, std::string> MetalViewportRenderer::submitReadback(
         Slot slot, core::Tensor& destination, int x, int y, bool depth) const {
         try {
-            auto& i=*impl_;
+            auto& i = *impl_;
             std::lock_guard lock(i.readback_mutex);
-            auto f=i.latest[static_cast<size_t>(slot)];
-            if(!f) throw std::runtime_error("Metal readback slot is empty");
+            auto f = i.latest[static_cast<size_t>(slot)];
+            if (!f)
+                throw std::runtime_error("Metal readback slot is empty");
             // Abandoned commands retain staging until completion but no host pointer.
-            std::erase_if(i.readbacks,[](const auto& entry){return !entry.second.destination &&
-                (entry.second.command.status==MTLCommandBufferStatusCompleted || entry.second.command.status==MTLCommandBufferStatusError);});
-            if(i.readbacks.size()>=ReadbackTicketRing::kRingSize)
+            std::erase_if(i.readbacks, [](const auto& entry) { return !entry.second.destination &&
+                                                                      (entry.second.command.status == MTLCommandBufferStatusCompleted || entry.second.command.status == MTLCommandBufferStatusError); });
+            if (i.readbacks.size() >= ReadbackTicketRing::kRingSize)
                 throw std::runtime_error("Metal readback ring is full; retire or abandon a ticket");
-            if(!destination.is_valid() || destination.device()!=core::Device::CPU || !destination.is_contiguous() ||
-                x<0 || y<0 || (depth?(destination.dtype()!=core::DataType::Float32 || destination.ndim()!=2 ||
-                    destination.size(0)!=size_t(f->size.y) || destination.size(1)!=size_t(f->size.x)):
-                (destination.ndim()!=3 || destination.size(2)<3 || destination.size(2)>4 ||
-                 size_t(x)+f->size.x>destination.size(1) || size_t(y)+f->size.y>destination.size(0) ||
-                 (destination.dtype()!=core::DataType::Float32 && destination.dtype()!=core::DataType::UInt8))))
+            if (!destination.is_valid() || destination.device() != core::Device::CPU || !destination.is_contiguous() ||
+                x < 0 || y < 0 || (depth ? (destination.dtype() != core::DataType::Float32 || destination.ndim() != 2 || destination.size(0) != size_t(f->size.y) || destination.size(1) != size_t(f->size.x)) : (destination.ndim() != 3 || destination.size(2) < 3 || destination.size(2) > 4 || size_t(x) + f->size.x > destination.size(1) || size_t(y) + f->size.y > destination.size(0) || (destination.dtype() != core::DataType::Float32 && destination.dtype() != core::DataType::UInt8))))
                 throw std::invalid_argument("Invalid Metal readback destination");
-            if(!i.readback_queue || !i.readback_event || i.next_readback==((uint64_t{1}<<63)-1))
+            if (!i.readback_queue || !i.readback_event || i.next_readback == ((uint64_t{1} << 63) - 1))
                 throw std::runtime_error("Metal readback timeline unavailable or exhausted");
-            const uint64_t serial=i.next_readback+1;
-            const auto command=[i.readback_queue commandBuffer];
-            const size_t row=size_t(f->size.x)*4;
-            const auto buffer=[i.reader.device() newBufferWithLength:row*f->size.y options:MTLResourceStorageModeShared];
-            if(!command || !buffer) throw std::runtime_error("Metal readback allocation failed");
+            const uint64_t serial = i.next_readback + 1;
+            const auto command = [i.readback_queue commandBuffer];
+            const size_t row = size_t(f->size.x) * 4;
+            const auto buffer = [i.reader.device() newBufferWithLength:row * f->size.y options:MTLResourceStorageModeShared];
+            if (!command || !buffer)
+                throw std::runtime_error("Metal readback allocation failed");
             [command encodeWaitForEvent:i.event value:f->producer_value];
-            auto blit=[command blitCommandEncoder];
-            if(!blit) throw std::runtime_error("Metal readback encoder unavailable");
-            [blit copyFromTexture:depth?f->depth.texture:f->color.texture sourceSlice:0 sourceLevel:0
-                sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(f->size.x,f->size.y,1)
-                toBuffer:buffer destinationOffset:0 destinationBytesPerRow:row destinationBytesPerImage:row*f->size.y];
+            auto blit = [command blitCommandEncoder];
+            if (!blit)
+                throw std::runtime_error("Metal readback encoder unavailable");
+            [blit copyFromTexture:depth ? f->depth.texture : f->color.texture
+                             sourceSlice:0
+                             sourceLevel:0
+                            sourceOrigin:MTLOriginMake(0, 0, 0)
+                              sourceSize:MTLSizeMake(f->size.x, f->size.y, 1)
+                                toBuffer:buffer
+                       destinationOffset:0
+                  destinationBytesPerRow:row
+                destinationBytesPerImage:row * f->size.y];
             [blit endEncoding];
-            const auto event=i.readback_event;
+            const auto event = i.readback_event;
             [command encodeSignalEvent:event value:serial];
-            [command addCompletedHandler:^(id<MTLCommandBuffer> completed){
-                if(completed.status==MTLCommandBufferStatusError && event.signaledValue<serial) event.signaledValue=serial;
+            [command addCompletedHandler:^(id<MTLCommandBuffer> completed) {
+                if (completed.status == MTLCommandBufferStatusError && event.signaledValue < serial)
+                    event.signaledValue = serial;
             }];
-            const uint64_t ticket=(uint64_t{1}<<63)|serial;
-            i.readbacks.emplace(ticket,Impl::Readback{buffer,command,f->command,destination.data_ptr(),f->size,
-                destination.size(1),depth?1:destination.size(2),x,y,depth,destination.dtype()==core::DataType::Float32});
-            i.next_readback=serial;
+            const uint64_t ticket = reserveNativeTicket();
+            i.readbacks.emplace(ticket, Impl::Readback{buffer, command, f->command, destination.data_ptr(), f->size,
+                                                       destination.size(1), depth ? 1 : destination.size(2), x, y, depth, destination.dtype() == core::DataType::Float32});
+            i.next_readback = serial;
             [command commit];
             return ticket;
-        } catch(const std::exception& e){return std::unexpected(e.what());}
+        } catch (const std::exception& e) { return std::unexpected(e.what()); }
     }
-    std::expected<VksplatViewportRenderer::ReadbackTicketStatus,std::string> MetalViewportRenderer::pollReadback(uint64_t ticket,bool wait) const {
-        auto& i=*impl_;
+    std::expected<VksplatViewportRenderer::ReadbackTicketStatus, std::string> MetalViewportRenderer::pollReadback(uint64_t ticket, bool wait) const {
+        auto& i = *impl_;
         std::lock_guard lock(i.readback_mutex);
-        auto it=i.readbacks.find(ticket);
-        if(it==i.readbacks.end()) return std::unexpected("Unknown Metal readback ticket");
-        auto& r=it->second;
-        if(wait) [r.command waitUntilCompleted];
-        if(r.command.status==MTLCommandBufferStatusError){
-            const std::string error=r.command.error.localizedDescription.UTF8String;
-            i.readbacks.erase(it); return std::unexpected(error);
+        auto it = i.readbacks.find(ticket);
+        if (it == i.readbacks.end())
+            return std::unexpected("Unknown Metal readback ticket");
+        auto& r = it->second;
+        if (wait)
+            [r.command waitUntilCompleted];
+        if (r.command.status == MTLCommandBufferStatusError) {
+            const std::string error = r.command.error.localizedDescription.UTF8String;
+            i.readbacks.erase(it);
+            return std::unexpected(error);
         }
-        if(r.command.status!=MTLCommandBufferStatusCompleted) return VksplatViewportRenderer::ReadbackTicketStatus::NotReady;
-        if(r.producer.status==MTLCommandBufferStatusError){
-            i.readbacks.erase(it);return std::unexpected("Metal readback producer failed");
+        if (r.command.status != MTLCommandBufferStatusCompleted)
+            return VksplatViewportRenderer::ReadbackTicketStatus::NotReady;
+        if (r.producer.status == MTLCommandBufferStatusError) {
+            i.readbacks.erase(it);
+            return std::unexpected("Metal readback producer failed");
         }
-        if(!r.destination){i.readbacks.erase(it);return std::unexpected("Metal readback ticket abandoned");}
-        if(r.depth) std::memcpy(r.destination,r.buffer.contents,size_t(r.size.x)*r.size.y*4);
+        if (!r.destination) {
+            i.readbacks.erase(it);
+            return std::unexpected("Metal readback ticket abandoned");
+        }
+        if (r.depth)
+            std::memcpy(r.destination, r.buffer.contents, size_t(r.size.x) * r.size.y * 4);
         else {
-            const auto src=static_cast<const uint8_t*>(r.buffer.contents);
-            for(int row=0;row<r.size.y;++row) for(int col=0;col<r.size.x;++col) for(size_t c=0;c<r.channels;++c){
-                const auto value=src[(size_t(row)*r.size.x+col)*4+c];
-                const auto offset=((size_t(row+r.y)*r.width+col+r.x)*r.channels+c);
-                if(r.floating) static_cast<float*>(r.destination)[offset]=float(value)/255;
-                else static_cast<uint8_t*>(r.destination)[offset]=value;
-            }
+            const auto src = static_cast<const uint8_t*>(r.buffer.contents);
+            for (int row = 0; row < r.size.y; ++row)
+                for (int col = 0; col < r.size.x; ++col)
+                    for (size_t c = 0; c < r.channels; ++c) {
+                        const auto value = src[(size_t(row) * r.size.x + col) * 4 + c];
+                        const auto offset = ((size_t(row + r.y) * r.width + col + r.x) * r.channels + c);
+                        if (r.floating)
+                            static_cast<float*>(r.destination)[offset] = float(value) / 255;
+                        else
+                            static_cast<uint8_t*>(r.destination)[offset] = value;
+                    }
         }
         i.readbacks.erase(it);
         return VksplatViewportRenderer::ReadbackTicketStatus::Ready;
     }
     void MetalViewportRenderer::abandonReadback(uint64_t ticket) const {
         std::lock_guard lock(impl_->readback_mutex);
-        const auto it=impl_->readbacks.find(ticket);
-        if(it!=impl_->readbacks.end()) it->second.destination=nullptr;
+        const auto it = impl_->readbacks.find(ticket);
+        if (it != impl_->readbacks.end())
+            it->second.destination = nullptr;
     }
     size_t MetalViewportRenderer::outstandingReadbacks() const {
         std::lock_guard lock(impl_->readback_mutex);
-        return std::count_if(impl_->readbacks.begin(),impl_->readbacks.end(),[](const auto& entry){return entry.second.destination!=nullptr;});
+        return std::count_if(impl_->readbacks.begin(), impl_->readbacks.end(), [](const auto& entry) { return entry.second.destination != nullptr; });
     }
-    std::expected<void,std::string> MetalViewportRenderer::release(Slot slot) {
+    std::expected<void, std::string> MetalViewportRenderer::release(Slot slot) {
         try {
-            auto& i=*impl_;
+            auto& i = *impl_;
             std::lock_guard lock(i.readback_mutex);
-            if(!i.context) return {};
+            if (!i.context)
+                return {};
             i.wait(i.serial);
-            for(const auto& [ticket,r]:i.readbacks) [r.command waitUntilCompleted];
+            for (const auto& [ticket, r] : i.readbacks)
+                [r.command waitUntilCompleted];
             // Includes cached outputs sampled after their initial producer frame.
-            if(!i.context->waitForRetiredFrameSubmitSerial(i.context->lastFrameSubmitSerial()))
+            if (!i.context->waitForRetiredFrameSubmitSerial(i.context->lastFrameSubmitSerial()))
                 throw std::runtime_error(i.context->lastError());
-            const size_t index=static_cast<size_t>(slot);
-            i.latest[index]=nullptr;
-            for(auto& frame:i.frames[index]) frame.reset();
-            i.next[index]=0; i.needed_capacity[index]=0;
+            const size_t index = static_cast<size_t>(slot);
+            i.latest[index] = nullptr;
+            for (auto& frame : i.frames[index])
+                frame.reset();
+            i.next[index] = 0;
+            i.needed_capacity[index] = 0;
             return {};
-        } catch(const std::exception& e){return std::unexpected(e.what());}
+        } catch (const std::exception& e) { return std::unexpected(e.what()); }
     }
     std::expected<bool, std::string> MetalViewportRenderer::outputComplete(Slot slot) const {
         try {

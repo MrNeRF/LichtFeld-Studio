@@ -17,6 +17,11 @@ set_tests_properties(ViewerBackendSelectionContracts PROPERTIES LABELS "viewer;c
 if(NOT APPLE)
     return()
 endif()
+add_executable(metal_frame_budget_contracts frame_budget_contracts.cpp)
+target_compile_features(metal_frame_budget_contracts PRIVATE cxx_std_20)
+target_include_directories(metal_frame_budget_contracts PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../src/rendering/rasterizer/metal")
+add_test(NAME MetalViewerFrameBudgetContracts COMMAND metal_frame_budget_contracts)
+set_tests_properties(MetalViewerFrameBudgetContracts PROPERTIES LABELS "viewer;metal;cpu" TIMEOUT 30)
 enable_language(OBJCXX)
 if(NOT TARGET lfs_metal_viewer)
     add_subdirectory(../../src/rendering/rasterizer/metal metal_viewer)
@@ -70,10 +75,17 @@ if(TARGET lfs_visualizer)
                 --smoke --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-benchmark-smoke.json")
             set_tests_properties(MacViewerBackendBenchmarkSmoke PROPERTIES
                 LABELS "benchmark;metal;gpu;metal4" TIMEOUT 180 SKIP_RETURN_CODE 77)
-            foreach(_mode IN ITEMS mip ortho depth)
+            foreach(_mode IN ITEMS mip ortho depth export_scale)
                 add_test(NAME MacViewerParity_${_mode} COMMAND mac_viewer_backend_benchmark
                     --smoke --${_mode} --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-${_mode}.json")
                 set_tests_properties(MacViewerParity_${_mode} PROPERTIES
+                    LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
+            endforeach()
+            foreach(_overlay IN ITEMS selection preview crop ellipsoid window markers flash affine)
+                add_test(NAME MacViewerParity_${_overlay} COMMAND mac_viewer_backend_benchmark
+                    --smoke --overlay ${_overlay}
+                    --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-${_overlay}.json")
+                set_tests_properties(MacViewerParity_${_overlay} PROPERTIES
                     LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
             endforeach()
         endif()

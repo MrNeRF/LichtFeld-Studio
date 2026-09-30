@@ -1,5 +1,7 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Vulkan HiGS tile dimensions are inserted at configure time.
+@LFS_METAL_MACRO_LAYOUT@
 // Desktop buildOverlayParamsCpuFloats ABI. Checked against the host enum.
 constant uint overlay_parameter_count=207;
 bool overlay_enabled(float x){return x>.5f;}
