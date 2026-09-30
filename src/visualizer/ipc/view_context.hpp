@@ -4,6 +4,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "internal/viewport.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
 
 #include <array>
@@ -27,6 +28,22 @@ namespace lfs::vis {
         bool orthographic = false;
         float ortho_scale = 100.0f;
     };
+
+    inline ViewInfo makeViewInfo(const Viewport& viewport, const ViewSettings& settings, const glm::ivec2 size) {
+        ViewInfo info{};
+        const auto& camera = viewport.camera;
+        for (int row = 0; row < 3; ++row)
+            for (int col = 0; col < 3; ++col)
+                info.rotation[row * 3 + col] = camera.R[col][row];
+        info.translation = {camera.t.x, camera.t.y, camera.t.z};
+        info.pivot = {camera.pivot.x, camera.pivot.y, camera.pivot.z};
+        info.width = size.x;
+        info.height = size.y;
+        info.fov = lfs::rendering::focalLengthToVFov(settings.focal_length_mm);
+        info.orthographic = settings.orthographic;
+        info.ortho_scale = settings.ortho_scale;
+        return info;
+    }
 
     struct SetViewParams {
         std::array<float, 3> eye;

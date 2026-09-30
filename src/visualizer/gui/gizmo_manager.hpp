@@ -182,6 +182,7 @@ namespace lfs::vis {
 
             // Viewport gizmo
             bool viewport_gizmo_dragging_ = false;
+            std::uint64_t viewport_gizmo_epoch_ = 0;
             ViewId viewport_gizmo_view_ = kNoView;
             ViewId transform_gizmo_view_ = kNoView;
             glm::dvec2 gizmo_drag_start_cursor_{0.0, 0.0};

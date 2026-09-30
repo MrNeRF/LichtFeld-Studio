@@ -11,6 +11,7 @@
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_types.hpp"
 #include "rendering/selection_ops.hpp"
+#include "rendering/view_source.hpp"
 #include <array>
 #include <cstdint>
 #include <expected>
@@ -242,6 +243,8 @@ namespace lfs::vis {
         bool pollPendingPassiveRingCount() const;
 
         struct ViewerViewportContext {
+            ViewId view = kNoView;
+            std::uint64_t screen_epoch = 0;
             SplitViewPanelId panel = SplitViewPanelId::Left;
             ViewportInfo info;
             const Viewport* viewport = nullptr;
@@ -299,7 +302,8 @@ namespace lfs::vis {
                                                            const core::Tensor* affinity = nullptr);
         [[nodiscard]] std::optional<ViewerViewportContext> resolveViewerViewportContext(
             std::optional<glm::vec2> screen_point = std::nullopt,
-            std::optional<SplitViewPanelId> panel_override = std::nullopt) const;
+            std::optional<SplitViewPanelId> panel_override = std::nullopt,
+            ViewId view = kNoView) const;
         [[nodiscard]] std::optional<int> resolveCommandHoveredGaussianId(float x, float y, int camera_index,
                                                                          const SelectionFilterState& filters,
                                                                          const SelectionProjectionContext& projection_context);

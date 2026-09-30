@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <glm/gtc/quaternion.hpp>
+#include <limits>
 #include <nlohmann/json.hpp>
 
 namespace lfs::vis::screen {
@@ -93,7 +94,9 @@ namespace lfs::vis::screen {
                 read(key, [&](const Json& v) {
                     if (!v.is_number_integer())
                         return false;
-                    const auto value = v.get<long long>();
+                    if (v.is_number_unsigned() && v.get<std::uint64_t>() > static_cast<std::uint64_t>(hi))
+                        return false;
+                    const auto value = v.get<std::int64_t>();
                     if (value < lo || value > hi)
                         return false;
                     out = static_cast<int>(value);
@@ -103,9 +106,12 @@ namespace lfs::vis::screen {
 
             void count(const char* key, std::size_t& out) {
                 read(key, [&](const Json& v) {
-                    if (!v.is_number_unsigned())
+                    if (!v.is_number_integer() || (!v.is_number_unsigned() && v.get<std::int64_t>() < 0))
                         return false;
-                    out = v.get<std::size_t>();
+                    const auto value = v.get<std::uint64_t>();
+                    if (value > std::numeric_limits<std::size_t>::max())
+                        return false;
+                    out = static_cast<std::size_t>(value);
                     return true;
                 });
             }
@@ -158,7 +164,19 @@ namespace lfs::vis::screen {
         return {{"camera",
                  {{"rotation", mat3Json(camera.camera.R)},
                   {"translation", vec3Json(camera.camera.t)},
-                  {"pivot", vec3Json(camera.camera.pivot)}}},
+                  {"pivot", vec3Json(camera.camera.pivot)},
+                  {"home_rotation", mat3Json(camera.camera.home_R)},
+                  {"home_translation", vec3Json(camera.camera.home_t)},
+                  {"home_pivot", vec3Json(camera.camera.home_pivot)},
+                  {"home_saved", camera.camera.home_saved},
+                  {"zoom_speed", camera.camera.zoomSpeed},
+                  {"max_zoom_speed", camera.camera.maxZoomSpeed},
+                  {"rotate_speed", camera.camera.rotateSpeed},
+                  {"centre_speed", camera.camera.rotateCenterSpeed},
+                  {"roll_speed", camera.camera.rotateRollSpeed},
+                  {"translate_speed", camera.camera.translateSpeed},
+                  {"wasd_speed", camera.camera.wasdSpeed},
+                  {"max_wasd_speed", camera.camera.maxWasdSpeed}}},
                 {"settings", viewSettingsToJson(settings)},
                 {"auto_orthographic", auto_orthographic}};
     }
@@ -184,6 +202,30 @@ namespace lfs::vis::screen {
         const auto auto_ortho = json.find("auto_orthographic");
         if (auto_ortho != json.end() && !auto_ortho->is_boolean())
             return false;
+        auto restored_camera = camera;
+        auto& durable = restored_camera.camera;
+        FieldReader reader(*camera_it);
+        reader.read("home_rotation", [&](const Json& value) {
+            const auto matrix = readMat3(value);
+            if (!matrix)
+                return false;
+            durable.home_R = *matrix;
+            return true;
+        });
+        reader.vec3("home_translation", durable.home_t);
+        reader.vec3("home_pivot", durable.home_pivot);
+        reader.boolean("home_saved", durable.home_saved);
+        reader.number("zoom_speed", durable.zoomSpeed, 0.0f, std::numeric_limits<float>::max());
+        reader.number("max_zoom_speed", durable.maxZoomSpeed, 0.0f, std::numeric_limits<float>::max());
+        reader.number("rotate_speed", durable.rotateSpeed, 0.0f, std::numeric_limits<float>::max());
+        reader.number("centre_speed", durable.rotateCenterSpeed, 0.0f, std::numeric_limits<float>::max());
+        reader.number("roll_speed", durable.rotateRollSpeed, 0.0f, std::numeric_limits<float>::max());
+        reader.number("translate_speed", durable.translateSpeed, 0.0f, std::numeric_limits<float>::max());
+        reader.number("wasd_speed", durable.wasdSpeed, 0.0f, std::numeric_limits<float>::max());
+        reader.number("max_wasd_speed", durable.maxWasdSpeed, 0.0f, std::numeric_limits<float>::max());
+        if (!reader.ok())
+            return false;
+        camera = std::move(restored_camera);
         camera.setViewMatrix(*rotation, *translation);
         camera.camera.pivot = *pivot;
         settings = *restored;
@@ -262,6 +304,7 @@ namespace lfs::vis::screen {
         case ViewAxis::None: return;
         }
         view.camera.camera.setAxisAlignedView(index, negative);
+        view.settings.grid_plane = index;
         if (!view.settings.orthographic && !view.settings.equirectangular) {
             setOrthographic(view, true, viewport_height);
             view.auto_orthographic = true;

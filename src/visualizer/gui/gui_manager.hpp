@@ -157,6 +157,7 @@ namespace lfs::vis {
             void commitUiVisibilityTransitionIfFrameReady(bool frame_ready);
             [[nodiscard]] bool isUiHidden() const { return ui_hidden_; }
             [[nodiscard]] ViewportLayout viewportLayout() const { return viewport_layout_; }
+            [[nodiscard]] std::vector<ViewId> visibleViews() const;
             [[nodiscard]] screen::AreaId viewAt(float x, float y) const;
             bool isPositionInViewport(double x, double y) const;
             bool isPositionOverFloatingPanel(double x, double y) const;

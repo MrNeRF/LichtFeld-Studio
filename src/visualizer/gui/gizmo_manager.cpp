@@ -1145,6 +1145,16 @@ namespace lfs::vis::gui {
     }
 
     void GizmoManager::updateToolState(const UIContext& ctx, bool ui_hidden) {
+        if (viewport_gizmo_dragging_ &&
+            (viewer_->screens().screenEpoch() != viewport_gizmo_epoch_ ||
+             !viewer_->findView(viewport_gizmo_view_).viewport)) {
+            viewport_gizmo_dragging_ = false;
+            viewport_gizmo_view_ = kNoView;
+            if (SDL_Window* const window = viewer_->getWindow()) {
+                SDL_SetWindowRelativeMouseMode(window, false);
+                SDL_WarpMouseInWindow(window, gizmo_drag_start_cursor_.x, gizmo_drag_start_cursor_.y);
+            }
+        }
         auto* const scene_manager = ctx.viewer->getSceneManager();
         auto* const align_tool = ctx.viewer->getAlignTool();
         auto* const selection_tool = ctx.viewer->getSelectionTool();
@@ -3090,6 +3100,7 @@ namespace lfs::vis::gui {
                     rendering_manager->markCameraPoseChanged(viewport.view);
                 } else {
                     viewport_gizmo_dragging_ = true;
+                    viewport_gizmo_epoch_ = viewer_->screens().screenEpoch();
                     viewport_gizmo_view_ = hovered_panel->id;
                     active_viewport.camera.startRotateAroundCenter(capture_mouse_pos, time);
                     if (SDL_Window* const window = viewer_->getWindow()) {

@@ -169,19 +169,25 @@ namespace lfs::vis {
         return bounds;
     }
 
-    std::optional<RenderingManager::GTSelectionContext> RenderingManager::gtComparisonSelectionContext() const {
+    std::optional<RenderingManager::GTSelectionContext> RenderingManager::gtComparisonSelectionContext(ViewId id) const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        if (!this->state().split_view_service_.isGTComparisonActive(activeSettingsLocked())) {
+        if (id == kNoView)
+            id = activeViewId();
+        const auto settings = view_source_.viewSettings(id);
+        if (!settings)
+            return std::nullopt;
+        const auto& state = viewState(id);
+        if (!state.split_view_service_.isGTComparisonActive(RenderSettings(settings_, *settings))) {
             return std::nullopt;
         }
-        if (!this->state().vulkan_gt_comparison_selection_view_.has_value()) {
+        if (!state.vulkan_gt_comparison_selection_view_.has_value()) {
             return std::nullopt;
         }
-        const auto& view = *this->state().vulkan_gt_comparison_selection_view_;
+        const auto& view = *state.vulkan_gt_comparison_selection_view_;
         if (view.size.x <= 0 || view.size.y <= 0) {
             return std::nullopt;
         }
-        if (view.size != this->state().vulkan_gt_comparison_content_size_) {
+        if (view.size != state.vulkan_gt_comparison_content_size_) {
             return std::nullopt;
         }
         // Fallback contract: when any condition fails the accessor returns nullopt and every

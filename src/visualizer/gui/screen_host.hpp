@@ -152,6 +152,7 @@ namespace lfs::vis::gui {
         screen::LayoutGeometry geometry_;
         std::vector<AreaFrame> frames_;
         std::uint64_t laid_out_generation_ = 0;
+        std::uint64_t laid_out_epoch_ = 0;
         bool layout_changed_ = true;
 
         screen::AreaGestures gestures_;

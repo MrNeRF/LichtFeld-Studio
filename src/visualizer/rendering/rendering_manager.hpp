@@ -431,7 +431,7 @@ namespace lfs::vis {
             GTRenderCamera camera;
             glm::ivec2 size{0, 0};
         };
-        [[nodiscard]] std::optional<GTSelectionContext> gtComparisonSelectionContext() const;
+        [[nodiscard]] std::optional<GTSelectionContext> gtComparisonSelectionContext(ViewId view = kNoView) const;
 
         // Current camera tracking for GT comparison
         void setCurrentCameraId(int cam_id) {

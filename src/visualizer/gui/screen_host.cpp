@@ -262,6 +262,7 @@ namespace lfs::vis::gui {
         });
         auto geometry = screen.solve(work, metrics);
         const bool changed = scale_changed || !(work == work_) || screen.generation() != laid_out_generation_ ||
+                             services_.screens->screenEpoch() != laid_out_epoch_ ||
                              geometry.areas.size() != geometry_.areas.size() ||
                              !std::equal(geometry.areas.begin(), geometry.areas.end(), geometry_.areas.begin(),
                                          [](const screen::AreaGeometry& a, const screen::AreaGeometry& b) {
@@ -270,6 +271,7 @@ namespace lfs::vis::gui {
         work_ = work;
         geometry_ = std::move(geometry);
         laid_out_generation_ = screen.generation();
+        laid_out_epoch_ = services_.screens->screenEpoch();
         layout_changed_ = changed;
         if (!changed)
             return;
@@ -665,7 +667,8 @@ namespace lfs::vis::gui {
     void ScreenHost::draw(const UIContext& ui, const PanelDrawContext& draw, const PanelInputState& input,
                           const bool force_live, const PanelAnimationDemand demand) {
         syncPanelEditors();
-        if (layout_changed_ || services_.screens->screen().generation() != laid_out_generation_)
+        if (layout_changed_ || services_.screens->screen().generation() != laid_out_generation_ ||
+            services_.screens->screenEpoch() != laid_out_epoch_)
             layout(work_, ui_scale_);
 
         const bool keyboard_activity = !input.keys_pressed.empty() || !input.keys_released.empty() ||

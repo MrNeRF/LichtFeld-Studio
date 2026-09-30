@@ -1009,23 +1009,7 @@ namespace lfs::vis {
             if (!rendering_manager_)
                 return std::nullopt;
 
-            const auto& settings = rendering_manager_->getSettings();
-            const auto R = getViewport().getRotationMatrix();
-            const auto T = getViewport().getTranslation();
-
-            vis::ViewInfo info;
-            for (int i = 0; i < 3; ++i)
-                for (int j = 0; j < 3; ++j)
-                    info.rotation[i * 3 + j] = R[j][i];
-            info.translation = {T.x, T.y, T.z};
-            const auto P = getViewport().camera.getPivot();
-            info.pivot = {P.x, P.y, P.z};
-            info.width = getViewport().windowSize.x;
-            info.height = getViewport().windowSize.y;
-            info.fov = lfs::rendering::focalLengthToVFov(settings.focal_length_mm);
-            info.orthographic = settings.orthographic;
-            info.ortho_scale = settings.ortho_scale;
-            return info;
+            return makeViewInfo(getViewport(), rendering_manager_->getSettings(), getViewport().windowSize);
         });
         callback_cleanup_.add([] { vis::set_view_callback(nullptr); });
 
@@ -2634,8 +2618,10 @@ namespace lfs::vis {
             gui_manager_ && gui_manager_->isInteractiveTransitionSettling();
 
         std::vector<ViewId> visible_views;
-        for (const auto id : screen_service_.screen().views()) {
-            if (!gui_manager_ || gui_manager_->screenHost().viewContent(id))
+        if (gui_manager_) {
+            visible_views = gui_manager_->visibleViews();
+        } else {
+            for (const auto id : screen_service_.screen().views())
                 visible_views.push_back(id.value);
         }
         rendering_manager_->retainVisibleViews(visible_views);

@@ -6843,23 +6843,18 @@ namespace lfs::vis::gui {
         beginScaleGizmoFrame();
         beginBoundsGizmoFrame();
         view_overlay_commands_.clear();
-        for (const auto view_id : viewer_->screens().screen().views()) {
-            if (!screen_host_.viewContent(view_id))
+        const auto overlay_epoch = viewer_->screens().screenEpoch();
+        for (const auto id : visibleViews()) {
+            if (viewer_->screens().screenEpoch() != overlay_epoch)
+                break;
+            const screen::AreaId view_id{id};
+            const auto target = viewer_->findView(id);
+            if (!target.viewport)
                 continue;
-            const auto target = viewer_->findView(view_id.value);
             ViewportLayout overlay_layout{.view = view_id.value, .pos = target.pos, .size = target.size};
             draw_ctx.viewport = &overlay_layout;
             const auto overlay_settings = viewer_->getRenderingManager()->settingsForView(view_id.value);
-            ViewInfo overlay_info{};
-            std::copy_n(glm::value_ptr(target.viewport->camera.R), 9, overlay_info.rotation.begin());
-            std::copy_n(glm::value_ptr(target.viewport->camera.t), 3, overlay_info.translation.begin());
-            const auto pivot = target.viewport->camera.getPivot();
-            std::copy_n(glm::value_ptr(pivot), 3, overlay_info.pivot.begin());
-            overlay_info.width = static_cast<int>(target.size.x);
-            overlay_info.height = static_cast<int>(target.size.y);
-            overlay_info.fov = lfs::rendering::focalLengthToVFov(overlay_settings.focal_length_mm);
-            overlay_info.orthographic = overlay_settings.orthographic;
-            overlay_info.ortho_scale = overlay_settings.ortho_scale;
+            const auto overlay_info = makeViewInfo(*target.viewport, overlay_settings, glm::ivec2(target.size));
             lfs::rendering::ScreenOverlayRenderer* overlay_renderer = nullptr;
             if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr) {
                 overlay_renderer = &rendering->viewState(view_id.value).screen_overlay_renderer_;
@@ -6875,11 +6870,18 @@ namespace lfs::vis::gui {
                 overlay_renderer->beginFrame();
             }
 
+            const auto target_exists = [&]() {
+                return viewer_->screens().screenEpoch() == overlay_epoch && viewer_->findView(id).viewport;
+            };
             const auto draw_screen_overlay_content = [&]() {
                 if (has_python_overlay_hooks) {
                     LOG_TIMER_THRESHOLD("gui_render.viewport_overlay.python_hooks", 0.25);
                     lfs::python::invoke_python_hooks("viewport_overlay", "draw", true);
+                    if (!target_exists())
+                        return;
                     lfs::python::invoke_python_hooks("viewport_overlay", "draw", false);
+                    if (!target_exists())
+                        return;
                 }
 
                 if (has_viewport_overlay_panels) {
@@ -6888,6 +6890,8 @@ namespace lfs::vis::gui {
                                           .target = PanelRenderTarget::for_space(PanelSpace::ViewportOverlay),
                                       },
                                       draw_ctx);
+                    if (!target_exists())
+                        return;
                 }
 
                 if (has_overlay_popups && view_id.value == viewer_->screens().activeView()) {
@@ -6898,7 +6902,9 @@ namespace lfs::vis::gui {
 
             draw_screen_overlay_content();
 
-            view_overlay_commands_[view_id.value] = consumeLineRendererCommands();
+            auto commands = consumeLineRendererCommands();
+            if (target_exists())
+                view_overlay_commands_[id] = std::move(commands);
         }
         draw_ctx.viewport = &viewport_layout_;
 
@@ -7105,10 +7111,8 @@ namespace lfs::vis::gui {
                 }
             }
             LOG_TIMER_THRESHOLD("gui_render.screen_overlay_renderer.endFrame", 0.25);
-            for (const auto id : viewer_->screens().screen().views()) {
-                if (!screen_host_.viewContent(id))
-                    continue;
-                auto& overlay = rendering->viewState(id.value).screen_overlay_renderer_;
+            for (const auto id : visibleViews()) {
+                auto& overlay = rendering->viewState(id).screen_overlay_renderer_;
                 if (overlay.isFrameActive())
                     overlay.endFrame();
             }
@@ -7180,11 +7184,7 @@ namespace lfs::vis::gui {
             VkClearValue clear_value{};
             clear_value.color = VkClearColorValue{{bg.x, bg.y, bg.z, 1.0f}};
 
-            std::vector<ViewId> visible_views;
-            if (viewer_)
-                for (const auto id : viewer_->screens().screen().views())
-                    if (screen_host_.viewContent(id))
-                        visible_views.push_back(id.value);
+            const auto visible_views = visibleViews();
             bool interop_prepare_ok = true;
             auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
             if (vulkan_context) {
@@ -7801,21 +7801,30 @@ namespace lfs::vis::gui {
         }
     }
 
+    std::vector<ViewId> GuiManager::visibleViews() const {
+        std::vector<ViewId> views;
+        if (!viewer_)
+            return views;
+        const auto& screen = viewer_->screens().screen();
+        for (const auto id : screen.views()) {
+            if (ui_hidden_ ? id == screen.activeView() : screen_host_.viewContent(id).has_value())
+                views.push_back(id.value);
+        }
+        return views;
+    }
+
     screen::AreaId GuiManager::viewAt(const float x, const float y) const {
-        const auto active = viewer_->screens().screen().activeView();
-        const auto hovered = ui_hidden_ ? screen::AreaId{} : screen_host_.viewAt(x, y);
-        const screen::Rect viewport_rect{viewport_layout_.pos.x, viewport_layout_.pos.y,
-                                         viewport_layout_.size.x, viewport_layout_.size.y};
-        return screen_host_detail::displayedViewAt(ui_hidden_, active, hovered, viewport_rect, x, y);
+        for (const auto id : visibleViews()) {
+            const auto target = viewer_->findView(id);
+            if (target.viewport && x >= target.pos.x && y >= target.pos.y &&
+                x < target.pos.x + target.size.x && y < target.pos.y + target.size.y)
+                return screen::AreaId{id};
+        }
+        return {};
     }
 
     bool GuiManager::isPositionInViewport(double x, double y) const {
-        if (!ui_hidden_)
-            return screen_host_.viewAt(static_cast<float>(x), static_cast<float>(y)).valid();
-        return (x >= viewport_layout_.pos.x &&
-                x < viewport_layout_.pos.x + viewport_layout_.size.x &&
-                y >= viewport_layout_.pos.y &&
-                y < viewport_layout_.pos.y + viewport_layout_.size.y);
+        return viewAt(static_cast<float>(x), static_cast<float>(y)).valid();
     }
 
     bool GuiManager::isPositionOverFloatingPanel(const double x, const double y) const {

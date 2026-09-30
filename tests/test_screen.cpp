@@ -5,6 +5,8 @@
 #include "gui/panel_input_utils.hpp"
 #include "gui/screen_host.hpp"
 #include "gui/screen_host_logic.hpp"
+#include "ipc/view_context.hpp"
+#include "project/session_state.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "screen/area_gestures.hpp"
 #include "screen/screen.hpp"
@@ -507,6 +509,26 @@ namespace lfs::vis::screen {
 
         ASSERT_TRUE(screen.toggleQuadView(view, 800.0f));
         ASSERT_EQ(screen.views().size(), 4u);
+        int axis_views = 0;
+        for (const auto id : screen.views()) {
+            const auto* quad = screen.view(id);
+            switch (alignedViewAxis(quad->camera.camera.R)) {
+            case ViewAxis::Top:
+                EXPECT_EQ(quad->settings.grid_plane, 1);
+                ++axis_views;
+                break;
+            case ViewAxis::Front:
+                EXPECT_EQ(quad->settings.grid_plane, 2);
+                ++axis_views;
+                break;
+            case ViewAxis::Right:
+                EXPECT_EQ(quad->settings.grid_plane, 0);
+                ++axis_views;
+                break;
+            default: break;
+            }
+        }
+        EXPECT_EQ(axis_views, 3);
         ASSERT_TRUE(screen.toggleQuadView(screen.views()[2], 800.0f));
 
         EXPECT_EQ(screen.views().size(), 1u);
@@ -562,6 +584,68 @@ namespace lfs::vis::screen {
         EXPECT_FALSE(gui::screen_host_detail::cornerGestureZone(geometry, false, 12.0f, 100.0f, 100.0f));
     }
 
+    TEST_F(ScreenTest, ReplacingScreenInvalidatesHostAtEqualGeneration) {
+        ScreenService source;
+        gui::ScreenHost host(source);
+        auto first = Screen::load(source.screen().save(), source.editorTypes());
+        ASSERT_TRUE(first);
+        source.replace(std::move(*first));
+        host.layout(kBounds, 1.0f);
+        const auto scene = source.screen().findEditor(editors::kScene);
+        const auto generation = source.screen().generation();
+        ASSERT_TRUE(source.screen().setEditor(scene, editors::kView3D));
+        auto second = Screen::load(source.screen().save(), source.editorTypes());
+        ASSERT_TRUE(second);
+        source.replace(std::move(*second));
+        ASSERT_EQ(source.screen().generation(), generation);
+        host.layout(kBounds, 1.0f);
+        ASSERT_NE(host.area(scene), nullptr);
+        EXPECT_EQ(host.area(scene)->editor, editors::kView3D);
+        EXPECT_TRUE(host.viewContent(scene));
+    }
+
+    TEST_F(ScreenTest, DurableCameraStateSurvivesLegacyImportAndScreenRoundTrip) {
+        View3DSpace original;
+        auto& camera = original.camera.camera;
+        camera.home_R = glm::mat3(glm::rotate(glm::mat4(1.0f), 0.4f, glm::vec3(1, 0, 0)));
+        camera.home_t = {3, 4, 5};
+        camera.home_pivot = {1, 2, 3};
+        camera.zoomSpeed = 17;
+        camera.maxZoomSpeed = 160;
+        camera.rotateSpeed = 0.003f;
+        camera.rotateCenterSpeed = 0.004f;
+        camera.rotateRollSpeed = 0.02f;
+        camera.translateSpeed = 0.006f;
+        camera.wasdSpeed = 22;
+        camera.maxWasdSpeed = 180;
+        for (const bool saved : {false, true}) {
+            camera.home_saved = saved;
+            const auto legacy = project::capturePanelCameraProjectState(original.camera, original.settings.ortho_scale);
+            const auto imported = project::panelCameraProjectStateFromJson(project::panelCameraProjectStateToJson("primary", legacy));
+            ASSERT_TRUE(imported);
+            auto screen = Screen::makeDefault(registry);
+            auto* view = screen.view(screen.activeView());
+            project::applyPanelCameraProjectState(view->camera, view->settings, *imported);
+            const auto restored = Screen::load(screen.save(), registry);
+            ASSERT_TRUE(restored);
+            const auto* reopened = restored->view(restored->activeView());
+            EXPECT_EQ(reopened->save()["camera"], original.save()["camera"]);
+            auto home = reopened->camera;
+            home.camera.resetToHome();
+            EXPECT_EQ(home.camera.R, camera.home_R);
+            EXPECT_EQ(home.camera.t, camera.home_t);
+            EXPECT_EQ(home.camera.pivot, camera.home_pivot);
+        }
+    }
+
+    TEST(ViewInfo, PitchedCameraUsesRowMajorRotation) {
+        View3DSpace view;
+        view.camera.camera.R = glm::mat3(glm::rotate(glm::mat4(1.0f), 0.6f, glm::vec3(1, 0, 0)));
+        const auto info = makeViewInfo(view.camera, view.settings, {800, 600});
+        EXPECT_EQ(lfs::rendering::mat3FromRowMajor3x3(info.rotation.data()), view.camera.camera.R);
+        EXPECT_NE(info.rotation[5], info.rotation[7]);
+    }
+
     TEST_F(ScreenTest, ViewSettingsJsonRoundTripsEveryField) {
         ViewSettings s;
         s.focal_length_mm = 50.0f;
@@ -605,6 +689,14 @@ namespace lfs::vis::screen {
         ASSERT_TRUE(restored);
         EXPECT_EQ(viewSettingsToJson(*restored), viewSettingsToJson(s));
         EXPECT_NE(viewSettingsToJson(ViewSettings{}), viewSettingsToJson(s));
+        auto signed_json = viewSettingsToJson(s);
+        signed_json["split_view_offset"] = std::int64_t{0};
+        const auto signed_result = viewSettingsFromJson(signed_json, ViewSettings{});
+        ASSERT_TRUE(signed_result);
+        EXPECT_EQ(signed_result->split_view_offset, 0u);
+        EXPECT_FALSE(viewSettingsFromJson(nlohmann::json{{"split_view_offset", -1}}, ViewSettings{}));
+        EXPECT_FALSE(viewSettingsFromJson(nlohmann::json{{"split_view_offset", 0.5}}, ViewSettings{}));
+        EXPECT_FALSE(viewSettingsFromJson(nlohmann::json{{"grid_plane", std::numeric_limits<std::uint64_t>::max()}}, ViewSettings{}));
         EXPECT_FALSE(viewSettingsFromJson(nlohmann::json{{"grid_plane", 7}}, ViewSettings{}));
         EXPECT_FALSE(viewSettingsFromJson(nlohmann::json{{"orthographic", 1}}, ViewSettings{}));
     }
