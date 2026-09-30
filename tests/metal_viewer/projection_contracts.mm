@@ -284,6 +284,16 @@ static void run(id<MTLDevice> device) {
             "Resident LOD weights did not scale activated source opacity");
     require(cut_result[0].color.x == 0 && std::abs(cut_result[0].color.y - .5f) < 1e-5f && cut_result[0].color.z == 0,
             "LOD level palette did not use the selected-cut level");
+    cut_camera.display.z = 1;
+    cut_command = [queue commandBuffer];
+    pipeline.encode(cut_command, spherical, cut_camera, 0, PrimitiveMode::Gaussian, {cut_output}, {}, {}, {}, lod);
+    [cut_command commit];
+    [cut_command waitUntilCompleted];
+    const double rx = std::pow(double(cut_camera.intrinsics.x) * std::exp(double(logs[0])) / 3., 2);
+    const double ry = std::pow(double(cut_camera.intrinsics.y) * std::exp(double(logs[1])) / 3., 2);
+    const double expected_density_opacity = 1.25 * std::sqrt(rx * ry / ((rx + .3) * (ry + .3)));
+    require(cut_command.status == MTLCommandBufferStatusCompleted && std::abs(cut_result[0].conic_opacity.w - expected_density_opacity) < 1e-5,
+            "Spark compact 1..2 activation, transition weight or non-mip compensation differs");
     lod.indices.offset = 1;
     reject([&] { pipeline.encode([queue commandBuffer], spherical, cut_camera, 0, PrimitiveMode::Gaussian, { cut_output }, {}, {}, {}, lod); });
     std::printf("Metal projection contracts passed: %zu SH component comparisons; 4 storage formats; SH0-3; boundary, point and clipping checks.\n", comparisons);

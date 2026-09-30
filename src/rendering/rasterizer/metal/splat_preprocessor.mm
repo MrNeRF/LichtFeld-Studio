@@ -47,6 +47,7 @@ namespace lfs::rendering::metal {
                 !p.extent.x || !p.extent.y || p.extent.x > 65535 || p.extent.y > 65535 ||
                 p.extent.z > uint32_t(CameraModel::Equirectangular) || p.extent.w > 1 || p.intrinsics.x <= 0 || p.intrinsics.y <= 0 || p.clip_scale.x <= 0 ||
                 p.clip_scale.y <= p.clip_scale.x || p.clip_scale.z <= 0 || p.clip_scale.w < 0 ||
+                (p.display.z != 0 && p.display.z != 1) ||
                 !std::isfinite(p.rasterization.w) || (p.rasterization.w != 0.f && p.rasterization.w != 1.f))
                 throw std::invalid_argument("Invalid Metal splat projection");
             if (p.extent.z == uint32_t(CameraModel::Equirectangular)) {

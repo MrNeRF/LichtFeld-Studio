@@ -29,7 +29,7 @@ namespace {
         int width = 1280, height = 720, warmup = 12, samples = 40;
         std::string output, images, overlay;
         bool verify_parity = false;
-        bool mip = false, ortho = false, depth = false, export_scale = false, gut = false, equirect = false, subregion = false, near = false, portal = false, portal_tone = false, lod = false, lod_logical = false, lod_weights = false, lod_debug = false;
+        bool mip = false, ortho = false, depth = false, export_scale = false, gut = false, equirect = false, subregion = false, near = false, portal = false, portal_tone = false, lod = false, lod_logical = false, lod_weights = false, lod_debug = false, spark = false;
     };
     Options options(int argc, char** argv) {
         Options o;
@@ -54,6 +54,10 @@ namespace {
                 o.lod_logical = arg == "--lod_logical";
                 o.lod_weights = arg == "--lod_weights";
                 o.lod_debug = arg == "--lod_debug";
+                continue;
+            }
+            if (arg == "--spark") {
+                o.spark = o.lod = true;
                 continue;
             }
             if (arg == "--equirect") {
@@ -130,7 +134,7 @@ namespace {
             throw std::runtime_error("Benchmark reservation limit exceeded");
         return o;
     }
-    core::SplatData scene(size_t count, int degree, float rest_amplitude = .1f, bool panorama = false, bool near = false, const Options* reference_cut = nullptr) {
+    core::SplatData scene(size_t count, int degree, float rest_amplitude = .1f, bool panorama = false, bool near = false, const Options* reference_cut = nullptr, bool spark = false) {
         std::mt19937 random(1939);
         std::uniform_real_distribution<float> unit(0.f, 1.f);
         std::vector<float> means(count * 3), sh0(count * 3), scales(count * 3), rotation(count * 4, 0), opacity(count);
@@ -168,6 +172,8 @@ namespace {
             }
             rotation[4 * i] = 1.f;
             opacity[i] = 1.f + unit(random);
+            if (spark)
+                opacity[i] = .2f + .4f * float(i % 5);
         }
         for (auto& value : rest)
             value = (unit(random) - .5f) * rest_amplitude;
@@ -213,6 +219,20 @@ namespace {
             (void)model.apply_shN_value_quant();
             if (!model.shN_value_quantized())
                 throw std::runtime_error("SH3 fixture must use production Q16 storage");
+        }
+        if (spark) {
+            model.lod_tree = std::make_unique<core::SplatLodTree>();
+            auto& tree = *model.lod_tree;
+            tree.lod_opacity_encoded = true;
+            tree.child_count.assign(count, 0);
+            tree.child_start.assign(count, 0);
+            tree.lod_level.assign(count, 0);
+            tree.centers.resize(count);
+            tree.sizes.resize(count);
+            for (size_t n = 0; n < count; ++n) {
+                tree.centers[n] = {means[n * 3], means[n * 3 + 1], means[n * 3 + 2]};
+                tree.sizes[n] = 2.f * std::exp(std::max({scales[n * 3], scales[n * 3 + 1], scales[n * 3 + 2]}));
+            }
         }
         return model;
     }
@@ -293,7 +313,7 @@ namespace {
             throw std::runtime_error("Benchmark preferences must be isolated");
         Json cases = Json::array();
         for (int degree : {0, 3}) {
-            auto model = scene(o.count, degree, o.overlay == "affine" ? 1.f : .1f, o.equirect, o.near);
+            auto model = scene(o.count, degree, o.overlay == "affine" ? 1.f : .1f, o.equirect, o.near, nullptr, o.spark);
             vis::MetalViewportRenderer metal;
             vis::VksplatViewportRenderer vulkan;
             rendering::ViewportRenderRequest request;
@@ -526,7 +546,7 @@ namespace {
         }
         rusage usage{};
         getrusage(RUSAGE_SELF, &usage);
-        return {{"schema_version", 1}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", 1939}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"profile", o.portal ? "portal" : "studio"}, {"tone_fixture", o.portal_tone}, {"reference_resident_cut", o.gut && o.lod}, {"lod", o.lod}, {"lod_logical", o.lod_logical}, {"lod_weights", o.lod_weights}, {"lod_debug", o.lod_debug}, {"gut", o.gut}, {"equirectangular", o.equirect}, {"near_fixture", o.near}, {"subregion", o.subregion}, {"reference_full_frame_crop", o.equirect && o.subregion}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
+        return {{"schema_version", 1}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", 1939}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"profile", o.portal ? "portal" : "studio"}, {"tone_fixture", o.portal_tone}, {"reference_resident_cut", o.gut && o.lod}, {"spark_opacity", o.spark}, {"lod", o.lod}, {"lod_logical", o.lod_logical}, {"lod_weights", o.lod_weights}, {"lod_debug", o.lod_debug}, {"gut", o.gut}, {"equirectangular", o.equirect}, {"near_fixture", o.near}, {"subregion", o.subregion}, {"reference_full_frame_crop", o.equirect && o.subregion}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
     }
 } // namespace
 int main(int argc, char** argv) {

@@ -178,7 +178,8 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     }
     const float4x4 matrix=frame.world_to_camera*model_to_world;
     const float3 view=(matrix*float4(p,1)).xyz;
-    const bool portal=frame.rasterization.w==1.f;
+    const bool spark=frame.display.z==1.f;
+    const bool portal=frame.rasterization.w==1.f && !spark;
     const bool equirectangular=frame.extent.z==2u;
     const bool orthographic=frame.extent.z==1u;
     const float projection_depth=equirectangular?length(view):view.z;
@@ -211,7 +212,8 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
         if(!active)return;
     }
     const float logit=layout.half_attrs?float(reinterpret_cast<device const half*>(opacity)[source]):opacity[source];
-    float alpha=1.0f/(1.0f+exp(-logit));
+    float alpha=spark?max(logit,0.f):1.0f/(1.0f+exp(-logit));
+    if(spark && alpha>1.f)alpha=min(alpha*4.f-3.f,5.f);
     if(!isfinite(alpha) || alpha<0.5f/255.0f) return;
     if(layout.lod&8u)alpha*=clamp(lod_weights[i],0.f,1.f);
     if(!isfinite(alpha))return;
@@ -316,7 +318,7 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
         float3 covariance=float3(raw_xx+frame.clip_scale.w,raw_covariance.y/variance_scale,raw_yy+frame.clip_scale.w);
         float det=covariance.x*covariance.z-covariance.y*covariance.y;
         if(!isfinite(det) || det<=1e-12f) return;
-        if(frame.extent.w) alpha*=sqrt(max((raw_xx*raw_yy-covariance.y*covariance.y)/det,0.f));
+        if(frame.extent.w || (spark && primitive_mode!=3u)) alpha*=sqrt(max((raw_xx*raw_yy-covariance.y*covariance.y)/det,0.f));
         if(alpha<0.5f/255.0f) return;
         const float2 camera_extent=all(frame.panorama.xy>0)?frame.panorama.xy:float2(frame.extent.xy);
         const float2 source_extent=max(float2(1),round(camera_extent/raster_scale));
@@ -373,10 +375,11 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
         const float3 palette[5]={float3(1,0,0),float3(0,1,0),float3(0,0,1),float3(1,1,0),float3(1,0,1)};
         color*=palette[level];
     }
-    if(portal) {
-        color=lfsPortalCompactColor(color);
-        if(frame.display.x>0)color=lfsDisplaySplat(color,uint(frame.display.x),frame.display.y);
-    }
+    if(portal)color=lfsPortalCompactColor(color);
+    // Portal tone is still per Gaussian for Spark density, while compact
+    // codecs and normalized tails apply only to the standard opacity profile.
+    if(frame.rasterization.w==1.f && frame.display.x>0)
+        color=lfsDisplaySplat(color,uint(frame.display.x),frame.display.y);
     if(layout.overlay)color=overlay_projection_color(color,center+(equirectangular?frame.panorama.zw:float2(0)),flags,params);
     if(!all(isfinite(color))) return;
     // The viewer reference sorts by radial distance squared, not camera Z.

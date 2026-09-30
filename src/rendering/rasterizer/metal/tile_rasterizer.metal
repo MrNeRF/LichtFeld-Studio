@@ -262,6 +262,16 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
             means[lane] = splat.mean_depth;
             conics[lane] = splat.conic_opacity;
             colors[lane] = splat.color;
+            if((p.unused&16u) && p.mode!=1u) {
+                const float opacity=p.mode==3u?gut[id].mean_opacity.w:splat.conic_opacity.w;
+                const float adjusted=sqrt(8.f)+.7f*(min(opacity,5.f)-1.f);
+                const float power=opacity>1.f?.5f*adjusted*adjusted:max(4.f,log(max(opacity,.5f/255.f)*510.f));
+                // Neither radius nor radial sort metric is used by this hot
+                // blend path. Reuse shared slots for cutoff and density, with
+                // one exp per Gaussian/tile and no new buffers or shared memory.
+                means[lane].w=exp(-power);
+                colors[lane].w=opacity>1.f?exp((opacity*opacity-1.f)/2.718281828459045f):0.f;
+            }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
         if (!done) for (uint j = 0; j < count; ++j) {
@@ -297,8 +307,14 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                 const float value=q>8.f?0.f:exp(-.5f*q);
                 alpha=c.w*max(0.f,(value-edge)/(1.f-edge));
             } else alpha = c.w * exp(-.5f * q);
+            if((p.unused&16u) && p.mode!=1u) {
+                const float opacity=p.mode==3u?gut[ids[j]].mean_opacity.w:c.w;
+                const float value=clamp(alpha/max(opacity,1e-8f),0.f,1.f);
+                if(value<means[j].w)continue;
+                if(colors[j].w>0)alpha=1.f-pow(max(0.f,1.f-value),colors[j].w);
+            }
             alpha = min(alpha, .999f);
-            if((p.mode==0u && (p.unused&4u)) || (p.mode!=3u && (p.unused&1u) && overlay_enabled(overlay_params[22].y) && !(overlay_flags[ids[j]]&2u))){
+            if((p.mode==0u && (p.unused&4u)) || (p.mode!=3u && !(p.unused&16u) && (p.unused&1u) && overlay_enabled(overlay_params[22].y) && !(overlay_flags[ids[j]]&2u))){
                 const float2 origin=floor((float2(pixel)+p.render_origin.xy)/overlay_macro_extent)*overlay_macro_extent;
                 const half2 center=half2((means[j].xy+p.render_origin.xy-origin)/overlay_tile_extent);
                 const half2 coord=half2((float2(pixel)+p.render_origin.xy-origin)/overlay_tile_extent);
@@ -328,7 +344,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                 const float2 macro_origin=floor((float2(pixel)+p.render_origin.xy)/overlay_macro_extent)*overlay_macro_extent;
                 // Vulkan's 3DGUT shared-struct path retains full float centers;
                 // only the 3DGS macro-relative path compresses them to half.
-                const float2 overlay_center=p.mode==3u?means[j].xy:
+                const float2 overlay_center=(p.mode==3u || (p.unused&16u))?means[j].xy:
                     float2(half2((means[j].xy+p.render_origin.xy-macro_origin)/overlay_tile_extent))*overlay_tile_extent+macro_origin-p.render_origin.xy;
                 const uint status=overlay_selection(overlay_params,logical,flags,overlay_center+(p.camera.z==2u?p.panorama.zw:float2(0)),selection,preview);
                 const bool selectable=(flags&2u)==0;

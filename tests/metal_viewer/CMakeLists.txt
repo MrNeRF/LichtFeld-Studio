@@ -150,6 +150,16 @@ if(TARGET lfs_visualizer)
                         LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
                 endforeach()
             endforeach()
+            foreach(_spark_mode IN ITEMS native mip ortho depth export_scale portal portal_tone lod_weights)
+                set(_spark_args --spark)
+                if(NOT _spark_mode STREQUAL "native")
+                    list(APPEND _spark_args --${_spark_mode})
+                endif()
+                add_test(NAME MacViewerParity_spark_${_spark_mode} COMMAND mac_viewer_backend_benchmark
+                    --smoke ${_spark_args} --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-spark-${_spark_mode}.json")
+                set_tests_properties(MacViewerParity_spark_${_spark_mode} PROPERTIES
+                    LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
+            endforeach()
             foreach(_overlay IN ITEMS selection preview crop ellipsoid window markers flash affine)
                 add_test(NAME MacViewerParity_${_overlay} COMMAND mac_viewer_backend_benchmark
                     --smoke --overlay ${_overlay}

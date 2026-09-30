@@ -479,7 +479,7 @@ namespace lfs::vis {
                core::gpu_backend_of(model.means_raw()) == core::GpuBackend::Metal &&
                (!r.equirectangular || r.gut) && (r.splat_render_profile == 0 || r.splat_render_profile == 1) &&
                !r.lod_gpu_traversal.enabled &&
-               (!model.lod_tree || (!model.lod_tree->rad_source.valid() && !model.lod_tree->lod_opacity_encoded)) &&
+               (!model.lod_tree || (!model.lod_tree->rad_source.valid() && (!model.lod_tree->lod_opacity_encoded || !r.gut))) &&
                (!r.lod_indices || r.lod_count <= std::numeric_limits<uint32_t>::max()) &&
                model.means_raw().dtype() == core::DataType::Float32 && model.sh0_raw().dtype() == core::DataType::Float32 &&
                ((model.scaling_raw().dtype() == core::DataType::Float32 && model.rotation_raw().dtype() == core::DataType::Float32 &&
@@ -568,15 +568,17 @@ namespace lfs::vis {
             // Viewer raster clipping differs from the desktop projection matrix's
             // near/far planes. Derive the reference near threshold at configure.
             const bool portal = request.splat_render_profile == 1;
-            const bool mip = request.mip_filter && !(portal && request.gut);
-            const float dilation = portal && !request.gut ? .075f : mip ? .1f
-                                                                        : .3f;
+            const bool spark = (request.lod_indices && request.lod_count) && model.lod_tree && model.lod_tree->lod_opacity_encoded;
+            const bool portal_math = portal && !spark;
+            const bool mip = request.mip_filter && !(portal_math && request.gut);
+            const float dilation = portal_math && !request.gut ? .075f : mip ? .1f
+                                                                             : .3f;
             projection.clip_scale = {kViewerNearClip, std::numeric_limits<float>::max(), request.scaling_modifier, dilation};
             projection.extent = {uint32_t(f.size.x), uint32_t(f.size.y), uint32_t(request.equirectangular ? CameraModel::Equirectangular : request.frame_view.orthographic ? CameraModel::Orthographic
                                                                                                                                                                            : CameraModel::Perspective),
                                  uint32_t(mip)};
             projection.rasterization = {request.frame_view.rasterization_scale, expected_depth ? 1.f : 0.f, request.frame_view.far_plane, float(request.splat_render_profile)};
-            projection.display = {float(request.color_tonemapping), request.color_exposure, 0, 0};
+            projection.display = {float(request.color_tonemapping), request.color_exposure, spark ? 1.f : 0.f, 0};
             const auto panorama_size = request.frame_view.cameraSize();
             projection.panorama = {float(panorama_size.x), float(panorama_size.y), float(request.frame_view.subregion_origin.x), float(request.frame_view.subregion_origin.y)};
             SceneBuffers scene{};

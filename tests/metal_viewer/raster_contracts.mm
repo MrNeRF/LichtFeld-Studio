@@ -367,6 +367,25 @@ static void run(id<MTLDevice> device) {
     wait(command);
     const auto picked = reinterpret_cast<const uint32_t*>(static_cast<const char*>(lod_read.pick.contents) + 14 * lod_read.pick_stride) + 18;
     require(*picked == logical_id, "Resident LOD picking published a compact draw slot instead of its logical primitive");
+    // Spark high-opacity nodes encode a density kernel, not a probability.
+    // Independent double-precision oracle checks the nonlinear saturation.
+    ProjectedSplat density_splat = portal_splat;
+    density_splat.conic_opacity.w = 2.f;
+    auto density_input = [device newBufferWithBytes:&density_splat length:sizeof(density_splat) options:MTLResourceStorageModeShared];
+    camera.display.z = 1;
+    command = [queue commandBuffer];
+    raster.encode(command, {density_input}, 1, RasterMode::Gaussian, {0, 0, 0, 0}, expected_frame, {}, {}, camera);
+    const auto density_read = readback(device, command, expected_frame);
+    wait(command);
+    const double density = std::exp(3. / std::exp(1.));
+    for (uint32_t x = 18; x <= 22; ++x) {
+        const double q = double(x - 18) * (x - 18), power = .5 * q;
+        double alpha = power > .5 * std::pow(std::sqrt(8.) + .7, 2) ? 0 : std::min(.999, 1 - std::pow(1 - std::exp(-power), density));
+        if (alpha < .5 / 255)
+            alpha = 0;
+        const auto color = reinterpret_cast<const _Float16*>(static_cast<const char*>(density_read.color.contents) + 14 * density_read.color_stride) + x * 4;
+        require(std::abs(float(color[3]) - alpha) < .001, "Spark density was clamped/treated as a probability");
+    }
     std::puts("Metal tile raster contracts passed: stable depth, RGB/alpha/depth/pick, modes, scan/block boundaries, overflow and frame reuse.");
 }
 int main() {

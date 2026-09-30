@@ -156,7 +156,15 @@ a full source-layout scene with unselected nodes hidden by zero opacity, weights
 folded into opacity, and debug/mask state mapped to source IDs. This is explicitly
 reported and no timing ratio is produced for that fixture. Vulkan is unchanged.
 
-Unsupported GPU LOD traversal, Spark-encoded opacity and RAD traversal/paging
+Resident Spark-encoded 3DGS opacity is decoded from the compact 1..2 range
+to the 1..5 density kernel, with transition weights and non-mip compensation.
+Density and cutoff are computed once per Gaussian/tile into existing shared
+slots, with no extra allocation or per-pixel density exponential. Portal tone
+remains per Gaussian while its compact probability codecs/tails are disabled
+for Spark. Eight real-reference comparisons and analytic activation/alpha
+oracles exercise this separately from the ordinary sigmoid path.
+
+Unsupported GPU LOD traversal, Spark-encoded 3DGUT and RAD traversal/paging
 requests retain the existing Vulkan path. Selection queries,
 the desktop UI, grid, gizmos and final composition also remain on Vulkan. This
 backend is not yet a fully independent Metal desktop presentation/editor stack.
