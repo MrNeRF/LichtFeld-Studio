@@ -53,7 +53,7 @@ static void compare(const Readback& r, const std::vector<ProjectedSplat>& splats
     std::vector<uint32_t> sorted(splats.size());
     for (uint32_t i = 0; i < sorted.size(); ++i)
         sorted[i] = i;
-    std::stable_sort(sorted.begin(), sorted.end(), [&](auto a, auto b) { return splats[a].mean_depth.z < splats[b].mean_depth.z; });
+    std::stable_sort(sorted.begin(), sorted.end(), [&](auto a, auto b) { return splats[a].color.w < splats[b].color.w; });
     for (uint32_t y = 0; y < h; ++y)
         for (uint32_t x = 0; x < w; ++x) {
             double rgb[3] = {}, trans = 1, z = 0, near = 0, median = 1e10;
@@ -65,13 +65,13 @@ static void compare(const Readback& r, const std::vector<ProjectedSplat>& splats
                     x / 16 < s.bounds.x / 16 || x / 16 >= (s.bounds.z + 15) / 16 ||
                     y / 16 < s.bounds.y / 16 || y / 16 >= (s.bounds.w + 15) / 16)
                     continue;
-                const double dx = x + .5 - s.mean_depth.x, dy = y + .5 - s.mean_depth.y;
+                const double dx = x - s.mean_depth.x, dy = y - s.mean_depth.y;
                 const auto c = s.conic_opacity;
                 const double q = c.x * dx * dx + 2 * c.y * dx * dy + c.z * dy * dy;
                 double a = mode == RasterMode::Points ? (dx * dx + dy * dy <= s.mean_depth.w * s.mean_depth.w ? c.w : 0) : mode == RasterMode::Discs ? (q <= 9 ? c.w : 0)
                                                                                                                                                      : c.w * std::exp(-.5 * q);
                 a = std::min(a, double(.999f));
-                if (a < 1. / 255)
+                if (a < .5 / 255)
                     continue;
                 if (picked == UINT32_MAX) {
                     picked = id;
@@ -81,7 +81,7 @@ static void compare(const Readback& r, const std::vector<ProjectedSplat>& splats
                     rgb[c] += s.color[c] * a * trans;
                 z += s.mean_depth.z * a * trans;
                 const double next = trans * (1 - a);
-                if (trans >= .5 && next < .5)
+                if (trans > .5 && next <= .5)
                     median = s.mean_depth.z;
                 trans = next;
                 if (trans < 1e-4)
@@ -117,6 +117,8 @@ static void run(id<MTLDevice> device) {
             s.mean_depth = {x, y, 1 + float(random() % 11), 3};
             s.conic_opacity = {.5f, 0, .5f, .05f + float(random() % 800) / 1000};
             s.color = {float(random() % 100) / 100, float(random() % 100) / 100, float(random() % 100) / 100, 1};
+            // Deliberately disagree with linear Z; radial ties remain stable.
+            s.color.w = 1 + float((i * 7) % 11);
             s.bounds = {uint32_t(std::max(0.f, x - 6)), uint32_t(std::max(0.f, y - 6)),
                         uint32_t(std::min(float(width), x + 7)), uint32_t(std::min(float(height), y + 7))};
             if (i % 19 == 3)
@@ -145,6 +147,17 @@ static void run(id<MTLDevice> device) {
             compare(read, splats, width, height, bg, mode);
         }
     }
+    // Exact 50% crossing is inclusive, matching desktop median depth. This
+    // analytic case catches a wrong strict comparison independently of Vulkan.
+    const std::vector<ProjectedSplat> threshold_splats={
+        {{18,14,3,3},{1,0,1,.5f},{1,0,0,9},{16,12,21,17}},
+        {{18,14,6,3},{1,0,1,.9f},{0,1,0,36},{16,12,21,17}}};
+    auto threshold_input=[device newBufferWithBytes:threshold_splats.data() length:threshold_splats.size()*sizeof(ProjectedSplat) options:MTLResourceStorageModeShared];
+    auto threshold_command=[queue commandBuffer];
+    raster.encode(threshold_command,{threshold_input},2,RasterMode::Gaussian,bg,frame);
+    const auto threshold_read=readback(device,threshold_command,frame);
+    wait(threshold_command);
+    compare(threshold_read,threshold_splats,width,height,bg,RasterMode::Gaussian);
     // Overflow cannot publish only part of a scene. Reusing that reservation for
     // an empty scene must clear stale ranges and recover a successful status.
     RasterFrame small(device, width, height, 1, 1);

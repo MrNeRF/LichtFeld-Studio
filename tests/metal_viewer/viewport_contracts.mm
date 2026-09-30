@@ -45,6 +45,26 @@ static void run() {
         if (!depth)
             throw std::runtime_error(depth.error());
         require(std::abs(*depth - 3.f) < 1e-4f, "Native desktop depth differs");
+        auto asynchronous = Tensor::full({size_t(size.y)+2, size_t(size.x)+2, 3}, -1.f, Device::CPU);
+        const auto ticket = renderer.submitReadback(vis::VksplatViewportRenderer::OutputSlot::Main, asynchronous, 1, 1, false);
+        require(ticket.has_value(), "Native asynchronous color submit failed");
+        require(renderer.outstandingReadbacks() == 1, "Native ticket not tracked");
+        const auto ready = renderer.pollReadback(*ticket, true);
+        require(ready.has_value() && *ready == vis::VksplatViewportRenderer::ReadbackTicketStatus::Ready,
+                "Native asynchronous color delivery failed");
+        require(asynchronous.ptr<float>()[0] == -1.f, "Readback overwrote destination border");
+        const size_t async_center = (((size.y/2)+1)*(size.x+2)+(size.x/2)+1)*3;
+        require(asynchronous.ptr<float>()[async_center] == pixels.ptr<float>()[center], "Asynchronous color differs");
+        auto plane = Tensor::full({size_t(size.y),size_t(size.x)},-1.f,Device::CPU);
+        const auto depth_ticket = renderer.submitReadback(vis::VksplatViewportRenderer::OutputSlot::Main,plane,0,0,true);
+        require(depth_ticket.has_value() && renderer.pollReadback(*depth_ticket,true).has_value(), "Depth plane ticket failed");
+        require(std::abs(plane.ptr<float>()[(size.y/2)*size.x+size.x/2]-3.f)<1e-4f,"Asynchronous depth differs");
+        const auto abandoned = renderer.submitReadback(vis::VksplatViewportRenderer::OutputSlot::Main,plane,0,0,true);
+        require(abandoned.has_value(),"Abandoned ticket submit failed");
+        renderer.abandonReadback(*abandoned);
+        plane.fill_(-7.f);
+        require(!renderer.pollReadback(*abandoned,true).has_value(),"Abandoned ticket delivered");
+        require(plane.ptr<float>()[0]==-7.f,"Abandoned ticket wrote to host destination");
         if (frame == 5)
             request.frame_view.size = {80, 48};
         if (frame == 6) {
@@ -60,7 +80,71 @@ static void run() {
         }
     }
     request.overlay.markers.show_rings = true;
-    require(!vis::MetalViewportRenderer::supports(model, request), "Unsupported overlay silently dropped");
+    require(vis::MetalViewportRenderer::supports(model, request), "Native rings rejected");
+    request.overlay.markers.show_rings = false;
+    request.frame_view.orthographic = false;
+    const auto snapshot = [&](rendering::ViewportRenderRequest& r) {
+        const auto frame=renderer.render(context,model,r,vis::VksplatViewportRenderer::OutputSlot::Main);
+        if(!frame)throw std::runtime_error(frame.error());
+        auto pixels=Tensor::empty({64,96,3},Device::CPU,core::DataType::Float32);
+        const auto read=renderer.readColor(vis::VksplatViewportRenderer::OutputSlot::Main,pixels,0,0);
+        if(!read)throw std::runtime_error(read.error());
+        return pixels;
+    };
+    rendering::GaussianScopedBoxFilter crop;
+    crop.bounds.min={-1,-1,-4}; crop.bounds.max={1,1,-2};
+    request.filters.crop_region=crop;
+    require(snapshot(request).ptr<float>()[((64/2)*96+96/2)*3]>.5f,"Inside crop lost splat");
+    request.filters.crop_region->inverse=true;
+    require(snapshot(request).ptr<float>()[((64/2)*96+96/2)*3]<.1f,"Inverse crop did not cull splat");
+    request.filters.crop_region->desaturate=true;
+    const auto dim=snapshot(request);
+    const auto center=((64/2)*96+96/2)*3;
+    require(std::abs(dim.ptr<float>()[center]-dim.ptr<float>()[center+1])<.01f,"Crop desaturation differs");
+    request.filters={};
+    request.overlay.has_selection=true;
+    request.overlay.emphasis.mask=std::make_shared<Tensor>(Tensor::from_vector(std::vector<float>{1},{1},Device::GPU).to(core::DataType::UInt8));
+    const auto selected=snapshot(request);
+    require(selected.ptr<float>()[center+1]>.2f,"Committed selection tint missing");
+    request.overlay.has_selection=false;
+    request.overlay.emphasis.mask.reset();
+    request.overlay.markers.show_center_markers=true;
+    const auto marker=snapshot(request);
+    require(marker.ptr<float>()[center+1]>.5f && marker.ptr<float>()[center]<.1f,"Native center marker missing");
+    request.gut=true;
+    require(!vis::MetalViewportRenderer::supports(model,request),"Unsupported 3DGUT silently accepted");
+    require(renderer.release(vis::VksplatViewportRenderer::OutputSlot::Main).has_value(),"Native release failed");
+    require(renderer.size(vis::VksplatViewportRenderer::OutputSlot::Main)==glm::ivec2(0),"Released slot retained output");
+    auto positions=Tensor::from_vector(std::vector<float>{0,0,-3,0,0,-6},{2,3},Device::GPU);
+    auto colors=Tensor::from_vector(std::vector<float>{0,1,0,1,0,0},{2,3},Device::GPU);
+    vis::PointCloudVulkanRenderer::RenderRequest points;
+    points.positions=&positions;points.colors=&colors;points.size={96,64};points.focal_y=64;points.voxel_size=.2f;
+    points.view=glm::mat4(1);
+    // Explicit OpenGL-Z/Vulkan-Y projection supplied by the desktop contract.
+    points.view_projection=glm::mat4(0);
+    points.view_projection[0][0]=1;points.view_projection[1][1]=-1.5f;
+    points.view_projection[2][2]=-1.002002f;points.view_projection[2][3]=-1;
+    points.view_projection[3][2]=-.2002002f;
+    const auto point_frame=renderer.renderPoints(context,points,vis::PointCloudVulkanRenderer::OutputSlot::Main);
+    require(point_frame.has_value(),"Native point raster failed");
+    auto point_pixels=Tensor::empty({64,96,3},Device::CPU,core::DataType::Float32);
+    require(renderer.readColor(vis::VksplatViewportRenderer::OutputSlot::Main,point_pixels,0,0).has_value(),"Point readback failed");
+    require(point_pixels.ptr<float>()[center+1]>.9f && point_pixels.ptr<float>()[center]<.1f,
+            "Point depth test did not keep nearest color");
+    const auto point_depth=renderer.readDepth({.pixel={48,32},.source_size={96,64}});
+    require(point_depth.has_value() && std::abs(*point_depth-3.f)<1e-4f,"Point linear depth differs");
+    vis::PointCloudVulkanRenderer point_reference;
+    const auto reference_frame=point_reference.render(context,points);
+    require(reference_frame.has_value(),"Point Vulkan reference failed");
+    const auto reference_pixels=point_reference.readOutputImage(context);
+    require(reference_pixels.has_value(),"Point Vulkan reference readback failed");
+    size_t coverage_difference=0;
+    for(size_t pixel=0;pixel<64*96;++pixel){
+        const bool native_visible=point_pixels.ptr<float>()[pixel*3+1]>.5f;
+        const bool reference_visible=(*reference_pixels)->ptr<float>()[pixel*3+1]>.5f;
+        if(native_visible!=reference_visible)++coverage_difference;
+    }
+    require(coverage_difference==0,"Native point coverage differs from desktop Vulkan");
     std::puts("Native viewport texture, resident storage, camera, depth, resize and slot reuse contracts passed.");
 }
 int main() {

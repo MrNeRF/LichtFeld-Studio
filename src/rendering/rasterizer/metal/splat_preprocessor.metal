@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <metal_stdlib>
 using namespace metal;
+@LFS_METAL_OVERLAY@
 
 constant uint sh_storage [[function_constant(0)]];
 constant uint sh_degree [[function_constant(1)]];
@@ -12,9 +13,26 @@ struct Projection {
     float4 camera_local, intrinsics, clip_scale;
     uint4 extent;
 };
-struct InputLayout { uint count, rest, has_deleted, objects, half_attrs; };
+struct InputLayout { uint count, rest, has_deleted, objects, half_attrs, overlay; };
 struct SceneObject { float4x4 model_to_world; float4 camera_local; uint4 flags; };
 struct ProjectedSplat { float4 mean_depth, conic_opacity, color; uint4 bounds; };
+
+// Matches the Studio reference's covariance extent limit before inversion.
+float3 clamp_covariance_extent(float3 covariance, float opacity) {
+    const float power=max(4.f,log(max(opacity,.5f/255.f+1e-8f)*510.f));
+    const float maximum=512.5f*512.5f/(2.f*power);
+    const float average=.5f*(covariance.x+covariance.z);
+    const float delta=sqrt(max(0.f,average*average-(covariance.x*covariance.z-covariance.y*covariance.y)));
+    const float eigen1=average+delta, eigen2=max(average-delta,0.f);
+    const float capped1=min(eigen1,maximum), capped2=min(eigen2,maximum);
+    if(capped1>=eigen1 && capped2>=eigen2) return covariance;
+    const float2 axis=abs(covariance.y)>1e-6f?normalize(float2(covariance.y,eigen1-covariance.x)):
+        (covariance.x>=covariance.z?float2(1,0):float2(0,1));
+    const float2 other=float2(axis.y,-axis.x);
+    return float3(capped1*axis.x*axis.x+capped2*other.x*other.x,
+                  capped1*axis.x*axis.y+capped2*other.x*other.y,
+                  capped1*axis.y*axis.y+capped2*other.y*other.y);
+}
 
 // Same cell swizzle and per-256 bounds as core/sh_value_codec.cuh.
 // Q16 stores integer codes; it MUST NOT be interpreted as IEEE half.
@@ -69,16 +87,21 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     device const uchar* deleted [[buffer(7)]], device ProjectedSplat* output [[buffer(8)]],
     constant Projection& frame [[buffer(9)]], constant InputLayout& layout [[buffer(10)]],
     device const uint* object_indices [[buffer(11)]], device const SceneObject* objects [[buffer(12)]],
+    device const float4* params [[buffer(13)]], device uint* overlay_flags [[buffer(14)]],
+    device const uchar* node_mask [[buffer(15)]],
     uint i [[thread_position_in_grid]]) {
     if(i>=layout.count) return;
     output[i]=ProjectedSplat{};
+    if(layout.overlay)overlay_flags[i]=0;
     if(layout.has_deleted && deleted[i]) return;
     const float3 p=float3(means[i]);
     float4x4 model_to_world=frame.model_to_world;
     float3 camera_local=frame.camera_local.xyz;
     uint active_degree=sh_degree;
+    int node=0;
     if(layout.objects) {
         const uint index=object_indices[i];
+        node=int(index);
         if(index>=layout.objects) return;
         const auto object=objects[index];
         if(!object.flags.x) return;
@@ -89,11 +112,38 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     const float4x4 matrix=frame.world_to_camera*model_to_world;
     const float3 view=(matrix*float4(p,1)).xyz;
     if(!all(isfinite(view)) || view.z<=frame.clip_scale.x || view.z>=frame.clip_scale.y) return;
+    uint flags=0;
+    if(layout.overlay){
+        bool active=true;
+        const float3 world=(model_to_world*float4(p,1)).xyz;
+        overlay_filter(params,0,false,node,world,active,flags);
+        for(uint n=0;n<15 && overlay_enabled(params[26+n*7].x);++n)overlay_filter(params,26+n*7,false,node,world,active,flags);
+        overlay_filter(params,7,true,node,world,active,flags);
+        for(uint n=0;n<15 && overlay_enabled(params[131+n*5].x);++n)overlay_filter(params,131+n*5,true,node,world,active,flags);
+        if(active&&overlay_enabled(params[13].x)){
+            float4 k=params[12];
+            if(k.x<=0)k=float4(frame.intrinsics.xy,float2(frame.extent.xy)*.5f);
+            if(frame.extent.z)k=float4(frame.intrinsics.xy,float2(frame.extent.xy)*.5f);
+            const float2 center=k.xy*view.xy/(frame.extent.z?1.f:view.z)+k.zw;
+            const float2 half_extent=.5f*float2(frame.extent.xy)*params[206].xy;
+            const float2 window=.5f*float2(frame.extent.xy)+float2(params[14].w,params[15].w)*(.5f*float2(frame.extent.xy)-half_extent);
+            const bool inside=all(abs(center-window)<=half_extent)&&view.z>=-params[15].z&&view.z<=-params[14].z;
+            if(!inside){flags|=2u;if(overlay_enabled(params[13].z))flags|=1u;if(overlay_enabled(params[13].y))active=false;}
+        }
+        const float4 emphasis=params[20];
+        if(active&&overlay_enabled(emphasis.y)&&node>=0&&node<int(round(emphasis.z))){
+            if(overlay_enabled(emphasis.x)&&!node_mask[node])flags|=3u;
+            if(emphasis.w>0&&node_mask[node])flags|=4u;
+        }
+        overlay_flags[i]=flags;
+        if(!active)return;
+    }
     const float logit=layout.half_attrs?float(reinterpret_cast<device const half*>(opacity)[i]):opacity[i];
     float alpha=1.0f/(1.0f+exp(-logit));
-    if(!isfinite(alpha) || alpha<1.0f/255.0f) return;
+    if(!isfinite(alpha) || alpha<0.5f/255.0f) return;
     const bool orthographic=frame.extent.z!=0;
-    const float2 center=frame.intrinsics.xy*view.xy/(orthographic?1.0f:view.z)+frame.intrinsics.zw;
+    // Vulkan's project_splat subtracts half a pixel before integer sampling.
+    const float2 center=frame.intrinsics.xy*view.xy/(orthographic?1.0f:view.z)+frame.intrinsics.zw-.5f;
     float3 conic;
     float radius;
     if(primitive_mode==1u) {
@@ -103,14 +153,16 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     } else {
         float4 q=layout.half_attrs?float4(reinterpret_cast<device const half4*>(rotations)[i]):rotations[i];
         const float norm2=dot(q,q);
-        if(!isfinite(norm2) || norm2<1e-20f) return;
-        q*=rsqrt(norm2);
+        if(!isfinite(norm2)) return;
+        q=norm2>1e-8f?q*rsqrt(norm2):float4(1,0,0,0);
         const float3 log_scale=layout.half_attrs?float3(reinterpret_cast<device const packed_half3*>(scales)[i]):float3(scales[i]);
         const float3 s=exp(log_scale)*frame.clip_scale.z;
         if(!all(isfinite(s))) return;
         // Bound the covariance Jacobian near the frustum, as in 3DGS projection.
-        const float2 limit=1.3f*float2(frame.extent.xy)*0.5f/frame.intrinsics.xy;
-        const float2 ratio=clamp(view.xy/view.z,-limit,limit);
+        const float2 margin=.3f*.5f*float2(frame.extent.xy)/frame.intrinsics.xy;
+        const float2 positive=(float2(frame.extent.xy)-frame.intrinsics.zw)/frame.intrinsics.xy+margin;
+        const float2 negative=frame.intrinsics.zw/frame.intrinsics.xy+margin;
+        const float2 ratio=clamp(view.xy/view.z,-negative,positive);
         const float3 jx=orthographic?float3(frame.intrinsics.x,0,0):float3(frame.intrinsics.x/view.z,0,-frame.intrinsics.x*ratio.x/view.z);
         const float3 jy=orthographic?float3(0,frame.intrinsics.y,0):float3(0,frame.intrinsics.y/view.z,-frame.intrinsics.y*ratio.y/view.z);
         const float3x3 linear=float3x3(matrix[0].xyz,matrix[1].xyz,matrix[2].xyz);
@@ -120,20 +172,28 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
         const float3 u=float3(dot(jx,a),dot(jx,b),dot(jx,c));
         const float3 v=float3(dot(jy,a),dot(jy,b),dot(jy,c));
         const float raw_xx=dot(u,u),raw_yy=dot(v,v);
-        const float xx=raw_xx+frame.clip_scale.w,xy=dot(u,v),yy=raw_yy+frame.clip_scale.w;
-        const float det=xx*yy-xy*xy;
+        float3 covariance=float3(raw_xx+frame.clip_scale.w,dot(u,v),raw_yy+frame.clip_scale.w);
+        float det=covariance.x*covariance.z-covariance.y*covariance.y;
         if(!isfinite(det) || det<=1e-12f) return;
-        if(frame.extent.w) alpha*=sqrt(clamp((raw_xx*raw_yy-xy*xy)/det,0.0f,1.0f));
-        if(alpha<1.0f/255.0f) return;
+        if(frame.extent.w) alpha*=sqrt(max((raw_xx*raw_yy-covariance.y*covariance.y)/det,0.f));
+        if(alpha<0.5f/255.0f) return;
+        covariance=clamp_covariance_extent(covariance,alpha);
+        const float xx=covariance.x,xy=covariance.y,yy=covariance.z;
+        det=xx*yy-xy*xy;
         conic=float3(yy,-xy,xx)/det;
         const float eigen=.5f*(xx+yy)+sqrt(max(0.0f,.25f*(xx-yy)*(xx-yy)+xy*xy));
-        radius=primitive_mode==2u?3.0f*sqrt(eigen):sqrt(max(0.0f,2.0f*log(alpha*255.0f)*eigen));
+        radius=primitive_mode==2u?3.0f*sqrt(eigen):sqrt(2.0f*max(4.0f,log(alpha*510.0f))*eigen);
     }
     if(!all(isfinite(center)) || !isfinite(radius)) return;
     const float2 extent=float2(frame.extent.xy);
     const float2 lo=clamp(floor(center-radius),0.0f,extent),hi=clamp(ceil(center+radius),0.0f,extent);
     if(any(lo>=hi)) return;
-    const float3 color=evaluate_sh(float3(sh0[i]),p-camera_local,rest,bounds,i,layout.rest,active_degree);
+    float3 color=evaluate_sh(float3(sh0[i]),orthographic?
+        normalize(float3(matrix[0].z,matrix[1].z,matrix[2].z)):p-camera_local,
+        rest,bounds,i,layout.rest,active_degree);
+    if(layout.overlay)color=overlay_projection_color(color,center,flags,params);
     if(!all(isfinite(color))) return;
-    output[i]={float4(center,view.z,radius),float4(conic,alpha),float4(color,1),uint4(uint2(lo),uint2(hi))};
+    // The viewer reference sorts by radial distance squared, not camera Z.
+    // Keep linear Z for depth/picking; color.w is reserved for the sort metric.
+    output[i]={float4(center,view.z,radius),float4(conic,alpha),float4(color,dot(view,view)),uint4(uint2(lo),uint2(hi))};
 }

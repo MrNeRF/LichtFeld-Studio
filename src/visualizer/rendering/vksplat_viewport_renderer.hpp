@@ -326,6 +326,7 @@ namespace lfs::vis {
 #ifdef __APPLE__
         std::unique_ptr<MetalViewportRenderer> metal_viewport_;
         std::array<bool,4> metal_output_{};
+        std::array<int,4> metal_route_{-1,-1,-1,-1};
 #endif
         struct ComposePipeline;
         struct InputBindingResult {

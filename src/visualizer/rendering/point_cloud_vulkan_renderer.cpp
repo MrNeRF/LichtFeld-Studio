@@ -3,6 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "point_cloud_vulkan_renderer.hpp"
+#ifdef __APPLE__
+#include "metal_viewport_renderer.hpp"
+#include "preferences.hpp"
+#endif
 
 #include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
@@ -403,6 +407,10 @@ namespace lfs::vis {
     } // namespace
 
     struct PointCloudVulkanRenderer::Impl {
+#ifdef __APPLE__
+        std::unique_ptr<MetalViewportRenderer> metal;
+        std::array<bool,3> metal_output{};
+#endif
         VulkanContext* context = nullptr;
         VkDevice device = VK_NULL_HANDLE;
         VmaAllocator allocator = VK_NULL_HANDLE;
@@ -2251,6 +2259,17 @@ namespace lfs::vis {
     std::expected<PointCloudVulkanRenderer::RenderResult, std::string>
     PointCloudVulkanRenderer::render(VulkanContext& context, const RenderRequest& request,
                                      OutputSlot output_slot) {
+#ifdef __APPLE__
+        if(UserPreferences::instance().viewerBackend()==rendering::ViewerBackend::Metal && MetalViewportRenderer::supportsPoints(request)){
+            try{
+                if(!impl_->metal)impl_->metal=std::make_unique<MetalViewportRenderer>();
+                auto result=impl_->metal->renderPoints(context,request,output_slot);
+                if(result)impl_->metal_output[static_cast<size_t>(output_slot)]=true;
+                return result;
+            }catch(const std::exception& e){return std::unexpected(e.what());}
+        }
+        impl_->metal_output[static_cast<size_t>(output_slot)]=false;
+#endif
         if (auto r = impl_->ensureInitialized(context); !r) {
             return std::unexpected<std::string>(r.error());
         }
@@ -2259,10 +2278,23 @@ namespace lfs::vis {
 
     std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
     PointCloudVulkanRenderer::readOutputImage(VulkanContext& context, OutputSlot output_slot) {
+#ifdef __APPLE__
+        if(impl_->metal_output[static_cast<size_t>(output_slot)]){
+            const auto slot=static_cast<VksplatViewportRenderer::OutputSlot>(output_slot);
+            const auto size=impl_->metal->size(slot);
+            auto image=core::Tensor::empty({size_t(size.y),size_t(size.x),3},core::Device::CPU,core::DataType::Float32);
+            const auto read=impl_->metal->readColor(slot,image,0,0);
+            if(!read)return std::unexpected(read.error());
+            return std::make_shared<core::Tensor>(std::move(image));
+        }
+#endif
         return impl_->readOutputImage(context, output_slot);
     }
 
     void PointCloudVulkanRenderer::reset() {
+#ifdef __APPLE__
+        impl_->metal.reset();impl_->metal_output.fill(false);
+#endif
         impl_->destroy();
     }
 

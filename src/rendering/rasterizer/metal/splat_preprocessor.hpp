@@ -44,6 +44,14 @@ namespace lfs::rendering::metal {
         BufferSlice objects;        // SceneObject[count]
         uint32_t count = 0;         // zero uses the single object in Projection
     };
+    // Shares the desktop overlay parameter ABI; masks stay resident and retain
+    // their original logical primitive IDs through sorting.
+    struct OverlayBuffers {
+        BufferSlice parameters, flags, selection, preview, node_mask, colors;
+        uint32_t parameter_count = 0;
+        uint32_t node_count = 0;
+        simd_float4 render_origin{};
+    };
 
     struct alignas(16) Projection {
         simd_float4x4 model_to_world;
@@ -58,7 +66,7 @@ namespace lfs::rendering::metal {
     struct alignas(16) ProjectedSplat {
         simd_float4 mean_depth;    // x, y, linear view depth, contribution radius in pixels
         simd_float4 conic_opacity; // inverse covariance xx,xy,yy and activated opacity
-        simd_float4 color;
+        simd_float4 color; // RGB radiance; w is radial sort distance squared, not alpha
         simd_uint4 bounds; // exclusive pixel AABB; empty means culled
     };
     static_assert(sizeof(ProjectedSplat) == 64);
@@ -76,7 +84,7 @@ namespace lfs::rendering::metal {
         void prepare(ShStorage storage, uint32_t active_degree, PrimitiveMode mode);
         void encode(id<MTLCommandBuffer> command, const SplatBuffers& inputs,
                     const Projection& projection, uint32_t active_degree,
-                    PrimitiveMode mode, BufferSlice output, const SceneBuffers& scene = {});
+                    PrimitiveMode mode, BufferSlice output, const SceneBuffers& scene = {}, const OverlayBuffers& overlay = {});
 
     private:
         struct Impl;

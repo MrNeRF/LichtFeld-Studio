@@ -92,7 +92,7 @@ static void run(id<MTLDevice> device) {
                     auto result = static_cast<const ProjectedSplat*>(output.contents);
                     for (uint32_t i = 0; i < n; ++i) {
                         require(result[i].bounds.z > result[i].bounds.x, "Valid Gaussian was culled");
-                        require(std::abs(result[i].mean_depth.x - 128) < 1e-5, "Projection center mismatch");
+                        require(std::abs(result[i].mean_depth.x - 127.5f) < 1e-5, "Projection center mismatch");
                         for (uint32_t c = 0; c < 3; ++c) {
                             // Analytic SH on +Z: only m=0 survives, no copied shader basis.
                             const auto value = [&](uint32_t k) { return canonical[(size_t(i) * rest + k) * 3 + c]; };
@@ -144,7 +144,8 @@ static void run(id<MTLDevice> device) {
         [command commit];
         [command waitUntilCompleted];
         require(command.status == MTLCommandBufferStatusCompleted, "Object transform dispatch failed");
-        require(std::abs(result[0].mean_depth.x - 148) < 1e-4, "Object transform was not applied");
+        require(std::abs(result[0].mean_depth.x - 147.5f) < 1e-4, "Object transform/pixel offset was not applied");
+        require(std::abs(result[0].color.w - 9.09f) < 1e-4, "Radial sort key was replaced by camera Z");
         require(static_cast<const float*>(input.means.buffer.contents)[0] == 0, "Object transform mutated source geometry");
         auto ortho = moved;
         ortho.extent.z = 1;
@@ -153,7 +154,7 @@ static void run(id<MTLDevice> device) {
         [command commit];
         [command waitUntilCompleted];
         require(command.status == MTLCommandBufferStatusCompleted, "Orthographic dispatch failed");
-        require(std::abs(result[0].mean_depth.x - 188) < 1e-4, "Orthographic projection used perspective division");
+        require(std::abs(result[0].mean_depth.x - 187.5f) < 1e-4, "Orthographic projection used perspective division");
         std::array<SceneObject, 2> objects{{{matrix_identity_float4x4, {0, 0, 0, 0}, {1, 0, 0, 0}},
                                             {matrix_identity_float4x4, {0, 0, 0, 0}, {0, 0, 0, 0}}}};
         objects[0].model_to_world.columns[3].x = .6f;
@@ -170,10 +171,20 @@ static void run(id<MTLDevice> device) {
         require(command.status == MTLCommandBufferStatusCompleted, "Scene object dispatch failed");
         for (uint32_t i = 0; i < n; ++i) {
             if (i % 3 == 0)
-                require(std::abs(result[i].mean_depth.x - 168) < 1e-4, "Scene transform not applied");
+                require(std::abs(result[i].mean_depth.x - 167.5f) < 1e-4, "Scene transform not applied");
             else
                 require(result[i].bounds.z == 0, "Invisible/invalid scene node was not culled");
         }
+        // Large, near-camera splats must have the same bounded covariance as Studio.
+        input.log_scales = {buffer(device, xyz.data(), xyz.size() * 4)};
+        input.rotations = {buffer(device, rotations.data(), rotations.size() * 4)};
+        command = [queue commandBuffer];
+        pipeline.encode(command, input, frame(), 0, PrimitiveMode::Gaussian, {output});
+        [command commit];
+        [command waitUntilCompleted];
+        require(command.status == MTLCommandBufferStatusCompleted, "Extent clamp dispatch failed");
+        require(result[0].mean_depth.w <= 512.501f, "Projected radius exceeds Studio's covariance cap");
+        require(result[0].mean_depth.w > 0, "Extent-clamped splat was dropped");
         std::vector<uint8_t> deleted(n, 1);
         input.deleted = {buffer(device, deleted.data(), deleted.size())};
         command = [queue commandBuffer];

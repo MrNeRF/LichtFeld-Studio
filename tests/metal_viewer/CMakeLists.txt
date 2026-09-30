@@ -70,6 +70,12 @@ if(TARGET lfs_visualizer)
                 --smoke --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-benchmark-smoke.json")
             set_tests_properties(MacViewerBackendBenchmarkSmoke PROPERTIES
                 LABELS "benchmark;metal;gpu;metal4" TIMEOUT 180 SKIP_RETURN_CODE 77)
+            foreach(_mode IN ITEMS mip ortho depth)
+                add_test(NAME MacViewerParity_${_mode} COMMAND mac_viewer_backend_benchmark
+                    --smoke --${_mode} --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-${_mode}.json")
+                set_tests_properties(MacViewerParity_${_mode} PROPERTIES
+                    LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
+            endforeach()
         endif()
     endif()
 endif()

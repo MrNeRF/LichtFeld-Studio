@@ -94,7 +94,7 @@ jobs:
           icd="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"
           test -f "$icd"
           VK_DRIVER_FILES="$icd" ctest --test-dir build-macos-release \
-            -R '^MacViewerBackendBenchmarkSmoke$' --no-tests=error --output-on-failure
+            -R '^MacViewer(BackendBenchmarkSmoke|Parity_.*)$' --no-tests=error --output-on-failure
 
       - name: Upload test diagnostics
         if: always()

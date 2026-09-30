@@ -48,7 +48,7 @@ namespace lfs::rendering::metal {
         TileRasterizer(const TileRasterizer&) = delete;
         TileRasterizer& operator=(const TileRasterizer&) = delete;
         void encode(id<MTLCommandBuffer> command, BufferSlice projected, uint32_t count,
-                    RasterMode mode, simd_float4 background, RasterFrame& frame);
+                    RasterMode mode, simd_float4 background, RasterFrame& frame, const OverlayBuffers& overlay = {});
 
     private:
         struct Impl;

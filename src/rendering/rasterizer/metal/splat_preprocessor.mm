@@ -115,7 +115,7 @@ namespace lfs::rendering::metal {
     }
 
     void SplatPreprocessor::encode(id<MTLCommandBuffer> command, const SplatBuffers& in,
-                                   const Projection& projection, uint32_t degree, PrimitiveMode mode, BufferSlice output, const SceneBuffers& scene) {
+                                   const Projection& projection, uint32_t degree, PrimitiveMode mode, BufferSlice output, const SceneBuffers& scene, const OverlayBuffers& overlay) {
         if (!command || command.commandQueue.device != impl_->device || command.status != MTLCommandBufferStatusNotEnqueued)
             throw std::invalid_argument("Metal viewer requires an uncommitted command buffer on the same device");
         if (degree > 3 || (in.layout_rest != 0 && in.layout_rest != 3 && in.layout_rest != 8 && in.layout_rest != 15) ||
@@ -126,6 +126,12 @@ namespace lfs::rendering::metal {
         if (!in.count)
             return;
         const size_t n = in.count;
+        if(overlay.parameter_count){
+            if(overlay.parameter_count!=207)throw std::invalid_argument("Metal overlay parameter ABI mismatch");
+            check_slice(overlay.parameters,207*16,16,impl_->device,"overlay parameters");
+            check_slice(overlay.flags,n*4,4,impl_->device,"overlay flags");
+            if(overlay.node_count)check_slice(overlay.node_mask,overlay.node_count,1,impl_->device,"node emphasis mask");
+        }
         const bool gaussians = mode != PrimitiveMode::Points;
         size_t rest_bytes = 0, bounds_bytes = 0;
         if (degree) {
@@ -165,8 +171,11 @@ namespace lfs::rendering::metal {
             [encoder setBuffer:lengths[i] ? inputs[i].buffer : impl_->empty offset:lengths[i] ? inputs[i].offset : 0 atIndex:i < 8 ? i : i + 3];
         [encoder setBuffer:output.buffer offset:output.offset atIndex:8];
         [encoder setBytes:&projection length:sizeof(projection) atIndex:9];
-        const std::array<uint32_t, 5> layout = {in.count, in.layout_rest, in.deleted.buffer ? 1u : 0u, scene.count, in.non_sh_attrs_f16 ? 1u : 0u};
+        const std::array<uint32_t, 6> layout = {in.count, in.layout_rest, in.deleted.buffer ? 1u : 0u, scene.count, in.non_sh_attrs_f16 ? 1u : 0u, overlay.parameter_count?1u:0u};
         [encoder setBytes:layout.data() length:sizeof(layout) atIndex:10];
+        const std::array<BufferSlice,3> overlays={overlay.parameters,overlay.flags,overlay.node_mask};
+        for(NSUInteger j=0;j<overlays.size();++j)
+            [encoder setBuffer:overlays[j].buffer?:impl_->empty offset:overlays[j].buffer?overlays[j].offset:0 atIndex:13+j];
         const NSUInteger width = std::min(NSUInteger(256), pipeline.maxTotalThreadsPerThreadgroup);
         [encoder dispatchThreads:MTLSizeMake(n, 1, 1) threadsPerThreadgroup:MTLSizeMake(width, 1, 1)];
         [encoder endEncoding];

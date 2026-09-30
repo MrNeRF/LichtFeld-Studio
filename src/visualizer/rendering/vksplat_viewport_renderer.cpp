@@ -2003,6 +2003,13 @@ namespace lfs::vis {
 
     void VksplatViewportRenderer::releasePreviewResources() {
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
+#ifdef __APPLE__
+        if (metal_viewport_) {
+            const auto released = metal_viewport_->release(OutputSlot::Preview);
+            if (!released) LOG_WARN("Metal preview release failed: {}", released.error());
+            else metal_output_[static_cast<size_t>(OutputSlot::Preview)] = false;
+        }
+#endif
         if (!context_) {
             return;
         }
@@ -2019,6 +2026,15 @@ namespace lfs::vis {
 
     void VksplatViewportRenderer::releaseSplitOutputResources() {
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
+#ifdef __APPLE__
+        if (metal_viewport_) {
+            for (const auto slot : {OutputSlot::SplitLeft, OutputSlot::SplitRight}) {
+                const auto released = metal_viewport_->release(slot);
+                if (!released) LOG_WARN("Metal split release failed: {}", released.error());
+                else metal_output_[static_cast<size_t>(slot)] = false;
+            }
+        }
+#endif
         if (!context_) {
             return;
         }
@@ -2045,6 +2061,15 @@ namespace lfs::vis {
 
     void VksplatViewportRenderer::releaseSceneResources() {
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
+#ifdef __APPLE__
+        if (metal_viewport_) {
+            for (const auto slot : {OutputSlot::Main, OutputSlot::SplitLeft, OutputSlot::SplitRight, OutputSlot::Preview}) {
+                const auto released = metal_viewport_->release(slot);
+                if (!released) LOG_WARN("Metal scene release failed: {}", released.error());
+                else metal_output_[static_cast<size_t>(slot)] = false;
+            }
+        }
+#endif
         if (!context_) {
             return;
         }
@@ -2112,14 +2137,15 @@ namespace lfs::vis {
     }
 
     void VksplatViewportRenderer::reset() {
-#ifdef __APPLE__
-        metal_viewport_.reset();
-        metal_output_.fill(false);
-#endif
         // Arena boundary callbacks take sync_mutex_ before readback_mutex_. Keep
         // cancellation in that same order so reset cannot invert the pair.
         cancelArenaHandoff();
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
+#ifdef __APPLE__
+        metal_viewport_.reset();
+        metal_output_.fill(false);
+        metal_route_.fill(-1);
+#endif
         live_submit_callback_ = {};
         // Join page producers before waiting on the device. A device-idle wait
         // does not stop workers from submitting more work or reading metadata.
@@ -6456,17 +6482,40 @@ namespace lfs::vis {
 
     std::expected<VksplatViewportRenderer::ReadbackTicketStatus, std::string>
     VksplatViewportRenderer::pollReadbackTicket(const std::uint64_t ticket) const {
+#ifdef __APPLE__
+        if (MetalViewportRenderer::nativeTicket(ticket)) {
+            std::lock_guard<std::mutex> lock(readback_mutex_);
+            if (!metal_viewport_) return std::unexpected("Metal readback renderer was reset");
+            return metal_viewport_->pollReadback(ticket, false);
+        }
+#endif
         std::lock_guard<std::mutex> lock(readback_mutex_);
         return pollReadbackTicketLocked(ticket);
     }
 
     std::expected<void, std::string> VksplatViewportRenderer::waitReadbackTicket(
         const std::uint64_t ticket) const {
+#ifdef __APPLE__
+        if (MetalViewportRenderer::nativeTicket(ticket)) {
+            std::lock_guard<std::mutex> lock(readback_mutex_);
+            if (!metal_viewport_) return std::unexpected("Metal readback renderer was reset");
+            const auto result = metal_viewport_->pollReadback(ticket, true);
+            if (!result) return std::unexpected(result.error());
+            return {};
+        }
+#endif
         std::lock_guard<std::mutex> lock(readback_mutex_);
         return waitReadbackTicketLocked(ticket);
     }
 
     void VksplatViewportRenderer::abandonReadbackTicket(const std::uint64_t ticket) const {
+#ifdef __APPLE__
+        if (MetalViewportRenderer::nativeTicket(ticket)) {
+            std::lock_guard<std::mutex> lock(readback_mutex_);
+            if (metal_viewport_) metal_viewport_->abandonReadback(ticket);
+            return;
+        }
+#endif
         if (ticket == 0) {
             return;
         }
@@ -6495,7 +6544,11 @@ namespace lfs::vis {
 
     std::size_t VksplatViewportRenderer::outstandingReadbackTickets() const {
         std::lock_guard<std::mutex> lock(readback_mutex_);
-        return readback_ring_.outstandingCount();
+        return readback_ring_.outstandingCount()
+#ifdef __APPLE__
+            + (metal_viewport_ ? metal_viewport_->outstandingReadbacks() : 0)
+#endif
+            ;
     }
 
     std::uint64_t VksplatViewportRenderer::readbackRingFullWaitCount() const {
@@ -6511,7 +6564,10 @@ namespace lfs::vis {
     lfs::Result<glm::ivec2> VksplatViewportRenderer::latestOutputImageSize(
         const OutputSlot output_slot) const {
 #ifdef __APPLE__
-        if(metal_output_[static_cast<size_t>(output_slot)]) return metal_viewport_->size(output_slot);
+        {
+            std::lock_guard<std::mutex> native_lock(readback_mutex_);
+            if(metal_output_[static_cast<size_t>(output_slot)]) return metal_viewport_->size(output_slot);
+        }
 #endif
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
         if (!context_) {
@@ -6635,6 +6691,20 @@ namespace lfs::vis {
 
     std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
     VksplatViewportRenderer::readPreviewDepth(VulkanContext& context, const OutputSlot output_slot) const {
+#ifdef __APPLE__
+        {
+            std::lock_guard<std::mutex> native_lock(readback_mutex_);
+            if(metal_output_[static_cast<size_t>(output_slot)]){
+                const auto extent=metal_viewport_->size(output_slot);
+                auto plane=core::Tensor::empty({size_t(extent.y),size_t(extent.x)},core::Device::CPU,core::DataType::Float32);
+                const auto ticket=metal_viewport_->submitReadback(output_slot,plane,0,0,true);
+                if(!ticket)return std::unexpected(ticket.error());
+                const auto ready=metal_viewport_->pollReadback(*ticket,true);
+                if(!ready)return std::unexpected(ready.error());
+                return std::make_shared<core::Tensor>(std::move(plane));
+            }
+        }
+#endif
         const auto readback_t0 = std::chrono::steady_clock::now();
         const auto size = latestOutputImageSize(output_slot);
         if (!size) {
@@ -6782,6 +6852,13 @@ namespace lfs::vis {
         VulkanContext& context,
         const OutputSlot output_slot,
         lfs::core::Tensor& destination) const {
+#ifdef __APPLE__
+        {
+            std::lock_guard<std::mutex> native_lock(readback_mutex_);
+            if (metal_output_[static_cast<size_t>(output_slot)])
+                return metal_viewport_->submitReadback(output_slot, destination, 0, 0, true);
+        }
+#endif
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
         if (!context_) {
             return std::unexpected("VkSplat output depth readback requested before renderer initialization");
@@ -6926,6 +7003,13 @@ namespace lfs::vis {
         lfs::core::Tensor& destination,
         const int destination_x,
         const int destination_y) const {
+#ifdef __APPLE__
+        {
+            std::lock_guard<std::mutex> native_lock(readback_mutex_);
+            if (metal_output_[static_cast<size_t>(output_slot)])
+                return metal_viewport_->submitReadback(output_slot, destination, destination_x, destination_y, false);
+        }
+#endif
         if (!destination.is_valid() ||
             destination.device() != lfs::core::Device::CPU ||
             destination.ndim() != 3 ||
@@ -7089,8 +7173,11 @@ namespace lfs::vis {
         const int destination_x,
         const int destination_y) const {
 #ifdef __APPLE__
-        if(metal_output_[static_cast<size_t>(output_slot)])
-            return metal_viewport_->readColor(output_slot,destination,destination_x,destination_y);
+        {
+            std::lock_guard<std::mutex> native_lock(readback_mutex_);
+            if(metal_output_[static_cast<size_t>(output_slot)])
+                return metal_viewport_->readColor(output_slot,destination,destination_x,destination_y);
+        }
 #endif
         const auto readback_t0 = std::chrono::steady_clock::now();
         const auto ticket = submitReadOutputImageIntoCpuHwcTicket(
@@ -7112,7 +7199,10 @@ namespace lfs::vis {
         VulkanContext& context,
         const DepthSampleRequest& request) const {
 #ifdef __APPLE__
-        if(metal_output_[static_cast<size_t>(request.output_slot)]) return metal_viewport_->readDepth(request);
+        {
+            std::lock_guard<std::mutex> native_lock(readback_mutex_);
+            if(metal_output_[static_cast<size_t>(request.output_slot)]) return metal_viewport_->readDepth(request);
+        }
 #endif
         const auto readback_t0 = std::chrono::steady_clock::now();
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
@@ -8074,16 +8164,47 @@ namespace lfs::vis {
         const bool synchronize_input_upload,
         const bool deterministic_export) {
 #ifdef __APPLE__
+        std::unique_lock native_lock(readback_mutex_);
         const auto preference=UserPreferences::instance().viewerBackend();
-        if(preference==rendering::ViewerBackend::Metal && output_slot!=OutputSlot::Preview &&
-           !deterministic_export && MetalViewportRenderer::supports(splat_data,request)) {
-            if(!metal_viewport_) metal_viewport_=std::make_unique<MetalViewportRenderer>();
+        if(preference==rendering::ViewerBackend::Metal && !depth_capture_mode_ &&
+           MetalViewportRenderer::supports(splat_data,request)) {
+            try {
+                if(!metal_viewport_) metal_viewport_=std::make_unique<MetalViewportRenderer>();
+            } catch(const std::exception& e) {
+                return std::unexpected(std::string("Metal viewport initialization failed: ") + e.what());
+            }
             auto result=metal_viewport_->render(context,splat_data,request,output_slot);
             if(!result) return result;
+            // Offline capture cannot publish the provisional overflow image used
+            // by the interactive refinement loop. Retry only after GPU completion.
+            if(deterministic_export || output_slot==OutputSlot::Preview){
+                bool complete=false;
+                for(int attempt=0;attempt<4;++attempt){
+                    const auto status=metal_viewport_->outputComplete(output_slot);
+                    if(!status)return std::unexpected(status.error());
+                    if(*status){complete=true;break;}
+                    result=metal_viewport_->render(context,splat_data,request,output_slot);
+                    if(!result)return result;
+                }
+                if(!complete)return std::unexpected("Metal export reservation did not converge");
+            }
             metal_output_[static_cast<size_t>(output_slot)]=true;
+            if(metal_route_[static_cast<size_t>(output_slot)]!=0){
+                LOG_INFO("Viewer GPU backend: requested=metal effective=metal slot={}",static_cast<size_t>(output_slot));
+                metal_route_[static_cast<size_t>(output_slot)]=0;
+            }
             return result;
         }
         metal_output_[static_cast<size_t>(output_slot)]=false;
+        if(preference==rendering::ViewerBackend::Metal){
+            const int reason=depth_capture_mode_?2:1;
+            if(metal_route_[static_cast<size_t>(output_slot)]!=reason){
+                LOG_INFO("Viewer GPU backend: requested=metal effective=vulkan slot={} reason={}",static_cast<size_t>(output_slot),
+                    reason==2?"depth capture mode":"unsupported frame or tensor storage");
+                metal_route_[static_cast<size_t>(output_slot)]=reason;
+            }
+        }else metal_route_[static_cast<size_t>(output_slot)]=-1;
+        native_lock.unlock();
 #endif
         const glm::ivec2 size = request.frame_view.size;
         if (size.x <= 0 || size.y <= 0) {

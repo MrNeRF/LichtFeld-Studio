@@ -16,6 +16,7 @@ namespace lfs::rendering::metal {
         struct alignas(16) RasterParameters {
             uint32_t count, width, height, columns, tiles, capacity, mode, unused;
             simd_float4 background;
+            simd_float4 render_origin;
         };
         struct SortParameters {
             uint32_t blocks, shift;
@@ -181,7 +182,7 @@ namespace lfs::rendering::metal {
     }
     TileRasterizer::~TileRasterizer() = default;
     void TileRasterizer::encode(id<MTLCommandBuffer> command, BufferSlice projected, uint32_t count,
-                                RasterMode mode, simd_float4 background, RasterFrame& frame) {
+                                RasterMode mode, simd_float4 background, RasterFrame& frame, const OverlayBuffers& overlay) {
         auto f = frame.impl_;
         if (!command || command.device != impl_->device || f->device != impl_->device ||
             command.status != MTLCommandBufferStatusNotEnqueued || count > f->max_splats || uint32_t(mode) > 2)
@@ -201,7 +202,7 @@ namespace lfs::rendering::metal {
             f->completed.store(finished.status == MTLCommandBufferStatusCompleted, std::memory_order_release);
             f->in_flight.store(false, std::memory_order_release);
         }];
-        const RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), 0, background};
+        const RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), overlay.parameter_count?1u:0u, background,overlay.render_origin};
         const auto dispatch = [](id<MTLComputeCommandEncoder> e, uint32_t n) {
             [e dispatchThreadgroups:MTLSizeMake(ceil_div(n, 256), 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
             [e endEncoding];
@@ -282,6 +283,9 @@ namespace lfs::rendering::metal {
         [e setBuffer:f->ranges offset:0 atIndex:2];
         [e setBuffer:f->status offset:0 atIndex:3];
         [e setBytes:&p length:sizeof(p) atIndex:4];
+        const std::array<BufferSlice,5> overlays={overlay.parameters,overlay.flags,overlay.selection,overlay.preview,overlay.colors};
+        for(NSUInteger j=0;j<overlays.size();++j)
+            [e setBuffer:overlays[j].buffer?:f->counts offset:overlays[j].buffer?overlays[j].offset:0 atIndex:5+j];
         [e setTexture:f->color atIndex:0];
         [e setTexture:f->depth atIndex:1];
         [e setTexture:f->pick atIndex:2];

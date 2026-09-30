@@ -6,10 +6,15 @@ if(NOT APPLE)
 endif()
 enable_language(OBJCXX)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/splat_preprocessor.metal" LFS_METAL_PREPROCESS_SOURCE)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/viewer_overlay.metal" LFS_METAL_OVERLAY_SOURCE)
+string(REPLACE "@LFS_METAL_OVERLAY@" "${LFS_METAL_OVERLAY_SOURCE}" LFS_METAL_PREPROCESS_SOURCE "${LFS_METAL_PREPROCESS_SOURCE}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/viewer_overlay.metal")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/splat_preprocessor.metal")
 configure_file(shader_source.hpp.in generated/shader_source.hpp @ONLY)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/tile_rasterizer.metal" LFS_METAL_TILE_SOURCE)
+string(REPLACE "@LFS_METAL_OVERLAY@" "${LFS_METAL_OVERLAY_SOURCE}" LFS_METAL_TILE_SOURCE "${LFS_METAL_TILE_SOURCE}")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/tile_rasterizer.metal")
 configure_file(tile_shader_source.hpp.in generated/tile_shader_source.hpp @ONLY)

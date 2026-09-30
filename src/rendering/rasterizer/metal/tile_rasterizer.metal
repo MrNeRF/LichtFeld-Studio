@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <metal_stdlib>
 using namespace metal;
+@LFS_METAL_OVERLAY@
 
 struct ProjectedSplat {
     float4 mean_depth, conic_opacity, color;
@@ -11,6 +12,7 @@ struct RasterParameters {
     uint count, width, height, columns;
     uint tiles, capacity, mode, unused;
     float4 background;
+    float4 render_origin;
 };
 struct RasterStatus { ulong required; uint error, unused; };
 uint4 clipped_bounds(ProjectedSplat s, constant RasterParameters& p) {
@@ -89,7 +91,7 @@ kernel void tile_instances(device const ProjectedSplat* splats [[buffer(0)]],
     ulong at = offsets[i];
     for (uint y = bounds.y / 16; y < (bounds.w + 15) / 16; ++y)
         for (uint x = bounds.x / 16; x < (bounds.z + 15) / 16; ++x) {
-            keys[at] = (ulong(y * p.columns + x) << 32) | as_type<uint>(s.mean_depth.z);
+            keys[at] = (ulong(y * p.columns + x) << 32) | as_type<uint>(s.color.w);
             indices[at++] = i;
         }
 }
@@ -193,6 +195,11 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                        device const uint* ranges [[buffer(2)]],
                        device const RasterStatus& status [[buffer(3)]],
                        constant RasterParameters& p [[buffer(4)]],
+                       device const float4* overlay_params [[buffer(5)]],
+                       device const uint* overlay_flags [[buffer(6)]],
+                       device const uchar* selection [[buffer(7)]],
+                       device const uchar* preview [[buffer(8)]],
+                       device const float4* selection_colors [[buffer(9)]],
                        texture2d<float, access::write> color [[texture(0)]],
                        texture2d<float, access::write> depth [[texture(1)]],
                        texture2d<uint, access::write> pick [[texture(2)]],
@@ -228,7 +235,8 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
         if (!done) for (uint j = 0; j < count; ++j) {
-            const float2 d = float2(pixel) + .5f - means[j].xy;
+            // Studio's CUDA/Vulkan convention samples at integer pixel coordinates.
+            const float2 d = float2(pixel) - means[j].xy;
             const float4 c = conics[j];
             const float q = c.x*d.x*d.x + 2*c.y*d.x*d.y + c.z*d.y*d.y;
             if (q < 0 || !isfinite(q)) continue;
@@ -237,13 +245,58 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
             else if (p.mode == 2) alpha = q <= 9 ? c.w : 0;
             else alpha = c.w * exp(-.5f * q);
             alpha = min(alpha, .999f);
-            if (alpha < 1.f/255) continue;
+            if(p.unused && overlay_enabled(overlay_params[22].y) && !(overlay_flags[ids[j]]&2u)){
+                const float2 origin=floor((float2(pixel)+p.render_origin.xy)/float2(64,32))*float2(64,32);
+                const half2 center=half2((means[j].xy+p.render_origin.xy-origin)/8.f);
+                const half2 coord=half2((float2(pixel)+p.render_origin.xy-origin)/8.f);
+                const float l00=sqrt(max(c.x,1e-12f)),l01=c.y/l00,l11=sqrt(max(c.z-l01*l01,0.f));
+                const half4 chol=half4(float4(l00*8*.849321800288019f,l01*8*.849321800288019f,
+                    l11*8*.849321800288019f,max(4.f,log(c.w*510.f))*1.4426950408889634f));
+                const half2 delta=coord-center;
+                const half u=chol.x*delta.x+chol.y*delta.y,v=chol.z*delta.y;
+                const half power=u*u+v*v;
+                if(power<0 || power>chol.w)continue;
+                alpha=float(min(half(c.w)*exp2(-power),half(.999f)));
+            }
+            if (alpha < .5f/255) continue;
+            float3 radiance=clamp(colors[j].xyz,0.f,4.f);
+            if(p.unused){
+                const uint flags=overlay_flags[ids[j]];
+                // Pixel-sized overlays use the same macro-relative half position
+                // as the desktop reference. Keep Gaussian blending in FP32.
+                // KEEP IN SYNC with Vulkan config.slang: tile 8x8, macro 8x4 tiles.
+                const float2 macro_origin=floor((float2(pixel)+p.render_origin.xy)/float2(64,32))*float2(64,32);
+                const float2 overlay_center=float2(half2((means[j].xy+p.render_origin.xy-macro_origin)/8.f))*8.f+macro_origin-p.render_origin.xy;
+                const uint status=overlay_selection(overlay_params,ids[j],flags,overlay_center,selection,preview);
+                const bool selectable=(flags&2u)==0;
+                if(overlay_enabled(overlay_params[22].x)&&selectable){
+                    const float gaussian=exp(-.5f*q);
+                    const float boundary=(.5f/255.f)/max(c.w,1e-8f);
+                    const float width=overlay_params[21].w*10;
+                    if(gaussian<boundary*(1+width)&&gaussian>boundary*(1-width)){
+                        if(status)radiance=overlay_target(status,selection_colors);
+                        alpha=.8f;
+                    }
+                }
+                if(overlay_enabled(overlay_params[22].y)&&selectable){
+                    // Desktop marker mode contributes dots only, without the
+                    // Gaussian body outside the marker's circular support.
+                    const float2 marker_delta=float2(pixel)-overlay_center;
+                    if(dot(marker_delta,marker_delta)>6.25f)continue;
+                    rgb=overlay_target(status,selection_colors)*(dot(marker_delta,marker_delta)>2.25f?.4f:1.f);
+                    if(transmittance>.5f)median=means[j].z;
+                    transmittance=0; done=true; break;
+                }
+                if(status&128u)radiance=mix(radiance,overlay_target(status,selection_colors),.9f);
+                else if(status&127u)radiance=mix(radiance,selection_colors[status&127u].xyz,.8f);
+                if((flags&4u)&&overlay_params[20].w>0)radiance=mix(radiance,float3(1,.95f,.6f),overlay_params[20].w*.5f);
+            }
             const float weight = alpha * transmittance;
             if (picked == 0xffffffff) { picked = ids[j]; nearest = means[j].z; }
-            rgb += colors[j].xyz * weight;
+            rgb += radiance * weight;
             weighted_depth += means[j].z * weight;
             const float next_transmittance = transmittance * (1 - alpha);
-            if (transmittance >= .5f && next_transmittance < .5f) median = means[j].z;
+            if (transmittance > .5f && next_transmittance <= .5f) median = means[j].z;
             transmittance = next_transmittance;
             if (transmittance < 1e-4f) { done = true; break; }
         }
