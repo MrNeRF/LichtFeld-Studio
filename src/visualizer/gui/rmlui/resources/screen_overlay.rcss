@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
 /* Area gesture previews drawn above everything in the work area (layout only). */
 
 body {
@@ -27,7 +30,7 @@ body {
 
 #active-outline {
     border-width: 1dp;
-    border-radius: 0 0 6dp 6dp;
+    border-radius: 0;
 }
 
 #divider-highlight {

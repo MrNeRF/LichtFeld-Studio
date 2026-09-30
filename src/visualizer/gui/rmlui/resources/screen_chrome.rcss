@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
 /* Area frames and headers of the screen (layout only; colours live in the theme sheet). */
 
 body {
@@ -138,33 +141,6 @@ body {
     pointer-events: none;
     z-index: 1;
     padding: 1dp 4dp;
-    border-width: 1dp;
-}
-
-.view-corner-mask {
-    position: absolute;
-    width: 6dp;
-    height: 6dp;
-    pointer-events: none;
-    z-index: 2;
-}
-
-.view-corner-mask.top-left {
-    left: 0;
-}
-
-.view-corner-mask.top-right {
-    right: 0;
-}
-
-.view-corner-mask.bottom-left {
-    left: 0;
-    bottom: 0;
-}
-
-.view-corner-mask.bottom-right {
-    right: 0;
-    bottom: 0;
 }
 
 .tab-close {

@@ -1,3 +1,6 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
 /* Theme colours of the area frames and headers. */
 
 .area {
@@ -5,6 +8,7 @@
 }
 
 .area.view {
+    decorator: none;
     background-color: transparent;
 }
 
@@ -91,29 +95,10 @@
 }
 
 .view-label {
-    color: @{text};
-    background-color: @{alpha(background,0.42)};
+    color: #b8b8b8;
+    font-effect: shadow(1dp 1dp #000000d0);
+    background-color: #00000040;
     border-radius: @{num(size.frame_rounding)}dp;
-}
-
-.view-corner-mask {
-    background-color: @{background};
-}
-
-.view-corner-mask.top-left {
-    border-bottom-right-radius: 6dp;
-}
-
-.view-corner-mask.top-right {
-    border-bottom-left-radius: 6dp;
-}
-
-.view-corner-mask.bottom-left {
-    border-top-right-radius: 6dp;
-}
-
-.view-corner-mask.bottom-right {
-    border-top-left-radius: 6dp;
 }
 
 .tab-close {
