@@ -22,7 +22,7 @@
 
 namespace fast_lfs::rasterization {
 
-    using InstanceKey = std::uint32_t;
+    using InstanceKey = std::uint64_t;
 
     enum FastGSForwardStatusFlags : unsigned int {
         kFastGSForwardStatusTileIndexOutOfRange = 1u << 0,
@@ -224,15 +224,9 @@ namespace fast_lfs::rasterization {
         return 32 - leading_zeros;
     }
 
-    inline int packed_instance_depth_bits(uint n_tiles) {
-        const int tile_bits = n_tiles <= 1 ? 0 : extract_end_bit(n_tiles - 1);
-        const int depth_bits = 32 - tile_bits;
-        return depth_bits > 23 ? 23 : (depth_bits < 0 ? 0 : depth_bits);
-    }
-
     inline int packed_instance_key_end_bit(uint n_tiles) {
         const int tile_bits = n_tiles <= 1 ? 0 : extract_end_bit(n_tiles - 1);
-        return tile_bits + packed_instance_depth_bits(n_tiles);
+        return tile_bits + 32;
     }
 
     struct mat3x3 {
