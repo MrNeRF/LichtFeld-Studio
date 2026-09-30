@@ -1692,7 +1692,8 @@
     "action.view_axis_left": "左视图",
     "action.view_toggle_perspective": "切换透视/正交",
     "action.view_frame_all": "框选全部",
-    "action.toggle_quad_view": "切换四视图"
+    "action.toggle_quad_view": "切换四视图",
+    "action.toggle_maximize_area": "最大化区域"
   },
   "debug_info": {
     "clear_history": "清除历史",

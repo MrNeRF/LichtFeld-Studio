@@ -1692,7 +1692,8 @@
     "action.view_axis_left": "Vue de gauche",
     "action.view_toggle_perspective": "Basculer perspective/orthographique",
     "action.view_frame_all": "Tout cadrer",
-    "action.toggle_quad_view": "Basculer les quatre vues"
+    "action.toggle_quad_view": "Basculer les quatre vues",
+    "action.toggle_maximize_area": "Agrandir la zone"
   },
   "debug_info": {
     "clear_history": "Effacer l'Historique",

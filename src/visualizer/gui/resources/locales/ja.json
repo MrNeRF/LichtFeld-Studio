@@ -1692,7 +1692,8 @@
     "action.view_axis_left": "左面ビュー",
     "action.view_toggle_perspective": "透視/平行投影を切り替え",
     "action.view_frame_all": "全体をフレーム",
-    "action.toggle_quad_view": "4分割ビューを切り替え"
+    "action.toggle_quad_view": "4分割ビューを切り替え",
+    "action.toggle_maximize_area": "エリアを最大化"
   },
   "debug_info": {
     "clear_history": "履歴をクリア",

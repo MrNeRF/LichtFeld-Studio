@@ -369,6 +369,11 @@ namespace lfs::vis::gui {
         return done;
     }
 
+    bool ScreenHost::toggleMaximizedAt(const float x, const float y) {
+        const auto id = areaAt(x, y);
+        return id.valid() && toggleMaximized(id);
+    }
+
     screen::AreaId ScreenHost::splitArea(const screen::AreaId id, const screen::SplitAxis axis) {
         screen::AreaId added;
         mutate([&](screen::Screen& s) { added = s.split(id, axis, 0.5f); });
@@ -564,12 +569,6 @@ namespace lfs::vis::gui {
                     }
                 }
             }
-        }
-
-        if (pointer_free && input.key_ctrl && !input.key_alt && hasKey(input.keys_pressed, SDL_SCANCODE_SPACE) &&
-            !guiFocusState().want_text_input) {
-            const auto target = hovered_area_.valid() ? hovered_area_ : screen.activeView();
-            toggleMaximized(target);
         }
 
         const auto hover = pointer_free && !gestures_.active() && !over_header

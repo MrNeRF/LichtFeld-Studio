@@ -1692,7 +1692,8 @@
     "action.view_axis_left": "Vista da sinistra",
     "action.view_toggle_perspective": "Alterna prospettica/ortografica",
     "action.view_frame_all": "Inquadra tutto",
-    "action.toggle_quad_view": "Attiva/disattiva quattro viste"
+    "action.toggle_quad_view": "Attiva/disattiva quattro viste",
+    "action.toggle_maximize_area": "Massimizza area"
   },
   "debug_info": {
     "clear_history": "Cancella Cronologia",

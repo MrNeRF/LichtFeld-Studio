@@ -1692,7 +1692,8 @@
     "action.view_axis_left": "Widok z lewej",
     "action.view_toggle_perspective": "Przełącz perspektywę/rzut ortogonalny",
     "action.view_frame_all": "Wykadruj wszystko",
-    "action.toggle_quad_view": "Przełącz cztery widoki"
+    "action.toggle_quad_view": "Przełącz cztery widoki",
+    "action.toggle_maximize_area": "Maksymalizuj obszar"
   },
   "debug_info": {
     "clear_history": "Wyczyść Historię",

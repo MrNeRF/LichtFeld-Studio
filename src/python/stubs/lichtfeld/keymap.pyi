@@ -201,6 +201,8 @@ class Action(enum.Enum):
 
     TOGGLE_QUAD_VIEW = 100
 
+    TOGGLE_MAXIMIZE_AREA = 101
+
     DEPTH_WINDOW_DRAG = 86
 
 class ToolMode(enum.Enum):

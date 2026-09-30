@@ -1692,7 +1692,8 @@
     "action.view_axis_left": "왼쪽 보기",
     "action.view_toggle_perspective": "원근/직교 전환",
     "action.view_frame_all": "전체 맞추기",
-    "action.toggle_quad_view": "4분할 뷰 전환"
+    "action.toggle_quad_view": "4분할 뷰 전환",
+    "action.toggle_maximize_area": "영역 최대화"
   },
   "debug_info": {
     "clear_history": "기록 지우기",

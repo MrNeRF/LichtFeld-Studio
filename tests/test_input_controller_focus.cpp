@@ -1356,7 +1356,7 @@ namespace lfs::vis {
         EXPECT_EQ(bindings.getActionForKey(input::ToolMode::GLOBAL,
                                            input::KEY_SPACE,
                                            input::MODIFIER_CTRL),
-                  input::Action::NONE);
+                  input::Action::TOGGLE_MAXIMIZE_AREA);
         EXPECT_EQ(bindings.getActionForKey(input::ToolMode::GLOBAL,
                                            input::KEY_H,
                                            input::MODIFIER_CTRL | input::MODIFIER_SHIFT),
@@ -1394,7 +1394,7 @@ namespace lfs::vis {
         ASSERT_TRUE(loaded.loadProfileFromFile(profile_path));
         EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL, input::KEY_SPACE,
                                          input::MODIFIER_CTRL),
-                  input::Action::NONE);
+                  input::Action::TOGGLE_MAXIMIZE_AREA);
         EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL, input::KEY_H,
                                          input::MODIFIER_CTRL | input::MODIFIER_SHIFT),
                   input::Action::TOGGLE_SCENE_SELECTION_VISIBILITY);
@@ -1507,7 +1507,7 @@ namespace lfs::vis {
         std::ifstream persisted(profile_path);
         ASSERT_TRUE(persisted.is_open());
         const std::string contents((std::istreambuf_iterator<char>(persisted)), {});
-        EXPECT_NE(contents.find("\"version\": 31"), std::string::npos); // PROFILE_VERSION
+        EXPECT_NE(contents.find("\"version\": 32"), std::string::npos); // PROFILE_VERSION
         EXPECT_NE(contents.find("Gallery Primary Action"), std::string::npos);
         EXPECT_NE(contents.find("Copy Gallery Link"), std::string::npos);
         EXPECT_NE(contents.find("Refresh Assets"), std::string::npos);
@@ -1575,7 +1575,7 @@ namespace lfs::vis {
         const auto version_key = contents.find("\"version\":");
         ASSERT_NE(version_key, std::string::npos);
         EXPECT_EQ(contents.find("\"version\":", version_key + 1), std::string::npos);
-        EXPECT_NE(contents.find("\"version\": 31"), std::string::npos);
+        EXPECT_NE(contents.find("\"version\": 32"), std::string::npos);
         EXPECT_NE(contents.find("Toggle MCP Server"), std::string::npos);
         EXPECT_NE(contents.find("Window size"), std::string::npos);
         EXPECT_NE(contents.find("Window drag"), std::string::npos);
@@ -1613,6 +1613,30 @@ namespace lfs::vis {
         EXPECT_EQ(bindings.getActionForKey(ToolMode::GLOBAL, KEY_ENTER, MODIFIER_CTRL), Action::NONE);
         EXPECT_EQ(bindings.getActionForScroll(ToolMode::SELECTION, MODIFIER_SHIFT | MODIFIER_ALT), Action::DEPTH_ADJUST_SIZE);
         EXPECT_EQ(bindings.getActionForDrag(ToolMode::SELECTION, MouseButton::LEFT, MODIFIER_SHIFT | MODIFIER_ALT), Action::DEPTH_WINDOW_DRAG);
+        std::filesystem::remove(path);
+    }
+
+    TEST_F(InputControllerFocusTest, MaximizeAreaHasGlobalCtrlSpaceBinding) {
+        input::InputBindings bindings;
+        EXPECT_EQ(bindings.getActionForKey(input::ToolMode::GLOBAL, input::KEY_SPACE,
+                                           input::MODIFIER_CTRL),
+                  input::Action::TOGGLE_MAXIMIZE_AREA);
+        EXPECT_EQ(input::shortcutScopeForAction(input::Action::TOGGLE_MAXIMIZE_AREA),
+                  input::ShortcutScope::GlobalWhenNotTextEditing);
+    }
+
+    TEST_F(InputControllerFocusTest, VersionThirtyOneProfileMigratesMaximizeBinding) {
+        const auto path = std::filesystem::temp_directory_path() / "lfs_keymap_v31.json";
+        {
+            std::ofstream file(path);
+            ASSERT_TRUE(file.is_open());
+            file << R"({"name":"Legacy","version":31,"bindings":[]})";
+        }
+        input::InputBindings bindings;
+        ASSERT_TRUE(bindings.loadProfileFromFile(path));
+        EXPECT_EQ(bindings.getActionForKey(input::ToolMode::GLOBAL, input::KEY_SPACE,
+                                           input::MODIFIER_CTRL),
+                  input::Action::TOGGLE_MAXIMIZE_AREA);
         std::filesystem::remove(path);
     }
 

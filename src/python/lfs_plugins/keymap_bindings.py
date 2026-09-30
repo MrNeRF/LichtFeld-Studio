@@ -98,6 +98,7 @@ class KeymapBindingsSection:
             lf.keymap.Action.TOGGLE_SPLIT_VIEW,
             lf.keymap.Action.TOGGLE_SPLIT_VIEWPORT,
             lf.keymap.Action.TOGGLE_QUAD_VIEW,
+            lf.keymap.Action.TOGGLE_MAXIMIZE_AREA,
             lf.keymap.Action.TOGGLE_GT_COMPARISON,
             lf.keymap.Action.TOGGLE_CAMERA_FRUSTUMS,
             lf.keymap.Action.TOGGLE_GRID,

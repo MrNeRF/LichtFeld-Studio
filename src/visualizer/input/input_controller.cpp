@@ -1976,6 +1976,11 @@ namespace lfs::vis {
 
         if (bound_action != input::Action::NONE) {
             switch (bound_action) {
+            case input::Action::TOGGLE_MAXIMIZE_AREA:
+                if (gui)
+                    (void)gui->screenHost().toggleMaximizedAt(static_cast<float>(mx), static_cast<float>(my));
+                return;
+
             case input::Action::TOGGLE_SPLIT_VIEW:
                 cmd::ToggleSplitView{}.emit();
                 return;

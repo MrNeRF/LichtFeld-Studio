@@ -142,6 +142,22 @@ namespace lfs::vis::screen {
         EXPECT_EQ(host.geometry().find(viewport)->rect, scene_geometry->rect);
     }
 
+    TEST_F(ScreenTest, MaximizeAtPointerTargetsPanelEditorArea) {
+        ScreenService source;
+        gui::ScreenHost host(source);
+        host.layout({0.0f, 0.0f, 1600.0f, 900.0f}, 1.0f);
+        const auto scene = source.screen().findEditor(editors::kScene);
+        const auto* frame = host.area(scene);
+        ASSERT_NE(frame, nullptr);
+        const float x = frame->rect.x + frame->rect.w * 0.5f;
+        const float y = frame->rect.y + frame->rect.h * 0.5f;
+
+        EXPECT_TRUE(host.toggleMaximizedAt(x, y));
+        EXPECT_EQ(source.screen().maximized(), scene);
+        EXPECT_TRUE(host.toggleMaximizedAt(x, y));
+        EXPECT_FALSE(source.screen().maximized().valid());
+    }
+
     TEST_F(ScreenTest, SplittingAViewCopiesItsCameraIndependently) {
         Screen screen = Screen::makeDefault(registry);
         const AreaId view = screen.activeView();

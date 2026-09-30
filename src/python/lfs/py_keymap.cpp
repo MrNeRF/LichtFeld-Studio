@@ -201,6 +201,7 @@ namespace lfs::python {
             .value("VIEW_TOGGLE_PERSPECTIVE", Action::VIEW_TOGGLE_PERSPECTIVE)
             .value("VIEW_FRAME_ALL", Action::VIEW_FRAME_ALL)
             .value("TOGGLE_QUAD_VIEW", Action::TOGGLE_QUAD_VIEW)
+            .value("TOGGLE_MAXIMIZE_AREA", Action::TOGGLE_MAXIMIZE_AREA)
             .value("DEPTH_WINDOW_DRAG", Action::DEPTH_WINDOW_DRAG);
 
         // Expose ToolMode enum

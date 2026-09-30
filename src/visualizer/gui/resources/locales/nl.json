@@ -1692,7 +1692,8 @@
     "action.view_axis_left": "Linkeraanzicht",
     "action.view_toggle_perspective": "Perspectief/orthografisch wisselen",
     "action.view_frame_all": "Alles inkaderen",
-    "action.toggle_quad_view": "Vier weergaven wisselen"
+    "action.toggle_quad_view": "Vier weergaven wisselen",
+    "action.toggle_maximize_area": "Gebied maximaliseren"
   },
   "debug_info": {
     "clear_history": "Geschiedenis Wissen",

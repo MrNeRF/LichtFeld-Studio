@@ -129,6 +129,7 @@ namespace lfs::vis::gui {
 
         // Area commands shared by headers, menus, shortcuts and scripts.
         bool toggleMaximized(screen::AreaId id);
+        bool toggleMaximizedAt(float x, float y);
         screen::AreaId splitArea(screen::AreaId id, screen::SplitAxis axis);
         bool closeArea(screen::AreaId id);
         bool setEditor(screen::AreaId id, std::string_view editor);

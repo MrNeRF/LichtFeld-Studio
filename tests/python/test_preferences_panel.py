@@ -356,6 +356,7 @@ def preferences_panel_module(monkeypatch):
             VIEW_TOGGLE_PERSPECTIVE=SimpleNamespace(name="VIEW_TOGGLE_PERSPECTIVE", value=93),
             VIEW_FRAME_ALL=SimpleNamespace(name="VIEW_FRAME_ALL", value=94),
             TOGGLE_QUAD_VIEW=SimpleNamespace(name="TOGGLE_QUAD_VIEW", value=95),
+            TOGGLE_MAXIMIZE_AREA=SimpleNamespace(name="TOGGLE_MAXIMIZE_AREA", value=96),
         ),
         get_available_profiles=lambda: ["Default"],
         get_current_profile=lambda: "Default",

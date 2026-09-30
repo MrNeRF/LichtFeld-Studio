@@ -1692,7 +1692,8 @@
     "action.view_axis_left": "Ansicht von links",
     "action.view_toggle_perspective": "Perspektivisch/Orthografisch umschalten",
     "action.view_frame_all": "Alles einpassen",
-    "action.toggle_quad_view": "Vier Ansichten umschalten"
+    "action.toggle_quad_view": "Vier Ansichten umschalten",
+    "action.toggle_maximize_area": "Bereich maximieren"
   },
   "debug_info": {
     "clear_history": "Verlauf löschen",

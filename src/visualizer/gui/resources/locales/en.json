@@ -1690,7 +1690,8 @@
     "action.view_axis_left": "View Left",
     "action.view_toggle_perspective": "Toggle Perspective/Orthographic",
     "action.view_frame_all": "Frame All",
-    "action.toggle_quad_view": "Toggle Four Views"
+    "action.toggle_quad_view": "Toggle Four Views",
+    "action.toggle_maximize_area": "Maximize Area"
   },
   "debug_info": {
     "clear_history": "Clear History",

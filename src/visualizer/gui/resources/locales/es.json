@@ -1692,7 +1692,8 @@
     "action.view_axis_left": "Vista izquierda",
     "action.view_toggle_perspective": "Alternar perspectiva/ortográfica",
     "action.view_frame_all": "Encuadrar todo",
-    "action.toggle_quad_view": "Alternar cuatro vistas"
+    "action.toggle_quad_view": "Alternar cuatro vistas",
+    "action.toggle_maximize_area": "Maximizar área"
   },
   "debug_info": {
     "clear_history": "Borrar el Historial",
