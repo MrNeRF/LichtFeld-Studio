@@ -42,11 +42,12 @@ namespace lfs::rendering::metal {
             bool finite = true;
             for (int i = 0; i < 4; ++i)
                 finite = finite && std::isfinite(p.intrinsics[i]) &&
-                         std::isfinite(p.clip_scale[i]) && std::isfinite(p.camera_local[i]);
+                         std::isfinite(p.clip_scale[i]) && std::isfinite(p.camera_local[i]) && std::isfinite(p.display[i]);
             if (!finite || !finite_matrix(p.model_to_world) || !finite_matrix(p.world_to_camera) ||
                 !p.extent.x || !p.extent.y || p.extent.x > 65535 || p.extent.y > 65535 ||
                 p.extent.z > uint32_t(CameraModel::Equirectangular) || p.extent.w > 1 || p.intrinsics.x <= 0 || p.intrinsics.y <= 0 || p.clip_scale.x <= 0 ||
-                p.clip_scale.y <= p.clip_scale.x || p.clip_scale.z <= 0 || p.clip_scale.w < 0)
+                p.clip_scale.y <= p.clip_scale.x || p.clip_scale.z <= 0 || p.clip_scale.w < 0 ||
+                !std::isfinite(p.rasterization.w) || (p.rasterization.w != 0.f && p.rasterization.w != 1.f))
                 throw std::invalid_argument("Invalid Metal splat projection");
             if (p.extent.z == uint32_t(CameraModel::Equirectangular)) {
                 for (int i = 0; i < 4; ++i)

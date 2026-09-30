@@ -336,6 +336,23 @@ static void run(id<MTLDevice> device) {
         raster.encode([queue commandBuffer], { mixed_input }, 2, RasterMode::Gut, bg, expected_frame, {}, {mixed_gut}, camera);
     } catch (const std::invalid_argument&) { rejected = true; }
     require(rejected && !expected_frame.busy(), "Invalid expected-depth parameters consumed the reservation");
+    // The standard portal normalizes its Gaussian tail to zero at q=8.
+    // Verify analytic coverage independently of the Vulkan reference and projector.
+    const ProjectedSplat portal_splat{{18, 14, 3, 100}, {1, 0, 1, .8f}, {1, 0, 0, 9}, {0, 0, width, height}};
+    auto portal_input = [device newBufferWithBytes:&portal_splat length:sizeof(portal_splat) options:MTLResourceStorageModeShared];
+    camera.rasterization = {1, 0, 0, 1};
+    command = [queue commandBuffer];
+    raster.encode(command, {portal_input}, 1, RasterMode::Gaussian, {0, 0, 0, 0}, expected_frame, {}, {}, camera);
+    const auto portal_read = readback(device, command, expected_frame);
+    wait(command);
+    for (uint32_t x = 18; x <= 22; ++x) {
+        const double q = double(x - 18) * (x - 18), edge = std::exp(-4.);
+        double alpha = .8 * std::max(0., (std::exp(-.5 * q) - edge) / (1 - edge));
+        if (alpha < 1. / 255)
+            alpha = 0;
+        const auto color = reinterpret_cast<const _Float16*>(static_cast<const char*>(portal_read.color.contents) + 14 * portal_read.color_stride) + x * 4;
+        require(std::abs(float(color[3]) - alpha) < .001, "Portal Gaussian tail differs from its normalized alpha contract");
+    }
     std::puts("Metal tile raster contracts passed: stable depth, RGB/alpha/depth/pick, modes, scan/block boundaries, overflow and frame reuse.");
 }
 int main() {

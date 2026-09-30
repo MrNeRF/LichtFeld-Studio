@@ -3,6 +3,15 @@
 #include <metal_stdlib>
 using namespace metal;
 @LFS_METAL_OVERLAY@
+#define LFS_PORTAL_INLINE inline
+#define LFS_PORTAL_VEC3 float3
+#define LFS_PORTAL_VEC4 float4
+@LFS_METAL_PORTAL@
+#define LFS_COLOR_INLINE inline
+#define LFS_COLOR_VEC3 float3
+#define LFS_COLOR_UINT uint
+#define LFS_COLOR_MIX mix
+@LFS_METAL_DISPLAY_COLOR@
 
 constant uint sh_storage [[function_constant(0)]];
 constant uint sh_degree [[function_constant(1)]];
@@ -12,7 +21,7 @@ struct Projection {
     float4x4 model_to_world, world_to_camera;
     float4 camera_local, intrinsics, clip_scale;
     uint4 extent;
-    float4 rasterization, panorama;
+    float4 rasterization, display, panorama;
 };
 struct InputLayout { uint count, rest, has_deleted, objects, half_attrs, overlay, object_indexed; };
 struct SceneObject { float4x4 model_to_world; float4 camera_local; uint4 flags; };
@@ -64,6 +73,24 @@ float3 clamp_covariance_extent(float3 covariance, float opacity) {
     return float3(capped1*axis.x*axis.x+capped2*other.x*other.x,
                   capped1*axis.x*axis.y+capped2*other.x*other.y,
                   capped1*axis.y*axis.y+capped2*other.y*other.y);
+}
+
+// Portal billboard eigen-axis limits, in source viewport pixel units.
+float3 portal_covariance(float3 covariance, float2 extent) {
+    const float limit=min(1024.f,min(extent.x,extent.y));
+    const float cap=max(1.f,sqrt(8.f*max(covariance.x,covariance.z))/limit);
+    covariance/=cap*cap;
+    const float mid=.5f*(covariance.x+covariance.z);
+    const float radius=length(float2(.5f*(covariance.x-covariance.z),covariance.y));
+    const float first=mid+radius,second=max(mid-radius,.025f);
+    const float maximum=limit*limit/8.f;
+    const float a=min(first,maximum),b=min(second,maximum);
+    const float2 axis=abs(covariance.y)>1e-6f?normalize(float2(covariance.y,first-covariance.x)):
+        (covariance.x>=covariance.z?float2(1,0):float2(0,1));
+    const float2 other=float2(axis.y,-axis.x);
+    return float3(a*axis.x*axis.x+b*other.x*other.x,
+                  a*axis.x*axis.y+b*other.x*other.y,
+                  a*axis.y*axis.y+b*other.y*other.y);
 }
 
 // Same cell swizzle and per-256 bounds as core/sh_value_codec.cuh.
@@ -144,6 +171,7 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     }
     const float4x4 matrix=frame.world_to_camera*model_to_world;
     const float3 view=(matrix*float4(p,1)).xyz;
+    const bool portal=frame.rasterization.w==1.f;
     const bool equirectangular=frame.extent.z==2u;
     const bool orthographic=frame.extent.z==1u;
     const float projection_depth=equirectangular?length(view):view.z;
@@ -178,13 +206,15 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     const float logit=layout.half_attrs?float(reinterpret_cast<device const half*>(opacity)[i]):opacity[i];
     float alpha=1.0f/(1.0f+exp(-logit));
     if(!isfinite(alpha) || alpha<0.5f/255.0f) return;
+    if(portal)alpha=lfsPortalCompactOpacity(alpha);
+    if(portal && alpha<=1.f/255.f)return;
     const float source_alpha=alpha;
     // Vulkan's project_splat subtracts half a pixel before integer sampling.
     float2 center=equirectangular?panorama_project(view,frame.panorama.xy)-frame.panorama.zw-.5f:
         frame.intrinsics.xy*view.xy/(orthographic?1.0f:view.z)+frame.intrinsics.zw-.5f;
     float3 conic;
     float radius;
-    float2 panorama_radius=0;
+    float2 panorama_radius=0,portal_axis=0,portal_extent=0;
     if(primitive_mode==1u) {
         // Independent point path: no covariance, quaternion or Gaussian scale work.
         radius=2.0f;
@@ -194,8 +224,10 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
         const float norm2=dot(q,q);
         if(!isfinite(norm2)) return;
         q=norm2>1e-8f?q*rsqrt(norm2):float4(1,0,0,0);
+        if(portal){q=lfsPortalCompactRotation(q);q*=rsqrt(max(dot(q,q),1e-8f));}
         const float3 log_scale=layout.half_attrs?float3(reinterpret_cast<device const packed_half3*>(scales)[i]):float3(scales[i]);
-        const float3 s=exp(min(log_scale,float3(20.f)))*frame.clip_scale.z;
+        float3 s=exp(min(log_scale,float3(20.f)))*frame.clip_scale.z;
+        if(portal)s=lfsPortalCompactScales(s);
         if(!all(isfinite(s))) return;
         const float3x3 linear=float3x3(matrix[0].xyz,matrix[1].xyz,matrix[2].xyz);
         const float3 a=linear*rotate_axis(q,float3(s.x,0,0));
@@ -207,7 +239,7 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
             const float2 margin=.3f*.5f*float2(frame.extent.xy)/frame.intrinsics.xy;
             const float2 positive=(float2(frame.extent.xy)-frame.intrinsics.zw)/frame.intrinsics.xy+margin;
             const float2 negative=frame.intrinsics.zw/frame.intrinsics.xy+margin;
-            const float2 ratio=clamp(view.xy/view.z,-negative,positive);
+            const float2 ratio=portal?view.xy/view.z:clamp(view.xy/view.z,-negative,positive);
             const float3 jx=orthographic?float3(frame.intrinsics.x,0,0):float3(frame.intrinsics.x/view.z,0,-frame.intrinsics.x*ratio.x/view.z);
             const float3 jy=orthographic?float3(0,frame.intrinsics.y,0):float3(0,frame.intrinsics.y/view.z,-frame.intrinsics.y*ratio.y/view.z);
             const float3 u=float3(dot(jx,a),dot(jx,b),dot(jx,c));
@@ -257,7 +289,8 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
             center=mean-.5f-(equirectangular?frame.panorama.zw:float2(0));
             // Actual 3D alpha uses source scale, independently of binning scale
             // modifier/mip compensation, matching load_splat_gut_alphablend.
-            const float3 base_scale=max(exp(log_scale),float3(1e-8f));
+            const float3 source_scale=portal?lfsPortalCompactScales(exp(log_scale)):exp(log_scale);
+            const float3 base_scale=max(source_scale,float3(1e-8f));
             const float3 ga=linear*rotate_axis(q,float3(base_scale.x,0,0));
             const float3 gb=linear*rotate_axis(q,float3(0,base_scale.y,0));
             const float3 gc=linear*rotate_axis(q,float3(0,0,base_scale.z));
@@ -276,15 +309,35 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
         if(!isfinite(det) || det<=1e-12f) return;
         if(frame.extent.w) alpha*=sqrt(max((raw_xx*raw_yy-covariance.y*covariance.y)/det,0.f));
         if(alpha<0.5f/255.0f) return;
-        covariance=(primitive_mode==3u?covariance:clamp_covariance_extent(covariance,alpha))*variance_scale;
+        const float2 camera_extent=all(frame.panorama.xy>0)?frame.panorama.xy:float2(frame.extent.xy);
+        const float2 source_extent=max(float2(1),round(camera_extent/raster_scale));
+        if(portal && primitive_mode!=3u)covariance=portal_covariance(covariance,source_extent);
+        else if(!portal && primitive_mode!=3u)covariance=clamp_covariance_extent(covariance,alpha);
+        covariance*=variance_scale;
         const float xx=covariance.x,xy=covariance.y,yy=covariance.z;
         det=xx*yy-xy*xy;
         conic=float3(yy,-xy,xx)/det;
-        const float eigen=.5f*(xx+yy)+sqrt(max(0.0f,.25f*(xx-yy)*(xx-yy)+xy*xy));
+        float3 bin_covariance=covariance;
+        if(portal && primitive_mode==3u) {
+            // Preserve raw conic for rings while binning the clamped billboard.
+            const float3 billboard=portal_covariance(covariance,camera_extent);
+            const float mid=.5f*(billboard.x+billboard.z);
+            const float delta=length(float2(.5f*(billboard.x-billboard.z),billboard.y));
+            const float first=mid+delta,second=max(mid-delta,.025f);
+            portal_axis=abs(billboard.y)>1e-6f?normalize(float2(billboard.y,first-billboard.x)):
+                (billboard.x>=billboard.z?float2(1,0):float2(0,1));
+            const float clip=min(1.f,.5f*sqrt(max(0.f,log(source_alpha*255.f))));
+            portal_extent=sqrt(8.f*float2(first,second))*clip;
+            gut_output[i].inverse0.w=portal_axis.x;
+            gut_output[i].inverse1.w=portal_axis.y;
+            gut_output[i].inverse2.w=portal_extent.y;
+            bin_covariance=2.f*billboard;
+        }
+        const float eigen=.5f*(bin_covariance.x+bin_covariance.z)+sqrt(max(0.0f,.25f*(bin_covariance.x-bin_covariance.z)*(bin_covariance.x-bin_covariance.z)+bin_covariance.y*bin_covariance.y));
         radius=primitive_mode==2u?3.0f*sqrt(eigen):sqrt(2.0f*max(4.0f,log(alpha*510.0f))*eigen);
         if(equirectangular) {
             const float extent_factor=sqrt(2.f*max(4.f,log(source_alpha*510.f)));
-            panorama_radius=min(sqrt(float2(xx,yy))*extent_factor,frame.panorama.xy*float2(1.f,.49f));
+            panorama_radius=min(sqrt(bin_covariance.xz)*extent_factor,frame.panorama.xy*float2(1.f,.49f));
             radius=max(panorama_radius.x,panorama_radius.y);
         }
     }
@@ -306,10 +359,14 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     if(all(axis_lengths>1e-8f))direction=float3(dot(model_linear[0]/axis_lengths.x,direction),
         dot(model_linear[1]/axis_lengths.y,direction),dot(model_linear[2]/axis_lengths.z,direction));
     float3 color=evaluate_sh(float3(sh0[i]),direction,rest,bounds,i,layout.rest,active_degree);
+    if(portal) {
+        color=lfsPortalCompactColor(color);
+        if(frame.display.x>0)color=lfsDisplaySplat(color,uint(frame.display.x),frame.display.y);
+    }
     if(layout.overlay)color=overlay_projection_color(color,center+(equirectangular?frame.panorama.zw:float2(0)),flags,params);
     if(!all(isfinite(color))) return;
     // The viewer reference sorts by radial distance squared, not camera Z.
     // Retain positive projection depth for admission; the ray path evaluates view-Z depth.
     // color.w is reserved for the radial sort metric.
-    output[i]={float4(center,projection_depth,radius),float4(conic,alpha),float4(color,dot(view,view)),uint4(uint2(lo),uint2(hi))};
+    output[i]={float4(center,projection_depth,portal && primitive_mode==3u?portal_extent.x:radius),float4(conic,alpha),float4(color,dot(view,view)),uint4(uint2(lo),uint2(hi))};
 }

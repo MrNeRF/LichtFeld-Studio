@@ -67,20 +67,22 @@ namespace lfs::rendering::metal {
         simd_float4 intrinsics;                // fx, fy, cx, cy in render pixels
         simd_float4 clip_scale;                // near, far, scale modifier, pixel dilation variance
         simd_uint4 extent;                     // width, height, CameraModel, mip antialiasing (0/1)
-        simd_float4 rasterization{1, 0, 0, 0}; // output/source pixel scale, expected-depth flag/far, reserved
+        simd_float4 rasterization{1, 0, 0, 0}; // output/source pixel scale, expected-depth flag/far, render profile (0 Studio, 1 portal)
+        simd_float4 display{0, 1, 0, 0};       // tone operator, exposure, reserved, reserved
         simd_float4 panorama{};                // full camera width/height and subregion origin in output pixels
     };
-    static_assert(sizeof(Projection) == 224);
+    static_assert(sizeof(Projection) == 240);
 
     // Normalized local-frame inverse rows in camera coordinates. Independent of
     // projected covariance and mip compensation: 3DGUT evaluates the pixel ray.
+    // Portal only: inverse0/1.w hold the billboard axis; inverse2.w its minor extent.
     struct alignas(16) GutSplat {
         simd_float4 inverse0, inverse1, inverse2, mean_opacity;
     };
     static_assert(sizeof(GutSplat) == 64);
 
     struct alignas(16) ProjectedSplat {
-        simd_float4 mean_depth;    // x, y, linear view depth, contribution radius in pixels
+        simd_float4 mean_depth;    // x, y, linear view depth, radius (portal GUT: billboard major extent)
         simd_float4 conic_opacity; // inverse covariance xx,xy,yy and activated opacity
         simd_float4 color;         // RGB radiance; w is radial sort distance squared, not alpha
         simd_uint4 bounds;         // exclusive pixel AABB; panorama X is a wrapped tile span; empty means culled

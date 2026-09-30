@@ -86,7 +86,7 @@ under `viewer_backend`, defaults missing/invalid values to automatic, and does n
 rewrite the saved request when a backend is unavailable. The resolver reports a
 fallback reason. Desktop routing and the preferences UI are connected.
 
-The native desktop adapter supports Studio 3DGS and 3DGUT color/depth, perspective and
+The native desktop adapter supports Studio and standard portal 3DGS/3DGUT color/depth, perspective and
 orthographic and equirectangular views, resident float32/half geometry, Q16/half/float SH storage,
 node transforms/visibility/SH limits, deletion, crop boxes and ellipsoids,
 screen depth windows, dimming, committed/preview selection, brushes, node flash,
@@ -105,6 +105,18 @@ relative offsets to avoid cancellation from its large negative central weight.
 The viewer's fixed raster near threshold is derived from the existing Vulkan
 shader configuration; desktop projection near/far planes do not incorrectly
 cull native Gaussian input. Separate close-range parity cases cover this.
+
+The standard portal profile embeds the same MIT-licensed compact codecs and
+display-color functions used by Vulkan, without modifying those sources. It
+quantizes displayed scales, rotation, opacity and radiance, uses the unclamped
+pinhole Jacobian, 0.075-pixel GS dilation, normalized Gaussian tails and portal
+billboard limits. The GUT path retains its 0.3 dilation, no mip compensation,
+raw ray geometry and explicit clamped billboard fragment bound. Tone operators
+are applied per Gaussian before blending, with no second tone pass. Portal GS
+uses the reference's macro-relative FP16 footprint; native accumulation remains
+FP32. An independent analytic alpha contract and eighteen macOS-only comparisons
+cover SH0/Q16, mip, orthographic, depth, export, close range, GUT/panoramas, ACES,
+affine transforms, selection, crop and markers. Existing parity limits are retained.
 
 Main, split-left, split-right and preview outputs have independent reservations.
 Expected-depth captures normalize only valid forward contributor weights within
@@ -128,8 +140,7 @@ recommended working set, accounting for allocations already on the shared
 device. This guards large growth before allocation; it is not an eviction or
 adaptive-quality policy and does not measure driver memory exactly.
 
-Unsupported requests, including the standard portal profile and LOD/RAD
-traversal/paging, retain the existing Vulkan path. Selection queries,
+Unsupported LOD/RAD traversal/paging requests retain the existing Vulkan path. Selection queries,
 the desktop UI, grid, gizmos and final composition also remain on Vulkan. This
 backend is not yet a fully independent Metal desktop presentation/editor stack.
 Automatic continues to use Vulkan, and no global Vulkan shader is modified.
@@ -185,8 +196,7 @@ emitted on successful frames and route changes, including Automatic and fallback
 tensor selection is logged after startup preflight. Preferences reject unavailable
 CUDA/Metal choices with a localized dialog and preserve the previous settings.
 
-Remaining native work includes 3DGUT/equirectangular and portal profiles,
-LOD/RAD admission, page layouts and leases, selection-query kernels, pressure
+Remaining native work includes LOD/RAD admission, page layouts and leases, selection-query kernels, pressure
 eviction and adaptive reservation, and representative sustained performance
 across large scenes. RAD's signed-byte/page-frame layout must not be decoded as
 SplatData Q16. iOS can reuse projection/raster/scene contracts but needs direct

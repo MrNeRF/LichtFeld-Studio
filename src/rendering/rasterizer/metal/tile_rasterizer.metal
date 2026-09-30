@@ -274,6 +274,10 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
             else if (p.mode == 2) alpha = q <= 9 ? c.w : 0;
             else if(p.mode==3u) {
                 const auto g=gut[ids[j]];
+                if(p.unused&4u) {
+                    const float2 axis=float2(g.inverse0.w,g.inverse1.w);
+                    if(abs(dot(d,axis))>means[j].w || abs(dot(d,float2(axis.y,-axis.x)))>g.inverse2.w)continue;
+                }
                 const float3 delta=gut_origin-g.mean_opacity.xyz;
                 const float3 local_origin=float3(dot(g.inverse0.xyz,delta),dot(g.inverse1.xyz,delta),dot(g.inverse2.xyz,delta));
                 const float3 local_direction=float3(dot(g.inverse0.xyz,gut_direction),dot(g.inverse1.xyz,gut_direction),dot(g.inverse2.xyz,gut_direction));
@@ -284,9 +288,13 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                 const float t=-dot(local_direction,local_origin)/denom;
                 const float z=gut_origin.z+t*gut_direction.z;
                 splat_depth=t>0 && z>p.clip.x && isfinite(z)?z:1e10f;
+            } else if(p.unused&4u) {
+                const float edge=.01831563888873418f;
+                const float value=q>8.f?0.f:exp(-.5f*q);
+                alpha=c.w*max(0.f,(value-edge)/(1.f-edge));
             } else alpha = c.w * exp(-.5f * q);
             alpha = min(alpha, .999f);
-            if(p.mode!=3u && (p.unused&1u) && overlay_enabled(overlay_params[22].y) && !(overlay_flags[ids[j]]&2u)){
+            if((p.mode==0u && (p.unused&4u)) || (p.mode!=3u && (p.unused&1u) && overlay_enabled(overlay_params[22].y) && !(overlay_flags[ids[j]]&2u))){
                 const float2 origin=floor((float2(pixel)+p.render_origin.xy)/overlay_macro_extent)*overlay_macro_extent;
                 const half2 center=half2((means[j].xy+p.render_origin.xy-origin)/overlay_tile_extent);
                 const half2 coord=half2((float2(pixel)+p.render_origin.xy-origin)/overlay_tile_extent);
@@ -297,9 +305,16 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                 const half u=chol.x*delta.x+chol.y*delta.y,v=chol.z*delta.y;
                 const half power=u*u+v*v;
                 if(power<0 || power>chol.w)continue;
-                alpha=float(min(half(c.w)*exp2(-power),half(.999f)));
+                // Match the portal's macro-relative FP16 footprint. The
+                // native accumulation remains FP32; this is display-profile math.
+                half value=exp2(-power);
+                if(p.unused&4u) {
+                    const half edge=half(.01831563888873418f);
+                    value=max(half(0),(value-edge)/(half(1)-edge));
+                }
+                alpha=float(min(half(c.w)*value,half(.999f)));
             }
-            if (alpha < .5f/255) continue;
+            if (alpha < ((p.unused&4u)?1.f/255.f:.5f/255.f)) continue;
             float3 radiance=clamp(colors[j].xyz,0.f,4.f);
             if(p.unused&1u){
                 const uint flags=overlay_flags[ids[j]];

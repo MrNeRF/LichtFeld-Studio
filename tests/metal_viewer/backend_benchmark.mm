@@ -29,7 +29,7 @@ namespace {
         int width = 1280, height = 720, warmup = 12, samples = 40;
         std::string output, images, overlay;
         bool verify_parity = false;
-        bool mip = false, ortho = false, depth = false, export_scale = false, gut = false, equirect = false, subregion = false, near = false;
+        bool mip = false, ortho = false, depth = false, export_scale = false, gut = false, equirect = false, subregion = false, near = false, portal = false, portal_tone = false;
     };
     Options options(int argc, char** argv) {
         Options o;
@@ -42,6 +42,11 @@ namespace {
                 o.warmup = 6;
                 o.samples = 4;
                 o.verify_parity = true;
+                continue;
+            }
+            if (arg == "--portal" || arg == "--portal_tone") {
+                o.portal = true;
+                o.portal_tone = arg == "--portal_tone";
                 continue;
             }
             if (arg == "--equirect") {
@@ -151,7 +156,8 @@ namespace {
                 means[3 * i] *= .006f;
                 means[3 * i + 1] *= .006f;
                 means[3 * i + 2] = -.03f - .05f * unit(random);
-                for (int c = 0; c < 3; ++c) scales[3 * i + c] -= 2.5f;
+                for (int c = 0; c < 3; ++c)
+                    scales[3 * i + c] -= 2.5f;
             }
             rotation[4 * i] = 1.f;
             opacity[i] = 1.f + unit(random);
@@ -256,10 +262,14 @@ namespace {
             vis::VksplatViewportRenderer vulkan;
             rendering::ViewportRenderRequest request;
             request.frame_view.size = {o.width, o.height};
-            if (o.near) request.frame_view.far_plane = .06f;
+            if (o.near)
+                request.frame_view.far_plane = .06f;
             request.frame_view.rasterization_scale = o.export_scale ? 2.f : 1.f;
             request.sh_degree = degree;
             request.gut = o.gut;
+            request.splat_render_profile = o.portal ? 1 : 0;
+            request.color_tonemapping = o.portal_tone ? 4 : 0;
+            request.color_exposure = o.portal_tone ? 1.6f : 1.f;
             request.equirectangular = o.equirect;
             if (o.subregion) {
                 request.frame_view.subregion_full_size = {o.width * 2, o.height * 2};
@@ -446,7 +456,7 @@ namespace {
         }
         rusage usage{};
         getrusage(RUSAGE_SELF, &usage);
-        return {{"schema_version", 1}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", 1939}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"gut", o.gut}, {"equirectangular", o.equirect}, {"near_fixture", o.near}, {"subregion", o.subregion}, {"reference_full_frame_crop", o.equirect && o.subregion}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
+        return {{"schema_version", 1}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", 1939}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"profile", o.portal ? "portal" : "studio"}, {"tone_fixture", o.portal_tone}, {"gut", o.gut}, {"equirectangular", o.equirect}, {"near_fixture", o.near}, {"subregion", o.subregion}, {"reference_full_frame_crop", o.equirect && o.subregion}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
     }
 } // namespace
 int main(int argc, char** argv) {

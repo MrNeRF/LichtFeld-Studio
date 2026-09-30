@@ -109,6 +109,32 @@ if(TARGET lfs_visualizer)
                 set_tests_properties(MacViewerParity_equirect_${_panorama_overlay} PROPERTIES
                     LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
             endforeach()
+            foreach(_portal_mode IN ITEMS native mip ortho depth export_scale gut equirect near tone)
+                set(_portal_args --portal)
+                if(_portal_mode STREQUAL "tone")
+                    list(APPEND _portal_args --portal_tone)
+                elseif(NOT _portal_mode STREQUAL "native")
+                    list(APPEND _portal_args --${_portal_mode})
+                endif()
+                add_test(NAME MacViewerParity_portal_${_portal_mode} COMMAND mac_viewer_backend_benchmark
+                    --smoke ${_portal_args} --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-portal-${_portal_mode}.json")
+                set_tests_properties(MacViewerParity_portal_${_portal_mode} PROPERTIES
+                    LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
+            endforeach()
+            foreach(_portal_gut_mode IN ITEMS mip depth export_scale near portal_tone)
+                add_test(NAME MacViewerParity_portal_gut_${_portal_gut_mode} COMMAND mac_viewer_backend_benchmark
+                    --smoke --portal --gut --${_portal_gut_mode}
+                    --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-portal-gut-${_portal_gut_mode}.json")
+                set_tests_properties(MacViewerParity_portal_gut_${_portal_gut_mode} PROPERTIES
+                    LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
+            endforeach()
+            foreach(_portal_overlay IN ITEMS affine selection crop markers)
+                add_test(NAME MacViewerParity_portal_${_portal_overlay} COMMAND mac_viewer_backend_benchmark
+                    --smoke --portal --overlay ${_portal_overlay}
+                    --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-portal-${_portal_overlay}.json")
+                set_tests_properties(MacViewerParity_portal_${_portal_overlay} PROPERTIES
+                    LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
+            endforeach()
             foreach(_overlay IN ITEMS selection preview crop ellipsoid window markers flash affine)
                 add_test(NAME MacViewerParity_${_overlay} COMMAND mac_viewer_backend_benchmark
                     --smoke --overlay ${_overlay}
