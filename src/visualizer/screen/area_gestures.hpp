@@ -8,7 +8,7 @@
 
 #include <optional>
 
-// Pointer gestures on the screen's chrome, the way Blender handles them:
+// Pointer gestures on the screen's chrome:
 // dragging a divider resizes its neighbours; dragging from an area corner into
 // the area splits it, out of the area across an edge joins the neighbour, and
 // with the swap modifier held exchanges two areas. The state machine only

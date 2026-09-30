@@ -3420,8 +3420,8 @@ namespace lfs::vis {
         return true;
     }
 
-    // Keys act on the 3D view under the pointer, like Blender; away from every
-    // view they act on the active one.
+    // Keyboard view actions target the 3D view under the pointer; when no view
+    // is hovered, they target the active view.
     Viewport& InputController::activeKeyboardViewport() {
         const auto hovered = views_.viewAt(static_cast<float>(hover_pos_.x), static_cast<float>(hover_pos_.y));
         if (hovered.valid())

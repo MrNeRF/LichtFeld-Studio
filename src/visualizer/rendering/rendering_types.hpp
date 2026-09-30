@@ -282,9 +282,8 @@ namespace lfs::vis {
 
     using PPISPOverrides = lfs::training::PPISPViewportOverrides;
 
-    // Settings that belong to one 3D view (Blender's View3D shading and
-    // overlays): lens and projection, overlays, display mode, comparison
-    // mode and the selection depth filter. Every 3D view owns one.
+    // Settings that belong to one 3D view: lens, projection, overlays, display
+    // mode, comparison mode and selection depth filter. Every 3D view owns one.
     struct ViewSettings {
         float focal_length_mm = lfs::rendering::DEFAULT_FOCAL_LENGTH_MM;
         bool equirectangular = false;

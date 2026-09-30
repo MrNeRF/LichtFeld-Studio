@@ -305,7 +305,7 @@ namespace lfs::vis::screen {
                 return true;
             }
         }
-        // Top | original over Front | Right, as Blender lays its quad view out.
+        // Quad view layout: Top | original over Front | Right.
         const AreaId left = split(id, SplitAxis::Columns, 0.5f, true);
         if (!left.valid())
             return false;

@@ -13,17 +13,15 @@
 
 namespace lfs::vis::screen {
 
-    // The state of one 3D viewport: where it looks from and how it draws the
-    // scene. Blender splits this into View3D and RegionView3D; with one view
-    // region per area they are one object here.
+    // The state of one 3D viewport: its camera and display settings.
     class View3DSpace final : public SpaceData {
     public:
         View3DSpace() = default;
 
         Viewport camera;
         ViewSettings settings;
-        // Set when an axis view switched the projection to orthographic, so
-        // orbiting away returns to perspective (Blender's auto perspective).
+        // Set when an axis view switches to orthographic, so orbiting away
+        // returns to perspective.
         bool auto_orthographic = false;
 
         [[nodiscard]] std::unique_ptr<SpaceData> clone() const override;
@@ -42,14 +40,13 @@ namespace lfs::vis::screen {
 
     [[nodiscard]] ViewAxis alignedViewAxis(const glm::mat3& rotation);
 
-    // Blender-style view name, e.g. "Top Orthographic" or "User Perspective".
+    // Human-readable view name, e.g. "Top Orthographic" or "User Perspective".
     [[nodiscard]] std::string viewLabel(const View3DSpace& view);
 
     // Switches projection, keeping the apparent size of what is at the pivot
     // when entering orthographic. `viewport_height` is in pixels.
     void setOrthographic(View3DSpace& view, bool enabled, float viewport_height);
-    // Looks along `axis` at the pivot; like Blender's numpad views this also
-    // switches to orthographic.
+    // Looks along `axis` at the pivot and switches to orthographic.
     void setAxisView(View3DSpace& view, ViewAxis axis, float viewport_height);
     // Leaves an axis view: back to perspective if the axis view chose ortho.
 

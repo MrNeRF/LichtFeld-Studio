@@ -153,7 +153,7 @@ namespace lfs::vis::input {
         ASSET_GALLERY_PRIMARY,
         ASSET_GALLERY_COPY_LINK,
         ASSET_REFRESH,
-        // 3D view navigation (Blender's numpad views) and area shortcuts.
+        // 3D view navigation and area shortcuts.
         VIEW_AXIS_TOP,
         VIEW_AXIS_BOTTOM,
         VIEW_AXIS_FRONT,

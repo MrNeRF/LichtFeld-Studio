@@ -84,8 +84,8 @@ namespace lfs::vis::screen {
         bool closeEditor(std::string_view editor);
         bool moveDivider(const DividerGeometry& divider, float position);
 
-        // Blender's quad view: turns a 3D view into four (Top, Front and Right
-        // orthographic plus the original), or collapses such a block back to
+        // Turns a 3D view into four (Top, Front and Right orthographic plus
+        // the original), or collapses such a block back to
         // `view`. `viewport_height` sizes the new orthographic views.
         bool toggleQuadView(AreaId view, float viewport_height);
         // A second 3D view beside `view`, or back to one when it already has

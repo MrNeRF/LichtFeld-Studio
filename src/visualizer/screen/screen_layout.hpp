@@ -13,7 +13,7 @@
 #include <vector>
 
 // The screen layout partitions the window's work area into non-overlapping
-// areas, the way Blender's screen does. It is a pure value type: no UI, no
+// areas. It is a pure value type: no UI, no
 // GPU, no editor knowledge. Areas are referenced by id; what an area shows is
 // owned by the Screen that holds this layout.
 //
@@ -145,7 +145,7 @@ namespace lfs::vis::screen {
         bool join(AreaId kept, AreaId absorbed);
 
         // The area sharing `area`'s full edge on `side`, if any. This is the
-        // area a Blender-style corner drag across that edge would join.
+        // area a corner drag across that edge would join.
         [[nodiscard]] AreaId joinableNeighbour(AreaId area, Side side) const;
 
         // The four areas of a 2x2 block containing `area`: a split of two

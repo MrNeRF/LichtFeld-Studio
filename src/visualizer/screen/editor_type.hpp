@@ -14,15 +14,11 @@
 #include <string_view>
 #include <vector>
 
-// Editor types play the part of Blender's space types: every area shows one
-// editor, and the registry says what each editor is called, how it looks in
-// menus, whether several areas may show it, where it opens by default and how
-// to create its per-area state.
+// Each area shows one editor type. The registry defines its label, menu icon,
+// instance rules, default placement and per-area state.
 namespace lfs::vis::screen {
 
-    // Per-area state of one editor type (Blender's SpaceLink). An area keeps
-    // the state of every editor it has shown, so switching away and back
-    // restores it.
+    // An area retains each editor's state while other editors are shown.
     class SpaceData {
     public:
         virtual ~SpaceData() = default;

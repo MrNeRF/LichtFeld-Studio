@@ -1101,7 +1101,7 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_ENTER, MODIFIER_CTRL}, Action::ASSET_GALLERY_PRIMARY, "Gallery Primary Action"},
             {KeyTrigger{KEY_C, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::ASSET_GALLERY_COPY_LINK, "Copy Gallery Link"},
             {KeyTrigger{KEY_F5, MODIFIER_NONE}, Action::ASSET_REFRESH, "Refresh Assets"},
-            // 3D view: Blender's numpad views
+            // 3D view: axis and projection shortcuts
             {KeyTrigger{KEY_KP_7, MODIFIER_NONE}, Action::VIEW_AXIS_TOP, "Top view"},
             {KeyTrigger{KEY_KP_7, MODIFIER_CTRL}, Action::VIEW_AXIS_BOTTOM, "Bottom view"},
             {KeyTrigger{KEY_KP_1, MODIFIER_NONE}, Action::VIEW_AXIS_FRONT, "Front view"},
