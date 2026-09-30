@@ -9,6 +9,7 @@ Development docs in this section are organized around execution workflows rather
 - [Components](components/)
 - [RmlUI Styling](rmlui-styling)
 - [UI design language and window patterns](ui-design-language)
+- [Editor areas](editor-areas)
 - [Developer flags and diagnostics](flags)
 - [Native model inference on GPU backends](native-inference)
 - [Windows build preflight](windows-build-preflight)
