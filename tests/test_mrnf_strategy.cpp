@@ -1740,14 +1740,14 @@ namespace {
         return {p, p + cpu.numel()};
     }
 
-    param::OptimizationParameters mean_step_test_params(const bool per_splat) {
+    param::OptimizationParameters mean_step_test_params() {
         auto opt = vanilla_mrnf_params();
         opt.iterations = 10'000;
         opt.sh_degree_interval = 10'000;
         opt.max_cap = 32;
         opt.means_lr = 0.1f;
         opt.means_lr_end = 0.1f;
-        opt.background_improvements = per_splat;
+        opt.background_improvements = false;
         return opt;
     }
 } // namespace
@@ -1759,8 +1759,10 @@ TEST(MRNFStrategyTest, PerSplatMeanStepScalesWithExtentAndClamps) {
     place_deep_far_probe(splat_g);
     MRNF per_splat(splat_p);
     MRNF global(splat_g);
-    per_splat.initialize(mean_step_test_params(true));
-    global.initialize(mean_step_test_params(false));
+    per_splat.initialize(mean_step_test_params());
+    global.initialize(mean_step_test_params());
+    global.get_optimizer().set_per_splat_mean_step(
+        false, 0.0f, kPerSplatMeanStepRatioMin, kPerSplatMeanStepRatioMax);
     install_test_camera_hull(per_splat);
     per_splat._far_starvation = 1.0f;
     per_splat.refresh_far_field_mask(static_cast<size_t>(splat_p.size()));
@@ -1979,14 +1981,15 @@ TEST(MRNFStrategyTest, CensusGateActivatesAndSuppressesFarFeatures) {
     }
 
     {
-        // census-inert + starvation OFF clears the hull
+        // The mean-step mask keeps the hull even when profile features are off.
         auto splat = create_mrnf_test_splat_data();
         place_deep_far_probe_at(splat, 9);
         MRNF strategy(splat);
         strategy.initialize(make_params(true, 1.0f, false));
         install_test_camera_hull(strategy);
-        EXPECT_FALSE(strategy._camera_hull_valid);
+        EXPECT_TRUE(strategy._camera_hull_valid);
         EXPECT_FALSE(strategy._scene_has_far_field);
+        EXPECT_FALSE(strategy.far_operators_active());
     }
 
     {
@@ -1995,9 +1998,10 @@ TEST(MRNFStrategyTest, CensusGateActivatesAndSuppressesFarFeatures) {
         MRNF strategy(splat);
         strategy.initialize(make_params(false, 0.0f));
         install_test_camera_hull(strategy);
-        EXPECT_FALSE(strategy._camera_hull_valid);
-        EXPECT_FALSE(strategy._scene_has_far_field);
-        EXPECT_FALSE(strategy.get_optimizer().per_splat_mean_step());
+        EXPECT_TRUE(strategy._camera_hull_valid);
+        EXPECT_TRUE(strategy._scene_has_far_field);
+        EXPECT_TRUE(strategy.get_optimizer().per_splat_mean_step());
+        ASSERT_NE(strategy.get_optimizer().mean_step_far_mask(), nullptr);
     }
 }
 
@@ -2115,6 +2119,7 @@ TEST(MRNFStrategyTest, BackgroundImprovementsOffDisablesEveryProfileMechanism) {
     EXPECT_EQ(opt_params.far_seed_dose, 2'000u);
     EXPECT_TRUE(opt_params.explore_starvation_weighting);
     opt_params.background_improvements = false;
+    opt_params.far_scene_min_fraction = 1.0f;
     opt_params.iterations = 1'000;
     opt_params.max_cap = 32;
     strategy.initialize(opt_params);
@@ -2128,7 +2133,13 @@ TEST(MRNFStrategyTest, BackgroundImprovementsOffDisablesEveryProfileMechanism) {
     EXPECT_EQ(strategy.effective_grow_until_iter(), static_cast<int>(opt_params.grow_until_iter));
     EXPECT_FLOAT_EQ(strategy.effective_far_growth_cap(), 1.0f);
     EXPECT_FLOAT_EQ(strategy.effective_far_decay_scale(), 1.0f);
-    EXPECT_FLOAT_EQ(strategy.effective_mean_step_ratio_max(), 1.0f);
+    EXPECT_FLOAT_EQ(strategy.effective_mean_step_ratio_max(), kPerSplatMeanStepRatioMax);
+    EXPECT_TRUE(strategy.get_optimizer().per_splat_mean_step());
+    install_test_camera_hull(strategy);
+    EXPECT_FALSE(strategy._scene_has_far_field);
+    EXPECT_FALSE(strategy.far_operators_active());
+    ASSERT_NE(strategy.get_optimizer().mean_step_far_mask(), nullptr);
+    EXPECT_EQ(strategy.get_optimizer().mean_step_far_mask_n(), 10);
 }
 
 TEST(MRNFStrategyTest, BackgroundImprovementsOnKeepsProfileMechanisms) {
@@ -2153,9 +2164,10 @@ TEST(MRNFStrategyTest, BackgroundImprovementsOnKeepsProfileMechanisms) {
     EXPECT_TRUE(strategy.far_operators_active());
     EXPECT_EQ(strategy.effective_grow_until_iter(),
               std::max(static_cast<int>(opt_params.grow_until_iter), 15000));
-    EXPECT_FLOAT_EQ(strategy.effective_far_growth_cap(), kFarGrowthCap);
-    EXPECT_FLOAT_EQ(strategy.effective_far_decay_scale(), kFarDecayScale);
-    EXPECT_FLOAT_EQ(strategy.effective_mean_step_ratio_max(), kPerSplatMeanStepRatioMax);
+    EXPECT_NEAR(strategy.effective_far_growth_cap(), 1.0f - 0.2f * (1.0f - kFarGrowthCap), 1.0e-6f);
+    EXPECT_NEAR(strategy.effective_far_decay_scale(), 1.0f - 0.2f * (1.0f - kFarDecayScale), 1.0e-6f);
+    EXPECT_NEAR(strategy.effective_mean_step_ratio_max(),
+                1.0f + 0.2f * (kPerSplatMeanStepRatioMax - 1.0f), 1.0e-5f);
 }
 
 TEST(MRNFStrategyTest, PermutationRepublishesFarMask) {
@@ -2206,6 +2218,15 @@ TEST(MRNFStrategyTest, PermutationRepublishesFarMask) {
     EXPECT_FALSE(strategy._far_field_mask.is_valid());
     EXPECT_EQ(optimizer.mean_step_far_mask(), nullptr);
     EXPECT_EQ(optimizer.mean_step_far_mask_n(), 0);
+}
+
+TEST(MRNFStrategyTest, SetTrainingDatasetBeforeInitializeWithBackgroundImprovementsOff) {
+    auto splat_data = create_mrnf_test_splat_data(0);
+    MRNF strategy(splat_data);
+
+    // Trainer wires the dataset before initialize() binds params and creates the
+    // optimizer. The default profile has background improvements disabled.
+    EXPECT_NO_THROW(strategy.set_training_dataset(make_hull_dataset()));
 }
 
 TEST(MRNFStrategyTest, HardRemovalRepublishesFarMaskForDegenerateModel) {
@@ -2547,7 +2568,7 @@ TEST(MRNFStrategyTest, CheckpointLoadPreservesDatasetFarFieldProtection) {
     place_deep_far_probe(original_model);
     MRNF original(original_model);
     param::TrainingParameters params;
-    params.optimization = mean_step_test_params(true);
+    params.optimization = mean_step_test_params();
     params.optimization.far_scene_min_fraction = 0.0f;
     const auto dataset = make_hull_dataset();
     original.set_training_dataset(dataset);

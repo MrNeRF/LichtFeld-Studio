@@ -1493,7 +1493,8 @@ namespace lfs::training {
     }
 
     bool MRNF::far_operators_active() const {
-        return _scene_has_far_field || explore_starvation_weighting_enabled();
+        return background_improvements_enabled() &&
+               (_scene_has_far_field || explore_starvation_weighting_enabled());
     }
 
     bool MRNF::explore_starvation_weighting_enabled() const {
@@ -1509,16 +1510,12 @@ namespace lfs::training {
         _cam_centroid[2] = 0.0f;
         _orbit_radius = 0.0f;
 
-        if (!background_improvements_enabled()) {
+        const size_t n_cam = _views ? _views->size() : 0;
+        if (n_cam < 2) {
             _scene_has_far_field = false;
             _far_field_mask = {};
             update_far_starvation();
-            return;
-        }
-
-        const size_t n_cam = _views ? _views->size() : 0;
-        if (n_cam < 2) {
-            update_far_starvation();
+            publish_mean_step_far_mask();
             if (!_logged_degenerate_hull && background_improvements_enabled()) {
                 LOG_INFO("MRNF: camera hull unavailable (need >= 2 training cameras); far-field guard is inert");
                 _logged_degenerate_hull = true;
@@ -1596,7 +1593,10 @@ namespace lfs::training {
         _logged_degenerate_hull = false;
 
         constexpr float kDeepFarRadiusOrbits = 8.0f;
-        const float far_scene_min_fraction = _params->far_scene_min_fraction;
+        // set_training_dataset() runs before initialize() binds params and creates
+        // the optimizer. The camera hull can still be recorded, but its census
+        // threshold has no configured value yet.
+        const float far_scene_min_fraction = _params ? _params->far_scene_min_fraction : 0.0f;
         const size_t n_now = _splat_data ? static_cast<size_t>(_splat_data->size()) : 0;
         _scene_has_far_field = false;
         if (n_now > 0) {
@@ -1622,14 +1622,8 @@ namespace lfs::training {
                          _scene_has_far_field ? "active" : "inert");
             }
 
-            if (!far_operators_active()) {
-                _camera_hull_valid = false;
-                _far_field_mask = lfs::core::Tensor();
-            }
             update_far_starvation();
-            if (far_operators_active()) {
-                refresh_far_field_mask(n_now);
-            }
+            refresh_far_field_mask(n_now);
         } else {
             update_far_starvation();
         }
@@ -1667,10 +1661,10 @@ namespace lfs::training {
     }
 
     float MRNF::effective_mean_step_ratio_max() const {
-        if (!background_improvements_enabled()) {
-            return 1.0f;
+        if (background_improvements_enabled()) {
+            return 1.0f + _far_starvation * (kPerSplatMeanStepRatioMax - 1.0f);
         }
-        return 1.0f + _far_starvation * (kPerSplatMeanStepRatioMax - 1.0f);
+        return kPerSplatMeanStepRatioMax;
     }
 
     float MRNF::far_starvation_factor(const float ratio, const float full, const float rich) {
@@ -1758,10 +1752,6 @@ namespace lfs::training {
         if (!_optimizer) {
             return;
         }
-        if (!background_improvements_enabled()) {
-            _optimizer->set_mean_step_far_mask({});
-            return;
-        }
         const size_t n = _splat_data ? static_cast<size_t>(_splat_data->size()) : 0;
         if (!_camera_hull_valid || n == 0 || !_far_field_mask.is_valid() ||
             _far_field_mask.numel() != n) {
@@ -1772,10 +1762,6 @@ namespace lfs::training {
     }
 
     void MRNF::ensure_mean_step_far_mask() {
-        if (!background_improvements_enabled()) {
-            publish_mean_step_far_mask();
-            return;
-        }
         const size_t n = _splat_data ? static_cast<size_t>(_splat_data->size()) : 0;
         refresh_far_field_mask(n);
     }
@@ -3430,7 +3416,7 @@ namespace lfs::training {
         if (!_optimizer || !_bounds_valid)
             return;
         _optimizer->set_param_lr(ParamType::Means, _mean_lr_unscaled * _bounds.median_size);
-        if (background_improvements_enabled() && _median_splat_extent_valid) {
+        if (_median_splat_extent_valid) {
             _optimizer->set_per_splat_mean_step(
                 true, _median_splat_extent, kPerSplatMeanStepRatioMin,
                 effective_mean_step_ratio_max());
