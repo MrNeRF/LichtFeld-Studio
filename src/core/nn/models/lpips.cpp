@@ -5,6 +5,7 @@
 
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
+#include "core/gpu_device_runtime.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_completion.hpp"
@@ -404,6 +405,13 @@ namespace lfs::core::nn::models {
         y_in.sync_to_stream(stream);
         bind_weights_to_stream(stream);
 
+        if (dispatch_ && !cuda_backend && gpu_backend_of(pred) == GpuBackend::Vulkan &&
+            !fast_features_[0].is_valid()) {
+            // Release completed transient storage at the phase boundary before
+            // weight taps and activations pin additional allocator blocks.
+            gpu_trim_cached_memory(GpuBackend::Vulkan);
+        }
+
         std::size_t taps_bytes = 0;
         if (cuda_backend) {
             for (std::size_t i = 1; i < kLayers.size(); ++i) {
@@ -478,10 +486,26 @@ namespace lfs::core::nn::models {
             tile_y = Tensor::empty(tile_x.shape(), Device::GPU);
         }
         const std::size_t max_feature_elems = 64ULL * crop_height * crop_width;
-        for (auto& buffer : fast_features_) {
-            if (!buffer.is_valid() || buffer.numel() < max_feature_elems)
-                buffer = Tensor::empty(shape_of({max_feature_elems}), Device::GPU, DataType::Float16);
-            buffer.set_stream(stream);
+        const bool share_rgb_features = dispatch_ && gpu_backend_of(pred) == GpuBackend::Vulkan;
+        if (share_rgb_features) {
+            for (std::size_t i = 0; i < fast_features_.size(); ++i) {
+                auto& buffer = fast_features_[i];
+                // Complete the first block for one image before starting the other.
+                // Its RGB intermediate can be shared; the second scratch buffer is
+                // only needed after pooling, where features use at most half as much.
+                const std::size_t elements = share_rgb_features && i == 1
+                                                 ? std::max<std::size_t>(1, max_feature_elems / 2)
+                                                 : max_feature_elems;
+                if (!buffer.is_valid() || buffer.numel() < elements)
+                    buffer = Tensor::empty(shape_of({elements}), Device::GPU, DataType::Float16);
+                buffer.set_stream(stream);
+            }
+        } else {
+            for (auto& buffer : fast_features_) {
+                if (!buffer.is_valid() || buffer.numel() < max_feature_elems)
+                    buffer = Tensor::empty(shape_of({max_feature_elems}), Device::GPU, DataType::Float16);
+                buffer.set_stream(stream);
+            }
         }
         if (!fast_scores_.is_valid())
             fast_scores_ = Tensor::empty(shape_of({kBlocks}), Device::GPU, DataType::Float32);
@@ -578,6 +602,8 @@ namespace lfs::core::nn::models {
                     };
                     void* read[2] = {cur[0], cur[1]};
                     void* write[2] = {next[0], next[1]};
+                    if (share_rgb_features)
+                        write[1] = write[0];
                     int h = crop_h, width = crop_w, index = 0;
                     for (int stage = 0; stage < kBlocks; ++stage) {
                         for (int i = 0; i < kStageLayers[stage]; ++i, ++index) {
@@ -594,6 +620,8 @@ namespace lfs::core::nn::models {
                                     write[side] = fast_features_[side + 2].data_ptr();
                             }
                         }
+                        if (share_rgb_features && stage == 0)
+                            write[1] = fast_features_[1].data_ptr();
                         for (int side = 0; side < 2; ++side) {
                             features[stage][side] = outputs[index - 1][side];
                             if (stage + 1 < kBlocks) {
@@ -615,54 +643,68 @@ namespace lfs::core::nn::models {
                 int cur_w = crop_w;
                 int layer = 0;
                 for (int stage = 0; stage < kBlocks; ++stage) {
-                    for (int i = 0; i < kStageLayers[static_cast<std::size_t>(stage)]; ++i,
-                             ++layer) {
-                        const auto& spec = kLayers[static_cast<std::size_t>(layer)];
-                        const auto& weight = w(std::format("vgg.features.{}.weight", spec.index));
-                        const auto& bias = w(std::format("vgg.features.{}.bias", spec.index));
+                    if (share_rgb_features && stage == 0) {
                         for (int side = 0; side < 2; ++side) {
-                            if (dispatch_) {
-                                if (layer == 0) {
-                                    dispatch_->rgb_conv(inputs[layer][side], weight, bias, outputs[layer][side],
-                                                        {scaling_shift_, scaling_scale_, scaling == InputScaling::Normalize});
-                                } else {
-                                    Conv2dParams params;
-                                    params.pad_h = params.pad_w = 1;
-                                    params.activation = Activation::Relu;
-                                    dispatch_->convolution(inputs[layer][side], weight, tap_views[layer], bias,
-                                                           outputs[layer][side], scratch, params);
-                                }
-                            } else if (layer == 0) {
+                            dispatch_->rgb_conv(inputs[0][side], w("vgg.features.0.weight"),
+                                                w("vgg.features.0.bias"), outputs[0][side],
+                                                {scaling_shift_, scaling_scale_, scaling == InputScaling::Normalize});
+                            Conv2dParams params;
+                            params.pad_h = params.pad_w = 1;
+                            params.activation = Activation::Relu;
+                            dispatch_->convolution(inputs[1][side], w("vgg.features.2.weight"),
+                                                   tap_views[1], w("vgg.features.2.bias"),
+                                                   outputs[1][side], scratch, params);
+                        }
+                        layer = kStageLayers[0];
+                    } else {
+                        for (int i = 0; i < kStageLayers[static_cast<std::size_t>(stage)]; ++i,
+                                 ++layer) {
+                            const auto& spec = kLayers[static_cast<std::size_t>(layer)];
+                            const auto& weight = w(std::format("vgg.features.{}.weight", spec.index));
+                            const auto& bias = w(std::format("vgg.features.{}.bias", spec.index));
+                            for (int side = 0; side < 2; ++side) {
+                                if (dispatch_) {
+                                    if (layer == 0) {
+                                        dispatch_->rgb_conv(inputs[layer][side], weight, bias, outputs[layer][side],
+                                                            {scaling_shift_, scaling_scale_, scaling == InputScaling::Normalize});
+                                    } else {
+                                        Conv2dParams params;
+                                        params.pad_h = params.pad_w = 1;
+                                        params.activation = Activation::Relu;
+                                        dispatch_->convolution(inputs[layer][side], weight, tap_views[layer], bias,
+                                                               outputs[layer][side], scratch, params);
+                                    }
+                                } else if (layer == 0) {
 #if LFS_HAS_CUDA
-                                kernels::lpips_rgb_conv3x3(
-                                    static_cast<const float*>(cur[side]), weight.data_ptr(),
-                                    bias.data_ptr(), next[side], scaling_shift_.data(),
-                                    scaling_scale_.data(), scaling == InputScaling::Normalize, 1, cur_h,
-                                    cur_w, stream);
+                                    kernels::lpips_rgb_conv3x3(
+                                        static_cast<const float*>(cur[side]), weight.data_ptr(),
+                                        bias.data_ptr(), next[side], scaling_shift_.data(),
+                                        scaling_scale_.data(), scaling == InputScaling::Normalize, 1, cur_h,
+                                        cur_w, stream);
 #else
-                                return lpips_error(lfs::ErrorCode::Unsupported,
-                                                   "CUDA LPIPS kernels are unavailable in this build");
+                                    return lpips_error(lfs::ErrorCode::Unsupported,
+                                                       "CUDA LPIPS kernels are unavailable in this build");
 #endif
-                            } else {
-                                const void* weight_taps =
-                                    taps_base
-                                        ? taps_base + fast_weight_tap_offsets_[static_cast<std::size_t>(layer)]
-                                        : nullptr;
-                                kernels::conv2d_implicit(
-                                    cur[side], weight.data_ptr(), weight_taps, bias.data_ptr(), next[side],
-                                    nullptr, 1, spec.cin, cur_h, cur_w, spec.cout, 3, 3, cur_h, cur_w,
-                                    1, 1, 1, 1, 1, 1, 0, static_cast<int>(Activation::Relu),
-                                    DataType::Float16, stream);
+                                } else {
+                                    const void* weight_taps =
+                                        taps_base
+                                            ? taps_base + fast_weight_tap_offsets_[static_cast<std::size_t>(layer)]
+                                            : nullptr;
+                                    kernels::conv2d_implicit(
+                                        cur[side], weight.data_ptr(), weight_taps, bias.data_ptr(), next[side],
+                                        nullptr, 1, spec.cin, cur_h, cur_w, spec.cout, 3, 3, cur_h, cur_w,
+                                        1, 1, 1, 1, 1, 1, 0, static_cast<int>(Activation::Relu),
+                                        DataType::Float16, stream);
+                                }
+                            }
+                            std::swap(cur[0], next[0]);
+                            std::swap(cur[1], next[1]);
+                            if (layer == 0) {
+                                next[0] = fast_features_[2].data_ptr();
+                                next[1] = fast_features_[3].data_ptr();
                             }
                         }
-                        std::swap(cur[0], next[0]);
-                        std::swap(cur[1], next[1]);
-                        if (layer == 0) {
-                            next[0] = fast_features_[2].data_ptr();
-                            next[1] = fast_features_[3].data_ptr();
-                        }
                     }
-
                     const int factor = 1 << stage;
                     const int feature_h = full_dim(height, stage);
                     const int feature_w = full_dim(width, stage);

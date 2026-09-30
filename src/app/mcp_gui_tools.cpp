@@ -11,6 +11,7 @@
 #include "app/mcp_sequencer_tools.hpp"
 #include "app/mcp_ui_registry_tools.hpp"
 #include "app/view_info_json.hpp"
+#include "core/error_envelope.hpp"
 #include "core/tensor_sh.hpp"
 
 #include "core/event_bridge/command_center_bridge.hpp"
@@ -55,6 +56,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <deque>
@@ -62,6 +64,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <numbers>
 #include <optional>
 #include <shared_mutex>
 #include <string>
@@ -267,17 +270,35 @@ namespace lfs::app {
                     }));
         }
 
-        std::expected<std::string, std::string> render_scene_to_base64(
-            core::Scene& scene,
-            int camera_index = 0,
-            int width = 0,
-            int height = 0) {
-            (void)scene;
-            (void)camera_index;
-            (void)width;
-            (void)height;
-            return std::unexpected(
-                "Camera-index CUDA scene rendering has been removed; use live Vulkan viewport capture");
+        // Renders dataset camera `camera_index` (an index into the scene's camera list, as selection
+        // camera_index uses) from its pose and intrinsics at its image size. Viewer thread only.
+        std::expected<std::string, std::string> render_dataset_camera_to_base64(vis::Visualizer* viewer,
+                                                                                const int camera_index) {
+            auto* const scene_manager = viewer->getSceneManager();
+            auto* const rendering_manager = viewer->getRenderingManager();
+            if (!scene_manager || !rendering_manager)
+                return std::unexpected("Dataset camera rendering requires the GUI scene and renderer");
+
+            const auto cameras = scene_manager->getScene().getAllCameras();
+            if (camera_index < 0 || static_cast<size_t>(camera_index) >= cameras.size() || !cameras[camera_index])
+                return std::unexpected(std::format("Camera index {} is out of range; the scene has {} dataset cameras",
+                                                   camera_index, cameras.size()));
+            const auto& camera = *cameras[camera_index];
+            if (camera.camera_model_type() == core::CameraModelType::EQUIRECTANGULAR)
+                return std::unexpected(std::format(
+                    "Dataset camera {} is equirectangular; only pinhole-projected cameras can be rendered",
+                    camera_index));
+
+            const auto image = rendering_manager->renderDatasetCameraImage(scene_manager, camera);
+            if (!image || !image->is_valid())
+                return std::unexpected(std::format(
+                    "Rendering dataset camera {} failed: the scene has no renderable Gaussian model, "
+                    "or the renderer rejected the frame (see the log)",
+                    camera_index));
+            auto encoded = mcp::encode_render_tensor_to_base64(*image);
+            if (!encoded)
+                return std::unexpected(std::string(encoded.error().user_message()));
+            return std::move(*encoded);
         }
 
         template <typename F>
@@ -311,23 +332,23 @@ namespace lfs::app {
             return post_render_and_wait(viewer_impl, std::forward<F>(fn));
         }
 
-        std::expected<std::string, std::string> capture_viewport_from_window(
+        lfs::Result<std::string> capture_viewport_from_window(
             vis::VisualizerImpl* viewer_impl,
             const vis::RenderingManager& rendering_manager,
             const int width,
             const int height) {
             const auto rect = rendering_manager.framebufferViewportRect();
             if (!rect.valid())
-                return std::unexpected("No rendered viewport image is available yet");
+                return mcp::capture_error(lfs::ErrorCode::Unavailable, "No rendered viewport image is available yet");
 
             auto* const window_manager = viewer_impl->getWindowManager();
             auto* const vulkan_context = window_manager ? window_manager->getVulkanContext() : nullptr;
             if (!vulkan_context)
-                return std::unexpected("Viewport capture requires a Vulkan window");
+                return mcp::capture_error(lfs::ErrorCode::FailedPrecondition, "Viewport capture requires a Vulkan window");
 
             auto capture = vulkan_context->captureAndEndActiveFrameRgba();
             if (!capture)
-                return std::unexpected(capture.error());
+                return mcp::capture_error(lfs::ErrorCode::Unavailable, capture.error());
 
             const int left = std::clamp(rect.top_left.x, 0, capture->width);
             const int top = std::clamp(rect.top_left.y, 0, capture->height);
@@ -336,7 +357,10 @@ namespace lfs::app {
             const int crop_width = right - left;
             const int crop_height = bottom - top;
             if (crop_width <= 0 || crop_height <= 0)
-                return std::unexpected("Viewport region lies outside the captured window");
+                return mcp::capture_error(lfs::ErrorCode::Unavailable,
+                                          std::format("Viewport region at ({}, {}) size {}x{} lies outside the {}x{} window",
+                                                      rect.top_left.x, rect.top_left.y, rect.size.x, rect.size.y,
+                                                      capture->width, capture->height));
 
             constexpr int kChannels = 4;
             std::vector<std::uint8_t> cropped(
@@ -357,18 +381,18 @@ namespace lfs::app {
                                                 height);
         }
 
-        std::expected<std::string, std::string> capture_live_viewport_to_base64(
+        lfs::Result<std::string> capture_live_viewport_to_base64(
             vis::Visualizer* viewer,
             int width = 0,
             int height = 0,
             bool presented = false) {
             auto* const viewer_impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
             if (!viewer_impl)
-                return std::unexpected("Live viewport capture requires a GUI visualizer");
+                return mcp::capture_error(lfs::ErrorCode::FailedPrecondition, "Live viewport capture requires a GUI visualizer");
 
             auto* const rendering_manager = viewer_impl->getRenderingManager();
             if (!rendering_manager)
-                return std::unexpected("Viewport capture is not initialized");
+                return mcp::capture_error(lfs::ErrorCode::Unavailable, "Viewport capture is not initialized");
 
             if (!presented) {
                 if (auto image = rendering_manager->captureViewportImage(); image && image->is_valid())
@@ -383,22 +407,22 @@ namespace lfs::app {
             return capture_viewport_from_window(viewer_impl, *rendering_manager, width, height);
         }
 
-        std::expected<std::string, std::string> capture_full_window_to_base64(
+        lfs::Result<std::string> capture_full_window_to_base64(
             vis::Visualizer* viewer,
             int width = 0,
             int height = 0) {
             auto* const viewer_impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
             if (!viewer_impl)
-                return std::unexpected("Full-window capture requires a GUI visualizer");
+                return mcp::capture_error(lfs::ErrorCode::FailedPrecondition, "Full-window capture requires a GUI visualizer");
 
             auto* const window_manager = viewer_impl->getWindowManager();
             auto* const vulkan_context = window_manager ? window_manager->getVulkanContext() : nullptr;
             if (!vulkan_context)
-                return std::unexpected("Full-window capture requires a Vulkan window");
+                return mcp::capture_error(lfs::ErrorCode::FailedPrecondition, "Full-window capture requires a Vulkan window");
 
             auto capture = vulkan_context->captureAndEndActiveFrameRgba();
             if (!capture)
-                return std::unexpected(capture.error());
+                return mcp::capture_error(lfs::ErrorCode::Unavailable, capture.error());
 
             return mcp::encode_pixels_to_base64(capture->rgba.data(),
                                                 capture->width,
@@ -591,13 +615,35 @@ namespace lfs::app {
             };
         }
 
-        json selection_result_json(vis::SceneManager& scene_manager, const vis::SelectionResult& result) {
+        // Gaussians whose selection state differs between two selection masks; a missing
+        // mask selects nothing.
+        int64_t changed_selection_count(const std::shared_ptr<core::Tensor>& before,
+                                        const std::shared_ptr<core::Tensor>& after) {
+            const bool has_before = before && before->is_valid();
+            const bool has_after = after && after->is_valid();
+            if (has_before && has_after && before->numel() == after->numel()) {
+                const core::Tensor prior =
+                    before->device() == after->device() ? *before : before->to(after->device());
+                return static_cast<int64_t>(after->ne(prior).count_nonzero());
+            }
+            if (has_after)
+                return static_cast<int64_t>(after->count_nonzero());
+            return has_before ? static_cast<int64_t>(before->count_nonzero()) : 0;
+        }
+
+        // Runs a selection command and reports how many Gaussians it changed. The service's
+        // SelectionResult::affected_count is the post-command selected count, which its
+        // deferred group counts can still hold at the previous selection size.
+        template <typename Command>
+        json selection_command_json(vis::SceneManager& scene_manager, Command&& command) {
+            const auto before = scene_manager.getScene().getSelectionMask();
+            const vis::SelectionResult result = std::forward<Command>(command)();
             if (!result.success)
                 return json{{"error", result.error}};
 
             return json{
                 {"success", true},
-                {"affected_count", static_cast<int64_t>(result.affected_count)},
+                {"affected_count", changed_selection_count(before, scene_manager.getScene().getSelectionMask())},
                 {"selected_count", selected_gaussian_count(scene_manager)},
             };
         }
@@ -608,15 +654,23 @@ namespace lfs::app {
             return args[key].get<std::string>();
         }
 
+        // Tool schemas reject malformed vectors before the handler; this keeps a direct
+        // caller from indexing a short array and rejects values that overflow float.
         std::expected<std::optional<glm::vec3>, std::string> optional_vec3_arg(const json& args, const char* key) {
             if (!args.contains(key) || args[key].is_null())
                 return std::optional<glm::vec3>{};
 
             const auto& value = args[key];
-            if (!value.is_array() || value.size() != 3)
-                return std::unexpected(std::string("Field '") + key + "' must be a 3-element array");
+            if (!value.is_array() || value.size() != 3 ||
+                !std::ranges::all_of(value, [](const json& v) { return v.is_number(); }))
+                return std::unexpected(std::format("Field '{}' must be a 3-element number array (got {})", key,
+                                                   value.dump()));
 
-            return glm::vec3(value[0].get<float>(), value[1].get<float>(), value[2].get<float>());
+            const glm::vec3 result(value[0].get<float>(), value[1].get<float>(), value[2].get<float>());
+            if (!std::isfinite(result.x) || !std::isfinite(result.y) || !std::isfinite(result.z))
+                return std::unexpected(std::format("Field '{}' must contain finite float values (got {})", key,
+                                                   value.dump()));
+            return result;
         }
 
         struct ViewArguments {
@@ -628,26 +682,29 @@ namespace lfs::app {
 
         struct ViewArgumentsError {
             std::string message;
+            std::string parameter;
         };
 
         std::expected<ViewArguments, ViewArgumentsError> parse_view_arguments(const json& args) {
             auto eye = optional_vec3_arg(args, "eye");
             if (!eye)
-                return std::unexpected(ViewArgumentsError{eye.error()});
+                return std::unexpected(ViewArgumentsError{eye.error(), "eye"});
             auto target = optional_vec3_arg(args, "target");
             if (!target)
-                return std::unexpected(ViewArgumentsError{target.error()});
+                return std::unexpected(ViewArgumentsError{target.error(), "target"});
             auto up = optional_vec3_arg(args, "up");
             if (!up)
-                return std::unexpected(ViewArgumentsError{up.error()});
+                return std::unexpected(ViewArgumentsError{up.error(), "up"});
             if (!eye->has_value() || !target->has_value())
-                return std::unexpected(ViewArgumentsError{"Fields 'eye' and 'target' must be provided"});
+                return std::unexpected(ViewArgumentsError{"Fields 'eye' and 'target' must be provided", "eye"});
 
             ViewArguments result{
                 .eye = **eye,
                 .target = **target,
                 .up = up->value_or(glm::vec3(0.0f, 1.0f, 0.0f)),
             };
+            if (auto error = view_vectors_error(result.eye, result.target, result.up))
+                return std::unexpected(ViewArgumentsError{std::move(*error), "eye"});
             if (args.contains("fov_degrees"))
                 result.fov_degrees = args["fov_degrees"].get<float>();
             return result;
@@ -1336,6 +1393,20 @@ namespace lfs::app {
 
             props.set("resolved_node_names", *targets);
             return {};
+        }
+
+        // Euler angles past a full turn in either direction are almost always a units
+        // mistake (degrees passed as radians) and lose precision in float.
+        json rotation_components_schema(const std::string& description) {
+            constexpr double FULL_TURN = 2.0 * std::numbers::pi;
+            return json{{"items", json{{"type", "number"}, {"minimum", -FULL_TURN}, {"maximum", FULL_TURN}}},
+                        {"description", description + ", each within [-2*pi, 2*pi]"}};
+        }
+
+        // A zero or negative scale factor collapses or mirrors the node.
+        json scale_components_schema(const std::string& description) {
+            return json{{"items", json{{"type", "number"}, {"exclusiveMinimum", 0}}},
+                        {"description", description + ", each > 0"}};
         }
 
         std::expected<void, std::string> prepare_transform_set_operator(vis::Visualizer& viewer,
@@ -2479,11 +2550,18 @@ namespace lfs::app {
             .runtime = "gui",
             .thread_affinity = "gui_thread",
             .load_dataset =
-                [viewer](const std::filesystem::path& path,
-                         const core::param::TrainingParameters& params) {
+                [viewer, viewer_impl](const std::filesystem::path& path,
+                                      const core::param::TrainingParameters& params) {
                     auto immediate_params = params;
                     immediate_params.dataset.data_path.clear();
-                    return post_and_wait(viewer, [viewer, params = std::move(immediate_params), path]() {
+                    return post_and_wait(viewer, [viewer, viewer_impl, params = std::move(immediate_params), path]() -> mcp::SharedSceneToolBackend::LoadDatasetHandler::result_type {
+                        // Loading replaces the trainer. The GUI thread cannot wait for a live
+                        // worker, so the load would stop the run and then fail; refuse first.
+                        if (const auto* const trainer_manager = viewer_impl->getTrainerManager();
+                            trainer_manager && trainer_manager->hasLiveTrainingThread()) {
+                            return std::unexpected(
+                                "Cannot load a dataset while training is running. Stop training and wait for it to finish first.");
+                        }
                         viewer->setParameters(params);
                         return viewer->loadDataset(path);
                     });
@@ -2516,11 +2594,17 @@ namespace lfs::app {
                     });
                 },
             .start_training =
-                [viewer, viewer_impl]() {
+                [viewer, viewer_impl](const bool overwrite) {
                     // The GUI hop only acknowledges Starting. MCP keeps its
                     // historical start contract by waiting for worker-side
                     // initialization before returning to the caller.
-                    auto result = post_and_wait(viewer, [viewer]() {
+                    auto result = post_and_wait(viewer, [viewer, viewer_impl, overwrite]() {
+                        // Overwrite consent follows the training panel: a finished
+                        // run is reset to its fresh dataset before Start.
+                        if (const auto* const trainer_manager = viewer_impl->getTrainerManager();
+                            overwrite && trainer_manager && trainer_manager->isFinished()) {
+                            core::events::cmd::ResetTraining{}.emit();
+                        }
                         return viewer->startTraining();
                     });
                     if (result) {
@@ -2532,14 +2616,11 @@ namespace lfs::app {
                     return result;
                 },
             .render_capture =
-                [viewer](std::optional<int> camera_index, int width, int height, bool presented) {
+                [viewer](int width, int height, bool presented) {
                     // Runs as render work, not plain posted work: the window-crop fallback
                     // inside capture_live_viewport_to_base64 needs an active GUI frame.
                     return capture_after_gui_render(
-                        viewer, [viewer, camera_index, width, height, presented]() {
-                            if (camera_index)
-                                return render_scene_to_base64(
-                                    viewer->getScene(), *camera_index, width, height);
+                        viewer, [viewer, width, height, presented]() {
                             return capture_live_viewport_to_base64(viewer, width, height, presented);
                         });
                 },
@@ -2644,12 +2725,12 @@ namespace lfs::app {
         registry.register_tool(
             McpTool{
                 .name = "render.capture_window",
-                .description = "Capture the current composited app window. Unlike render_capture without camera_index, this includes the full window, including panels, toolbars, and GUI overlays.",
+                .description = "Capture the current composited app window. Unlike render_capture, which grabs the viewport region only, this includes the full window, including panels, toolbars, and GUI overlays.",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"width", json{{"type", "integer"}, {"description", "Optional output width; preserves aspect ratio when height is omitted"}}},
-                        {"height", json{{"type", "integer"}, {"description", "Optional output height; preserves aspect ratio when width is omitted"}}}},
+                        {"width", mcp::capture_size_schema("Optional output width in pixels; preserves aspect ratio when height is omitted")},
+                        {"height", mcp::capture_size_schema("Optional output height in pixels; preserves aspect ratio when width is omitted")}},
                     .required = {}},
                 .metadata = mcp::McpToolMetadata{
                     .category = "render",
@@ -2665,7 +2746,7 @@ namespace lfs::app {
                     return capture_full_window_to_base64(viewer, width, height);
                 });
                 if (!result)
-                    return json{{"error", result.error()}};
+                    return json{{"error", lfs::core::to_wire_envelope(result.error())}};
 
                 return json{
                     {"success", true},
@@ -2695,15 +2776,15 @@ namespace lfs::app {
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"eye", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Camera eye position [x,y,z]"}}},
-                        {"target", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Camera target/pivot position [x,y,z]"}}},
-                        {"up", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional up vector [x,y,z], defaults to [0,1,0]"}}},
+                        {"eye", number_array_schema(3, "Camera eye position [x,y,z]")},
+                        {"target", number_array_schema(3, "Camera target/pivot position [x,y,z]")},
+                        {"up", number_array_schema(3, "Optional up vector [x,y,z], defaults to [0,1,0]")},
                         {"fov_degrees", json{{"type", "number"}, {"description", "Optional vertical field of view in degrees"}}}},
                     .required = {"eye", "target"}}},
             [viewer_impl](const json& args) -> json {
                 auto view = parse_view_arguments(args);
                 if (!view)
-                    return json{{"error", view.error().message}};
+                    return mcp::invalid_argument_result(view.error().message, view.error().parameter);
 
                 return post_and_wait(viewer_impl, [view = *view]() -> json {
                     apply_view_arguments(view);
@@ -3011,9 +3092,9 @@ namespace lfs::app {
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"eye", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Camera eye position [x,y,z]"}}},
-                        {"target", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Camera target/pivot position [x,y,z]"}}},
-                        {"up", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional up vector [x,y,z], defaults to [0,1,0]"}}},
+                        {"eye", number_array_schema(3, "Camera eye position [x,y,z]")},
+                        {"target", number_array_schema(3, "Camera target/pivot position [x,y,z]")},
+                        {"up", number_array_schema(3, "Optional up vector [x,y,z], defaults to [0,1,0]")},
                         {"fov_degrees", json{{"type", "number"}, {"description", "Optional vertical field of view in degrees"}}}},
                     .required = {"eye", "target"}},
                 .metadata = mcp::McpToolMetadata{
@@ -3026,7 +3107,7 @@ namespace lfs::app {
             [viewer_impl](const json& args) -> json {
                 auto view = parse_view_arguments(args);
                 if (!view)
-                    return json{{"error", view.error().message}};
+                    return mcp::invalid_argument_result(view.error().message, view.error().parameter);
 
                 const auto started_at = std::chrono::steady_clock::now();
                 auto applied = post_and_wait(viewer_impl, [view = *view]() -> json {
@@ -3089,7 +3170,7 @@ namespace lfs::app {
                         {"render_scale", json{{"type", "number"}}},
                         {"scene_upscaler", json{{"type", "string"}, {"enum", scene_upscaler_backend_enum}}},
                         {"scene_upscaler_preset", json{{"type", "string"}, {"enum", scene_upscaler_preset_enum}}},
-                        {"background_color", json{{"type", "array"}, {"items", json{{"type", "number"}}}}},
+                        {"background_color", number_array_schema(3, "Background RGB color [r,g,b]")},
                         {"environment_mode", json{{"type", "integer"}}},
                         {"environment_map_path", json{{"type", "string"}}},
                         {"environment_exposure", json{{"type", "number"}}},
@@ -3903,7 +3984,7 @@ namespace lfs::app {
                         {"y0", json{{"type", "number"}, {"description", "Top edge Y coordinate"}}},
                         {"x1", json{{"type", "number"}, {"description", "Right edge X coordinate"}}},
                         {"y1", json{{"type", "number"}, {"description", "Bottom edge Y coordinate"}}},
-                        {"camera_index", json{{"type", "integer"}, {"description", "-1 = the current viewer (default; matches render.capture omitted-index behavior); >= 0 = dataset camera index; out-of-range fails with an error"}}},
+                        {"camera_index", json{{"type", "integer"}, {"minimum", SELECTION_VIEWER_CAMERA_INDEX}, {"description", "-1 = project through the current viewer (default); >= 0 = project through that dataset camera, with x/y in its image pixels; an index past the last camera fails with an error"}}},
                         {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove", "intersect"})}, {"description", "Selection mode (default: replace)"}}}},
                     .required = {"x0", "y0", "x1", "y1"}}},
             [viewer_impl](const json& args) -> json {
@@ -3918,8 +3999,9 @@ namespace lfs::app {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
-                    return selection_result_json(*scene_manager,
-                                                 scene_manager->selectRect(x0, y0, x1, y1, mode, camera_index));
+                    return selection_command_json(*scene_manager, [&] {
+                        return scene_manager->selectRect(x0, y0, x1, y1, mode, camera_index);
+                    });
                 });
             });
 
@@ -3930,8 +4012,8 @@ namespace lfs::app {
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"points", json{{"type", "array"}, {"items", json{{"type", "array"}, {"items", json{{"type", "number"}}}}}, {"description", "Polygon vertices [[x0,y0], [x1,y1], ...]"}}},
-                        {"camera_index", json{{"type", "integer"}, {"description", "-1 = the current viewer (default; matches render.capture omitted-index behavior); >= 0 = dataset camera index; out-of-range fails with an error"}}},
+                        {"points", point_list_schema(3, "Polygon vertices [[x0,y0], [x1,y1], ...]")},
+                        {"camera_index", json{{"type", "integer"}, {"minimum", SELECTION_VIEWER_CAMERA_INDEX}, {"description", "-1 = project through the current viewer (default); >= 0 = project through that dataset camera, with x/y in its image pixels; an index past the last camera fails with an error"}}},
                         {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove", "intersect"})}, {"description", "Selection mode (default: replace)"}}}},
                     .required = {"points"}}},
             [viewer_impl](const json& args) -> json {
@@ -3953,8 +4035,9 @@ namespace lfs::app {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
-                    return selection_result_json(*scene_manager,
-                                                 scene_manager->selectPolygon(vertex_data, mode, camera_index));
+                    return selection_command_json(*scene_manager, [&] {
+                        return scene_manager->selectPolygon(vertex_data, mode, camera_index);
+                    });
                 });
             });
 
@@ -3965,8 +4048,8 @@ namespace lfs::app {
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"points", json{{"type", "array"}, {"items", json{{"type", "array"}, {"items", json{{"type", "number"}}}}}, {"description", "Lasso points [[x0,y0], [x1,y1], ...]"}}},
-                        {"camera_index", json{{"type", "integer"}, {"description", "-1 = the current viewer (default; matches render.capture omitted-index behavior); >= 0 = dataset camera index; out-of-range fails with an error"}}},
+                        {"points", point_list_schema(3, "Lasso points [[x0,y0], [x1,y1], ...]")},
+                        {"camera_index", json{{"type", "integer"}, {"minimum", SELECTION_VIEWER_CAMERA_INDEX}, {"description", "-1 = project through the current viewer (default); >= 0 = project through that dataset camera, with x/y in its image pixels; an index past the last camera fails with an error"}}},
                         {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove", "intersect"})}, {"description", "Selection mode (default: replace)"}}}},
                     .required = {"points"}}},
             [viewer_impl](const json& args) -> json {
@@ -3988,8 +4071,9 @@ namespace lfs::app {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
-                    return selection_result_json(*scene_manager,
-                                                 scene_manager->selectLasso(vertex_data, mode, camera_index));
+                    return selection_command_json(*scene_manager, [&] {
+                        return scene_manager->selectLasso(vertex_data, mode, camera_index);
+                    });
                 });
             });
 
@@ -4002,7 +4086,7 @@ namespace lfs::app {
                     .properties = json{
                         {"x", json{{"type", "number"}, {"description", "X coordinate"}}},
                         {"y", json{{"type", "number"}, {"description", "Y coordinate"}}},
-                        {"camera_index", json{{"type", "integer"}, {"description", "-1 = the current viewer (default; matches render.capture omitted-index behavior); >= 0 = dataset camera index; out-of-range fails with an error"}}},
+                        {"camera_index", json{{"type", "integer"}, {"minimum", SELECTION_VIEWER_CAMERA_INDEX}, {"description", "-1 = project through the current viewer (default); >= 0 = project through that dataset camera, with x/y in its image pixels; an index past the last camera fails with an error"}}},
                         {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove", "intersect"})}, {"description", "Selection mode (default: replace)"}}}},
                     .required = {"x", "y"}}},
             [viewer_impl](const json& args) -> json {
@@ -4015,8 +4099,9 @@ namespace lfs::app {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
-                    return selection_result_json(*scene_manager,
-                                                 scene_manager->selectRing(x, y, mode, camera_index));
+                    return selection_command_json(*scene_manager, [&] {
+                        return scene_manager->selectRing(x, y, mode, camera_index);
+                    });
                 });
             });
 
@@ -4030,7 +4115,7 @@ namespace lfs::app {
                         {"x", json{{"type", "number"}, {"description", "X coordinate"}}},
                         {"y", json{{"type", "number"}, {"description", "Y coordinate"}}},
                         {"radius", json{{"type", "number"}, {"description", "Selection radius in pixels (default: 20)"}}},
-                        {"camera_index", json{{"type", "integer"}, {"description", "-1 = the current viewer (default; matches render.capture omitted-index behavior); >= 0 = dataset camera index; out-of-range fails with an error"}}},
+                        {"camera_index", json{{"type", "integer"}, {"minimum", SELECTION_VIEWER_CAMERA_INDEX}, {"description", "-1 = project through the current viewer (default); >= 0 = project through that dataset camera, with x/y in its image pixels; an index past the last camera fails with an error"}}},
                         {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove", "intersect"})}, {"description", "Selection mode (default: replace)"}}}},
                     .required = {"x", "y"}}},
             [viewer_impl](const json& args) -> json {
@@ -4044,8 +4129,9 @@ namespace lfs::app {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
-                    return selection_result_json(*scene_manager,
-                                                 scene_manager->selectBrush(x, y, radius, mode, camera_index));
+                    return selection_command_json(*scene_manager, [&] {
+                        return scene_manager->selectBrush(x, y, radius, mode, camera_index);
+                    });
                 });
             });
 
@@ -4059,7 +4145,7 @@ namespace lfs::app {
                         {"x", json{{"type", "number"}, {"description", "X coordinate"}}},
                         {"y", json{{"type", "number"}, {"description", "Y coordinate"}}},
                         {"radius", json{{"type", "number"}, {"description", "Selection radius in pixels (default: 20)"}}},
-                        {"camera_index", json{{"type", "integer"}, {"description", "-1 = the current viewer (default; matches render.capture omitted-index behavior); >= 0 = dataset camera index; out-of-range fails with an error"}}},
+                        {"camera_index", json{{"type", "integer"}, {"minimum", SELECTION_VIEWER_CAMERA_INDEX}, {"description", "-1 = project through the current viewer (default); >= 0 = project through that dataset camera, with x/y in its image pixels; an index past the last camera fails with an error"}}},
                         {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove", "intersect"})}, {"description", "Selection mode (default: replace)"}}}},
                     .required = {"x", "y"}}},
             [viewer_impl](const json& args) -> json {
@@ -4073,8 +4159,9 @@ namespace lfs::app {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
-                    return selection_result_json(*scene_manager,
-                                                 scene_manager->selectBrush(x, y, radius, mode, camera_index));
+                    return selection_command_json(*scene_manager, [&] {
+                        return scene_manager->selectBrush(x, y, radius, mode, camera_index);
+                    });
                 });
             });
 
@@ -4272,6 +4359,9 @@ namespace lfs::app {
                 .operator_id = vis::op::BuiltinOp::TransformSet,
                 .category = "transform",
                 .description = "Set absolute visualizer-world transform components for a node or the current shared node selection",
+                .property_overrides = json{
+                    {"rotation", rotation_components_schema("Optional visualizer-world XYZ Euler rotation in radians")},
+                    {"scale", scale_components_schema("Optional visualizer-world XYZ scale")}},
                 .prepare = prepare_transform_set_operator,
                 .on_success = transform_operator_result,
             });
@@ -4296,6 +4386,8 @@ namespace lfs::app {
                 .category = "transform",
                 .description = "Rotate a node or the current shared node selection by visualizer-world XYZ Euler deltas in radians",
                 .required = {"value"},
+                .property_overrides = json{
+                    {"value", rotation_components_schema("Visualizer-world XYZ Euler delta in radians")}},
                 .prepare = prepare_transform_operator,
                 .on_success = transform_operator_result,
             });
@@ -4308,6 +4400,8 @@ namespace lfs::app {
                 .category = "transform",
                 .description = "Scale a node or the current shared node selection by visualizer-world XYZ factors",
                 .required = {"value"},
+                .property_overrides = json{
+                    {"value", scale_components_schema("Visualizer-world XYZ scale multiplier")}},
                 .prepare = prepare_transform_operator,
                 .on_success = transform_operator_result,
             });
@@ -4338,6 +4432,9 @@ namespace lfs::app {
                     if (!cropbox_id)
                         return json{{"error", cropbox_id.error()}};
 
+                    // Select the box as the GUI's add does, so crop_box_set/get without a
+                    // node address it whatever was selected before.
+                    scene_manager->selectNode(*cropbox_id);
                     return crop_box_info_json(*scene_manager, *cropbox_id);
                 });
             });
@@ -4375,11 +4472,11 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"node", json{{"type", "string"}, {"description", "Optional crop box node or parent node name; defaults to the current selected crop box"}}},
-                        {"min", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional local minimum bounds"}}},
-                        {"max", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional local maximum bounds"}}},
-                        {"translation", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional local XYZ translation"}}},
-                        {"rotation", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional local XYZ Euler rotation in radians"}}},
-                        {"scale", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional local XYZ scale"}}},
+                        {"min", number_array_schema(3, "Optional local minimum bounds")},
+                        {"max", number_array_schema(3, "Optional local maximum bounds")},
+                        {"translation", number_array_schema(3, "Optional local XYZ translation")},
+                        {"rotation", number_array_schema(3, "Optional local XYZ Euler rotation in radians")},
+                        {"scale", number_array_schema(3, "Optional local XYZ scale")},
                         {"inverse", json{{"type", "boolean"}, {"description", "Invert the crop volume"}}},
                         {"enabled", json{{"type", "boolean"}, {"description", "Enable crop filtering for this crop box"}}},
                         {"show", json{{"type", "boolean"}, {"description", "Show crop boxes in the viewport"}}},
@@ -4542,6 +4639,9 @@ namespace lfs::app {
                     if (!ellipsoid_id)
                         return json{{"error", ellipsoid_id.error()}};
 
+                    // Select the ellipsoid as the GUI's add does, so ellipsoid_set/get without
+                    // a node address it whatever was selected before.
+                    scene_manager->selectNode(*ellipsoid_id);
                     return ellipsoid_info_json(*scene_manager, *ellipsoid_id);
                 });
             });
@@ -4579,10 +4679,10 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"node", json{{"type", "string"}, {"description", "Optional ellipsoid node or parent node name; defaults to the current selected ellipsoid"}}},
-                        {"radii", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional ellipsoid radii"}}},
-                        {"translation", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional local XYZ translation"}}},
-                        {"rotation", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional local XYZ Euler rotation in radians"}}},
-                        {"scale", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional local XYZ scale"}}},
+                        {"radii", number_array_schema(3, "Optional ellipsoid radii")},
+                        {"translation", number_array_schema(3, "Optional local XYZ translation")},
+                        {"rotation", number_array_schema(3, "Optional local XYZ Euler rotation in radians")},
+                        {"scale", number_array_schema(3, "Optional local XYZ scale")},
                         {"inverse", json{{"type", "boolean"}, {"description", "Invert the ellipsoid selection volume"}}},
                         {"enabled", json{{"type", "boolean"}, {"description", "Enable ellipsoid filtering for this helper"}}},
                         {"show", json{{"type", "boolean"}, {"description", "Show ellipsoids in the viewport"}}},
@@ -5344,8 +5444,8 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"problem", json{{"type", "string"}, {"description", "Description of the problem or question"}}},
-                        {"include_render", json{{"type", "boolean"}, {"description", "Include current render in request (default: true)"}}},
-                        {"camera_index", json{{"type", "integer"}, {"description", "Camera index for render (default: 0)"}}}},
+                        {"include_render", json{{"type", "boolean"}, {"description", "Include a render from a dataset camera in the request (default: true)"}}},
+                        {"camera_index", json{{"type", "integer"}, {"minimum", 0}, {"description", "Index into the dataset camera list to render from (default: 0)"}}}},
                     .required = {}}},
             [viewer](const json& args) -> json {
                 auto api_key = mcp::LLMClient::load_api_key_from_env();
@@ -5364,12 +5464,13 @@ namespace lfs::app {
                 std::string base64_render;
                 bool include_render = args.value("include_render", true);
                 if (include_render) {
-                    int camera_index = args.value("camera_index", 0);
+                    const int camera_index = args.value("camera_index", 0);
                     auto render_result = post_and_wait(viewer, [viewer, camera_index]() {
-                        return render_scene_to_base64(viewer->getScene(), camera_index);
+                        return render_dataset_camera_to_base64(viewer, camera_index);
                     });
-                    if (render_result)
-                        base64_render = *render_result;
+                    if (!render_result)
+                        return json{{"error", render_result.error() + "; pass include_render=false to ask without a render"}};
+                    base64_render = std::move(*render_result);
                 }
 
                 std::string problem = args.value("problem", "");
@@ -5404,7 +5505,7 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"description", json{{"type", "string"}, {"description", "Natural language description of what to select (e.g., 'the bicycle wheel')"}}},
-                        {"camera_index", json{{"type", "integer"}, {"description", "Camera index for rendering (default: 0)"}}}},
+                        {"camera_index", json{{"type", "integer"}, {"minimum", 0}, {"description", "Index into the dataset camera list to render and select from (default: 0)"}}}},
                     .required = {"description"}}},
             [viewer_impl](const json& args) -> json {
                 auto api_key = mcp::LLMClient::load_api_key_from_env();
@@ -5415,7 +5516,7 @@ namespace lfs::app {
                 const std::string description = args["description"].get<std::string>();
 
                 auto render_result = post_and_wait(viewer_impl, [viewer_impl, camera_index]() {
-                    return render_scene_to_base64(viewer_impl->getScene(), camera_index);
+                    return render_dataset_camera_to_base64(viewer_impl, camera_index);
                 });
                 if (!render_result)
                     return json{{"error", render_result.error()}};
@@ -5468,8 +5569,9 @@ namespace lfs::app {
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
 
-                    auto result = selection_result_json(*scene_manager,
-                                                        scene_manager->selectRect(x0, y0, x1, y1, "replace", camera_index));
+                    auto result = selection_command_json(*scene_manager, [&] {
+                        return scene_manager->selectRect(x0, y0, x1, y1, "replace", camera_index);
+                    });
                     if (!result.value("success", false))
                         return result;
                     result["bounding_box"] = bbox;
@@ -5569,7 +5671,7 @@ namespace lfs::app {
                     return capture_live_viewport_to_base64(viewer);
                 });
                 if (!result)
-                    return std::unexpected(result.error());
+                    return std::unexpected(std::string(result.error().user_message()));
 
                 return single_blob_resource(uri, "image/png", *result);
             });
@@ -5585,7 +5687,7 @@ namespace lfs::app {
                     return capture_full_window_to_base64(viewer);
                 });
                 if (!result)
-                    return std::unexpected(result.error());
+                    return std::unexpected(std::string(result.error().user_message()));
 
                 return single_blob_resource(uri, "image/png", *result);
             });
@@ -5593,7 +5695,8 @@ namespace lfs::app {
         registry.register_resource_prefix(
             "lichtfeld://render/",
             [viewer](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
-                std::expected<std::string, std::string> result = std::unexpected("Unknown resource URI: " + uri);
+                lfs::Result<std::string> result =
+                    mcp::capture_error(lfs::ErrorCode::NotFound, "Unknown resource URI: " + uri);
                 if (uri == "lichtfeld://render/current") {
                     result = capture_after_gui_render(viewer, [viewer]() {
                         return capture_live_viewport_to_base64(viewer);
@@ -5604,7 +5707,7 @@ namespace lfs::app {
                     });
                 }
                 if (!result)
-                    return std::unexpected(result.error());
+                    return std::unexpected(std::string(result.error().user_message()));
 
                 return single_blob_resource(uri, "image/png", *result);
             });
@@ -5613,16 +5716,15 @@ namespace lfs::app {
             "lichtfeld://render/camera/",
             [viewer](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
                 constexpr std::string_view camera_prefix = "lichtfeld://render/camera/";
-                int camera_index = 0;
-                const auto idx_str = uri.substr(camera_prefix.size());
-                try {
-                    camera_index = std::stoi(idx_str);
-                } catch (...) {
-                    return std::unexpected("Invalid camera resource URI: " + uri);
-                }
+                const std::string_view idx_str = std::string_view(uri).substr(camera_prefix.size());
+                int camera_index = -1;
+                const auto [last, ec] = std::from_chars(idx_str.data(), idx_str.data() + idx_str.size(), camera_index);
+                if (idx_str.empty() || ec != std::errc{} || last != idx_str.data() + idx_str.size() || camera_index < 0)
+                    return std::unexpected("Invalid camera resource URI '" + uri +
+                                           "'; expected lichtfeld://render/camera/<dataset camera index>");
 
                 auto result = post_and_wait(viewer, [viewer, camera_index]() {
-                    return render_scene_to_base64(viewer->getScene(), camera_index);
+                    return render_dataset_camera_to_base64(viewer, camera_index);
                 });
                 if (!result)
                     return std::unexpected(result.error());

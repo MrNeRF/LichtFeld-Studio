@@ -48,6 +48,13 @@ namespace lfs::core {
         const size_t k = shape_[1];
         const size_t n = other.shape_[1];
 
+        // Empty operands have no storage for the backends; the product is zeros.
+        if (m == 0 || k == 0 || n == 0) {
+            auto result = internal::allocate_like(*this, TensorShape{m, n}, dtype_);
+            result.zero_();
+            return result;
+        }
+
         const Tensor& a = is_contiguous() ? *this : contiguous();
         const Tensor& b = other.is_contiguous() ? other : other.contiguous();
 
@@ -93,6 +100,13 @@ namespace lfs::core {
         const size_t m = shape_[1];
         const size_t k = shape_[2];
         const size_t n = other.shape_[2];
+
+        // Empty operands have no storage for the backends; the product is zeros.
+        if (batch_size == 0 || m == 0 || k == 0 || n == 0) {
+            auto result = internal::allocate_like(*this, TensorShape{batch_size, m, n}, dtype_);
+            result.zero_();
+            return result;
+        }
 
         const Tensor& a = is_contiguous() ? *this : contiguous();
         const Tensor& b = other.is_contiguous() ? other : other.contiguous();

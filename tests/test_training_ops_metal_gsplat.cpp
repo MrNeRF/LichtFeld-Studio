@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// Metal GsplatRasterOps against a float64 CPU model of the CUDA 3DGUT math:
+// Metal and Vulkan GsplatRasterOps against a float64 CPU model of the CUDA 3DGUT math:
 // unscented projection and tile culling, depth-ordered world-space ray
 // blending, SH colour. Gradients are checked by central differences of that
 // model; densification, edge scores and screen share by its forward sums.
@@ -28,6 +28,9 @@
 #include <vector>
 
 namespace {
+    // The backend of the running parameterized test.
+    lfs::core::GpuBackend backend_under_test() { return testing::TestWithParam<lfs::core::GpuBackend>::GetParam(); }
+
     using lfs::core::DataType;
     using lfs::core::Device;
     using lfs::core::GpuBackend;
@@ -405,13 +408,13 @@ namespace {
         Tensor image, alpha;
     };
 
-    class MetalGsplat : public testing::Test {
+    class PortableGsplat : public ::testing::TestWithParam<GpuBackend> {
     protected:
         void SetUp() override {
-            if (!lfs::core::gpu_backend_available(GpuBackend::Metal))
-                GTEST_SKIP() << "No Metal device";
-            scope_.emplace(GpuBackend::Metal);
-            table_ = lfs::training::training_ops(GpuBackend::Metal).gsplat;
+            if (!lfs::core::gpu_backend_available(backend_under_test()))
+                GTEST_SKIP() << lfs::core::gpu_backend_name(GetParam()) << " device unavailable";
+            scope_.emplace(backend_under_test());
+            table_ = lfs::training::training_ops(backend_under_test()).gsplat;
             ASSERT_NE(table_, nullptr);
             saved_.backend = table_->create();
         }
@@ -503,7 +506,7 @@ namespace {
 
     constexpr D3 kBackground{0.2, 0.5, 0.1};
 
-    TEST_F(MetalGsplat, ForwardMatchesReference) {
+    TEST_P(PortableGsplat, ForwardMatchesReference) {
         const auto scene = make_scene(40);
         for (const auto model : {CameraModel::PINHOLE, CameraModel::FISHEYE}) {
             SCOPED_TRACE(static_cast<int>(model));
@@ -531,7 +534,7 @@ namespace {
     // Many radix blocks in both sorts and two passes over 260 tile ids. A
     // float alpha landing on the other side of a cutoff than its float64 value
     // changes a pixel by up to 1/255, so a few such pixels are allowed.
-    TEST_F(MetalGsplat, ForwardMatchesReferenceAtScale) {
+    TEST_P(PortableGsplat, ForwardMatchesReferenceAtScale) {
         const auto scene = make_scene(30000, -3.3);
         auto cam = make_camera(CameraModel::PINHOLE);
         cam.W = 320;
@@ -553,7 +556,7 @@ namespace {
         EXPECT_LE(worst, 0.02);
     }
 
-    TEST_F(MetalGsplat, Q16StorageMatchesDecodedFloats) {
+    TEST_P(PortableGsplat, Q16StorageMatchesDecodedFloats) {
         const auto scene = make_scene(40);
         const auto cam = make_camera(CameraModel::PINHOLE);
         const auto q16 = host(forward(scene, cam, 9, kBackground, true).image);
@@ -570,7 +573,7 @@ namespace {
         expect_near(q16, expected, 1e-5, "q16 image");
     }
 
-    TEST_F(MetalGsplat, BackwardMatchesFiniteDifferences) {
+    TEST_P(PortableGsplat, BackwardMatchesFiniteDifferences) {
         auto scene = make_scene(40);
         const auto cam = make_camera(CameraModel::PINHOLE);
         constexpr uint32_t bases = 4;
@@ -621,8 +624,15 @@ namespace {
         const auto dens = host(densification);
         expect_near({dens.begin(), dens.begin() + n}, reference.dens_w, 2e-4, "densification weight");
         expect_near({dens.begin() + n, dens.end()}, reference.dens_e, 2e-4, "densification error");
-        expect_near(host(edge_scores), reference.edge, 2e-4, "edge scores");
-        expect_near(host(share), reference.share, 1e-6, "screen share");
+        // CUDA's RGB dual-pixel path sums each warp's edge score twice
+        // (reduce_field, then warpSum), which Vulkan keeps. Metal reports the
+        // single sum; MRNF normalizes the scores by their median either way.
+        const double edge_factor = GetParam() == GpuBackend::Vulkan ? 32.0 : 1.0;
+        std::vector<double> edge = reference.edge;
+        for (double& value : edge)
+            value *= edge_factor;
+        expect_near(host(edge_scores), edge, 2e-4 * edge_factor, "edge scores");
+        expect_near(host(share), reference.share, 2e-6, "screen share");
 
         // Central differences at the gaussians with the most blending weight.
         std::vector<size_t> ranked(n);
@@ -684,4 +694,7 @@ namespace {
             expected_norms[g] = std::hypot(means[g * 3] - 1.0, means[g * 3 + 1] - 1.0, means[g * 3 + 2] - 1.0);
         expect_near({norm_rows.begin(), norm_rows.begin() + n}, expected_norms, 1e-5, "gradient norms");
     }
+    INSTANTIATE_TEST_SUITE_P(Backends, PortableGsplat, testing::Values(GpuBackend::Metal, GpuBackend::Vulkan),
+                             [](const auto& info) { return std::string(lfs::core::gpu_backend_name(info.param)); });
+
 } // namespace

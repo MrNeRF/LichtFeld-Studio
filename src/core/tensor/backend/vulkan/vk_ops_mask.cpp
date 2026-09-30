@@ -126,6 +126,9 @@ namespace lfs::core::internal {
             return shape;
         }
 
+        // Compaction moves elements bitwise; UInt32 shares Int32's layout.
+        DataType moved_dtype(const DataType dtype) { return dtype == DataType::UInt32 ? DataType::Int32 : dtype; }
+
         void record_mask(VulkanContext& context, const uint32_t mode, const DataType dtype,
                          const uint32_t predicate, const MaskPush& push,
                          const std::span<const StorageRef> reads,
@@ -265,7 +268,7 @@ namespace lfs::core::internal {
         };
         const std::array reads{input, mask, scan};
         const std::array writes{output};
-        record_mask(*context, kCompactSelectMode, input.dtype, kBytePredicate, push, reads, writes,
+        record_mask(*context, kCompactSelectMode, moved_dtype(input.dtype), kBytePredicate, push, reads, writes,
                     dispatch_groups(*context, program.count));
         context->memory().deallocate(scan);
         // The host sized the output from the same mask; like CUDA the launch trusts it.
@@ -290,7 +293,7 @@ namespace lfs::core::internal {
         };
         const std::array reads{mask, source, scan};
         const std::array writes{output};
-        record_mask(*context, kCompactScatterMode, output.dtype, kBytePredicate, push, reads, writes,
+        record_mask(*context, kCompactScatterMode, moved_dtype(output.dtype), kBytePredicate, push, reads, writes,
                     dispatch_groups(*context, program.count));
         context->memory().deallocate(scan);
     }

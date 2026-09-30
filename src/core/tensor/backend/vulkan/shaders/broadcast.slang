@@ -3,6 +3,7 @@ static const uint LFS_PUSH_CONSTANT_SIZE = 136;
 #include "half_bits.slangh"
 #include "byte_word.slangh"
 #include "integer_math.slangh"
+#include "power_math.slangh"
 
 [SpecializationConstant]
 const uint kOp = 4;
@@ -75,7 +76,7 @@ float floatOp(float lhs, float rhs)
     if (kOp == 5) return lhs - rhs;
     if (kOp == 6) return lhs * rhs;
     if (kOp == 7) return lhs / rhs;
-    if (kOp == 25) return rhs == 2.0f ? lhs * lhs : pow(lhs, rhs);
+    if (kOp == 25) return rhs == 2.0f ? lhs * lhs : cPow(lhs, rhs);
     if (kOp == 26) return fmod(lhs, rhs);
     if (kOp == 27) return ieeeMaximum(lhs, rhs);
     if (kOp == 28) return ieeeMinimum(lhs, rhs);
@@ -101,7 +102,7 @@ int intOp(int lhs, int rhs)
     if (kOp == 5) return lhs - rhs;
     if (kOp == 6) return lhs * rhs;
     if (kOp == 7) return rhs == 0 ? 0 : lhs / rhs;
-    if (kOp == 25) return rhs == 2 ? lhs * lhs : int(pow(float(lhs), float(rhs)));
+    if (kOp == 25) return intPow(lhs, rhs);
     if (kOp == 26) return signedRemainder(lhs, rhs);
     if (kOp == 27) return max(lhs, rhs);
     if (kOp == 28) return min(lhs, rhs);
@@ -142,6 +143,16 @@ uint evaluateByte(uint index, uniform Parameters parameters)
         const int64_t lhs = ((Ptr<int64_t, Access.Read>)parameters.lhsAddress)[lhsIndex];
         const int64_t rhs = ((Ptr<int64_t, Access.Read>)parameters.rhsAddress)[rhsIndex];
         return predicateInt64(lhs, rhs) ? 1u : 0u;
+    }
+    if (kInputDType == 6)
+    {
+        const uint lhs = ((Ptr<uint, Access.Read>)parameters.lhsAddress)[lhsIndex];
+        const uint rhs = ((Ptr<uint, Access.Read>)parameters.rhsAddress)[rhsIndex];
+        return (kOp == 29 ? lhs == rhs : kOp == 30 ? lhs != rhs
+                : kOp == 31 ? lhs < rhs : kOp == 32 ? lhs <= rhs
+                : kOp == 33 ? lhs > rhs : kOp == 34 ? lhs >= rhs
+                : kOp == 35 ? lhs != 0u && rhs != 0u
+                : kOp == 36 ? lhs != 0u || rhs != 0u : (lhs != 0u) != (rhs != 0u)) ? 1u : 0u;
     }
     const int lhs = kInputDType == 2
                        ? ((Ptr<int, Access.Read>)parameters.lhsAddress)[lhsIndex]
@@ -216,9 +227,26 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters param
             if (kOp == 6) result = lhs * rhs;
             if (kOp == 7) result = rhs == 0 ? int64_t(0) : lhs / rhs;
             if (kOp == 26) result = rhs == 0 ? int64_t(0) : lhs % rhs;
+            if (kOp == 25) result = int64Pow(lhs, rhs);
             if (kOp == 27) result = lhs < rhs ? rhs : lhs;
             if (kOp == 28) result = rhs < lhs ? rhs : lhs;
             ((Ptr<int64_t, Access.ReadWrite>)parameters.outputAddress)[index] = result;
+            continue;
+        }
+        if (kInputDType == 6)
+        {
+            const uint lhs = ((Ptr<uint, Access.Read>)parameters.lhsAddress)[lhsIndex];
+            const uint rhs = ((Ptr<uint, Access.Read>)parameters.rhsAddress)[rhsIndex];
+            uint result = lhs;
+            if (kOp == 4) result = lhs + rhs;
+            if (kOp == 5) result = lhs - rhs;
+            if (kOp == 6) result = lhs * rhs;
+            if (kOp == 7) result = rhs == 0u ? 0u : lhs / rhs;
+            if (kOp == 25) result = uintPow(lhs, rhs);
+            if (kOp == 26) result = rhs == 0u ? 0u : lhs % rhs;
+            if (kOp == 27) result = max(lhs, rhs);
+            if (kOp == 28) result = min(lhs, rhs);
+            ((Ptr<uint, Access.ReadWrite>)parameters.outputAddress)[index] = result;
             continue;
         }
         const int lhs = ((Ptr<int, Access.Read>)parameters.lhsAddress)[lhsIndex];

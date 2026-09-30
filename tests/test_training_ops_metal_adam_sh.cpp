@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// The Metal Adam, Sh and Morton families against CPU transliterations of the
+// The Metal and Vulkan Adam, Sh and Morton families against CPU transliterations of the
 // CUDA kernels, on the inputs of the parity fixtures (capture_adam, capture_sh,
 // capture_morton) plus larger, Q16 and skipped-row cases.
 //
@@ -21,6 +21,7 @@
 #include "lfs/training/ops/registry.hpp"
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
+#include "optimizer/adam_optimizer.hpp"
 
 #include "cuda_backend_test.hpp"
 #include <gtest/gtest.h>
@@ -39,6 +40,8 @@
 #include <vector>
 
 namespace {
+    // The backend of the running parameterized test.
+    lfs::core::GpuBackend backend_under_test() { return testing::TestWithParam<lfs::core::GpuBackend>::GetParam(); }
 
     using lfs::core::DataType;
     using lfs::core::Device;
@@ -52,16 +55,16 @@ namespace {
     constexpr float kEps = 1e-15f;
     constexpr double kAdamTie = 0.05;
 
-    class MetalAdamShMorton : public ::testing::Test {
+    class PortableAdamShMorton : public ::testing::TestWithParam<GpuBackend> {
     protected:
         void SetUp() override {
-            if (!lfs::core::gpu_backend_available(GpuBackend::Metal))
-                GTEST_SKIP() << "Metal device unavailable";
-            session_.emplace(GpuBackend::Metal);
+            if (!lfs::core::gpu_backend_available(backend_under_test()))
+                GTEST_SKIP() << lfs::core::gpu_backend_name(GetParam()) << " device unavailable";
+            session_.emplace(backend_under_test());
             ASSERT_TRUE(session_->switched());
-            const auto& table = lfs::training::training_ops(GpuBackend::Metal);
+            const auto& table = lfs::training::training_ops(backend_under_test());
             if (table.adam == nullptr || table.sh == nullptr || table.morton == nullptr)
-                GTEST_SKIP() << "Metal Adam, Sh or Morton slot is empty";
+                GTEST_SKIP() << "Adam, Sh or Morton slot is empty";
             adam = table.adam;
             sh = table.sh;
             morton = table.morton;
@@ -298,13 +301,14 @@ namespace {
                     const auto mv = joint_g1g2(joint_decode_us(s.packed, cell, old.data()));
                     float mn = mv[0], vn = mv[1];
                     if (apply) {
-                        float grad = s.gradient[cell];
+                        const float grad = s.gradient[cell];
                         const float limit = mod.screen_share_limit;
+                        float hinge = 0.f;
                         if (s.screen_share && static_cast<size_t>(prim) < m.share.size() && limit > 0.f &&
                             limit < 1.f && m.share[prim] > limit && mod.screen_share_penalty > 0.f)
-                            grad += mod.screen_share_penalty * std::log2(m.share[prim] / limit) *
+                            hinge = mod.screen_share_penalty * std::log2(m.share[prim] / limit) *
                                     (std::sqrt(mv[1]) * bc2_sqrt_rcp + h.eps);
-                        mn = h.beta1 * mv[0] + (1.f - h.beta1) * grad;
+                        mn = h.beta1 * mv[0] + (1.f - h.beta1) * (grad + hinge);
                         vn = h.beta2 * mv[1] + (1.f - h.beta2) * grad * grad;
                         s.parameter[cell] -= step * mn / (std::sqrt(vn) * bc2_sqrt_rcp + h.eps);
                     }
@@ -409,7 +413,7 @@ namespace {
 
     // Two steps, each from the GPU's state, so the second decodes nonzero
     // moments and a tie rounded differently does not carry over.
-    TEST_F(MetalAdamShMorton, AdamStepBatchMatchesCpu) {
+    TEST_P(PortableAdamShMorton, AdamStepBatchMatchesCpu) {
         constexpr size_t n = 700;
         constexpr ops::AdamModifiers modifiers{.frozen_lr_scale = 0.25f,
                                                .cropbox_lr_scale = 0.5f,
@@ -497,7 +501,7 @@ namespace {
         if (q16) {
             Tensor codes = Tensor::zeros({quant::sh_value_u16_count(n, rest)}, Device::GPU, DataType::Float16);
             value_bounds = Tensor::zeros({quant::n_bounds_for_prims(n) * 2}, Device::GPU);
-            lfs::training::training_ops(GpuBackend::Metal).sh->encode_q16(parameter, codes, value_bounds, n, rest, 0, 0);
+            lfs::training::training_ops(backend_under_test()).sh->encode_q16(parameter, codes, value_bounds, n, rest, 0, 0);
             parameter = codes;
         }
         Tensor packed = Tensor::zeros({floats * 2}, Device::GPU, DataType::UInt8);
@@ -528,9 +532,9 @@ namespace {
         }
     }
 
-    TEST_F(MetalAdamShMorton, AdamStepShFloatMatchesCpu) { run_step_sh(*adam, false, 0.25f); }
+    TEST_P(PortableAdamShMorton, AdamStepShFloatMatchesCpu) { run_step_sh(*adam, false, 0.25f); }
 
-    TEST_F(MetalAdamShMorton, AdamStepShQ16WithSkippedRowsMatchesCpu) { run_step_sh(*adam, true, 0.f); }
+    TEST_P(PortableAdamShMorton, AdamStepShQ16WithSkippedRowsMatchesCpu) { run_step_sh(*adam, true, 0.f); }
 
     // joint_encode_zero_{rows,shN}_cu on random codes and bounds.
     void run_encode_zero(const ops::AdamOps& adam, ops::JointLayout layout, int bits) {
@@ -582,9 +586,9 @@ namespace {
         expect_equal(host<float>(bounds_gpu), bounds, "encode_zero bounds");
     }
 
-    TEST_F(MetalAdamShMorton, EncodeZeroRows16MatchesCpu) { run_encode_zero(*adam, ops::JointLayout::Rows, 16); }
+    TEST_P(PortableAdamShMorton, EncodeZeroRows16MatchesCpu) { run_encode_zero(*adam, ops::JointLayout::Rows, 16); }
 
-    TEST_F(MetalAdamShMorton, EncodeZeroSwizzled8MatchesCpu) {
+    TEST_P(PortableAdamShMorton, EncodeZeroSwizzled8MatchesCpu) {
         run_encode_zero(*adam, ops::JointLayout::SwizzledSH, 8);
     }
 
@@ -622,7 +626,7 @@ namespace {
         return out;
     }
 
-    TEST_F(MetalAdamShMorton, Q16EncodeDecodeMatchesCpu) {
+    TEST_P(PortableAdamShMorton, Q16EncodeDecodeMatchesCpu) {
         for (const auto [n, rest] : {std::pair<size_t, uint32_t>{8, 3}, {600, 15}, {300, 8}}) {
             const std::string name = std::to_string(n) + "x" + std::to_string(rest);
             const auto src = pattern(lfs::core::sh_swizzled_float_count(n, rest), 0.25f, 3);
@@ -655,7 +659,7 @@ namespace {
         }
     }
 
-    TEST_F(MetalAdamShMorton, Q16ChunkEncodeWritesAtOffsets) {
+    TEST_P(PortableAdamShMorton, Q16ChunkEncodeWritesAtOffsets) {
         constexpr size_t n = 256;
         constexpr uint32_t rest = 3;
         const auto src = pattern(lfs::core::sh_swizzled_float_count(n, rest), 0.25f, 5);
@@ -673,7 +677,7 @@ namespace {
 
     // block_ids and block_runs on the fixture's shape, then reencode_touched
     // with a duplicate destination, a canonical order and rows past decode_rows.
-    TEST_F(MetalAdamShMorton, TouchedBlockReencodeMatchesCpu) {
+    TEST_P(PortableAdamShMorton, TouchedBlockReencodeMatchesCpu) {
         const std::vector<int64_t> dest{0, 256, 257, 512, 256, -3};
         Tensor ids = Tensor::zeros({dest.size()}, Device::GPU);
         sh->block_ids(upload(dest, {dest.size()}, DataType::Int64), ids);
@@ -737,11 +741,22 @@ namespace {
                 for (uint32_t c = 0; c < cells; ++c)
                     q16_encode(expected.codes, slot_index(start + lane, c, cells), values[lane * cells + c], lo, hi);
         }
-        expect_equal(host<uint8_t>(codes), expected.codes.bytes, "reencoded codes");
+        if (GetParam() == GpuBackend::Vulkan) {
+            // Vulkan follows CUDA's fast-math division (a reciprocal multiply),
+            // so a code on a rounding boundary may move by one.
+            const auto got = host<uint16_t>(codes);
+            std::vector<uint16_t> want(got.size());
+            ASSERT_EQ(expected.codes.bytes.size(), want.size() * sizeof(uint16_t));
+            std::memcpy(want.data(), expected.codes.bytes.data(), expected.codes.bytes.size());
+            for (size_t i = 0; i < got.size(); ++i)
+                EXPECT_LE(std::abs(int{got[i]} - int{want[i]}), 1) << "reencoded code " << i;
+        } else {
+            expect_equal(host<uint8_t>(codes), expected.codes.bytes, "reencoded codes");
+        }
         expect_equal(host<float>(bounds), expected.bounds, "reencoded bounds");
     }
 
-    TEST_F(MetalAdamShMorton, RowOpsMatchCpu) {
+    TEST_P(PortableAdamShMorton, RowOpsMatchCpu) {
         constexpr size_t n = 70;
         constexpr uint32_t rest = 8;
         const uint32_t slots = lfs::core::sh_float4_slots_for_rest(rest);
@@ -905,7 +920,7 @@ namespace {
         return order;
     }
 
-    TEST_F(MetalAdamShMorton, MortonPermutationMatchesCpuStableSort) {
+    TEST_P(PortableAdamShMorton, MortonPermutationMatchesCpuStableSort) {
         // The parity fixture (many equal codes, a flat axis) and a cloud longer
         // than one sort threadgroup.
         std::mt19937 rng(12345);
@@ -957,7 +972,7 @@ namespace {
                 joint_encode(dst, cell_of(p, i), decode(perm[p], i), &dst_bounds[4 * (p / 256)]);
     }
 
-    TEST_F(MetalAdamShMorton, JointPermutationMatchesCpu) {
+    TEST_P(PortableAdamShMorton, JointPermutationMatchesCpu) {
         constexpr int n = 513;
         const auto perm = shuffled(n, 731);
         const Tensor perm_gpu = upload(perm, {perm.size()}, DataType::Int64);
@@ -1014,7 +1029,7 @@ namespace {
                                     make({count, 1}, 1.f, 6), 1.f);
     }
 
-    TEST_F(MetalAdamShMorton, ShPermutationsMatchCpu) {
+    TEST_P(PortableAdamShMorton, ShPermutationsMatchCpu) {
         constexpr size_t n = 300;
         constexpr uint32_t rest = 3;
         const uint32_t slots = lfs::core::sh_float4_slots_for_rest(rest);
@@ -1081,5 +1096,45 @@ namespace {
         std::copy_n(source_values.begin(), 10, expected_live.begin());
         expect_equal(host<float>(live), expected_live, "copy_back");
     }
+
+    // 3DGUT materializes the shN gradient only once SH bands activate; MCMC growth after
+    // that must extend every materialized gradient with its moments, whether the growth
+    // fits the reserved capacity or not, or zero_grad slices past the gradient's end.
+    TEST_P(PortableAdamShMorton, GatherGrowthExtendsMaterializedGradients) {
+        using lfs::training::ParamType;
+        constexpr size_t n = 300;
+        constexpr uint32_t rest = 3;
+        for (const size_t capacity : {size_t{512}, n}) {
+            SCOPED_TRACE(capacity);
+            auto splat = make_degree1_splat(n);
+            for (auto* param : {&splat.means(), &splat.sh0(), &splat.scaling_raw(),
+                                &splat.rotation_raw(), &splat.opacity_raw()})
+                param->reserve(2 * n);
+            lfs::training::AdamConfig cfg;
+            cfg.initial_capacity = capacity;
+            lfs::training::AdamOptimizer optimizer(splat, cfg);
+            optimizer.allocate_gradients(capacity);
+            const std::array types{ParamType::Means, ParamType::Sh0, ParamType::ShN,
+                                   ParamType::Rotation, ParamType::Opacity, ParamType::Scaling};
+            for (const auto type : types)
+                optimizer.get_grad(type);
+            ASSERT_EQ(optimizer.get_grad(ParamType::ShN).numel(), lfs::core::sh_swizzled_float_count(n, rest));
+
+            constexpr size_t n_new = 40;
+            std::vector<int64_t> sampled(n_new);
+            std::iota(sampled.begin(), sampled.end(), int64_t{7});
+            const Tensor indices = upload(sampled, {n_new}, DataType::Int64);
+            for (const auto type : types)
+                optimizer.add_new_params_gather(type, indices);
+
+            EXPECT_EQ(optimizer.get_grad(ParamType::ShN).numel(),
+                      lfs::core::sh_swizzled_float_count(n + n_new, rest));
+            EXPECT_EQ(optimizer.get_grad(ParamType::Means).shape()[0], n + n_new);
+            EXPECT_NO_THROW(optimizer.zero_grad(0));
+        }
+    }
+
+    INSTANTIATE_TEST_SUITE_P(Backends, PortableAdamShMorton, testing::Values(GpuBackend::Metal, GpuBackend::Vulkan),
+                             [](const auto& info) { return std::string(lfs::core::gpu_backend_name(info.param)); });
 
 } // namespace

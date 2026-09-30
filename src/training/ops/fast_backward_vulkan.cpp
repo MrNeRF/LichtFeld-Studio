@@ -78,6 +78,8 @@ namespace lfs::training::vulkan {
                                 : b.densification != 0 && b.error != 0 ? DensificationType::MCMC
                                                                        : DensificationType::None;
         b.densify = static_cast<uint32_t>(blend_type);
+        // Without blend statistics, None counts visibility and screen gradients.
+        const bool count_visible = b.densification != 0 && b.error == 0 && type == DensificationType::None;
         b.mean_gradient = address(gradients[0]);
         b.scale_gradient = address(gradients[1]);
         b.rotation_gradient = address(gradients[2]);
@@ -118,7 +120,8 @@ namespace lfs::training::vulkan {
         const std::string_view shader = context->caps().shader_atomic_float ? "fast_backward_atomic" : "fast_backward";
         const uint32_t variant = specialization(p, 0) |
                                  (uint32_t(b.depth_gradient != 0) << 18) | (uint32_t(b.normal_gradient != 0) << 19) |
-                                 (uint32_t(b.densify != 0 && b.densification != 0) << 20) | (uint32_t(b.scores != 0) << 21);
+                                 (uint32_t(b.densify != 0 && b.densification != 0) << 20) | (uint32_t(b.scores != 0) << 21) |
+                                 (uint32_t(count_visible) << 22);
         if (p.visible) {
             b.stage = 2;
             dispatch(shader, b, reads, writes,
@@ -169,11 +172,15 @@ namespace lfs::training {
         void release(FastSaved& saved) noexcept {
             if (saved.backend) {
                 auto& state = static_cast<vulkan::FastState&>(*saved.backend);
+                const bool indirect = state.indirect;
+                const bool submit_before_status = state.submit_before_status;
                 auto* timer = state.timer;
                 auto scratch = std::move(state.scratch);
                 auto readback = std::move(state.scalar_readback);
                 state = vulkan::FastState{};
                 state.timer = timer;
+                state.indirect = indirect;
+                state.submit_before_status = submit_before_status;
                 state.scratch = std::move(scratch);
                 state.scalar_readback = std::move(readback);
             }
@@ -214,7 +221,6 @@ namespace lfs::training {
             record_vram_tensor(scope, "forward.counts", s.counts);
             record_vram_tensor(scope, "forward.keys_a", s.keys_a);
             record_vram_tensor(scope, "forward.keys_b", s.keys_b);
-            record_vram_tensor(scope, "forward.status", s.status);
             record_vram_tensor(scope, "output.depth", s.depth);
             record_vram_tensor(scope, "output.normal", s.normal);
             record_vram_current(scope, "backward.screen_gradient", backward ? size_t(s.push.visible) * 16 * 4 : 0, true);

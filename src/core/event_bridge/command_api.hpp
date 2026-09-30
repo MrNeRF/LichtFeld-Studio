@@ -60,6 +60,10 @@ namespace lfs::training {
         ArgType type;
         bool required = true;
         std::optional<std::string> description;
+        // Bounds for a Float argument, enforced by CommandCenter::execute and advertised
+        // in the generated MCP schema.
+        std::optional<double> exclusive_minimum;
+        std::optional<double> maximum;
     };
 
     struct OperationInfo {
@@ -119,6 +123,9 @@ namespace lfs::training {
         int iteration;
         float loss;
     };
+
+    // Broadcasts a [N] row mask over an attribute whose leading axis holds the N rows.
+    LFS_BRIDGE_API core::Tensor expand_row_mask(const core::Tensor& row_mask, const core::TensorShape& target_shape);
 
     class CommandCenter {
     public:

@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// Metal Mrnf, Refine and Mcmc ops against CPU transliterations of the CUDA
+// Metal and Vulkan Mrnf, Refine and Mcmc ops against CPU transliterations of the CUDA
 // kernels (mrnf_kernels.cu, densification_kernels.cu, pruning_kernels.cu,
 // mcmc_kernels.cu) on fixture-sized inputs. Integer results, selections and
 // RNG-driven choices are exact; float math compares within the fast-math
@@ -26,6 +26,8 @@
 #include <vector>
 
 namespace {
+    // The backend of the running parameterized test.
+    lfs::core::GpuBackend backend_under_test() { return testing::TestWithParam<lfs::core::GpuBackend>::GetParam(); }
 
     using lfs::core::DataType;
     using lfs::core::Device;
@@ -166,15 +168,15 @@ namespace {
 
     float sigmoid(const float x) { return 1.0f / (1.0f + std::exp(-x)); }
 
-    class MetalDensifyOps : public ::testing::Test {
+    class PortableDensifyOps : public ::testing::TestWithParam<GpuBackend> {
     protected:
         void SetUp() override {
-            if (!lfs::core::gpu_backend_available(GpuBackend::Metal))
-                GTEST_SKIP() << "Metal device unavailable";
-            scope_.emplace(GpuBackend::Metal);
-            table_ = &lfs::training::training_ops(GpuBackend::Metal);
+            if (!lfs::core::gpu_backend_available(backend_under_test()))
+                GTEST_SKIP() << lfs::core::gpu_backend_name(GetParam()) << " device unavailable";
+            scope_.emplace(backend_under_test());
+            table_ = &lfs::training::training_ops(backend_under_test());
             if (table_->mrnf == nullptr || table_->refine == nullptr || table_->mcmc == nullptr)
-                GTEST_SKIP() << "Metal Mrnf/Refine/Mcmc slots are empty";
+                GTEST_SKIP() << "Mrnf/Refine/Mcmc slots are empty";
         }
 
         const ops::MrnfOps& mrnf() const { return *table_->mrnf; }
@@ -196,7 +198,7 @@ namespace {
 
     // ---- MRNF ------------------------------------------------------------
 
-    TEST_F(MetalDensifyOps, MrnfNoiseFollowsTheCurandStream) {
+    TEST_P(PortableDensifyOps, MrnfNoiseFollowsTheCurandStream) {
         constexpr size_t n = 257;
         constexpr uint64_t seed = 0x4d524e46ull;
         auto opacity = values(n, 4.f, 3, -2.f);
@@ -223,7 +225,7 @@ namespace {
         expect_close(host_f(means_gpu), expected, "mrnf.noise");
     }
 
-    TEST_F(MetalDensifyOps, MrnfDecay) {
+    TEST_P(PortableDensifyOps, MrnfDecay) {
         constexpr size_t n = 257;
         auto raw = values(n, 1.5f, 9);
         raw[1] = std::numeric_limits<float>::infinity();
@@ -254,7 +256,7 @@ namespace {
         expect_close(host_f(scales_gpu), expected_scales, "mrnf.decay.scales");
     }
 
-    TEST_F(MetalDensifyOps, MrnfPercentileBoundsSelectCubOrder) {
+    TEST_P(PortableDensifyOps, MrnfPercentileBoundsSelectCubOrder) {
         constexpr size_t n = 1029;
         auto means = values(3 * n, 3.f, 2);
         for (size_t i = 0; i < 3 * n; i += 7)
@@ -281,7 +283,7 @@ namespace {
         EXPECT_EQ(bounds.max_extent, extents[2]);
     }
 
-    TEST_F(MetalDensifyOps, MrnfMedianExtentAndSortedMedian) {
+    TEST_P(PortableDensifyOps, MrnfMedianExtentAndSortedMedian) {
         constexpr size_t n = 1537;
         auto scales = values(3 * n, 0.8f, 4);
         for (size_t i = 0; i < 3 * n; i += 11)
@@ -348,7 +350,7 @@ namespace {
         return out;
     }
 
-    TEST_F(MetalDensifyOps, MrnfGumbelTopKMatchesCurandKeys) {
+    TEST_P(PortableDensifyOps, MrnfGumbelTopKMatchesCurandKeys) {
         constexpr size_t n = 257;
         constexpr uint64_t seed = 0x4d524e46ull;
         auto weights = values(n, 1.f, 8);
@@ -380,7 +382,7 @@ namespace {
         EXPECT_EQ(host_i64(top), gumbel_reference(large, 64, 99, true));
     }
 
-    TEST_F(MetalDensifyOps, MrnfFoldsAndMasks) {
+    TEST_P(PortableDensifyOps, MrnfFoldsAndMasks) {
         constexpr size_t n = 64;
         const auto vis = values(n, 1.f, 1, 1.f);
         const auto weight = values(n, 0.2f, 2);
@@ -442,7 +444,7 @@ namespace {
         }
     }
 
-    TEST_F(MetalDensifyOps, MrnfProjectionAndSeeds) {
+    TEST_P(PortableDensifyOps, MrnfProjectionAndSeeds) {
         constexpr size_t n = 64;
         const auto means = values(3 * n, 1.f, 12);
         const std::vector<float> view{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 2, 0, 0, 0, 1};
@@ -524,7 +526,7 @@ namespace {
         expect_same(host_f(depth_gpu), std::vector<float>(pixels.size(), 0.f), "mrnf.gather.no_depth");
     }
 
-    TEST_F(MetalDensifyOps, MrnfWeightsAndCompaction) {
+    TEST_P(PortableDensifyOps, MrnfWeightsAndCompaction) {
         constexpr size_t n = 33;
         auto weights = values(n, 1.f, 10, 1.f);
         auto vis = values(n, 2.f, 11, 1.f);
@@ -576,7 +578,7 @@ namespace {
 
     // ---- Refine ----------------------------------------------------------
 
-    TEST_F(MetalDensifyOps, RefineSplitAndFill) {
+    TEST_P(PortableDensifyOps, RefineSplitAndFill) {
         constexpr size_t n = 257;
         auto means = unit_values(3 * n);
         auto rotations = unit_values(4 * n, 0.1f);
@@ -666,7 +668,7 @@ namespace {
         EXPECT_EQ(host_u8(free_gpu), expected_free);
     }
 
-    TEST_F(MetalDensifyOps, RefineCountsAndMedian) {
+    TEST_P(PortableDensifyOps, RefineCountsAndMedian) {
         constexpr size_t n = 5003;
         std::vector<bool> b0(n), b1(n / 2);
         for (size_t i = 0; i < n; ++i)
@@ -717,7 +719,7 @@ namespace {
         expect_same(host_f(none_gpu), {0.f, 0.f, 0.f, 0.f}, "refine.median.none");
     }
 
-    TEST_F(MetalDensifyOps, RefineScreenShareAndMasks) {
+    TEST_P(PortableDensifyOps, RefineScreenShareAndMasks) {
         constexpr size_t n = 257;
         const auto shares = unit_values(n);
         const auto log_scales = unit_values(3 * n, -2.f);
@@ -771,7 +773,7 @@ namespace {
 
     // ---- MCMC ------------------------------------------------------------
 
-    TEST_F(MetalDensifyOps, McmcRelocate) {
+    TEST_P(PortableDensifyOps, McmcRelocate) {
         constexpr size_t n = 257;
         mcmc().initialize(51);
         auto opacity = unit_values(n, 0.01f);
@@ -819,7 +821,7 @@ namespace {
         expect_close(host_f(new_scales), expected_scales, "mcmc.relocate.scales", 1e-4f, 1e-3f);
     }
 
-    TEST_F(MetalDensifyOps, McmcNoiseFollowsTheCurandStream) {
+    TEST_P(PortableDensifyOps, McmcNoiseFollowsTheCurandStream) {
         constexpr size_t n = 257;
         constexpr uint64_t seed = 12345;
         const auto raw_opacity = unit_values(n, -4.f);
@@ -859,7 +861,7 @@ namespace {
         expect_close(host_f(means_gpu), expected, "mcmc.noise", 1e-6f, 1e-4f);
     }
 
-    TEST_F(MetalDensifyOps, McmcRowsAndFold) {
+    TEST_P(PortableDensifyOps, McmcRowsAndFold) {
         constexpr size_t rows = 17;
         const auto means = unit_values(3 * rows), sh0 = unit_values(3 * rows, 0.3f), scales = unit_values(3 * rows, -2.f);
         const auto quats = unit_values(4 * rows, 0.2f), opacity = unit_values(rows, -1.f);
@@ -908,7 +910,7 @@ namespace {
         expect_same(host_f(dens_gpu), std::vector<float>(2 * n, 0.f), "mcmc.fold_error.rows");
     }
 
-    TEST_F(MetalDensifyOps, McmcSampleFollowsTheCurandStream) {
+    TEST_P(PortableDensifyOps, McmcSampleFollowsTheCurandStream) {
         constexpr size_t n = 4099;
         constexpr size_t samples = 1025;
         constexpr uint64_t seed = 98765;
@@ -964,5 +966,8 @@ namespace {
         EXPECT_EQ(host_i64(indices), std::vector<int64_t>(4, 0));
         expect_same(host_f(sampled_scales), std::vector<float>(12, 0.f), "mcmc.sample.empty");
     }
+
+    INSTANTIATE_TEST_SUITE_P(Backends, PortableDensifyOps, testing::Values(GpuBackend::Metal, GpuBackend::Vulkan),
+                             [](const auto& info) { return std::string(lfs::core::gpu_backend_name(info.param)); });
 
 } // namespace

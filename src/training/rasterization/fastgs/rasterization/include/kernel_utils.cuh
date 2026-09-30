@@ -376,10 +376,11 @@ namespace fast_lfs::rasterization::kernels {
                 float m = mv.x;
                 float v = mv.y;
                 if (apply_step) {
-                    float grad = (i < active) ? grads[i] : 0.0f;
+                    const float grad = (i < active) ? grads[i] : 0.0f;
+                    float hinge = 0.0f;
                     if (i < active && param.screen_share_max != nullptr &&
                         primitive_idx < static_cast<uint>(param.screen_share_n)) {
-                        grad += lfs::training::screen_share_hinge_extra_grad(
+                        hinge = lfs::training::screen_share_hinge_extra_grad(
                             param.screen_share_max[primitive_idx],
                             param.screen_share_limit,
                             param.screen_share_penalty,
@@ -387,7 +388,7 @@ namespace fast_lfs::rasterization::kernels {
                             param.bias_correction2_sqrt_rcp,
                             eps);
                     }
-                    m = beta1 * mv.x + (1.0f - beta1) * grad;
+                    m = beta1 * mv.x + (1.0f - beta1) * (grad + hinge);
                     v = beta2 * mv.y + (1.0f - beta2) * grad * grad;
                     if (i < active) {
                         const float denom = sqrtf(v) * param.bias_correction2_sqrt_rcp + eps;

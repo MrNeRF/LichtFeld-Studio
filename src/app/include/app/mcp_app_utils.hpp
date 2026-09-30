@@ -4,17 +4,22 @@
 #pragma once
 
 #include "mcp/mcp_protocol.hpp"
+#include "rendering/coordinate_conventions.hpp"
+#include "visualizer/gui/utils/native_file_dialog.hpp"
 #include "visualizer/post_work_utils.hpp"
 #include "visualizer/visualizer.hpp"
 
 #include "core/error.hpp"
 #include "core/path_utils.hpp"
 
+#include <glm/vec3.hpp>
+
 #include <chrono>
 #include <expected>
 #include <filesystem>
 #include <format>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -44,7 +49,9 @@ namespace lfs::app {
     } // namespace detail
 
     template <typename R>
-    R make_post_failure(const std::string& error) {
+    R make_post_failure(const std::string& error,
+                        const lfs::ErrorCode code = lfs::ErrorCode::Unavailable,
+                        std::string error_detail = "The GUI work queue rejected the MCP request") {
         if constexpr (std::is_same_v<R, nlohmann::json>) {
             return nlohmann::json{{"error", error}};
         } else if constexpr (detail::is_string_expected<R>::value) {
@@ -52,15 +59,14 @@ namespace lfs::app {
         } else if constexpr (detail::is_lfs_result<R>::value) {
             auto typed_error = lfs::make_error(
                 lfs::ErrorInit{
-                    .code = lfs::ErrorCode::Unavailable,
+                    .code = code,
                     .domain = lfs::ErrorDomain::MCP,
                     .severity = lfs::Severity::Error,
                     .retryability =
                         lfs::Retryability::NotRetryable,
                     .operation_id = {},
                     .user_message = error,
-                    .detail =
-                        "The GUI work queue rejected the MCP request",
+                    .detail = std::move(error_detail),
                     .detection =
                         LFS_SOURCE_SITE_CURRENT(),
                     .fields = {},
@@ -79,7 +85,34 @@ namespace lfs::app {
         }
     }
 
+    inline constexpr std::string_view NATIVE_DIALOG_BLOCKED_ERROR =
+        "The request needs a native file dialog, which cannot be answered over MCP; "
+        "use a tool that takes an explicit path instead (for example project_save_as, "
+        "project_open, scene_load_ply or scene_load_dataset)";
+
     namespace detail {
+
+        // MCP work runs on the GUI thread, where a native modal dialog would block every
+        // later request with no client able to answer it. Dialogs requested during the work
+        // return at once, and the request fails instead of reporting a silent cancel.
+        template <typename F>
+        auto invoke_without_native_dialogs(F& fn) {
+            using R = std::invoke_result_t<F&>;
+            const vis::gui::ScopedNativeFileDialogBlock block;
+            if constexpr (std::is_void_v<R>) {
+                std::invoke(fn);
+            } else {
+                R result = std::invoke(fn);
+                if constexpr (std::is_same_v<R, nlohmann::json> || is_string_expected<R>::value ||
+                              is_lfs_result<R>::value) {
+                    if (block.suppressedDialog())
+                        return make_post_failure<R>(std::string(NATIVE_DIALOG_BLOCKED_ERROR),
+                                                    lfs::ErrorCode::FailedPrecondition,
+                                                    "A native file dialog was suppressed during MCP work");
+                }
+                return result;
+            }
+        }
 
         template <typename F, typename PostFn>
         auto post_and_wait_impl(PostFn&& post_fn, F&& fn) {
@@ -87,7 +120,7 @@ namespace lfs::app {
             constexpr const char* shutdown_error = "Viewer is shutting down";
             return vis::post_work_and_wait(
                 std::forward<PostFn>(post_fn),
-                std::forward<F>(fn),
+                [fn = std::forward<F>(fn)]() mutable { return invoke_without_native_dialogs(fn); },
                 [] { return make_post_failure<R>(shutdown_error); });
         }
 
@@ -100,7 +133,7 @@ namespace lfs::app {
         if (viewer->isOnViewerThread()) {
             if (!viewer->acceptsPostedWork())
                 return make_post_failure<R>("Viewer is shutting down");
-            return std::invoke(std::forward<F>(fn));
+            return detail::invoke_without_native_dialogs(fn);
         }
 
         return detail::post_and_wait_impl(
@@ -320,6 +353,39 @@ namespace lfs::app {
                 .uri = uri,
                 .mime_type = mime_type,
                 .content = std::move(base64_payload)}};
+    }
+
+    // Schema for a fixed-length list of numbers such as an [x,y,z] vector. ToolRegistry
+    // rejects a wrong length or a non-number element before the handler runs.
+    [[nodiscard]] inline nlohmann::json number_array_schema(const int size, std::string description) {
+        return nlohmann::json{{"type", "array"},
+                              {"items", nlohmann::json{{"type", "number"}}},
+                              {"minItems", size},
+                              {"maxItems", size},
+                              {"description", std::move(description)}};
+    }
+
+    // Schema for a screen-space point list [[x0,y0], [x1,y1], ...] of at least min_points points.
+    [[nodiscard]] inline nlohmann::json point_list_schema(const int min_points, std::string description) {
+        auto point = number_array_schema(2, "Screen point [x,y]");
+        point.erase("description");
+        return nlohmann::json{{"type", "array"},
+                              {"items", std::move(point)},
+                              {"minItems", min_points},
+                              {"description", std::move(description)}};
+    }
+
+    // Why the viewer's set_view would silently ignore this view (eye and target that
+    // coincide, or coordinates too large to form a view direction in float), or nullopt.
+    [[nodiscard]] inline std::optional<std::string> view_vectors_error(const glm::vec3& eye,
+                                                                       const glm::vec3& target,
+                                                                       const glm::vec3& up) {
+        if (lfs::rendering::tryMakeVisualizerLookAtRotation(eye, target, up))
+            return std::nullopt;
+        return std::format(
+            "Fields 'eye' [{}, {}, {}], 'target' [{}, {}, {}] and 'up' [{}, {}, {}] describe no camera view; "
+            "eye and target must differ and stay small enough to form a view direction in float",
+            eye.x, eye.y, eye.z, target.x, target.y, target.z, up.x, up.y, up.z);
     }
 
     // Selection tools: an omitted camera_index means "the current viewer".

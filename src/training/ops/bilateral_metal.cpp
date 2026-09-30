@@ -149,7 +149,7 @@ namespace lfs::training {
 
         void adam(Out grid, Out moment1, Out moment2, In gradient, const AdamUpdateParams& a) {
             const AdamParams p{mk::address(grid), mk::address(moment1), mk::address(moment2), mk::address(gradient),
-                               static_cast<uint32_t>(grid.numel()), a.lr, a.beta1, a.beta2, a.bc1_rcp, a.bc2_sqrt_rcp, a.eps};
+                               mk::count32(grid.numel(), "bilateral grid"), a.lr, a.beta1, a.beta2, a.bc1_rcp, a.bc2_sqrt_rcp, a.eps};
             mk::launch_items("bilateral_adam", p, {&grid, &moment1, &moment2, &gradient}, grid.numel());
         }
 
@@ -162,7 +162,7 @@ namespace lfs::training {
         void scale_moments(Out moment1, Out moment2, const float scale1, const float scale2) {
             if (moment1.numel() == 0)
                 return;
-            const ScaleParams p{mk::address(moment1), mk::address(moment2), static_cast<uint32_t>(moment1.numel()),
+            const ScaleParams p{mk::address(moment1), mk::address(moment2), mk::count32(moment1.numel(), "bilateral moments"),
                                 scale1, scale2};
             mk::launch_items("bilateral_scale_moments", p, {&moment1, &moment2}, moment1.numel());
         }

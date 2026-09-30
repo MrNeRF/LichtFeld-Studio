@@ -194,8 +194,9 @@ struct Push {
 };
 [[vk::push_constant]] Push push;
 [SpecializationConstant] const uint stage = 0;
-groupshared float4 xyzo[64], m0[64], m1[64], m2[64], quats[64], colors[64];
-groupshared uint ids[64];
+// Stage one Gaussian per lane to amortize workgroup synchronization.
+groupshared float4 xyzo[128], m0[128], m1[128], m2[128], quats[128], colors[128];
+groupshared uint ids[128];
 groupshared float reduction[17][128];
 groupshared int last_active[128];
 void raster(GsplatRasterParams p, uint tile, uint lane) {
@@ -204,6 +205,7 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
     GsplatPixel px0 = gsplat_pixel(p, i, j), px1 = gsplat_pixel(p, i, j + 1);
     bool bg = p.bg_color != 0 || p.bg_image != 0;
     int begin = p.tile_offsets[tile], end = p.tile_offsets[tile + 1];
+    const int wave_last = WaveActiveMax(max(px0.bin_final, px1.bin_final));
     last_active[lane] = max(px0.bin_final, px1.bin_final);
     GroupMemoryBarrierWithGroupSync();
     for (uint step = 64; step != 0; step >>= 1) {
@@ -213,10 +215,10 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
     }
     // Later intersections did not contribute to any pixel in this tile.
     end = min(end, last_active[0] + 1);
-    for (int batch_end = end - 1; batch_end >= begin; batch_end -= 64) {
+    for (int batch_end = end - 1; batch_end >= begin; batch_end -= 128) {
         GroupMemoryBarrierWithGroupSync();
         int index = batch_end - int(lane);
-        if (lane < 64 && index >= begin) {
+        if (lane < 128 && index >= begin) {
             uint g = p.gaussian_ids[index];
             float3 scale = exp(gsplat_load3(p.scales, g));
             float4 quat = gsplat_load4(p.quats, g);
@@ -230,7 +232,10 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
             ids[lane] = g;
         }
         GroupMemoryBarrierWithGroupSync();
-        for (int t = 0; t < min(64, batch_end + 1 - begin); ++t) {
+        // A subgroup can skip intersections beyond all of its pixels.
+        // Other subgroup widths retain the shared-memory reduction barriers.
+        const int first = WaveGetLaneCount() == 32 ? max(0, batch_end - wave_last) : 0;
+        for (int t = first; t < min(128, batch_end + 1 - begin); ++t) {
             GsplatGrad grad = (GsplatGrad)0;
             bool hit0 = gsplat_contribute(px0, batch_end - t, xyzo[t], m0[t], m1[t], m2[t], quats[t], colors[t].xyz, colors[t].w, bg, grad);
             bool hit1 = gsplat_contribute(px1, batch_end - t, xyzo[t], m0[t], m1[t], m2[t], quats[t], colors[t].xyz, colors[t].w, bg, grad);
@@ -240,7 +245,25 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
             bool wave_hit = WaveActiveAnyTrue(hit0 || hit1);
             if (WaveGetLaneCount() == 32) {
                 if (wave_hit) {
-                    [unroll] for (uint k = 0; k < 17; ++k) values[k] = WaveActiveSum(values[k]);
+                    const float edge = p.edge_scores != 0 ? WaveActiveSum(values[16]) : 0;
+                    // Reduce each field to its own lane using the CUDA XOR tree.
+                    const uint wl = WaveGetLaneIndex();
+                    [unroll] for (uint k = 0; k < 16; ++k)
+                        values[k] += WaveReadLaneAt(values[k], wl ^ 16);
+                    [unroll] for (uint stride = 8; stride > 0; stride >>= 1) {
+                        [unroll] for (uint k = 0; k < stride; ++k) {
+                            const float own = (wl & stride) != 0 ? values[k + stride] : values[k];
+                            const float send = (wl & stride) != 0 ? values[k] : values[k + stride];
+                            values[k] = own + WaveReadLaneAt(send, wl ^ stride);
+                        }
+                    }
+                    const uint g = ids[t];
+                    if (wl < 14 && values[0] != 0)
+                        gsplat_atomic_add(p.grads, g * 14 + wl, values[0]);
+                    if (wl >= 14 && wl < 16 && p.densification != 0 && p.error_map != 0)
+                        gsplat_atomic_add(p.densification, (wl - 14) * p.count + g, values[0]);
+                    if (wl == 16 && p.edge_scores != 0)
+                        gsplat_atomic_add(p.edge_scores, g, edge * p.edge_factor);
                 }
             } else {
                 for (uint k = 0; k < 17; ++k)
@@ -257,7 +280,7 @@ void raster(GsplatRasterParams p, uint tile, uint lane) {
                     values[k] = reduction[k][lane];
                 GroupMemoryBarrierWithGroupSync();
             }
-            if (WaveGetLaneCount() == 32 ? (WaveIsFirstLane() && wave_hit) : lane % 32 == 0) {
+            if (WaveGetLaneCount() != 32 && lane % 32 == 0) {
                 uint g = ids[t];
                 [unroll] for (uint k = 0; k < 14; ++k) if (values[k] != 0)
                     gsplat_atomic_add(p.grads, g * 14 + k, values[k]);

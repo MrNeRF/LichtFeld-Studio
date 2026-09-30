@@ -21,7 +21,7 @@ namespace lfs::training {
         uint32_t element_count(In tensor, const char* what) {
             LFS_ASSERT_MSG(tensor.numel() <= UINT32_MAX,
                            std::format("{} supports at most 2^32-1 elements (count={})", what, tensor.numel()));
-            return static_cast<uint32_t>(tensor.numel());
+            return mk::count32(tensor.numel(), "extra loss");
         }
 
         void regularize(In raw, Out gradient, Out loss, Out reduction_temp, Regularizer kind, float weight) {

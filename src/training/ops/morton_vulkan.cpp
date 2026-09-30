@@ -103,6 +103,7 @@ namespace lfs::training {
                      "vkCreateComputePipelines(training.morton)");
             vkDestroyShaderModule(context->device(), shader, nullptr);
             cache.emplace(key, pipeline);
+            release_at_shutdown(*context, mutex, cache);
             return pipeline;
         }
 
@@ -144,8 +145,10 @@ namespace lfs::training {
             const auto pipeline = training_pipeline(context, "joint_morton", sizeof(push), phase);
             const std::array reads{storage_ref(source), storage_ref(bounds), storage_ref(indices)};
             const std::array writes{storage_ref(destination), storage_ref(destination_bounds)};
-            const size_t work = phase == 0 ? (static_cast<size_t>(codec.primitives) + 255) / 256 * 256
-                                           : static_cast<size_t>(codec.primitives);
+            const size_t work = phase == 2
+                                    ? ((static_cast<size_t>(codec.primitives) + core::kShReorderSize - 1) / core::kShReorderSize) *
+                                          core::kShReorderSize * (push.slot_end - push.slot_begin) * joint_adam::bytes_per_cell(codec.bits)
+                                    : static_cast<size_t>(codec.primitives);
             const uint32_t groups = phase == 0 ? static_cast<uint32_t>((codec.primitives + 255) / 256)
                                                : vk::dispatch_groups(*context, work);
             dispatch(context, pipeline, push, reads, writes, groups);
@@ -206,7 +209,6 @@ namespace lfs::training {
             const size_t slot_bytes = reorder * 4 * static_cast<size_t>(joint_adam::bytes_per_cell(codec.bits));
             if (scratch.bytes() < tiles * slot_bytes)
                 throw std::invalid_argument("Morton grouped scratch is smaller than one encoded slot");
-            const auto context = acquire_vulkan_context();
             launch_joint(packed, bounds, scratch, destination_bounds, indices, codec, 0);
             const size_t slots = static_cast<size_t>(codec.attributes_or_slots);
             const size_t slots_per_group = std::max<size_t>(1, std::min(slots, scratch.bytes() / (tiles * slot_bytes)));
@@ -215,12 +217,11 @@ namespace lfs::training {
                 scratch.zero_();
                 launch_joint(packed, bounds, scratch, destination_bounds, indices, codec, 1,
                              static_cast<uint32_t>(first), static_cast<uint32_t>(last));
-                const StorageRef temp = storage_ref(scratch), live = storage_ref(packed);
-                for (size_t tile = 0; tile < tiles; ++tile) {
-                    for (size_t local = 0; local < last - first; ++local) {
-                        backend_ops(GpuBackend::Vulkan).copy_device_to_device(CopyRequest{.src = offset_storage_ref(temp, tile * (last - first) * slot_bytes + local * slot_bytes), .dst = offset_storage_ref(live, tile * slots * slot_bytes + (first + local) * slot_bytes), .bytes = slot_bytes, .operation = "training.morton.copy_joint_group"});
-                    }
-                }
+                // Scatter complete packed words, including padded rows, in one
+                // dispatch. Per-tile copies create hundreds of thousands of
+                // recorder operations at full training sizes.
+                launch_joint(scratch, bounds, packed, destination_bounds, indices, codec, 2,
+                             static_cast<uint32_t>(first), static_cast<uint32_t>(last));
             }
         }
 

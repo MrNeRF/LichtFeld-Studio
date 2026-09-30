@@ -9,6 +9,7 @@
 #include "metal_kernels.hpp"
 
 #include "core/memory_pressure.hpp"
+#include "core/tensor_upload.hpp"
 #include "lfs/training/vram_ledger.hpp"
 
 #include <algorithm>
@@ -34,6 +35,10 @@ namespace lfs::training {
         constexpr uint32_t kTile = 16;
         constexpr uint32_t kTilePixels = kTile * kTile;
         constexpr uint32_t kBlendThreads = 128;
+        // kFastShParts and kFastShSlotsPerThread in fast_backward.metal:
+        // fast_backward_sh spreads a primitive's SH rest slots over kShParts threads.
+        constexpr uint32_t kShParts = 4;
+        constexpr uint32_t kShSlotsPerThread = 3;
         // kFastBwdThreads in fast_backward.metal.
         constexpr uint32_t kBackwardThreads = 64;
         constexpr uint32_t kGradStride = 12;
@@ -51,6 +56,8 @@ namespace lfs::training {
         constexpr uint32_t kMipFilterConstant = 65;
         constexpr uint32_t kShLayoutRestConstant = 66;
         constexpr uint32_t kShStorageConstant = 67;
+        constexpr uint32_t kDepthGradConstant = 68;
+        constexpr uint32_t kEdgeWeightConstant = 69;
 
         // Tensors captured by forward for the backward of the same frame.
         struct Frame {
@@ -72,6 +79,10 @@ namespace lfs::training {
             Tensor ranges, final_transmittance, n_contrib;
             Tensor block_sums, counts, histogram;
             std::array<Tensor, 2> keys, values;
+            // The host's copy of the instance count, and the instance buffers'
+            // size, which lets a frame encode its raster tail before the count arrives.
+            Tensor count_copy;
+            uint32_t instance_capacity = 0;
             Frame frame;
             std::string message;
         };
@@ -162,14 +173,15 @@ namespace lfs::training {
         }
 
         struct SortParams {
-            uint64_t keys_in, values_in, keys_out, values_out, histogram;
+            uint64_t keys_in, values_in, keys_out, values_out, histogram, counts;
             uint32_t n, n_blocks, shift, unused;
         };
 
-        // Stable sort of the first n key/value pairs on bits [0, end_bit); returns
-        // the buffer index holding the result.
-        uint32_t sort_instances(MetalFastState& s, const uint32_t n, const uint32_t end_bit) {
-            const uint32_t blocks = div_up(n, kSortBlock);
+        // Stable sort of the key/value pairs on bits [0, end_bit): as many as
+        // s.counts holds, dispatched for `capacity`. Returns the buffer index
+        // holding the result.
+        uint32_t sort_instances(MetalFastState& s, const uint32_t capacity, const uint32_t end_bit) {
+            const uint32_t blocks = div_up(capacity, kSortBlock);
             reserve(s.histogram, size_t{256} * blocks, DataType::UInt32);
             uint32_t current = 0;
             for (uint32_t shift = 0; shift < end_bit; shift += 8) {
@@ -178,11 +190,12 @@ namespace lfs::training {
                 auto& keys_out = s.keys[current ^ 1];
                 auto& values_out = s.values[current ^ 1];
                 const SortParams params{mk::address(keys_in), mk::address(values_in), mk::address(keys_out),
-                                        mk::address(values_out), mk::address(s.histogram), n, blocks, shift, 0};
-                launch("fast_sort_histogram", params, {&keys_in, &s.histogram}, blocks, 1, 256);
+                                        mk::address(values_out), mk::address(s.histogram), mk::address(s.counts),
+                                        capacity, blocks, shift, 0};
+                launch("fast_sort_histogram", params, {&keys_in, &s.histogram, &s.counts}, blocks, 1, 256);
                 exclusive_scan(s, s.histogram, s.histogram, 256 * blocks, nullptr);
-                launch("fast_sort_scatter", params, {&keys_in, &values_in, &keys_out, &values_out, &s.histogram},
-                       blocks, 1, 256);
+                launch("fast_sort_scatter", params,
+                       {&keys_in, &values_in, &keys_out, &values_out, &s.histogram, &s.counts}, blocks, 1, 256);
                 current ^= 1;
             }
             return current;
@@ -200,12 +213,12 @@ namespace lfs::training {
 
         struct InstanceParams {
             uint64_t mean_box, conic_opacity, tile_info, n_touched, offsets, keys, values;
-            uint32_t n, grid_w, depth_bits, unused;
+            uint32_t n, grid_w, depth_bits, capacity;
         };
 
         struct RangeParams {
-            uint64_t keys, ranges;
-            uint32_t n_instances, n_tiles, depth_bits, unused;
+            uint64_t keys, ranges, counts;
+            uint32_t capacity, n_tiles, depth_bits, unused;
         };
 
         struct BlendParams {
@@ -392,8 +405,72 @@ namespace lfs::training {
                         {kShStorageConstant, f.sh_storage}});
                 exclusive_scan(s, s.n_touched, s.offsets, n, &s.counts);
 
-                // The one host round trip of a frame: the instance count sizes the sort.
-                const Tensor counts = s.counts.to(Device::CPU);
+                const uint32_t sort_bits = tile_bits(n_tiles) + key_depth_bits;
+                const bool solid_bg = !has_bg_image && bg_color.is_valid() && bg_color.numel() >= 3;
+                const Tensor& bg_use = has_bg_image ? bg_image : (solid_bg ? bg_color : none);
+                const Tensor& normals_use = params.render_normal ? s.normals : none;
+                // Instances, their sort, the tile ranges and the blend for buffers
+                // of `capacity` instances; the kernels take the count from s.counts.
+                const auto encode_raster = [&](const uint32_t capacity) {
+                    fill(s.ranges, size_t{n_tiles} * 2, 0);
+                    for (uint32_t i = 0; i < 2; ++i) {
+                        reserve(s.keys[i], capacity, DataType::UInt32);
+                        reserve(s.values[i], capacity, DataType::UInt32);
+                    }
+                    const InstanceParams inst{mk::address(s.mean_box), mk::address(s.conic_opacity),
+                                              mk::address(s.tile_info), mk::address(s.n_touched),
+                                              mk::address(s.offsets), mk::address(s.keys[0]),
+                                              mk::address(s.values[0]), n, f.grid_w, key_depth_bits, capacity};
+                    launch("fast_create_instances", inst,
+                           {&s.mean_box, &s.conic_opacity, &s.tile_info, &s.n_touched, &s.offsets, &s.keys[0],
+                            &s.values[0]},
+                           div_up(n, 256), 1, 256);
+                    f.sorted = sort_instances(s, capacity, sort_bits);
+                    const RangeParams range{mk::address(s.keys[f.sorted]), mk::address(s.ranges),
+                                            mk::address(s.counts), capacity, n_tiles, key_depth_bits, 0};
+                    launch("fast_tile_ranges", range, {&s.keys[f.sorted], &s.ranges, &s.counts},
+                           div_up(capacity, 256), 1, 256);
+                    const BlendParams blend{
+                        .ranges = mk::address(s.ranges),
+                        .values = mk::address(s.values[f.sorted]),
+                        .mean_box = mk::address(s.mean_box),
+                        .conic_opacity = mk::address(s.conic_opacity),
+                        .color_depth = mk::address(s.color_depth),
+                        .normals = params.render_normal ? mk::address(s.normals) : 0,
+                        .image = mk::address(s.image),
+                        .alpha = mk::address(s.alpha),
+                        .depth = params.render_depth ? mk::address(s.depth) : 0,
+                        .normal = params.render_normal ? mk::address(s.normal) : 0,
+                        .n_contrib = mk::address(s.n_contrib),
+                        .final_transmittance = mk::address(s.final_transmittance),
+                        .bg_color = solid_bg ? mk::address(bg_color) : 0,
+                        .bg_image = has_bg_image ? mk::address(bg_image) : 0,
+                        .width = f.width,
+                        .height = f.height,
+                        .grid_w = f.grid_w,
+                        .unused = 0,
+                    };
+                    launch("fast_blend_forward", blend,
+                           {&s.ranges, &s.values[f.sorted], &s.mean_box, &s.conic_opacity, &s.color_depth,
+                            &normals_use, &s.image, &s.alpha, &s.depth, &s.normal, &s.n_contrib,
+                            &s.final_transmittance, &bg_use},
+                           f.grid_w, f.grid_h, kBlendThreads,
+                           {{kRenderDepthConstant, params.render_depth ? 1u : 0u},
+                            {kRenderNormalConstant, params.render_normal ? 1u : 0u}});
+                };
+
+                // The frame's one host round trip is the instance count. The host
+                // reads a copy that the raster tail does not touch, submitted with
+                // the scan, while the GPU runs the tail sized for the capacity of
+                // earlier frames. A frame needing more encodes the tail again.
+                reserve(s.count_copy, 2, DataType::UInt32);
+                s.count_copy.slice(0, 0, 2).copy_(s.counts.slice(0, 0, 2));
+                core::TensorFence counted(core::GpuBackend::Metal);
+                counted.record(core::TensorExecutionTarget::current());
+                const uint32_t speculated = s.instance_capacity;
+                if (speculated > 0)
+                    encode_raster(speculated);
+                const Tensor counts = s.count_copy.slice(0, 0, 2).to(Device::CPU);
                 const uint32_t* words = counts.ptr<uint32_t>();
                 const uint64_t n_instances = uint64_t{words[0]} | (uint64_t{words[1]} << 32);
                 if (n_instances > static_cast<uint64_t>(std::numeric_limits<int>::max()))
@@ -402,58 +479,10 @@ namespace lfs::training {
                                             "primitives across {} tiles",
                                             n_instances, n, n_tiles));
                 f.n_instances = static_cast<uint32_t>(n_instances);
-
-                fill(s.ranges, size_t{n_tiles} * 2, 0);
-                if (f.n_instances > 0) {
-                    for (uint32_t i = 0; i < 2; ++i) {
-                        reserve(s.keys[i], f.n_instances, DataType::UInt32);
-                        reserve(s.values[i], f.n_instances, DataType::UInt32);
-                    }
-                    const InstanceParams inst{mk::address(s.mean_box), mk::address(s.conic_opacity),
-                                              mk::address(s.tile_info), mk::address(s.n_touched),
-                                              mk::address(s.offsets), mk::address(s.keys[0]),
-                                              mk::address(s.values[0]), n, f.grid_w, key_depth_bits, 0};
-                    launch("fast_create_instances", inst,
-                           {&s.mean_box, &s.conic_opacity, &s.tile_info, &s.n_touched, &s.offsets, &s.keys[0],
-                            &s.values[0]},
-                           div_up(n, 256), 1, 256);
-                    f.sorted = sort_instances(s, f.n_instances, tile_bits(n_tiles) + key_depth_bits);
-                    const RangeParams range{mk::address(s.keys[f.sorted]), mk::address(s.ranges), f.n_instances,
-                                            n_tiles, key_depth_bits, 0};
-                    launch("fast_tile_ranges", range, {&s.keys[f.sorted], &s.ranges}, div_up(f.n_instances, 256), 1,
-                           256);
+                if (speculated == 0 || f.n_instances > speculated) {
+                    s.instance_capacity = std::max<uint32_t>(1024, f.n_instances + f.n_instances / 4);
+                    encode_raster(s.instance_capacity);
                 }
-
-                const bool solid_bg = !has_bg_image && bg_color.is_valid() && bg_color.numel() >= 3;
-                const Tensor& bg_use = has_bg_image ? bg_image : (solid_bg ? bg_color : none);
-                const BlendParams blend{
-                    .ranges = mk::address(s.ranges),
-                    .values = f.n_instances > 0 ? mk::address(s.values[f.sorted]) : 0,
-                    .mean_box = mk::address(s.mean_box),
-                    .conic_opacity = mk::address(s.conic_opacity),
-                    .color_depth = mk::address(s.color_depth),
-                    .normals = params.render_normal ? mk::address(s.normals) : 0,
-                    .image = mk::address(s.image),
-                    .alpha = mk::address(s.alpha),
-                    .depth = params.render_depth ? mk::address(s.depth) : 0,
-                    .normal = params.render_normal ? mk::address(s.normal) : 0,
-                    .n_contrib = mk::address(s.n_contrib),
-                    .final_transmittance = mk::address(s.final_transmittance),
-                    .bg_color = solid_bg ? mk::address(bg_color) : 0,
-                    .bg_image = has_bg_image ? mk::address(bg_image) : 0,
-                    .width = f.width,
-                    .height = f.height,
-                    .grid_w = f.grid_w,
-                    .unused = 0,
-                };
-                const Tensor& values_use = f.n_instances > 0 ? s.values[f.sorted] : none;
-                const Tensor& normals_use = params.render_normal ? s.normals : none;
-                launch("fast_blend_forward", blend,
-                       {&s.ranges, &values_use, &s.mean_box, &s.conic_opacity, &s.color_depth, &normals_use, &s.image,
-                        &s.alpha, &s.depth, &s.normal, &s.n_contrib, &s.final_transmittance, &bg_use},
-                       f.grid_w, f.grid_h, kBlendThreads,
-                       {{kRenderDepthConstant, params.render_depth ? 1u : 0u},
-                        {kRenderNormalConstant, params.render_normal ? 1u : 0u}});
             } catch (const core::MemoryAllocationError& e) {
                 return fail(s, Code::ResourceExhausted, std::format("OUT_OF_MEMORY: {}", e.what()));
             }
@@ -688,7 +717,10 @@ namespace lfs::training {
                         &s.final_transmittance, &s.grads, &normal_grads_use, &densification_use, &error, &edge_weight,
                         &edge_scores},
                        f.grid_w * f.grid_h, 1, kBackwardThreads,
-                       {{kDensificationConstant, blend_densification}, {kNormalChannelConstant, normal_channel ? 1u : 0u}});
+                       {{kDensificationConstant, blend_densification},
+                        {kNormalChannelConstant, normal_channel ? 1u : 0u},
+                        {kDepthGradConstant, present(grad_depth) ? 1u : 0u},
+                        {kEdgeWeightConstant, present(edge_weight) && present(edge_scores) ? 1u : 0u}});
             }
 
             const uint32_t blocks = div_up(f.n, 256);
@@ -707,7 +739,11 @@ namespace lfs::training {
                 .eps = adam.eps,
                 .n = f.n,
             };
-            launch("fast_backward_sh", sh, std::span<const Tensor* const>(uses), blocks, 1, 256,
+            // The kernels clamp to degree 3: 15 rest coefficients in 12 float4 slots.
+            LFS_ASSERT_MSG(f.sh_layout_rest <= 15 && (f.sh_layout_rest * 3 + 3) / 4 <= kShParts * kShSlotsPerThread,
+                           std::format("fast_backward_sh covers 15 SH rest coefficients in {} slots, the layout has {}",
+                                       kShParts * kShSlotsPerThread, f.sh_layout_rest));
+            launch("fast_backward_sh", sh, std::span<const Tensor* const>(uses), blocks, 1, 256 * kShParts,
                    {{kShBasesConstant, f.sh_bases},
                     {kShLayoutRestConstant, f.sh_layout_rest},
                     {kShStorageConstant, f.sh_storage}});
@@ -774,7 +810,7 @@ namespace lfs::training {
                 .far_mask_n = far_mask ? static_cast<uint32_t>(std::min<size_t>(adam.far_mask.numel(),
                                                                                 static_cast<size_t>(means_group.primitives)))
                                        : 0,
-                .sparsity_n = sparsity ? static_cast<uint32_t>(adam.sparsity_sigmoid.numel()) : 0,
+                .sparsity_n = sparsity ? mk::count32(adam.sparsity_sigmoid.numel(), "sparsity") : 0,
                 .per_splat_mean_step = adam.per_splat_mean_step ? 1u : 0u,
             };
             launch("fast_backward_geometry", geometry, std::span<const Tensor* const>(uses), blocks, 1, 256,

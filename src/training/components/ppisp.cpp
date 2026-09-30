@@ -697,333 +697,80 @@ namespace lfs::training {
     }
 
     namespace {
-        // Smooth L1 loss (Huber loss): 0.5*x^2/beta if |x| < beta, else |x| - 0.5*beta
-        inline float smooth_l1(float x, float beta) {
-            const float abs_x = std::abs(x);
-            if (abs_x < beta) {
-                return 0.5f * x * x / beta;
-            }
-            return abs_x - 0.5f * beta;
+        // Smooth L1 (Huber): 0.5*x^2/beta if |x| < beta, else |x| - 0.5*beta.
+        // With c = min(|x|, beta) both branches are c * (|x| - 0.5*c) / beta.
+        lfs::core::Tensor smooth_l1(const lfs::core::Tensor& x, const float beta) {
+            const auto magnitude = x.abs();
+            const auto c = magnitude.minimum(beta);
+            return c.mul(magnitude.sub(c.mul(0.5f))).div(beta);
         }
 
-        // Gradient of smooth L1: x/beta if |x| < beta, else sign(x)
-        inline float smooth_l1_grad(float x, float beta) {
-            const float abs_x = std::abs(x);
-            if (abs_x < beta) {
-                return x / beta;
-            }
-            return (x > 0.0f) ? 1.0f : -1.0f;
+        // Gradient of smooth L1: x/beta if |x| < beta, else sign(x).
+        lfs::core::Tensor smooth_l1_grad(const lfs::core::Tensor& x, const float beta) {
+            return x.div(beta).clamp(-1.0f, 1.0f);
+        }
+
+        // [cameras * 3 * k] per-channel parameters minus their mean over the 3 channels.
+        lfs::core::Tensor channel_deviation(const lfs::core::Tensor& params, const int cameras, const int k) {
+            const auto grouped = params.reshape({cameras, 3, k});
+            return grouped.sub(grouped.mean(1, true));
         }
     } // namespace
 
+    // Regularizer terms stay on the device: no host round trip per step.
+    // Vignetting (center, non-positivity, channel variance) is the
+    // vignetting_regularization op; the rest are tensor expressions.
     lfs::core::Tensor PPISP::reg_loss_gpu() {
-        const bool skip_mean = config_.exposure_mean <= 0.0f && config_.color_mean <= 0.0f;
-        const bool skip_crf = !config_.train_crf || config_.crf_channel <= 0.0f;
-        if (skip_mean && skip_crf) {
-            vig_reg_loss_.zero_();
-            lfs::core::Tensor unused;
-            training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->vignetting_regularization(vignetting_params_, unused, vig_reg_loss_, config_.vig_center, config_.vig_channel, config_.vig_non_pos);
-            return vig_reg_loss_;
-        }
+        vig_reg_loss_.zero_();
+        lfs::core::Tensor unused;
+        training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->vignetting_regularization(vignetting_params_, unused, vig_reg_loss_, config_.vig_center, config_.vig_channel, config_.vig_non_pos);
+        lfs::core::Tensor loss = vig_reg_loss_;
 
-        // Compute regularization on CPU (small params, avoid kernel overhead)
-        // Transfer to CPU, compute, return GPU scalar for gradient flow
-        auto exposure_cpu = exposure_params_.cpu();
-        auto vignetting_cpu = vignetting_params_.cpu();
-        auto color_cpu = color_params_.cpu();
-        auto crf_cpu = crf_params_.cpu();
-
-        const float* exp_ptr = exposure_cpu.ptr<float>();
-        const float* vig_ptr = vignetting_cpu.ptr<float>();
-        const float* color_ptr = color_cpu.ptr<float>();
-        const float* crf_ptr = crf_cpu.ptr<float>();
-
-        float total_loss = 0.0f;
-
-        // 1. Exposure mean regularization: smooth_l1(mean(exposure), beta=0.1)
+        // Exposure mean: smooth_l1(mean(exposure), beta=0.1)
         if (config_.exposure_mean > 0.0f) {
-            float exp_sum = 0.0f;
-            for (int i = 0; i < num_frames_; ++i) {
-                exp_sum += exp_ptr[i];
-            }
-            const float exp_mean = exp_sum / static_cast<float>(num_frames_);
-            total_loss += config_.exposure_mean * smooth_l1(exp_mean, 0.1f);
+            loss = loss.add(smooth_l1(exposure_params_.mean().reshape({1}), 0.1f).mul(config_.exposure_mean));
         }
 
-        // Vignetting layout: [num_cameras * 3 * 5] = [cam][channel][cx, cy, alpha0, alpha1, alpha2]
-        // 2. Vignetting center loss: mean(cx^2 + cy^2)
-        if (config_.vig_center > 0.0f) {
-            float vig_center_sum = 0.0f;
-            for (int cam = 0; cam < num_cameras_; ++cam) {
-                for (int ch = 0; ch < 3; ++ch) {
-                    size_t base = static_cast<size_t>(cam) * 15 + static_cast<size_t>(ch) * 5;
-                    float cx = vig_ptr[base + 0];
-                    float cy = vig_ptr[base + 1];
-                    vig_center_sum += cx * cx + cy * cy;
-                }
-            }
-            total_loss += config_.vig_center * vig_center_sum / static_cast<float>(num_cameras_ * 3);
-        }
-
-        // 3. Vignetting non-positivity: mean(relu(alphas))
-        if (config_.vig_non_pos > 0.0f) {
-            float vig_non_pos_sum = 0.0f;
-            for (int cam = 0; cam < num_cameras_; ++cam) {
-                for (int ch = 0; ch < 3; ++ch) {
-                    size_t base = static_cast<size_t>(cam) * 15 + static_cast<size_t>(ch) * 5;
-                    for (int a = 0; a < 3; ++a) {
-                        float alpha = vig_ptr[base + 2 + a];
-                        if (alpha > 0.0f) {
-                            vig_non_pos_sum += alpha;
-                        }
-                    }
-                }
-            }
-            total_loss += config_.vig_non_pos * vig_non_pos_sum / static_cast<float>(num_cameras_ * 3 * 3);
-        }
-
-        // 4. Vignetting channel variance: mean(var(vig, dim=channel))
-        if (config_.vig_channel > 0.0f) {
-            float vig_var_sum = 0.0f;
-            for (int cam = 0; cam < num_cameras_; ++cam) {
-                // For each of the 5 param indices, compute variance across 3 channels
-                for (int p = 0; p < 5; ++p) {
-                    float vals[3];
-                    for (int ch = 0; ch < 3; ++ch) {
-                        size_t idx = static_cast<size_t>(cam) * 15 + static_cast<size_t>(ch) * 5 + p;
-                        vals[ch] = vig_ptr[idx];
-                    }
-                    float mean = (vals[0] + vals[1] + vals[2]) / 3.0f;
-                    float var = 0.0f;
-                    for (int ch = 0; ch < 3; ++ch) {
-                        float diff = vals[ch] - mean;
-                        var += diff * diff;
-                    }
-                    var /= 3.0f; // unbiased=False
-                    vig_var_sum += var;
-                }
-            }
-            total_loss += config_.vig_channel * vig_var_sum / static_cast<float>(num_cameras_ * 5);
-        }
-
-        // 5. Color mean regularization: smooth_l1(mean(color @ pinv, dim=0), beta=0.005)
+        // Color mean: smooth_l1(mean(color @ pinv, dim=0), beta=0.005), averaged over the 8 offsets
         if (config_.color_mean > 0.0f) {
-            auto pinv_cpu = color_pinv_block_diag_.cpu();
-            const float* pinv_ptr = pinv_cpu.ptr<float>();
-
-            // Compute color_offsets = color_params @ pinv (matrix multiply [num_frames, 8] @ [8, 8])
-            // Then compute mean across frames for each of 8 outputs
-            float color_mean_offsets[8] = {0.0f};
-            for (int f = 0; f < num_frames_; ++f) {
-                for (int j = 0; j < 8; ++j) {
-                    float dot = 0.0f;
-                    for (int k = 0; k < 8; ++k) {
-                        dot += color_ptr[f * 8 + k] * pinv_ptr[k * 8 + j];
-                    }
-                    color_mean_offsets[j] += dot;
-                }
-            }
-            for (int j = 0; j < 8; ++j) {
-                color_mean_offsets[j] /= static_cast<float>(num_frames_);
-            }
-
-            // smooth_l1 for each mean offset
-            float color_loss = 0.0f;
-            for (int j = 0; j < 8; ++j) {
-                color_loss += smooth_l1(color_mean_offsets[j], 0.005f);
-            }
-            total_loss += config_.color_mean * color_loss / 8.0f;
+            const auto offsets = color_params_.reshape({num_frames_, 8}).mm(color_pinv_block_diag_).mean(0);
+            loss = loss.add(smooth_l1(offsets, 0.005f).sum().reshape({1}).mul(config_.color_mean / 8.0f));
         }
 
-        // 6. CRF channel variance: mean(var(crf, dim=channel))
-        // CRF layout: [num_cameras * 3 * 4] = [cam][channel][toe, shoulder, gamma, center]
+        // CRF channel variance: mean(var(crf, dim=channel)), layout [cam][channel][toe, shoulder, gamma, center]
         if (config_.train_crf && config_.crf_channel > 0.0f) {
-            float crf_var_sum = 0.0f;
-            for (int cam = 0; cam < num_cameras_; ++cam) {
-                // For each of the 4 param indices, compute variance across 3 channels
-                for (int p = 0; p < 4; ++p) {
-                    float vals[3];
-                    for (int ch = 0; ch < 3; ++ch) {
-                        size_t idx = static_cast<size_t>(cam) * 12 + static_cast<size_t>(ch) * 4 + p;
-                        vals[ch] = crf_ptr[idx];
-                    }
-                    float mean = (vals[0] + vals[1] + vals[2]) / 3.0f;
-                    float var = 0.0f;
-                    for (int ch = 0; ch < 3; ++ch) {
-                        float diff = vals[ch] - mean;
-                        var += diff * diff;
-                    }
-                    var /= 3.0f; // unbiased=False
-                    crf_var_sum += var;
-                }
-            }
-            total_loss += config_.crf_channel * crf_var_sum / static_cast<float>(num_cameras_ * 4);
+            const auto deviation = channel_deviation(crf_params_, num_cameras_, 4);
+            loss = loss.add(deviation.square().sum().reshape({1}).mul(
+                config_.crf_channel / static_cast<float>(num_cameras_ * 4 * 3)));
         }
-
-        // Return as GPU scalar
-        auto loss = lfs::core::Tensor::full({1}, total_loss, lfs::core::Device::GPU);
         return loss;
     }
 
     void PPISP::reg_backward() {
-        const bool skip_mean = config_.exposure_mean <= 0.0f && config_.color_mean <= 0.0f;
-        const bool skip_crf = !config_.train_crf || config_.crf_channel <= 0.0f;
-        if (skip_mean && skip_crf) {
-            lfs::core::Tensor unused;
-            training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->vignetting_regularization(vignetting_params_, vignetting_grad_, unused, config_.vig_center, config_.vig_channel, config_.vig_non_pos);
-            return;
-        }
+        lfs::core::Tensor unused;
+        training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->vignetting_regularization(vignetting_params_, vignetting_grad_, unused, config_.vig_center, config_.vig_channel, config_.vig_non_pos);
 
-        // Compute regularization gradients on CPU (matching reg_loss_gpu)
-        auto exposure_cpu = exposure_params_.cpu();
-        auto vignetting_cpu = vignetting_params_.cpu();
-        auto color_cpu = color_params_.cpu();
-        auto crf_cpu = crf_params_.cpu();
-
-        const float* exp_ptr = exposure_cpu.ptr<float>();
-        const float* vig_ptr = vignetting_cpu.ptr<float>();
-        const float* color_ptr = color_cpu.ptr<float>();
-        const float* crf_ptr = crf_cpu.ptr<float>();
-
-        // Allocate gradient buffers
-        std::vector<float> exp_grad(num_frames_, 0.0f);
-        std::vector<float> vig_grad(num_cameras_ * 3 * 5, 0.0f);
-        std::vector<float> color_grad(num_frames_ * 8, 0.0f);
-        std::vector<float> crf_grad(num_cameras_ * 3 * 4, 0.0f);
-
-        // 1. Exposure mean gradient
         if (config_.exposure_mean > 0.0f) {
-            float exp_sum = 0.0f;
-            for (int i = 0; i < num_frames_; ++i) {
-                exp_sum += exp_ptr[i];
-            }
-            const float exp_mean = exp_sum / static_cast<float>(num_frames_);
-            const float grad_mean = smooth_l1_grad(exp_mean, 0.1f);
-            const float grad_per_elem = config_.exposure_mean * grad_mean / static_cast<float>(num_frames_);
-            for (int i = 0; i < num_frames_; ++i) {
-                exp_grad[i] += grad_per_elem;
-            }
+            const auto grad_mean = smooth_l1_grad(exposure_params_.mean().reshape({1}), 0.1f);
+            exposure_grad_ = exposure_grad_.add(
+                grad_mean.mul(config_.exposure_mean / static_cast<float>(num_frames_)));
         }
 
-        // 2. Vignetting center gradient: d/d(cx,cy) of (cx^2 + cy^2) = 2*cx, 2*cy
-        if (config_.vig_center > 0.0f) {
-            const float scale = config_.vig_center * 2.0f / static_cast<float>(num_cameras_ * 3);
-            for (int cam = 0; cam < num_cameras_; ++cam) {
-                for (int ch = 0; ch < 3; ++ch) {
-                    size_t base = static_cast<size_t>(cam) * 15 + static_cast<size_t>(ch) * 5;
-                    vig_grad[base + 0] += scale * vig_ptr[base + 0]; // d/d(cx)
-                    vig_grad[base + 1] += scale * vig_ptr[base + 1]; // d/d(cy)
-                }
-            }
-        }
-
-        // 3. Vignetting non-positivity gradient: d/d(alpha) of relu(alpha) = 1 if alpha > 0
-        if (config_.vig_non_pos > 0.0f) {
-            const float scale = config_.vig_non_pos / static_cast<float>(num_cameras_ * 3 * 3);
-            for (int cam = 0; cam < num_cameras_; ++cam) {
-                for (int ch = 0; ch < 3; ++ch) {
-                    size_t base = static_cast<size_t>(cam) * 15 + static_cast<size_t>(ch) * 5;
-                    for (int a = 0; a < 3; ++a) {
-                        if (vig_ptr[base + 2 + a] > 0.0f) {
-                            vig_grad[base + 2 + a] += scale;
-                        }
-                    }
-                }
-            }
-        }
-
-        // 4. Vignetting channel variance gradient
-        if (config_.vig_channel > 0.0f) {
-            const float scale = config_.vig_channel / static_cast<float>(num_cameras_ * 5);
-            for (int cam = 0; cam < num_cameras_; ++cam) {
-                for (int p = 0; p < 5; ++p) {
-                    float vals[3];
-                    size_t idxs[3];
-                    for (int ch = 0; ch < 3; ++ch) {
-                        idxs[ch] = static_cast<size_t>(cam) * 15 + static_cast<size_t>(ch) * 5 + p;
-                        vals[ch] = vig_ptr[idxs[ch]];
-                    }
-                    float mean = (vals[0] + vals[1] + vals[2]) / 3.0f;
-                    // d/d(x_i) of var = 2*(x_i - mean) / n
-                    for (int ch = 0; ch < 3; ++ch) {
-                        vig_grad[idxs[ch]] += scale * 2.0f * (vals[ch] - mean) / 3.0f;
-                    }
-                }
-            }
-        }
-
-        // 5. Color mean gradient
+        // d/d(color[f, k]) = sum_j pinv[k, j] * grad_offsets[j] / num_frames
         if (config_.color_mean > 0.0f) {
-            auto pinv_cpu = color_pinv_block_diag_.cpu();
-            const float* pinv_ptr = pinv_cpu.ptr<float>();
-
-            // First compute mean offsets (same as forward)
-            float color_mean_offsets[8] = {0.0f};
-            for (int f = 0; f < num_frames_; ++f) {
-                for (int j = 0; j < 8; ++j) {
-                    float dot = 0.0f;
-                    for (int k = 0; k < 8; ++k) {
-                        dot += color_ptr[f * 8 + k] * pinv_ptr[k * 8 + j];
-                    }
-                    color_mean_offsets[j] += dot;
-                }
-            }
-            for (int j = 0; j < 8; ++j) {
-                color_mean_offsets[j] /= static_cast<float>(num_frames_);
-            }
-
-            // Gradient of smooth_l1
-            float grad_offsets[8];
-            for (int j = 0; j < 8; ++j) {
-                grad_offsets[j] = config_.color_mean * smooth_l1_grad(color_mean_offsets[j], 0.005f) / 8.0f;
-            }
-
-            // Chain rule: d/d(color) = grad_offsets @ pinv^T / num_frames
-            for (int f = 0; f < num_frames_; ++f) {
-                for (int k = 0; k < 8; ++k) {
-                    float grad = 0.0f;
-                    for (int j = 0; j < 8; ++j) {
-                        grad += grad_offsets[j] * pinv_ptr[k * 8 + j];
-                    }
-                    color_grad[f * 8 + k] += grad / static_cast<float>(num_frames_);
-                }
-            }
+            const auto offsets = color_params_.reshape({num_frames_, 8}).mm(color_pinv_block_diag_).mean(0);
+            const auto grad_offsets = smooth_l1_grad(offsets, 0.005f).mul(config_.color_mean / (8.0f * static_cast<float>(num_frames_)));
+            const auto grad_row = color_pinv_block_diag_.mm(grad_offsets.reshape({8, 1})).reshape({1, 8});
+            color_grad_ = color_grad_.reshape({num_frames_, 8}).add(grad_row).reshape({num_frames_ * 8});
         }
 
-        // 6. CRF channel variance gradient
+        // d/d(x_ch) of mean(var) = scale * 2 * (x_ch - mean) / 3
         if (config_.train_crf && config_.crf_channel > 0.0f) {
-            const float scale = config_.crf_channel / static_cast<float>(num_cameras_ * 4);
-            for (int cam = 0; cam < num_cameras_; ++cam) {
-                for (int p = 0; p < 4; ++p) {
-                    float vals[3];
-                    size_t idxs[3];
-                    for (int ch = 0; ch < 3; ++ch) {
-                        idxs[ch] = static_cast<size_t>(cam) * 12 + static_cast<size_t>(ch) * 4 + p;
-                        vals[ch] = crf_ptr[idxs[ch]];
-                    }
-                    float mean = (vals[0] + vals[1] + vals[2]) / 3.0f;
-                    for (int ch = 0; ch < 3; ++ch) {
-                        crf_grad[idxs[ch]] += scale * 2.0f * (vals[ch] - mean) / 3.0f;
-                    }
-                }
-            }
+            const auto deviation = channel_deviation(crf_params_, num_cameras_, 4);
+            crf_grad_ = crf_grad_.add(deviation.mul(
+                                                   2.0f * config_.crf_channel / static_cast<float>(num_cameras_ * 4 * 3))
+                                          .reshape({num_cameras_ * 12}));
         }
-
-        // Add gradients to GPU gradient buffers (accumulate)
-        auto exp_grad_tensor = lfs::core::Tensor::from_vector(exp_grad, {static_cast<size_t>(num_frames_)},
-                                                              lfs::core::Device::GPU);
-        auto vig_grad_tensor = lfs::core::Tensor::from_vector(vig_grad, {vig_grad.size()},
-                                                              lfs::core::Device::GPU);
-        auto color_grad_tensor = lfs::core::Tensor::from_vector(color_grad, {color_grad.size()},
-                                                                lfs::core::Device::GPU);
-        auto crf_grad_tensor = lfs::core::Tensor::from_vector(crf_grad, {crf_grad.size()},
-                                                              lfs::core::Device::GPU);
-
-        // Accumulate into existing gradients
-        exposure_grad_ = exposure_grad_.add(exp_grad_tensor);
-        vignetting_grad_ = vignetting_grad_.add(vig_grad_tensor);
-        color_grad_ = color_grad_.add(color_grad_tensor);
-        crf_grad_ = crf_grad_.add(crf_grad_tensor);
     }
 
     void PPISP::optimizer_step() {

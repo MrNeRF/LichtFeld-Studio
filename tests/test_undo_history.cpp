@@ -2218,6 +2218,115 @@ TEST_F(UndoHistoryTest, SceneSnapshotTransformReplayUsesUuidAcrossRename) {
     EXPECT_EQ(scene.getNodeTransform(scene.getNodeIdByUuid(node_uuid)), after);
 }
 
+TEST_F(UndoHistoryTest, SceneSnapshotTransformReplaySurvivesPayloadGrowth) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto node_id = scene.addSplat("model", make_linear_test_splat(32));
+    ASSERT_NE(node_id, lfs::core::NULL_NODE);
+    const glm::mat4 before{1.0f};
+    const glm::mat4 after = glm::translate(glm::mat4{1.0f}, {1.0f, 2.0f, 3.0f});
+
+    auto snapshot = std::make_unique<lfs::vis::op::SceneSnapshot>(*scene_manager, "transform.rotate");
+    snapshot->captureTransforms({"model"});
+    scene.setNodeTransform(node_id, after);
+    snapshot->captureAfter();
+    ASSERT_TRUE(lfs::vis::op::pushSceneSnapshotIfChanged(std::move(snapshot)));
+
+    // Densification grows the node payload without recording history.
+    scene.replaceNodeModel("model", make_linear_test_splat(48));
+
+    const auto undo = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(undo.success) << undo.error;
+    EXPECT_EQ(scene.getNodeTransform(node_id), before);
+
+    scene.replaceNodeModel("model", make_linear_test_splat(64));
+    const auto redo = lfs::vis::op::undoHistory().redo();
+    ASSERT_TRUE(redo.success) << redo.error;
+    EXPECT_EQ(scene.getNodeTransform(node_id), after);
+}
+
+TEST_F(UndoHistoryTest, TopologyProofIgnoresSequencerKeyframeNodes) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+    auto& scene = scene_manager->getScene();
+
+    const auto model_id = scene.addSplat("model", make_linear_test_splat(4));
+    ASSERT_NE(model_id, lfs::core::NULL_NODE);
+    auto before =
+        lfs::vis::op::SceneGraphMetadataEntry::captureNodes(*scene_manager, {"model"});
+    ASSERT_EQ(before.size(), 1u);
+    ASSERT_TRUE(scene.renameNode(model_id, "renamed"));
+    auto after =
+        lfs::vis::op::SceneGraphMetadataEntry::captureNodes(*scene_manager, {"renamed"});
+    ASSERT_EQ(after.size(), 1u);
+    lfs::vis::op::undoHistory().push(std::make_unique<lfs::vis::op::SceneGraphMetadataEntry>(
+        *scene_manager,
+        "node.rename",
+        std::vector<lfs::vis::op::SceneGraphNodeMetadataDiff>{lfs::vis::op::SceneGraphNodeMetadataDiff{
+            .before = std::move(before.front()),
+            .after = std::move(after.front()),
+        }}));
+
+    // The sequencer projects its timeline into the scene graph outside of history.
+    const auto group_id = scene.addKeyframeGroup("Keyframes");
+    ASSERT_NE(group_id, lfs::core::NULL_NODE);
+    ASSERT_NE(scene.addKeyframe("Keyframe 1", group_id, std::make_unique<lfs::core::KeyframeData>()),
+              lfs::core::NULL_NODE);
+
+    const auto undo = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(undo.success) << undo.error;
+    ASSERT_NE(scene.getNode("model"), nullptr);
+    EXPECT_EQ(scene.getNode("renamed"), nullptr);
+    EXPECT_NE(scene.getNode("Keyframes"), nullptr);
+
+    const auto redo = lfs::vis::op::undoHistory().redo();
+    ASSERT_TRUE(redo.success) << redo.error;
+    EXPECT_NE(scene.getNode("renamed"), nullptr);
+}
+
+TEST_F(UndoHistoryTest, StaleUndoEntryIsDiscardedWithoutClearingOlderHistory) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto node_id = scene.addSplat("model", make_linear_test_splat(32));
+    ASSERT_NE(node_id, lfs::core::NULL_NODE);
+    const glm::mat4 after = glm::translate(glm::mat4{1.0f}, {1.0f, 0.0f, 0.0f});
+
+    auto transform = std::make_unique<lfs::vis::op::SceneSnapshot>(*scene_manager, "transform.translate");
+    transform->captureTransforms({"model"});
+    scene.setNodeTransform(node_id, after);
+    transform->captureAfter();
+    ASSERT_TRUE(lfs::vis::op::pushSceneSnapshotIfChanged(std::move(transform)));
+
+    auto selection = std::make_unique<lfs::vis::op::SceneSnapshot>(*scene_manager, "selection.stroke");
+    selection->captureSelection();
+    std::vector<uint8_t> selected(32, 0);
+    selected[3] = 1;
+    scene.setSelectionMask(std::make_shared<Tensor>(make_uint8_mask(selected)));
+    selection->captureAfter();
+    ASSERT_TRUE(lfs::vis::op::pushSceneSnapshotIfChanged(std::move(selection)));
+    ASSERT_EQ(lfs::vis::op::undoHistory().undoCount(), 2u);
+
+    scene.replaceNodeModel("model", make_linear_test_splat(48));
+
+    const auto stale = lfs::vis::op::undoHistory().undo();
+    EXPECT_FALSE(stale.success);
+    EXPECT_NE(stale.error.find("selection.stroke"), std::string::npos) << stale.error;
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoName(), "transform.translate");
+
+    const auto undo_transform = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(undo_transform.success) << undo_transform.error;
+    EXPECT_EQ(scene.getNodeTransform(node_id), glm::mat4{1.0f});
+}
+
 TEST_F(UndoHistoryTest, SceneSnapshotTopologyReplayUsesUuidAcrossRename) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();

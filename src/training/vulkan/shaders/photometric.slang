@@ -70,10 +70,50 @@ float partial(Params p, uint base, int x, int y, uint field) {
     float weight = decoupled(p) && field > 0 ? 1.0f : p.weight;
     return -weight * value * chain(p, x, y);
 }
+// The horizontal derivative filter reuses neighboring partials across lanes.
+// Keep the existing workspace shape: allocation placement must not increase VRAM.
+groupshared float derivativeTile[4][266];
+void horizontalDerivatives(Params p, uint group, uint lane, uint groupCount) {
+    uint pixels = p.width * p.height;
+    uint fields = decoupled(p) ? 4 : 3;
+    for (uint start = group * 256; start < p.count; start += groupCount * 256) {
+        for (uint j = lane; j < 266; j += 256) {
+            int source = int(start) + int(j) - 5;
+            bool valid = source >= 0 && uint(source) < p.count;
+            uint index = valid ? uint(source) : 0;
+            uint base = (index / pixels) * pixels;
+            int x = int(index % p.width), y = int((index % pixels) / p.width);
+            [unroll] for (uint field = 0; field < 4; ++field)
+                if (field < fields)
+                    derivativeTile[field][j] = valid ? partial(p, base, x, y, field) : 0;
+        }
+        GroupMemoryBarrierWithGroupSync();
+        uint i = start + lane;
+        if (i < p.count) {
+            int x = int(i % p.width);
+            [unroll] for (uint field = 0; field < 4; ++field) {
+                if (field >= fields) continue;
+                float sum = 0;
+                [unroll] for (int d = 1; d <= 5; ++d) {
+                    float left = x >= d ? derivativeTile[field][lane + 5 - d] : 0;
+                    float right = x + d < int(p.width) ? derivativeTile[field][lane + 5 + d] : 0;
+                    sum = fma(left + right, weights[d], sum);
+                }
+                writeFloat(p.horizontal, field * p.count + i,
+                           fma(derivativeTile[field][lane + 5], weights[0], sum));
+            }
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+}
 [numthreads(256, 1, 1)]
 void main(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex) {
     uint3 groups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
     Params p = ((Ptr<Params, Access.Read>)push.parameters)[0];
+    if ((operation & 7u) == 2) {
+        horizontalDerivatives(p, gid.x, lane, groups.x);
+        return;
+    }
     uint pixels = p.width * p.height;
     for (uint i = gid.x * 256 + lane; i < p.count; i += groups.x * 256) {
         uint base = (i / pixels) * pixels;
@@ -93,11 +133,12 @@ void main(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex) {
                 sums[5] = fma(fma(rl, tl, rr * tr), weights[d], sums[5]);
             }
             [unroll] for (uint field = 0; field < 6; ++field)
-                writeFloat(p.horizontal, field * p.count + i,
+                if (decoupled(p) || field != 1) writeFloat(p.horizontal, field * p.count + i,
                            fma(moment(p, base, x, y, field), weights[0], sums[field]));
         } else if ((operation & 7u) == 1) {
             float m[6];
-            for (uint field = 0; field < 6; ++field) {
+            [unroll] for (uint field = 0; field < 6; ++field) {
+                if (!decoupled(p) && field == 1) { m[field] = m[0]; continue; }
                 float sum = 0;
                 for (int d = 1; d <= 5; ++d)
                     sum = fma((horizontalAt(p, base, x, y-d, field) + horizontalAt(p, base, x, y+d, field)), weights[d], sum);

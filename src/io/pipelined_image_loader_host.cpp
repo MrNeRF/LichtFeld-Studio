@@ -5,6 +5,8 @@
 
 namespace lfs::io {
 
+    bool PipelinedImageLoader::decodes_on_gpu(lfs::core::GpuBackend) { return false; }
+
     bool PipelinedImageLoader::attach_cuda_decode_stage() { return false; }
 
     void PipelinedImageLoader::start_cuda_decode_workers() {}

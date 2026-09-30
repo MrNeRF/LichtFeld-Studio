@@ -60,8 +60,8 @@ namespace lfs::core::internal {
                               uint64_t timeline_value, VkPipelineStageFlags2 stage,
                               VkDeviceSize bytes);
 
-        [[nodiscard]] static VkBuffer buffer_for(StorageRef storage);
-        [[nodiscard]] static VkDeviceSize offset_for(StorageRef storage);
+        [[nodiscard]] LFS_CORE_API static VkBuffer buffer_for(StorageRef storage);
+        [[nodiscard]] LFS_CORE_API static VkDeviceSize offset_for(StorageRef storage);
 
         void trim();
         [[nodiscard]] LFS_CORE_API MemoryInfo stats() const;
@@ -95,6 +95,7 @@ namespace lfs::core::internal {
         void ensure_staging(size_t bytes);
         [[nodiscard]] StagingSlice acquire_staging(size_t bytes, size_t alignment);
         void collect_retired_locked(uint64_t completed);
+        void destroy_free_when_idle_locked();
         void destroy_free_locked();
         [[nodiscard]] AllocationRecord& allocation_for(StorageRef storage) const;
 

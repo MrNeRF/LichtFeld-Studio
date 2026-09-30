@@ -666,6 +666,10 @@ namespace lfs::core {
 
         const size_t gaussian_count = model ? static_cast<size_t>(model->size()) : 0;
         const glm::vec3 centroid = model ? computeCentroid(model.get()) : node->centroid;
+        if (single_node_model_ == node->model.get()) {
+            // The caller owns the previous model from here on and may release it.
+            single_node_model_ = nullptr;
+        }
         auto previous = retireCombinedModelIfInFlight(std::move(node->model));
         node->model = std::move(model);
         node->gaussian_count.store(gaussian_count, std::memory_order_release);
@@ -756,6 +760,9 @@ namespace lfs::core {
 
         cached_combined_.reset();
         cached_combined_includes_hidden_ = false;
+        // The alias points into a node model released above; peekCombinedModel() must not
+        // hand it to count queries (selection read a freed SplatData here).
+        single_node_model_ = nullptr;
         cached_transform_indices_.reset();
         cached_visible_selection_indices_.reset();
         invalidateVisibleSelectionMaskCache();

@@ -4,6 +4,7 @@
 #include "lfs/training/ops/sh_vulkan.hpp"
 
 #include "core/assert.hpp"
+#include "core/sh_layout.hpp"
 #include "core/tensor/backend/vulkan/vk_context.hpp"
 #include "core/tensor/backend/vulkan/vk_memory.hpp"
 #include "core/tensor/backend/vulkan/vk_ops_common.hpp"
@@ -13,10 +14,13 @@
 
 #include <array>
 #include <cstddef>
+#include <format>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <ranges>
+#include <stdexcept>
 #include <string_view>
 #include <vector>
 
@@ -103,7 +107,7 @@ namespace lfs::training {
             vk_check(context.get(), vkCreatePipelineLayout(context->device(), &layout_info, nullptr, &pipeline->layout),
                      "vkCreatePipelineLayout(training.sh_ops)");
 
-            std::array<VkSpecializationMapEntry, constants.size()> entries{};
+            std::array<VkSpecializationMapEntry, Specialization{}.size()> entries{};
             for (uint32_t i = 0; i < entries.size(); ++i)
                 entries[i] = {i, static_cast<uint32_t>(sizeof(uint32_t) * i), sizeof(uint32_t)};
             VkSpecializationInfo specialization{};
@@ -123,6 +127,7 @@ namespace lfs::training {
                      "vkCreateComputePipelines(training.sh_ops)");
             vkDestroyShaderModule(context->device(), shader, nullptr);
             cache.emplace(key, pipeline);
+            vulkan::release_at_shutdown(*context, mutex, cache);
             return pipeline;
         }
 
@@ -209,6 +214,16 @@ namespace lfs::training {
         }
 
         void decode_range(In values, In bounds, Out canonical, const ShRangeParams& params) {
+            if (params.primitives == 0 || params.destination_rest == 0)
+                throw std::invalid_argument(std::format("SH range decode needs primitives and rest, got {} and {}",
+                                                        params.primitives, params.destination_rest));
+            const uint64_t per_primitive = uint64_t{params.destination_rest} * core::kShChannels;
+            if (params.primitives > std::numeric_limits<uint64_t>::max() / per_primitive ||
+                params.canonical_float_offset > params.primitives * per_primitive ||
+                params.float_count > params.primitives * per_primitive - params.canonical_float_offset)
+                throw std::out_of_range(std::format("SH range [{}, +{}) exceeds the canonical {} x {} floats",
+                                                    params.canonical_float_offset, params.float_count,
+                                                    params.primitives, per_primitive));
             const auto src = ref(values), dst = ref(canonical);
             StorageRef bnd{};
             const bool needs_bounds = params.storage == ShStorage::Q16;

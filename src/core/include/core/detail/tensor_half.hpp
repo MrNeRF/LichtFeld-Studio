@@ -33,11 +33,37 @@ namespace lfs::core::detail {
     }
 #undef LFS_TENSOR_HALF_HD
 #else
+    // IEEE binary32 -> binary16 with round-to-nearest-even and subnormals, like
+    // __float2half. radmath::floatToHalf flushes subnormals for the RAD format.
+    inline std::uint16_t tensor_float_to_half_bits(const float value) {
+        const std::uint32_t bits = radmath::floatToBits(value);
+        const auto sign = static_cast<std::uint16_t>((bits >> 16) & 0x8000u);
+        const std::uint32_t magnitude = bits & 0x7fffffffu;
+        if (magnitude >= 0x7f800000u) // inf, or NaN kept quiet
+            return sign | 0x7c00u | (magnitude > 0x7f800000u ? 0x200u | ((magnitude >> 13) & 0x3ffu) : 0u);
+        if (magnitude >= 0x477ff000u) // rounds past 65504
+            return sign | 0x7c00u;
+        if (magnitude >= 0x38800000u) { // normal half
+            std::uint32_t rebased = magnitude - 0x38000000u;
+            rebased += 0x0fffu + ((rebased >> 13) & 1u);
+            return static_cast<std::uint16_t>(sign | (rebased >> 13));
+        }
+        if (magnitude <= 0x33000000u) // at most half the smallest subnormal
+            return sign;
+        const std::uint32_t mantissa = (magnitude & 0x7fffffu) | 0x800000u;
+        const std::uint32_t shift = 126u - (magnitude >> 23);
+        std::uint32_t half = mantissa >> shift;
+        const std::uint32_t rest = mantissa & ((1u << shift) - 1u), halfway = 1u << (shift - 1u);
+        if (rest > halfway || (rest == halfway && (half & 1u) != 0u))
+            ++half;
+        return static_cast<std::uint16_t>(sign | half);
+    }
+
     struct tensor_half_t {
         std::uint16_t bits{};
 
         tensor_half_t() = default;
-        tensor_half_t(const float value) : bits(radmath::floatToHalf(value)) {}
+        tensor_half_t(const float value) : bits(tensor_float_to_half_bits(value)) {}
 
         operator float() const {
             return radmath::halfToFloat(bits);

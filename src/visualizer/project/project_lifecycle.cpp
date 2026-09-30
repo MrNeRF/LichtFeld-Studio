@@ -640,6 +640,21 @@ namespace lfs::vis::project {
             const int expected_iteration,
             const std::filesystem::path& dataset_root) {
 #if LFS_BUILD_TRAINER
+            // The restore runs later than hydration, against the live scene.
+            // A scene replaced since then (PLY load, clear) no longer holds
+            // the cameras and training model this CKPT belongs to.
+            const auto& live_scene = scene_manager.getScene();
+            const auto bound_model =
+                document.scene_graph().training_model_uuid();
+            if (!live_scene.hasTrainingData() || !bound_model ||
+                !bound_model->has_value() ||
+                **bound_model !=
+                    live_scene.getTrainingModelNodeUuid()) {
+                notifyTrainerRestoreFailure(
+                    viewer,
+                    "The scene no longer holds the project's training cameras and model");
+                return;
+            }
             const auto old_root =
                 ckpt_params.dataset.data_path;
             if (!old_root.empty() &&
@@ -1294,8 +1309,16 @@ namespace lfs::vis::project {
                 }
                 report.pending_parameters.dataset.output_path =
                     output_path;
-                tryInstallTrainerFromHydratedProject(
-                    *scene_manager, *document_, report);
+                // Nothing may escape this thread: an exception here
+                // would terminate the application.
+                try {
+                    tryInstallTrainerFromHydratedProject(
+                        *scene_manager, *document_, report);
+                } catch (const std::exception& error) {
+                    // LFS-CENSUS-OK(empty-catch): trainer-restore failure is notified; the hydrated display model is kept.
+                    notifyTrainerRestoreFailure(
+                        viewer_, error.what());
+                }
                 const bool installed =
                     viewer_.getTrainerManager() &&
                     viewer_.getTrainerManager()->hasTrainer();

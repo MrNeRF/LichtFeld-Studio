@@ -97,6 +97,7 @@ namespace lfs::training {
                      "vkCreateComputePipelines(training.mcmc)");
             vkDestroyShaderModule(context->device(), shader, nullptr);
             cache.emplace(key, pipeline);
+            release_at_shutdown(*context, mutex, cache);
             return pipeline;
         }
 
@@ -113,15 +114,16 @@ namespace lfs::training {
                 vkCmdDispatch(command, vk::dispatch_groups(*context, count), 1, 1); }, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_WHOLE_SIZE, lifetime ? std::move(lifetime) : pipeline);
         }
 
+        // Host copy of the relocation coefficients, uploaded per relocation: a
+        // cached GPU table would outlive the Vulkan backend across shutdowns.
         std::mutex coefficient_mutex;
-        std::map<uint64_t, std::shared_ptr<Tensor>> coefficient_tables;
+        std::vector<float> coefficient_values;
 
-        Tensor coefficient_table(const std::shared_ptr<VulkanContext>& context) {
+        Tensor coefficient_table() {
             std::lock_guard lock(coefficient_mutex);
-            const auto found = coefficient_tables.find(context->context_id());
-            if (found == coefficient_tables.end())
+            if (coefficient_values.empty())
                 throw std::logic_error("Vulkan MCMC relocation coefficients are not initialized");
-            return *found->second;
+            return Tensor::from_vector(coefficient_values, {coefficient_values.size()}, Device::GPU);
         }
 
         void initialize(const int n_max) {
@@ -138,14 +140,8 @@ namespace lfs::training {
                         binomial *= float(n - k) / float(k + 1);
                 }
             }
-            const auto context = acquire_vulkan_context();
-            auto table = std::make_shared<Tensor>(Tensor::from_vector(
-                coefficients, {kRelocationMax * kRelocationMax}, Device::GPU));
-            TensorCompletion completion;
-            completion.include(*table);
-            completion.wait();
             std::lock_guard lock(coefficient_mutex);
-            coefficient_tables.insert_or_assign(context->context_id(), std::move(table));
+            coefficient_values = std::move(coefficients);
         }
 
         void relocate(const Tensor& opacity, const Tensor& scales, const Tensor& ratios,
@@ -154,7 +150,7 @@ namespace lfs::training {
             if (count == 0)
                 return;
             const auto context = acquire_vulkan_context();
-            const Tensor coefficients = coefficient_table(context);
+            const Tensor coefficients = coefficient_table();
             const McmcPush push{.a = vk::address(storage_ref(opacity)), .b = vk::address(storage_ref(scales)), .c = vk::address(storage_ref(ratios)), .d = vk::address(storage_ref(new_opacity)), .e = vk::address(storage_ref(new_scales)), .f = vk::address(storage_ref(coefficients)), .count = vk::checked_u32(count, "MCMC relocation count exceeds uint32"), .first = min_opacity};
             const std::array reads{storage_ref(opacity), storage_ref(scales), storage_ref(ratios), storage_ref(coefficients)};
             const std::array writes{storage_ref(new_opacity), storage_ref(new_scales)};

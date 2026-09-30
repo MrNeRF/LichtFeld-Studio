@@ -261,6 +261,7 @@ namespace lfs::app {
         }
 
         auto input_schema = build_operator_input_schema(descriptor->id(), binding.required);
+        input_schema.properties.merge_patch(binding.property_overrides);
         auto metadata = build_metadata(binding, *descriptor);
         std::string tool_name = binding.tool_name;
         std::string description =

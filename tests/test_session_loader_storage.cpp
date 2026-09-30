@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/image_io.hpp"
+#include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
@@ -16,6 +17,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <limits>
+#include <optional>
 #include <vector>
 
 namespace {
@@ -67,6 +69,42 @@ namespace {
 
         std::error_code ec;
         std::filesystem::remove_all(directory, ec);
+    }
+
+    // Training storage carves the q16 codes and their bounds from one block;
+    // re-quantizing a float shN into it must not treat the two as aliases.
+    TEST(SessionSplatStorage, QuantizesFloatShNIntoTheExportableBlock) {
+        if (!gpu_backend_available(default_gpu_backend()))
+            GTEST_SKIP() << "session GPU backend is unavailable";
+        lfs::core::sh_value_quant::set_enabled_for_testing(true);
+        constexpr std::size_t kLive = 40;
+        constexpr std::size_t kRest = 15;
+        auto created = SplatExportableStorage::create(64, 3);
+        ASSERT_TRUE(created.has_value()) << created.error();
+        const auto allocator = created->make_allocator();
+        const auto param = [&](const TensorShape& shape, const char* name) {
+            Tensor tensor = allocator(shape, 64, DataType::Float32, name);
+            tensor.zero_();
+            return tensor;
+        };
+        std::vector<float> rest(kLive * kRest * 3);
+        for (std::size_t i = 0; i < rest.size(); ++i)
+            rest[i] = std::sin(0.37f * static_cast<float>(i));
+        SplatData model(3, param(TensorShape({kLive, 3}), "SplatData.means"),
+                        param(TensorShape({kLive, 1, 3}), "SplatData.sh0"),
+                        Tensor::from_vector(rest, TensorShape({kLive, kRest, 3}), Device::CPU).to(Device::GPU),
+                        param(TensorShape({kLive, 3}), "SplatData.scaling"),
+                        param(TensorShape({kLive, 4}), "SplatData.rotation"),
+                        param(TensorShape({kLive, 1}), "SplatData.opacity"), 1.0f, SplatData::ShNLayout::Canonical);
+        model.set_tensor_allocator(allocator);
+
+        ASSERT_TRUE(model.apply_shN_value_quant());
+        EXPECT_TRUE(model.shN_value_quantized());
+        const auto decoded = model.shN_canonical().cpu().to_vector();
+        ASSERT_EQ(decoded.size(), rest.size());
+        for (std::size_t i = 0; i < rest.size(); ++i)
+            EXPECT_NEAR(decoded[i], rest[i], 2.0f / 65535.0f) << i;
+        lfs::core::sh_value_quant::set_enabled_for_testing(std::nullopt);
     }
 
     TEST(SessionSplatStorage, CreateGrowRebindOnTheSessionBackend) {

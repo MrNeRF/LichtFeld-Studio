@@ -49,9 +49,17 @@ float2 decode(uint64_t cell, uint sourceRow, uniform Parameters p) {
         uq = float(loadByte(p.source, cell * 2u));
         sq = float(loadByte(p.source, cell * 2u + 1u));
     }
-    const float maxCode = p.bits == 16u ? 65535.0 : 255.0;
-    return float2(uMin + (uMax - uMin) * (uq / maxCode),
-                  sMin + (sMax - sMin) * (sq / maxCode));
+    // joint_adam_codec.cuh decode_us: multiply by the reciprocal code range.
+    const float invMaxCode = p.bits == 16u ? 1.0f / 65535.0f : 1.0f / 255.0f;
+    return float2(uMin + (uMax - uMin) * (uq * invMaxCode),
+                  sMin + (sMax - sMin) * (sq * invMaxCode));
+}
+
+// roundf (half away from zero), then clamp to the code range.
+uint codeOf(float scaled, float maxCode) {
+    const float magnitude = floor(abs(scaled));
+    const float rounded = sign(scaled) * (magnitude + (abs(scaled) - magnitude >= 0.5f ? 1.0f : 0.0f));
+    return uint(clamp(rounded, 0.0f, maxCode));
 }
 
 void encode(uint64_t cell, float2 value, uint destinationRow, uniform Parameters p) {
@@ -62,20 +70,42 @@ void encode(uint64_t cell, float2 value, uint destinationRow, uniform Parameters
     const float sMin = bounds[block * 4u + 2u];
     const float sMax = bounds[block * 4u + 3u];
     const float maxCode = p.bits == 16u ? 65535.0 : 255.0;
-    const uint uq = uint(clamp(floor(maxCode * (value.x - uMin) / max(uMax - uMin, 1e-15) + 0.5), 0.0, maxCode));
-    const uint sq = uint(clamp(floor(maxCode * (value.y - sMin) / max(sMax - sMin, 1e-15) + 0.5), 0.0, maxCode));
+    // joint_adam_codec.cuh encode_us: hoisted reciprocal ranges and roundf.
+    const uint uq = codeOf(maxCode * (value.x - uMin) * (1.0f / max(uMax - uMin, 1e-15f)), maxCode);
+    const uint sq = codeOf(maxCode * (value.y - sMin) * (1.0f / max(sMax - sMin, 1e-15f)), maxCode);
     if (p.bits == 16u) {
         Ptr<uint16_t, Access.ReadWrite> codes = (Ptr<uint16_t, Access.ReadWrite>)p.destination;
         codes[cell * 2u] = uint16_t(uq);
         codes[cell * 2u + 1u] = uint16_t(sq);
     } else {
-        storeByteWord(p.destination + cell * 2u, uq | (sq << 8u), 0xffffu);
+        // Odd cells sit in the upper half of their aligned word.
+        const uint64_t address = p.destination + cell * 2u;
+        const uint shift = uint(address & 3u) * 8u;
+        storeByteWord(address & ~uint64_t(3u), (uq | (sq << 8u)) << shift, 0xffffu << shift);
     }
 }
 
 [numthreads(256, 1, 1)]
 void main(uint3 groupId : SV_GroupID, uint3 laneId : SV_GroupThreadID, uniform Parameters p) {
     const uint lane = laneId.x;
+    if (kPhase == 2u) {
+        uint3 grid = spirv_asm {
+        result:
+            $$uint3 = OpLoad builtin(NumWorkgroups : uint3);
+        };
+        const uint wordsPerSlot = 32u * (p.bits == 16u ? 4u : 2u);
+        const uint groupWords = (p.slotEnd - p.slotBegin) * wordsPerSlot;
+        const uint64_t words = uint64_t((p.primitives + 31u) / 32u) * groupWords;
+        Ptr<uint, Access.Read> source = (Ptr<uint, Access.Read>)p.source;
+        Ptr<uint, Access.ReadWrite> destination = (Ptr<uint, Access.ReadWrite>)p.destination;
+        for (uint64_t word = uint64_t(groupId.x) * 256u + lane;
+             word < words; word += uint64_t(grid.x) * 256u) {
+            const uint64_t tile = word / groupWords;
+            const uint local = uint(word % groupWords);
+            destination[tile * p.width * wordsPerSlot + p.slotBegin * wordsPerSlot + local] = source[word];
+        }
+        return;
+    }
     Ptr<int64_t, Access.Read> permutation = (Ptr<int64_t, Access.Read>)p.permutation;
     if (kPhase == 0u) {
         const uint row = groupId.x * 256u + lane;

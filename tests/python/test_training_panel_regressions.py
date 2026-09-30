@@ -1849,7 +1849,7 @@ def test_training_panel_keeps_controls_and_search_outside_scroll_region():
     scroll_end = rml.index("<!-- /training-scroll-region -->")
     color_picker = rml.index('id="color-picker-popup"')
 
-    assert controls < search < telemetry < scroll_start < parameters < scroll_end < color_picker
+    assert controls < telemetry < search < scroll_start < parameters < scroll_end < color_picker
     assert 'class="section-gap training-telemetry" data-if="show_training_telemetry"' in rml
     assert 'id="training-search-icon" src="../icon/scene/search.png"' in rml
     assert 'id="training-search-input" type="text"' in rml

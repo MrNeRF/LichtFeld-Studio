@@ -72,8 +72,12 @@ void main(uint3 groupId:SV_GroupID,uint lane:SV_GroupIndex,uint3 tid:SV_Dispatch
         if(p.frameIndex!=-1){Ptr<float,Access.Read> c=(Ptr<float,Access.Read>)p.color;uint k=uint(p.frameIndex)*8;PpColor col;col.b=float2(c[k],c[k+1]);col.r=float2(c[k+2],c[k+3]);col.g=float2(c[k+4],c[k+5]);col.n=float2(c[k+6],c[k+7]);rgb=ppApplyColor(rgb,col);}
         if(p.cameraIndex!=-1)rgb=applyCrf(rgb,p.crf+uint64_t(p.cameraIndex)*48);storeRgb(p,p.out,i,rgb);}return;}
     if(operation==1){
+        // Per-thread sums over the grid-stride pixels, reduced per workgroup before
+        // one atomic per parameter (as Metal does): per-pixel CAS loops on the same
+        // 36 words serialized the whole image.
+        float gex=0;float gv[15]={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};float gc[8]={0,0,0,0,0,0,0,0};float gcr[12]={0,0,0,0,0,0,0,0,0,0,0,0};
         for(uint i=tid.x;i<p.height*p.width;i+=groups.x*256){uint n=p.height*p.width,y=i/p.width,x=i%p.width;float3 input=loadRgb(p,p.rgb,i),rgb=input,afterE=input,afterV=input,afterC=input;
-            float2 xy=float2(float(x)+0.5f,float(y)+0.5f);float gex=0;float gv[15]={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};float gc[8]={0,0,0,0,0,0,0,0};float gcr[12]={0,0,0,0,0,0,0,0,0,0,0,0};
+            float2 xy=float2(float(x)+0.5f,float(y)+0.5f);
             if(p.frameIndex!=-1){afterE=ppApplyExposure(rgb,load(p.exposure,uint(p.frameIndex)));rgb=afterE;}
             if(p.cameraIndex!=-1){afterV=applyVig(rgb,p.vignetting+uint64_t(p.cameraIndex)*60,xy,float(p.width),float(p.height));rgb=afterV;}else afterV=rgb;
             if(p.frameIndex!=-1){Ptr<float,Access.Read> c=(Ptr<float,Access.Read>)p.color;uint k=uint(p.frameIndex)*8;PpColor col;col.b=float2(c[k],c[k+1]);col.r=float2(c[k+2],c[k+3]);col.g=float2(c[k+4],c[k+5]);col.n=float2(c[k+6],c[k+7]);afterC=ppApplyColor(rgb,col);}else afterC=rgb;
@@ -81,10 +85,16 @@ void main(uint3 groupId:SV_GroupID,uint lane:SV_GroupIndex,uint3 tid:SV_Dispatch
             if(p.cameraIndex!=-1)grad=ppCrfBwd(afterC,p.crf+uint64_t(p.cameraIndex)*48,grad,gcr);
             if(p.frameIndex!=-1){Ptr<float,Access.Read> c=(Ptr<float,Access.Read>)p.color;uint k=uint(p.frameIndex)*8;PpColor col;col.b=float2(c[k],c[k+1]);col.r=float2(c[k+2],c[k+3]);col.g=float2(c[k+4],c[k+5]);col.n=float2(c[k+6],c[k+7]);grad=ppApplyColorBwd(afterV,col,grad,gc);}
             if(p.cameraIndex!=-1)grad=ppVigBwd(afterE,p.vignetting+uint64_t(p.cameraIndex)*60,xy,float(p.width),float(p.height),grad,gv);
-            if(p.frameIndex!=-1)grad=ppApplyExposureBwd(input,load(p.exposure,uint(p.frameIndex)),grad,gex);
+            if(p.frameIndex!=-1){float ge=0;grad=ppApplyExposureBwd(input,load(p.exposure,uint(p.frameIndex)),grad,ge);gex+=ge;}
             storeRgb(p,p.gradRgb,i,grad);
-            if(p.frameIndex!=-1){atomicAdd(p.gradExposure,uint(p.frameIndex),gex);for(uint k=0;k<8;++k)atomicAdd(p.gradColor,uint(p.frameIndex)*8+k,gc[k]);}
-            if(p.cameraIndex!=-1){for(uint k=0;k<15;++k)atomicAdd(p.gradVignetting,uint(p.cameraIndex)*15+k,gv[k]);for(uint k=0;k<12;++k)atomicAdd(p.gradCrf,uint(p.cameraIndex)*12+k,gcr[k]);}
+        }
+        for(uint slot=0;slot<36;++slot){
+            reduceData[lane]=slot==0?gex:slot<9?gc[slot-1]:slot<24?gv[slot-9]:gcr[slot-24];GroupMemoryBarrierWithGroupSync();
+            for(uint step=128;step>0;step>>=1){if(lane<step)reduceData[lane]+=reduceData[lane+step];GroupMemoryBarrierWithGroupSync();}
+            if(lane==0){float total=reduceData[0];
+                if(slot<9){if(p.frameIndex!=-1)atomicAdd(slot==0?p.gradExposure:p.gradColor,slot==0?uint(p.frameIndex):uint(p.frameIndex)*8+slot-1,total);}
+                else if(p.cameraIndex!=-1)atomicAdd(slot<24?p.gradVignetting:p.gradCrf,slot<24?uint(p.cameraIndex)*15+slot-9:uint(p.cameraIndex)*12+slot-24,total);}
+            GroupMemoryBarrierWithGroupSync();
         }return;
     }
     if(operation==2){const uint i=tid.x;if(i>=p.count)return;Ptr<float,Access.ReadWrite> prm=(Ptr<float,Access.ReadWrite>)p.out,m1=(Ptr<float,Access.ReadWrite>)p.moment1,m2=(Ptr<float,Access.ReadWrite>)p.moment2;Ptr<float,Access.Read> gr=(Ptr<float,Access.Read>)p.gradient;

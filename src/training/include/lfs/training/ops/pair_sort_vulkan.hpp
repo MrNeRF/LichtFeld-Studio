@@ -26,8 +26,12 @@ namespace lfs::training {
 
     // Returns true when the sorted pairs occupy the A buffers. Keys are packed
     // as uint32 or uint64; values are uint32 and equal keys retain input order.
+    // With indirect control, element_count is the allocated capacity. The
+    // Fast forward control pass supplies the actual count and dispatch arguments
+    // in a contiguous UInt32 tensor of at least 32 elements.
     [[nodiscard]] bool vulkan_pair_sort(PairSortBuffers buffers, uint32_t element_count,
                                         uint32_t begin_bit, uint32_t end_bit,
                                         bool wide_keys,
-                                        std::vector<PairSortPassTimings>* pass_timings = nullptr);
+                                        std::vector<PairSortPassTimings>* pass_timings = nullptr,
+                                        const core::Tensor* indirect = nullptr);
 } // namespace lfs::training

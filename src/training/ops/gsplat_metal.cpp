@@ -256,9 +256,9 @@ namespace lfs::training {
                 break;
             default: break;
             }
-            setup.radial_count = static_cast<uint32_t>(radial_d.is_valid() ? radial_d.numel() : 0);
-            setup.tangential_count = static_cast<uint32_t>(tangential_d.is_valid() ? tangential_d.numel() : 0);
-            setup.prism_count = static_cast<uint32_t>(prism_d.is_valid() ? prism_d.numel() : 0);
+            setup.radial_count = mk::count32(radial_d.is_valid() ? radial_d.numel() : 0, "radial distortion");
+            setup.tangential_count = mk::count32(tangential_d.is_valid() ? tangential_d.numel() : 0, "tangential distortion");
+            setup.prism_count = mk::count32(prism_d.is_valid() ? prism_d.numel() : 0, "prism distortion");
             f.camera = reuse(state.camera, {kCameraFloats}, DataType::Float32);
             setup.view = mk::address(view_matrix);
             setup.radial = mk::address(radial_d);

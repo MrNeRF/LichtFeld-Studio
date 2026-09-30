@@ -228,7 +228,7 @@ namespace lfs::training {
                 return;
             require_indices(indices, DataType::Int32, "sh zero_rows");
             const ZeroParams params{mk::live_address(values), mk::address(indices),
-                                    static_cast<uint32_t>(indices.numel()), slots};
+                                    mk::count32(indices.numel(), "SH indices"), slots};
             mk::launch_items("sh_zero_rows", params, {&values, &indices}, indices.numel());
         }
 

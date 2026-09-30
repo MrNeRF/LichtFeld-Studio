@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// Metal Bilateral, PPISP, Controller, Lpips and SharedImage ops against CPU
+// Metal and Vulkan Bilateral, PPISP, Controller, Lpips and SharedImage ops against CPU
 // transliterations of the CUDA kernels, on fixture-sized inputs. Integer and
 // byte outputs are exact; floats use tolerances; the bilateral and PPISP
 // gradients are checked against central differences of the CPU forward.
@@ -27,6 +27,9 @@
 #include <vector>
 
 namespace {
+    // The backend of the running parameterized test.
+    lfs::core::GpuBackend backend_under_test() { return testing::TestWithParam<lfs::core::GpuBackend>::GetParam(); }
+
     using lfs::core::DataType;
     using lfs::core::Device;
     using lfs::core::GpuBackend;
@@ -306,22 +309,22 @@ namespace {
         return out;
     }
 
-    class TrainingOpsMetalAppearance : public ::testing::Test {
+    class PortableAppearance : public ::testing::TestWithParam<GpuBackend> {
     protected:
         void SetUp() override {
-            if (!lfs::core::gpu_backend_available(GpuBackend::Metal))
-                GTEST_SKIP() << "Metal device unavailable";
-            scope_.emplace(GpuBackend::Metal);
+            if (!lfs::core::gpu_backend_available(backend_under_test()))
+                GTEST_SKIP() << lfs::core::gpu_backend_name(GetParam()) << " device unavailable";
+            scope_.emplace(backend_under_test());
         }
 
-        static const lfs::training::TrainingOps& table() { return lfs::training::training_ops(GpuBackend::Metal); }
+        static const lfs::training::TrainingOps& table() { return lfs::training::training_ops(backend_under_test()); }
 
     private:
         std::optional<lfs::core::GpuBackendScope> scope_;
     };
 
     void check_bilateral_slice(const bool chw, const bool exposure_chroma) {
-        const auto& table = *lfs::training::training_ops(GpuBackend::Metal).bilateral;
+        const auto& table = *lfs::training::training_ops(backend_under_test()).bilateral;
         const std::string what = std::format("bilateral {} {}", chw ? "chw" : "hwc", exposure_chroma ? "exposure-chroma" : "affine");
         constexpr int h = 5, w = 7;
         const int channels = exposure_chroma ? 9 : 12;
@@ -375,14 +378,14 @@ namespace {
         expect_close(host(grad_rgb), finite_difference(rgb, loss_of_rgb), 2e-4, 1e-3, what + " rgb gradient", skip);
     }
 
-    TEST_F(TrainingOpsMetalAppearance, BilateralSliceMatchesReferenceAndFiniteDifferences) {
+    TEST_P(PortableAppearance, BilateralSliceMatchesReferenceAndFiniteDifferences) {
         check_bilateral_slice(false, false);
         check_bilateral_slice(true, false);
         check_bilateral_slice(false, true);
         check_bilateral_slice(true, true);
     }
 
-    TEST_F(TrainingOpsMetalAppearance, BilateralRegularizerAndOptimizer) {
+    TEST_P(PortableAppearance, BilateralRegularizerAndOptimizer) {
         const auto& table = *this->table().bilateral;
         constexpr int N = 2, C = 9, L = 3, H = 4, W = 5, norm_n = 7;
         const size_t count = static_cast<size_t>(N) * C * L * H * W;
@@ -504,7 +507,7 @@ namespace {
 
     std::vector<float> narrow(const Doubles& values) { return {values.begin(), values.end()}; }
 
-    TEST_F(TrainingOpsMetalAppearance, PpispForwardMatchesReference) {
+    TEST_P(PortableAppearance, PpispForwardMatchesReference) {
         const auto& table = *this->table().ppisp;
         const PpispParams p = ppisp_values();
         // Keep vignetting alphas nonpositive so the falloff stays inside [0, 1].
@@ -533,7 +536,7 @@ namespace {
         EXPECT_EQ(host(band), host(full.slice(1, 2, 5).contiguous()));
     }
 
-    TEST_F(TrainingOpsMetalAppearance, PpispBackwardMatchesFiniteDifferences) {
+    TEST_P(PortableAppearance, PpispBackwardMatchesFiniteDifferences) {
         const auto& table = *this->table().ppisp;
         PpispParams p = ppisp_values();
         for (int i = 0; i < 30; ++i)
@@ -569,7 +572,40 @@ namespace {
         expect_close(host(gk), group(&PpispParams::crf), 2e-4, 2e-3, "ppisp crf gradient");
     }
 
-    TEST_F(TrainingOpsMetalAppearance, PpispOptimizerAndRegularizers) {
+    // Parameter gradients summed over many workgroups: each reduces its pixels
+    // before one atomic per parameter.
+    TEST_P(PortableAppearance, PpispBackwardSumsAcrossWorkgroups) {
+        const auto& table = *this->table().ppisp;
+        PpispParams p = ppisp_values();
+        for (int i = 0; i < 30; ++i)
+            if (i % 5 >= 2)
+                p.vignetting[i] = -std::abs(p.vignetting[i]) * 0.5;
+        constexpr int H = 48, W = 96, camera = 1, frame = 2;
+        const auto rgb_values = pattern(3 * H * W, 0.25f, 7, 0.45f);
+        const auto grad_values = pattern(3 * H * W, 1.f, 9);
+        const Doubles rgb = widen(rgb_values);
+        const auto exposure = gpu(narrow(p.exposure), {3}), vignetting = gpu(narrow(p.vignetting), {30});
+        const auto color = gpu(narrow(p.color), {24}), crf = gpu(narrow(p.crf), {24});
+        auto ge = Tensor::zeros({3}, Device::GPU), gv = Tensor::zeros({30}, Device::GPU);
+        auto gc = Tensor::zeros({24}, Device::GPU), gk = Tensor::zeros({24}, Device::GPU);
+        auto grad_rgb = Tensor::empty({3, H, W}, Device::GPU);
+        table.backward({exposure, vignetting, color, crf}, gpu(rgb_values, {3, H, W}), gpu(grad_values, {3, H, W}),
+                       {ge, gv, gc, gk}, grad_rgb, 2, 3, camera, frame);
+
+        const auto group = [&](Doubles PpispParams::*member) {
+            return finite_difference(p.*member, [&](const Doubles& values) {
+                PpispParams q = p;
+                q.*member = values;
+                return weighted(ppisp_forward(q, rgb, H, W, 0, H, camera, frame), grad_values);
+            });
+        };
+        expect_close(host(ge), group(&PpispParams::exposure), 2e-4, 2e-3, "ppisp exposure gradient");
+        expect_close(host(gv), group(&PpispParams::vignetting), 2e-4, 2e-3, "ppisp vignetting gradient");
+        expect_close(host(gc), group(&PpispParams::color), 2e-4, 2e-3, "ppisp color gradient");
+        expect_close(host(gk), group(&PpispParams::crf), 2e-4, 2e-3, "ppisp crf gradient");
+    }
+
+    TEST_P(PortableAppearance, PpispOptimizerAndRegularizers) {
         const auto& table = *this->table().ppisp;
         {
             auto e = gpu(pattern(3, 1.f, 1), {3}), v = gpu(pattern(30, 1.f, 2), {30});
@@ -583,7 +619,11 @@ namespace {
             EXPECT_EQ(host(e), std::vector<float>(3, 0.f));
             EXPECT_EQ(host(v), std::vector<float>(30, 0.f));
             EXPECT_EQ(host(c), std::vector<float>(24, 0.f));
-            EXPECT_EQ(host(k), expect_crf);
+            // ppisp.cu computes the identity with __logf/__expf.
+            const auto crf = host(k);
+            ASSERT_EQ(crf.size(), expect_crf.size());
+            for (size_t i = 0; i < crf.size(); ++i)
+                EXPECT_NEAR(crf[i], expect_crf[i], 2e-6f * std::abs(expect_crf[i])) << "crf " << i;
         }
 
         const ops::PPISPAdamUpdateParams hyper{0.003f, 0.9f, 0.999f, 10.f, 31.622776f, 1e-8f};
@@ -687,7 +727,7 @@ namespace {
         }
     }
 
-    TEST_F(TrainingOpsMetalAppearance, ControllerOps) {
+    TEST_P(PortableAppearance, ControllerOps) {
         const auto& table = *this->table().controller;
         const auto features = pattern(1600, 1.f, 2);
         auto fc = gpu(pattern(1601, 1.f, 5), {1, 1601});
@@ -732,7 +772,7 @@ namespace {
         expect_close(host(bg), ebg, 1e-6, 1e-6, "controller bias gradient, first layer");
     }
 
-    TEST_F(TrainingOpsMetalAppearance, LpipsOps) {
+    TEST_P(PortableAppearance, LpipsOps) {
         const auto& table = *this->table().lpips;
         const auto half_values = [](std::vector<float> values) {
             for (float& v : values)
@@ -874,7 +914,7 @@ namespace {
         return values;
     }
 
-    TEST_F(TrainingOpsMetalAppearance, SharedImageSentinelAndConversions) {
+    TEST_P(PortableAppearance, SharedImageSentinelAndConversions) {
         const auto* table = this->table().shared_image;
         ASSERT_NE(table, nullptr);
         {
@@ -1039,7 +1079,7 @@ namespace {
         return out;
     }
 
-    TEST_F(TrainingOpsMetalAppearance, SharedImageResizeAndUndistort) {
+    TEST_P(PortableAppearance, SharedImageResizeAndUndistort) {
         const auto* table = this->table().shared_image;
         ASSERT_NE(table, nullptr);
         constexpr int H = 13, W = 17;
@@ -1139,4 +1179,7 @@ namespace {
         }
         expect_close(host(table->undistort(gpu(source, {3, H, W}), p, false)), expected, 1e-4, 1e-4, "undistort");
     }
+    INSTANTIATE_TEST_SUITE_P(Backends, PortableAppearance, testing::Values(GpuBackend::Metal, GpuBackend::Vulkan),
+                             [](const auto& info) { return std::string(lfs::core::gpu_backend_name(info.param)); });
+
 } // namespace

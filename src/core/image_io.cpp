@@ -442,6 +442,42 @@ namespace {
         return std::malloc(bytes);
     }
 
+    // Applies load_image's res_div and max_width to decoded RGB samples; takes
+    // ownership of `base`.
+    template <typename T>
+    std::tuple<T*, int, int, int> resize_loaded_rgb(T* base, const int source_width, const int source_height,
+                                                    const int res_div, const int max_width) {
+        int target_width = source_width;
+        int target_height = source_height;
+        if (res_div == 2 || res_div == 4 || res_div == 8) {
+            target_width = std::max(1, target_width / res_div);
+            target_height = std::max(1, target_height / res_div);
+        } else if (res_div > 1) {
+            LOG_ERROR("load_image: unsupported resize factor {}", res_div);
+        }
+        if (max_width > 0 && (target_width > max_width || target_height > max_width)) {
+            if (target_width > target_height) {
+                target_height = std::max(1, max_width * target_height / target_width);
+                target_width = max_width;
+            } else {
+                target_width = std::max(1, max_width * target_width / target_height);
+                target_height = max_width;
+            }
+        }
+        if (target_width == source_width && target_height == source_height)
+            return {base, source_width, source_height, 3};
+        T* resized = nullptr;
+        try {
+            resized = downscale_resample_direct<T>(base, source_width, source_height,
+                                                   target_width, target_height, 0);
+        } catch (...) {
+            std::free(base);
+            throw;
+        }
+        std::free(base);
+        return {resized, target_width, target_height, 3};
+    }
+
     template <typename T>
     std::tuple<T*, int, int, int>
     load_image_t(std::filesystem::path p, int res_div, int max_width,
@@ -509,35 +545,7 @@ namespace {
         if (used_embedded_thumbnail)
             *used_embedded_thumbnail = decoded_embedded;
 
-        int target_width = source_width;
-        int target_height = source_height;
-        if (res_div == 2 || res_div == 4 || res_div == 8) {
-            target_width = std::max(1, target_width / res_div);
-            target_height = std::max(1, target_height / res_div);
-        } else if (res_div > 1) {
-            LOG_ERROR("load_image: unsupported resize factor {}", res_div);
-        }
-        if (max_width > 0 && (target_width > max_width || target_height > max_width)) {
-            if (target_width > target_height) {
-                target_height = std::max(1, max_width * target_height / target_width);
-                target_width = max_width;
-            } else {
-                target_width = std::max(1, max_width * target_width / target_height);
-                target_height = max_width;
-            }
-        }
-        if (target_width == source_width && target_height == source_height)
-            return {base, source_width, source_height, 3};
-        T* resized = nullptr;
-        try {
-            resized = downscale_resample_direct<T>(base, source_width, source_height,
-                                                   target_width, target_height, 0);
-        } catch (...) {
-            std::free(base);
-            throw;
-        }
-        std::free(base);
-        return {resized, target_width, target_height, 3};
+        return resize_loaded_rgb<T>(base, source_width, source_height, res_div, max_width);
     }
 
 } // namespace
@@ -611,12 +619,13 @@ namespace lfs::core {
     }
 
     std::tuple<unsigned char*, int, int, int>
-    load_image_from_memory(const uint8_t* const data, const size_t size) {
+    load_image_from_memory(const uint8_t* const data, const size_t size, const int res_div, const int max_width) {
         image_codecs::DecodeTarget target{3, image_codecs::SampleType::UInt8, nullptr, allocate_image_buffer, nullptr};
         image_codecs::Probe direct_info;
         std::string direct_error;
         if (image_codecs::decode_memory_to_buffer(data, size, target, direct_info, direct_error))
-            return {static_cast<unsigned char*>(target.data), direct_info.width, direct_info.height, direct_info.channels};
+            return ::resize_loaded_rgb(static_cast<unsigned char*>(target.data), direct_info.width,
+                                       direct_info.height, res_div, max_width);
         if (target.data)
             std::free(target.data);
         image_codecs::Image decoded;
@@ -646,7 +655,7 @@ namespace lfs::core {
                                 decoded.channels > 1 ? sample_to_u8(src + 1) : first,
                                 decoded.channels > 2 ? sample_to_u8(src + 2) : first);
         }
-        return {out, decoded.width, decoded.height, 3};
+        return ::resize_loaded_rgb(out, decoded.width, decoded.height, res_div, max_width);
     }
 
     std::tuple<unsigned char*, int, int, int>

@@ -3,32 +3,40 @@
 
 #include "core/event_bridge/command_api.hpp"
 
+#include "core/assert.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "lfs/training/live_model_mutation_guard.hpp"
+#include "lfs/training/sh_value_storage.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/trainer.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <format>
 
 namespace lfs::training {
 
-    namespace {
-        core::Tensor expand_mask(const core::Tensor& row_mask, const core::TensorShape& target_shape) {
-            if (row_mask.shape().rank() == 0 || target_shape.rank() == 0) {
-                return row_mask;
-            }
-            if (row_mask.shape().rank() == 1 && target_shape.rank() > 1) {
-                auto expanded = row_mask.unsqueeze(-1);
-                std::vector<size_t> dims = target_shape.dims();
-                expanded = expanded.expand(core::TensorShape{dims});
-                return expanded;
-            }
+    core::Tensor expand_row_mask(const core::Tensor& row_mask, const core::TensorShape& target_shape) {
+        if (row_mask.shape().rank() == 0 || target_shape.rank() == 0) {
             return row_mask;
         }
+        if (row_mask.shape().rank() == 1 && target_shape.rank() > 1) {
+            LFS_ASSERT_MSG(row_mask.shape()[0] == target_shape[0],
+                           std::format("row mask length {} does not match attribute rows (shape={})",
+                                       row_mask.shape()[0], target_shape.str()));
+            // Rows are the leading axis of every attribute ([N, 3], [N, 1, 3], [N, K, 3]),
+            // so the mask keeps that axis and broadcasts over all trailing ones.
+            std::vector<size_t> mask_dims(target_shape.rank(), 1);
+            mask_dims[0] = row_mask.shape()[0];
+            return row_mask.reshape(core::TensorShape{mask_dims}).expand(target_shape);
+        }
+        return row_mask;
+    }
 
+    namespace {
         core::Tensor make_full_like_mask(const core::Tensor& mask, double value) {
             return core::Tensor::full(mask.shape(), static_cast<float>(value), mask.device(), core::DataType::Float32);
         }
@@ -289,7 +297,7 @@ namespace lfs::training {
     }
 
     std::expected<void, std::string> CommandCenter::apply_set(core::Tensor& tensor, const core::Tensor& mask_rows, const ArgValue& value) {
-        auto mask_full = expand_mask(mask_rows, tensor.shape());
+        auto mask_full = expand_row_mask(mask_rows, tensor.shape());
 
         if (std::holds_alternative<double>(value)) {
             const double v = std::get<double>(value);
@@ -323,7 +331,7 @@ namespace lfs::training {
     }
 
     std::expected<void, std::string> CommandCenter::apply_scale(core::Tensor& tensor, const core::Tensor& mask_rows, double factor) {
-        const auto mask_full = expand_mask(mask_rows, tensor.shape());
+        const auto mask_full = expand_row_mask(mask_rows, tensor.shape());
         const auto mask_float = mask_full.to(tensor.dtype());
         const auto one = make_full_like_mask(mask_full, 1.0).to(tensor.dtype());
         const auto scale = make_full_like_mask(mask_full, factor).to(tensor.dtype());
@@ -335,7 +343,7 @@ namespace lfs::training {
         if (!minv && !maxv) {
             return std::unexpected("clamp_attribute requires min or max");
         }
-        const auto mask_full = expand_mask(mask_rows, tensor.shape());
+        const auto mask_full = expand_row_mask(mask_rows, tensor.shape());
         const auto mask_float = mask_full.to(tensor.dtype());
         const auto keep = mask_full.logical_not().to(tensor.dtype());
         auto clamped = tensor;
@@ -363,7 +371,8 @@ namespace lfs::training {
         const size_t rows = model.size();
 
         // shN is stored swizzled — operate on a deswizzled [N, K, 3] working buffer,
-        // then reswizzle. Other params can mutate in place via the resolved pointer.
+        // then write the selected rows back. Other params can mutate in place via the
+        // resolved pointer.
         core::Tensor shN_canon;
         core::Tensor* tensor = nullptr;
         size_t prev_capacity = 0;
@@ -373,7 +382,6 @@ namespace lfs::training {
                 return std::unexpected("shN storage is not allocated (max sh-degree 0)");
             }
             shN_canon = model.shN_canonical();
-            prev_capacity = std::max<size_t>(model.means().capacity(), model.size());
             tensor = &shN_canon;
         } else {
             size_t row_dim = 0;
@@ -426,9 +434,16 @@ namespace lfs::training {
             return result;
         }
 
-        // For shN, write the mutated canonical view back into swizzled storage.
+        // Write the selected shN rows back through the training storage helper. It
+        // re-encodes only the touched q16 bound blocks in the live storage;
+        // shN_set_from_canonical would swap that storage for a detached fp32 buffer.
         if (is_shN) {
-            model.shN_set_from_canonical(shN_canon, prev_capacity);
+            const auto written_rows = mask->nonzero().squeeze(-1);
+            if (written_rows.numel() > 0) {
+                LiveModelMutationGuard mutation_guard("CommandCenter::exec_model shN");
+                sh_value::scatter_canonical_into_shN(
+                    model, written_rows, shN_canon.index_select(0, written_rows));
+            }
         }
 
         if (auto p = param_type_from_attribute(attr_name)) {
@@ -519,6 +534,16 @@ namespace lfs::training {
             }
             if (!argument_is_finite(value)) {
                 return std::unexpected("Non-finite argument '" + name + "' in op " + cmd.op);
+            }
+            if (const auto* scalar = std::get_if<double>(&value)) {
+                if (spec->exclusive_minimum && !(*scalar > *spec->exclusive_minimum)) {
+                    return std::unexpected(std::format("Argument '{}' of op {} must be > {} (got {})",
+                                                       name, cmd.op, *spec->exclusive_minimum, *scalar));
+                }
+                if (spec->maximum && *scalar > *spec->maximum) {
+                    return std::unexpected(std::format("Argument '{}' of op {} must be <= {} (got {})",
+                                                       name, cmd.op, *spec->maximum, *scalar));
+                }
             }
         }
         for (const auto& spec : it_op->args) {

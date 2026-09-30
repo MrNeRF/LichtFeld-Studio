@@ -47,7 +47,7 @@ groupshared uint maxLast[128];
         b.depthGradient = 0;
     if ((fastStage & (1u << 19)) == 0)
         b.normalGradient = 0;
-    if ((fastStage & (1u << 20)) == 0)
+    if ((fastStage & ((1u << 20) | (1u << 22))) == 0)
         b.densification = 0;
     if ((fastStage & (1u << 21)) == 0)
         b.scores = 0;

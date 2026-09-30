@@ -24,6 +24,7 @@ struct SortParameters {
     uint significantBits;
     uint passCount;
     uint passIndex;
+    uint64_t control;
 };
 
 groupshared uint localCounts[kDigitCount];
@@ -109,6 +110,10 @@ bool firstMatchingLane(uint4 matchMask, uint lane) {
                                        uint3 groupId : SV_GroupID,
                                        uint3 groupThreadId : SV_GroupThreadID,
                                        uniform SortParameters parameters) {
+    if (parameters.control != 0) {
+        parameters.elementCount = ((Ptr<uint, Access.Read>)parameters.control)[0];
+        parameters.partitionCount = (parameters.elementCount + kPartitionWidth - 1) / kPartitionWidth;
+    }
     Ptr<uint, Access.Read> valuesIn = (Ptr<uint, Access.Read>)parameters.sourceValues;
     Ptr<uint, Access.ReadWrite> valuesOut = (Ptr<uint, Access.ReadWrite>)parameters.destinationValues;
     Ptr<uint, Access.ReadWrite> counts = (Ptr<uint, Access.ReadWrite>)parameters.partitionCounts;
@@ -173,50 +178,37 @@ bool firstMatchingLane(uint4 matchMask, uint lane) {
             GroupMemoryBarrierWithGroupSync();
             carry = chunkCarry;
         }
+        if (lane == 0u)
+            offsets[parameters.passIndex * kDigitCount + digit] = carry;
         return;
     }
 
     if (kStage == 2u) {
-        const uint pass = parameters.passIndex;
-        const uint digit = groupId.x % kDigitCount;
-        const uint row = (pass * kDigitCount + digit) * parameters.partitionCount;
-        uint localTotal = 0u;
-        for (uint partition = lane; partition < parameters.partitionCount; partition += kWorkers)
-            localTotal += counts[row + partition];
-        const uint subgroup = lane / WaveGetLaneCount();
+        const uint subgroupWidth = WaveGetLaneCount();
+        const uint subgroup = lane / subgroupWidth;
         const uint subgroupLane = WaveGetLaneIndex();
-        const uint subgroupTotal = WaveActiveSum(localTotal);
-        if (subgroupLane == 0u)
-            subgroupTotals[subgroup] = subgroupTotal;
-        GroupMemoryBarrierWithGroupSync();
-        if (lane == 0u) {
-            uint total = 0u;
-            for (uint previous = 0u; previous < kWorkers / WaveGetLaneCount(); ++previous)
-                total += subgroupTotals[previous];
-            offsets[pass * kDigitCount + digit] = total;
+        const uint subgroupCount = (kWorkers + subgroupWidth - 1u) / subgroupWidth;
+        uint carry = 0u;
+        for (uint first = 0u; first < kDigitCount; first += kWorkers) {
+            const uint index = parameters.passIndex * kDigitCount + first + lane;
+            const uint amount = offsets[index];
+            const uint prefix = WavePrefixSum(amount);
+            const uint total = WaveActiveSum(amount);
+            if (subgroupLane == 0u)
+                subgroupTotals[subgroup] = total;
+            GroupMemoryBarrierWithGroupSync();
+            uint earlier = 0u;
+            for (uint previous = 0u; previous < subgroup; ++previous)
+                earlier += subgroupTotals[previous];
+            offsets[index] = carry + earlier + prefix;
+            for (uint previous = 0u; previous < subgroupCount; ++previous)
+                carry += subgroupTotals[previous];
+            GroupMemoryBarrierWithGroupSync();
         }
         return;
     }
 
     if (kStage == 3u) {
-        // Stage the totals in shared memory: SPIRV-Cross (MoltenVK) forwards a
-        // device-address load past a store to the same address, so an in-place
-        // read-then-overwrite of offsets would read the new value.
-        const uint pass = parameters.passIndex;
-        for (uint digit = lane; digit < kDigitCount; digit += kWorkers)
-            localCounts[digit] = offsets[pass * kDigitCount + digit];
-        GroupMemoryBarrierWithGroupSync();
-        if (lane == 0u) {
-            uint base = 0u;
-            for (uint digit = 0u; digit < kDigitCount; ++digit) {
-                offsets[pass * kDigitCount + digit] = base;
-                base += localCounts[digit];
-            }
-        }
-        return;
-    }
-
-    if (kStage == 4u) {
 #if PAIR_SORT_SUBGROUP_MATCH
         // Each subgroup owns a contiguous input segment, preserving producer order.
         // Rank locally before exchanging subgroup prefixes and coalescing the scatter.

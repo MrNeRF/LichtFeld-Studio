@@ -6,8 +6,11 @@
 #include "core/tensor.hpp"
 
 #include <cstdint>
+#include <format>
 #include <initializer_list>
+#include <limits>
 #include <span>
+#include <stdexcept>
 #include <string_view>
 #include <utility>
 
@@ -29,6 +32,13 @@ namespace lfs::training::metal {
     struct alignas(8) Float2 {
         float x = 0.f, y = 0.f;
     };
+
+    // A count passed to a kernel's 32-bit index space.
+    inline uint32_t count32(const size_t count, const std::string_view what) {
+        if (count > std::numeric_limits<uint32_t>::max())
+            throw std::invalid_argument(std::format("{} count {} exceeds the 32-bit kernel index range", what, count));
+        return static_cast<uint32_t>(count);
+    }
 
     core::GpuKernelModule& kernels();
 

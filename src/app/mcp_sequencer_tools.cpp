@@ -15,7 +15,9 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <cstdint>
+#include <format>
 #include <optional>
 #include <string>
 
@@ -32,15 +34,23 @@ namespace lfs::app {
             return json::array({value.x, value.y, value.z});
         }
 
+        // Tool schemas reject malformed vectors before the handler; this keeps a direct
+        // caller from indexing a short array and rejects values that overflow float.
         std::expected<std::optional<glm::vec3>, std::string> optional_vec3_arg(const json& args, const char* key) {
             if (!args.contains(key) || args[key].is_null())
                 return std::optional<glm::vec3>{};
 
             const auto& value = args[key];
-            if (!value.is_array() || value.size() != 3)
-                return std::unexpected(std::string("Field '") + key + "' must be a 3-element array");
+            if (!value.is_array() || value.size() != 3 ||
+                !std::ranges::all_of(value, [](const json& v) { return v.is_number(); }))
+                return std::unexpected(std::format("Field '{}' must be a 3-element number array (got {})", key,
+                                                   value.dump()));
 
-            return glm::vec3(value[0].get<float>(), value[1].get<float>(), value[2].get<float>());
+            const glm::vec3 result(value[0].get<float>(), value[1].get<float>(), value[2].get<float>());
+            if (!std::isfinite(result.x) || !std::isfinite(result.y) || !std::isfinite(result.z))
+                return std::unexpected(std::format("Field '{}' must contain finite float values (got {})", key,
+                                                   value.dump()));
+            return result;
         }
 
         const char* keyframe_easing_name(const uint8_t easing) {
@@ -208,9 +218,9 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"time", json{{"type", "number"}, {"description", "Keyframe time in seconds; defaults to the playhead. Times past the clip duration extend it, which scrubbing cannot reach."}}},
-                        {"eye", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional camera eye position [x,y,z]"}}},
-                        {"target", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional camera target [x,y,z]"}}},
-                        {"up", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional camera up vector [x,y,z]"}}},
+                        {"eye", number_array_schema(3, "Optional camera eye position [x,y,z]")},
+                        {"target", number_array_schema(3, "Optional camera target [x,y,z]")},
+                        {"up", number_array_schema(3, "Optional camera up vector [x,y,z]")},
                         {"fov_degrees", json{{"type", "number"}, {"description", "Optional camera FOV override"}}},
                         {"show_sequencer", json{{"type", "boolean"}, {"description", "Show the sequencer panel before operating (default: true)"}}}},
                     .required = {}}},
@@ -226,6 +236,10 @@ namespace lfs::app {
                     return json{{"error", up.error()}};
                 if (eye->has_value() != target->has_value())
                     return json{{"error", "Fields 'eye' and 'target' must either both be provided or both be omitted"}};
+                if (eye->has_value()) {
+                    if (auto error = view_vectors_error(**eye, **target, up->value_or(glm::vec3(0.0f, 1.0f, 0.0f))))
+                        return mcp::invalid_argument_result(*error, "eye");
+                }
 
                 const std::optional<float> fov = args.contains("fov_degrees")
                                                      ? std::optional<float>(args["fov_degrees"].get<float>())
@@ -260,9 +274,9 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"keyframe_id", json{{"type", "integer"}, {"description", "Stable keyframe id to select before updating"}}},
-                        {"eye", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional camera eye position [x,y,z]"}}},
-                        {"target", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional camera target [x,y,z]"}}},
-                        {"up", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional camera up vector [x,y,z]"}}},
+                        {"eye", number_array_schema(3, "Optional camera eye position [x,y,z]")},
+                        {"target", number_array_schema(3, "Optional camera target [x,y,z]")},
+                        {"up", number_array_schema(3, "Optional camera up vector [x,y,z]")},
                         {"fov_degrees", json{{"type", "number"}, {"description", "Optional camera FOV override"}}},
                         {"show_sequencer", json{{"type", "boolean"}, {"description", "Show the sequencer panel before operating (default: true)"}}}},
                     .required = {}}},
@@ -278,6 +292,10 @@ namespace lfs::app {
                     return json{{"error", up.error()}};
                 if (eye->has_value() != target->has_value())
                     return json{{"error", "Fields 'eye' and 'target' must either both be provided or both be omitted"}};
+                if (eye->has_value()) {
+                    if (auto error = view_vectors_error(**eye, **target, up->value_or(glm::vec3(0.0f, 1.0f, 0.0f))))
+                        return mcp::invalid_argument_result(*error, "eye");
+                }
 
                 const std::optional<float> fov = args.contains("fov_degrees")
                                                      ? std::optional<float>(args["fov_degrees"].get<float>())
@@ -539,10 +557,16 @@ namespace lfs::app {
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"speed", json{{"type", "number"}, {"description", "Playback speed multiplier"}}}},
+                        {"speed", json{{"type", "number"}, {"description", std::format("Playback speed multiplier, {} to {}", vis::MIN_PLAYBACK_SPEED, vis::MAX_PLAYBACK_SPEED)}}}},
                     .required = {"speed"}}},
             [viewer, backend](const json& args) -> json {
                 const float speed = args["speed"].get<float>();
+                // Compared in float: the bounds are floats, and 0.1 must equal MIN_PLAYBACK_SPEED.
+                if (!(speed >= vis::MIN_PLAYBACK_SPEED && speed <= vis::MAX_PLAYBACK_SPEED))
+                    return mcp::invalid_argument_result(
+                        std::format("Parameter 'speed' must be between {} and {} (got {})", vis::MIN_PLAYBACK_SPEED,
+                                    vis::MAX_PLAYBACK_SPEED, args["speed"].dump()),
+                        "speed");
 
                 return post_and_wait(viewer, [backend, speed]() -> json {
                     auto controller = ensure_ready_controller(backend);

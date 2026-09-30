@@ -85,6 +85,7 @@ namespace lfs::training {
             vk_check(context.get(), vkCreateComputePipelines(context->device(), context->pipeline_cache(), 1, &pipeline_info, nullptr, &pipeline->handle), "vkCreateComputePipelines(training.lpips)");
             vkDestroyShaderModule(context->device(), shader, nullptr);
             cache.emplace(key, pipeline);
+            release_at_shutdown(*context, mutex, cache);
             return pipeline;
         }
 
@@ -268,7 +269,7 @@ namespace lfs::training {
     } // namespace
 
     const gpu_ops::LpipsOps& vulkan_lpips_ops() {
-        static const gpu_ops::LpipsOps ops{{.weight_taps = weight_taps, .rgb_conv = rgb_conv, .convolution = convolution, .pool_reduce = pool_reduce}};
+        static const gpu_ops::LpipsOps ops{{.weight_taps = weight_taps, .rgb_conv = rgb_conv, .convolution = convolution, .pool_reduce = pool_reduce, .prefer_independent_queue = true}};
         return ops;
     }
 } // namespace lfs::training

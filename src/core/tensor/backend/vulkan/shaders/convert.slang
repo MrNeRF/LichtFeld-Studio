@@ -38,6 +38,23 @@ int64_t loadAsInt64(uint64_t address, uint index)
     return int64_t(loadAsFloat(address, index));
 }
 
+// Float to integer like CUDA's cvt.rzi: truncate, NaN to 0, saturate out of range.
+static const bool kFloatInput = kInputDType == 0 || kInputDType == 1;
+int saturateInt32(float v)
+{
+    return isnan(v) ? 0 : v >= 2147483648.0f ? 2147483647 : v <= -2147483648.0f ? int(0x80000000u) : int(v);
+}
+int64_t saturateInt64(float v)
+{
+    return isnan(v) ? int64_t(0)
+         : v >= 9223372036854775808.0f ? int64_t(0x7fffffffffffffffull)
+         : v <= -9223372036854775808.0f ? int64_t(0x8000000000000000ull) : int64_t(v);
+}
+uint saturateUInt32(float v)
+{
+    return isnan(v) || v <= 0.0f ? 0u : v >= 4294967296.0f ? 0xffffffffu : uint(v);
+}
+
 uint torchUInt8Cast(float value)
 {
     if (!isfinite(value))
@@ -134,12 +151,15 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters param
                 uint16_t(floatToHalfBits(loadAsFloat(parameters.inputAddress, index)));
         else if (kOutputDType == 2)
             ((Ptr<int, Access.ReadWrite>)parameters.outputAddress)[index] =
-                int(loadAsInt64(parameters.inputAddress, index));
+                kFloatInput ? saturateInt32(loadAsFloat(parameters.inputAddress, index))
+                            : int(loadAsInt64(parameters.inputAddress, index));
         else if (kOutputDType == 3)
             ((Ptr<int64_t, Access.ReadWrite>)parameters.outputAddress)[index] =
-                loadAsInt64(parameters.inputAddress, index);
+                kFloatInput ? saturateInt64(loadAsFloat(parameters.inputAddress, index))
+                            : loadAsInt64(parameters.inputAddress, index);
         else
             ((Ptr<uint, Access.ReadWrite>)parameters.outputAddress)[index] =
-                uint(loadAsInt64(parameters.inputAddress, index));
+                kFloatInput ? saturateUInt32(loadAsFloat(parameters.inputAddress, index))
+                            : uint(loadAsInt64(parameters.inputAddress, index));
     }
 }

@@ -467,26 +467,31 @@ if(NOT LFS_HAS_CUDA)
         test_tensor_vulkan_matrix_nn.cpp
         test_tensor_vulkan_random.cpp
         test_tensor_vulkan_buffer.cpp
+        test_tensor_backend_semantics.cpp
         test_tensor_metal.cpp
         test_camera_priors_portable.cpp
+        test_pipelined_loader_backends.cpp
         test_viewer_no_cuda.cpp
     )
     if(LFS_BUILD_TRAINER)
         list(APPEND TEST_SOURCES
             test_vulkan_trainer_start.cpp
             test_session_loader_storage.cpp
+            test_training_command_masks.cpp
             test_training_ops_parity.cpp
             test_training_ops_vulkan_gsplat.cpp
+            test_tensor_vulkan_training_fault.cpp
             test_training_pair_sort.cpp
             test_training_ops_metal_densify.cpp
             test_training_ops_metal_appearance.cpp
             test_training_ops_metal_gsplat.cpp
             test_training_ops_metal_losses.cpp
             test_training_ops_metal_adam_sh.cpp
-            test_training_ops_metal_fast.cpp)
+            test_training_ops_metal_fast.cpp
+            test_ppisp_regularizer_portable.cpp)
     endif()
     if(APPLE)
-        list(APPEND TEST_SOURCES test_video_videotoolbox.cpp)
+        list(APPEND TEST_SOURCES test_video_videotoolbox.cpp test_mcp_render_capture_utils.cpp)
     endif()
     add_executable(lichtfeld_tests ${TEST_SOURCES})
     if(APPLE)
@@ -592,6 +597,7 @@ set(TEST_FILES
     test_photometric_ops.cpp
     test_training_ops_parity.cpp
     test_training_ops_vulkan_gsplat.cpp
+    test_tensor_vulkan_training_fault.cpp
     test_training_pair_sort.cpp
     test_gsplat_ops.cpp
     test_fast_ops.cpp
@@ -733,10 +739,12 @@ set(TEST_FILES
     test_parameter_manager.cpp
     test_mcp_protocol.cpp
     test_mcp_training_state.cpp
+    test_training_command_masks.cpp
     test_mcp_app_utils.cpp
     test_mcp_operator_schema.cpp
     test_mcp_shared_scene_tools.cpp
     test_mcp_sequencer_tools.cpp
+    test_mcp_render_capture_utils.cpp
     test_tcp_publisher.cpp
     test_view_info_json.cpp
     test_video_reconstruction.cpp
@@ -934,6 +942,7 @@ if(LFS_TENSOR_VULKAN)
         test_tensor_vulkan_buffer.cpp
         test_tensor_vulkan_cuda_bridge.cpp
         test_tensor_backend_parity.cpp
+        test_tensor_backend_semantics.cpp
         test_ply_vulkan_q16_bands.cpp
         test_viewer_vulkan_load.cpp
         test_headless_vulkan_device_selection.cpp

@@ -40,15 +40,16 @@ namespace {
     namespace k = lfs::training::kernels;
     using Field = std::vector<double>;
 
-    class MetalLosses : public testing::Test {
+    // CPU references of the CUDA loss kernels, run on every portable backend.
+    class PortableLosses : public testing::TestWithParam<GpuBackend> {
     protected:
         void SetUp() override {
-            if (!lfs::core::gpu_backend_available(GpuBackend::Metal))
-                GTEST_SKIP() << "No Metal device";
-            scope_.emplace(GpuBackend::Metal);
-            table_ = &lfs::training::training_ops(GpuBackend::Metal);
+            if (!lfs::core::gpu_backend_available(GetParam()))
+                GTEST_SKIP() << "No " << lfs::core::gpu_backend_name(GetParam()) << " device";
+            scope_.emplace(GetParam());
+            table_ = &lfs::training::training_ops(GetParam());
             if (!table_->photometric || !table_->masks || !table_->extra_loss || !table_->geometry)
-                GTEST_SKIP() << "Metal loss families are not filled";
+                GTEST_SKIP() << "Loss families are not filled";
         }
 
         std::optional<lfs::core::GpuBackendScope> scope_;
@@ -248,15 +249,15 @@ namespace {
         return !((crop_y && (y < 5 || y >= s.h - 5)) || (crop_x && (x < 5 || x >= s.w - 5)));
     }
 
-    // The backward crops only when both axes exceed 10 pixels.
+    // The backward crops each axis like the forward.
     Field valid_chain(const Shape4& s, const bool padding) {
-        const bool crop = padding && s.h > 10 && s.w > 10;
-        const double count = static_cast<double>(s.n) * s.c * (crop ? s.h - 10 : s.h) * (crop ? s.w - 10 : s.w);
+        const bool crop_y = padding && s.h > 10, crop_x = padding && s.w > 10;
+        const double count = static_cast<double>(s.n) * s.c * (crop_y ? s.h - 10 : s.h) * (crop_x ? s.w - 10 : s.w);
         const float per_pixel = 1.0f / static_cast<float>(count);
         Field chain(s.plane(), 0.0);
         for (int y = 0; y < s.h; ++y)
             for (int x = 0; x < s.w; ++x)
-                if (!crop || (x >= 5 && x < s.w - 5 && y >= 5 && y < s.h - 5))
+                if (in_mean_crop(x, y, s, padding))
                     chain[y * s.w + x] = per_pixel;
         return chain;
     }
@@ -299,7 +300,7 @@ namespace {
             double mask_sum = 0.0;
             for (const double m : mask)
                 mask_sum += m;
-            const double normalized = static_cast<float>(mask_sum) * s.c + 1e-8;
+            const double normalized = static_cast<float>(mask_sum) * s.n * s.c + 1e-8;
             chain.resize(s.plane());
             for (size_t i = 0; i < s.plane(); ++i)
                 chain[i] = mask[i] / normalized;
@@ -402,7 +403,7 @@ namespace {
         }
     }
 
-    TEST_F(MetalLosses, PhotometricPathsMatchReference) {
+    TEST_P(PortableLosses, PhotometricPathsMatchReference) {
         const Shape4 fixture{1, 3, 32, 40};
         const Shape4 odd{2, 3, 21, 27};
         check_photo(*table_, {ops::PhotoPath::L1, fixture}, "l1");
@@ -418,7 +419,7 @@ namespace {
     }
 
     // Central differences of the GPU loss 1 - SSIM against the GPU gradient.
-    TEST_F(MetalLosses, SsimGradientMatchesFiniteDifferences) {
+    TEST_P(PortableLosses, SsimGradientMatchesFiniteDifferences) {
         const Shape4 s{1, 3, 16, 20};
         const PhotoCase pc{ops::PhotoPath::SSIM, s};
         const PhotoInputs in = photo_inputs(pc, 5);
@@ -448,7 +449,7 @@ namespace {
         }
     }
 
-    TEST_F(MetalLosses, PhotometricMetricAndErrorMaps) {
+    TEST_P(PortableLosses, PhotometricMetricAndErrorMaps) {
         const Shape4 s{1, 3, 32, 40};
         const PhotoCase pc{ops::PhotoPath::SSIM, s};
         const PhotoInputs in = photo_inputs(pc, 23);
@@ -491,7 +492,7 @@ namespace {
 
     // LossWorkspaceArena accounting: exact on variant switches, a same-variant
     // high-water on shape changes, shrink to the active layout, reset to zero.
-    TEST_F(MetalLosses, PhotometricWorkspaceBytesFollowTheArena) {
+    TEST_P(PortableLosses, PhotometricWorkspaceBytesFollowTheArena) {
         const auto layout = [](const std::vector<size_t>& fields) {
             size_t total = 0;
             for (const size_t bytes : fields)
@@ -541,7 +542,7 @@ namespace {
 
     // SSIM forward + backward at training resolution. Run with
     // --gtest_also_run_disabled_tests.
-    TEST_F(MetalLosses, DISABLED_FusedSsimTiming) {
+    TEST_P(PortableLosses, DISABLED_FusedSsimTiming) {
         const Shape4 s{1, 3, 700, 1000};
         const PhotoInputs in = photo_inputs({ops::PhotoPath::Fused, s}, 9);
         ops::PhotoSaved saved{.backend = table_->photometric->create()};
@@ -565,7 +566,7 @@ namespace {
 
     // ---- Masks (mask_preprocess.cu) --------------------------------------------
 
-    TEST_F(MetalLosses, MasksMatchReference) {
+    TEST_P(PortableLosses, MasksMatchReference) {
         constexpr size_t h = 33, w = 35, n = h * w;
         const auto soft = uniform(n, 7);
         std::vector<uint8_t> bytes(n);
@@ -632,7 +633,7 @@ namespace {
 
     // ---- Extra loss (regularization.cu, sparsity_optimizer_kernels.cu) ---------
 
-    TEST_F(MetalLosses, ExtraLossMatchesReference) {
+    TEST_P(PortableLosses, ExtraLossMatchesReference) {
         constexpr size_t n = 1027;
         for (const auto kind : {ops::Regularizer::Scale, ops::Regularizer::Opacity}) {
             const size_t attrs = kind == ops::Regularizer::Scale ? 3 : 1;
@@ -865,7 +866,7 @@ namespace {
             EXPECT_NEAR(partials[i], want[i], 1e-6 + 2e-5 * std::abs(want[i])) << what << " slot " << i;
     }
 
-    TEST_F(MetalLosses, DepthLossMatchesReference) {
+    TEST_P(PortableLosses, DepthLossMatchesReference) {
         const GeomInputs in = geom_inputs(41, 37, true);
         const size_t n = static_cast<size_t>(in.w) * in.h;
         const TensorShape plane({static_cast<size_t>(in.h), static_cast<size_t>(in.w)});
@@ -1081,7 +1082,7 @@ namespace {
         return ref;
     }
 
-    TEST_F(MetalLosses, NormalLossesMatchReference) {
+    TEST_P(PortableLosses, NormalLossesMatchReference) {
         const GeomInputs in = geom_inputs(38, 29, true);
         const size_t n = static_cast<size_t>(in.w) * in.h;
         const TensorShape plane({static_cast<size_t>(in.h), static_cast<size_t>(in.w)});
@@ -1125,7 +1126,7 @@ namespace {
         }
     }
 
-    TEST_F(MetalLosses, AnchorSamplesMatchProjection) {
+    TEST_P(PortableLosses, AnchorSamplesMatchProjection) {
         constexpr int W = 40, H = 30;
         const auto prior_h = uniform(static_cast<size_t>(W) * H, 50, 0.1f, 2.f);
         std::vector<float> xyz;
@@ -1160,5 +1161,8 @@ namespace {
             EXPECT_NEAR(got[i].y, want[i].second, 1e-6) << i;
         }
     }
+
+    INSTANTIATE_TEST_SUITE_P(Backends, PortableLosses, testing::Values(GpuBackend::Metal, GpuBackend::Vulkan),
+                             [](const auto& info) { return std::string(lfs::core::gpu_backend_name(info.param)); });
 
 } // namespace

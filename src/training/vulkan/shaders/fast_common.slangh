@@ -83,6 +83,8 @@ void store3(uint64_t a, uint i, float3 v) {
 }
 uint loadUint(uint64_t a, uint i) { return ((Ptr<uint, Access.Read>)a)[i]; }
 void storeUint(uint64_t a, uint i, uint v) { ((Ptr<uint, Access.ReadWrite>)a)[i] = v; }
+// Bit test, immune to fast-math NaN folding.
+bool finiteValue(float x) { return (asuint(x) & 0x7fffffffu) < 0x7f800000u; }
 float minNumber(float a, float b) { return isnan(a) ? b : isnan(b) ? a
                                                                    : min(a, b); }
 float maxNumber(float a, float b) { return isnan(a) ? b : isnan(b) ? a

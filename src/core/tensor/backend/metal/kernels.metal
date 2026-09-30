@@ -93,12 +93,14 @@ static float accurate_log1p(float value) {
 }
 
 static float accurate_asin(float value) {
-    const float bounded = clamp(value, -1.0f, 1.0f);
+    // Clamp rounding overshoot, but keep NaN (clamp would drop it).
+    const float bounded = isnan(value) ? value : clamp(value, -1.0f, 1.0f);
     return atan2(bounded, sqrt(max(0.0f, 1.0f - bounded * bounded)));
 }
 
 static float accurate_acos(float value) {
-    const float bounded = clamp(value, -1.0f, 1.0f);
+    // Clamp rounding overshoot, but keep NaN (clamp would drop it).
+    const float bounded = isnan(value) ? value : clamp(value, -1.0f, 1.0f);
     return atan2(sqrt(max(0.0f, 1.0f - bounded * bounded)), bounded);
 }
 
@@ -574,6 +576,18 @@ static uint torch_uint8_cast(float value) {
     return uint(wrapped);
 }
 
+// Float to integer like CUDA's cvt.rzi: truncate, NaN to 0, saturate out of range.
+constant bool kConvertFromFloat = kInputDType == LFS_DT_Float32 || kInputDType == LFS_DT_Float16;
+static int saturate_int32(float v) {
+    return isnan(v) ? 0 : v >= 2147483648.0f ? 2147483647 : v <= -2147483648.0f ? int(0x80000000u) : int(v);
+}
+static long saturate_int64(float v) {
+    return isnan(v) ? 0 : v >= 9223372036854775808.0f ? long(0x7fffffffffffffffUL) : v <= -9223372036854775808.0f ? long(0x8000000000000000UL) : long(v);
+}
+static uint saturate_uint32(float v) {
+    return isnan(v) || v <= 0.0f ? 0u : v >= 4294967296.0f ? 0xffffffffu : uint(v);
+}
+
 kernel void convert(device const uchar* input_buffer [[buffer(0)]],
                     device uchar* output_buffer [[buffer(1)]],
                     constant ConvertParams& params [[buffer(2)]],
@@ -601,11 +615,14 @@ kernel void convert(device const uchar* input_buffer [[buffer(0)]],
         ((device half*)output)[index] = kInputDType == LFS_DT_Float16 ? ((device const half*)input)[index]
                                                                      : half(load_as_float(input, index));
     else if (kOutputDType == LFS_DT_Int32)
-        ((device int*)output)[index] = int(load_as_int64(input, index));
+        ((device int*)output)[index] = kConvertFromFloat ? saturate_int32(load_as_float(input, index))
+                                                   : int(load_as_int64(input, index));
     else if (kOutputDType == LFS_DT_Int64)
-        ((device long*)output)[index] = load_as_int64(input, index);
+        ((device long*)output)[index] = kConvertFromFloat ? saturate_int64(load_as_float(input, index))
+                                                    : load_as_int64(input, index);
     else
-        ((device uint*)output)[index] = uint(load_as_int64(input, index));
+        ((device uint*)output)[index] = kConvertFromFloat ? saturate_uint32(load_as_float(input, index))
+                                                    : uint(load_as_int64(input, index));
 }
 
 // ---------------------------------------------------------------------------

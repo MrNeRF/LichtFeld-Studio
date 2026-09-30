@@ -35,6 +35,7 @@ namespace lfs::core::internal {
         constexpr VkBufferUsageFlags kStorageUsage =
             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
             VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
@@ -140,7 +141,8 @@ namespace lfs::core::internal {
         : context_(context) {
         try {
             create_pool();
-            ensure_staging(kInitialStagingSize);
+            // Availability probes also construct a context. Allocate the ring
+            // on the first upload, when acquire_staging holds its mutex.
         } catch (...) {
             shutdown();
             throw;
@@ -238,15 +240,38 @@ namespace lfs::core::internal {
         buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                             VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        // Upload workers write sequentially through the device mapping while
+        // training runs. The queued copy then reads local device memory. A
+        // dedicated allocation bounds this ring to its requested size.
         VmaAllocationCreateInfo allocation_info{};
-        allocation_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
-                                VMA_ALLOCATION_CREATE_MAPPED_BIT;
-        allocation_info.usage = VMA_MEMORY_USAGE_AUTO;
+        allocation_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                VMA_ALLOCATION_CREATE_MAPPED_BIT |
+                                VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+        allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
         allocation_info.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+                                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        uint32_t memory_type = 0;
+        VkResult result = vmaFindMemoryTypeIndexForBufferInfo(
+            context_.allocator(), &buffer_info, &allocation_info, &memory_type);
         VmaAllocationInfo info{};
-        vk_check(&context_, vmaCreateBuffer(context_.allocator(), &buffer_info, &allocation_info, &staging_buffer_, &staging_allocation_, &info),
-                 "vmaCreateBuffer(staging)");
+        if (result == VK_SUCCESS) {
+            result = vmaCreateBuffer(context_.allocator(), &buffer_info, &allocation_info,
+                                     &staging_buffer_, &staging_allocation_, &info);
+        }
+        if (result == VK_ERROR_FEATURE_NOT_PRESENT || result == VK_ERROR_MEMORY_MAP_FAILED ||
+            result == VK_ERROR_OUT_OF_DEVICE_MEMORY || result == VK_ERROR_OUT_OF_HOST_MEMORY) {
+            // Preserve ordinary host staging on devices without a usable
+            // coherent device mapping, including an exhausted mapping heap.
+            allocation_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                                    VMA_ALLOCATION_CREATE_MAPPED_BIT;
+            allocation_info.usage = VMA_MEMORY_USAGE_AUTO;
+            allocation_info.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+            result = vmaCreateBuffer(context_.allocator(), &buffer_info, &allocation_info,
+                                     &staging_buffer_, &staging_allocation_, &info);
+        }
+        vk_check(&context_, result, "vmaCreateBuffer(staging)");
         staging_mapped_ = static_cast<std::byte*>(info.pMappedData);
         LFS_ASSERT_MSG(staging_mapped_ != nullptr,
                        "Vulkan staging allocation was not mapped");
@@ -428,7 +453,7 @@ namespace lfs::core::internal {
                 {
                     std::lock_guard lock(allocations_mutex_);
                     collect_retired_locked(context_.completed_timeline());
-                    destroy_free_locked();
+                    destroy_free_when_idle_locked();
                 }
                 result = vmaCreateBuffer(
                     context_.allocator(), &buffer_info, &allocation_info,
@@ -800,21 +825,13 @@ namespace lfs::core::internal {
     }
 
     void VulkanMemory::collect_retired_locked(const uint64_t completed) {
-#ifdef __APPLE__
-        // MoltenVK makes all device memory resident for every command buffer
-        // it submits without keeping that memory alive, so freeing memory also
-        // waits for work that never used it.
-        const bool idle = completed >= context_.submitted_timeline();
-#else
-        constexpr bool idle = true;
-#endif
+        std::vector<std::unique_ptr<AllocationRecord>> released;
         std::erase_if(retired_, [&](auto& record) {
-            if (record->last_use > completed || (!record->cacheable && !idle)) {
+            if (record->last_use > completed) {
                 return false;
             }
             if (!record->cacheable) {
-                vmaDestroyBuffer(context_.allocator(), record->buffer,
-                                 record->allocation);
+                released.push_back(std::move(record));
             } else if (record->host_visible) {
                 readback_free_lists_[record->allocated_size].push_back(std::move(record));
             } else {
@@ -822,6 +839,35 @@ namespace lfs::core::internal {
             }
             return true;
         });
+        if (released.empty()) {
+            return;
+        }
+        const auto destroy = [&] {
+            for (auto& record : released) {
+                vmaDestroyBuffer(context_.allocator(), record->buffer,
+                                 record->allocation);
+            }
+            released.clear();
+        };
+#ifdef __APPLE__
+        // See run_while_queue_idle: memory is freed only with nothing in flight.
+        if (!context_.run_while_queue_idle(destroy)) {
+            for (auto& record : released) {
+                retired_.push_back(std::move(record));
+            }
+        }
+#else
+        destroy();
+#endif
+    }
+
+    void VulkanMemory::destroy_free_when_idle_locked() {
+#ifdef __APPLE__
+        // See run_while_queue_idle; pooled blocks stay cached when work is in flight.
+        (void)context_.run_while_queue_idle([&] { destroy_free_locked(); });
+#else
+        destroy_free_locked();
+#endif
     }
 
     void VulkanMemory::destroy_free_locked() {
@@ -875,7 +921,7 @@ namespace lfs::core::internal {
 #endif
         std::lock_guard lock(allocations_mutex_);
         collect_retired_locked(context_.completed_timeline());
-        destroy_free_locked();
+        destroy_free_when_idle_locked();
     }
 
     MemoryInfo VulkanMemory::stats() const {

@@ -312,6 +312,25 @@ add_custom_command(
             "${_photometric_spv}" "${LFS_TRAINING_SPV_DIR}/photometric.json"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/photometric.slang" lfs_tensor_spirv_finalize
     VERBATIM)
+
+# Separate filter compilations bound optimizer memory; keep their tap loops rolled.
+foreach(_variant IN ITEMS photometric_fused photometric_fused_gradient)
+    if(_variant STREQUAL "photometric_fused")
+        set(_moments 1)
+    else()
+        set(_moments 0)
+    endif()
+    add_custom_command(
+        OUTPUT "${LFS_TRAINING_SPV_DIR}/${_variant}.spv" "${LFS_TRAINING_SPV_DIR}/${_variant}.json"
+        COMMAND ${LFS_TENSOR_SLANGC} "${CMAKE_CURRENT_SOURCE_DIR}/shaders/photometric_fused.slang"
+                -entry main -stage compute -O -fp-mode precise -line-directive-mode none
+                -target spirv -profile glsl_460 -emit-spirv-directly -D PHOTO_MOMENTS=${_moments}
+                -o "${LFS_TRAINING_SPV_DIR}/${_variant}.raw.spv"
+        COMMAND lfs_tensor_spirv_finalize "${LFS_TRAINING_SPV_DIR}/${_variant}.raw.spv"
+                "${LFS_TRAINING_SPV_DIR}/${_variant}.spv" "${LFS_TRAINING_SPV_DIR}/${_variant}.json"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/photometric_fused.slang" lfs_tensor_spirv_finalize
+        VERBATIM)
+endforeach()
 set(_fast_forward_spv "${LFS_TRAINING_SPV_DIR}/fast_forward.spv")
 add_custom_command(
     OUTPUT "${_fast_forward_spv}" "${LFS_TRAINING_SPV_DIR}/fast_forward.json"
@@ -440,7 +459,10 @@ add_custom_command(
             pair_sort "${_pair_sort_spv}" pair_sort_match "${_pair_sort_match_spv}"
             fast_backward "${LFS_TRAINING_SPV_DIR}/fast_backward.spv"
             fast_backward_atomic "${LFS_TRAINING_SPV_DIR}/fast_backward_atomic.spv"
-            fast_forward "${_fast_forward_spv}" photometric "${_photometric_spv}" sh_ops "${_sh_ops_spv}" extra_loss "${_extra_loss_spv}" adam "${_adam_spv}"
+            fast_forward "${_fast_forward_spv}" photometric "${_photometric_spv}"
+            photometric_fused "${LFS_TRAINING_SPV_DIR}/photometric_fused.spv"
+            photometric_fused_gradient "${LFS_TRAINING_SPV_DIR}/photometric_fused_gradient.spv"
+            sh_ops "${_sh_ops_spv}" extra_loss "${_extra_loss_spv}" adam "${_adam_spv}"
             training_image "${_training_image_spv}"
             refine "${_refine_spv}"
             mrnf "${_mrnf_spv}"
@@ -453,6 +475,7 @@ add_custom_command(
             ppisp "${_ppisp_spv}"
             geometry "${_geometry_spv}" geometry_fp32 "${_geometry_fp32_spv}"
     DEPENDS "${LFS_TRAINING_SPV_DIR}/fast_backward.spv" "${LFS_TRAINING_SPV_DIR}/fast_backward_atomic.spv" "${_gsplat_forward_spv}" "${LFS_TRAINING_SPV_DIR}/gsplat_backward.spv" "${LFS_TRAINING_SPV_DIR}/gsplat_backward_atomic.spv"
+            "${LFS_TRAINING_SPV_DIR}/photometric_fused.spv" "${LFS_TRAINING_SPV_DIR}/photometric_fused_gradient.spv"
             "${_fast_forward_spv}" "${_photometric_spv}" "${_pair_sort_spv}" "${_pair_sort_match_spv}" lfs_tensor_spirv_finalize
             "${_sh_ops_spv}" "${_extra_loss_spv}" "${_adam_spv}" "${_training_image_spv}" "${_refine_spv}" "${_mrnf_spv}" "${_morton_spv}" "${_joint_morton_spv}" "${_mcmc_spv}" "${_lpips_spv}" "${_lpips_coop_spv}" "${_lpips_halo_spv}" "${_masks_spv}" "${_bilateral_spv}" "${_controller_spv}" "${_ppisp_spv}" "${_geometry_spv}" "${_geometry_fp32_spv}"
             "${CMAKE_CURRENT_SOURCE_DIR}/training_shader_table.hpp"

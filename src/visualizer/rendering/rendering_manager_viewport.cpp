@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/camera.hpp"
 #include "core/logger.hpp"
 #include "model_renderability.hpp"
 #include "rendering/coordinate_conventions.hpp"
@@ -9,6 +10,7 @@
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "scene/scene_render_state.hpp"
+#include "split_view_service.hpp"
 #if LFS_BUILD_TRAINER
 #include "training/trainer.hpp"
 #endif
@@ -441,6 +443,42 @@ namespace lfs::vis {
             orthographic_override,
             ortho_scale_override,
             background_color_override,
+            PreviewImageReadback::FloatRgb);
+    }
+
+    std::shared_ptr<lfs::core::Tensor> RenderingManager::renderDatasetCameraImage(SceneManager* const scene_manager,
+                                                                                  const lfs::core::Camera& camera) {
+        if (!scene_manager || camera.camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR) {
+            return {};
+        }
+        const glm::ivec2 size{std::max(camera.image_width(), camera.camera_width()),
+                              std::max(camera.image_height(), camera.camera_height())};
+        const auto render_camera = detail::buildGTRenderCamera(
+            camera, size, detail::currentSceneTransform(scene_manager, camera.uid()));
+        if (!render_camera || !render_camera->intrinsics) {
+            return {};
+        }
+
+        auto render_lock = acquireLiveModelRenderLock(scene_manager);
+        auto render_state = scene_manager->buildRenderState();
+        const auto* const model = render_state.combined_model;
+        if (!hasRenderableGaussians(model)) {
+            return {};
+        }
+        return renderPreviewImageWithState(
+            scene_manager,
+            *model,
+            std::move(render_state),
+            render_camera->rotation,
+            render_camera->translation,
+            lfs::rendering::vFovToFocalLength(glm::degrees(camera.FoVy())),
+            size.x,
+            size.y,
+            render_lock.has_value(),
+            render_camera->intrinsics,
+            false,
+            std::nullopt,
+            std::nullopt,
             PreviewImageReadback::FloatRgb);
     }
 

@@ -6,10 +6,31 @@
 #include "core/sh_value_quant.hpp"
 #include "internal/sh_codec.hpp"
 #include "internal/tensor_impl.hpp"
+#include <cstdint>
 #include <limits>
 #include <tbb/parallel_for.h>
+#include <utility>
 
 namespace lfs::core {
+
+    namespace {
+        // Views of one allocation alias only where their bytes meet: training
+        // storage carves the shN codes and their bounds from a single block.
+        bool overlaps(const Tensor& a, const Tensor& b) {
+            if (!internal::shares_storage(a, b) || a.numel() == 0 || b.numel() == 0)
+                return false;
+            const auto span = [](const Tensor& t) {
+                size_t last = 0;
+                for (size_t d = 0; d < t.ndim(); ++d)
+                    last += (t.shape()[d] - 1) * t.strides()[d];
+                const auto begin = reinterpret_cast<std::uintptr_t>(t.data_ptr());
+                return std::pair{begin, begin + (last + 1) * dtype_size(t.dtype())};
+            };
+            const auto [a_begin, a_end] = span(a);
+            const auto [b_begin, b_end] = span(b);
+            return a_begin < b_end && b_begin < a_end;
+        }
+    } // namespace
     ShFormat sh_storage_format(const Tensor& values, const Tensor& bounds) {
         return bounds.is_valid() && bounds.numel()   ? ShFormat::Q16
                : values.dtype() == DataType::Float16 ? ShFormat::Float16
@@ -73,17 +94,17 @@ namespace lfs::core {
             internal::require_same_gpu_backend(source, *input, "sh_codec");
         }
         if (destination_bounds) {
-            LFS_ASSERT_MSG(!internal::shares_storage(*destination_bounds, destination) &&
-                               !internal::shares_storage(*destination_bounds, source) &&
-                               (!source_bounds || !internal::shares_storage(*destination_bounds, *source_bounds)) &&
-                               (!indices || !internal::shares_storage(*destination_bounds, *indices)),
+            LFS_ASSERT_MSG(!overlaps(*destination_bounds, destination) &&
+                               !overlaps(*destination_bounds, source) &&
+                               (!source_bounds || !overlaps(*destination_bounds, *source_bounds)) &&
+                               (!indices || !overlaps(*destination_bounds, *indices)),
                            "sh_codec output bounds must not alias any operand");
             internal::preserve_lazy_snapshots_before_write(*destination_bounds);
         }
         internal::preserve_lazy_snapshots_before_write(destination);
-        Tensor src = internal::shares_storage(source, destination) ? source.clone() : source;
-        Tensor ids = indices ? (internal::shares_storage(*indices, destination) ? indices->clone() : *indices) : Tensor{};
-        Tensor bounds = source_bounds ? (internal::shares_storage(*source_bounds, destination) ? source_bounds->clone() : *source_bounds) : Tensor{};
+        Tensor src = overlaps(source, destination) ? source.clone() : source;
+        Tensor ids = indices ? (overlaps(*indices, destination) ? indices->clone() : *indices) : Tensor{};
+        Tensor bounds = source_bounds ? (overlaps(*source_bounds, destination) ? source_bounds->clone() : *source_bounds) : Tensor{};
         if (!p.count || !p.destination_rest)
             return;
 

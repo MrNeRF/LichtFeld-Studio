@@ -6,6 +6,18 @@ struct Push {
     uint64_t parameters;
 };
 [[vk::push_constant]] Push push;
+// First fault wins. Synchronization reports it through the tensor runtime;
+// every invalid access below is still suppressed on the device.
+void tileFault(FastPush p, uint value, uint bound, uint operation) {
+    Ptr<uint, Access.ReadWrite> words = (Ptr<uint, Access.ReadWrite>)p.status;
+    uint observed;
+    InterlockedCompareExchange(words[0], 0u, 3u, observed);
+    if (observed == 0) {
+        words[1] = value;
+        words[2] = bound;
+        words[3] = operation;
+    }
+}
 Projected project(FastPush p, uint i, out uint touched) {
     Projected o = (Projected)0;
     touched = 0;
@@ -13,7 +25,13 @@ Projected project(FastPush p, uint i, out uint touched) {
     float4 q = ((Ptr<float4, Access.Read>)p.rotations)[i];
     float4 v0 = ((Ptr<float4, Access.Read>)p.view)[0], v1 = ((Ptr<float4, Access.Read>)p.view)[1], v2 = ((Ptr<float4, Access.Read>)p.view)[2];
     float z = dot(v2.xyz, m) + v2.w;
-    float opacity = 1 / (1 + exp(-loadFloat(p.opacities, i)));
+    float rawOpacity = loadFloat(p.opacities, i);
+    // Primitives with NaN/Inf geometry or opacity are culled on every backend.
+    if (!finiteValue(m.x) || !finiteValue(m.y) || !finiteValue(m.z) || !finiteValue(s.x) || !finiteValue(s.y) ||
+        !finiteValue(s.z) || !finiteValue(q.x) || !finiteValue(q.y) || !finiteValue(q.z) || !finiteValue(q.w) ||
+        !finiteValue(rawOpacity))
+        return o;
+    float opacity = 1 / (1 + exp(-rawOpacity));
     if (z < 0.01f || z > 1e10f || opacity < 1.0f / 255 || dot(q, q) < 1e-8f)
         return o;
     float3 variance = exp(2 * min(s, float3(20)));
@@ -150,6 +168,26 @@ result:
     };
     FastPush p = ((Ptr<FastPush, Access.Read>)push.parameters)[0];
     specializeFast(p, fastStage);
+    if (p.stage == 8) {
+        if (gid.x == 0 && lane == 0) {
+            uint64_t count = ((Ptr<uint64_t, Access.Read>)p.offsets)[p.visible - 1];
+            uint overflow = count > uint64_t(0x7fffffffu) ? 2 : count > p.instances ? 1 : 0;
+            Ptr<uint, Access.ReadWrite> args = (Ptr<uint, Access.ReadWrite>)p.visibility;
+            args[0] = overflow == 0 ? uint(count) : 0;
+            args[1] = overflow; args[2] = count != 0 ? 1 : 0;
+            args[24] = uint(count); args[25] = uint(count >> 32);
+            uint active = overflow == 0 && count != 0 ? 1 : 0;
+            args[4] = active * min((p.visible + 255) / 256, p.padding); args[5] = 1; args[6] = 1;
+            args[8] = active * ((uint(count) + 2047) / 2048); args[9] = 1; args[10] = 1;
+            args[12] = active * min((uint(count) + 255) / 256, p.padding); args[13] = 1; args[14] = 1;
+            args[16] = active * 256; args[17] = 1; args[18] = 1;
+            args[20] = overflow == 0 ? min(p.gridWidth * p.gridHeight, p.padding) : 0; args[21] = 1; args[22] = 1;
+            args[28] = active; args[29] = 1; args[30] = 1;
+        }
+        return;
+    }
+    if (p.padding != 0 && p.stage >= 3 && p.stage <= 5)
+        p.instances = loadUint(p.visibility, 0);
     if (p.stage == 6) {
         uint blocks = (p.count + 255) / 256;
         for (uint block = gid.x; block < blocks; block += groups.x) {
@@ -249,7 +287,7 @@ result:
                 for (uint cross = span.x; cross < span.y; ++cross) {
                     uint tile = alongX ? scan * p.gridWidth + cross : cross * p.gridWidth + scan;
                     if (at >= end || at >= p.instances || tile >= p.gridWidth * p.gridHeight) {
-                        InterlockedOr(((Ptr<uint, Access.ReadWrite>)p.status)[0], 1u);
+                        tileFault(p, uint(at), p.instances, 1u);
                         continue;
                     }
                     storeUint(p.keys, uint(at), (tile << p.depthBits) | o.depthKey);
@@ -258,11 +296,12 @@ result:
                 }
             }
             if (at != end)
-                InterlockedOr(((Ptr<uint, Access.ReadWrite>)p.status)[0], 2u);
+                tileFault(p, uint(at), uint(end), 2u);
         } else if (p.stage == 4) {
             uint tile = loadUint(p.keys, i) >> p.depthBits;
             if (tile >= p.gridWidth * p.gridHeight || loadUint(p.values, i) >= p.visible) {
-                InterlockedOr(((Ptr<uint, Access.ReadWrite>)p.status)[0], 4u);
+                tileFault(p, tile >= p.gridWidth * p.gridHeight ? tile : loadUint(p.values, i),
+                          tile >= p.gridWidth * p.gridHeight ? p.gridWidth * p.gridHeight : p.visible, 4u);
                 continue;
             }
             if (i == 0 || (loadUint(p.keys, i - 1) >> p.depthBits) != tile)

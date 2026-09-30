@@ -361,6 +361,12 @@ void projectionBackward(BackPush back, uint primitive_idx) {
         rotation_grads[2] = clamped_rotation.z;
         rotation_grads[3] = clamped_rotation.w;
 
+        // Visibility statistics without blend densification (fastgs backward.cu).
+        if (back.densify == 0 && back.densification != 0) {
+            Ptr<float, Access.ReadWrite> stats = (Ptr<float, Access.ReadWrite>)back.densification;
+            stats[primitive_idx] += 1.0f;
+            stats[p.count + primitive_idx] += length(dL_dmean2d * float2(0.5f * p.width, 0.5f * p.height));
+        }
     } else {
         store3(back.dcGradient, primitive_idx, float3(0));
         [unroll] for (uint slot = 0; slot < 12; ++slot) if (slot < (p.rest * 3 + 3) / 4) {

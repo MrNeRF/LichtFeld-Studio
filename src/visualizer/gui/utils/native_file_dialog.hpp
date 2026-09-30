@@ -4,10 +4,29 @@
 #pragma once
 
 #include "core/export.hpp"
+#include <cstdint>
 #include <filesystem>
 #include <string>
 
 namespace lfs::vis::gui {
+
+    // While an instance is alive on the calling thread, every native file dialog below
+    // returns an empty path at once instead of opening. MCP requests run under one: a
+    // modal dialog on the GUI thread blocks every later request and no MCP client can
+    // answer it. Instances nest.
+    class LFS_VIS_API ScopedNativeFileDialogBlock {
+    public:
+        ScopedNativeFileDialogBlock();
+        ~ScopedNativeFileDialogBlock();
+        ScopedNativeFileDialogBlock(const ScopedNativeFileDialogBlock&) = delete;
+        ScopedNativeFileDialogBlock& operator=(const ScopedNativeFileDialogBlock&) = delete;
+
+        // True when a dialog was requested, and suppressed, while this block was alive.
+        [[nodiscard]] bool suppressedDialog() const;
+
+    private:
+        std::uint64_t suppressed_before_;
+    };
 
     // Initializes the thread-local native dialog backend without opening a
     // dialog. Call only on the UI thread during an idle frame.

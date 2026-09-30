@@ -18,6 +18,21 @@ struct Push { uint64_t parameters; };
 groupshared float red[4][256];
 groupshared float4 newMomentBounds;
 groupshared float2 newValueBounds;
+groupshared float4 oldMomentBounds;
+groupshared float2 oldValueBounds;
+
+// The kernel replaces a block's bounds in place, and bounds are read through
+// read-only pointers the compiler may re-load at every use (SPIRV-Cross on
+// MoltenVK does). Snapshot them once in shared memory so no thread decodes
+// with bounds another thread already replaced. Every thread must call it.
+float4 loadOldBounds(Params p, uint block, uint lane) {
+    if (lane == 0) {
+        oldMomentBounds = ((Ptr<float4, Access.Read>)p.bounds)[block];
+        oldValueBounds = p.valueBounds != 0 ? ((Ptr<float2, Access.Read>)p.valueBounds)[block] : float2(0);
+    }
+    GroupMemoryBarrierWithGroupSync();
+    return oldMomentBounds;
+}
 
 float qRound(float x) { float base = floor(abs(x)); return sign(x) * (base + (abs(x) - base >= 0.5f ? 1.0f : 0.0f)); }
 float qMin(float a, float b) { return isnan(a) ? b : isnan(b) ? a : min(a, b); }
@@ -142,6 +157,7 @@ float rowScale(Params p, uint row, bool sh) {
     }
     return scale;
 }
+// First-moment-only term (see screen_share.cuh): feeding it into v overflows v.
 float hinge(Params p, uint row, float oldV) {
     if ((p.entryCount & 2) == 0 || p.screenShare == 0 || !(p.screenLimit > 0.0f && p.screenLimit < 1.0f) || !(p.screenPenalty > 0.0f)) return 0.0f;
     if (row >= p.screenCount) return 0.0f;
@@ -157,7 +173,7 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Push pu
     uint row = groupId.x * 256 + lane;
     if (p.operation == 0) {
         uint attrs = min(p.attributes, 16u);
-        float4 oldmm = ((Ptr<float4, Access.Read>)p.bounds)[groupId.x];
+        float4 oldmm = loadOldBounds(p, groupId.x, lane);
         float usU[16], usS[16], grad[16], m[16], v[16];
         float umin = 1e30f, umax = -1e30f, smin = 1e30f, smax = -1e30f;
         bool valid = row < p.primitives;
@@ -170,10 +186,11 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Push pu
             float2 mv = decodeMV(loadUS(p, cell, oldmm));
             m[a]=mv.x; v[a]=mv.y;
             float g=((Ptr<float, Access.Read>)p.gradient)[cell];
+            float h=0.0f;
             if (p.screenShare != 0 && row < p.primitives && (p.entryCount & 2) != 0)
-                g += hinge(p,row,mv.y);
+                h = hinge(p,row,mv.y);
             if (apply) {
-                m[a] = fma(p.beta1, mv.x, (1.0f-p.beta1)*g);
+                m[a] = fma(p.beta1, mv.x, (1.0f-p.beta1)*(g+h));
                 v[a] = fma(p.beta2, mv.y, roundedMul(roundedMul(1.0f-p.beta2,g),g));
                 ((Ptr<float, Access.ReadWrite>)p.parameter)[cell] -= step * m[a] / (sqrt(v[a])*p.bc2+p.eps);
             }
@@ -189,24 +206,32 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Push pu
         if(valid) for(uint a=0;a<attrs;++a) storeUS(p,uint64_t(row)*attrs+a,float2(usU[a],usS[a]),newMomentBounds);
         return;
     }
-    if (p.operation == 2) {
-        uint block=groupId.x, start=block*256;
-        float4 oldmm=((Ptr<float4,Access.Read>)p.bounds)[block];
-        bool touched=false;
-        if(row<p.primitives) for(uint i=0;i<p.indexCount;++i) {
-            int64_t idx=((Ptr<int64_t,Access.Read>)p.indices)[i];
-            if(idx>=int64_t(start)&&idx<int64_t(start+256)) touched=true;
+    if (p.operation == 3) {
+        uint3 groups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
+        Ptr<uint, Access.ReadWrite> flags = (Ptr<uint, Access.ReadWrite>)p.scratch;
+        for (uint i = row; i < p.indexCount; i += groups.x * 256) {
+            int64_t index = ((Ptr<int64_t, Access.Read>)p.indices)[i];
+            if (index < 0 || index >= int64_t(p.primitives)) continue;
+            uint previous;
+            InterlockedOr(flags[uint(index)], 1u, previous);
+            InterlockedOr(flags[p.primitives + uint(index) / 256], 1u, previous);
         }
+        return;
+    }
+    if (p.operation == 2) {
+        uint block=groupId.x;
+        bool touched=((Ptr<uint,Access.Read>)p.scratch)[p.primitives+block]!=0;
+        if (!touched) return;
+        float4 oldmm=loadOldBounds(p, block, lane);
         if(lane==0) newMomentBounds=float4(min(oldmm.x,0.0f),max(oldmm.y,0.0f),min(oldmm.z,0.0f),max(oldmm.w,0.0f));
         GroupMemoryBarrierWithGroupSync();
         if(!touched || row>=p.primitives) return;
         uint n=p.layout==0?p.attributes:p.slots*4;
-        bool selected=false;
-        for(uint i=0;i<p.indexCount;++i) if(((Ptr<int64_t,Access.Read>)p.indices)[i]==int64_t(row)) selected=true;
+        bool selected=((Ptr<uint,Access.Read>)p.scratch)[row]!=0;
         for(uint a=0;a<n;++a) {
             uint64_t cell=p.layout==0?uint64_t(row)*n+a:uint64_t(shSlot(row,a/4,p.slots)*4+a%4);
             if(selected) storeUS(p,cell,float2(0),newMomentBounds);
-            else storeUS(p,cell,loadUS(p,cell,oldmm),newMomentBounds);
+            else if (any(oldmm != newMomentBounds)) storeUS(p,cell,loadUS(p,cell,oldmm),newMomentBounds);
         }
         if(lane==0)((Ptr<float4,Access.ReadWrite>)p.bounds)[block]=newMomentBounds;
         return;
@@ -215,8 +240,8 @@ void main(uint3 groupId : SV_GroupID, uint lane : SV_GroupIndex, uniform Push pu
     uint slots=p.slots;
     uint activeSlots=p.activeBases>9?12u:(p.activeBases>4?6u:3u);
     uint oldIndex=groupId.x;
-    float4 oldmm=((Ptr<float4,Access.Read>)p.bounds)[oldIndex];
-    float2 oldvb=p.valueBounds!=0?((Ptr<float2,Access.Read>)p.valueBounds)[oldIndex]:float2(0);
+    float4 oldmm=loadOldBounds(p, oldIndex, lane);
+    float2 oldvb=oldValueBounds;
     bool valid=row<p.primitives;
     bool apply=valid;
     if(valid&&p.frozenMask!=0&&row<p.frozenCount&&((Ptr<uint8_t,Access.Read>)p.frozenMask)[row]!=0&&p.frozenScale==0) apply=false;

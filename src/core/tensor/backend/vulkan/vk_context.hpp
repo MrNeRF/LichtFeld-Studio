@@ -12,6 +12,7 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -146,6 +147,18 @@ namespace lfs::core::internal {
         [[nodiscard]] uint64_t submitted_timeline() const noexcept {
             return submitted_timeline_.load(std::memory_order_acquire);
         }
+        // Runs `release` while no submission is in progress or unfinished and
+        // returns whether it ran. MoltenVK makes all device memory resident for
+        // every submitted command buffer without keeping it alive, so memory
+        // freed during a submit on another thread, or before it completes, faults.
+        template <class Release>
+        bool run_while_queue_idle(Release&& release) {
+            std::lock_guard lock(queue_mutex_);
+            if (completed_timeline() < submitted_timeline())
+                return false;
+            release();
+            return true;
+        }
         void check_fault_buffer();
         // Shaders record an out-of-range index as {code, index, extent, op}; the
         // adapter that owns the launch reads and clears the record after its wait.
@@ -158,6 +171,9 @@ namespace lfs::core::internal {
         [[nodiscard]] VulkanPipelines& pipelines();
 
         void shutdown();
+        // Runs `release` early in shutdown(), while the device is still alive, for
+        // objects held outside core past their last use (static pipeline caches).
+        LFS_CORE_API void on_shutdown(std::function<void()> release);
 
     private:
         void create_instance();
@@ -198,7 +214,10 @@ namespace lfs::core::internal {
         std::atomic<bool> dead_{false};
         std::atomic<bool> device_loss_reported_{false};
         std::mutex queue_mutex_;
+        void publish_submitted_locked(uint64_t signal_value);
         std::mutex shutdown_mutex_;
+        std::mutex shutdown_release_mutex_;
+        std::vector<std::function<void()>> shutdown_releases_;
 #if LFS_HAS_CUDA
         std::unique_ptr<VulkanCudaImportRegistry> cuda_imports_;
 #endif

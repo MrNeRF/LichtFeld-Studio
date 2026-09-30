@@ -1523,6 +1523,8 @@ namespace lfs::core::internal {
                                           .group_size = MTLSizeMake(kThreadgroupWidth, 1, 1)});
             }
 
+            void submit() override { context_->flush(); }
+
         private:
             std::shared_ptr<Context> context_ = acquire_context();
         };

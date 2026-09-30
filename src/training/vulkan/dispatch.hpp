@@ -10,12 +10,14 @@ namespace lfs::training::vulkan {
     uint64_t address(const core::Tensor& tensor);
     void dispatch(std::string_view module, const void* parameters, size_t bytes,
                   std::span<const StorageRef> reads, std::span<const StorageRef> writes,
-                  uint32_t groups, uint32_t specialization = UINT32_MAX);
+                  uint32_t groups, uint32_t specialization = UINT32_MAX,
+                  StorageRef indirect = {}, VkDeviceSize indirect_offset = 0);
     template <class T>
     void dispatch(std::string_view module, const T& parameters,
                   std::span<const StorageRef> reads, std::span<const StorageRef> writes,
-                  uint32_t groups, uint32_t specialization = UINT32_MAX) {
-        dispatch(module, &parameters, sizeof(T), reads, writes, groups, specialization);
+                  uint32_t groups, uint32_t specialization = UINT32_MAX,
+                  StorageRef indirect = {}, VkDeviceSize indirect_offset = 0) {
+        dispatch(module, &parameters, sizeof(T), reads, writes, groups, specialization, indirect, indirect_offset);
     }
     uint32_t groups(size_t work);
 } // namespace lfs::training::vulkan

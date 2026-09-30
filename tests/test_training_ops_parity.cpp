@@ -453,7 +453,9 @@ namespace {
         // Borders, batch normalization, soft masks and byte targets are observable
         // contracts, including independent valid padding on each image axis.
         for (const auto [n, h, w] : {std::tuple{1, 7, 19}, std::tuple{1, 8, 40}, std::tuple{1, 40, 8},
-                                     std::tuple{2, 13, 17}, std::tuple{2, 8, 40}, std::tuple{2, 40, 8}}) {
+                                     std::tuple{2, 10, 10}, std::tuple{2, 10, 11}, std::tuple{2, 11, 10},
+                                     std::tuple{2, 13, 17}, std::tuple{2, 8, 40}, std::tuple{2, 40, 8},
+                                     std::tuple{1, 13, 259}, std::tuple{1, 17, 31}, std::tuple{2, 33, 35}}) {
             auto host = Tensor::empty({static_cast<size_t>(n), 3, static_cast<size_t>(h), static_cast<size_t>(w)}, Device::CPU);
             auto bytes_host = Tensor::empty(host.shape(), Device::CPU, DataType::UInt8);
             auto soft_host = Tensor::empty({static_cast<size_t>(h), static_cast<size_t>(w)}, Device::CPU);
@@ -640,6 +642,16 @@ namespace {
                            {.layout = ops::JointLayout::Rows, .primitives = static_cast<int>(n), .attributes_or_slots = 4, .bits = 16});
         keep(out.snapshot, backend, "adam.encode_zero.packed", rows.packed, kExact);
         keep(out.snapshot, backend, "adam.encode_zero.bounds", rows.bounds, kAdam);
+        // Duplicate and invalid selections touch the first and final blocks;
+        // the middle block and the partial final block must retain their state.
+        std::vector<int64_t> reset_rows{-1, static_cast<int64_t>(n), 0, 255, static_cast<int64_t>(n - 1)};
+        for (int i = 0; i < 40; ++i)
+            reset_rows.push_back(i % 17);
+        const auto reset_indices = i64_rows(reset_rows);
+        table->encode_zero(sh_packed, sh_bounds, reset_indices,
+                           {.layout = ops::JointLayout::SwizzledSH, .primitives = static_cast<int>(n), .attributes_or_slots = static_cast<int>(lfs::core::sh_float4_slots_for_rest(rest)), .bits = 8});
+        keep(out.snapshot, backend, "adam.encode_zero.sh.packed", sh_packed, kExact);
+        keep(out.snapshot, backend, "adam.encode_zero.sh.bounds", sh_bounds, kAdam);
         return out;
     }
 
@@ -2866,6 +2878,55 @@ namespace {
             EXPECT_TRUE(same_float(other[i], reference[i], kLoss))
                 << "step " << i << " cuda " << reference[i] << " second " << other[i]
                 << " max_abs " << max_abs << " at " << worst;
+        }
+    }
+
+    TEST(TrainingVulkanOps, GroupedMortonPreservesPackedWordsAndPadding) {
+        if (!lfs::core::gpu_backend_available(GpuBackend::Vulkan))
+            GTEST_SKIP();
+        const lfs::core::GpuBackendScope scope(GpuBackend::Vulkan);
+        const auto& table = *lfs::training::training_ops(GpuBackend::Vulkan).morton;
+        constexpr size_t width = 5;
+        for (const int bits : {8, 16}) {
+            for (const size_t n : {size_t{513}, size_t{1048609}}) {
+                SCOPED_TRACE(std::to_string(n) + "/" + std::to_string(bits));
+                const auto perm = shuffled_indices(n);
+                const size_t cells = lfs::core::sh_swizzled_padded_n(n) * width * 4;
+                const size_t bytes = cells * joint::bytes_per_cell(bits);
+                auto host = Tensor::empty({bytes}, Device::CPU, DataType::UInt8);
+                uint32_t value = 731;
+                for (size_t i = 0; i < bytes; ++i) {
+                    value = value * 1664525u + 1013904223u;
+                    host.ptr<uint8_t>()[i] = uint8_t(value >> 24);
+                }
+                const auto packed = host.gpu();
+                std::vector<float> values(joint::n_bounds_for_prims(n) * 4);
+                for (size_t b = 0; b < values.size() / 4; ++b) {
+                    values[b * 4] = -.3f - .01f * float(b % 13);
+                    values[b * 4 + 1] = .5f + .01f * float(b % 17);
+                    values[b * 4 + 2] = .01f;
+                    values[b * 4 + 3] = .1f + .001f * float(b % 11);
+                }
+                const auto bounds = Tensor::from_vector(values, {values.size()}, Device::GPU);
+                const ops::JointCodecParams codec{ops::JointLayout::SwizzledSH, int(n), int(width), bits};
+                auto reference = Tensor::zeros(packed.shape(), Device::GPU, DataType::UInt8);
+                auto reference_bounds = Tensor::zeros(bounds.shape(), Device::GPU);
+                table.permute_joint(packed, bounds, perm, reference, reference_bounds, codec);
+                const auto expected = reference.cpu(), expected_bounds = reference_bounds.cpu();
+                // The large 16-bit case exceeds 65535 workgroups; small cases
+                // cover one-slot batches and a partial final group.
+                for (const size_t group : n == 513 ? std::vector<size_t>{1, 3, 5} : std::vector<size_t>{5}) {
+                    SCOPED_TRACE(group);
+                    auto grouped = packed.clone();
+                    auto grouped_bounds = Tensor::zeros(bounds.shape(), Device::GPU);
+                    auto scratch = Tensor::empty({bytes / width * group}, Device::GPU, DataType::UInt8);
+                    table.permute_joint_grouped(grouped, bounds, perm, grouped_bounds, scratch, codec);
+                    const auto actual = grouped.cpu(), actual_bounds = grouped_bounds.cpu();
+                    ASSERT_EQ(actual.bytes(), expected.bytes());
+                    EXPECT_EQ(std::memcmp(actual.data_ptr(), expected.data_ptr(), actual.bytes()), 0);
+                    EXPECT_EQ(std::memcmp(actual_bounds.data_ptr(), expected_bounds.data_ptr(), actual_bounds.bytes()), 0);
+                }
+            }
         }
     }
 

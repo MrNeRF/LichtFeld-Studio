@@ -179,6 +179,12 @@ namespace lfs::vis {
                                                               std::optional<glm::vec3> background_color_override = std::nullopt,
                                                               std::optional<bool> orthographic_override = std::nullopt,
                                                               std::optional<float> ortho_scale_override = std::nullopt);
+        // Renders the scene from a dataset camera's pose and intrinsics, as the GT comparison
+        // view does, at max(image, camera) size: the size selection projects that camera at.
+        // Returns a CPU float [H,W,3] image without touching the viewport presentation, or
+        // null for an equirectangular camera or a failed render. Viewer thread only.
+        std::shared_ptr<lfs::core::Tensor> renderDatasetCameraImage(SceneManager* scene_manager,
+                                                                    const lfs::core::Camera& camera);
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageRgb8(SceneManager* scene_manager,
                                                                   const glm::mat3& camera_rotation,
                                                                   const glm::vec3& camera_position,

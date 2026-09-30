@@ -57,7 +57,7 @@ namespace lfs::training {
             Tensor ssim_map, dm_mu, dm_sigma1, dm_sigma12, raw_dm_mu, dl_dmap, grad, grad_raw, temp, result, mask_sum;
         };
         struct Field {
-            Tensor Views::* member;
+            Tensor Views::*member;
             Slot slot;
         };
 
@@ -359,6 +359,7 @@ namespace lfs::training {
             mk::launch("loss_reduce_final", params, {&partials, &result}, 1, kMaxGroups);
         }
 
+        // ssim_reduction.cu normalizes by mask_sum * N * C.
         void reduce_masked(const Tensor& partials, const uint32_t count, Tensor& loss, Tensor& mask_sum, const int channels) {
             const ReduceParams params{mk::address(partials), mk::address(loss), mk::address(mask_sum), count, 1,
                                       static_cast<float>(channels), 1.f, 1.f, 0.f};
@@ -380,12 +381,9 @@ namespace lfs::training {
             uint32_t valid_padding, masked, has_sigma;
         };
 
-        // The backward crops only when both axes exceed 10 pixels.
+        // ssim.cu crops the backward per axis like the forward.
         float grad_per_pixel(const Images& images, const bool valid_padding) {
-            const bool crop = valid_padding && images.h > 10 && images.w > 10;
-            const size_t numel = static_cast<size_t>(images.n) * images.c * (crop ? images.h - 10 : images.h) *
-                                 (crop ? images.w - 10 : images.w);
-            return 1.0f / static_cast<float>(numel);
+            return 1.0f / static_cast<float>(valid_count(images, valid_padding));
         }
 
         void ssim_backward(const Images& images, const Tensor& prediction, const Tensor& dm_mu, const Tensor& dm_sigma1,
@@ -493,7 +491,7 @@ namespace lfs::training {
                                                   .partials = ws.temp},
                                                  mode, !pure, weight, padding);
             if (masked)
-                reduce_masked(ws.temp, groups, ws.result, ws.mask_sum, images.c);
+                reduce_masked(ws.temp, groups, ws.result, ws.mask_sum, images.n * images.c);
             else if (pure) // loss = 1 - mean SSIM
                 reduce_final(ws.temp, groups, ws.result, -1.f, static_cast<float>(valid_count(images, padding)), 1.f);
             else

@@ -42,13 +42,13 @@ namespace lfs::training {
         ops_.push_back({.name = "set_lr",
                         .target = CommandTarget::Optimizer,
                         .selectors = {SelectionKind::All},
-                        .args = {{"value", ArgType::Float, true, "Learning rate"}},
+                        .args = {{"value", ArgType::Float, true, "Learning rate, in (0, 1]", 0.0, 1.0}},
                         .description = "Set global learning rate."});
 
         ops_.push_back({.name = "scale_lr",
                         .target = CommandTarget::Optimizer,
                         .selectors = {SelectionKind::All},
-                        .args = {{"factor", ArgType::Float, true, "Scale factor"}},
+                        .args = {{"factor", ArgType::Float, true, "Scale factor, > 0", 0.0, std::nullopt}},
                         .description = "Scale global learning rate."});
 
         ops_.push_back({.name = "pause",
@@ -111,7 +111,15 @@ namespace lfs::training {
         if (snapshot_.trainer != trainer) {
             return;
         }
+        // The finished run's counters stay readable (training.get_state, scene/state) until
+        // the next run or reset_snapshot() replaces them; only the live-run state goes.
+        const TrainingSnapshot finished = std::move(snapshot_);
         reset_snapshot_locked();
+        snapshot_.iteration = finished.iteration;
+        snapshot_.max_iterations = finished.max_iterations;
+        snapshot_.loss = finished.loss;
+        snapshot_.num_gaussians = finished.num_gaussians;
+        snapshot_.strategy = finished.strategy;
     }
 
     void CommandCenter::reset_snapshot() {

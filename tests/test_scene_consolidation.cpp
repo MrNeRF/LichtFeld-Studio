@@ -690,3 +690,37 @@ TEST(SceneActiveShTest, PreservesInactiveDataAndNodeLimitsThroughConsolidationAn
         }
     }
 }
+
+namespace {
+
+    [[nodiscard]] std::unique_ptr<SplatData> make_two_splat_model(const float x) {
+        return std::make_unique<SplatData>(
+            1,
+            Tensor::from_vector({x, 0.0f, 0.0f, x + 1.0f, 0.0f, 0.0f}, {size_t{2}, size_t{3}}, Device::CPU),
+            Tensor::zeros({size_t{2}, size_t{1}, size_t{3}}, Device::CPU),
+            Tensor::zeros({size_t{2}, size_t{3}, size_t{3}}, Device::CPU),
+            Tensor::zeros({size_t{2}, size_t{3}}, Device::CPU),
+            Tensor::from_vector({1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f}, {size_t{2}, size_t{4}}, Device::CPU),
+            Tensor::zeros({size_t{2}, size_t{1}}, Device::CPU),
+            1.0f);
+    }
+
+} // namespace
+
+// The single-node alias points into a node's model. Selection's count query reads it through
+// peekCombinedModel(), so an alias outliving the model read a freed SplatData.
+TEST(SceneSingleNodeAliasTest, ClearAndSwapDropTheAlias) {
+    Scene scene;
+    ASSERT_NE(scene.addSplat("single", make_two_splat_model(0.0f)), lfs::core::NULL_NODE);
+    ASSERT_NE(scene.getCombinedModel(), nullptr);
+    ASSERT_NE(scene.peekCombinedModel(), nullptr);
+
+    auto previous = scene.swapNodeModel("single", make_two_splat_model(5.0f));
+    ASSERT_NE(previous, nullptr);
+    EXPECT_NE(scene.peekCombinedModel(), previous.get()) << "the alias still names the swapped-out model";
+    previous.reset();
+
+    ASSERT_NE(scene.getCombinedModel(), nullptr);
+    scene.clear();
+    EXPECT_EQ(scene.peekCombinedModel(), nullptr) << "the alias outlived the cleared node's model";
+}

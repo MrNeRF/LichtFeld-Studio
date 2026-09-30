@@ -97,6 +97,7 @@ namespace lfs::training {
                      "vkCreateComputePipelines(training.adam)");
             vkDestroyShaderModule(context->device(), shader, nullptr);
             cache.emplace(context->context_id(), pipeline);
+            vulkan::release_at_shutdown(*context, mutex, cache);
             return pipeline;
         }
 
@@ -167,7 +168,7 @@ namespace lfs::training {
 
         void validate_far_mask(const bool* pointer) {
             if (!pointer)
-                return;
+                throw std::invalid_argument("mean-step far mask must not be null");
             const auto context = acquire_vulkan_context();
             LFS_ASSERT_MSG(context->memory().owns_address(pointer),
                            "Vulkan Adam far-mask pointer is not a live Vulkan allocation");
@@ -304,9 +305,17 @@ namespace lfs::training {
             p.layout = codec.layout == JointLayout::Rows ? 0u : 1u;
             p.operation = 2;
             p.index_count = vk::checked_u32(indices.numel(), "Adam index count exceeds 32-bit indexing");
-            const std::array reads{ref(packed), ref(bounds), ref(indices)};
+            const uint32_t blocks = (p.primitives + 255u) / 256u;
+            auto flags = Tensor::zeros({size_t(p.primitives) + blocks}, core::Device::GPU, core::DataType::Int32);
+            p.scratch = address(flags);
+            const std::array mark_reads{ref(indices)};
+            const std::array mark_writes{ref(flags)};
+            p.operation = 3;
+            launch(p, mark_reads, mark_writes, groups(p.index_count));
+            p.operation = 2;
+            const std::array reads{ref(packed), ref(bounds), ref(flags)};
             const std::array writes{ref(packed), ref(bounds)};
-            launch(p, reads, writes, (p.primitives + 255u) / 256u);
+            launch(p, reads, writes, blocks);
         }
 
         const AdamOps kVulkanAdamOps{

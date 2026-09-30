@@ -32,6 +32,9 @@ constant uint kFastNormalChannel [[function_constant(64)]];
 constant uint kFastMipFilter [[function_constant(65)]];
 constant uint kFastShLayoutRest [[function_constant(66)]];
 constant uint kFastShStorage [[function_constant(67)]];
+// Backward only: whether the blend receives a depth gradient and edge weights.
+constant uint kFastDepthGrad [[function_constant(68)]];
+constant uint kFastEdgeWeight [[function_constant(69)]];
 
 // Screen mean plus the conservative pixel AABB [x0, x1) x [y0, y1) of the
 // contribution ellipse.
@@ -174,6 +177,8 @@ static uint fast_depth_key(const float depth, const uint depth_bits) {
     return (as_type<uint>(normalized) & 0x7fffffu) >> (23u - depth_bits);
 }
 
+// Bit test, immune to fast-math NaN folding.
+static bool fast_is_finite(const float x) { return (as_type<uint>(x) & 0x7fffffffu) < 0x7f800000u; }
 static int fast_floor_int(const float x) { return int(floor(clamp(x, -1.0e9f, 1.0e9f))); }
 static int fast_ceil_int(const float x) { return int(ceil(clamp(x, -1.0e9f, 1.0e9f))); }
 
@@ -292,8 +297,14 @@ kernel void fast_preprocess(constant FastPreprocessParams& p [[buffer(0)]], cons
         return;
 
     const float3 raw_scale = float3(p.scales[idx]);
-    const float3 variance = exp(2.0f * fmin(raw_scale, kFastMaxRawScale));
     const float4 q = p.rotations[idx];
+    // Primitives with NaN/Inf geometry or opacity are culled on every backend.
+    if (!fast_is_finite(mean3d.x) || !fast_is_finite(mean3d.y) || !fast_is_finite(mean3d.z) ||
+        !fast_is_finite(raw_scale.x) || !fast_is_finite(raw_scale.y) || !fast_is_finite(raw_scale.z) ||
+        !fast_is_finite(q.x) || !fast_is_finite(q.y) || !fast_is_finite(q.z) || !fast_is_finite(q.w) ||
+        !fast_is_finite(raw_opacity))
+        return;
+    const float3 variance = exp(2.0f * fmin(raw_scale, kFastMaxRawScale));
     if (dot(q, q) < 1e-8f)
         return;
     const FastRotation rot = fast_rotation(q);
@@ -499,8 +510,14 @@ struct FastInstanceParams {
     device const uint* offsets;
     device uint* keys;
     device uint* values;
-    uint n, grid_w, depth_bits, unused;
+    uint n, grid_w, depth_bits, capacity;
 };
+
+// The instance count the scan wrote (low and high words), or 0 when it exceeds
+// the buffers the host sized speculatively; the host then redoes the frame.
+static uint fast_instance_count(device const uint* counts, const uint capacity) {
+    return counts[1] != 0u || counts[0] > capacity ? 0u : counts[0];
+}
 
 // Port of create_instances_cu: one (tile << depth_bits | depth) key per
 // touched tile, walked exactly as the preprocess count. A walk that falls
@@ -516,6 +533,9 @@ kernel void fast_create_instances(constant FastInstanceParams& p [[buffer(0)]], 
     const FastTileWalk walk = fast_tile_walk(p.mean_box[idx].mean, co.xyz, co.w, uint4(info.bounds));
     const uint begin = p.offsets[idx];
     const uint end = begin + count;
+    // A speculative frame sized below the true count writes nothing past it.
+    if (end < begin || end > p.capacity)
+        return;
     uint write_at = begin;
     uint key = ((uint(info.bounds.z) * p.grid_w + uint(info.bounds.x)) << p.depth_bits) | info.depth_key;
     for (uint scan = walk.scan0; scan < walk.scan1 && write_at < end; ++scan) {
@@ -546,6 +566,7 @@ struct FastSortParams {
     device uint* keys_out;
     device uint* values_out;
     device uint* histogram;
+    device const uint* counts;
     uint n, n_blocks, shift, unused;
 };
 
@@ -558,10 +579,11 @@ kernel void fast_sort_histogram(constant FastSortParams& p [[buffer(0)]],
     for (uint i = lane; i < groups * 256u; i += kFastSortThreads)
         atomic_store_explicit(&counts[i], 0u, memory_order_relaxed);
     threadgroup_barrier(mem_flags::mem_threadgroup);
+    const uint n = fast_instance_count(p.counts, p.n);
     const uint base = group * kFastSortBlock;
     for (uint j = 0; j < kFastSortBlock / kFastSortThreads; ++j) {
         const uint i = base + j * kFastSortThreads + lane;
-        if (i < p.n)
+        if (i < n)
             atomic_fetch_add_explicit(&counts[simd_group * 256u + ((p.keys_in[i] >> p.shift) & 255u)], 1u,
                                       memory_order_relaxed);
     }
@@ -582,13 +604,14 @@ kernel void fast_sort_scatter(constant FastSortParams& p [[buffer(0)]],
     threadgroup uint offsets[groups * 256u];
     digit_base[lane] = p.histogram[lane * p.n_blocks + group];
     const uint below = (1u << simd_lane) - 1u;
+    const uint n = fast_instance_count(p.counts, p.n);
     const uint base = group * kFastSortBlock;
-    for (uint chunk = base; chunk < min(base + kFastSortBlock, p.n); chunk += kFastSortThreads) {
+    for (uint chunk = base; chunk < min(base + kFastSortBlock, n); chunk += kFastSortThreads) {
         for (uint s = 0; s < groups; ++s)
             offsets[s * 256u + lane] = 0u;
         threadgroup_barrier(mem_flags::mem_threadgroup);
         const uint i = chunk + lane;
-        const bool valid = i < p.n;
+        const bool valid = i < n;
         const uint key = valid ? p.keys_in[i] : 0u;
         const uint digit = (key >> p.shift) & 255u;
         uint peers = uint(static_cast<simd_vote::vote_t>(simd_ballot(valid)));
@@ -621,13 +644,15 @@ kernel void fast_sort_scatter(constant FastSortParams& p [[buffer(0)]],
 struct FastRangeParams {
     device const uint* keys;
     device uint* ranges;
-    uint n_instances, n_tiles, depth_bits, unused;
+    device const uint* counts;
+    uint capacity, n_tiles, depth_bits, unused;
 };
 
 // Port of extract_instance_ranges_cu. Range ends are written as separate
 // words: a uint2 component store may rewrite its neighbour.
 kernel void fast_tile_ranges(constant FastRangeParams& p [[buffer(0)]], const uint idx [[thread_position_in_grid]]) {
-    if (idx >= p.n_instances)
+    const uint n_instances = fast_instance_count(p.counts, p.capacity);
+    if (idx >= n_instances)
         return;
     const uint tile = p.keys[idx] >> p.depth_bits;
     if (tile >= p.n_tiles)
@@ -643,8 +668,8 @@ kernel void fast_tile_ranges(constant FastRangeParams& p [[buffer(0)]], const ui
             p.ranges[2u * tile] = idx;
         }
     }
-    if (idx == p.n_instances - 1u)
-        p.ranges[2u * tile + 1u] = p.n_instances;
+    if (idx == n_instances - 1u)
+        p.ranges[2u * tile + 1u] = n_instances;
 }
 
 struct FastFillParams {
@@ -689,6 +714,34 @@ static FastTilePixels fast_tile_pixels(const uint2 tile, const uint lane, const 
 
 static bool fast_bbox_hits(const ushort4 bb, const uint2 sub) {
     return uint(bb.x) < sub.x + 8u && uint(bb.y) > sub.x && uint(bb.z) < sub.y + 4u && uint(bb.w) > sub.y;
+}
+
+// Port of ellipse_box_overlap_test / splat_overlaps_subtile_ellipse on an
+// 8x4 sub-tile whose integer pixel origin is `sub`; `power` is
+// log(opacity * kFastMinAlphaRcp), hoisted out of the per-sub-tile tests.
+static bool fast_overlaps_subtile(const float2 mean, const float3 conic, const float opacity, const float power,
+                                  const float2 sub) {
+    if (!(opacity >= kFastMinAlpha))
+        return false;
+    const float x0 = (sub.x + 0.5f) - mean.x;
+    const float x1 = (sub.x + 8.0f - 0.5f) - mean.x;
+    const float y0 = (sub.y + 0.5f) - mean.y;
+    const float y1 = (sub.y + 4.0f - 0.5f) - mean.y;
+    const float mc = fmax(fmax(x0, -x1), fmax(y0, -y1));
+    if (!(power > 0.0f))
+        return power == 0.0f && mc <= 0.0f;
+    const float inv_scale = 1.0f / (2.0f * power);
+    const float a = conic.x * inv_scale, b0 = conic.y * inv_scale, c = conic.z * inv_scale;
+    const float wx = -b0 / c;
+    const float wy = -b0 / a;
+    const float u0 = fmin(fmax(x0 * wx, y0), y1);
+    const float u1 = fmin(fmax(x1 * wx, y0), y1);
+    const float v0 = fmin(fmax(y0 * wy, x0), x1);
+    const float v1 = fmin(fmax(y1 * wy, x0), x1);
+    const float b = 2.0f * b0;
+    const float mx = fmin(a * x0 * x0 + b * x0 * u0 + c * u0 * u0, a * x1 * x1 + b * x1 * u1 + c * u1 * u1);
+    const float my = fmin(a * v0 * v0 + b * v0 * y0 + c * y0 * y0, a * v1 * v1 + b * v1 * y1 + c * y1 * y1);
+    return fmin(mc, fmin(mx, my) - 1.0f) <= 0.0f;
 }
 
 static float3 fast_background(device const float* bg_color, device const float* bg_image, const uint pixel,
@@ -768,8 +821,8 @@ static void fast_store_pixel(constant FastBlendParams& p, const FastPixelState s
     p.n_contrib[pixel] = s.contributions;
 }
 
-// Port of blend_cu: 128 threads per tile, front to back, with the warp
-// sub-tile bbox cull.
+// Port of blend_cu: 128 threads per tile, front to back, with the exact
+// ellipse sub-tile cull.
 kernel void fast_blend_forward(constant FastBlendParams& p [[buffer(0)]],
                                const uint2 tile [[threadgroup_position_in_grid]],
                                const uint rank [[thread_index_in_threadgroup]],
@@ -828,9 +881,15 @@ kernel void fast_blend_forward(constant FastBlendParams& p [[buffer(0)]],
             const int j_test = j_base + int(lane);
             bool hit0 = false, hit1 = false;
             if (j_test < batch_size) {
+                // The exact ellipse test of the backward keeps splats whose box
+                // but not ellipse reaches a sub-tile out of the serial walk.
                 const ushort4 bb = s_bbox[j_test];
-                hit0 = fast_bbox_hits(bb, t.sub0);
-                hit1 = fast_bbox_hits(bb, t.sub1);
+                const float2 mean = s_mean[j_test];
+                const float4 co = s_conic[j_test];
+                const float3 conic = float3(2.0f * co.x, co.y, 2.0f * co.z);
+                const float power = s_color[j_test].w;
+                hit0 = fast_bbox_hits(bb, t.sub0) && fast_overlaps_subtile(mean, conic, co.w, power, float2(t.sub0));
+                hit1 = fast_bbox_hits(bb, t.sub1) && fast_overlaps_subtile(mean, conic, co.w, power, float2(t.sub1));
             }
             const uint mask0 = uint(static_cast<simd_vote::vote_t>(simd_ballot(hit0)));
             const uint mask1 = uint(static_cast<simd_vote::vote_t>(simd_ballot(hit1)));

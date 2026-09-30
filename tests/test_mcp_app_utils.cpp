@@ -5,6 +5,7 @@
 #include "core/error.hpp"
 #include "core/scene.hpp"
 #include "mcp/mcp_tools.hpp"
+#include "visualizer/gui/utils/native_file_dialog.hpp"
 #include "visualizer/visualizer.hpp"
 
 #include <chrono>
@@ -353,7 +354,86 @@ TEST(McpAppUtilsTest, SelectionCameraIndexDefaultsToViewerWhenOmitted) {
     EXPECT_EQ(selection_camera_index_from_args(nlohmann::json{{"camera_index", -1}}), -1);
     EXPECT_EQ(selection_camera_index_from_args(nlohmann::json{{"camera_index", 0}}), 0);
     EXPECT_EQ(selection_camera_index_from_args(nlohmann::json{{"camera_index", 5}}), 5);
-    // The seam itself does not validate: -2 passes through unchanged, and the service rejects it
-    // as out of range rather than treating it as the viewer.
+    // The seam itself does not validate: -2 passes through unchanged. The selection tool schemas
+    // reject it (minimum -1) before the seam runs, and the service rejects it as out of range for
+    // other callers rather than treating it as the viewer.
     EXPECT_EQ(selection_camera_index_from_args(nlohmann::json{{"camera_index", -2}}), -2);
+}
+
+TEST(McpAppUtilsTest, ViewVectorsErrorNamesViewsSetViewWouldIgnore) {
+    using lfs::app::view_vectors_error;
+    const glm::vec3 up(0.0f, 1.0f, 0.0f);
+
+    EXPECT_FALSE(view_vectors_error({0.0f, 0.0f, 5.0f}, {0.0f, 0.0f, 0.0f}, up));
+    const auto coincident = view_vectors_error({1.0f, 2.0f, 3.0f}, {1.0f, 2.0f, 3.0f}, up);
+    ASSERT_TRUE(coincident);
+    EXPECT_NE(coincident->find("'eye' [1, 2, 3]"), std::string::npos) << *coincident;
+    EXPECT_TRUE(view_vectors_error({0.0f, 0.0f, 1e30f}, {0.0f, 0.0f, 0.0f}, up));
+}
+
+// MCP work runs on the GUI thread; a native modal dialog there would block every later request.
+TEST(McpAppUtilsTest, PostAndWaitFailsWorkThatRequestsANativeFileDialog) {
+    FakeVisualizer viewer;
+
+    const auto dialog_result = lfs::app::post_and_wait(&viewer, []() {
+        const auto path = lfs::vis::gui::SaveProjectFileDialog();
+        return nlohmann::json{{"success", true}, {"path_empty", path.empty()}};
+    });
+    ASSERT_TRUE(dialog_result.contains("error")) << dialog_result.dump();
+    EXPECT_EQ(dialog_result["error"], std::string(lfs::app::NATIVE_DIALOG_BLOCKED_ERROR));
+
+    const auto expected_result = lfs::app::post_and_wait(&viewer, []() -> std::expected<int, std::string> {
+        (void)lfs::vis::gui::PickFolderDialog();
+        return 7;
+    });
+    ASSERT_FALSE(expected_result);
+    EXPECT_EQ(expected_result.error(), std::string(lfs::app::NATIVE_DIALOG_BLOCKED_ERROR));
+
+    const auto plain_result = lfs::app::post_and_wait(&viewer, []() -> std::expected<int, std::string> { return 7; });
+    ASSERT_TRUE(plain_result);
+    EXPECT_EQ(*plain_result, 7) << "work without a dialog request must be unaffected";
+
+    const lfs::vis::gui::ScopedNativeFileDialogBlock outer;
+    {
+        const lfs::vis::gui::ScopedNativeFileDialogBlock inner;
+        EXPECT_TRUE(lfs::vis::gui::OpenFileDialog().empty());
+        EXPECT_TRUE(inner.suppressedDialog());
+    }
+    EXPECT_TRUE(outer.suppressedDialog()) << "a nested suppression must be visible to the outer block";
+}
+
+TEST(McpAppUtilsTest, PointListSchemaRejectsShortAndMalformedPointsBeforeTheHandler) {
+    static constexpr const char* kToolName = "test.mcp.point_list_schema";
+    ScopedToolRegistration cleanup(kToolName);
+    int handler_calls = 0;
+    lfs::mcp::ToolRegistry::instance().register_tool(
+        lfs::mcp::McpTool{
+            .name = kToolName,
+            .description = "Point list schema regression test",
+            .input_schema = {.type = "object",
+                             .properties = nlohmann::json{
+                                 {"points", lfs::app::point_list_schema(3, "Polygon vertices")},
+                                 {"eye", lfs::app::number_array_schema(3, "Eye")}},
+                             .required = {}},
+            .metadata = {.category = "test", .kind = "command"}},
+        [&handler_calls](const nlohmann::json&) -> nlohmann::json {
+            ++handler_calls;
+            return nlohmann::json{{"success", true}};
+        });
+    auto& registry = lfs::mcp::ToolRegistry::instance();
+    using nlohmann::json;
+
+    for (const auto& points : {json::parse("[[1],[2,3,4],[]]"), json::parse("[[100],[200,300],[400,500]]"),
+                               json::parse("[[1,2],[3,4]]"), json::parse("[[1,2],[3,\"x\"],[5,6]]")}) {
+        const auto result = registry.call_tool(kToolName, json{{"points", points}});
+        EXPECT_EQ(result["error"]["code"], "InvalidArgument") << points.dump() << " -> " << result.dump();
+        EXPECT_EQ(result["error"]["details"]["parameter"], "points");
+    }
+    const auto eye = registry.call_tool(kToolName, json{{"eye", json::array({"a", 1, 2})}});
+    EXPECT_EQ(eye["error"]["code"], "InvalidArgument") << eye.dump();
+    EXPECT_EQ(eye["error_message"], "Parameter 'eye[0]' must be of type number");
+    EXPECT_EQ(handler_calls, 0) << "a malformed point list reached the handler";
+
+    EXPECT_EQ(registry.call_tool(kToolName, json{{"points", json::parse("[[1,2],[3,4],[5,6]]")}})["success"], true);
+    EXPECT_EQ(handler_calls, 1);
 }

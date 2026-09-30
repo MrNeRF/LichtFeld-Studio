@@ -30,6 +30,9 @@ namespace lfs::app {
         std::string category;
         std::string description;
         std::vector<std::string> required;
+        // JSON merge patch applied to the schema properties derived from the operator,
+        // for constraints the operator properties cannot state (such as element bounds).
+        json property_overrides = json::object();
         bool destructive = false;
         std::function<std::expected<void, std::string>(vis::Visualizer& viewer, const json& args,
                                                        vis::op::OperatorProperties& props)>

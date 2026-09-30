@@ -69,6 +69,11 @@ namespace lfs::core::tensor_ops {
 } // namespace lfs::core::tensor_ops
 
 namespace lfs::core {
+    void gpu_trim_cached_memory(const GpuBackend backend) {
+        if (gpu_backend_live(backend))
+            internal::backend_ops(backend).trim();
+    }
+
     void gpu_device_barrier(const GpuBackend backend) {
         internal::backend_ops(backend).device_barrier();
     }

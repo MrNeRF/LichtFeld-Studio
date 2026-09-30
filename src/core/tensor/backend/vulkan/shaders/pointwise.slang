@@ -3,6 +3,7 @@ static const uint LFS_PUSH_CONSTANT_SIZE = 48;
 #include "half_bits.slangh"
 #include "byte_word.slangh"
 #include "integer_math.slangh"
+#include "power_math.slangh"
 
 [SpecializationConstant]
 const uint kOp = 0;
@@ -114,13 +115,15 @@ float accurateLog1p(float value)
 
 float accurateAsin(float value)
 {
-    const float bounded = clamp(value, -1.0f, 1.0f);
+    // Clamp rounding overshoot, but keep NaN (clamp would drop it).
+    const float bounded = isnan(value) ? value : clamp(value, -1.0f, 1.0f);
     return atan2(bounded, sqrt(max(0.0f, 1.0f - bounded * bounded)));
 }
 
 float accurateAcos(float value)
 {
-    const float bounded = clamp(value, -1.0f, 1.0f);
+    // Clamp rounding overshoot, but keep NaN (clamp would drop it).
+    const float bounded = isnan(value) ? value : clamp(value, -1.0f, 1.0f);
     return atan2(sqrt(max(0.0f, 1.0f - bounded * bounded)), bounded);
 }
 
@@ -130,7 +133,7 @@ float floatBinary(float lhs, float rhs)
     if (kOp == 1 || kOp == 5) return lhs - rhs;
     if (kOp == 2 || kOp == 6) return lhs * rhs;
     if (kOp == 3 || kOp == 7) return lhs / rhs;
-    if (kOp == 8 || kOp == 25) return rhs == 2.0f ? lhs * lhs : pow(lhs, rhs);
+    if (kOp == 8 || kOp == 25) return rhs == 2.0f ? lhs * lhs : cPow(lhs, rhs);
     if (kOp == 9 || kOp == 26) return fmod(lhs, rhs);
     if (kOp == 27 || kOp == 57) return ieeeMaximum(lhs, rhs);
     if (kOp == 28 || kOp == 58) return ieeeMinimum(lhs, rhs);
@@ -230,44 +233,6 @@ float applyChainOp(float value, ChainOp op, uint index)
     if (op.kind == 23) return ceil(value);
     if (op.kind == 24) return ieeeRound(value);
     return value;
-}
-
-// Wrap-around integer power; negative exponents follow integer division, so
-// only bases 1 and -1 keep a nonzero result.
-int intPow(int base, int exponent)
-{
-    if (exponent < 0)
-        return base == 1 ? 1 : base == -1 ? ((exponent & 1) != 0 ? -1 : 1) : 0;
-    int result = 1;
-    int factor = base;
-    int remaining = exponent;
-    while (remaining != 0)
-    {
-        if ((remaining & 1) != 0)
-            result *= factor;
-        factor *= factor;
-        remaining >>= 1;
-    }
-    return result;
-}
-
-int64_t int64Pow(int64_t base, int64_t exponent)
-{
-    if (exponent < int64_t(0))
-        return base == int64_t(1) ? int64_t(1)
-             : base == int64_t(-1) ? ((exponent & int64_t(1)) != int64_t(0) ? int64_t(-1) : int64_t(1))
-                                   : int64_t(0);
-    int64_t result = int64_t(1);
-    int64_t factor = base;
-    int64_t remaining = exponent;
-    while (remaining != int64_t(0))
-    {
-        if ((remaining & int64_t(1)) != int64_t(0))
-            result *= factor;
-        factor *= factor;
-        remaining >>= 1;
-    }
-    return result;
 }
 
 int intBinary(int lhs, int rhs)
@@ -466,17 +431,7 @@ void evaluateScalar(uint index, uniform Parameters parameters)
         else if (kOp == 26) result = rhs == 0u ? 0u : lhs % rhs;
         else if (kOp == 27) result = max(lhs, rhs);
         else if (kOp == 28) result = min(lhs, rhs);
-        else if (kOp == 25)
-        {
-            result = 1u;
-            uint factor = lhs, exponent = rhs;
-            while (exponent != 0u)
-            {
-                if ((exponent & 1u) != 0u) result *= factor;
-                factor *= factor;
-                exponent >>= 1u;
-            }
-        }
+        else if (kOp == 25) result = uintPow(lhs, rhs);
         ((Ptr<uint, Access.ReadWrite>)parameters.outputAddress)[index] = result;
     }
 }
