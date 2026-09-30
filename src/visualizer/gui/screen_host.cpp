@@ -550,9 +550,20 @@ namespace lfs::vis::gui {
             }
         }
 
-        if (pointer_free && !gestures_.active() && !over_header && input.mouse_clicked[0]) {
-            if (gestures_.press(geometry_, x, y, input.key_ctrl))
-                overlay_dirty_ = true;
+        const auto* press = input.lastPress(0);
+        if (pointer_free && !gestures_.active() && press) {
+            const bool press_over_corner = screen_host_detail::cornerGestureZone(
+                geometry_, geometry_.maximized.valid(), gestures_.metrics().corner_size, press->x, press->y);
+            const bool press_over_header = !press_over_corner && pointerOverHeader(press->x, press->y);
+            if (press_over_corner || (!press->gui_owned && !press_over_header)) {
+                if (gestures_.press(geometry_, press->x, press->y, press->ctrl)) {
+                    overlay_dirty_ = true;
+                    if (x != press->x || y != press->y) {
+                        applyGesture(gestures_.move(geometry_, screen, x, y));
+                        overlay_dirty_ = true;
+                    }
+                }
+            }
         }
 
         if (pointer_free && input.key_ctrl && !input.key_alt && hasKey(input.keys_pressed, SDL_SCANCODE_SPACE) &&

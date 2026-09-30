@@ -174,6 +174,23 @@ namespace {
         EXPECT_TRUE(buffer.mouse_released[0]);
     }
 
+    TEST(FrameInputBufferTest, CapturesCtrlModifierOnMousePressEvent) {
+        lfs::vis::FrameInputBuffer buffer;
+        buffer.beginFrame();
+        const auto previous = SDL_GetModState();
+        SDL_SetModState(SDL_KMOD_CTRL);
+        SDL_Event event{};
+        event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        event.button.button = SDL_BUTTON_LEFT;
+        event.button.x = 20.0f;
+        event.button.y = 30.0f;
+        buffer.processEvent(event);
+        SDL_SetModState(previous);
+
+        ASSERT_EQ(buffer.mouse_button_events.size(), 1u);
+        EXPECT_TRUE(buffer.mouse_button_events.front().ctrl);
+    }
+
     TEST(FrameInputBufferTest, TracksMouseWindowAndWakeEventsForRenderDemand) {
         lfs::vis::FrameInputBuffer buffer;
         buffer.beginFrame();

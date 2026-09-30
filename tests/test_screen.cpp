@@ -61,6 +61,87 @@ namespace lfs::vis::screen {
         EXPECT_FLOAT_EQ(rectOf(g, scene).x, rectOf(g, properties).x);
     }
 
+    TEST_F(ScreenTest, CtrlSwapStartsAtSceneBottomRightAfterViewportDividerMovesLeft) {
+        Screen screen = Screen::makeDefault(registry);
+        const Rect bounds{0.0f, 0.0f, 1600.0f, 900.0f};
+        LayoutMetrics metrics{2.0f, 48.0f, 32.0f};
+        auto geometry = screen.solve(bounds, metrics);
+        const auto divider = std::find_if(geometry.dividers.begin(), geometry.dividers.end(),
+                                          [](const DividerGeometry& d) {
+                                              return d.axis == SplitAxis::Columns;
+                                          });
+        ASSERT_NE(divider, geometry.dividers.end());
+        ASSERT_TRUE(screen.moveDivider(*divider, divider->rect.x - 160.0f));
+        geometry = screen.solve(bounds, metrics);
+
+        const AreaId scene = screen.findEditor(editors::kScene);
+        const AreaId viewport = screen.activeView();
+        const auto* scene_geometry = geometry.find(scene);
+        const auto* viewport_geometry = geometry.find(viewport);
+        ASSERT_NE(scene_geometry, nullptr);
+        ASSERT_NE(viewport_geometry, nullptr);
+        const float press_x = scene_geometry->rect.right() - 3.0f;
+        const float press_y = scene_geometry->rect.bottom() - 3.0f;
+        const float target_x = viewport_geometry->rect.x + viewport_geometry->rect.w * 0.5f;
+        const float target_y = viewport_geometry->rect.y + viewport_geometry->rect.h * 0.5f;
+
+        EXPECT_TRUE(gui::screen_host_detail::cornerGestureZone(geometry, false, 12.0f, press_x, press_y));
+        AreaGestures gestures;
+        ASSERT_TRUE(gestures.press(geometry, press_x, press_y, true));
+        const auto command = gestures.release(geometry, screen, target_x, target_y);
+        EXPECT_EQ(command.kind, GestureCommand::Kind::Swap);
+        EXPECT_EQ(command.area, scene);
+        EXPECT_EQ(command.other, viewport);
+    }
+
+    TEST_F(ScreenTest, ScreenHostUsesCtrlFromTheCornerPressAfterPointerMoves) {
+        ScreenService source;
+        gui::ScreenHost host(source);
+        const Rect bounds{0.0f, 0.0f, 1600.0f, 900.0f};
+        host.layout(bounds, 1.0f);
+        auto geometry = host.geometry();
+        const auto divider = std::find_if(geometry.dividers.begin(), geometry.dividers.end(),
+                                          [](const DividerGeometry& d) {
+                                              return d.axis == SplitAxis::Columns;
+                                          });
+        ASSERT_NE(divider, geometry.dividers.end());
+        ASSERT_TRUE(source.screen().moveDivider(*divider, divider->rect.x - 160.0f));
+        host.layout(bounds, 1.0f);
+        geometry = host.geometry();
+
+        const auto scene = source.screen().findEditor(editors::kScene);
+        const auto viewport = source.screen().activeView();
+        const auto* scene_geometry = geometry.find(scene);
+        const auto* viewport_geometry = geometry.find(viewport);
+        ASSERT_NE(scene_geometry, nullptr);
+        ASSERT_NE(viewport_geometry, nullptr);
+        const float press_x = scene_geometry->rect.right() - 3.0f;
+        const float press_y = scene_geometry->rect.bottom() - 3.0f;
+        const float target_x = viewport_geometry->rect.x + viewport_geometry->rect.w * 0.5f;
+        const float target_y = viewport_geometry->rect.y + viewport_geometry->rect.h * 0.5f;
+
+        gui::PanelInputState press{};
+        press.mouse_x = target_x;
+        press.mouse_y = target_y;
+        press.mouse_clicked[0] = true;
+        press.mouse_down[0] = true;
+        press.mouse_button_events.push_back(
+            {.button = 0, .down = true, .x = press_x, .y = press_y, .ctrl = true, .gui_owned = true});
+        host.processInput(press, true);
+        ASSERT_TRUE(host.gestureActive());
+        EXPECT_EQ(host.areaAt(target_x, target_y), viewport);
+        EXPECT_EQ(host.cursor(), screen::GestureCursor::Move);
+
+        gui::PanelInputState release{};
+        release.mouse_x = target_x;
+        release.mouse_y = target_y;
+        release.mouse_released[0] = true;
+        host.processInput(release, true);
+        EXPECT_FALSE(host.gestureActive());
+        EXPECT_EQ(host.geometry().find(scene)->rect, viewport_geometry->rect);
+        EXPECT_EQ(host.geometry().find(viewport)->rect, scene_geometry->rect);
+    }
+
     TEST_F(ScreenTest, SplittingAViewCopiesItsCameraIndependently) {
         Screen screen = Screen::makeDefault(registry);
         const AreaId view = screen.activeView();

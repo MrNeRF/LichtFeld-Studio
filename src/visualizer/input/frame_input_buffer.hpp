@@ -23,6 +23,7 @@ namespace lfs::vis {
         float y = 0.0f;
         uint64_t timestamp = 0;
         uint8_t clicks = 0;
+        bool ctrl = false;
         // GUI ownership from GuiManager::hitTestMouseButton, recorded by the window
         // layer at the SDL event through notePressOwner(). Keep it with event coordinates:
         // later bounds checks cannot recover ownership after DPI, resize or dock changes.
@@ -114,6 +115,7 @@ namespace lfs::vis {
                         .y = event.button.y,
                         .timestamp = event.button.timestamp,
                         .clicks = event.button.clicks,
+                        .ctrl = (SDL_GetModState() & SDL_KMOD_CTRL) != 0,
                         .gui_owned = released_owner,
                     });
                     if (down) {
