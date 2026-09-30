@@ -230,7 +230,7 @@ namespace lfs::core {
             float tv_loss_weight = 10.f;
 
             // Combined per-photo exposure + residual grid (replaces standalone grid/PPISP)
-            bool use_exposure_correction = false;
+            bool use_exposure_correction = true;
             int exposure_correction_grid_start_iter = 1000;
 
             [[nodiscard]] bool bilateral_grid_active() const {

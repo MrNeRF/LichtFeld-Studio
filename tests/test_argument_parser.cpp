@@ -508,9 +508,23 @@ TEST(ArgumentParserTest, TrainingDefaultsApplyMaxWidthCap) {
     EXPECT_EQ((*parsed)->optimization.morton_reorder_interval, 5000u);
 }
 
-TEST(ArgumentParserTest, ExposureCorrectionFlagSetsField) {
+TEST(ArgumentParserTest, ExposureCorrectionDefaultsOnAndCanBeDisabled) {
     const auto data_path = make_test_path("lfs_arg_parser_exposure_correction_data");
     const auto output_path = make_test_path("lfs_arg_parser_exposure_correction_output");
+
+    const char* default_argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str()};
+    auto default_parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(default_argv)), default_argv);
+    ASSERT_TRUE(default_parsed.has_value()) << default_parsed.error();
+    EXPECT_TRUE((*default_parsed)->optimization.use_exposure_correction);
+    EXPECT_FALSE((*default_parsed)->optimization.use_bilateral_grid);
+    EXPECT_FALSE((*default_parsed)->optimization.use_ppisp);
 
     const char* argv[] = {
         "LichtFeld-Studio",
@@ -519,10 +533,10 @@ TEST(ArgumentParserTest, ExposureCorrectionFlagSetsField) {
         data_path.c_str(),
         "--output-path",
         output_path.c_str(),
-        "--exposure-correction"};
+        "--no-exposure-correction"};
     auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
-    EXPECT_TRUE((*parsed)->optimization.use_exposure_correction);
+    EXPECT_FALSE((*parsed)->optimization.use_exposure_correction);
     EXPECT_FALSE((*parsed)->optimization.use_bilateral_grid);
     EXPECT_FALSE((*parsed)->optimization.use_ppisp);
     EXPECT_EQ((*parsed)->optimization.exposure_correction_grid_start_iter, 1000);

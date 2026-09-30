@@ -328,10 +328,12 @@ namespace {
 
     TEST_F(TrainingParametersTest, ExposureCorrectionJsonRoundTripAndConflicts) {
         auto params = OptimizationParameters::mcmc_defaults();
-        EXPECT_FALSE(params.use_exposure_correction);
+        EXPECT_TRUE(params.use_exposure_correction);
         EXPECT_EQ(params.exposure_correction_grid_start_iter, 1000);
-        EXPECT_FALSE(params.bilateral_grid_active());
-        EXPECT_FALSE(params.ppisp_active());
+        EXPECT_TRUE(params.bilateral_grid_active());
+        EXPECT_TRUE(params.ppisp_active());
+        EXPECT_FALSE(params.use_bilateral_grid);
+        EXPECT_FALSE(params.use_ppisp);
         EXPECT_TRUE(params.validate().empty());
 
         params.use_exposure_correction = true;
@@ -360,6 +362,11 @@ namespace {
         conflict = params;
         conflict.ppisp_freeze_from_sidecar = true;
         EXPECT_NE(conflict.validate().find(conflict_message), std::string::npos);
+
+        params.use_exposure_correction = false;
+        const auto opted_out_json = params.to_json();
+        EXPECT_FALSE(opted_out_json.at("use_exposure_correction").get<bool>());
+        EXPECT_FALSE(OptimizationParameters::from_json(opted_out_json).use_exposure_correction);
     }
 
     TEST_F(TrainingParametersTest, PpispExposureFromExifRoundTripsThroughJson) {
@@ -609,6 +616,9 @@ namespace {
 
     TEST_F(TrainingParametersTest, MrnfRegularizationDefaultsAndSchedule) {
         const auto params = OptimizationParameters::mrnf_defaults();
+        EXPECT_TRUE(resolved<bool>(params, "use_exposure_correction"));
+        EXPECT_FALSE(params.use_bilateral_grid);
+        EXPECT_FALSE(params.use_ppisp);
         EXPECT_FLOAT_EQ(params.scale_reg, 0.01f);
         EXPECT_FLOAT_EQ(params.scale_reg_decay_power, 0.4f);
         EXPECT_FLOAT_EQ(params.erank_reg, 0.001f);
