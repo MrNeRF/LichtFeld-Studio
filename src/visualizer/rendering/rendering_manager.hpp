@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "render_target_id.hpp"
+
 #include "camera_interaction_service.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/export.hpp"
@@ -986,6 +988,11 @@ namespace lfs::vis {
         bool scene_reconstruction_request_logged_ = false;
         std::string last_scene_reconstruction_backend_;
         std::string last_scene_reconstruction_preset_;
+        RenderTargetRegistry render_targets_;
+        RenderTargetId main_render_target_ = render_targets_.allocate();
+        RenderTargetId split_left_render_target_ = render_targets_.allocate();
+        RenderTargetId split_right_render_target_ = render_targets_.allocate();
+        RenderTargetId preview_render_target_ = render_targets_.allocate();
         std::unique_ptr<VksplatViewportRenderer> vksplat_viewport_renderer_;
         std::unique_ptr<PointCloudVulkanRenderer> point_cloud_vulkan_renderer_;
         std::unique_ptr<SparkLodController> lod_controller_;

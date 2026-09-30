@@ -584,13 +584,13 @@ namespace lfs::vis {
         // and the pixel_depth scratch it just wrote (still resident — the Preview
         // path uses private scratch, which render() does not release).
         auto image = vksplat_viewport_renderer_->readOutputImage(
-            *last_vulkan_context_, VksplatViewportRenderer::OutputSlot::Preview);
+            *last_vulkan_context_, preview_render_target_);
         if (!image) {
             LOG_ERROR("Gaussian preview rgbd image readback failed: {}", image.error());
             return result;
         }
         auto depth = vksplat_viewport_renderer_->readPreviewDepth(
-            *last_vulkan_context_, VksplatViewportRenderer::OutputSlot::Preview);
+            *last_vulkan_context_, preview_render_target_);
         if (!depth) {
             LOG_ERROR("Gaussian preview depth readback failed: {}", depth.error());
             return result;
@@ -883,7 +883,10 @@ namespace lfs::vis {
 
     void RenderingManager::releasePreviewImageResources() {
         if (vksplat_viewport_renderer_) {
-            vksplat_viewport_renderer_->releasePreviewResources();
+            if (vksplat_viewport_renderer_->releaseRenderTarget(preview_render_target_)) {
+                render_targets_.release(preview_render_target_);
+                preview_render_target_ = render_targets_.allocate();
+            }
         }
     }
 
@@ -1019,15 +1022,15 @@ namespace lfs::vis {
             readback_config.channels == 4) {
             image = vksplat_viewport_renderer_->readOutputImageRgba8(
                 *last_vulkan_context_,
-                VksplatViewportRenderer::OutputSlot::Preview);
+                preview_render_target_);
         } else if (readback_config.dtype == lfs::core::DataType::UInt8) {
             image = vksplat_viewport_renderer_->readOutputImageRgb8(
                 *last_vulkan_context_,
-                VksplatViewportRenderer::OutputSlot::Preview);
+                preview_render_target_);
         } else {
             image = vksplat_viewport_renderer_->readOutputImage(
                 *last_vulkan_context_,
-                VksplatViewportRenderer::OutputSlot::Preview);
+                preview_render_target_);
         }
         if (!image) {
             LOG_ERROR("Gaussian preview image readback failed: {}", image.error());
@@ -1139,7 +1142,7 @@ namespace lfs::vis {
             model,
             request,
             false,
-            VksplatViewportRenderer::OutputSlot::Preview,
+            preview_render_target_,
             false,
             deterministic_export);
         if (!render_result) {
@@ -1259,7 +1262,7 @@ namespace lfs::vis {
             }
             auto ticket = vksplat_viewport_renderer_->submitReadOutputImageIntoCpuHwcTicket(
                 *last_vulkan_context_,
-                VksplatViewportRenderer::OutputSlot::Preview,
+                preview_render_target_,
                 output,
                 0,
                 tile_y);
@@ -1299,11 +1302,11 @@ namespace lfs::vis {
             return -1.0f;
         }
 
-        VksplatViewportRenderer::OutputSlot output_slot = VksplatViewportRenderer::OutputSlot::Main;
+        RenderTargetId output_slot = main_render_target_;
         if (panel && isIndependentSplitViewActive()) {
             output_slot = *panel == SplitViewPanelId::Right
-                              ? VksplatViewportRenderer::OutputSlot::SplitRight
-                              : VksplatViewportRenderer::OutputSlot::SplitLeft;
+                              ? split_right_render_target_
+                              : split_left_render_target_;
         }
 
         glm::ivec2 source_size = frame_lifecycle_service_.lastViewportSize();
@@ -1398,7 +1401,7 @@ namespace lfs::vis {
 
         auto depth = vksplat_viewport_renderer_->readPreviewDepth(
             *last_vulkan_context_,
-            VksplatViewportRenderer::OutputSlot::Preview);
+            preview_render_target_);
         if (!depth) {
             LOG_TRACE("Expected-depth pixel readback failed: {}", depth.error());
             return -1.0f;
