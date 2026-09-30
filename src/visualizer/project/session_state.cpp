@@ -301,65 +301,83 @@ namespace lfs::vis::project {
 
         template <typename Owner>
         struct JsonField {
-            std::string_view name;
-            std::function<Json(const Owner&)> write;
-            std::function<lfs::Result<void>(
+            using Writer = std::function<Json(const Owner&)>;
+            using Reader = std::function<lfs::Result<void>(
                 const Json&,
                 Owner&,
                 std::string_view,
-                std::string_view)>
-                read;
+                std::string_view)>;
+
+            JsonField(const std::string_view field_name, Writer writer, Reader reader)
+                : name(field_name),
+                  write(std::move(writer)),
+                  read(std::move(reader)) {}
+
+            // A field of a base struct, e.g. ViewSettings, is a field of the
+            // derived RenderSettings too.
+            template <typename Base>
+                requires(!std::same_as<Base, Owner> && std::derived_from<Owner, Base>)
+            JsonField(JsonField<Base> base)
+                : name(base.name),
+                  write([w = std::move(base.write)](const Owner& source) { return w(source); }),
+                  read([r = std::move(base.read)](const Json& json, Owner& destination,
+                                                  const std::string_view prefix,
+                                                  const std::string_view field) {
+                      return r(json, destination, prefix, field);
+                  }) {}
+
+            std::string_view name;
+            Writer write;
+            Reader read;
         };
 
         template <typename Owner, typename Member>
         JsonField<Owner> required_field(
             const std::string_view name,
-            Member Owner::*member) {
-            return {
-                .name = name,
-                .write = [member](const Owner& source) { return Json(source.*member); },
-                .read = [member](
-                            const Json& json,
-                            Owner& destination,
-                            const std::string_view prefix,
-                            const std::string_view field) { return assign_required(
-                                                                json,
-                                                                field,
-                                                                destination.*member,
-                                                                prefix); },
-            };
+            Member Owner::* member) {
+            return JsonField<Owner>(
+                name,
+                [member](const Owner& source) { return Json(source.*member); },
+                [member](
+                    const Json& json,
+                    Owner& destination,
+                    const std::string_view prefix,
+                    const std::string_view field) { return assign_required(
+                                                        json,
+                                                        field,
+                                                        destination.*member,
+                                                        prefix); });
         }
 
         template <typename Owner, typename Member>
         JsonField<Owner> optional_field(
             const std::string_view name,
-            Member Owner::*member) {
-            return {
-                .name = name,
-                .write = [member](const Owner& source) { return Json(source.*member); },
-                .read = [member](
-                            const Json& json,
-                            Owner& destination,
-                            std::string_view,
-                            const std::string_view field) {
+            Member Owner::* member) {
+            return JsonField<Owner>(
+                name,
+                [member](const Owner& source) { return Json(source.*member); },
+                [member](
+                    const Json& json,
+                    Owner& destination,
+                    std::string_view,
+                    const std::string_view field) {
                     (void)assign_optional(
                         json, field, destination.*member);
-                    return lfs::Result<void>{}; },
-            };
+                    return lfs::Result<void>{}; });
         }
 
         template <typename Owner>
         JsonField<Owner> vec3_field(
             const std::string_view name,
-            glm::vec3 Owner::*member) {
-            return {
-                .name = name,
-                .write = [member](const Owner& source) { return vec3_json(source.*member); },
-                .read = [member](
-                            const Json& json,
-                            Owner& destination,
-                            const std::string_view prefix,
-                            const std::string_view field) {
+            glm::vec3 Owner::* member) {
+            return JsonField<Owner>(
+                name,
+                [member](const Owner& source) { return vec3_json(source.*member); },
+                [member](
+                    const Json& json,
+                    Owner& destination,
+                    const std::string_view prefix,
+                    const std::string_view field) {
                     auto value = required_vec3(
                         json, field, prefix);
                     if (!value) {
@@ -367,27 +385,26 @@ namespace lfs::vis::project {
                             std::move(value).error());
                     }
                     destination.*member = *value;
-                    return lfs::Result<void>{}; },
-            };
+                    return lfs::Result<void>{}; });
         }
 
         template <typename Owner, typename Enum,
                   typename AfterAssign = std::nullptr_t>
         JsonField<Owner> enum_field(
             const std::string_view name,
-            Enum Owner::*member,
+            Enum Owner::* member,
             const int minimum,
             const int maximum,
             const std::string_view invalid_detail,
             AfterAssign after_assign = nullptr) {
-            return {
-                .name = name,
-                .write = [member](const Owner& source) { return Json(static_cast<int>(source.*member)); },
-                .read = [=](
-                            const Json& json,
-                            Owner& destination,
-                            const std::string_view prefix,
-                            const std::string_view field) {
+            return JsonField<Owner>(
+                name,
+                [member](const Owner& source) { return Json(static_cast<int>(source.*member)); },
+                [=](
+                    const Json& json,
+                    Owner& destination,
+                    const std::string_view prefix,
+                    const std::string_view field) {
                     int value = 0;
                     if (auto status = assign_required(
                             json, field, value, prefix);
@@ -406,8 +423,7 @@ namespace lfs::vis::project {
                                       AfterAssign,
                                       std::nullptr_t>)
                         after_assign(destination);
-                    return lfs::Result<void>{}; },
-            };
+                    return lfs::Result<void>{}; });
         }
 
         template <typename Owner, typename Writer, typename Reader>
@@ -415,11 +431,7 @@ namespace lfs::vis::project {
             const std::string_view name,
             Writer write,
             Reader read) {
-            return {
-                .name = name,
-                .write = std::move(write),
-                .read = std::move(read),
-            };
+            return JsonField<Owner>(name, std::move(write), std::move(read));
         }
 
         template <typename Owner>
@@ -467,7 +479,7 @@ namespace lfs::vis::project {
         template <typename Owner, std::size_t Size>
         JsonField<Owner> array_field(
             const std::string_view name,
-            std::array<float, Size> Owner::*member) {
+            std::array<float, Size> Owner::* member) {
             return custom_field<Owner>(
                 name,
                 [member](const Owner& source) {
@@ -503,7 +515,7 @@ namespace lfs::vis::project {
         template <typename Owner>
         JsonField<Owner> nullable_positive_float_field(
             const std::string_view name,
-            std::optional<float> Owner::*member) {
+            std::optional<float> Owner::* member) {
             return custom_field<Owner>(
                 name,
                 [member](const Owner& source) {
@@ -757,7 +769,7 @@ namespace lfs::vis::project {
                            std::numeric_limits<int>::min(),
                            std::numeric_limits<int>::max(),
                            "Unsupported GT comparison mode",
-                           [](RenderSettings& settings) {
+                           [](ViewSettings& settings) {
                                sanitizeGTComparisonSettings(settings);
                            }),
                 required_field("split_position", &RenderSettings::split_position),
@@ -795,7 +807,7 @@ namespace lfs::vis::project {
                            std::numeric_limits<int>::min(),
                            std::numeric_limits<int>::max(),
                            "Unsupported depth visualization mode",
-                           [](RenderSettings& settings) {
+                           [](ViewSettings& settings) {
                                sanitizeDepthViewSettings(settings);
                            }),
                 vec3_field("selection_color_committed", &RenderSettings::selection_color_committed),
@@ -1693,7 +1705,7 @@ namespace lfs::vis::project {
             using Panel = gui::PanelProjectState;
             const auto nullable_float = [](
                                             const std::string_view name,
-                                            float Panel::*member) {
+                                            float Panel::* member) {
                 return custom_field<Panel>(
                     name,
                     [member](const Panel& panel) {

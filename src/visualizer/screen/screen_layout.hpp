@@ -126,6 +126,10 @@ namespace lfs::vis::screen {
         // the fraction is not in (0, 1).
         bool split(AreaId target, AreaId added, SplitAxis axis, float fraction, bool new_first = false);
 
+        // Adds an area along one edge of the whole screen, spanning its full
+        // height (Left/Right) or width (Top/Bottom), taking `fraction` of it.
+        bool insertAtEdge(AreaId added, Side side, float fraction);
+
         // Removes an area; its space goes to the neighbour before it (or
         // after it, for the first child). The last area cannot be removed.
         bool remove(AreaId area);

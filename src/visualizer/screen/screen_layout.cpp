@@ -416,6 +416,28 @@ namespace lfs::vis::screen {
         return true;
     }
 
+    bool ScreenLayout::insertAtEdge(const AreaId added, const Side side, const float fraction) {
+        if (!root_ || !added.valid() || contains(added) || !(fraction > 0.0f && fraction < 1.0f))
+            return false;
+        const SplitAxis axis = axisAcross(side);
+        const bool at_start = side == Side::Left || side == Side::Top;
+        if (root_->isArea() || root_->axis != axis) {
+            Node wrapper;
+            wrapper.split = allocateSplit();
+            wrapper.axis = axis;
+            wrapper.children.push_back(std::move(*root_));
+            wrapper.weights.push_back(1.0f);
+            root_ = std::move(wrapper);
+        }
+        for (float& w : root_->weights)
+            w *= 1.0f - fraction;
+        const auto at = at_start ? root_->children.begin() : root_->children.end();
+        root_->children.insert(at, makeLeaf(added));
+        root_->weights.insert(at_start ? root_->weights.begin() : root_->weights.end(), fraction);
+        normalize();
+        return true;
+    }
+
     bool ScreenLayout::remove(const AreaId area) {
         if (!root_ || areaCount() <= 1)
             return false;

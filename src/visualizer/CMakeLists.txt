@@ -83,6 +83,10 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # Screen: areas, layout and editors
         screen/screen_layout.cpp
+        screen/editor_type.cpp
+        screen/screen.cpp
+        screen/view3d_space.cpp
+        screen/area_gestures.cpp
 
         # Preferences and theme system
         preferences.cpp
