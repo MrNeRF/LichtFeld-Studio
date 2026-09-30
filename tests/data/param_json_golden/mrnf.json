@@ -105,7 +105,7 @@
   "steps_scaler": 1.0,
   "stop_refine": 28500,
   "strategy": "mrnf",
-  "thin_structure_weight": 1.0,
+  "thin_structure_weight": 0.5,
   "tv_loss_weight": 10.0,
   "undistort": false,
   "use_alpha_as_mask": true,

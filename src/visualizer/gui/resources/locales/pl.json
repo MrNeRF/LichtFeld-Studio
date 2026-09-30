@@ -449,7 +449,7 @@
     "tooltip.erank_reg": "Karze mocno nierówne osie skali Gaussian.",
     "tooltip.dc_reg": "Regularyzuje bezpośrednie współczynniki koloru.",
     "tooltip.sh_rest_reg": "Regularyzuje współczynniki harmonicznych sferycznych wyższych rzędów.",
-    "tooltip.thin_structure_weight": "Emphasizes thin line structures in the photometric loss. 0 disables it; recommended 1. Range: 0 to 4.",
+    "tooltip.thin_structure_weight": "Emphasizes thin line structures in the photometric loss. 0 disables it; recommended 0.5 to 1. Range: 0 to 4.",
     "tooltip.scale_reg": "Kara za skalę Gaussian. Użyj, aby redukować zbyt duże splaty lub puchnięcie; trzymaj nisko, jeśli pogarsza pokrycie.",
     "tooltip.lambda_dssim": "Miesza stratę pikselową L1 z podobieństwem strukturalnym. Zwiększ dla podobieństwa strukturalnego/percepcyjnego; zmniejsz dla ściślejszego dopasowania koloru pikseli.",
     "tooltip.tv_loss_weight": "Wygładza korekty Bilateral Grid. Użyj z Bilateral Grid, aby uniknąć zaszumionej lokalnej korekcji koloru; nie ma znaczenia, gdy grid jest wyłączony.",

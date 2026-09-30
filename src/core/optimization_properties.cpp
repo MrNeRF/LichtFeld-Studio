@@ -198,7 +198,7 @@ namespace lfs::core::param {
             .all_strategies()
             .float_prop(&OptimizationParameters::thin_structure_weight,
                         "thin_structure_weight", "Thin Structure Weight", d.thin_structure_weight, 0.0f, 4.0f,
-                        "Emphasizes thin line structures in the photometric loss; 0 disables it, recommended 1")
+                        "Emphasizes thin line structures in the photometric loss; 0 disables it, recommended 0.5 to 1")
             .locale("training.losses.thin_structure_weight")
             .tooltip("training.tooltip.thin_structure_weight")
             .precision(2)

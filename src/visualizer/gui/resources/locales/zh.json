@@ -449,7 +449,7 @@
     "tooltip.erank_reg": "惩罚 Gaussian 尺度轴之间过大的差异。",
     "tooltip.dc_reg": "正则化直接颜色系数。",
     "tooltip.sh_rest_reg": "正则化高阶球谐系数。",
-    "tooltip.thin_structure_weight": "Emphasizes thin line structures in the photometric loss. 0 disables it; recommended 1. Range: 0 to 4.",
+    "tooltip.thin_structure_weight": "Emphasizes thin line structures in the photometric loss. 0 disables it; recommended 0.5 to 1. Range: 0 to 4.",
     "tooltip.scale_reg": "惩罚 Gaussian scale。用于减少过大的 splat 或膨胀；如果影响覆盖则保持较低。",
     "tooltip.lambda_dssim": "将像素 L1 loss 与结构相似性混合。提高可增强结构/感知相似性；降低可更严格地匹配像素颜色。",
     "tooltip.tv_loss_weight": "平滑 Bilateral Grid 校正。与 Bilateral Grid 一起使用可避免有噪声的局部颜色校正；grid 关闭时无关。",

@@ -449,7 +449,7 @@
     "tooltip.erank_reg": "Bestraft stark ungleichmäßige Gauß-Skalierungsachsen.",
     "tooltip.dc_reg": "Reguliert die direkten Farbkoeffizienten.",
     "tooltip.sh_rest_reg": "Reguliert die Koeffizienten höherer Kugelfunktionsordnungen.",
-    "tooltip.thin_structure_weight": "Emphasizes thin line structures in the photometric loss. 0 disables it; recommended 1. Range: 0 to 4.",
+    "tooltip.thin_structure_weight": "Emphasizes thin line structures in the photometric loss. 0 disables it; recommended 0.5 to 1. Range: 0 to 4.",
     "tooltip.scale_reg": "Bestrafung für Gaussian-Skalierung. Nutze dies, um übergroße Splats oder Aufblähung zu reduzieren; halte es niedrig, wenn die Abdeckung leidet.",
     "tooltip.lambda_dssim": "Mischt Pixel-L1-Verlust mit struktureller Ähnlichkeit. Erhöhe den Wert für stärkere Struktur-/Wahrnehmungsähnlichkeit; senke ihn für strengere pixelgenaue Farbanpassung.",
     "tooltip.tv_loss_weight": "Glättet Bilateral-Grid-Korrekturen. Nutze dies mit Bilateral Grid, um verrauschte lokale Farbkorrektur zu vermeiden; ohne aktives Grid ist es irrelevant.",

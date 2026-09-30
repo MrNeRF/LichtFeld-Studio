@@ -246,7 +246,7 @@ TEST(ThinStructure, ParameterDefaultsJsonCliAndBounds) {
         GTEST_SKIP() << "set LFS_THIN_STRUCTURE_TEST_IMAGE and LFS_THIN_STRUCTURE_TEST_OUTPUT to run";
     for (const auto* strategy : {"mrnf", "mcmc", "igs+"}) {
         auto params = param::OptimizationParameters::defaults_for_strategy(strategy);
-        const float expected_default = param::is_mrnf_strategy(strategy) ? 1.0f : 0.0f;
+        const float expected_default = param::is_mrnf_strategy(strategy) ? 0.5f : 0.0f;
         EXPECT_EQ(params.thin_structure_weight, expected_default);
         EXPECT_EQ(params.to_json().at("thin_structure_weight").get<float>(), expected_default);
         params.thin_structure_weight = 1.0f;

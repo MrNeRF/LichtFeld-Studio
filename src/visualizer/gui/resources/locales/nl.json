@@ -449,7 +449,7 @@
     "tooltip.erank_reg": "Bestraft sterk ongelijke Gaussian-schaalassen.",
     "tooltip.dc_reg": "Regulariseert de directe kleurcoëfficiënten.",
     "tooltip.sh_rest_reg": "Regulariseert coëfficiënten van hogere sferische harmonischen.",
-    "tooltip.thin_structure_weight": "Emphasizes thin line structures in the photometric loss. 0 disables it; recommended 1. Range: 0 to 4.",
+    "tooltip.thin_structure_weight": "Emphasizes thin line structures in the photometric loss. 0 disables it; recommended 0.5 to 1. Range: 0 to 4.",
     "tooltip.scale_reg": "Bestraft Gaussian-schaal. Gebruik om te grote splats of opbolling te verminderen; houd laag als de dekking eronder lijdt.",
     "tooltip.lambda_dssim": "Mengt pixel-L1-loss met structurele gelijkenis. Verhoog voor structuur/perceptuele gelijkenis; verlaag voor striktere pixelkleurmatching.",
     "tooltip.tv_loss_weight": "Maakt Bilateral Grid-correcties vloeiender. Gebruik met Bilateral Grid om ruisachtige lokale kleurcorrectie te vermijden; irrelevant wanneer het grid uit staat.",

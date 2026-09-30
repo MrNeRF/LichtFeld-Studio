@@ -449,7 +449,7 @@
     "tooltip.erank_reg": "Penalizza gli assi di scala Gaussian molto disuguali.",
     "tooltip.dc_reg": "Regolarizza i coefficienti di colore diretto.",
     "tooltip.sh_rest_reg": "Regolarizza i coefficienti degli armonici sferici di ordine superiore.",
-    "tooltip.thin_structure_weight": "Emphasizes thin line structures in the photometric loss. 0 disables it; recommended 1. Range: 0 to 4.",
+    "tooltip.thin_structure_weight": "Emphasizes thin line structures in the photometric loss. 0 disables it; recommended 0.5 to 1. Range: 0 to 4.",
     "tooltip.scale_reg": "Penalizza la scala Gaussian. Usalo per ridurre splat sovradimensionati o gonfi; tienilo basso se danneggia la copertura.",
     "tooltip.lambda_dssim": "Mescola perdita L1 per pixel con similarità strutturale. Aumenta per similarità strutturale/percettiva; riduci per corrispondenza colore per pixel più rigorosa.",
     "tooltip.tv_loss_weight": "Uniforma le correzioni del Bilateral Grid. Usalo con Bilateral Grid per evitare correzione colore locale rumorosa; è irrilevante quando il grid è spento.",

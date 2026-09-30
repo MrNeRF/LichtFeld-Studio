@@ -449,7 +449,7 @@
     "tooltip.erank_reg": "ガウスのスケール軸の大きな偏りにペナルティを与えます。",
     "tooltip.dc_reg": "直接色係数を正則化します。",
     "tooltip.sh_rest_reg": "高次球面調和係数を正則化します。",
-    "tooltip.thin_structure_weight": "Emphasizes thin line structures in the photometric loss. 0 disables it; recommended 1. Range: 0 to 4.",
+    "tooltip.thin_structure_weight": "Emphasizes thin line structures in the photometric loss. 0 disables it; recommended 0.5 to 1. Range: 0 to 4.",
     "tooltip.scale_reg": "Gaussian scale にペナルティを与えます。大きすぎる splat や膨らみを減らすために使います。カバレッジが悪化する場合は低く保ちます。",
     "tooltip.lambda_dssim": "ピクセル L1 loss と構造類似性を混ぜます。構造/知覚的類似性を重視する場合は上げ、厳密なピクセル単位の色一致を重視する場合は下げます。",
     "tooltip.tv_loss_weight": "Bilateral Grid の補正を滑らかにします。Bilateral Grid と一緒に使うとノイズの多いローカル色補正を避けられます。grid がオフなら関係ありません。",

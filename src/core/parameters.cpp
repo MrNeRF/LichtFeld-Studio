@@ -723,7 +723,7 @@ namespace lfs::core {
             p.max_cap = 5'000'000;
             p.grow_fraction = -1.0f;
             p.shs_lr = -1.0f;
-            p.thin_structure_weight = 1.0f;
+            p.thin_structure_weight = 0.5f;
             p.min_opacity = 1.0f / 255.0f;
             p.means_lr_end = 2e-7f;
             p.opacity_lr = 0.012f;
