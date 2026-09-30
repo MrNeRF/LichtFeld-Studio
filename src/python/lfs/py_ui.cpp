@@ -5487,19 +5487,21 @@ namespace lfs::python {
             },
             "Clear all saved scene reconstruction backend and preset preferences");
 
-        m.def("get_viewer_backend_preference", [] {
-            return std::string(rendering::viewerBackendName(vis::UserPreferences::instance().viewerBackend()));
-        }, "Get the saved viewer GPU API, independently of tensor execution");
+        m.def("get_viewer_backend_preference", [] { return std::string(rendering::viewerBackendName(vis::UserPreferences::instance().viewerBackend())); }, "Get the saved viewer GPU API, independently of tensor execution");
         m.def("set_viewer_backend_preference", [](const std::string& backend) {
             const auto selected=rendering::parseViewerBackend(backend);
             if(!selected) throw nb::value_error("Viewer backend must be auto, vulkan or metal");
 #ifndef __APPLE__
             if(*selected==rendering::ViewerBackend::Metal) throw nb::value_error("Metal viewer requires macOS");
 #endif
+            const auto previous = vis::UserPreferences::instance().viewerBackend();
             vis::UserPreferences::instance().setViewerBackend(*selected);
+            if (previous != *selected) {
+                LOG_INFO("Viewer GPU backend preference changed: {} -> {}; effective backend reported on scene rendering",
+                         rendering::viewerBackendName(previous), rendering::viewerBackendName(*selected));
+            }
             if(auto* rm=vis::services().renderingOrNull()) rm->markDirty(vis::DirtyFlag::ALL);
-            lfs::python::request_redraw();
-        }, nb::arg("backend")="auto", "Select the viewer GPU API; unsupported frame contracts use Vulkan");
+            lfs::python::request_redraw(); }, nb::arg("backend") = "auto", "Select the viewer GPU API; unsupported frame contracts use Vulkan");
         m.def("get_tensor_backend_preferences", [] {
             const auto state = vis::UserPreferences::instance().tensorBackend();
             nb::dict result;
@@ -5534,7 +5536,16 @@ namespace lfs::python {
                       .options = {.vulkan_device = device, .vulkan_validation = validation,
                                   .force_fp32_half = fp32_half, .force_no_atomic_float = no_atomic_float},
                   };
-                  vis::UserPreferences::instance().setTensorBackend(state); }, nb::arg("backend") = "auto", nb::arg("vulkan_device") = "", nb::arg("vulkan_validation") = 0, nb::arg("force_fp32_half") = false, nb::arg("force_no_atomic_float") = false, "Save tensor backend preferences for the next application start");
+                  const auto previous = vis::UserPreferences::instance().tensorBackend();
+                  vis::UserPreferences::instance().setTensorBackend(state);
+                  if (previous.backend != state.backend ||
+                      previous.options.vulkan_device != state.options.vulkan_device ||
+                      previous.options.vulkan_validation != state.options.vulkan_validation ||
+                      previous.options.force_fp32_half != state.options.force_fp32_half ||
+                      previous.options.force_no_atomic_float != state.options.force_no_atomic_float) {
+                      LOG_INFO("Tensor GPU backend preferences saved: requested={}; changes apply after restart; current={}",
+                               backend, core::gpu_backend_name(core::configured_gpu_backend()));
+                  } }, nb::arg("backend") = "auto", nb::arg("vulkan_device") = "", nb::arg("vulkan_validation") = 0, nb::arg("force_fp32_half") = false, nb::arg("force_no_atomic_float") = false, "Save tensor backend preferences for the next application start");
 
         m.def(
             "get_mcp_preferences",

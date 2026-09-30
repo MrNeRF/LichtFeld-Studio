@@ -13,6 +13,9 @@
 #include "input/input_controller.hpp"
 #include "input/sdl_coordinate_utils.hpp"
 #include "input/sdl_key_mapping.hpp"
+#ifdef __APPLE__
+#include "preferences.hpp"
+#endif
 #include "vulkan_context.hpp"
 #include "vulkan_loader_probe.hpp"
 #include "window_state_utils.hpp"
@@ -690,6 +693,12 @@ namespace lfs::vis {
             LOG_INFO("SDL video driver: {}", video_driver);
         }
 
+#ifdef __APPLE__
+        LOG_INFO("Viewer GPU backend preference: requested={} (effective backend reported on scene rendering); tensor={}",
+                 lfs::rendering::viewerBackendName(UserPreferences::instance().viewerBackend()),
+                 lfs::core::gpu_backend_name(lfs::core::configured_gpu_backend()));
+        LOG_INFO("Desktop compositor uses Vulkan for presentation, UI and editor overlays, including with the Metal viewer");
+#endif
         const auto vulkan_info = probeVulkanLoader();
         if (vulkan_info.enabled) {
             if (vulkan_info.loader_available) {
@@ -786,6 +795,9 @@ namespace lfs::vis {
             return false;
         }
         LOG_INFO("Vulkan window context initialized");
+#ifdef __APPLE__
+        LOG_INFO("Desktop compositor backend active: vulkan");
+#endif
         return true;
     }
 

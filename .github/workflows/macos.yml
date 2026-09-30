@@ -76,6 +76,11 @@ jobs:
       - name: Build application and tests
         run: cmake --build --preset macos-release
 
+      - name: Check native Finder drag-and-drop event bridge (no GPU)
+        run: |
+          cmake --build build-macos-release --target mac_native_drag_drop_contracts --parallel 4
+          ctest --test-dir build-macos-release -R '^MacNativeDragDropContracts$' --no-tests=error --output-on-failure
+
       - name: Run GPU and VideoToolbox tests
         run: |
           icd="$(brew --prefix molten-vk)/etc/vulkan/icd.d/MoltenVK_icd.json"

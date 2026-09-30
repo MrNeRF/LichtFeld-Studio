@@ -35,6 +35,21 @@ endif()
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
 
+if(APPLE AND (BUILD_VISUALIZER_TESTS OR BUILD_TESTS))
+    # Cocoa delivers SDL drag events; this contract exercises the bridge without a GPU.
+    add_executable(mac_native_drag_drop_contracts EXCLUDE_FROM_ALL
+        test_mac_native_drag_drop.cpp
+        ${CMAKE_SOURCE_DIR}/src/visualizer/gui/utils/drag_drop_native.cpp)
+    target_compile_features(mac_native_drag_drop_contracts PRIVATE cxx_std_23)
+    target_include_directories(mac_native_drag_drop_contracts PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/visualizer)
+    target_link_libraries(mac_native_drag_drop_contracts PRIVATE
+        SDL3::SDL3 lfs_logger GTest::gtest_main)
+    add_test(NAME MacNativeDragDropContracts COMMAND mac_native_drag_drop_contracts)
+    set_tests_properties(MacNativeDragDropContracts PROPERTIES
+        LABELS "cpu;macos" TIMEOUT 30 ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+endif()
+
 # =============================================================================
 # CPU-only visualizer tests (no LibTorch)
 # =============================================================================

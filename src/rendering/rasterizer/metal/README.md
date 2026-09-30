@@ -9,6 +9,14 @@ continues to use Vulkan. The desktop UI, grid and gizmos still use the existing
 Vulkan compositor, sampling shared Metal color/depth textures on the same GPU.
 No full-frame CPU readback occurs during interactive native presentation.
 
+Startup logs distinguish the requested viewer API, selected tensor backend and
+active Vulkan compositor before any scene opens. Runtime logs announce actual
+viewer routes and fallbacks after successful submission; tensor preference
+changes explicitly require restart. Finder drag-and-drop uses SDL's native Cocoa
+destination and the existing single import path, including hover/cancel feedback.
+`MacNativeDragDropContracts` exercises that event bridge without a GPU in macOS CI;
+actual Finder interaction remains a manual UI check.
+
 ## Implemented and GPU-tested
 
 `SplatPreprocessor` encodes a GPU projection into the caller's command buffer.
