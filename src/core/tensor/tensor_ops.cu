@@ -387,6 +387,21 @@ namespace lfs::core::tensor_ops {
         }
     };
 
+    // cvt.rzi maps NaN to INT64_MIN; tensor casts define NaN as zero.
+    template <>
+    struct ConvertFunctor<float, int64_t> {
+        __device__ int64_t operator()(float x) const {
+            return isnan(x) ? int64_t{0} : static_cast<int64_t>(x);
+        }
+    };
+
+    template <>
+    struct ConvertFunctor<__half, int64_t> {
+        __device__ int64_t operator()(__half x) const {
+            return __hisnan(x) ? int64_t{0} : static_cast<int64_t>(x);
+        }
+    };
+
     // Numeric-to-byte casts follow Torch's truncation and modulo semantics.
     template <>
     struct ConvertFunctor<float, uint8_t> {
@@ -3008,6 +3023,21 @@ namespace lfs::core::tensor_ops {
         const int64_t*, const int64_t*, unsigned char*, size_t, ops::equal_op, cudaStream_t);
     template LFS_CORE_API void launch_binary_op_generic<int64_t, unsigned char, ops::not_equal_op>(
         const int64_t*, const int64_t*, unsigned char*, size_t, ops::not_equal_op, cudaStream_t);
+
+#define LFS_INSTANTIATE_UINT32_COMPARISON(OP)                                    \
+    template LFS_CORE_API void launch_binary_op_generic<uint32_t, unsigned char, \
+                                                        ops::OP>(                \
+        const uint32_t*, const uint32_t*, unsigned char*, size_t, ops::OP, cudaStream_t);
+    LFS_INSTANTIATE_UINT32_COMPARISON(greater_op)
+    LFS_INSTANTIATE_UINT32_COMPARISON(greater_equal_op)
+    LFS_INSTANTIATE_UINT32_COMPARISON(less_op)
+    LFS_INSTANTIATE_UINT32_COMPARISON(less_equal_op)
+    LFS_INSTANTIATE_UINT32_COMPARISON(equal_op)
+    LFS_INSTANTIATE_UINT32_COMPARISON(not_equal_op)
+    LFS_INSTANTIATE_UINT32_COMPARISON(logical_and_op)
+    LFS_INSTANTIATE_UINT32_COMPARISON(logical_or_op)
+    LFS_INSTANTIATE_UINT32_COMPARISON(logical_xor_op)
+#undef LFS_INSTANTIATE_UINT32_COMPARISON
 
     template LFS_CORE_API void launch_binary_op_generic<__half, unsigned char, ops::greater_op>(
         const __half*, const __half*, unsigned char*, size_t, ops::greater_op, cudaStream_t);

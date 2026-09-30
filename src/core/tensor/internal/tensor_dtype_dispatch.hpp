@@ -106,6 +106,20 @@ namespace lfs::core::detail {
                    static_cast<double>(std::numeric_limits<int32_t>::max());
     }
 
+    // Match CUDA's float-to-integer conversion: truncate toward zero, map NaN
+    // to zero, and saturate values outside the destination range.
+    template <typename To>
+    inline To saturating_float_cast(const float value) {
+        if (value != value)
+            return To{0};
+        const double truncated = std::trunc(static_cast<double>(value));
+        if (truncated <= static_cast<double>(std::numeric_limits<To>::lowest()))
+            return std::numeric_limits<To>::lowest();
+        if (truncated >= static_cast<double>(std::numeric_limits<To>::max()))
+            return std::numeric_limits<To>::max();
+        return static_cast<To>(truncated);
+    }
+
     __host__ __device__ inline uint8_t torch_uint8_cast(const float value) {
 #ifdef __CUDA_ARCH__
         if (!isfinite(value)) {

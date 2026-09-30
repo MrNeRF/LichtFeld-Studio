@@ -247,6 +247,12 @@ namespace lfs::core {
                 tensor_ops::launch_masked_select(ptr<int64_t>(), mask.ptr<unsigned char>(),
                                                  result.ptr<int64_t>(), numel(), output_size, stream());
                 break;
+            case DataType::UInt32:
+                tensor_ops::launch_masked_select(reinterpret_cast<const int32_t*>(ptr<uint32_t>()),
+                                                 mask.ptr<unsigned char>(),
+                                                 reinterpret_cast<int32_t*>(result.ptr<uint32_t>()),
+                                                 numel(), output_size, stream());
+                break;
             case DataType::UInt8:
             case DataType::Bool:
                 tensor_ops::launch_masked_select(ptr<uint8_t>(), mask.ptr<unsigned char>(),
@@ -274,6 +280,9 @@ namespace lfs::core {
                 break;
             case DataType::Int64:
                 masked_select_cpu(ptr<int64_t>(), mask.ptr<unsigned char>(), result.ptr<int64_t>(), numel());
+                break;
+            case DataType::UInt32:
+                masked_select_cpu(ptr<uint32_t>(), mask.ptr<unsigned char>(), result.ptr<uint32_t>(), numel());
                 break;
             case DataType::UInt8:
             case DataType::Bool:
@@ -2333,6 +2342,12 @@ namespace lfs::core {
                                                   mask_.ptr<unsigned char>(), other.ptr<int64_t>(),
                                                   tensor_->numel(), other.numel(), tensor_->stream());
                 break;
+            case DataType::UInt32:
+                tensor_ops::launch_masked_scatter(
+                    reinterpret_cast<int32_t*>(const_cast<Tensor*>(tensor_)->ptr<uint32_t>()),
+                    mask_.ptr<unsigned char>(), reinterpret_cast<const int32_t*>(other.ptr<uint32_t>()),
+                    tensor_->numel(), other.numel(), tensor_->stream());
+                break;
             case DataType::UInt8:
             case DataType::Bool:
                 tensor_ops::launch_masked_scatter(const_cast<Tensor*>(tensor_)->ptr<uint8_t>(),
@@ -2360,6 +2375,10 @@ namespace lfs::core {
             case DataType::Int64:
                 masked_scatter_cpu(const_cast<Tensor*>(tensor_)->ptr<int64_t>(), mask,
                                    other.ptr<int64_t>(), tensor_->numel());
+                break;
+            case DataType::UInt32:
+                masked_scatter_cpu(const_cast<Tensor*>(tensor_)->ptr<uint32_t>(), mask,
+                                   other.ptr<uint32_t>(), tensor_->numel());
                 break;
             case DataType::UInt8:
             case DataType::Bool:

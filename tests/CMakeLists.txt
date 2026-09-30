@@ -355,6 +355,7 @@ set(TEST_FILES
     test_selection_cursor.cpp
     test_tensor_basic.cpp
     test_tensor_ops.cpp
+    test_tensor_edge_semantics.cpp
     test_tensor_memory.cpp
     test_allocator_policy.cpp
     test_alloc_counter.cpp

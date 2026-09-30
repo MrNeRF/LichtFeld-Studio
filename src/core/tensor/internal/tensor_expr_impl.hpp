@@ -857,6 +857,41 @@ namespace lfs::core {
                             }
                         }
                     }
+                } else if (left_tensor.dtype() == DataType::UInt32 && right_tensor.dtype() == DataType::UInt32) {
+                    // UInt32 comparisons must read the full unsigned values.
+                    if (device == Device::CUDA) {
+                        if (needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
+                            tensor_ops::launch_broadcast_binary(
+                                left_tensor.template ptr<uint32_t>(),
+                                right_tensor.template ptr<uint32_t>(),
+                                result.template ptr<unsigned char>(),
+                                left_tensor.shape().dims().data(),
+                                right_tensor.shape().dims().data(),
+                                shape.dims().data(),
+                                left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
+                                result.numel(), op, result.stream());
+                        } else {
+                            pin_operands({&left_tensor, &right_tensor});
+                            tensor_ops::launch_binary_op_generic(
+                                left_tensor.template ptr<uint32_t>(),
+                                right_tensor.template ptr<uint32_t>(),
+                                result.template ptr<unsigned char>(), result.numel(), op, result.stream());
+                        }
+                    } else {
+                        Tensor left_broadcast = left_tensor;
+                        Tensor right_broadcast = right_tensor;
+                        if (needs_broadcast) {
+                            left_broadcast = left_tensor.broadcast_to(shape).contiguous();
+                            right_broadcast = right_tensor.broadcast_to(shape).contiguous();
+                        }
+                        pin_operands({&left_broadcast, &right_broadcast});
+                        const uint32_t* left_ptr = left_broadcast.template ptr<uint32_t>();
+                        const uint32_t* right_ptr = right_broadcast.template ptr<uint32_t>();
+                        unsigned char* out_ptr = result.template ptr<unsigned char>();
+                        for (size_t i = 0; i < result.numel(); ++i)
+                            out_ptr[i] = op(left_ptr[i], right_ptr[i]);
+                    }
                 } else if (left_tensor.dtype() == DataType::UInt8 && right_tensor.dtype() == DataType::UInt8) {
                     // UInt8,UInt8 -> Bool (comparison operations on UInt8 tensors)
                     if (device == Device::CUDA) {

@@ -1712,7 +1712,11 @@ namespace lfs::core {
         const FROM_TYPE* src = ptr<FROM_TYPE>();                                    \
         TO_TYPE* dst = result.ptr<TO_TYPE>();                                       \
         for (size_t i = 0; i < numel(); ++i) {                                      \
-            if constexpr (std::is_same_v<TO_TYPE, uint8_t>) {                       \
+            if constexpr (std::is_same_v<FROM_TYPE, float> &&                       \
+                          (std::is_same_v<TO_TYPE, int> ||                          \
+                           std::is_same_v<TO_TYPE, int64_t>)) {                     \
+                dst[i] = detail::saturating_float_cast<TO_TYPE>(src[i]);            \
+            } else if constexpr (std::is_same_v<TO_TYPE, uint8_t>) {                \
                 dst[i] = detail::torch_uint8_cast(src[i]);                          \
             } else {                                                                \
                 dst[i] = static_cast<TO_TYPE>(src[i]);                              \
@@ -1804,7 +1808,7 @@ namespace lfs::core {
                 const float* src = ptr<float>();
                 int* dst = result.ptr<int>();
                 for (size_t i = 0; i < numel(); ++i) {
-                    dst[i] = static_cast<int>(src[i]);
+                    dst[i] = detail::saturating_float_cast<int>(src[i]);
                 }
             }
             return result;
