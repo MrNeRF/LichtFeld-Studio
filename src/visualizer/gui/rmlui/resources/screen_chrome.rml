@@ -43,6 +43,12 @@
             </div>
         </div>
         <div class="view-label" data-if="area.is_view">{{ area.view_label }}</div>
+        <div class="view-corner-mask top-left" data-if="area.is_view"
+             data-style-top="area.header_height"></div>
+        <div class="view-corner-mask top-right" data-if="area.is_view"
+             data-style-top="area.header_height"></div>
+        <div class="view-corner-mask bottom-left" data-if="area.is_view"></div>
+        <div class="view-corner-mask bottom-right" data-if="area.is_view"></div>
     </div>
 </body>
 </rml>

@@ -96,6 +96,26 @@
     border-radius: @{num(size.frame_rounding)}dp;
 }
 
+.view-corner-mask {
+    background-color: @{background};
+}
+
+.view-corner-mask.top-left {
+    border-bottom-right-radius: 6dp;
+}
+
+.view-corner-mask.top-right {
+    border-bottom-left-radius: 6dp;
+}
+
+.view-corner-mask.bottom-left {
+    border-top-right-radius: 6dp;
+}
+
+.view-corner-mask.bottom-right {
+    border-top-left-radius: 6dp;
+}
+
 .tab-close {
     background-color: transparent;
     color: @{text_dim};

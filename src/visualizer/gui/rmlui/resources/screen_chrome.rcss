@@ -141,6 +141,32 @@ body {
     border-width: 1dp;
 }
 
+.view-corner-mask {
+    position: absolute;
+    width: 6dp;
+    height: 6dp;
+    pointer-events: none;
+    z-index: 2;
+}
+
+.view-corner-mask.top-left {
+    left: 0;
+}
+
+.view-corner-mask.top-right {
+    right: 0;
+}
+
+.view-corner-mask.bottom-left {
+    left: 0;
+    bottom: 0;
+}
+
+.view-corner-mask.bottom-right {
+    right: 0;
+    bottom: 0;
+}
+
 .tab-close {
     display: block;
     width: 16dp;
