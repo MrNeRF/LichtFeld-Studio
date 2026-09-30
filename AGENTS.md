@@ -17,6 +17,7 @@ This repository exposes a large local MCP surface for LichtFeld Studio. When the
 
 Pull narrower resources only when needed:
 
+- `lichtfeld://ui/screen`
 - `lichtfeld://ui/tools`
 - `lichtfeld://ui/menus`
 - `lichtfeld://ui/panels`
