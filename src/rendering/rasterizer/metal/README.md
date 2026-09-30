@@ -1,9 +1,13 @@
+<!-- SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+     SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Native Metal viewer backend
 
-This directory is the native Metal viewer implementation on
-`feature/macos-metal-viewer`, starting at upstream/dev `e8a508ae4`.
-It is independent of UIKit, MoltenVK and the trainer. The desktop still uses its
-existing Vulkan renderer: this module is not yet selectable as a complete viewer.
+The native Metal rasterizer consumes resident LichtFeld tensors, including Q16
+SH storage. On macOS it can be selected explicitly under Preferences; Automatic
+continues to use Vulkan. The desktop UI, grid and gizmos still use the existing
+Vulkan compositor, sampling shared Metal color/depth textures on the same GPU.
+No full-frame CPU readback occurs during interactive native presentation.
 
 ## Implemented and GPU-tested
 
@@ -57,13 +61,18 @@ discard its reservation too.
 tensor backend and the 3DGS/3DGUT algorithm. `UserPreferences` persists the request
 under `viewer_backend`, defaults missing/invalid values to automatic, and does not
 rewrite the saved request when a backend is unavailable. The resolver reports a
-fallback reason. Desktop routing and the preferences UI are **not connected yet**;
-the actual default remains Vulkan.
+fallback reason. Desktop routing and the preferences UI are connected. Native rendering supports
+Studio 3DGS color/depth, perspective/orthographic views, Gaussian/point/disc
+projection, node transforms and visibility, resident float32/half geometry and
+Q16/half/float SH storage. Unsupported requests (including 3DGUT, LOD/RAD,
+crop/clipping and editor selection overlays) retain the existing Vulkan path.
+Preview and deterministic export also retain Vulkan. This is an incremental
+native raster integration, not a complete replacement of the desktop renderer.
 
-The module now produces native images, but has not established visual parity with
-the desktop Vulkan rasterizer or end-to-end viewer frame time. Projection/profile,
-near-camera behavior, lifecycle and workflow comparisons remain required before
-enabling the desktop UI choice.
+The GPU contracts cover projection, stable sorting/composition, tensor producer
+ordering, interop and native viewport readback/resize. Full workflow and visual
+parity, memory-budget behavior and representative performance remain validation
+requirements. Passing contracts alone is not evidence of a speed advantage.
 
 ## Remaining integration, in order
 

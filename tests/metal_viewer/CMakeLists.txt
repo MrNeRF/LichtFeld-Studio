@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+#
 # SPDX-License-Identifier: GPL-3.0-or-later
 cmake_minimum_required(VERSION 3.25)
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
@@ -36,6 +38,19 @@ if(TARGET lfs_core)
     target_link_libraries(metal_tensor_reader_contracts PRIVATE lfs_core)
     set_target_properties(metal_tensor_reader_contracts PROPERTIES OBJCXX_STANDARD 23)
     set_property(TEST MetalViewerTensorReaderContracts APPEND PROPERTY LABELS metal4)
+endif()
+if(TARGET lfs_visualizer)
+    find_package(Python REQUIRED COMPONENTS Development.Embed)
+    lfs_add_metal_contract(metal_viewport_contracts viewport_contracts.mm MetalViewerViewportContracts)
+    target_link_libraries(metal_viewport_contracts PRIVATE lfs_visualizer lfs_core Python::Python)
+    target_include_directories(metal_viewport_contracts PRIVATE
+        "${CMAKE_SOURCE_DIR}/src/visualizer/rendering"
+        "${CMAKE_SOURCE_DIR}/src/visualizer"
+        "${CMAKE_SOURCE_DIR}/src/io/include"
+        "${CMAKE_SOURCE_DIR}/src/rendering/include"
+        "${CMAKE_SOURCE_DIR}/src")
+    set_target_properties(metal_viewport_contracts PROPERTIES OBJCXX_STANDARD 23)
+    set_property(TEST MetalViewerViewportContracts APPEND PROPERTY LABELS metal4)
 endif()
 
 set(_interop_default OFF)

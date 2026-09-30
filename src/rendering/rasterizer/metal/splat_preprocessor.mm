@@ -1,9 +1,9 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "splat_preprocessor.hpp"
-#include "shader_source.hpp"
 #include "core/sh_layout.hpp"
 #include "core/sh_value_quant.hpp"
+#include "shader_source.hpp"
 
 #include <array>
 #include <cmath>
@@ -13,145 +13,162 @@
 #include <utility>
 
 namespace lfs::rendering::metal {
-namespace {
-static_assert(core::kShReorderSize == 32);
-static_assert(core::kShMaxCoeffsRest == 15);
-static_assert(core::sh_value_quant::kBlockSize == 256);
+    namespace {
+        static_assert(core::kShReorderSize == 32);
+        static_assert(core::kShMaxCoeffsRest == 15);
+        static_assert(core::sh_value_quant::kBlockSize == 256);
 
-std::runtime_error failure(const char* operation, NSError* error) {
-    return std::runtime_error(std::string(operation)+": "+
-        (error.localizedDescription.UTF8String ?: "Metal operation failed"));
-}
+        std::runtime_error failure(const char* operation, NSError* error) {
+            return std::runtime_error(std::string(operation) + ": " +
+                                      (error.localizedDescription.UTF8String ?: "Metal operation failed"));
+        }
 
-void check_slice(BufferSlice view, size_t bytes, NSUInteger alignment,
-                 id<MTLDevice> device, const char* name) {
-    if(!view.buffer || view.buffer.device!=device || view.offset%alignment ||
-       view.offset>view.buffer.length || bytes>view.buffer.length-view.offset)
-        throw std::invalid_argument(std::string("Invalid Metal splat buffer: ")+name);
-}
+        void check_slice(BufferSlice view, size_t bytes, NSUInteger alignment,
+                         id<MTLDevice> device, const char* name) {
+            if (!view.buffer || view.buffer.device != device || view.offset % alignment ||
+                view.offset > view.buffer.length || bytes > view.buffer.length - view.offset)
+                throw std::invalid_argument(std::string("Invalid Metal splat buffer: ") + name);
+        }
 
-void check_projection(const Projection& p) {
-    const auto finite_matrix=[](simd_float4x4 matrix) {
-        for(int column=0;column<4;++column)
-            for(int row=0;row<4;++row) if(!std::isfinite(matrix.columns[column][row]))return false;
-        return matrix.columns[0].w==0 && matrix.columns[1].w==0 &&
-               matrix.columns[2].w==0 && matrix.columns[3].w==1;
+        void check_projection(const Projection& p) {
+            const auto finite_matrix = [](simd_float4x4 matrix) {
+                for (int column = 0; column < 4; ++column)
+                    for (int row = 0; row < 4; ++row)
+                        if (!std::isfinite(matrix.columns[column][row]))
+                            return false;
+                return matrix.columns[0].w == 0 && matrix.columns[1].w == 0 &&
+                       matrix.columns[2].w == 0 && matrix.columns[3].w == 1;
+            };
+            bool finite = true;
+            for (int i = 0; i < 4; ++i)
+                finite = finite && std::isfinite(p.intrinsics[i]) &&
+                         std::isfinite(p.clip_scale[i]) && std::isfinite(p.camera_local[i]);
+            if (!finite || !finite_matrix(p.model_to_world) || !finite_matrix(p.world_to_camera) ||
+                !p.extent.x || !p.extent.y || p.extent.x > 65535 || p.extent.y > 65535 ||
+                p.extent.z > 1 || p.extent.w > 1 || p.intrinsics.x <= 0 || p.intrinsics.y <= 0 || p.clip_scale.x <= 0 ||
+                p.clip_scale.y <= p.clip_scale.x || p.clip_scale.z <= 0 || p.clip_scale.w < 0)
+                throw std::invalid_argument("Invalid Metal splat projection");
+        }
+    } // namespace
+
+    struct SplatPreprocessor::Impl {
+        id<MTLDevice> device;
+        id<MTLLibrary> library;
+        id<MTLBuffer> empty;
+        std::mutex mutex;
+        std::map<uint32_t, id<MTLComputePipelineState>> pipelines;
+
+        id<MTLComputePipelineState> pipeline(ShStorage storage, uint32_t degree, PrimitiveMode mode) {
+            const uint32_t format = static_cast<uint32_t>(storage), primitive = static_cast<uint32_t>(mode);
+            if (format > 3 || degree > 3 || primitive > 2)
+                throw std::invalid_argument("Unsupported Metal splat specialization");
+            const uint32_t key = format * 16 + degree * 4 + primitive;
+            std::lock_guard lock(mutex);
+            if (auto found = pipelines.find(key); found != pipelines.end())
+                return found->second;
+            MTLFunctionConstantValues* constants = [MTLFunctionConstantValues new];
+            [constants setConstantValue:&format type:MTLDataTypeUInt atIndex:0];
+            [constants setConstantValue:&degree type:MTLDataTypeUInt atIndex:1];
+            [constants setConstantValue:&primitive type:MTLDataTypeUInt atIndex:2];
+            NSError* error = nil;
+            id<MTLFunction> function = [library newFunctionWithName:@"project_splats" constantValues:constants error:&error];
+            if (!function)
+                throw failure("Compile Metal splat specialization", error);
+            id<MTLComputePipelineState> state = [device newComputePipelineStateWithFunction:function error:&error];
+            if (!state)
+                throw failure("Create Metal splat pipeline", error);
+            pipelines.emplace(key, state);
+            return state;
+        }
     };
-    bool finite=true;
-    for(int i=0;i<4;++i)finite=finite && std::isfinite(p.intrinsics[i]) &&
-        std::isfinite(p.clip_scale[i]) && std::isfinite(p.camera_local[i]);
-    if(!finite || !finite_matrix(p.model_to_world) || !finite_matrix(p.world_to_camera) ||
-       !p.extent.x || !p.extent.y || p.extent.x>65535 || p.extent.y>65535 ||
-       p.extent.z>1 || p.extent.w>1 || p.intrinsics.x<=0 || p.intrinsics.y<=0 || p.clip_scale.x<=0 ||
-       p.clip_scale.y<=p.clip_scale.x || p.clip_scale.z<=0 || p.clip_scale.w<0)
-        throw std::invalid_argument("Invalid Metal splat projection");
-}
-}
 
-struct SplatPreprocessor::Impl {
-    id<MTLDevice> device;
-    id<MTLLibrary> library;
-    id<MTLBuffer> empty;
-    std::mutex mutex;
-    std::map<uint32_t,id<MTLComputePipelineState>> pipelines;
-
-    id<MTLComputePipelineState> pipeline(ShStorage storage,uint32_t degree,PrimitiveMode mode) {
-        const uint32_t format=static_cast<uint32_t>(storage),primitive=static_cast<uint32_t>(mode);
-        if(format>3 || degree>3 || primitive>2)
-            throw std::invalid_argument("Unsupported Metal splat specialization");
-        const uint32_t key=format*16+degree*4+primitive;
-        std::lock_guard lock(mutex);
-        if(auto found=pipelines.find(key);found!=pipelines.end())return found->second;
-        MTLFunctionConstantValues* constants=[MTLFunctionConstantValues new];
-        [constants setConstantValue:&format type:MTLDataTypeUInt atIndex:0];
-        [constants setConstantValue:&degree type:MTLDataTypeUInt atIndex:1];
-        [constants setConstantValue:&primitive type:MTLDataTypeUInt atIndex:2];
-        NSError* error=nil;
-        id<MTLFunction> function=[library newFunctionWithName:@"project_splats" constantValues:constants error:&error];
-        if(!function)throw failure("Compile Metal splat specialization",error);
-        id<MTLComputePipelineState> state=[device newComputePipelineStateWithFunction:function error:&error];
-        if(!state)throw failure("Create Metal splat pipeline",error);
-        pipelines.emplace(key,state);
-        return state;
-    }
-};
-
-SplatPreprocessor::SplatPreprocessor(id<MTLDevice> device):impl_(std::make_unique<Impl>()) {
-    if(!device)throw std::invalid_argument("Metal viewer requires a device");
-    impl_->device=device;
-    MTLCompileOptions* options=[MTLCompileOptions new];
-    // Q16 fma and near-plane finite checks are contractual.
-    if (@available(macOS 15.0, iOS 18.0, *)) {
-        options.mathMode=MTLMathModeSafe;
-    } else {
+    SplatPreprocessor::SplatPreprocessor(id<MTLDevice> device) : impl_(std::make_unique<Impl>()) {
+        if (!device)
+            throw std::invalid_argument("Metal viewer requires a device");
+        impl_->device = device;
+        MTLCompileOptions* options = [MTLCompileOptions new];
+        // Q16 fma and near-plane finite checks are contractual.
+        if (@available(macOS 15.0, iOS 18.0, *)) {
+            options.mathMode = MTLMathModeSafe;
+        } else {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        options.fastMathEnabled=NO;
+            options.fastMathEnabled = NO;
 #pragma clang diagnostic pop
+        }
+        options.languageVersion = MTLLanguageVersion2_4;
+        NSError* error = nil;
+        impl_->library = [device newLibraryWithSource:[NSString stringWithUTF8String:kSplatPreprocessorSource]
+                                              options:options
+                                                error:&error];
+        if (!impl_->library)
+            throw failure("Compile Metal viewer projection", error);
+        const std::array<uint32_t, 24> zero{};
+        impl_->empty = [device newBufferWithBytes:zero.data() length:sizeof(zero) options:MTLResourceStorageModeShared];
+        if (!impl_->empty)
+            throw std::runtime_error("Cannot allocate Metal placeholder buffer");
     }
-    options.languageVersion=MTLLanguageVersion2_4;
-    NSError* error=nil;
-    impl_->library=[device newLibraryWithSource:[NSString stringWithUTF8String:kSplatPreprocessorSource]
-        options:options error:&error];
-    if(!impl_->library)throw failure("Compile Metal viewer projection",error);
-    const std::array<uint32_t,24> zero{};
-    impl_->empty=[device newBufferWithBytes:zero.data() length:sizeof(zero) options:MTLResourceStorageModeShared];
-    if(!impl_->empty)throw std::runtime_error("Cannot allocate Metal placeholder buffer");
-}
-SplatPreprocessor::~SplatPreprocessor()=default;
+    SplatPreprocessor::~SplatPreprocessor() = default;
 
-void SplatPreprocessor::prepare(ShStorage storage,uint32_t degree,PrimitiveMode mode) {
-    (void)impl_->pipeline(storage,degree,mode);
-}
+    void SplatPreprocessor::prepare(ShStorage storage, uint32_t degree, PrimitiveMode mode) {
+        (void)impl_->pipeline(storage, degree, mode);
+    }
 
-void SplatPreprocessor::encode(id<MTLCommandBuffer> command,const SplatBuffers& in,
-    const Projection& projection,uint32_t degree,PrimitiveMode mode,BufferSlice output,const SceneBuffers& scene) {
-    if(!command || command.commandQueue.device!=impl_->device || command.status!=MTLCommandBufferStatusNotEnqueued)
-        throw std::invalid_argument("Metal viewer requires an uncommitted command buffer on the same device");
-    if(degree>3 || (in.layout_rest!=0 && in.layout_rest!=3 && in.layout_rest!=8 && in.layout_rest!=15) ||
-       core::sh_rest_coefficients_for_degree(degree)>in.layout_rest || static_cast<uint32_t>(in.storage)>3 ||
-       static_cast<uint32_t>(mode)>2)
-        throw std::invalid_argument("Active SH degree does not fit resident Metal storage");
-    check_projection(projection);
-    if(!in.count)return;
-    const size_t n=in.count;
-    const bool gaussians=mode!=PrimitiveMode::Points;
-    size_t rest_bytes=0,bounds_bytes=0;
-    if(degree) {
-        if(in.storage==ShStorage::Q16) {
-            rest_bytes=core::sh_value_quant::sh_value_u16_count(n,in.layout_rest)*sizeof(uint16_t);
-            bounds_bytes=core::sh_value_quant::n_bounds_for_prims(n)*2u*sizeof(float);
-        } else if(in.storage==ShStorage::CanonicalFloat32)rest_bytes=n*in.layout_rest*3u*sizeof(float);
-        else rest_bytes=core::sh_swizzled_float_count(n,in.layout_rest)*
-            (in.storage==ShStorage::SwizzledFloat16?sizeof(uint16_t):sizeof(float));
+    void SplatPreprocessor::encode(id<MTLCommandBuffer> command, const SplatBuffers& in,
+                                   const Projection& projection, uint32_t degree, PrimitiveMode mode, BufferSlice output, const SceneBuffers& scene) {
+        if (!command || command.commandQueue.device != impl_->device || command.status != MTLCommandBufferStatusNotEnqueued)
+            throw std::invalid_argument("Metal viewer requires an uncommitted command buffer on the same device");
+        if (degree > 3 || (in.layout_rest != 0 && in.layout_rest != 3 && in.layout_rest != 8 && in.layout_rest != 15) ||
+            core::sh_rest_coefficients_for_degree(degree) > in.layout_rest || static_cast<uint32_t>(in.storage) > 3 ||
+            static_cast<uint32_t>(mode) > 2)
+            throw std::invalid_argument("Active SH degree does not fit resident Metal storage");
+        check_projection(projection);
+        if (!in.count)
+            return;
+        const size_t n = in.count;
+        const bool gaussians = mode != PrimitiveMode::Points;
+        size_t rest_bytes = 0, bounds_bytes = 0;
+        if (degree) {
+            if (in.storage == ShStorage::Q16) {
+                rest_bytes = core::sh_value_quant::sh_value_u16_count(n, in.layout_rest) * sizeof(uint16_t);
+                bounds_bytes = core::sh_value_quant::n_bounds_for_prims(n) * 2u * sizeof(float);
+            } else if (in.storage == ShStorage::CanonicalFloat32)
+                rest_bytes = n * in.layout_rest * 3u * sizeof(float);
+            else
+                rest_bytes = core::sh_swizzled_float_count(n, in.layout_rest) *
+                             (in.storage == ShStorage::SwizzledFloat16 ? sizeof(uint16_t) : sizeof(float));
+        }
+        const std::array<BufferSlice, 10> inputs = {in.means, in.log_scales, in.rotations, in.opacity_logits,
+                                                    in.sh0, in.sh_rest, in.sh_bounds, in.deleted, scene.object_indices, scene.objects};
+        const size_t attr = in.non_sh_attrs_f16 ? 2 : 4;
+        const std::array<size_t, 10> lengths = {n * 12, gaussians ? n * 3 * attr : 0, gaussians ? n * 4 * attr : 0, n * attr, n * 12,
+                                                rest_bytes, bounds_bytes, in.deleted.buffer ? n : 0, scene.count ? n * 4 : 0, size_t(scene.count) * sizeof(SceneObject)};
+        const std::array<NSUInteger, 10> alignments = {4, attr, 4 * attr, attr, 4, 4, 8, 1, 4, 16};
+        const char* names[] = {"means", "scales", "rotations", "opacity", "SH0", "SH rest", "SH bounds", "deleted mask", "object indices", "scene objects"};
+        check_slice(output, n * sizeof(ProjectedSplat), 16, impl_->device, "projection output");
+        for (size_t i = 0; i < inputs.size(); ++i) {
+            if (!lengths[i])
+                continue;
+            check_slice(inputs[i], lengths[i], alignments[i], impl_->device, names[i]);
+            if (inputs[i].buffer == output.buffer && inputs[i].offset < output.offset + n * sizeof(ProjectedSplat) &&
+                output.offset < inputs[i].offset + lengths[i])
+                throw std::invalid_argument("Metal projection output overlaps input");
+        }
+        // Resolve/compile before opening an encoder so failure leaves the command usable.
+        auto pipeline = impl_->pipeline(in.storage, degree, mode);
+        id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+        if (!encoder)
+            throw std::runtime_error("Cannot create Metal projection encoder");
+        encoder.label = @"LichtFeld splat projection";
+        [encoder setComputePipelineState:pipeline];
+        for (NSUInteger i = 0; i < inputs.size(); ++i)
+            [encoder setBuffer:lengths[i] ? inputs[i].buffer : impl_->empty offset:lengths[i] ? inputs[i].offset : 0 atIndex:i < 8 ? i : i + 3];
+        [encoder setBuffer:output.buffer offset:output.offset atIndex:8];
+        [encoder setBytes:&projection length:sizeof(projection) atIndex:9];
+        const std::array<uint32_t, 5> layout = {in.count, in.layout_rest, in.deleted.buffer ? 1u : 0u, scene.count, in.non_sh_attrs_f16 ? 1u : 0u};
+        [encoder setBytes:layout.data() length:sizeof(layout) atIndex:10];
+        const NSUInteger width = std::min(NSUInteger(256), pipeline.maxTotalThreadsPerThreadgroup);
+        [encoder dispatchThreads:MTLSizeMake(n, 1, 1) threadsPerThreadgroup:MTLSizeMake(width, 1, 1)];
+        [encoder endEncoding];
     }
-    const std::array<BufferSlice,10> inputs={in.means,in.log_scales,in.rotations,in.opacity_logits,
-        in.sh0,in.sh_rest,in.sh_bounds,in.deleted,scene.object_indices,scene.objects};
-    const std::array<size_t,10> lengths={n*12,gaussians?n*12:0,gaussians?n*16:0,n*4,n*12,
-        rest_bytes,bounds_bytes,in.deleted.buffer?n:0,scene.count?n*4:0,size_t(scene.count)*sizeof(SceneObject)};
-    const std::array<NSUInteger,10> alignments={4,4,16,4,4,4,8,1,4,16};
-    const char* names[]={"means","scales","rotations","opacity","SH0","SH rest","SH bounds","deleted mask","object indices","scene objects"};
-    check_slice(output,n*sizeof(ProjectedSplat),16,impl_->device,"projection output");
-    for(size_t i=0;i<inputs.size();++i) {
-        if(!lengths[i])continue;
-        check_slice(inputs[i],lengths[i],alignments[i],impl_->device,names[i]);
-        if(inputs[i].buffer==output.buffer && inputs[i].offset<output.offset+n*sizeof(ProjectedSplat) &&
-           output.offset<inputs[i].offset+lengths[i])throw std::invalid_argument("Metal projection output overlaps input");
-    }
-    // Resolve/compile before opening an encoder so failure leaves the command usable.
-    auto pipeline=impl_->pipeline(in.storage,degree,mode);
-    id<MTLComputeCommandEncoder> encoder=[command computeCommandEncoder];
-    if(!encoder)throw std::runtime_error("Cannot create Metal projection encoder");
-    encoder.label=@"LichtFeld splat projection";
-    [encoder setComputePipelineState:pipeline];
-    for(NSUInteger i=0;i<inputs.size();++i)
-        [encoder setBuffer:lengths[i]?inputs[i].buffer:impl_->empty offset:lengths[i]?inputs[i].offset:0 atIndex:i<8?i:i+3];
-    [encoder setBuffer:output.buffer offset:output.offset atIndex:8];
-    [encoder setBytes:&projection length:sizeof(projection) atIndex:9];
-    const std::array<uint32_t,4> layout={in.count,in.layout_rest,in.deleted.buffer?1u:0u,scene.count};
-    [encoder setBytes:layout.data() length:sizeof(layout) atIndex:10];
-    const NSUInteger width=std::min(NSUInteger(256),pipeline.maxTotalThreadsPerThreadgroup);
-    [encoder dispatchThreads:MTLSizeMake(n,1,1) threadsPerThreadgroup:MTLSizeMake(width,1,1)];
-    [encoder endEncoding];
-}
 } // namespace lfs::rendering::metal

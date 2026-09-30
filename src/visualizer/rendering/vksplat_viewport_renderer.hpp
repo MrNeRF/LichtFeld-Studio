@@ -40,6 +40,9 @@
 #include <vector>
 
 namespace lfs::vis {
+#ifdef __APPLE__
+    class MetalViewportRenderer;
+#endif
 
     // Starts with file-only work: shader blobs are cached for the first
     // renderer initialization without touching Vulkan.
@@ -320,6 +323,10 @@ namespace lfs::vis {
         [[nodiscard]] GpuLodSelectionStatus gpuLodSelectionStatus() const;
 
     private:
+#ifdef __APPLE__
+        std::unique_ptr<MetalViewportRenderer> metal_viewport_;
+        std::array<bool,4> metal_output_{};
+#endif
         struct ComposePipeline;
         struct InputBindingResult {
             bool model_snapshot_changed = false;

@@ -2784,6 +2784,12 @@ def set_scene_reconstruction(backend_id: str, preset_id: str) -> bool:
 def reset_scene_reconstruction_preferences() -> None:
     """Clear all saved scene reconstruction backend and preset preferences"""
 
+def get_viewer_backend_preference() -> str:
+    """Get the requested viewer GPU API: auto, vulkan, or metal"""
+
+def set_viewer_backend_preference(backend: str = 'auto') -> None:
+    """Save the viewer GPU API; unsupported Metal frames use Vulkan"""
+
 def get_tensor_backend_preferences() -> dict:
     """Get saved tensor backend preferences; changes apply after restart"""
 

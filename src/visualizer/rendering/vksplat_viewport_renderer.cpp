@@ -3,6 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "vksplat_viewport_renderer.hpp"
+#ifdef __APPLE__
+#include "metal_viewport_renderer.hpp"
+#include "preferences.hpp"
+#endif
 #include "rendering/rasterizer/vulkan/src/display_color.h"
 
 #include "core/tensor_rad.hpp"
@@ -2108,6 +2112,10 @@ namespace lfs::vis {
     }
 
     void VksplatViewportRenderer::reset() {
+#ifdef __APPLE__
+        metal_viewport_.reset();
+        metal_output_.fill(false);
+#endif
         // Arena boundary callbacks take sync_mutex_ before readback_mutex_. Keep
         // cancellation in that same order so reset cannot invert the pair.
         cancelArenaHandoff();
@@ -4847,6 +4855,10 @@ namespace lfs::vis {
     bool VksplatViewportRenderer::nextOutputImagesNeedResize(
         const glm::ivec2 size,
         const OutputSlot output_slot) const {
+#ifdef __APPLE__
+        if(metal_output_[static_cast<size_t>(output_slot)])
+            return metal_viewport_->size(output_slot)!=size;
+#endif
         if (size.x <= 0 || size.y <= 0) {
             return false;
         }
@@ -6498,6 +6510,9 @@ namespace lfs::vis {
 
     lfs::Result<glm::ivec2> VksplatViewportRenderer::latestOutputImageSize(
         const OutputSlot output_slot) const {
+#ifdef __APPLE__
+        if(metal_output_[static_cast<size_t>(output_slot)]) return metal_viewport_->size(output_slot);
+#endif
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
         if (!context_) {
             return lfs::make_error(lfs::ErrorInit{
@@ -7073,6 +7088,10 @@ namespace lfs::vis {
         lfs::core::Tensor& destination,
         const int destination_x,
         const int destination_y) const {
+#ifdef __APPLE__
+        if(metal_output_[static_cast<size_t>(output_slot)])
+            return metal_viewport_->readColor(output_slot,destination,destination_x,destination_y);
+#endif
         const auto readback_t0 = std::chrono::steady_clock::now();
         const auto ticket = submitReadOutputImageIntoCpuHwcTicket(
             context, output_slot, destination, destination_x, destination_y);
@@ -7092,6 +7111,9 @@ namespace lfs::vis {
     std::expected<float, std::string> VksplatViewportRenderer::sampleDepthAtPixel(
         VulkanContext& context,
         const DepthSampleRequest& request) const {
+#ifdef __APPLE__
+        if(metal_output_[static_cast<size_t>(request.output_slot)]) return metal_viewport_->readDepth(request);
+#endif
         const auto readback_t0 = std::chrono::steady_clock::now();
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
         if (!context_) {
@@ -7799,6 +7821,10 @@ namespace lfs::vis {
         const lfs::rendering::ViewportRenderRequest& request,
         const OutputSlot output_slot,
         const bool synchronize_input_read) {
+#ifdef __APPLE__
+        if(metal_output_[static_cast<size_t>(output_slot)])
+            return render(context,splat_data,request,false,output_slot,synchronize_input_read);
+#endif
         const glm::ivec2 size = request.frame_view.size;
         if (size.x <= 0 || size.y <= 0) {
             return std::unexpected("VkSplat selection overlay received an invalid viewport size");
@@ -8047,6 +8073,18 @@ namespace lfs::vis {
         const OutputSlot output_slot,
         const bool synchronize_input_upload,
         const bool deterministic_export) {
+#ifdef __APPLE__
+        const auto preference=UserPreferences::instance().viewerBackend();
+        if(preference==rendering::ViewerBackend::Metal && output_slot!=OutputSlot::Preview &&
+           !deterministic_export && MetalViewportRenderer::supports(splat_data,request)) {
+            if(!metal_viewport_) metal_viewport_=std::make_unique<MetalViewportRenderer>();
+            auto result=metal_viewport_->render(context,splat_data,request,output_slot);
+            if(!result) return result;
+            metal_output_[static_cast<size_t>(output_slot)]=true;
+            return result;
+        }
+        metal_output_[static_cast<size_t>(output_slot)]=false;
+#endif
         const glm::ivec2 size = request.frame_view.size;
         if (size.x <= 0 || size.y <= 0) {
             return std::unexpected("VkSplat received an invalid viewport size");

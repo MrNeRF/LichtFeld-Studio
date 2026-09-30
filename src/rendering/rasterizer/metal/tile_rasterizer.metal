@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <metal_stdlib>
 using namespace metal;
@@ -63,10 +64,16 @@ kernel void scan_add(device ulong* output [[buffer(0)]],
 kernel void tile_status(device const ulong* counts [[buffer(0)]],
                         device const ulong* offsets [[buffer(1)]],
                         device RasterStatus& status [[buffer(2)]],
-                        constant RasterParameters& p [[buffer(3)]]) {
+                        constant RasterParameters& p [[buffer(3)]],
+                        device uint* dispatch_args [[buffer(4)]]) {
     status.required = p.count ? offsets[p.count - 1] + counts[p.count - 1] : 0;
     status.error = status.required > p.capacity ? 1 : 0;
     status.unused = 0;
+    const ulong live=status.error?0:status.required;
+    dispatch_args[0]=max(1u,uint((live+2047)/2048));
+    dispatch_args[1]=1; dispatch_args[2]=1;
+    dispatch_args[3]=max(1u,uint((live+255)/256));
+    dispatch_args[4]=1; dispatch_args[5]=1;
 }
 kernel void tile_instances(device const ProjectedSplat* splats [[buffer(0)]],
                            device const ulong* offsets [[buffer(1)]],

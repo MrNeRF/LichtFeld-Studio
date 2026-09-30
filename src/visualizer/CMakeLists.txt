@@ -369,6 +369,21 @@ target_link_libraries(lfs_visualizer
         volk::volk_headers
         ${CMAKE_DL_LIBS})
 target_link_libraries(lfs_visualizer PRIVATE lfs_vulkan_rasterizer)
+if(APPLE)
+    enable_language(OBJCXX)
+    file(READ "${CMAKE_SOURCE_DIR}/src/rendering/rasterizer/vulkan/shader/src/slang/display_color.inc" LFS_METAL_DISPLAY_COLOR)
+    configure_file(rendering/metal_viewport_present.metal generated/metal_viewport_present.metal @ONLY)
+    file(READ "${CMAKE_CURRENT_BINARY_DIR}/generated/metal_viewport_present.metal" LFS_METAL_PRESENT_SOURCE)
+    configure_file(rendering/metal_present_source.hpp.in generated/metal_present_source.hpp @ONLY)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_SOURCE_DIR}/src/rendering/rasterizer/vulkan/shader/src/slang/display_color.inc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/rendering/metal_viewport_present.metal")
+    target_sources(lfs_visualizer PRIVATE rendering/metal_viewport_renderer.mm)
+    set_source_files_properties(rendering/metal_viewport_renderer.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    set_target_properties(lfs_visualizer PROPERTIES OBJCXX_STANDARD 23 OBJCXX_STANDARD_REQUIRED YES)
+    target_include_directories(lfs_visualizer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    target_link_libraries(lfs_visualizer PRIVATE lfs_metal_viewer)
+endif()
 if(WIN32)
     target_compile_definitions(lfs_visualizer PRIVATE VK_USE_PLATFORM_WIN32_KHR)
 endif()

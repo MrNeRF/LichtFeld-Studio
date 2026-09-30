@@ -5487,6 +5487,19 @@ namespace lfs::python {
             },
             "Clear all saved scene reconstruction backend and preset preferences");
 
+        m.def("get_viewer_backend_preference", [] {
+            return std::string(rendering::viewerBackendName(vis::UserPreferences::instance().viewerBackend()));
+        }, "Get the saved viewer GPU API, independently of tensor execution");
+        m.def("set_viewer_backend_preference", [](const std::string& backend) {
+            const auto selected=rendering::parseViewerBackend(backend);
+            if(!selected) throw nb::value_error("Viewer backend must be auto, vulkan or metal");
+#ifndef __APPLE__
+            if(*selected==rendering::ViewerBackend::Metal) throw nb::value_error("Metal viewer requires macOS");
+#endif
+            vis::UserPreferences::instance().setViewerBackend(*selected);
+            if(auto* rm=vis::services().renderingOrNull()) rm->markDirty(vis::DirtyFlag::ALL);
+            lfs::python::request_redraw();
+        }, nb::arg("backend")="auto", "Select the viewer GPU API; unsupported frame contracts use Vulkan");
         m.def("get_tensor_backend_preferences", [] {
             const auto state = vis::UserPreferences::instance().tensorBackend();
             nb::dict result;

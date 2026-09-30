@@ -131,7 +131,7 @@ def test_literal_localization_calls_resolve():
              ROOT / "src" / "python" / "lfs_plugins"]
     for source_root in roots:
         for path in source_root.rglob("*"):
-            if path.suffix not in {".cpp", ".hpp", ".h", ".py"}:
+            if path.suffix not in {".cpp", ".hpp", ".h", ".py", ".mm", ".m"}:
                 continue
             source = path.read_text(encoding="utf-8", errors="ignore")
             for pattern in patterns:
@@ -212,6 +212,13 @@ def test_hardcoded_ui_audit_detects_common_bypasses():
         assert {"Export {count}", "Overview", "Working", "Degraded", "Queued", "Choose a file"} <= source_texts
         assert sum(finding.text == "Overview" for finding in source_findings) == 1
         assert "Visible notice" in cpp_texts
+        for extension in (".mm", ".m"):
+            assert extension in audit.SOURCE_SUFFIXES
+            apple = root / f"panel{extension}"
+            apple.write_text('State state{.message = @"Apple visible notice"};\n', encoding="utf-8")
+            assert "Apple visible notice" in {
+                finding.text for finding in audit.scan_source(apple, allowlist, patterns)
+            }
         assert {"Cancel", "Export"} <= rml_texts
 
 

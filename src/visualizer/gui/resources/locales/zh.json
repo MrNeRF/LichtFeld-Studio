@@ -880,6 +880,8 @@
     "tensor_cuda": "CUDA",
     "tensor_vulkan": "Vulkan",
     "tensor_metal": "Metal",
+    "viewer_backend": "查看器后端",
+    "viewer_backend_description": "自动模式使用 Vulkan。兼容的 Mac 可使用 Metal；不支持的渲染选项将使用 Vulkan。",
     "tensor_backend": "Tensor backend",
     "tensor_restart": "Changes apply after restarting LichtFeld Studio. Automatic picks CUDA where it is built, else Metal where the GPU supports it, else Vulkan. Vulkan and Metal support viewing and inference; training requires CUDA.",
     "tensor_device": "Vulkan device",

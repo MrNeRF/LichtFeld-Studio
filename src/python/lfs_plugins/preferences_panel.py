@@ -182,6 +182,10 @@ class PreferencesPanel(Panel):
             "tensor_metal_available",
             lambda: bool(lf.ui.get_tensor_backend_preferences()["metal_available"]),
         )
+        model.bind("viewer_backend", lf.ui.get_viewer_backend_preference,
+                   lf.ui.set_viewer_backend_preference)
+        model.bind_func("viewer_metal_available",
+                        lambda: bool(lf.ui.get_tensor_backend_preferences()["metal_available"]))
         model.bind("theme_family_idx", self._theme_family_index, self._set_theme_family_index)
         model.bind_func("theme_has_variants", self._theme_has_variants)
         model.bind("progress_bar_idx", self._progress_bar_index, self._set_progress_bar_index)
@@ -1618,6 +1622,7 @@ class PreferencesPanel(Panel):
             self._notify_project_manager_preferences_changed()
             self._read_project_location()
         elif section == "appearance":
+            lf.ui.set_viewer_backend_preference()
             lf.ui.set_theme("dark")
             lf.ui.set_progress_bar_style("classic")
             lf.ui.set_viewport_chrome_style("translucent")

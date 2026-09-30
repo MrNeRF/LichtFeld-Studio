@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <metal_stdlib>
 using namespace metal;
@@ -11,7 +12,7 @@ struct Projection {
     float4 camera_local, intrinsics, clip_scale;
     uint4 extent;
 };
-struct InputLayout { uint count, rest, has_deleted, objects; };
+struct InputLayout { uint count, rest, has_deleted, objects, half_attrs; };
 struct SceneObject { float4x4 model_to_world; float4 camera_local; uint4 flags; };
 struct ProjectedSplat { float4 mean_depth, conic_opacity, color; uint4 bounds; };
 
@@ -88,7 +89,8 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     const float4x4 matrix=frame.world_to_camera*model_to_world;
     const float3 view=(matrix*float4(p,1)).xyz;
     if(!all(isfinite(view)) || view.z<=frame.clip_scale.x || view.z>=frame.clip_scale.y) return;
-    float alpha=1.0f/(1.0f+exp(-opacity[i]));
+    const float logit=layout.half_attrs?float(reinterpret_cast<device const half*>(opacity)[i]):opacity[i];
+    float alpha=1.0f/(1.0f+exp(-logit));
     if(!isfinite(alpha) || alpha<1.0f/255.0f) return;
     const bool orthographic=frame.extent.z!=0;
     const float2 center=frame.intrinsics.xy*view.xy/(orthographic?1.0f:view.z)+frame.intrinsics.zw;
@@ -99,11 +101,12 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
         radius=2.0f;
         conic=float3(1,0,1);
     } else {
-        float4 q=rotations[i];
+        float4 q=layout.half_attrs?float4(reinterpret_cast<device const half4*>(rotations)[i]):rotations[i];
         const float norm2=dot(q,q);
         if(!isfinite(norm2) || norm2<1e-20f) return;
         q*=rsqrt(norm2);
-        const float3 s=exp(float3(scales[i]))*frame.clip_scale.z;
+        const float3 log_scale=layout.half_attrs?float3(reinterpret_cast<device const packed_half3*>(scales)[i]):float3(scales[i]);
+        const float3 s=exp(log_scale)*frame.clip_scale.z;
         if(!all(isfinite(s))) return;
         // Bound the covariance Jacobian near the frustum, as in 3DGS projection.
         const float2 limit=1.3f*float2(frame.extent.xy)*0.5f/frame.intrinsics.xy;
