@@ -102,6 +102,12 @@ namespace {
         expect_floats(host<float>(base.pow(cube)), {-8.f, -27.f, 0.f, -kInf, 0.f, kNan, -512.f});
     }
 
+    TEST_P(TensorBackendSemantics, FloatScalarMinimumAndMaximum) {
+        const Tensor x = make<float>(DataType::Float32, {4}, {-2.f, 0.25f, 3.f, 0.5f});
+        expect_floats(host<float>(x.minimum(0.5f)), {-2.f, 0.25f, 0.5f, 0.5f});
+        expect_floats(host<float>(x.maximum(0.5f)), {0.5f, 0.5f, 3.f, 0.5f});
+    }
+
     TEST_P(TensorBackendSemantics, IntegerPowBroadcasts) {
         const Tensor i64 = make<int64_t>(DataType::Int64, {2}, {3, 7}).pow(make<int64_t>(DataType::Int64, {1}, {2}));
         EXPECT_EQ(host<int64_t>(i64), (std::vector<int64_t>{9, 49}));
