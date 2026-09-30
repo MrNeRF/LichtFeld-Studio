@@ -343,39 +343,38 @@ namespace lfs::vis {
         [[nodiscard]] bool isGTComparisonActive() const;
         [[nodiscard]] bool isPLYComparisonActive() const;
         [[nodiscard]] bool depthWindowDragPreview() const;
-        void beginDepthWindowDrag(uint64_t& out_drag_token);
-        void endDepthWindowDrag(uint64_t drag_token);
-        void beginDepthWindowPreview();
-        void endDepthWindowPreview();
+        void beginDepthWindowDrag(ViewId view, uint64_t& out_drag_token);
+        void endDepthWindowDrag(ViewId view, uint64_t drag_token);
+        void beginDepthWindowPreview(ViewId view);
+        void endDepthWindowPreview(ViewId view);
         [[nodiscard]] GTComparisonMode getGTComparisonMode() const;
         [[nodiscard]] SplitViewMode getSplitViewMode() const;
         void restoreSplitViewMode(SplitViewMode mode);
         [[nodiscard]] float getSplitPosition() const;
-        [[nodiscard]] std::optional<float> getSplitDividerScreenX(const glm::vec2& viewport_pos,
+        [[nodiscard]] std::optional<float> getSplitDividerScreenX(ViewId view, const glm::vec2& viewport_pos,
                                                                   const glm::vec2& viewport_size) const;
         [[nodiscard]] DepthWindowState getDepthWindow() const;
         void setDepthWindow(const DepthWindowState& state);
-        bool applyDepthWindowIfEpoch(const DepthWindowState& state,
+        bool applyDepthWindowIfEpoch(ViewId view, const DepthWindowState& state,
                                      uint64_t expected_epoch,
                                      uint64_t drag_token);
-        bool restorePinnedDepthWindow(const DepthWindowState& state,
+        bool restorePinnedDepthWindow(ViewId view, const DepthWindowState& state,
                                       uint64_t expected_epoch,
                                       uint64_t drag_token);
-        bool commitDepthWindowIfEpoch(const DepthWindowState& state,
+        bool commitDepthWindowIfEpoch(ViewId view, const DepthWindowState& state,
                                       uint64_t expected_epoch,
                                       uint64_t drag_token,
                                       op::DepthWindowModeSnapshot& out_snapshot);
-        [[nodiscard]] std::unique_lock<std::mutex> acquireDepthWindowTransitionLock() {
-            return std::unique_lock<std::mutex>(this->state().depth_window_transition_mutex_);
+        [[nodiscard]] std::unique_lock<std::mutex> acquireDepthWindowTransitionLock(ViewId view) {
+            return std::unique_lock<std::mutex>(viewState(view).depth_window_transition_mutex_);
         }
-        [[nodiscard]] op::DepthWindowModeSnapshot depthWindowSnapshot() const;
+        [[nodiscard]] op::DepthWindowModeSnapshot depthWindowSnapshot(ViewId view) const;
         [[nodiscard]] op::DepthWindowModeSnapshot
-        depthWindowBaselineSnapshotForDrag(uint64_t drag_token) const;
+        depthWindowBaselineSnapshotForDrag(ViewId view, uint64_t drag_token) const;
         void restoreDepthWindowStateFromProject();
         bool restoreDepthWindowSnapshotIfEpoch(const op::DepthWindowModeSnapshot& snapshot,
                                                uint64_t expected_epoch);
         [[nodiscard]] uint64_t depthWindowProjectionGeneration() const;
-        [[nodiscard]] uint64_t depthWindowModeEpoch() const;
 
         struct ViewerPanelInfo {
             SplitViewPanelId panel = SplitViewPanelId::Left;
@@ -876,8 +875,8 @@ namespace lfs::vis {
         void handleEllipsoidChanged(bool enabled);
         void handlePointCloudModeChanged(const lfs::core::events::ui::PointCloudModeChanged& event);
         [[nodiscard]] static int clampGridPlane(int plane);
-        [[nodiscard]] op::DepthWindowModeSnapshot depthWindowSnapshotLocked() const;
-        void applyDepthWindowProjectionLocked(const DepthWindowState& state);
+        [[nodiscard]] op::DepthWindowModeSnapshot depthWindowSnapshotLocked(ViewId view) const;
+        void applyDepthWindowProjectionLocked(ViewId view, const DepthWindowState& state);
         void applyDepthWindowModeTransitionLocked(SplitViewMode previous_mode,
                                                   SplitViewMode new_mode);
 
@@ -910,6 +909,7 @@ namespace lfs::vis {
         VulkanContext* last_vulkan_context_ = nullptr;
         std::atomic<bool> vksplat_terminal_release_pending_{false};
         std::uint32_t vksplat_idle_frame_count_ = 0;
+        ViewportFrameLifecycleService::ModelSource renderer_model_source_ = ViewportFrameLifecycleService::ModelSource::Scene;
 
         static constexpr std::uint64_t SPLIT_LEFT_GENERATION_BIT = 1ULL << 63;
         const lfs::core::Scene* gt_camera_index_scene_ = nullptr;
@@ -1004,6 +1004,7 @@ namespace lfs::vis {
 
         friend class RenderingManagerEventsTest_SceneClearedResetsFrustumLoaderSyncCache_Test;
         friend class SceneManager;
+        friend class ViewRenderStateTestAccess;
     };
 
 } // namespace lfs::vis

@@ -81,7 +81,6 @@ namespace lfs::vis {
         // Called every frame by GUI manager to update viewport bounds
         void updateViewportBounds(float x, float y, float w, float h) {
             viewport_bounds_ = {x, y, w, h};
-            cached_split_divider_screen_x_.reset();
         }
 
         // Frames the selection (or the whole scene when nothing is selected, or
@@ -137,19 +136,19 @@ namespace lfs::vis {
         [[nodiscard]] bool isContinuousInputActive() const {
             const bool movement_active = keys_movement_[0] || keys_movement_[1] || keys_movement_[2] ||
                                          keys_movement_[3] || keys_movement_[4] || keys_movement_[5];
-            const bool camera_drag = drag_mode_ == DragMode::Orbit ||
-                                     drag_mode_ == DragMode::Pan ||
-                                     drag_mode_ == DragMode::Rotate;
+            const bool camera_drag = dragViewport() && (drag_mode_ == DragMode::Orbit ||
+                                                        drag_mode_ == DragMode::Pan ||
+                                                        drag_mode_ == DragMode::Rotate);
             auto& keyboard_camera = activeKeyboardViewport().camera;
             const bool orbit_coasting =
-                orbit_coast_viewport_ && orbit_coast_viewport_->camera.hasOrbitMomentum();
+                orbitCoastViewport() && orbitCoastViewport()->camera.hasOrbitMomentum();
             const bool pan_coasting =
-                pan_coast_viewport_ && pan_coast_viewport_->camera.hasPanMomentum();
+                panCoastViewport() && panCoastViewport()->camera.hasPanMomentum();
             const bool wasd_coasting =
-                (wasd_momentum_viewport_ && wasd_momentum_viewport_->camera.hasWasdMomentum()) ||
+                (wasdMomentumViewport() && wasdMomentumViewport()->camera.hasWasdMomentum()) ||
                 keyboard_camera.hasWasdMomentum();
             const bool drone_settling =
-                (wasd_momentum_viewport_ && wasd_momentum_viewport_->camera.hasDroneMotion()) ||
+                (wasdMomentumViewport() && wasdMomentumViewport()->camera.hasDroneMotion()) ||
                 keyboard_camera.hasDroneMotion();
             return movement_active || camera_drag || orbit_coasting || pan_coasting ||
                    keyboard_camera.isGliding() || wasd_coasting || drone_settling;
@@ -226,7 +225,6 @@ namespace lfs::vis {
         // that panel's camera; this predicate neither selects a viewport nor changes
         // focus.
         bool isNearSplitter(double x, double y) const;
-        void refreshSplitDividerCache() const;
         int getModifierKeys() const;
         bool isKeyPressed(int app_key) const;
         bool isMouseButtonPressed(int app_button) const;
@@ -258,7 +256,6 @@ namespace lfs::vis {
         // panel-less commands act on.
         [[nodiscard]] Viewport& viewport() { return *views_.activeView().viewport; }
         [[nodiscard]] const Viewport& viewport() const { return *views_.activeView().viewport; }
-        mutable std::optional<float> cached_split_divider_screen_x_;
 
         // Input bindings for customizable hotkeys
         input::InputBindings bindings_;
@@ -294,10 +291,17 @@ namespace lfs::vis {
         glm::dvec2 hover_pos_{-1.0, -1.0};
         float splitter_start_pos_ = 0.5f;
         double splitter_start_x_ = 0.0;
-        Viewport* drag_viewport_ = nullptr;
-        Viewport* orbit_coast_viewport_ = nullptr;
-        Viewport* pan_coast_viewport_ = nullptr;
-        Viewport* wasd_momentum_viewport_ = nullptr;
+        std::uint64_t camera_view_epoch_ = 0;
+        Viewport* rememberedViewport(ViewId id) const;
+        ViewId rememberViewport(Viewport* camera);
+        ViewId drag_view_ = kNoView;
+        Viewport* dragViewport() const { return rememberedViewport(drag_view_); }
+        ViewId orbit_coast_view_ = kNoView;
+        Viewport* orbitCoastViewport() const { return rememberedViewport(orbit_coast_view_); }
+        ViewId pan_coast_view_ = kNoView;
+        Viewport* panCoastViewport() const { return rememberedViewport(pan_coast_view_); }
+        ViewId wasd_momentum_view_ = kNoView;
+        Viewport* wasdMomentumViewport() const { return rememberedViewport(wasd_momentum_view_); }
 
         // Cached whole-scene radius (half the bounds diagonal) that scales WASD
         // speed and caps pan distance by splat size; 0 means "recompute" (after scene

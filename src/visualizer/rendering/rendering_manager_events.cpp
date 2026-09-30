@@ -110,7 +110,7 @@ namespace lfs::vis {
         // Hold across cancellation and mode change to exclude drag release sequences.
         // Acquire transition before settings/history locks; release settings before
         // pushing history.
-        const auto transition_lock = acquireDepthWindowTransitionLock();
+        const auto transition_lock = acquireDepthWindowTransitionLock(view_source_.activeView());
         const SplitViewMode current_mode = getSettings().split_view_mode;
         cancelDepthWindowDragBeforeSplitModeChange(
             current_mode, toggledSplitViewTarget(current_mode, SplitViewMode::PLYComparison));
@@ -135,7 +135,7 @@ namespace lfs::vis {
         // Hold across cancellation and mode change to exclude drag release sequences.
         // Acquire transition before settings/history locks; release settings before
         // pushing history.
-        const auto transition_lock = acquireDepthWindowTransitionLock();
+        const auto transition_lock = acquireDepthWindowTransitionLock(view_source_.activeView());
         const SplitViewMode current_mode = getSettings().split_view_mode;
         cancelDepthWindowDragBeforeSplitModeChange(
             current_mode, toggledSplitViewTarget(current_mode, SplitViewMode::GTComparison));
@@ -179,7 +179,7 @@ namespace lfs::vis {
         // Hold across cancellation and mode change to exclude drag release sequences.
         // Acquire transition before settings/history locks; release settings before
         // pushing history.
-        const auto transition_lock = acquireDepthWindowTransitionLock();
+        const auto transition_lock = acquireDepthWindowTransitionLock(view_source_.activeView());
         SplitViewMode current_mode;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
@@ -316,7 +316,7 @@ namespace lfs::vis {
         // Hold across cancellation and mode change to exclude drag release sequences.
         // Acquire transition before settings/history locks; release settings before
         // pushing history.
-        const auto transition_lock = acquireDepthWindowTransitionLock();
+        const auto transition_lock = acquireDepthWindowTransitionLock(view_source_.activeView());
         const SplitViewMode current_mode = getSettings().split_view_mode;
         const SplitViewMode target_mode =
             splitViewUsesGTComparison(current_mode) ? SplitViewMode::Disabled : current_mode;
@@ -353,7 +353,7 @@ namespace lfs::vis {
         // Hold across cancellation and mode change to exclude drag release sequences.
         // Acquire transition before settings/history locks; release settings before
         // pushing history.
-        const auto transition_lock = acquireDepthWindowTransitionLock();
+        const auto transition_lock = acquireDepthWindowTransitionLock(view_source_.activeView());
         const SplitViewMode current_mode = getSettings().split_view_mode;
         cancelDepthWindowDragBeforeSplitModeChange(current_mode, SplitViewMode::Disabled);
 
@@ -388,7 +388,7 @@ namespace lfs::vis {
         // Hold across cancellation and mode change to exclude drag release sequences.
         // Acquire transition before settings/history locks; release settings before
         // pushing history.
-        const auto transition_lock = acquireDepthWindowTransitionLock();
+        const auto transition_lock = acquireDepthWindowTransitionLock(view_source_.activeView());
         const SplitViewMode current_mode = getSettings().split_view_mode;
         if (splitViewUsesPLYComparison(current_mode)) {
             if (auto* const scene_manager = services().sceneOrNull()) {

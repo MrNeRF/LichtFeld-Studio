@@ -14,6 +14,7 @@ namespace lfs::vis {
         }
         ViewTarget findView(ViewId id) override { return id == 1 ? activeView() : ViewTarget{}; }
         ViewId viewId(const Viewport&) const override { return 1; }
+        std::uint64_t viewEpoch() const override { return 1; }
         void activateView(ViewId) override {}
         bool runViewCommand(ViewId, std::string_view) override { return false; }
 

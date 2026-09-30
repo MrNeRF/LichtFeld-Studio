@@ -3240,7 +3240,7 @@ namespace lfs::vis::gui {
             append_rect(glm::vec4(1.0f, 1.0f, 1.0f, 1.0f), 4.5f);
         }
 
-        void appendCropAndFilterOverlays(VulkanViewportPassParams& params,
+        void appendCropAndFilterOverlays(VulkanViewportPassParams& params, ViewId view,
                                          const VulkanGuidePanelTarget& panel,
                                          const RenderSettings& settings,
                                          const SceneRenderState* scene_state,
@@ -3256,8 +3256,8 @@ namespace lfs::vis::gui {
                                           depth_window_scale_x, depth_window_scale_y,
                                           depth_window_offset_x, depth_window_offset_y);
                 if (settings.depth_filter_enabled) {
-                    const op::DepthWindowPanelMapping window_panel{
-                        .panel = panel.panel,
+                    const op::DepthWindowViewMapping window_panel{
+                        .view = view,
                         .x = panel.pos.x,
                         .y = panel.pos.y,
                         .width = panel.size.x,
@@ -3272,7 +3272,7 @@ namespace lfs::vis::gui {
                         depth_window_offset_x,
                         depth_window_offset_y);
                     const auto& overlay_state = op::depthWindowOverlayState();
-                    if (overlay_state.visible) {
+                    if (overlay_state.visible && overlay_state.view == view) {
                         const auto geometry = op::depthWindowHandleGeometry(screen_rect);
                         const auto append_square = [&](const glm::vec2 center,
                                                        const float radius,
@@ -3523,7 +3523,7 @@ namespace lfs::vis::gui {
                         .offset_x = settings.depth_filter_offset_x,
                         .offset_y = settings.depth_filter_offset_y,
                     };
-                appendCropAndFilterOverlays(params, panel, settings, scene_state, scene_manager, gizmo,
+                appendCropAndFilterOverlays(params, viewport_layout.view, panel, settings, scene_state, scene_manager, gizmo,
                                             panel_depth_window.scale_x,
                                             panel_depth_window.scale_y,
                                             panel_depth_window.offset_x,
@@ -5327,6 +5327,15 @@ namespace lfs::vis::gui {
 
         if (auto* const rendering_manager = viewer_ ? viewer_->getRenderingManager() : nullptr) {
             const auto settings = rendering_manager->settingsForView(id);
+            if (const auto divider = rendering_manager->getSplitDividerScreenX(id, target.pos, target.size)) {
+                const auto bounds = rendering_manager->getContentBounds(id, glm::ivec2(target.size));
+                const auto color = theme().menu_background();
+                appendShapeOverlayLine(params.ui_shape_overlay_triangles, params,
+                                       {*divider, target.pos.y + bounds.y},
+                                       {*divider, target.pos.y + bounds.y + bounds.height},
+                                       {color.x, color.y, color.z, color.w},
+                                       std::max(10.0f * current_ui_scale_, std::round(theme().viewport.border_size * current_ui_scale_ * 4.0f)));
+            }
             params.scene_upscaler = sceneUpscalerBackendFromId(settings.scene_upscaler)
                                         .value_or(SceneUpscalerBackend::Native);
             params.background_color = settings.background_color;
@@ -6658,27 +6667,7 @@ namespace lfs::vis::gui {
             viewport_layout_.pos, viewport_layout_.size,
             {panel_input.screen_x, panel_input.screen_y});
         rml_viewport_overlay_.setViewportContentOffset(0.0f);
-        RmlViewportOverlay::SplitDividerOverlayState split_divider_state;
-        if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
-            rendering && rendering->isSplitViewActive()) {
-            const auto divider_x = rendering->getSplitDividerScreenX(viewport_layout_.pos, viewport_layout_.size);
-            const auto content_bounds = rendering->getContentBounds(rendering->activeViewId(), glm::ivec2(
-                                                                                                   std::max(static_cast<int>(viewport_layout_.size.x), 0),
-                                                                                                   std::max(static_cast<int>(viewport_layout_.size.y), 0)));
-            if (divider_x && content_bounds.width > 0.0f && content_bounds.height > 0.0f) {
-                const auto& t = theme();
-                constexpr float kSplitDividerMinWidthPx = 10.0f;
-                const float divider_width =
-                    std::max(kSplitDividerMinWidthPx * current_ui_scale_,
-                             std::round(t.viewport.border_size * current_ui_scale_ * 4.0f));
-                split_divider_state.visible = true;
-                split_divider_state.x = std::round((*divider_x - screen.work_pos.x) - divider_width * 0.5f);
-                split_divider_state.y = content_bounds.y;
-                split_divider_state.width = divider_width;
-                split_divider_state.height = content_bounds.height;
-            }
-        }
-        rml_viewport_overlay_.setSplitDividerOverlay(split_divider_state);
+        rml_viewport_overlay_.setSplitDividerOverlay({});
         RmlViewportOverlay::LodStatsOverlayState lod_stats_state;
         if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr) {
             lod_stats_state = makeLodStatsOverlayState(rendering->getLodStats());
@@ -6928,6 +6917,7 @@ namespace lfs::vis::gui {
             overlay_info.orthographic = overlay_settings.orthographic;
             overlay_info.ortho_scale = overlay_settings.ortho_scale;
             const ScopedOverlayView overlay_view(overlay_info);
+            sequencer_ui_.renderViewOverlay(ctx, overlay_layout);
             lfs::rendering::ScreenOverlayRenderer* overlay_renderer = nullptr;
             if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr) {
                 overlay_renderer = &rendering->viewState(view_id.value).screen_overlay_renderer_;

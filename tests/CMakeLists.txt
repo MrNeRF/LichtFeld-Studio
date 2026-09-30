@@ -51,6 +51,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         test_preferences_migration.cpp
         test_screen_layout.cpp
         test_screen.cpp
+        test_view_render_state.cpp
         test_startup_overlay_geometry.cpp
         test_trackpad_navigation.cpp
         test_vram_hud_geometry.cpp
@@ -812,6 +813,8 @@ set(TEST_FILES
     test_selection_rasterization_ops.cpp
     test_selection_screen_window.cpp
     test_rendering_refactor_services.cpp
+    test_view_render_state.cpp
+    test_rml_pointer_routing.cpp
     test_point_cloud_raster_orientation.cpp
     test_theme_registry.cpp
     test_viewport.cpp

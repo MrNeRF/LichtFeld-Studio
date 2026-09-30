@@ -5,6 +5,7 @@
 #pragma once
 
 #include "rendering/rendering_types.hpp"
+#include "rendering/view_source.hpp"
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -16,8 +17,8 @@ namespace lfs::vis::op {
     inline constexpr float DEPTH_WINDOW_HANDLE_DRAW_RADIUS_DP = 6.0f;
     inline constexpr float DEPTH_WINDOW_HANDLE_HIT_RADIUS_PX = 11.0f;
 
-    struct DepthWindowPanelMapping {
-        SplitViewPanelId panel = SplitViewPanelId::Left;
+    struct DepthWindowViewMapping {
+        ViewId view = kNoView;
         float x = 0.0f;
         float y = 0.0f;
         float width = 0.0f;
@@ -70,11 +71,10 @@ namespace lfs::vis::op {
 
     struct DepthWindowOverlayState {
         bool visible = false;
-        bool has_hovered_panel = false;
         // While a NEW box is being rubber-banded the handles are hidden -
         // they only apply to a committed/released window.
         bool hide_handles = false;
-        SplitViewPanelId hovered_panel = SplitViewPanelId::Left;
+        ViewId view = kNoView;
         DepthWindowHandle hovered_handle = DepthWindowHandle::None;
     };
 
@@ -93,7 +93,7 @@ namespace lfs::vis::op {
     }
 
     [[nodiscard]] inline glm::vec2 renderToScreen(const glm::vec2& render,
-                                                  const DepthWindowPanelMapping& panel) {
+                                                  const DepthWindowViewMapping& panel) {
         const float scale_x = panel.width / static_cast<float>(panel.render_width);
         const float scale_y = panel.height / static_cast<float>(panel.render_height);
         return {
@@ -125,7 +125,7 @@ namespace lfs::vis::op {
     }
 
     [[nodiscard]] inline DepthWindowRect depthWindowScreenRect(
-        const DepthWindowPanelMapping& panel,
+        const DepthWindowViewMapping& panel,
         const float scale_x,
         const float scale_y,
         const float offset_x,
@@ -240,9 +240,9 @@ namespace lfs::vis::op {
         return gt_comparison_mode_active;
     }
 
-    [[nodiscard]] inline bool pointInDepthWindowPanel(
+    [[nodiscard]] inline bool pointInDepthWindowView(
         const glm::vec2 point,
-        const DepthWindowPanelMapping& panel) {
+        const DepthWindowViewMapping& panel) {
         return point.x >= panel.x && point.y >= panel.y &&
                point.x < panel.x + panel.width && point.y < panel.y + panel.height;
     }

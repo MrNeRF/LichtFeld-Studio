@@ -50,6 +50,7 @@ namespace lfs::vis {
             void render(const UIContext& ctx, const ViewportLayout& viewport,
                         float panel_x, float panel_y, float panel_width, float panel_height,
                         const PanelInputState& panel_input);
+            void renderViewOverlay(const UIContext& ctx, const ViewportLayout& viewport);
             void setSequencerEnabled(bool enabled);
             void reloadRmlResources();
 

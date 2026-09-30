@@ -885,31 +885,35 @@ namespace lfs::vis {
         return splitViewUsesPLYComparison(activeSettingsLocked().split_view_mode);
     }
 
-    void RenderingManager::beginDepthWindowDrag(uint64_t& out_drag_token) {
+    void RenderingManager::beginDepthWindowDrag(ViewId view, uint64_t& out_drag_token) {
         std::lock_guard lock(settings_mutex_);
-        if (!this->state().depth_window_drag_owner_)
-            this->state().depth_window_drag_backup_ = depthWindowFromProjection(activeSettingsLocked());
-        out_drag_token = this->state().depth_window_drag_owner_ = ++this->state().depth_window_last_drag_token_;
+        if (!viewState(view).depth_window_drag_owner_)
+            viewState(view).depth_window_drag_backup_ = depthWindowFromProjection(RenderSettings(settings_, view_source_.viewSettings(view).value()));
+        out_drag_token = viewState(view).depth_window_drag_owner_ = ++viewState(view).depth_window_last_drag_token_;
     }
 
-    void RenderingManager::endDepthWindowDrag(const uint64_t drag_token) {
+    void RenderingManager::endDepthWindowDrag(ViewId view, const uint64_t drag_token) {
+        if (!hasViewState(view))
+            return;
         std::lock_guard lock(settings_mutex_);
-        if (this->state().depth_window_drag_owner_ == drag_token) {
-            this->state().depth_window_drag_owner_ = 0;
-            this->state().depth_window_drag_backup_.reset();
+        if (viewState(view).depth_window_drag_owner_ == drag_token) {
+            viewState(view).depth_window_drag_owner_ = 0;
+            viewState(view).depth_window_drag_backup_.reset();
         }
     }
 
-    void RenderingManager::beginDepthWindowPreview() {
+    void RenderingManager::beginDepthWindowPreview(ViewId view) {
         std::lock_guard lock(settings_mutex_);
-        ++this->state().depth_window_preview_count_;
-        markViewDirty(this->state().id, DirtyFlag::OVERLAY);
+        ++viewState(view).depth_window_preview_count_;
+        markViewDirty(viewState(view).id, DirtyFlag::OVERLAY);
     }
 
-    void RenderingManager::endDepthWindowPreview() {
+    void RenderingManager::endDepthWindowPreview(ViewId view) {
+        if (!hasViewState(view))
+            return;
         std::lock_guard lock(settings_mutex_);
-        this->state().depth_window_preview_count_ = std::max(0, this->state().depth_window_preview_count_ - 1);
-        markViewDirty(this->state().id, DirtyFlag::OVERLAY);
+        viewState(view).depth_window_preview_count_ = std::max(0, viewState(view).depth_window_preview_count_ - 1);
+        markViewDirty(viewState(view).id, DirtyFlag::OVERLAY);
     }
 
     bool RenderingManager::depthWindowDragPreview() const {
@@ -941,72 +945,72 @@ namespace lfs::vis {
         auto clamped = state;
         clampDepthWindowState(clamped);
         std::lock_guard lock(settings_mutex_);
-        applyDepthWindowProjectionLocked(clamped);
+        applyDepthWindowProjectionLocked(this->state().id, clamped);
         this->state().depth_window_drag_owner_ = 0;
         this->state().depth_window_drag_backup_.reset();
         markViewDirty(this->state().id, DirtyFlag::ALL);
     }
 
-    bool RenderingManager::applyDepthWindowIfEpoch(const DepthWindowState& state,
+    bool RenderingManager::applyDepthWindowIfEpoch(ViewId view, const DepthWindowState& state,
                                                    const uint64_t expected_epoch,
                                                    const uint64_t drag_token) {
         auto clamped = state;
         clampDepthWindowState(clamped);
         std::lock_guard lock(settings_mutex_);
-        if (this->state().depth_window_mode_epoch_ != expected_epoch || !drag_token ||
-            this->state().depth_window_drag_owner_ != drag_token)
+        if (viewState(view).depth_window_mode_epoch_ != expected_epoch || !drag_token ||
+            viewState(view).depth_window_drag_owner_ != drag_token)
             return false;
-        applyDepthWindowProjectionLocked(clamped);
-        markViewDirty(this->state().id, DirtyFlag::ALL);
+        applyDepthWindowProjectionLocked(view, clamped);
+        markViewDirty(viewState(view).id, DirtyFlag::ALL);
         return true;
     }
 
-    bool RenderingManager::restorePinnedDepthWindow(const DepthWindowState& state,
+    bool RenderingManager::restorePinnedDepthWindow(ViewId view, const DepthWindowState& state,
                                                     const uint64_t expected_epoch,
                                                     const uint64_t drag_token) {
-        return applyDepthWindowIfEpoch(state, expected_epoch, drag_token);
+        return applyDepthWindowIfEpoch(view, state, expected_epoch, drag_token);
     }
 
-    bool RenderingManager::commitDepthWindowIfEpoch(
-        const DepthWindowState& state, const uint64_t expected_epoch,
-        const uint64_t drag_token, op::DepthWindowModeSnapshot& out_snapshot) {
+    bool RenderingManager::commitDepthWindowIfEpoch(ViewId view,
+                                                    const DepthWindowState& state, const uint64_t expected_epoch,
+                                                    const uint64_t drag_token, op::DepthWindowModeSnapshot& out_snapshot) {
         auto clamped = state;
         clampDepthWindowState(clamped);
         std::lock_guard lock(settings_mutex_);
-        if (this->state().depth_window_mode_epoch_ != expected_epoch || !drag_token ||
-            this->state().depth_window_drag_owner_ != drag_token)
+        if (viewState(view).depth_window_mode_epoch_ != expected_epoch || !drag_token ||
+            viewState(view).depth_window_drag_owner_ != drag_token)
             return false;
-        applyDepthWindowProjectionLocked(clamped);
-        this->state().depth_window_drag_owner_ = 0;
-        this->state().depth_window_drag_backup_.reset();
-        out_snapshot = depthWindowSnapshotLocked();
-        markViewDirty(this->state().id, DirtyFlag::ALL);
+        applyDepthWindowProjectionLocked(view, clamped);
+        viewState(view).depth_window_drag_owner_ = 0;
+        viewState(view).depth_window_drag_backup_.reset();
+        out_snapshot = depthWindowSnapshotLocked(view);
+        markViewDirty(viewState(view).id, DirtyFlag::ALL);
         return true;
     }
 
     op::DepthWindowModeSnapshot
-    RenderingManager::depthWindowSnapshotLocked() const {
-        return {.view = this->state().id, .screen_epoch = view_source_.screenEpoch(), .lifetime_epoch = view_lifetime_epoch_, .window = depthWindowFromProjection(activeSettingsLocked()), .mode_epoch = this->state().depth_window_mode_epoch_};
+    RenderingManager::depthWindowSnapshotLocked(ViewId view) const {
+        return {.view = viewState(view).id, .screen_epoch = view_source_.screenEpoch(), .lifetime_epoch = view_lifetime_epoch_, .window = depthWindowFromProjection(RenderSettings(settings_, view_source_.viewSettings(view).value())), .mode_epoch = viewState(view).depth_window_mode_epoch_};
     }
 
-    op::DepthWindowModeSnapshot RenderingManager::depthWindowSnapshot() const {
+    op::DepthWindowModeSnapshot RenderingManager::depthWindowSnapshot(ViewId view) const {
         std::lock_guard lock(settings_mutex_);
-        return depthWindowSnapshotLocked();
+        return depthWindowSnapshotLocked(view);
     }
 
     op::DepthWindowModeSnapshot
-    RenderingManager::depthWindowBaselineSnapshotForDrag(
-        const uint64_t drag_token) const {
+    RenderingManager::depthWindowBaselineSnapshotForDrag(ViewId view,
+                                                         const uint64_t drag_token) const {
         std::lock_guard lock(settings_mutex_);
-        auto snapshot = depthWindowSnapshotLocked();
-        if (drag_token && this->state().depth_window_drag_owner_ == drag_token &&
-            this->state().depth_window_drag_backup_)
-            snapshot.window = *this->state().depth_window_drag_backup_;
+        auto snapshot = depthWindowSnapshotLocked(view);
+        if (drag_token && viewState(view).depth_window_drag_owner_ == drag_token &&
+            viewState(view).depth_window_drag_backup_)
+            snapshot.window = *viewState(view).depth_window_drag_backup_;
         return snapshot;
     }
 
     void RenderingManager::restoreDepthWindowStateFromProject() {
-        const auto transition_lock = acquireDepthWindowTransitionLock();
+        const auto transition_lock = acquireDepthWindowTransitionLock(this->state().id);
         std::lock_guard lock(settings_mutex_);
         this->state().depth_window_drag_owner_ = 0;
         this->state().depth_window_drag_backup_.reset();
@@ -1050,18 +1054,13 @@ namespace lfs::vis {
         return this->state().depth_window_projection_generation_;
     }
 
-    uint64_t RenderingManager::depthWindowModeEpoch() const {
-        std::lock_guard lock(settings_mutex_);
-        return this->state().depth_window_mode_epoch_;
-    }
-
-    void RenderingManager::applyDepthWindowProjectionLocked(const DepthWindowState& state) {
-        auto settings = activeSettingsLocked();
+    void RenderingManager::applyDepthWindowProjectionLocked(ViewId view, const DepthWindowState& state) {
+        auto settings = RenderSettings(settings_, view_source_.viewSettings(view).value());
         const auto previous = depthWindowFromProjection(settings);
         applyDepthWindowToProjection(settings, state);
-        storeActiveSettingsLocked(settings);
+        view_source_.editViewSettings(view, [&](ViewSettings& target) { target = settings.view(); });
         if (previous.near_plane != state.near_plane || previous.far_plane != state.far_plane)
-            ++this->state().depth_window_projection_generation_;
+            ++viewState(view).depth_window_projection_generation_;
     }
 
     void RenderingManager::applyDepthWindowModeTransitionLocked(
@@ -1072,7 +1071,7 @@ namespace lfs::vis {
         // GT suspends selection filtering; an old drag must not overwrite its
         // successor.
         if (this->state().depth_window_drag_owner_ && this->state().depth_window_drag_backup_)
-            applyDepthWindowProjectionLocked(*this->state().depth_window_drag_backup_);
+            applyDepthWindowProjectionLocked(this->state().id, *this->state().depth_window_drag_backup_);
         this->state().depth_window_drag_owner_ = 0;
         this->state().depth_window_drag_backup_.reset();
         ++this->state().depth_window_mode_epoch_;
@@ -1286,18 +1285,18 @@ namespace lfs::vis {
         }
     }
 
-    std::optional<float> RenderingManager::getSplitDividerScreenX(const glm::vec2& viewport_pos,
+    std::optional<float> RenderingManager::getSplitDividerScreenX(ViewId view, const glm::vec2& viewport_pos,
                                                                   const glm::vec2& viewport_size) const {
-        const auto settings = getSettings();
-        if (!this->state().split_view_service_.isActive(settings) ||
+        const auto settings = settingsForView(view);
+        if (!viewState(view).split_view_service_.isActive(settings) ||
             (splitViewUsesGTComparison(settings.split_view_mode) &&
              gtComparisonShowsLoss(settings.gt_comparison_mode))) {
             return std::nullopt;
         }
 
-        const auto content_bounds = getContentBounds(this->state().id, glm::ivec2(
-                                                                           std::max(static_cast<int>(viewport_size.x), 0),
-                                                                           std::max(static_cast<int>(viewport_size.y), 0)));
+        const auto content_bounds = getContentBounds(viewState(view).id, glm::ivec2(
+                                                                             std::max(static_cast<int>(viewport_size.x), 0),
+                                                                             std::max(static_cast<int>(viewport_size.y), 0)));
         const int content_width = std::max(static_cast<int>(std::lround(content_bounds.width)), 0);
         if (content_width <= 0) {
             return std::nullopt;

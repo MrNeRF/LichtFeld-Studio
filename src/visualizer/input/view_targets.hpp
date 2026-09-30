@@ -30,6 +30,7 @@ namespace lfs::vis {
     class ViewTargets {
     public:
         virtual ~ViewTargets() = default;
+        [[nodiscard]] virtual std::uint64_t viewEpoch() const = 0;
 
         // The view the user last worked in. Always valid.
         [[nodiscard]] virtual ViewTarget activeView() = 0;

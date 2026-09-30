@@ -407,6 +407,20 @@ namespace lfs::vis {
 
     InputController* InputController::instance_ = nullptr;
 
+    Viewport* InputController::rememberedViewport(ViewId id) const {
+        if (id == kNoView || camera_view_epoch_ != views_.viewEpoch())
+            return nullptr;
+        return views_.findView(id).viewport;
+    }
+
+    ViewId InputController::rememberViewport(Viewport* camera) {
+        if (camera_view_epoch_ != views_.viewEpoch()) {
+            drag_view_ = orbit_coast_view_ = pan_coast_view_ = wasd_momentum_view_ = kNoView;
+            camera_view_epoch_ = views_.viewEpoch();
+        }
+        return camera ? views_.viewId(*camera) : kNoView;
+    }
+
     InputController::InputController(SDL_Window* window, ViewTargets& views)
         : window_(window),
           views_(views) {
@@ -526,11 +540,10 @@ namespace lfs::vis {
 
     bool InputController::applyDepthWindowHoverCursor(const double x, const double y,
                                                       const bool modifiers_held) {
+        const auto target = views_.viewAt(x, y);
         const auto depth_cursor = op::updateDepthWindowHover(
-            glm::vec2(x, y),
-            {viewport_bounds_.x, viewport_bounds_.y,
-             viewport_bounds_.width, viewport_bounds_.height},
-            modifiers_held);
+            target.id, glm::vec2(x, y),
+            {target.pos.x, target.pos.y, target.size.x, target.size.y}, modifiers_held);
         if (!op::depthWindowOverlayState().visible) {
             if (current_cursor_ == CursorType::DepthWindow) {
                 SDL_SetCursor(SDL_GetDefaultCursor());
@@ -607,11 +620,11 @@ namespace lfs::vis {
         // user-set pivot.
         if (leaving_drone) {
             Viewport* finished_viewport = nullptr;
-            if (wasd_momentum_viewport_) {
-                wasd_momentum_viewport_->camera.finishDrone();
-                publishCameraMove(wasd_momentum_viewport_);
-                finished_viewport = wasd_momentum_viewport_;
-                wasd_momentum_viewport_ = nullptr;
+            if (wasdMomentumViewport()) {
+                wasdMomentumViewport()->camera.finishDrone();
+                publishCameraMove(wasdMomentumViewport());
+                finished_viewport = wasdMomentumViewport();
+                wasd_momentum_view_ = kNoView;
             }
             auto& keyboard_viewport = activeKeyboardViewport();
             if (&keyboard_viewport != finished_viewport) {
@@ -700,46 +713,18 @@ namespace lfs::vis {
         return selection_drag_op_;
     }
 
-    void InputController::refreshSplitDividerCache() const {
-        auto* const rendering = services().renderingOrNull();
-        if (!rendering) {
-            cached_split_divider_screen_x_.reset();
-            return;
-        }
-        cached_split_divider_screen_x_ = rendering->getSplitDividerScreenX(
-            {viewport_bounds_.x, viewport_bounds_.y},
-            {viewport_bounds_.width, viewport_bounds_.height});
-    }
-
     bool InputController::isNearSplitter(double x, double y) const {
+        const auto target = views_.viewAt(x, y);
         auto* const rendering = services().renderingOrNull();
-        if (!rendering) {
+        if (!rendering || !target.valid())
             return false;
-        }
-
-        const glm::ivec2 viewport_size{
-            std::max(static_cast<int>(std::lround(viewport_bounds_.width)), 0),
-            std::max(static_cast<int>(std::lround(viewport_bounds_.height)), 0)};
-        const auto content_bounds = rendering->getContentBounds(views_.activeView().id, viewport_size);
-        if (content_bounds.width <= 0.0f || content_bounds.height <= 0.0f) {
+        const auto divider = rendering->getSplitDividerScreenX(target.id, target.pos, target.size);
+        if (!divider)
             return false;
-        }
-
-        if (!cached_split_divider_screen_x_) {
-            refreshSplitDividerCache();
-        }
-        if (!cached_split_divider_screen_x_) {
-            return false;
-        }
-
-        constexpr float SPLITTER_HIT_HALF_WIDTH = 12.0f;
-        const float content_left = viewport_bounds_.x + content_bounds.x;
-        const float content_top = viewport_bounds_.y + content_bounds.y;
-        return x >= content_left &&
-               x < content_left + content_bounds.width &&
-               y >= content_top &&
-               y < content_top + content_bounds.height &&
-               std::abs(x - *cached_split_divider_screen_x_) < SPLITTER_HIT_HALF_WIDTH;
+        const auto content = rendering->getContentBounds(target.id, glm::ivec2(target.size));
+        return x >= target.pos.x + content.x && x < target.pos.x + content.x + content.width &&
+               y >= target.pos.y + content.y && y < target.pos.y + content.y + content.height &&
+               std::abs(x - *divider) < 12.0f;
     }
 
     // Core handlers
@@ -1052,7 +1037,7 @@ namespace lfs::vis {
                 if (const auto interaction = resolvePanelInteraction(x, y); interaction && interaction->valid()) {
                     interaction->viewport->camera.finishGlide();
                     interaction->viewport->camera.initScreenPos(glm::vec2(x, y));
-                    drag_viewport_ = interaction->viewport;
+                    drag_view_ = rememberViewport(interaction->viewport);
 
                     if (camera_navigation_mode_ == CameraNavigationMode::FPV ||
                         camera_navigation_mode_ == CameraNavigationMode::Drone) {
@@ -1219,7 +1204,7 @@ namespace lfs::vis {
             }
 
             bool was_dragging = false;
-            Viewport* released_viewport = drag_viewport_;
+            Viewport* released_viewport = dragViewport();
 
             if (drag_mode_ == DragMode::Pan) {
                 drag_mode_ = DragMode::None;
@@ -1230,8 +1215,8 @@ namespace lfs::vis {
                 drag_button_ = -1;
                 was_dragging = true;
             } else if (drag_mode_ == DragMode::Orbit) {
-                if (drag_viewport_) {
-                    drag_viewport_->camera.endRotateAroundCenter();
+                if (dragViewport()) {
+                    dragViewport()->camera.endRotateAroundCenter();
                 } else {
                     viewport().camera.endRotateAroundCenter();
                 }
@@ -1244,7 +1229,7 @@ namespace lfs::vis {
                 drag_button_ = -1;
                 was_dragging = true;
             }
-            drag_viewport_ = nullptr;
+            drag_view_ = kNoView;
 
             if (was_dragging) {
                 auto* const moved_viewport = released_viewport ? released_viewport : &viewport();
@@ -1380,6 +1365,8 @@ namespace lfs::vis {
     }
 
     void InputController::handleMouseMove(double x, double y) {
+        if (drag_view_ != kNoView && !dragViewport())
+            clearViewportDragState();
         hover_pos_ = {x, y};
         LOG_PERF("InputController::handleMouseMove pos=({},{}) drag_mode={}",
                  x, y, static_cast<int>(drag_mode_));
@@ -1584,13 +1571,13 @@ namespace lfs::vis {
         if (drag_mode_ != DragMode::None &&
             drag_mode_ != DragMode::Gizmo &&
             drag_mode_ != DragMode::Splitter) {
-            auto* const target_viewport = drag_viewport_ ? drag_viewport_ : &viewport();
+            auto* const target_viewport = dragViewport() ? dragViewport() : &viewport();
 
             switch (drag_mode_) {
             case DragMode::Pan: {
                 const float current_time = static_cast<float>(SDL_GetTicks() / 1000.0f);
                 target_viewport->camera.panDrag(pos, current_time);
-                pan_coast_viewport_ = target_viewport;
+                pan_coast_view_ = rememberViewport(target_viewport);
                 break;
             }
             case DragMode::Rotate:
@@ -1604,7 +1591,7 @@ namespace lfs::vis {
                 const float current_time = static_cast<float>(SDL_GetTicks() / 1000.0f);
                 target_viewport->camera.orbitDrag(
                     pos, camera_navigation_mode_ == CameraNavigationMode::Trackball, current_time);
-                orbit_coast_viewport_ = target_viewport;
+                orbit_coast_view_ = rememberViewport(target_viewport);
                 break;
             }
             default:
@@ -2355,9 +2342,8 @@ namespace lfs::vis {
     }
 
     void InputController::update(float delta_time) {
-        // Refresh once per input frame; mouse-move events can then query the
-        // divider without taking RenderingManager's settings mutex repeatedly.
-        refreshSplitDividerCache();
+        if (drag_view_ != kNoView && !dragViewport())
+            clearViewportDragState();
         maybeInitializeDepthViewRange();
 
         if (input_router_) {
@@ -2396,17 +2382,17 @@ namespace lfs::vis {
 
         // Handle missed mouse release events (e.g., outside window)
         if (drag_mode_ == DragMode::Orbit && drag_button_released) {
-            auto* const released_viewport = drag_viewport_ ? drag_viewport_ : &viewport();
-            if (drag_viewport_) {
-                drag_viewport_->camera.endRotateAroundCenter();
-                snapViewportToNearestAxis(*drag_viewport_);
+            auto* const released_viewport = dragViewport() ? dragViewport() : &viewport();
+            if (dragViewport()) {
+                dragViewport()->camera.endRotateAroundCenter();
+                snapViewportToNearestAxis(*dragViewport());
             } else {
                 viewport().camera.endRotateAroundCenter();
                 snapViewportToNearestAxis(viewport());
             }
             drag_mode_ = DragMode::None;
             drag_button_ = -1;
-            drag_viewport_ = nullptr;
+            drag_view_ = kNoView;
             press_selected_camera_frustum_ = false;
             pressed_camera_frustum_id_ = -1;
             pressed_camera_frustum_modifiers_ = input::MODIFIER_NONE;
@@ -2421,7 +2407,7 @@ namespace lfs::vis {
         if (drag_mode_ == DragMode::Pan && drag_button_released) {
             drag_mode_ = DragMode::None;
             drag_button_ = -1;
-            drag_viewport_ = nullptr;
+            drag_view_ = kNoView;
             press_selected_camera_frustum_ = false;
             pressed_camera_frustum_id_ = -1;
             pressed_camera_frustum_modifiers_ = input::MODIFIER_NONE;
@@ -2430,7 +2416,7 @@ namespace lfs::vis {
         if (drag_mode_ == DragMode::Rotate && drag_button_released) {
             drag_mode_ = DragMode::None;
             drag_button_ = -1;
-            drag_viewport_ = nullptr;
+            drag_view_ = kNoView;
             press_selected_camera_frustum_ = false;
             pressed_camera_frustum_id_ = -1;
             pressed_camera_frustum_modifiers_ = input::MODIFIER_NONE;
@@ -2470,46 +2456,46 @@ namespace lfs::vis {
 
         // Orbit ease-out: while dragging, let a held-still pause fade the stored
         // motion; once released, coast the remembered rotation to a smooth stop.
-        if (orbit_coast_viewport_) {
-            auto& orbit_camera = orbit_coast_viewport_->camera;
+        if (orbitCoastViewport()) {
+            auto& orbit_camera = orbitCoastViewport()->camera;
             if (drag_mode_ == DragMode::Orbit) {
                 orbit_camera.decayOrbitMomentum(delta_time);
             } else if (orbit_camera.hasOrbitMomentum()) {
                 orbit_camera.updateOrbitCoast(delta_time);
                 onCameraMovementStart();
-                publishCameraMove(orbit_coast_viewport_);
+                publishCameraMove(orbitCoastViewport());
                 if (!orbit_camera.hasOrbitMomentum()) {
                     ui::CameraMove{
-                        .rotation = orbit_coast_viewport_->getRotationMatrix(),
-                        .translation = orbit_coast_viewport_->getTranslation()}
+                        .rotation = orbitCoastViewport()->getRotationMatrix(),
+                        .translation = orbitCoastViewport()->getTranslation()}
                         .emit();
-                    orbit_coast_viewport_ = nullptr;
+                    orbit_coast_view_ = kNoView;
                 }
             } else {
-                orbit_coast_viewport_ = nullptr;
+                orbit_coast_view_ = kNoView;
             }
         }
 
         // Pan ease-out: mirror the orbit coast for click-drag panning. While the
         // button is held a paused drag fades the stored motion; once released the
         // remembered translation coasts to a smooth stop.
-        if (pan_coast_viewport_) {
-            auto& pan_camera = pan_coast_viewport_->camera;
+        if (panCoastViewport()) {
+            auto& pan_camera = panCoastViewport()->camera;
             if (drag_mode_ == DragMode::Pan) {
                 pan_camera.decayPanMomentum(delta_time);
             } else if (pan_camera.hasPanMomentum()) {
                 pan_camera.updatePanCoast(delta_time);
                 onCameraMovementStart();
-                publishCameraMove(pan_coast_viewport_);
+                publishCameraMove(panCoastViewport());
                 if (!pan_camera.hasPanMomentum()) {
                     ui::CameraMove{
-                        .rotation = pan_coast_viewport_->getRotationMatrix(),
-                        .translation = pan_coast_viewport_->getTranslation()}
+                        .rotation = panCoastViewport()->getRotationMatrix(),
+                        .translation = panCoastViewport()->getTranslation()}
                         .emit();
-                    pan_coast_viewport_ = nullptr;
+                    pan_coast_view_ = kNoView;
                 }
             } else {
-                pan_coast_viewport_ = nullptr;
+                pan_coast_view_ = kNoView;
             }
         }
 
@@ -2543,11 +2529,11 @@ namespace lfs::vis {
                                   keys_movement_[3] || keys_movement_[4] || keys_movement_[5]);
 
         if (keys_active) {
-            if (wasd_momentum_viewport_ && wasd_momentum_viewport_ != active_movement_viewport) {
-                wasd_momentum_viewport_->camera.clearWasdMomentum();
-                wasd_momentum_viewport_->camera.clearDroneMotion();
+            if (wasdMomentumViewport() && wasdMomentumViewport() != active_movement_viewport) {
+                wasdMomentumViewport()->camera.clearWasdMomentum();
+                wasdMomentumViewport()->camera.clearDroneMotion();
             }
-            wasd_momentum_viewport_ = active_movement_viewport;
+            wasd_momentum_view_ = rememberViewport(active_movement_viewport);
         }
 
         const float movement_speed_bonus =
@@ -2557,7 +2543,7 @@ namespace lfs::vis {
             // The drone must keep integrating with no keys held: braking,
             // leveling and mouse-look smoothing all settle through
             // advanceDrone until hasDroneMotion() reaches false.
-            auto* drone_viewport = keys_active ? active_movement_viewport : wasd_momentum_viewport_;
+            auto* drone_viewport = keys_active ? active_movement_viewport : wasdMomentumViewport();
             if (!drone_viewport && active_movement_viewport->camera.hasDroneMotion())
                 drone_viewport = active_movement_viewport;
             if (drone_viewport && (keys_active || drone_viewport->camera.hasDroneMotion())) {
@@ -2572,7 +2558,7 @@ namespace lfs::vis {
                     keys_active && keys_movement_[5],
                     movement_speed_bonus);
 
-                wasd_momentum_viewport_ = drone_viewport;
+                wasd_momentum_view_ = rememberViewport(drone_viewport);
                 onCameraMovementStart();
                 publishCameraMove(drone_viewport);
 
@@ -2581,13 +2567,13 @@ namespace lfs::vis {
                         .rotation = drone_viewport->getRotationMatrix(),
                         .translation = drone_viewport->getTranslation()}
                         .emit();
-                    wasd_momentum_viewport_ = nullptr;
+                    wasd_momentum_view_ = kNoView;
                 }
             } else if (!keys_active) {
-                wasd_momentum_viewport_ = nullptr;
+                wasd_momentum_view_ = kNoView;
             }
         } else {
-            auto* const movement_viewport = keys_active ? active_movement_viewport : wasd_momentum_viewport_;
+            auto* const movement_viewport = keys_active ? active_movement_viewport : wasdMomentumViewport();
             if (movement_viewport && (keys_active || movement_viewport->camera.hasWasdMomentum())) {
                 movement_viewport->camera.setSceneExtent(sceneExtent());
                 movement_viewport->camera.advanceWasd(
@@ -2608,10 +2594,10 @@ namespace lfs::vis {
                         .rotation = movement_viewport->getRotationMatrix(),
                         .translation = movement_viewport->getTranslation()}
                         .emit();
-                    wasd_momentum_viewport_ = nullptr;
+                    wasd_momentum_view_ = kNoView;
                 }
             } else if (!keys_active) {
-                wasd_momentum_viewport_ = nullptr;
+                wasd_momentum_view_ = kNoView;
             }
         }
 
@@ -3189,7 +3175,7 @@ namespace lfs::vis {
         interaction.viewport->camera.finishGlide();
         interaction.viewport->camera.setSceneExtent(sceneExtent());
         interaction.viewport->camera.startPan(glm::vec2(x, y), current_time);
-        drag_viewport_ = interaction.viewport;
+        drag_view_ = rememberViewport(interaction.viewport);
         drag_mode_ = DragMode::Pan;
         drag_button_ = button;
     }
@@ -3201,8 +3187,8 @@ namespace lfs::vis {
             drag_mode_ == DragMode::Rotate;
 
         if (drag_mode_ == DragMode::Orbit) {
-            if (drag_viewport_) {
-                drag_viewport_->camera.endRotateAroundCenter();
+            if (dragViewport()) {
+                dragViewport()->camera.endRotateAroundCenter();
             } else {
                 viewport().camera.endRotateAroundCenter();
             }
@@ -3210,7 +3196,7 @@ namespace lfs::vis {
 
         drag_mode_ = DragMode::None;
         drag_button_ = -1;
-        drag_viewport_ = nullptr;
+        drag_view_ = kNoView;
         pending_click_drag_ = {};
         forced_mouse_press_action_ = input::Action::NONE;
         is_node_rect_dragging_ = false;
@@ -3229,12 +3215,12 @@ namespace lfs::vis {
     }
 
     void InputController::clearWasdMomentumViewport() {
-        if (!wasd_momentum_viewport_) {
+        if (!wasdMomentumViewport()) {
             return;
         }
-        wasd_momentum_viewport_->camera.clearWasdMomentum();
-        wasd_momentum_viewport_->camera.clearDroneMotion();
-        wasd_momentum_viewport_ = nullptr;
+        wasdMomentumViewport()->camera.clearWasdMomentum();
+        wasdMomentumViewport()->camera.clearDroneMotion();
+        wasd_momentum_view_ = kNoView;
     }
 
     bool InputController::canOpenSelectedCameraContextMenu(const int hovered_camera_uid) const {
@@ -3420,8 +3406,8 @@ namespace lfs::vis {
         }
 
         target_viewport.camera.clearOrbitMomentum();
-        if (&target_viewport == orbit_coast_viewport_) {
-            orbit_coast_viewport_ = nullptr;
+        if (&target_viewport == orbitCoastViewport()) {
+            orbit_coast_view_ = kNoView;
         }
 
         if (auto* const rendering = services().renderingOrNull()) {

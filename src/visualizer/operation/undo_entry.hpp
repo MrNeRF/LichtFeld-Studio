@@ -356,7 +356,8 @@ namespace lfs::vis::op {
         [[nodiscard]] std::string name() const override { return "selection.depth_window_drag"; }
         [[nodiscard]] UndoMetadata metadata() const override;
         [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this); }
-        [[nodiscard]] DirtyMask dirtyFlags() const override { return DirtyFlag::SELECTION; }
+        // Applying this entry dirties its owning view directly.
+        [[nodiscard]] DirtyMask dirtyFlags() const override { return 0; }
 
     private:
         [[nodiscard]] bool isExpired() const;

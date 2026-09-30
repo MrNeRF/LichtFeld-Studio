@@ -209,6 +209,7 @@ namespace lfs::vis {
         [[nodiscard]] ViewTarget viewAt(float x, float y) override;
         [[nodiscard]] ViewTarget findView(ViewId id) override;
         [[nodiscard]] ViewId viewId(const Viewport& viewport) const override;
+        [[nodiscard]] std::uint64_t viewEpoch() const override { return screen_service_.screenEpoch(); }
         void activateView(ViewId id) override;
         // Runs a named command on one 3D view: frame_all, frame_selected,
         // area:quad. Returns false for unknown commands or views.

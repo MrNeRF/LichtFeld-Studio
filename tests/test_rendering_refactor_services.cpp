@@ -426,12 +426,12 @@ namespace lfs::vis {
         settings.split_view_mode = SplitViewMode::GTComparison;
         settings.gt_comparison_mode = GTComparisonMode::RGB;
         manager.updateSettings(settings);
-        ASSERT_TRUE(manager.getSplitDividerScreenX({10.0f, 20.0f}, {800.0f, 600.0f}).has_value());
+        ASSERT_TRUE(manager.getSplitDividerScreenX(manager.activeViewId(), {10.0f, 20.0f}, {800.0f, 600.0f}).has_value());
 
         settings.gt_comparison_mode = GTComparisonMode::Loss;
         manager.updateSettings(settings);
 
-        EXPECT_FALSE(manager.getSplitDividerScreenX({10.0f, 20.0f}, {800.0f, 600.0f}).has_value());
+        EXPECT_FALSE(manager.getSplitDividerScreenX(manager.activeViewId(), {10.0f, 20.0f}, {800.0f, 600.0f}).has_value());
     }
 
     TEST(SplitViewServiceTest, SceneClearedDisablesSplitViewAndResetsOffset) {
@@ -3122,10 +3122,10 @@ namespace lfs::vis {
         };
         ASSERT_EQ(op::operators().dispatchModalEvent(move), op::OperatorResult::RUNNING_MODAL);
         ASSERT_TRUE(rendering_manager_->depthWindowDragPreview());
-        (void)lfs::vis::op::updateDepthWindowHover(
-            glm::vec2(50.0f, 50.0f),
-            glm::vec4(0.0f, 0.0f, static_cast<float>(options_.width), static_cast<float>(options_.height)),
-            true);
+        (void)lfs::vis::op::updateDepthWindowHover(rendering_manager_->activeViewId(),
+                                                   glm::vec2(50.0f, 50.0f),
+                                                   glm::vec4(0.0f, 0.0f, static_cast<float>(options_.width), static_cast<float>(options_.height)),
+                                                   true);
 
         lfs::core::events::cmd::ToggleGTComparison{}.emit();
 

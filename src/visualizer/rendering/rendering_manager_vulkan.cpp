@@ -1896,7 +1896,6 @@ namespace lfs::vis {
             if (splitViewUsesPLYComparison(frame_settings.split_view_mode)) {
                 // Comparison draws owned node models. Do not concatenate them
                 // into a hidden combined copy just to fill FrameContext.model.
-                scene_manager->getScene().discardUnconsolidatedModelCache();
                 scene_state = scene_manager->buildRenderState({.metadata_only = true});
                 model = nullptr;
                 const auto visible_nodes = scene_manager->getScene().getVisibleSplatNodeSlots();
@@ -1975,47 +1974,49 @@ namespace lfs::vis {
         // scene dropped the model. Treating it as a change would wipe the retained
         // last splat image (the whole point of the cadence path).
         if (!render_lock_contended) {
-            if (const auto model_change = this->state().frame_lifecycle_service_.handleModelChange(model_ptr, this->state().viewport_artifact_service_, model_source);
-                model_change.changed) {
+            const bool ownership_changed = renderer_model_source_ != model_source;
+            renderer_model_source_ = model_source;
+            if (ownership_changed && !is_training && vksplat_viewport_renderer_) {
+                // A new view does not replace the shared model or its GPU outputs.
+                // Only a trainer ownership transition tears down the handshake.
+#if LFS_BUILD_TRAINER
+                if (trainer_manager) {
+                    if (auto* trainer = trainer_manager->getTrainer())
+                        trainer->setViewerReleaseFence(nullptr, {});
+                }
+#endif
+                frame_tensor_scope.reset();
+                vksplat_viewport_renderer_->reset();
                 invalidateGTComparisonImageCache();
+                std::lock_guard lock(views_mutex_);
+                for (auto& [id, view] : view_states_) {
+                    view->vulkan_viewport_image_.reset();
+                    view->vulkan_external_viewport_image_ = VK_NULL_HANDLE;
+                    view->vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
+                    view->vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+                    view->vulkan_external_viewport_image_generation_ = 0;
+                    view->vulkan_viewport_image_size_ = {};
+                    view->vulkan_mesh_frame_ = {};
+                    view->viewport_interop_.setSceneImage({}, {}, false, 0);
+                    view->viewport_interop_.clearSplitRightImage();
+                    view->viewport_interop_.clearDepthBlitImage();
+                    view->viewport_artifact_service_.clearViewportOutput();
+                    view->gt_async_depth_ticket_ = 0;
+                    view->gt_async_depth_dest_ = {};
+                    view->gt_async_ticket_intrinsics_.reset();
+                    view->gt_async_ticket_view_.reset();
+                    view->gt_async_held_display_.reset();
+                    view->gt_async_held_view_.reset();
+                    view->dirty_mask_.fetch_or(DirtyFlag::ALL);
+                }
+            }
+            if (this->state().frame_lifecycle_service_.handleModelChange(model_ptr, this->state().viewport_artifact_service_, model_source).changed) {
                 clearVulkanViewportImageState();
                 this->state().last_logged_vksplat_render_error_.clear();
-                if (vksplat_viewport_renderer_) {
-                    if (is_training && lfs::rendering::isVkSplatBackend(frame_settings.raster_backend)) {
-                        LOG_DEBUG("Preserving VkSplat renderer across training model change");
-                    } else {
-                        // The trainer must drop the fence handle before reset destroys
-                        // the CUDA import it points at.
-#if LFS_BUILD_TRAINER
-                        if (trainer_manager) {
-                            if (auto* trainer = trainer_manager->getTrainer()) {
-                                trainer->setViewerReleaseFence(nullptr, {});
-                            }
-                        }
-#endif
-                        // reset() destroys render_stream_; drop it from the TLS current
-                        // stream first so the rest of the frame doesn't enqueue work on a
-                        // stale handle. Re-installed after the handshake re-init below.
-                        frame_tensor_scope.reset();
-                        vksplat_viewport_renderer_->reset();
-                        // Clear GT async ticket host state after ring teardown.
-                        this->state().gt_async_depth_ticket_ = 0;
-                        this->state().gt_async_depth_dest_ = {};
-                        this->state().gt_async_ticket_mode_ = GTComparisonMode::RGB;
-                        this->state().gt_async_ticket_intrinsics_.reset();
-                        this->state().gt_async_ticket_flip_y_ = false;
-                        this->state().gt_async_ticket_metadata_ = {};
-                        this->state().gt_async_ticket_view_.reset();
-                        this->state().gt_async_held_display_.reset();
-                        this->state().gt_async_held_flip_y_ = false;
-                        this->state().gt_async_held_metadata_ = {};
-                        this->state().gt_async_held_view_.reset();
-                    }
-                }
                 this->state().viewport_artifact_service_.clearViewportOutput();
-                markDirty(DirtyFlag::ALL);
+                markViewDirty(context.view, DirtyFlag::ALL);
             }
-        } // !render_lock_contended model-change tracking
+        }
 
         const bool synchronize_vksplat_input_upload = is_training;
         // Training refresh marks the scene dirty from the main loop; its provenance decides whether a
@@ -3717,19 +3718,6 @@ namespace lfs::vis {
         }
 
         const bool render_point_cloud = frame_settings.point_cloud_mode || !has_visible_gaussian_model;
-        const auto release_inactive_point_cloud = [this]() {
-            if (!point_cloud_vulkan_renderer_ && !point_cloud_colors_cache_.is_valid()) {
-                return;
-            }
-            if (last_vulkan_context_ &&
-                last_vulkan_context_->retiredFrameSubmitSerial() < point_cloud_last_frame_serial_) {
-                return;
-            }
-            point_cloud_colors_cache_ = {};
-            point_cloud_colors_cache_key_ = nullptr;
-            point_cloud_colors_cache_size_ = 0;
-            point_cloud_vulkan_renderer_.reset();
-        };
 
         if (rendered_image || pending_split_view.enabled) {
             // Split-view paths populate pending_split_view directly; skip the
@@ -4269,7 +4257,6 @@ namespace lfs::vis {
                                         complete_temporal_convergence_frame();
                                     else if (this->state().temporal_convergence_.enabled())
                                         this->state().temporal_convergence_.cancelSettle();
-                                    release_inactive_point_cloud();
 
                                     this->state().vulkan_viewport_coordinate_size_ = current_size;
                                     return {.image = this->state().vulkan_viewport_image_,
@@ -4352,7 +4339,6 @@ namespace lfs::vis {
                             complete_temporal_convergence_frame();
                         else if (this->state().temporal_convergence_.enabled())
                             this->state().temporal_convergence_.cancelSettle();
-                        release_inactive_point_cloud();
 
                         this->state().vulkan_viewport_coordinate_size_ = current_size;
                         return {.image = {},
@@ -4760,9 +4746,6 @@ namespace lfs::vis {
             LOG_ERROR("Failed to render Vulkan viewport image: {}",
                       render_error.empty() ? "missing image payload" : render_error);
             clearVulkanViewportImageState();
-            if (!has_point_cloud) {
-                release_inactive_point_cloud();
-            }
             return {};
         }
 
@@ -4790,9 +4773,6 @@ namespace lfs::vis {
         this->state().viewport_artifact_service_.updateFromImageOutput(
             std::move(viewport_image), rendered_metadata, render_size, true);
         release_inactive_split_outputs();
-        if (has_visible_gaussian_model && !frame_settings.point_cloud_mode) {
-            release_inactive_point_cloud();
-        }
 
         if (resize_result.completed) {
             lfs::core::Tensor::trim_memory_pool();
