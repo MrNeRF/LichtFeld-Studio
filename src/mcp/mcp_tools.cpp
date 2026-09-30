@@ -11,6 +11,7 @@
 #include "core/logger.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <charconv>
 #include <cmath>
@@ -106,6 +107,55 @@ namespace lfs::mcp {
             return std::nullopt;
         }
 
+        [[nodiscard]] std::optional<std::string> check_against_schema(json& checked, const json& schema,
+                                                                      const std::string& path) {
+            if (!schema.is_object())
+                return std::nullopt;
+            if (const auto type = schema.find("type"); type != schema.end() && type->is_string()) {
+                auto coerced = coerce_to_declared_type(checked, type->get<std::string>());
+                if (!coerced)
+                    return std::format("Parameter '{}' must be of type {}", path, type->get<std::string>());
+                checked = std::move(*coerced);
+            }
+            if (checked.is_number()) {
+                const double number = checked.get<double>();
+                if (!std::isfinite(number))
+                    return std::format("Parameter '{}' must be finite", path);
+                struct Bound {
+                    const char* key;
+                    const char* relation;
+                    bool (*violated)(double, double);
+                };
+                static constexpr std::array<Bound, 4> bounds{{
+                    {"minimum", ">=", [](double v, double b) { return v < b; }},
+                    {"exclusiveMinimum", ">", [](double v, double b) { return v <= b; }},
+                    {"maximum", "<=", [](double v, double b) { return v > b; }},
+                    {"exclusiveMaximum", "<", [](double v, double b) { return v >= b; }},
+                }};
+                for (const auto& [key, relation, violated] : bounds) {
+                    const auto bound = schema.find(key);
+                    if (bound != schema.end() && bound->is_number() && violated(number, bound->get<double>()))
+                        return std::format("Parameter '{}' must be {} {} (got {})", path, relation,
+                                           bound->dump(), checked.dump());
+                }
+            }
+            if (checked.is_array()) {
+                if (const auto min = schema.find("minItems"); min != schema.end() && min->is_number() &&
+                                                              checked.size() < min->get<std::size_t>())
+                    return std::format("Parameter '{}' must have at least {} items (got {})", path, min->dump(), checked.size());
+                if (const auto max = schema.find("maxItems"); max != schema.end() && max->is_number() &&
+                                                              checked.size() > max->get<std::size_t>())
+                    return std::format("Parameter '{}' must have at most {} items (got {})", path, max->dump(), checked.size());
+                if (const auto items = schema.find("items"); items != schema.end() && items->is_object()) {
+                    for (std::size_t i = 0; i < checked.size(); ++i) {
+                        if (auto error = check_against_schema(checked[i], *items, std::format("{}[{}]", path, i)))
+                            return error;
+                    }
+                }
+            }
+            return std::nullopt;
+        }
+
         json invoke_handler_guarded(const std::string& name, const ToolRegistry::ToolHandler& handler,
                                     const json& arguments, const lfs::OperationId operation_id) {
             try {
@@ -161,10 +211,17 @@ namespace lfs::mcp {
                 std::string mirror = error.at("message").get<std::string>();
                 result["error_message"] = std::move(mirror);
             }
+            if (operation_id.has_value() && is_wire_envelope(error) &&
+                error.value("operation_id", std::uint64_t{0}) == 0)
+                result["error"]["operation_id"] = operation_id.value();
             return result;
         }
 
     } // namespace
+
+    json invalid_argument_result(const std::string& message, const std::string& parameter) {
+        return parameter_error_envelope(lfs::ErrorCode::InvalidArgument, message, parameter, lfs::OperationId{});
+    }
 
     ToolRegistry& ToolRegistry::instance() {
         static ToolRegistry inst;
@@ -291,17 +348,11 @@ namespace lfs::mcp {
                 const auto property = properties.find(key);
                 if (value.is_null() || property == properties.end() || !property->is_object())
                     continue;
-                const auto type = property->find("type");
-                if (type == property->end() || !type->is_string())
-                    continue;
-                auto coerced = coerce_to_declared_type(value, type->get<std::string>());
-                if (!coerced) {
+                if (auto error = check_against_schema(checked_arguments[key], *property, key)) {
                     return parameter_error_envelope(
-                        lfs::ErrorCode::InvalidArgument,
-                        std::format("Parameter '{}' must be of type {}", key, type->get<std::string>()), key,
+                        lfs::ErrorCode::InvalidArgument, *error, key,
                         operation_id);
                 }
-                checked_arguments[key] = std::move(*coerced);
             }
         }
 
@@ -414,6 +465,10 @@ namespace lfs::mcp {
 
         for (const auto& arg : op.args) {
             json prop = arg_type_to_json_schema(arg.type);
+            if (arg.exclusive_minimum)
+                prop["exclusiveMinimum"] = *arg.exclusive_minimum;
+            if (arg.maximum)
+                prop["maximum"] = *arg.maximum;
             if (arg.description) {
                 prop["description"] = *arg.description;
             }

@@ -188,8 +188,8 @@ namespace lfs::mcp {
                     .type = "object",
                     .properties = json{
                         {"camera_index", json{{"type", "integer"}, {"description", "Dataset camera index; omit to capture the live viewport region only"}}},
-                        {"width", json{{"type", "integer"}, {"description", "Optional output width; preserves aspect ratio when height is omitted"}}},
-                        {"height", json{{"type", "integer"}, {"description", "Optional output height; preserves aspect ratio when width is omitted"}}}},
+                        {"width", json{{"type", "integer"}, {"minimum", 1}, {"maximum", 16384}, {"description", "Optional output width; preserves aspect ratio when height is omitted"}}},
+                        {"height", json{{"type", "integer"}, {"minimum", 1}, {"maximum", 16384}, {"description", "Optional output height; preserves aspect ratio when width is omitted"}}}},
                     .required = {}},
                 .metadata = query_metadata(backend, "render")},
             [backend](const json& args) -> json {

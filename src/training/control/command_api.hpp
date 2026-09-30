@@ -60,6 +60,8 @@ namespace lfs::training {
         ArgType type;
         bool required = true;
         std::optional<std::string> description;
+        std::optional<double> exclusive_minimum;
+        std::optional<double> maximum;
     };
 
     struct OperationInfo {

@@ -211,7 +211,13 @@ namespace lfs::training {
         if (snapshot_.trainer != trainer) {
             return;
         }
+        const TrainingSnapshot finished = snapshot_;
         reset_snapshot_locked();
+        snapshot_.iteration = finished.iteration;
+        snapshot_.max_iterations = finished.max_iterations;
+        snapshot_.loss = finished.loss;
+        snapshot_.num_gaussians = finished.num_gaussians;
+        snapshot_.strategy = finished.strategy;
     }
 
     void CommandCenter::reset_snapshot() {
@@ -598,6 +604,14 @@ namespace lfs::training {
             }
             if (!argument_is_finite(value)) {
                 return std::unexpected("Non-finite argument '" + name + "' in op " + cmd.op);
+            }
+            if (const auto* number = std::get_if<double>(&value)) {
+                if (spec->exclusive_minimum && *number <= *spec->exclusive_minimum)
+                    return std::unexpected(std::format("Argument '{}' must be > {} (got {})", name,
+                                                       *spec->exclusive_minimum, *number));
+                if (spec->maximum && *number > *spec->maximum)
+                    return std::unexpected(std::format("Argument '{}' must be <= {} (got {})", name,
+                                                       *spec->maximum, *number));
             }
         }
         for (const auto& spec : it_op->args) {

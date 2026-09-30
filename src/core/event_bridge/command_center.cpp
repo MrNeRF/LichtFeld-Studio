@@ -42,13 +42,13 @@ namespace lfs::training {
         ops_.push_back({.name = "set_lr",
                         .target = CommandTarget::Optimizer,
                         .selectors = {SelectionKind::All},
-                        .args = {{"value", ArgType::Float, true, "Learning rate"}},
+                        .args = {{"value", ArgType::Float, true, "Learning rate, in (0, 1]", 0.0, 1.0}},
                         .description = "Set global learning rate."});
 
         ops_.push_back({.name = "scale_lr",
                         .target = CommandTarget::Optimizer,
                         .selectors = {SelectionKind::All},
-                        .args = {{"factor", ArgType::Float, true, "Scale factor"}},
+                        .args = {{"factor", ArgType::Float, true, "Scale factor, > 0", 0.0, std::nullopt}},
                         .description = "Scale global learning rate."});
 
         ops_.push_back({.name = "pause",

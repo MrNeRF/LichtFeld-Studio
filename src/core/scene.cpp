@@ -683,6 +683,7 @@ namespace lfs::core {
         const glm::vec3 centroid = model ? computeCentroid(model.get()) : node->centroid;
         auto previous = retireCombinedModelIfInFlight(std::move(node->model));
         node->model = std::move(model);
+        single_node_model_ = nullptr;
         node->gaussian_count.store(gaussian_count, std::memory_order_release);
         node->centroid = centroid;
         node->payload_hydration =
@@ -771,6 +772,7 @@ namespace lfs::core {
 
         cached_combined_.reset();
         cached_combined_includes_hidden_ = false;
+        single_node_model_ = nullptr;
         cached_transform_indices_.reset();
         cached_visible_selection_indices_.reset();
         invalidateVisibleSelectionMaskCache();

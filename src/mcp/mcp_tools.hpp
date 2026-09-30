@@ -18,6 +18,8 @@
 
 namespace lfs::mcp {
 
+    LFS_MCP_API json invalid_argument_result(const std::string& message, const std::string& parameter);
+
     class LFS_MCP_API ToolRegistry {
     public:
         using ToolHandler = std::function<json(const json& params)>;

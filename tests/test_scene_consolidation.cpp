@@ -697,3 +697,29 @@ TEST(SceneActiveShTest, PreservesInactiveDataAndNodeLimitsThroughConsolidationAn
         }
     }
 }
+
+namespace {
+    [[nodiscard]] std::unique_ptr<SplatData> make_alias_test_model(float x) {
+        return std::make_unique<SplatData>(
+            1,
+            Tensor::from_vector(std::vector<float>{x, 0.0f, 0.0f, x + 1.0f, 0.0f, 0.0f}, {2, 3}, Device::CPU),
+            Tensor::zeros({2, 1, 3}, Device::CPU),
+            Tensor::zeros({2, 3, 3}, Device::CPU),
+            Tensor::zeros({2, 3}, Device::CPU),
+            Tensor::from_vector(std::vector<float>{1, 0, 0, 0, 1, 0, 0, 0}, {2, 4}, Device::CPU),
+            Tensor::zeros({2, 1}, Device::CPU), 1.0f);
+    }
+} // namespace
+
+TEST(SceneSingleNodeAliasTest, ClearAndSwapDropTheAlias) {
+    Scene scene;
+    ASSERT_NE(scene.addSplat("single", make_alias_test_model(0.0f)), lfs::core::NULL_NODE);
+    ASSERT_NE(scene.getCombinedModel(), nullptr);
+    auto previous = scene.swapNodeModel("single", make_alias_test_model(5.0f));
+    ASSERT_NE(previous, nullptr);
+    EXPECT_NE(scene.peekCombinedModel(), previous.get());
+    previous.reset();
+    (void)scene.getCombinedModel();
+    scene.clear();
+    EXPECT_EQ(scene.peekCombinedModel(), nullptr);
+}

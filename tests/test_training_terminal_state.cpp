@@ -76,6 +76,7 @@ namespace {
 
         command_center.update_snapshot(
             context, 100, false, true, false, lfs::training::TrainingPhase::SafeControl);
+        command_center.overlay_stored_session("MRNF", true);
         command_center.clear_snapshot(nullptr);
         EXPECT_EQ(command_center.snapshot().trainer, trainer);
 
@@ -84,6 +85,14 @@ namespace {
         EXPECT_EQ(snapshot.trainer, nullptr);
         EXPECT_FALSE(snapshot.is_running);
         EXPECT_EQ(snapshot.phase, lfs::training::TrainingPhase::Idle);
+        EXPECT_EQ(snapshot.iteration, 17);
+        EXPECT_EQ(snapshot.max_iterations, 100);
+        EXPECT_EQ(snapshot.num_gaussians, 42u);
+        EXPECT_FLOAT_EQ(snapshot.loss, 0.25f);
+        EXPECT_EQ(snapshot.strategy, "MRNF");
+        command_center.reset_snapshot();
+        EXPECT_EQ(command_center.snapshot().iteration, 0);
+        EXPECT_EQ(command_center.snapshot().num_gaussians, 0u);
     }
 
     TEST_F(TrainingTerminalStateTest, ModelCommandsQueueWithoutDereferencingCallerThreadSnapshot) {
@@ -119,6 +128,15 @@ namespace {
         const auto result = command_center.execute(command);
         ASSERT_FALSE(result);
         EXPECT_NE(result.error().find("Non-finite"), std::string::npos);
+        for (const double invalid_lr : {0.0, -1e-3, 1e6}) {
+            command.args = {{"value", invalid_lr}};
+            const auto rejected = command_center.execute(command);
+            ASSERT_FALSE(rejected) << "set_lr accepted " << invalid_lr;
+            EXPECT_NE(rejected.error().find("value"), std::string::npos);
+        }
+        command.op = "scale_lr";
+        command.args = {{"factor", 0.0}};
+        EXPECT_FALSE(command_center.execute(command));
         command_center.clear_snapshot(trainer);
     }
 

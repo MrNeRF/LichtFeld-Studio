@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "gui/utils/native_file_dialog.hpp"
 #include "mcp/mcp_protocol.hpp"
 #include "visualizer/post_work_utils.hpp"
 #include "visualizer/visualizer.hpp"
@@ -81,6 +82,37 @@ namespace lfs::app {
 
     namespace detail {
 
+        template <typename R>
+        R make_native_dialog_failure() {
+            constexpr std::string_view message =
+                "This MCP operation requested a native file dialog. Use project_save_as, project_open, "
+                "scene.load_ply, or scene.load_dataset with an explicit path instead.";
+            if constexpr (std::is_same_v<R, nlohmann::json>) {
+                return nlohmann::json{{"error", std::string(message)}};
+            } else if constexpr (is_string_expected<R>::value) {
+                return std::unexpected(std::string(message));
+            } else if constexpr (is_lfs_result<R>::value) {
+                auto error = lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::FailedPrecondition,
+                    .domain = lfs::ErrorDomain::MCP,
+                    .severity = lfs::Severity::Error,
+                    .retryability = lfs::Retryability::NotRetryable,
+                    .operation_id = {},
+                    .user_message = std::string(message),
+                    .detail = "Native file dialogs cannot be answered by an MCP client",
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                    .fields = {},
+                    .native = std::nullopt,
+                });
+                if constexpr (std::same_as<typename R::value_type, void>)
+                    return R::failure(std::move(error));
+                else
+                    return R(std::move(error));
+            } else {
+                return R{};
+            }
+        }
+
         template <typename F, typename PostFn>
         auto post_and_wait_impl(PostFn&& post_fn, F&& fn) {
             using R = std::invoke_result_t<F>;
@@ -96,16 +128,27 @@ namespace lfs::app {
     template <typename F>
     auto post_and_wait(vis::Visualizer* viewer, F&& fn) {
         using R = std::invoke_result_t<F>;
+        auto guarded = [work = std::forward<F>(fn)]() mutable -> R {
+            vis::gui::ScopedNativeFileDialogBlock block;
+            if constexpr (std::is_void_v<R>) {
+                std::invoke(std::move(work));
+            } else {
+                R result = std::invoke(std::move(work));
+                if (vis::gui::nativeFileDialogAttempted())
+                    return detail::make_native_dialog_failure<R>();
+                return result;
+            }
+        };
 
         if (viewer->isOnViewerThread()) {
             if (!viewer->acceptsPostedWork())
                 return make_post_failure<R>("Viewer is shutting down");
-            return std::invoke(std::forward<F>(fn));
+            return std::invoke(std::move(guarded));
         }
 
         return detail::post_and_wait_impl(
             [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
-            std::forward<F>(fn));
+            std::move(guarded));
     }
 
     inline lfs::Result<vis::ProjectInfo>

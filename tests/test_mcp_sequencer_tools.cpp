@@ -360,6 +360,29 @@ TEST_F(McpSequencerToolsTest, RegisteredSchemasAreIdOnly) {
     EXPECT_EQ(result["error_message"], "Missing required parameter: keyframe_id");
 }
 
+TEST_F(McpSequencerToolsTest, PlaybackSpeedRejectsValuesOutsideControllerRange) {
+    const float before = backend_.controller.playbackSpeed();
+    for (const float speed : {-1.0f, 0.0f, 4.1f}) {
+        const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
+            "sequencer.set_playback_speed", json{{"speed", speed}});
+        EXPECT_EQ(result["error"]["code"], "InvalidArgument");
+    }
+    EXPECT_FLOAT_EQ(backend_.controller.playbackSpeed(), before);
+    const auto valid = lfs::mcp::ToolRegistry::instance().call_tool(
+        "sequencer.set_playback_speed", json{{"speed", 0.5}});
+    EXPECT_TRUE(valid["success"].get<bool>());
+    EXPECT_FLOAT_EQ(backend_.controller.playbackSpeed(), 0.5f);
+}
+
+TEST_F(McpSequencerToolsTest, AddKeyframeRejectsCoincidentCameraView) {
+    const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
+        "sequencer.add_keyframe",
+        json{{"eye", json::array({1.0, 2.0, 3.0})}, {"target", json::array({1.0, 2.0, 3.0})}});
+    EXPECT_EQ(result["error"]["code"], "InvalidArgument");
+    EXPECT_EQ(result["error_message"], "Camera eye and target must not coincide");
+    EXPECT_EQ(backend_.controller.timeline().realKeyframeCount(), 0u);
+}
+
 TEST_F(McpSequencerToolsTest, GetUsesStableIdsAndSkipsLoopPoint) {
     const auto id_a = backend_.add_manual_keyframe(0.0f, {0.0f, 0.0f, 0.0f});
     const auto id_b = backend_.add_manual_keyframe(1.0f, {1.0f, 2.0f, 3.0f});
