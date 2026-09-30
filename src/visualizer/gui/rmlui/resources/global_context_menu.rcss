@@ -38,6 +38,13 @@ body {
     white-space: normal;
 }
 
+.context-menu-check {
+    display: block;
+    flex: 0 0 16dp;
+    width: 16dp;
+    text-align: center;
+}
+
 .context-menu-shortcut {
     flex: 0 0 auto;
     margin-left: 12dp;

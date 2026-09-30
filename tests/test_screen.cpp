@@ -10,6 +10,7 @@
 #include "screen/screen_service.hpp"
 #include "screen/view3d_space.hpp"
 
+#include <algorithm>
 #include <gtest/gtest.h>
 #include <limits>
 #include <nlohmann/json.hpp>
@@ -156,6 +157,61 @@ namespace lfs::vis::screen {
         EXPECT_EQ(source.screen().maximized(), scene);
         EXPECT_TRUE(host.toggleMaximizedAt(x, y));
         EXPECT_FALSE(source.screen().maximized().valid());
+    }
+
+    TEST_F(ScreenTest, ViewHeaderCollapsesAtStableDpThresholds) {
+        Screen screen = Screen::makeDefault(registry);
+        const auto view = screen.activeView();
+        gui::View3DEditor editor({}, {});
+        const auto header_for_width = [&](const float width) {
+            gui::AreaFrame area{.id = view,
+                                .rect = {0.0f, 0.0f, width, 500.0f},
+                                .header = {0.0f, 0.0f, width, 28.0f},
+                                .content = {0.0f, 28.0f, width, 472.0f},
+                                .editor = std::string(editors::kView3D)};
+            std::vector<gui::HeaderItem> items;
+            editor.header(area, screen, items);
+            return std::pair{area, items};
+        };
+
+        auto wide = header_for_width(700.0f).second;
+        EXPECT_TRUE(std::any_of(wide.begin(), wide.end(), [](const auto& item) {
+            return item.id == "display:splats";
+        }));
+        EXPECT_FALSE(std::any_of(wide.begin(), wide.end(), [](const auto& item) {
+            return item.id == "display";
+        }));
+
+        auto compact = header_for_width(500.0f).second;
+        EXPECT_TRUE(std::any_of(compact.begin(), compact.end(), [](const auto& item) {
+            return item.id == "display";
+        }));
+        EXPECT_TRUE(std::any_of(compact.begin(), compact.end(), [](const auto& item) {
+            return item.id == "depth";
+        }));
+        EXPECT_EQ(editor.menu(header_for_width(500.0f).first, screen, "display").size(), 4u);
+
+        auto [narrow_area, narrow] = header_for_width(400.0f);
+        EXPECT_FALSE(std::any_of(narrow.begin(), narrow.end(), [](const auto& item) {
+            return item.id == "depth" || item.id == "overlays" || item.id == "projection";
+        }));
+        const auto display_menu = editor.menu(narrow_area, screen, "display");
+        EXPECT_EQ(display_menu.size(), 7u);
+        EXPECT_EQ(std::count_if(display_menu.begin(), display_menu.end(), [](const auto& item) {
+                      return item.is_active;
+                  }),
+                  1);
+        EXPECT_TRUE(std::all_of(display_menu.begin(), display_menu.begin() + 4, [](const auto& item) {
+            return !item.icon.empty();
+        }));
+
+        auto tiny = header_for_width(250.0f).second;
+        const auto view_item = std::find_if(tiny.begin(), tiny.end(), [](const auto& item) {
+            return item.id == "view";
+        });
+        ASSERT_NE(view_item, tiny.end());
+        EXPECT_TRUE(view_item->label.empty());
+        EXPECT_EQ(view_item->icon, "editor-view3d");
     }
 
     TEST_F(ScreenTest, SplittingAViewCopiesItsCameraIndependently) {

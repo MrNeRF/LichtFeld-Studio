@@ -11,6 +11,7 @@
 #include "screen/view3d_space.hpp"
 
 #include <algorithm>
+#include <format>
 
 namespace lfs::vis::gui {
 
@@ -73,43 +74,56 @@ namespace lfs::vis::gui {
             return;
         const auto& s = view->settings;
         const std::string mode = displayMode(s);
-        items.push_back({.kind = HeaderItem::Kind::Menu, .id = "view", .label = LOC("view3d.view")});
-        items.push_back({.kind = HeaderItem::Kind::Spacer});
-        items.push_back({.kind = HeaderItem::Kind::Toggle,
-                         .id = "display:splats",
-                         .icon = "blob",
-                         .tooltip = LOC("view3d.splats"),
-                         .active = mode == "splats"});
-        items.push_back({.kind = HeaderItem::Kind::Toggle,
-                         .id = "display:points",
-                         .icon = "dots-diagonal",
-                         .tooltip = LOC("view3d.point_cloud"),
-                         .active = mode == "points"});
-        items.push_back({.kind = HeaderItem::Kind::Toggle,
-                         .id = "display:rings",
-                         .icon = "ring",
-                         .tooltip = LOC("view3d.rings"),
-                         .active = mode == "rings"});
-        items.push_back({.kind = HeaderItem::Kind::Toggle,
-                         .id = "display:centers",
-                         .icon = "circle-dot",
-                         .tooltip = LOC("view3d.centers"),
-                         .active = mode == "centers"});
-        items.push_back({.kind = HeaderItem::Kind::Toggle,
-                         .id = "depth",
-                         .icon = "depth-map",
-                         .tooltip = LOC("view3d.depth_map"),
-                         .active = s.depth_view});
+        const float scale = std::max(area.header.h / 28.0f, 1.0f);
+        const float width_dp = area.header.w / scale;
+        const bool compact_display = width_dp < 560.0f;
+        const bool compact_controls = width_dp < 420.0f;
+        const bool icon_only_view = width_dp < 280.0f;
         items.push_back({.kind = HeaderItem::Kind::Menu,
-                         .id = "overlays",
-                         .icon = "overlays",
-                         .tooltip = LOC("view3d.overlays"),
-                         .active = s.show_grid || s.show_coord_axes || s.show_pivot || s.show_camera_frustums});
-        items.push_back({.kind = HeaderItem::Kind::Toggle,
-                         .id = "projection",
-                         .icon = s.orthographic ? "orthographic" : "perspective",
-                         .tooltip = s.orthographic ? LOC("view3d.orthographic") : LOC("view3d.perspective"),
-                         .active = s.orthographic});
+                         .id = "view",
+                         .label = icon_only_view ? "" : LOC("view3d.view"),
+                         .icon = icon_only_view ? "editor-view3d" : ""});
+        const auto display_icon = mode == "points"    ? "dots-diagonal"
+                                  : mode == "rings"   ? "ring"
+                                  : mode == "centers" ? "circle-dot"
+                                                      : "blob";
+        if (compact_display) {
+            items.push_back({.kind = HeaderItem::Kind::Menu,
+                             .id = "display",
+                             .icon = display_icon});
+        } else {
+            items.push_back({.kind = HeaderItem::Kind::Toggle,
+                             .id = "display:splats",
+                             .icon = "blob",
+                             .tooltip = LOC("view3d.splats"),
+                             .active = mode == "splats"});
+            items.push_back({.kind = HeaderItem::Kind::Toggle,
+                             .id = "display:points",
+                             .icon = "dots-diagonal",
+                             .tooltip = LOC("view3d.point_cloud"),
+                             .active = mode == "points"});
+            items.push_back({.kind = HeaderItem::Kind::Toggle,
+                             .id = "display:rings",
+                             .icon = "ring",
+                             .tooltip = LOC("view3d.rings"),
+                             .active = mode == "rings"});
+            items.push_back({.kind = HeaderItem::Kind::Toggle,
+                             .id = "display:centers",
+                             .icon = "circle-dot",
+                             .tooltip = LOC("view3d.centers"),
+                             .active = mode == "centers"});
+        }
+        if (!compact_controls) {
+            items.push_back({.kind = HeaderItem::Kind::Toggle, .id = "depth", .icon = "depth-map", .tooltip = LOC("view3d.depth_map"), .active = s.depth_view});
+            items.push_back({.kind = HeaderItem::Kind::Menu, .id = "overlays", .icon = "overlays", .tooltip = LOC("view3d.overlays"), .active = s.show_grid || s.show_coord_axes || s.show_pivot || s.show_camera_frustums});
+            const auto tooltip = std::format("{} (Numpad 5)",
+                                             LOC(s.orthographic ? "view3d.orthographic" : "view3d.perspective"));
+            items.push_back({.kind = HeaderItem::Kind::Toggle,
+                             .id = "projection",
+                             .icon = s.orthographic ? "orthographic" : "perspective",
+                             .tooltip = tooltip,
+                             .active = s.orthographic});
+        }
     }
 
     std::vector<ContextMenuItem> View3DEditor::menu(const AreaFrame& area, const screen::Screen& screen,
@@ -151,6 +165,28 @@ namespace lfs::vis::gui {
                              .shortcut = "Ctrl Space"});
             if (screen.canClose(area.id))
                 items.push_back({.label = LOC("screen.close_area"), .action = "area:close", .is_submenu_item = true});
+        } else if (menu_id == "display") {
+            const auto mode_item = [&](const char* key, const char* action, const char* icon, const bool active) {
+                const auto icon_path = std::format("../icon/{}.png", icon);
+                items.push_back({.label = LOC(key),
+                                 .action = action,
+                                 .is_active = active,
+                                 .icon = icon_path});
+            };
+            mode_item("view3d.splats", "display:splats", "blob", displayMode(s) == "splats");
+            mode_item("view3d.point_cloud", "display:points", "dots-diagonal", displayMode(s) == "points");
+            mode_item("view3d.rings", "display:rings", "ring", displayMode(s) == "rings");
+            mode_item("view3d.centers", "display:centers", "circle-dot", displayMode(s) == "centers");
+            if (area.header.w / std::max(area.header.h / 28.0f, 1.0f) < 420.0f) {
+                items.push_back({.label = LOC("view3d.depth_map"), .action = "depth", .separator_before = true, .is_active = s.depth_view});
+                items.push_back({.label = LOC("view3d.overlays"),
+                                 .action = "menu:overlays",
+                                 .is_submenu_item = true});
+                items.push_back({.label = LOC(s.orthographic ? "view3d.perspective" : "view3d.orthographic"),
+                                 .action = "projection",
+                                 .is_active = s.orthographic,
+                                 .shortcut = "Numpad 5"});
+            }
         } else if (menu_id == "overlays") {
             items.push_back({.label = LOC("view3d.viewport_overlays"), .is_label = true});
             items.push_back({.label = LOC("view3d.grid"), .action = "overlay:grid", .is_active = s.show_grid});
