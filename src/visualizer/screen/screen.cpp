@@ -274,6 +274,55 @@ namespace lfs::vis::screen {
         return true;
     }
 
+    bool Screen::toggleQuadView(const AreaId id, const float viewport_height) {
+        if (!isView(id))
+            return false;
+        if (const auto quad = layout_.quadAround(id)) {
+            const bool all_views =
+                std::all_of(quad->begin(), quad->end(), [this](const AreaId area) { return isView(area); });
+            if (all_views) {
+                maximized_ = {};
+                for (const AreaId area : *quad) {
+                    if (area != id && layout_.remove(area))
+                        eraseArea(area);
+                }
+                active_view_ = id;
+                repair();
+                touch();
+                return true;
+            }
+        }
+        // Top | original over Front | Right, as Blender lays its quad view out.
+        const AreaId left = split(id, SplitAxis::Columns, 0.5f, true);
+        if (!left.valid())
+            return false;
+        const AreaId bottom_right = split(id, SplitAxis::Rows, 0.5f);
+        const AreaId bottom_left = split(left, SplitAxis::Rows, 0.5f);
+        const auto orient = [&](const AreaId area, const ViewAxis axis) {
+            if (auto* space = view(area)) {
+                space->settings.orthographic = false;
+                setAxisView(*space, axis, viewport_height);
+            }
+        };
+        orient(left, ViewAxis::Top);
+        orient(bottom_left, ViewAxis::Front);
+        orient(bottom_right, ViewAxis::Right);
+        active_view_ = id;
+        touch();
+        return true;
+    }
+
+    bool Screen::toggleSideView(const AreaId id) {
+        if (!isView(id))
+            return false;
+        for (const Side side : {Side::Right, Side::Left}) {
+            const AreaId neighbour = layout_.joinableNeighbour(id, side);
+            if (neighbour.valid() && isView(neighbour))
+                return join(id, neighbour);
+        }
+        return split(id, SplitAxis::Columns, 0.5f).valid();
+    }
+
     bool Screen::isView(const AreaId id) const {
         const Area* a = area(id);
         return a && a->editor == editors::kView3D;

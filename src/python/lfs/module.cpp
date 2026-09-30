@@ -390,7 +390,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -3041,13 +3041,13 @@ NB_MODULE(lichtfeld, m) {
         []() -> bool { return lfs::vis::app_store().perf_hud.get().visible; },
         "True when the performance HUD is currently shown");
     m.def(
-        "toggle_independent_split_view", []() {
+        "toggle_split_viewport", []() {
             auto* controller = lfs::vis::InputController::instance();
             if (!controller)
                 return;
-            controller->toggleIndependentSplitView();
+            controller->toggleSplitViewport();
         },
-        "Toggle independent split view");
+        "Open a second 3D viewport beside the one under the pointer, or close it again");
 
     m.def(
         "get_render_mode", []() -> RenderMode {

@@ -1613,7 +1613,7 @@
     "action.zoom_speed_up": "Increase Zoom Speed",
     "action.zoom_speed_down": "Decrease Zoom Speed",
     "action.toggle_split_view": "Toggle Split View",
-    "action.toggle_independent_split_view": "Toggle Independent Split View",
+    "action.toggle_split_viewport": "Toggle Split Viewport",
     "action.toggle_gt_comparison": "Toggle GT Comparison",
     "action.toggle_camera_frustums": "Toggle Camera Frustums",
     "action.toggle_grid": "Toggle Grid",
@@ -1685,7 +1685,16 @@
     "trigger.drag": " Drag",
     "trigger.scroll": "Scroll",
     "trigger.unknown": "Unknown",
-    "action.toggle_performance_hud": "Toggle Performance HUD"
+    "action.toggle_performance_hud": "Toggle Performance HUD",
+    "action.view_axis_top": "View Top",
+    "action.view_axis_bottom": "View Bottom",
+    "action.view_axis_front": "View Front",
+    "action.view_axis_back": "View Back",
+    "action.view_axis_right": "View Right",
+    "action.view_axis_left": "View Left",
+    "action.view_toggle_perspective": "Toggle Perspective/Orthographic",
+    "action.view_frame_all": "Frame All",
+    "action.toggle_quad_view": "Toggle Four Views"
   },
   "debug_info": {
     "clear_history": "Clear History",
@@ -3136,5 +3145,6 @@
   "view3d.grid_plane_xy": "Grid Plane XY",
   "view3d.coordinate_axes": "Coordinate Axes",
   "view3d.pivot_point": "Pivot Point",
-  "view3d.camera_frustums": "Camera Frustums"
+  "view3d.camera_frustums": "Camera Frustums",
+  "ui.split_viewport": "Split Viewport"
 }

@@ -493,6 +493,42 @@ namespace lfs::vis::screen {
         return neighbour.isArea() ? neighbour.area : AreaId{};
     }
 
+    std::optional<std::array<AreaId, 4>> ScreenLayout::quadAround(const AreaId area) const {
+        if (!root_)
+            return std::nullopt;
+        auto& root = const_cast<Node&>(*root_);
+        const auto leaf = locate(root, area);
+        if (!leaf.leaf || !leaf.parent)
+            return std::nullopt;
+        const auto isPair = [](const Node& n) {
+            return !n.isArea() && n.children.size() == 2 && n.children[0].isArea() && n.children[1].isArea();
+        };
+        const Node* parent = leaf.parent;
+        if (!isPair(*parent))
+            return std::nullopt;
+        // Find the grandparent: the split holding `parent`.
+        std::function<const Node*(const Node&)> findParentOf = [&](const Node& n) -> const Node* {
+            if (n.isArea())
+                return nullptr;
+            for (const auto& child : n.children) {
+                if (&child == parent)
+                    return &n;
+                if (const auto* found = findParentOf(child))
+                    return found;
+            }
+            return nullptr;
+        };
+        const Node* grand = findParentOf(*root_);
+        if (!grand || grand->children.size() != 2 || grand->axis == parent->axis)
+            return std::nullopt;
+        const Node& first = grand->children[0];
+        const Node& second = grand->children[1];
+        if (!isPair(first) || !isPair(second) || first.axis != second.axis)
+            return std::nullopt;
+        return std::array<AreaId, 4>{first.children[0].area, first.children[1].area, second.children[0].area,
+                                     second.children[1].area};
+    }
+
     bool ScreenLayout::swap(const AreaId a, const AreaId b) {
         if (!root_ || a == b)
             return false;

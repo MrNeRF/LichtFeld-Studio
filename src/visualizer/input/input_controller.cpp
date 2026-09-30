@@ -864,6 +864,11 @@ namespace lfs::vis {
             return;
         }
 
+        // A press in a 3D view makes it the active one: tools, gizmos and
+        // drags act on the view they start in.
+        if (action == input::ACTION_PRESS && !over_gui)
+            activateViewAt(x, y);
+
         if (is_left_button &&
             action == input::ACTION_PRESS &&
             isInViewport(x, y) &&
@@ -1410,6 +1415,7 @@ namespace lfs::vis {
     }
 
     void InputController::handleMouseMove(double x, double y) {
+        hover_pos_ = {x, y};
         LOG_PERF("InputController::handleMouseMove pos=({},{}) drag_mode={}",
                  x, y, static_cast<int>(drag_mode_));
         auto* gui = services().guiOrNull();
@@ -2031,9 +2037,35 @@ namespace lfs::vis {
                 cmd::ToggleSplitView{}.emit();
                 return;
 
-            case input::Action::TOGGLE_INDEPENDENT_SPLIT_VIEW:
-                toggleIndependentSplitView();
+            case input::Action::TOGGLE_SPLIT_VIEWPORT:
+                toggleSplitViewport();
                 return;
+
+            case input::Action::VIEW_AXIS_TOP:
+            case input::Action::VIEW_AXIS_BOTTOM:
+            case input::Action::VIEW_AXIS_FRONT:
+            case input::Action::VIEW_AXIS_BACK:
+            case input::Action::VIEW_AXIS_RIGHT:
+            case input::Action::VIEW_AXIS_LEFT:
+            case input::Action::VIEW_TOGGLE_PERSPECTIVE:
+            case input::Action::VIEW_FRAME_ALL:
+            case input::Action::TOGGLE_QUAD_VIEW: {
+                const auto command = [&]() -> std::string_view {
+                    switch (bound_action) {
+                    case input::Action::VIEW_AXIS_TOP: return "axis:top";
+                    case input::Action::VIEW_AXIS_BOTTOM: return "axis:bottom";
+                    case input::Action::VIEW_AXIS_FRONT: return "axis:front";
+                    case input::Action::VIEW_AXIS_BACK: return "axis:back";
+                    case input::Action::VIEW_AXIS_RIGHT: return "axis:right";
+                    case input::Action::VIEW_AXIS_LEFT: return "axis:left";
+                    case input::Action::VIEW_TOGGLE_PERSPECTIVE: return "projection";
+                    case input::Action::VIEW_FRAME_ALL: return "frame_all";
+                    default: return "area:quad";
+                    }
+                }();
+                views_.runViewCommand(keyboardView().id, command);
+                return;
+            }
 
             case input::Action::TOGGLE_GT_COMPARISON:
                 cmd::ToggleGTComparison{}.emit();
@@ -3091,10 +3123,17 @@ namespace lfs::vis {
 
     // Helpers
     bool InputController::isInViewport(double x, double y) const {
-        return x >= viewport_bounds_.x &&
-               x < viewport_bounds_.x + viewport_bounds_.width &&
-               y >= viewport_bounds_.y &&
-               y < viewport_bounds_.y + viewport_bounds_.height;
+        return views_.viewAt(static_cast<float>(x), static_cast<float>(y)).valid();
+    }
+
+    void InputController::activateViewAt(const double x, const double y) {
+        const auto target = views_.viewAt(static_cast<float>(x), static_cast<float>(y));
+        if (!target.valid())
+            return;
+        views_.activateView(target.id);
+        updateViewportBounds(target.pos.x, target.pos.y, target.size.x, target.size.y);
+        if (tool_context_)
+            tool_context_->updateViewportBounds(target.pos.x, target.pos.y, target.size.x, target.size.y);
     }
 
     bool InputController::isPointerOverBlockingUi(const double x, const double y) const {
@@ -3145,16 +3184,13 @@ namespace lfs::vis {
         return rendering && rendering->isIndependentSplitViewActive();
     }
 
-    void InputController::toggleIndependentSplitView() {
-        if (!isIndependentSplitViewActive()) {
-            const auto* const scene_manager = services().sceneOrNull();
-            if (!scene_manager || scene_manager->isEmpty()) {
-                return;
-            }
-        }
+    ViewTarget InputController::keyboardView() {
+        const auto hovered = views_.viewAt(static_cast<float>(hover_pos_.x), static_cast<float>(hover_pos_.y));
+        return hovered.valid() ? hovered : views_.activeView();
+    }
 
-        cmd::ToggleIndependentSplitView{.viewport = &viewport()}.emit();
-        focusSplitPanel(SplitViewPanelId::Left);
+    void InputController::toggleSplitViewport() {
+        views_.runViewCommand(keyboardView().id, "area:side");
     }
 
     SplitViewPanelId InputController::splitPanelForScreenX(const double x) const {
@@ -3173,26 +3209,25 @@ namespace lfs::vis {
 
     std::optional<InputController::PanelInteractionState> InputController::resolvePanelInteraction(
         const double x, const double y) {
-        if (!isInViewport(x, y)) {
+        const auto view = views_.viewAt(static_cast<float>(x), static_cast<float>(y));
+        if (!view.valid()) {
             return std::nullopt;
         }
 
         auto* const rendering = services().renderingOrNull();
         PanelInteractionState state;
-        state.viewport = &viewport();
+        state.viewport = view.viewport;
         if (!rendering) {
             state.panel = SplitViewPanelId::Left;
-            state.local_x = static_cast<float>(x) - viewport_bounds_.x;
-            state.local_y = static_cast<float>(y) - viewport_bounds_.y;
-            state.width = viewport_bounds_.width;
-            state.height = viewport_bounds_.height;
+            state.local_x = static_cast<float>(x) - view.pos.x;
+            state.local_y = static_cast<float>(y) - view.pos.y;
+            state.width = view.size.x;
+            state.height = view.size.y;
             return state.valid() ? std::optional<PanelInteractionState>(state) : std::nullopt;
         }
 
         const auto panel = rendering->resolveViewerPanel(
-            viewport(),
-            {viewport_bounds_.x, viewport_bounds_.y},
-            {viewport_bounds_.width, viewport_bounds_.height},
+            *view.viewport, view.pos, view.size,
             glm::vec2(static_cast<float>(x), static_cast<float>(y)));
         if (!panel) {
             return std::nullopt;
@@ -3472,7 +3507,12 @@ namespace lfs::vis {
         return true;
     }
 
+    // Keys act on the 3D view under the pointer, like Blender; away from every
+    // view they act on the active one.
     Viewport& InputController::activeKeyboardViewport() {
+        const auto hovered = views_.viewAt(static_cast<float>(hover_pos_.x), static_cast<float>(hover_pos_.y));
+        if (hovered.valid())
+            return *hovered.viewport;
         if (auto* const rendering = services().renderingOrNull()) {
             return rendering->resolveFocusedViewport(viewport());
         }
@@ -3480,6 +3520,9 @@ namespace lfs::vis {
     }
 
     const Viewport& InputController::activeKeyboardViewport() const {
+        const auto hovered = views_.viewAt(static_cast<float>(hover_pos_.x), static_cast<float>(hover_pos_.y));
+        if (hovered.valid())
+            return *hovered.viewport;
         if (auto* const rendering = services().renderingOrNull()) {
             return rendering->resolveFocusedViewport(viewport());
         }

@@ -61,8 +61,8 @@
                 <div class="menu-window-separator"></div>
                 <div id="menu-window-split-view"
                      class="icon-btn menu-window-btn menu-window-utility-btn"
-                     data-action="toggle_independent_split_view"
-                     title="@tr:ui.independent_split_view">
+                     data-action="toggle_split_viewport"
+                     title="@tr:ui.split_viewport">
                     <img src="../icon/layout-columns.png" />
                 </div>
                 <div id="menu-window-toggle-ui"

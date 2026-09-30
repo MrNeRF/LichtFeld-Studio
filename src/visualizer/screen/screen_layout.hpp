@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <compare>
 #include <cstdint>
 #include <nlohmann/json_fwd.hpp>
@@ -143,6 +144,11 @@ namespace lfs::vis::screen {
         // The area sharing `area`'s full edge on `side`, if any. This is the
         // area a Blender-style corner drag across that edge would join.
         [[nodiscard]] AreaId joinableNeighbour(AreaId area, Side side) const;
+
+        // The four areas of a 2x2 block containing `area`: a split of two
+        // splits of the other axis, each holding two areas. Order: first
+        // split's children, then the second's.
+        [[nodiscard]] std::optional<std::array<AreaId, 4>> quadAround(AreaId area) const;
 
         // Exchanges the positions of two areas.
         bool swap(AreaId a, AreaId b);

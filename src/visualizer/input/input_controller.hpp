@@ -87,6 +87,8 @@ namespace lfs::vis {
         // Frames the selection (or the whole scene when nothing is selected, or
         // when `selection` is false) in one 3D view.
         bool frameView(ViewId view, bool selection);
+        // Makes the 3D view under a window point the active one.
+        void activateViewAt(double x, double y);
 
         void setFocusedSplitPanel(const SplitViewPanelId panel) {
             focusSplitPanel(panel);
@@ -95,7 +97,10 @@ namespace lfs::vis {
         void releaseDepthWindowCursor();
         bool applyDepthWindowHoverCursor(double x, double y, bool modifiers_held);
 
-        void toggleIndependentSplitView();
+        // A second 3D view beside the one under the pointer, or back to one.
+        void toggleSplitViewport();
+        // The 3D view keys act on: the one under the pointer, else the active one.
+        [[nodiscard]] ViewTarget keyboardView();
 
         // Set special input modes
         void setPointCloudMode(bool enabled) {
@@ -308,6 +313,8 @@ namespace lfs::vis {
         int trackpad_touches_ = 0;
         int drag_button_ = -1;
         glm::dvec2 last_mouse_pos_{0, 0};
+        // Latest pointer position, drag or not; keys target the view under it.
+        glm::dvec2 hover_pos_{-1.0, -1.0};
         float splitter_start_pos_ = 0.5f;
         double splitter_start_x_ = 0.0;
         Viewport* drag_viewport_ = nullptr;

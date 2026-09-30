@@ -1159,9 +1159,9 @@ namespace lfs::vis::gui {
                 ic->setCameraViewSnapEnabled(!ic->cameraViewSnapEnabled());
             if (const auto* ic = lfs::vis::InputController::instance())
                 lfs::vis::saveCameraViewSnapPreference(ic->cameraViewSnapEnabled());
-        } else if (action == "toggle_independent_split_view") {
+        } else if (action == "toggle_split_viewport") {
             if (auto* ic = lfs::vis::InputController::instance())
-                ic->toggleIndependentSplitView();
+                ic->toggleSplitViewport();
         } else if (action == "portal_connection") {
             python::invoke_operator("lfs_plugins.help_menu.PortalConnectionOperator");
         } else if (action == "gallery_transfers") {

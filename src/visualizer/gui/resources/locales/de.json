@@ -1615,7 +1615,7 @@
     "action.zoom_speed_up": "Zoom-Geschwindigkeit erhöhen",
     "action.zoom_speed_down": "Zoom-Geschwindigkeit verringern",
     "action.toggle_split_view": "Geteilte Ansicht umschalten",
-    "action.toggle_independent_split_view": "Unabhängige geteilte Ansicht umschalten",
+    "action.toggle_split_viewport": "Geteilte Ansicht umschalten",
     "action.toggle_gt_comparison": "GT-Vergleich umschalten",
     "action.toggle_camera_frustums": "Kamera-Frustums umschalten",
     "action.toggle_grid": "Gitter umschalten",
@@ -1687,7 +1687,16 @@
     "trigger.drag": " Ziehen",
     "trigger.scroll": "Scrollen",
     "trigger.unknown": "Unbekannt",
-    "action.toggle_performance_hud": "Toggle Performance HUD"
+    "action.toggle_performance_hud": "Toggle Performance HUD",
+    "action.view_axis_top": "Ansicht von oben",
+    "action.view_axis_bottom": "Ansicht von unten",
+    "action.view_axis_front": "Ansicht von vorne",
+    "action.view_axis_back": "Ansicht von hinten",
+    "action.view_axis_right": "Ansicht von rechts",
+    "action.view_axis_left": "Ansicht von links",
+    "action.view_toggle_perspective": "Perspektivisch/Orthografisch umschalten",
+    "action.view_frame_all": "Alles einpassen",
+    "action.toggle_quad_view": "Vier Ansichten umschalten"
   },
   "debug_info": {
     "clear_history": "Verlauf löschen",
@@ -3136,5 +3145,6 @@
   "view3d.grid_plane_xy": "Rasterebene XY",
   "view3d.coordinate_axes": "Koordinatenachsen",
   "view3d.pivot_point": "Drehpunkt",
-  "view3d.camera_frustums": "Kamerafrusta"
+  "view3d.camera_frustums": "Kamerafrusta",
+  "ui.split_viewport": "Ansicht teilen"
 }

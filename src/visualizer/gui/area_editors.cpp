@@ -11,7 +11,6 @@
 #include "screen/view3d_space.hpp"
 
 #include <algorithm>
-#include <cstdlib>
 
 namespace lfs::vis::gui {
 
@@ -63,23 +62,6 @@ namespace lfs::vis::gui {
             if (s.show_center_markers)
                 return "centers";
             return "splats";
-        }
-
-        std::optional<screen::ViewAxis> axisFromName(const std::string_view name) {
-            using screen::ViewAxis;
-            if (name == "top")
-                return ViewAxis::Top;
-            if (name == "bottom")
-                return ViewAxis::Bottom;
-            if (name == "front")
-                return ViewAxis::Front;
-            if (name == "back")
-                return ViewAxis::Back;
-            if (name == "right")
-                return ViewAxis::Right;
-            if (name == "left")
-                return ViewAxis::Left;
-            return std::nullopt;
         }
 
     } // namespace
@@ -196,38 +178,12 @@ namespace lfs::vis::gui {
         auto* view = screen.view(area.id);
         if (!view)
             return;
-        auto& s = view->settings;
-        bool changed = true;
-        if (action.starts_with("display:")) {
-            const auto mode = action.substr(8);
-            s.point_cloud_mode = mode == "points";
-            s.show_rings = mode == "rings";
-            s.show_center_markers = mode == "centers";
-        } else if (action == "depth") {
-            s.depth_view = !s.depth_view;
-        } else if (action == "projection") {
-            screen::setOrthographic(*view, !s.orthographic, area.content.h);
-        } else if (action.starts_with("axis:")) {
-            if (const auto axis = axisFromName(action.substr(5)))
-                screen::setAxisView(*view, *axis, area.content.h);
-        } else if (action == "overlay:grid") {
-            s.show_grid = !s.show_grid;
-        } else if (action.starts_with("overlay:grid_plane:")) {
-            s.grid_plane = std::clamp(std::atoi(std::string(action.substr(19)).c_str()), 0, 2);
-            s.show_grid = true;
-        } else if (action == "overlay:axes") {
-            s.show_coord_axes = !s.show_coord_axes;
-        } else if (action == "overlay:pivot") {
-            s.show_pivot = !s.show_pivot;
-        } else if (action == "overlay:frustums") {
-            s.show_camera_frustums = !s.show_camera_frustums;
-        } else {
-            changed = false;
-            if (command_)
-                command_(area.id, action);
+        if (screen::applyViewCommand(*view, action, area.content.h)) {
+            if (changed_)
+                changed_(area.id);
+        } else if (command_) {
+            command_(area.id, action);
         }
-        if (changed && changed_)
-            changed_(area.id);
     }
 
     // ---- Properties ------------------------------------------------------

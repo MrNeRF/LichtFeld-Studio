@@ -275,6 +275,54 @@ namespace lfs::vis::screen {
         view.settings.orthographic = false;
     }
 
+    bool applyViewCommand(View3DSpace& view, const std::string_view command, const float viewport_height) {
+        auto& s = view.settings;
+        if (command.starts_with("display:")) {
+            const auto mode = command.substr(8);
+            if (mode != "splats" && mode != "points" && mode != "rings" && mode != "centers")
+                return false;
+            s.point_cloud_mode = mode == "points";
+            s.show_rings = mode == "rings";
+            s.show_center_markers = mode == "centers";
+        } else if (command == "depth") {
+            s.depth_view = !s.depth_view;
+        } else if (command == "projection") {
+            setOrthographic(view, !s.orthographic, viewport_height);
+        } else if (command.starts_with("axis:")) {
+            static constexpr std::pair<std::string_view, ViewAxis> kAxes[] = {
+                {"top", ViewAxis::Top},
+                {"bottom", ViewAxis::Bottom},
+                {"front", ViewAxis::Front},
+                {"back", ViewAxis::Back},
+                {"right", ViewAxis::Right},
+                {"left", ViewAxis::Left},
+            };
+            const auto name = command.substr(5);
+            const auto it = std::find_if(std::begin(kAxes), std::end(kAxes),
+                                         [name](const auto& entry) { return entry.first == name; });
+            if (it == std::end(kAxes))
+                return false;
+            setAxisView(view, it->second, viewport_height);
+        } else if (command == "overlay:grid") {
+            s.show_grid = !s.show_grid;
+        } else if (command.starts_with("overlay:grid_plane:")) {
+            const auto plane = command.substr(19);
+            if (plane.size() != 1 || plane[0] < '0' || plane[0] > '2')
+                return false;
+            s.grid_plane = plane[0] - '0';
+            s.show_grid = true;
+        } else if (command == "overlay:axes") {
+            s.show_coord_axes = !s.show_coord_axes;
+        } else if (command == "overlay:pivot") {
+            s.show_pivot = !s.show_pivot;
+        } else if (command == "overlay:frustums") {
+            s.show_camera_frustums = !s.show_camera_frustums;
+        } else {
+            return false;
+        }
+        return true;
+    }
+
     Json viewSettingsToJson(const ViewSettings& s) {
         return {
             {"focal_length_mm", s.focal_length_mm},

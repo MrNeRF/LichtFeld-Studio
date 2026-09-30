@@ -1615,7 +1615,7 @@
     "action.zoom_speed_up": "提高缩放速度",
     "action.zoom_speed_down": "降低缩放速度",
     "action.toggle_split_view": "切换分屏视图",
-    "action.toggle_independent_split_view": "切换独立分屏视图",
+    "action.toggle_split_viewport": "切换拆分视口",
     "action.toggle_gt_comparison": "切换 GT 对比",
     "action.toggle_camera_frustums": "切换相机视锥体",
     "action.toggle_grid": "切换网格",
@@ -1687,7 +1687,16 @@
     "trigger.drag": " 拖动",
     "trigger.scroll": "滚动",
     "trigger.unknown": "未知",
-    "action.toggle_performance_hud": "Toggle Performance HUD"
+    "action.toggle_performance_hud": "Toggle Performance HUD",
+    "action.view_axis_top": "顶视图",
+    "action.view_axis_bottom": "底视图",
+    "action.view_axis_front": "前视图",
+    "action.view_axis_back": "后视图",
+    "action.view_axis_right": "右视图",
+    "action.view_axis_left": "左视图",
+    "action.view_toggle_perspective": "切换透视/正交",
+    "action.view_frame_all": "框选全部",
+    "action.toggle_quad_view": "切换四视图"
   },
   "debug_info": {
     "clear_history": "清除历史",
@@ -3136,5 +3145,6 @@
   "view3d.grid_plane_xy": "网格平面 XY",
   "view3d.coordinate_axes": "坐标轴",
   "view3d.pivot_point": "轴心点",
-  "view3d.camera_frustums": "相机视锥"
+  "view3d.camera_frustums": "相机视锥",
+  "ui.split_viewport": "拆分视口"
 }

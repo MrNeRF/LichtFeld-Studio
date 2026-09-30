@@ -9,6 +9,7 @@
 #include "screen/editor_type.hpp"
 
 #include <string>
+#include <string_view>
 
 namespace lfs::vis::screen {
 
@@ -52,6 +53,13 @@ namespace lfs::vis::screen {
     void setAxisView(View3DSpace& view, ViewAxis axis, float viewport_height);
     // Leaves an axis view: back to perspective if the axis view chose ortho.
     void leaveAxisView(View3DSpace& view);
+
+    // Applies a view command that only touches the view itself:
+    //   display:splats|points|rings|centers, depth, projection,
+    //   axis:top|bottom|front|back|right|left, overlay:grid|axes|pivot|frustums,
+    //   overlay:grid_plane:<0..2>.
+    // Returns false for commands it does not know.
+    bool applyViewCommand(View3DSpace& view, std::string_view command, float viewport_height);
 
     [[nodiscard]] nlohmann::json viewSettingsToJson(const ViewSettings& settings);
     // Fields missing from `json` keep their value from `base`; present fields

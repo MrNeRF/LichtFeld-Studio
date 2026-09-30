@@ -1615,7 +1615,7 @@
     "action.zoom_speed_up": "Zwiększ prędkość zoomu",
     "action.zoom_speed_down": "Zmniejsz prędkość zoomu",
     "action.toggle_split_view": "Przełącz widok podzielony",
-    "action.toggle_independent_split_view": "Przełącz niezależny widok podzielony",
+    "action.toggle_split_viewport": "Przełącz podzielony widok",
     "action.toggle_gt_comparison": "Przełącz porównanie GT",
     "action.toggle_camera_frustums": "Przełącz ostrosłupy kamery",
     "action.toggle_grid": "Przełącz siatkę",
@@ -1687,7 +1687,16 @@
     "trigger.drag": " Przeciągnięcie",
     "trigger.scroll": "Przewijanie",
     "trigger.unknown": "Nieznane",
-    "action.toggle_performance_hud": "Toggle Performance HUD"
+    "action.toggle_performance_hud": "Toggle Performance HUD",
+    "action.view_axis_top": "Widok z góry",
+    "action.view_axis_bottom": "Widok z dołu",
+    "action.view_axis_front": "Widok z przodu",
+    "action.view_axis_back": "Widok z tyłu",
+    "action.view_axis_right": "Widok z prawej",
+    "action.view_axis_left": "Widok z lewej",
+    "action.view_toggle_perspective": "Przełącz perspektywę/rzut ortogonalny",
+    "action.view_frame_all": "Wykadruj wszystko",
+    "action.toggle_quad_view": "Przełącz cztery widoki"
   },
   "debug_info": {
     "clear_history": "Wyczyść Historię",
@@ -3136,5 +3145,6 @@
   "view3d.grid_plane_xy": "Płaszczyzna siatki XY",
   "view3d.coordinate_axes": "Osie współrzędnych",
   "view3d.pivot_point": "Punkt obrotu",
-  "view3d.camera_frustums": "Ostrosłupy kamer"
+  "view3d.camera_frustums": "Ostrosłupy kamer",
+  "ui.split_viewport": "Podziel widok"
 }

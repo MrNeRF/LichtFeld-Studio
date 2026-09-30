@@ -1615,7 +1615,7 @@
     "action.zoom_speed_up": "Augmenter la vitesse de zoom",
     "action.zoom_speed_down": "Réduire la vitesse de zoom",
     "action.toggle_split_view": "Basculer la vue divisée",
-    "action.toggle_independent_split_view": "Basculer la vue divisée indépendante",
+    "action.toggle_split_viewport": "Basculer la vue scindée",
     "action.toggle_gt_comparison": "Basculer la comparaison GT",
     "action.toggle_camera_frustums": "Afficher/masquer les frustums de caméra",
     "action.toggle_grid": "Afficher/masquer la grille",
@@ -1687,7 +1687,16 @@
     "trigger.drag": " Glisser",
     "trigger.scroll": "Défilement",
     "trigger.unknown": "Inconnu",
-    "action.toggle_performance_hud": "Toggle Performance HUD"
+    "action.toggle_performance_hud": "Toggle Performance HUD",
+    "action.view_axis_top": "Vue de dessus",
+    "action.view_axis_bottom": "Vue de dessous",
+    "action.view_axis_front": "Vue de face",
+    "action.view_axis_back": "Vue arrière",
+    "action.view_axis_right": "Vue de droite",
+    "action.view_axis_left": "Vue de gauche",
+    "action.view_toggle_perspective": "Basculer perspective/orthographique",
+    "action.view_frame_all": "Tout cadrer",
+    "action.toggle_quad_view": "Basculer les quatre vues"
   },
   "debug_info": {
     "clear_history": "Effacer l'Historique",
@@ -3136,5 +3145,6 @@
   "view3d.grid_plane_xy": "Plan de grille XY",
   "view3d.coordinate_axes": "Axes de coordonnées",
   "view3d.pivot_point": "Point de pivot",
-  "view3d.camera_frustums": "Frustums des caméras"
+  "view3d.camera_frustums": "Frustums des caméras",
+  "ui.split_viewport": "Scinder la vue"
 }

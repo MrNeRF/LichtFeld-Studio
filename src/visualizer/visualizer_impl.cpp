@@ -938,41 +938,34 @@ namespace lfs::vis {
     }
 
     bool VisualizerImpl::runViewCommand(const ViewId id, const std::string_view command) {
-        if (!screen_service_.view3D(id))
+        auto* view = screen_service_.view3D(id);
+        if (!view)
             return false;
+        float height = static_cast<float>(view->camera.windowSize.y);
+        if (gui_manager_) {
+            if (const auto rect = gui_manager_->screenHost().viewContent(screen::AreaId{id}))
+                height = rect->h;
+        }
+        const auto changed = [this] {
+            if (rendering_manager_)
+                rendering_manager_->markDirty(DirtyFlag::ALL);
+            return true;
+        };
+        if (screen::applyViewCommand(*view, command, height))
+            return changed();
         if (command == "frame_all" || command == "frame_selected") {
             activateView(id);
             return input_controller_ && input_controller_->frameView(id, command == "frame_selected");
         }
         if (command == "area:quad") {
-            // Blender's four views: Top and Front on the left, the original
-            // perspective above Right on the right.
-            float height = 0.0f;
-            if (gui_manager_) {
-                if (const auto rect = gui_manager_->screenHost().viewContent(screen::AreaId{id}))
-                    height = rect->h * 0.5f;
-            }
-            const screen::AreaId original{id};
-            return screen_service_.edit([&](screen::Screen& screen) {
-                const auto left = screen.split(original, screen::SplitAxis::Columns, 0.5f, true);
-                if (!left.valid())
-                    return false;
-                const auto bottom_right = screen.split(original, screen::SplitAxis::Rows, 0.5f);
-                const auto bottom_left = screen.split(left, screen::SplitAxis::Rows, 0.5f);
-                const auto setup = [&](const screen::AreaId area, const screen::ViewAxis axis) {
-                    if (auto* view = screen.view(area)) {
-                        view->settings.orthographic = false;
-                        screen::setAxisView(*view, axis, height);
-                    }
-                };
-                setup(left, screen::ViewAxis::Top);
-                setup(bottom_left, screen::ViewAxis::Front);
-                setup(bottom_right, screen::ViewAxis::Right);
-                screen.setActiveView(original);
-                if (rendering_manager_)
-                    rendering_manager_->markDirty(DirtyFlag::ALL);
-                return true;
-            });
+            const bool toggled = screen_service_.edit(
+                [&](screen::Screen& screen) { return screen.toggleQuadView(screen::AreaId{id}, height * 0.5f); });
+            return toggled && changed();
+        }
+        if (command == "area:side") {
+            const bool toggled =
+                screen_service_.edit([&](screen::Screen& screen) { return screen.toggleSideView(screen::AreaId{id}); });
+            return toggled && changed();
         }
         return false;
     }

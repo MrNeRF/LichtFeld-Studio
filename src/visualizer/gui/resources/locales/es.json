@@ -1615,7 +1615,7 @@
     "action.zoom_speed_up": "Aumentar velocidad de zoom",
     "action.zoom_speed_down": "Reducir velocidad de zoom",
     "action.toggle_split_view": "Alternar vista dividida",
-    "action.toggle_independent_split_view": "Alternar vista dividida independiente",
+    "action.toggle_split_viewport": "Alternar vista dividida",
     "action.toggle_gt_comparison": "Alternar comparación GT",
     "action.toggle_camera_frustums": "Alternar frustos de cámara",
     "action.toggle_grid": "Alternar cuadrícula",
@@ -1687,7 +1687,16 @@
     "trigger.drag": " Arrastrar",
     "trigger.scroll": "Rueda",
     "trigger.unknown": "Desconocido",
-    "action.toggle_performance_hud": "Toggle Performance HUD"
+    "action.toggle_performance_hud": "Toggle Performance HUD",
+    "action.view_axis_top": "Vista superior",
+    "action.view_axis_bottom": "Vista inferior",
+    "action.view_axis_front": "Vista frontal",
+    "action.view_axis_back": "Vista posterior",
+    "action.view_axis_right": "Vista derecha",
+    "action.view_axis_left": "Vista izquierda",
+    "action.view_toggle_perspective": "Alternar perspectiva/ortográfica",
+    "action.view_frame_all": "Encuadrar todo",
+    "action.toggle_quad_view": "Alternar cuatro vistas"
   },
   "debug_info": {
     "clear_history": "Borrar el Historial",
@@ -3136,5 +3145,6 @@
   "view3d.grid_plane_xy": "Plano de cuadrícula XY",
   "view3d.coordinate_axes": "Ejes de coordenadas",
   "view3d.pivot_point": "Punto de pivote",
-  "view3d.camera_frustums": "Frustos de cámara"
+  "view3d.camera_frustums": "Frustos de cámara",
+  "ui.split_viewport": "Dividir vista"
 }

@@ -1615,7 +1615,7 @@
     "action.zoom_speed_up": "확대/축소 속도 증가",
     "action.zoom_speed_down": "확대/축소 속도 감소",
     "action.toggle_split_view": "분할 보기 전환",
-    "action.toggle_independent_split_view": "독립 분할 보기 전환",
+    "action.toggle_split_viewport": "분할 뷰 전환",
     "action.toggle_gt_comparison": "GT 비교 전환",
     "action.toggle_camera_frustums": "카메라 절두체 전환",
     "action.toggle_grid": "그리드 전환",
@@ -1687,7 +1687,16 @@
     "trigger.drag": " 드래그",
     "trigger.scroll": "스크롤",
     "trigger.unknown": "알 수 없음",
-    "action.toggle_performance_hud": "Toggle Performance HUD"
+    "action.toggle_performance_hud": "Toggle Performance HUD",
+    "action.view_axis_top": "위쪽 보기",
+    "action.view_axis_bottom": "아래쪽 보기",
+    "action.view_axis_front": "앞쪽 보기",
+    "action.view_axis_back": "뒤쪽 보기",
+    "action.view_axis_right": "오른쪽 보기",
+    "action.view_axis_left": "왼쪽 보기",
+    "action.view_toggle_perspective": "원근/직교 전환",
+    "action.view_frame_all": "전체 맞추기",
+    "action.toggle_quad_view": "4분할 뷰 전환"
   },
   "debug_info": {
     "clear_history": "기록 지우기",
@@ -3136,5 +3145,6 @@
   "view3d.grid_plane_xy": "그리드 평면 XY",
   "view3d.coordinate_axes": "좌표축",
   "view3d.pivot_point": "피벗 포인트",
-  "view3d.camera_frustums": "카메라 절두체"
+  "view3d.camera_frustums": "카메라 절두체",
+  "ui.split_viewport": "뷰 분할"
 }

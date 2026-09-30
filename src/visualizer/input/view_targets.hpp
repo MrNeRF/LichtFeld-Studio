@@ -8,6 +8,7 @@
 #include "rendering/view_source.hpp"
 
 #include <glm/glm.hpp>
+#include <string_view>
 
 namespace lfs::vis {
 
@@ -37,6 +38,9 @@ namespace lfs::vis {
         [[nodiscard]] virtual ViewTarget findView(ViewId id) = 0;
         // Makes a view the active one (a press in it does this).
         virtual void activateView(ViewId id) = 0;
+        // Runs a view command (see screen::applyViewCommand, plus frame_all,
+        // frame_selected, area:quad and area:side) on one view.
+        virtual bool runViewCommand(ViewId id, std::string_view command) = 0;
     };
 
 } // namespace lfs::vis

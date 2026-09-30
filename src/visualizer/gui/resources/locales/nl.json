@@ -1615,7 +1615,7 @@
     "action.zoom_speed_up": "Zoomsnelheid verhogen",
     "action.zoom_speed_down": "Zoomsnelheid verlagen",
     "action.toggle_split_view": "Gesplitste weergave omschakelen",
-    "action.toggle_independent_split_view": "Onafhankelijke gesplitste weergave omschakelen",
+    "action.toggle_split_viewport": "Gesplitste weergave wisselen",
     "action.toggle_gt_comparison": "GT-vergelijking omschakelen",
     "action.toggle_camera_frustums": "Camerafrustums in-/uitschakelen",
     "action.toggle_grid": "Raster in-/uitschakelen",
@@ -1687,7 +1687,16 @@
     "trigger.drag": " Slepen",
     "trigger.scroll": "Scrollen",
     "trigger.unknown": "Onbekend",
-    "action.toggle_performance_hud": "Toggle Performance HUD"
+    "action.toggle_performance_hud": "Toggle Performance HUD",
+    "action.view_axis_top": "Bovenaanzicht",
+    "action.view_axis_bottom": "Onderaanzicht",
+    "action.view_axis_front": "Vooraanzicht",
+    "action.view_axis_back": "Achteraanzicht",
+    "action.view_axis_right": "Rechteraanzicht",
+    "action.view_axis_left": "Linkeraanzicht",
+    "action.view_toggle_perspective": "Perspectief/orthografisch wisselen",
+    "action.view_frame_all": "Alles inkaderen",
+    "action.toggle_quad_view": "Vier weergaven wisselen"
   },
   "debug_info": {
     "clear_history": "Geschiedenis Wissen",
@@ -3136,5 +3145,6 @@
   "view3d.grid_plane_xy": "Rastervlak XY",
   "view3d.coordinate_axes": "Coördinaatassen",
   "view3d.pivot_point": "Draaipunt",
-  "view3d.camera_frustums": "Camerafrustums"
+  "view3d.camera_frustums": "Camerafrustums",
+  "ui.split_viewport": "Weergave splitsen"
 }
