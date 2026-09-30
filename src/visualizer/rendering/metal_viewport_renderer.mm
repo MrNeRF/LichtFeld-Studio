@@ -127,6 +127,7 @@ namespace lfs::vis {
             uint64_t request_key = 0;
             std::unique_ptr<RasterFrame> raster;
             id<MTLBuffer> projected, gut_geometry, objects, overlay_parameters, overlay_flags, overlay_nodes, selection_colors;
+            std::array<id<MTLBuffer>, 4> lod_buffers;
             id<MTLCommandBuffer> command;
             id<MTLTexture> point_depth;
             bool points = false;
@@ -477,7 +478,9 @@ namespace lfs::vis {
         return resident_mask(r.overlay.emphasis.mask.get()) && resident_mask(r.overlay.emphasis.transient_mask.mask) &&
                core::gpu_backend_of(model.means_raw()) == core::GpuBackend::Metal &&
                (!r.equirectangular || r.gut) && (r.splat_render_profile == 0 || r.splat_render_profile == 1) &&
-               !r.lod_indices && !r.lod_gpu_traversal.enabled && !r.lod_debug_mode &&
+               !r.lod_gpu_traversal.enabled &&
+               (!model.lod_tree || (!model.lod_tree->rad_source.valid() && !model.lod_tree->lod_opacity_encoded)) &&
+               (!r.lod_indices || r.lod_count <= std::numeric_limits<uint32_t>::max()) &&
                model.means_raw().dtype() == core::DataType::Float32 && model.sh0_raw().dtype() == core::DataType::Float32 &&
                ((model.scaling_raw().dtype() == core::DataType::Float32 && model.rotation_raw().dtype() == core::DataType::Float32 &&
                  model.opacity_raw().dtype() == core::DataType::Float32) ||
@@ -510,9 +513,36 @@ namespace lfs::vis {
             }
             if (i.frames[static_cast<size_t>(slot)][i.next[static_cast<size_t>(slot)] % 3].get() == previous)
                 previous = nullptr;
-            auto& f = i.acquire(slot, request, static_cast<uint32_t>(model.size()));
-            if (request.gut && (!f.gut_geometry || f.gut_geometry.length < size_t(model.size()) * sizeof(GutSplat))) {
-                const size_t bytes = std::max<size_t>(16, size_t(model.size()) * sizeof(GutSplat));
+            const uint32_t draw_count = uint32_t(request.lod_indices ? request.lod_count : model.size());
+            auto& f = i.acquire(slot, request, draw_count);
+            LodSelection lod{};
+            if (request.lod_indices) {
+                lod.enabled = true;
+                lod.debug = request.lod_debug_mode;
+                lod.count = draw_count;
+                lod.source_count = uint32_t(model.size());
+                const std::array<const void*, 4> sources = {request.lod_indices, request.lod_logical_indices, request.lod_levels, request.lod_weights};
+                std::array<BufferSlice*, 4> destinations = {&lod.indices, &lod.logical_indices, &lod.levels, &lod.weights};
+                for (size_t n = 0; n < sources.size(); ++n) {
+                    if (!sources[n])
+                        continue;
+                    const size_t bytes = std::max<size_t>(16, size_t(draw_count) * 4);
+                    auto& buffer = f.lod_buffers[n];
+                    if (!buffer || buffer.length < bytes) {
+                        const auto device = i.reader.device();
+                        if (!frameFitsWorkingSet(device.currentAllocatedSize, bytes, device.recommendedMaxWorkingSetSize))
+                            throw lfs::Exception(nativeError("Metal LOD selection exceeds the recommended GPU working set", lfs::ErrorCode::ResourceExhausted));
+                        buffer = [device newBufferWithLength:bytes options:MTLResourceStorageModeShared];
+                    }
+                    if (!buffer)
+                        throw lfs::Exception(nativeError("Metal LOD selection allocation failed", lfs::ErrorCode::ResourceExhausted));
+                    if (draw_count)
+                        std::memcpy(buffer.contents, sources[n], size_t(draw_count) * 4);
+                    *destinations[n] = {buffer, 0};
+                }
+            }
+            if (request.gut && (!f.gut_geometry || f.gut_geometry.length < size_t(draw_count) * sizeof(GutSplat))) {
+                const size_t bytes = std::max<size_t>(16, size_t(draw_count) * sizeof(GutSplat));
                 const auto device = i.reader.device();
                 if (!frameFitsWorkingSet(device.currentAllocatedSize, bytes, device.recommendedMaxWorkingSetSize))
                     throw lfs::Exception(nativeError("Metal 3DGUT reservation exceeds the recommended GPU working set", lfs::ErrorCode::ResourceExhausted));
@@ -595,7 +625,7 @@ namespace lfs::vis {
                 };
                 allocate(f.overlay_parameters, params->size() * sizeof(float), MTLResourceStorageModeShared);
                 std::memcpy(f.overlay_parameters.contents, params->data(), params->size() * sizeof(float));
-                allocate(f.overlay_flags, size_t(model.size()) * 4, MTLResourceStorageModePrivate);
+                allocate(f.overlay_flags, size_t(draw_count) * 4, MTLResourceStorageModePrivate);
                 allocate(f.overlay_nodes, node_count, MTLResourceStorageModeShared);
                 auto nodes = static_cast<uint8_t*>(f.overlay_nodes.contents);
                 for (size_t n = 0; n < node_count; ++n)
@@ -639,6 +669,30 @@ namespace lfs::vis {
             const auto mask_version = model.deleted_mask_version();
             hash(&mask_version, sizeof(mask_version));
             hash(&request.gut, sizeof(request.gut));
+            hash(&lod.enabled, sizeof(lod.enabled));
+            hash(&lod.debug, sizeof(lod.debug));
+            hash(&draw_count, sizeof(draw_count));
+            if (lod.enabled)
+                for (const auto slice : {lod.indices, lod.logical_indices, lod.levels, lod.weights}) {
+                    const bool present = slice.buffer != nil;
+                    hash(&present, sizeof(present));
+                    if (present) {
+                        if (slice.buffer == lod.indices.buffer && request.lod_selection_hash) {
+                            hash(&request.lod_selection_hash, sizeof(request.lod_selection_hash));
+                        } else {
+                            // Cut arrays contain 32-bit elements: mix a whole
+                            // word rather than a serial multiply per byte. CPU
+                            // callers without a stable selection hash remain safe.
+                            const auto data = static_cast<const char*>(slice.buffer.contents) + slice.offset;
+                            for (uint32_t n = 0; n < draw_count; ++n) {
+                                uint32_t word;
+                                std::memcpy(&word, data + size_t(n) * 4, 4);
+                                key ^= word;
+                                key *= 1099511628211ull;
+                            }
+                        }
+                    }
+                }
             if (scene.count)
                 hash(f.objects.contents, scene.count * sizeof(SceneObject));
             if (needs_overlay) {
@@ -665,9 +719,9 @@ namespace lfs::vis {
                 scene.object_indices = slice(8);
                 overlay.selection = selection_enabled ? slice(9) : BufferSlice{};
                 overlay.preview = preview_enabled ? slice(10) : BufferSlice{};
-                i.preprocessor.encode(command, inputs, projection, degree, request.gut ? PrimitiveMode::Gut : PrimitiveMode::Gaussian, {f.projected, 0}, scene, overlay, request.gut ? BufferSlice{f.gut_geometry, 0} : BufferSlice{});
-                i.rasterizer.encode(command, {f.projected, 0}, uint32_t(model.size()), request.gut ? RasterMode::Gut : RasterMode::Gaussian,
-                                    {background.x, background.y, background.z, request.transparent_background ? 0.f : 1.f}, *f.raster, overlay, request.gut ? BufferSlice{f.gut_geometry, 0} : BufferSlice{}, projection);
+                i.preprocessor.encode(command, inputs, projection, degree, request.gut ? PrimitiveMode::Gut : PrimitiveMode::Gaussian, {f.projected, 0}, scene, overlay, request.gut ? BufferSlice{f.gut_geometry, 0} : BufferSlice{}, lod);
+                i.rasterizer.encode(command, {f.projected, 0}, draw_count, request.gut ? RasterMode::Gut : RasterMode::Gaussian,
+                                    {background.x, background.y, background.z, request.transparent_background ? 0.f : 1.f}, *f.raster, overlay, request.gut ? BufferSlice{f.gut_geometry, 0} : BufferSlice{}, projection, lod);
                 auto encoder = [command computeCommandEncoder];
                 [encoder setComputePipelineState:i.present];
                 [encoder setTexture:f.raster->color() atIndex:0];

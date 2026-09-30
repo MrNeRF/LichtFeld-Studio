@@ -29,7 +29,7 @@ namespace {
         int width = 1280, height = 720, warmup = 12, samples = 40;
         std::string output, images, overlay;
         bool verify_parity = false;
-        bool mip = false, ortho = false, depth = false, export_scale = false, gut = false, equirect = false, subregion = false, near = false, portal = false, portal_tone = false;
+        bool mip = false, ortho = false, depth = false, export_scale = false, gut = false, equirect = false, subregion = false, near = false, portal = false, portal_tone = false, lod = false, lod_logical = false, lod_weights = false, lod_debug = false;
     };
     Options options(int argc, char** argv) {
         Options o;
@@ -47,6 +47,13 @@ namespace {
             if (arg == "--portal" || arg == "--portal_tone") {
                 o.portal = true;
                 o.portal_tone = arg == "--portal_tone";
+                continue;
+            }
+            if (arg == "--lod" || arg == "--lod_logical" || arg == "--lod_weights" || arg == "--lod_debug") {
+                o.lod = true;
+                o.lod_logical = arg == "--lod_logical";
+                o.lod_weights = arg == "--lod_weights";
+                o.lod_debug = arg == "--lod_debug";
                 continue;
             }
             if (arg == "--equirect") {
@@ -123,7 +130,7 @@ namespace {
             throw std::runtime_error("Benchmark reservation limit exceeded");
         return o;
     }
-    core::SplatData scene(size_t count, int degree, float rest_amplitude = .1f, bool panorama = false, bool near = false) {
+    core::SplatData scene(size_t count, int degree, float rest_amplitude = .1f, bool panorama = false, bool near = false, const Options* reference_cut = nullptr) {
         std::mt19937 random(1939);
         std::uniform_real_distribution<float> unit(0.f, 1.f);
         std::vector<float> means(count * 3), sh0(count * 3), scales(count * 3), rotation(count * 4, 0), opacity(count);
@@ -164,6 +171,35 @@ namespace {
         }
         for (auto& value : rest)
             value = (unit(random) - .5f) * rest_amplitude;
+        if (reference_cut) {
+            // The legacy GUT gather reads compact slots as source IDs and has
+            // no LOD indirection bindings. Keep that production path untouched;
+            // construct the same resident cut in a full source-layout reference.
+            // Zero opacity hides unselected nodes; no attributes are repacked.
+            for (size_t source = 0; source < count; ++source) {
+                const size_t ordinal = count - 1 - source;
+                if (ordinal % 2) {
+                    opacity[source] = -100.f;
+                    continue;
+                }
+                if (reference_cut->lod_weights) {
+                    const float weight = ordinal % 6 == 0 ? 0.f : ordinal % 6 == 2 ? .3f
+                                                                                   : 1.f;
+                    const float alpha = weight / (1 + std::exp(-opacity[source]));
+                    opacity[source] = alpha > 0 ? std::log(alpha / (1 - alpha)) : -100.f;
+                }
+                if (reference_cut->lod_debug) {
+                    constexpr float palette[5][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}, {1, 1, 0}, {1, 0, 1}};
+                    for (size_t c = 0; c < 3; ++c)
+                        if (palette[(ordinal / 2) % 5][c] == 0) {
+                            sh0[source * 3 + c] = -.5f / .2820947917738781f;
+                            if (degree)
+                                for (size_t k = 0; k < 15; ++k)
+                                    rest[(source * 15 + k) * 3 + c] = 0;
+                        }
+                }
+            }
+        }
         using core::Device;
         using core::Tensor;
         auto model = core::SplatData(degree,
@@ -261,6 +297,26 @@ namespace {
             vis::MetalViewportRenderer metal;
             vis::VksplatViewportRenderer vulkan;
             rendering::ViewportRenderRequest request;
+            std::vector<uint32_t> lod_indices, lod_logical, lod_levels;
+            std::vector<float> lod_weights;
+            if (o.lod) {
+                // Reverse, sparse source cut: never a contiguous prefix. Q16
+                // reads must retain original cell swizzle and block bounds.
+                for (size_t n = 0; n < o.count; n += 2) {
+                    const uint32_t source = uint32_t(o.count - 1 - n);
+                    lod_indices.push_back(source);
+                    lod_logical.push_back(uint32_t(n));
+                    lod_levels.push_back(uint32_t(n / 2) % 5u);
+                    lod_weights.push_back(n % 6 == 0 ? 0.f : n % 6 == 2 ? .3f
+                                                                        : 1.f);
+                }
+                request.lod_indices = lod_indices.data();
+                request.lod_count = lod_indices.size();
+                request.lod_logical_indices = o.lod_logical ? lod_logical.data() : nullptr;
+                request.lod_levels = lod_levels.data();
+                request.lod_debug_mode = o.lod_debug;
+                request.lod_weights = o.lod_weights ? lod_weights.data() : nullptr;
+            }
             request.frame_view.size = {o.width, o.height};
             if (o.near)
                 request.frame_view.far_plane = .06f;
@@ -337,13 +393,27 @@ namespace {
             // legacy Vulkan panorama subregion wraps its local tile grid;
             // comparing that output would bless a clipped reference seam.
             auto reference_request = request;
+            std::unique_ptr<core::SplatData> reference_cut;
+            if (o.gut && o.lod) {
+                reference_cut = std::make_unique<core::SplatData>(scene(o.count, degree, o.overlay == "affine" ? 1.f : .1f, o.equirect, o.near, &o));
+                reference_request.lod_indices = reference_request.lod_logical_indices = reference_request.lod_levels = nullptr;
+                reference_request.lod_weights = nullptr;
+                reference_request.lod_count = 0;
+                reference_request.lod_debug_mode = false;
+                if (o.overlay == "selection") {
+                    std::vector<float> mask(o.count);
+                    for (size_t n = 0; n < lod_indices.size(); ++n)
+                        mask[lod_indices[n]] = float((o.lod_logical ? lod_logical[n] : lod_indices[n]) % 3);
+                    reference_request.overlay.emphasis.mask = std::make_shared<core::Tensor>(core::Tensor::from_vector(mask, {o.count}, core::Device::GPU).to(core::DataType::UInt8));
+                }
+            }
             if (o.equirect && o.subregion) {
                 reference_request.frame_view.size = request.frame_view.cameraSize();
                 reference_request.frame_view.subregion_full_size = reference_request.frame_view.subregion_origin = {0, 0};
             }
             auto frame = [&](bool native) {
                 auto result = native ? vis::legacyMetalResult(metal.render(context, model, request, Slot::Main))
-                                     : vulkan.render(context, model, reference_request, false, Slot::Main);
+                                     : vulkan.render(context, reference_cut ? *reference_cut : model, reference_request, false, Slot::Main);
                 if (!result)
                     throw std::runtime_error(result.error());
                 wait(context, *result);
@@ -452,11 +522,11 @@ namespace {
                                     double(difference[o.depth ? "depth_valid_rmse" : "rmse"]) > 1. / 255))
                 throw std::runtime_error("Native image exceeds FP16-reference parity bounds (valid max 4/255, RMS 1/255, depth coverage 0.1%): SH" + std::to_string(degree) + " " + difference.dump());
             const auto native_stats = statistics(native_times), vulkan_stats = statistics(vulkan_times);
-            cases.push_back({{"sh_degree", degree}, {"storage", degree ? "q16" : "sh0"}, {"metal", native_stats}, {"vulkan", vulkan_stats}, {"speedup_vulkan_over_metal", o.subregion ? Json(nullptr) : Json(double(vulkan_stats["median_ms"]) / double(native_stats["median_ms"]))}, {"image_difference", difference}});
+            cases.push_back({{"sh_degree", degree}, {"storage", degree ? "q16" : "sh0"}, {"metal", native_stats}, {"vulkan", vulkan_stats}, {"speedup_vulkan_over_metal", (o.subregion || (o.gut && o.lod)) ? Json(nullptr) : Json(double(vulkan_stats["median_ms"]) / double(native_stats["median_ms"]))}, {"image_difference", difference}});
         }
         rusage usage{};
         getrusage(RUSAGE_SELF, &usage);
-        return {{"schema_version", 1}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", 1939}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"profile", o.portal ? "portal" : "studio"}, {"tone_fixture", o.portal_tone}, {"gut", o.gut}, {"equirectangular", o.equirect}, {"near_fixture", o.near}, {"subregion", o.subregion}, {"reference_full_frame_crop", o.equirect && o.subregion}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
+        return {{"schema_version", 1}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", 1939}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"profile", o.portal ? "portal" : "studio"}, {"tone_fixture", o.portal_tone}, {"reference_resident_cut", o.gut && o.lod}, {"lod", o.lod}, {"lod_logical", o.lod_logical}, {"lod_weights", o.lod_weights}, {"lod_debug", o.lod_debug}, {"gut", o.gut}, {"equirectangular", o.equirect}, {"near_fixture", o.near}, {"subregion", o.subregion}, {"reference_full_frame_crop", o.equirect && o.subregion}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
     }
 } // namespace
 int main(int argc, char** argv) {

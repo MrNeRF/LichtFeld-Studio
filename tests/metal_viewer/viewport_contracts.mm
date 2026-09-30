@@ -48,6 +48,22 @@ static void run() {
     // Desktop single-node scenes omit the per-primitive index table.
     transforms.resize(1);
     require(vis::MetalViewportRenderer::supports(model, request), "Implicit single-object frame rejected");
+    {
+        auto lod_request = request;
+        lod_request.transparent_background = true;
+        uint32_t index = 0xffffffffu;
+        lod_request.lod_indices = &index;
+        lod_request.lod_count = 1;
+        require(vis::MetalViewportRenderer::supports(model, lod_request), "Resident LOD cut incorrectly fell back");
+        for (size_t count : {size_t(1), size_t(0)}) {
+            lod_request.lod_count = count;
+            const auto result = renderer.render(context, model, lod_request, vis::VksplatViewportRenderer::OutputSlot::Main);
+            require(bool(result), "Invalid/empty LOD cut failed instead of publishing empty coverage");
+            auto pixels = Tensor::empty({64, 96, 4}, Device::CPU);
+            require(bool(renderer.readColor(vis::VksplatViewportRenderer::OutputSlot::Main, pixels, 0, 0)), "Empty LOD readback failed");
+            require(pixels.ptr<float>()[((32 * 96 + 48) * 4) + 3] == 0, "Invalid/empty LOD cut retained old visible coverage");
+        }
+    }
     for (int frame = 0; frame < 12; ++frame) {
         const auto output = renderer.render(context, model, request, vis::VksplatViewportRenderer::OutputSlot::Main);
         if (!output)

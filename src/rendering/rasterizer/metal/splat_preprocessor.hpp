@@ -60,6 +60,16 @@ namespace lfs::rendering::metal {
         simd_float4 render_origin{};
     };
 
+    // Draw a compact resident cut without copying/repacking SplatData. Physical
+    // indices address source attributes; logical IDs address scene/editor masks.
+    struct LodSelection {
+        BufferSlice indices, logical_indices, levels, weights;
+        uint32_t count = 0;
+        uint32_t source_count = 0;
+        bool enabled = false;
+        bool debug = false;
+    };
+
     struct alignas(16) Projection {
         simd_float4x4 model_to_world;
         simd_float4x4 world_to_camera;         // positive view Z, as in the desktop rasterizer
@@ -102,7 +112,7 @@ namespace lfs::rendering::metal {
         void prepare(ShStorage storage, uint32_t active_degree, PrimitiveMode mode);
         void encode(id<MTLCommandBuffer> command, const SplatBuffers& inputs,
                     const Projection& projection, uint32_t active_degree,
-                    PrimitiveMode mode, BufferSlice output, const SceneBuffers& scene = {}, const OverlayBuffers& overlay = {}, BufferSlice gut_output = {});
+                    PrimitiveMode mode, BufferSlice output, const SceneBuffers& scene = {}, const OverlayBuffers& overlay = {}, BufferSlice gut_output = {}, const LodSelection& lod = {});
 
     private:
         struct Impl;

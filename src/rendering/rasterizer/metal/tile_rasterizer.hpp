@@ -50,7 +50,7 @@ namespace lfs::rendering::metal {
         TileRasterizer& operator=(const TileRasterizer&) = delete;
         void encode(id<MTLCommandBuffer> command, BufferSlice projected, uint32_t count,
                     RasterMode mode, simd_float4 background, RasterFrame& frame, const OverlayBuffers& overlay = {},
-                    BufferSlice gut = {}, const Projection& projection = {});
+                    BufferSlice gut = {}, const Projection& projection = {}, const LodSelection& lod = {});
 
     private:
         struct Impl;

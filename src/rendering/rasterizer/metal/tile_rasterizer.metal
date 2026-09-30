@@ -212,6 +212,8 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                        device const uchar* preview [[buffer(8)]],
                        device const float4* selection_colors [[buffer(9)]],
                        device const GutSplat* gut [[buffer(10)]],
+                       device const uint* logical_ids [[buffer(11)]],
+                       constant uint& logical_count [[buffer(12)]],
                        texture2d<float, access::write> color [[texture(0)]],
                        texture2d<float, access::write> depth [[texture(1)]],
                        texture2d<uint, access::write> pick [[texture(2)]],
@@ -264,6 +266,8 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
         threadgroup_barrier(mem_flags::mem_threadgroup);
         if (!done) for (uint j = 0; j < count; ++j) {
             // Studio's CUDA/Vulkan convention samples at integer pixel coordinates.
+            const uint logical=(p.unused&8u)?logical_ids[ids[j]]:ids[j];
+            if((p.unused&8u) && logical>=logical_count)continue;
             const float2 d = float2(pixel) - means[j].xy;
             const float4 c = conics[j];
             const float q = c.x*d.x*d.x + 2*c.y*d.x*d.y + c.z*d.y*d.y;
@@ -326,7 +330,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                 // only the 3DGS macro-relative path compresses them to half.
                 const float2 overlay_center=p.mode==3u?means[j].xy:
                     float2(half2((means[j].xy+p.render_origin.xy-macro_origin)/overlay_tile_extent))*overlay_tile_extent+macro_origin-p.render_origin.xy;
-                const uint status=overlay_selection(overlay_params,ids[j],flags,overlay_center+(p.camera.z==2u?p.panorama.zw:float2(0)),selection,preview);
+                const uint status=overlay_selection(overlay_params,logical,flags,overlay_center+(p.camera.z==2u?p.panorama.zw:float2(0)),selection,preview);
                 const bool selectable=(flags&2u)==0;
                 if(overlay_enabled(overlay_params[22].x)&&selectable){
                     const float gaussian=exp(-.5f*q);
@@ -354,7 +358,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                 if((flags&4u)&&overlay_params[20].w>0)radiance=mix(radiance,float3(1,.95f,.6f),overlay_params[20].w*.5f);
             }
             const float weight = alpha * transmittance;
-            if (picked == 0xffffffff) { picked = ids[j]; nearest = splat_depth; }
+            if (picked == 0xffffffff) { picked = logical; nearest = splat_depth; }
             rgb += radiance * weight;
             // Match expected_far in the reference: invalid/too-distant
             // GUT depths affect transmittance but never the depth average.

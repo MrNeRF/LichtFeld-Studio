@@ -140,7 +140,24 @@ recommended working set, accounting for allocations already on the shared
 device. This guards large growth before allocation; it is not an eviction or
 adaptive-quality policy and does not measure driver memory exactly.
 
-Unsupported LOD/RAD traversal/paging requests retain the existing Vulkan path. Selection queries,
+Resident LOD cuts use compact draw reservations while directly addressing the
+original SplatData source, including Q16 cell swizzle and per-block bounds. Physical
+and logical indices remain distinct through projection, object transforms, masks
+and picking. Optional transition weights and level colors use cut-space metadata.
+Invalid source/logical IDs are culled before reads; empty cuts clear prior coverage.
+Buffers are retained/reused per output slot, with working-set checks on growth,
+and cut changes participate in refinement invalidation. No full-attribute gather,
+CPU sort or SH expansion is needed. Twelve macOS comparisons cover sparse reverse
+cuts, logical masks, weights and level colors in Studio/portal/GUT.
+
+The existing Vulkan GUT fragment gather has no LOD-indirection bindings and reads
+compact slots as source IDs. Its sparse-cut reference in this suite is therefore
+a full source-layout scene with unselected nodes hidden by zero opacity, weights
+folded into opacity, and debug/mask state mapped to source IDs. This is explicitly
+reported and no timing ratio is produced for that fixture. Vulkan is unchanged.
+
+Unsupported GPU LOD traversal, Spark-encoded opacity and RAD traversal/paging
+requests retain the existing Vulkan path. Selection queries,
 the desktop UI, grid, gizmos and final composition also remain on Vulkan. This
 backend is not yet a fully independent Metal desktop presentation/editor stack.
 Automatic continues to use Vulkan, and no global Vulkan shader is modified.

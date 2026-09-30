@@ -266,6 +266,26 @@ static void run(id<MTLDevice> device) {
     [invalid_command waitUntilCompleted];
     require(invalid_command.status == MTLCommandBufferStatusCompleted && static_cast<const ProjectedSplat*>(projected.contents)->bounds.z == 0,
             "Nonfinite spherical input retained an earlier projection");
+    const std::array<float, 3> resident_mean{0, 0, 3};
+    spherical.means = {buffer(device, resident_mean.data(), sizeof(resident_mean))};
+    const std::array<uint32_t, 2> cut{0, 0xffffffffu}, logical{0, 0}, levels{1, 0};
+    const std::array<float, 2> weights{.25f, 1};
+    LodSelection lod{{buffer(device, cut.data(), sizeof(cut))}, {buffer(device, logical.data(), sizeof(logical))}, {buffer(device, levels.data(), sizeof(levels))}, {buffer(device, weights.data(), sizeof(weights))}, 2, 1, true, true};
+    auto cut_output = [device newBufferWithLength:2 * sizeof(ProjectedSplat) options:MTLResourceStorageModeShared];
+    auto cut_camera = frame();
+    auto cut_command = [queue commandBuffer];
+    pipeline.encode(cut_command, spherical, cut_camera, 0, PrimitiveMode::Gaussian, {cut_output}, {}, {}, {}, lod);
+    [cut_command commit];
+    [cut_command waitUntilCompleted];
+    const auto cut_result = static_cast<const ProjectedSplat*>(cut_output.contents);
+    require(cut_command.status == MTLCommandBufferStatusCompleted && cut_result[0].bounds.z > 0 && cut_result[1].bounds.z == 0,
+            "Resident LOD indirection retained an invalid physical index");
+    require(std::abs(cut_result[0].conic_opacity.w - .25f / (1 + std::exp(-2.f))) < 1e-5f,
+            "Resident LOD weights did not scale activated source opacity");
+    require(cut_result[0].color.x == 0 && std::abs(cut_result[0].color.y - .5f) < 1e-5f && cut_result[0].color.z == 0,
+            "LOD level palette did not use the selected-cut level");
+    lod.indices.offset = 1;
+    reject([&] { pipeline.encode([queue commandBuffer], spherical, cut_camera, 0, PrimitiveMode::Gaussian, { cut_output }, {}, {}, {}, lod); });
     std::printf("Metal projection contracts passed: %zu SH component comparisons; 4 storage formats; SH0-3; boundary, point and clipping checks.\n", comparisons);
 }
 int main() {

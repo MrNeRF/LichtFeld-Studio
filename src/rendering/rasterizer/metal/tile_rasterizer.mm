@@ -186,7 +186,7 @@ namespace lfs::rendering::metal {
     }
     TileRasterizer::~TileRasterizer() = default;
     void TileRasterizer::encode(id<MTLCommandBuffer> command, BufferSlice projected, uint32_t count,
-                                RasterMode mode, simd_float4 background, RasterFrame& frame, const OverlayBuffers& overlay, BufferSlice gut, const Projection& projection) {
+                                RasterMode mode, simd_float4 background, RasterFrame& frame, const OverlayBuffers& overlay, BufferSlice gut, const Projection& projection, const LodSelection& lod) {
         auto f = frame.impl_;
         if (!command || command.device != impl_->device || f->device != impl_->device ||
             command.status != MTLCommandBufferStatusNotEnqueued || count > f->max_splats || uint32_t(mode) > 3)
@@ -222,6 +222,11 @@ namespace lfs::rendering::metal {
         if (!std::isfinite(projection.rasterization.y) || (projection.rasterization.y != 0.f && !expected_depth) ||
             (expected_depth && (!std::isfinite(projection.rasterization.z) || projection.rasterization.z <= 0)))
             throw std::invalid_argument("Invalid Metal expected-depth capture parameters");
+        const auto logical = lod.logical_indices.buffer ? lod.logical_indices : lod.indices;
+        if (lod.enabled && (lod.count != count || !lod.source_count ||
+                            (count && (!logical.buffer || logical.buffer.device != impl_->device || logical.offset % 4 ||
+                                       logical.offset > logical.buffer.length || size_t(count) * 4 > logical.buffer.length - logical.offset))))
+            throw std::invalid_argument("Invalid native Metal LOD identifier mapping");
         if (f->in_flight.exchange(true, std::memory_order_acq_rel))
             throw std::logic_error("Metal viewer frame reservation is still in flight");
         f->completed.store(false, std::memory_order_release);
@@ -230,7 +235,7 @@ namespace lfs::rendering::metal {
             f->completed.store(finished.status == MTLCommandBufferStatusCompleted, std::memory_order_release);
             f->in_flight.store(false, std::memory_order_release);
         }];
-        const RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), (overlay.parameter_count ? 1u : 0u) | (expected_depth ? 2u : 0u) | (projection.rasterization.w == 1.f ? 4u : 0u), background, overlay.render_origin, projection.intrinsics, {projection.clip_scale.x, expected_depth ? projection.rasterization.z : projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w}, projection.extent, projection.panorama};
+        const RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), (overlay.parameter_count ? 1u : 0u) | (expected_depth ? 2u : 0u) | (projection.rasterization.w == 1.f ? 4u : 0u) | (lod.enabled ? 8u : 0u), background, overlay.render_origin, projection.intrinsics, {projection.clip_scale.x, expected_depth ? projection.rasterization.z : projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w}, projection.extent, projection.panorama};
         const auto dispatch = [](id<MTLComputeCommandEncoder> e, uint32_t n) {
             [e dispatchThreadgroups:MTLSizeMake(ceil_div(n, 256), 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
             [e endEncoding];
@@ -315,6 +320,8 @@ namespace lfs::rendering::metal {
         const std::array<BufferSlice, 5> overlays = {overlay.parameters, overlay.flags, overlay.selection, overlay.preview, overlay.colors};
         for (NSUInteger j = 0; j < overlays.size(); ++j)
             [e setBuffer:overlays[j].buffer ?: f->counts offset:overlays[j].buffer ? overlays[j].offset : 0 atIndex:5 + j];
+        [e setBuffer:lod.enabled && logical.buffer ? logical.buffer : f->counts offset:lod.enabled && logical.buffer ? logical.offset : 0 atIndex:11];
+        [e setBytes:&lod.source_count length:sizeof(lod.source_count) atIndex:12];
         [e setTexture:f->color atIndex:0];
         [e setTexture:f->depth atIndex:1];
         [e setTexture:f->pick atIndex:2];

@@ -126,7 +126,7 @@ namespace lfs::rendering::metal {
     }
 
     void SplatPreprocessor::encode(id<MTLCommandBuffer> command, const SplatBuffers& in,
-                                   const Projection& projection, uint32_t degree, PrimitiveMode mode, BufferSlice output, const SceneBuffers& scene, const OverlayBuffers& overlay, BufferSlice gut_output) {
+                                   const Projection& projection, uint32_t degree, PrimitiveMode mode, BufferSlice output, const SceneBuffers& scene, const OverlayBuffers& overlay, BufferSlice gut_output, const LodSelection& lod) {
         if (!command || command.commandQueue.device != impl_->device || command.status != MTLCommandBufferStatusNotEnqueued)
             throw std::invalid_argument("Metal viewer requires an uncommitted command buffer on the same device");
         if (degree > 3 || (in.layout_rest != 0 && in.layout_rest != 3 && in.layout_rest != 8 && in.layout_rest != 15) ||
@@ -138,12 +138,26 @@ namespace lfs::rendering::metal {
             throw std::invalid_argument("Metal panoramas require the 3DGUT ray rasterizer");
         if (!in.count)
             return;
-        const size_t n = in.count;
+        const size_t n = in.count, draw_count = lod.enabled ? lod.count : n;
+        if (lod.enabled && lod.source_count != in.count)
+            throw std::invalid_argument("Metal resident LOD source extent mismatch");
+        const std::array<BufferSlice, 4> lod_buffers = {lod.indices, lod.logical_indices, lod.levels, lod.weights};
+        for (size_t j = 0; j < lod_buffers.size(); ++j) {
+            const auto input = lod_buffers[j];
+            if (!lod.enabled || (!input.buffer && j))
+                continue;
+            if (draw_count)
+                check_slice(input, draw_count * 4, 4, impl_->device, "LOD selection");
+            if (input.buffer && (input.buffer == output.buffer || input.buffer == gut_output.buffer || input.buffer == overlay.flags.buffer))
+                throw std::invalid_argument("Metal LOD input overlaps projection output");
+        }
+        if (!draw_count)
+            return;
         if (overlay.parameter_count) {
             if (overlay.parameter_count != 207)
                 throw std::invalid_argument("Metal overlay parameter ABI mismatch");
             check_slice(overlay.parameters, 207 * 16, 16, impl_->device, "overlay parameters");
-            check_slice(overlay.flags, n * 4, 4, impl_->device, "overlay flags");
+            check_slice(overlay.flags, draw_count * 4, 4, impl_->device, "overlay flags");
             if (overlay.node_count)
                 check_slice(overlay.node_mask, overlay.node_count, 1, impl_->device, "node emphasis mask");
         }
@@ -166,9 +180,9 @@ namespace lfs::rendering::metal {
                                                 rest_bytes, bounds_bytes, in.deleted.buffer ? n : 0, scene.count && scene.object_indices.buffer ? n * 4 : 0, size_t(scene.count) * sizeof(SceneObject)};
         const std::array<NSUInteger, 10> alignments = {4, attr, 4 * attr, attr, 4, 4, 8, 1, 4, 16};
         const char* names[] = {"means", "scales", "rotations", "opacity", "SH0", "SH rest", "SH bounds", "deleted mask", "object indices", "scene objects"};
-        check_slice(output, n * sizeof(ProjectedSplat), 16, impl_->device, "projection output");
+        check_slice(output, draw_count * sizeof(ProjectedSplat), 16, impl_->device, "projection output");
         if (mode == PrimitiveMode::Gut) {
-            check_slice(gut_output, n * sizeof(GutSplat), 16, impl_->device, "3DGUT output");
+            check_slice(gut_output, draw_count * sizeof(GutSplat), 16, impl_->device, "3DGUT output");
             if (gut_output.buffer == output.buffer)
                 throw std::invalid_argument("Metal 3DGUT geometry overlaps projection output");
             for (const auto input : inputs)
@@ -179,7 +193,7 @@ namespace lfs::rendering::metal {
             if (!lengths[i])
                 continue;
             check_slice(inputs[i], lengths[i], alignments[i], impl_->device, names[i]);
-            if (inputs[i].buffer == output.buffer && inputs[i].offset < output.offset + n * sizeof(ProjectedSplat) &&
+            if (inputs[i].buffer == output.buffer && inputs[i].offset < output.offset + draw_count * sizeof(ProjectedSplat) &&
                 output.offset < inputs[i].offset + lengths[i])
                 throw std::invalid_argument("Metal projection output overlaps input");
         }
@@ -196,14 +210,19 @@ namespace lfs::rendering::metal {
             [encoder setBuffer:lengths[i] ? inputs[i].buffer : impl_->empty offset:lengths[i] ? inputs[i].offset : 0 atIndex:i < 8 ? i : i + 3];
         [encoder setBuffer:output.buffer offset:output.offset atIndex:8];
         [encoder setBytes:&projection length:sizeof(projection) atIndex:9];
-        const std::array<uint32_t, 7> layout = {in.count, in.layout_rest, in.deleted.buffer ? 1u : 0u, scene.count, in.non_sh_attrs_f16 ? 1u : 0u, overlay.parameter_count ? 1u : 0u, scene.object_indices.buffer ? 1u : 0u};
+        const std::array<uint32_t, 9> layout = {in.count, in.layout_rest, in.deleted.buffer ? 1u : 0u, scene.count, in.non_sh_attrs_f16 ? 1u : 0u, overlay.parameter_count ? 1u : 0u, scene.object_indices.buffer ? 1u : 0u, uint32_t(draw_count),
+                                                lod.enabled ? (1u | (lod.logical_indices.buffer ? 2u : 0u) | (lod.levels.buffer ? 4u : 0u) | (lod.weights.buffer ? 8u : 0u) | (lod.debug ? 16u : 0u)) : 0u};
         [encoder setBytes:layout.data() length:sizeof(layout) atIndex:10];
         const std::array<BufferSlice, 3> overlays = {overlay.parameters, overlay.flags, overlay.node_mask};
         for (NSUInteger j = 0; j < overlays.size(); ++j)
             [encoder setBuffer:overlays[j].buffer ?: impl_->empty offset:overlays[j].buffer ? overlays[j].offset : 0 atIndex:13 + j];
         [encoder setBuffer:gut_output.buffer ?: impl_->empty offset:gut_output.buffer ? gut_output.offset : 0 atIndex:16];
+        for (NSUInteger j = 0; j < lod_buffers.size(); ++j)
+            [encoder setBuffer:lod.enabled && lod_buffers[j].buffer ? lod_buffers[j].buffer : impl_->empty
+                        offset:lod.enabled && lod_buffers[j].buffer ? lod_buffers[j].offset : 0
+                       atIndex:17 + j];
         const NSUInteger width = std::min(NSUInteger(256), pipeline.maxTotalThreadsPerThreadgroup);
-        [encoder dispatchThreads:MTLSizeMake(n, 1, 1) threadsPerThreadgroup:MTLSizeMake(width, 1, 1)];
+        [encoder dispatchThreads:MTLSizeMake(draw_count, 1, 1) threadsPerThreadgroup:MTLSizeMake(width, 1, 1)];
         [encoder endEncoding];
     }
 } // namespace lfs::rendering::metal

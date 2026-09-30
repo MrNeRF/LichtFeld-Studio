@@ -353,6 +353,20 @@ static void run(id<MTLDevice> device) {
         const auto color = reinterpret_cast<const _Float16*>(static_cast<const char*>(portal_read.color.contents) + 14 * portal_read.color_stride) + x * 4;
         require(std::abs(float(color[3]) - alpha) < .001, "Portal Gaussian tail differs from its normalized alpha contract");
     }
+    // Compacted draw slot zero must retain logical primitive seven for picking.
+    const uint32_t logical_id = 7;
+    LodSelection lod;
+    lod.enabled = true;
+    lod.count = 1;
+    lod.source_count = 8;
+    lod.indices = {[device newBufferWithBytes:&logical_id length:sizeof(logical_id) options:MTLResourceStorageModeShared]};
+    camera.rasterization = {1, 0, 0, 0};
+    command = [queue commandBuffer];
+    raster.encode(command, {portal_input}, 1, RasterMode::Gaussian, {0, 0, 0, 0}, expected_frame, {}, {}, camera, lod);
+    const auto lod_read = readback(device, command, expected_frame);
+    wait(command);
+    const auto picked = reinterpret_cast<const uint32_t*>(static_cast<const char*>(lod_read.pick.contents) + 14 * lod_read.pick_stride) + 18;
+    require(*picked == logical_id, "Resident LOD picking published a compact draw slot instead of its logical primitive");
     std::puts("Metal tile raster contracts passed: stable depth, RGB/alpha/depth/pick, modes, scan/block boundaries, overflow and frame reuse.");
 }
 int main() {

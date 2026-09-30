@@ -135,6 +135,21 @@ if(TARGET lfs_visualizer)
                 set_tests_properties(MacViewerParity_portal_${_portal_overlay} PROPERTIES
                     LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
             endforeach()
+            foreach(_lod_mode IN ITEMS lod lod_logical lod_weights lod_debug)
+                foreach(_lod_raster IN ITEMS studio gut portal)
+                    set(_lod_args --${_lod_mode})
+                    if(_lod_raster STREQUAL "gut")
+                        list(APPEND _lod_args --gut)
+                    elseif(_lod_raster STREQUAL "portal")
+                        list(APPEND _lod_args --portal)
+                    endif()
+                    add_test(NAME MacViewerParity_${_lod_raster}_${_lod_mode} COMMAND mac_viewer_backend_benchmark
+                        --smoke ${_lod_args} --overlay selection
+                        --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-${_lod_raster}-${_lod_mode}.json")
+                    set_tests_properties(MacViewerParity_${_lod_raster}_${_lod_mode} PROPERTIES
+                        LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
+                endforeach()
+            endforeach()
             foreach(_overlay IN ITEMS selection preview crop ellipsoid window markers flash affine)
                 add_test(NAME MacViewerParity_${_overlay} COMMAND mac_viewer_backend_benchmark
                     --smoke --overlay ${_overlay}

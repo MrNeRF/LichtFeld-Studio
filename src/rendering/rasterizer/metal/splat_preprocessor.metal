@@ -23,7 +23,7 @@ struct Projection {
     uint4 extent;
     float4 rasterization, display, panorama;
 };
-struct InputLayout { uint count, rest, has_deleted, objects, half_attrs, overlay, object_indexed; };
+struct InputLayout { uint count, rest, has_deleted, objects, half_attrs, overlay, object_indexed, draw_count, lod; };
 struct SceneObject { float4x4 model_to_world; float4 camera_local; uint4 flags; };
 struct GutSplat { float4 inverse0, inverse1, inverse2, mean_opacity; };
 struct ProjectedSplat { float4 mean_depth, conic_opacity, color; uint4 bounds; };
@@ -149,18 +149,25 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     device const float4* params [[buffer(13)]], device uint* overlay_flags [[buffer(14)]],
     device const uchar* node_mask [[buffer(15)]],
     device GutSplat* gut_output [[buffer(16)]],
+    device const uint* lod_indices [[buffer(17)]],
+    device const uint* logical_indices [[buffer(18)]],
+    device const uint* lod_levels [[buffer(19)]],
+    device const float* lod_weights [[buffer(20)]],
     uint i [[thread_position_in_grid]]) {
-    if(i>=layout.count) return;
+    if(i>=layout.draw_count) return;
     output[i]=ProjectedSplat{};
     if(layout.overlay)overlay_flags[i]=0;
-    if(layout.has_deleted && deleted[i]) return;
-    const float3 p=float3(means[i]);
+    const uint source=(layout.lod&1u)?lod_indices[i]:i;
+    const uint logical=(layout.lod&2u)?logical_indices[i]:source;
+    if(source>=layout.count || logical>=layout.count)return;
+    if(layout.has_deleted && deleted[source]) return;
+    const float3 p=float3(means[source]);
     float4x4 model_to_world=frame.model_to_world;
     float3 camera_local=frame.camera_local.xyz;
     uint active_degree=sh_degree;
     int node=0;
     if(layout.objects) {
-        const uint index=layout.object_indexed?object_indices[i]:0;
+        const uint index=layout.object_indexed?object_indices[logical]:0;
         node=int(index);
         if(index>=layout.objects) return;
         const auto object=objects[index];
@@ -203,9 +210,11 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
         overlay_flags[i]=flags;
         if(!active)return;
     }
-    const float logit=layout.half_attrs?float(reinterpret_cast<device const half*>(opacity)[i]):opacity[i];
+    const float logit=layout.half_attrs?float(reinterpret_cast<device const half*>(opacity)[source]):opacity[source];
     float alpha=1.0f/(1.0f+exp(-logit));
     if(!isfinite(alpha) || alpha<0.5f/255.0f) return;
+    if(layout.lod&8u)alpha*=clamp(lod_weights[i],0.f,1.f);
+    if(!isfinite(alpha))return;
     if(portal)alpha=lfsPortalCompactOpacity(alpha);
     if(portal && alpha<=1.f/255.f)return;
     const float source_alpha=alpha;
@@ -220,12 +229,12 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
         radius=2.0f;
         conic=float3(1,0,1);
     } else {
-        float4 q=layout.half_attrs?float4(reinterpret_cast<device const half4*>(rotations)[i]):rotations[i];
+        float4 q=layout.half_attrs?float4(reinterpret_cast<device const half4*>(rotations)[source]):rotations[source];
         const float norm2=dot(q,q);
         if(!isfinite(norm2)) return;
         q=norm2>1e-8f?q*rsqrt(norm2):float4(1,0,0,0);
         if(portal){q=lfsPortalCompactRotation(q);q*=rsqrt(max(dot(q,q),1e-8f));}
-        const float3 log_scale=layout.half_attrs?float3(reinterpret_cast<device const packed_half3*>(scales)[i]):float3(scales[i]);
+        const float3 log_scale=layout.half_attrs?float3(reinterpret_cast<device const packed_half3*>(scales)[source]):float3(scales[source]);
         float3 s=exp(min(log_scale,float3(20.f)))*frame.clip_scale.z;
         if(portal)s=lfsPortalCompactScales(s);
         if(!all(isfinite(s))) return;
@@ -358,7 +367,12 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     const float3 axis_lengths=float3(length(model_linear[0]),length(model_linear[1]),length(model_linear[2]));
     if(all(axis_lengths>1e-8f))direction=float3(dot(model_linear[0]/axis_lengths.x,direction),
         dot(model_linear[1]/axis_lengths.y,direction),dot(model_linear[2]/axis_lengths.z,direction));
-    float3 color=evaluate_sh(float3(sh0[i]),direction,rest,bounds,i,layout.rest,active_degree);
+    float3 color=evaluate_sh(float3(sh0[source]),direction,rest,bounds,source,layout.rest,active_degree);
+    if(layout.lod&16u) {
+        const uint level=(layout.lod&4u)?lod_levels[i]%5u:0u;
+        const float3 palette[5]={float3(1,0,0),float3(0,1,0),float3(0,0,1),float3(1,1,0),float3(1,0,1)};
+        color*=palette[level];
+    }
     if(portal) {
         color=lfsPortalCompactColor(color);
         if(frame.display.x>0)color=lfsDisplaySplat(color,uint(frame.display.x),frame.display.y);
