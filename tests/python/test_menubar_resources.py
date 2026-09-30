@@ -10,6 +10,28 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_context_menu_reserves_space_for_shortcuts_and_wraps_long_labels():
+    rcss = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "resources"
+        / "global_context_menu.rcss"
+    ).read_text(encoding="utf-8")
+    cpp = (
+        PROJECT_ROOT / "src" / "visualizer" / "gui" / "global_context_menu.cpp"
+    ).read_text(encoding="utf-8")
+    assert "label_width + shortcut_width" in cpp
+    assert "justify-content: space-between" in rcss
+    assert "padding-right: 12dp" in rcss
+    assert "width: 100%" in rcss
+    assert "white-space: normal" in rcss
+    assert "margin-right: 16dp" in rcss
+    assert "flex: 0 0 auto" in rcss
+
+
 def _rule_body(rcss: str, selector: str) -> str:
     return rcss.split(f"{selector} {{", 1)[1].split("}", 1)[0]
 

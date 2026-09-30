@@ -26,16 +26,22 @@ body {
 .context-menu-item.has-shortcut {
     display: flex;
     align-items: center;
+    justify-content: space-between;
+    width: 100%;
     gap: 8dp;
+    padding-right: 12dp;
 }
 
 .context-menu-item.has-shortcut .context-menu-text {
     flex: 1 1 auto;
+    min-width: 0;
+    white-space: normal;
 }
 
 .context-menu-shortcut {
     flex: 0 0 auto;
-    margin-left: 24dp;
+    margin-left: 12dp;
+    margin-right: 16dp;
     font-size: 11dp;
     white-space: nowrap;
 }

@@ -334,7 +334,19 @@ namespace lfs::vis::gui {
 
         const float dp = std::max(mgr_->getDpRatio(), 1.0f);
         const float available_width_dp = std::max(1.0f, static_cast<float>(w) / dp - 8.0f);
-        const float minimum_width_dp = std::min(150.0f, available_width_dp);
+        float content_width_dp = 150.0f;
+        for (const auto& item : items_) {
+            if (item.shortcut.empty())
+                continue;
+            // Reserve a readable label column, the complete shortcut column,
+            // and the button's checkmark, gaps, and horizontal padding.
+            // Seven dp per label byte and eight per shortcut byte intentionally
+            // err wide for non-ASCII text; max-width clamps to the viewport.
+            const auto label_width = static_cast<float>(item.label.size()) * 7.0f;
+            const auto shortcut_width = static_cast<float>(item.shortcut.size()) * 8.0f;
+            content_width_dp = std::max(content_width_dp, label_width + shortcut_width + 140.0f);
+        }
+        const float minimum_width_dp = std::min(content_width_dp, available_width_dp);
         if (minimum_width_dp != last_menu_min_width_dp_ ||
             available_width_dp != last_menu_max_width_dp_) {
             el_ctx_menu_->SetProperty("min-width", std::format("{:.2f}dp", minimum_width_dp));
