@@ -214,7 +214,6 @@ namespace lfs::vis {
         bool runViewCommand(ViewId id, std::string_view command) override;
         // Until every view renders on its own, the renderer's settings carry the
         // active view's half; this keeps the two in step each frame.
-        void syncActiveViewSettings();
         [[nodiscard]] lfs::Result<
             lfs::io::project::ProjectSessionChapters>
         captureProjectSession(
@@ -651,8 +650,6 @@ namespace lfs::vis {
 
         // Core components
         screen::ScreenService screen_service_;
-        ViewId mirrored_view_ = kNoView;
-        std::string mirrored_view_settings_;
         std::unique_ptr<WindowManager> window_manager_;
         std::unique_ptr<InputController> input_controller_;
         std::unique_ptr<RenderingManager> rendering_manager_;

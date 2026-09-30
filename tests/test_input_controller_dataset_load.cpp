@@ -12,6 +12,7 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "screen/screen_service.hpp"
 #include "test_view_targets.hpp"
 #include "tools/tool_base.hpp"
 
@@ -98,7 +99,8 @@ namespace lfs::vis {
         Viewport viewport(200, 200);
         lfs::vis::TestViewTargets controller_views{viewport};
         InputController controller{nullptr, controller_views};
-        RenderingManager rendering_manager;
+        lfs::vis::screen::ScreenService rendering_manager_views;
+        RenderingManager rendering_manager{rendering_manager_views};
         services().set(&rendering_manager);
 
         const auto drop_path = std::filesystem::temp_directory_path() / "drag_drop_environment.hdr";
@@ -147,7 +149,8 @@ namespace lfs::vis {
         Viewport viewport(200, 200);
         lfs::vis::TestViewTargets controller_views{viewport};
         InputController controller{nullptr, controller_views};
-        RenderingManager rendering_manager;
+        lfs::vis::screen::ScreenService rendering_manager_views;
+        RenderingManager rendering_manager{rendering_manager_views};
         services().set(&rendering_manager);
 
         bool video_extractor_requested = false;

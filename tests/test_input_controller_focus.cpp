@@ -18,6 +18,7 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "screen/screen_service.hpp"
 #include "test_view_targets.hpp"
 #include "tools/tool_base.hpp"
 #include "visualizer/visualizer.hpp"
@@ -1820,7 +1821,8 @@ namespace lfs::vis {
     }
 
     TEST_F(InputControllerFocusTest, CameraFrustumsDefaultToAltCAndToggleRenderSetting) {
-        RenderingManager rendering_manager;
+        lfs::vis::screen::ScreenService rendering_manager_views;
+        RenderingManager rendering_manager{rendering_manager_views};
         services().set(&rendering_manager);
 
         Viewport viewport(200, 200);
@@ -1846,7 +1848,8 @@ namespace lfs::vis {
     }
 
     TEST_F(InputControllerFocusTest, GridDefaultToAltGAndToggleRenderSetting) {
-        RenderingManager rendering_manager;
+        lfs::vis::screen::ScreenService rendering_manager_views;
+        RenderingManager rendering_manager{rendering_manager_views};
         services().set(&rendering_manager);
 
         Viewport viewport(200, 200);

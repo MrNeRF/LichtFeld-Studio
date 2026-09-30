@@ -15,6 +15,7 @@
 #include "operation/undo_history.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "screen/screen_service.hpp"
 #include "training/trainer.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui_capabilities.hpp"
@@ -874,7 +875,8 @@ TEST_F(UndoHistoryTest, ShrinkToFitOffloadsHistoryToMeetGpuBudget) {
 
 TEST_F(UndoHistoryTest, TensorUndoEntryRestoresTensorRoundTrip) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -1109,7 +1111,8 @@ TEST_F(UndoHistoryTest, SceneSnapshotRejectsTopologyChangedReplayWithoutMutating
 
 TEST_F(UndoHistoryTest, CropBoxUndoEntryRoundTripsAndRejectsDeletedNodeReplay) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -1186,7 +1189,8 @@ TEST_F(UndoHistoryTest, CropBoxUndoEntryRoundTripsAndRejectsDeletedNodeReplay) {
 
 TEST_F(UndoHistoryTest, EllipsoidUndoEntryRoundTripsAndRejectsDeletedNodeReplay) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -1260,7 +1264,8 @@ TEST_F(UndoHistoryTest, EllipsoidUndoEntryRoundTripsAndRejectsDeletedNodeReplay)
 
 TEST_F(UndoHistoryTest, GaussianFieldWritePushesUndoableTensorEntries) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -1302,7 +1307,8 @@ TEST_F(UndoHistoryTest, GaussianFieldWritePushesUndoableTensorEntries) {
 
 TEST_F(UndoHistoryTest, GaussianFieldWriteRejectsInvalidRawStateWithoutMutation) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -1350,7 +1356,8 @@ TEST_F(UndoHistoryTest, GaussianFieldWriteRejectsInvalidRawStateWithoutMutation)
 
 TEST_F(UndoHistoryTest, GaussianShWriteScattersOnlySelectedRowsAndIsUndoable) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -1389,7 +1396,8 @@ TEST_F(UndoHistoryTest, GaussianShWriteScattersOnlySelectedRowsAndIsUndoable) {
 
 TEST_F(UndoHistoryTest, DeleteSplatUndoRestoresVisibleCropBox) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -1424,7 +1432,8 @@ TEST_F(UndoHistoryTest, DeleteSplatUndoRestoresVisibleCropBox) {
 
 TEST_F(UndoHistoryTest, CropBoxIsAppliedWhenMergingGroup) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -1456,7 +1465,8 @@ TEST_F(UndoHistoryTest, CropBoxIsAppliedWhenMergingGroup) {
 
 TEST_F(UndoHistoryTest, CropBoxCapabilityUndoRestoresNodeVisibilityAndEnabledState) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -1508,7 +1518,8 @@ TEST_F(UndoHistoryTest, CropBoxCapabilityUndoRestoresNodeVisibilityAndEnabledSta
 
 TEST_F(UndoHistoryTest, CropBoxResetUndoRestoresBoundsAndTransform) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -1568,7 +1579,8 @@ TEST_F(UndoHistoryTest, CropBoxResetUndoRestoresBoundsAndTransform) {
 
 TEST_F(UndoHistoryTest, TopologyUndoRestoresSoftDeletedMasks) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -1633,7 +1645,8 @@ TEST_F(UndoHistoryTest, CropMarksPayloadDivergedAndUndoRedoRestoresFlag) {
 
 TEST_F(UndoHistoryTest, CutSelectedGaussiansCopiesAndUndoRestoresDelete) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -1667,7 +1680,8 @@ TEST_F(UndoHistoryTest, CutSelectedGaussiansCopiesAndUndoRestoresDelete) {
 
 TEST_F(UndoHistoryTest, GaussianSelectionIgnoresSoftDeletedRowsForAllSelectionSources) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -1695,7 +1709,8 @@ TEST_F(UndoHistoryTest, GaussianSelectionIgnoresSoftDeletedRowsForAllSelectionSo
 
 TEST_F(UndoHistoryTest, NodeCopyPasteExcludesSoftDeletedRows) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -1720,7 +1735,8 @@ TEST_F(UndoHistoryTest, NodeCopyPasteExcludesSoftDeletedRows) {
 
 TEST_F(UndoHistoryTest, NodeCopyPasteWithoutDeletionsKeepsAllRows) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -1739,7 +1755,8 @@ TEST_F(UndoHistoryTest, NodeCopyPasteWithoutDeletionsKeepsAllRows) {
 
 TEST_F(UndoHistoryTest, PasteNodesCreatesUndoableSceneGraphEntry) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -1762,7 +1779,8 @@ TEST_F(UndoHistoryTest, PasteNodesCreatesUndoableSceneGraphEntry) {
 
 TEST_F(UndoHistoryTest, PasteGaussiansCreatesUndoableSceneGraphEntry) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -1782,7 +1800,8 @@ TEST_F(UndoHistoryTest, PasteGaussiansCreatesUndoableSceneGraphEntry) {
 
 TEST_F(UndoHistoryTest, NodeCopyWithAllRowsDeletedProducesNoClipboard) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -1799,7 +1818,8 @@ TEST_F(UndoHistoryTest, NodeCopyWithAllRowsDeletedProducesNoClipboard) {
 
 TEST_F(UndoHistoryTest, SelectingOnlySoftDeletedRowsClearsSelectionAndClipboard) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -1819,7 +1839,8 @@ TEST_F(UndoHistoryTest, SelectingOnlySoftDeletedRowsClearsSelectionAndClipboard)
 
 TEST_F(UndoHistoryTest, DeleteAndMirrorUseOnlyLiveRowsFromMixedSelection) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -1836,7 +1857,8 @@ TEST_F(UndoHistoryTest, DeleteAndMirrorUseOnlyLiveRowsFromMixedSelection) {
     EXPECT_EQ(deleted_mask_values(*delete_node->model), (std::vector<bool>{false, true, true}));
 
     auto mirror_scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto mirror_rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService mirror_rendering_manager_views;
+    auto mirror_rendering_manager = std::make_unique<lfs::vis::RenderingManager>(mirror_rendering_manager_views);
     lfs::vis::services().set(mirror_scene_manager.get());
     lfs::vis::services().set(mirror_rendering_manager.get());
 
@@ -1856,7 +1878,8 @@ TEST_F(UndoHistoryTest, DeleteAndMirrorUseOnlyLiveRowsFromMixedSelection) {
 
 TEST_F(UndoHistoryTest, TopologyUndoRoundTripsVisibleNodeDeleteWithHiddenSibling) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -1896,7 +1919,8 @@ TEST_F(UndoHistoryTest, TopologyUndoRoundTripsVisibleNodeDeleteWithHiddenSibling
 
 TEST_F(UndoHistoryTest, FullNodeGaussianDeleteRemovesNodeAndUndoRestoresIt) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -1924,7 +1948,8 @@ TEST_F(UndoHistoryTest, FullNodeGaussianDeleteRemovesNodeAndUndoRestoresIt) {
 
 TEST_F(UndoHistoryTest, PipelineDeleteRestoresThenStaleSelectionReplayFailsClosed) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -1981,7 +2006,8 @@ TEST_F(UndoHistoryTest, PipelineDeleteRestoresThenStaleSelectionReplayFailsClose
 
 TEST_F(UndoHistoryTest, SceneSnapshotCompactsSparseSelectionMasks) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -2006,7 +2032,8 @@ TEST_F(UndoHistoryTest, SceneSnapshotCompactsSparseSelectionMasks) {
 
 TEST_F(UndoHistoryTest, PushSceneSnapshotIfChangedSkipsNoOpSnapshots) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -2022,7 +2049,8 @@ TEST_F(UndoHistoryTest, PushSceneSnapshotIfChangedSkipsNoOpSnapshots) {
 
 TEST_F(UndoHistoryTest, SceneSnapshotSparseSelectionRoundTripsDirectly) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -2044,7 +2072,8 @@ TEST_F(UndoHistoryTest, SceneSnapshotSparseSelectionRoundTripsDirectly) {
 
 TEST_F(UndoHistoryTest, OffloadedSceneSnapshotRestoresSelectionDuringPlayback) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -2082,7 +2111,8 @@ TEST_F(UndoHistoryTest, OffloadedSceneSnapshotRestoresSelectionDuringPlayback) {
 
 TEST_F(UndoHistoryTest, SceneSnapshotEstimatedBytesIncludeTransformMaps) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -2102,7 +2132,8 @@ TEST_F(UndoHistoryTest, SceneSnapshotEstimatedBytesIncludeTransformMaps) {
 
 TEST_F(UndoHistoryTest, SceneSnapshotFallsBackToDenseSelectionStorageForWideChanges) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -2127,7 +2158,8 @@ TEST_F(UndoHistoryTest, SceneSnapshotFallsBackToDenseSelectionStorageForWideChan
 
 TEST_F(UndoHistoryTest, SceneSnapshotCompactsSparseDeletedMasksAndRestoresPresence) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -2190,7 +2222,8 @@ TEST_F(UndoHistoryTest, SceneSnapshotInvalidatesExistingDeletedMaskOnUndoAndRedo
 
 TEST_F(UndoHistoryTest, SceneSnapshotTransformReplayUsesUuidAcrossRename) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -2220,7 +2253,8 @@ TEST_F(UndoHistoryTest, SceneSnapshotTransformReplayUsesUuidAcrossRename) {
 
 TEST_F(UndoHistoryTest, SceneSnapshotTransformReplaySurvivesPayloadGrowth) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -2290,7 +2324,8 @@ TEST_F(UndoHistoryTest, TopologyProofIgnoresSequencerKeyframeNodes) {
 
 TEST_F(UndoHistoryTest, StaleUndoEntryIsDiscardedWithoutClearingOlderHistory) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -2329,7 +2364,8 @@ TEST_F(UndoHistoryTest, StaleUndoEntryIsDiscardedWithoutClearingOlderHistory) {
 
 TEST_F(UndoHistoryTest, SceneSnapshotTopologyReplayUsesUuidAcrossRename) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -2366,7 +2402,8 @@ TEST_F(UndoHistoryTest, SceneSnapshotTopologyReplayUsesUuidAcrossRename) {
 
 TEST_F(UndoHistoryTest, UuidKeyedPlyPathAndTrainingBindingSurviveRenameDeleteUndo) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -2399,7 +2436,8 @@ TEST_F(UndoHistoryTest, UuidKeyedPlyPathAndTrainingBindingSurviveRenameDeleteUnd
 
 TEST_F(UndoHistoryTest, SceneResetClearsHistory) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -2835,7 +2873,8 @@ TEST_F(UndoHistoryTest, SceneGraphPatchPayloadCaptureIsOperationScoped) {
 
 TEST_F(UndoHistoryTest, DeletingLastNodeRemainsUndoable) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -2862,7 +2901,8 @@ TEST_F(UndoHistoryTest, DeletingLastNodeRemainsUndoable) {
 
 TEST_F(UndoHistoryTest, DeleteKeepChildrenRestoresHierarchyOnUndo) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -2893,7 +2933,8 @@ TEST_F(UndoHistoryTest, DeleteKeepChildrenRestoresHierarchyOnUndo) {
 
 TEST_F(UndoHistoryTest, MergeGroupNodeHandlesNameReferenceFromGroupNode) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -2934,7 +2975,8 @@ TEST_F(UndoHistoryTest, MergeGroupNodeHandlesNameReferenceFromGroupNode) {
 TEST_F(UndoHistoryTest, DeleteResultHonorsTrainingRemovalPolicy) {
     LFS_CUDA_BACKEND_OR_RETURN();
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     auto trainer_manager = std::make_unique<lfs::vis::TrainerManager>();
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
@@ -2983,7 +3025,8 @@ TEST_F(UndoHistoryTest, DeleteResultHonorsTrainingRemovalPolicy) {
 TEST_F(UndoHistoryTest, RemoveNodesWithResultValidatesAllBeforeDeletingAny) {
     LFS_CUDA_BACKEND_OR_RETURN();
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     auto trainer_manager = std::make_unique<lfs::vis::TrainerManager>();
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
@@ -3020,7 +3063,8 @@ TEST_F(UndoHistoryTest, RemoveNodesWithResultValidatesAllBeforeDeletingAny) {
 
 TEST_F(UndoHistoryTest, RemoveNodesWithResultUsesStableIdsForDuplicateNames) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -3064,7 +3108,8 @@ TEST_F(UndoHistoryTest, RemoveNodesWithResultUsesStableIdsForDuplicateNames) {
 TEST_F(UndoHistoryTest, RemoveNodesByIdValidatesWholeBatchBeforeDeletingAny) {
     LFS_CUDA_BACKEND_OR_RETURN();
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     auto trainer_manager = std::make_unique<lfs::vis::TrainerManager>();
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
@@ -3092,7 +3137,8 @@ TEST_F(UndoHistoryTest, RemoveNodesByIdValidatesWholeBatchBeforeDeletingAny) {
 
 TEST_F(UndoHistoryTest, CameraDeleteUndoRepublishesCameraCount) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -3129,7 +3175,8 @@ TEST_F(UndoHistoryTest, CameraDeleteUndoRepublishesCameraCount) {
 
 TEST_F(UndoHistoryTest, CameraBatchDeleteUndoRestoresOrderAndId) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -3178,7 +3225,8 @@ TEST_F(UndoHistoryTest, DeleteUndoEntriesReplayAfterFreshIdRestore) {
 
 TEST_F(UndoHistoryTest, RenameNodeCreatesUndoableSceneGraphEntry) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -3229,7 +3277,8 @@ TEST_F(UndoHistoryTest, SceneGraphMetadataUndoRedoRestoresPayloadDivergence) {
 
 TEST_F(UndoHistoryTest, ReparentNodeCreatesUndoableSceneGraphEntry) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -3256,7 +3305,8 @@ TEST_F(UndoHistoryTest, ReparentNodeCreatesUndoableSceneGraphEntry) {
 
 TEST_F(UndoHistoryTest, AddGroupCreatesUndoableSceneGraphEntry) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -3273,7 +3323,8 @@ TEST_F(UndoHistoryTest, AddGroupCreatesUndoableSceneGraphEntry) {
 
 TEST_F(UndoHistoryTest, AnimatablePropertyWritesCreateUndoEntries) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -3294,7 +3345,8 @@ TEST_F(UndoHistoryTest, AnimatablePropertyWritesCreateUndoEntries) {
 
 TEST_F(UndoHistoryTest, RapidVisibilityChangesMergeIntoSingleUndoStep) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -3320,7 +3372,8 @@ TEST_F(UndoHistoryTest, RapidVisibilityChangesMergeIntoSingleUndoStep) {
 
 TEST_F(UndoHistoryTest, RapidVisibilityCommandsMergeIntoSingleUndoStep) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -3344,7 +3397,8 @@ TEST_F(UndoHistoryTest, RapidVisibilityCommandsMergeIntoSingleUndoStep) {
 
 TEST_F(UndoHistoryTest, VisibilityCommandsOutsideMergeWindowStaySeparate) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -3365,7 +3419,8 @@ TEST_F(UndoHistoryTest, VisibilityCommandsOutsideMergeWindowStaySeparate) {
 
 TEST_F(UndoHistoryTest, RapidLockChangesMergeIntoSingleUndoStep) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -3391,7 +3446,8 @@ TEST_F(UndoHistoryTest, RapidLockChangesMergeIntoSingleUndoStep) {
 
 TEST_F(UndoHistoryTest, DuplicateNodeCreatesUndoableSceneGraphEntry) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -3411,7 +3467,8 @@ TEST_F(UndoHistoryTest, DuplicateNodeCreatesUndoableSceneGraphEntry) {
 
 TEST_F(UndoHistoryTest, DuplicateNodeCompactsSoftDeletedSplats) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -3452,7 +3509,8 @@ TEST_F(UndoHistoryTest, DuplicateNodeCompactsSoftDeletedSplats) {
 
 TEST_F(UndoHistoryTest, DuplicateFullySoftDeletedSplatDoesNotPromoteChildren) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 
@@ -3479,7 +3537,8 @@ TEST_F(UndoHistoryTest, DuplicateFullySoftDeletedSplatDoesNotPromoteChildren) {
 
 TEST_F(UndoHistoryTest, SelectionSnapshotRestoresSelectionGroupsAndActiveGroup) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
-    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::screen::ScreenService rendering_manager_views;
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>(rendering_manager_views);
     lfs::vis::services().set(scene_manager.get());
     lfs::vis::services().set(rendering_manager.get());
 

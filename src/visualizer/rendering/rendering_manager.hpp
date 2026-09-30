@@ -6,6 +6,8 @@
 
 #include "render_target_id.hpp"
 
+#include "view_source.hpp"
+
 #include "camera_interaction_service.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/export.hpp"
@@ -136,7 +138,7 @@ namespace lfs::vis {
             bool split_right_flip_y = false;
         };
 
-        RenderingManager();
+        explicit RenderingManager(ViewSource& views);
         ~RenderingManager();
         void setWakeCallback(std::function<void()> callback);
 
@@ -306,6 +308,8 @@ namespace lfs::vis {
             DirtyMask dirty_flags,
             SceneUpscalerPresetUpdate preset_update = SceneUpscalerPresetUpdate::UseRequested);
         RenderSettings getSettings() const;
+        RenderSettings settingsForView(ViewId view) const;
+        [[nodiscard]] ViewId activeViewId() const { return view_source_.activeView(); }
         // The presentation pass reports its actual runtime choice after pipeline
         // preparation. Rendering uses this feedback on the next frame so a failed
         // reconstruction pipeline never receives a reduced-resolution image.
@@ -992,8 +996,12 @@ namespace lfs::vis {
         SplitViewService split_view_service_;
         ViewportFrameLifecycleService frame_lifecycle_service_;
 
+        RenderSettings activeSettingsLocked() const;
+        void storeActiveSettingsLocked(const RenderSettings& settings);
+
         // Settings
-        RenderSettings settings_;
+        ViewSource& view_source_;
+        SceneRenderSettings settings_;
         int depth_window_preview_count_ = 0;
         std::optional<DepthWindowState> depth_window_drag_backup_;
         uint64_t depth_window_drag_owner_ = 0;

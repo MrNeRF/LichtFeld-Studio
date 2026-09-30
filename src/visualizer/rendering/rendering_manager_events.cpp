@@ -118,10 +118,13 @@ namespace lfs::vis {
         SplitViewService::ModeChangeResult result;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
-            const SplitViewMode previous_mode = settings_.split_view_mode;
-            result = split_view_service_.toggleMode(settings_, SplitViewMode::PLYComparison);
+            auto settings = activeSettingsLocked();
+            const SplitViewMode previous_mode = settings.split_view_mode;
+            result = split_view_service_.toggleMode(settings, SplitViewMode::PLYComparison);
             applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode);
             markDirty(DirtyFlag::SPLIT_VIEW);
+
+            storeActiveSettingsLocked(settings);
         }
         applySplitModeChange(result);
         LOG_INFO("Split view: {}", result.current_mode == SplitViewMode::PLYComparison ? "PLY comparison mode" : "disabled");
@@ -139,10 +142,13 @@ namespace lfs::vis {
         SplitViewService::ModeChangeResult result;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
-            const SplitViewMode previous_mode = settings_.split_view_mode;
-            result = split_view_service_.toggleMode(settings_, SplitViewMode::GTComparison);
+            auto settings = activeSettingsLocked();
+            const SplitViewMode previous_mode = settings.split_view_mode;
+            result = split_view_service_.toggleMode(settings, SplitViewMode::GTComparison);
             applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode);
             markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::SPLATS);
+
+            storeActiveSettingsLocked(settings);
         }
 
         applySplitModeChange(result);
@@ -175,10 +181,11 @@ namespace lfs::vis {
         SplitViewMode current_mode;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
-            if (settings_.split_view_mode == mode) {
+            auto settings = activeSettingsLocked();
+            if (settings.split_view_mode == mode) {
                 return;
             }
-            current_mode = settings_.split_view_mode;
+            current_mode = settings.split_view_mode;
         }
         cancelDepthWindowDragBeforeSplitModeChange(
             current_mode, mode);
@@ -187,21 +194,24 @@ namespace lfs::vis {
 
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
-            SplitViewMode previous_mode = settings_.split_view_mode;
-            if (settings_.split_view_mode != SplitViewMode::Disabled) {
-                changes.push_back(split_view_service_.toggleMode(
-                    settings_, settings_.split_view_mode));
+            auto settings = activeSettingsLocked();
+            SplitViewMode previous_mode = settings.split_view_mode;
+            if (settings.split_view_mode != SplitViewMode::Disabled) {
+                changes.push_back(split_view_service_.toggleMode(settings, settings.split_view_mode));
                 applyDepthWindowModeTransitionLocked(
-                    previous_mode, settings_.split_view_mode);
-                previous_mode = settings_.split_view_mode;
+                    previous_mode,
+                    settings.split_view_mode);
+                previous_mode = settings.split_view_mode;
             }
             if (mode != SplitViewMode::Disabled) {
-                changes.push_back(split_view_service_.toggleMode(
-                    settings_, mode));
+                changes.push_back(split_view_service_.toggleMode(settings, mode));
                 applyDepthWindowModeTransitionLocked(
-                    previous_mode, settings_.split_view_mode);
+                    previous_mode,
+                    settings.split_view_mode);
             }
             markDirty(DirtyFlag::ALL);
+
+            storeActiveSettingsLocked(settings);
         }
         for (const auto& change : changes)
             applySplitModeChange(change);
@@ -220,39 +230,46 @@ namespace lfs::vis {
 
     void RenderingManager::handleSplitPositionChanged(const float position) {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        settings_.split_position = std::clamp(position, 0.0f, 1.0f);
+        auto settings = activeSettingsLocked();
+        settings.split_position = std::clamp(position, 0.0f, 1.0f);
         LOG_TRACE("Split position changed to: {}", position);
         markDirty(DirtyFlag::SPLIT_POSITION);
+
+        storeActiveSettingsLocked(settings);
     }
 
     void RenderingManager::handleRenderSettingsChanged(const ui::RenderSettingsChanged& event) {
         std::lock_guard<std::mutex> lock(settings_mutex_);
+        auto settings = activeSettingsLocked();
         if (event.sh_degree) {
-            settings_.sh_degree = *event.sh_degree;
-            LOG_TRACE("SH_DEGREE changed to: {}", settings_.sh_degree);
+            settings.sh_degree = *event.sh_degree;
+            LOG_TRACE("SH_DEGREE changed to: {}", settings.sh_degree);
         }
         if (event.focal_length_mm) {
-            settings_.focal_length_mm = *event.focal_length_mm;
-            LOG_TRACE("Focal length changed to: {} mm", settings_.focal_length_mm);
+            settings.focal_length_mm = *event.focal_length_mm;
+            LOG_TRACE("Focal length changed to: {} mm", settings.focal_length_mm);
         }
         if (event.scaling_modifier) {
-            settings_.scaling_modifier = *event.scaling_modifier;
-            LOG_TRACE("Scaling modifier changed to: {}", settings_.scaling_modifier);
+            settings.scaling_modifier = *event.scaling_modifier;
+            LOG_TRACE("Scaling modifier changed to: {}", settings.scaling_modifier);
         }
         if (event.antialiasing) {
-            settings_.antialiasing = *event.antialiasing;
-            LOG_TRACE("Antialiasing: {}", settings_.antialiasing ? "enabled" : "disabled");
+            settings.antialiasing = *event.antialiasing;
+            LOG_TRACE("Antialiasing: {}",
+                      settings.antialiasing ? "enabled" : "disabled");
         }
         if (event.background_color) {
-            settings_.background_color = *event.background_color;
+            settings.background_color = *event.background_color;
             LOG_TRACE("Background color changed");
         }
         if (event.equirectangular) {
-            settings_.equirectangular = *event.equirectangular;
-            enforceProjectionBackend(settings_);
-            LOG_TRACE("Equirectangular rendering: {}", settings_.equirectangular ? "enabled" : "disabled");
+            settings.equirectangular = *event.equirectangular;
+            LOG_TRACE("Equirectangular rendering: {}",
+                      settings.equirectangular ? "enabled" : "disabled");
         }
         markDirty(DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::BACKGROUND);
+
+        storeActiveSettingsLocked(settings);
     }
 
     void RenderingManager::handleWindowResized() {
@@ -262,12 +279,15 @@ namespace lfs::vis {
 
     void RenderingManager::handleGridSettingsChanged(const ui::GridSettingsChanged& event) {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        settings_.show_grid = event.enabled;
-        settings_.grid_plane = clampGridPlane(event.plane);
-        settings_.grid_opacity = event.opacity;
+        auto settings = activeSettingsLocked();
+        settings.show_grid = event.enabled;
+        settings.grid_plane = clampGridPlane(event.plane);
+        settings.grid_opacity = event.opacity;
         LOG_TRACE("Grid settings updated - enabled: {}, plane: {}, opacity: {}",
-                  event.enabled, settings_.grid_plane, event.opacity);
+                  event.enabled, settings.grid_plane, event.opacity);
         markDirty(DirtyFlag::OVERLAY);
+
+        storeActiveSettingsLocked(settings);
     }
 
     void RenderingManager::handleTrainingStarted() {
@@ -303,9 +323,12 @@ namespace lfs::vis {
         SplitViewService::ModeChangeResult result;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
-            const SplitViewMode previous_mode = settings_.split_view_mode;
-            result = split_view_service_.handleSceneLoaded(settings_);
+            auto settings = activeSettingsLocked();
+            const SplitViewMode previous_mode = settings.split_view_mode;
+            result = split_view_service_.handleSceneLoaded(settings);
             applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode);
+
+            storeActiveSettingsLocked(settings);
         }
         applySplitModeChange(result);
         if (splitViewUsesGTComparison(result.previous_mode) && !splitViewUsesGTComparison(result.current_mode)) {
@@ -330,9 +353,12 @@ namespace lfs::vis {
         SplitViewService::ModeChangeResult result;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
-            const SplitViewMode previous_mode = settings_.split_view_mode;
-            result = split_view_service_.handleSceneCleared(settings_);
+            auto settings = activeSettingsLocked();
+            const SplitViewMode previous_mode = settings.split_view_mode;
+            result = split_view_service_.handleSceneCleared(settings);
             applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode);
+
+            storeActiveSettingsLocked(settings);
         }
         camera_interaction_service_.clearCurrentCamera();
         camera_interaction_service_.clearHoveredCamera();
@@ -368,11 +394,14 @@ namespace lfs::vis {
         SplitViewService::ModeChangeResult result;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
-            const SplitViewMode previous_mode = settings_.split_view_mode;
-            result = split_view_service_.handlePLYRemoved(settings_,
+            auto settings = activeSettingsLocked();
+            const SplitViewMode previous_mode = settings.split_view_mode;
+            result = split_view_service_.handlePLYRemoved(settings,
                                                           services().sceneOrNull());
             applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode);
             markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY | DirtyFlag::SPLIT_VIEW);
+
+            storeActiveSettingsLocked(settings);
         }
         applySplitModeChange(result);
         if (result.mode_changed) {
@@ -382,24 +411,33 @@ namespace lfs::vis {
 
     void RenderingManager::handleCropBoxChanged(const bool enabled) {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        settings_.use_crop_box = enabled;
+        auto settings = activeSettingsLocked();
+        settings.use_crop_box = enabled;
         markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+
+        storeActiveSettingsLocked(settings);
     }
 
     void RenderingManager::handleEllipsoidChanged(const bool enabled) {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        settings_.use_ellipsoid = enabled;
+        auto settings = activeSettingsLocked();
+        settings.use_ellipsoid = enabled;
         markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+
+        storeActiveSettingsLocked(settings);
     }
 
     void RenderingManager::handlePointCloudModeChanged(const ui::PointCloudModeChanged& event) {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        settings_.point_cloud_mode = event.enabled;
-        settings_.voxel_size = event.voxel_size;
+        auto settings = activeSettingsLocked();
+        settings.point_cloud_mode = event.enabled;
+        settings.voxel_size = event.voxel_size;
         LOG_DEBUG("Point cloud mode: {}, voxel size: {}",
                   event.enabled ? "enabled" : "disabled", event.voxel_size);
         viewport_artifact_service_.clearViewportOutput();
         markDirty(DirtyFlag::SPLATS);
+
+        storeActiveSettingsLocked(settings);
     }
 
 } // namespace lfs::vis

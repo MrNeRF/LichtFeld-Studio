@@ -426,7 +426,9 @@ namespace lfs::vis {
         size_t lod_page_pool_splats = DEFAULT_LOD_PAGE_POOL_SPLATS;    // VRAM page-pool budget for RAD streaming (0 = auto)
         float lod_pool_vram_fraction = DEFAULT_LOD_POOL_VRAM_FRACTION; // out-of-core pool share of free VRAM
         int lod_fade_frames = DEFAULT_LOD_FADE_FRAMES;                 // newly streamed pages fade in over N frames
-        bool lod_debug_colors = false;                                 // Per-level color tinting
+        [[nodiscard]] bool operator==(const SceneRenderSettings&) const = default;
+
+        bool lod_debug_colors = false; // Per-level color tinting
     };
 
     // What one render of one view uses: the scene's settings combined with

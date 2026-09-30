@@ -20,6 +20,7 @@
 #include "rendering/render_constants.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "screen/screen_service.hpp"
 #include "selection/depth_window_geometry.hpp"
 #include "selection/selection_service.hpp"
 #include "test_view_targets.hpp"
@@ -174,7 +175,7 @@ protected:
         lfs::vis::services().clear();
         lfs::vis::op::undoHistory().clear();
 
-        rendering_manager_ = std::make_unique<lfs::vis::RenderingManager>();
+        rendering_manager_ = std::make_unique<lfs::vis::RenderingManager>(rendering_manager__views);
         scene_manager_ = std::make_unique<lfs::vis::SceneManager>();
         lfs::vis::services().set(rendering_manager_.get());
         lfs::vis::services().set(scene_manager_.get());
@@ -227,6 +228,8 @@ protected:
         context_->setModalEvent(event);
         return op.modal(*context_, props);
     }
+
+    lfs::vis::screen::ScreenService rendering_manager__views;
 
     std::unique_ptr<lfs::vis::RenderingManager> rendering_manager_;
     std::unique_ptr<lfs::vis::SceneManager> scene_manager_;

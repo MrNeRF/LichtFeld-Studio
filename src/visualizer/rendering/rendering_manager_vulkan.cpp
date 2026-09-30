@@ -1509,7 +1509,8 @@ namespace lfs::vis {
 #endif
             vksplat_viewport_renderer_->releaseScratchOnIdle(true);
         }
-        const auto frame_settings = getSettings();
+        auto frame_settings = context.settings;
+        enforceProjectionBackend(frame_settings);
         const bool frame_depth_window_drag_preview = depthWindowDragPreview();
         SceneManager* const scene_manager = context.scene_manager;
         auto* const trainer_manager = scene_manager ? scene_manager->getTrainerManager() : nullptr;

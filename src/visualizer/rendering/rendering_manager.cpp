@@ -227,7 +227,7 @@ namespace lfs::vis {
     }
 
     // RenderingManager Implementation
-    RenderingManager::RenderingManager() {
+    RenderingManager::RenderingManager(ViewSource& views) : view_source_(views) {
         viewport_interop_ = std::make_unique<ViewportInteropService>();
         gt_comparison_image_worker_ = std::jthread([this](std::stop_token stop_token) {
             gtComparisonImageWorkerLoop(stop_token);
@@ -634,79 +634,83 @@ namespace lfs::vis {
         std::unique_lock<std::mutex> transition_lock;
         for (;;) {
             std::unique_lock<std::mutex> lock(settings_mutex_);
+            auto settings = activeSettingsLocked();
             const bool split_mode_changes =
-                settings_.split_view_mode != sanitized_settings.split_view_mode;
+                settings.split_view_mode != sanitized_settings.split_view_mode;
             if (split_mode_changes && !transition_lock.owns_lock()) {
                 lock.unlock();
                 transition_lock = std::unique_lock<std::mutex>(depth_window_transition_mutex_);
                 continue;
             }
-            const SplitViewMode previous_split_mode = settings_.split_view_mode;
-            if (split_view_service_.isGTComparisonActive(settings_) ||
+            const SplitViewMode previous_split_mode = settings.split_view_mode;
+            if (split_view_service_.isGTComparisonActive(settings) ||
                 split_view_service_.isGTComparisonActive(sanitized_settings)) {
                 sanitized_settings.show_camera_frustums = false;
             }
-            const float previous_depth_filter_scale_x = settings_.depth_filter_scale_x;
-            const float previous_depth_filter_scale_y = settings_.depth_filter_scale_y;
-            const float previous_depth_filter_offset_x = settings_.depth_filter_offset_x;
-            const float previous_depth_filter_offset_y = settings_.depth_filter_offset_y;
-            const float previous_depth_filter_min_z = settings_.depth_filter_min.z;
-            const float previous_depth_filter_max_z = settings_.depth_filter_max.z;
-            lod_enabled_turned_on = !settings_.lod_enabled && sanitized_settings.lod_enabled;
+            const float previous_depth_filter_scale_x = settings.depth_filter_scale_x;
+            const float previous_depth_filter_scale_y = settings.depth_filter_scale_y;
+            const float previous_depth_filter_offset_x =
+                settings.depth_filter_offset_x;
+            const float previous_depth_filter_offset_y =
+                settings.depth_filter_offset_y;
+            const float previous_depth_filter_min_z = settings.depth_filter_min.z;
+            const float previous_depth_filter_max_z = settings.depth_filter_max.z;
+            lod_enabled_turned_on =
+                !settings.lod_enabled && sanitized_settings.lod_enabled;
             lod_request_changed =
-                settings_.lod_enabled != sanitized_settings.lod_enabled ||
-                settings_.lod_max_splats != sanitized_settings.lod_max_splats ||
-                settings_.lod_render_scale != sanitized_settings.lod_render_scale ||
-                settings_.lod_behind_camera_penalty != sanitized_settings.lod_behind_camera_penalty ||
-                settings_.lod_cone_foveation != sanitized_settings.lod_cone_foveation ||
-                settings_.lod_cone_inner_degrees != sanitized_settings.lod_cone_inner_degrees ||
-                settings_.lod_cone_outer_degrees != sanitized_settings.lod_cone_outer_degrees;
+                settings.lod_enabled != sanitized_settings.lod_enabled ||
+                settings.lod_max_splats != sanitized_settings.lod_max_splats ||
+                settings.lod_render_scale != sanitized_settings.lod_render_scale ||
+                settings.lod_behind_camera_penalty != sanitized_settings.lod_behind_camera_penalty ||
+                settings.lod_cone_foveation != sanitized_settings.lod_cone_foveation ||
+                settings.lod_cone_inner_degrees != sanitized_settings.lod_cone_inner_degrees ||
+                settings.lod_cone_outer_degrees != sanitized_settings.lod_cone_outer_degrees;
 
             if (sanitized_settings.camera_metrics_mode == RenderSettings::CameraMetricsMode::Off) {
                 clear_metrics = true;
             } else if (camera_interaction_service_.currentCameraId() >= 0 &&
-                       shouldRefreshCameraMetricsForSettings(settings_, sanitized_settings)) {
+                       shouldRefreshCameraMetricsForSettings(settings, sanitized_settings)) {
                 clear_metrics = true;
             }
 
-            const float previous_depth_min_z = settings_.depth_filter_min.z;
-            const float previous_depth_max_z = settings_.depth_filter_max.z;
-            const auto previous_backend = settings_.raster_backend;
-            const bool previous_gut = settings_.gut;
-            settings_ = sanitized_settings;
-            const bool gut_toggle_only =
-                settings_.raster_backend == previous_backend && settings_.gut != previous_gut;
-            settings_.raster_backend = gut_toggle_only
-                                           ? lfs::rendering::viewerRasterBackendForGutMode(settings_.gut)
-                                           : lfs::rendering::normalizeViewerRasterBackend(
-                                                 settings_.raster_backend, settings_.gut);
-            settings_.gut = lfs::rendering::isGutBackend(settings_.raster_backend);
-            enforceProjectionBackend(settings_);
-            sanitizeDepthViewSettings(settings_);
-            sanitizeGTComparisonSettings(settings_);
-            sanitizeSelectionWindowSettings(settings_);
-            settings_.grid_plane = clampGridPlane(settings_.grid_plane);
+            const float previous_depth_min_z = settings.depth_filter_min.z;
+            const float previous_depth_max_z = settings.depth_filter_max.z;
+            const auto previous_backend = settings.raster_backend;
+            const bool previous_gut = settings.gut;
+            settings = sanitized_settings;
+            const bool gut_toggle_only = settings.raster_backend == previous_backend &&
+                                         settings.gut != previous_gut;
+            settings.raster_backend = gut_toggle_only
+                                          ? lfs::rendering::viewerRasterBackendForGutMode(settings.gut)
+                                          : lfs::rendering::normalizeViewerRasterBackend(
+                                                settings.raster_backend, settings.gut);
+            settings.gut = lfs::rendering::isGutBackend(settings.raster_backend);
+            sanitizeDepthViewSettings(settings);
+            sanitizeGTComparisonSettings(settings);
+            sanitizeSelectionWindowSettings(settings);
+            settings.grid_plane = clampGridPlane(settings.grid_plane);
 
             const bool depth_window_projection_changed =
-                previous_depth_filter_scale_x != settings_.depth_filter_scale_x ||
-                previous_depth_filter_scale_y != settings_.depth_filter_scale_y ||
-                previous_depth_filter_offset_x != settings_.depth_filter_offset_x ||
-                previous_depth_filter_offset_y != settings_.depth_filter_offset_y ||
-                previous_depth_filter_min_z != settings_.depth_filter_min.z ||
-                previous_depth_filter_max_z != settings_.depth_filter_max.z;
+                previous_depth_filter_scale_x != settings.depth_filter_scale_x ||
+                previous_depth_filter_scale_y != settings.depth_filter_scale_y ||
+                previous_depth_filter_offset_x != settings.depth_filter_offset_x ||
+                previous_depth_filter_offset_y != settings.depth_filter_offset_y ||
+                previous_depth_filter_min_z != settings.depth_filter_min.z ||
+                previous_depth_filter_max_z != settings.depth_filter_max.z;
 
             if (depth_window_projection_changed) {
                 depth_window_drag_owner_ = 0;
                 depth_window_drag_backup_.reset();
             }
-
-            if (settings_.depth_filter_min.z != previous_depth_min_z ||
-                settings_.depth_filter_max.z != previous_depth_max_z) {
+            if (settings.depth_filter_min.z != previous_depth_min_z ||
+                settings.depth_filter_max.z != previous_depth_max_z) {
                 ++depth_window_projection_generation_;
             }
             if (split_mode_changes)
                 applyDepthWindowModeTransitionLocked(
-                    previous_split_mode, settings_.split_view_mode);
+                    previous_split_mode,
+                    settings.split_view_mode);
+            storeActiveSettingsLocked(settings);
             markDirty(dirty_flags);
             break;
         }
@@ -726,9 +730,23 @@ namespace lfs::vis {
         }
     }
 
+    RenderSettings RenderingManager::activeSettingsLocked() const {
+        return RenderSettings(settings_, view_source_.viewSettings(view_source_.activeView()).value());
+    }
+
+    void RenderingManager::storeActiveSettingsLocked(const RenderSettings& settings) {
+        settings_ = settings.scene();
+        view_source_.editViewSettings(view_source_.activeView(), [&](ViewSettings& view) { view = settings.view(); });
+    }
+
+    RenderSettings RenderingManager::settingsForView(const ViewId view) const {
+        std::lock_guard lock(settings_mutex_);
+        return RenderSettings(settings_, view_source_.viewSettings(view).value());
+    }
+
     RenderSettings RenderingManager::getSettings() const {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        return settings_;
+        std::lock_guard lock(settings_mutex_);
+        return activeSettingsLocked();
     }
 
     void RenderingManager::reportSceneUpscalerRuntimeSelection(
@@ -755,57 +773,40 @@ namespace lfs::vis {
     }
 
     void RenderingManager::setOrthographic(const bool enabled, const float viewport_height, const float distance_to_pivot) {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-
-        constexpr float MIN_DISTANCE = 0.01f;
-        constexpr float MIN_SCALE = 1.0f;
-        constexpr float MAX_SCALE = 10000.0f;
-        constexpr float DEFAULT_SCALE = 100.0f;
-
-        if (viewport_height <= 0.0f || distance_to_pivot <= MIN_DISTANCE) {
-            LOG_WARN("setOrthographic: invalid viewport_height={} or distance={}", viewport_height, distance_to_pivot);
-            if (enabled && !settings_.orthographic) {
-                settings_.ortho_scale = DEFAULT_SCALE;
-            }
-            settings_.orthographic = enabled;
-            markDirty(DirtyFlag::CAMERA);
-            return;
+        auto settings = getSettings();
+        if (enabled && !settings.orthographic) {
+            const float vfov = lfs::rendering::focalLengthToVFov(settings.focal_length_mm);
+            settings.ortho_scale = viewport_height > 0.0f && distance_to_pivot > 0.01f
+                                       ? std::clamp(
+                                             viewport_height / (2.0f * distance_to_pivot * std::tan(glm::radians(vfov) * 0.5f)), 1.0f, 10000.0f)
+                                       : 100.0f;
         }
-
-        if (enabled && !settings_.orthographic) {
-            const float vfov = lfs::rendering::focalLengthToVFov(settings_.focal_length_mm);
-            const float half_tan_fov = std::tan(glm::radians(vfov) * 0.5f);
-            settings_.ortho_scale = std::clamp(
-                viewport_height / (2.0f * distance_to_pivot * half_tan_fov),
-                MIN_SCALE, MAX_SCALE);
-        }
-
-        settings_.orthographic = enabled;
-        markDirty(DirtyFlag::CAMERA);
+        settings.orthographic = enabled;
+        updateSettings(settings, DirtyFlag::CAMERA);
     }
 
     float RenderingManager::getFovDegrees() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        return lfs::rendering::focalLengthToVFov(settings_.focal_length_mm);
+        return lfs::rendering::focalLengthToVFov(activeSettingsLocked().focal_length_mm);
     }
 
     float RenderingManager::getFocalLengthMm() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        return settings_.focal_length_mm;
+        return activeSettingsLocked().focal_length_mm;
     }
 
     void RenderingManager::setFocalLength(const float focal_mm) {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        settings_.focal_length_mm = std::clamp(focal_mm,
-                                               lfs::rendering::MIN_FOCAL_LENGTH_MM,
-                                               lfs::rendering::MAX_FOCAL_LENGTH_MM);
-        markDirty(DirtyFlag::CAMERA);
+        auto settings = getSettings();
+        settings.focal_length_mm = std::clamp(focal_mm,
+                                              lfs::rendering::MIN_FOCAL_LENGTH_MM,
+                                              lfs::rendering::MAX_FOCAL_LENGTH_MM);
+        updateSettings(settings, DirtyFlag::CAMERA);
     }
 
     void RenderingManager::advanceSplitOffset() {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        split_view_service_.advanceSplitOffset(settings_);
-        markDirty(DirtyFlag::SPLIT_VIEW);
+        auto settings = getSettings();
+        split_view_service_.advanceSplitOffset(settings);
+        updateSettings(settings, DirtyFlag::SPLIT_VIEW);
     }
 
     SplitViewInfo RenderingManager::getSplitViewInfo() const {
@@ -819,23 +820,23 @@ namespace lfs::vis {
 
     bool RenderingManager::isSplitViewActive() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        return split_view_service_.isActive(settings_);
+        return split_view_service_.isActive(activeSettingsLocked());
     }
 
     bool RenderingManager::isGTComparisonActive() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        return split_view_service_.isGTComparisonActive(settings_);
+        return split_view_service_.isGTComparisonActive(activeSettingsLocked());
     }
 
     bool RenderingManager::isPLYComparisonActive() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        return splitViewUsesPLYComparison(settings_.split_view_mode);
+        return splitViewUsesPLYComparison(activeSettingsLocked().split_view_mode);
     }
 
     void RenderingManager::beginDepthWindowDrag(uint64_t& out_drag_token) {
         std::lock_guard lock(settings_mutex_);
         if (!depth_window_drag_owner_)
-            depth_window_drag_backup_ = depthWindowFromProjection(settings_);
+            depth_window_drag_backup_ = depthWindowFromProjection(activeSettingsLocked());
         out_drag_token = depth_window_drag_owner_ = ++depth_window_last_drag_token_;
     }
 
@@ -866,22 +867,22 @@ namespace lfs::vis {
 
     GTComparisonMode RenderingManager::getGTComparisonMode() const {
         std::lock_guard lock(settings_mutex_);
-        return settings_.gt_comparison_mode;
+        return activeSettingsLocked().gt_comparison_mode;
     }
 
     SplitViewMode RenderingManager::getSplitViewMode() const {
         std::lock_guard lock(settings_mutex_);
-        return settings_.split_view_mode;
+        return activeSettingsLocked().split_view_mode;
     }
 
     float RenderingManager::getSplitPosition() const {
         std::lock_guard lock(settings_mutex_);
-        return settings_.split_position;
+        return activeSettingsLocked().split_position;
     }
 
     DepthWindowState RenderingManager::getDepthWindow() const {
         std::lock_guard lock(settings_mutex_);
-        return depthWindowFromProjection(settings_);
+        return depthWindowFromProjection(activeSettingsLocked());
     }
 
     void RenderingManager::setDepthWindow(const DepthWindowState& state) {
@@ -934,7 +935,7 @@ namespace lfs::vis {
 
     op::DepthWindowModeSnapshot
     RenderingManager::depthWindowSnapshotLocked() const {
-        return {.window = depthWindowFromProjection(settings_),
+        return {.window = depthWindowFromProjection(activeSettingsLocked()),
                 .mode_epoch = depth_window_mode_epoch_};
     }
 
@@ -987,10 +988,11 @@ namespace lfs::vis {
     }
 
     void RenderingManager::applyDepthWindowProjectionLocked(const DepthWindowState& state) {
-        const auto previous = depthWindowFromProjection(settings_);
-        applyDepthWindowToProjection(settings_, state);
-        if (previous.near_plane != state.near_plane ||
-            previous.far_plane != state.far_plane)
+        auto settings = activeSettingsLocked();
+        const auto previous = depthWindowFromProjection(settings);
+        applyDepthWindowToProjection(settings, state);
+        storeActiveSettingsLocked(settings);
+        if (previous.near_plane != state.near_plane || previous.far_plane != state.far_plane)
             ++depth_window_projection_generation_;
     }
 
@@ -1220,9 +1222,9 @@ namespace lfs::vis {
     std::optional<float> RenderingManager::getSplitDividerScreenX(const glm::vec2& viewport_pos,
                                                                   const glm::vec2& viewport_size) const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        if (!split_view_service_.isActive(settings_) ||
-            (splitViewUsesGTComparison(settings_.split_view_mode) &&
-             gtComparisonShowsLoss(settings_.gt_comparison_mode))) {
+        if (!split_view_service_.isActive(activeSettingsLocked()) ||
+            (splitViewUsesGTComparison(activeSettingsLocked().split_view_mode) &&
+             gtComparisonShowsLoss(activeSettingsLocked().gt_comparison_mode))) {
             return std::nullopt;
         }
 
@@ -1235,7 +1237,7 @@ namespace lfs::vis {
         }
 
         return viewport_pos.x + content_bounds.x +
-               static_cast<float>(splitViewDividerPixel(content_width, settings_.split_position));
+               static_cast<float>(splitViewDividerPixel(content_width, activeSettingsLocked().split_position));
     }
 
     void RenderingManager::applySplitModeChange(const SplitViewService::ModeChangeResult& result) {

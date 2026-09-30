@@ -130,7 +130,7 @@ namespace lfs::vis {
             static_cast<float>(viewport_height),
             false};
 
-        if (split_view_service_.isGTComparisonActive(settings_)) {
+        if (split_view_service_.isGTComparisonActive(getSettings())) {
             glm::ivec2 content_dims{0, 0};
             if (const auto service_dims = split_view_service_.gtContentDimensions()) {
                 content_dims = *service_dims;
@@ -171,7 +171,7 @@ namespace lfs::vis {
 
     std::optional<RenderingManager::GTSelectionContext> RenderingManager::gtComparisonSelectionContext() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        if (!split_view_service_.isGTComparisonActive(settings_)) {
+        if (!split_view_service_.isGTComparisonActive(activeSettingsLocked())) {
             return std::nullopt;
         }
         if (!vulkan_gt_comparison_selection_view_.has_value()) {
@@ -296,8 +296,7 @@ namespace lfs::vis {
         const int hovered_camera = camera_interaction_service_.pickCameraFrustum(
             engine,
             viewport_interaction_context_.scene_manager,
-            viewport_interaction_context_,
-            settings_,
+            viewport_interaction_context_, getSettings(),
             mouse_pos,
             hover_changed);
 

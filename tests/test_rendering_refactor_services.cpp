@@ -22,6 +22,7 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/render_constants.hpp"
 #include "rendering/vksplat_viewport_renderer.hpp"
+#include "screen/screen_service.hpp"
 #include "selection/selection_service.hpp"
 #include "tools/selection_tool.hpp"
 #include "visualizer/gui_capabilities.hpp"
@@ -419,7 +420,8 @@ namespace lfs::vis {
     }
 
     TEST_F(RenderingManagerEventsTest, LossModeDoesNotExposeDraggableDivider) {
-        RenderingManager manager;
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
         auto settings = manager.getSettings();
         settings.split_view_mode = SplitViewMode::GTComparison;
         settings.gt_comparison_mode = GTComparisonMode::RGB;
@@ -445,8 +447,7 @@ namespace lfs::vis {
         EXPECT_EQ(settings.split_view_offset, 0);
     }
 
-    TEST(SplitViewServiceTest,
-         GtRenderCameraUsesVisualizerCameraAxesAndNormalizedSceneRotation) {
+    TEST(SplitViewServiceTest, GtRenderCameraUsesVisualizerCameraAxesAndNormalizedSceneRotation) {
         using lfs::core::Camera;
         using lfs::core::CameraModelType;
         using lfs::core::Device;
@@ -565,7 +566,8 @@ namespace lfs::vis {
     }
 
     TEST_F(RenderingManagerEventsTest, OrthographicEnterSetsScaleFromCurrentFocal) {
-        RenderingManager manager;
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
         auto settings = manager.getSettings();
         settings.focal_length_mm = 50.0f;
         manager.updateSettings(settings);
@@ -584,7 +586,8 @@ namespace lfs::vis {
     }
 
     TEST_F(RenderingManagerEventsTest, OrthographicLeaveKeepsFocalLength) {
-        RenderingManager manager;
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
         auto settings = manager.getSettings();
         settings.focal_length_mm = 35.0f;
         manager.updateSettings(settings);
@@ -1678,7 +1681,8 @@ namespace lfs::vis {
     }
     TEST_F(SceneManagerRenderStateTest, EnsureEllipsoidConvertsExistingCropBoxInPlace) {
         SceneManager manager;
-        RenderingManager rendering_manager;
+        lfs::vis::screen::ScreenService rendering_manager_views;
+        RenderingManager rendering_manager{rendering_manager_views};
         auto& scene = manager.getScene();
         const auto parent_id = scene.addPointCloud("Model", makeTestPointCloud());
         ASSERT_NE(parent_id, lfs::core::NULL_NODE);
@@ -1740,7 +1744,8 @@ namespace lfs::vis {
 
     TEST_F(SceneManagerRenderStateTest, DefaultCropBoxConvertsToEllipsoidAtCropCenter) {
         SceneManager manager;
-        RenderingManager rendering_manager;
+        lfs::vis::screen::ScreenService rendering_manager_views;
+        RenderingManager rendering_manager{rendering_manager_views};
         auto& scene = manager.getScene();
         const auto parent_id = scene.addPointCloud("Model", makeTestPointCloud());
         ASSERT_NE(parent_id, lfs::core::NULL_NODE);
@@ -1770,7 +1775,8 @@ namespace lfs::vis {
 
     TEST_F(SceneManagerRenderStateTest, AddCropCommandsConvertSelectedCropVolumeViaParent) {
         SceneManager manager;
-        RenderingManager rendering_manager;
+        lfs::vis::screen::ScreenService rendering_manager_views;
+        RenderingManager rendering_manager{rendering_manager_views};
         services().set(&rendering_manager);
         EditorContext editor;
         services().set(&editor);
@@ -1808,7 +1814,8 @@ namespace lfs::vis {
 
     TEST_F(SceneManagerRenderStateTest, AddCropCommandsRevealExistingHiddenCropVolume) {
         SceneManager manager;
-        RenderingManager rendering_manager;
+        lfs::vis::screen::ScreenService rendering_manager_views;
+        RenderingManager rendering_manager{rendering_manager_views};
         services().set(&rendering_manager);
         auto& scene = manager.getScene();
         const auto parent_id = scene.addPointCloud("Model", makeTestPointCloud());
@@ -1842,7 +1849,8 @@ namespace lfs::vis {
 
     TEST_F(SceneManagerRenderStateTest, ResetAndFitPreserveEnabledCropEffects) {
         SceneManager manager;
-        RenderingManager rendering_manager;
+        lfs::vis::screen::ScreenService rendering_manager_views;
+        RenderingManager rendering_manager{rendering_manager_views};
         services().set(&rendering_manager);
         auto& scene = manager.getScene();
         const auto parent_id = scene.addSplat("Model", makeTestSplat(0.0f));
@@ -1935,7 +1943,8 @@ namespace lfs::vis {
 
     TEST_F(SceneManagerRenderStateTest, DeletingSelectedCropVolumeSelectsParentAndClearsRenderState) {
         SceneManager manager;
-        RenderingManager rendering_manager;
+        lfs::vis::screen::ScreenService rendering_manager_views;
+        RenderingManager rendering_manager{rendering_manager_views};
         services().set(&manager);
         services().set(&rendering_manager);
         auto& scene = manager.getScene();
@@ -1966,7 +1975,8 @@ namespace lfs::vis {
 
     TEST_F(SceneManagerRenderStateTest, EnsureCropBoxConvertsExistingEllipsoidAndUndoRedoRestoresShape) {
         SceneManager manager;
-        RenderingManager rendering_manager;
+        lfs::vis::screen::ScreenService rendering_manager_views;
+        RenderingManager rendering_manager{rendering_manager_views};
         auto& scene = manager.getScene();
         const auto parent_id = scene.addPointCloud("Model", makeTestPointCloud());
         ASSERT_NE(parent_id, lfs::core::NULL_NODE);
@@ -2764,7 +2774,8 @@ namespace lfs::vis {
     }
 
     TEST_F(RenderingManagerEventsTest, SceneLoadedDisablesGtComparison) {
-        RenderingManager manager;
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
         lfs::core::events::cmd::ToggleGTComparison{}.emit();
         EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::GTComparison);
 
@@ -2779,7 +2790,8 @@ namespace lfs::vis {
     }
 
     TEST_F(RenderingManagerEventsTest, SceneClearedDisablesGtComparison) {
-        RenderingManager manager;
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
         lfs::core::events::cmd::ToggleGTComparison{}.emit();
         EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::GTComparison);
 
@@ -2792,7 +2804,9 @@ namespace lfs::vis {
            RenderSettingsChangedEquirectangularForcesGutBackend) {
         using Backend = lfs::rendering::GaussianRasterBackend;
 
-        RenderingManager manager;
+        lfs::vis::screen::ScreenService manager_views;
+
+        RenderingManager manager{manager_views};
         auto settings = manager.getSettings();
         settings.raster_backend = Backend::ThreeDgs;
         settings.gut = false;
@@ -2809,8 +2823,10 @@ namespace lfs::vis {
         EXPECT_TRUE(settings.gut);
     }
 
-    TEST_F(RenderingManagerEventsTest, EnablingDepthFilterMigratesConstructorDefaultPositiveZBox) {
-        RenderingManager manager;
+    TEST_F(RenderingManagerEventsTest,
+           EnablingDepthFilterMigratesConstructorDefaultPositiveZBox) {
+        lfs::vis::screen::ScreenService manager_views;
+        RenderingManager manager{manager_views};
         auto settings = manager.getSettings();
         ASSERT_FALSE(settings.depth_filter_enabled);
         ASSERT_EQ(settings.depth_filter_min.z, 0.0f);

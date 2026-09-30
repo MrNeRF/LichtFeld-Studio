@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "screen/screen_service.hpp"
 #include "visualizer/ipc/render_settings_convert.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
@@ -183,7 +184,9 @@ TEST(RenderSettingsProxy, EquirectangularForcesGutBackend) {
 TEST(RenderSettingsBackendNormalization, RenderingManagerCanSwitchBackFromGutTo3dgs) {
     using Backend = lfs::rendering::GaussianRasterBackend;
 
-    lfs::vis::RenderingManager manager;
+    lfs::vis::screen::ScreenService manager_views;
+
+    lfs::vis::RenderingManager manager{manager_views};
     auto settings = manager.getSettings();
     settings.raster_backend = Backend::ThreeDgut;
     settings.gut = true;
@@ -205,7 +208,9 @@ TEST(RenderSettingsBackendNormalization, RenderingManagerCanSwitchBackFromGutTo3
 TEST(RenderSettingsBackendNormalization, RenderingManagerEquirectangularUpdateForcesGutBackend) {
     using Backend = lfs::rendering::GaussianRasterBackend;
 
-    lfs::vis::RenderingManager manager;
+    lfs::vis::screen::ScreenService manager_views;
+
+    lfs::vis::RenderingManager manager{manager_views};
     auto settings = manager.getSettings();
     settings.raster_backend = Backend::ThreeDgs;
     settings.gut = false;
@@ -221,7 +226,9 @@ TEST(RenderSettingsBackendNormalization, RenderingManagerEquirectangularUpdateFo
 TEST(RenderSettingsBackendNormalization, RenderingManagerKeepsGutToggleWorking) {
     using Backend = lfs::rendering::GaussianRasterBackend;
 
-    lfs::vis::RenderingManager manager;
+    lfs::vis::screen::ScreenService manager_views;
+
+    lfs::vis::RenderingManager manager{manager_views};
     auto settings = manager.getSettings();
     ASSERT_EQ(settings.raster_backend, Backend::ThreeDgs);
     ASSERT_FALSE(settings.gut);

@@ -270,7 +270,7 @@ namespace lfs::vis {
         gui_manager_ = std::make_unique<gui::GuiManager>(this);
 
         // Create rendering manager with initial antialiasing setting
-        rendering_manager_ = std::make_unique<RenderingManager>();
+        rendering_manager_ = std::make_unique<RenderingManager>(screen_service_);
         rendering_manager_->setWakeCallback([this] {
             wakeMainLoop();
         });
@@ -968,23 +968,6 @@ namespace lfs::vis {
             return toggled && changed();
         }
         return false;
-    }
-
-    void VisualizerImpl::syncActiveViewSettings() {
-        if (!rendering_manager_)
-            return;
-        auto& view = screen_service_.activeView3D();
-        const ViewId active = screen_service_.screen().activeView().value;
-        const auto rendered = rendering_manager_->getSettings();
-        const std::string view_state = screen::viewSettingsToJson(view.settings).dump();
-        if (active != mirrored_view_ || view_state != mirrored_view_settings_) {
-            rendering_manager_->updateSettings(RenderSettings(rendered.scene(), view.settings), DirtyFlag::ALL);
-            view.settings = rendering_manager_->getSettings().view();
-        } else if (screen::viewSettingsToJson(rendered.view()).dump() != mirrored_view_settings_) {
-            view.settings = rendered.view();
-        }
-        mirrored_view_ = active;
-        mirrored_view_settings_ = screen::viewSettingsToJson(view.settings).dump();
     }
 
     void VisualizerImpl::setupViewContextBridge() {
@@ -2588,8 +2571,6 @@ namespace lfs::vis {
                 live_scene_clip_time_ = 0.0f;
             }
         }
-
-        syncActiveViewSettings();
 
         // Update input controller with viewport bounds
         if (gui_manager_) {

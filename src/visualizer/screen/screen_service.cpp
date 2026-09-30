@@ -62,6 +62,14 @@ namespace lfs::vis::screen {
             return false;
         edit(space->settings);
         sanitizeDepthViewSettings(space->settings);
+        if (splitViewEnabled(space->settings.split_view_mode)) {
+            for (const auto id : screen_.areas()) {
+                if (id.value != view) {
+                    if (auto* other = dynamic_cast<View3DSpace*>(screen_.area(id)->space("view3d")))
+                        other->settings.split_view_mode = SplitViewMode::Disabled;
+                }
+            }
+        }
         return true;
     }
 
