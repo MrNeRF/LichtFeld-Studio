@@ -82,7 +82,7 @@ namespace lfs::vis::gui {
         items.push_back({.kind = HeaderItem::Kind::Menu,
                          .id = "view",
                          .label = icon_only_view ? "" : LOC("view3d.view"),
-                         .icon = icon_only_view ? "editor-view3d" : "",
+                         .icon = icon_only_view ? "camera-orbit" : "",
                          .tooltip = LOC("view3d.view")});
         const auto display_icon = mode == "points"    ? "dots-diagonal"
                                   : mode == "rings"   ? "ring"
