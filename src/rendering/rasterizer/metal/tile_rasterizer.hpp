@@ -32,7 +32,7 @@ namespace lfs::rendering::metal {
         // never a partially sorted scene. Retry in a larger reservation if desired.
         [[nodiscard]] RasterStatus status() const;
         [[nodiscard]] id<MTLTexture> color() const;       // RGBA16Float, premultiplied
-        [[nodiscard]] id<MTLTexture> depth() const;       // RGBA32Float: weighted Z, alpha, first Z, median Z
+        [[nodiscard]] id<MTLTexture> depth() const;       // RGBA32Float: weighted Z, alpha, first Z (or expected-depth weight), median Z
         [[nodiscard]] id<MTLTexture> pick() const;        // R32Uint: first contributing source ID
         [[nodiscard]] id<MTLBuffer> statusBuffer() const; // GPU consumers only; CPU reads use status().
 

@@ -541,7 +541,7 @@ namespace lfs::vis {
             projection.extent = {uint32_t(f.size.x), uint32_t(f.size.y), uint32_t(request.equirectangular ? CameraModel::Equirectangular : request.frame_view.orthographic ? CameraModel::Orthographic
                                                                                                                                                                            : CameraModel::Perspective),
                                  uint32_t(request.mip_filter)};
-            projection.rasterization = {request.frame_view.rasterization_scale, 0, 0, 0};
+            projection.rasterization = {request.frame_view.rasterization_scale, expected_depth ? 1.f : 0.f, request.frame_view.far_plane, 0};
             const auto panorama_size = request.frame_view.cameraSize();
             projection.panorama = {float(panorama_size.x), float(panorama_size.y), float(request.frame_view.subregion_origin.x), float(request.frame_view.subregion_origin.y)};
             SceneBuffers scene{};

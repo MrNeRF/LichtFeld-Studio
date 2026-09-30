@@ -122,7 +122,9 @@ kernel void present_viewer(texture2d<float, access::read> color [[texture(0)]],
     const float4 d=depth.read(pixel);
     // Match expected_depth_finalize.slang: normalized alpha-weighted view Z,
     // with the same empty-coverage sentinel. Display depth remains median.
-    const float output_depth=p.capture.x?(d.y>1e-4f?d.x/d.y:1e10f):d.w;
+    // In expected capture, channel Z contains the accumulated valid-depth
+    // weight, independently of visible alpha and invalid GUT contributors.
+    const float output_depth=p.capture.x?(d.z>1e-4f?d.x/d.z:1e10f):d.w;
     linear_depth.write(float4(output_depth),pixel);
     if(p.depth_view) {
         const bool empty=d.y<.02f || d.w>=1e9f || d.w<=0;

@@ -302,6 +302,40 @@ static void run(id<MTLDevice> device) {
         raster.encode(command, {gut_input}, 1, RasterMode::Gut, bg, gut_frame, {}, {geometry}, camera);
     } catch (const std::invalid_argument&) { rejected = true; }
     require(rejected && !gut_frame.busy(), "Invalid panorama consumed its frame reservation");
+    // A behind-camera Gaussian can contribute line-distance alpha in a
+    // conservative GUT tile. Only valid forward depths belong in the average.
+    const std::array<ProjectedSplat, 2> mixed_projection{{{{18, 14, 3, 100}, {1, 0, 1, .8f}, {1, 0, 0, 9}, {0, 0, width, height}},
+                                                          {{18, 14, 3, 100}, {1, 0, 1, .8f}, {0, 1, 0, 9}, {0, 0, width, height}}}};
+    const std::array<GutSplat, 2> mixed_geometry{{{{2, 0, 0, 0}, {0, 2, 0, 0}, {0, 0, 2, 0}, {0, 0, -3, .8f}},
+                                                  {{2, 0, 0, 0}, {0, 2, 0, 0}, {0, 0, 2, 0}, {0, 0, 3, .8f}}}};
+    auto mixed_input = [device newBufferWithBytes:mixed_projection.data() length:sizeof(mixed_projection) options:MTLResourceStorageModeShared];
+    auto mixed_gut = [device newBufferWithBytes:mixed_geometry.data() length:sizeof(mixed_geometry) options:MTLResourceStorageModeShared];
+    RasterFrame expected_frame(device, width, height, 2, 12);
+    camera.extent.z = uint32_t(CameraModel::Perspective);
+    camera.rasterization = {1, 1, 100, 0};
+    for (float far : {100.f, 2.5f}) {
+        camera.rasterization.z = far;
+        command = [queue commandBuffer];
+        raster.encode(command, {mixed_input}, 2, RasterMode::Gut, {0, 0, 0, 0}, expected_frame, {}, {mixed_gut}, camera);
+        const auto expected = readback(device, command, expected_frame);
+        wait(command);
+        const auto center_depth = reinterpret_cast<const float*>(static_cast<const char*>(expected.depth.contents) + 14 * expected.depth_stride) + 18 * 4;
+        require(std::abs(center_depth[1] - .96f) < 1e-5f, "Invalid depth incorrectly removed visible GUT opacity");
+        if (far > 3) {
+            require(std::abs(center_depth[0] - .48f) < 1e-5f && std::abs(center_depth[2] - .16f) < 1e-5f,
+                    "Invalid GUT contributor contaminated expected-depth weights");
+            require(std::abs(center_depth[0] / center_depth[2] - 3.f) < 1e-5f,
+                    "Expected GUT depth normalized against visible rather than valid opacity");
+        } else
+            require(center_depth[0] == 0 && center_depth[2] == 0, "Expected-depth capture ignored its far cutoff");
+    }
+    camera.rasterization.y = 1;
+    camera.rasterization.z = NAN;
+    rejected = false;
+    try {
+        raster.encode([queue commandBuffer], { mixed_input }, 2, RasterMode::Gut, bg, expected_frame, {}, {mixed_gut}, camera);
+    } catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected && !expected_frame.busy(), "Invalid expected-depth parameters consumed the reservation");
     std::puts("Metal tile raster contracts passed: stable depth, RGB/alpha/depth/pick, modes, scan/block boundaries, overflow and frame reuse.");
 }
 int main() {

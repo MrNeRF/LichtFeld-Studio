@@ -225,6 +225,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
     const bool valid = pixel.x < p.width && pixel.y < p.height;
     bool done = !valid;
     float transmittance = 1, weighted_depth = 0, nearest = 0, median = 1e10f;
+    float valid_depth_weight=0;
     float3 rgb = 0;
     uint picked = 0xffffffff;
     const uint begin = status.error ? 0 : ranges[2 * tile];
@@ -285,7 +286,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                 splat_depth=t>0 && z>p.clip.x && isfinite(z)?z:1e10f;
             } else alpha = c.w * exp(-.5f * q);
             alpha = min(alpha, .999f);
-            if(p.mode!=3u && p.unused && overlay_enabled(overlay_params[22].y) && !(overlay_flags[ids[j]]&2u)){
+            if(p.mode!=3u && (p.unused&1u) && overlay_enabled(overlay_params[22].y) && !(overlay_flags[ids[j]]&2u)){
                 const float2 origin=floor((float2(pixel)+p.render_origin.xy)/overlay_macro_extent)*overlay_macro_extent;
                 const half2 center=half2((means[j].xy+p.render_origin.xy-origin)/overlay_tile_extent);
                 const half2 coord=half2((float2(pixel)+p.render_origin.xy-origin)/overlay_tile_extent);
@@ -300,7 +301,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
             }
             if (alpha < .5f/255) continue;
             float3 radiance=clamp(colors[j].xyz,0.f,4.f);
-            if(p.unused){
+            if(p.unused&1u){
                 const uint flags=overlay_flags[ids[j]];
                 // Pixel-sized overlays use the same macro-relative half position
                 // as the desktop reference. Keep Gaussian blending in FP32.
@@ -340,7 +341,14 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
             const float weight = alpha * transmittance;
             if (picked == 0xffffffff) { picked = ids[j]; nearest = splat_depth; }
             rgb += radiance * weight;
-            weighted_depth += splat_depth * weight;
+            // Match expected_far in the reference: invalid/too-distant
+            // GUT depths affect transmittance but never the depth average.
+            if(p.unused&2u) {
+                if(splat_depth<=p.clip.y) {
+                    weighted_depth += splat_depth * weight;
+                    valid_depth_weight += weight;
+                }
+            } else weighted_depth += splat_depth * weight;
             const float next_transmittance = transmittance * (1 - alpha);
             if (transmittance > .5f && next_transmittance <= .5f) median = splat_depth;
             transmittance = next_transmittance;
@@ -354,7 +362,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
         color.write(float4(rgb + p.background.rgb*p.background.a*transmittance,
                             alpha + p.background.a*transmittance), pixel);
         // weighted depth, accumulated alpha, first contributor depth.
-        depth.write(float4(weighted_depth, alpha, nearest, median), pixel);
+        depth.write(float4(weighted_depth, alpha, (p.unused&2u)?valid_depth_weight:nearest, median), pixel);
         pick.write(uint4(picked), pixel);
     }
 }

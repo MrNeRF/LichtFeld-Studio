@@ -67,7 +67,7 @@ namespace lfs::rendering::metal {
         simd_float4 intrinsics;                // fx, fy, cx, cy in render pixels
         simd_float4 clip_scale;                // near, far, scale modifier, pixel dilation variance
         simd_uint4 extent;                     // width, height, CameraModel, mip antialiasing (0/1)
-        simd_float4 rasterization{1, 0, 0, 0}; // output pixels per source viewport pixel
+        simd_float4 rasterization{1, 0, 0, 0}; // output/source pixel scale, expected-depth flag/far, reserved
         simd_float4 panorama{};                // full camera width/height and subregion origin in output pixels
     };
     static_assert(sizeof(Projection) == 224);

@@ -107,6 +107,12 @@ shader configuration; desktop projection near/far planes do not incorrectly
 cull native Gaussian input. Separate close-range parity cases cover this.
 
 Main, split-left, split-right and preview outputs have independent reservations.
+Expected-depth captures normalize only valid forward contributor weights within
+the requested far range. Invalid GUT rays retain their visible opacity but cannot
+contaminate that depth average. The valid weight reuses a depth texture channel
+only in expected capture; normal first-contributor and median channels retain
+their contracts, without an extra texture/allocation. Analytic GPU cases cover
+mixed valid/invalid contributors, far cutoff and failed reservation validation.
 Native median and normalized alpha-weighted depth capture, deterministic export,
 synchronous reads and asynchronous color/depth tickets use the actual native
 output. High-resolution export dilation and covariance caps remain calibrated

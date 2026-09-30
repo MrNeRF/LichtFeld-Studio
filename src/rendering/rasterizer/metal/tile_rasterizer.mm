@@ -218,6 +218,10 @@ namespace lfs::rendering::metal {
                     throw std::invalid_argument("Invalid native 3DGUT panorama subregion");
             }
         }
+        const bool expected_depth = projection.rasterization.y == 1.f;
+        if (!std::isfinite(projection.rasterization.y) || (projection.rasterization.y != 0.f && !expected_depth) ||
+            (expected_depth && (!std::isfinite(projection.rasterization.z) || projection.rasterization.z <= 0)))
+            throw std::invalid_argument("Invalid Metal expected-depth capture parameters");
         if (f->in_flight.exchange(true, std::memory_order_acq_rel))
             throw std::logic_error("Metal viewer frame reservation is still in flight");
         f->completed.store(false, std::memory_order_release);
@@ -226,7 +230,7 @@ namespace lfs::rendering::metal {
             f->completed.store(finished.status == MTLCommandBufferStatusCompleted, std::memory_order_release);
             f->in_flight.store(false, std::memory_order_release);
         }];
-        const RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), overlay.parameter_count ? 1u : 0u, background, overlay.render_origin, projection.intrinsics, projection.clip_scale, projection.extent, projection.panorama};
+        const RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), (overlay.parameter_count ? 1u : 0u) | (expected_depth ? 2u : 0u), background, overlay.render_origin, projection.intrinsics, {projection.clip_scale.x, expected_depth ? projection.rasterization.z : projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w}, projection.extent, projection.panorama};
         const auto dispatch = [](id<MTLComputeCommandEncoder> e, uint32_t n) {
             [e dispatchThreadgroups:MTLSizeMake(ceil_div(n, 256), 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
             [e endEncoding];
