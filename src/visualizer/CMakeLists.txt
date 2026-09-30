@@ -81,6 +81,9 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/passes/vulkan_split_view_pass.cpp
         rendering/framerate_controller.cpp
 
+        # Screen: areas, layout and editors
+        screen/screen_layout.cpp
+
         # Preferences and theme system
         preferences.cpp
         theme/theme.cpp

@@ -49,6 +49,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         test_menu_bar_title.cpp
         test_panel_layout_render_demand.cpp
         test_preferences_migration.cpp
+        test_screen_layout.cpp
         test_startup_overlay_geometry.cpp
         test_trackpad_navigation.cpp
         test_vram_hud_geometry.cpp
