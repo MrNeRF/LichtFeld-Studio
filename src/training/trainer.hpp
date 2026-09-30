@@ -851,7 +851,11 @@ namespace lfs::training {
         core::Tensor loss_accumulator_;
         // persistent FastGS scale/opacity reg loss scalars (filled in fused bwd)
         core::Tensor fused_scale_reg_loss_;
+        float train_frame_scale_ = 1.0f;
         core::Tensor fused_opacity_reg_loss_;
+        core::Tensor fused_erank_reg_loss_;
+        core::Tensor fused_dc_reg_loss_;
+        core::Tensor fused_sh_rest_reg_loss_;
         // cropbox damping mask cache (rebuild on cropbox/topology change only)
         core::Tensor cropbox_damping_cached_mask_;
         size_t cropbox_damping_cached_n_ = 0;

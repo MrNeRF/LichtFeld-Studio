@@ -169,6 +169,10 @@ namespace lfs::core {
             int sh_degree = 3;
             float opacity_reg = 0.01f;
             float scale_reg = 0.01f;
+            float scale_reg_decay_power = -1.0f;
+            float erank_reg = 0.0f;
+            float dc_reg = 0.0f;
+            float sh_rest_reg = 0.0f;
             float init_opacity = 0.5f;
             float init_scaling = 0.1f;
             int max_cap = 1000000;
@@ -305,6 +309,7 @@ namespace lfs::core {
             void remove_step_scaling();
             [[nodiscard]] int resolved_total_iterations() const;
             [[nodiscard]] bool normal_supervision_active(int iter) const;
+            [[nodiscard]] float scale_reg_at(int iter) const;
             // Every test_every-th image is withheld from training for evaluation.
             [[nodiscard]] bool holds_out_eval_images() const { return enable_eval && !eval_all; }
             [[nodiscard]] int resolved_ppisp_controller_activation_step(int total_iterations) const;

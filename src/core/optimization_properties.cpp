@@ -89,7 +89,6 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.lr_opacity")
             .precision(4)
             .ui_step(0.001)
-            .flags(PROP_LIVE_UPDATE)
             .all_strategies()
             .float_prop(&OptimizationParameters::scaling_lr,
                         "scaling_lr", "Scale LR", d.scaling_lr, 0.0f, 0.1f,
@@ -161,6 +160,40 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.scale_reg")
             .precision(4)
             .ui_step(0.001)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::scale_reg_decay_power,
+                        "scale_reg_decay_power", "Scale Reg Decay Power", d.scale_reg_decay_power, -1.0f, 4.0f,
+                        "Power used to decay scale regularization over training; negative keeps it constant")
+            .strategies({"mrnf"})
+            .locale("training.losses.scale_reg_decay_power")
+            .tooltip("training.tooltip.scale_reg_decay_power")
+            .precision(2)
+            .ui_step(0.1)
+            .float_prop(&OptimizationParameters::erank_reg,
+                        "erank_reg", "Effective Rank Reg", d.erank_reg, 0.0f, 1.0f,
+                        "Penalizes anisotropic Gaussian scales")
+            .strategies({"mrnf"})
+            .locale("training.losses.erank_reg")
+            .tooltip("training.tooltip.erank_reg")
+            .precision(4)
+            .ui_step(0.001)
+            .float_prop(&OptimizationParameters::dc_reg,
+                        "dc_reg", "DC Reg", d.dc_reg, 0.0f, 1.0f,
+                        "Regularizes the direct color coefficients")
+            .strategies({"mrnf"})
+            .locale("training.losses.dc_reg")
+            .tooltip("training.tooltip.dc_reg")
+            .precision(4)
+            .ui_step(0.001)
+            .float_prop(&OptimizationParameters::sh_rest_reg,
+                        "sh_rest_reg", "SH Rest Reg", d.sh_rest_reg, 0.0f, 1.0f,
+                        "Regularizes higher order spherical harmonics coefficients")
+            .strategies({"mrnf"})
+            .locale("training.losses.sh_rest_reg")
+            .tooltip("training.tooltip.sh_rest_reg")
+            .precision(4)
+            .ui_step(0.001)
+            .flags(PROP_LIVE_UPDATE)
 
             // Refinement
             .all_strategies()

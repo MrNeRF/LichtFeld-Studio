@@ -8,6 +8,7 @@
 #include "helper_math.h"
 #include "kernel_utils.cuh"
 #include "lfs/core/warp_reduce.cuh"
+#include "lfs/training/effective_rank.cuh"
 #include "lfs/training/mean_step_scale.cuh"
 #include "rasterization_config.h"
 #include "utils.h"
@@ -86,6 +87,9 @@ namespace fast_lfs::rasterization::kernels::backward {
         // per-call empty({num_blocks})/empty({1}) allocs.
         float scale_loss_local = 0.0f;
         float opacity_loss_local = 0.0f;
+        float erank_loss_local = 0.0f;
+        float dc_loss_local = 0.0f;
+        float erank_grads[3] = {0.0f, 0.0f, 0.0f};
         if (in_range) {
             if (fused_adam.scale_reg_loss_out != nullptr &&
                 fused_adam.scale_reg_weight > 0.0f &&
@@ -93,10 +97,29 @@ namespace fast_lfs::rasterization::kernels::backward {
                 fused_adam.scaling.n_elements > 0) {
                 const uint scale_base = static_cast<uint>(primitive_idx) * 3u;
                 const float inv_n = 1.0f / static_cast<float>(fused_adam.scaling.n_elements);
-                scale_loss_local = fused_adam.scale_reg_weight * inv_n *
-                                   (expf(fused_adam.scaling.param[scale_base]) +
-                                    expf(fused_adam.scaling.param[scale_base + 1]) +
-                                    expf(fused_adam.scaling.param[scale_base + 2]));
+                if (fused_adam.scale_reg_log) {
+                    scale_loss_local = fused_adam.scale_reg_weight * 0.01f * inv_n /
+                                       fused_adam.scale_reg_normalizer *
+                                       (fmaxf(fused_adam.scaling.param[scale_base], -40.0f) +
+                                        fmaxf(fused_adam.scaling.param[scale_base + 1], -40.0f) +
+                                        fmaxf(fused_adam.scaling.param[scale_base + 2], -40.0f));
+                } else {
+                    scale_loss_local = fused_adam.scale_reg_weight * inv_n *
+                                       (expf(fused_adam.scaling.param[scale_base]) +
+                                        expf(fused_adam.scaling.param[scale_base + 1]) +
+                                        expf(fused_adam.scaling.param[scale_base + 2]));
+                }
+            }
+            if (fused_adam.erank_reg_weight > 0.0f && fused_adam.scaling.n_primitives > 0) {
+                const uint scale_base = static_cast<uint>(primitive_idx) * 3u;
+                const auto penalty = lfs::training::effective_rank_penalty(
+                    fused_adam.scaling.param[scale_base], fused_adam.scaling.param[scale_base + 1u],
+                    fused_adam.scaling.param[scale_base + 2u]);
+                const float coef = fused_adam.erank_reg_weight /
+                                   static_cast<float>(fused_adam.scaling.n_primitives);
+                erank_loss_local = coef * penalty.value;
+                for (int axis = 0; axis < 3; ++axis)
+                    erank_grads[axis] = coef * penalty.gradient[axis];
             }
             if (fused_adam.opacity_reg_loss_out != nullptr &&
                 fused_adam.opacity_reg_weight > 0.0f &&
@@ -119,6 +142,11 @@ namespace fast_lfs::rasterization::kernels::backward {
                 atomicAdd(fused_adam.opacity_reg_loss_out, block_sum);
             }
         }
+        if (fused_adam.erank_reg_loss_out != nullptr) {
+            const float block_sum = lfs::core::warp_ops::block_reduce_sum(erank_loss_local);
+            if (threadIdx.x == 0 && block_sum != 0.0f)
+                atomicAdd(fused_adam.erank_reg_loss_out, block_sum);
+        }
 
         // Grad buffers. Joint block-bounds needs all threads to hit the same
         // adam_step_row sequence — no early returns before Adam sections.
@@ -139,9 +167,9 @@ namespace fast_lfs::rasterization::kernels::backward {
         if (invisible) {
             // Reg-only scale/opacity; SH/means/rot get pure momentum decay (zeros).
             const uint scale_base = static_cast<uint>(primitive_idx) * 3u;
-            scale_grads[0] = scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base);
-            scale_grads[1] = scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 1);
-            scale_grads[2] = scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 2);
+            scale_grads[0] = scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base) + erank_grads[0];
+            scale_grads[1] = scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 1) + erank_grads[1];
+            scale_grads[2] = scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 2) + erank_grads[2];
             add_flatten_regularization_grads(fused_adam, fused_adam.scaling, scale_base, scale_grads);
             opacity_grads[0] = opacity_extra_grad(fused_adam, fused_adam.opacity, static_cast<uint>(primitive_idx));
         } else if (visible) {
@@ -161,6 +189,27 @@ namespace fast_lfs::rasterization::kernels::backward {
                 shN_value_bounds != nullptr ? shN_value_n_cells : 0u,
                 shN_value_bits == 16u ? 16u : 0u);
         } // close visible — SH Adam next kills shN live range before geometry
+
+        if (in_range && fused_adam.dc_reg_weight > 0.0f && fused_adam.sh0.param != nullptr) {
+            constexpr float kSh0 = 0.28209479177387814f;
+            const float limit = 0.5f / kSh0;
+            const int stride = fused_adam.sh0.n_attributes > 0 ? fused_adam.sh0.n_attributes : 3;
+            const float* coeff = fused_adam.sh0.param + static_cast<uint>(primitive_idx) * static_cast<uint>(stride);
+            for (int c = 0; c < 3; ++c) {
+                float delta = 0.0f;
+                if (coeff[c] > limit)
+                    delta = coeff[c] - limit;
+                else if (coeff[c] < -limit)
+                    delta = coeff[c] + limit;
+                sh0_grads[c] += (2.0f * fused_adam.dc_reg_weight / 3.0f) * delta;
+                dc_loss_local += (fused_adam.dc_reg_weight / 3.0f) * delta * delta;
+            }
+        }
+        if (fused_adam.dc_reg_loss_out != nullptr) {
+            const float block_sum = lfs::core::warp_ops::block_reduce_sum(dc_loss_local);
+            if (threadIdx.x == 0 && block_sum != 0.0f)
+                atomicAdd(fused_adam.dc_reg_loss_out, block_sum);
+        }
 
         // Apply SH Adam for all threads so joint block-bounds reduction remains valid.
         // Also the single re-encode site for SH value quant.
@@ -365,9 +414,9 @@ namespace fast_lfs::rasterization::kernels::backward {
                 (raw_scale.z < config::max_raw_scale) ? 2.0f * variance.z * dL_dvariance_z : 0.0f);
             const float3 clamped_scale_grad = clamp_grad3(dL_draw_scale);
             const uint scale_base = primitive_idx * 3;
-            scale_grads[0] = clamped_scale_grad.x + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base);
-            scale_grads[1] = clamped_scale_grad.y + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 1);
-            scale_grads[2] = clamped_scale_grad.z + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 2);
+            scale_grads[0] = clamped_scale_grad.x + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base) + erank_grads[0];
+            scale_grads[1] = clamped_scale_grad.y + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 1) + erank_grads[1];
+            scale_grads[2] = clamped_scale_grad.z + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 2) + erank_grads[2];
             add_flatten_regularization_grads(fused_adam, fused_adam.scaling, scale_base, scale_grads);
 
             // raw rotation gradient

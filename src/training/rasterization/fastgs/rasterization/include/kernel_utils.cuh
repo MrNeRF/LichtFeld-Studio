@@ -474,6 +474,12 @@ namespace fast_lfs::rasterization::kernels {
         const uint element_idx) {
         if (fused_adam.scale_reg_weight <= 0.0f || param.n_elements <= 0)
             return 0.0f;
+        if (fused_adam.scale_reg_log) {
+            if (param.param[element_idx] <= -40.0f)
+                return 0.0f;
+            return fused_adam.scale_reg_weight * 0.01f /
+                   (static_cast<float>(param.n_elements) * fused_adam.scale_reg_normalizer);
+        }
         return fused_adam.scale_reg_weight * expf(param.param[element_idx]) /
                static_cast<float>(param.n_elements);
     }
@@ -870,6 +876,7 @@ namespace fast_lfs::rasterization::kernels {
         float local_u_min = kInf, local_u_max = -kInf;
         float local_s_min = kInf, local_s_max = -kInf;
         float local_v_min = kInf, local_v_max = -kInf;
+        float local_sh_rest_loss = 0.0f;
 
         constexpr uint N_SLOTS = (ACTIVE_SH_BASES > 9) ? 12u : (ACTIVE_SH_BASES > 4) ? 6u
                                                                                      : 3u;
@@ -889,10 +896,21 @@ namespace fast_lfs::rasterization::kernels {
                     float pci = (c == 0) ? pc.x : (c == 1) ? pc.y
                                               : (c == 2)   ? pc.z
                                                            : pc.w;
-                    const float gci = (c == 0) ? gk.x : (c == 1) ? gk.y
-                                                    : (c == 2)   ? gk.z
-                                                                 : gk.w;
+                    float gci = (c == 0) ? gk.x : (c == 1) ? gk.y
+                                              : (c == 2)   ? gk.z
+                                                           : gk.w;
                     const int64_t cell = static_cast<int64_t>(slot) * 4 + c;
+                    if constexpr (ACTIVE_SH_BASES > 1) {
+                        const uint cell_lin = k * 4u + static_cast<uint>(c);
+                        if (fused_adam.sh_rest_reg_weight > 0.0f &&
+                            cell_lin < (ACTIVE_SH_BASES - 1u) * 3u && p.n_primitives > 0) {
+                            const float reg_scale = fused_adam.sh_rest_reg_weight /
+                                                    (static_cast<float>(p.n_primitives) * (ACTIVE_SH_BASES - 1u) * 3.0f);
+                            gci += 2.0f * reg_scale * pci;
+                            if (fused_adam.sh_rest_reg_loss_out != nullptr)
+                                local_sh_rest_loss += reg_scale * pci * pci;
+                        }
+                    }
                     const float2 prim = shN_adam_moment_us<C>(
                         gci, cell, p.joint_packed, old_mm, apply_step, active_slot,
                         beta1, beta2, row_step_size, eps, p.bias_correction2_sqrt_rcp, pci);
@@ -988,10 +1006,22 @@ namespace fast_lfs::rasterization::kernels {
                     float pci = (c == 0) ? pc.x : (c == 1) ? pc.y
                                               : (c == 2)   ? pc.z
                                                            : pc.w;
-                    const float gci = (c == 0) ? gk.x : (c == 1) ? gk.y
-                                                    : (c == 2)   ? gk.z
-                                                                 : gk.w;
+                    float gci = (c == 0) ? gk.x : (c == 1) ? gk.y
+                                              : (c == 2)   ? gk.z
+                                                           : gk.w;
                     const int64_t cell = static_cast<int64_t>(slot) * 4 + c;
+                    if constexpr (ACTIVE_SH_BASES > 1) {
+                        const uint cell_lin = k * 4u + static_cast<uint>(c);
+                        constexpr uint kCoefficientCount = (ACTIVE_SH_BASES - 1u) * 3u;
+                        if (fused_adam.sh_rest_reg_weight > 0.0f &&
+                            cell_lin < kCoefficientCount && p.n_primitives > 0) {
+                            const float reg_scale = fused_adam.sh_rest_reg_weight /
+                                                    (static_cast<float>(p.n_primitives) * kCoefficientCount);
+                            gci += 2.0f * reg_scale * pci;
+                            // The loss was accumulated in the first pass. This
+                            // pass only re-encodes the regularized moments.
+                        }
+                    }
                     const float2 prim = shN_adam_moment_us<C>(
                         gci, cell, p.joint_packed, old_mm, apply_step, active_slot,
                         beta1, beta2, row_step_size, eps, p.bias_correction2_sqrt_rcp, pci);
@@ -1009,6 +1039,14 @@ namespace fast_lfs::rasterization::kernels {
                     }
                 }
             }
+        }
+
+        // Every thread reaches this reduction, including overhang and masked
+        // rows. This leaves at most one global scalar update per block.
+        if (fused_adam.sh_rest_reg_loss_out != nullptr) {
+            const float block_sum = lfs::core::warp_ops::block_reduce_sum(local_sh_rest_loss);
+            if (threadIdx.x == 0 && block_sum != 0.0f)
+                atomicAdd(fused_adam.sh_rest_reg_loss_out, block_sum);
         }
     }
 
