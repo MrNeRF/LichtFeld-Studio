@@ -6,6 +6,7 @@
 
 #include "core/export.hpp"
 #include "core/tensor.hpp"
+#include "render_target_id.hpp"
 #include "rendering/rendering.hpp"
 #include "window/vulkan_context.hpp"
 
@@ -109,12 +110,6 @@ namespace lfs::vis {
                 lfs::rendering::DepthVisualizationMode::Palette;
         };
 
-        enum class OutputSlot : std::size_t {
-            Main = 0,
-            SplitLeft = 1,
-            SplitRight = 2,
-        };
-
         PointCloudVulkanRenderer();
         ~PointCloudVulkanRenderer();
 
@@ -124,11 +119,12 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<RenderResult, std::string> render(
             VulkanContext& context,
             const RenderRequest& request,
-            OutputSlot output_slot = OutputSlot::Main);
+            RenderTargetId output_slot);
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
             VulkanContext& context,
-            OutputSlot output_slot = OutputSlot::Main);
+            RenderTargetId output_slot);
 
+        [[nodiscard]] bool releaseRenderTarget(RenderTargetId target);
         void reset();
 
     private:

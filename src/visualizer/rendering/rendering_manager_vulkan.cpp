@@ -2369,6 +2369,8 @@ namespace lfs::vis {
             if (vksplat_viewport_renderer_ && !split_view_service_.isActive(frame_settings)) {
                 for (auto* target : {&split_left_render_target_, &split_right_render_target_}) {
                     if (vksplat_viewport_renderer_->releaseRenderTarget(*target)) {
+                        if (point_cloud_vulkan_renderer_)
+                            (void)point_cloud_vulkan_renderer_->releaseRenderTarget(*target);
                         render_targets_.release(*target);
                         *target = render_targets_.allocate();
                     }
@@ -2424,7 +2426,7 @@ namespace lfs::vis {
 
         const auto render_native_point_cloud =
             [&](const lfs::rendering::PointCloudRenderRequest& pc_request,
-                const PointCloudVulkanRenderer::OutputSlot slot)
+                const RenderTargetId slot)
             -> lfs::Result<PointCloudVulkanRenderer::RenderResult> {
             const auto fail = [](std::string message) -> lfs::Result<PointCloudVulkanRenderer::RenderResult> {
                 return lfs::make_error({
@@ -3428,7 +3430,7 @@ namespace lfs::vis {
                                         frame_ctx, render_gt_size, transforms);
                                     point_request.frame_view = request.frame_view;
                                     auto rendered = render_native_point_cloud(
-                                        point_request, PointCloudVulkanRenderer::OutputSlot::SplitRight);
+                                        point_request, split_right_render_target_);
                                     if (rendered) {
                                         compare_panel.metadata.valid = true;
                                         compare_panel.metadata.flip_y = rendered->flip_y;
@@ -3845,7 +3847,7 @@ namespace lfs::vis {
                     return std::nullopt;
                 }
                 auto render_result = render_native_point_cloud(
-                    pc_request, PointCloudVulkanRenderer::OutputSlot::Main);
+                    pc_request, main_render_target_);
                 if (!render_result) {
                     LOG_ERROR("Point cloud Vulkan render failed: {}", lfs::format_for_developer(render_result.error()));
                     return std::nullopt;
@@ -3870,7 +3872,7 @@ namespace lfs::vis {
                         }
                         auto image = point_cloud_vulkan_renderer_->readOutputImage(
                             *last_vulkan_context_,
-                            PointCloudVulkanRenderer::OutputSlot::Main);
+                            main_render_target_);
                         if (!image) {
                             LOG_ERROR("Failed to capture point-cloud Vulkan viewport image: {}",
                                       image.error());
@@ -4667,7 +4669,7 @@ namespace lfs::vis {
                             capture_params.right.external_image_view != VK_NULL_HANDLE) {
                             if (gt_native_point_cloud_panel && point_cloud_vulkan_renderer_ && last_vulkan_context_) {
                                 auto image = point_cloud_vulkan_renderer_->readOutputImage(
-                                    *last_vulkan_context_, PointCloudVulkanRenderer::OutputSlot::SplitRight);
+                                    *last_vulkan_context_, split_right_render_target_);
                                 if (image) {
                                     capture_params.right.image = std::move(*image);
                                 }
