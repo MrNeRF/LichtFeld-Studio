@@ -2179,8 +2179,8 @@ namespace lfs::vis {
             if (gui && gui->getViewer()) {
                 const auto viewport_pos = gui->getViewportPos();
                 const auto viewport_size = gui->getViewportSize();
-                const auto bounds = rendering_manager_->getContentBounds(
-                    glm::ivec2(static_cast<int>(viewport_size.x), static_cast<int>(viewport_size.y)));
+                const auto bounds = rendering_manager_->getContentBounds(rendering_manager_->activeViewId(),
+                                                                         glm::ivec2(static_cast<int>(viewport_size.x), static_cast<int>(viewport_size.y)));
                 context.panel = SplitViewPanelId::Right;
                 context.info = ViewportInfo{
                     .x = viewport_pos.x + bounds.x,

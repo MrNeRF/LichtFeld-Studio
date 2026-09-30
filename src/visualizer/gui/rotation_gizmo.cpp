@@ -549,9 +549,10 @@ namespace lfs::vis::gui {
         }
     } // namespace
 
+    void beginRotationGizmoFrame() { g_hovered = false; }
+
     RotationGizmoResult drawRotationGizmo(const RotationGizmoConfig& config) {
         RotationGizmoResult result;
-        g_hovered = false;
 
         if (!config.draw_list || config.viewport_size.x <= 1.0f || config.viewport_size.y <= 1.0f) {
             return result;
@@ -667,7 +668,7 @@ namespace lfs::vis::gui {
 
         result.hovered_axis = hovered_axis;
         result.hovered = hovered_axis != RotationGizmoAxis::None;
-        g_hovered = result.hovered || result.active;
+        g_hovered |= result.hovered || result.active;
 
         const RotationGizmoAxis emphasized_axis = result.active ? g_active.axis : hovered_axis;
         for (const auto& ring : rings) {

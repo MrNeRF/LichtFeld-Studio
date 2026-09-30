@@ -141,7 +141,7 @@ namespace lfs::vis::gui::native_panels {
         : gui_(gui) {}
 
     void SelectionOverlayPanel::draw(const PanelDrawContext& ctx) {
-        if (ctx.ui)
+        if (ctx.ui && ctx.viewport && ctx.viewport->view == ctx.ui->viewer->activeView().id)
             gui_->renderSelectionOverlays(*ctx.ui);
     }
 
@@ -292,8 +292,8 @@ namespace lfs::vis::gui::native_panels {
         gizmo_->renderPieMenu();
     }
 
-    bool PieMenuPanel::poll(const PanelDrawContext&) {
-        return gizmo_->isPieMenuOpen();
+    bool PieMenuPanel::poll(const PanelDrawContext& ctx) {
+        return ctx.ui && ctx.viewport && ctx.viewport->view == ctx.ui->viewer->activeView().id && gizmo_->isPieMenuOpen();
     }
 
     PythonOverlayPanel::PythonOverlayPanel(GuiManager* gui)
@@ -311,11 +311,14 @@ namespace lfs::vis::gui::native_panels {
         if (!ctx.ui || !ctx.ui->viewer || !ctx.viewport)
             return;
 
-        const auto& vp = ctx.ui->viewer->getViewport();
+        const auto target = ctx.ui->viewer->findView(ctx.viewport->view);
+        if (!target.valid())
+            return;
+        const auto& vp = *target.viewport;
         const auto view = vp.getViewMatrix();
         auto* rm = ctx.ui->viewer->getRenderingManager();
-        const float focal_mm = rm ? rm->getFocalLengthMm() : lfs::rendering::DEFAULT_FOCAL_LENGTH_MM;
-        const auto proj = vp.getProjectionMatrix(focal_mm);
+        const auto settings = rm->settingsForView(target.id);
+        const auto proj = lfs::rendering::createProjectionMatrixFromFocal(glm::ivec2(target.size), settings.focal_length_mm, settings.orthographic, settings.ortho_scale);
         const float vp_pos[] = {ctx.viewport->pos.x, ctx.viewport->pos.y};
         const float vp_size[] = {ctx.viewport->size.x, ctx.viewport->size.y};
         const float cam_pos[] = {vp.camera.t.x, vp.camera.t.y, vp.camera.t.z};
@@ -324,7 +327,7 @@ namespace lfs::vis::gui::native_panels {
 
         lfs::rendering::ScreenOverlayRenderer* overlay = nullptr;
         if (rm) {
-            overlay = rm->getScreenOverlayRenderer();
+            overlay = &rm->viewState(target.id).screen_overlay_renderer_;
         }
 
         NativeOverlayDrawList draw_list;

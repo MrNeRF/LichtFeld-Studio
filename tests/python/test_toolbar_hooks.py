@@ -271,7 +271,6 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "crop_transform_buttons" in model.bound_record_lists
     assert "crop_action_buttons" in model.bound_record_lists
     assert "align_action_buttons" in model.bound_record_lists
-    assert "utility_primary_buttons" in model.bound_record_lists
     assert "camera_mode_buttons" in model.bound_record_lists
     assert "show_transform_space_controls" in model.bound_funcs
     assert "show_transform_pivot_controls" in model.bound_funcs
@@ -1423,7 +1422,7 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert "toolbar-context-stack" not in rml
     assert rml.count('data-for="button : gizmo_buttons"') == 1
     assert rml.count('data-for="button : camera_mode_buttons"') == 0
-    assert rml.count('data-for="button : utility_primary_buttons"') == 1
+    assert 'data-for="button : utility_primary_buttons"' not in rml
     assert rml.count('data-for="button : submode_buttons"') == 2
     assert rml.count('data-for="button : pivot_buttons"') == 1
     assert rml.count('data-for="button : mirror_group_buttons"') == 1
@@ -1440,13 +1439,12 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert rml.count('data-for="button : selection_group_buttons"') == 1
     assert rml.count('class="toolbar-separator"') == 3
     assert 'class="toolbar-separator hidden"' in rml
-    assert rml.count('class="viewport-gizmo-controls"') == 1
-    assert rml.count('class="viewport-gizmo-control-row"') == 1
-    assert 'id="primary-viewport-gizmo-controls" class="viewport-gizmo-controls"' in rml
+    assert 'class="viewport-gizmo-controls"' not in rml
+    assert 'class="viewport-gizmo-control-row"' not in rml
     assert "viewport-nav-toolbar" not in rml
     assert "viewport-nav-separator" not in rml
     primary_left = rml[
-        rml.index('id="primary-utility-toolbar"') : rml.index('id="primary-viewport-gizmo-controls"')
+        rml.index('id="primary-utility-toolbar"') : rml.index('id="primary-transform-toolbar"')
     ]
     for toolbar_markup in (primary_left,):
         assert 'data-for="button : camera_mode_buttons"' not in toolbar_markup
@@ -2024,7 +2022,6 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     module.update_overlay(SimpleNamespace())
 
     camera_buttons = model.handle.record_updates["camera_mode_buttons"]
-    primary_buttons = model.handle.record_updates["utility_primary_buttons"]
     extra_buttons = model.handle.record_updates["utility_extra_buttons"]
     assert len(camera_buttons) == 4
     assert [button["value"] for button in camera_buttons] == [
@@ -2034,12 +2031,6 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
         "drone",
     ]
     assert camera_buttons[3]["icon_src"] == "../icon/drone.png"
-    assert [button["action"] for button in primary_buttons] == [
-        "home",
-        "focus_selection",
-    ]
-    assert primary_buttons[1]["icon_src"] == "../icon/focus-selection.png"
-    assert primary_buttons[1]["tooltip_text"] == "Focus Selection"
     assert [button["button_id"] for button in extra_buttons] == [
         "util-preferences",
         "util-viewport-export",

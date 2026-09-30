@@ -720,7 +720,7 @@ namespace lfs::vis {
         const glm::ivec2 viewport_size{
             std::max(static_cast<int>(std::lround(viewport_bounds_.width)), 0),
             std::max(static_cast<int>(std::lround(viewport_bounds_.height)), 0)};
-        const auto content_bounds = rendering->getContentBounds(viewport_size);
+        const auto content_bounds = rendering->getContentBounds(views_.activeView().id, viewport_size);
         if (content_bounds.width <= 0.0f || content_bounds.height <= 0.0f) {
             return false;
         }
@@ -1460,7 +1460,7 @@ namespace lfs::vis {
         if (drag_mode_ == DragMode::Splitter && services().renderingOrNull()) {
             const auto viewport_size = glm::ivec2(static_cast<int>(viewport_bounds_.width),
                                                   static_cast<int>(viewport_bounds_.height));
-            const auto content = services().renderingOrNull()->getContentBounds(viewport_size);
+            const auto content = services().renderingOrNull()->getContentBounds(views_.activeView().id, viewport_size);
             const double delta = x - splitter_start_x_;
             const float new_pos = std::clamp(splitter_start_pos_ + static_cast<float>(delta / content.width), 0.0f, 1.0f);
 
@@ -3561,6 +3561,7 @@ namespace lfs::vis {
         if (auto* const scene_manager = services().sceneOrNull()) {
             depth = rendering->renderExpectedDepthAtPixel(
                 RenderingManager::ExpectedDepthSampleRequest{
+                    .view = target.id,
                     .scene_manager = scene_manager,
                     .viewport = &projection_viewport,
                     .render_size = projection_viewport.windowSize,

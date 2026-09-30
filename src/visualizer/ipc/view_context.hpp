@@ -28,6 +28,17 @@ namespace lfs::vis {
         float ortho_scale = 100.0f;
     };
 
+    class LFS_VIS_API ScopedOverlayView {
+    public:
+        explicit ScopedOverlayView(ViewInfo view);
+        ~ScopedOverlayView();
+        ScopedOverlayView(const ScopedOverlayView&) = delete;
+        ScopedOverlayView& operator=(const ScopedOverlayView&) = delete;
+
+    private:
+        std::optional<ViewInfo> previous_;
+    };
+
     struct SetViewParams {
         std::array<float, 3> eye;
         std::array<float, 3> target;

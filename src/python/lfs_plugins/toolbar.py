@@ -1245,22 +1245,6 @@ class _UtilityToolbarController:
             )
             for icon_name, mode_id, tooltip_key, label in self._CAMERA_MODE_SPECS
         ]
-        primary_buttons = [
-            _button_record("util-home", "home", "", _icon_src("home"),
-                           tooltip_key="toolbar.home",
-                           tooltip_text="Home",
-                           action_id=self._PRIMARY_ACTIONS["home"]),
-            _button_record(
-                "util-focus-selection",
-                "focus_selection",
-                "",
-                _icon_src("focus-selection"),
-                tooltip_key="toolbar.focus_selection",
-                tooltip_text="Focus Selection",
-                action_id=self._PRIMARY_ACTIONS["focus_selection"],
-            ),
-        ]
-
         utility_extra_buttons = [
             _button_record(
                 "util-preferences",
@@ -1338,7 +1322,6 @@ class _UtilityToolbarController:
 
         return {
             "camera_mode_buttons": camera_mode_buttons,
-            "primary_buttons": primary_buttons,
             "utility_extra_buttons": utility_extra_buttons,
             "utility_bottom_buttons": utility_bottom_buttons,
         }
@@ -1395,7 +1378,6 @@ class _ViewportToolbarController:
     )
     _RECORD_FIELDS = (
         "camera_mode_buttons",
-        "utility_primary_buttons",
         "utility_extra_buttons",
         "utility_bottom_buttons",
         "selection_group_buttons",
@@ -1636,7 +1618,6 @@ class _ViewportToolbarController:
         dirty |= self._sync_flag("show_transform_pivot_controls", gizmo_state["show_transform_pivot_controls"])
 
         dirty |= self._sync_records("camera_mode_buttons", utility_state["camera_mode_buttons"])
-        dirty |= self._sync_records("utility_primary_buttons", utility_state["primary_buttons"])
         dirty |= self._sync_records("utility_extra_buttons", utility_state["utility_extra_buttons"])
         dirty |= self._sync_records("utility_bottom_buttons", utility_state["utility_bottom_buttons"])
         dirty |= self._sync_records("selection_group_buttons", gizmo_state["selection_group_buttons"], doc)

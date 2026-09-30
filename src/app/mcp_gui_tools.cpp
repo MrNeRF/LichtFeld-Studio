@@ -2724,6 +2724,37 @@ namespace lfs::app {
 
         registry.register_tool(
             McpTool{
+                .name = "render.view_states",
+                .description = "Inspect each visible 3D area's camera, projection, rectangle, render target and published frame generation",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .metadata = {.category = "render", .kind = "query", .runtime = "gui", .thread_affinity = "gui_thread"}},
+            [viewer_impl](const json&) -> json {
+                auto result = post_and_wait(viewer_impl, [viewer_impl]() -> std::expected<json, std::string> {
+                    auto* rendering = viewer_impl->getRenderingManager();
+                    if (!rendering)
+                        return std::unexpected("Rendering is not initialized");
+                    json views = json::array();
+                    for (const auto area : viewer_impl->screens().screen().views()) {
+                        const auto target = viewer_impl->findView(area.value);
+                        if (!target.valid() || target.size.x <= 0 || target.size.y <= 0 || !rendering->hasViewState(area.value))
+                            continue;
+                        const auto settings = rendering->settingsForView(area.value);
+                        const auto& state = rendering->viewState(area.value);
+                        const auto rotation = target.viewport->getRotationMatrix();
+                        const auto position = target.viewport->getTranslation();
+                        json orientation = json::array();
+                        for (int col = 0; col < 3; ++col)
+                            for (int row = 0; row < 3; ++row)
+                                orientation.push_back(rotation[col][row]);
+                        views.push_back({{"id", area.value}, {"active", area.value == rendering->activeViewId()}, {"rect", {target.pos.x, target.pos.y, target.size.x, target.size.y}}, {"position", {position.x, position.y, position.z}}, {"rotation", orientation}, {"orthographic", settings.orthographic}, {"point_cloud", settings.point_cloud_mode}, {"target", state.main_render_target_.value}, {"generation", state.vulkan_external_viewport_image_ != VK_NULL_HANDLE ? state.vulkan_external_viewport_image_generation_ : state.vulkan_viewport_image_generation_}, {"image_size", {state.vulkan_viewport_image_size_.x, state.vulkan_viewport_image_size_.y}}});
+                    }
+                    return json{{"views", views}};
+                });
+                return result ? *result : json{{"error", result.error()}};
+            });
+
+        registry.register_tool(
+            McpTool{
                 .name = "render.capture_window",
                 .description = "Capture the current composited app window. Unlike render_capture, which grabs the viewport region only, this includes the full window, including panels, toolbars, and GUI overlays.",
                 .input_schema = {

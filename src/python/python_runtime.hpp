@@ -12,6 +12,7 @@
 #include "visualizer/gui/panel_height_mode.hpp"
 #include "visualizer/gui/panel_space.hpp"
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -43,6 +44,7 @@ namespace lfs::rendering {
 
 namespace lfs::vis {
     class Visualizer;
+    struct FrameInputBuffer;
     class SceneManager;
     class TrainerManager;
     class ParameterManager;
@@ -579,6 +581,9 @@ namespace lfs::python {
 
     struct OverlayDrawContext {
         lfs::rendering::ScreenOverlayRenderer* renderer = nullptr;
+        std::uint32_t view = 0;
+        const vis::FrameInputBuffer* frame_input = nullptr;
+        std::optional<std::array<float, 4>> viewport_bounds;
     };
 
     LFS_PYTHON_RUNTIME_API void set_overlay_draw_context(OverlayDrawContext context);

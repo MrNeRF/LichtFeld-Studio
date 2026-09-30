@@ -62,7 +62,7 @@ namespace lfs::vis {
 
         [[nodiscard]] DepthWindowState depthWindowFromProjection(const RenderSettings& settings) {
             // Fresh disabled settings still carry the legacy positive-Z sentinel.
-            // Decode it before seeding panel slots, just as the legacy getter does.
+            // Decode it into a forward depth interval before the first edit.
             const bool legacy_default = !settings.depth_filter_enabled &&
                                         settings.depth_filter_min.z == 0.0f &&
                                         settings.depth_filter_max.z == 100.0f;
@@ -228,6 +228,7 @@ namespace lfs::vis {
 
     // RenderingManager Implementation
     RenderingManager::RenderingManager(ViewSource& views) : view_source_(views) {
+        screen_epoch_ = views.screenEpoch();
 
         gt_comparison_image_worker_ = std::jthread([this](std::stop_token stop_token) {
             gtComparisonImageWorkerLoop(stop_token);
@@ -263,17 +264,6 @@ namespace lfs::vis {
     const ViewportInteropService& RenderingManager::viewportInterop() const {
 
         return this->state().viewport_interop_;
-    }
-
-    void RenderingManager::prepareViewportInterop(VulkanContext& context) {
-        viewportInterop().prepareFrame(context, isViewportResizeDeferring());
-    }
-
-    void RenderingManager::bindViewportInteropParams(VulkanViewportPassParams& params,
-                                                     const std::size_t frame_slot,
-                                                     const bool export_locked) {
-        viewportInterop().bindViewportParams(params, frame_slot, export_locked,
-                                             isViewportResizeDeferring());
     }
 
     void RenderingManager::shutdownViewportInterop(VulkanContext* context) {
@@ -812,12 +802,12 @@ namespace lfs::vis {
     }
 
     void RenderingManager::reportSceneUpscalerRuntimeSelection(
-        const SceneUpscalerSelection selection) {
+        const ViewId id, const SceneUpscalerSelection selection) {
         bool changed = false;
         {
             std::lock_guard lock(settings_mutex_);
-            changed = this->state().scene_upscaler_runtime_selection_ != selection;
-            this->state().scene_upscaler_runtime_selection_ = selection;
+            changed = viewState(id).scene_upscaler_runtime_selection_ != selection;
+            viewState(id).scene_upscaler_runtime_selection_ = selection;
         }
         // The renderer chooses its source resolution before the presentation pass
         // proves whether reconstruction is available. A real active/fallback
@@ -826,7 +816,7 @@ namespace lfs::vis {
         // a full-resolution native frame. TEMPORAL deliberately avoids restarting
         // the convergence sequence as CAMERA would.
         if (changed)
-            requestTemporalFollowUp();
+            markViewDirty(id, DirtyFlag::TEMPORAL);
     }
 
     SceneUpscalerSelection RenderingManager::sceneUpscalerRuntimeSelection() const {
@@ -1305,9 +1295,9 @@ namespace lfs::vis {
             return std::nullopt;
         }
 
-        const auto content_bounds = getContentBounds(glm::ivec2(
-            std::max(static_cast<int>(viewport_size.x), 0),
-            std::max(static_cast<int>(viewport_size.y), 0)));
+        const auto content_bounds = getContentBounds(this->state().id, glm::ivec2(
+                                                                           std::max(static_cast<int>(viewport_size.x), 0),
+                                                                           std::max(static_cast<int>(viewport_size.y), 0)));
         const int content_width = std::max(static_cast<int>(std::lround(content_bounds.width)), 0);
         if (content_width <= 0) {
             return std::nullopt;

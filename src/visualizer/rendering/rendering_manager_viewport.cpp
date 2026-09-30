@@ -120,7 +120,7 @@ namespace lfs::vis {
 
     } // namespace
 
-    RenderingManager::ContentBounds RenderingManager::getContentBounds(const glm::ivec2& viewport_size) const {
+    RenderingManager::ContentBounds RenderingManager::getContentBounds(ViewId view, const glm::ivec2& viewport_size) const {
         const int viewport_width = std::max(viewport_size.x, 0);
         const int viewport_height = std::max(viewport_size.y, 0);
         ContentBounds bounds{
@@ -130,12 +130,12 @@ namespace lfs::vis {
             static_cast<float>(viewport_height),
             false};
 
-        if (this->state().split_view_service_.isGTComparisonActive(settingsForView(this->state().id))) {
+        if (viewState(view).split_view_service_.isGTComparisonActive(settingsForView(viewState(view).id))) {
             glm::ivec2 content_dims{0, 0};
-            if (const auto service_dims = this->state().split_view_service_.gtContentDimensions()) {
+            if (const auto service_dims = viewState(view).split_view_service_.gtContentDimensions()) {
                 content_dims = *service_dims;
             } else {
-                content_dims = this->state().vulkan_gt_comparison_content_size_;
+                content_dims = viewState(view).vulkan_gt_comparison_content_size_;
             }
             if (content_dims.x <= 0 || content_dims.y <= 0 ||
                 viewport_width <= 0 || viewport_height <= 0) {
@@ -212,6 +212,15 @@ namespace lfs::vis {
             .render_height = full_render_height,
         };
 
+        const auto settings = settingsForView(view);
+        if (splitViewUsesComparisonPanels(settings.split_view_mode)) {
+            const auto bounds = getContentBounds(view, glm::ivec2(viewport_size));
+            const float divider = viewport_pos.x + bounds.x + bounds.width * settings.split_position;
+            info.panel = panel_override.value_or(screen_point && screen_point->x >= divider
+                                                     ? SplitViewPanelId::Right
+                                                     : SplitViewPanelId::Left);
+        }
+
         return info.valid() ? std::optional<MutableViewerPanelInfo>(info) : std::nullopt;
     }
 
@@ -237,6 +246,15 @@ namespace lfs::vis {
             .render_width = full_render_width,
             .render_height = full_render_height,
         };
+
+        const auto settings = settingsForView(view);
+        if (splitViewUsesComparisonPanels(settings.split_view_mode)) {
+            const auto bounds = getContentBounds(view, glm::ivec2(viewport_size));
+            const float divider = viewport_pos.x + bounds.x + bounds.width * settings.split_position;
+            info.panel = panel_override.value_or(screen_point && screen_point->x >= divider
+                                                     ? SplitViewPanelId::Right
+                                                     : SplitViewPanelId::Left);
+        }
 
         return info.valid() ? std::optional<ViewerPanelInfo>(info) : std::nullopt;
     }
@@ -424,6 +442,7 @@ namespace lfs::vis {
     }
 
     std::expected<void, std::string> RenderingManager::renderDepthCaptureToPreviewSlotWithState(
+        const RenderSettings& settings,
         SceneManager* const scene_manager,
         const lfs::core::SplatData& model,
         SceneRenderState scene_state,
@@ -463,6 +482,7 @@ namespace lfs::vis {
         } depth_capture_guard{vksplat_viewport_renderer_.get()};
 
         auto rendered = renderPreviewImageToPreviewSlotWithState(
+            settings,
             scene_manager,
             model,
             scene_state,
@@ -503,6 +523,7 @@ namespace lfs::vis {
         }
 
         auto rendered = renderDepthCaptureToPreviewSlotWithState(
+            getSettings(),
             scene_manager,
             *model,
             std::move(render_state),
@@ -917,6 +938,7 @@ namespace lfs::vis {
         // Image exports need stable ties. Float previews (including sequencer
         // thumbnails) keep the interactive sort and cold-frame warmup.
         auto rendered = renderPreviewImageToPreviewSlotWithState(
+            getSettings(),
             scene_manager,
             model,
             scene_state,
@@ -982,6 +1004,7 @@ namespace lfs::vis {
     }
 
     std::expected<void, std::string> RenderingManager::renderPreviewImageToPreviewSlotWithState(
+        const RenderSettings& settings,
         SceneManager* const scene_manager,
         const lfs::core::SplatData& model,
         SceneRenderState scene_state,
@@ -1016,7 +1039,7 @@ namespace lfs::vis {
             scene_state.combined_model = &model;
         }
 
-        RenderSettings preview_settings = getSettings();
+        RenderSettings preview_settings = settings;
         preview_settings.focal_length_mm = std::clamp(
             focal_length_mm,
             lfs::rendering::MIN_FOCAL_LENGTH_MM,
@@ -1152,6 +1175,7 @@ namespace lfs::vis {
                 focal_length_mm);
             while (true) {
                 auto rendered = renderPreviewImageToPreviewSlotWithState(
+                    getSettings(),
                     scene_manager,
                     model,
                     scene_state,
@@ -1274,7 +1298,7 @@ namespace lfs::vis {
         }
 
         auto render_lock = acquireLiveModelRenderLock(request.scene_manager);
-        const auto settings = getSettings();
+        const auto settings = settingsForView(request.view);
         SceneRenderState scene_state;
         const lfs::core::SplatData* model = nullptr;
         if (splitViewUsesPLYComparison(settings.split_view_mode)) {
@@ -1311,6 +1335,7 @@ namespace lfs::vis {
         }
 
         auto rendered = renderDepthCaptureToPreviewSlotWithState(
+            settings,
             request.scene_manager,
             *model,
             std::move(scene_state),

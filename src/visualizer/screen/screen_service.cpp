@@ -52,14 +52,17 @@ namespace lfs::vis::screen {
 
     std::optional<ViewSettings> ScreenService::viewSettings(const ViewId view) const {
         std::lock_guard lock(mutex_);
-        if (const auto* space = screen_.view(AreaId{view}))
-            return space->settings;
+        if (const auto* area = screen_.area(AreaId{view})) {
+            if (const auto* space = dynamic_cast<const View3DSpace*>(area->space("view3d")))
+                return space->settings;
+        }
         return std::nullopt;
     }
 
     bool ScreenService::editViewSettings(const ViewId view, const std::function<void(ViewSettings&)>& edit) {
         std::lock_guard lock(mutex_);
-        auto* space = screen_.view(AreaId{view});
+        auto* area = screen_.area(AreaId{view});
+        auto* space = area ? dynamic_cast<View3DSpace*>(area->space("view3d")) : nullptr;
         if (!space)
             return false;
         edit(space->settings);

@@ -962,8 +962,16 @@ namespace lfs::vis {
                 rendering_manager_->markViewDirty(id, DirtyFlag::ALL);
             return true;
         };
-        if (screen::applyViewCommand(*view, command, height))
+        if (screen::applyViewCommand(*view, command, height)) {
+            if (command.starts_with("axis:") || command == "projection")
+                rendering_manager_->markCameraCut(id);
             return changed();
+        }
+        if (command == "home") {
+            view->camera.camera.resetToHome();
+            rendering_manager_->markCameraCut(id);
+            return changed();
+        }
         if (command == "frame_all" || command == "frame_selected") {
             activateView(id);
             return input_controller_ && input_controller_->frameView(id, command == "frame_selected");

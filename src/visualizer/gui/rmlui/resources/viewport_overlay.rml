@@ -114,23 +114,6 @@
             </div>
         </div>
 
-        <!-- Primary gizmo buttons address Left regardless of focus. -->
-        <div id="primary-viewport-gizmo-controls" class="viewport-gizmo-controls">
-            <div class="viewport-gizmo-control-row">
-                <div class="icon-btn"
-                     data-for="button : utility_primary_buttons"
-                     data-attr-id="button.button_id"
-                     data-class-selected="button.selected"
-                     data-attr-data-action="button.action_id"
-                     data-attr-title="button.tooltip_text"
-                     data-attrif-disabled="!button.enabled"
-                     data-class-disabled="!button.enabled"
-                     data-event-click="toolbar_action(button.action, button.value)">
-                    <img data-attr-src="button.icon_src" />
-                </div>
-            </div>
-        </div>
-
         <div class="toolbar-hcenter toolbar-layer-primary" data-class-align-active="show_align_toolbar">
             <div id="primary-transform-toolbar" class="toolbar-container hidden"
                  data-class-hidden="!show_transform_toolbar">

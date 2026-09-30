@@ -144,6 +144,9 @@ namespace lfs::python {
         };
 
         int instance_id = 0;
+        std::uint32_t drag_view = 0;
+        std::uint64_t input_frame = 0;
+        std::unordered_map<std::uint32_t, int> view_instances;
         std::string id;
         TransformGizmoOperation operation = TransformGizmoOperation::Translate;
         TransformGizmoSpace space = TransformGizmoSpace::Local;

@@ -50,6 +50,7 @@ namespace lfs::vis::gui {
 
     BoundsGizmoResult drawBoundsGizmo(const BoundsGizmoConfig& config);
 
+    void beginBoundsGizmoFrame();
     [[nodiscard]] bool isBoundsGizmoHovered();
     [[nodiscard]] bool isBoundsGizmoActive();
 

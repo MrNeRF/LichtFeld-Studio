@@ -296,8 +296,8 @@ namespace lfs::vis {
             return false;
         }
 
-        void setPivotAnimationEndTime(const std::chrono::steady_clock::time_point end_time) {
-            this->state().animation_state_.setPivotAnimationEndTime(end_time);
+        void setPivotAnimationEndTime(ViewId view, const std::chrono::steady_clock::time_point end_time) {
+            viewState(view).animation_state_.setPivotAnimationEndTime(end_time);
         }
 
         void triggerSelectionFlash() {
@@ -325,7 +325,7 @@ namespace lfs::vis {
         // The presentation pass reports its actual runtime choice after pipeline
         // preparation. Rendering uses this feedback on the next frame so a failed
         // reconstruction pipeline never receives a reduced-resolution image.
-        void reportSceneUpscalerRuntimeSelection(SceneUpscalerSelection selection);
+        void reportSceneUpscalerRuntimeSelection(ViewId view, SceneUpscalerSelection selection);
         [[nodiscard]] SceneUpscalerSelection sceneUpscalerRuntimeSelection() const;
 
         // Entering computes ortho_scale so the view at the pivot matches the current
@@ -430,7 +430,7 @@ namespace lfs::vis {
             float x, y, width, height;
             bool letterboxed = false;
         };
-        ContentBounds getContentBounds(const glm::ivec2& viewport_size) const;
+        ContentBounds getContentBounds(ViewId view, const glm::ivec2& viewport_size) const;
 
         struct GTSelectionContext {
             GTRenderCamera camera;
@@ -483,6 +483,7 @@ namespace lfs::vis {
         // Depth access for tools (returns camera-space depth at pixel, or -1 if invalid).
         float getDepthAtPixel(ViewId view, int x, int y, std::optional<SplitViewPanelId> panel = std::nullopt) const;
         struct ExpectedDepthSampleRequest {
+            ViewId view = kNoView;
             SceneManager* scene_manager = nullptr;
             const Viewport* viewport = nullptr;
             glm::ivec2 render_size{0, 0};
@@ -649,15 +650,15 @@ namespace lfs::vis {
             bool active,
             ViewportResizeRenderPolicy render_policy = ViewportResizeRenderPolicy::InteractivePreview);
         [[nodiscard]] bool isViewportResizeDeferring() const {
-            return this->state().frame_lifecycle_service_.isResizeDeferring();
+            std::lock_guard lock(views_mutex_);
+            for (const auto& [id, view] : view_states_)
+                if (view->frame_lifecycle_service_.isResizeDeferring())
+                    return true;
+            return false;
         }
 
         [[nodiscard]] ViewportInteropService& viewportInterop();
         [[nodiscard]] const ViewportInteropService& viewportInterop() const;
-        void prepareViewportInterop(VulkanContext& context);
-        void bindViewportInteropParams(VulkanViewportPassParams& params,
-                                       std::size_t frame_slot,
-                                       bool export_locked);
         void shutdownViewportInterop(VulkanContext* context = nullptr);
         [[nodiscard]] bool hasPendingViewportResizeSettle() const {
             std::lock_guard lock(views_mutex_);
@@ -744,6 +745,7 @@ namespace lfs::vis {
             PreviewImageReadback readback,
             float rasterization_scale = 1.0f);
         [[nodiscard]] std::expected<void, std::string> renderPreviewImageToPreviewSlotWithState(
+            const RenderSettings& settings,
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,
             SceneRenderState scene_state,
@@ -763,6 +765,7 @@ namespace lfs::vis {
             float rasterization_scale = 1.0f,
             bool deterministic_export = false);
         [[nodiscard]] std::expected<void, std::string> renderDepthCaptureToPreviewSlotWithState(
+            const RenderSettings& settings,
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,
             SceneRenderState scene_state,
