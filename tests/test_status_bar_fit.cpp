@@ -170,10 +170,10 @@ namespace {
         std::string fps_value = "144";
         std::string fps_color = "#ffffff";
         std::string fps_label = " FPS";
-        std::string renderer_label = "Renderer";
+        std::string renderer_label = "R";
         std::string renderer_value = "Metal / Vulkan";
         std::string renderer_tooltip = "Scene renderer";
-        std::string tensor_label = "Tensors";
+        std::string tensor_label = "T";
         std::string tensor_value = "CUDA";
         std::string tensor_tooltip = "Tensor compute backend";
         std::string git_commit = "abcdef12";
@@ -406,7 +406,9 @@ namespace {
         EXPECT_EQ(renderer->GetAttribute<Rml::String>("title", ""), model_.renderer_tooltip);
         EXPECT_EQ(tensor->GetAttribute<Rml::String>("title", ""), model_.tensor_tooltip);
         EXPECT_LT(renderer->GetAbsoluteOffset().x, tensor->GetAbsoluteOffset().x);
-        EXPECT_LT(tensor->GetAbsoluteOffset().x, fps->GetAbsoluteOffset().x);
+        EXPECT_LT(fps->GetAbsoluteOffset().x, renderer->GetAbsoluteOffset().x);
+        EXPECT_NE(renderer->GetInnerRML().find(">R<"), Rml::String::npos);
+        EXPECT_NE(tensor->GetInnerRML().find(">T<"), Rml::String::npos);
 
         model_.renderer_value = "Vulkan";
         model_.renderer_tooltip = "Metal requested; Vulkan fallback";

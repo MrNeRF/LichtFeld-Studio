@@ -2070,7 +2070,7 @@
     "renderer_backend_tooltip": "表示中のシーンを描画したバックエンドです。分割表示では複数を使用できます。表示処理とエディターのオーバーレイにはVulkanを使用します。",
     "tensor_backend_tooltip": "テンソル計算で現在使用中の GPU バックエンド。シーンのレンダラーとは独立しており、変更にはアプリの再起動が必要です。",
     "backend_requested": "要求: {}",
-    "backend_no_frame": "表示中のフレームでは3Dシーンのレンダラーが動作していません。",
+    "backend_no_frame": "3Dシーンのレンダラーは動作していません。現在、Vulkanがビューポートとユーザーインターフェイスを表示しています。",
     "backend_fallback": "Metal が要求されましたが、データまたは描画オプションがネイティブで未対応のため、このフレームは Vulkan を使用しています。",
     "preview_reduced": "プレビュー解像度を低下（GPUメモリ）",
     "safe_mode": "セーフモード",
@@ -2109,7 +2109,9 @@
     "gpu_budget": "GPU メモリ予算",
     "strategy_default": "デフォルト",
     "split": "分割:",
-    "ui_fps": "UI FPS"
+    "ui_fps": "UI FPS",
+    "renderer_backend_short": "R",
+    "tensor_backend_short": "T"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "GitHub URL または短縮形式:",

@@ -2070,7 +2070,7 @@
     "renderer_backend_tooltip": "Backend die de weergegeven scène heeft gerenderd; gesplitste weergaven kunnen er meerdere gebruiken. Presentatie en editoroverlays gebruiken Vulkan.",
     "tensor_backend_tooltip": "GPU-backend die momenteel tensorberekeningen uitvoert. Deze staat los van de scènerenderer; wijzigen vereist een herstart van de app.",
     "backend_requested": "Gevraagd: {}",
-    "backend_no_frame": "Er is geen 3D-scènerenderer actief in het weergegeven frame.",
+    "backend_no_frame": "Er is geen 3D-scènerenderer actief. Vulkan geeft momenteel de viewport en de gebruikersinterface weer.",
     "backend_fallback": "Metal is gevraagd; dit frame gebruikt Vulkan omdat de gegevens of renderopties niet rechtstreeks worden ondersteund.",
     "preview_reduced": "Voorbeeldresolutie verlaagd (GPU-geheugen)",
     "safe_mode": "VEILIGE MODUS",
@@ -2109,7 +2109,9 @@
     "gpu_budget": "GPU-budget",
     "strategy_default": "Standaard",
     "split": "Splitsing:",
-    "ui_fps": "UI FPS"
+    "ui_fps": "UI FPS",
+    "renderer_backend_short": "R",
+    "tensor_backend_short": "T"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "GitHub-URL of verkorte vorm:",

@@ -115,15 +115,6 @@ body,
     border-color: @{alpha(text_dim,0.35)};
 }
 
-.backend-chip:hover {
-    background-color: @{alpha(surface_bright,0.45)};
-    border-color: @{text_dim};
-}
-
 .backend-label {
     color: @{text_dim};
-}
-
-.backend-icon {
-    image-color: @{text_dim};
 }

@@ -1705,11 +1705,15 @@ namespace lfs::vis::gui {
         append_backend(rendering::viewerBackendBit(rendering::ViewerBackend::Metal), "Metal");
         append_backend(rendering::viewerBackendBit(rendering::ViewerBackend::Vulkan), "Vulkan");
         append_backend(rendering::softwareViewerBackendBit, "CPU");
+        // With no scene output, the live desktop Vulkan compositor still
+        // presents the viewport and UI. Do not guess a scene route from
+        // the saved preference; explain the compositor in the tooltip.
         if (active_renderer.empty())
-            active_renderer = "—";
-        setModelString("renderer_label", model_.renderer_label, LOC("status_bar.renderer_backend"));
+            active_renderer = "Vulkan";
+        setModelString("renderer_label", model_.renderer_label, LOC("status_bar.renderer_backend_short"));
         setModelString("renderer_value", model_.renderer_value, active_renderer);
-        auto renderer_tooltip = std::string(LOC("status_bar.renderer_backend_tooltip")) + "\n" +
+        auto renderer_tooltip = std::string(LOC("status_bar.renderer_backend")) + ": " +
+                                LOC("status_bar.renderer_backend_tooltip") + "\n" +
                                 formatLocalizedValue(LOC("status_bar.backend_requested"), viewer_name(requested));
         if (!backend_mask)
             renderer_tooltip += std::string("\n") + LOC("status_bar.backend_no_frame");
@@ -1717,10 +1721,11 @@ namespace lfs::vis::gui {
                  backend_mask == rendering::viewerBackendBit(rendering::ViewerBackend::Vulkan))
             renderer_tooltip += std::string("\n") + LOC("status_bar.backend_fallback");
         setModelString("renderer_tooltip", model_.renderer_tooltip, std::move(renderer_tooltip));
-        setModelString("tensor_label", model_.tensor_label, LOC("status_bar.tensor_backend"));
+        setModelString("tensor_label", model_.tensor_label, LOC("status_bar.tensor_backend_short"));
         setModelString("tensor_value", model_.tensor_value,
                        core::gpu_backend_name(core::configured_gpu_backend()));
-        setModelString("tensor_tooltip", model_.tensor_tooltip, LOC("status_bar.tensor_backend_tooltip"));
+        setModelString("tensor_tooltip", model_.tensor_tooltip,
+                       std::string(LOC("status_bar.tensor_backend")) + ": " + LOC("status_bar.tensor_backend_tooltip"));
         setModelString("git_commit", model_.git_commit, GIT_COMMIT_HASH_SHORT);
 
         section_signature_ =

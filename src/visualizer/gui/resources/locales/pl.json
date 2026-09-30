@@ -2070,7 +2070,7 @@
     "renderer_backend_tooltip": "Backend, który wyrenderował wyświetlaną scenę; widoki dzielone mogą używać kilku. Prezentacja i nakładki edytora używają Vulkan.",
     "tensor_backend_tooltip": "Backend GPU obecnie używany do obliczeń tensorowych. Jest niezależny od renderera sceny; jego zmiana wymaga ponownego uruchomienia aplikacji.",
     "backend_requested": "Żądany: {}",
-    "backend_no_frame": "W wyświetlanej klatce nie jest aktywny żaden renderer sceny 3D.",
+    "backend_no_frame": "Żaden renderer sceny 3D nie jest aktywny. Vulkan wyświetla obecnie widok i interfejs użytkownika.",
     "backend_fallback": "Zażądano Metal; ta klatka używa Vulkan, ponieważ jej dane lub opcje renderowania nie są obsługiwane natywnie.",
     "preview_reduced": "Obniżona rozdzielczość podglądu (pamięć GPU)",
     "safe_mode": "TRYB BEZPIECZNY",
@@ -2109,7 +2109,9 @@
     "gpu_budget": "Budżet GPU",
     "strategy_default": "Domyślny",
     "split": "Podział:",
-    "ui_fps": "UI FPS"
+    "ui_fps": "UI FPS",
+    "renderer_backend_short": "R",
+    "tensor_backend_short": "T"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "URL GitHub lub skrót:",

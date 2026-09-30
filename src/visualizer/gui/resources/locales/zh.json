@@ -2070,7 +2070,7 @@
     "renderer_backend_tooltip": "渲染当前显示场景的后端；分屏视图可能使用多个后端。画面呈现和编辑器叠加层使用 Vulkan。",
     "tensor_backend_tooltip": "当前用于张量计算的 GPU 后端。它独立于场景渲染器；更改它需要重启应用。",
     "backend_requested": "请求：{}",
-    "backend_no_frame": "当前显示的帧中没有活动的 3D 场景渲染器。",
+    "backend_no_frame": "当前没有活动的 3D 场景渲染器。Vulkan 正在呈现视口和用户界面。",
     "backend_fallback": "已请求 Metal；由于此帧的数据或渲染选项尚未获得原生支持，因此使用 Vulkan。",
     "preview_reduced": "预览分辨率已降低（GPU 显存）",
     "safe_mode": "安全模式",
@@ -2109,7 +2109,9 @@
     "gpu_budget": "GPU 显存预算",
     "strategy_default": "默认",
     "split": "分割：",
-    "ui_fps": "UI FPS"
+    "ui_fps": "UI FPS",
+    "renderer_backend_short": "R",
+    "tensor_backend_short": "T"
   },
   "plugin_manager": {
     "github_url_or_shorthand": "GitHub URL 或简写：",

@@ -550,20 +550,6 @@ body.fit-9 #gpu-mem {
     font-weight: bold;
 }
 
-.backend-icon {
-    display: none;
-    width: 12dp;
-    height: 12dp;
-}
-
-body.fit-4 .backend-label {
-    display: none;
-}
-
-body.fit-4 .backend-icon {
-    display: block;
-}
-
 body.fit-8 .backend-chip {
     margin-left: 4dp;
     padding: 0 4dp;

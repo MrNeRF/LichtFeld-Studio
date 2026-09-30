@@ -21,8 +21,10 @@ The shared desktop status bar shows compact Renderer and Tensors badges beside
 FPS on all platforms. Renderer telemetry comes from published frame metadata,
 including mixed split frames and software point-cloud panels, rather than from
 the saved preference. The tensor badge reports the current process backend.
-Localized hover tooltips explain independent routing and restart semantics;
-compact layouts retain distinct display and compute icons. CPU visualizer
+Compact R and T role markers sit to the right of FPS and keep the same
+appearance on hover. Localized tooltips expand the role names and explain
+independent routing and restart semantics. With no scene output, R reports
+the active Vulkan desktop compositor and explains this in the tooltip. CPU visualizer
 contracts cover metadata propagation/reset and status-bar sizing without a GPU.
 
 ## Implemented and GPU-tested
