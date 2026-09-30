@@ -68,9 +68,9 @@ namespace lfs::vis {
         // exist — never a per-frame global wait.
         void prepareMeshes(const std::vector<VulkanMeshDrawItem>& items, std::size_t frame_slot);
 
-        // Copies handles for record-time binding. Valid until the next
+        // Immutable metadata for record-time binding. Valid until the next
         // prepareMeshes eviction of this id (not evicted while used this epoch).
-        [[nodiscard]] bool findMesh(std::uint64_t mesh_id, SharedMeshDrawAsset& out) const;
+        [[nodiscard]] const SharedMeshDrawAsset* findMesh(std::uint64_t mesh_id) const;
 
         // Keep the previous environment image until submitted frames retire.
         // A disabled view must not destroy an image used by another view.

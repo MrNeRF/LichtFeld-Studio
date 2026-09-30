@@ -84,6 +84,7 @@ namespace lfs::vis {
         };
 
         struct GpuMesh {
+            SharedMeshDrawAsset draw;
             VkBuffer vertex_buffer = VK_NULL_HANDLE;
             VmaAllocation vertex_alloc = VK_NULL_HANDLE;
             VkBuffer index_buffer = VK_NULL_HANDLE;
@@ -136,7 +137,7 @@ namespace lfs::vis {
         [[nodiscard]] bool initMeshInfrastructure();
         void shutdownMeshes();
         void prepareMeshes(const std::vector<VulkanMeshDrawItem>& items);
-        [[nodiscard]] bool findMesh(std::uint64_t mesh_id, SharedMeshDrawAsset& out) const;
+        [[nodiscard]] const SharedMeshDrawAsset* findMesh(std::uint64_t mesh_id) const;
         void evictUnusedMeshes();
 
         [[nodiscard]] bool initEnvironmentInfrastructure();

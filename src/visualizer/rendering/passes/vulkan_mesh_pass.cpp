@@ -1683,9 +1683,8 @@ namespace lfs::vis {
                 return true;
             });
             for (const auto& item : params.items) {
-                SharedMeshDrawAsset mesh;
-                if (item.mesh && assets->findMesh(item.mesh->id(), mesh))
-                    (void)prepareMaterials(item.mesh->id(), mesh);
+                if (const auto* mesh = item.mesh ? assets->findMesh(item.mesh->id()) : nullptr)
+                    (void)prepareMaterials(item.mesh->id(), *mesh);
             }
             for (auto it = material_bindings.begin(); it != material_bindings.end();) {
                 if (context->retiredFrameSubmitSerial() > it->second.last_used + 120) {
@@ -1711,10 +1710,10 @@ namespace lfs::vis {
                 if (!item.mesh || !item.shadow_enabled || item.shadow_map_resolution <= 0) {
                     continue;
                 }
-                SharedMeshDrawAsset mesh{};
-                if (!assets->findMesh(item.mesh->id(), mesh)) {
+                const auto* asset = assets->findMesh(item.mesh->id());
+                if (!asset)
                     continue;
-                }
+                const auto& mesh = *asset;
                 auto& gpu = mesh_shadows[item.mesh->id()];
                 if (!ensureShadowTarget(gpu, item.shadow_map_resolution)) {
                     continue;
@@ -1845,10 +1844,10 @@ namespace lfs::vis {
                 const auto& item = params.items[item_index];
                 if (!item.mesh || !assets)
                     continue;
-                SharedMeshDrawAsset mesh{};
-                if (!assets->findMesh(item.mesh->id(), mesh)) {
+                const auto* asset = assets->findMesh(item.mesh->id());
+                if (!asset)
                     continue;
-                }
+                const auto& mesh = *asset;
                 const auto shadow_it = mesh_shadows.find(item.mesh->id());
                 const MeshShadowState* shadow_state =
                     shadow_it != mesh_shadows.end() ? &shadow_it->second : nullptr;

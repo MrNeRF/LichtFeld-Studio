@@ -268,8 +268,8 @@ namespace lfs::vis {
         impl_->prepareMeshes(items);
     }
 
-    bool SharedViewportGpuAssets::findMesh(const std::uint64_t mesh_id, SharedMeshDrawAsset& out) const {
-        return impl_ && impl_->findMesh(mesh_id, out);
+    const SharedMeshDrawAsset* SharedViewportGpuAssets::findMesh(const std::uint64_t mesh_id) const {
+        return impl_ ? impl_->findMesh(mesh_id) : nullptr;
     }
 
     void SharedViewportGpuAssets::prepareEnvironment(const VulkanEnvironmentParams& params,
@@ -1043,6 +1043,22 @@ namespace lfs::vis {
         gpu.aabb_min = aabb_min;
         gpu.aabb_max = aabb_max;
         gpu.generation = mesh.generation();
+        gpu.draw.vertex_buffer = gpu.vertex_buffer;
+        gpu.draw.index_buffer = gpu.index_buffer;
+        gpu.draw.total_index_count = gpu.total_index_count;
+        gpu.draw.generation = gpu.generation;
+        gpu.draw.aabb_min = gpu.aabb_min;
+        gpu.draw.aabb_max = gpu.aabb_max;
+        gpu.draw.submeshes.clear();
+        gpu.draw.submeshes.reserve(gpu.submeshes.size());
+        for (const auto& sm : gpu.submeshes) {
+            gpu.draw.submeshes.push_back({sm.start_index, sm.index_count, sm.material_index});
+        }
+        gpu.draw.materials.clear();
+        gpu.draw.materials.reserve(gpu.materials.size());
+        for (const auto& mat : gpu.materials) {
+            gpu.draw.materials.push_back(mat.binding);
+        }
         // A previous pass may already have recorded these handles for the
         // upcoming GUI submit. Keep the old generation through that submit.
         if (destination.vertex_buffer != VK_NULL_HANDLE)
@@ -1100,30 +1116,9 @@ namespace lfs::vis {
         evictUnusedMeshes();
     }
 
-    bool SharedViewportGpuAssets::Impl::findMesh(const std::uint64_t mesh_id,
-                                                 SharedMeshDrawAsset& out) const {
+    const SharedMeshDrawAsset* SharedViewportGpuAssets::Impl::findMesh(const std::uint64_t mesh_id) const {
         const auto it = mesh_cache.find(mesh_id);
-        if (it == mesh_cache.end() || it->second.vertex_buffer == VK_NULL_HANDLE) {
-            return false;
-        }
-        const GpuMesh& gpu = it->second;
-        out.vertex_buffer = gpu.vertex_buffer;
-        out.index_buffer = gpu.index_buffer;
-        out.total_index_count = gpu.total_index_count;
-        out.generation = gpu.generation;
-        out.aabb_min = gpu.aabb_min;
-        out.aabb_max = gpu.aabb_max;
-        out.submeshes.clear();
-        out.submeshes.reserve(gpu.submeshes.size());
-        for (const auto& sm : gpu.submeshes) {
-            out.submeshes.push_back({sm.start_index, sm.index_count, sm.material_index});
-        }
-        out.materials.clear();
-        out.materials.reserve(gpu.materials.size());
-        for (const auto& mat : gpu.materials) {
-            out.materials.push_back(mat.binding);
-        }
-        return true;
+        return it != mesh_cache.end() && it->second.vertex_buffer != VK_NULL_HANDLE ? &it->second.draw : nullptr;
     }
 
     void SharedViewportGpuAssets::Impl::evictUnusedMeshes() {
