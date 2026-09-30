@@ -15,6 +15,7 @@
 namespace lfs::vis {
 
     class VulkanContext;
+    class SharedViewportGpuAssets;
 
     struct VulkanEnvironmentParams {
         bool enabled = false;
@@ -36,13 +37,17 @@ namespace lfs::vis {
         VulkanEnvironmentPass(VulkanEnvironmentPass&&) noexcept;
         VulkanEnvironmentPass& operator=(VulkanEnvironmentPass&&) noexcept;
 
+        // `shared_assets` owns the sampled equirect image. Null creates a private
+        // owner so existing single-pass callers keep current behavior. The
+        // screen-quad buffer remains caller-owned (per viewport).
         [[nodiscard]] bool init(VulkanContext& context,
                                 VkFormat color_format,
                                 VkFormat depth_stencil_format,
-                                VkBuffer screen_quad_buffer);
+                                VkBuffer screen_quad_buffer,
+                                std::shared_ptr<SharedViewportGpuAssets> shared_assets = {});
 
-        // Loads / re-uploads the equirect texture if the path changed. Cheap when path
-        // is unchanged.
+        // Rebinds this pass's per-frame descriptor to the shared environment
+        // texture. Does not destroy a texture another view still samples.
         void prepare(const VulkanEnvironmentParams& params, std::size_t frame_slot);
 
         // Records a quad draw that fills the viewport rect with the

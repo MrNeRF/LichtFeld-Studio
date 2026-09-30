@@ -501,7 +501,7 @@ namespace lfs::vis {
 
         void retireOutput(OutputSlotResources& slot) {
             if (slot.color_image != VK_NULL_HANDLE || slot.depth_image != VK_NULL_HANDLE)
-                retired_outputs.push_back({std::move(slot), submitted, context->lastFrameSubmitSerial()});
+                retired_outputs.push_back({std::move(slot), submitted, context->lastFrameSubmitSerial() + (context->hasActiveFrame() ? 1 : 0)});
             slot = {};
         }
         void drainOutputs() {

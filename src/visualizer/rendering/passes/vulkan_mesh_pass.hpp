@@ -20,6 +20,7 @@ namespace lfs::core {
 namespace lfs::vis {
 
     class VulkanContext;
+    class SharedViewportGpuAssets;
 
     // GPU-rendered mesh draw item. Full PBR (Cook-Torrance: GGX + Smith + Schlick) with
     // albedo / normal / metallic-roughness textures, vertex colors, Reinhard tonemap +
@@ -71,14 +72,16 @@ namespace lfs::vis {
         VulkanMeshPass(VulkanMeshPass&&) noexcept;
         VulkanMeshPass& operator=(VulkanMeshPass&&) noexcept;
 
-        // Initialize pipelines / descriptor layouts. color_format and depth_format
-        // must match the render-pass attachments the caller will record into.
+        // Attachment formats must match the render pass. A null shared_assets
+        // creates a private geometry/material cache for single-pass callers.
         [[nodiscard]] bool init(VulkanContext& context,
                                 VkFormat color_format,
-                                VkFormat depth_stencil_format);
+                                VkFormat depth_stencil_format,
+                                std::shared_ptr<SharedViewportGpuAssets> shared_assets = {});
 
-        // Upload any new / changed mesh GPU buffers. Idempotent — caches by
-        // (MeshData*, generation).
+        // Upload any new / changed mesh GPU buffers into the shared (or private)
+        // asset cache. Idempotent — caches by (MeshData::id, generation). Per-view
+        // light UBOs and shadow maps are prepared locally.
         void prepare(VulkanContext& context, const VulkanMeshPassParams& params);
 
         // Record draw commands into an already-active dynamic-rendering pass.

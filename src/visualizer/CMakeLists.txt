@@ -66,6 +66,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/appearance_tensor_model.cpp
         rendering/viewport_request_builder.cpp
         rendering/passes/vulkan_scene_image_uploader.cpp
+        rendering/passes/shared_viewport_gpu_assets.cpp
         rendering/passes/vulkan_viewport_pass.cpp
         rendering/passes/vulkan_mesh_pass.cpp
         rendering/passes/vulkan_scene_motion_pass.cpp

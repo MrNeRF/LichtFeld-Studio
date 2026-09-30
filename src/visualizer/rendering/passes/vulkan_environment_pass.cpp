@@ -3,14 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "vulkan_environment_pass.hpp"
+#include "shared_viewport_gpu_assets.hpp"
 
-#include "core/image_io.hpp"
 #include "core/logger.hpp"
-#include "core/path_utils.hpp"
-#include "diagnostics/vram_profiler.hpp"
-#include "internal/resource_paths.hpp"
-#include "rendering/vulkan_wait.hpp"
-#include "window/vulkan_barrier2.hpp"
 #include "window/vulkan_context.hpp"
 #include "window/vulkan_result.hpp"
 
@@ -18,10 +13,9 @@
 #include <array>
 #include <cstring>
 #include <format>
-#include <limits>
-#include <stop_token>
+#include <glm/glm.hpp>
+#include <memory>
 #include <string>
-#include <string_view>
 #include <vector>
 #include <vk_mem_alloc.h>
 
@@ -32,25 +26,6 @@ namespace lfs::vis {
 
     namespace {
 
-        [[nodiscard]] const char* waitOutcomeLabel(const lfs::rendering::WaitOutcome outcome) noexcept {
-            using lfs::rendering::WaitOutcome;
-            switch (outcome) {
-            case WaitOutcome::Ready: return "Ready";
-            case WaitOutcome::Cancelled: return "Cancelled";
-            case WaitOutcome::Shutdown: return "Shutdown";
-            case WaitOutcome::Quarantined: return "Quarantined";
-            }
-            return "Unknown";
-        }
-
-        [[nodiscard]] std::string formatWaitFailure(
-            const lfs::Result<lfs::rendering::WaitOutcome>& outcome) {
-            if (outcome.has_value()) {
-                return waitOutcomeLabel(*outcome);
-            }
-            return std::string(outcome.error().detail());
-        }
-
         struct EnvPush {
             float cam_to_world[16];
             float intrinsics[4];
@@ -58,27 +33,6 @@ namespace lfs::vis {
             float flags[4];             // x = is_equirectangular_view
         };
         static_assert(sizeof(EnvPush) == 112);
-
-        // Pack a float into a 16-bit half-float (IEEE 754 binary16). Avoids dragging in
-        // an extra header dep.
-        std::uint16_t floatToHalf(float f) {
-            std::uint32_t bits;
-            std::memcpy(&bits, &f, 4);
-            const std::uint32_t sign = (bits >> 31) & 0x1;
-            std::int32_t exp = static_cast<std::int32_t>((bits >> 23) & 0xff) - 127 + 15;
-            std::uint32_t mant = bits & 0x7fffff;
-            if (exp <= 0) {
-                if (exp < -10)
-                    return static_cast<std::uint16_t>(sign << 15);
-                mant |= 0x800000;
-                const std::uint32_t shift = 14 - exp;
-                return static_cast<std::uint16_t>((sign << 15) | (mant >> shift));
-            }
-            if (exp >= 31) {
-                return static_cast<std::uint16_t>((sign << 15) | (0x1f << 10) | (mant ? 0x200 : 0));
-            }
-            return static_cast<std::uint16_t>((sign << 15) | (exp << 10) | (mant >> 13));
-        }
 
     } // namespace
 
@@ -90,7 +44,6 @@ namespace lfs::vis {
         VkQueue graphics_queue = VK_NULL_HANDLE;
 
         VkBuffer screen_quad_buffer = VK_NULL_HANDLE;
-        VkSampler sampler = VK_NULL_HANDLE;
         VkDescriptorSetLayout desc_layout = VK_NULL_HANDLE;
         VkDescriptorPool desc_pool = VK_NULL_HANDLE;
         struct FrameDescriptor {
@@ -100,18 +53,25 @@ namespace lfs::vis {
         std::vector<FrameDescriptor> frame_descriptors;
         VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
-        VkCommandPool transfer_pool = VK_NULL_HANDLE;
-
-        VkImage image = VK_NULL_HANDLE;
-        VmaAllocation image_alloc = VK_NULL_HANDLE;
-        VkImageView image_view = VK_NULL_HANDLE;
-        std::string image_vram_label;
-        std::filesystem::path loaded_path;
-        bool load_failed_for_path = false;
+        std::shared_ptr<SharedViewportGpuAssets> assets;
 
         ~Impl() { destroy(); }
 
-        bool init(VulkanContext& ctx, VkFormat color_format, VkFormat depth_format, VkBuffer quad) {
+        bool init(VulkanContext& ctx,
+                  VkFormat color_format,
+                  VkFormat depth_format,
+                  VkBuffer quad,
+                  std::shared_ptr<SharedViewportGpuAssets> shared_assets) {
+            if (!shared_assets) {
+                shared_assets = std::make_shared<SharedViewportGpuAssets>();
+            }
+            assets = std::move(shared_assets);
+            if (!assets->ensureContext(ctx)) {
+                return logVkFailure(std::format(
+                    "Environment-pass initialization could not bind shared scene GPU assets ({}:{})",
+                    __FILE__,
+                    __LINE__));
+            }
             context = &ctx;
             device = ctx.device();
             allocator = ctx.allocator();
@@ -130,30 +90,10 @@ namespace lfs::vis {
                     __LINE__));
             }
 
-            VkCommandPoolCreateInfo pi{};
-            pi.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-            pi.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-            pi.queueFamilyIndex = ctx.graphicsQueueFamily();
-            if (!vk_try_bool(
-                    vkCreateCommandPool(device, &pi, nullptr, &transfer_pool),
-                    "vkCreateCommandPool(device, &pi, nullptr, &transfer_pool)",
-                    lfs::rendering::formatVulkanDiagnostic(
-                        "Environment transfer command-pool creation failed (device={:#x}, queue_family={}, flags={:#x})",
-                        vkHandleValue(device),
-                        pi.queueFamilyIndex,
-                        static_cast<std::uint32_t>(pi.flags)),
-                    std::source_location::current())) {
-                return false;
-            }
-            context->setDebugObjectName(VK_OBJECT_TYPE_COMMAND_POOL,
-                                        transfer_pool,
-                                        "environment.transfer.pool");
-
-            return createSampler() && createDescriptors() && createPipeline(color_format, depth_format);
+            return createDescriptors() && createPipeline(color_format, depth_format);
         }
 
         void destroy() {
-            destroyImage();
             if (pipeline != VK_NULL_HANDLE) {
                 vkDestroyPipeline(device, pipeline, nullptr);
                 pipeline = VK_NULL_HANDLE;
@@ -171,82 +111,9 @@ namespace lfs::vis {
                 vkDestroyDescriptorSetLayout(device, desc_layout, nullptr);
                 desc_layout = VK_NULL_HANDLE;
             }
-            if (sampler != VK_NULL_HANDLE) {
-                vkDestroySampler(device, sampler, nullptr);
-                sampler = VK_NULL_HANDLE;
-            }
-            if (transfer_pool != VK_NULL_HANDLE) {
-                vkDestroyCommandPool(device, transfer_pool, nullptr);
-                transfer_pool = VK_NULL_HANDLE;
-            }
             device = VK_NULL_HANDLE;
             allocator = VK_NULL_HANDLE;
-        }
-
-        void destroyImage() {
-            if (image_view != VK_NULL_HANDLE) {
-                vkDestroyImageView(device, image_view, nullptr);
-                image_view = VK_NULL_HANDLE;
-            }
-            if (image != VK_NULL_HANDLE) {
-                if (!image_vram_label.empty()) {
-                    lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
-                        "vulkan.environment.image",
-                        image_vram_label,
-                        0);
-                }
-                vmaDestroyImage(allocator, image, image_alloc);
-                image = VK_NULL_HANDLE;
-                image_alloc = VK_NULL_HANDLE;
-            }
-            image_vram_label.clear();
-            loaded_path.clear();
-            for (auto& descriptor : frame_descriptors) {
-                descriptor.bound_view = VK_NULL_HANDLE;
-            }
-        }
-
-        bool retireAndDestroyImage(const char* const reason) {
-            if (image == VK_NULL_HANDLE) {
-                return true;
-            }
-            if (context != nullptr && !context->waitForSubmittedFrames()) {
-                LOG_ERROR("VulkanEnvironmentPass: could not retire frames before {}: {}",
-                          reason,
-                          context->lastError());
-                return false;
-            }
-            destroyImage();
-            return true;
-        }
-
-        bool createSampler() {
-            VkSamplerCreateInfo info{};
-            info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-            info.magFilter = VK_FILTER_LINEAR;
-            info.minFilter = VK_FILTER_LINEAR;
-            info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-            info.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-            info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-            info.maxLod = 0.0f;
-            if (!vk_try_bool(
-                    vkCreateSampler(device, &info, nullptr, &sampler),
-                    "vkCreateSampler(device, &info, nullptr, &sampler)",
-                    lfs::rendering::formatVulkanDiagnostic(
-                        "Environment sampler creation failed (device={:#x}, mag_filter={}, min_filter={}, address_mode_u={}, address_mode_v={})",
-                        vkHandleValue(device),
-                        static_cast<int>(info.magFilter),
-                        static_cast<int>(info.minFilter),
-                        static_cast<int>(info.addressModeU),
-                        static_cast<int>(info.addressModeV)),
-                    std::source_location::current())) {
-                return false;
-            }
-            context->setDebugObjectName(VK_OBJECT_TYPE_SAMPLER,
-                                        sampler,
-                                        "environment.texture.sampler");
-            return true;
+            assets.reset();
         }
 
         bool createDescriptors() {
@@ -352,14 +219,14 @@ namespace lfs::vis {
             return frame_descriptors[frame_slot];
         }
 
-        void rebindDescriptor(FrameDescriptor& descriptor) const {
-            if (image_view == VK_NULL_HANDLE || descriptor.bound_view == image_view) {
+        void rebindDescriptor(FrameDescriptor& descriptor, const SharedEnvironmentTexture& texture) const {
+            if (texture.image_view == VK_NULL_HANDLE || descriptor.bound_view == texture.image_view) {
                 return;
             }
             VkDescriptorImageInfo image_info{};
             image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            image_info.imageView = image_view;
-            image_info.sampler = sampler;
+            image_info.imageView = texture.image_view;
+            image_info.sampler = texture.sampler;
             VkWriteDescriptorSet write{};
             write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             write.dstSet = descriptor.set;
@@ -368,7 +235,7 @@ namespace lfs::vis {
             write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             write.pImageInfo = &image_info;
             vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
-            descriptor.bound_view = image_view;
+            descriptor.bound_view = texture.image_view;
         }
 
         bool createPipeline(VkFormat color_format, VkFormat depth_format) {
@@ -518,396 +385,23 @@ namespace lfs::vis {
             return true;
         }
 
-        VkCommandBuffer beginCmds() const {
-            VkCommandBufferAllocateInfo a{};
-            a.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-            a.commandPool = transfer_pool;
-            a.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-            a.commandBufferCount = 1;
-            VkCommandBuffer cb = VK_NULL_HANDLE;
-            VkResult result = vkAllocateCommandBuffers(device, &a, &cb);
-            if (result != VK_SUCCESS) {
-                LOG_ERROR("Vulkan: {}",
-                          formatVkCheckFailure(
-                              "vkAllocateCommandBuffers(device, &a, &cb)",
-                              result,
-                              std::format("Environment upload command-buffer allocation failed (device={:#x}, command_pool={:#x}, requested_count={})",
-                                          vkHandleValue(device),
-                                          vkHandleValue(transfer_pool),
-                                          a.commandBufferCount),
-                              __FILE__,
-                              __LINE__));
-                return VK_NULL_HANDLE;
-            }
-            context->setDebugObjectName(VK_OBJECT_TYPE_COMMAND_BUFFER,
-                                        cb,
-                                        "environment.upload.command");
-            VkCommandBufferBeginInfo bi{};
-            bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-            bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-            result = vkBeginCommandBuffer(cb, &bi);
-            if (result != VK_SUCCESS) {
-                LOG_ERROR("Vulkan: {}",
-                          formatVkCheckFailure(
-                              "vkBeginCommandBuffer(cb, &bi)",
-                              result,
-                              std::format("Environment upload command buffer did not enter recording state (command_buffer={:#x}, command_pool={:#x})",
-                                          vkHandleValue(cb),
-                                          vkHandleValue(transfer_pool)),
-                              __FILE__,
-                              __LINE__));
-                vkFreeCommandBuffers(device, transfer_pool, 1, &cb);
-                return VK_NULL_HANDLE;
-            }
-            return cb;
-        }
-
-        bool endCmds(VkCommandBuffer cb) const {
-            VkResult r = vkEndCommandBuffer(cb);
-            if (r != VK_SUCCESS) {
-                vkFreeCommandBuffers(device, transfer_pool, 1, &cb);
-                return reportVkFailure(
-                    "vkEndCommandBuffer(cb)",
-                    r,
-                    std::format("Environment upload command buffer did not leave recording state (command_buffer={:#x}, command_pool={:#x})",
-                                vkHandleValue(cb),
-                                vkHandleValue(transfer_pool)));
-            }
-            VkSubmitInfo si{};
-            si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-            si.commandBufferCount = 1;
-            si.pCommandBuffers = &cb;
-            VkFenceCreateInfo fi{};
-            fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-            VkFence fence = VK_NULL_HANDLE;
-            r = vkCreateFence(device, &fi, nullptr, &fence);
-            if (r == VK_SUCCESS) {
-                context->setDebugObjectName(VK_OBJECT_TYPE_FENCE,
-                                            fence,
-                                            "environment.upload.fence");
-            }
-            std::string failed_expression;
-            std::string failed_context;
-            if (r != VK_SUCCESS) {
-                failed_expression = "vkCreateFence(device, &fi, nullptr, &fence)";
-                failed_context = std::format(
-                    "Environment upload fence creation failed (device={:#x}, command_buffer={:#x})",
-                    vkHandleValue(device),
-                    vkHandleValue(cb));
-            } else if (graphics_queue == VK_NULL_HANDLE || cb == VK_NULL_HANDLE ||
-                       fence == VK_NULL_HANDLE || si.commandBufferCount != 1 ||
-                       si.pCommandBuffers == nullptr || si.pCommandBuffers[0] != cb) {
-                r = VK_ERROR_INITIALIZATION_FAILED;
-                failed_expression = "environment upload submit integrity check";
-                failed_context = std::format(
-                    "Environment upload submit requires a non-null queue, one expected command buffer, and a non-null fence (queue={:#x}, command_buffer={:#x}, fence={:#x}, command_buffer_count={}, command_buffer_array={:#x}, submitted_command_buffer={:#x})",
-                    vkHandleValue(graphics_queue),
-                    vkHandleValue(cb),
-                    vkHandleValue(fence),
-                    si.commandBufferCount,
-                    reinterpret_cast<std::uintptr_t>(si.pCommandBuffers),
-                    si.pCommandBuffers != nullptr ? vkHandleValue(si.pCommandBuffers[0]) : 0);
-            }
-            bool submitted = false;
-            bool wait_ready = false;
-            if (r == VK_SUCCESS) {
-                r = lfs::rendering::vk_queue_submit_synced(graphics_queue, 1, &si, fence);
-                if (r != VK_SUCCESS) {
-                    failed_expression = "lfs::rendering::vk_queue_submit_synced(graphics_queue, 1, &si, fence)";
-                    failed_context = std::format(
-                        "Environment upload submission failed (queue={:#x}, command_buffer={:#x}, command_buffer_count=1, wait_semaphore_count=0, signal_semaphore_count=0, fence={:#x})",
-                        vkHandleValue(graphics_queue),
-                        vkHandleValue(cb),
-                        vkHandleValue(fence));
-                } else {
-                    submitted = true;
-                }
-            }
-            if (r == VK_SUCCESS) {
-                lfs::rendering::WaitContext wait_ctx;
-                wait_ctx.fingerprint = "pass.environment.upload_wait";
-                auto wait_outcome = lfs::rendering::wait_fence_bounded(
-                    device,
-                    fence,
-                    std::stop_token{},
-                    lfs::rendering::VulkanWaitPolicy{},
-                    wait_ctx);
-                if (wait_outcome.has_value() &&
-                    *wait_outcome == lfs::rendering::WaitOutcome::Ready) {
-                    wait_ready = true;
-                } else {
-                    r = VK_TIMEOUT;
-                    failed_expression =
-                        "wait_fence_bounded(pass.environment.upload_wait)";
-                    failed_context = std::format(
-                        "Environment upload submission did not retire "
-                        "(device={:#x}, fence={:#x}, command_buffer={:#x}): {}",
-                        vkHandleValue(device),
-                        vkHandleValue(fence),
-                        vkHandleValue(cb),
-                        formatWaitFailure(wait_outcome));
-                }
-            }
-            // AMB-4: destroy fence/CB only when never submitted or wait Ready.
-            if (fence != VK_NULL_HANDLE) {
-                if (!submitted || wait_ready) {
-                    vkDestroyFence(device, fence, nullptr);
-                } else {
-                    LOG_ERROR(
-                        "Vulkan: retaining environment upload fence after non-Ready wait "
-                        "(fence={:#x}, command_buffer={:#x})",
-                        vkHandleValue(fence),
-                        vkHandleValue(cb));
-                }
-            }
-            if (!submitted || wait_ready) {
-                vkFreeCommandBuffers(device, transfer_pool, 1, &cb);
-            } else {
-                LOG_ERROR(
-                    "Vulkan: retaining environment upload command buffer after non-Ready wait "
-                    "(command_buffer={:#x})",
-                    vkHandleValue(cb));
-            }
-            if (r != VK_SUCCESS) {
-                return reportVkFailure(
-                    failed_expression,
-                    r,
-                    failed_context);
-            }
-            return true;
-        }
-
-        bool loadFromPath(const std::filesystem::path& path) {
-            if (!retireAndDestroyImage("environment texture reload")) {
-                return false;
-            }
-            if (path.empty()) {
-                return false;
-            }
-            std::filesystem::path resolved = path;
-            if (!resolved.is_absolute() && !std::filesystem::exists(resolved)) {
-                try {
-                    resolved = lfs::vis::getAssetPath(lfs::core::path_to_utf8(path));
-                } catch (const std::exception&) {
-                    resolved = lfs::core::getAssetsDir() / path;
-                }
-            }
-            const std::string utf8 = lfs::core::path_to_utf8(resolved);
-            auto [source_data, w, h, nch] = lfs::core::load_image_float(resolved);
-            if (!source_data) {
-                LOG_WARN("VulkanEnvironmentPass: failed to read environment map {}", utf8);
-                return false;
-            }
-            if (w <= 0 || h <= 0 || nch <= 0) {
-                lfs::core::free_image_float(source_data);
-                return false;
-            }
-
-            // Repack to RGBA half-float (R16G16B16A16_SFLOAT). 3-channel float formats
-            // are spotty in Vulkan, RGBA half is universally supported.
-            const std::size_t pixel_count = static_cast<std::size_t>(w) * h;
-            std::vector<std::uint16_t> rgba(pixel_count * 4);
-            for (std::size_t i = 0; i < pixel_count; ++i) {
-                const float r = nch >= 1 ? source_data[i * nch + 0] : 0.0f;
-                const float g = nch >= 2 ? source_data[i * nch + 1] : r;
-                const float b = nch >= 3 ? source_data[i * nch + 2] : r;
-                rgba[i * 4 + 0] = floatToHalf(r);
-                rgba[i * 4 + 1] = floatToHalf(g);
-                rgba[i * 4 + 2] = floatToHalf(b);
-                rgba[i * 4 + 3] = floatToHalf(1.0f);
-            }
-            lfs::core::free_image_float(source_data);
-
-            VkImageCreateInfo img{};
-            img.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-            img.imageType = VK_IMAGE_TYPE_2D;
-            img.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-            img.extent = {static_cast<std::uint32_t>(w), static_cast<std::uint32_t>(h), 1};
-            img.mipLevels = 1;
-            img.arrayLayers = 1;
-            img.samples = VK_SAMPLE_COUNT_1_BIT;
-            img.tiling = VK_IMAGE_TILING_OPTIMAL;
-            img.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-            img.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-            img.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            VmaAllocationCreateInfo ai{};
-            ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-            VmaAllocationInfo allocation_info{};
-            if (!vk_try_bool(
-                    vmaCreateImage(allocator, &img, &ai, &image, &image_alloc, &allocation_info),
-                    "vmaCreateImage(allocator, &img, &ai, &image, &image_alloc, &allocation_info)",
-                    lfs::rendering::formatVulkanDiagnostic(
-                        "Environment image allocation failed (allocator={:#x}, path='{}', requested_extent={}x{}, format={}, usage={:#x})",
-                        reinterpret_cast<std::uintptr_t>(allocator),
-                        utf8,
-                        w,
-                        h,
-                        static_cast<int>(img.format),
-                        static_cast<std::uint32_t>(img.usage)),
-                    std::source_location::current())) {
-                return false;
-            }
-            context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE,
-                                         image,
-                                         "environment.image[{}x{}]",
-                                         w,
-                                         h);
-            vmaSetAllocationName(allocator, image_alloc, "Environment image");
-            image_vram_label = std::format("env:{}:{}x{}",
-                                           lfs::core::path_to_utf8(path),
-                                           w,
-                                           h);
-            lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
-                "vulkan.environment.image",
-                image_vram_label,
-                static_cast<std::size_t>(allocation_info.size));
-
-            const VkDeviceSize bytes = static_cast<VkDeviceSize>(rgba.size()) * sizeof(std::uint16_t);
-            VkBuffer staging = VK_NULL_HANDLE;
-            VmaAllocation staging_alloc = VK_NULL_HANDLE;
-            VkBufferCreateInfo bi{};
-            bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-            bi.size = bytes;
-            bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-            bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-            VmaAllocationCreateInfo sa{};
-            sa.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-            sa.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-            VkResult result =
-                vmaCreateBuffer(allocator, &bi, &sa, &staging, &staging_alloc, nullptr);
-            if (result != VK_SUCCESS) {
-                destroyImage();
-                return reportVkFailure(
-                    "vmaCreateBuffer(allocator, &bi, &sa, &staging, &staging_alloc, nullptr)",
-                    result,
-                    std::format("Environment staging-buffer allocation failed (allocator={:#x}, path='{}', requested_size={}, usage={:#x})",
-                                reinterpret_cast<std::uintptr_t>(allocator),
-                                utf8,
-                                bytes,
-                                static_cast<std::uint32_t>(bi.usage)));
-            }
-            context->setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER,
-                                         staging,
-                                         "environment.upload.staging[{}]",
-                                         bytes);
-            void* mapped = nullptr;
-            result = vmaMapMemory(allocator, staging_alloc, &mapped);
-            if (result != VK_SUCCESS) {
-                vmaDestroyBuffer(allocator, staging, staging_alloc);
-                destroyImage();
-                return reportVkFailure(
-                    "vmaMapMemory(allocator, staging_alloc, &mapped)",
-                    result,
-                    std::format("Environment staging allocation could not be mapped (allocator={:#x}, allocation={:#x}, buffer={:#x}, requested_size={})",
-                                reinterpret_cast<std::uintptr_t>(allocator),
-                                reinterpret_cast<std::uintptr_t>(staging_alloc),
-                                vkHandleValue(staging),
-                                bytes));
-            }
-            std::memcpy(mapped, rgba.data(), static_cast<std::size_t>(bytes));
-            const VkResult flush_result = vmaFlushAllocation(allocator, staging_alloc, 0, bytes);
-            vmaUnmapMemory(allocator, staging_alloc);
-            if (flush_result != VK_SUCCESS) {
-                vmaDestroyBuffer(allocator, staging, staging_alloc);
-                destroyImage();
-                return reportVkFailure(
-                    "vmaFlushAllocation(allocator, staging_alloc, 0, bytes)",
-                    flush_result,
-                    std::format("Environment staging flush failed (allocator={:#x}, allocation={:#x}, buffer={:#x}, offset=0, flush_size={})",
-                                reinterpret_cast<std::uintptr_t>(allocator),
-                                reinterpret_cast<std::uintptr_t>(staging_alloc),
-                                vkHandleValue(staging),
-                                bytes));
-            }
-
-            VkCommandBuffer cb = beginCmds();
-            if (cb == VK_NULL_HANDLE) {
-                vmaDestroyBuffer(allocator, staging, staging_alloc);
-                destroyImage();
-                return false;
-            }
-
-            cmdImageBarrier2(cb, image, VK_IMAGE_ASPECT_COLOR_BIT,
-                             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_ACCESS_2_NONE,
-                             VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-
-            VkBufferImageCopy region{};
-            region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            region.imageSubresource.layerCount = 1;
-            region.imageExtent = {static_cast<std::uint32_t>(w), static_cast<std::uint32_t>(h), 1};
-            vkCmdCopyBufferToImage(cb, staging, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-
-            cmdImageBarrier2(cb, image, VK_IMAGE_ASPECT_COLOR_BIT,
-                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                             VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-
-            const bool ok = endCmds(cb);
-            vmaDestroyBuffer(allocator, staging, staging_alloc);
-            if (!ok) {
-                destroyImage();
-                return false;
-            }
-
-            VkImageViewCreateInfo iv{};
-            iv.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-            iv.image = image;
-            iv.viewType = VK_IMAGE_VIEW_TYPE_2D;
-            iv.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-            iv.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            iv.subresourceRange.levelCount = 1;
-            iv.subresourceRange.layerCount = 1;
-            const VkResult view_result = vkCreateImageView(device, &iv, nullptr, &image_view);
-            if (view_result != VK_SUCCESS) {
-                destroyImage();
-                return reportVkFailure(
-                    "vkCreateImageView(device, &iv, nullptr, &image_view)",
-                    view_result,
-                    std::format("Environment image-view creation failed (device={:#x}, image={:#x}, path='{}', extent={}x{}, format={}, aspect_mask={:#x})",
-                                vkHandleValue(device),
-                                vkHandleValue(iv.image),
-                                utf8,
-                                w,
-                                h,
-                                static_cast<int>(iv.format),
-                                static_cast<std::uint32_t>(iv.subresourceRange.aspectMask)));
-            }
-            context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE_VIEW,
-                                         image_view,
-                                         "environment.image[{}x{}].view",
-                                         w,
-                                         h);
-
-            loaded_path = path;
-            return true;
-        }
-
         void prepare(const VulkanEnvironmentParams& params, const std::size_t frame_slot) {
             auto& descriptor = descriptorForFrame(frame_slot);
+            if (!assets || (context != nullptr && !assets->ensureContext(*context))) {
+                descriptor.bound_view = VK_NULL_HANDLE;
+                return;
+            }
+            assets->prepareEnvironment(params, frame_slot);
             if (!params.enabled) {
-                retireAndDestroyImage("environment texture release");
-                load_failed_for_path = false;
+                descriptor.bound_view = VK_NULL_HANDLE;
                 return;
             }
-            if (params.map_path == loaded_path && image != VK_NULL_HANDLE) {
-                rebindDescriptor(descriptor);
+            const SharedEnvironmentTexture texture = assets->environmentTexture();
+            if (texture.image_view == VK_NULL_HANDLE) {
+                descriptor.bound_view = VK_NULL_HANDLE;
                 return;
             }
-            if (params.map_path.empty()) {
-                retireAndDestroyImage("empty environment path");
-                return;
-            }
-            // Skip retry of a path we've already failed once for, until it changes.
-            if (load_failed_for_path && params.map_path == loaded_path) {
-                return;
-            }
-            const bool ok = loadFromPath(params.map_path);
-            load_failed_for_path = !ok;
-            loaded_path = params.map_path;
-            if (ok) {
-                rebindDescriptor(descriptor);
-            }
+            rebindDescriptor(descriptor, texture);
         }
 
         void record(VkCommandBuffer cb, VkRect2D rect, const VulkanEnvironmentParams& params,
@@ -974,10 +468,11 @@ namespace lfs::vis {
     VulkanEnvironmentPass& VulkanEnvironmentPass::operator=(VulkanEnvironmentPass&&) noexcept = default;
 
     bool VulkanEnvironmentPass::init(VulkanContext& context, VkFormat color_format,
-                                     VkFormat depth_format, VkBuffer screen_quad) {
+                                     VkFormat depth_format, VkBuffer screen_quad,
+                                     std::shared_ptr<SharedViewportGpuAssets> shared_assets) {
         if (!impl_)
             impl_ = std::make_unique<Impl>();
-        return impl_->init(context, color_format, depth_format, screen_quad);
+        return impl_->init(context, color_format, depth_format, screen_quad, std::move(shared_assets));
     }
 
     void VulkanEnvironmentPass::prepare(const VulkanEnvironmentParams& params,

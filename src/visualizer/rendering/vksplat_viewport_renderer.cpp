@@ -1961,7 +1961,7 @@ namespace lfs::vis {
 
         const RenderTargetId output_index = output_slot;
         const std::uint64_t producer = last_submitted_render_value_;
-        const std::uint64_t consumer = context_->lastFrameSubmitSerial();
+        const std::uint64_t consumer = context_->lastFrameSubmitSerial() + (context_->hasActiveFrame() ? 1 : 0);
         return ring_.releaseRenderTarget(output_index, [&](OutputImageSlot& slot) {
             if (slot.image.image != VK_NULL_HANDLE) {
                 context_->imageBarriers().forgetImage(slot.image.image, slot.image_generation);
@@ -2141,7 +2141,7 @@ namespace lfs::vis {
             // After device idle: release live slot acquisitions into the pool,
             // then force-drain so every pooled image is destroyed exactly once.
             const std::uint64_t producer = last_submitted_render_value_;
-            const std::uint64_t consumer = context_->lastFrameSubmitSerial();
+            const std::uint64_t consumer = context_->lastFrameSubmitSerial() + (context_->hasActiveFrame() ? 1 : 0);
             for (const auto& [logical, column] : ring_.table()) {
                 ring_.clearLogical(logical, [&](OutputImageSlot& slot) {
                     if (slot.image.image != VK_NULL_HANDLE) {
