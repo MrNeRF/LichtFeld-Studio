@@ -2319,6 +2319,10 @@ namespace lfs::core {
                 masked_scatter_cpu(const_cast<Tensor*>(tensor_)->ptr<int64_t>(), mask,
                                    other.ptr<int64_t>(), tensor_->numel());
                 break;
+            case DataType::UInt32:
+                masked_scatter_cpu(const_cast<Tensor*>(tensor_)->ptr<uint32_t>(), mask,
+                                   other.ptr<uint32_t>(), tensor_->numel());
+                break;
             case DataType::UInt8:
             case DataType::Bool:
                 masked_scatter_cpu(const_cast<Tensor*>(tensor_)->ptr<uint8_t>(), mask,

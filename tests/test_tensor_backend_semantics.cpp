@@ -119,6 +119,9 @@ namespace {
                   (std::vector<uint8_t>{0, 1, 1, 0}));
         const Tensor mask = make<uint8_t>(DataType::Bool, {4}, {1, 0, 1, 1});
         EXPECT_EQ(host<uint32_t>(a.masked_select(mask)), (std::vector<uint32_t>{1, 3, 0x80000000u}));
+        Tensor scattered = a.clone();
+        scattered[mask] = make<uint32_t>(DataType::UInt32, {3}, {7, 8, 0xFFFFFFFFu});
+        EXPECT_EQ(host<uint32_t>(scattered), (std::vector<uint32_t>{7, 22, 8, 0xFFFFFFFFu}));
     }
 
     TEST_P(TensorBackendSemantics, TakeReadsStridedIndices) {

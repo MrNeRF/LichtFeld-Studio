@@ -431,6 +431,21 @@ namespace lfs::core::tensor_ops {
         }
     };
 
+    // cvt.rzi saturates, but turns NaN into INT64_MIN for 64-bit targets; NaN casts to 0.
+    template <>
+    struct ConvertFunctor<float, int64_t> {
+        __device__ int64_t operator()(float x) const {
+            return isnan(x) ? int64_t{0} : static_cast<int64_t>(x);
+        }
+    };
+
+    template <>
+    struct ConvertFunctor<__half, int64_t> {
+        __device__ int64_t operator()(__half x) const {
+            return __hisnan(x) ? int64_t{0} : static_cast<int64_t>(x);
+        }
+    };
+
     template <typename SrcT, typename DstT>
     void launch_convert_type(const SrcT* src, DstT* dst, size_t n, cudaStream_t stream) {
         if (n == 0)

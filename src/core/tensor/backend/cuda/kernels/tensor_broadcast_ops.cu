@@ -725,4 +725,28 @@ namespace lfs::core::tensor_ops {
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::logical_xor_op, cudaStream_t);
 
+    // UInt32 broadcast operations: arithmetic keeps UInt32, predicates write Bool.
+#define LFS_BROADCAST_UINT32(Out, Op)                                      \
+    template LFS_CORE_API void launch_broadcast_binary<uint32_t, Out, Op>( \
+        const uint32_t*, const uint32_t*, Out*,                            \
+        const size_t*, const size_t*, const size_t*,                       \
+        size_t, size_t, size_t, size_t, Op, cudaStream_t);
+    LFS_BROADCAST_UINT32(uint32_t, ops::add_op)
+    LFS_BROADCAST_UINT32(uint32_t, ops::sub_op)
+    LFS_BROADCAST_UINT32(uint32_t, ops::mul_op)
+    LFS_BROADCAST_UINT32(uint32_t, ops::div_op)
+    LFS_BROADCAST_UINT32(uint32_t, ops::maximum_op)
+    LFS_BROADCAST_UINT32(uint32_t, ops::minimum_op)
+    LFS_BROADCAST_UINT32(uint32_t, ops::pow_op)
+    LFS_BROADCAST_UINT32(uint32_t, ops::mod_op)
+    LFS_BROADCAST_UINT32(unsigned char, ops::greater_op)
+    LFS_BROADCAST_UINT32(unsigned char, ops::greater_equal_op)
+    LFS_BROADCAST_UINT32(unsigned char, ops::less_op)
+    LFS_BROADCAST_UINT32(unsigned char, ops::less_equal_op)
+    LFS_BROADCAST_UINT32(unsigned char, ops::equal_op)
+    LFS_BROADCAST_UINT32(unsigned char, ops::not_equal_op)
+    LFS_BROADCAST_UINT32(unsigned char, ops::logical_and_op)
+    LFS_BROADCAST_UINT32(unsigned char, ops::logical_or_op)
+    LFS_BROADCAST_UINT32(unsigned char, ops::logical_xor_op)
+#undef LFS_BROADCAST_UINT32
 } // namespace lfs::core::tensor_ops

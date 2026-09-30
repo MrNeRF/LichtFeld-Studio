@@ -200,6 +200,7 @@ namespace lfs::core::internal {
                 LFS_LAUNCH_BROADCAST_SAME(__half, Float16);
                 LFS_LAUNCH_BROADCAST_SAME(int, Int32);
                 LFS_LAUNCH_BROADCAST_SAME(int64_t, Int64);
+                LFS_LAUNCH_BROADCAST_SAME(uint32_t, UInt32);
                 LFS_LAUNCH_BROADCAST_SAME(uint8_t, UInt8);
             default:
                 LFS_ASSERT_MSG(false, "broadcast op/dtype pair has no CUDA instantiation");
@@ -229,6 +230,7 @@ namespace lfs::core::internal {
                 LFS_LAUNCH_BROADCAST_BOOL(__half, Float16);
                 LFS_LAUNCH_BROADCAST_BOOL(int, Int32);
                 LFS_LAUNCH_BROADCAST_BOOL(int64_t, Int64);
+                LFS_LAUNCH_BROADCAST_BOOL(uint32_t, UInt32);
                 LFS_LAUNCH_BROADCAST_BOOL(unsigned char, UInt8);
                 LFS_LAUNCH_BROADCAST_BOOL(unsigned char, Bool);
             default:

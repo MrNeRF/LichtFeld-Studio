@@ -51,6 +51,15 @@ namespace lfs::core::internal {
             default: LFS_ASSERT_MSG(false, "unsupported CUDA index/mask dtype");
             }
         }
+
+        // Masked select and scatter only move elements, so UInt32 moves as Int32.
+        template <class Operation>
+        void dispatch_mask_copy_dtype(const StorageRef storage, Operation&& operation) {
+            if (storage.dtype == DataType::UInt32)
+                operation.template operator()<int32_t>();
+            else
+                dispatch_index_dtype(storage, operation);
+        }
     } // namespace
 
     void CudaBackendOps::index_cast(const StorageRef input, const StorageRef output,
@@ -286,7 +295,7 @@ namespace lfs::core::internal {
                 cuda_pointer<T>(output), program.count, program.selected_count,
                 context.cuda_stream);
         };
-        dispatch_index_dtype(input, launch);
+        dispatch_mask_copy_dtype(input, launch);
         LFS_CUDA_CHECK(cudaGetLastError());
         return program.selected_count;
     }
@@ -301,7 +310,7 @@ namespace lfs::core::internal {
                 cuda_const_pointer<T>(source), program.count,
                 program.selected_count, context.cuda_stream);
         };
-        dispatch_index_dtype(output, launch);
+        dispatch_mask_copy_dtype(output, launch);
         LFS_CUDA_CHECK(cudaGetLastError());
     }
 
