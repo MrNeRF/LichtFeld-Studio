@@ -66,14 +66,22 @@ namespace lfs::vis::screen {
         }
 
         void renormalize(std::vector<float>& weights) {
-            float sum = 0.0f;
+            float largest = 0.0f;
             for (float& w : weights) {
                 if (!std::isfinite(w) || w < kMinWeight)
                     w = kMinWeight;
-                sum += w;
+                largest = std::max(largest, w);
             }
-            for (float& w : weights)
-                w /= sum;
+            if (largest <= 0.0f || weights.empty())
+                return;
+            double sum = 0.0;
+            for (const float w : weights)
+                sum += static_cast<double>(w / largest);
+            for (float& w : weights) {
+                w = static_cast<float>((static_cast<double>(w / largest)) / sum);
+                if (!std::isfinite(w) || w <= 0.0f)
+                    w = kMinWeight;
+            }
         }
 
         // Restores the tree invariants below `node`: single-child splits
@@ -84,6 +92,7 @@ namespace lfs::vis::screen {
                 return;
             for (auto& child : node.children)
                 normalizeNode(child);
+            renormalize(node.weights);
 
             std::vector<Node> children;
             std::vector<float> weights;
@@ -213,6 +222,8 @@ namespace lfs::vis::screen {
                     divider.rect = columns ? Rect{trail, rect.y, metrics.divider, rect.h}
                                            : Rect{rect.x, trail, rect.w, metrics.divider};
                     divider.parent = rect;
+                    divider.leading_extent = child_extent;
+                    divider.trailing_extent = std::max(0.0f, edges[i + 2] - (trail + metrics.divider));
                     // The gap may move between the lead of child i plus its
                     // minimum and the trail of child i+1 minus its minimum.
                     const float next_trail = i + 2 == n ? origin + extent : edges[i + 2];
@@ -228,6 +239,8 @@ namespace lfs::vis::screen {
             if (node.isArea())
                 return node.children.empty() && areas.insert(node.area.value).second;
             if (!node.split.valid() || !splits.insert(node.split.value).second)
+                return false;
+            if (node.split.value == std::numeric_limits<std::uint32_t>::max())
                 return false;
             if (node.children.size() < 2 || node.children.size() != node.weights.size())
                 return false;
@@ -256,7 +269,7 @@ namespace lfs::vis::screen {
                 return std::nullopt;
             if (const auto it = json.find("area"); it != json.end()) {
                 if (!it->is_number_unsigned() || it->get<std::uint64_t>() == 0 ||
-                    it->get<std::uint64_t>() > std::numeric_limits<std::uint32_t>::max())
+                    it->get<std::uint64_t>() >= std::numeric_limits<std::uint32_t>::max())
                     return std::nullopt;
                 return makeLeaf(AreaId{it->get<std::uint32_t>()});
             }
@@ -268,7 +281,8 @@ namespace lfs::vis::screen {
                 return std::nullopt;
             if (!split->is_number_unsigned() || !axis->is_string() || !weights->is_array() || !children->is_array())
                 return std::nullopt;
-            if (split->get<std::uint64_t>() > std::numeric_limits<std::uint32_t>::max())
+            if (split->get<std::uint64_t>() == 0 ||
+                split->get<std::uint64_t>() >= std::numeric_limits<std::uint32_t>::max())
                 return std::nullopt;
             Node node;
             node.split = SplitId{split->get<std::uint32_t>()};
@@ -402,6 +416,8 @@ namespace lfs::vis::screen {
         } else {
             Node split_node;
             split_node.split = allocateSplit();
+            if (!split_node.split.valid())
+                return false;
             split_node.axis = axis;
             if (new_first) {
                 split_node.children = {makeLeaf(added), makeLeaf(target)};
@@ -424,6 +440,8 @@ namespace lfs::vis::screen {
         if (root_->isArea() || root_->axis != axis) {
             Node wrapper;
             wrapper.split = allocateSplit();
+            if (!wrapper.split.valid())
+                return false;
             wrapper.axis = axis;
             wrapper.children.push_back(std::move(*root_));
             wrapper.weights.push_back(1.0f);
@@ -503,30 +521,41 @@ namespace lfs::vis::screen {
         const auto isPair = [](const Node& n) {
             return !n.isArea() && n.children.size() == 2 && n.children[0].isArea() && n.children[1].isArea();
         };
-        const Node* parent = leaf.parent;
-        if (!isPair(*parent))
+        const Node* pair = leaf.parent;
+        if (!isPair(*pair))
             return std::nullopt;
-        // Find the grandparent: the split holding `parent`.
-        std::function<const Node*(const Node&)> findParentOf = [&](const Node& n) -> const Node* {
+        // Same-axis flattening can place both pair splits among other
+        // siblings, so find an adjacent pair rather than requiring a binary
+        // grandparent.
+        std::function<std::optional<std::pair<const Node*, std::size_t>>(const Node&)> findParentOf =
+            [&](const Node& n) -> std::optional<std::pair<const Node*, std::size_t>> {
             if (n.isArea())
-                return nullptr;
-            for (const auto& child : n.children) {
-                if (&child == parent)
-                    return &n;
-                if (const auto* found = findParentOf(child))
+                return std::nullopt;
+            for (std::size_t i = 0; i < n.children.size(); ++i) {
+                const auto& child = n.children[i];
+                if (&child == pair)
+                    return std::pair{&n, i};
+                if (const auto found = findParentOf(child))
                     return found;
             }
-            return nullptr;
+            return std::nullopt;
         };
-        const Node* grand = findParentOf(*root_);
-        if (!grand || grand->children.size() != 2 || grand->axis == parent->axis)
+        const auto found = findParentOf(*root_);
+        if (!found)
             return std::nullopt;
-        const Node& first = grand->children[0];
-        const Node& second = grand->children[1];
-        if (!isPair(first) || !isPair(second) || first.axis != second.axis)
+        const auto& [parent, index] = *found;
+        if (parent->axis == pair->axis)
             return std::nullopt;
-        return std::array<AreaId, 4>{first.children[0].area, first.children[1].area, second.children[0].area,
-                                     second.children[1].area};
+        const std::size_t start = index > 0 ? index - 1 : index;
+        for (std::size_t first_index = start; first_index <= index && first_index + 1 < parent->children.size();
+             ++first_index) {
+            const Node& first = parent->children[first_index];
+            const Node& second = parent->children[first_index + 1];
+            if (isPair(first) && isPair(second) && first.axis == second.axis)
+                return std::array<AreaId, 4>{first.children[0].area, first.children[1].area,
+                                             second.children[0].area, second.children[1].area};
+        }
+        return std::nullopt;
     }
 
     bool ScreenLayout::swap(const AreaId a, const AreaId b) {
@@ -555,18 +584,16 @@ namespace lfs::vis::screen {
         if (std::abs(delta) < 0.5f)
             return false;
 
-        // Convert the pixel delta into weight using the parent's extent minus
-        // its gaps, which is what the weights are distributed over.
-        const float extent = columns ? divider.parent.w : divider.parent.h;
-        const float divider_size = columns ? divider.rect.w : divider.rect.h;
-        const float usable = extent - divider_size * static_cast<float>(node->children.size() - 1);
+        // Rebase the pair from its solved extents before applying the pixel
+        // delta. Stored weights may no longer match geometry after clamping.
+        const float usable = divider.leading_extent + divider.trailing_extent;
         if (usable <= 0.0f)
             return false;
-        const float dw = delta / usable;
         float& lead = node->weights[divider.index];
         float& trail = node->weights[divider.index + 1];
         const float pair = lead + trail;
-        lead = std::clamp(lead + dw, kMinWeight, pair - kMinWeight);
+        const float requested_share = (divider.leading_extent + delta) / usable;
+        lead = std::clamp(pair * requested_share, kMinWeight, pair - kMinWeight);
         trail = pair - lead;
         return true;
     }
@@ -620,6 +647,8 @@ namespace lfs::vis::screen {
             return std::nullopt;
         ScreenLayout layout;
         layout.root_ = std::move(root);
+        if (maxSplitId(*layout.root_) == std::numeric_limits<std::uint32_t>::max())
+            return std::nullopt;
         layout.next_split_id_ = maxSplitId(*layout.root_) + 1;
         layout.normalize();
         return layout;

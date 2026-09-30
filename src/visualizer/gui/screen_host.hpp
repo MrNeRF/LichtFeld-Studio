@@ -162,6 +162,7 @@ namespace lfs::vis::gui {
 
         // Panel editors shown last frame, to tell whether the panel's enabled
         // flag or the screen changed since.
+        std::unordered_set<std::string> panel_editor_ids_;
         std::unordered_set<std::string> panel_editors_shown_;
         std::unordered_map<std::string, bool> panel_enabled_seen_;
         std::vector<std::string> externally_managed_;

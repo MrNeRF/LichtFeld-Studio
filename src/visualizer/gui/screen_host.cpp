@@ -12,6 +12,7 @@
 #include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
+#include "gui/screen_host_logic.hpp"
 #include "internal/resource_paths.hpp"
 #include "screen/view3d_space.hpp"
 
@@ -328,7 +329,9 @@ namespace lfs::vis::gui {
     }
 
     bool ScreenHost::blocksPointer(const float x, const float y) const {
-        return gestures_.active() || pointerOverHeader(x, y);
+        return gestures_.active() || pointerOverHeader(x, y) ||
+               screen_host_detail::cornerGestureZone(geometry_, geometry_.maximized.valid(),
+                                                     gestures_.metrics().corner_size, x, y);
     }
 
     bool ScreenHost::blocksPress(const float x, const float y) const {
@@ -507,7 +510,9 @@ namespace lfs::vis::gui {
             }
         }
 
-        const bool over_header = pointer_free && !gestures_.active() && pointerOverHeader(x, y);
+        const bool over_corner = screen_host_detail::cornerGestureZone(
+            geometry_, geometry_.maximized.valid(), gestures_.metrics().corner_size, x, y);
+        const bool over_header = pointer_free && !gestures_.active() && !over_corner && pointerOverHeader(x, y);
         if (chrome_context_) {
             const int mods = sdlModsToRml(input.key_ctrl, input.key_shift, input.key_alt, input.key_super);
             if (over_header) {
@@ -584,12 +589,11 @@ namespace lfs::vis::gui {
         // Areas showing a panel that left the editor spaces (it floats now,
         // or was unregistered) close.
         for (const auto& f : frames_) {
-            if (types.contains(f.editor))
+            if (!screen_host_detail::shouldCloseMissingPanelEditor(types.contains(f.editor),
+                                                                   panel_editor_ids_.contains(f.editor)))
                 continue;
-            if (reg.get_panel(f.editor)) {
-                const auto id = f.id;
-                mutate([&](screen::Screen& s) { s.close(id); });
-            }
+            const auto id = f.id;
+            mutate([&](screen::Screen& s) { s.close(id); });
         }
 
         std::unordered_set<std::string> shown_now;
@@ -597,6 +601,7 @@ namespace lfs::vis::gui {
             const auto details = reg.get_panel(type.id);
             if (!details || !isPanelEditorSpace(details->space))
                 continue;
+            panel_editor_ids_.insert(type.id);
             if (std::find(externally_managed_.begin(), externally_managed_.end(), type.id) !=
                 externally_managed_.end())
                 continue;
@@ -876,6 +881,7 @@ namespace lfs::vis::gui {
             break;
         }
         overlay_visible_ = any;
+        screen_host_detail::clearDirtyWhenOverlayHidden(overlay_visible_, overlay_dirty_);
     }
 
     bool ScreenHost::needsAnimationFrame() const {

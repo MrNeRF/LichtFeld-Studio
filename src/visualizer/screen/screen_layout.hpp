@@ -7,6 +7,7 @@
 #include <array>
 #include <compare>
 #include <cstdint>
+#include <limits>
 #include <nlohmann/json_fwd.hpp>
 #include <optional>
 #include <vector>
@@ -85,6 +86,8 @@ namespace lfs::vis::screen {
         Rect parent;               // the split's rect
         float min_position = 0.0f; // allowed range of the gap's leading edge
         float max_position = 0.0f;
+        float leading_extent = 0.0f;  // solved extent of child `index`
+        float trailing_extent = 0.0f; // solved extent of child `index + 1`
     };
 
     struct LayoutGeometry {
@@ -180,7 +183,11 @@ namespace lfs::vis::screen {
 
     private:
         void normalize();
-        SplitId allocateSplit() { return SplitId{next_split_id_++}; }
+        SplitId allocateSplit() {
+            if (next_split_id_ == 0 || next_split_id_ == std::numeric_limits<std::uint32_t>::max())
+                return {};
+            return SplitId{next_split_id_++};
+        }
 
         std::optional<Node> root_;
         std::uint32_t next_split_id_ = 1;

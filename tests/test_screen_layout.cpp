@@ -172,6 +172,18 @@ namespace lfs::vis::screen {
         expectTiles(g);
     }
 
+    TEST(ScreenLayout, MoveDividerRebasesWeightsAfterMinimumClamping) {
+        ScreenLayout layout(A);
+        ASSERT_TRUE(layout.split(A, B, SplitAxis::Columns, 0.01f));
+        ASSERT_TRUE(layout.setWeights(layout.root()->split, {0.99f, 0.01f}));
+        auto g = layout.solve(Rect{0.0f, 0.0f, 1000.0f, 300.0f}, kMetrics);
+        ASSERT_EQ(g.dividers.size(), 1u);
+        ASSERT_NEAR(rectOf(g, A).w, 950.0f, 1.0f);
+        ASSERT_TRUE(layout.moveDivider(g.dividers[0], 900.0f));
+        g = layout.solve(Rect{0.0f, 0.0f, 1000.0f, 300.0f}, kMetrics);
+        EXPECT_NEAR(g.dividers[0].rect.x, 900.0f, 1.0f);
+    }
+
     TEST(ScreenLayout, NestedDividerNormalizesAgainstItsSplit) {
         // Rows[Columns[A, B], C]: the A|B divider only moves inside the top half.
         ScreenLayout layout(A);
@@ -286,6 +298,17 @@ namespace lfs::vis::screen {
             R"({"split": 1, "axis": "rows", "weights": [0.5, -1], "children": [{"area": 1}, {"area": 2}]})")));
         EXPECT_FALSE(ScreenLayout::fromJson(json::parse(R"([1, 2, 3])")));
         EXPECT_TRUE(ScreenLayout::fromJson(json::parse(R"({"area": 7})")));
+        EXPECT_FALSE(ScreenLayout::fromJson(json::parse(R"({"area": 4294967295})")));
+        EXPECT_FALSE(ScreenLayout::fromJson(json::parse(
+            R"({"split": 4294967295, "axis": "columns", "weights": [0.5, 0.5], "children": [{"area": 1}, {"area": 2}]})")));
+    }
+
+    TEST(ScreenLayout, JsonNormalizesLargeFiniteWeightsWithoutOverflow) {
+        const auto restored = ScreenLayout::fromJson(nlohmann::json::parse(
+            R"({"split": 1, "axis": "columns", "weights": [3e38, 3e38], "children": [{"area": 1}, {"area": 2}]})"));
+        ASSERT_TRUE(restored);
+        EXPECT_NEAR(restored->root()->weights[0], 0.5f, 1e-6f);
+        EXPECT_NEAR(restored->root()->weights[1], 0.5f, 1e-6f);
     }
 
     TEST(ScreenLayout, JsonFlattensSameAxisNesting) {

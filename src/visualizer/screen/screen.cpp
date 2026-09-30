@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <limits>
 #include <nlohmann/json.hpp>
+#include <set>
 
 namespace lfs::vis::screen {
 
@@ -122,6 +123,8 @@ namespace lfs::vis::screen {
         const bool duplicate = isMultiInstance(source->editor);
         const std::string editor = duplicate ? source->editor : std::string(editors::kView3D);
 
+        if (next_area_ == 0 || next_area_ == std::numeric_limits<std::uint32_t>::max())
+            return {};
         const AreaId added{next_area_};
         if (!layout_.split(id, added, axis, fraction, new_first))
             return {};
@@ -231,6 +234,8 @@ namespace lfs::vis::screen {
         else if (placement.anchor == EditorPlacement::Anchor::Editor)
             anchor = findEditor(placement.editor);
 
+        if (next_area_ == 0 || next_area_ == std::numeric_limits<std::uint32_t>::max())
+            return {};
         const AreaId added{next_area_};
         const bool placed =
             anchor.valid()
@@ -344,6 +349,8 @@ namespace lfs::vis::screen {
     }
 
     AreaId Screen::addArea(std::string editor) {
+        if (next_area_ == 0 || next_area_ == std::numeric_limits<std::uint32_t>::max())
+            return {};
         const AreaId id{next_area_++};
         Area created;
         created.id = id;
@@ -402,6 +409,7 @@ namespace lfs::vis::screen {
         Screen screen(registry);
         screen.layout_ = std::move(*layout);
         std::uint32_t largest = 0;
+        std::set<std::string> single_instance_editors;
         for (const auto& item : *areas_it) {
             if (!item.is_object())
                 return std::nullopt;
@@ -411,7 +419,7 @@ namespace lfs::vis::screen {
                 !editor_it->is_string() || editor_it->get<std::string>().empty())
                 return std::nullopt;
             const auto raw_id = id_it->get<std::uint64_t>();
-            if (raw_id == 0 || raw_id > std::numeric_limits<std::uint32_t>::max())
+            if (raw_id == 0 || raw_id >= std::numeric_limits<std::uint32_t>::max())
                 return std::nullopt;
             const AreaId id{static_cast<std::uint32_t>(raw_id)};
             if (!screen.layout_.contains(id) || screen.areas_.contains(id))
@@ -419,6 +427,9 @@ namespace lfs::vis::screen {
             Area restored;
             restored.id = id;
             restored.editor = editor_it->get<std::string>();
+            if (const auto type = registry.find(restored.editor);
+                type && !type->multi_instance && !single_instance_editors.insert(restored.editor).second)
+                return std::nullopt;
             if (const auto spaces_it = item.find("spaces"); spaces_it != item.end()) {
                 if (!spaces_it->is_object())
                     return std::nullopt;

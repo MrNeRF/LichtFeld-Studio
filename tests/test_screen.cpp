@@ -2,11 +2,13 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "gui/screen_host_logic.hpp"
 #include "screen/area_gestures.hpp"
 #include "screen/screen.hpp"
 #include "screen/view3d_space.hpp"
 
 #include <gtest/gtest.h>
+#include <limits>
 #include <nlohmann/json.hpp>
 
 namespace lfs::vis::screen {
@@ -258,6 +260,81 @@ namespace lfs::vis::screen {
         const auto restored = Screen::load(unknown_editor, registry);
         ASSERT_TRUE(restored) << "an editor from a missing plugin keeps its area";
         EXPECT_TRUE(restored->findEditor("plugin.gone").valid());
+    }
+
+    TEST_F(ScreenTest, LoadRejectsDuplicateSingleInstanceEditors) {
+        auto json = Screen::makeDefault(registry).save();
+        for (auto& area : json["areas"]) {
+            if (area["editor"] == editors::kProperties)
+                area["editor"] = std::string(editors::kScene);
+        }
+        EXPECT_FALSE(Screen::load(json, registry));
+    }
+
+    TEST_F(ScreenTest, LoadRejectsIdsThatExhaustAreaOrSplitAllocators) {
+        Screen only_view = Screen::makeDefault(registry);
+        ASSERT_TRUE(only_view.closeEditor(editors::kScene));
+        ASSERT_TRUE(only_view.closeEditor(editors::kProperties));
+        auto json = only_view.save();
+        json["areas"][0]["id"] = std::numeric_limits<std::uint32_t>::max();
+        json["layout"]["area"] = std::numeric_limits<std::uint32_t>::max();
+        EXPECT_FALSE(Screen::load(json, registry));
+
+        json = Screen::makeDefault(registry).save();
+        json["layout"]["split"] = std::numeric_limits<std::uint32_t>::max();
+        EXPECT_FALSE(Screen::load(json, registry));
+    }
+
+    TEST_F(ScreenTest, QuadViewCollapsesInsideDefaultNaryParent) {
+        Screen screen = Screen::makeDefault(registry);
+        const auto scene = screen.findEditor(editors::kScene);
+        const auto properties = screen.findEditor(editors::kProperties);
+        const auto view = screen.activeView();
+        const auto before = screen.solve(kBounds, kMetrics);
+
+        ASSERT_TRUE(screen.toggleQuadView(view, 800.0f));
+        ASSERT_EQ(screen.views().size(), 4u);
+        ASSERT_TRUE(screen.toggleQuadView(screen.views()[2], 800.0f));
+
+        EXPECT_EQ(screen.views().size(), 1u);
+        EXPECT_EQ(screen.findEditor(editors::kScene), scene);
+        EXPECT_EQ(screen.findEditor(editors::kProperties), properties);
+        const auto after = screen.solve(kBounds, kMetrics);
+        EXPECT_EQ(rectOf(after, scene), rectOf(before, scene));
+        EXPECT_EQ(rectOf(after, properties), rectOf(before, properties));
+
+        Screen single = Screen::makeDefault(registry);
+        ASSERT_TRUE(single.closeEditor(editors::kScene));
+        ASSERT_TRUE(single.closeEditor(editors::kProperties));
+        const auto only = single.activeView();
+        ASSERT_TRUE(only.valid());
+        ASSERT_TRUE(single.toggleQuadView(only, 800.0f));
+        ASSERT_EQ(single.views().size(), 4u);
+        ASSERT_TRUE(single.toggleQuadView(single.views()[0], 800.0f));
+        EXPECT_EQ(single.views().size(), 1u);
+    }
+
+    TEST(ScreenHostLogic, HiddenOverlayConsumesDirtyState) {
+        bool dirty = true;
+        gui::screen_host_detail::clearDirtyWhenOverlayHidden(false, dirty);
+        EXPECT_FALSE(dirty);
+        dirty = true;
+        gui::screen_host_detail::clearDirtyWhenOverlayHidden(true, dirty);
+        EXPECT_TRUE(dirty);
+    }
+
+    TEST(ScreenHostLogic, DisappearedPanelEditorIsIdentifiedFromHistory) {
+        EXPECT_TRUE(gui::screen_host_detail::shouldCloseMissingPanelEditor(false, true));
+        EXPECT_FALSE(gui::screen_host_detail::shouldCloseMissingPanelEditor(false, false));
+        EXPECT_FALSE(gui::screen_host_detail::shouldCloseMissingPanelEditor(true, true));
+    }
+
+    TEST(ScreenHostLogic, CornerGestureZoneWinsInsideHeader) {
+        ScreenLayout layout(AreaId{1});
+        const auto geometry = layout.solve(kBounds, kMetrics);
+        EXPECT_TRUE(gui::screen_host_detail::cornerGestureZone(geometry, false, 12.0f, 2.0f, 2.0f));
+        EXPECT_FALSE(gui::screen_host_detail::cornerGestureZone(geometry, true, 12.0f, 2.0f, 2.0f));
+        EXPECT_FALSE(gui::screen_host_detail::cornerGestureZone(geometry, false, 12.0f, 100.0f, 100.0f));
     }
 
     TEST_F(ScreenTest, ViewSettingsJsonRoundTripsEveryField) {
