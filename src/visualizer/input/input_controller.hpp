@@ -220,7 +220,7 @@ namespace lfs::vis {
         bool scaleOrthographicView(Viewport& target_viewport, float factor);
         // Middle-drag style orbit/look by drag pixels, without release momentum.
         void orbitViewport(Viewport& target_viewport, const glm::vec2& drag);
-        void publishCameraMove(Viewport* target_viewport = nullptr);
+        void publishCameraMove(Viewport* target_viewport = nullptr, bool preserve_gt_comparison = false);
         // Suppress shared transform/x-y re-anchoring only for an explicitly
         // that panel's camera; this predicate neither selects a viewport nor changes
         // focus.

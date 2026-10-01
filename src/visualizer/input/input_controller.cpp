@@ -2884,7 +2884,7 @@ namespace lfs::vis {
             .rotation = target_viewport.getRotationMatrix(),
             .translation = target_viewport.getTranslation()}
             .emit();
-        publishCameraMove(&target_viewport);
+        publishCameraMove(&target_viewport, true);
 
         auto* const rendering_manager = services().renderingOrNull();
 
@@ -3474,7 +3474,7 @@ namespace lfs::vis {
     }
 
     void InputController::publishCameraMove(
-        Viewport* target_viewport) {
+        Viewport* target_viewport, const bool preserve_gt_comparison) {
         LOG_PERF("InputController::publishCameraMove drag_mode={}", static_cast<int>(drag_mode_));
         auto* const active_viewport = target_viewport ? target_viewport : &viewport();
         if (selection_tool_ && selection_tool_->isEnabled()) {
@@ -3483,7 +3483,8 @@ namespace lfs::vis {
 
         if (auto* const rendering = services().renderingOrNull()) {
             const auto view = views_.viewId(*active_viewport);
-            if (rendering->settingsForView(view).split_view_mode == SplitViewMode::GTComparison) {
+            if (!preserve_gt_comparison &&
+                rendering->settingsForView(view).split_view_mode == SplitViewMode::GTComparison) {
                 rendering->editViewSettings(view, [](ViewSettings& settings) {
                     settings.split_view_mode = SplitViewMode::Disabled;
                 });
