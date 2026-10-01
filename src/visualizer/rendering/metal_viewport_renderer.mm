@@ -612,7 +612,6 @@ namespace lfs::vis {
                                                  r.lod_gpu_traversal.node_count == model.lod_tree->total_nodes() && (rad || model.lod_tree->total_nodes() <= size_t(model.size())) &&
                                                  r.lod_gpu_traversal.output_capacity > 0 && r.lod_gpu_traversal.output_capacity <= std::numeric_limits<uint32_t>::max())) &&
                (!rad || (r.lod_gpu_traversal.enabled && model.lod_tree->rad_source.chunk_size >= core::SplatLodTree::kChunkSplats && model.lod_tree->rad_source.chunk_size % core::SplatLodTree::kChunkSplats == 0)) &&
-               (!model.lod_tree || !model.lod_tree->lod_opacity_encoded || !r.gut) &&
                (!r.lod_indices || r.lod_count <= std::numeric_limits<uint32_t>::max()) &&
                model.means_raw().dtype() == core::DataType::Float32 && model.sh0_raw().dtype() == core::DataType::Float32 &&
                ((model.scaling_raw().dtype() == core::DataType::Float32 && model.rotation_raw().dtype() == core::DataType::Float32 &&

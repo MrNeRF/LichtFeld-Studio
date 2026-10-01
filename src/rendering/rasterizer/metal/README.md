@@ -183,13 +183,24 @@ a full source-layout scene with unselected nodes hidden by zero opacity, weights
 folded into opacity, and debug/mask state mapped to source IDs. This is explicitly
 reported and no timing ratio is produced for that fixture. Vulkan is unchanged.
 
-Resident Spark-encoded 3DGS opacity is decoded from the compact 1..2 range
+Resident and paged Spark-encoded 3DGS/3DGUT opacity is decoded from the compact 1..2 range
 to the 1..5 density kernel, with transition weights and non-mip compensation.
 Density and cutoff are computed once per Gaussian/tile into existing shared
 slots, with no extra allocation or per-pixel density exponential. Portal tone
 remains per Gaussian while its compact probability codecs/tails are disabled
 for Spark. Eight real-reference comparisons and analytic activation/alpha
 oracles exercise this separately from the ordinary sigmoid path.
+Spark projection support uses the density cutoff, including the covariance cap,
+so high-density tails survive tile binning. Native 3DGUT retains weighted source
+opacity for 3D ray evaluation rather than projected mip compensation. The
+standalone `MetalViewerSparkGutContracts` checks more than two million pixels
+against independent double-precision 3D ray/density equations in perspective,
+orthographic and equirectangular views, with mip, output scale and LOD weights.
+The test exposed truncated high-density tails before the support correction.
+RAD capture contracts also exercise the complete native Spark GUT route.
+These cases are not compared blindly against the current Vulkan sparse-GUT
+reference: its fragment source indexing and ordinary sigmoid GUT opacity do
+not implement the logical-cut/Spark-density contract. Vulkan remains unchanged.
 
 Resident ordered hierarchies now select their cut entirely on Metal GPU,
 including root reachability, threshold transitions, page fade, missing-page
@@ -210,8 +221,8 @@ budget, mip, orthographic, depth, export, portal/tone, Spark, selection and tran
 GPU tests and comparison binaries are restricted to macOS; CPU policy tests
 remain available to Windows/Linux CI without a GPU.
 
-Spark-encoded 3DGUT and RAD traversal/paging requests retain the existing Vulkan path. Selection queries,
-the desktop UI, grid, gizmos and final composition also remain on Vulkan. This
+Selection queries, the desktop UI, grid, gizmos and final composition
+still use Vulkan. This
 backend is not yet a fully independent Metal desktop presentation/editor stack.
 Automatic continues to use Vulkan, and no global Vulkan shader is modified.
 
@@ -266,9 +277,9 @@ emitted on successful frames and route changes, including Automatic and fallback
 tensor selection is logged after startup preflight. Preferences reject unavailable
 CUDA/Metal choices with a localized dialog and preserve the previous settings.
 
-Remaining native work includes LOD/RAD admission, page layouts and leases, selection-query kernels, pressure
-eviction and adaptive reservation, and representative sustained performance
-across large scenes. RAD's signed-byte/page-frame layout must not be decoded as
+Remaining native work includes selection-query kernels and representative
+sustained performance across large scenes; projection, resident GPU traversal,
+RAD page decoding/admission/eviction and adaptive frame reservations are native. RAD's signed-byte/page-frame layout must not be decoded as
 SplatData Q16. iOS can reuse projection/raster/scene contracts but needs direct
 Metal presentation and its own device/simulator verification.
 

@@ -59,8 +59,15 @@ uint2 panorama_tile_span(float center, float radius, float period, uint width) {
 }
 
 // Matches the Studio reference's covariance extent limit before inversion.
-float3 clamp_covariance_extent(float3 covariance, float opacity) {
-    const float power=max(4.f,log(max(opacity,.5f/255.f+1e-8f)*510.f));
+float opacity_power(float opacity, bool spark) {
+    if(spark && opacity>1.f) {
+        const float extent=sqrt(8.f)+.7f*(min(opacity,5.f)-1.f);
+        return .5f*extent*extent;
+    }
+    return max(4.f,log(max(opacity,.5f/255.f+1e-8f)*510.f));
+}
+float3 clamp_covariance_extent(float3 covariance, float opacity, bool spark) {
+    const float power=opacity_power(opacity,spark);
     const float maximum=512.5f*512.5f/(2.f*power);
     const float average=.5f*(covariance.x+covariance.z);
     const float delta=sqrt(max(0.f,average*average-(covariance.x*covariance.z-covariance.y*covariance.y)));
@@ -338,7 +345,7 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
         const float2 camera_extent=all(frame.panorama.xy>0)?frame.panorama.xy:float2(frame.extent.xy);
         const float2 source_extent=max(float2(1),round(camera_extent/raster_scale));
         if(portal && primitive_mode!=3u)covariance=portal_covariance(covariance,source_extent);
-        else if(!portal && primitive_mode!=3u)covariance=clamp_covariance_extent(covariance,alpha);
+        else if(!portal && primitive_mode!=3u)covariance=clamp_covariance_extent(covariance,alpha,spark);
         covariance*=variance_scale;
         const float xx=covariance.x,xy=covariance.y,yy=covariance.z;
         det=xx*yy-xy*xy;
@@ -360,9 +367,13 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
             bin_covariance=2.f*billboard;
         }
         const float eigen=.5f*(bin_covariance.x+bin_covariance.z)+sqrt(max(0.0f,.25f*(bin_covariance.x-bin_covariance.z)*(bin_covariance.x-bin_covariance.z)+bin_covariance.y*bin_covariance.y));
-        radius=primitive_mode==2u?3.0f*sqrt(eigen):sqrt(2.0f*max(4.0f,log(alpha*510.0f))*eigen);
+        // Spark density can remain visible well beyond ordinary Gaussian
+        // support. GUT evaluates source opacity along the 3D ray, independently
+        // of the mip compensation used for its projected binning covariance.
+        const float support_alpha=spark && primitive_mode==3u?source_alpha:alpha;
+        radius=primitive_mode==2u?3.0f*sqrt(eigen):sqrt(2.0f*opacity_power(support_alpha,spark)*eigen);
         if(equirectangular) {
-            const float extent_factor=sqrt(2.f*max(4.f,log(source_alpha*510.f)));
+            const float extent_factor=sqrt(2.f*opacity_power(source_alpha,spark));
             panorama_radius=min(sqrt(bin_covariance.xz)*extent_factor,frame.panorama.xy*float2(1.f,.49f));
             radius=max(panorama_radius.x,panorama_radius.y);
         }

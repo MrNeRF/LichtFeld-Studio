@@ -143,10 +143,18 @@ static void run() {
     require(native_cut, "Native RAD never switched from preview to GPU selection");
     require(settled, "A stable native RAD cut keeps requesting redraws after paging settles");
     require(bool(renderer.release(vis::VksplatViewportRenderer::OutputSlot::Main)), "Native RAD release failed");
+    request.gut = true;
+    require(vis::MetalViewportRenderer::supports(model, request), "Native Spark GUT RAD frame fell back");
     const auto captured = renderer.render(context, model, request, vis::VksplatViewportRenderer::OutputSlot::Preview, false, true);
     require(bool(captured), "Native RAD capture did not wait for its pinned root");
     const auto complete = renderer.outputComplete(vis::VksplatViewportRenderer::OutputSlot::Preview);
     require(bool(complete) && *complete, "Native RAD capture published the provisional CPU preview");
+    auto gut_pixels = core::Tensor::empty({64, 96, 4}, core::Device::CPU);
+    require(bool(renderer.readColor(vis::VksplatViewportRenderer::OutputSlot::Preview, gut_pixels, 0, 0)), "Native Spark GUT RAD readback failed");
+    float gut_red = 0;
+    for (size_t pixel = 0; pixel < 64 * 96; ++pixel)
+        gut_red = std::max(gut_red, gut_pixels.ptr<float>()[pixel * 4]);
+    require(gut_red > .1f, "Native Spark GUT RAD has no visible coverage");
     require(bool(renderer.release(vis::VksplatViewportRenderer::OutputSlot::Preview)), "Native RAD capture release failed");
     // Legacy file blocks contain many native pages. Sidecar metadata and
     // physical pools must still use 2048-node pages, including a partial tail.
