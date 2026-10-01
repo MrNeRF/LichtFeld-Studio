@@ -118,6 +118,64 @@ if(TARGET lfs_visualizer)
                 --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-input.json")
             set_tests_properties(MacViewerParity_input PROPERTIES
                 LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
+            foreach(_frustum_mode IN ITEMS native mip ortho portal)
+                set(_frustum_args --frustum)
+                if(NOT _frustum_mode STREQUAL "native")
+                    list(APPEND _frustum_args --${_frustum_mode})
+                endif()
+                foreach(_frustum_alpha IN ITEMS opaque transparent)
+                    set(_frustum_test MacViewerParity_frustum_${_frustum_mode}_${_frustum_alpha})
+                    set(_frustum_display)
+                    if(_frustum_alpha STREQUAL "transparent")
+                        list(APPEND _frustum_display --transparent)
+                    endif()
+                    add_test(NAME ${_frustum_test} COMMAND mac_viewer_backend_benchmark
+                        --smoke ${_frustum_args} ${_frustum_display}
+                        --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-frustum-${_frustum_mode}-${_frustum_alpha}.json")
+                    set_tests_properties(${_frustum_test} PROPERTIES
+                        LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
+                endforeach()
+            endforeach()
+            # Exercise every display curve in both composition profiles and
+            # raster algorithms. RGBA cases check alpha independently of RGB.
+            foreach(_display_profile IN ITEMS studio studio_gut portal portal_gut)
+                set(_display_args)
+                if(_display_profile MATCHES "portal")
+                    list(APPEND _display_args --portal)
+                endif()
+                if(_display_profile MATCHES "gut")
+                    list(APPEND _display_args --gut)
+                endif()
+                foreach(_tone RANGE 0 6)
+                    set(_display_test MacViewerParity_${_display_profile}_tone${_tone})
+                    add_test(NAME ${_display_test} COMMAND mac_viewer_backend_benchmark
+                        --smoke ${_display_args} --tone ${_tone} --exposure 1.6
+                        --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-${_display_profile}-tone${_tone}.json")
+                    set_tests_properties(${_display_test} PROPERTIES
+                        LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
+                endforeach()
+                foreach(_transparent_overlay IN ITEMS selection preview markers affine)
+                    set(_display_test MacViewerParity_${_display_profile}_transparent_${_transparent_overlay})
+                    add_test(NAME ${_display_test} COMMAND mac_viewer_backend_benchmark
+                        --smoke ${_display_args} --transparent --overlay ${_transparent_overlay}
+                        --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-${_display_profile}-transparent-${_transparent_overlay}.json")
+                    set_tests_properties(${_display_test} PROPERTIES
+                        LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
+                endforeach()
+                add_test(NAME MacViewerParity_${_display_profile}_transparent_tone COMMAND mac_viewer_backend_benchmark
+                    --smoke ${_display_args} --transparent --tone 1 --exposure 1.6
+                    --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-${_display_profile}-transparent-tone.json")
+                set_tests_properties(MacViewerParity_${_display_profile}_transparent_tone PROPERTIES
+                    LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
+                foreach(_display_mode IN ITEMS transparent depth-gray)
+                    set(_display_test MacViewerParity_${_display_profile}_${_display_mode})
+                    add_test(NAME ${_display_test} COMMAND mac_viewer_backend_benchmark
+                        --smoke ${_display_args} --${_display_mode}
+                        --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-${_display_profile}-${_display_mode}.json")
+                    set_tests_properties(${_display_test} PROPERTIES
+                        LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
+                endforeach()
+            endforeach()
             foreach(_mode IN ITEMS mip ortho depth export_scale gut equirect near saturation)
                 add_test(NAME MacViewerParity_${_mode} COMMAND mac_viewer_backend_benchmark
                     --smoke --${_mode} --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-${_mode}.json")
@@ -222,6 +280,22 @@ if(TARGET lfs_visualizer)
                 --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-gpu-lod-multichunk.json")
             set_tests_properties(MacViewerParity_gpu_lod_multichunk PROPERTIES
                 LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
+            foreach(_tensor_case IN ITEMS gs gut gs_transparent gut_transparent gpu_lod)
+                set(_tensor_args --tensor-backend vulkan)
+                if(_tensor_case MATCHES "^gut")
+                    list(APPEND _tensor_args --gut)
+                endif()
+                if(_tensor_case MATCHES "transparent$")
+                    list(APPEND _tensor_args --transparent)
+                endif()
+                if(_tensor_case STREQUAL "gpu_lod")
+                    list(APPEND _tensor_args --gpu_lod --overlay selection)
+                endif()
+                add_test(NAME MacViewerParity_tensorVulkan_${_tensor_case} COMMAND mac_viewer_backend_benchmark
+                    --smoke ${_tensor_args} --output "${CMAKE_CURRENT_BINARY_DIR}/mac-viewer-parity-tensor-vulkan-${_tensor_case}.json")
+                set_tests_properties(MacViewerParity_tensorVulkan_${_tensor_case} PROPERTIES
+                    LABELS "metal;gpu;metal4;parity" TIMEOUT 180 SKIP_RETURN_CODE 77)
+            endforeach()
             foreach(_overlay IN ITEMS selection preview crop ellipsoid window markers flash affine)
                 add_test(NAME MacViewerParity_${_overlay} COMMAND mac_viewer_backend_benchmark
                     --smoke --overlay ${_overlay}

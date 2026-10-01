@@ -16,7 +16,7 @@ namespace lfs::core {
         size_t bytes = 0;
     };
 
-    // Zero-copy native access to resident Metal tensors. submit is read-only;
+    // Zero-copy native access to resident Metal or MoltenVK tensors. submit is read-only;
     // submitWrites names mutable outputs explicitly. Tensor work and native
     // access are ordered by GPU events; no CPU completion wait.
     // The caller must serialize model mutations while taking/submitting its snapshot,

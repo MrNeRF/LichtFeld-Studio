@@ -256,6 +256,8 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
     const uint tile=group/4, subtile=group%4;
     threadgroup float4 means[64], conics[64], colors[64];
     threadgroup GutSplat geometry[64];
+    threadgroup half4 macro_chol[64];
+    threadgroup half2 macro_center[64];
     threadgroup uint ids[64], finished[2], active_counts[2];
     const uint2 tile_origin = uint2((tile % p.columns)*16+(subtile%2)*8,
                                     (tile / p.columns)*16+(subtile/2)*8);
@@ -270,11 +272,21 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
     const float2 ray_min=(float2(tile_origin)+.5f-p.intrinsics.zw)/p.intrinsics.xy;
     const float2 ray_max=(float2(tile_origin)+7.5f-p.intrinsics.zw)/p.intrinsics.xy;
     const float4 plane_lengths=p.camera.z==1u?float4(1):sqrt(1.f+float4(ray_min,ray_max)*float4(ray_min,ray_max));
+    const bool batch_half=(kRasterMode==0u && (kRasterFlags&(4u|64u))) ||
+        (kRasterMode!=3u && !(kRasterFlags&16u) && (kRasterFlags&1u) && overlay_enabled(overlay_params[22].y));
+    const float2 first_macro=floor((float2(tile_origin)+p.render_origin.xy)/overlay_macro_extent);
+    const bool uniform_macro=all(first_macro==floor((float2(tile_origin)+7.f+p.render_origin.xy)/overlay_macro_extent));
+    const float2 batch_macro_origin=first_macro*overlay_macro_extent;
     const bool valid = pixel.x < p.width && pixel.y < p.height;
     bool done = !valid;
     float transmittance = 1, weighted_depth = 0, nearest = 0, median = 1e10f;
     float valid_depth_weight=0;
     float3 rgb = 0;
+    // Compress each cooperative blend batch, then compose in FP32. A single
+    // half accumulator for the whole depth stream loses weak contributions
+    // behind a foreground layer once its RGB exceeds their half-ULP weight.
+    float3 composed_rgb=0;
+    float composed_transmittance=1;
     uint picked = 0xffffffff;
     const uint begin = status.error ? 0 : ranges[2 * tile];
     const uint end = status.error ? 0 : ranges[2 * tile + 1];
@@ -349,7 +361,15 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
             means[destination] = splat.mean_depth;
             conics[destination] = splat.conic_opacity;
             colors[destination] = splat.color;
+            if(batch_half) {
+                const float4 c=splat.conic_opacity;
+                const float l00=sqrt(max(c.x,1e-12f)),l01=c.y/l00,l11=sqrt(max(c.z-l01*l01,0.f));
+                macro_chol[destination]=half4(float4(l00*overlay_tile_extent.x*.849321800288019f,l01*overlay_tile_extent.y*.849321800288019f,
+                    l11*overlay_tile_extent.y*.849321800288019f,max(4.f,log(c.w*510.f))*1.4426950408889634f));
+                macro_center[destination]=half2((splat.mean_depth.xy+p.render_origin.xy-batch_macro_origin)/overlay_tile_extent);
+            }
             colors[destination].xyz = clamp(colors[destination].xyz, 0.f, 4.f);
+            if(kRasterFlags&64u)colors[destination].xyz=float3(half3(colors[destination].xyz));
             if (!(kRasterFlags&16u) && kRasterMode!=1u) {
                 const float opacity=kRasterMode==3u?geometry[destination].mean_opacity.w:splat.conic_opacity.w;
                 // The radial key is no longer needed after sorting. Cache the
@@ -375,7 +395,7 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
             if((kRasterFlags&8u) && logical>=logical_count)continue;
             const float2 d = float2(pixel) - means[j].xy;
             const float4 c = conics[j];
-            const bool half_footprint=(kRasterMode==0u && (kRasterFlags&4u)) || (kRasterMode!=3u && !(kRasterFlags&16u) && (kRasterFlags&1u) && overlay_enabled(overlay_params[22].y) && !(overlay_flags[ids[j]]&2u));
+            const bool half_footprint=(kRasterMode==0u && (kRasterFlags&(4u|64u))) || (kRasterMode!=3u && !(kRasterFlags&16u) && (kRasterFlags&1u) && overlay_enabled(overlay_params[22].y) && !(overlay_flags[ids[j]]&2u));
             const float q = c.x*d.x*d.x + 2*c.y*d.x*d.y + c.z*d.y*d.y;
             if (q < 0 || !isfinite(q)) continue;
             if (!(kRasterFlags&16u) && kRasterMode==0u && !half_footprint && .5f*q>colors[j].w) continue;
@@ -422,18 +442,18 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
             }
             alpha = min(alpha, .999f);
             if(half_footprint){
-                const float2 origin=floor((float2(pixel)+p.render_origin.xy)/overlay_macro_extent)*overlay_macro_extent;
-                const half2 center=half2((means[j].xy+p.render_origin.xy-origin)/overlay_tile_extent);
+                const float2 origin=uniform_macro?batch_macro_origin:floor((float2(pixel)+p.render_origin.xy)/overlay_macro_extent)*overlay_macro_extent;
+                const half2 center=uniform_macro?macro_center[j]:half2((means[j].xy+p.render_origin.xy-origin)/overlay_tile_extent);
                 const half2 coord=half2((float2(pixel)+p.render_origin.xy-origin)/overlay_tile_extent);
-                const float l00=sqrt(max(c.x,1e-12f)),l01=c.y/l00,l11=sqrt(max(c.z-l01*l01,0.f));
-                const half4 chol=half4(float4(l00*overlay_tile_extent.x*.849321800288019f,l01*overlay_tile_extent.y*.849321800288019f,
-                    l11*overlay_tile_extent.y*.849321800288019f,max(4.f,log(c.w*510.f))*1.4426950408889634f));
+                const half4 chol=macro_chol[j];
                 const half2 delta=coord-center;
-                const half u=chol.x*delta.x+chol.y*delta.y,v=chol.z*delta.y;
+                // The macro reference rounds the X product before adding Y.
+                const half dx=half(chol.x*delta.x);
+                const half u=half(dx+chol.y*delta.y),v=half(chol.z*delta.y);
                 const half power=u*u+v*v;
                 if(power<0 || power>chol.w)continue;
                 // Match the portal's macro-relative FP16 footprint. The
-                // native accumulation remains FP32; this is display-profile math.
+                // final native composition remains FP32; this is display-profile math.
                 half value=exp2(-power);
                 if(kRasterFlags&4u) {
                     const half edge=half(.01831563888873418f);
@@ -441,7 +461,8 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                 }
                 alpha=float(min(half(c.w)*value,half(.999f)));
             }
-            if (alpha < ((kRasterFlags&4u)?1.f/255.f:.5f/255.f)) continue;
+            const float minimum_alpha=(kRasterFlags&4u)?1.f/255.f:.5f/255.f;
+            if (alpha < ((kRasterFlags&64u)?float(half(minimum_alpha)):minimum_alpha)) continue;
             float3 radiance=colors[j].xyz;
             if(kRasterFlags&1u){
                 const uint flags=overlay_flags[ids[j]];
@@ -473,14 +494,15 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                     const float marker_distance=length(marker_delta);
                     if(marker_distance>2.5f)continue;
                     rgb=overlay_target(status,selection_colors)*(marker_distance>1.5f?.4f:1.f);
-                    if(transmittance>.5f)median=splat_depth;
+                    if(((kRasterFlags&64u)?composed_transmittance*transmittance:transmittance)>.5f)median=splat_depth;
                     transmittance=0; done=true; break;
                 }
                 if(status&128u)radiance=mix(radiance,overlay_target(status,selection_colors),.9f);
                 else if(status&127u)radiance=mix(radiance,selection_colors[status&127u].xyz,.8f);
                 if((flags&4u)&&overlay_params[20].w>0)radiance=mix(radiance,float3(1,.95f,.6f),overlay_params[20].w*.5f);
             }
-            const float weight = alpha * transmittance;
+            const float total_transmittance=(kRasterFlags&64u)?composed_transmittance*transmittance:transmittance;
+            const float weight = alpha * total_transmittance;
             if (picked == 0xffffffff) { picked = logical; nearest = splat_depth; }
             // Match expected_far in the reference: invalid/too-distant
             // GUT depths affect transmittance but never the depth average.
@@ -491,7 +513,8 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                 }
             } else weighted_depth += splat_depth * weight;
             const float next_transmittance = transmittance * (1 - alpha);
-            if (transmittance > .5f && next_transmittance <= .5f) median = splat_depth;
+            const float next_total_transmittance=(kRasterFlags&64u)?composed_transmittance*next_transmittance:next_transmittance;
+            if (total_transmittance > .5f && next_total_transmittance <= .5f) median = splat_depth;
             // The existing desktop GUT legacy chain records depth before
             // dropping a saturating splat's color and transmittance update.
             // Keep this explicit: native analytic and Spark math includes it.
@@ -499,13 +522,31 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
                 done = true;
                 break;
             }
-            rgb += radiance * weight;
-            transmittance = next_transmittance;
-            if (transmittance < 1e-4f) { done = true; break; }
+            if(kRasterFlags&64u) {
+                if(kRasterFlags&1u) {
+                    rgb=float3(half3(rgb+radiance*(alpha*transmittance)));
+                    transmittance=float(half(next_transmittance));
+                } else {
+                    const half half_weight=half(half(alpha)*half(transmittance));
+                    rgb=float3(half3(half3(rgb)+half3(radiance)*half_weight));
+                    const half remaining=half(half(1)-half(alpha));
+                    transmittance=float(half(half(transmittance)*remaining));
+                }
+            } else {
+                rgb += radiance * weight;
+                transmittance = next_transmittance;
+            }
+            if (((kRasterFlags&64u)?composed_transmittance*transmittance:transmittance) < 1e-4f) { done = true; break; }
+        }
+        if(kRasterFlags&64u) {
+            composed_rgb+=rgb*composed_transmittance;
+            composed_transmittance*=transmittance;
+            rgb=0;transmittance=1;
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
     if (valid) {
+        if(kRasterFlags&64u){rgb=composed_rgb;transmittance=composed_transmittance;}
         const float alpha = 1 - transmittance;
         // Premultiplied RGBA. Background alpha participates in composition.
         color.write(float4(rgb + p.background.rgb*p.background.a*transmittance,

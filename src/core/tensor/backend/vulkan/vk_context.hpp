@@ -57,6 +57,9 @@ namespace lfs::core::internal {
         bool direct_host_uploads = false;
         bool external_memory = false;
         bool external_semaphore = false;
+#ifdef __APPLE__
+        bool metal_objects = false;
+#endif
     };
 
     // A device the application created and keeps alive; the backend runs on it
@@ -78,6 +81,9 @@ namespace lfs::core::internal {
         bool cooperative_matrix = false;
         bool external_memory = false;
         bool external_semaphore = false;
+#ifdef __APPLE__
+        bool metal_objects = false;
+#endif
     };
 
     class VulkanContext final {

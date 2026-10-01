@@ -221,6 +221,9 @@ namespace lfs::vis {
         [[nodiscard]] std::size_t currentFrameSlot() const { return frame_index_; }
         [[nodiscard]] bool externalMemoryInteropEnabled() const { return external_memory_interop_enabled_; }
         [[nodiscard]] bool externalSemaphoreInteropEnabled() const { return external_semaphore_interop_enabled_; }
+#ifdef __APPLE__
+        [[nodiscard]] bool metalObjectsInteropEnabled() const { return metal_objects_enabled_; }
+#endif
         [[nodiscard]] VulkanImageBarrierTracker& imageBarriers() { return image_barriers_; }
         [[nodiscard]] PFN_vkCmdPushDescriptorSetKHR vkCmdPushDescriptorSet() const { return vk_cmd_push_descriptor_set_; }
         [[nodiscard]] bool hasHostImageCopy() const { return has_host_image_copy_; }

@@ -135,7 +135,17 @@ kernel void present_viewer(texture2d<float, access::read> color [[texture(0)]],
         rgba.write(p.transparent?float4(rgb,coverage):float4(mix(p.background.rgb,rgb,coverage),1),pixel);
         return;
     }
-    if(p.transparent && c.a>1e-6f) c.rgb/=c.a;
+    if(p.transparent) {
+        // Same zero-coverage contract as vksplat_compose.comp. Unpremultiply
+        // only published coverage, never amplify an effectively empty tail.
+        // Coverage is already retained in the FP32 depth payload. The color
+        // texture's half alpha can round a valid threshold contributor below
+        // zero coverage; use the original alpha for both threshold and division.
+        const float coverage=d.y;
+        if(coverage<=.5f/255.f) { rgba.write(float4(0),pixel); return; }
+        c.rgb/=coverage;
+        c.a=coverage;
+    }
     c.rgb=lfsDisplayTone(max(c.rgb,0.0f),p.tone,p.exposure);
     rgba.write(c,pixel);
 }

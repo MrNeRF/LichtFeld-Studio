@@ -29,9 +29,11 @@ namespace {
     using Slot = vis::VksplatViewportRenderer::OutputSlot;
     struct Options {
         size_t count = 100000;
-        int width = 1280, height = 720, warmup = 12, samples = 40;
+        int width = 1280, height = 720, warmup = 12, samples = 40, tone = 0;
+        float exposure = 1.f;
         std::string output, images, overlay, input, camera;
-        bool verify_parity = false, saturation = false, input_fixture = false;
+        core::GpuBackend tensor_backend = core::GpuBackend::Metal;
+        bool frustum = false, verify_parity = false, saturation = false, input_fixture = false, transparent = false, depth_gray = false;
         bool mip = false, ortho = false, depth = false, export_scale = false, gut = false, equirect = false, subregion = false, near = false, portal = false, portal_tone = false, lod = false, lod_logical = false, lod_weights = false, lod_debug = false, spark = false, gpu_lod = false, gpu_lod_budget = false;
     };
     Options options(int argc, char** argv) {
@@ -50,6 +52,10 @@ namespace {
             if (arg == "--portal" || arg == "--portal_tone") {
                 o.portal = true;
                 o.portal_tone = arg == "--portal_tone";
+                if (o.portal_tone) {
+                    o.tone = 4;
+                    o.exposure = 1.6f;
+                }
                 continue;
             }
             if (arg == "--lod" || arg == "--lod_logical" || arg == "--lod_weights" || arg == "--lod_debug") {
@@ -92,6 +98,10 @@ namespace {
                 o.verify_parity = true;
                 continue;
             }
+            if (arg == "--frustum") {
+                o.frustum = true;
+                continue;
+            }
             if (arg == "--saturation") {
                 o.saturation = true;
                 continue;
@@ -104,6 +114,14 @@ namespace {
                 o.ortho = true;
                 continue;
             }
+            if (arg == "--transparent") {
+                o.transparent = true;
+                continue;
+            }
+            if (arg == "--depth-gray") {
+                o.depth = o.depth_gray = true;
+                continue;
+            }
             if (arg == "--depth") {
                 o.depth = true;
                 continue;
@@ -111,6 +129,12 @@ namespace {
             if (++i == argc)
                 throw std::runtime_error("Missing argument for " + arg);
             const std::string value = argv[i];
+            if (arg == "--tensor-backend") {
+                if (value != "metal" && value != "vulkan")
+                    throw std::invalid_argument("Benchmark tensor backend must be metal or vulkan");
+                o.tensor_backend = value == "metal" ? core::GpuBackend::Metal : core::GpuBackend::Vulkan;
+                continue;
+            }
             if (arg == "--output") {
                 o.output = value;
                 continue;
@@ -137,6 +161,19 @@ namespace {
                 continue;
             }
             size_t used = 0;
+            if (arg == "--exposure") {
+                o.exposure = std::stof(value, &used);
+                if (used != value.size() || !std::isfinite(o.exposure) || o.exposure <= 0 || o.exposure > 32)
+                    throw std::runtime_error("Invalid benchmark exposure");
+                continue;
+            }
+            if (arg == "--tone") {
+                const auto tone = std::stoll(value, &used);
+                if (used != value.size() || tone < 0 || tone > 6)
+                    throw std::runtime_error("Invalid benchmark tone operator");
+                o.tone = int(tone);
+                continue;
+            }
             const auto number = std::stoll(value, &used);
             if (used != value.size() || number < 1 || number > 10000000)
                 throw std::runtime_error("Invalid value for " + arg);
@@ -157,11 +194,11 @@ namespace {
             throw std::runtime_error("Benchmark reservation limit exceeded");
         if (!o.camera.empty() && o.input.empty())
             throw std::runtime_error("--camera requires --input");
-        if (!o.input.empty() && (o.lod || o.gpu_lod || o.spark || o.near || o.saturation || !o.overlay.empty()))
+        if (!o.input.empty() && (o.lod || o.gpu_lod || o.spark || o.near || o.frustum || o.saturation || !o.overlay.empty()))
             throw std::runtime_error("Synthetic hierarchy/geometry/overlay fixtures cannot be combined with --input");
         return o;
     }
-    core::SplatData scene(size_t count, int degree, float rest_amplitude = .1f, bool panorama = false, bool near = false, const Options* reference_cut = nullptr, bool spark = false, bool gpu_lod = false, bool saturation = false) {
+    core::SplatData scene(size_t count, int degree, float rest_amplitude = .1f, bool panorama = false, bool near = false, const Options* reference_cut = nullptr, bool spark = false, bool gpu_lod = false, bool saturation = false, const Options* frustum = nullptr) {
         std::mt19937 random(1939);
         std::uniform_real_distribution<float> unit(0.f, 1.f);
         std::vector<float> means(count * 3), sh0(count * 3), scales(count * 3), rotation(count * 4, 0), opacity(count);
@@ -221,6 +258,31 @@ namespace {
                     const float color = n ? .8f : c == 0 ? .7f
                                                          : .1f;
                     sh0[3 * n + c] = (color - .5f) / .2820947917738781f;
+                }
+            }
+        }
+        if (frustum) {
+            if (count < 2)
+                throw std::invalid_argument("Frustum fixture requires at least two splats");
+            std::fill(opacity.begin(), opacity.end(), -100.f);
+            std::fill(rest.begin(), rest.end(), 0.f);
+            rendering::FrameView camera;
+            camera.size = {frustum->width, frustum->height};
+            camera.orthographic = frustum->ortho;
+            camera.ortho_scale = 32;
+            const auto k = camera.getCameraIntrinsics();
+            // A near red Gaussian has an off-frustum mean but enough support
+            // to cover the image. The farther green Gaussian remains admitted.
+            for (size_t i = 0; i < 2; ++i) {
+                const float z = i ? 50.f : 3.f;
+                means[3 * i] = i ? 0.f : ((1.2f * frustum->width + 3.f - k.center_x) / k.focal_x) * (frustum->ortho ? 1.f : z);
+                means[3 * i + 1] = 0;
+                means[3 * i + 2] = -z;
+                opacity[i] = 3;
+                const float colors[2][3] = {{.9f, .05f, .05f}, {.05f, .7f, .1f}};
+                for (size_t c = 0; c < 3; ++c) {
+                    scales[3 * i + c] = std::log(40.f);
+                    sh0[3 * i + c] = (colors[i][c] - .5f) / .2820947917738781f;
                 }
             }
         }
@@ -369,7 +431,7 @@ namespace {
         return {{"mae", sum / native.numel()}, {"rmse", std::sqrt(mse)}, {"max_error", maximum}, {"psnr_db", mse == 0 ? Json(nullptr) : Json(-10 * std::log10(mse))}, {"identical", mse == 0}, {"depth_valid_max_error", depth_view ? Json(valid_depth_max) : Json(nullptr)}, {"depth_valid_rmse", depth_view ? Json(std::sqrt(valid_depth_squares / std::max<size_t>(1, valid_depth_channels))) : Json(nullptr)}, {"depth_coverage_disagreement_pixels", depth_coverage_disagreements}, {"depth_coverage_disagreement_fraction", 3. * depth_coverage_disagreements / native.numel()}};
     }
     Json run(Options o) {
-        core::GpuBackendScope scope(core::GpuBackend::Metal);
+        core::GpuBackendScope scope(o.tensor_backend);
         vis::VulkanContext context;
         if (!context.initHeadless())
             throw std::runtime_error(context.lastError());
@@ -460,7 +522,7 @@ namespace {
         }
         Json cases = Json::array();
         for (int degree : degrees) {
-            auto generated = imported ? nullptr : std::make_unique<core::SplatData>(scene(o.count, degree, o.overlay == "affine" ? 1.f : .1f, o.equirect, o.near, nullptr, o.spark, o.gpu_lod, o.saturation));
+            auto generated = imported ? nullptr : std::make_unique<core::SplatData>(scene(o.count, degree, o.overlay == "affine" ? 1.f : .1f, o.equirect, o.near, nullptr, o.spark, o.gpu_lod, o.saturation, o.frustum ? &o : nullptr));
             auto& model = imported ? *imported : *generated;
             model.set_active_sh_degree(degree);
             vis::MetalViewportRenderer metal;
@@ -507,8 +569,10 @@ namespace {
             request.sh_degree = degree;
             request.gut = o.gut;
             request.splat_render_profile = o.portal ? 1 : 0;
-            request.color_tonemapping = o.portal_tone ? 4 : 0;
-            request.color_exposure = o.portal_tone ? 1.6f : 1.f;
+            request.color_tonemapping = o.tone;
+            request.color_exposure = o.exposure;
+            request.transparent_background = o.transparent;
+            request.depth_visualization_mode = o.depth_gray ? rendering::DepthVisualizationMode::Grayscale : rendering::DepthVisualizationMode::Palette;
             request.equirectangular = o.equirect;
             if (o.subregion) {
                 request.frame_view.subregion_full_size = {o.width * 2, o.height * 2};
@@ -698,8 +762,53 @@ namespace {
                 difference["marker_boundary_disagreement_fraction"] = 3. * boundary / pixels.numel();
                 difference["marker_stable_max_error"] = stable_max;
             }
-            // The production Vulkan reference blends in FP16; bit equality with the
-            // native FP32 blend is not its contract. Bound both local and RMS error.
+            if (o.transparent) {
+                auto rgba = core::Tensor::empty({size_t(o.height), size_t(o.width), 4}, core::Device::CPU, core::DataType::Float32);
+                const auto native = metal.readColor(Slot::Main, rgba, 0, 0);
+                if (!native)
+                    throw std::runtime_error(lfs::format_for_developer(native.error()));
+                auto ref = vulkan.readOutputImageRgba(context, Slot::Main);
+                if (!ref)
+                    throw std::runtime_error(ref.error());
+                double maximum = 0, squares = 0, native_sum = 0, reference_sum = 0, worst_rgb = -1;
+                const auto origin = request.frame_view.subregion_origin;
+                const size_t ref_width = reference_request.frame_view.size.x;
+                for (size_t y = 0; y < size_t(o.height); ++y)
+                    for (size_t x = 0; x < size_t(o.width); ++x) {
+                        const size_t pixel = y * o.width + x;
+                        const size_t ref_pixel = o.equirect && o.subregion ? (y + origin.y) * ref_width + x + origin.x : pixel;
+                        const float a = rgba.ptr<float>()[pixel * 4 + 3], b = (*ref)->ptr<float>()[ref_pixel * 4 + 3];
+                        if (!std::isfinite(a) || !std::isfinite(b) || a < 0 || a > 1 || b < 0 || b > 1)
+                            throw std::runtime_error("Invalid transparent alpha");
+                        double color_error = 0;
+                        for (size_t c = 0; c < 3; ++c)
+                            color_error = std::max(color_error, std::abs(double(rgba.ptr<float>()[pixel * 4 + c]) - (*ref)->ptr<float>()[ref_pixel * 4 + c]));
+                        if (color_error > worst_rgb) {
+                            worst_rgb = color_error;
+                            difference["transparent_worst_pixel"] = {
+                                {"x", x},
+                                {"y", y},
+                                {"native_alpha", a},
+                                {"reference_alpha", b},
+                                {"native_rgb", {rgba.ptr<float>()[pixel * 4], rgba.ptr<float>()[pixel * 4 + 1], rgba.ptr<float>()[pixel * 4 + 2]}},
+                                {"reference_rgb", {(*ref)->ptr<float>()[ref_pixel * 4], (*ref)->ptr<float>()[ref_pixel * 4 + 1], (*ref)->ptr<float>()[ref_pixel * 4 + 2]}}};
+                        }
+                        const double delta = std::abs(double(a) - b);
+                        maximum = std::max(maximum, delta);
+                        squares += delta * delta;
+                        native_sum += a;
+                        reference_sum += b;
+                    }
+                const double rms = std::sqrt(squares / (size_t(o.width) * o.height));
+                if (native_sum < .1 || reference_sum < .1)
+                    throw std::runtime_error("Transparent benchmark published empty coverage");
+                difference["alpha_max_error"] = maximum;
+                difference["alpha_rmse"] = rms;
+                if (o.verify_parity && (maximum > 4. / 255 + 1e-7 || rms > 1. / 255))
+                    throw std::runtime_error("Transparent alpha exceeds parity bounds: " + difference.dump());
+            }
+            // The Vulkan reference uses compressed FP16 footprints/colors. Bound
+            // local and RMS error without claiming bit-identical arithmetic.
             // Median depth has a hard coverage boundary at 0.5. FP16 reference and
             // FP32 native can disagree on boundary pixels; record the full image
             // error and enforce a separate bound, never silently drop those pixels.
@@ -729,7 +838,7 @@ namespace {
         }
         rusage usage{};
         getrusage(RUSAGE_SELF, &usage);
-        return {{"schema_version", 1}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", imported ? Json(nullptr) : Json(1939)}, {"scene_source", imported ? o.input : "synthetic"}, {"loader", loader_name}, {"generated_input_fixture", o.input_fixture}, {"camera_source", imported ? (o.camera.empty() ? "fitted_bounds" : o.camera) : "synthetic"}, {"camera_pose", camera_pose}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"profile", o.portal ? "portal" : "studio"}, {"tone_fixture", o.portal_tone}, {"reference_resident_cut", o.gut && o.lod}, {"gpu_lod", o.gpu_lod}, {"gpu_lod_budget", o.gpu_lod_budget}, {"spark_opacity", o.spark}, {"lod", o.lod}, {"lod_logical", o.lod_logical}, {"lod_weights", o.lod_weights}, {"lod_debug", o.lod_debug}, {"gut", o.gut}, {"equirectangular", o.equirect}, {"near_fixture", o.near}, {"saturation_fixture", o.saturation}, {"subregion", o.subregion}, {"reference_full_frame_crop", o.equirect && o.subregion}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
+        return {{"schema_version", 1}, {"tensor_backend", core::gpu_backend_name(o.tensor_backend)}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", imported ? Json(nullptr) : Json(1939)}, {"scene_source", imported ? o.input : "synthetic"}, {"loader", loader_name}, {"generated_input_fixture", o.input_fixture}, {"camera_source", imported ? (o.camera.empty() ? "fitted_bounds" : o.camera) : "synthetic"}, {"camera_pose", camera_pose}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"profile", o.portal ? "portal" : "studio"}, {"tone_fixture", o.portal_tone}, {"tone_operator", o.tone}, {"exposure", o.exposure}, {"transparent", o.transparent}, {"depth_grayscale", o.depth_gray}, {"reference_resident_cut", o.gut && o.lod}, {"gpu_lod", o.gpu_lod}, {"gpu_lod_budget", o.gpu_lod_budget}, {"spark_opacity", o.spark}, {"lod", o.lod}, {"lod_logical", o.lod_logical}, {"lod_weights", o.lod_weights}, {"lod_debug", o.lod_debug}, {"gut", o.gut}, {"equirectangular", o.equirect}, {"near_fixture", o.near}, {"saturation_fixture", o.saturation}, {"frustum_fixture", o.frustum}, {"subregion", o.subregion}, {"reference_full_frame_crop", o.equirect && o.subregion}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
     }
 } // namespace
 int main(int argc, char** argv) {

@@ -212,8 +212,10 @@ namespace lfs::rendering::metal {
     }
     TileRasterizer::~TileRasterizer() = default;
     void TileRasterizer::encode(id<MTLCommandBuffer> command, BufferSlice projected, uint32_t count,
-                                RasterMode mode, simd_float4 background, RasterFrame& frame, const OverlayBuffers& overlay, BufferSlice gut, const Projection& projection, const LodSelection& lod, bool omit_saturating_color) {
+                                RasterMode mode, simd_float4 background, RasterFrame& frame, const OverlayBuffers& overlay, BufferSlice gut, const Projection& projection, const LodSelection& lod, bool omit_saturating_color, bool macro_half_display) {
         auto f = frame.impl_;
+        if (macro_half_display && (mode != RasterMode::Gaussian || projection.display.z == 1.f))
+            throw std::invalid_argument("Macro half display requires ordinary 3DGS");
         if (!command || command.device != impl_->device || f->device != impl_->device ||
             command.status != MTLCommandBufferStatusNotEnqueued || count > f->max_splats || uint32_t(mode) > 3)
             throw std::invalid_argument("Invalid Metal viewer frame submission");
@@ -262,7 +264,7 @@ namespace lfs::rendering::metal {
         };
         check_mask(overlay.selection, selection_count);
         check_mask(overlay.preview, preview_count);
-        const RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), (overlay.parameter_count ? 1u : 0u) | (expected_depth ? 2u : 0u) | (projection.rasterization.w == 1.f && projection.display.z == 0 ? 4u : 0u) | (lod.enabled ? 8u : 0u) | (projection.display.z == 1.f ? 16u : 0u) | (omit_saturating_color ? 32u : 0u), background, overlay.render_origin, projection.intrinsics, {projection.clip_scale.x, expected_depth ? projection.rasterization.z : projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w}, projection.extent, projection.panorama, {selection_count, preview_count, 0, 0}};
+        const RasterParameters p{count, f->width, f->height, f->columns, f->tiles, f->capacity, uint32_t(mode), (overlay.parameter_count ? 1u : 0u) | (expected_depth ? 2u : 0u) | (projection.rasterization.w == 1.f && projection.display.z == 0 ? 4u : 0u) | (lod.enabled ? 8u : 0u) | (projection.display.z == 1.f ? 16u : 0u) | (omit_saturating_color ? 32u : 0u) | (macro_half_display ? 64u : 0u), background, overlay.render_origin, projection.intrinsics, {projection.clip_scale.x, expected_depth ? projection.rasterization.z : projection.clip_scale.y, projection.clip_scale.z, projection.clip_scale.w}, projection.extent, projection.panorama, {selection_count, preview_count, 0, 0}};
         // Compile/cache before reserving the frame or encoding any work. A
         // specialization failure cannot strand its busy flag or partial scratch.
         const auto blend_pipeline = impl_->blendPipeline(uint32_t(mode), p.unused);

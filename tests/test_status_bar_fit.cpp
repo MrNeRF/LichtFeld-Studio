@@ -9,6 +9,7 @@
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "rendering/viewport_artifact_service.hpp"
 #include "visualizer/app_store.hpp"
+#include "visualizer/preferences.hpp"
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
@@ -535,6 +536,12 @@ namespace {
     }
 
     TEST_F(StatusBarFitTest, BadgesReadEachPublishedBackendIncludingFallbackAndClose) {
+        auto& preferences = lfs::vis::UserPreferences::instance();
+        struct RestorePreference {
+            lfs::rendering::ViewerBackend previous;
+            ~RestorePreference() { lfs::vis::UserPreferences::instance().setViewerBackend(previous); }
+        } restore{preferences.viewerBackend()};
+        preferences.setViewerBackend(lfs::rendering::ViewerBackend::Metal);
         lfs::vis::ViewportArtifactService artifacts;
         lfs::vis::gui::RmlStatusBarTestAccess::bindStore(status_bar_);
         auto& store = lfs::vis::app_store();
@@ -567,8 +574,15 @@ namespace {
         EXPECT_TRUE(lfs::vis::gui::RmlStatusBarTestAccess::redrawPending(status_bar_));
         lfs::vis::gui::RmlStatusBarTestAccess::updateBackends(status_bar_);
         context_->Update();
-        EXPECT_EQ(model_.renderer_value, "Vulkan"); // active desktop compositor
+        EXPECT_EQ(model_.renderer_value, "Metal"); // Configured renderer, no scene frame.
         EXPECT_EQ(store.viewer_backend_mask.get(), 0u);
+        preferences.setViewerBackend(lfs::rendering::ViewerBackend::Vulkan);
+        lfs::vis::gui::RmlStatusBarTestAccess::updateBackends(status_bar_);
+        context_->Update();
+        EXPECT_EQ(model_.renderer_value, "Vulkan");
+        preferences.setViewerBackend(lfs::rendering::ViewerBackend::Automatic);
+        lfs::vis::gui::RmlStatusBarTestAccess::updateBackends(status_bar_);
+        EXPECT_EQ(model_.renderer_value, "Vulkan");
     }
 
     TEST_F(StatusBarFitTest, McpDetailsReserveOnlyTheirMeasuredOverlayArea) {

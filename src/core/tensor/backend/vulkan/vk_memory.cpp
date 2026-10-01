@@ -217,6 +217,13 @@ namespace lfs::core::internal {
             exports_memory_ = true;
 #endif
         }
+#ifdef __APPLE__
+        if (context_.caps().metal_objects) {
+            metal_export_info_.exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_BUFFER_BIT_EXT;
+            metal_export_info_.pNext = pool_info.pMemoryAllocateNext;
+            pool_info.pMemoryAllocateNext = &metal_export_info_;
+        }
+#endif
         VkResult pool_result = vmaCreatePool(context_.allocator(), &pool_info, &device_pool_);
         if (exports_memory_ && pool_result != VK_SUCCESS) {
             LOG_WARN("Exportable Vulkan tensor pool failed (VkResult {}); using a non-exportable pool",
@@ -446,8 +453,16 @@ namespace lfs::core::internal {
                 if (!direct)
                     allocation_info.pool = device_pool_;
             }
+#ifdef __APPLE__
+            // Private blocks must declare native export too; this includes large
+            // scene attributes and host-visible scalar/readback allocations.
+            const bool metal_export = context_.caps().metal_objects;
+            if (direct || (metal_export && host_visible)) {
+                if (!pooled_export && !metal_export) {
+#else
             if (direct) {
                 if (!pooled_export) {
+#endif
                     allocation_info.pool = VK_NULL_HANDLE;
                     allocation_info.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
                 } else {
@@ -475,7 +490,11 @@ namespace lfs::core::internal {
                                 "vmaFindMemoryTypeIndexForBufferInfo(export block)");
                     pool_info.blockSize = align_up(requirements.size, std::max<VkDeviceSize>(requirements.alignment, 65536));
                     pool_info.maxBlockCount = 1;
+#ifdef __APPLE__
+                    pool_info.pMemoryAllocateNext = metal_export ? &metal_export_info_ : static_cast<void*>(&export_alloc_info_);
+#else
                     pool_info.pMemoryAllocateNext = &export_alloc_info_;
+#endif
                     record->private_pool = std::make_unique<AllocationRecord::PrivatePool>();
                     record->private_pool->allocator = context_.allocator();
                     check_setup(vmaCreatePool(context_.allocator(), &pool_info, &record->private_pool->pool),

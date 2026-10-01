@@ -23,8 +23,10 @@ including mixed split frames and software point-cloud panels, rather than from
 the saved preference. The tensor badge reports the current process backend.
 Compact R and T role markers sit to the right of FPS and keep the same
 appearance on hover. Localized tooltips expand the role names and explain
-independent routing and restart semantics. With no scene output, R reports
-the active Vulkan desktop compositor and explains this in the tooltip. CPU visualizer
+independent routing and restart semantics. With no scene output, R shows the
+configured scene renderer (Automatic currently selects Vulkan); the tooltip
+distinguishes this idle state from an actual rendered frame.
+CPU visualizer
 contracts cover metadata propagation/reset and status-bar sizing without a GPU.
 
 ## Implemented and GPU-tested
@@ -111,7 +113,10 @@ Callers can precompile cached specializations with `prepare` before interaction.
   branches and register pressure. The synchronized cache creates a variant before
   acquiring a frame reservation, so a compile failure cannot strand its busy flag.
 - Color/alpha, weighted depth, first-contributor depth/ID and median depth.
-  Equal-depth ties preserve source order. Median depth uses 1e10 for no crossing.
+  Radial keys use the world-space mean and camera origin, matching the reference
+  rather than rotating their delta into view space before the FP32 dot product.
+  Fixed-origin camera-rotation contracts require bit-identical keys, including
+  near-equal ties. Equal-depth ties preserve source order. Median depth uses 1e10 for no crossing.
 - Explicit frame reservations with retained GPU lifetimes. Encoding performs no
   per-frame storage allocation, CPU sort or instance-count readback.
 - Typed instance-capacity overflow with the complete required count. An overflow
@@ -161,6 +166,27 @@ uses the reference's macro-relative FP16 footprint; native accumulation remains
 FP32. An independent analytic alpha contract and eighteen macOS-only comparisons
 cover SH0/Q16, mip, orthographic, depth, export, close range, GUT/panoramas, ACES,
 affine transforms, selection, crop and markers. Existing parity limits are retained.
+
+Transparent desktop 3DGS uses the reference's compressed macro-relative half
+footprint, colors and per-batch accumulation, followed by FP32 composition of the
+native cooperative batches. The analytic raster default and Spark remain FP32.
+This avoids losing thousands of weak background contributions to a single half
+RGB accumulator. A separate double-precision oracle exercises 2145 depth-ordered
+splats behind an opaque foreground. Both this contract and the radial-key contract
+reject the previous arithmetic. Shared half Cholesky coefficients and centers
+are cached once per Gaussian/cooperative batch; an unaligned export origin falls
+back to per-pixel macro origins when a subtile crosses a macro boundary. A crop
+crossing both boundaries must retain exact RGBA, all depth channels and source IDs.
+
+Presentation unpremultiplies with FP32 coverage from the existing depth payload,
+before tone mapping. Coverage at or below 0.5/255 yields zero RGBA; above-threshold
+coverage that rounds below the cutoff in the half color texture must survive.
+An independent ray/opacity contract exercises both sides of that boundary.
+Fifty-six additional macOS comparisons cover every tone operator, exposure,
+transparent RGBA/alpha, grayscale depth and selection/preview/markers/affine
+overlays in Studio/portal and GS/GUT. They use the original max 4/255 and RMS
+1/255 color gates, with separate alpha gates; the macOS CI selects them through
+the existing parity regex. GPU tests are not added to Windows/Linux CI.
 
 Main, split-left, split-right and preview outputs have independent reservations.
 Expected-depth captures normalize only valid forward contributor weights within
@@ -392,6 +418,14 @@ VK_DRIVER_FILES=/path/to/MoltenVK_icd.json ./build-macos-release/tests/metal_vie
   --width 600 --height 668 --warmup 12 --samples 40 --output build-macos-release/real-viewer-benchmark.json
 ```
 
+Display checks can use `--tone 0..6 --exposure 1.6`, `--transparent` or
+`--depth-gray`. Transparent reports include separate alpha errors and the worst
+RGB pixel with both RGBA values; these errors remain visible even without
+`--verify-parity`. On the same 1.18M SH0 PLY/camera at 600x668, the latest paired
+opaque and transparent GS runs each stayed within 2/255 maximum RGB error;
+transparent alpha stayed within 1/255. This is a measured scene/camera result,
+not pixel identity or a universal image-error bound.
+
 The JSON contains raw samples, median/p95, Vulkan/Metal median ratio, image
 MAE/RMSE/PSNR/max error, device/OS/compiler, validation environment, and combined
 process peak RSS. A ratio above one means Metal was faster for that case only.
@@ -467,3 +501,25 @@ retested on other scenes/devices. The later conservative GUT support-sphere
 culling reduced the same real-scene native median to 15.3 ms versus Vulkan's
 26.7 ms (1.75x in that paired run), while retaining max error 1/255. These are
 scene-specific measurements, not a universal or CI speed gate.
+
+
+Desktop Gaussian admission uses the reference full-camera center bounds with a
+20% margin before covariance expansion. Oversized off-frustum Gaussians therefore
+cannot leak into the scene through their support alone. Export subregions retain
+the full camera extent and origin for this decision; GUT admission is unchanged.
+Independent perspective/orthographic boundary contracts and eight adversarial
+opaque/transparent Vulkan comparisons cover this policy. The raw projection API
+keeps it opt-in for analytic contracts.
+
+
+The native reader also consumes MoltenVK tensor storage on the same Metal device.
+Allocation and slice offsets alias the exported MTLBuffer, and shared GPU events
+order both the tensor producer and subsequent consumers/mutations. No mirrored
+scene, per-frame host copy or tensor-preference change is needed when switching
+the viewer. Mixed native writes retain the output tensor backend, so the shared
+editor's deletion and undo continue to run on their original backend. Reader
+contracts exercise both storage types, mixed read/write submissions, slab and
+dedicated allocations, encoding failure recovery and owner retirement; native
+selection adapter cases run on both. The bridge and Vulkan export declarations
+are compiled only on Apple; Windows/Linux Vulkan allocations are unchanged.
+Use `--tensor-backend vulkan` to benchmark the bridged configuration explicitly.

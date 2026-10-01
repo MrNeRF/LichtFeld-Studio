@@ -26,6 +26,10 @@ namespace lfs::vis {
     namespace {
         using namespace rendering::metal;
         using Slot = VksplatViewportRenderer::OutputSlot;
+        bool nativeStorage(const core::Tensor& tensor) {
+            const auto backend = core::gpu_backend_of(tensor);
+            return backend == core::GpuBackend::Metal || backend == core::GpuBackend::Vulkan;
+        }
         lfs::Error nativeError(std::string message, lfs::ErrorCode code = lfs::ErrorCode::Internal,
                                core::SourceSite site = LFS_SOURCE_SITE_CURRENT()) {
             return lfs::make_error(lfs::ErrorInit{
@@ -471,10 +475,10 @@ namespace lfs::vis {
     }
     bool MetalViewportRenderer::supportsSelection(const core::SplatData& model, const VksplatViewportRenderer::SelectionMaskRequest& request) {
         const bool rad_preview = model.lod_tree && model.lod_tree->rad_source.valid() &&
-                                 model.means_raw().device() == core::Device::CPU && core::default_gpu_backend() == core::GpuBackend::Metal;
+                                 model.means_raw().device() == core::Device::CPU && (core::default_gpu_backend() == core::GpuBackend::Metal || core::default_gpu_backend() == core::GpuBackend::Vulkan);
         const auto resident = [&](const core::Tensor& tensor) {
             return tensor.is_valid() && tensor.is_contiguous() &&
-                   (core::gpu_backend_of(tensor) == core::GpuBackend::Metal || (rad_preview && tensor.device() == core::Device::CPU));
+                   (nativeStorage(tensor) || (rad_preview && tensor.device() == core::Device::CPU));
         };
         const auto& means = model.means_raw();
         if (!resident(means) || means.dtype() != core::DataType::Float32 || means.ndim() != 2 || means.size(1) != 3 ||
@@ -491,7 +495,7 @@ namespace lfs::vis {
             return false;
         const auto indices = request.scene.transform_indices.get();
         return !indices || !indices->is_valid() ||
-               (indices->is_contiguous() && core::gpu_backend_of(*indices) == core::GpuBackend::Metal &&
+               (indices->is_contiguous() && nativeStorage(*indices) &&
                 indices->dtype() == core::DataType::Int32 && indices->bytes() >= size_t(model.size()) * 4);
     }
     lfs::Result<core::Tensor> MetalViewportRenderer::buildSelectionMask(VulkanContext& context, const core::SplatData& model,
@@ -510,7 +514,12 @@ namespace lfs::vis {
                 request.primitives.size() > std::numeric_limits<uint32_t>::max() || request.polygon_vertices.size() > std::numeric_limits<uint32_t>::max() ||
                 (polygon ? request.polygon_vertices.size() < 3 : request.primitives.empty()))
                 throw std::invalid_argument("Invalid native Metal selection request");
-            const core::GpuBackendScope scope(core::GpuBackend::Metal);
+            // Editor masks stay on the model's tensor backend even when their
+            // producer is the native Metal renderer.
+            const auto backend = model.means_raw().device() == core::Device::GPU
+                                     ? core::gpu_backend_of(model.means_raw()).value_or(core::default_gpu_backend())
+                                     : core::default_gpu_backend();
+            const core::GpuBackendScope scope(backend);
             if (!frameFitsWorkingSet(i.reader.device().currentAllocatedSize, n, i.reader.device().recommendedMaxWorkingSetSize))
                 throw std::bad_alloc();
             auto output = core::Tensor::empty({n}, core::Device::GPU, core::DataType::Bool);
@@ -640,7 +649,7 @@ namespace lfs::vis {
         } catch (const std::exception& error) { return nativeError(error); }
     }
     bool MetalViewportRenderer::supportsPoints(const PointCloudVulkanRenderer::RenderRequest& r) {
-        const auto resident = [](const core::Tensor* t) { return t && t->is_valid() && t->is_contiguous() && core::gpu_backend_of(*t) == core::GpuBackend::Metal; };
+        const auto resident = [](const core::Tensor* t) { return t && t->is_valid() && t->is_contiguous() && nativeStorage(*t); };
         if (!resident(r.positions) || !resident(r.colors) || r.positions->dtype() != core::DataType::Float32 ||
             r.colors->dtype() != core::DataType::Float32 || r.positions->ndim() != 2 || r.colors->ndim() != 2 ||
             r.positions->size(1) != 3 || r.colors->size(1) != 3 || r.positions->size(0) != r.colors->size(0))
@@ -765,7 +774,7 @@ namespace lfs::vis {
         // Every unsupported contract is routed to the existing renderer; never silently
         // drop filters, display settings or editor overlays from a requested frame.
         const auto resident_mask = [&](const core::Tensor* mask) { return !mask || !mask->is_valid() ||
-                                                                          (core::gpu_backend_of(*mask) == core::GpuBackend::Metal && mask->is_contiguous() && mask->bytes() >= size_t(model.size()) &&
+                                                                          (nativeStorage(*mask) && mask->is_contiguous() && mask->bytes() >= size_t(model.size()) &&
                                                                            (mask->dtype() == core::DataType::UInt8 || mask->dtype() == core::DataType::Bool)); };
         const bool rad = model.lod_tree && model.lod_tree->rad_source.valid();
         const size_t logical_count = rad ? model.lod_tree->total_nodes() : size_t(model.size());
@@ -773,12 +782,12 @@ namespace lfs::vis {
         const size_t objects = r.scene.model_transforms ? r.scene.model_transforms->size() : 0;
         const bool indexed = indices && indices->is_valid();
         if ((objects > 1 && !indexed) || (indexed &&
-                                          (core::gpu_backend_of(*indices) != core::GpuBackend::Metal || !indices->is_contiguous() ||
+                                          (!nativeStorage(*indices) || !indices->is_contiguous() ||
                                            indices->dtype() != core::DataType::Int32 || indices->bytes() < logical_count * 4)))
             return false;
         return resident_mask(r.overlay.emphasis.mask.get()) && resident_mask(r.overlay.emphasis.transient_mask.mask) &&
-               (core::gpu_backend_of(model.means_raw()) == core::GpuBackend::Metal ||
-                (rad && model.means_raw().device() == core::Device::CPU && core::default_gpu_backend() == core::GpuBackend::Metal)) &&
+               (nativeStorage(model.means_raw()) ||
+                (rad && model.means_raw().device() == core::Device::CPU && (core::default_gpu_backend() == core::GpuBackend::Metal || core::default_gpu_backend() == core::GpuBackend::Vulkan))) &&
                (!r.equirectangular || r.gut) && (r.splat_render_profile == 0 || r.splat_render_profile == 1) &&
                (!r.lod_gpu_traversal.enabled || (model.lod_tree && model.lod_tree->has_tree() &&
                                                  r.lod_gpu_traversal.node_count == model.lod_tree->total_nodes() && (rad || model.lod_tree->total_nodes() <= size_t(model.size())) &&
@@ -972,7 +981,7 @@ namespace lfs::vis {
                                                                                                                                                                            : CameraModel::Perspective),
                                  uint32_t(mip)};
             projection.rasterization = {request.frame_view.rasterization_scale, expected_depth ? 1.f : 0.f, request.frame_view.far_plane, float(request.splat_render_profile)};
-            projection.display = {float(request.color_tonemapping), request.color_exposure, spark ? 1.f : 0.f, 0};
+            projection.display = {float(request.color_tonemapping), request.color_exposure, spark ? 1.f : 0.f, request.gut ? 0.f : 1.f};
             const auto panorama_size = request.frame_view.cameraSize();
             projection.panorama = {float(panorama_size.x), float(panorama_size.y), float(request.frame_view.subregion_origin.x), float(request.frame_view.subregion_origin.y)};
             SceneBuffers scene{};
@@ -1156,7 +1165,7 @@ namespace lfs::vis {
                 overlay.preview_count = preview_enabled ? uint32_t(std::min<size_t>(views[10].bytes, std::numeric_limits<uint32_t>::max())) : 0;
                 i.preprocessor.encode(command, inputs, projection, degree, request.gut ? PrimitiveMode::Gut : PrimitiveMode::Gaussian, {f.projected, 0}, scene, overlay, request.gut ? BufferSlice{f.gut_geometry, 0} : BufferSlice{}, lod);
                 i.rasterizer.encode(command, {f.projected, 0}, draw_count, request.gut ? RasterMode::Gut : RasterMode::Gaussian,
-                                    {background.x, background.y, background.z, request.transparent_background ? 0.f : 1.f}, *f.raster, overlay, request.gut ? BufferSlice{f.gut_geometry, 0} : BufferSlice{}, projection, lod, request.gut && !spark);
+                                    {background.x, background.y, background.z, request.transparent_background ? 0.f : 1.f}, *f.raster, overlay, request.gut ? BufferSlice{f.gut_geometry, 0} : BufferSlice{}, projection, lod, request.gut && !spark, request.transparent_background && !request.gut && !spark);
                 auto encoder = [command computeCommandEncoder];
                 [encoder setComputePipelineState:i.present];
                 [encoder setTexture:f.raster->color() atIndex:0];

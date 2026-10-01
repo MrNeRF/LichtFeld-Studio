@@ -17,6 +17,9 @@
 #include <vector>
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
+#ifdef __APPLE__
+#include <vulkan/vulkan_metal.h>
+#endif
 
 namespace lfs::core {
     class MemoryInfo;
@@ -101,6 +104,9 @@ namespace lfs::core::internal {
 
         VulkanContext& context_;
         VkExportMemoryAllocateInfo export_alloc_info_{};
+#ifdef __APPLE__
+        VkExportMetalObjectCreateInfoEXT metal_export_info_{VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT};
+#endif
         VmaPool device_pool_ = VK_NULL_HANDLE;
         bool exports_memory_ = false;
         mutable std::mutex allocations_mutex_;

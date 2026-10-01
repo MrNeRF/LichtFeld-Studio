@@ -10,8 +10,9 @@ static void require(bool condition, const char* message) {
     if (!condition)
         throw std::runtime_error(message);
 }
-static void run() {
-    const GpuBackendScope scope(GpuBackend::Metal);
+static void run(GpuBackend backend) {
+    std::printf("Testing native tensor access on %s storage\n", gpu_backend_name(backend));
+    const GpuBackendScope scope(backend);
     MetalTensorReader reader;
     constexpr size_t count = 4097;
     for (int iteration = 0; iteration < 8; ++iteration) {
@@ -75,6 +76,42 @@ static void run() {
         } catch (const std::runtime_error&) { discarded = true; }
         require(discarded && output.cpu().ptr<float>()[0] == -5.f, "Unsubmitted native write changed or poisoned output");
     }
+    // A dedicated allocation exercises its full allocation offset, not only
+    // the ordinary small-buffer slab path used by selection masks.
+    {
+        constexpr size_t large_count = (17 * 1024 * 1024) / sizeof(float);
+        auto large = Tensor::full({large_count}, 3.f, Device::GPU);
+        const std::array<const Tensor*, 1> inputs{&large};
+        auto sample = [reader.device() newBufferWithLength:sizeof(float) options:MTLResourceStorageModeShared];
+        const auto command = reader.submit(inputs, [&](id<MTLCommandBuffer> command, auto views) {
+            auto blit = [command blitCommandEncoder];
+            [blit copyFromBuffer:views[0].buffer sourceOffset:views[0].offset + views[0].bytes - sizeof(float) toBuffer:sample destinationOffset:0 size:sizeof(float)];
+            [blit endEncoding];
+        });
+        large = {};
+        [command waitUntilCompleted];
+        require(command.status == MTLCommandBufferStatusCompleted && *static_cast<const float*>(sample.contents) == 3.f, "Large native allocation/owner contract differs");
+    }
+    if (gpu_backend_available(GpuBackend::Vulkan)) {
+        const auto other = backend == GpuBackend::Metal ? GpuBackend::Vulkan : GpuBackend::Metal;
+        auto source = Tensor::full({count}, 7.f, Device::GPU);
+        Tensor output;
+        {
+            const GpuBackendScope other_scope(other);
+            output = Tensor::zeros({count}, Device::GPU);
+        }
+        const std::array<const Tensor*, 1> inputs{&source};
+        const std::array<Tensor*, 1> outputs{&output};
+        const auto command = reader.submitWrites(inputs, outputs, [](id<MTLCommandBuffer> command, auto input, auto output) {
+            auto blit = [command blitCommandEncoder];
+            [blit copyFromBuffer:input[0].buffer sourceOffset:input[0].offset toBuffer:output[0].buffer destinationOffset:output[0].offset size:input[0].bytes];
+            [blit endEncoding];
+        });
+        source.add_(4.f);
+        require(output.add(2.f).cpu().ptr<float>()[count - 1] == 9.f, "Mixed native producer/consumer ordering differs");
+        [command waitUntilCompleted];
+        require(command.status == MTLCommandBufferStatusCompleted, "Mixed native command failed");
+    }
     Tensor cpu = Tensor::ones({3}, Device::CPU);
     std::array<const Tensor*, 1> inputs{&cpu};
     bool rejected = false;
@@ -108,7 +145,9 @@ int main() {
             return 77;
         }
         try {
-            run();
+            run(GpuBackend::Metal);
+            if (gpu_backend_available(GpuBackend::Vulkan))
+                run(GpuBackend::Vulkan);
             return 0;
         } catch (const std::exception& e) {
             std::fprintf(stderr, "%s\n", e.what());

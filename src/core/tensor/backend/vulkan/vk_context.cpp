@@ -13,6 +13,9 @@
 #include "vk_cuda_bridge.hpp"
 #endif
 #include "vk_memory.hpp"
+#ifdef __APPLE__
+#include <vulkan/vulkan_metal.h>
+#endif
 #include "vk_pipelines.hpp"
 #include "vk_recorder.hpp"
 
@@ -398,6 +401,14 @@ namespace lfs::core::internal {
         }
         VkSemaphoreCreateInfo semaphore_info{
             VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+#ifdef __APPLE__
+        VkExportMetalObjectCreateInfoEXT metal_export{VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT};
+        metal_export.exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_SHARED_EVENT_BIT_EXT;
+        if (caps_.metal_objects) {
+            metal_export.pNext = type_info.pNext;
+            type_info.pNext = &metal_export;
+        }
+#endif
         semaphore_info.pNext = &type_info;
         vk_check(this,
                  vkCreateSemaphore(device_, &semaphore_info, nullptr, &timeline_),
@@ -480,6 +491,9 @@ namespace lfs::core::internal {
         caps_.direct_host_uploads = false;
         caps_.external_memory = adopted.external_memory;
         caps_.external_semaphore = adopted.external_semaphore;
+#ifdef __APPLE__
+        caps_.metal_objects = adopted.metal_objects;
+#endif
     }
 
     VulkanContext::~VulkanContext() {
@@ -707,6 +721,11 @@ namespace lfs::core::internal {
         features13.subgroupSizeControl = caps_.subgroup_size_control ? VK_TRUE : VK_FALSE;
 
         std::vector<const char*> enabled_extensions;
+#ifdef __APPLE__
+        caps_.metal_objects = extensions_available.contains(VK_EXT_METAL_OBJECTS_EXTENSION_NAME);
+        if (caps_.metal_objects)
+            enabled_extensions.push_back(VK_EXT_METAL_OBJECTS_EXTENSION_NAME);
+#endif
         if (caps_.memory_budget) {
             enabled_extensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
         }

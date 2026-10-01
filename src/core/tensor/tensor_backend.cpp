@@ -986,6 +986,9 @@ namespace lfs::core {
             .cooperative_matrix = handles.cooperative_matrix,
             .external_memory = handles.external_memory,
             .external_semaphore = handles.external_semaphore,
+#ifdef __APPLE__
+            .metal_objects = handles.metal_objects,
+#endif
         });
 #else
         (void)handles;

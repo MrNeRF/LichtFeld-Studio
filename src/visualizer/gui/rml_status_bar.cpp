@@ -1735,13 +1735,6 @@ namespace lfs::vis::gui {
         if (backend_status_stamp_ == stamp)
             return;
         backend_status_stamp_ = stamp;
-        const auto viewer_name = [](rendering::ViewerBackend backend) -> std::string {
-            if (backend == rendering::ViewerBackend::Metal)
-                return "Metal";
-            if (backend == rendering::ViewerBackend::Vulkan)
-                return "Vulkan";
-            return LOC("preferences.tensor_auto");
-        };
         std::string active_renderer;
         const auto append_backend = [&](const uint32_t bit, const char* name) {
             if (backend_mask & bit) {
@@ -1753,16 +1746,15 @@ namespace lfs::vis::gui {
         append_backend(rendering::viewerBackendBit(rendering::ViewerBackend::Metal), "Metal");
         append_backend(rendering::viewerBackendBit(rendering::ViewerBackend::Vulkan), "Vulkan");
         append_backend(rendering::softwareViewerBackendBit, "CPU");
-        // With no scene output, the live desktop Vulkan compositor still
-        // presents the viewport and UI. Do not guess a scene route from
-        // the saved preference; explain the compositor in the tooltip.
+        // Until a scene publishes an output, show its configured renderer.
+        // The tooltip distinguishes this idle state from actual frame telemetry;
+        // the UI compositor is not the scene renderer represented by R.
         if (active_renderer.empty())
-            active_renderer = "Vulkan";
+            active_renderer = requested == rendering::ViewerBackend::Metal ? "Metal" : "Vulkan";
         setModelString("renderer_label", model_.renderer_label, LOC("status_bar.renderer_backend_short"));
         setModelString("renderer_value", model_.renderer_value, active_renderer);
         auto renderer_tooltip = std::string(LOC("status_bar.renderer_backend")) + ": " +
-                                LOC("status_bar.renderer_backend_tooltip") + "\n" +
-                                formatLocalizedValue(LOC("status_bar.backend_requested"), viewer_name(requested));
+                                LOC("status_bar.renderer_backend_tooltip");
         if (!backend_mask)
             renderer_tooltip += std::string("\n") + LOC("status_bar.backend_no_frame");
         else if (requested == rendering::ViewerBackend::Metal &&

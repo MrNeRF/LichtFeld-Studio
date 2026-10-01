@@ -47,18 +47,20 @@ namespace lfs::rendering::metal {
                 !p.extent.x || !p.extent.y || p.extent.x > 65535 || p.extent.y > 65535 ||
                 p.extent.z > uint32_t(CameraModel::Equirectangular) || p.extent.w > 1 || p.intrinsics.x <= 0 || p.intrinsics.y <= 0 || p.clip_scale.x <= 0 ||
                 p.clip_scale.y <= p.clip_scale.x || p.clip_scale.z <= 0 || p.clip_scale.w < 0 ||
-                (p.display.z != 0 && p.display.z != 1) ||
+                (p.display.z != 0 && p.display.z != 1) || (p.display.w != 0 && p.display.w != 1) ||
                 !std::isfinite(p.rasterization.w) || (p.rasterization.w != 0.f && p.rasterization.w != 1.f))
                 throw std::invalid_argument("Invalid Metal splat projection");
-            if (p.extent.z == uint32_t(CameraModel::Equirectangular)) {
+            if (p.extent.z == uint32_t(CameraModel::Equirectangular) || (p.display.w == 1 && (p.panorama.x != 0 || p.panorama.y != 0))) {
                 for (int i = 0; i < 4; ++i)
                     if (!std::isfinite(p.panorama[i]))
-                        throw std::invalid_argument("Invalid Metal panorama dimensions");
+                        throw std::invalid_argument("Invalid Metal full-camera dimensions");
                 if (p.panorama.x < p.extent.x || p.panorama.y < p.extent.y ||
                     p.panorama.x > 65535 || p.panorama.y > 65535 ||
                     p.panorama.z < 0 || p.panorama.w < 0 ||
                     p.panorama.z + p.extent.x > p.panorama.x || p.panorama.w + p.extent.y > p.panorama.y)
-                    throw std::invalid_argument("Invalid Metal panorama subregion");
+                    throw std::invalid_argument("Invalid Metal full-camera subregion");
+            } else if (p.display.w == 1 && (p.panorama.z != 0 || p.panorama.w != 0)) {
+                throw std::invalid_argument("Metal GS subregions require full-camera dimensions");
             }
         }
     } // namespace

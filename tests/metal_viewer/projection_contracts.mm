@@ -147,6 +147,26 @@ static void run(id<MTLDevice> device) {
         require(command.status == MTLCommandBufferStatusCompleted, "Object transform dispatch failed");
         require(std::abs(result[0].mean_depth.x - 147.5f) < 1e-4, "Object transform/pixel offset was not applied");
         require(std::abs(result[0].color.w - 9.09f) < 1e-4, "Radial sort key was replaced by camera Z");
+        // Keep the world-space camera origin fixed while rotating its view.
+        // Radial keys must remain bit-identical, including near-equal ties.
+        std::vector<float> radial_keys(n);
+        for (uint32_t i = 0; i < n; ++i)
+            radial_keys[i] = result[i].color.w;
+        for (float angle : {.13f, -.11f, .21f}) {
+            auto rotated = moved;
+            const float cosine = std::cos(angle), sine = std::sin(angle);
+            rotated.world_to_camera.columns[0] = {cosine, 0, -sine, 0};
+            rotated.world_to_camera.columns[2] = {sine, 0, cosine, 0};
+            command = [queue commandBuffer];
+            pipeline.encode(command, input, rotated, 0, PrimitiveMode::Points, {output});
+            [command commit];
+            [command waitUntilCompleted];
+            require(command.status == MTLCommandBufferStatusCompleted, "Radial rotation contract failed");
+            for (uint32_t i = 0; i < n; ++i)
+                if (radial_keys[i] && result[i].bounds.z > result[i].bounds.x)
+                    require(result[i].color.w == radial_keys[i], "World radial key changed after camera rotation");
+        }
+
         require(static_cast<const float*>(input.means.buffer.contents)[0] == 0, "Object transform mutated source geometry");
         auto ortho = moved;
         ortho.extent.z = 1;
@@ -202,6 +222,63 @@ static void run(id<MTLDevice> device) {
         [command commit];
         [command waitUntilCompleted];
         require(command.status == MTLCommandBufferStatusCompleted, "Empty scene dispatch failed");
+    }
+    // Desktop GS center admission uses full-camera pixels, independently of
+    // how far a large Gaussian footprint can extend into the output rectangle.
+    // Exact binary intrinsics/means keep threshold equality free of division
+    // rounding. Check inclusive lower and exclusive upper boundaries on both axes.
+    for (bool orthographic : {false, true}) {
+        constexpr uint32_t n = 12;
+        auto camera = frame();
+        camera.extent = {80, 80, uint32_t(orthographic ? CameraModel::Orthographic : CameraModel::Perspective), 0};
+        camera.intrinsics = {64, 64, 40, 40};
+        camera.panorama = {80, 80, 0, 0};
+        camera.display.w = 1;
+        std::array<float, n * 3> means{}, scales{}, dc{};
+        std::array<float, n * 4> rotations{};
+        std::array<float, n> opacity{};
+        const std::array<float, 6> x{-17, -16, -15, 95, 96, 97}, y{-17, -16, -15, 95, 96, 97};
+        for (uint32_t i = 0; i < n; ++i) {
+            const float px = i < 6 ? x[i] : 40, py = i >= 6 ? y[i - 6] : 40;
+            const float factor = orthographic ? 1.f : 4.f;
+            means[i * 3] = (px - 40) * factor / 64;
+            means[i * 3 + 1] = (py - 40) * factor / 64;
+            means[i * 3 + 2] = 4;
+            for (uint32_t c = 0; c < 3; ++c)
+                scales[i * 3 + c] = std::log(4.f);
+            rotations[i * 4] = 1;
+            opacity[i] = 3;
+        }
+        SplatBuffers input{{buffer(device, means.data(), sizeof(means))}, {buffer(device, scales.data(), sizeof(scales))}, {buffer(device, rotations.data(), sizeof(rotations))}, {buffer(device, opacity.data(), sizeof(opacity))}, {buffer(device, dc.data(), sizeof(dc))}, {}, {}, {}, n, 0, ShStorage::CanonicalFloat32};
+        auto output = [device newBufferWithLength:n * sizeof(ProjectedSplat) options:MTLResourceStorageModeShared];
+        for (bool cropped : {false, true}) {
+            auto p = camera;
+            if (cropped) {
+                p.extent.x = 33;
+                p.extent.y = 27;
+                p.intrinsics.z -= 43;
+                p.intrinsics.w -= 29;
+                p.panorama.z = 43;
+                p.panorama.w = 29;
+            }
+            auto command = [queue commandBuffer];
+            pipeline.encode(command, input, p, 0, PrimitiveMode::Gaussian, {output});
+            [command commit];
+            [command waitUntilCompleted];
+            require(command.status == MTLCommandBufferStatusCompleted, "GS full-camera center admission failed");
+            const auto result = static_cast<const ProjectedSplat*>(output.contents);
+            for (uint32_t i = 0; i < n; ++i) {
+                const double px = i < 6 ? x[i] : 40, py = i >= 6 ? y[i - 6] : 40;
+                const bool admitted = px >= -16 && px < 96 && py >= -16 && py < 96;
+                require((result[i].bounds.z > result[i].bounds.x) == admitted, "GS center admission differs from the independent full-camera bounds");
+            }
+        }
+        auto invalid = camera;
+        invalid.display.w = 2;
+        reject([&] { pipeline.encode([queue commandBuffer], input, invalid, 0, PrimitiveMode::Gaussian, { output }); });
+        invalid = camera;
+        invalid.panorama = {0, 0, 43, 29};
+        reject([&] { pipeline.encode([queue commandBuffer], input, invalid, 0, PrimitiveMode::Gaussian, { output }); });
     }
     // Double-precision spherical UT oracle: check actual projected centers,
     // including rear hemisphere, longitude seam and near-pole directions.

@@ -198,6 +198,7 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
         active_degree=min(active_degree,object.flags.y);
     }
     const float4x4 matrix=frame.world_to_camera*model_to_world;
+    const float3 world=(model_to_world*float4(p,1)).xyz;
     const float3 view=(matrix*float4(p,1)).xyz;
     const bool spark=frame.display.z==1.f;
     const bool portal=frame.rasterization.w==1.f && !spark;
@@ -205,10 +206,18 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     const bool orthographic=frame.extent.z==1u;
     const float projection_depth=equirectangular?length(view):view.z;
     if(!all(isfinite(view)) || projection_depth<=frame.clip_scale.x || projection_depth>=frame.clip_scale.y) return;
+    if(frame.display.w==1.f && primitive_mode==0u) {
+        // Desktop GS survivor admission: reject off-frustum means before
+        // covariance/SH work, even if a large footprint reaches the viewport.
+        // Use full-camera coordinates during cropped/high-resolution exports.
+        const float2 camera_extent=all(frame.panorama.xy>0)?frame.panorama.xy:float2(frame.extent.xy);
+        const float2 image=frame.intrinsics.xy*view.xy/(orthographic?1.f:view.z)+frame.intrinsics.zw+frame.panorama.zw;
+        const float2 margin=.2f*camera_extent;
+        if(any(image< -margin) || any(image>=camera_extent+margin))return;
+    }
     uint flags=0;
     if(layout.overlay){
         bool active=true;
-        const float3 world=(model_to_world*float4(p,1)).xyz;
         overlay_filter(params,0,false,node,world,active,flags);
         for(uint n=0;n<15 && overlay_enabled(params[26+n*7].x);++n)overlay_filter(params,26+n*7,false,node,world,active,flags);
         overlay_filter(params,7,true,node,world,active,flags);
@@ -414,8 +423,10 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
         color=lfsDisplaySplat(color,uint(frame.display.x),frame.display.y);
     if(layout.overlay)color=overlay_projection_color(color,center+(equirectangular?frame.panorama.zw:float2(0)),flags,params);
     if(!all(isfinite(color))) return;
-    // The viewer reference sorts by radial distance squared, not camera Z.
-    // Retain positive projection depth for admission; the ray path evaluates view-Z depth.
-    // color.w is reserved for the radial sort metric.
-    output[i]={float4(center,projection_depth,portal && primitive_mode==3u?portal_extent.x:radius),float4(conic,alpha),float4(color,dot(view,view)),uint4(uint2(lo),uint2(hi))};
+    // Compute the reference radial metric in world space. Rotating the delta
+    // before dotting is mathematically invariant but introduces FP32 rounding
+    // that can reverse near-equal depths. SH's model-local camera is unrelated.
+    const float3x3 world_to_view=float3x3(frame.world_to_camera[0].xyz,frame.world_to_camera[1].xyz,frame.world_to_camera[2].xyz);
+    const float3 sort_delta=world+(frame.world_to_camera[3].xyz*world_to_view);
+    output[i]={float4(center,projection_depth,portal && primitive_mode==3u?portal_extent.x:radius),float4(conic,alpha),float4(color,dot(sort_delta,sort_delta)),uint4(uint2(lo),uint2(hi))};
 }

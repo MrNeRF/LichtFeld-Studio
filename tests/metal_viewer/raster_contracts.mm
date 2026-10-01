@@ -185,6 +185,84 @@ static void compare_gut_culling(id<MTLDevice> device) {
             }
     std::puts("GUT subtile culling preserves exact color, depth and IDs across 8 affine/density/camera cases.");
 }
+// Independent double-precision oracle: an opaque foreground leaves a small
+// background contribution spread over thousands of weak depth-ordered splats.
+// Keeping the entire RGB accumulator in half loses that contribution even
+// though each opacity is well above the viewer's visibility threshold.
+static void compare_weak_transparent_layers(id<MTLDevice> device) {
+    constexpr uint32_t n = 2145;
+    std::vector<ProjectedSplat> splats(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        splats[i] = {{0, 0, 5, 1}, {1, 0, 1, i ? 1.f / 256.f : 15.f / 16.f}, {i ? .8f : .4f, i ? .5f : .3f, i ? .25f : .2f, float(i + 1)}, {0, 0, 1, 1}};
+    }
+    for (uint32_t i = 1; i <= 96; ++i) {
+        splats[i].mean_depth.x = 3;
+        splats[i].mean_depth.y = 3;
+    }
+    auto input = [device newBufferWithBytes:splats.data() length:n * sizeof(ProjectedSplat) options:MTLResourceStorageModeShared];
+    auto queue = [device newCommandQueue];
+    TileRasterizer raster(device);
+    RasterFrame frame(device, 1, 1, n, n);
+    auto command = [queue commandBuffer];
+    raster.encode(command, {input}, n, RasterMode::Gaussian, {}, frame, {}, {}, {}, {}, false, true);
+    const auto output = readback(device, command, frame);
+    wait(command);
+    require(frame.status().error == RasterError::None, "Weak transparent layer fixture overflow");
+    double rgb[3] = {}, transmittance = 1;
+    for (const auto& splat : splats) {
+        const double a = double(splat.conic_opacity.w) * std::exp(-.5 * (double(splat.mean_depth.x) * splat.mean_depth.x + double(splat.mean_depth.y) * splat.mean_depth.y));
+        if (a < .5 / 255)
+            continue;
+        for (uint32_t c = 0; c < 3; ++c)
+            rgb[c] += double(splat.color[c]) * a * transmittance;
+        transmittance *= 1. - a;
+        if (transmittance < 1e-4)
+            break;
+    }
+    const auto rgba = static_cast<const _Float16*>(output.color.contents);
+    const auto depth = static_cast<const float*>(output.depth.contents);
+    for (uint32_t c = 0; c < 3; ++c)
+        require(std::abs(double(rgba[c]) - rgb[c]) < .003, "Weak transparent contributions were lost to half accumulator rounding");
+    require(std::abs(depth[1] - (1 - transmittance)) < .0001, "Weak transparent layer coverage differs from the independent oracle");
+    require(*static_cast<const uint32_t*>(output.pick.contents) == 0, "Weak layer compositing changed the nearest source ID");
+    require(depth[3] == 5, "Weak layer compositing changed median depth");
+    std::puts("2145 depth-ordered transparent splats preserve weak background radiance against an independent double oracle.");
+}
+static void compare_unaligned_macro_crop(id<MTLDevice> device) {
+    constexpr uint32_t w = 129, h = 97, cw = 33, ch = 27, ox = 59, oy = 29;
+    std::array<ProjectedSplat, 2> source{{{{63.4f, 31.4f, 5, 100}, {.16f, .015f, .12f, .8f}, {.55f, .2f, .8f, 25}, {0, 0, w, h}},
+                                          {{72.2f, 41.1f, 6, 100}, {.12f, -.02f, .2f, .65f}, {.2f, .8f, .4f, 36}, {0, 0, w, h}}}};
+    auto queue = [device newCommandQueue];
+    TileRasterizer raster(device);
+    RasterFrame full(device, w, h, 2, 126), crop(device, cw, ch, 2, 12);
+    auto input = [device newBufferWithBytes:source.data() length:sizeof(source) options:MTLResourceStorageModeShared];
+    auto command = [queue commandBuffer];
+    raster.encode(command, {input}, 2, RasterMode::Gaussian, {}, full, {}, {}, {}, {}, false, true);
+    const auto a = readback(device, command, full);
+    wait(command);
+    for (auto& splat : source) {
+        splat.mean_depth.x -= ox;
+        splat.mean_depth.y -= oy;
+        splat.bounds = {0, 0, cw, ch};
+    }
+    std::memcpy(input.contents, source.data(), sizeof(source));
+    OverlayBuffers overlay;
+    overlay.render_origin = {float(ox), float(oy), 0, 0};
+    command = [queue commandBuffer];
+    raster.encode(command, {input}, 2, RasterMode::Gaussian, {}, crop, overlay, {}, {}, {}, false, true);
+    const auto b = readback(device, command, crop);
+    wait(command);
+    require(full.status().error == RasterError::None && crop.status().error == RasterError::None, "Unaligned crop overflow");
+    for (uint32_t y = 0; y < ch; ++y) {
+        const auto same = [&](id<MTLBuffer> left, id<MTLBuffer> right, size_t left_stride, size_t right_stride, size_t bytes) {
+            return std::memcmp(static_cast<const char*>(left.contents) + (y + oy) * left_stride + ox * bytes,
+                               static_cast<const char*>(right.contents) + y * right_stride, cw * bytes) == 0;
+        };
+        require(same(a.color, b.color, a.color_stride, b.color_stride, 8), "Macro cache changed unaligned crop color/alpha");
+        require(same(a.depth, b.depth, a.depth_stride, b.depth_stride, 16), "Macro cache changed unaligned crop depth");
+        require(same(a.pick, b.pick, a.pick_stride, b.pick_stride, 4), "Macro cache changed unaligned crop IDs");
+    }
+}
 static void run(id<MTLDevice> device) {
     TileRasterizer raster(device);
     auto queue = [device newCommandQueue];
@@ -542,6 +620,8 @@ int main() {
         try {
             run(device);
             compare_gut_culling(device);
+            compare_unaligned_macro_crop(device);
+            compare_weak_transparent_layers(device);
             return 0;
         } catch (const std::exception& e) {
             std::fprintf(stderr, "%s\n", e.what());

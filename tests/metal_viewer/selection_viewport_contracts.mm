@@ -90,8 +90,8 @@ namespace {
             }
         }
     }
-    void run(bool native_only) {
-        core::GpuBackendScope scope(core::GpuBackend::Metal);
+    void run(bool native_only, core::GpuBackend backend) {
+        core::GpuBackendScope scope(backend);
         vis::VulkanContext context;
         require(context.initHeadless(), context.lastError().c_str());
         constexpr size_t count = 1029;
@@ -249,7 +249,10 @@ int main(int argc, char** argv) {
         unsetenv("LFS_SAFE_MODE");
         Py_Initialize();
         try {
-            run(argc == 2 && std::string_view(argv[1]) == "--native-only");
+            const bool native_only = argc == 2 && std::string_view(argv[1]) == "--native-only";
+            run(native_only, core::GpuBackend::Metal);
+            if (native_only && core::gpu_backend_available(core::GpuBackend::Vulkan))
+                run(true, core::GpuBackend::Vulkan);
             return 0;
         } catch (const std::exception& error) {
             std::fprintf(stderr, "%s\n", error.what());

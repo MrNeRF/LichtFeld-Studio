@@ -1903,6 +1903,9 @@ namespace lfs::vis {
             .cooperative_matrix = device.cooperative_matrix,
             .external_memory = vulkan_context_->externalMemoryInteropEnabled(),
             .external_semaphore = vulkan_context_->externalSemaphoreInteropEnabled(),
+#ifdef __APPLE__
+            .metal_objects = vulkan_context_->metalObjectsInteropEnabled(),
+#endif
         };
         if (const auto status = lfs::core::adopt_vulkan_device(handles); !status) {
             LOG_WARN("Tensor Vulkan backend keeps its own device: {}", lfs::format_for_developer(status.error()));

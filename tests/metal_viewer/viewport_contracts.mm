@@ -4,6 +4,7 @@
 #include "metal_viewport_renderer.hpp"
 #include "preferences.hpp"
 #include <Python.h>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <stdexcept>
@@ -13,6 +14,46 @@ using namespace lfs;
 static void require(bool ok, const char* message) {
     if (!ok)
         throw std::runtime_error(message);
+}
+static void transparent_threshold_contract(vis::VulkanContext& context) {
+    using core::Device;
+    using core::Tensor;
+    rendering::ViewportRenderRequest request;
+    request.frame_view.size = {97, 97};
+    request.gut = true;
+    request.sh_degree = 0;
+    request.transparent_background = true;
+    const auto k = request.frame_view.getCameraIntrinsics();
+    constexpr size_t x = 52, y = 48;
+    const double dx = (double(x) + .5 - k.center_x) / k.focal_x;
+    const double dy = (double(y) + .5 - k.center_y) / k.focal_y;
+    constexpr float scale = .08f;
+    const double power = .5 * 9 * (dx * dx + dy * dy) / (1 + dx * dx + dy * dy) / (double(scale) * scale);
+    core::SplatData model(0,
+                          Tensor::from_vector(std::vector<float>{0, 0, -3}, {1, 3}, Device::GPU),
+                          Tensor::from_vector(std::vector<float>{1, 0, 0}, {1, 1, 3}, Device::GPU), {},
+                          Tensor::from_vector(std::vector<float>{std::log(scale), std::log(scale), std::log(scale)}, {1, 3}, Device::GPU),
+                          Tensor::from_vector(std::vector<float>{1, 0, 0, 0}, {1, 4}, Device::GPU),
+                          Tensor::from_vector(std::vector<float>{0}, {1, 1}, Device::GPU), 1.f);
+    vis::MetalViewportRenderer renderer;
+    for (bool visible : {false, true}) {
+        // The positive case remains above the real FP32 threshold but rounds
+        // below it when alpha is stored in the half color texture. It failed
+        // when presentation used color.a instead of the retained depth alpha.
+        const double pixel_alpha = .5 / 255 + (visible ? 2e-7 : -2e-7);
+        const double opacity = pixel_alpha * std::exp(power);
+        require(opacity > 0 && opacity < 1, "Invalid transparent threshold oracle");
+        model.opacity_raw() = Tensor::from_vector(std::vector<float>{float(std::log(opacity / (1 - opacity)))}, {1, 1}, Device::GPU);
+        const auto frame = renderer.render(context, model, request, vis::VksplatViewportRenderer::OutputSlot::Main);
+        require(bool(frame), "Transparent threshold render failed");
+        auto pixels = Tensor::empty({97, 97, 4}, Device::CPU);
+        require(bool(renderer.readColor(vis::VksplatViewportRenderer::OutputSlot::Main, pixels, 0, 0)), "Transparent threshold readback failed");
+        const auto pixel = pixels.ptr<float>() + (y * 97 + x) * 4;
+        if (visible)
+            require(pixel[3] > 0 && pixel[0] > .7f, "FP16 storage erased valid FP32 threshold coverage");
+        else
+            require(pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 0 && pixel[3] == 0, "Empty transparent tail retained RGB/alpha");
+    }
 }
 static void run() {
     core::GpuBackendScope scope(core::GpuBackend::Metal);
@@ -301,6 +342,7 @@ static void run() {
             ++coverage_difference;
     }
     require(coverage_difference == 0, "Native point coverage differs from desktop Vulkan");
+    transparent_threshold_contract(context);
     std::puts("Native viewport texture, resident storage, camera, depth, resize and slot reuse contracts passed.");
 }
 int main() {
