@@ -118,10 +118,12 @@ namespace lfs::rendering::metal {
         SplatPreprocessor(const SplatPreprocessor&) = delete;
         SplatPreprocessor& operator=(const SplatPreprocessor&) = delete;
 
-        void prepare(ShStorage storage, uint32_t active_degree, PrimitiveMode mode);
+        // Tight bounds apply only to ordinary FP32 Gaussian blending. Callers using
+        // half-rounded footprints or extended markers must keep the default.
+        void prepare(ShStorage storage, uint32_t active_degree, PrimitiveMode mode, bool tight_bounds = false);
         void encode(id<MTLCommandBuffer> command, const SplatBuffers& inputs,
                     const Projection& projection, uint32_t active_degree,
-                    PrimitiveMode mode, BufferSlice output, const SceneBuffers& scene = {}, const OverlayBuffers& overlay = {}, BufferSlice gut_output = {}, const LodSelection& lod = {}, GpuProfile* profile = nullptr);
+                    PrimitiveMode mode, BufferSlice output, const SceneBuffers& scene = {}, const OverlayBuffers& overlay = {}, BufferSlice gut_output = {}, const LodSelection& lod = {}, GpuProfile* profile = nullptr, bool tight_bounds = false);
 
     private:
         struct Impl;

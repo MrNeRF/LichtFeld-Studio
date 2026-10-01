@@ -16,6 +16,7 @@ using namespace metal;
 constant uint sh_storage [[function_constant(0)]];
 constant uint sh_degree [[function_constant(1)]];
 constant uint primitive_mode [[function_constant(2)]];
+constant bool tight_bounds [[function_constant(3)]];
 
 struct Projection {
     float4x4 model_to_world, world_to_camera;
@@ -255,7 +256,7 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
         frame.intrinsics.xy*view.xy/(orthographic?1.0f:view.z)+frame.intrinsics.zw-.5f;
     float3 conic;
     float radius;
-    float2 panorama_radius=0,portal_axis=0,portal_extent=0;
+    float2 panorama_radius=0,portal_axis=0,portal_extent=0,gaussian_support=0;
     if(primitive_mode==1u) {
         // Independent point path: no covariance, quaternion or Gaussian scale work.
         radius=2.0f;
@@ -387,6 +388,15 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
         // of the mip compensation used for its projected binning covariance.
         const float support_alpha=spark && primitive_mode==3u?source_alpha:alpha;
         radius=primitive_mode==2u?3.0f*sqrt(eigen):sqrt(2.0f*opacity_power(support_alpha,spark)*eigen);
+        gaussian_support=float2(radius);
+        if(tight_bounds && primitive_mode==0u && !portal && !spark && !layout.overlay &&
+           det>xx*yy*1e-4f) {
+            // Axis-aligned support of the projected ellipse, computed once per
+            // source before duplication/sorting. Keep the circular fallback for
+            // ill-conditioned covariances and a conservative FP32/pixel margin.
+            const float power=opacity_power(alpha,false);
+            gaussian_support=min(gaussian_support,sqrt(2.f*(power+1e-4f)*bin_covariance.xz)*1.001f+1.f);
+        }
         if(equirectangular) {
             const float extent_factor=sqrt(2.f*opacity_power(source_alpha,spark));
             panorama_radius=min(sqrt(bin_covariance.xz)*extent_factor,frame.panorama.xy*float2(1.f,.49f));
@@ -395,7 +405,8 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
     }
     if(!all(isfinite(center)) || !isfinite(radius)) return;
     const float2 extent=float2(frame.extent.xy);
-    const float2 support=equirectangular?panorama_radius:float2(radius);
+    const float2 support=equirectangular?panorama_radius:
+        (tight_bounds && primitive_mode==0u?gaussian_support:float2(radius));
     float2 lo=clamp(floor(center-support),0.0f,extent),hi=clamp(ceil(center+support),0.0f,extent);
     if(equirectangular) {
         const uint2 span=panorama_tile_span(center.x,support.x,frame.panorama.x,frame.extent.x);

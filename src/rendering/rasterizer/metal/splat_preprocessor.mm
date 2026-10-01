@@ -73,11 +73,11 @@ namespace lfs::rendering::metal {
         std::mutex mutex;
         std::map<uint32_t, id<MTLComputePipelineState>> pipelines;
 
-        id<MTLComputePipelineState> pipeline(ShStorage storage, uint32_t degree, PrimitiveMode mode) {
+        id<MTLComputePipelineState> pipeline(ShStorage storage, uint32_t degree, PrimitiveMode mode, bool tight_bounds) {
             const uint32_t format = static_cast<uint32_t>(storage), primitive = static_cast<uint32_t>(mode);
             if (format > 4 || degree > 3 || primitive > 3)
                 throw std::invalid_argument("Unsupported Metal splat specialization");
-            const uint32_t key = format * 16 + degree * 4 + primitive;
+            const uint32_t key = (format * 16 + degree * 4 + primitive) | (tight_bounds ? 128u : 0u);
             std::lock_guard lock(mutex);
             if (auto found = pipelines.find(key); found != pipelines.end())
                 return found->second;
@@ -85,6 +85,7 @@ namespace lfs::rendering::metal {
             [constants setConstantValue:&format type:MTLDataTypeUInt atIndex:0];
             [constants setConstantValue:&degree type:MTLDataTypeUInt atIndex:1];
             [constants setConstantValue:&primitive type:MTLDataTypeUInt atIndex:2];
+            [constants setConstantValue:&tight_bounds type:MTLDataTypeBool atIndex:3];
             NSError* error = nil;
             id<MTLFunction> function = [library newFunctionWithName:@"project_splats" constantValues:constants error:&error];
             if (!function)
@@ -125,12 +126,12 @@ namespace lfs::rendering::metal {
     }
     SplatPreprocessor::~SplatPreprocessor() = default;
 
-    void SplatPreprocessor::prepare(ShStorage storage, uint32_t degree, PrimitiveMode mode) {
-        (void)impl_->pipeline(storage, degree, mode);
+    void SplatPreprocessor::prepare(ShStorage storage, uint32_t degree, PrimitiveMode mode, bool tight_bounds) {
+        (void)impl_->pipeline(storage, degree, mode, tight_bounds);
     }
 
     void SplatPreprocessor::encode(id<MTLCommandBuffer> command, const SplatBuffers& in,
-                                   const Projection& projection, uint32_t degree, PrimitiveMode mode, BufferSlice output, const SceneBuffers& scene, const OverlayBuffers& overlay, BufferSlice gut_output, const LodSelection& lod, GpuProfile* profile) {
+                                   const Projection& projection, uint32_t degree, PrimitiveMode mode, BufferSlice output, const SceneBuffers& scene, const OverlayBuffers& overlay, BufferSlice gut_output, const LodSelection& lod, GpuProfile* profile, bool tight_bounds) {
         if (!command || command.commandQueue.device != impl_->device || command.status != MTLCommandBufferStatusNotEnqueued)
             throw std::invalid_argument("Metal viewer requires an uncommitted command buffer on the same device");
         if (degree > 3 || (in.layout_rest != 0 && in.layout_rest != 3 && in.layout_rest != 8 && in.layout_rest != 15) ||
@@ -217,7 +218,7 @@ namespace lfs::rendering::metal {
         if (scene.count > 1 && !scene.object_indices.buffer)
             throw std::invalid_argument("Multiple Metal scene objects require primitive indices");
         // Resolve/compile before opening an encoder so failure leaves the command usable.
-        auto pipeline = impl_->pipeline(in.storage, degree, mode);
+        auto pipeline = impl_->pipeline(in.storage, degree, mode, tight_bounds);
         id<MTLComputeCommandEncoder> encoder = profiledCompute(command, profile, GpuStage::Projection);
         if (!encoder)
             throw std::runtime_error("Cannot create Metal projection encoder");

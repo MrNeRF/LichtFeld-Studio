@@ -201,7 +201,13 @@ kernel void tile_instances(device const ProjectedSplat* splats [[buffer(0)]],
     for (uint y = bounds.y / 16; y < (bounds.w + 15) / 16; ++y)
         for (uint x = bounds.x / 16; x < (bounds.z + 15) / 16; ++x) {
             const uint column=p.mode==3u && p.camera.z==2u?x%p.columns:x;
-            keys[at] = (ulong(y * p.columns + column) << 32) | as_type<uint>(s.color.w);
+            const uint tile = y * p.columns + column;
+            // Source sorting already preserves the full radial key and ties.
+            // The remaining stable pass needs only the exact tile ID.
+            if (p.unused & 256u)
+                reinterpret_cast<device uint*>(keys)[at] = tile;
+            else
+                keys[at] = (ulong(tile) << 32) | as_type<uint>(s.color.w);
             indices[at++] = source;
         }
 }
@@ -348,10 +354,10 @@ kernel void tile_ranges(device const ulong* keys [[buffer(0)]],
                         device const RasterStatus& status [[buffer(2)]],
                         uint i [[thread_position_in_grid]]) {
     if (status.error || i >= status.required) return;
-    const uint tile = uint(keys[i] >> 32);
+    const uint tile = kSourceKey32 ? reinterpret_cast<device const uint*>(keys)[i] : uint(keys[i] >> 32);
     if (i == 0) ranges[tile * 2] = 0;
     else {
-        const uint previous = uint(keys[i - 1] >> 32);
+        const uint previous = kSourceKey32 ? reinterpret_cast<device const uint*>(keys)[i - 1] : uint(keys[i - 1] >> 32);
         if (tile != previous) {
             ranges[previous * 2 + 1] = i;
             ranges[tile * 2] = i;
@@ -432,7 +438,9 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
     const float2 ray_min=(float2(tile_origin)+.5f-p.intrinsics.zw)/p.intrinsics.xy;
     const float2 ray_max=(float2(tile_origin)+float2(7.5f,float(pixel_height)-.5f)-p.intrinsics.zw)/p.intrinsics.xy;
     const float4 plane_lengths=p.camera.z==1u?float4(1):sqrt(1.f+float4(ray_min,ray_max)*float4(ray_min,ray_max));
-    const bool separate_median=(kRasterFlags&(4u|2048u))==(4u|2048u);
+    // Only GS has a half-rounded 2D display footprint to separate. GUT
+    // already accumulates FP32 ray alpha and must retain its 3D ray depth.
+    const bool separate_median=kRasterMode==0u && (kRasterFlags&(4u|2048u))==(4u|2048u);
     const bool batch_half=(!(kRasterFlags&2048u) || separate_median) && ((kRasterMode==0u && (kRasterFlags&(4u|64u))) ||
         (kRasterMode!=3u && !(kRasterFlags&16u) && (kRasterFlags&1u) && overlay_enabled(overlay_params[22].y)));
     const float2 first_macro=floor((float2(tile_origin)+p.render_origin.xy)/overlay_macro_extent);

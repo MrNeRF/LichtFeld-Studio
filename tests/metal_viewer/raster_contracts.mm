@@ -821,6 +821,156 @@ static void run(id<MTLDevice> device) {
     }
     std::puts("Metal tile raster contracts passed: stable depth, RGB/alpha/depth/pick, modes, scan/block boundaries, overflow and frame reuse.");
 }
+
+// Narrow binning must preserve the actual pixels, exact depth and logical IDs.
+// Exercise rotated anisotropy, mip compensation, partial tiles, clipping and
+// poorly conditioned covariance against the original circular projection.
+static void compare_tight_projection(id<MTLDevice> device) {
+    constexpr uint32_t n = 257, w = 129, h = 97;
+    SplatPreprocessor project(device);
+    TileRasterizer raster(device);
+    auto queue = [device newCommandQueue];
+    std::vector<float> xyz(n * 3), logs(n * 3), rotations(n * 4, 0), opacity(n), dc(n * 3);
+    for (uint32_t i = 0; i < n; ++i) {
+        xyz[i * 3] = float(int(i % 17) - 8) * .09f;
+        xyz[i * 3 + 1] = float(int(i % 13) - 6) * .08f;
+        xyz[i * 3 + 2] = 2.f + float(i % 7) * .1f;
+        logs[i * 3] = i % 11 == 0 ? 0.f : -1.5f;
+        logs[i * 3 + 1] = i % 11 == 0 ? -12.f : -5.f;
+        logs[i * 3 + 2] = -6.f;
+        const float angle = float(i % 9) * .19f;
+        rotations[i * 4] = std::cos(angle);
+        rotations[i * 4 + 3] = std::sin(angle);
+        opacity[i] = -5.f + float(i % 11);
+        for (uint32_t c = 0; c < 3; ++c)
+            dc[i * 3 + c] = float(int((i + c * 3) % 13) - 6) * .1f;
+    }
+    const auto upload = [&](const std::vector<float>& data) {
+        return BufferSlice{[device newBufferWithBytes:data.data() length:data.size() * sizeof(float) options:MTLResourceStorageModeShared]};
+    };
+    SplatBuffers inputs;
+    inputs.count = n;
+    inputs.storage = ShStorage::CanonicalFloat32;
+    inputs.means = upload(xyz);
+    inputs.log_scales = upload(logs);
+    inputs.rotations = upload(rotations);
+    inputs.opacity_logits = upload(opacity);
+    inputs.sh0 = upload(dc);
+    const simd_float4 bg{.1f, .2f, .3f, 1};
+    id<MTLBuffer> projected[2];
+    for (auto& buffer : projected)
+        buffer = [device newBufferWithLength:n * sizeof(ProjectedSplat) options:MTLResourceStorageModeShared];
+    RasterFrame frames[2] = {{device, w, h, n, n * 63}, {device, w, h, n, n * 63}};
+    size_t reduced = 0;
+    for (uint32_t scenario = 0; scenario < 8; ++scenario) {
+        Projection camera{matrix_identity_float4x4, matrix_identity_float4x4, {},
+                          {100, 100, 64.25f, 48.75f}, {.01f, 1000, 1, scenario % 2 ? 0.f : .3f},
+                          {w, h, scenario / 4, scenario % 2}};
+        if (scenario % 4 >= 2)
+            camera.model_to_world.columns[3].x = .7f;
+        Readback images[2];
+        for (uint32_t variant = 0; variant < 2; ++variant) {
+            auto command = [queue commandBuffer];
+            project.encode(command, inputs, camera, 0, PrimitiveMode::Gaussian, {projected[variant]}, {}, {}, {}, {}, nullptr, variant != 0);
+            raster.encode(command, {projected[variant]}, n, RasterMode::Gaussian, bg, frames[variant]);
+            images[variant] = readback(device, command, frames[variant]);
+            wait(command);
+            require(frames[variant].status().error == RasterError::None, "Tight-bounds fixture overflowed");
+        }
+        const auto before = frames[0].status().required_instances;
+        const auto after = frames[1].status().required_instances;
+        require(after <= before, "Ellipse bounds expanded tile membership");
+        reduced += before - after;
+        for (uint32_t y = 0; y < h; ++y) {
+            const auto identical = [&](id<MTLBuffer> a, id<MTLBuffer> b, size_t stride, size_t bytes) {
+                return std::memcmp(static_cast<const char*>(a.contents) + y * stride,
+                                   static_cast<const char*>(b.contents) + y * stride, bytes) == 0;
+            };
+            require(identical(images[0].color, images[1].color, images[0].color_stride, w * 8), "Ellipse bounds changed rendered RGBA");
+            require(identical(images[0].depth, images[1].depth, images[0].depth_stride, w * 16), "Ellipse bounds changed exact depth");
+            require(identical(images[0].pick, images[1].pick, images[0].pick_stride, w * 4), "Ellipse bounds changed source picking IDs");
+        }
+    }
+    require(reduced > n, "Anisotropic bounds did not remove redundant tile instances");
+    std::printf("Tight Gaussian bounds preserved all pixel/depth/pick bits; removed %zu tile instances.\n", reduced);
+}
+
+
+// The tile radix grows from one byte to two at 257 columns. Compare a fresh
+// full-key frame with reused depth-before-duplication frames and an empty cut;
+// keys must stay stable across radix parity changes and partial edge tiles.
+static void compare_tile_key_widths(id<MTLDevice> device) {
+    constexpr uint32_t n = 4097;
+    TileRasterizer raster(device);
+    auto queue = [device newCommandQueue];
+    const simd_float4 bg{.1f, .2f, .3f, 1};
+    for (uint32_t width : {4096u, 4097u}) {
+        std::vector<ProjectedSplat> splats(n);
+        for (uint32_t i = 0; i < n; ++i) {
+            const uint32_t x = i % width;
+            splats[i] = {{float(x), 0, float(i % 7 + 1), 35}, {.02f, 0, 1, .2f},
+                         {float(i % 11) / 11, float(i % 13) / 13, float(i % 17) / 17, float(i % 5 + 1)},
+                         {x > 35 ? x - 35 : 0, 0, std::min(width, x + 36), 1}};
+        }
+        auto input = [device newBufferWithBytes:splats.data() length:n * sizeof(ProjectedSplat) options:MTLResourceStorageModeShared];
+        RasterFrame frame(device, width, 1, n, n * 6);
+        Readback reference{};
+        uint64_t instances = 0;
+        for (uint32_t count : {n, n, 0u, n, n}) {
+            auto command = [queue commandBuffer];
+            raster.encode(command, {input}, count, RasterMode::Gaussian, bg, frame);
+            const auto actual = readback(device, command, frame);
+            wait(command);
+            require(frame.status().error == RasterError::None, "Tile-key boundary fixture overflowed");
+            if (!count) {
+                compare(actual, {}, width, 1, bg, RasterMode::Gaussian);
+                continue;
+            }
+            if (!reference.color) {
+                reference = actual;
+                instances = frame.status().required_instances;
+                require(instances > n * 5 / 4, "Tile-key fixture does not exercise source sorting");
+                continue;
+            }
+            require(frame.status().required_instances == instances, "Tile-key width changed membership");
+            require(std::memcmp(reference.color.contents, actual.color.contents, width * 8) == 0,
+                    "Compact tile sorting changed RGBA across digit widths");
+            require(std::memcmp(reference.depth.contents, actual.depth.contents, width * 16) == 0,
+                    "Compact tile sorting changed exact depth across digit widths");
+            require(std::memcmp(reference.pick.contents, actual.pick.contents, width * 4) == 0,
+                    "Compact tile sorting changed stable source IDs across digit widths");
+        }
+    }
+}
+
+
+// GUT depth is the closest point on a 3D ray. Deliberately disagree with the
+// projected center Z so the separate 2D Portal median cannot silently win.
+static void compare_portal_gut_median(id<MTLDevice> device) {
+    const ProjectedSplat splat{{0, 0, 17, 2}, {1, 0, 1, .75f}, {.2f, .3f, .4f, 9}, {0, 0, 1, 1}};
+    const GutSplat geometry{{1, 0, 0, 1}, {0, 1, 0, 0}, {0, 0, 1, 2}, {0, 0, 3, .75f}};
+    auto input = [device newBufferWithBytes:&splat length:sizeof(splat) options:MTLResourceStorageModeShared];
+    auto gut = [device newBufferWithBytes:&geometry length:sizeof(geometry) options:MTLResourceStorageModeShared];
+    auto queue = [device newCommandQueue];
+    TileRasterizer raster(device);
+    RasterFrame frame(device, 1, 1, 1, 1);
+    Projection camera{matrix_identity_float4x4, matrix_identity_float4x4, {},
+                      {1, 1, .5f, .5f}, {.01f, 100, 1, .3f}, {1, 1, 0, 0}};
+    camera.rasterization.w = 1;
+    for (auto model : {CameraModel::Perspective, CameraModel::Orthographic})
+        for (bool exact : {false, true}) {
+            camera.extent.z = uint32_t(model);
+            auto command = [queue commandBuffer];
+            raster.encode(command, {input}, 1, RasterMode::Gut, {0, 0, 0, 1}, frame, {}, {gut}, camera, {}, false, false, nullptr, exact);
+            const auto actual = readback(device, command, frame);
+            wait(command);
+            const auto depth = static_cast<const float*>(actual.depth.contents);
+            require(std::abs(depth[3] - 3.f) < 1e-6f, "Portal GUT median used the projected 2D center instead of the 3D ray depth");
+            require(std::abs(depth[2] - 3.f) < 1e-6f && std::abs(depth[0] - 2.25f) < 1e-6f,
+                    "Portal GUT nearest/weighted ray depth changed");
+        }
+}
+
 int main() {
     @autoreleasepool {
         auto device = MTLCreateSystemDefaultDevice();
@@ -828,6 +978,9 @@ int main() {
             return LFS_METAL_TEST_REQUIRE_DEVICE ? 1 : 77;
         try {
             run(device);
+            compare_tight_projection(device);
+            compare_tile_key_widths(device);
+            compare_portal_gut_median(device);
             compare_gut_culling(device);
             compare_dense_gut_subtiles(device);
             compare_depth_chunks(device);

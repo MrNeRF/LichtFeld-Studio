@@ -223,9 +223,10 @@ namespace lfs::rendering::metal {
             throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal tile shader compilation failed");
         impl_->library = library;
         for (const char* name : {"tile_counts", "scan_blocks", "scan_add", "scan32_blocks", "scan32_add", "tile_status", "source_keys", "tile_instances",
-                                 "tile_histogram", "tile_scatter", "source_histogram", "source_scatter", "tile_ranges", "tile_depth_batches", "tile_depth_compose"}) {
+                                 "tile_histogram", "tile_scatter", "source_histogram", "source_scatter", "source_ranges", "tile_ranges", "tile_depth_batches", "tile_depth_compose"}) {
             const bool source_keys = std::string_view(name).starts_with("source_") && std::string_view(name) != "source_keys";
-            const char* function_name = source_keys ? (std::string_view(name) == "source_histogram" ? "tile_histogram" : "tile_scatter") : name;
+            const char* function_name = std::string_view(name) == "source_ranges" ? "tile_ranges"
+                : source_keys ? (std::string_view(name) == "source_histogram" ? "tile_histogram" : "tile_scatter") : name;
             auto constants = [MTLFunctionConstantValues new];
             [constants setConstantValue:&source_keys type:MTLDataTypeBool atIndex:2];
             auto function = [library newFunctionWithName:[NSString stringWithUTF8String:function_name]
@@ -438,13 +439,13 @@ namespace lfs::rendering::metal {
             [e setBuffer:f->keys[1] offset:0 atIndex:6];
             dispatch(e, count);
             encode_sort((source_sorted ? 0u : 4u) + (std::bit_width(f->tiles - 1) + 7) / 8,
-                        source_sorted ? 32u : 0u);
+                        0u, source_sorted);
         }
         auto clear = [command blitCommandEncoder];
         [clear fillBuffer:f->ranges range:NSMakeRange(0, f->ranges.length) value:0];
         [clear endEncoding];
         if (count) {
-            e = impl_->begin(command, "tile_ranges", profile, GpuStage::Sort);
+            e = impl_->begin(command, source_sorted ? "source_ranges" : "tile_ranges", profile, GpuStage::Sort);
             const uint32_t sorted = (4 + (std::bit_width(f->tiles - 1) + 7) / 8) % 2;
             [e setBuffer:f->keys[sorted] offset:0 atIndex:0];
             [e setBuffer:f->ranges offset:0 atIndex:1];
