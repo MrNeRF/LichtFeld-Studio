@@ -21,5 +21,8 @@ int main() {
     static_assert(frameReservationBytes(1920, 1080, 1000000, 16000000, true) <
                   frameReservationBytes(1920, 1080, 1000000, 16000000, false));
     static_assert(scanReservationBytes(257) > scanReservationBytes(256));
+    static_assert(scanReservationBytes(65537, 4) < scanReservationBytes(65537, 8));
+    // Narrow post-admission histograms do not narrow the reservation arithmetic.
+    static_assert(scanReservationBytes(std::numeric_limits<uint32_t>::max(), 4) > 65536);
     std::puts("Metal frame working-set admission and overflow contracts passed.");
 }

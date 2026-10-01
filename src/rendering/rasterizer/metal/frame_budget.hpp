@@ -9,11 +9,11 @@
 namespace lfs::rendering::metal {
     // A conservative admission estimate, not a measurement of driver allocation.
     // Inputs are 32-bit, while every product and scan total uses 64-bit arithmetic.
-    constexpr uint64_t scanReservationBytes(uint64_t count) {
+    constexpr uint64_t scanReservationBytes(uint64_t count, uint32_t element_bytes = 8) {
         uint64_t bytes = 0;
         do {
             count = (count + 255) / 256;
-            bytes += count * 16 + 2 * 65536;
+            bytes += count * (2 * element_bytes) + 2 * 65536;
         } while (count > 1);
         return bytes;
     }
@@ -27,8 +27,8 @@ namespace lfs::rendering::metal {
         const uint64_t tiles = ((uint64_t(width) + 15) / 16) * ((uint64_t(height) + 15) / 16);
         const uint64_t histogram = ((uint64_t(instances) + 2047) / 2048) * 256;
         return pixels * 36 + uint64_t(splats) * 84 + uint64_t(instances) * 24 +
-               histogram * 16 + tiles * 8 + scanReservationBytes(splats) +
-               scanReservationBytes(histogram) + 24 * 65536;
+               histogram * 8 + tiles * 8 + scanReservationBytes(splats) +
+               scanReservationBytes(histogram, 4) + 24 * 65536;
     }
 
     constexpr bool frameFitsWorkingSet(uint64_t allocated, uint64_t reservation, uint64_t recommended) {

@@ -53,11 +53,11 @@ namespace lfs::rendering::metal {
             uint32_t count;
         };
         using ScanStorage = std::vector<ScanLevel>;
-        ScanStorage reserve_scan(id<MTLDevice> device, uint32_t n) {
+        ScanStorage reserve_scan(id<MTLDevice> device, uint32_t n, size_t element_bytes = 8) {
             ScanStorage levels;
             for (;;) {
                 const auto groups = ceil_div(n, 256);
-                levels.push_back({allocate(device, size_t(groups) * 8), allocate(device, size_t(groups) * 8), n});
+                levels.push_back({allocate(device, size_t(groups) * element_bytes), allocate(device, size_t(groups) * element_bytes), n});
                 if (groups <= 1)
                     break;
                 n = groups;
@@ -99,10 +99,10 @@ namespace lfs::rendering::metal {
             f.indices[i] = allocate(device, size_t(max_instances) * 4);
         }
         const uint32_t histogram_size = f.sort_blocks * 256;
-        f.histogram = allocate(device, size_t(histogram_size) * 8);
-        f.histogram_offsets = allocate(device, size_t(histogram_size) * 8);
+        f.histogram = allocate(device, size_t(histogram_size) * 4);
+        f.histogram_offsets = allocate(device, size_t(histogram_size) * 4);
         f.count_scan = reserve_scan(device, max_splats);
-        f.histogram_scan = reserve_scan(device, histogram_size);
+        f.histogram_scan = reserve_scan(device, histogram_size, 4);
         f.color = texture(device, width, height, MTLPixelFormatRGBA16Float);
         f.depth = texture(device, width, height, MTLPixelFormatRGBA32Float);
         f.pick = texture(device, width, height, MTLPixelFormatR32Uint);
@@ -131,12 +131,12 @@ namespace lfs::rendering::metal {
             return encoder;
         }
         void scan(id<MTLCommandBuffer> command, id<MTLBuffer> input, id<MTLBuffer> output,
-                  uint32_t count, const ScanStorage& storage, size_t level = 0) {
+                  uint32_t count, const ScanStorage& storage, bool narrow = false, size_t level = 0) {
             if (!count)
                 return;
             const auto& scratch = storage.at(level);
             const auto groups = ceil_div(count, 256);
-            auto encoder = begin(command, "scan_blocks");
+            auto encoder = begin(command, narrow ? "scan32_blocks" : "scan_blocks");
             [encoder setBuffer:input offset:0 atIndex:0];
             [encoder setBuffer:output offset:0 atIndex:1];
             [encoder setBuffer:scratch.sums offset:0 atIndex:2];
@@ -145,8 +145,8 @@ namespace lfs::rendering::metal {
             [encoder endEncoding];
             if (groups <= 1)
                 return;
-            scan(command, scratch.sums, scratch.offsets, groups, storage, level + 1);
-            encoder = begin(command, "scan_add");
+            scan(command, scratch.sums, scratch.offsets, groups, storage, narrow, level + 1);
+            encoder = begin(command, narrow ? "scan32_add" : "scan_add");
             [encoder setBuffer:output offset:0 atIndex:0];
             [encoder setBuffer:scratch.offsets offset:0 atIndex:1];
             [encoder setBytes:&count length:4 atIndex:2];
@@ -174,7 +174,7 @@ namespace lfs::rendering::metal {
                                               error:&error];
         if (!library)
             throw std::runtime_error(error.localizedDescription.UTF8String ?: "Metal tile shader compilation failed");
-        for (const char* name : {"tile_counts", "scan_blocks", "scan_add", "tile_status", "tile_instances",
+        for (const char* name : {"tile_counts", "scan_blocks", "scan_add", "scan32_blocks", "scan32_add", "tile_status", "tile_instances",
                                  "tile_histogram", "tile_scatter", "tile_ranges", "tile_blend"}) {
             auto function = [library newFunctionWithName:[NSString stringWithUTF8String:name]];
             auto state = [device newComputePipelineStateWithFunction:function error:&error];
@@ -294,7 +294,7 @@ namespace lfs::rendering::metal {
                 [e setBytes:&sort length:sizeof(sort) atIndex:3];
                 [e dispatchThreadgroupsWithIndirectBuffer:f->dispatch_args indirectBufferOffset:0 threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
                 [e endEncoding];
-                impl_->scan(command, f->histogram, f->histogram_offsets, f->sort_blocks * 256, f->histogram_scan);
+                impl_->scan(command, f->histogram, f->histogram_offsets, f->sort_blocks * 256, f->histogram_scan, true);
                 e = impl_->begin(command, "tile_scatter");
                 [e setBuffer:f->keys[src] offset:0 atIndex:0];
                 [e setBuffer:f->indices[src] offset:0 atIndex:1];

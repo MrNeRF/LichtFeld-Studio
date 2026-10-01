@@ -74,6 +74,32 @@ kernel void scan_add(device ulong* output [[buffer(0)]],
                      uint i [[thread_position_in_grid]]) {
     if (i < count) output[i] += offsets[i / 256];
 }
+// Histogram totals cannot exceed the admitted uint32 instance capacity. Keep
+// the pre-admission count scan above in uint64 so overflow reporting stays exact.
+kernel void scan32_blocks(device const uint* input [[buffer(0)]],
+                          device uint* output [[buffer(1)]],
+                          device uint* sums [[buffer(2)]],
+                          constant uint& count [[buffer(3)]],
+                          uint group [[threadgroup_position_in_grid]],
+                          uint lane [[thread_index_in_threadgroup]],
+                          uint sg [[simdgroup_index_in_threadgroup]]) {
+    threadgroup uint group_sums[8];
+    const uint i=group*256+lane;
+    const uint value=i<count?input[i]:0;
+    uint prefix=simd_prefix_exclusive_sum(value);
+    const uint total=simd_sum(value);
+    if((lane&31)==0)group_sums[sg]=total;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for(uint s=0;s<sg;++s)prefix+=group_sums[s];
+    if(i<count)output[i]=prefix;
+    if(lane==255)sums[group]=prefix+value;
+}
+kernel void scan32_add(device uint* output [[buffer(0)]],
+                       device const uint* offsets [[buffer(1)]],
+                       constant uint& count [[buffer(2)]],
+                       uint i [[thread_position_in_grid]]) {
+    if(i<count)output[i]+=offsets[i/256];
+}
 kernel void tile_status(device const ulong* counts [[buffer(0)]],
                         device const ulong* offsets [[buffer(1)]],
                         device RasterStatus& status [[buffer(2)]],
@@ -112,7 +138,7 @@ kernel void tile_instances(device const ProjectedSplat* splats [[buffer(0)]],
 // Full float32 positive depth is retained; equal depths preserve source order.
 struct SortParameters { uint blocks, shift; };
 kernel void tile_histogram(device const ulong* keys [[buffer(0)]],
-                           device ulong* histogram [[buffer(1)]],
+                           device uint* histogram [[buffer(1)]],
                            device const RasterStatus& status [[buffer(2)]],
                            constant SortParameters& p [[buffer(3)]],
                            uint group [[threadgroup_position_in_grid]],
@@ -139,7 +165,7 @@ kernel void tile_scatter(device const ulong* keys_in [[buffer(0)]],
                          device const uint* values_in [[buffer(1)]],
                          device ulong* keys_out [[buffer(2)]],
                          device uint* values_out [[buffer(3)]],
-                         device const ulong* histogram [[buffer(4)]],
+                         device const uint* histogram [[buffer(4)]],
                          device const RasterStatus& status [[buffer(5)]],
                          constant SortParameters& p [[buffer(6)]],
                          uint group [[threadgroup_position_in_grid]],

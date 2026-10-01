@@ -107,9 +107,13 @@ static void run(id<MTLDevice> device) {
     auto queue = [device newCommandQueue];
     constexpr uint32_t width = 37, height = 29;
     const simd_float4 bg{.15f, .1f, .2f, .4f};
-    RasterFrame frame(device, width, height, 4097, 4097 * 6);
+    // The reserved histogram exceeds 256*256 entries, exercising three
+    // scan levels even when the live frame is small or empty. Reuse it after
+    // a large stable sort to catch stale inactive histogram blocks.
+    constexpr uint32_t capacity = 131073;
+    RasterFrame frame(device, width, height, capacity, capacity * 6);
     std::mt19937 random(0x1939);
-    for (uint32_t count : {0u, 1u, 255u, 256u, 257u, 2047u, 2048u, 2049u, 4097u}) {
+    for (uint32_t count : {0u, 1u, 255u, 256u, 257u, 2047u, 2048u, 2049u, 4097u, capacity, 0u}) {
         std::vector<ProjectedSplat> splats(count);
         uint64_t expected_instances = 0;
         for (uint32_t i = 0; i < count; ++i) {
@@ -133,6 +137,8 @@ static void run(id<MTLDevice> device) {
                                                 options:MTLResourceStorageModeShared]
                            : nil;
         for (auto mode : {RasterMode::Gaussian, RasterMode::Points, RasterMode::Discs}) {
+            if (count > 4097 && mode != RasterMode::Gaussian)
+                continue;
             auto command = [queue commandBuffer];
             raster.encode(command, {input}, count, mode, bg, frame);
             require(frame.busy(), "Frame was not reserved");

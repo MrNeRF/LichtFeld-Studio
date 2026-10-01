@@ -84,6 +84,9 @@ Callers can precompile cached specializations with `prepare` before interaction.
 
 - GPU tile counts and hierarchical uint64 exclusive scan. SIMD reductions use
   16-bit limbs because MSL 2.4 does not provide ulong SIMD reductions.
+  Radix histograms use uint32 storage and SIMD scan after the exact uint64
+  admission check: their total cannot exceed the uint32 instance capacity.
+  This halves histogram storage without narrowing overflow reporting or keys.
 - Bounded instance generation, stable GPU radix sort by tile and full float32
   positive radial distance squared, tile ranges, front-to-back composition and transmittance exit.
   The radix sort reuses the algorithm in `training/kernels/metal/fast_raster.metal`,
@@ -221,8 +224,7 @@ budget, mip, orthographic, depth, export, portal/tone, Spark, selection and tran
 GPU tests and comparison binaries are restricted to macOS; CPU policy tests
 remain available to Windows/Linux CI without a GPU.
 
-Selection queries, the desktop UI, grid, gizmos and final composition
-still use Vulkan. This
+The desktop UI, grid, gizmos and final composition still use Vulkan. This
 backend is not yet a fully independent Metal desktop presentation/editor stack.
 Automatic continues to use Vulkan, and no global Vulkan shader is modified.
 
@@ -277,8 +279,7 @@ emitted on successful frames and route changes, including Automatic and fallback
 tensor selection is logged after startup preflight. Preferences reject unavailable
 CUDA/Metal choices with a localized dialog and preserve the previous settings.
 
-Remaining native work includes selection-query kernels and representative
-sustained performance across large scenes; projection, resident GPU traversal,
+Representative sustained performance across large scenes remains under evaluation; projection, resident GPU traversal,
 RAD page decoding/admission/eviction and adaptive frame reservations are native. RAD's signed-byte/page-frame layout must not be decoded as
 SplatData Q16. iOS can reuse projection/raster/scene contracts but needs direct
 Metal presentation and its own device/simulator verification.
@@ -309,6 +310,8 @@ desktop application are not validated by this target.
 reference for color, alpha, weighted/median/first depth and picking. It covers
 empty/reused frames, overflow recovery, partial tiles, equal-depth ties, and
 255/256/257 and 2047/2048/2049/4097 splats in Gaussian/point/disc modes.
+It also compares a 131073-splat stable sort with the CPU oracle, exercises three
+histogram scan levels and reuses that reservation for empty and smaller frames.
 `ViewerBackendSelectionContracts` exercises requested/default/availability/frame
 capability combinations independently of GPU hardware.
 
