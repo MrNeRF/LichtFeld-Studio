@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "vulkan_mesh_pass.hpp"
+#include <algorithm>
 
 #include "core/logger.hpp"
 #include "core/material.hpp"

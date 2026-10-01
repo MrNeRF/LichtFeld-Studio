@@ -20,6 +20,7 @@
 #include "scene/scene_manager.hpp"
 #include "tools/tool_base.hpp"
 #include "visualizer/visualizer.hpp"
+#include <algorithm>
 
 #include <cstdint>
 #include <cstdlib>

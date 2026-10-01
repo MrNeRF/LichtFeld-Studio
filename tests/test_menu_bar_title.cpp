@@ -8,6 +8,7 @@
 #include "python/python_runtime.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/visualizer.hpp"
+#include <algorithm>
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/ElementDocument.h>

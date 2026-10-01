@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include "gui/panel_layout.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/startup_overlay_geometry.hpp"
@@ -28,7 +30,7 @@ namespace lfs::vis::gui {
 
     class RmlUIManager;
 
-    class StartupOverlay {
+    class LFS_VIS_API StartupOverlay {
     public:
         void init(RmlUIManager* mgr);
         void shutdown();

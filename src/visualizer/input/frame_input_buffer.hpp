@@ -10,6 +10,7 @@
 #include <SDL3/SDL_video.h>
 #include <cassert>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>

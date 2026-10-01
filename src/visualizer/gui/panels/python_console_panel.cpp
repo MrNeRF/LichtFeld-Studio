@@ -18,6 +18,7 @@
 #include "gui/terminal/terminal_input.hpp"
 #include "gui/terminal/terminal_widget.hpp"
 #include "gui/utils/native_file_dialog.hpp"
+#include <algorithm>
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/ElementDocument.h>

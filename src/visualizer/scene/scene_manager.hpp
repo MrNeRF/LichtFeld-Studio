@@ -17,6 +17,7 @@
 #include "selection/selection_service.hpp"
 #include "training/components/ppisp.hpp"
 #include "training/components/ppisp_controller_pool.hpp"
+#include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <functional>

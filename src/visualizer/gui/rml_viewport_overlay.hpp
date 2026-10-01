@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/vram_hud_overlay.hpp"
@@ -33,7 +35,7 @@ namespace lfs::vis::gui {
 
     struct PanelInputState;
 
-    class RmlViewportOverlay {
+    class LFS_VIS_API RmlViewportOverlay {
     public:
         struct GTMetricsOverlayState {
             bool visible = false;

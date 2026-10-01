@@ -25,6 +25,7 @@
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <SDL3/SDL.h>
+#include <algorithm>
 #include <future>
 #include <gtest/gtest.h>
 #include <thread>
