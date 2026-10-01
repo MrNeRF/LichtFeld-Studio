@@ -124,10 +124,7 @@ namespace lfs::vis {
             }
             return input.mouse_wheel != 0.0f ||
                    !input.keys_pressed.empty() ||
-                   !input.keys_released.empty() ||
-                   !input.text_codepoints.empty() ||
-                   !input.text_inputs.empty() ||
-                   input.has_text_editing;
+                   !input.input_events.empty();
         }
 
         [[nodiscard]] bool mouseOverPanel(const PanelInputState& input,

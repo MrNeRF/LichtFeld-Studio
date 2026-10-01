@@ -3,8 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/rmlui/elements/terminal_element.hpp"
+#include "gui/terminal/terminal_widget.hpp"
 
 #include <RmlUi/Core/ElementDocument.h>
+#include <RmlUi/Core/Event.h>
 
 #include <algorithm>
 #include <format>
@@ -63,6 +65,14 @@ namespace lfs::vis::gui {
         SetProperty("color", "rgba(229,229,229,255)");
         SetProperty("font-family", "\"JetBrains Mono\"");
         SetProperty("white-space", "pre");
+        SetAttribute("tabindex", "0");
+        SetAttribute("data-text-input", "true");
+    }
+
+    void TerminalElement::ProcessDefaultAction(Rml::Event& event) {
+        Element::ProcessDefaultAction(event);
+        if (event.GetType() == "mousedown")
+            Focus();
     }
 
     bool TerminalElement::GetIntrinsicDimensions(Rml::Vector2f& dimensions, float& ratio) {

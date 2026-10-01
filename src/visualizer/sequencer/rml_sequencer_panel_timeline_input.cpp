@@ -7,6 +7,7 @@
 
 #include "core/events.hpp"
 #include "gui/film_strip_renderer.hpp"
+#include "gui/panel_input_utils.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
@@ -69,27 +70,8 @@ namespace lfs::vis {
 
         void forwardFocusedKeyboardInput(Rml::Context* const context,
                                          const PanelInputState& input) {
-            const int mods = gui::sdlModsToRml(input.key_ctrl, input.key_shift,
-                                               input.key_alt, input.key_super);
-            for (const int sc : input.keys_pressed) {
-                const auto rml_key = gui::sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
-                if (rml_key != Rml::Input::KI_UNKNOWN)
-                    context->ProcessKeyDown(rml_key, mods);
-            }
-            for (const int sc : input.keys_released) {
-                const auto rml_key = gui::sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
-                if (rml_key != Rml::Input::KI_UNKNOWN)
-                    context->ProcessKeyUp(rml_key, mods);
-            }
-            // SDL TextInput events are distinct from key events; without forwarding them,
-            // <input> fields cannot receive typed characters or IME composition.
-            if (!input.text_inputs.empty()) {
-                for (const auto& s : input.text_inputs)
-                    context->ProcessTextInput(s);
-            } else {
-                for (const std::uint32_t cp : input.text_codepoints)
-                    context->ProcessTextInput(static_cast<Rml::Character>(cp));
-            }
+            for (const auto& event : input.input_events)
+                gui::rml_input::processKeyboardEvent(*context, event);
         }
 
         struct ElementBounds {
@@ -245,6 +227,9 @@ namespace lfs::vis {
 
     void RmlSequencerPanel::forwardInput(const PanelInputState& input) {
         if (!rml_context_)
+            return;
+        if (rml_manager_ && rml_manager_->routeInput(rml_context_, gui::fromSequencerPanelInput(input),
+                                                     [this](const gui::PanelInputState& event) { forwardInput(gui::toSequencerPanelInput(event)); }))
             return;
         if (rml_manager_) {
             rml_manager_->trackContextFrame(rml_context_,

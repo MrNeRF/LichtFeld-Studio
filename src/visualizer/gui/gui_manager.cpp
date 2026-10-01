@@ -3488,15 +3488,9 @@ namespace lfs::vis::gui {
             input.key_alt = false;
             input.key_super = false;
             input.viewport_keyboard_focus = false;
+            input.input_events.clear();
             input.keys_pressed.clear();
-            input.keys_repeated.clear();
-            input.keys_released.clear();
-            input.text_codepoints.clear();
-            input.text_inputs.clear();
-            input.text_editing.clear();
-            input.text_editing_start = -1;
-            input.text_editing_length = -1;
-            input.has_text_editing = false;
+
             return input;
         }
 
@@ -3508,9 +3502,7 @@ namespace lfs::vis::gui {
         }
 
         [[nodiscard]] bool hasKeyboardActivity(const FrameInputBuffer& input) {
-            return !input.keys_pressed.empty() || !input.keys_repeated.empty() ||
-                   !input.keys_released.empty() || !input.text_codepoints.empty() ||
-                   !input.text_inputs.empty() || input.has_text_editing;
+            return !input.keys_pressed.empty() || !input.input_events.empty();
         }
 
         [[nodiscard]] bool hasMouseButtonDown(const FrameInputBuffer& input) {
@@ -3546,21 +3538,6 @@ namespace lfs::vis::gui {
                 focus.want_capture_keyboard = true;
             if (panel_hosts_want_text_input)
                 focus.want_text_input = true;
-        }
-
-        void syncWindowTextInput(SDL_Window* window) {
-            if (!window)
-                return;
-
-            const bool wants_text_input = guiFocusState().want_text_input;
-            const bool text_input_active = SDL_TextInputActive(window);
-            if (wants_text_input == text_input_active)
-                return;
-
-            if (wants_text_input)
-                SDL_StartTextInput(window);
-            else
-                SDL_StopTextInput(window);
         }
 
         SDL_Cursor* systemCursorForRequest(const RmlCursorRequest cursor) {
@@ -7229,7 +7206,7 @@ namespace lfs::vis::gui {
         // SDL key (handleKey) sees text focus even when GUI frames are idle.
         if (rmlui_manager_.wantsTextInput())
             guiFocusState().want_text_input = true;
-        syncWindowTextInput(viewer_->getWindow());
+        rmlui_manager_.syncTextInput();
 
         if (!vulkan_gui_)
             renderFloatingPanelDragCursor();
@@ -7985,8 +7962,9 @@ namespace lfs::vis::gui {
             sequencer_ui_.blocksKeyboard();
 
         return {
-            .has_keyboard_focus = focus.any_item_active || focus.want_capture_keyboard,
-            .text_input_active = focus.want_text_input,
+            .has_keyboard_focus = focus.any_item_active || focus.want_capture_keyboard ||
+                                  rmlui_manager_.wantsCaptureKeyboard(),
+            .text_input_active = focus.want_text_input || rmlui_manager_.wantsTextInput(),
             .modal_open = modal_open,
         };
     }
@@ -8376,6 +8354,13 @@ namespace lfs::vis::gui {
 
     void GuiManager::showWindow(const std::string& name, bool show) {
         window_states_[name] = show;
+    }
+
+    void GuiManager::prepareInput() {
+        if (python::has_python_modals())
+            python::draw_python_modals(viewer_ && viewer_->getSceneManager() ? &viewer_->getSceneManager()->getScene() : nullptr);
+        if (rml_modal_overlay_)
+            rml_modal_overlay_->activatePending();
     }
 
     void GuiManager::enqueueModal(lfs::core::ModalRequest request) {

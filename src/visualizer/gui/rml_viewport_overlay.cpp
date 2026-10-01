@@ -1044,6 +1044,8 @@ namespace lfs::vis::gui {
     }
 
     void RmlViewportOverlay::processInput(const PanelInputState& input) {
+        if (rml_manager_ && rml_context_ && rml_manager_->routeInput(rml_context_, input, [this](const PanelInputState& event) { processInput(event); }))
+            return;
         wants_input_ = false;
         if (!rml_context_ || !document_)
             return;
@@ -1080,11 +1082,9 @@ namespace lfs::vis::gui {
         const bool pointer_drag =
             input.mouse_down[0] || input.mouse_down[1] || input.mouse_down[2];
         const bool keyboard_event =
-            !input.keys_pressed.empty() || !input.keys_released.empty() ||
-            !input.keys_repeated.empty() || !input.text_codepoints.empty() ||
-            !input.text_inputs.empty() || input.has_text_editing;
-        const bool vram_drag_capture = vram_hud_ && vram_hud_->isCapturingPointer();
-        const bool toolbar_drag_capture = toolbar_drag_active_;
+            !input.keys_pressed.empty() || !input.input_events.empty();
+        bool vram_drag_capture = vram_hud_ && vram_hud_->isCapturingPointer();
+        bool toolbar_drag_capture = toolbar_drag_active_;
         auto* const focused_before = rml_context_->GetFocusElement();
         const bool focused_text_target = rml_input::wantsTextInput(focused_before);
         if (mouse_pos_valid_ && !mouse_moved && !pointer_event && !pointer_drag &&
@@ -1244,37 +1244,17 @@ namespace lfs::vis::gui {
         if (auto* focused = rml_context_->GetFocusElement()) {
             if (publishOverlayTextFocus(focused)) {
                 wants_input_ = true;
-                // Numpad digit and period scancodes must be suppressed from
-                // ProcessKeyDown / ProcessKeyUp when a text input is focused,
-                // otherwise RmlUi treats them as navigation keys (Home, End,
-                // arrows, etc.). The actual digit text arrives via
-                // ProcessTextInput below. This mirrors the fix in
-                // rml_panel_host.cpp for the sidebar text inputs.
-                auto isNumpadTextKey = [](int sc) {
-                    return (sc >= SDL_SCANCODE_KP_1 && sc <= SDL_SCANCODE_KP_0) ||
-                           sc == SDL_SCANCODE_KP_PERIOD;
-                };
-                for (const int sc : input.keys_pressed) {
-                    if (isNumpadTextKey(sc))
-                        continue;
-                    const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
-                    if (rml_key != Rml::Input::KI_UNKNOWN) {
+                auto* const handler = rml_manager_ ? rml_manager_->getTextInputHandler() : nullptr;
+                for (const auto& event : input.input_events) {
+                    const bool composing = handler && handler->isComposing();
+                    if (event.kind == FrameInputEventKind::KeyDown &&
+                        event.scancode == SDL_SCANCODE_ESCAPE &&
+                        rml_input::shouldCancelOnEscape(rml_context_->GetFocusElement(), composing)) {
+                        if (rml_input::cancelFocusedElement(*rml_context_))
+                            markRenderNeeded(RenderReason::Keyboard);
+                    } else if (rml_input::processKeyboardEvent(*rml_context_, event, handler)) {
                         markRenderNeeded(RenderReason::Keyboard);
-                        rml_context_->ProcessKeyDown(rml_key, mods);
                     }
-                }
-                for (const int sc : input.keys_released) {
-                    if (isNumpadTextKey(sc))
-                        continue;
-                    const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
-                    if (rml_key != Rml::Input::KI_UNKNOWN) {
-                        markRenderNeeded(RenderReason::Keyboard);
-                        rml_context_->ProcessKeyUp(rml_key, mods);
-                    }
-                }
-                for (uint32_t cp : input.text_codepoints) {
-                    markRenderNeeded(RenderReason::Keyboard);
-                    rml_context_->ProcessTextInput(static_cast<Rml::Character>(cp));
                 }
             }
         }

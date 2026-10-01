@@ -1623,7 +1623,7 @@ namespace lfs::vis {
     }
 
     void InputController::handleKey(const int physical_key, const int logical_key,
-                                    const int scancode, int action, [[maybe_unused]] int mods) {
+                                    const int scancode, int action, int mods, const bool owned_release, const bool gui_consumed) {
         // Track modifier keys (always, even if GUI has focus)
         if (physical_key == input::KEY_LEFT_CONTROL || physical_key == input::KEY_RIGHT_CONTROL) {
             key_ctrl_pressed_ = (action != input::ACTION_RELEASE);
@@ -1631,12 +1631,18 @@ namespace lfs::vis {
         if (physical_key == input::KEY_LEFT_ALT || physical_key == input::KEY_RIGHT_ALT) {
             key_alt_pressed_ = (action != input::ACTION_RELEASE);
         }
+        const bool wants_text_input = input_router_
+                                          ? input_router_->isTextInputActive()
+                                          : gui::guiFocusState().want_text_input;
         const bool is_modifier_key =
             physical_key == input::KEY_LEFT_SHIFT || physical_key == input::KEY_RIGHT_SHIFT ||
             physical_key == input::KEY_LEFT_CONTROL || physical_key == input::KEY_RIGHT_CONTROL ||
             physical_key == input::KEY_LEFT_ALT || physical_key == input::KEY_RIGHT_ALT ||
             physical_key == input::KEY_LEFT_SUPER || physical_key == input::KEY_RIGHT_SUPER;
-        if (!is_modifier_key && logical_key != input::KEY_UNKNOWN) {
+        if (wants_text_input && !bindings_.isCapturing()) {
+            // Text keys must not become viewport mouse/scroll chords either.
+            held_keys_.clear();
+        } else if (!is_modifier_key && logical_key != input::KEY_UNKNOWN) {
             if (action == input::ACTION_RELEASE) {
                 std::erase(held_keys_, logical_key);
             } else if (!std::ranges::contains(held_keys_, logical_key)) {
@@ -1669,9 +1675,19 @@ namespace lfs::vis {
         const bool is_mcp_runtime_action =
             bound_action == input::Action::TOGGLE_MCP_SERVER ||
             bound_action == input::Action::TOGGLE_MCP_BINDING;
-        if (lfs::python::has_keyboard_capture_request() && !is_mcp_runtime_action) {
+        if (lfs::python::has_keyboard_capture_request() && !is_mcp_runtime_action && !owned_release) {
             return;
         }
+
+        const bool project_save = logical_key == input::KEY_S && mods == input::KEYMOD_CTRL;
+        if (wants_text_input && !is_mcp_runtime_action && !owned_release) {
+            if (project_save && action == input::ACTION_PRESS)
+                cmd::ProjectSave{}.emit();
+            return;
+        }
+
+        if (gui_consumed && !is_mcp_runtime_action && !owned_release)
+            return;
 
         // Dispatch to modal operators first - if consumed, don't continue
         float mx_f, my_f;
@@ -1701,9 +1717,6 @@ namespace lfs::vis {
             }
         }
 
-        const bool wants_text_input = input_router_
-                                          ? input_router_->isTextInputActive()
-                                          : gui::guiFocusState().want_text_input;
         const bool viewport_keyboard_focus = input_router_
                                                  ? input_router_->isViewportKeyboardFocused()
                                                  : false;

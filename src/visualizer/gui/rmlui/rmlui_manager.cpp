@@ -7,6 +7,8 @@
 #include "core/environment.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "gui/gui_focus_state.hpp"
+#include "gui/panel_input_utils.hpp"
 #include "gui/rmlui/elements/chromaticity_element.hpp"
 #include "gui/rmlui/elements/color_picker_element.hpp"
 #include "gui/rmlui/elements/crf_curve_element.hpp"
@@ -91,10 +93,10 @@ namespace lfs::vis::gui {
         }
     } // namespace
 
-    RmlUIManager::RmlUIManager() = default;
+    RmlUIManager::RmlUIManager(SDL_Window* window) : window_(window) {}
 
     RmlUIManager::~RmlUIManager() {
-        if (initialized_)
+        if (initialized_ || !input_handlers_.empty())
             shutdown();
     }
 
@@ -192,7 +194,7 @@ namespace lfs::vis::gui {
         system_interface_ = std::make_unique<RmlSystemInterface>(window);
         owned_render_interface_ = std::move(render_interface);
         vulkan_render_interface_ = vulkan_render_interface;
-        text_input_handler_ = std::make_unique<RmlTextInputHandler>();
+        text_input_handler_ = std::make_unique<RmlTextInputHandler>([this] { return accepts_text_activation_; });
 
         Rml::SetSystemInterface(system_interface_.get());
         Rml::SetRenderInterface(owned_render_interface_.get());
@@ -443,6 +445,11 @@ namespace lfs::vis::gui {
 
     void RmlUIManager::shutdown() {
         cancelDragPayload();
+        for (const auto& [context, _] : input_handlers_)
+            context->GetRootElement()->RemoveEventListener("focus", this, true);
+        input_handlers_.clear();
+        key_owners_.clear();
+        keyboard_context_ = nullptr;
         if (!initialized_)
             return;
 
@@ -543,6 +550,13 @@ namespace lfs::vis::gui {
                 system_interface_->releaseContext(context);
             if (auto fn = lfs::python::get_rml_context_destroy_handler())
                 fn(context);
+            context->GetRootElement()->RemoveEventListener("focus", this, true);
+            input_handlers_.erase(context);
+            if (keyboard_context_ == context)
+                keyboard_context_ = nullptr;
+            for (auto& [_, owner] : key_owners_)
+                if (owner.context == context)
+                    owner.context = nullptr;
             context_names_.erase(context);
             tracked_context_frames_.erase(context);
             previous_context_frames_.erase(context);
@@ -564,6 +578,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlUIManager::beginFrameCursorTracking() {
+        ++input_frame_;
         if (system_interface_)
             system_interface_->beginFrame();
         previous_context_frames_ = tracked_context_frames_;
@@ -580,6 +595,8 @@ namespace lfs::vis::gui {
         if (!context)
             return;
 
+        if (auto it = input_handlers_.find(const_cast<Rml::Context*>(context)); it != input_handlers_.end())
+            it->second.frame = input_frame_;
         const auto dimensions = context->GetDimensions();
         auto& frame = tracked_context_frames_[context];
         const bool needs_passive_frames = frame.needs_passive_mouse_move_frames;
@@ -741,34 +758,273 @@ namespace lfs::vis::gui {
         return owner && owner->context != context;
     }
 
-    bool RmlUIManager::wantsCaptureKeyboard() const {
-        for (const auto& [_, context] : contexts_) {
-            if (!context)
-                continue;
-            if (rml_input::hasFocusedKeyboardTarget(context->GetFocusElement()))
-                return true;
+    bool RmlUIManager::focusContext(Rml::Context* context, const bool activate) {
+        const auto current = input_handlers_.find(keyboard_context_);
+        if (!activate && context != keyboard_context_ && current != input_handlers_.end() &&
+            current->second.enabled && current->second.exclusive &&
+            (current->second.persistent || current->second.frame == input_frame_))
+            return false;
+        keyboard_context_ = context;
+        for (const auto& [other, _] : input_handlers_) {
+            if (other != context) {
+                if (auto* focused = other->GetFocusElement())
+                    focused->Blur();
+            }
         }
-        return false;
+        return true;
+    }
+
+    void RmlUIManager::ProcessEvent(Rml::Event& event) {
+        auto* element = event.GetTargetElement();
+        if (event.GetType() == "focus" && rml_input::hasFocusedKeyboardTarget(element)) {
+            accepts_text_activation_ = focusContext(element->GetContext());
+            if (!accepts_text_activation_)
+                rejected_focus_.push_back(element->GetObserverPtr());
+        }
+    }
+
+    bool RmlUIManager::registerInput(Rml::Context* context, const PanelInputState& input,
+                                     std::function<void(const PanelInputState&)> handler, const bool exclusive) {
+        if (dispatching_input_)
+            return false;
+        if (!input_handlers_.contains(context))
+            context->GetRootElement()->AddEventListener("focus", this, true);
+        auto& registered = input_handlers_[context];
+        auto& passive = registered.input;
+        passive.mouse_x = input.mouse_x;
+        passive.mouse_y = input.mouse_y;
+        passive.screen_x = input.screen_x;
+        passive.screen_y = input.screen_y;
+        passive.screen_w = input.screen_w;
+        passive.screen_h = input.screen_h;
+        passive.bg_draw_list = input.bg_draw_list;
+        passive.fg_draw_list = input.fg_draw_list;
+        std::copy(std::begin(input.mouse_down), std::end(input.mouse_down), passive.mouse_down);
+        passive.key_ctrl = input.key_ctrl;
+        passive.key_shift = input.key_shift;
+        passive.key_alt = input.key_alt;
+        passive.key_super = input.key_super;
+        registered.callback = std::make_shared<std::function<void(const PanelInputState&)>>(handler);
+        registered.frame = input_frame_;
+        registered.exclusive = exclusive;
+        registered.enabled = true;
+        dispatching_input_ = true;
+        handler(passive);
+        dispatching_input_ = false;
+        if (exclusive || (!keyboard_context_ && rml_input::hasFocusedKeyboardTarget(context->GetFocusElement())))
+            focusContext(context);
+        return true;
+    }
+
+    void RmlUIManager::activateInput(Rml::Context* context, std::function<void(const PanelInputState&)> handler) {
+        if (!input_handlers_.contains(context))
+            context->GetRootElement()->AddEventListener("focus", this, true);
+        auto& registered = input_handlers_[context];
+        registered.callback = std::make_shared<std::function<void(const PanelInputState&)>>(std::move(handler));
+        registered.frame = input_frame_;
+        registered.exclusive = true;
+        registered.persistent = true;
+        registered.enabled = true;
+        focusContext(context, true);
+        syncTextInput();
+    }
+
+    void RmlUIManager::deactivateInput(Rml::Context* context, const bool keep_pointer_input) {
+        if (auto it = input_handlers_.find(context); it != input_handlers_.end()) {
+            it->second.enabled = keep_pointer_input;
+            it->second.persistent = false;
+            it->second.exclusive = false;
+        }
+        if (context) {
+            if (auto* focused = context->GetFocusElement())
+                focused->Blur();
+        }
+        if (keyboard_context_ == context)
+            keyboard_context_ = nullptr;
+        syncTextInput();
+    }
+
+    void RmlUIManager::syncTextInput() {
+        // Focus notifications precede RmlUi's assignment of its focus element.
+        // Finish rejected transitions after that assignment, preserving the
+        // exclusive owner's text-input handler and composition throughout.
+        while (!rejected_focus_.empty()) {
+            auto element = rejected_focus_.back();
+            rejected_focus_.pop_back();
+            if (element && element->GetContext() != keyboard_context_)
+                element->Blur();
+        }
+        const auto it = input_handlers_.find(keyboard_context_);
+        const bool active = it != input_handlers_.end() && it->second.enabled && (it->second.persistent || it->second.frame == input_frame_);
+        auto* focused = active ? keyboard_context_->GetFocusElement() : nullptr;
+        auto& focus = guiFocusState();
+        focus.want_text_input = rml_input::wantsTextInput(focused);
+        focus.any_item_active = rml_input::hasFocusedKeyboardTarget(focused);
+        focus.want_capture_keyboard = (active && it->second.exclusive) || rml_input::hasFocusedKeyboardTarget(focused);
+        const bool collect_text = focus.want_text_input;
+        if (window_ && SDL_TextInputActive(window_) != collect_text) {
+            if (std::getenv("LFS_TRACE_INPUT"))
+                LOG_INFO("INPUT SDL text state -> {} owner={}", collect_text,
+                         active ? keyboard_context_->GetName() : "none");
+            if (collect_text)
+                SDL_StartTextInput(window_);
+            else
+                SDL_StopTextInput(window_);
+        }
+    }
+
+    RmlUIManager::InputDispatchResult RmlUIManager::dispatchInputEvent(const SDL_Event& event) {
+        InputDispatchResult result;
+        const bool key = event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP;
+        const bool text = event.type == SDL_EVENT_TEXT_INPUT || event.type == SDL_EVENT_TEXT_EDITING;
+        const bool pointer = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP ||
+                             event.type == SDL_EVENT_MOUSE_MOTION || event.type == SDL_EVENT_MOUSE_WHEEL;
+        if (!key && !text && !pointer) {
+            if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST)
+                key_owners_.clear();
+            syncTextInput();
+            return result;
+        }
+        dispatch_frame_.beginFrame();
+        dispatch_frame_.processEvent(event);
+        auto& single = dispatch_input_;
+        buildPanelInputFromSDL(dispatch_frame_, single);
+        InputEventDispatch dispatch;
+        for (auto& input : single.input_events)
+            input.dispatch = &dispatch;
+        if (pointer) {
+            if (event.type == SDL_EVENT_MOUSE_MOTION) {
+                single.mouse_x = event.motion.x;
+                single.mouse_y = event.motion.y;
+            } else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
+                single.mouse_x = event.wheel.mouse_x;
+                single.mouse_y = event.wheel.mouse_y;
+            } else {
+                single.mouse_x = event.button.x;
+                single.mouse_y = event.button.y;
+                for (auto& button : single.mouse_button_events) {
+                    input_mouse_down_[button.button] = button.down;
+                }
+            }
+        }
+        auto invoke = [&](Rml::Context* context) {
+            const auto it = input_handlers_.find(context);
+            if (it == input_handlers_.end() || !it->second.enabled)
+                return;
+            auto& input = it->second.input;
+            input.input_events = single.input_events;
+            input.keys_pressed = single.keys_pressed;
+            input.mouse_button_events = single.mouse_button_events;
+            if (pointer) {
+                input.mouse_x = single.mouse_x;
+                input.mouse_y = single.mouse_y;
+                std::copy(std::begin(single.mouse_clicked), std::end(single.mouse_clicked), input.mouse_clicked);
+                std::copy(std::begin(single.mouse_released), std::end(single.mouse_released), input.mouse_released);
+                std::copy(std::begin(input_mouse_down_), std::end(input_mouse_down_), input.mouse_down);
+                input.mouse_wheel = single.mouse_wheel;
+                input.mouse_wheel_x = single.mouse_wheel_x;
+            }
+            const auto mods = key ? event.key.mod : SDL_GetModState();
+            input.key_ctrl = mods & SDL_KMOD_CTRL;
+            input.key_shift = mods & SDL_KMOD_SHIFT;
+            input.key_alt = mods & SDL_KMOD_ALT;
+            input.key_super = mods & SDL_KMOD_GUI;
+            auto callback = it->second.callback;
+            dispatching_input_ = true;
+            (*callback)(input);
+            dispatching_input_ = false;
+            if (!input_handlers_.contains(context))
+                return;
+            input.input_events.clear();
+            input.keys_pressed.clear();
+            input.mouse_button_events.clear();
+            std::fill(std::begin(input.mouse_clicked), std::end(input.mouse_clicked), false);
+            std::fill(std::begin(input.mouse_released), std::end(input.mouse_released), false);
+            input.mouse_wheel = input.mouse_wheel_x = 0;
+        };
+        if (pointer) {
+            auto& contexts = pointer_contexts_;
+            contexts.clear();
+            // Render-time pointer masking must not suppress a later native press.
+            // Each context hit-tests the current event, including outside-click blur.
+            for (const auto& [context, handler] : input_handlers_)
+                if (handler.enabled && (handler.persistent || handler.frame == input_frame_))
+                    contexts.push_back(context);
+            // Underlays see an outside click before the target context focuses.
+            std::ranges::sort(contexts, [&](auto* a, auto* b) {
+                return tracked_context_frames_[a].order < tracked_context_frames_[b].order;
+            });
+            const auto owner = input_handlers_.find(keyboard_context_);
+            if (owner != input_handlers_.end() && owner->second.enabled && owner->second.exclusive) {
+                invoke(keyboard_context_);
+            } else {
+                for (auto* context : contexts) {
+                    invoke(context);
+                    const auto current = input_handlers_.find(keyboard_context_);
+                    if (current != input_handlers_.end() && current->second.enabled && current->second.exclusive)
+                        break;
+                }
+            }
+        } else {
+            auto* context = keyboard_context_;
+            auto it = input_handlers_.find(context);
+            if (it == input_handlers_.end() || !it->second.enabled || (!it->second.persistent && it->second.frame != input_frame_) ||
+                (!it->second.exclusive && !rml_input::hasFocusedKeyboardTarget(context->GetFocusElement())))
+                context = nullptr;
+            auto* focused = context ? context->GetFocusElement() : nullptr;
+            auto pressed_element = focused ? focused->GetObserverPtr() : Rml::ObserverPtr<Rml::Element>();
+            const bool text_owner = rml_input::wantsTextInput(focused);
+            const bool exclusive = context && it->second.exclusive;
+            bool gui_release = false;
+            if (event.type == SDL_EVENT_KEY_UP) {
+                const auto owner = key_owners_.find(event.key.scancode);
+                if (owner != key_owners_.end()) {
+                    context = owner->second.context;
+                    gui_release = owner->second.gui;
+                    result.owned_release = !gui_release;
+                    result.consumed = owner->second.gui && (!context || !owner->second.element);
+                    if (context && owner->second.element && owner->second.element.get() != context->GetFocusElement()) {
+                        Rml::Dictionary parameters;
+                        parameters["key_identifier"] = sdlScancodeToRml(event.key.scancode);
+                        parameters["ctrl_key"] = bool(event.key.mod & SDL_KMOD_CTRL);
+                        parameters["shift_key"] = bool(event.key.mod & SDL_KMOD_SHIFT);
+                        parameters["alt_key"] = bool(event.key.mod & SDL_KMOD_ALT);
+                        parameters["meta_key"] = bool(event.key.mod & SDL_KMOD_GUI);
+                        owner->second.element->DispatchEvent("keyup", parameters);
+                        result.consumed = true;
+                    }
+                    key_owners_.erase(owner);
+                }
+            }
+            if (context && !result.consumed) {
+                if (std::getenv("LFS_TRACE_INPUT") && text)
+                    LOG_INFO("INPUT dispatch owner={} text={}", context->GetName(), single.input_events.front().text);
+                invoke(context);
+                result.consumed = gui_release || text_owner || exclusive || dispatch.consumed ||
+                                  !input_handlers_.contains(context) || context->GetFocusElement() != pressed_element.get();
+            }
+            if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat)
+                key_owners_[event.key.scancode] = {result.consumed && input_handlers_.contains(context) ? context : nullptr,
+                                                   pressed_element, result.consumed};
+        }
+        syncTextInput();
+        return result;
+    }
+
+    bool RmlUIManager::wantsCaptureKeyboard() const {
+        const auto it = input_handlers_.find(keyboard_context_);
+        return it != input_handlers_.end() && it->second.enabled && (it->second.persistent || it->second.frame == input_frame_) &&
+               (it->second.exclusive || rml_input::hasFocusedKeyboardTarget(keyboard_context_->GetFocusElement()));
     }
 
     bool RmlUIManager::wantsTextInput() const {
-        for (const auto& [_, context] : contexts_) {
-            if (!context)
-                continue;
-            if (rml_input::wantsTextInput(context->GetFocusElement()))
-                return true;
-        }
-        return false;
+        const auto it = input_handlers_.find(keyboard_context_);
+        return it != input_handlers_.end() && it->second.enabled && (it->second.persistent || it->second.frame == input_frame_) &&
+               rml_input::wantsTextInput(keyboard_context_->GetFocusElement());
     }
 
     bool RmlUIManager::anyItemActive() const {
-        for (const auto& [_, context] : contexts_) {
-            if (!context)
-                continue;
-            if (rml_input::hasFocusedKeyboardTarget(context->GetFocusElement()))
-                return true;
-        }
-        return false;
+        return wantsCaptureKeyboard();
     }
 
     bool RmlUIManager::refreshLocalizedDocuments() {

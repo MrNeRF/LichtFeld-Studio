@@ -159,7 +159,7 @@ namespace lfs::vis {
         void handleMouseMove(double x, double y);
         void handleScroll(double xoff, double yoff);
         void handleKey(int key, int action, int mods);
-        void handleKey(int physical_key, int logical_key, int scancode, int action, int mods);
+        void handleKey(int physical_key, int logical_key, int scancode, int action, int mods, bool owned_release = false, bool gui_consumed = false);
         void handleFileDrop(const std::vector<std::string>& paths);
         void onWindowFocusLost();
         bool focusSelection();

@@ -7,6 +7,7 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "gui/gui_manager.hpp"
 #include "input/input_controller.hpp"
 #include "input/sdl_key_mapping.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
@@ -176,6 +177,7 @@ namespace lfs::vis {
             switch (event.type) {
             case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
             case SDL_EVENT_WINDOW_FOCUS_LOST:
+            case SDL_EVENT_WINDOW_FOCUS_GAINED:
             case SDL_EVENT_WINDOW_RESIZED:
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
             case SDL_EVENT_WINDOW_MINIMIZED:
@@ -197,6 +199,8 @@ namespace lfs::vis {
                 return event.key.windowID == target_window_id;
             case SDL_EVENT_TEXT_INPUT:
                 return event.text.windowID == target_window_id;
+            case SDL_EVENT_TEXT_EDITING:
+                return event.edit.windowID == target_window_id;
             case SDL_EVENT_DROP_FILE:
             case SDL_EVENT_DROP_COMPLETE:
                 return event.drop.windowID == target_window_id;
@@ -518,6 +522,7 @@ namespace lfs::vis {
     }
 
     WindowManager::~WindowManager() {
+        SDL_RemoveEventWatch(watchEvent, this);
 #if defined(__linux__)
         if (g_x11_error_owner == this) {
             g_x11_error_owner = nullptr;
@@ -774,6 +779,7 @@ namespace lfs::vis {
             SDL_Quit();
             return false;
         }
+        SDL_AddEventWatch(watchEvent, this);
         LOG_INFO("Vulkan window context initialized");
         return true;
     }
@@ -851,16 +857,49 @@ namespace lfs::vis {
         return std::chrono::steady_clock::now() - last_window_size_change_time_ <= max_age;
     }
 
+    bool WindowManager::watchEvent(void* userdata, SDL_Event* event) {
+        // Native events are translated on the SDL thread. Focus must be applied
+        // before SDL translates the next key into text; worker events stay queued.
+        if (!SDL_IsMainThread())
+            return true;
+        auto& self = *static_cast<WindowManager*>(userdata);
+        if (!self.pumping_events_ || self.watching_event_)
+            return true;
+        self.watching_event_ = true;
+        self.dispatched_events_.emplace_back(event->type, event->common.timestamp);
+        self.dispatchQueuedEvent(*event);
+        self.watching_event_ = false;
+        return true;
+    }
+
+    void WindowManager::dispatchQueuedEvent(const SDL_Event& event) {
+        const SDL_WindowID id = window_ ? SDL_GetWindowID(window_) : 0;
+        if (auto* gui = services().guiOrNull())
+            gui->prepareInput();
+        if (!shouldSuppressGuiRoutingForResize(event, id))
+            frame_input_.processEvent(event, id);
+        processEvent(event);
+        if (auto* gui = services().guiOrNull())
+            gui->prepareInput();
+    }
+
     void WindowManager::pollEvents() {
         frame_input_.beginFrame();
-        const SDL_WindowID main_window_id = window_ ? SDL_GetWindowID(window_) : 0;
         SDL_Event event;
+        // Drain previously queued events before pumping new native events.
+        while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_EVENT_FIRST, SDL_EVENT_LAST) > 0)
+            dispatchQueuedEvent(event);
+        pumping_events_ = true;
         while (SDL_PollEvent(&event)) {
-            const bool suppress_gui_route = shouldSuppressGuiRoutingForResize(event, main_window_id);
-            if (!suppress_gui_route)
-                frame_input_.processEvent(event, main_window_id);
-            processEvent(event);
+            const auto token = std::pair(event.type, event.common.timestamp);
+            const auto it = std::find(dispatched_events_.begin(), dispatched_events_.end(), token);
+            if (it != dispatched_events_.end())
+                dispatched_events_.erase(it);
+            else
+                dispatchQueuedEvent(event);
         }
+        pumping_events_ = false;
+        dispatched_events_.clear();
         if (isManualResizeActive())
             updateManualResize();
         finishTitlebarDragIfReleased();
@@ -871,7 +910,6 @@ namespace lfs::vis {
 
     void WindowManager::waitEvents(double timeout_seconds) {
         frame_input_.beginFrame();
-        const SDL_WindowID main_window_id = window_ ? SDL_GetWindowID(window_) : 0;
         SDL_Event event;
         if (vulkan_context_ &&
             vulkan_context_->hasPendingSwapchainResize()) {
@@ -884,18 +922,21 @@ namespace lfs::vis {
         if (isManualResizeActive())
             timeout_seconds = std::min(timeout_seconds, 1.0 / 60.0);
         const int timeout_ms = static_cast<int>(timeout_seconds * 1000.0);
+        while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_EVENT_FIRST, SDL_EVENT_LAST) > 0)
+            dispatchQueuedEvent(event);
+        pumping_events_ = true;
         if (SDL_WaitEventTimeout(&event, timeout_ms)) {
-            bool suppress_gui_route = shouldSuppressGuiRoutingForResize(event, main_window_id);
-            if (!suppress_gui_route)
-                frame_input_.processEvent(event, main_window_id);
-            processEvent(event);
-            while (SDL_PollEvent(&event)) {
-                suppress_gui_route = shouldSuppressGuiRoutingForResize(event, main_window_id);
-                if (!suppress_gui_route)
-                    frame_input_.processEvent(event, main_window_id);
-                processEvent(event);
-            }
+            do {
+                const auto token = std::pair(event.type, event.common.timestamp);
+                const auto it = std::find(dispatched_events_.begin(), dispatched_events_.end(), token);
+                if (it != dispatched_events_.end())
+                    dispatched_events_.erase(it);
+                else
+                    dispatchQueuedEvent(event);
+            } while (SDL_PollEvent(&event));
         }
+        pumping_events_ = false;
+        dispatched_events_.clear();
         if (isManualResizeActive())
             updateManualResize();
         finishTitlebarDragIfReleased();
@@ -920,7 +961,9 @@ namespace lfs::vis {
         // Wake SDL_WaitEventTimeout so queued viewer-thread work is serviced promptly.
         SDL_Event event{};
         event.type = SDL_EVENT_USER;
-        SDL_PushEvent(&event);
+        // Watches run under SDL's watcher mutex. A worker may hold the Python
+        // lock while waking us, so enqueue wakeups without invoking watches.
+        SDL_PeepEvents(&event, 1, SDL_ADDEVENT, 0, 0);
     }
 
     bool WindowManager::shouldSuppressGuiRoutingForResize(const SDL_Event& event,
@@ -955,6 +998,17 @@ namespace lfs::vis {
 
     void WindowManager::processEvent(const SDL_Event& event) {
         const SDL_WindowID main_window_id = window_ ? SDL_GetWindowID(window_) : 0;
+
+        if (std::getenv("LFS_TRACE_INPUT") && (event.type == SDL_EVENT_TEXT_INPUT || event.type == SDL_EVENT_KEY_DOWN))
+            LOG_INFO("INPUT arrival type={} key={} text={} active={}", event.type,
+                     event.type == SDL_EVENT_KEY_DOWN ? int(event.key.scancode) : 0,
+                     event.type == SDL_EVENT_TEXT_INPUT ? event.text.text : "", SDL_TextInputActive(window_));
+
+        gui::RmlUIManager::InputDispatchResult dispatched;
+        if (eventTargetsWindow(event, main_window_id) && !shouldSuppressGuiRoutingForResize(event, main_window_id)) {
+            if (auto* gui = services().guiOrNull())
+                dispatched = gui->dispatchInputEvent(event);
+        }
 
         switch (event.type) {
         case SDL_EVENT_QUIT:
@@ -1139,7 +1193,7 @@ namespace lfs::vis {
                                    : input::ACTION_RELEASE;
             const int mods = input::sdlModsToAppMods(event.key.mod);
             input_controller_->handleKey(
-                physical_key, logical_key, static_cast<int>(event.key.scancode), action, mods);
+                physical_key, logical_key, static_cast<int>(event.key.scancode), action, mods, dispatched.owned_release, dispatched.consumed);
             break;
         }
 

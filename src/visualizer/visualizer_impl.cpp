@@ -2333,9 +2333,7 @@ namespace lfs::vis {
         if (!input.had_event || !input.mouse_moved || input.window_event ||
             input.mouse_wheel != 0.0f || input.mouse_down[0] || input.mouse_down[1] ||
             input.mouse_down[2] || !input.mouse_button_events.empty() ||
-            !input.keys_pressed.empty() || !input.keys_repeated.empty() ||
-            !input.keys_released.empty() || !input.text_codepoints.empty() ||
-            !input.text_inputs.empty() || input.has_text_editing)
+            !input.keys_pressed.empty() || !input.input_events.empty())
             return false;
 
         return !gui_manager_->passiveMouseMoveNeedsRender(input.mouse_x, input.mouse_y);
@@ -2355,11 +2353,7 @@ namespace lfs::vis {
                                         input.mouse_clicked[2] || input.mouse_released[0] ||
                                         input.mouse_released[1] || input.mouse_released[2];
         const bool keyboard_event = !input.keys_pressed.empty() ||
-                                    !input.keys_repeated.empty() ||
-                                    !input.keys_released.empty() ||
-                                    !input.text_codepoints.empty() ||
-                                    !input.text_inputs.empty() ||
-                                    input.has_text_editing;
+                                    !input.input_events.empty();
         if (mouse_button_event || keyboard_event || input.mouse_wheel != 0.0f)
             return true;
 

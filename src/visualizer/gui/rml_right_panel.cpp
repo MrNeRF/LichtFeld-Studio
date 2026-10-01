@@ -411,6 +411,8 @@ namespace lfs::vis::gui {
     }
 
     void RmlRightPanel::processInput(const RightPanelLayout& layout, const PanelInputState& input) {
+        if (rml_manager_ && rml_context_ && rml_manager_->routeInput(rml_context_, input, [this, layout](const PanelInputState& event) { processInput(layout, event); }))
+            return;
         const CursorRequest previous_cursor_request = cursor_request_;
         wants_input_ = false;
         wants_keyboard_ = false;
@@ -439,9 +441,7 @@ namespace lfs::vis::gui {
         const bool pointer_down =
             input.mouse_down[0] || input.mouse_down[1] || input.mouse_down[2];
         const bool keyboard_event =
-            !input.keys_pressed.empty() || !input.keys_released.empty() ||
-            !input.keys_repeated.empty() || !input.text_codepoints.empty() ||
-            !input.text_inputs.empty() || input.has_text_editing;
+            !input.keys_pressed.empty() || !input.input_events.empty();
         auto* const focused_before = rml_context_->GetFocusElement();
         if (pointer_event || keyboard_event)
             last_blurred_focus_ = nullptr;
@@ -594,20 +594,8 @@ namespace lfs::vis::gui {
 
         if (rml_input::hasFocusedKeyboardTarget(rml_context_->GetFocusElement()) &&
             !input.viewport_keyboard_focus) {
-            for (const int sc : input.keys_pressed) {
-                const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
-                if (rml_key != Rml::Input::KI_UNKNOWN) {
-                    rml_context_->ProcessKeyDown(rml_key, mods);
-                    input_dirty_ = true;
-                }
-            }
-            for (const int sc : input.keys_released) {
-                const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
-                if (rml_key != Rml::Input::KI_UNKNOWN) {
-                    rml_context_->ProcessKeyUp(rml_key, mods);
-                    input_dirty_ = true;
-                }
-            }
+            for (const auto& event : input.input_events)
+                input_dirty_ |= rml_input::processKeyboardEvent(*rml_context_, event, rml_manager_->getTextInputHandler());
         }
 
         auto* focused = rml_context_->GetFocusElement();

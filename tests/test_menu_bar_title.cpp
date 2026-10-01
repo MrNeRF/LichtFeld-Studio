@@ -142,7 +142,8 @@ namespace {
             resize(1600);
         }
         void TearDown() override {
-            // RmlMenuBar owns no context in this fixture; remove it before Rml shutdown.
+            // Release input registrations before destroying the externally owned context.
+            manager_.shutdown();
             ASSERT_TRUE(Rml::RemoveContext("menu_bar_title_test"));
         }
         Rml::Element* el(const char* id) { return document_->GetElementById(id); }
