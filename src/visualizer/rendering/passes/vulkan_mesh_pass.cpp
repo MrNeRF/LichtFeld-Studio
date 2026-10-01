@@ -1971,6 +1971,11 @@ namespace lfs::vis {
         impl_->prepare(context, params);
     }
 
+    void VulkanMeshPass::discardImport(uint64_t mesh_id) {
+        if (impl_ && impl_->assets)
+            impl_->assets->discardImportMesh(mesh_id);
+    }
+
     void VulkanMeshPass::record(VkCommandBuffer command_buffer, VkRect2D viewport_rect,
                                 const VulkanMeshPassParams& params) {
         if (!impl_)

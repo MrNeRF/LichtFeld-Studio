@@ -16,8 +16,10 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/camera_thumbnail_policy.hpp"
 #include "gui/frustum_overlay_key.hpp"
+#include "gui/import_error.hpp"
 #include "ipc/view_context.hpp"
 #include "preferences.hpp"
+#include "window/vulkan_result.hpp"
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include "core/tensor.hpp"
@@ -63,6 +65,7 @@
 #include "core/events.hpp"
 #include "core/parameters.hpp"
 #include "core/scene.hpp"
+#include "gui/error_surface_types.hpp"
 #include "operator/ops/depth_window_ops.hpp"
 #include "python/gil.hpp"
 #include "python/package_manager.hpp"
@@ -3601,15 +3604,9 @@ namespace lfs::vis::gui {
             input.key_alt = false;
             input.key_super = false;
             input.viewport_keyboard_focus = false;
+            input.input_events.clear();
             input.keys_pressed.clear();
-            input.keys_repeated.clear();
-            input.keys_released.clear();
-            input.text_codepoints.clear();
-            input.text_inputs.clear();
-            input.text_editing.clear();
-            input.text_editing_start = -1;
-            input.text_editing_length = -1;
-            input.has_text_editing = false;
+
             return input;
         }
 
@@ -3621,9 +3618,7 @@ namespace lfs::vis::gui {
         }
 
         [[nodiscard]] bool hasKeyboardActivity(const FrameInputBuffer& input) {
-            return !input.keys_pressed.empty() || !input.keys_repeated.empty() ||
-                   !input.keys_released.empty() || !input.text_codepoints.empty() ||
-                   !input.text_inputs.empty() || input.has_text_editing;
+            return !input.keys_pressed.empty() || !input.input_events.empty();
         }
 
         [[nodiscard]] bool hasMouseButtonDown(const FrameInputBuffer& input) {
@@ -3643,21 +3638,6 @@ namespace lfs::vis::gui {
                 focus.want_capture_keyboard = true;
             if (panel_hosts_want_text_input)
                 focus.want_text_input = true;
-        }
-
-        void syncWindowTextInput(SDL_Window* window) {
-            if (!window)
-                return;
-
-            const bool wants_text_input = guiFocusState().want_text_input;
-            const bool text_input_active = SDL_TextInputActive(window);
-            if (wants_text_input == text_input_active)
-                return;
-
-            if (wants_text_input)
-                SDL_StartTextInput(window);
-            else
-                SDL_StopTextInput(window);
         }
 
         SDL_Cursor* systemCursorForRequest(const RmlCursorRequest cursor) {
@@ -4664,6 +4644,12 @@ namespace lfs::vis::gui {
             .screens = &viewer_->screens(),
             .rml = &rmlui_manager_,
             .context_menu = global_context_menu_.get(),
+            .pointer_available = [this](const float x, const float y) {
+                if (PanelRegistry::instance().isPositionOverFloatingPanel(x, y))
+                    return false;
+                const auto* window = viewer_->getWindowManager();
+                return screen_host_.gestureActive() || !window ||
+                       window->inputRouter().state().pointer_capture != input::InputTarget::Viewport; },
             .screen_changed =
                 [this]() {
                     if (auto* const rendering = viewer_->getRenderingManager())
@@ -6280,7 +6266,6 @@ namespace lfs::vis::gui {
         // Check for async completions that must be applied on the main thread.
         if (async_tasks_.hasPendingMainThreadCompletions()) {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.async_poll", 0.25);
-            async_tasks_.pollImportCompletion();
             async_tasks_.pollMesh2SplatCompletion();
             async_tasks_.pollSplatSimplifyCompletion();
         }
@@ -6826,10 +6811,11 @@ namespace lfs::vis::gui {
                                                                            .pending_modal = modal_overlay_pending,
                                                                            .context_menu = context_menu_open,
                                                                            .menu_pointer = menu_blocks_underlay_pointer,
-                                                                           .floating_panel = has_floating_panels &&
-                                                                                             reg.isPositionOverFloatingPanel(sdl_input.mouse_x, sdl_input.mouse_y),
-                                                                           .area_chrome = !ui_hidden_ && screen_host_.blocksPress(static_cast<float>(sdl_input.mouse_x), static_cast<float>(sdl_input.mouse_y)),
-                                                                       });
+                                                                       },
+                                               [this](float x, float y) {
+                                                   return PanelRegistry::instance().isPositionOverFloatingPanel(x, y) ||
+                                                          (!ui_hidden_ && screen_host_.blocksPress(x, y));
+                                               });
         }
         const bool has_python_overlay_hooks =
             !startup_plugin_preload_blocking_python &&
@@ -7098,7 +7084,7 @@ namespace lfs::vis::gui {
         // SDL key (handleKey) sees text focus even when GUI frames are idle.
         if (rmlui_manager_.wantsTextInput())
             guiFocusState().want_text_input = true;
-        syncWindowTextInput(viewer_->getWindow());
+        rmlui_manager_.syncTextInput();
 
         if (!vulkan_gui_)
             renderFloatingPanelDragCursor();
@@ -7887,10 +7873,80 @@ namespace lfs::vis::gui {
             sequencer_ui_.blocksKeyboard();
 
         return {
-            .has_keyboard_focus = focus.any_item_active || focus.want_capture_keyboard,
-            .text_input_active = focus.want_text_input,
+            .has_keyboard_focus = focus.any_item_active || focus.want_capture_keyboard ||
+                                  rmlui_manager_.wantsCaptureKeyboard(),
+            .text_input_active = focus.want_text_input || rmlui_manager_.wantsTextInput(),
             .modal_open = modal_open,
         };
+    }
+
+    void GuiManager::discardImportMesh(uint64_t mesh_id) {
+        for (auto& [id, pass] : vulkan_viewport_passes_)
+            pass->discardImportMesh(mesh_id);
+    }
+
+    void GuiManager::beginImportRenderCheck() {
+        endImportRenderCheck();
+        // Include uploads attempted by normal GUI frames between attachment and
+        // offscreen validation. The capture ends with this attachment, so old
+        // fallback errors cannot reject a later, unrelated import.
+        import_error_capture_ = std::make_unique<VulkanImportErrorScope>(import_render_error_);
+    }
+
+    void GuiManager::endImportRenderCheck() {
+        import_error_capture_.reset();
+        import_render_error_.clear();
+    }
+
+    std::optional<std::string> GuiManager::pollImportRenderCheck(const core::Uuid& provisional_node) {
+        if (!import_render_error_.empty())
+            return import_render_error_;
+
+        auto* rendering = viewer_->getRenderingManager();
+        auto* context = viewer_->getWindowManager()->getVulkanContext();
+        try {
+            const auto view_id = viewer_->screens().screen().activeView().value;
+            const RenderingManager::RenderContext preparation{
+                .view = view_id,
+                .viewport = viewer_->getViewport(),
+                .settings = rendering->getSettings(),
+                .scene_manager = viewer_->getSceneManager(),
+                .vulkan_context = context,
+                .provisional_import_node = provisional_node};
+            auto result = rendering->pollImportRenderCheck(preparation, [&] {
+                auto& view = rendering->viewState(view_id);
+                std::lock_guard lock(view.vulkan_mesh_frame_mutex_);
+                const auto frame = view.vulkan_mesh_frame_;
+                VulkanViewportPassParams params;
+                params.mesh_view_projection = frame.view_projection;
+                params.mesh_camera_position = frame.camera_position;
+                params.mesh_items = frame.items;
+                params.mesh_panels = frame.panels;
+                params.environment = frame.environment;
+                params.depth_blit = frame.depth_blit;
+                params.split_view = frame.split_view;
+                auto& resident_pass = vulkan_viewport_passes_[view_id];
+                std::unique_ptr<VulkanViewportPass> validation_pass;
+                if (!viewport_gpu_assets_)
+                    viewport_gpu_assets_ = std::make_shared<SharedViewportGpuAssets>();
+                if (!resident_pass)
+                    resident_pass = std::make_unique<VulkanViewportPass>(viewport_gpu_assets_);
+                if (!rendering->importUsesCombinedModel())
+                    validation_pass = std::make_unique<VulkanViewportPass>();
+                auto* pass = validation_pass ? validation_pass.get() : resident_pass.get();
+                view.viewport_interop_.prepareFrame(*context, false);
+                for (size_t slot = 0; slot < context->framesInFlight(); ++slot) {
+                    params.frame_slot = slot;
+                    view.viewport_interop_.bindViewportParams(params, slot, false, false);
+                    pass->prepareImport(*context, params, validation_pass ? resident_pass.get() : nullptr);
+                }
+            });
+            if (!import_render_error_.empty())
+                return import_render_error_;
+            return result;
+        } catch (const std::exception& error) {
+            return error.what();
+        }
     }
 
     void GuiManager::setupEventHandlers() {
@@ -8069,6 +8125,31 @@ namespace lfs::vis::gui {
             if (e.success) {
                 focus_panel_name_ = "Training";
             }
+        });
+
+        state::SplatBatchLoadFailed::when([this](const auto& e) {
+            lfs::core::ModalRequest req;
+            req.title = lfs::event::formatLocalized(
+                importFailureTitleKey(lfs::event::LocalizationManager::getInstance().getCurrentLanguage(), e.failures.size()),
+                e.failures.size());
+            std::string body;
+            for (const auto& [path, reason] : e.failures) {
+                body += std::format("<div class=\"content-row error-text\">{}: {}</div>",
+                                    escapeRmlText(lfs::core::path_to_utf8(path.filename())),
+                                    escapeRmlText(isImportOutOfMemory(reason) ? LOC("runtime.import_out_of_memory") : reason));
+            }
+            const auto* const manager = viewer_->getSceneManager();
+            const bool has_retained_models = manager && std::ranges::any_of(manager->getScene().getNodes(), [](const auto* node) {
+                                                 return node->type == core::NodeType::SPLAT || node->type == core::NodeType::MESH;
+                                             });
+            if (e.loaded_count > 0 || has_retained_models)
+                body += std::format("<div class=\"content-row\">{}</div>",
+                                    escapeRmlText(LOC("runtime.import_batch_kept")));
+            req.body_rml = std::move(body);
+            req.style = lfs::core::ModalStyle::Error;
+            req.width_dp = 640;
+            req.buttons = {{"OK", "primary"}};
+            enqueueModal(std::move(req));
         });
 
         state::SplatFileLoadFailed::when([this](const auto& e) {
@@ -8256,6 +8337,13 @@ namespace lfs::vis::gui {
             cached = SDL_CreateSystemCursor(system);
         if (cached)
             setCursorIfChanged(cached);
+    }
+
+    void GuiManager::prepareInput() {
+        if (python::has_python_modals())
+            python::draw_python_modals(viewer_ && viewer_->getSceneManager() ? &viewer_->getSceneManager()->getScene() : nullptr);
+        if (rml_modal_overlay_)
+            rml_modal_overlay_->activatePending();
     }
 
     void GuiManager::enqueueModal(lfs::core::ModalRequest request) {

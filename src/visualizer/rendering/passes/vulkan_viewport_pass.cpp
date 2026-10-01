@@ -3217,6 +3217,41 @@ namespace lfs::vis {
         return impl_->init(context);
     }
 
+    void VulkanViewportPass::discardImportMesh(uint64_t mesh_id) {
+        if (impl_)
+            impl_->mesh_pass.discardImport(mesh_id);
+    }
+
+    void VulkanViewportPass::prepareImport(VulkanContext& context, const VulkanViewportPassParams& params,
+                                           VulkanViewportPass* resident_mesh_resources) {
+        std::string error;
+        VulkanImportErrorScope capture(error);
+        if (!init(context) || (resident_mesh_resources && !resident_mesh_resources->init(context)))
+            throw std::runtime_error(error.empty() ? "Could not prepare the viewport" : error);
+        if (!context.waitForSubmittedFrames())
+            throw std::runtime_error("Could not finish the previous viewport work");
+        {
+            const auto slot = params.frame_slot;
+            const VulkanMeshPassParams mesh_params{
+                .view_projection = params.mesh_view_projection,
+                .camera_position = params.mesh_camera_position,
+                .items = params.mesh_items,
+                .frame_slot = slot,
+                .draw_group_count = std::max<size_t>(1, params.mesh_panels.size())};
+            // Preparation does not write per-draw presentation uniforms. Reuse the
+            // resident geometry, material textures and shadows without copying
+            // them into the temporary pass. Missing uploads are retained there.
+            auto& mesh_owner = resident_mesh_resources ? *resident_mesh_resources : *this;
+            mesh_owner.impl_->mesh_pass.prepare(context, mesh_params);
+            impl_->environment_pass.prepare(params.environment, slot);
+            impl_->depth_blit_pass.prepare(params.depth_blit, slot);
+            impl_->split_view_pass.prepare(params.split_view, slot);
+            if (!error.empty())
+                throw std::runtime_error(error);
+            LOG_DEBUG("Prepared import viewport resources: meshes={}, frame_slot={}", params.mesh_items.size(), slot);
+        }
+    }
+
     void VulkanViewportPass::prepare(VulkanContext& context, const VulkanViewportPassParams& params) {
         if (!impl_) {
             impl_ = std::make_unique<Impl>();

@@ -121,7 +121,12 @@ namespace lfs::vis::gui {
         // Shared production routing boundary: input is the original frame,
         // never a masked copy with sentinel coordinates or removed events.
         LFS_VIS_API void processInput(const PanelInputState& input,
-                                      const ViewportOverlayInputBlockers& blockers = {});
+                                      const ViewportOverlayInputBlockers& blockers = {},
+                                      std::function<bool(float, float)> pointer_blocker = {});
+        void processInput(const PanelInputState& input, std::function<bool(float, float)> pointer_blocker) {
+            processInput(input, {}, std::move(pointer_blocker));
+        }
+
         bool wantsInput() const { return wants_input_; }
         [[nodiscard]] bool needsAnimationFrame() const {
             return render_needed_ || document_sync_dirty_ || animation_active_ || tooltip_.revealDue() ||

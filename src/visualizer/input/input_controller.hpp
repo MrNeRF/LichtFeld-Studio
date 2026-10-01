@@ -177,7 +177,7 @@ namespace lfs::vis {
         // A finger touched (down) or left the trackpad.
         void handleTrackpadTouch(bool down);
         void handleKey(int key, int action, int mods);
-        void handleKey(int physical_key, int logical_key, int scancode, int action, int mods);
+        void handleKey(int physical_key, int logical_key, int scancode, int action, int mods, bool owned_release = false, bool gui_consumed = false);
         void handleFileDrop(const std::vector<std::string>& paths);
         void onWindowFocusLost();
         bool focusSelection();

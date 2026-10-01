@@ -108,6 +108,8 @@ namespace lfs::vis {
             const ViewportRegion* viewport_region = nullptr;
             SceneManager* scene_manager = nullptr;
             VulkanContext* vulkan_context = nullptr;
+            bool preparing_import = false;
+            core::Uuid provisional_import_node;
         };
 
         struct VulkanFrameResult {
@@ -148,6 +150,10 @@ namespace lfs::vis {
         void initialize();
         bool isInitialized() const { return initialized_; }
         void releaseSceneModelResources();
+        void beginImportRenderCheck(uint64_t scene_generation);
+        bool importUsesCombinedModel() const;
+        std::optional<std::string> pollImportRenderCheck(const RenderContext& context, const std::function<void()>& prepare_viewport = {});
+        void cancelImportRenderCheck();
 
         // Main render function
         VulkanFrameResult renderVulkanFrame(const RenderContext& context);
@@ -869,6 +875,13 @@ namespace lfs::vis {
 
         RenderTargetRegistry render_targets_;
         RenderTargetId preview_render_target_ = render_targets_.allocate();
+        std::optional<std::string> prepareImportRenderCheck(const RenderContext& context, const std::function<void()>& prepare_viewport);
+        void noteImportRenderFrame(uint64_t scene_generation, std::string error = {});
+        bool import_render_check_ = false;
+        bool import_render_preparing_ = false;
+        uint64_t import_render_generation_ = 0;
+        unsigned import_render_frames_ = 0;
+        std::optional<std::string> import_render_result_;
         std::unique_ptr<VksplatViewportRenderer> vksplat_viewport_renderer_;
         std::unique_ptr<PointCloudVulkanRenderer> point_cloud_vulkan_renderer_;
         std::unique_ptr<SparkLodController> lod_controller_;

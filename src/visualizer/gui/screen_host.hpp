@@ -68,6 +68,7 @@ namespace lfs::vis::gui {
             screen::ScreenService* screens = nullptr;
             RmlUIManager* rml = nullptr;
             GlobalContextMenu* context_menu = nullptr;
+            std::function<bool(float, float)> pointer_available;
             // The screen's structure changed (areas, editors, active view).
             std::function<void()> screen_changed;
             // Runs a view command such as "view.frame_all" on a 3D view.
@@ -113,7 +114,13 @@ namespace lfs::vis::gui {
         // hovering there still reaches the viewport.
         [[nodiscard]] bool blocksPress(float x, float y) const;
         [[nodiscard]] bool cornerGestureAt(float x, float y) const;
+        [[nodiscard]] bool resizeGestureAt(float x, float y) const;
         [[nodiscard]] bool gestureActive() const { return gestures_.active(); }
+        void cancelInput() {
+            gestures_.cancel();
+            live_capture_area_ = {};
+            overlay_dirty_ = true;
+        }
         [[nodiscard]] bool needsAnimationFrame() const;
         [[nodiscard]] std::string animationDemandDescription() const;
         [[nodiscard]] screen::GestureCursor cursor() const { return cursor_; }

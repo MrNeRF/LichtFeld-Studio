@@ -52,6 +52,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         test_screen_layout.cpp
         test_screen.cpp
         test_view_render_state.cpp
+        test_python_editor_input.cpp
         test_startup_overlay_geometry.cpp
         test_trackpad_navigation.cpp
         test_vram_hud_geometry.cpp
@@ -77,6 +78,7 @@ if(BUILD_VISUALIZER_TESTS OR BUILD_TESTS)
         lfs_core
         lfs_python_runtime
         GTest::gtest_main
+        Zep::Zep
     )
     if(APPLE)
         # On macOS the visualizer resolves CPython from the host process. The app
@@ -822,6 +824,8 @@ set(TEST_FILES
     test_theme_registry.cpp
     test_viewport.cpp
     test_input_controller_focus.cpp
+    test_ordered_input_dispatch.cpp
+    test_python_editor_input.cpp
     test_input_controller_dataset_load.cpp
     test_selection_service_interactions.cpp
     test_selection_group_mask.cpp
@@ -901,6 +905,7 @@ set(TEST_FILES
     test_status_bar_fit.cpp
     test_training_progress_publisher.cpp
     test_startup_overlay_geometry.cpp
+    test_vram_hud_geometry.cpp
     test_menu_bar_title.cpp
     test_status_bar_mining.cpp
     test_rotated_sh_correctness.cpp
@@ -1121,6 +1126,8 @@ target_link_libraries(lichtfeld_tests PRIVATE
     ${LFS_TEST_INTERNAL_LINK_LIBS}
 
     # External libraries
+    Zep::Zep
+    vterm
     GTest::gtest
     nanobind-static
     ${TORCH_LIBRARIES}
@@ -1563,6 +1570,9 @@ foreach(TEST_TARGET lichtfeld_tests)
         COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
             "${PROJECT_SOURCE_DIR}/src/visualizer/gui/resources/viewer"
             "$<TARGET_FILE_DIR:${TEST_TARGET}>/resources/viewer"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+            "${PROJECT_SOURCE_DIR}/src/visualizer/gui/rmlui/resources"
+            "$<TARGET_FILE_DIR:${TEST_TARGET}>/resources/assets/rmlui"
     )
 endforeach()
 

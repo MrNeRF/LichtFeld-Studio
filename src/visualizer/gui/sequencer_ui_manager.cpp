@@ -530,16 +530,9 @@ namespace lfs::vis::gui {
         overlay_input.key_shift = (sdl_buf.key_mods & SDL_KMOD_SHIFT) != 0;
         overlay_input.key_alt = (sdl_buf.key_mods & SDL_KMOD_ALT) != 0;
         overlay_input.key_super = (sdl_buf.key_mods & SDL_KMOD_GUI) != 0;
+        overlay_input.input_events = sdl_buf.input_events;
         for (auto sc : sdl_buf.keys_pressed)
             overlay_input.keys_pressed.push_back(static_cast<int>(sc));
-        for (auto sc : sdl_buf.keys_released)
-            overlay_input.keys_released.push_back(static_cast<int>(sc));
-        overlay_input.text_codepoints = sdl_buf.text_codepoints;
-        overlay_input.text_inputs = sdl_buf.text_inputs;
-        overlay_input.text_editing = sdl_buf.text_editing;
-        overlay_input.text_editing_start = sdl_buf.text_editing_start;
-        overlay_input.text_editing_length = sdl_buf.text_editing_length;
-        overlay_input.has_text_editing = sdl_buf.has_text_editing;
 
         renderKeyframeEditOverlay(viewport);
         overlay_->processInput(overlay_input);

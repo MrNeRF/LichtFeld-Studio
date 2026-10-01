@@ -2148,6 +2148,11 @@ def on_show_load_file_confirmation(callback: object) -> None:
     Register callback for a load-file wipe confirmation (receives paths: list[str], is_dataset: bool, replace: bool)
     """
 
+def on_show_load_file_confirmation_with_batch(callback: object) -> None:
+    """
+    Register a load-file confirmation callback with batch provenance (receives paths: list[str], is_dataset: bool, replace: bool, user_batch: bool). Replaces the callback registered through either load-file confirmation API.
+    """
+
 def on_stop_training_confirmation(callback: object) -> None:
     """Register callback for a stop-training project-switch decision"""
 

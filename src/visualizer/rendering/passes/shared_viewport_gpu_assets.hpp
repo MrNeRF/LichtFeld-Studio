@@ -68,6 +68,8 @@ namespace lfs::vis {
         // exist — never a per-frame global wait.
         void prepareMeshes(const std::vector<VulkanMeshDrawItem>& items, std::size_t frame_slot);
 
+        void discardImportMesh(std::uint64_t mesh_id);
+
         // Immutable metadata for record-time binding. Valid until the next
         // prepareMeshes eviction of this id (not evicted while used this epoch).
         [[nodiscard]] const SharedMeshDrawAsset* findMesh(std::uint64_t mesh_id) const;

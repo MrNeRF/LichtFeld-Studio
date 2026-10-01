@@ -60,7 +60,8 @@ namespace lfs::core::sh_value_quant {
         std::size_t n_dst,
         std::size_t n_src_primitives,
         std::uint32_t coeffs_rest,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        bool match_cpu_rounding = false);
 
     /// Gather-decode selected source prims into canonical [n_dst, rest, 3].
     void decode_shN_u16_gathered_to_canonical(

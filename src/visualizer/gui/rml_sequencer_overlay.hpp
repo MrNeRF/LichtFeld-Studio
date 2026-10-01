@@ -99,6 +99,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] std::optional<EditResult> consumeFocalEdit();
 
     private:
+        void syncInputOwnership();
         void initContext();
         [[nodiscard]] bool ensureContextReady();
         void syncTheme();

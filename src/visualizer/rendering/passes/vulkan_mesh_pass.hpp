@@ -91,6 +91,7 @@ namespace lfs::vis {
                     VkRect2D viewport_rect,
                     const VulkanMeshPassParams& params);
 
+        void discardImport(uint64_t mesh_id);
         void shutdown();
 
     private:

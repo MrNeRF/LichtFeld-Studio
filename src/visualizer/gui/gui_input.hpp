@@ -41,14 +41,7 @@ namespace lfs::vis::gui {
         bool key_super = false;
         bool viewport_keyboard_focus = false;
         std::vector<int> keys_pressed;
-        std::vector<int> keys_repeated;
-        std::vector<int> keys_released;
-        std::vector<uint32_t> text_codepoints;
-        std::vector<std::string> text_inputs;
-        std::string text_editing;
-        int text_editing_start = -1;
-        int text_editing_length = -1;
-        bool has_text_editing = false;
+        std::vector<FrameInputEvent> input_events;
         void* bg_draw_list = nullptr;
         void* fg_draw_list = nullptr;
 

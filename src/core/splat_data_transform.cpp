@@ -913,7 +913,8 @@ namespace lfs::core {
                   .count = count,
                   .source_rest = rest,
                   .destination_rest = destination_rest,
-                  .destination_offset = destination_offset},
+                  .destination_offset = destination_offset,
+                  .match_cpu_rounding = true},
                  nullptr, model.shN_value_quantized() ? &model.shN_value_bounds() : nullptr);
     }
 

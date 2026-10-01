@@ -1902,6 +1902,13 @@ namespace lfs::vis {
         // NOTE: ui::RenderSettingsChanged, ui::CameraMove, state::SceneChanged,
         // ui::PointCloudModeChanged are handled by RenderingManager::setupEventHandlers()
 
+        state::CombinedModelBuildReady::when([this](const auto& event) {
+            postWork({.run = [this, scene = event.scene] {
+                if (scene_manager_ && scene == &scene_manager_->getScene() && rendering_manager_)
+                    rendering_manager_->markDirty(DirtyFlag::ALL);
+            }});
+        });
+
         // Window redraw requests on scene/mode changes
         state::SceneChanged::when([this](const auto& event) {
             python::set_scene_mutation_flags(event.mutation_flags);
@@ -2172,6 +2179,10 @@ namespace lfs::vis {
         update_work_processed_ = false;
         window_manager_->updateWindowSize();
 
+        // Completion and allocation validation must also run while minimized.
+        if (gui_manager_ && gui_manager_->asyncTasks().hasPendingMainThreadCompletions())
+            gui_manager_->asyncTasks().pollImportCompletion();
+
         motion_only_wake_skipped_ = isMotionOnlyWake();
         if (motion_only_wake_skipped_)
             return;
@@ -2359,9 +2370,7 @@ namespace lfs::vis {
         if (!input.had_event || !input.mouse_moved || input.window_event ||
             input.mouse_wheel != 0.0f || input.mouse_down[0] || input.mouse_down[1] ||
             input.mouse_down[2] || !input.mouse_button_events.empty() ||
-            !input.keys_pressed.empty() || !input.keys_repeated.empty() ||
-            !input.keys_released.empty() || !input.text_codepoints.empty() ||
-            !input.text_inputs.empty() || input.has_text_editing)
+            !input.keys_pressed.empty() || !input.input_events.empty())
             return false;
 
         return !gui_manager_->passiveMouseMoveNeedsRender(input.mouse_x, input.mouse_y);
@@ -2381,11 +2390,7 @@ namespace lfs::vis {
                                         input.mouse_clicked[2] || input.mouse_released[0] ||
                                         input.mouse_released[1] || input.mouse_released[2];
         const bool keyboard_event = !input.keys_pressed.empty() ||
-                                    !input.keys_repeated.empty() ||
-                                    !input.keys_released.empty() ||
-                                    !input.text_codepoints.empty() ||
-                                    !input.text_inputs.empty() ||
-                                    input.has_text_editing;
+                                    !input.input_events.empty();
         if (mouse_button_event || keyboard_event || input.mouse_wheel != 0.0f)
             return true;
 
@@ -3206,6 +3211,11 @@ namespace lfs::vis {
             return std::unexpected("No data loader available");
         }
 
+        if (scene_manager_ && scene_manager_->canClearScene()) {
+            data_loader_->cancelPendingImports();
+            if (gui_manager_)
+                gui_manager_->asyncTasks().cancelImport(false);
+        }
         if (data_loader_->clearScene()) {
             return {};
         }
@@ -3363,9 +3373,10 @@ namespace lfs::vis {
             return false;
         }
         lfs::core::events::cmd::ShowLoadFileConfirmation{
-            .paths = {cmd.path},
+            .paths = cmd.paths.empty() ? std::vector<std::filesystem::path>{cmd.path} : cmd.paths,
             .is_dataset = cmd.is_dataset,
-            .replace = cmd.replace}
+            .replace = cmd.replace,
+            .user_batch = cmd.user_batch}
             .emit();
         return true;
     }
@@ -3426,6 +3437,8 @@ namespace lfs::vis {
             return;
         }
         if (gui_manager_) {
+            if (data_loader_)
+                data_loader_->cancelPendingImports();
             gui_manager_->asyncTasks().cancelImport(false);
         }
 
@@ -3556,6 +3569,8 @@ namespace lfs::vis {
             return preflight;
         }
         if (gui_manager_) {
+            if (data_loader_)
+                data_loader_->cancelPendingImports();
             gui_manager_->asyncTasks().cancelImport(false);
         }
         pending_view_paths_.clear();
@@ -3674,10 +3689,6 @@ namespace lfs::vis {
             });
             return;
         }
-        if (gui_manager_) {
-            gui_manager_->asyncTasks().cancelImport(false);
-        }
-
         if (shouldDeferProjectSwitchForTraining()) {
             pending_training_action_ =
                 PendingTrainingAction::OpenProject;

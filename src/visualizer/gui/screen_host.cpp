@@ -355,6 +355,11 @@ namespace lfs::vis::gui {
                                                      gestures_.metrics().corner_size, x, y);
     }
 
+    bool ScreenHost::resizeGestureAt(const float x, const float y) const {
+        return gestures_.active() || cornerGestureAt(x, y) ||
+               (!geometry_.maximized.valid() && geometry_.dividerAt(x, y, gestures_.metrics().divider_slop));
+    }
+
     bool ScreenHost::isEditorVisible(const std::string_view editor) const {
         return std::any_of(frames_.begin(), frames_.end(), [editor](const AreaFrame& f) { return f.editor == editor; });
     }
@@ -502,6 +507,13 @@ namespace lfs::vis::gui {
     }
 
     void ScreenHost::processInput(const PanelInputState& input, const bool pointer_free) {
+        if (services_.rml && chrome_context_ &&
+            services_.rml->routeInput(chrome_context_, input, [this, pointer_free](const PanelInputState& event) {
+                processInput(event, services_.pointer_available
+                                        ? services_.pointer_available(event.mouse_x, event.mouse_y)
+                                        : pointer_free);
+            }))
+            return;
         const float x = input.mouse_x;
         const float y = input.mouse_y;
         const bool moved = x != last_mouse_x_ || y != last_mouse_y_;
@@ -671,8 +683,7 @@ namespace lfs::vis::gui {
             services_.screens->screenEpoch() != laid_out_epoch_)
             layout(work_, ui_scale_);
 
-        const bool keyboard_activity = !input.keys_pressed.empty() || !input.keys_released.empty() ||
-                                       !input.text_inputs.empty() || !input.text_codepoints.empty();
+        const bool keyboard_activity = !input.keys_pressed.empty() || !input.input_events.empty();
 
         rebuildChrome();
         if (chrome_context_ && chrome_document_ && services_.rml && !work_.empty()) {
