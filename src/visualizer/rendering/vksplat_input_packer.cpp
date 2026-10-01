@@ -10,6 +10,34 @@
 #include <cstdint>
 
 namespace lfs::vis::vksplat {
+    lfs::core::Tensor prepareDeletedMask(
+        lfs::core::TensorVulkanInterop& interop,
+        const lfs::core::Tensor& input,
+        const lfs::core::GpuBackend backend,
+        const bool upload_requested,
+        lfs::core::Tensor& slot_copy) {
+        using namespace lfs::core;
+        GpuBackendScope backend_scope(backend);
+        const auto n = input.numel();
+        const auto padded_bytes = (n + 3u) & ~std::size_t{3u};
+        Tensor source = gpu_backend_of(input) == backend ? input : input.to(backend);
+        // Backend identity and word alignment do not imply Vulkan visibility:
+        // training can supply an ordinary CUDA allocation for an aligned mask.
+        if (padded_bytes != n || !interop.buffer(source)) {
+            const bool fresh = !slot_copy.is_valid() || slot_copy.numel() != padded_bytes ||
+                               gpu_backend_of(slot_copy) != backend;
+            if (fresh) {
+                slot_copy = interop.empty({padded_bytes}, DataType::Bool, backend);
+                slot_copy.zero_();
+            }
+            if (fresh || upload_requested)
+                slot_copy.slice(0, 0, n).copy_(source);
+            return slot_copy;
+        }
+        slot_copy = {};
+        return source;
+    }
+
     namespace {
         using lfs::core::DataType;
         using lfs::core::Tensor;
