@@ -362,3 +362,29 @@ copy. A failed encode discards the command; a failed submitted write quarantines
 the tensor context before its wait is released, preventing partial output from
 becoming valid data. Reader contracts cover sliced outputs, immediate dependent
 tensor operations, concurrent source mutation and encode failure recovery.
+
+
+### Native editor selection
+
+Brush, rectangle, polygon and ring queries now run on Metal and return a native
+Bool tensor directly to the shared editor. Polygon coverage uses one GPU pass
+per clipped screen region, caches the first 2048 vertices and handles larger
+gestures from device memory. Ring picking resolves nearest depth and source-ID
+ties on the GPU; only an explicitly requested picked ID requires a scalar wait.
+Object visibility, affine transforms, soft deletion, GUT/panorama projection,
+mip compensation and packed IEEE half geometry follow the editor query contract.
+Queries retain the shared viewport's projection coordinates; raster export tiles
+have a separate camera/origin contract. RAD queries cover the resident preview
+prefix exposed by SplatData, as the current shared editor does; this does not
+enable editing every nonresident leaf of an out-of-core file.
+
+`MetalViewerSelectionContracts` checks independent geometry and polygon coverage,
+including a 4099-vertex gesture and deterministic ring ties.
+`MetalViewerSelectionViewportContracts` validates the native desktop adapter,
+immediate tensor consumers and deletion/undo with Metal validation enabled.
+`MacViewerParity_selectionQuery` compares 160 FP32/FP16, camera, affine, visibility,
+shape and mip cases against Vulkan. The Vulkan selection binding requires expanded
+Float32 geometry, so FP16 comparison uses the same decoded values in the reference.
+The parity comparison runs without Metal's shader validator because the existing
+MoltenVK polygon pipeline exceeds its threadgroup-memory validation limit; native
+query contracts keep full API and shader validation. No Vulkan shaders are changed.

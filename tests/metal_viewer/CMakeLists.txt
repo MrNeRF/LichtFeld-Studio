@@ -33,12 +33,13 @@ function(lfs_add_metal_contract target source test_name)
     target_compile_options(${target} PRIVATE -fobjc-arc)
     target_compile_definitions(${target} PRIVATE LFS_METAL_TEST_REQUIRE_DEVICE=$<BOOL:${LFS_METAL_TEST_REQUIRE_DEVICE}>)
     set_target_properties(${target} PROPERTIES OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED YES)
-    add_test(NAME ${test_name} COMMAND ${target})
+    add_test(NAME ${test_name} COMMAND ${target} ${ARGN})
     set_tests_properties(${test_name} PROPERTIES LABELS "viewer;metal;gpu" TIMEOUT 120 SKIP_RETURN_CODE 77)
 endfunction()
 lfs_add_metal_contract(metal_lod_contracts lod_contracts.mm MetalViewerLodContracts)
 lfs_add_metal_contract(metal_rad_contracts rad_contracts.mm MetalViewerRadContracts)
 lfs_add_metal_contract(metal_spark_gut_contracts spark_gut_contracts.mm MetalViewerSparkGutContracts)
+lfs_add_metal_contract(metal_selection_contracts selection_contracts.mm MetalViewerSelectionContracts)
 lfs_add_metal_contract(metal_viewer_contracts projection_contracts.mm MetalViewerProjectionContracts)
 lfs_add_metal_contract(metal_raster_contracts raster_contracts.mm MetalViewerRasterContracts)
 if(TARGET lfs_core)
@@ -63,6 +64,24 @@ if(TARGET lfs_visualizer)
         "${CMAKE_SOURCE_DIR}/src")
     set_target_properties(metal_rad_pager_contracts PROPERTIES OBJCXX_STANDARD 23)
     set_property(TEST MetalViewerRadPagerContracts APPEND PROPERTY LABELS metal4)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        lfs_add_metal_contract(metal_selection_viewport_contracts selection_viewport_contracts.mm MetalViewerSelectionViewportContracts --native-only)
+        target_link_libraries(metal_selection_viewport_contracts PRIVATE lfs_visualizer lfs_core Python::Python)
+        target_include_directories(metal_selection_viewport_contracts PRIVATE
+            "${CMAKE_SOURCE_DIR}/src/visualizer/rendering"
+            "${CMAKE_SOURCE_DIR}/src/visualizer"
+            "${CMAKE_SOURCE_DIR}/src/io/include"
+            "${CMAKE_SOURCE_DIR}/src/rendering/include"
+            "${CMAKE_SOURCE_DIR}/src")
+        set_target_properties(metal_selection_viewport_contracts PROPERTIES OBJCXX_STANDARD 23)
+        set_property(TEST MetalViewerSelectionViewportContracts APPEND PROPERTY LABELS metal4)
+        # MoltenVK's legacy polygon kernel exceeds the Metal validator's
+        # threadgroup-memory limit. Native queries retain full validation;
+        # the Vulkan comparison runs alongside the other parity checks.
+        add_test(NAME MacViewerParity_selectionQuery COMMAND metal_selection_viewport_contracts)
+        set_tests_properties(MacViewerParity_selectionQuery PROPERTIES
+            LABELS "metal;gpu;metal4;parity" TIMEOUT 120 SKIP_RETURN_CODE 77)
+    endif()
     lfs_add_metal_contract(metal_viewport_contracts viewport_contracts.mm MetalViewerViewportContracts)
     target_link_libraries(metal_viewport_contracts PRIVATE lfs_visualizer lfs_core Python::Python)
     target_include_directories(metal_viewport_contracts PRIVATE

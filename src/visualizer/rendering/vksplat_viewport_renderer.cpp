@@ -7388,6 +7388,19 @@ namespace lfs::vis {
         const SelectionMaskRequest& request,
         const bool force_input_upload) {
         LOG_TIMER("VksplatViewportRenderer::buildSelectionMask");
+#ifdef __APPLE__
+        if (UserPreferences::instance().viewerBackend() == rendering::ViewerBackend::Metal && MetalViewportRenderer::supportsSelection(splat_data, request)) {
+            std::lock_guard native_lock(readback_mutex_);
+            try {
+                if (!metal_viewport_)
+                    metal_viewport_ = std::make_unique<MetalViewportRenderer>();
+                metal_viewport_->setLodSettings(lod_page_pool_splats_, lod_pool_vram_fraction_, lod_fade_frames_);
+                return legacyMetalResult(metal_viewport_->buildSelectionMask(context, splat_data, request));
+            } catch (const std::exception& error) {
+                return std::unexpected(std::string("Metal selection query initialization failed: ") + error.what());
+            }
+        }
+#endif
         const glm::ivec2 size = request.frame_view.size;
         if (size.x <= 0 || size.y <= 0) {
             return std::unexpected("VkSplat selection query received an invalid viewport size");

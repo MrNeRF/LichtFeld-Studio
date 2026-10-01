@@ -50,7 +50,10 @@ configure_file(tile_shader_source.hpp.in generated/tile_shader_source.hpp @ONLY)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/lod_selector.metal" LFS_METAL_LOD_SOURCE)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/lod_selector.metal")
 configure_file(lod_shader_source.hpp.in generated/lod_shader_source.hpp @ONLY)
-add_library(lfs_metal_viewer STATIC splat_preprocessor.mm tile_rasterizer.mm lod_selector.mm)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/selection_query.metal" LFS_METAL_SELECTION_SOURCE)
+configure_file(selection_shader_source.hpp.in generated/selection_shader_source.hpp @ONLY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/selection_query.metal")
+add_library(lfs_metal_viewer STATIC splat_preprocessor.mm tile_rasterizer.mm lod_selector.mm selection_query.mm)
 target_include_directories(lfs_metal_viewer PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
     PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../core/include")

@@ -8,6 +8,7 @@
 #include "metal_present_source.hpp"
 #include "metal_rad_pager.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "selection_query.hpp"
 #include "splat_preprocessor.hpp"
 #include "tile_rasterizer.hpp"
 #include <algorithm>
@@ -153,6 +154,7 @@ namespace lfs::vis {
         };
         std::map<const core::SplatLodTree*, NativeLodTree> lod_trees;
         std::unique_ptr<LodSelector> lod_selector;
+        std::unique_ptr<SelectionQuery> selection_query;
         std::array<std::unique_ptr<MetalRadPager>, 4> rad_pagers;
         MetalRadPager::Settings rad_settings;
         core::MetalTensorReader reader;
@@ -466,6 +468,176 @@ namespace lfs::vis {
     void MetalViewportRenderer::setLodSettings(size_t splats, float fraction, uint32_t fade) {
         std::lock_guard lock(impl_->readback_mutex);
         impl_->rad_settings = {splats, fraction, fade};
+    }
+    bool MetalViewportRenderer::supportsSelection(const core::SplatData& model, const VksplatViewportRenderer::SelectionMaskRequest& request) {
+        const bool rad_preview = model.lod_tree && model.lod_tree->rad_source.valid() &&
+                                 model.means_raw().device() == core::Device::CPU && core::default_gpu_backend() == core::GpuBackend::Metal;
+        const auto resident = [&](const core::Tensor& tensor) {
+            return tensor.is_valid() && tensor.is_contiguous() &&
+                   (core::gpu_backend_of(tensor) == core::GpuBackend::Metal || (rad_preview && tensor.device() == core::Device::CPU));
+        };
+        const auto& means = model.means_raw();
+        if (!resident(means) || means.dtype() != core::DataType::Float32 || means.ndim() != 2 || means.size(1) != 3 ||
+            (request.equirectangular && !request.gut))
+            return false;
+        const bool geometry = request.gut || request.shape == VksplatViewportRenderer::SelectionMaskShape::Ring;
+        if (geometry && (!resident(model.scaling_raw()) || !resident(model.rotation_raw()) ||
+                         !((model.scaling_raw().dtype() == core::DataType::Float32 && model.rotation_raw().dtype() == core::DataType::Float32 && model.opacity_raw().dtype() == core::DataType::Float32) || model.non_sh_attrs_f16())))
+            return false;
+        if (request.shape == VksplatViewportRenderer::SelectionMaskShape::Ring && !resident(model.opacity_raw()))
+            return false;
+        if (model.deleted().is_valid() && (!resident(model.deleted()) ||
+                                           (model.deleted().dtype() != core::DataType::Bool && model.deleted().dtype() != core::DataType::UInt8)))
+            return false;
+        const auto indices = request.scene.transform_indices.get();
+        return !indices || !indices->is_valid() ||
+               (indices->is_contiguous() && core::gpu_backend_of(*indices) == core::GpuBackend::Metal &&
+                indices->dtype() == core::DataType::Int32 && indices->bytes() >= size_t(model.size()) * 4);
+    }
+    lfs::Result<core::Tensor> MetalViewportRenderer::buildSelectionMask(VulkanContext& context, const core::SplatData& model,
+                                                                        const VksplatViewportRenderer::SelectionMaskRequest& request) {
+        try {
+            auto& i = *impl_;
+            std::lock_guard lock(i.readback_mutex);
+            i.initialize(context);
+            if (request.picked_ring_id_out)
+                *request.picked_ring_id_out = 0xffffffffu;
+            const size_t n = model.size();
+            const bool polygon = request.shape == VksplatViewportRenderer::SelectionMaskShape::Polygon;
+            const bool ring = request.shape == VksplatViewportRenderer::SelectionMaskShape::Ring;
+            if (!supportsSelection(model, request) || !n || n > std::numeric_limits<uint32_t>::max() ||
+                request.frame_view.size.x <= 0 || request.frame_view.size.y <= 0 ||
+                request.primitives.size() > std::numeric_limits<uint32_t>::max() || request.polygon_vertices.size() > std::numeric_limits<uint32_t>::max() ||
+                (polygon ? request.polygon_vertices.size() < 3 : request.primitives.empty()))
+                throw std::invalid_argument("Invalid native Metal selection request");
+            const core::GpuBackendScope scope(core::GpuBackend::Metal);
+            if (!frameFitsWorkingSet(i.reader.device().currentAllocatedSize, n, i.reader.device().recommendedMaxWorkingSetSize))
+                throw std::bad_alloc();
+            auto output = core::Tensor::empty({n}, core::Device::GPU, core::DataType::Bool);
+            SelectionParameters parameters;
+            auto view = glm::mat4(glm::transpose(rendering::dataCameraToWorldFromVisualizerRotation(request.frame_view.rotation)));
+            view[3] = glm::vec4(-glm::mat3(view) * request.frame_view.translation, 1);
+            parameters.world_to_camera = matrix(view);
+            const auto intrinsics = request.frame_view.getCameraIntrinsics();
+            parameters.intrinsics = {intrinsics.focal_x, intrinsics.focal_y, intrinsics.center_x, intrinsics.center_y};
+            parameters.image = {uint32_t(request.frame_view.size.x), uint32_t(request.frame_view.size.y), uint32_t(request.equirectangular ? CameraModel::Equirectangular : request.frame_view.orthographic ? CameraModel::Orthographic
+                                                                                                                                                                                                            : CameraModel::Perspective),
+                                uint32_t(request.gut)};
+            parameters.source = {uint32_t(n), uint32_t(request.shape), uint32_t(request.primitives.size()), uint32_t(request.polygon_vertices.size())};
+            parameters.payload = {uint32_t(model.non_sh_attrs_f16()), uint32_t(request.mip_filter), 0, 0};
+            parameters.ring.x = request.ring_width;
+            if (polygon) {
+                glm::vec2 lo(std::numeric_limits<float>::max()), hi(std::numeric_limits<float>::lowest());
+                for (const auto vertex : request.polygon_vertices) {
+                    if (!std::isfinite(vertex.x) || !std::isfinite(vertex.y))
+                        throw std::invalid_argument("Invalid native selection polygon vertex");
+                    lo = glm::min(lo, vertex);
+                    hi = glm::max(hi, vertex);
+                }
+                const auto size = request.frame_view.size;
+                // Clamp in floating point before integer conversion, including
+                // huge off-screen gestures; no out-of-range C++ float cast.
+                const glm::ivec2 begin(glm::clamp(glm::floor(lo), glm::vec2(0), glm::vec2(size)));
+                const glm::ivec2 end(glm::clamp(glm::ceil(hi), glm::vec2(0), glm::vec2(size)));
+                if (end.x <= begin.x || end.y <= begin.y)
+                    return core::Tensor::zeros({n}, core::Device::GPU, core::DataType::Bool);
+                parameters.aabb = {uint32_t(begin.x), uint32_t(begin.y), uint32_t(end.x - begin.x), uint32_t(end.y - begin.y)};
+            }
+            const auto indices = request.scene.transform_indices.get();
+            const bool indexed = indices && indices->is_valid();
+            const size_t transforms = request.scene.model_transforms ? request.scene.model_transforms->size() : 0;
+            const auto upload = [&](const void* data, size_t bytes) -> BufferSlice {
+                if (!bytes)
+                    return {};
+                if (!frameFitsWorkingSet(i.reader.device().currentAllocatedSize, bytes, i.reader.device().recommendedMaxWorkingSetSize))
+                    throw std::bad_alloc();
+                auto buffer = [i.reader.device() newBufferWithBytes:data length:bytes options:MTLResourceStorageModeShared];
+                if (!buffer)
+                    throw std::bad_alloc();
+                return {buffer};
+            };
+            SelectionBuffers buffers;
+            if (transforms > std::numeric_limits<int32_t>::max() || request.scene.node_visibility_mask.size() > std::numeric_limits<uint32_t>::max())
+                throw std::invalid_argument("Native selection scene exceeds transform indexing limits");
+            if (transforms) {
+                for (const auto& transform : *request.scene.model_transforms)
+                    for (size_t col = 0; col < 4; ++col)
+                        for (size_t row = 0; row < 4; ++row)
+                            if (!std::isfinite(transform[col][row]))
+                                throw std::invalid_argument("Invalid native selection object matrix");
+                buffers.transforms = upload(request.scene.model_transforms->data(), transforms * sizeof(glm::mat4));
+            }
+            std::vector<uint8_t> visibility(request.scene.node_visibility_mask.begin(), request.scene.node_visibility_mask.end());
+            buffers.visibility = upload(visibility.data(), visibility.size());
+            parameters.scene = {uint32_t(transforms), uint32_t(indexed), uint32_t(visibility.size()), 0};
+            if (!polygon) {
+                for (const auto primitive : request.primitives)
+                    for (size_t axis = 0; axis < 4; ++axis)
+                        if (!std::isfinite(primitive[axis]))
+                            throw std::invalid_argument("Invalid native selection primitive");
+                buffers.primitives = upload(request.primitives.data(), request.primitives.size() * sizeof(glm::vec4));
+            } else {
+                buffers.polygon_vertices = upload(request.polygon_vertices.data(), request.polygon_vertices.size() * sizeof(glm::vec2));
+                const size_t bytes = size_t(parameters.aabb.z) * parameters.aabb.w;
+                if (bytes > std::numeric_limits<uint32_t>::max())
+                    throw std::invalid_argument("Native selection polygon exceeds shader indexing limits");
+                if (!frameFitsWorkingSet(i.reader.device().currentAllocatedSize, bytes, i.reader.device().recommendedMaxWorkingSetSize))
+                    throw std::bad_alloc();
+                auto mask = [i.reader.device() newBufferWithLength:bytes options:MTLResourceStorageModePrivate];
+                if (!mask)
+                    throw std::bad_alloc();
+                buffers.polygon_mask = {mask};
+            }
+            if (ring) {
+                auto pick = [i.reader.device() newBufferWithLength:8 options:MTLResourceStorageModeShared];
+                if (!pick)
+                    throw std::bad_alloc();
+                buffers.ring_pick = {pick};
+            }
+            const bool geometry = request.gut || ring;
+            std::array<const core::Tensor*, 6> tensors{&model.means_raw(), geometry ? &model.scaling_raw() : nullptr,
+                                                       geometry ? &model.rotation_raw() : nullptr, ring ? &model.opacity_raw() : nullptr,
+                                                       &model.deleted(), indexed ? indices : nullptr};
+            if (model.means_raw().device() == core::Device::CPU) {
+                auto& pager = i.rad_pagers[static_cast<size_t>(Slot::Main)];
+                if (!pager)
+                    pager = std::make_unique<MetalRadPager>(i.reader.device());
+                pager->configure(model, context, i.completion, i.rad_settings);
+                const auto& prefix = pager->preview(model);
+                tensors[0] = &prefix[0];
+                if (geometry) {
+                    tensors[1] = &prefix[1];
+                    tensors[2] = &prefix[2];
+                }
+                if (ring)
+                    tensors[3] = &prefix[3];
+                tensors[4] = &pager->deleted(model);
+            }
+            if (!i.selection_query)
+                i.selection_query = std::make_unique<SelectionQuery>(i.reader.device());
+            const std::array<core::Tensor*, 1> outputs{&output};
+            auto command = i.reader.submitWrites(tensors, outputs, [&](id<MTLCommandBuffer> command, std::span<const core::MetalTensorView> input, std::span<const core::MetalTensorView> out) {
+                const auto slice = [&](size_t index) { return BufferSlice{input[index].buffer, input[index].offset}; };
+                buffers.means = slice(0);
+                buffers.log_scales = slice(1);
+                buffers.rotations = slice(2);
+                buffers.opacity = slice(3);
+                buffers.deleted = slice(4);
+                buffers.transform_indices = slice(5);
+                buffers.output = {out[0].buffer, out[0].offset};
+                parameters.scene.w = uint32_t(std::min(n, input[4].bytes));
+                i.selection_query->encode(command, buffers, parameters);
+            });
+            if (ring && request.picked_ring_id_out) {
+                [command waitUntilCompleted];
+                if (command.status != MTLCommandBufferStatusCompleted)
+                    throw std::runtime_error("Native Metal ring query failed");
+                const auto pick = reinterpret_cast<const uint32_t*>(static_cast<const char*>(buffers.ring_pick.buffer.contents) + buffers.ring_pick.offset);
+                if (pick[0] != 0xffffffffu && pick[1] < n)
+                    *request.picked_ring_id_out = pick[1];
+            }
+            return output;
+        } catch (const std::exception& error) { return nativeError(error); }
     }
     bool MetalViewportRenderer::supportsPoints(const PointCloudVulkanRenderer::RenderRequest& r) {
         const auto resident = [](const core::Tensor* t) { return t && t->is_valid() && t->is_contiguous() && core::gpu_backend_of(*t) == core::GpuBackend::Metal; };
@@ -786,7 +958,7 @@ namespace lfs::vis {
             projection.camera_local = {camera.x, camera.y, camera.z, 1};
             auto intrinsics = request.frame_view.getCameraIntrinsics();
             projection.intrinsics = {intrinsics.focal_x, intrinsics.focal_y,
-                                     intrinsics.center_x - request.frame_view.subregion_origin.x, intrinsics.center_y - request.frame_view.subregion_origin.y};
+                                     intrinsics.center_x, intrinsics.center_y};
             // Viewer raster clipping differs from the desktop projection matrix's
             // near/far planes. Derive the reference near threshold at configure.
             const bool portal = request.splat_render_profile == 1;

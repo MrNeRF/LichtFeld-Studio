@@ -24,6 +24,8 @@ namespace lfs::vis {
         ~MetalViewportRenderer();
         static bool supports(const core::SplatData&, const rendering::ViewportRenderRequest&);
         void setLodSettings(size_t pool_splats, float vram_fraction, uint32_t fade_frames);
+        static bool supportsSelection(const core::SplatData&, const VksplatViewportRenderer::SelectionMaskRequest&);
+        lfs::Result<core::Tensor> buildSelectionMask(VulkanContext&, const core::SplatData&, const VksplatViewportRenderer::SelectionMaskRequest&);
         static bool supportsPoints(const PointCloudVulkanRenderer::RenderRequest&);
         lfs::Result<PointCloudVulkanRenderer::RenderResult> renderPoints(
             VulkanContext&, const PointCloudVulkanRenderer::RenderRequest&, PointCloudVulkanRenderer::OutputSlot);
