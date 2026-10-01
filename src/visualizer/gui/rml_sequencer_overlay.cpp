@@ -72,6 +72,8 @@ namespace lfs::vis::gui {
     }
 
     RmlSequencerOverlay::~RmlSequencerOverlay() {
+        if (!rml_manager_ || !rml_manager_->isInitialized())
+            return;
         hidePreviewWindow();
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("sequencer_overlay");
@@ -365,6 +367,15 @@ namespace lfs::vis::gui {
         return html;
     }
 
+    void RmlSequencerOverlay::syncInputOwnership() {
+        if (!rml_manager_ || !rml_context_)
+            return;
+        const bool exclusive = context_menu_open_ || time_edit_active_ || focal_edit_active_;
+        rml_manager_->deactivateInput(rml_context_, true);
+        if (exclusive || edit_overlay_visible_)
+            rml_manager_->activateInput(rml_context_, [this](const gui::PanelInputState& event) { processInput(gui::toSequencerPanelInput(event)); }, exclusive, exclusive ? std::vector<SDL_Scancode>{} : std::vector<SDL_Scancode>{SDL_SCANCODE_U, SDL_SCANCODE_ESCAPE});
+    }
+
     void RmlSequencerOverlay::showContextMenu(float screen_x, float screen_y,
                                               std::optional<size_t> keyframe_index,
                                               const float time,
@@ -391,6 +402,7 @@ namespace lfs::vis::gui {
 
         el_context_menu_->SetProperty("left", fmt::format("{:.0f}dp", screen_x / dp));
         el_context_menu_->SetProperty("top", fmt::format("{:.0f}dp", y / dp));
+        syncInputOwnership();
     }
 
     void RmlSequencerOverlay::hideContextMenu() {
@@ -402,6 +414,7 @@ namespace lfs::vis::gui {
         context_menu_time_ = 0.0f;
         el_context_menu_->SetClass("visible", false);
         el_menu_backdrop_->SetProperty("display", "none");
+        syncInputOwnership();
     }
 
     void RmlSequencerOverlay::showTimeEdit(size_t index, float current_time) {
@@ -421,6 +434,7 @@ namespace lfs::vis::gui {
         el_time_popup_->SetProperty("display", "block");
         el_popup_backdrop_->SetProperty("display", "block");
 
+        syncInputOwnership();
         el_time_input_->Focus();
         has_text_focus_ = true;
     }
@@ -442,6 +456,7 @@ namespace lfs::vis::gui {
         el_focal_popup_->SetProperty("display", "block");
         el_popup_backdrop_->SetProperty("display", "block");
 
+        syncInputOwnership();
         el_focal_input_->Focus();
         has_text_focus_ = true;
     }
@@ -459,6 +474,7 @@ namespace lfs::vis::gui {
         has_text_focus_ = false;
         el_time_popup_->SetProperty("display", "none");
         el_popup_backdrop_->SetProperty("display", "none");
+        syncInputOwnership();
     }
 
     void RmlSequencerOverlay::submitFocalEdit() {
@@ -474,6 +490,7 @@ namespace lfs::vis::gui {
         has_text_focus_ = false;
         el_focal_popup_->SetProperty("display", "none");
         el_popup_backdrop_->SetProperty("display", "none");
+        syncInputOwnership();
     }
 
     void RmlSequencerOverlay::updateEditOverlay(size_t selected, float pos_delta, float rot_delta,
@@ -505,6 +522,7 @@ namespace lfs::vis::gui {
         if (!edit_overlay_visible_) {
             el_edit_overlay_->SetProperty("display", "block");
             edit_overlay_visible_ = true;
+            syncInputOwnership();
         }
     }
 
@@ -514,6 +532,7 @@ namespace lfs::vis::gui {
 
         el_edit_overlay_->SetProperty("display", "none");
         edit_overlay_visible_ = false;
+        syncInputOwnership();
         overlay_px_left_ = overlay_px_top_ = overlay_px_width_ = overlay_px_height_ = 0.0f;
     }
 
@@ -578,8 +597,7 @@ namespace lfs::vis::gui {
                                       preview_visible_;
         if (!anything_visible)
             return;
-        if (rml_manager_ && rml_manager_->routeInput(rml_context_, gui::fromSequencerPanelInput(input),
-                                                     [this](const gui::PanelInputState& event) { processInput(gui::toSequencerPanelInput(event)); }))
+        if (rml_manager_ && rml_manager_->routeInput(rml_context_, gui::fromSequencerPanelInput(input), [this](const gui::PanelInputState& event) { processInput(gui::toSequencerPanelInput(event)); }, context_menu_open_ || time_edit_active_ || focal_edit_active_))
             return;
         if (rml_manager_)
             rml_manager_->trackContextFrame(rml_context_, 0, 0);
@@ -662,11 +680,13 @@ namespace lfs::vis::gui {
                         has_text_focus_ = false;
                         el_time_popup_->SetProperty("display", "none");
                         el_popup_backdrop_->SetProperty("display", "none");
+                        syncInputOwnership();
                     } else if (focal_edit_active_) {
                         focal_edit_active_ = false;
                         has_text_focus_ = false;
                         el_focal_popup_->SetProperty("display", "none");
                         el_popup_backdrop_->SetProperty("display", "none");
+                        syncInputOwnership();
                     } else if (context_menu_open_) {
                         hideContextMenu();
                     }
@@ -675,10 +695,15 @@ namespace lfs::vis::gui {
         }
 
         if (edit_overlay_visible_ && !need_keyboard) {
-            if (gui::hasKey(input.keys_pressed, SDL_SCANCODE_U))
-                pending_actions_.push_back({Action::APPLY_EDIT, 0, 0});
-            if (gui::hasKey(input.keys_pressed, SDL_SCANCODE_ESCAPE))
-                pending_actions_.push_back({Action::REVERT_EDIT, 0, 0});
+            for (const auto& event : input.input_events) {
+                if (event.kind != FrameInputEventKind::KeyDown || event.repeat)
+                    continue;
+                if (event.scancode == SDL_SCANCODE_U || event.scancode == SDL_SCANCODE_ESCAPE) {
+                    pending_actions_.push_back({event.scancode == SDL_SCANCODE_U ? Action::APPLY_EDIT : Action::REVERT_EDIT, 0, 0});
+                    if (event.dispatch)
+                        event.dispatch->consumed = true;
+                }
+            }
         }
     }
 
@@ -764,6 +789,7 @@ namespace lfs::vis::gui {
                 overlay->el_focal_popup_->SetProperty("display", "none");
             }
             overlay->el_popup_backdrop_->SetProperty("display", "none");
+            overlay->syncInputOwnership();
             return;
         }
 
@@ -844,6 +870,7 @@ namespace lfs::vis::gui {
             overlay->has_text_focus_ = false;
             overlay->el_time_popup_->SetProperty("display", "none");
             overlay->el_popup_backdrop_->SetProperty("display", "none");
+            overlay->syncInputOwnership();
         } else if (id == "focal-edit-ok") {
             overlay->submitFocalEdit();
         } else if (id == "focal-edit-cancel") {
@@ -851,6 +878,7 @@ namespace lfs::vis::gui {
             overlay->has_text_focus_ = false;
             overlay->el_focal_popup_->SetProperty("display", "none");
             overlay->el_popup_backdrop_->SetProperty("display", "none");
+            overlay->syncInputOwnership();
         }
     }
 

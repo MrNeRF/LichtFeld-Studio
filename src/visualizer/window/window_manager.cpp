@@ -866,6 +866,7 @@ namespace lfs::vis {
         if (!self.pumping_events_ || self.watching_event_)
             return true;
         self.watching_event_ = true;
+        self.drainQueuedEvents();
         self.dispatched_events_.emplace_back(event->type, event->common.timestamp);
         self.dispatchQueuedEvent(*event);
         self.watching_event_ = false;
@@ -883,21 +884,33 @@ namespace lfs::vis {
             gui->prepareInput();
     }
 
+    void WindowManager::dispatchPolledEvent(const SDL_Event& event) {
+        const auto token = std::pair(event.type, event.common.timestamp);
+        const auto it = std::find(dispatched_events_.begin(), dispatched_events_.end(), token);
+        if (it != dispatched_events_.end())
+            dispatched_events_.erase(it);
+        else
+            dispatchQueuedEvent(event);
+    }
+
+    bool WindowManager::drainQueuedEvents() {
+        bool drained = false;
+        SDL_Event event;
+        while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_EVENT_FIRST, SDL_EVENT_LAST) > 0) {
+            drained = true;
+            dispatchPolledEvent(event);
+        }
+        return drained;
+    }
+
     void WindowManager::pollEvents() {
         frame_input_.beginFrame();
         SDL_Event event;
         // Drain previously queued events before pumping new native events.
-        while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_EVENT_FIRST, SDL_EVENT_LAST) > 0)
-            dispatchQueuedEvent(event);
+        drainQueuedEvents();
         pumping_events_ = true;
-        while (SDL_PollEvent(&event)) {
-            const auto token = std::pair(event.type, event.common.timestamp);
-            const auto it = std::find(dispatched_events_.begin(), dispatched_events_.end(), token);
-            if (it != dispatched_events_.end())
-                dispatched_events_.erase(it);
-            else
-                dispatchQueuedEvent(event);
-        }
+        while (SDL_PollEvent(&event))
+            dispatchPolledEvent(event);
         pumping_events_ = false;
         dispatched_events_.clear();
         if (isManualResizeActive())
@@ -921,18 +934,11 @@ namespace lfs::vis {
         }
         if (isManualResizeActive())
             timeout_seconds = std::min(timeout_seconds, 1.0 / 60.0);
-        const int timeout_ms = static_cast<int>(timeout_seconds * 1000.0);
-        while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_EVENT_FIRST, SDL_EVENT_LAST) > 0)
-            dispatchQueuedEvent(event);
+        const int timeout_ms = drainQueuedEvents() ? 0 : static_cast<int>(timeout_seconds * 1000.0);
         pumping_events_ = true;
         if (SDL_WaitEventTimeout(&event, timeout_ms)) {
             do {
-                const auto token = std::pair(event.type, event.common.timestamp);
-                const auto it = std::find(dispatched_events_.begin(), dispatched_events_.end(), token);
-                if (it != dispatched_events_.end())
-                    dispatched_events_.erase(it);
-                else
-                    dispatchQueuedEvent(event);
+                dispatchPolledEvent(event);
             } while (SDL_PollEvent(&event));
         }
         pumping_events_ = false;

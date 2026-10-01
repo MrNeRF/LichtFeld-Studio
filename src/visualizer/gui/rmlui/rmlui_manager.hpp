@@ -129,12 +129,14 @@ namespace lfs::vis::gui {
         // Render passes register geometry and handlers. SDL polling dispatches each
         // event once, before polling the next event or invoking scene operators.
         template <typename Handler>
-        bool routeInput(Rml::Context* context, const PanelInputState& input, Handler&& handler, bool exclusive = false) {
+        bool routeInput(Rml::Context* context, const PanelInputState& input, Handler&& handler, bool exclusive = false,
+                        std::function<bool(float, float)> pointer_blocker = {}) {
             if (dispatching_input_)
                 return false;
-            return registerInput(context, input, std::forward<Handler>(handler), exclusive);
+            return registerInput(context, input, std::forward<Handler>(handler), exclusive, std::move(pointer_blocker));
         }
-        LFS_VIS_API void activateInput(Rml::Context* context, std::function<void(const PanelInputState&)> handler);
+        LFS_VIS_API void activateInput(Rml::Context* context, std::function<void(const PanelInputState&)> handler,
+                                       bool exclusive = true, std::vector<SDL_Scancode> shortcuts = {});
         LFS_VIS_API void deactivateInput(Rml::Context* context, bool keep_pointer_input = false);
         struct InputDispatchResult {
             bool consumed = false;
@@ -242,10 +244,14 @@ namespace lfs::vis::gui {
                                      RenderInterface_VK* vulkan_render_interface);
 
         LFS_VIS_API bool registerInput(Rml::Context* context, const PanelInputState& input,
-                                       std::function<void(const PanelInputState&)> handler, bool exclusive);
+                                       std::function<void(const PanelInputState&)> handler, bool exclusive,
+                                       std::function<bool(float, float)> pointer_blocker);
         struct InputHandler {
             std::shared_ptr<std::function<void(const PanelInputState&)>> callback;
             PanelInputState input;
+            std::function<bool(float, float)> pointer_blocker;
+            bool blocked_buttons[3] = {};
+            std::vector<SDL_Scancode> shortcuts;
             uint64_t frame = 0;
             bool exclusive = false;
             bool enabled = true;

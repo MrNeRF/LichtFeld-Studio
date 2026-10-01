@@ -784,12 +784,14 @@ namespace lfs::vis::gui {
     }
 
     bool RmlUIManager::registerInput(Rml::Context* context, const PanelInputState& input,
-                                     std::function<void(const PanelInputState&)> handler, const bool exclusive) {
+                                     std::function<void(const PanelInputState&)> handler, const bool exclusive,
+                                     std::function<bool(float, float)> pointer_blocker) {
         if (dispatching_input_)
             return false;
         if (!input_handlers_.contains(context))
             context->GetRootElement()->AddEventListener("focus", this, true);
         auto& registered = input_handlers_[context];
+        registered.pointer_blocker = std::move(pointer_blocker);
         auto& passive = registered.input;
         passive.mouse_x = input.mouse_x;
         passive.mouse_y = input.mouse_y;
@@ -816,16 +818,19 @@ namespace lfs::vis::gui {
         return true;
     }
 
-    void RmlUIManager::activateInput(Rml::Context* context, std::function<void(const PanelInputState&)> handler) {
+    void RmlUIManager::activateInput(Rml::Context* context, std::function<void(const PanelInputState&)> handler,
+                                     const bool exclusive, std::vector<SDL_Scancode> shortcuts) {
         if (!input_handlers_.contains(context))
             context->GetRootElement()->AddEventListener("focus", this, true);
         auto& registered = input_handlers_[context];
         registered.callback = std::make_shared<std::function<void(const PanelInputState&)>>(std::move(handler));
         registered.frame = input_frame_;
-        registered.exclusive = true;
+        registered.exclusive = exclusive;
+        registered.shortcuts = std::move(shortcuts);
         registered.persistent = true;
         registered.enabled = true;
-        focusContext(context, true);
+        if (exclusive)
+            focusContext(context, true);
         syncTextInput();
     }
 
@@ -834,6 +839,7 @@ namespace lfs::vis::gui {
             it->second.enabled = keep_pointer_input;
             it->second.persistent = false;
             it->second.exclusive = false;
+            it->second.shortcuts.clear();
         }
         if (context) {
             if (auto* focused = context->GetFocusElement())
@@ -923,6 +929,31 @@ namespace lfs::vis::gui {
                 std::copy(std::begin(input_mouse_down_), std::end(input_mouse_down_), input.mouse_down);
                 input.mouse_wheel = single.mouse_wheel;
                 input.mouse_wheel_x = single.mouse_wheel_x;
+                // Explicit occlusion is evaluated at the event position, independently
+                // of render-time hover masks. A blocked press owns its release too.
+                auto& registered = it->second;
+                const bool blocked = registered.pointer_blocker &&
+                                     registered.pointer_blocker(single.mouse_x, single.mouse_y);
+                for (const auto& button : single.mouse_button_events)
+                    if (button.down)
+                        registered.blocked_buttons[button.button] = blocked;
+                std::erase_if(input.mouse_button_events, [&](const auto& button) {
+                    return blocked || registered.blocked_buttons[button.button];
+                });
+                std::erase_if(input.input_events, [&](const auto& event) {
+                    return event.kind == FrameInputEventKind::MouseButton && input.mouse_button_events.empty();
+                });
+                for (int button = 0; button < 3; ++button) {
+                    if (blocked || registered.blocked_buttons[button]) {
+                        input.mouse_clicked[button] = input.mouse_released[button] = input.mouse_down[button] = false;
+                    }
+                    if (single.mouse_released[button])
+                        registered.blocked_buttons[button] = false;
+                }
+                if (blocked) {
+                    input.mouse_x = input.mouse_y = -1e9f;
+                    input.mouse_wheel = input.mouse_wheel_x = 0;
+                }
             }
             const auto mods = key ? event.key.mod : SDL_GetModState();
             input.key_ctrl = mods & SDL_KMOD_CTRL;
@@ -971,6 +1002,22 @@ namespace lfs::vis::gui {
             if (it == input_handlers_.end() || !it->second.enabled || (!it->second.persistent && it->second.frame != input_frame_) ||
                 (!it->second.exclusive && !rml_input::hasFocusedKeyboardTarget(context->GetFocusElement())))
                 context = nullptr;
+            const auto shortcutContext = [&]() {
+                Rml::Context* target = nullptr;
+                if (event.type == SDL_EVENT_KEY_DOWN) {
+                    for (const auto& [candidate, handler] : input_handlers_) {
+                        if (handler.enabled && (handler.persistent || handler.frame == input_frame_) &&
+                            std::ranges::find(handler.shortcuts, event.key.scancode) != handler.shortcuts.end() &&
+                            (!target || tracked_context_frames_[candidate].order > tracked_context_frames_[target].order))
+                            target = candidate;
+                    }
+                }
+                return target;
+            };
+            if (!context) {
+                context = shortcutContext();
+                it = input_handlers_.find(context);
+            }
             auto* focused = context ? context->GetFocusElement() : nullptr;
             auto pressed_element = focused ? focused->GetObserverPtr() : Rml::ObserverPtr<Rml::Element>();
             const bool text_owner = rml_input::wantsTextInput(focused);
@@ -1002,6 +1049,18 @@ namespace lfs::vis::gui {
                 invoke(context);
                 result.consumed = gui_release || text_owner || exclusive || dispatch.consumed ||
                                   !input_handlers_.contains(context) || context->GetFocusElement() != pressed_element.get();
+            }
+            // Blurring a control can leave its inert parent focused. Give
+            // unhandled keys to viewport shortcuts without taking text ownership.
+            if (!result.consumed) {
+                if (auto* shortcut = shortcutContext(); shortcut && shortcut != context) {
+                    context = shortcut;
+                    focused = context->GetFocusElement();
+                    pressed_element = focused ? focused->GetObserverPtr() : Rml::ObserverPtr<Rml::Element>();
+                    invoke(context);
+                    result.consumed = dispatch.consumed || !input_handlers_.contains(context) ||
+                                      context->GetFocusElement() != pressed_element.get();
+                }
             }
             if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat)
                 key_owners_[event.key.scancode] = {result.consumed && input_handlers_.contains(context) ? context : nullptr,

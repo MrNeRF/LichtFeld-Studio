@@ -103,7 +103,7 @@ namespace lfs::vis::gui {
         void render();
         void renderCached();
         void renderFrostedGlass();
-        void processInput(const PanelInputState& input);
+        void processInput(const PanelInputState& input, std::function<bool(float, float)> pointer_blocker = {});
         bool wantsInput() const { return wants_input_; }
         [[nodiscard]] bool needsAnimationFrame() const {
             return render_needed_ || document_sync_dirty_ || animation_active_ || tooltip_.revealDue() ||

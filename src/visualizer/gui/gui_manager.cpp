@@ -6950,7 +6950,13 @@ namespace lfs::vis::gui {
         {
             LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.processInput", 0.25);
             if (!block_underlay_input)
-                rml_viewport_overlay_.processInput(viewport_overlay_input);
+                rml_viewport_overlay_.processInput(viewport_overlay_input,
+                                                   [left_dock_layout, top = screen.work_pos.y, left_dock_h](float x, float y) {
+                                                       return PanelRegistry::instance().isPositionOverFloatingPanel(x, y) ||
+                                                              (left_dock_layout.panel_width > 0.0f && y >= top && y < top + left_dock_h &&
+                                                               ((x >= left_dock_layout.panel_x && x < left_dock_layout.panel_x + left_dock_layout.panel_width) ||
+                                                                (x >= left_dock_layout.edge_min_x && x < left_dock_layout.edge_max_x)));
+                                                   });
         }
         if (rml_viewport_overlay_.wantsInput() && viewport_overlay_input.mouse_clicked[0]) {
             if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;

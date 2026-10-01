@@ -11,6 +11,7 @@
 #include "gui/gui_manager.hpp"
 #include "gui/panel_input_utils.hpp"
 #include "gui/rml_modal_overlay.hpp"
+#include "gui/rml_sequencer_overlay.hpp"
 #include "gui/rmlui/elements/python_editor_element.hpp"
 #include "gui/rmlui/elements/terminal_element.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
@@ -18,6 +19,7 @@
 #include "input/input_controller.hpp"
 #include "input/key_codes.hpp"
 #include "operator/operator_registry.hpp"
+#include "sequencer/sequencer_controller.hpp"
 #include "visualizer_impl.hpp"
 #include "window/window_manager.hpp"
 #include <RmlUi/Core.h>
@@ -602,6 +604,13 @@ namespace lfs::vis {
             SDL_FlushEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST);
             window_->dispatched_events_.clear();
         }
+        void watchNative(SDL_Event event) {
+            window_->pumping_events_ = true;
+            WindowManager::watchEvent(window_, &event);
+            window_->pumping_events_ = false;
+        }
+        void poll() { window_->pollEvents(); }
+        void wait(double timeout) { window_->waitEvents(timeout); }
         SDL_Window* nativeWindow() { return window_->window_; }
         gui::RmlModalOverlay& modal() { return *gui_->rml_modal_overlay_; }
         gui::GlobalContextMenu& menu() { return *gui_->global_context_menu_; }
@@ -827,5 +836,152 @@ namespace lfs::vis {
         EXPECT_EQ(field_->GetValue(), "next");
         EXPECT_FALSE(editor.isFocused());
         view->setEditor(nullptr);
+    }
+} // namespace lfs::vis
+
+namespace lfs::vis {
+    TEST_F(WindowInputDispatchTest, WorkerEventsPrecedeLaterWatchedEventsAndAreNotReplayed) {
+        click();
+        SDL_FlushEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST);
+        const auto event = [&](const char* value, Uint64 stamp) {
+            SDL_Event result{};
+            result.type = SDL_EVENT_TEXT_INPUT;
+            result.text.windowID = SDL_GetWindowID(nativeWindow());
+            result.text.text = value;
+            result.common.timestamp = stamp;
+            return result;
+        };
+        auto a = event("a", 100);
+        watchNative(a);
+        ASSERT_EQ(SDL_PeepEvents(&a, 1, SDL_ADDEVENT, 0, 0), 1);
+        auto worker = std::async(std::launch::async, [&] {
+            auto b = event("b", 101);
+            return SDL_PeepEvents(&b, 1, SDL_ADDEVENT, 0, 0);
+        });
+        ASSERT_EQ(worker.get(), 1);
+        auto c = event("c", 102);
+        watchNative(c);
+        ASSERT_EQ(SDL_PeepEvents(&c, 1, SDL_ADDEVENT, 0, 0), 1);
+        poll();
+        EXPECT_EQ(field_->GetValue(), "abc");
+    }
+
+    TEST_F(WindowInputDispatchTest, QueuedWakeReturnsWithoutAnAdditionalIdleWait) {
+        SDL_FlushEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST);
+        window_->wakeEventLoop();
+        const auto start = std::chrono::steady_clock::now();
+        wait(.2);
+        EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::milliseconds(100));
+    }
+
+    TEST_F(WindowInputDispatchTest, SequencerMenuAndViewportEditsReceiveKeysWithoutDomFocus) {
+        SequencerController controller;
+        gui::RmlSequencerOverlay overlay(controller, &manager());
+        overlay.showContextMenu(200, 100, std::nullopt, 0, gui::SequencerViewportEditMode::None);
+        ASSERT_TRUE(overlay.isContextMenuOpen());
+        key(SDL_SCANCODE_ESCAPE);
+        EXPECT_FALSE(overlay.isContextMenuOpen());
+        overlay.hideContextMenu();
+        overlay.updateEditOverlay(0, 1, 1, 400, 0);
+        key(SDL_SCANCODE_U);
+        auto action = overlay.consumeAction();
+        ASSERT_TRUE(action);
+        EXPECT_EQ(action->action, gui::RmlSequencerOverlay::Action::APPLY_EDIT);
+        key(SDL_SCANCODE_ESCAPE);
+        action = overlay.consumeAction();
+        ASSERT_TRUE(action);
+        EXPECT_EQ(action->action, gui::RmlSequencerOverlay::Action::REVERT_EDIT);
+    }
+} // namespace lfs::vis
+
+namespace lfs::vis {
+    TEST_F(WindowInputDispatchTest, ExplicitOcclusionBlocksViewportPressAndItsRelease) {
+        gui::RmlViewportOverlay overlay;
+        overlay.init(&manager());
+        overlay.setViewportBounds({0, 0}, {400, 300}, {0, 0});
+        auto* context = Rml::GetContext("viewport_overlay");
+        ASSERT_NE(context, nullptr);
+        auto* document = context->LoadDocumentFromMemory(
+            "<rml><head><style>body { width:400px; height:300px; font-family:Inter; }"
+            "input { position:absolute; left:220px; top:100px; width:100px; height:40px; }"
+            "</style></head><body><input id='covered' type='text'/></body></rml>");
+        ASSERT_NE(document, nullptr);
+        document->Show();
+        context->Update();
+        auto* field = document->GetElementById("covered");
+        struct PointerListener : Rml::EventListener {
+            std::vector<Rml::String> events;
+            void ProcessEvent(Rml::Event& event) override { events.push_back(event.GetType()); }
+        } listener;
+        field->AddEventListener("mousedown", &listener);
+        field->AddEventListener("mouseup", &listener);
+        bool blocked = true;
+        overlay.processInput({}, [&](float x, float y) { return blocked && x >= 200 && y >= 80; });
+        SDL_Event press{};
+        press.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        press.button.button = SDL_BUTTON_LEFT;
+        press.button.x = 240;
+        press.button.y = 115;
+        dispatch(press);
+        EXPECT_NE(context->GetFocusElement(), field);
+        blocked = false;
+        press.type = SDL_EVENT_MOUSE_BUTTON_UP;
+        dispatch(press);
+        EXPECT_TRUE(listener.events.empty());
+        click(240, 115);
+        EXPECT_EQ(context->GetFocusElement(), field);
+        EXPECT_EQ(listener.events.size(), 2);
+        field->RemoveEventListener("mousedown", &listener);
+        field->RemoveEventListener("mouseup", &listener);
+    }
+
+    TEST_F(WindowInputDispatchTest, SequencerEditShortcutsRespectTextFocusAndVisibility) {
+        SequencerController controller;
+        gui::RmlSequencerOverlay overlay(controller, &manager());
+        overlay.updateEditOverlay(0, 1, 1, 400, 0);
+        click();
+        key(SDL_SCANCODE_U);
+        text("u");
+        EXPECT_EQ(field_->GetValue(), "u");
+        EXPECT_FALSE(overlay.consumeAction());
+        key(SDL_SCANCODE_ESCAPE);
+        EXPECT_FALSE(overlay.consumeAction());
+        key(SDL_SCANCODE_U);
+        ASSERT_TRUE(overlay.consumeAction());
+        overlay.hideEditOverlay();
+        key(SDL_SCANCODE_U);
+        EXPECT_FALSE(overlay.consumeAction());
+        EXPECT_FALSE(manager().wantsCaptureKeyboard());
+    }
+} // namespace lfs::vis
+
+namespace lfs::vis {
+    TEST_F(WindowInputDispatchTest, SequencerOwnerCanBeDestroyedAfterUiShutdown) {
+        SequencerController controller;
+        gui::RmlSequencerOverlay overlay(controller, &manager());
+        overlay.showContextMenu(200, 100, std::nullopt, 0, gui::SequencerViewportEditMode::None);
+        key(SDL_SCANCODE_ESCAPE);
+        EXPECT_FALSE(overlay.isContextMenuOpen());
+        revert_.clear();
+        manager().shutdown();
+    }
+} // namespace lfs::vis
+
+namespace lfs::vis {
+    TEST_F(WindowInputDispatchTest, SequencerEditShortcutsFallThroughFromUnconsumedContainerFocus) {
+        SequencerController controller;
+        gui::RmlSequencerOverlay overlay(controller, &manager());
+        overlay.updateEditOverlay(0, 1, 1, 400, 0);
+        auto* container = document_->AppendChild(document_->CreateElement("div"));
+        ASSERT_TRUE(container->Focus());
+        ASSERT_EQ(context_->GetFocusElement(), container);
+        key(SDL_SCANCODE_U);
+        auto action = overlay.consumeAction();
+        ASSERT_TRUE(action);
+        EXPECT_EQ(action->action, gui::RmlSequencerOverlay::Action::APPLY_EDIT);
+        key(SDL_SCANCODE_ESCAPE);
+        action = overlay.consumeAction();
+        ASSERT_TRUE(action);
+        EXPECT_EQ(action->action, gui::RmlSequencerOverlay::Action::REVERT_EDIT);
     }
 } // namespace lfs::vis

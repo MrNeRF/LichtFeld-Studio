@@ -99,6 +99,8 @@ namespace lfs::vis {
         friend class WindowInputDispatchTest;
         void processEvent(const ::SDL_Event& event);
         void dispatchQueuedEvent(const ::SDL_Event& event);
+        void dispatchPolledEvent(const ::SDL_Event& event);
+        bool drainQueuedEvents();
         static bool watchEvent(void* userdata, ::SDL_Event* event);
         bool pumping_events_ = false;
         bool watching_event_ = false;

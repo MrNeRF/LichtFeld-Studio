@@ -1043,8 +1043,8 @@ namespace lfs::vis::gui {
         }
     }
 
-    void RmlViewportOverlay::processInput(const PanelInputState& input) {
-        if (rml_manager_ && rml_context_ && rml_manager_->routeInput(rml_context_, input, [this](const PanelInputState& event) { processInput(event); }))
+    void RmlViewportOverlay::processInput(const PanelInputState& input, std::function<bool(float, float)> pointer_blocker) {
+        if (rml_manager_ && rml_context_ && rml_manager_->routeInput(rml_context_, input, [this](const PanelInputState& event) { processInput(event); }, false, std::move(pointer_blocker)))
             return;
         wants_input_ = false;
         if (!rml_context_ || !document_)
