@@ -298,6 +298,12 @@ The desktop UI, grid, gizmos and final composition still use Vulkan. This
 backend is not yet a fully independent Metal desktop presentation/editor stack.
 Automatic continues to use Vulkan, and no global Vulkan shader is modified.
 
+The production adapter admits short resident UInt8/Bool selection and preview
+masks: unknown logical IDs remain unselected. Mac contracts exercise both tensor
+backends, GS/GUT, reordered cuts and an explicit Metal preference, comparing the
+exact captured image with a zero-filled full mask. Nonresident, strided and
+non-byte masks still fall back through the existing capability contract.
+
 ## Verification and remaining native work
 
 GPU contracts cover projection, stable sorting/composition, tensor producer

@@ -776,8 +776,10 @@ namespace lfs::vis {
     bool MetalViewportRenderer::supports(const core::SplatData& model, const rendering::ViewportRenderRequest& r) {
         // Every unsupported contract is routed to the existing renderer; never silently
         // drop filters, display settings or editor overlays from a requested frame.
-        const auto resident_mask = [&](const core::Tensor* mask) { return !mask || !mask->is_valid() ||
-                                                                          (nativeStorage(*mask) && mask->is_contiguous() && mask->bytes() >= size_t(model.size()) &&
+        // Short byte masks have an unselected suffix; both native overlay
+        // stages guard logical IDs against the exact resident mask extent.
+        const auto resident_mask = [](const core::Tensor* mask) { return !mask || !mask->is_valid() ||
+                                                                          (nativeStorage(*mask) && mask->is_contiguous() && mask->bytes() > 0 &&
                                                                            (mask->dtype() == core::DataType::UInt8 || mask->dtype() == core::DataType::Bool)); };
         // A fully resident RAD can use the ordinary source path. Paging is
         // required only for a GPU hierarchy cut or a partial resident preview.

@@ -4,8 +4,10 @@
 #include "metal_viewport_renderer.hpp"
 #include "preferences.hpp"
 #include <Python.h>
+#include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <stdexcept>
 #include <unistd.h>
@@ -54,6 +56,74 @@ static void transparent_threshold_contract(vis::VulkanContext& context) {
         else
             require(pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 0 && pixel[3] == 0, "Empty transparent tail retained RGB/alpha");
     }
+}
+static void partial_selection_mask_contract(vis::VulkanContext& context) {
+    using core::Device;
+    using core::Tensor;
+    // A short mask has an implicit unselected suffix. Exercise admission and
+    // the production adapter, not only the lower-level shader buffer contract.
+    vis::UserPreferences::instance().setViewerBackend(rendering::ViewerBackend::Metal);
+    for (const auto backend : {core::GpuBackend::Metal, core::GpuBackend::Vulkan}) {
+        core::GpuBackendScope scope(backend);
+        core::SplatData model(0,
+                              Tensor::from_vector(std::vector<float>{-.45f, 0, -3, 0, 0, -3, .45f, 0, -3}, {3, 3}, Device::GPU),
+                              Tensor::full({3, 1, 3}, .5f, Device::GPU), {},
+                              Tensor::full({3, 3}, -3.f, Device::GPU),
+                              Tensor::from_vector(std::vector<float>{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0}, {3, 4}, Device::GPU),
+                              Tensor::full({3, 1}, 4.f, Device::GPU), 1.f);
+        vis::VksplatViewportRenderer adapter;
+        rendering::ViewportRenderRequest request;
+        request.frame_view.size = {96, 64};
+        request.sh_degree = 0;
+        const auto capture = [&] {
+            require(vis::MetalViewportRenderer::supports(model, request), "Partial native selection mask unnecessarily rejected Metal");
+            const auto frame = adapter.render(context, model, request, true, vis::VksplatViewportRenderer::OutputSlot::Main, false, true);
+            require(frame.has_value() && (frame->generation >> 63) != 0, "Partial selection mask fell back to Vulkan");
+            auto rgb = Tensor::empty({64, 96, 3}, Device::CPU);
+            const auto ticket = adapter.submitReadOutputImageIntoCpuHwcTicket(context, vis::VksplatViewportRenderer::OutputSlot::Main, rgb, 0, 0);
+            require(ticket.has_value() && adapter.waitReadbackTicket(*ticket).has_value(), "Partial selection readback failed");
+            return rgb;
+        };
+        const std::array<uint32_t, 3> reordered_cut{2, 0, 1};
+        for (bool gut : {false, true})
+            for (bool reordered : {false, true}) {
+                request.gut = gut;
+                request.lod_indices = reordered ? reordered_cut.data() : nullptr;
+                request.lod_count = reordered ? reordered_cut.size() : 0;
+                const auto plain = capture();
+                for (const auto dtype : {core::DataType::UInt8, core::DataType::Bool}) {
+                    const auto full = std::make_shared<Tensor>(Tensor::from_vector(std::vector<float>{1, 0, 0}, {3}, Device::GPU).to(dtype));
+                    const auto short_mask = std::make_shared<Tensor>(Tensor::from_vector(std::vector<float>{1}, {1}, Device::GPU).to(dtype));
+                    for (bool preview : {false, true}) {
+                        const auto assign = [&](const std::shared_ptr<Tensor>& mask) {
+                            request.overlay = {};
+                            if (preview) {
+                                request.overlay.emphasis.transient_mask.owned_mask = mask;
+                                request.overlay.emphasis.transient_mask.mask = mask.get();
+                            } else {
+                                request.overlay.has_selection = true;
+                                request.overlay.emphasis.mask = mask;
+                            }
+                        };
+                        assign(full);
+                        const auto expected = capture();
+                        require(std::memcmp(plain.ptr<float>(), expected.ptr<float>(), plain.bytes()) != 0, "Selection oracle never changed the image");
+                        assign(short_mask);
+                        const auto actual = capture();
+                        require(std::memcmp(expected.ptr<float>(), actual.ptr<float>(), expected.bytes()) == 0, "Short selection mask changed its implicit unselected suffix");
+                    }
+                }
+                request.overlay = {};
+            }
+        request.overlay.has_selection = true;
+        request.overlay.emphasis.mask = std::make_shared<Tensor>(Tensor::full({1}, 1.f, Device::GPU));
+        require(!vis::MetalViewportRenderer::supports(model, request), "Non-byte selection mask accepted");
+        request.overlay.emphasis.mask = std::make_shared<Tensor>(Tensor::full({1}, 1.f, Device::CPU).to(core::DataType::UInt8));
+        require(!vis::MetalViewportRenderer::supports(model, request), "Non-resident selection mask accepted");
+        request.overlay.emphasis.mask = std::make_shared<Tensor>(Tensor::full({3, 2}, 1.f, Device::GPU).to(core::DataType::UInt8).slice(1, 0, 1));
+        require(!vis::MetalViewportRenderer::supports(model, request), "Strided selection mask accepted");
+    }
+    vis::UserPreferences::instance().setViewerBackend(rendering::ViewerBackend::Vulkan);
 }
 static void run() {
     core::GpuBackendScope scope(core::GpuBackend::Metal);
@@ -343,6 +413,7 @@ static void run() {
     }
     require(coverage_difference == 0, "Native point coverage differs from desktop Vulkan");
     transparent_threshold_contract(context);
+    partial_selection_mask_contract(context);
     std::puts("Native viewport texture, resident storage, camera, depth, resize and slot reuse contracts passed.");
 }
 int main() {
