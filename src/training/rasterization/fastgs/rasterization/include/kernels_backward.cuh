@@ -853,9 +853,9 @@ namespace fast_lfs::rasterization::kernels::backward {
                     const float3 color_clamped =
                         fminf(fmaxf(color_unclamped, 0.0f), config::max_blend_color);
                     const unsigned factor_bits =
-                        (color_unclamped.x <= config::max_blend_color ? 1u : 0u) |
-                        (color_unclamped.y <= config::max_blend_color ? 2u : 0u) |
-                        (color_unclamped.z <= config::max_blend_color ? 4u : 0u);
+                        (color_unclamped.x >= 0.0f && color_unclamped.x <= config::max_blend_color ? 1u : 0u) |
+                        (color_unclamped.y >= 0.0f && color_unclamped.y <= config::max_blend_color ? 2u : 0u) |
+                        (color_unclamped.z >= 0.0f && color_unclamped.z <= config::max_blend_color ? 4u : 0u);
                     s_color[thread_rank] = make_float4(
                         color_clamped.x, color_clamped.y, color_clamped.z, __uint_as_float(factor_bits));
                     if (stage_depth)
