@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <glm/gtc/matrix_transform.hpp>
 #include <limits>
@@ -22,6 +23,7 @@
 #include <stdexcept>
 #include <string>
 #include <sys/resource.h>
+#include <unistd.h>
 
 namespace {
     using namespace lfs;
@@ -454,10 +456,17 @@ namespace {
         vis::VulkanContext context;
         if (!context.initHeadless())
             throw std::runtime_error(context.lastError());
-        // Safe mode prevents reading/writing user preferences. Automatic keeps the
-        // production Vulkan path while the native adapter is called directly.
-        if (vis::UserPreferences::instance().viewerBackend() != rendering::ViewerBackend::Automatic)
-            throw std::runtime_error("Benchmark preferences must be isolated");
+        // Preferences use a unique temporary home. Auto can choose Metal now,
+        // so force only the production reference adapter to Vulkan.
+        auto& preferences = vis::UserPreferences::instance();
+        const auto previous_backend = preferences.viewerBackend();
+        struct RestoreBackend {
+            rendering::ViewerBackend value;
+            ~RestoreBackend() { vis::UserPreferences::instance().setViewerBackend(value); }
+        } restore_backend{previous_backend};
+        preferences.setViewerBackend(rendering::ViewerBackend::Vulkan);
+        if (preferences.viewerBackend() != rendering::ViewerBackend::Vulkan)
+            throw std::runtime_error("Benchmark reference must explicitly select Vulkan");
         std::shared_ptr<core::SplatData> imported;
         rendering::FrameView imported_view;
         std::vector<glm::mat4> imported_transforms;
@@ -715,6 +724,9 @@ namespace {
                                      : vulkan.render(context, reference_cut ? *reference_cut : model, reference_request, false, kTarget, false, o.deterministic_reference);
                 if (!result)
                     throw std::runtime_error(result.error());
+                const auto expected_backend = native ? rendering::ViewerBackend::Metal : rendering::ViewerBackend::Vulkan;
+                if (result->viewer_backend != expected_backend || bool(result->generation >> 63) != native)
+                    throw std::runtime_error("Benchmark frame did not use the requested renderer API");
                 wait(context, *result);
             };
             auto complete = [&] {
@@ -962,14 +974,18 @@ namespace {
         }
         rusage usage{};
         getrusage(RUSAGE_SELF, &usage);
-        return {{"schema_version", 1}, {"gpu_profiling", o.profile_gpu}, {"deterministic_reference", o.deterministic_reference}, {"tensor_backend", core::gpu_backend_name(o.tensor_backend)}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", imported ? Json(nullptr) : Json(1939)}, {"scene_source", imported ? o.input : "synthetic"}, {"loader", loader_name}, {"generated_input_fixture", o.input_fixture}, {"generated_source_count", o.input_fixture ? Json(o.fixture_count) : Json(nullptr)}, {"fixture_format", o.fixture_format}, {"camera_source", imported ? (o.camera.empty() ? "fitted_bounds" : o.camera) : "synthetic"}, {"camera_pose", camera_pose}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"profile", o.portal ? "portal" : "studio"}, {"tone_fixture", o.portal_tone}, {"tone_operator", o.tone}, {"exposure", o.exposure}, {"transparent", o.transparent}, {"depth_grayscale", o.depth_gray}, {"reference_resident_cut", o.gut && o.lod}, {"gpu_lod", o.gpu_lod}, {"gpu_lod_budget", o.gpu_lod_budget}, {"spark_opacity", o.spark}, {"lod", o.lod}, {"lod_logical", o.lod_logical}, {"lod_weights", o.lod_weights}, {"lod_debug", o.lod_debug}, {"gut", o.gut}, {"equirectangular", o.equirect}, {"near_fixture", o.near}, {"saturation_fixture", o.saturation}, {"frustum_fixture", o.frustum}, {"subregion", o.subregion}, {"reference_full_frame_crop", o.equirect && o.subregion}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
+        return {{"schema_version", 1}, {"renderer_identity_verified", true}, {"preferences_isolated", true}, {"metal_renderer", "metal"}, {"vulkan_reference_renderer", "vulkan"}, {"gpu_profiling", o.profile_gpu}, {"deterministic_reference", o.deterministic_reference}, {"tensor_backend", core::gpu_backend_name(o.tensor_backend)}, {"metric", "completed_frame_wall_latency_ms"}, {"includes", "host encode, submission, GPU raster, output conversion, completion wait"}, {"excludes", "warmup, CPU image readback, desktop UI/compositor, frame pipelining"}, {"device", MTLCreateSystemDefaultDevice().name.UTF8String}, {"os", NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String}, {"compiler", __clang_version__}, {"scene_seed", imported ? Json(nullptr) : Json(1939)}, {"scene_source", imported ? o.input : "synthetic"}, {"loader", loader_name}, {"generated_input_fixture", o.input_fixture}, {"generated_source_count", o.input_fixture ? Json(o.fixture_count) : Json(nullptr)}, {"fixture_format", o.fixture_format}, {"camera_source", imported ? (o.camera.empty() ? "fitted_bounds" : o.camera) : "synthetic"}, {"camera_pose", camera_pose}, {"metal_debug_layer", std::getenv("MTL_DEBUG_LAYER") ? std::getenv("MTL_DEBUG_LAYER") : "unset"}, {"metal_shader_validation", std::getenv("MTL_SHADER_VALIDATION") ? std::getenv("MTL_SHADER_VALIDATION") : "unset"}, {"count", o.count}, {"width", o.width}, {"height", o.height}, {"warmup_pairs", o.warmup}, {"profile", o.portal ? "portal" : "studio"}, {"tone_fixture", o.portal_tone}, {"tone_operator", o.tone}, {"exposure", o.exposure}, {"transparent", o.transparent}, {"depth_grayscale", o.depth_gray}, {"reference_resident_cut", o.gut && o.lod}, {"gpu_lod", o.gpu_lod}, {"gpu_lod_budget", o.gpu_lod_budget}, {"spark_opacity", o.spark}, {"lod", o.lod}, {"lod_logical", o.lod_logical}, {"lod_weights", o.lod_weights}, {"lod_debug", o.lod_debug}, {"gut", o.gut}, {"equirectangular", o.equirect}, {"near_fixture", o.near}, {"saturation_fixture", o.saturation}, {"frustum_fixture", o.frustum}, {"subregion", o.subregion}, {"reference_full_frame_crop", o.equirect && o.subregion}, {"mip", o.mip}, {"orthographic", o.ortho}, {"depth_view", o.depth}, {"overlay_fixture", o.overlay}, {"rasterization_scale", o.export_scale ? 2.f : 1.f}, {"samples_per_backend", o.samples}, {"process_peak_rss_bytes", usage.ru_maxrss}, {"cases", cases}};
     }
 } // namespace
 int main(int argc, char** argv) {
     @autoreleasepool {
         try {
             const auto o = options(argc, argv);
-            if (setenv("LFS_SAFE_MODE", "1", 1) != 0)
+            // Safe mode always returns defaults and cannot retain an explicit
+            // renderer choice. Use an isolated home instead of user settings.
+            auto preference_home = (std::filesystem::temp_directory_path() / "lichtfeld-viewer-benchmark-XXXXXX").string();
+            if (!mkdtemp(preference_home.data()) || setenv("LFS_HOME", preference_home.c_str(), 1) != 0 ||
+                unsetenv("LFS_SAFE_MODE") != 0)
                 throw std::runtime_error("Cannot isolate benchmark preferences");
             if (!core::gpu_backend_available(core::GpuBackend::Metal)) {
                 std::puts("SKIP: resident Metal tensors require a compatible macOS/Metal device");

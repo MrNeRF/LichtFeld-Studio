@@ -322,6 +322,12 @@ backends, GS/GUT, reordered cuts and an explicit Metal preference, comparing the
 exact captured image with a zero-filled full mask. Nonresident, strided and
 non-byte masks still fall back through the existing capability contract.
 
+The comparison benchmark explicitly selects Vulkan for the production reference
+adapter and invokes Metal directly. Every warmup and measured frame verifies
+its actual renderer metadata and generation identity. This prevents Auto's
+native preference from silently turning the comparison into Metal versus Metal.
+A unique temporary preferences home keeps benchmark settings isolated from the user.
+
 ## Verification and remaining native work
 
 GPU contracts cover projection, stable sorting/composition, tensor producer
