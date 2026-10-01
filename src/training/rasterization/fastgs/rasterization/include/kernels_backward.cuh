@@ -162,6 +162,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         const uint work_idx = in_range ? primitive_work_indices[primitive_idx] : 0u;
         const bool invisible = in_range && work_idx == 0xffffffffu;
         const bool visible = in_range && !invisible;
+        if (visible && fused_adam.rendered_count != nullptr)
+            fused_adam.rendered_count[primitive_idx] += 1.0f;
 
         // Compute SH backward gradients before entering the geometry path.
         if (invisible) {

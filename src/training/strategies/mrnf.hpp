@@ -86,6 +86,8 @@ namespace lfs::training {
         void post_backward(int iter, RenderOutput& render_output) override;
         bool is_refining(int iter) const override;
         void step(int iter) override;
+        [[nodiscard]] lfs::core::Tensor rendered_support_counts() const override { return _rendered_count; }
+
         void permute_gaussian_rows(const lfs::core::Tensor& perm) override;
 
         lfs::core::SplatData& get_model() override { return *_splat_data; }
@@ -163,6 +165,7 @@ namespace lfs::training {
             float cap = 1.0f;
         };
 
+        void clear_rendered_support(const lfs::core::Tensor& indices);
         void refine(int iter, RenderOutput& render_output);
         void grow_and_split(int iter, int pruned_count);
         // Splits the given parents and places their children (free slots first,
@@ -259,6 +262,7 @@ namespace lfs::training {
 
         std::shared_ptr<CameraDataset> _views;
 
+        lfs::core::Tensor _rendered_count;
         lfs::core::Tensor _refine_weight_max;
         lfs::core::Tensor _refine_ratio_max;
         lfs::core::Tensor _vis_count;

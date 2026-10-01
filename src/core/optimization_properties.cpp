@@ -213,6 +213,21 @@ namespace lfs::core::param {
             .precision(2)
             .ui_step(0.1)
 
+            .all_strategies()
+            .bool_prop(&OptimizationParameters::opacity_decay_rendered_only,
+                       "opacity_decay_rendered_only", "Opacity Decay Rendered Only", d.opacity_decay_rendered_only,
+                       "Apply MRNF opacity decay only to rows rasterized in the refine window")
+            .locale("training.losses.opacity_decay_rendered_only")
+            .tooltip("training.tooltip.opacity_decay_rendered_only")
+            .all_strategies()
+            .float_prop(&OptimizationParameters::densify_structure_weight,
+                        "densify_structure_weight", "Densify Structure Weight", d.densify_structure_weight, 0.0f, 4.0f,
+                        "Emphasizes line structures in the densification error map; 0 disables it, recommended 1")
+            .locale("training.losses.densify_structure_weight")
+            .tooltip("training.tooltip.densify_structure_weight")
+            .precision(2)
+            .ui_step(0.1)
+
             // Refinement
             .all_strategies()
             .size_prop(&OptimizationParameters::refine_every,

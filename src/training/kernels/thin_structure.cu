@@ -22,6 +22,12 @@ namespace lfs::training::kernels {
         constexpr int VERTICAL_TILE_HEIGHT = 8;
         constexpr std::array<double, 4> RIDGE_SIGMAS{0.8, 1.2, 1.8, 2.5};
         constexpr float STRUCTURE_RESPONSE_CAP = 4.0f;
+
+        __global__ void densification_weight_kernel(float* error, const float* structure, size_t n, float gain) {
+            const size_t i = blockIdx.x * static_cast<size_t>(blockDim.x) + threadIdx.x;
+            if (i < n)
+                error[i] *= 1.0f + gain * fminf(fmaxf(structure[i], 0.0f), STRUCTURE_RESPONSE_CAP);
+        }
         struct DerivativeFilter {
             float g[2 * MAX_FILTER_RADIUS + 1];
             float d1[2 * MAX_FILTER_RADIUS + 1];
@@ -288,4 +294,19 @@ namespace lfs::training::kernels {
         }
         LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.weight");
     }
+    void structure_densification_weight(lfs::core::Tensor& error, const lfs::core::Tensor& structure, const float gain) {
+        using namespace lfs::core;
+        LFS_ASSERT(std::isfinite(gain) && gain >= 0.0f);
+        if (gain == 0.0f)
+            return;
+        LFS_ASSERT(error.device() == Device::CUDA && error.ndim() == 2 && error.dtype() == DataType::Float32 && error.is_contiguous());
+        LFS_ASSERT(structure.device() == Device::CUDA && structure.shape() == error.shape() && structure.dtype() == DataType::Float32 && structure.is_contiguous());
+        const auto stream = error.stream();
+        structure.sync_to_stream(stream);
+        constexpr int threads = 256;
+        const auto blocks = static_cast<unsigned>((error.numel() + threads - 1) / threads);
+        densification_weight_kernel<<<blocks, threads, 0, stream>>>(error.ptr<float>(), structure.ptr<float>(), error.numel(), gain);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.structure.densification");
+    }
+
 } // namespace lfs::training::kernels

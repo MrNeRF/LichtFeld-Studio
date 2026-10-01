@@ -44,6 +44,7 @@ namespace lfs::training {
         virtual void permute_gaussian_rows(const lfs::core::Tensor&) {}
 
         virtual bool is_refining(int iter) const = 0;
+        [[nodiscard]] virtual lfs::core::Tensor rendered_support_counts() const { return {}; }
 
         // Get the underlying Gaussian model (reference to Scene-owned data)
         virtual lfs::core::SplatData& get_model() = 0;

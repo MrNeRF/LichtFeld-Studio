@@ -608,6 +608,8 @@ namespace lfs::training {
         _densify_n_allocated_peak_bytes = 0;
         _densify_child_required_peak_bytes = 0;
         _densify_child_allocated_peak_bytes = 0;
+        if (optimParams.gut && optimParams.opacity_decay_rendered_only)
+            LOG_WARN("opacity_decay_rendered_only has no effect with GUT");
         auto resolved_params = optimParams;
         resolved_params.resolve_mrnf_capacity_defaults();
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(
@@ -710,6 +712,10 @@ namespace lfs::training {
         _initial_sfm_point_count = n;
         const size_t tracking_capacity = splat_reserved_capacity(*_splat_data);
         reset_vector_buffer(_refine_weight_max, n, _splat_data->means().device(), tracking_capacity);
+        if (_params->opacity_decay_rendered_only && !_params->gut)
+            reset_vector_buffer(_rendered_count, n, _splat_data->means().device(), tracking_capacity);
+        else
+            _rendered_count = lfs::core::Tensor();
         if (cfg_ratio_rank_on()) {
             reset_vector_buffer(_vis_count, n, _splat_data->means().device(), tracking_capacity);
             reset_vector_buffer(_refine_ratio_max, n, _splat_data->means().device(), tracking_capacity);
@@ -1245,6 +1251,8 @@ namespace lfs::training {
         if (has_separate_visibility_buffer()) {
             morton::permute_row_tensor(_vis_count, perm);
         }
+        if (_rendered_count.is_valid())
+            morton::permute_row_tensor(_rendered_count, perm);
         morton::permute_row_tensor(_precomputed_edge_scores, perm);
         morton::permute_row_tensor(_edge_score_sum, perm);
         morton::permute_row_tensor(_explore_score_sum, perm);
@@ -1414,6 +1422,8 @@ namespace lfs::training {
         const size_t new_n = static_cast<size_t>(_splat_data->size());
         const size_t tracking_capacity = splat_reserved_capacity(*_splat_data);
         reset_vector_buffer(_refine_weight_max, new_n, _splat_data->means().device(), tracking_capacity);
+        if (_params->opacity_decay_rendered_only && !_params->gut)
+            reset_vector_buffer(_rendered_count, new_n, _splat_data->means().device(), tracking_capacity);
         if (has_separate_visibility_buffer()) {
             reset_vector_buffer(_vis_count, new_n, _splat_data->means().device(), tracking_capacity);
         }
@@ -2376,6 +2386,7 @@ namespace lfs::training {
                 append_start,
                 count,
                 &shn_batch);
+            clear_rendered_support(chunk_indices);
             shn_batch.flush();
             reused += append_start;
         }
@@ -2648,6 +2659,8 @@ namespace lfs::training {
             compact(_refine_weight_max);
         if (_refine_ratio_max.is_valid() && _refine_ratio_max.numel() > new_size)
             compact(_refine_ratio_max);
+        if (_rendered_count.is_valid() && _rendered_count.numel() > new_size)
+            compact(_rendered_count);
         if (has_separate_visibility_buffer() && _vis_count.numel() > new_size)
             compact(_vis_count);
         if (_precomputed_edge_scores.is_valid() && _precomputed_edge_scores.numel() > new_size)
@@ -2686,6 +2699,11 @@ namespace lfs::training {
             n, seed);
     }
 
+    void MRNF::clear_rendered_support(const lfs::core::Tensor& indices) {
+        if (_rendered_count.is_valid() && indices.numel() > 0)
+            _rendered_count.index_put_(indices, lfs::core::Tensor::zeros({indices.numel()}, _splat_data->means().device()));
+    }
+
     void MRNF::apply_decay(int iter) {
         const size_t n = static_cast<size_t>(_splat_data->size());
         if (n == 0)
@@ -2699,6 +2717,7 @@ namespace lfs::training {
             refresh_far_field_mask(n);
         }
 
+        assert(!_params->opacity_decay_rendered_only || _params->gut || _rendered_count.numel() == n);
         mrnf_strategy::launch_mrnf_decay(
             _splat_data->opacity_raw().ptr<float>(),
             _splat_data->scaling_raw().ptr<float>(),
@@ -2710,7 +2729,8 @@ namespace lfs::training {
             _params->scale_decay,
             scale_far ? effective_far_decay_scale() : 1.0f,
             train_t,
-            n);
+            n, nullptr,
+            _params->opacity_decay_rendered_only && !_params->gut ? _rendered_count.ptr<float>() : nullptr);
     }
 
     void MRNF::enforce_max_cap() {
@@ -2917,6 +2937,7 @@ namespace lfs::training {
         // previous-occupant / pre-split gradients on rewritten rows.
         zero_adam_grads_at_indices(*_optimizer, target_indices, layout_rest);
 
+        clear_rendered_support(target_indices);
         set_deleted_mask_rows(*_splat_data, _free_mask, target_indices, false);
 
         return {target_indices, count - slots_to_fill};
@@ -3027,6 +3048,8 @@ namespace lfs::training {
             }
         };
 
+        if (_params->opacity_decay_rendered_only && !_params->gut)
+            ensure(_rendered_count, DataType::Float32);
         ensure(_free_mask, DataType::Bool);
         ensure(_refine_weight_max, DataType::Float32);
         if (has_separate_visibility_buffer()) {
@@ -3635,6 +3658,11 @@ namespace lfs::training {
         const size_t capacity = splat_reserved_capacity(*_splat_data);
         const size_t tracking_capacity = capacity;
         reset_vector_buffer(_refine_weight_max, n, _splat_data->means().device(), tracking_capacity);
+        if (_params->opacity_decay_rendered_only && !_params->gut) {
+            reset_vector_buffer(_rendered_count, n, _splat_data->means().device(), tracking_capacity);
+            _rendered_count.fill_(1.0f);
+        } else
+            _rendered_count = lfs::core::Tensor();
         reset_vector_buffer(_explore_score_sum, n, _splat_data->means().device(), tracking_capacity);
         if (has_separate_visibility_buffer()) {
             reset_vector_buffer(_vis_count, n, _splat_data->means().device(), tracking_capacity);
@@ -3694,6 +3722,7 @@ namespace lfs::training {
         std::swap(_refine_weight_max, source._refine_weight_max);
         std::swap(_refine_ratio_max, source._refine_ratio_max);
         std::swap(_vis_count, source._vis_count);
+        std::swap(_rendered_count, source._rendered_count);
         std::swap(_precomputed_edge_scores, source._precomputed_edge_scores);
         std::swap(_edge_precompute_valid, source._edge_precompute_valid);
         std::swap(_edge_score_sum, source._edge_score_sum);
@@ -3749,7 +3778,16 @@ namespace lfs::training {
     void MRNF::set_optimization_params(const lfs::core::param::OptimizationParameters& params) {
         const bool background_changed = background_improvements_enabled() != params.background_improvements;
         const bool renderer_changed = _params && _params->gut != params.gut;
+        const bool support_changed = !_params || _params->opacity_decay_rendered_only != params.opacity_decay_rendered_only;
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(params);
+        if ((support_changed || renderer_changed) && params.gut && params.opacity_decay_rendered_only)
+            LOG_WARN("opacity_decay_rendered_only has no effect with GUT");
+        if (_splat_data && (support_changed || renderer_changed)) {
+            if (params.opacity_decay_rendered_only && !params.gut)
+                reset_vector_buffer(_rendered_count, _splat_data->size(), _splat_data->means().device(), splat_reserved_capacity(*_splat_data));
+            else
+                _rendered_count = lfs::core::Tensor();
+        }
 
         if (_mean_lr_unscaled <= 0.0) {
             _mean_lr_unscaled = params.means_lr;

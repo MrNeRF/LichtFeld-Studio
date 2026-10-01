@@ -94,7 +94,8 @@ namespace lfs::training::mrnf_strategy {
         float far_decay_scale,
         float train_t,
         size_t N,
-        void* stream = nullptr);
+        void* stream = nullptr,
+        const float* rendered_count = nullptr);
 
     /**
      * Compute percentile-based bounding box on GPU.

@@ -26,4 +26,8 @@ namespace lfs::training::kernels {
                                                    lfs::core::Tensor& output,
                                                    float gain, bool valid_padding);
 
+    LFS_CUDA_API void structure_densification_weight(lfs::core::Tensor& error,
+                                                     const lfs::core::Tensor& structure,
+                                                     float gain);
+
 } // namespace lfs::training::kernels

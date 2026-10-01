@@ -155,6 +155,7 @@ namespace lfs::training::mrnf_strategy {
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.noise_injection");
     }
 
+    template <bool RenderedOnly>
     __global__ void mrnf_decay_kernel(
         float* __restrict__ raw_opacities,
         float* __restrict__ log_scales,
@@ -166,7 +167,7 @@ namespace lfs::training::mrnf_strategy {
         float scale_decay,
         float far_decay_scale,
         float train_t,
-        size_t N) {
+        size_t N, const float* rendered_count) {
 
         const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
         if (idx >= N)
@@ -186,7 +187,8 @@ namespace lfs::training::mrnf_strategy {
         const float opacity_delta = opac_decay * t_shrink;
         // A sigmoid/logit round trip loses finite saturated logits even when
         // decay is disabled. Still repair infinities from older checkpoints.
-        if (opacity_delta != 0.0f || isinf(raw_opacities[idx])) {
+        if ((!RenderedOnly || rendered_count[idx] > 0.0f) &&
+            (opacity_delta != 0.0f || isinf(raw_opacities[idx]))) {
             raw_opacities[idx] = d_logit(d_sigmoid(raw_opacities[idx]) - opacity_delta);
         }
 
@@ -209,7 +211,7 @@ namespace lfs::training::mrnf_strategy {
         float far_decay_scale,
         float train_t,
         size_t N,
-        void* stream) {
+        void* stream, const float* rendered_count) {
 
         if (N == 0)
             return;
@@ -218,10 +220,16 @@ namespace lfs::training::mrnf_strategy {
         const int blocks = static_cast<int>((N + threads - 1) / threads);
         cudaStream_t s = resolve_stream(stream);
 
-        mrnf_decay_kernel<<<blocks, threads, 0, s>>>(
-            raw_opacities, log_scales, frozen_mask, frozen_mask_size,
-            far_mask, far_mask_size, opacity_decay, scale_decay, far_decay_scale,
-            train_t, N);
+        if (rendered_count != nullptr)
+            mrnf_decay_kernel<true><<<blocks, threads, 0, s>>>(
+                raw_opacities, log_scales, frozen_mask, frozen_mask_size,
+                far_mask, far_mask_size, opacity_decay, scale_decay, far_decay_scale,
+                train_t, N, rendered_count);
+        else
+            mrnf_decay_kernel<false><<<blocks, threads, 0, s>>>(
+                raw_opacities, log_scales, frozen_mask, frozen_mask_size,
+                far_mask, far_mask_size, opacity_decay, scale_decay, far_decay_scale,
+                train_t, N, nullptr);
         LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.decay");
     }
 

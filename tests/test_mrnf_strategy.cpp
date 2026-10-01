@@ -247,6 +247,8 @@ namespace {
         p.fill_pacing_iter = 0;
         p.far_seed_dose = 0;
         p.growth_ratio_rank = false;
+        p.opacity_decay_rendered_only = false;
+        p.densify_structure_weight = 0.0f;
         return p;
     }
 
@@ -1690,6 +1692,26 @@ TEST(MRNFStrategyTest, FarDecayScaleAppliesOnlyToFarUnfrozenRows) {
             EXPECT_GT(std::abs(expected_raw(o0[i], opt_params.opacity_decay, 0.5f) - o[i]), 1e-6f) << i;
         }
     }
+    auto gut_model = create_mrnf_test_splat_data();
+    MRNF gut_strategy(gut_model);
+    auto gut_params = vanilla_mrnf_params();
+    gut_params.iterations = 1'000;
+    gut_params.gut = true;
+    gut_params.opacity_decay_rendered_only = true;
+    EXPECT_TRUE(gut_params.validate().empty());
+    gut_strategy.initialize(gut_params);
+    EXPECT_FALSE(gut_strategy.rendered_support_counts().is_valid());
+    const auto gut_original = gut_model.opacity_raw().cpu().to_vector();
+    gut_strategy.apply_decay(500);
+    const auto gut_decayed = gut_model.opacity_raw().cpu().to_vector();
+    for (size_t i = 0; i < gut_original.size(); ++i)
+        EXPECT_NEAR(gut_decayed[i], expected_raw(gut_original[i], gut_params.opacity_decay, .5f), 1e-5f);
+    gut_params.gut = false;
+    gut_strategy.set_optimization_params(gut_params);
+    EXPECT_TRUE(gut_strategy.rendered_support_counts().is_valid());
+    gut_params.gut = true;
+    gut_strategy.set_optimization_params(gut_params);
+    EXPECT_FALSE(gut_strategy.rendered_support_counts().is_valid());
 }
 
 TEST(MRNFStrategyTest, DensificationInfoShapeIsTwoRows) {
