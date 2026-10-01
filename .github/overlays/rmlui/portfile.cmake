@@ -8,6 +8,9 @@ vcpkg_from_github(
         add-itlib-and-robin-hood.patch
         skip-custom-find-modules.patch
         context-mouse-button-cancel.patch
+        # Header-defined pointer templates must instantiate in DLL consumers.
+        # Keep ObserverPtrBlock and its allocation functions exported.
+        observer-ptr-header-only.patch
 )
 
 vcpkg_check_features(OUT_FEATURE_OPTIONS FEATURE_OPTIONS
