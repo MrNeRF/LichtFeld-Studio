@@ -1123,8 +1123,11 @@ namespace lfs::core {
         if (banded_q16) {
             const size_t cells = sh_value_quant::sh_value_u16_count(total, dst_layout_rest);
             const size_t bounds = sh_value_quant::n_bounds_for_prims(total) * 2;
-            shN = allocator(TensorShape({cells}), cells, DataType::Float16, "SplatData.shN");
-            shN_bounds = allocator(TensorShape({bounds}), bounds, DataType::Float32, "SplatData.shN_value_bounds");
+            const size_t capacity = std::max(total, means.capacity());
+            const size_t capacity_cells = sh_value_quant::sh_value_u16_count(capacity, dst_layout_rest);
+            const size_t capacity_bounds = sh_value_quant::n_bounds_for_prims(capacity) * 2;
+            shN = allocator(TensorShape({cells}), capacity_cells, DataType::Float16, "SplatData.shN");
+            shN_bounds = allocator(TensorShape({bounds}), capacity_bounds, DataType::Float32, "SplatData.shN_value_bounds");
             auto band = Tensor::empty_exact({band_floats});
             auto decoded = decode_floats ? Tensor::empty_exact({decode_floats}) : Tensor{};
             for (size_t begin = 0; begin < total; begin += band_size) {

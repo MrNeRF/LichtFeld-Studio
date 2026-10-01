@@ -8,6 +8,7 @@
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/scene.hpp"
+#include "core/sh_value_quant.hpp"
 #include "core/sh_value_quant_kernels.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_data_transform.hpp"
@@ -1022,4 +1023,56 @@ TEST(SceneCombinedImport, OrdinaryBuildFailuresKeepAutomaticRetry) {
     fail = false;
     ASSERT_NE(scene.getCombinedModel(), nullptr);
     EXPECT_EQ(scene.getCombinedModel()->size(), 4u);
+}
+
+TEST(SceneCombinedEncode, QuantizedStorageCoversReservedModelCapacity) {
+    using lfs::core::DataType;
+    using lfs::core::TensorShape;
+    for (const size_t total : {1025u, 196615u}) {
+        SCOPED_TRACE(total); // small aggregate and multi-band aggregate
+        Scene scene;
+        for (int i = 0; i < 2; ++i) {
+            const size_t count = i == 0 ? 257 : total - 257;
+            std::vector<float> sh(count * 15 * 3);
+            for (size_t cell = 0; cell < sh.size(); ++cell)
+                sh[cell] = float(int(cell % 127) - 63) / 13.f;
+            auto model = std::make_unique<SplatData>(
+                3, Tensor::zeros({count, 3}, Device::CUDA),
+                Tensor::zeros({count, 1, 3}, Device::CUDA),
+                Tensor::from_vector(sh, {count, 15, 3}, Device::CUDA),
+                Tensor::zeros({count, 3}, Device::CUDA),
+                Tensor::ones({count, 4}, Device::CUDA),
+                Tensor::zeros({count, 1}, Device::CUDA), 1.f);
+            if (i == 0)
+                ASSERT_TRUE(model->apply_shN_value_quant());
+            scene.addSplat(std::to_string(i), std::move(model));
+        }
+        const auto allocate = [](TensorShape shape, size_t capacity, DataType dtype, std::string_view) {
+            return Tensor::zeros_direct(std::move(shape), capacity, Device::CUDA, dtype);
+        };
+        const auto over_reserve = [&](TensorShape shape, size_t capacity, DataType dtype, std::string_view name) {
+            if (name == "SplatData.means")
+                capacity += 65537;
+            return allocate(std::move(shape), capacity, dtype, name);
+        };
+        const auto snapshot = scene.captureCombinedModelBuild();
+        const auto reference = Scene::buildCombinedModelCache(snapshot.inputs, total, allocate);
+        Scene::CombinedModelBuild actual;
+        ASSERT_NO_THROW(actual = Scene::buildCombinedModelCache(snapshot.inputs, total, over_reserve));
+        ASSERT_NE(actual.model, nullptr);
+        ASSERT_TRUE(actual.model->shN_value_quantized());
+        EXPECT_EQ(actual.model->size(), total);
+        const size_t capacity = actual.model->means_raw().capacity();
+        ASSERT_GE(capacity, total + 65537);
+        EXPECT_GE(actual.model->shN_raw().capacity(), lfs::core::sh_value_quant::sh_value_u16_count(capacity, 15));
+        EXPECT_GE(actual.model->shN_value_bounds().capacity(), lfs::core::sh_value_quant::n_bounds_for_prims(capacity) * 2);
+        EXPECT_EQ(actual.model->shN_raw().numel(), lfs::core::sh_value_quant::sh_value_u16_count(total, 15));
+        EXPECT_EQ(actual.model->shN_value_bounds().numel(), lfs::core::sh_value_quant::n_bounds_for_prims(total) * 2);
+        const auto codes = actual.model->shN_raw().cpu();
+        const auto expected_codes = reference.model->shN_raw().cpu();
+        EXPECT_EQ(std::memcmp(codes.data_ptr(), expected_codes.data_ptr(), codes.numel() * sizeof(uint16_t)), 0);
+        const auto bounds = actual.model->shN_value_bounds().cpu();
+        const auto expected_bounds = reference.model->shN_value_bounds().cpu();
+        EXPECT_EQ(std::memcmp(bounds.data_ptr(), expected_bounds.data_ptr(), bounds.numel() * sizeof(float)), 0);
+    }
 }
