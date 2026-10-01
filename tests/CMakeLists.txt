@@ -419,6 +419,7 @@ set(TEST_FILES
     test_mcmc.cpp
     test_expression_templates.cpp
     test_lfs_scheduler.cpp
+    test_uncapped_compaction.cpp
     test_mrnf_strategy.cpp
     test_compact_splats_peak.cpp
     test_adam_capacity_invariant.cpp

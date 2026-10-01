@@ -2548,7 +2548,7 @@ namespace lfs::training {
                 } else {
                     compact(state->exp_avg);
                     state->size = new_size;
-                    state->capacity = cap;
+                    state->capacity = cap > 0 ? cap : new_size;
                 }
                 // grow-only zero bounds (free-zero moments after compact).
                 ensure_joint_bounds_capacity(state->joint_bounds, new_size, cap,
@@ -2561,7 +2561,7 @@ namespace lfs::training {
             } else {
                 compact(state->exp_avg);
                 state->size = new_size;
-                state->capacity = cap;
+                state->capacity = cap > 0 ? cap : new_size;
             }
             // Grad buffers match param dtype/shape (fp32), not joint packed bytes.
             // Fused FastGS leaves grads empty; rebuilding them here would be a
