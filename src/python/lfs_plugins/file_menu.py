@@ -985,7 +985,7 @@ def register():
     lf.ui.on_project_switch_confirmation(
         _show_project_switch_confirmation
     )
-    lf.ui.on_show_load_file_confirmation(
+    lf.ui.on_show_load_file_confirmation_with_batch(
         _show_load_file_confirmation
     )
     lf.ui.on_stop_training_confirmation(

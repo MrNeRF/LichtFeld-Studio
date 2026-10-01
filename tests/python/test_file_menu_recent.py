@@ -1197,3 +1197,33 @@ def test_menu_bar_transfer_operator_shows_overlay(monkeypatch):
     assert scope['GalleryTransfersOperator'].description == 'Show gallery transfers'
     assert scope['GalleryTransfersOperator']().execute(None) == {'FINISHED'}
     assert calls == ['overlay']
+
+
+def test_registered_load_confirmation_keeps_batch_after_prompt(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    callbacks = {}
+    file_menu.lf.register_class = lambda _cls: None
+    for name in (
+        "on_show_new_project_dialog", "on_show_resume_checkpoint_popup",
+        "on_request_exit", "on_project_switch_confirmation",
+        "on_show_load_file_confirmation_with_batch", "on_stop_training_confirmation",
+    ):
+        setattr(file_menu.lf.ui, name, lambda cb, key=name: callbacks.__setitem__(key, cb))
+    file_menu.register()
+    file_menu.lf.project_is_dirty = lambda: True
+    file_menu.lf.project_has_path = lambda: True
+    calls = []
+    file_menu.lf.load_files = lambda *args, **kwargs: calls.append((args, kwargs))
+    callbacks["on_show_load_file_confirmation_with_batch"](
+        ["/tmp/first.ply", "/tmp/second.ply"], False, True, True
+    )
+    assert calls == []
+    assert len(file_menu.lf.confirm_dialogs) == 1
+    _title, _message, buttons, on_result = file_menu.lf.confirm_dialogs[0]
+    assert "tr:unsaved_work.continue_without_saving" in buttons
+    on_result("tr:unsaved_work.continue_without_saving")
+    assert calls == [
+        ((["/tmp/first.ply", "/tmp/second.ply"],),
+         {"discard_changes": True, "replace": True,
+          "stop_training": False, "_user_batch": True})
+    ]
