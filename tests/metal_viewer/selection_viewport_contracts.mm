@@ -5,10 +5,12 @@
 #include "preferences.hpp"
 #include <Python.h>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <random>
 #include <stdexcept>
 #include <unistd.h>
@@ -22,6 +24,71 @@ namespace {
     void require(bool condition, const char* message) {
         if (!condition)
             throw std::runtime_error(message);
+    }
+    void precise_small_splats(vis::VulkanContext& context, vis::MetalViewportRenderer& renderer) {
+        // Subpixel splats near real gesture boundaries exposed cancellation
+        // that broad random selections did not exercise. Keep only geometry.
+        const std::array<std::array<float, 10>, 8> geometry{{{.375725746f, -.741980493f, 2.271957159f, -4.215744972f, -4.617194176f, -5.498218536f, -.024384813f, .001928580f, .006719906f, .999678195f},
+                                                             {-.608863533f, -.740784824f, 2.025210142f, -6.730025291f, -6.838163376f, -7.678555489f, .463676602f, -.004799385f, .006771366f, .885965645f},
+                                                             {.539509296f, -.219786569f, 1.198791027f, -6.554687023f, -7.342196941f, -7.711044788f, .451674461f, -.006747358f, .014449934f, .892040253f},
+                                                             {.543651283f, .204180837f, 1.060629249f, -6.813228130f, -7.043622017f, -7.382377625f, -.044447560f, .002716169f, .012134803f, .998934329f},
+                                                             {.527110100f, .174101308f, 1.085454822f, -7.214101315f, -7.603221893f, -8.221177101f, -.686177135f, .017221944f, -.001918331f, .727228105f},
+                                                             {.510118663f, .120262504f, 1.122224450f, -7.172321796f, -7.373991489f, -7.414416790f, -.689201117f, -.004335938f, .103279151f, .717158556f},
+                                                             {.114320897f, .339419514f, 1.054803491f, -7.387386799f, -8.014912605f, -8.145614624f, -.704070985f, -.010196945f, .027925953f, .709506989f},
+                                                             {.225137383f, .339107156f, 1.044668078f, -5.300498486f, -5.594229221f, -6.695940495f, -.032454044f, .002216667f, .006841690f, .999447346f}}};
+        std::vector<float> means, scales, rotation;
+        for (const auto& row : geometry) {
+            means.insert(means.end(), row.begin(), row.begin() + 3);
+            scales.insert(scales.end(), row.begin() + 3, row.begin() + 6);
+            rotation.insert(rotation.end(), row.begin() + 6, row.end());
+        }
+        const size_t n = geometry.size();
+        core::SplatData model(0, Tensor::from_vector(means, {n, 3}, Device::GPU), Tensor::zeros({n, 1, 3}, Device::GPU), {},
+                              Tensor::from_vector(scales, {n, 3}, Device::GPU), Tensor::from_vector(rotation, {n, 4}, Device::GPU), Tensor::zeros({n, 1}, Device::GPU), 1.f);
+        Adapter::SelectionMaskRequest request;
+        request.frame_view.size = {600, 668};
+        request.frame_view.translation = {-5.657000065f, 3.f, -5.657000065f};
+        const float rows[]{-.707106769f, .248276189f, -.662086785f,
+                           7.3059776e-9f, .936332166f, .351115495f, .707106829f, .248276159f, -.662086785f};
+        request.frame_view.rotation = rendering::mat3FromRowMajor3x3(rows);
+        request.gut = true;
+        std::vector<glm::mat4> transforms{rendering::DATA_TO_VISUALIZER_WORLD_AXES_4};
+        request.scene.model_transforms = &transforms;
+        auto view = glm::mat4(glm::transpose(rendering::dataCameraToWorldFromVisualizerRotation(request.frame_view.rotation)));
+        view[3] = glm::vec4(-glm::mat3(view) * request.frame_view.translation, 1);
+        const glm::dmat4 matrix = glm::dmat4(view) * glm::dmat4(transforms[0]);
+        const auto k = request.frame_view.getCameraIntrinsics();
+        const auto project = [&](glm::dvec3 source) {
+            const auto point = matrix * glm::dvec4(source, 1);
+            return glm::dvec2(double(k.focal_x) * point.x / point.z + k.center_x, double(k.focal_y) * point.y / point.z + k.center_y);
+        };
+        for (auto shape : {Shape::Rectangle, Shape::Brush}) {
+            request.shape = shape;
+            request.primitives = shape == Shape::Rectangle ? std::vector<glm::vec4>{{40, 50, 390, 570}} : std::vector<glm::vec4>{{240, 320, 8100, 0}};
+            auto output = renderer.buildSelectionMask(context, model, request);
+            if (!output)
+                throw std::runtime_error(format_for_developer(output.error()));
+            const auto mask = output->cpu();
+            for (size_t id = 0; id < n; ++id) {
+                const auto& row = geometry[id];
+                const glm::dvec3 source(row[0], row[1], row[2]);
+                const auto basis = glm::mat3_cast(glm::normalize(glm::dquat(row[6], row[7], row[8], row[9])));
+                const auto origin = project(source);
+                glm::dvec2 delta(0);
+                for (size_t axis = 0; axis < 3; ++axis) {
+                    const auto offset = basis[axis] * (std::sqrt(.03) * std::exp(double(row[3 + axis])));
+                    delta += project(source + offset) - origin;
+                    delta += project(source - offset) - origin;
+                }
+                const auto center = origin + delta / .06 - .5;
+                const bool expected = shape == Shape::Rectangle ? center.x >= 40 && center.x <= 390 && center.y >= 50 && center.y <= 570
+                                                                : glm::length(center - glm::dvec2(240, 320)) <= 90;
+                if (bool(mask.ptr<uint8_t>()[id]) != expected) {
+                    std::fprintf(stderr, "Tiny GUT source=%zu shape=%u double center=%.9f,%.9f native=%u expected=%d\n", id, uint32_t(shape), center.x, center.y, mask.ptr<uint8_t>()[id], expected);
+                    throw std::runtime_error("Subpixel GUT selection differs from independent double projection");
+                }
+            }
+        }
     }
     void run(bool native_only) {
         core::GpuBackendScope scope(core::GpuBackend::Metal);
@@ -63,6 +130,7 @@ namespace {
         model.notify_deleted_mask_changed();
         Adapter native_adapter, reference_adapter;
         vis::MetalViewportRenderer native;
+        precise_small_splats(context, native);
         size_t cases = 0, hits = 0, ring_hits = 0;
         for (bool half : {false, true}) {
             if (half) {

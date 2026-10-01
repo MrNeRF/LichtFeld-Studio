@@ -388,3 +388,15 @@ Float32 geometry, so FP16 comparison uses the same decoded values in the referen
 The parity comparison runs without Metal's shader validator because the existing
 MoltenVK polygon pipeline exceeds its threadgroup-memory validation limit; native
 query contracts keep full API and shader validation. No Vulkan shaders are changed.
+
+
+Selection UT means avoid subtracting large weighted image coordinates. An
+orthographic projection preserves the source mean exactly; pinhole +/- sigma
+pairs use the equivalent rational correction, and spherical means accumulate
+unwrapped relative offsets. A targeted double-precision geometry oracle checks
+eight subpixel splats at gesture boundaries; the previous shader fails this
+regression and the stable formulation passes. A real 1.18-million-splat scene
+matched 3DGS selection indices exactly. Seven GUT brush IDs differed from the
+legacy Vulkan arithmetic within 0.002 pixels of the boundary; independent double
+projection confirmed the native decisions in every case. This is semantic and
+numerical parity, not a promise of bit-identical floating-point boundary decisions.

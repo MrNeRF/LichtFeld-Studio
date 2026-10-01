@@ -92,8 +92,27 @@ bool project_query(uint id, constant Parameters& p, Buffers b, bool ring,
             points[n]=sample.xy;
             if(p.image.z==2u&&n)points[n].x-=float(p.image.x)*round((points[n].x-points[0].x)/float(p.image.x));
         }
-        float2 mean2d=0;
-        for(uint n=0;n<7;++n)mean2d+=(n?sigma_weight:mean_weight)*points[n];
+        // Accumulate offsets to avoid subtracting ~100 times the image center
+        // from six large terms. The UT weights sum to one analytically.
+        float2 offset=0;
+        for(uint n=1;n<7;++n)offset+=points[n]-points[0];
+        const float2 mean2d_unwrapped=fma(float2(sigma_weight),offset,points[0]);
+        float2 mean2d=mean2d_unwrapped;
+        if(p.image.z==1u) {
+            // A linear orthographic projection preserves the Gaussian mean.
+            mean2d=projected.xy;
+        } else if(p.image.z==0u) {
+            // Pair the +/- rational projections analytically. Subtracting two
+            // large pixel coordinates loses subpixel curvature for tiny splats.
+            // sum(pair-base*2) = 2*dz*(xy*dz-z*dxy)/(z*(z*z-dz*dz)).
+            float2 correction=0;
+            const float3 view_axes[3]={sigma_scale*a,sigma_scale*bb,sigma_scale*c};
+            for(uint axis=0;axis<3;++axis) {
+                const float3 d=view_axes[axis];
+                correction+=2.f*d.z*(view.xy*d.z-view.z*d.xy)/(view.z*(view.z*view.z-d.z*d.z));
+            }
+            mean2d=fma(p.intrinsics.xy*sigma_weight,correction,projected.xy);
+        }
         if(ring)for(uint n=0;n<7;++n) {
             const float2 delta=points[n]-mean2d;
             covariance+=(n?sigma_weight:covariance_weight)*float3(delta.x*delta.x,delta.x*delta.y,delta.y*delta.y);

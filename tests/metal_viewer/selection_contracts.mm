@@ -37,8 +37,8 @@ static void run(id<MTLDevice> device) {
     auto output = [device newBufferWithLength:count options:MTLResourceStorageModeShared];
     auto coverage = [device newBufferWithLength:width * height options:MTLResourceStorageModePrivate];
     auto pick = [device newBufferWithLength:8 options:MTLResourceStorageModeShared];
-    // Fractional boundaries keep these geometry oracles away from the known
-    // FP32 UT cancellation at exactly symmetric integer pixel coordinates.
+    // Fractional boundaries distinguish geometry correctness from floating-point
+    // comparisons made exactly on a gesture boundary.
     const std::array<simd_float4, 2> primitives{simd_float4{47.75f, 35.75f, 75.25f, 55.25f}, simd_float4{20.25f, 20.25f, 60.25f, 40.25f}};
     const std::array<simd_float2, 5> polygon{simd_float2{25, 20}, simd_float2{75, 20}, simd_float2{55, 40}, simd_float2{75, 60}, simd_float2{25, 55}};
     auto shape = buffer(primitives.data(), sizeof(primitives)), vertices = buffer(polygon.data(), sizeof(polygon));
