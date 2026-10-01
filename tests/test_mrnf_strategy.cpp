@@ -1750,12 +1750,12 @@ TEST(MRNFStrategyTest, FarDecayScaleAppliesOnlyToFarUnfrozenRows) {
     EXPECT_NEAR(o[0], o0[0], 1e-6f);
     EXPECT_NEAR(s[0], s0[0], 1e-6f);
     for (size_t i = 1; i < splat_data.size(); ++i) {
-        const bool far = is_far_of_test_hull(m[i * 3], m[i * 3 + 1], m[i * 3 + 2]);
-        const float opac_decay = opt_params.opacity_decay * (far ? kFarDecayScale : 1.0f);
-        const float scale_decay = opt_params.scale_decay * (far ? kFarDecayScale : 1.0f);
+        const bool is_far = is_far_of_test_hull(m[i * 3], m[i * 3 + 1], m[i * 3 + 2]);
+        const float opac_decay = opt_params.opacity_decay * (is_far ? kFarDecayScale : 1.0f);
+        const float scale_decay = opt_params.scale_decay * (is_far ? kFarDecayScale : 1.0f);
         EXPECT_NEAR(o[i], expected_raw(o0[i], opac_decay, 0.5f), 1e-5f) << "row " << i;
         EXPECT_NEAR(s[i * 3], expected_log_s(s0[i * 3], scale_decay, 0.5f), 1e-5f) << "row " << i;
-        if (far) {
+        if (is_far) {
             EXPECT_GT(std::abs(expected_raw(o0[i], opt_params.opacity_decay, 0.5f) - o[i]), 1e-6f) << i;
         }
     }
@@ -2303,11 +2303,11 @@ TEST(MRNFStrategyTest, HardRemovalRepublishesFarMaskForDegenerateModel) {
     ASSERT_EQ(splat.size(), 1);
     ASSERT_NE(optimizer.mean_step_far_mask(), nullptr);
     ASSERT_EQ(optimizer.mean_step_far_mask_n(), splat.means().shape()[0]);
-    bool far = false;
-    ASSERT_EQ(cudaMemcpy(&far, optimizer.mean_step_far_mask(), sizeof(far),
+    bool is_far = false;
+    ASSERT_EQ(cudaMemcpy(&is_far, optimizer.mean_step_far_mask(), sizeof(is_far),
                          cudaMemcpyDeviceToHost),
               cudaSuccess);
-    EXPECT_TRUE(far);
+    EXPECT_TRUE(is_far);
 
     optimizer.get_grad(ParamType::Means).fill_(0.2f);
     EXPECT_NO_THROW(optimizer.step(1));
@@ -2340,20 +2340,20 @@ TEST(MRNFStrategyTest, DeserializeRepublishesFarMaskWithDegenerateBounds) {
     install_test_camera_hull(restored);
     auto& optimizer = restored.get_optimizer();
     ASSERT_NE(optimizer.mean_step_far_mask(), nullptr);
-    bool far = true;
-    ASSERT_EQ(cudaMemcpy(&far, optimizer.mean_step_far_mask(), sizeof(far),
+    bool is_far = true;
+    ASSERT_EQ(cudaMemcpy(&is_far, optimizer.mean_step_far_mask(), sizeof(is_far),
                          cudaMemcpyDeviceToHost),
               cudaSuccess);
-    ASSERT_FALSE(far);
+    ASSERT_FALSE(is_far);
 
     splat.deserialize(checkpoint);
     restored.deserialize(checkpoint);
     ASSERT_NE(optimizer.mean_step_far_mask(), nullptr);
     ASSERT_EQ(optimizer.mean_step_far_mask_n(), splat.means().shape()[0]);
-    ASSERT_EQ(cudaMemcpy(&far, optimizer.mean_step_far_mask(), sizeof(far),
+    ASSERT_EQ(cudaMemcpy(&is_far, optimizer.mean_step_far_mask(), sizeof(is_far),
                          cudaMemcpyDeviceToHost),
               cudaSuccess);
-    EXPECT_TRUE(far);
+    EXPECT_TRUE(is_far);
     optimizer.get_grad(ParamType::Means).fill_(0.2f);
     EXPECT_NO_THROW(optimizer.step(1));
     EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
@@ -2704,9 +2704,9 @@ TEST(MRNFDecayTest, FrozenRowsAndZeroFarDecayRemainUnchangedWhileNaNsStayVisible
     auto opacity = Tensor::from_vector(std::vector<float>{inf, 20.0f, std::nanf(""), 20.0f}, {4}, Device::CUDA);
     auto scales = Tensor::zeros({4, 3}, Device::CUDA);
     const auto frozen = Tensor::from_vector(std::vector<bool>{true, false, false, false}, {4}, Device::CUDA);
-    const auto far = Tensor::from_vector(std::vector<bool>{false, true, false, false}, {4}, Device::CUDA);
+    const auto is_far = Tensor::from_vector(std::vector<bool>{false, true, false, false}, {4}, Device::CUDA);
     mrnf_strategy::launch_mrnf_decay(opacity.ptr<float>(), scales.ptr<float>(),
-                                     frozen.ptr<bool>(), 4, far.ptr<bool>(), 4,
+                                     frozen.ptr<bool>(), 4, is_far.ptr<bool>(), 4,
                                      0.004f, 0.01f, 0.0f, 0.5f, 4);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     const auto values = opacity.cpu().to_vector();
