@@ -793,15 +793,18 @@ namespace lfs::vis::gui {
         auto& registered = input_handlers_[context];
         registered.pointer_blocker = std::move(pointer_blocker);
         auto& passive = registered.input;
-        passive.mouse_x = input.mouse_x;
-        passive.mouse_y = input.mouse_y;
+        const bool pointer_owned = std::ranges::contains(registered.pointer_presses, PointerPressState::Accepted);
+        if (!pointer_owned) {
+            passive.mouse_x = input.mouse_x;
+            passive.mouse_y = input.mouse_y;
+            std::copy(std::begin(input.mouse_down), std::end(input.mouse_down), passive.mouse_down);
+        }
         passive.screen_x = input.screen_x;
         passive.screen_y = input.screen_y;
         passive.screen_w = input.screen_w;
         passive.screen_h = input.screen_h;
         passive.bg_draw_list = input.bg_draw_list;
         passive.fg_draw_list = input.fg_draw_list;
-        std::copy(std::begin(input.mouse_down), std::end(input.mouse_down), passive.mouse_down);
         passive.key_ctrl = input.key_ctrl;
         passive.key_shift = input.key_shift;
         passive.key_alt = input.key_alt;
@@ -929,29 +932,34 @@ namespace lfs::vis::gui {
                 std::copy(std::begin(input_mouse_down_), std::end(input_mouse_down_), input.mouse_down);
                 input.mouse_wheel = single.mouse_wheel;
                 input.mouse_wheel_x = single.mouse_wheel_x;
-                // Explicit occlusion is evaluated at the event position, independently
-                // of render-time hover masks. A blocked press owns its release too.
+                // Occlusion decides ownership at the press. Accepted gestures keep
+                // their motion and release; blocked gestures never gain a release.
                 auto& registered = it->second;
                 const bool blocked = registered.pointer_blocker &&
                                      registered.pointer_blocker(single.mouse_x, single.mouse_y);
                 for (const auto& button : single.mouse_button_events)
                     if (button.down)
-                        registered.blocked_buttons[button.button] = blocked;
+                        registered.pointer_presses[button.button] = blocked ? PointerPressState::Blocked : PointerPressState::Accepted;
+                const bool pointer_owned = std::ranges::contains(registered.pointer_presses, PointerPressState::Accepted);
+                const auto suppress_button = [&](int button) {
+                    const auto state = registered.pointer_presses[button];
+                    return state == PointerPressState::Blocked || (blocked && state != PointerPressState::Accepted);
+                };
                 std::erase_if(input.mouse_button_events, [&](const auto& button) {
-                    return blocked || registered.blocked_buttons[button.button];
+                    return suppress_button(button.button);
                 });
                 std::erase_if(input.input_events, [&](const auto& event) {
                     return event.kind == FrameInputEventKind::MouseButton && input.mouse_button_events.empty();
                 });
                 for (int button = 0; button < 3; ++button) {
-                    if (blocked || registered.blocked_buttons[button]) {
+                    if (suppress_button(button))
                         input.mouse_clicked[button] = input.mouse_released[button] = input.mouse_down[button] = false;
-                    }
                     if (single.mouse_released[button])
-                        registered.blocked_buttons[button] = false;
+                        registered.pointer_presses[button] = PointerPressState::None;
                 }
                 if (blocked) {
-                    input.mouse_x = input.mouse_y = -1e9f;
+                    if (!pointer_owned)
+                        input.mouse_x = input.mouse_y = -1e9f;
                     input.mouse_wheel = input.mouse_wheel_x = 0;
                 }
             }
@@ -987,7 +995,23 @@ namespace lfs::vis::gui {
             });
             const auto owner = input_handlers_.find(keyboard_context_);
             if (owner != input_handlers_.end() && owner->second.enabled && owner->second.exclusive) {
-                invoke(keyboard_context_);
+                auto* const exclusive_context = keyboard_context_;
+                for (auto* context : contexts) {
+                    if (context == exclusive_context)
+                        continue;
+                    const auto it = input_handlers_.find(context);
+                    if (it == input_handlers_.end())
+                        continue;
+                    const auto& presses = it->second.pointer_presses;
+                    const bool owned_motion = event.type == SDL_EVENT_MOUSE_MOTION &&
+                                              std::ranges::contains(presses, PointerPressState::Accepted);
+                    const bool owned_release = std::ranges::any_of(single.mouse_button_events, [&](const auto& button) {
+                        return !button.down && presses[button.button] == PointerPressState::Accepted;
+                    });
+                    if (owned_motion || owned_release)
+                        invoke(context);
+                }
+                invoke(exclusive_context);
             } else {
                 for (auto* context : contexts) {
                     invoke(context);

@@ -246,11 +246,14 @@ namespace lfs::vis::gui {
         LFS_VIS_API bool registerInput(Rml::Context* context, const PanelInputState& input,
                                        std::function<void(const PanelInputState&)> handler, bool exclusive,
                                        std::function<bool(float, float)> pointer_blocker);
+        enum class PointerPressState { None,
+                                       Accepted,
+                                       Blocked };
         struct InputHandler {
             std::shared_ptr<std::function<void(const PanelInputState&)>> callback;
             PanelInputState input;
             std::function<bool(float, float)> pointer_blocker;
-            bool blocked_buttons[3] = {};
+            PointerPressState pointer_presses[3] = {};
             std::vector<SDL_Scancode> shortcuts;
             uint64_t frame = 0;
             bool exclusive = false;

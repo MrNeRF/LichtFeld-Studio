@@ -985,3 +985,104 @@ namespace lfs::vis {
         EXPECT_EQ(action->action, gui::RmlSequencerOverlay::Action::REVERT_EDIT);
     }
 } // namespace lfs::vis
+
+namespace lfs::vis {
+    TEST_F(WindowInputDispatchTest, AcceptedDragKeepsMotionAndReleaseAcrossOcclusion) {
+        auto* handle = document_->AppendChild(document_->CreateElement("div"));
+        handle->SetProperty("position", "absolute");
+        handle->SetProperty("left", "220px");
+        handle->SetProperty("top", "100px");
+        handle->SetProperty("width", "50px");
+        handle->SetProperty("height", "50px");
+        handle->SetProperty("drag", "drag");
+        context_->Update();
+        struct DragListener : Rml::EventListener {
+            int starts = 0, moves = 0, ends = 0;
+            float x = 0;
+            void ProcessEvent(Rml::Event& event) override {
+                if (event.GetType() == "dragstart")
+                    ++starts;
+                else if (event.GetType() == "drag") {
+                    ++moves;
+                    x = event.GetParameter("mouse_x", 0.0f);
+                } else if (event.GetType() == "dragend")
+                    ++ends;
+            }
+        } listener;
+        for (const auto* type : {"dragstart", "drag", "dragend"})
+            handle->AddEventListener(type, &listener);
+        const auto forward = [&](const gui::PanelInputState& input) {
+            context_->ProcessMouseMove(input.mouse_x, input.mouse_y, 0);
+            for (const auto& button : input.mouse_button_events) {
+                if (button.down)
+                    context_->ProcessMouseButtonDown(button.button, 0);
+                else
+                    context_->ProcessMouseButtonUp(button.button, 0);
+            }
+        };
+        const auto blocked = [](float x, float) { return x >= 280; };
+        manager().routeInput(context_, {}, forward, false, blocked);
+        SDL_Event event{};
+        event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        event.button.button = SDL_BUTTON_LEFT;
+        event.button.x = 240;
+        event.button.y = 115;
+        dispatch(event);
+        const auto move = [&](float x, float y) {
+            SDL_Event motion{};
+            motion.type = SDL_EVENT_MOUSE_MOTION;
+            motion.motion.x = x;
+            motion.motion.y = y;
+            dispatch(motion);
+        };
+        move(260, 130);
+        EXPECT_EQ(listener.starts, 1);
+        move(300, 160);
+        EXPECT_EQ(listener.x, 300);
+        // A render pass may still provide hover-masked coordinates mid-drag.
+        gui::PanelInputState masked;
+        masked.mouse_x = masked.mouse_y = -1e9f;
+        manager().routeInput(context_, masked, forward, false, blocked);
+        EXPECT_EQ(listener.x, 300);
+        event.type = SDL_EVENT_MOUSE_BUTTON_UP;
+        event.button.x = 300;
+        event.button.y = 160;
+        dispatch(event);
+        EXPECT_EQ(listener.ends, 1);
+        const int moves_after_release = listener.moves;
+        move(240, 220);
+        EXPECT_EQ(listener.moves, moves_after_release);
+        for (const auto* type : {"dragstart", "drag", "dragend"})
+            handle->RemoveEventListener(type, &listener);
+    }
+} // namespace lfs::vis
+
+namespace lfs::vis {
+    TEST_F(WindowInputDispatchTest, AcceptedPointerReleaseSurvivesExclusiveFocusChange) {
+        int releases = 0;
+        float motion_x = 0;
+        manager().routeInput(context_, {}, [&](const gui::PanelInputState& input) {
+            motion_x = input.mouse_x;
+            releases += input.mouse_released[0];
+        });
+        SDL_Event event{};
+        event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        event.button.button = SDL_BUTTON_LEFT;
+        event.button.x = event.button.y = 25;
+        dispatch(event);
+        auto* modal = manager().createContext("pointer-modal", 400, 300);
+        manager().activateInput(modal, [](const gui::PanelInputState&) {});
+        SDL_Event motion{};
+        motion.type = SDL_EVENT_MOUSE_MOTION;
+        motion.motion.x = 300;
+        motion.motion.y = 200;
+        dispatch(motion);
+        EXPECT_EQ(motion_x, 300);
+        event.type = SDL_EVENT_MOUSE_BUTTON_UP;
+        event.button.x = 300;
+        event.button.y = 200;
+        dispatch(event);
+        EXPECT_EQ(releases, 1);
+        manager().deactivateInput(modal);
+    }
+} // namespace lfs::vis
