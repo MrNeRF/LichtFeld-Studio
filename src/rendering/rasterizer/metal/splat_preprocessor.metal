@@ -329,7 +329,13 @@ kernel void project_splats(device const packed_float3* means [[buffer(0)]],
             const float3 gc=linear*rotate_axis(q,float3(0,0,base_scale.z));
             const float determinant=dot(ga,cross(gb,gc));
             if(!isfinite(determinant)||abs(determinant)<=1e-30f)return;
-            gut_output[i]={float4(cross(gb,gc)/determinant,0),float4(cross(gc,ga)/determinant,0),
+            // A Frobenius bound encloses the entire view-space alpha ellipsoid,
+            // even under affine shear and anisotropic scale. Keep ill-conditioned
+            // transforms on the uncullable path instead of trusting their inverse.
+            const float norm_product=length(ga)*length(gb)*length(gc);
+            const float sphere=(!portal && abs(determinant)>norm_product*1e-5f)?
+                sqrt(2.f*(opacity_power(alpha,spark)+1e-4f)*(dot(ga,ga)+dot(gb,gb)+dot(gc,gc)))*1.001f:0.f;
+            gut_output[i]={float4(cross(gb,gc)/determinant,isfinite(sphere)?sphere:0.f),float4(cross(gc,ga)/determinant,0),
                            float4(cross(ga,gb)/determinant,0),float4(view,alpha)};
         }
         // Dilation and the covariance cap use source viewport pixels,

@@ -102,6 +102,89 @@ static void compare(const Readback& r, const std::vector<ProjectedSplat>& splats
             require(*pick == picked, "Pick source ID mismatch");
         }
 }
+// Compare the same 3D ray pipeline with support-sphere culling enabled and
+// explicitly disabled. Color, all depth channels and source IDs must be exact,
+// including anisotropy, affine shear, partial subtiles and ill-conditioned input.
+static void compare_gut_culling(id<MTLDevice> device) {
+    constexpr uint32_t n = 259, w = 129, h = 97;
+    std::mt19937 random(1939);
+    std::uniform_real_distribution<float> unit(0.f, 1.f);
+    std::vector<float> means(n * 3), scales(n * 3), rotations(n * 4), sh0(n * 3), opacity(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        const float angle = unit(random) * 6.28f;
+        rotations[4 * i] = std::cos(angle * .5f);
+        const float sine = std::sin(angle * .5f) / std::sqrt(3.f);
+        for (uint32_t c = 0; c < 3; ++c) {
+            means[3 * i + c] = c == 2 ? .06f + 5.f * unit(random) : (unit(random) - .5f) * 2.f;
+            scales[3 * i + c] = std::log(.008f + .18f * unit(random));
+            rotations[4 * i + c + 1] = sine;
+            sh0[3 * i + c] = (unit(random) - .5f) * 2;
+        }
+        opacity[i] = unit(random) * 5 - 2;
+    }
+    const auto buffer = [&](const void* bytes, size_t length) {
+        return [device newBufferWithBytes:bytes length:length options:MTLResourceStorageModeShared];
+    };
+    SplatBuffers input{{buffer(means.data(), means.size() * 4)}, {buffer(scales.data(), scales.size() * 4)}, {buffer(rotations.data(), rotations.size() * 4)}, {buffer(opacity.data(), opacity.size() * 4)}, {buffer(sh0.data(), sh0.size() * 4)}, {}, {}, {}, n, 0, ShStorage::CanonicalFloat32};
+    auto projected = [device newBufferWithLength:n * sizeof(ProjectedSplat) options:MTLResourceStorageModeShared];
+    auto geometry = [device newBufferWithLength:n * sizeof(GutSplat) options:MTLResourceStorageModeShared];
+    auto queue = [device newCommandQueue];
+    SplatPreprocessor projector(device);
+    TileRasterizer raster(device);
+    RasterFrame frame(device, w, h, n, n * 63);
+    for (auto camera : {CameraModel::Perspective, CameraModel::Orthographic})
+        for (bool spark : {false, true})
+            for (bool ill_conditioned : {false, true}) {
+                Projection p{matrix_identity_float4x4, matrix_identity_float4x4, {0, 0, 0, 0}, {64, 57, w * .5f, h * .5f}, {.01f, 100, 1, .3f}, {w, h, uint32_t(camera), 0}};
+                p.model_to_world.columns[0].x = 1.4f;
+                p.model_to_world.columns[1].x = .35f;
+                p.model_to_world.columns[1].y = ill_conditioned ? 1e-7f : .7f;
+                p.model_to_world.columns[2].y = .12f;
+                p.model_to_world.columns[2].z = 1.1f;
+                p.display.z = spark ? 1 : 0;
+                // Spark uses encoded density rather than opacity logits.
+                if (spark) {
+                    auto encoded = std::vector<float>(n);
+                    for (uint32_t i = 0; i < n; ++i)
+                        encoded[i] = .3f + float(i % 8) * .2f;
+                    std::memcpy(input.opacity_logits.buffer.contents, encoded.data(), n * 4);
+                } else
+                    std::memcpy(input.opacity_logits.buffer.contents, opacity.data(), n * 4);
+                auto command = [queue commandBuffer];
+                projector.encode(command, input, p, 0, PrimitiveMode::Gut, {projected}, {}, {}, {geometry});
+                wait(command);
+                const auto splats = static_cast<const ProjectedSplat*>(projected.contents);
+                auto guts = static_cast<GutSplat*>(geometry.contents);
+                size_t bounds = 0;
+                for (uint32_t i = 0; i < n; ++i)
+                    if (splats[i].bounds.z > splats[i].bounds.x && splats[i].bounds.w > splats[i].bounds.y) {
+                        require(std::isfinite(guts[i].inverse0.w), "Invalid GUT support sphere");
+                        bounds += guts[i].inverse0.w > 0;
+                    }
+                require(ill_conditioned ? bounds == 0 : bounds > 0, "GUT support-sphere fallback was not exercised");
+                command = [queue commandBuffer];
+                raster.encode(command, {projected}, n, RasterMode::Gut, {.1f, .2f, .3f, 1}, frame, {}, {geometry}, p);
+                const auto culled = readback(device, command, frame);
+                wait(command);
+                require(frame.status().error == RasterError::None, "GUT culling fixture overflow");
+                for (uint32_t i = 0; i < n; ++i)
+                    guts[i].inverse0.w = 0;
+                command = [queue commandBuffer];
+                raster.encode(command, {projected}, n, RasterMode::Gut, {.1f, .2f, .3f, 1}, frame, {}, {geometry}, p);
+                const auto full = readback(device, command, frame);
+                wait(command);
+                for (uint32_t y = 0; y < h; ++y) {
+                    const auto same = [&](id<MTLBuffer> a, id<MTLBuffer> b, size_t stride, size_t pixel_bytes) {
+                        return std::memcmp(static_cast<const char*>(a.contents) + y * stride,
+                                           static_cast<const char*>(b.contents) + y * stride, w * pixel_bytes) == 0;
+                    };
+                    require(same(culled.color, full.color, full.color_stride, 8), "GUT culling changed color/alpha");
+                    require(same(culled.depth, full.depth, full.depth_stride, 16), "GUT culling changed depth");
+                    require(same(culled.pick, full.pick, full.pick_stride, 4), "GUT culling changed source IDs");
+                }
+            }
+    std::puts("GUT subtile culling preserves exact color, depth and IDs across 8 affine/density/camera cases.");
+}
 static void run(id<MTLDevice> device) {
     TileRasterizer raster(device);
     auto queue = [device newCommandQueue];
@@ -458,6 +541,7 @@ int main() {
             return LFS_METAL_TEST_REQUIRE_DEVICE ? 1 : 77;
         try {
             run(device);
+            compare_gut_culling(device);
             return 0;
         } catch (const std::exception& e) {
             std::fprintf(stderr, "%s\n", e.what());

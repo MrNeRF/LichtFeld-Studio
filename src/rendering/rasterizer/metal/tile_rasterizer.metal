@@ -260,10 +260,16 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
     const uint2 tile_origin = uint2((tile % p.columns)*16+(subtile%2)*8,
                                     (tile / p.columns)*16+(subtile/2)*8);
     const uint2 pixel = tile_origin+uint2(lane%8,lane/8);
-    // Rings/markers can extend the displayed footprint. Preserve their full
-    // parent list, as for GUT rays, panoramas and Spark's density support.
-    const bool compact_candidates=kRasterMode==0u && p.camera.z!=2u && !(kRasterFlags&16u) &&
+    // Ordinary GS bounds are suitable only without extended overlays. GUT
+    // uses a separate conservative 3D-support sphere; portal and panorama
+    // retain their full parent list.
+    const bool compact_gs=kRasterMode==0u && p.camera.z!=2u && !(kRasterFlags&16u) &&
         (!(kRasterFlags&1u) || (!overlay_enabled(overlay_params[22].x) && !overlay_enabled(overlay_params[22].y)));
+    const bool compact_gut=kRasterMode==3u && p.camera.z!=2u && !(kRasterFlags&4u);
+    const bool compact_candidates=compact_gs || compact_gut;
+    const float2 ray_min=(float2(tile_origin)+.5f-p.intrinsics.zw)/p.intrinsics.xy;
+    const float2 ray_max=(float2(tile_origin)+7.5f-p.intrinsics.zw)/p.intrinsics.xy;
+    const float4 plane_lengths=p.camera.z==1u?float4(1):sqrt(1.f+float4(ray_min,ray_max)*float4(ray_min,ray_max));
     const bool valid = pixel.x < p.width && pixel.y < p.height;
     bool done = !valid;
     float transmittance = 1, weighted_depth = 0, nearest = 0, median = 1e10f;
@@ -297,16 +303,29 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
         const uint source_count=uint(min(ulong(64),ulong(end)-batch));
         uint count=source_count, destination=lane, id=0;
         ProjectedSplat splat{};
+        GutSplat g{};
         bool active=lane<source_count;
         if (active) {
             id=indices[batch+lane];
             splat=splats[id];
+            if(kRasterMode==3u)g=gut[id];
         }
         if (compact_candidates) {
             // Integer support with a one-pixel margin includes rounding of the
             // full-float projection and the optional half portal footprint.
             const int2 minimum=int2(tile_origin)-1, maximum=int2(tile_origin)+9;
-            active=active && all(int2(splat.bounds.xy)<maximum) && all(int2(splat.bounds.zw)>minimum);
+            if(compact_gs)active=active && all(int2(splat.bounds.xy)<maximum) && all(int2(splat.bounds.zw)>minimum);
+            if(compact_gut && active && g.inverse0.w>0.f) {
+                // Reject only if the complete alpha-support sphere is outside
+                // one of the four pixel-ray frustum planes. Unlike a projected
+                // UT rectangle, this remains conservative for the actual 3D ray.
+                const float3 center=g.mean_opacity.xyz;
+                const float z=p.camera.z==1u?1.f:center.z;
+                const float4 edges=float4(ray_min*z,ray_max*z);
+                const float4 distances=float4(center.xy-edges.xy,edges.zw-center.xy);
+                const float4 rounding=1e-6f*(float4(abs(center.xy),abs(center.xy))+abs(edges));
+                active=all(distances>=-g.inverse0.w*plane_lengths-rounding);
+            }
             const uint live=active?1u:0u;
             destination=simd_prefix_exclusive_sum(live);
             const uint total=simd_sum(live);
@@ -318,7 +337,6 @@ kernel void tile_blend(device const ProjectedSplat* splats [[buffer(0)]],
         if (active) {
             ids[destination] = id;
             if (kRasterMode==3u) {
-                auto g=gut[id];
                 if (p.camera.z!=1u) {
                     // Pinhole/spherical rays start at camera origin. The
                     // inverse-Gaussian origin is invariant across all pixels:

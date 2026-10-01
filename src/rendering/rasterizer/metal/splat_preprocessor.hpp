@@ -91,7 +91,9 @@ namespace lfs::rendering::metal {
 
     // Normalized local-frame inverse rows in camera coordinates. Independent of
     // projected covariance and mip compensation: 3DGUT evaluates the pixel ray.
-    // Portal only: inverse0/1.w hold the billboard axis; inverse2.w its minor extent.
+    // Non-portal inverse0.w is a conservative view-space alpha-support sphere;
+    // zero disables subtile culling. Portal inverse0/1.w hold the billboard axis
+    // and inverse2.w its minor extent instead (never interpreted as a sphere).
     struct alignas(16) GutSplat {
         simd_float4 inverse0, inverse1, inverse2, mean_opacity;
     };

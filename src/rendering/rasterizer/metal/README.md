@@ -93,8 +93,16 @@ Callers can precompile cached specializations with `prepare` before interaction.
   without depending on the trainer. It only sorts the tile-ID bytes actually used.
 - Four independent 8x8 blend groups share each stable 16x16 bin list. Each
   group stops on its own pixel saturation; ordinary GS candidates are compacted
-  stably against the subtile support with a rounding margin. Rings/markers,
-  GUT rays, panoramas and Spark retain the complete parent list.
+  stably against the subtile support with a rounding margin. Ordinary GS
+  rings/markers, panoramas and portal GUT retain the complete parent list.
+- Non-portal pinhole/orthographic GUT stably rejects a Gaussian only when its
+  complete 3D alpha-support sphere is outside a subtile ray-frustum plane.
+  The affine covariance Frobenius bound includes anisotropy and shear, with
+  floating-point margins. Spark uses its actual density cutoff. Ill-conditioned
+  transforms disable this optimization. Metadata reuses an otherwise unused
+  inverse-row component, with no added buffers or per-pixel copies. GPU tests
+  compare exact color/alpha, all depth channels and source IDs against disabled
+  culling in eight camera/density/affine cases, including partial subtiles.
 - Ordinary alpha support is cached per Gaussian and rejected before exponentials.
   FP16 portal/marker footprints retain their own support equations. Shared GUT
   batches cache inverse geometry and camera-origin transforms for pinhole and
@@ -279,8 +287,9 @@ convergence to zero remaining temporal samples. Native repeated captures were
 identical. The three GUT color comparisons differed by at most 1/255 after the
 saturation correction below. The first 3DGS Vulkan frame uses its legacy warmup
 chain and differs at 28 pixels by more than 4/255; later frames use its macro
-chain, with one isolated 6/255 difference and RMS 0.000529. The isolated macro
-difference remains under investigation. These are measured scene-specific results,
+chain, with isolated reference variation of up to 6/255 and RMS 0.000529. Later
+repeats reproduced that variation between Vulkan captures of the same scene;
+the corresponding native captures remained identical. These are measured scene-specific results,
 not pixel identity or a guarantee for every scene, camera or editor workflow.
 Synthetic maximum-error gates remain unchanged.
 
@@ -454,4 +463,7 @@ full errors remain reported: a real-input strict parity run can reject them, and
 its 4/255 gate is not weakened. GUT stayed within 1/255. The synthetic 100k
 SH0/Q16 tests measured about 2.3x for GS and 1.4x for GUT in these runs. All figures
 are serial completed-frame latency, exclude desktop composition and must be
-retested on other scenes/devices. Real-scene GUT still trails the reference here.
+retested on other scenes/devices. The later conservative GUT support-sphere
+culling reduced the same real-scene native median to 15.3 ms versus Vulkan's
+26.7 ms (1.75x in that paired run), while retaining max error 1/255. These are
+scene-specific measurements, not a universal or CI speed gate.
