@@ -35,11 +35,17 @@ uint4 clipped_bounds(ProjectedSplat s, constant RasterParameters& p) {
 kernel void tile_counts(device const ProjectedSplat* splats [[buffer(0)]],
                         device ulong* counts [[buffer(1)]],
                         constant RasterParameters& p [[buffer(2)]],
+                        device const uint* source_order [[buffer(3)]],
+                        device const ulong* source_counts [[buffer(4)]],
                         uint i [[thread_position_in_grid]]) {
     if (i >= p.count) return;
-    const uint4 b = clipped_bounds(splats[i],p);
-    counts[i] = b.z > b.x && b.w > b.y ?
-        ulong((b.z + 15) / 16 - b.x / 16) * ((b.w + 15) / 16 - b.y / 16) : 0;
+    if (p.unused & 256u) {
+        counts[i] = source_counts[source_order[i]];
+    } else {
+        const uint4 b = clipped_bounds(splats[i],p);
+        counts[i] = b.z > b.x && b.w > b.y ?
+            ulong((b.z + 15) / 16 - b.x / 16) * ((b.w + 15) / 16 - b.y / 16) : 0;
+    }
 }
 
 // Hierarchical exclusive scan. UInt64 preserves the required size on overflow;
@@ -121,14 +127,8 @@ kernel void scan32_add(device uint* output [[buffer(0)]],
     const uint count = histogram_scan_count(status, level);
     if(i<count)output[i]+=offsets[i/256];
 }
-kernel void tile_status(device const ulong* counts [[buffer(0)]],
-                        device const ulong* offsets [[buffer(1)]],
-                        device RasterStatus& status [[buffer(2)]],
-                        constant RasterParameters& p [[buffer(3)]],
-                        device uint* dispatch_args [[buffer(4)]]) {
-    status.required = p.count ? offsets[p.count - 1] + counts[p.count - 1] : 0;
-    status.error = status.required > p.capacity ? 1 : 0;
-    status.unused = 0;
+// Both source and intersection sorts use the existing GPU-sized radix scratch.
+void write_sort_dispatch(device const RasterStatus& status, device uint* dispatch_args) {
     const ulong live=status.error?0:status.required;
     dispatch_args[0]=max(1u,uint((live+2047)/2048));
     dispatch_args[1]=1; dispatch_args[2]=1;
@@ -143,15 +143,51 @@ kernel void tile_status(device const ulong* counts [[buffer(0)]],
         histogram_count = groups;
     }
 }
+kernel void tile_status(device const ulong* counts [[buffer(0)]],
+                        device const ulong* offsets [[buffer(1)]],
+                        device RasterStatus& status [[buffer(2)]],
+                        constant RasterParameters& p [[buffer(3)]],
+                        device uint* dispatch_args [[buffer(4)]]) {
+    status.required = p.count ? offsets[p.count - 1] + counts[p.count - 1] : 0;
+    status.error = status.required > p.capacity ? 1 : 0;
+    status.unused = 0;
+    write_sort_dispatch(status, dispatch_args);
+}
+// Sort the exact existing radial-distance key before duplicating a source into
+// tiles. Stable tile-only sorting then preserves its full depth and tie order.
+kernel void source_keys(device const ProjectedSplat* splats [[buffer(0)]],
+                        device uint* keys [[buffer(1)]],
+                        device uint* indices [[buffer(2)]],
+                        device RasterStatus& status [[buffer(3)]],
+                        constant RasterParameters& p [[buffer(4)]],
+                        device uint* dispatch_args [[buffer(5)]],
+                        device ulong* counts [[buffer(6)]],
+                        uint i [[thread_position_in_grid]]) {
+    if (i >= p.count) return;
+    const auto s = splats[i];
+    keys[i] = as_type<uint>(s.color.w);
+    const uint4 b = clipped_bounds(s,p);
+    counts[i] = b.z > b.x && b.w > b.y ?
+        ulong((b.z + 15) / 16 - b.x / 16) * ((b.w + 15) / 16 - b.y / 16) : 0;
+    indices[i] = i;
+    if (!i) {
+        status.required = p.count;
+        status.error = 0;
+        status.unused = 0;
+        write_sort_dispatch(status, dispatch_args);
+    }
+}
 kernel void tile_instances(device const ProjectedSplat* splats [[buffer(0)]],
                            device const ulong* offsets [[buffer(1)]],
                            device const RasterStatus& status [[buffer(2)]],
                            device ulong* keys [[buffer(3)]],
                            device uint* indices [[buffer(4)]],
                            constant RasterParameters& p [[buffer(5)]],
+                           device const uint* source_order [[buffer(6)]],
                            uint i [[thread_position_in_grid]]) {
     if (i >= p.count || status.error) return;
-    const auto s = splats[i];
+    const uint source = (p.unused & 256u) ? source_order[i] : i;
+    const auto s = splats[source];
     const uint4 bounds = clipped_bounds(s,p);
     if (bounds.z <= bounds.x || bounds.w <= bounds.y) return;
     ulong at = offsets[i];
@@ -159,13 +195,17 @@ kernel void tile_instances(device const ProjectedSplat* splats [[buffer(0)]],
         for (uint x = bounds.x / 16; x < (bounds.z + 15) / 16; ++x) {
             const uint column=p.mode==3u && p.camera.z==2u?x%p.columns:x;
             keys[at] = (ulong(y * p.columns + column) << 32) | as_type<uint>(s.color.w);
-            indices[at++] = i;
+            indices[at++] = source;
         }
 }
 
 // Stable LSD radix sort adapted from training/kernels/metal/fast_raster.metal.
 // Full float32 positive depth is retained; equal depths preserve source order.
 struct SortParameters { uint blocks, shift; };
+constant bool kSourceKey32 [[function_constant(2)]];
+ulong radix_key(device const ulong* keys, ulong index) {
+    return kSourceKey32 ? ulong(reinterpret_cast<device const uint*>(keys)[index]) : keys[index];
+}
 kernel void tile_histogram(device const ulong* keys [[buffer(0)]],
                            device uint* histogram [[buffer(1)]],
                            device const RasterStatus& status [[buffer(2)]],
@@ -181,7 +221,7 @@ kernel void tile_histogram(device const ulong* keys [[buffer(0)]],
     for (uint j = 0; j < 8; ++j) {
         const ulong i = ulong(group) * 2048 + j * 256 + lane;
         const bool valid = i < n;
-        const uint digit = valid ? uint((keys[i] >> p.shift) & 255ul) : 0u;
+        const uint digit = valid ? uint((radix_key(keys, i) >> p.shift) & 255ul) : 0u;
         uint peers = uint(static_cast<simd_vote::vote_t>(simd_ballot(valid)));
         for (uint bit = 0; bit < 8; ++bit) {
             const bool set = ((digit >> bit) & 1u) != 0;
@@ -222,7 +262,7 @@ kernel void tile_scatter(device const ulong* keys_in [[buffer(0)]],
         threadgroup_barrier(mem_flags::mem_threadgroup);
         const ulong i = chunk + lane;
         const bool valid = i < n;
-        const ulong key = valid ? keys_in[i] : 0;
+        const ulong key = valid ? radix_key(keys_in, i) : 0;
         const uint digit = uint((key >> p.shift) & 255);
         uint peers = uint(static_cast<simd_vote::vote_t>(simd_ballot(valid)));
         for (uint b = 0; b < 8; ++b) {
@@ -243,7 +283,10 @@ kernel void tile_scatter(device const ulong* keys_in [[buffer(0)]],
         threadgroup_barrier(mem_flags::mem_threadgroup);
         if (valid) {
             const uint destination = offsets[sg * 256 + digit] + rank;
-            keys_out[destination] = key;
+            if (kSourceKey32)
+                reinterpret_cast<device uint*>(keys_out)[destination] = uint(key);
+            else
+                keys_out[destination] = key;
             values_out[destination] = values_in[i];
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);

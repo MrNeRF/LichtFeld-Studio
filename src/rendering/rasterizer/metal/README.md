@@ -93,10 +93,29 @@ Callers can precompile cached specializations with `prepare` before interaction.
   positive radial distance squared, tile ranges, front-to-back composition and transmittance exit.
   The radix sort reuses the algorithm in `training/kernels/metal/fast_raster.metal`,
   without depending on the trainer. It only sorts the tile-ID bytes actually used.
-- Four independent 8x8 blend groups share each stable 16x16 bin list. Each
-  group stops on its own pixel saturation; ordinary GS candidates are compacted
+- Ordinary GS uses eight independent SIMD32 8x4 blend groups per stable
+  16x16 bin list; the other paths retain four 8x8 groups. Each group stops on
+  its own pixel saturation; ordinary GS candidates are compacted
   stably against the subtile support with a rounding margin. Ordinary GS
   rings/markers, panoramas and portal GUT retain the complete parent list.
+- When a completed frame shows sufficient tile duplication, the next frame
+  with the same source extent first stably sorts full 32-bit radial keys, then
+  emits intersections in that order and stably sorts only their tile-ID bytes.
+  Equal-depth ties and original source IDs are identical to the intersection
+  sort. Full-width source keys use a 32-bit radix specialization; this is not
+  depth quantization. Source key generation caches exact uint64 tile counts
+  during sequential input reads; sorted counts gather only those eight bytes.
+  A source permutation and reordered counts reuse dead key/count scratch.
+  No GPU allocation, current-frame count readback or additional wait is added.
+  The completed status is already CPU-visible before a reservation can be reused.
+  Small, sparse, failed, changed-extent and initially empty frames use the original
+  sort. Source extents larger than instance capacity cannot use source scratch.
+  Camera changes can select the less efficient route for one frame; both routes
+  remain exact. The two-stage ordering idea was cross-checked against
+  [Brush's original implementation](https://github.com/ArthurBrussee/brush/blob/3b80985709e2ec04fd6c8622a40e36473647a8e0/crates/brush-render/src/render.rs#L176),
+  implemented here using the existing LichtFeld radix kernels and key convention.
+  The independent CPU oracle covers large repeated source extents, radial ties,
+  source IDs, fully culled reuse, sparse instance reservations and overflow recovery.
 - Non-portal pinhole/orthographic GUT stably rejects a Gaussian only when its
   complete 3D alpha-support sphere is outside a subtile ray-frustum plane.
   The affine covariance Frobenius bound includes anisotropy and shear, with
@@ -177,6 +196,12 @@ reject the previous arithmetic. Shared half Cholesky coefficients and centers
 are cached once per Gaussian/cooperative batch; an unaligned export origin falls
 back to per-pixel macro origins when a subtile crosses a macro boundary. A crop
 crossing both boundaries must retain exact RGBA, all depth channels and source IDs.
+
+Ring overlays use the reference's full FP32 conic and macro-relative half-rounded
+center after compressed body admission. Their second FP32 alpha gate rejects
+rounded-down half values below 0.5/255 before promoting a Gaussian to an opaque
+edge. Sixteen macOS comparisons cover opaque/transparent and selected/all rings
+across Studio/portal GS/GUT; an independent pixel oracle straddles that threshold.
 
 Presentation unpremultiplies with FP32 coverage from the existing depth payload,
 before tone mapping. Coverage at or below 0.5/255 yields zero RGBA; above-threshold

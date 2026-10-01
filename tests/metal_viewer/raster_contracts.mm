@@ -317,7 +317,12 @@ static void run(id<MTLDevice> device) {
     constexpr uint32_t capacity = 131073;
     RasterFrame frame(device, width, height, capacity, capacity * 6);
     std::mt19937 random(0x1939);
-    for (uint32_t count : {capacity, 2049u, 1u, 2u, 0u, 255u, 256u, 257u, 2047u, 2048u, 4097u, capacity, 257u, 2u, 0u}) {
+    uint32_t sequence = 0;
+    for (uint32_t count : {capacity, capacity, capacity, capacity, 2049u, 1u, 2u, 0u, 255u, 256u, 257u, 2047u, 2048u, 4097u, capacity, 257u, 2u, 0u}) {
+        // Repeat the large source extent to exercise depth-before-duplication,
+        // then a fully culled frame and recovery without changing reservations.
+        // The CPU oracle checks radial ties and original IDs in both sort paths.
+        const bool fully_culled = sequence++ == 2;
         std::vector<ProjectedSplat> splats(count);
         uint64_t expected_instances = 0;
         for (uint32_t i = 0; i < count; ++i) {
@@ -331,7 +336,7 @@ static void run(id<MTLDevice> device) {
             s.color.w = 1 + float((i * 7) % 11);
             s.bounds = {uint32_t(std::max(0.f, x - 6)), uint32_t(std::max(0.f, y - 6)),
                         uint32_t(std::min(float(width), x + 7)), uint32_t(std::min(float(height), y + 7))};
-            if (count == 2 || i % 19 == 3)
+            if (fully_culled || count == 2 || i % 19 == 3)
                 s.bounds = {};
             else
                 expected_instances += ((s.bounds.z + 15) / 16 - s.bounds.x / 16) * ((s.bounds.w + 15) / 16 - s.bounds.y / 16);
@@ -413,6 +418,31 @@ static void run(id<MTLDevice> device) {
     raster.encode(command, {}, 0, RasterMode::Gaussian, bg, small);
     wait(command);
     require(small.status().error == RasterError::None, "Empty scene did not recover");
+    // Input and intersection capacities are independent. Thousands of culled
+    // sources can share one admitted instance; source presorting must never use
+    // intersection scratch for an input extent larger than that reservation.
+    constexpr uint32_t sparse_count = 4097;
+    RasterFrame sparse(device, width, height, sparse_count, 1);
+    std::vector<ProjectedSplat> sparse_sources(sparse_count, large);
+    for (auto& splat : sparse_sources)
+        splat.bounds = {};
+    sparse_sources[0] = {{20, 4, 1, 3}, {1, 0, 1, .9f}, {1, 0, 0, 1}, {16, 0, 25, 9}};
+    auto sparse_input = [device newBufferWithBytes:sparse_sources.data() length:sparse_sources.size() * sizeof(ProjectedSplat) options:MTLResourceStorageModeShared];
+    for (uint32_t phase = 0; phase < 4; ++phase) {
+        if (phase == 2)
+            sparse_sources[0].bounds = large.bounds;
+        else if (phase == 3)
+            sparse_sources[0].bounds = {};
+        std::memcpy(sparse_input.contents, sparse_sources.data(), sparse_sources.size() * sizeof(ProjectedSplat));
+        auto sparse_command = [queue commandBuffer];
+        raster.encode(sparse_command, {sparse_input}, sparse_count, RasterMode::Gaussian, bg, sparse);
+        const auto sparse_read = readback(device, sparse_command, sparse);
+        wait(sparse_command);
+        const auto status = sparse.status();
+        require(status.required_instances == (phase == 2 ? 6u : phase == 3 ? 0u : 1u), "Sparse source/instance extent changed the exact count");
+        require(status.error == (phase == 2 ? RasterError::InstanceCapacityExceeded : RasterError::None), "Sparse overflow/recovery status differs");
+        compare(sparse_read, phase == 2 ? std::vector<ProjectedSplat>{} : sparse_sources, width, height, bg, RasterMode::Gaussian);
+    }
     // Independent 3D ray reference deliberately disagrees with the projected
     // conic/center depth: the raster must evaluate the normalized 3D Gaussian.
     RasterFrame gut_frame(device, width, height, 1, 6);
