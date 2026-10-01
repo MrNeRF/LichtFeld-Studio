@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include "rendering/view_source.hpp"
 
 #include "core/export.hpp"
 #include "core/reactive/observable.hpp"
@@ -188,7 +189,9 @@ namespace lfs::vis {
 
         struct DepthWindowDrawCommit {
             std::uint64_t generation = 0;
-            SplitViewPanelId panel = SplitViewPanelId::Left;
+            ViewId view = kNoView;
+            float scale_x = 0.35f;
+            float scale_y = 0.35f;
 
             [[nodiscard]] bool operator==(const DepthWindowDrawCommit&) const = default;
         };
@@ -286,6 +289,6 @@ namespace lfs::vis {
     LFS_VIS_API AppStore& app_store();
     LFS_VIS_API void publish_language_generation();
     LFS_VIS_API void publish_viewport_toolbar_generation();
-    LFS_VIS_API void publish_depth_window_draw_commit(SplitViewPanelId panel = SplitViewPanelId::Left);
+    LFS_VIS_API void publish_depth_window_draw_commit(ViewId view, float scale_x, float scale_y);
 
 } // namespace lfs::vis

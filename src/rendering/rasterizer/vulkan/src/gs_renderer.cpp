@@ -207,21 +207,16 @@ void VulkanGSRenderer::tagDeferredVisibleCountReadback(const VkSemaphore semapho
 }
 
 void VulkanGSRenderer::tagDeferredLodSelectionReadback(const VkSemaphore semaphore,
-                                                       const std::uint64_t value) {
-    if (lod_selection_readback_pending_) {
-        if (semaphore == VK_NULL_HANDLE || value == 0) {
-            lfs::rendering::throw_renderer_contract(
-                std::format(
-                    "LOD-selection readback requires a valid completion timeline tag (semaphore={:#x}, value={}, pending={}, prior_semaphore={:#x}, prior_value={})",
-                    lfs::rendering::vkHandleValue(semaphore),
-                    value,
-                    lod_selection_readback_pending_,
-                    lfs::rendering::vkHandleValue(lod_selection_readback_signal_),
-                    lod_selection_readback_value_),
-                LFS_SOURCE_SITE_CURRENT());
-        }
-        lod_selection_readback_signal_ = semaphore;
-        lod_selection_readback_value_ = value;
+                                                       const std::uint64_t value,
+                                                       const LodSelectionReadbackIdentity identity) {
+    for (auto& slot : lod_selection_readbacks_) {
+        if (!slot.pending || slot.value != 0)
+            continue;
+        if (semaphore == VK_NULL_HANDLE || value == 0)
+            lfs::rendering::throw_renderer_contract("Invalid LOD readback completion tag", LFS_SOURCE_SITE_CURRENT());
+        slot.signal = semaphore;
+        slot.value = value;
+        slot.identity = identity;
     }
 }
 
@@ -657,14 +652,16 @@ void VulkanGSRenderer::destroyVisibleCountReadback() {
     visible_count_readback_num_splats_ = 0;
 }
 
-void VulkanGSRenderer::ensureLodSelectionReadback(const size_t chunk_capacity) {
-    if (lod_selection_readback_initialized_) {
-        if (lod_selection_readback_chunk_capacity_ >= chunk_capacity)
+void VulkanGSRenderer::ensureLodSelectionReadback(LodSelectionReadbackSlot& slot, const size_t chunk_capacity) {
+    if (slot.initialized) {
+        if (slot.chunk_capacity >= chunk_capacity)
             return;
         // Growing requires a recreate; never destroy under an in-flight copy.
-        if (lod_selection_readback_pending_)
+        if (slot.pending)
             return;
-        destroyLodSelectionReadback();
+        if (slot.buffer.buffer != VK_NULL_HANDLE)
+            vmaDestroyBuffer(allocator, slot.buffer.buffer, slot.buffer.allocation);
+        slot = {};
     }
 
     const VkDeviceSize byte_size = (3 + chunk_capacity) * sizeof(uint32_t);
@@ -680,14 +677,14 @@ void VulkanGSRenderer::ensureLodSelectionReadback(const size_t chunk_capacity) {
                 VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
     VmaAllocationInfo alloc_info{};
-    lod_selection_readback_buffer_.label = "lod_selection_readback";
+    slot.buffer.label = "lod_selection_readback";
     const VkResult create_result = vmaCreateBuffer(allocator, &info, &aci,
-                                                   &lod_selection_readback_buffer_.buffer,
-                                                   &lod_selection_readback_buffer_.allocation,
+                                                   &slot.buffer.buffer,
+                                                   &slot.buffer.allocation,
                                                    &alloc_info);
     if (create_result != VK_SUCCESS) {
-        lod_selection_readback_buffer_.buffer = VK_NULL_HANDLE;
-        lod_selection_readback_buffer_.allocation = VK_NULL_HANDLE;
+        slot.buffer.buffer = VK_NULL_HANDLE;
+        slot.buffer.allocation = VK_NULL_HANDLE;
         lfs::rendering::throw_vk_result(
             create_result,
             "vmaCreateBuffer",
@@ -700,52 +697,42 @@ void VulkanGSRenderer::ensureLodSelectionReadback(const size_t chunk_capacity) {
                 static_cast<int>(create_result)),
             LFS_SOURCE_SITE_CURRENT());
     }
-    lod_selection_readback_buffer_.allocSize = byte_size;
-    lod_selection_readback_buffer_.capacity = byte_size;
-    lod_selection_readback_buffer_.size = byte_size;
-    lod_selection_readback_mapped_ = static_cast<uint32_t*>(alloc_info.pMappedData);
-    if (lod_selection_readback_mapped_ == nullptr) {
-        const VkBuffer failed_buffer = lod_selection_readback_buffer_.buffer;
-        const VmaAllocation failed_allocation = lod_selection_readback_buffer_.allocation;
+    slot.buffer.allocSize = byte_size;
+    slot.buffer.capacity = byte_size;
+    slot.buffer.size = byte_size;
+    slot.mapped = static_cast<uint32_t*>(alloc_info.pMappedData);
+    if (slot.mapped == nullptr) {
+        const VkBuffer failed_buffer = slot.buffer.buffer;
+        const VmaAllocation failed_allocation = slot.buffer.allocation;
         vmaDestroyBuffer(allocator, failed_buffer, failed_allocation);
-        lod_selection_readback_buffer_ = {};
+        slot.buffer = {};
         lfs::rendering::throw_renderer_contract(
             std::format(
                 "LOD-selection readback allocation was not persistently mapped (requested_bytes={}, buffer={:#x}, allocation={:#x}, mapped_pointer={:#x})",
                 byte_size,
                 lfs::rendering::vkHandleValue(failed_buffer),
                 lfs::rendering::vkHandleValue(failed_allocation),
-                lfs::rendering::vkHandleValue(lod_selection_readback_mapped_)),
+                lfs::rendering::vkHandleValue(slot.mapped)),
             LFS_SOURCE_SITE_CURRENT());
     }
-    std::memset(lod_selection_readback_mapped_, 0, byte_size);
+    std::memset(slot.mapped, 0, byte_size);
     setDebugObjectName(VK_OBJECT_TYPE_BUFFER,
-                       lod_selection_readback_buffer_.buffer,
+                       slot.buffer.buffer,
                        "vksplat.readback.lod_selection");
-    lod_selection_readback_initialized_ = true;
-    lod_selection_readback_pending_ = false;
-    lod_selection_readback_signal_ = VK_NULL_HANDLE;
-    lod_selection_readback_value_ = 0;
-    lod_selection_readback_capacity_ = 0;
-    lod_selection_readback_chunk_capacity_ = chunk_capacity;
+    slot.initialized = true;
+    slot.pending = false;
+    slot.signal = VK_NULL_HANDLE;
+    slot.value = 0;
+    slot.capacity = 0;
+    slot.chunk_capacity = chunk_capacity;
 }
 
 void VulkanGSRenderer::destroyLodSelectionReadback() {
-    if (!lod_selection_readback_initialized_)
-        return;
-    if (lod_selection_readback_buffer_.buffer != VK_NULL_HANDLE) {
-        vmaDestroyBuffer(allocator,
-                         lod_selection_readback_buffer_.buffer,
-                         lod_selection_readback_buffer_.allocation);
+    for (auto& slot : lod_selection_readbacks_) {
+        if (slot.buffer.buffer != VK_NULL_HANDLE)
+            vmaDestroyBuffer(allocator, slot.buffer.buffer, slot.buffer.allocation);
+        slot = {};
     }
-    lod_selection_readback_buffer_ = {};
-    lod_selection_readback_mapped_ = nullptr;
-    lod_selection_readback_initialized_ = false;
-    lod_selection_readback_pending_ = false;
-    lod_selection_readback_signal_ = VK_NULL_HANDLE;
-    lod_selection_readback_value_ = 0;
-    lod_selection_readback_capacity_ = 0;
-    lod_selection_readback_chunk_capacity_ = 0;
 }
 
 std::optional<VulkanGSRenderer::PrimitiveVisibilityStats>
@@ -773,23 +760,31 @@ VulkanGSRenderer::pollDeferredPrimitiveVisibilityStats() {
 
 std::optional<VulkanGSRenderer::LodSelectionStats>
 VulkanGSRenderer::pollDeferredLodSelectionStats() {
-    if (!lod_selection_readback_pending_ || !lod_selection_readback_mapped_)
+    LodSelectionReadbackSlot* oldest = nullptr;
+    for (auto& candidate : lod_selection_readbacks_)
+        if (candidate.pending && (!oldest || candidate.order < oldest->order))
+            oldest = &candidate;
+    if (!oldest)
         return std::nullopt;
-    if (lod_selection_readback_signal_ == VK_NULL_HANDLE || lod_selection_readback_value_ == 0)
+    auto& slot = *oldest;
+    if (!slot.pending || !slot.mapped)
         return std::nullopt;
-    if (!timelineValueComplete(lod_selection_readback_signal_, lod_selection_readback_value_))
+    if (slot.signal == VK_NULL_HANDLE || slot.value == 0)
+        return std::nullopt;
+    if (!timelineValueComplete(slot.signal, slot.value))
         return std::nullopt;
     if (!invalidateReadbackBuffer(
-            lod_selection_readback_buffer_,
+            slot.buffer,
             (3 + 4 + kLodCompactProtectedCap + 2 * kLodCompactMissCap) * sizeof(uint32_t)))
         return std::nullopt;
 
     LodSelectionStats stats{};
-    stats.candidate_count = lod_selection_readback_mapped_[0];
-    stats.rendered_capacity = lod_selection_readback_capacity_;
-    stats.overflow_count = lod_selection_readback_mapped_[1];
-    stats.threshold_scale = std::bit_cast<float>(lod_selection_readback_mapped_[2]);
-    const uint32_t* const words = lod_selection_readback_mapped_;
+    stats.identity = slot.identity;
+    stats.candidate_count = slot.mapped[0];
+    stats.rendered_capacity = slot.capacity;
+    stats.overflow_count = slot.mapped[1];
+    stats.threshold_scale = std::bit_cast<float>(slot.mapped[2]);
+    const uint32_t* const words = slot.mapped;
     const size_t protected_count =
         std::min<size_t>(words[3], kLodCompactProtectedCap);
     const size_t miss_count = std::min<size_t>(words[4], kLodCompactMissCap);
@@ -801,10 +796,10 @@ VulkanGSRenderer::pollDeferredLodSelectionStats() {
     for (size_t i = 0; i < miss_count; ++i) {
         stats.miss_candidates.emplace_back(misses[i * 2], misses[i * 2 + 1]);
     }
-    lod_selection_readback_pending_ = false;
-    lod_selection_readback_signal_ = VK_NULL_HANDLE;
-    lod_selection_readback_value_ = 0;
-    lod_selection_readback_capacity_ = 0;
+    slot.pending = false;
+    slot.signal = VK_NULL_HANDLE;
+    slot.value = 0;
+    slot.capacity = 0;
     return stats;
 }
 
@@ -874,7 +869,18 @@ void VulkanGSRenderer::recordLodSelectionReadback(VulkanGSPipelineBuffers& buffe
     // pairs; independent of the logical chunk count.
     constexpr size_t kPayloadWords =
         4 + kLodCompactProtectedCap + 2 * kLodCompactMissCap;
-    ensureLodSelectionReadback(kPayloadWords);
+    // Untagged copies belong to a cancelled recording or an earlier traversal
+    // in this same command batch. Only submitted, tagged slots are in flight.
+    for (auto& prior : lod_selection_readbacks_)
+        if (prior.pending && prior.value == 0)
+            prior.pending = false;
+    auto available = std::find_if(lod_selection_readbacks_.begin(), lod_selection_readbacks_.end(),
+                                  [](const auto& slot) { return !slot.pending; });
+    // Grow under multi-target load instead of overwriting a tagged GPU copy.
+    auto& slot = available == lod_selection_readbacks_.end()
+                     ? lod_selection_readbacks_.emplace_back()
+                     : *available;
+    ensureLodSelectionReadback(slot, kPayloadWords);
     if (buffers.lod_gpu_counts.deviceBuffer.buffer == VK_NULL_HANDLE ||
         buffers.lod_compact_counts.deviceBuffer.buffer == VK_NULL_HANDLE)
         return;
@@ -889,7 +895,7 @@ void VulkanGSRenderer::recordLodSelectionReadback(VulkanGSPipelineBuffers& buffe
         {.buffer = &buffers.lod_compact_counts.deviceBuffer, .use = BufferUse::TransferRead},
         {.buffer = &buffers.lod_compact_protected.deviceBuffer, .use = BufferUse::TransferRead},
         {.buffer = &buffers.lod_compact_misses.deviceBuffer, .use = BufferUse::TransferRead},
-        {.buffer = &lod_selection_readback_buffer_, .use = BufferUse::TransferWrite},
+        {.buffer = &slot.buffer, .use = BufferUse::TransferWrite},
     };
     planTransfer(std::span{pre_copy});
 
@@ -900,7 +906,7 @@ void VulkanGSRenderer::recordLodSelectionReadback(VulkanGSPipelineBuffers& buffe
         copy.dstOffset = dst_word * sizeof(uint32_t);
         copy.size = words * sizeof(uint32_t);
         validateBufferRange(src, 0, copy.size, "LOD-selection readback source");
-        validateBufferRange(lod_selection_readback_buffer_,
+        validateBufferRange(slot.buffer,
                             copy.dstOffset,
                             copy.size,
                             "LOD-selection readback destination");
@@ -910,7 +916,7 @@ void VulkanGSRenderer::recordLodSelectionReadback(VulkanGSPipelineBuffers& buffe
                 LFS_SOURCE_SITE_CURRENT());
         }
         vulkan_dispatch_.cmd_copy_buffer(command_buffer, src.buffer,
-                                         lod_selection_readback_buffer_.buffer, 1, &copy);
+                                         slot.buffer.buffer, 1, &copy);
     };
     copy_region(buffers.lod_gpu_counts.deviceBuffer, 0, 3);
     copy_region(buffers.lod_compact_counts.deviceBuffer, 3, 4);
@@ -920,15 +926,16 @@ void VulkanGSRenderer::recordLodSelectionReadback(VulkanGSPipelineBuffers& buffe
 
     // Host coherence still requires fence/timeline wait at endCommandBatch (§3.2 G3).
     const DeclaredAccess host_read{
-        .buffer = &lod_selection_readback_buffer_,
+        .buffer = &slot.buffer,
         .use = BufferUse::HostRead,
     };
     planTransfer(std::span{&host_read, 1});
 
-    lod_selection_readback_pending_ = true;
-    lod_selection_readback_signal_ = VK_NULL_HANDLE;
-    lod_selection_readback_value_ = 0;
-    lod_selection_readback_capacity_ = rendered_capacity;
+    slot.pending = true;
+    slot.order = ++lod_selection_readback_order_;
+    slot.signal = VK_NULL_HANDLE;
+    slot.value = 0;
+    slot.capacity = rendered_capacity;
 }
 
 bool VulkanGSRenderer::invalidateReadbackBuffer(_VulkanBuffer& buffer, VkDeviceSize size) {

@@ -119,18 +119,6 @@ namespace lfs::vis {
         return splitViewUsesGTComparison(settings.split_view_mode);
     }
 
-    bool SplitViewService::isIndependentDualActive(const RenderSettings& settings) const {
-        return splitViewUsesIndependentPanels(settings.split_view_mode);
-    }
-
-    std::optional<std::array<SplitViewPanelLayout, 2>>
-    SplitViewService::panelLayouts(const RenderSettings& settings, const int total_width) const {
-        if (!isIndependentDualActive(settings) || total_width <= 0) {
-            return std::nullopt;
-        }
-        return makeSplitViewPanelLayouts(total_width, settings.split_position);
-    }
-
     std::optional<glm::ivec2> SplitViewService::gtContentDimensions() const {
         if (!hasValidGTContext()) {
             return std::nullopt;
@@ -143,7 +131,6 @@ namespace lfs::vis {
         pre_gt_equirectangular_ = false;
         pre_gt_show_camera_frustums_ = false;
         gt_forced_camera_frustums_off_ = false;
-        focused_panel_ = SplitViewPanelId::Left;
         std::lock_guard<std::mutex> lock(info_mutex_);
         const SplitViewInfo empty_info{};
         if (current_info_ != empty_info) {
@@ -158,7 +145,6 @@ namespace lfs::vis {
 
     SplitViewService::ModeChangeResult SplitViewService::transitionToMode(RenderSettings& settings,
                                                                           const SplitViewMode target_mode,
-                                                                          const Viewport* const primary_viewport,
                                                                           const GTExitBehavior gt_exit_behavior) {
         const SplitViewMode previous_mode = settings.split_view_mode;
         ModeChangeResult result{
@@ -209,33 +195,20 @@ namespace lfs::vis {
             settings.split_view_offset = 0;
         }
 
-        if (target_mode == SplitViewMode::IndependentDual) {
-            if (primary_viewport) {
-                secondary_viewport_ = *primary_viewport;
-            }
-            secondary_viewport_.ortho_scale_override = settings.ortho_scale;
-            focused_panel_ = SplitViewPanelId::Left;
-        } else if (previous_mode == SplitViewMode::IndependentDual) {
-            secondary_viewport_.ortho_scale_override.reset();
-            focused_panel_ = SplitViewPanelId::Left;
-        }
-
         return result;
     }
 
     SplitViewService::ModeChangeResult SplitViewService::toggleMode(RenderSettings& settings,
-                                                                    const SplitViewMode target_mode,
-                                                                    const Viewport* const primary_viewport) {
+                                                                    const SplitViewMode target_mode) {
         const SplitViewMode next_mode =
             settings.split_view_mode == target_mode ? SplitViewMode::Disabled : target_mode;
-        return transitionToMode(settings, next_mode, primary_viewport, GTExitBehavior::RestorePrevious);
+        return transitionToMode(settings, next_mode, GTExitBehavior::RestorePrevious);
     }
 
     SplitViewService::ModeChangeResult SplitViewService::handleSceneLoaded(RenderSettings& settings) {
         auto result = transitionToMode(
             settings,
             isGTComparisonActive(settings) ? SplitViewMode::Disabled : settings.split_view_mode,
-            nullptr,
             GTExitBehavior::PreserveCurrent);
         {
             std::lock_guard<std::mutex> lock(info_mutex_);
@@ -253,7 +226,6 @@ namespace lfs::vis {
         auto result = transitionToMode(
             settings,
             SplitViewMode::Disabled,
-            nullptr,
             GTExitBehavior::PreserveCurrent);
         clear();
         settings.split_view_offset = 0;
@@ -276,7 +248,6 @@ namespace lfs::vis {
         auto result = transitionToMode(
             settings,
             SplitViewMode::Disabled,
-            nullptr,
             GTExitBehavior::PreserveCurrent);
         settings.split_view_offset = 0;
         return result;

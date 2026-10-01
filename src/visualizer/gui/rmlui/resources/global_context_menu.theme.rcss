@@ -14,6 +14,10 @@
     image-color: @{text};
 }
 
+.context-menu-check {
+    color: @{primary};
+}
+
 .context-menu-item:hover .context-menu-icon {
     image-color: #ffffff;
 }
@@ -24,4 +28,12 @@
 
 .context-menu-separator {
     background-color: @{alpha(border,0.5)};
+}
+
+.context-menu-shortcut {
+    color: @{text_dim};
+}
+
+.context-menu-item:hover .context-menu-shortcut {
+    color: @{alpha(text,0.8)};
 }

@@ -19,7 +19,7 @@ actual Finder interaction remains a manual UI check.
 
 The shared desktop status bar shows compact Renderer and Tensors badges beside
 FPS on all platforms. Renderer telemetry comes from published frame metadata,
-including mixed split frames and software point-cloud panels, rather than from
+including the active editor view, mixed split frames and software point-cloud panels, rather than from
 the saved preference. The tensor badge reports the current process backend.
 Compact R and T role markers sit to the right of FPS and keep the same
 appearance on hover. Localized tooltips expand the role names and explain
@@ -326,8 +326,18 @@ non-byte masks still fall back through the existing capability contract.
 
 GPU contracts cover projection, stable sorting/composition, tensor producer
 ordering, interop, native hardware point coverage, resize/reuse, failed-encode
-recovery, adapter routing, four output slots, asynchronous ticket delivery and
-abandonment, median/expected depth capture and resource release. CPU contracts
+recovery, adapter routing, dynamic render target IDs, asynchronous ticket delivery
+and abandonment, median/expected depth capture and resource release. Each editor
+view owns its three-frame texture ring, capacity feedback and RAD pager. Closing
+a view cancels its pending readbacks and retires its textures only after native
+compute and desktop graphics consumers complete; it does not wait for unrelated
+views or permit a closed target ID to be reused. Contracts render eight
+nonconsecutive targets on both tensor backends, verify exact cached images,
+independent ticket cancellation and Auto routing. The separate macOS
+`MacViewerParity_viewportTargets` contract verifies actual Auto fallback and
+explicit Vulkan selection without Metal shader validation: MoltenVK's legacy
+GUT kernel exceeds the validator's threadgroup-memory limit. Native contracts
+retain GPU validation, following the existing selection-query CI separation. CPU contracts
 cover backend selection and working-set admission, including 64-bit overflow.
 An independent analytic ray reference exercises native 3DGUT color, first,
 weighted and median depth, IDs and reservation validation. The macOS-only parity

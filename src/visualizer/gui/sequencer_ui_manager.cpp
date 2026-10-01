@@ -373,7 +373,7 @@ namespace lfs::vis::gui {
 
         if (auto* const rm = viewer_->getRenderingManager()) {
             rm->setFocalLength(state.focal_length_mm);
-            rm->markCameraCut();
+            rm->markCameraCut(rm->activeViewId());
         }
     }
 
@@ -505,7 +505,7 @@ namespace lfs::vis::gui {
                                     const float panel_width, const float panel_height,
                                     const PanelInputState& panel_input) {
         const auto* const gui = viewer_->getGuiManager();
-        const bool sequencer_enabled = gui && gui->panelLayout().isShowSequencer();
+        const bool sequencer_enabled = gui && gui->isSequencerVisible();
         if (!sequencer_enabled) {
             setSequencerEnabled(false);
             return;
@@ -552,14 +552,6 @@ namespace lfs::vis::gui {
         if (overlay_active || edit_entered_mouse_down_)
             guiFocusState().want_capture_mouse = true;
 
-        const bool actively_following =
-            ui_state_.follow_playback &&
-            controller_.timeline().realKeyframeCount() > 0;
-
-        if (ui_state_.show_camera_path && !actively_following) {
-            renderCameraPath(viewport);
-            renderKeyframeGizmo(ctx, viewport);
-        }
         renderKeyframePreview(ctx);
         renderSequencerPanel(ctx, viewport, panel_x, panel_y, panel_width, panel_height, panel_input);
         syncPipPreviewWindow(viewport);
@@ -1163,7 +1155,7 @@ namespace lfs::vis::gui {
         auto& vp = viewer_->getViewport();
         vp.setViewMatrix(glm::mat3_cast(state.rotation), state.position);
         rm->setFocalLength(state.focal_length_mm);
-        rm->markCameraPoseChanged();
+        rm->markCameraPoseChanged(rm->activeViewId());
         return true;
     }
 
@@ -1349,7 +1341,7 @@ namespace lfs::vis::gui {
         }
 
         if (panel_->consumeDockToggleRequest()) {
-            const PanelSpace target = panel_->isFloating() ? PanelSpace::BottomDock : PanelSpace::Floating;
+            const PanelSpace target = panel_->isFloating() ? PanelSpace::BottomArea : PanelSpace::Floating;
             if (!PanelRegistry::instance().set_panel_space("native.sequencer", target)) {
                 LOG_ERROR("Failed to move sequencer panel to {}",
                           target == PanelSpace::Floating ? "floating" : "bottom dock");
@@ -1358,7 +1350,7 @@ namespace lfs::vis::gui {
 
         if (panel_->consumeClosePanelRequest()) {
             if (auto* const gui = viewer_->getGuiManager())
-                gui->panelLayout().setShowSequencer(false);
+                gui->setSequencerVisible(false);
             setSequencerEnabled(false);
         }
 
@@ -1490,6 +1482,15 @@ namespace lfs::vis::gui {
         applyPlySequenceFrame();
     }
 
+    void SequencerUIManager::renderViewOverlay(const UIContext& ctx, const ViewportLayout& viewport) {
+        if (!overlay_ || !ui_state_.show_camera_path ||
+            (ui_state_.follow_playback && controller_.timeline().realKeyframeCount() > 0))
+            return;
+        renderCameraPath(viewport);
+        if (viewport.view == viewer_->screens().activeView())
+            renderKeyframeGizmo(ctx, viewport);
+    }
+
     void SequencerUIManager::renderCameraPath(const ViewportLayout& viewport) {
         constexpr float PATH_THICKNESS = 2.0f;
         constexpr float PATH_SAMPLE_RADIUS = 2.5f;
@@ -1504,16 +1505,17 @@ namespace lfs::vis::gui {
         if (timeline.empty())
             return;
 
-        const auto& vp = viewer_->getViewport();
+        const auto target = viewer_->findView(viewport.view);
+        if (!target.valid())
+            return;
+        const auto& vp = *target.viewport;
         auto* const rm = viewer_->getRenderingManager();
         if (!rm)
             return;
-        const auto& settings = rm->getSettings();
+        const auto settings = rm->settingsForView(viewport.view);
         const glm::ivec2 vp_size(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
-        const auto* const rendering_manager = static_cast<const RenderingManager*>(rm);
 
         struct CameraPathPanel {
-            SplitViewPanelId panel_id = SplitViewPanelId::Left;
             const Viewport* viewport = nullptr;
             glm::vec2 projection_pos{0.0f};
             glm::vec2 projection_size{0.0f};
@@ -1541,32 +1543,6 @@ namespace lfs::vis::gui {
         std::vector<CameraPathPanel> panels;
         panels.reserve(2);
 
-        const auto add_viewer_panel = [&](const std::optional<RenderingManager::ViewerPanelInfo>& info_opt) {
-            if (!info_opt || !info_opt->valid())
-                return;
-            const auto& info = *info_opt;
-            panels.push_back(CameraPathPanel{
-                .panel_id = info.panel,
-                .viewport = info.viewport,
-                .projection_pos = {info.x, info.y},
-                .projection_size = {info.width, info.height},
-                .render_size = {info.render_width, info.render_height},
-                .clip_rect = {
-                    static_cast<int>(std::round(info.x)),
-                    static_cast<int>(std::round(info.y)),
-                    static_cast<int>(std::round(info.width)),
-                    static_cast<int>(std::round(info.height)),
-                },
-            });
-        };
-
-        if (rm->isIndependentSplitViewActive()) {
-            add_viewer_panel(rendering_manager->resolveViewerPanel(
-                vp, viewport.pos, viewport.size, std::nullopt, SplitViewPanelId::Left));
-            add_viewer_panel(rendering_manager->resolveViewerPanel(
-                vp, viewport.pos, viewport.size, std::nullopt, SplitViewPanelId::Right));
-        }
-
         if (panels.empty()) {
             const int clip_x = static_cast<int>(std::round(viewport.pos.x));
             const int clip_y = static_cast<int>(std::round(viewport.pos.y));
@@ -1575,7 +1551,7 @@ namespace lfs::vis::gui {
             std::vector<gui::ClipRect> clip_rects;
             clip_rects.reserve(2);
 
-            if (const auto divider_x = rm->getSplitDividerScreenX(viewport.pos, viewport.size);
+            if (const auto divider_x = rm->getSplitDividerScreenX(viewport.view, viewport.pos, viewport.size);
                 divider_x.has_value()) {
                 const int divider =
                     std::clamp(static_cast<int>(std::round(*divider_x)), clip_x, clip_x + clip_w);
@@ -1590,7 +1566,6 @@ namespace lfs::vis::gui {
 
             for (size_t i = 0; i < clip_rects.size(); ++i) {
                 panels.push_back(CameraPathPanel{
-                    .panel_id = (i == 0) ? SplitViewPanelId::Left : SplitViewPanelId::Right,
                     .viewport = &vp,
                     .projection_pos = viewport.pos,
                     .projection_size = viewport.size,
@@ -1915,25 +1890,6 @@ namespace lfs::vis::gui {
         glm::vec2 rect_size = viewport.size;
         glm::ivec2 render_size(static_cast<int>(std::round(viewport.size.x)),
                                static_cast<int>(std::round(viewport.size.y)));
-
-        if (rendering_manager->isIndependentSplitViewActive()) {
-            auto panel = rendering_manager->resolveViewerPanel(
-                primary_viewport, viewport.pos, viewport.size, screen_point, std::nullopt);
-            if (!panel || !panel->valid()) {
-                panel = rendering_manager->resolveViewerPanel(
-                    primary_viewport,
-                    viewport.pos,
-                    viewport.size,
-                    std::nullopt,
-                    rendering_manager->getFocusedSplitPanel());
-            }
-            if (panel && panel->valid()) {
-                gizmo_viewport = panel->viewport;
-                rect_pos = {panel->x, panel->y};
-                rect_size = {panel->width, panel->height};
-                render_size = {panel->render_width, panel->render_height};
-            }
-        }
 
         if (!gizmo_viewport || rect_size.x <= 0.0f || rect_size.y <= 0.0f ||
             render_size.x <= 0 || render_size.y <= 0) {

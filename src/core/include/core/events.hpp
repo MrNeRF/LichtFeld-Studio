@@ -44,9 +44,7 @@ namespace lfs::core {
         using event_id = Name;                             \
         __VA_ARGS__                                        \
                                                            \
-        void emit() const {                                \
-            ::lfs::event::emit(*this);                     \
-        }                                                  \
+        void emit() const { ::lfs::event::emit(*this); }   \
                                                            \
         static auto when(auto&& handler) {                 \
             return ::lfs::event::when<Name>(               \
@@ -141,7 +139,6 @@ namespace lfs::core {
             EVENT(CyclePLY, );
             EVENT(CycleSelectionVisualization, );
             EVENT(ToggleSplitView, );
-            EVENT(ToggleIndependentSplitView, const Viewport* viewport;);
             EVENT(ToggleGTComparison, );
             EVENT(Undo, );
             EVENT(Redo, );

@@ -47,6 +47,8 @@ namespace lfs::vis::gui {
         glm::vec3 total_translation{0.0f};
     };
 
+    LFS_VIS_API void beginTranslationGizmoFrame();
+
     LFS_VIS_API TranslationGizmoResult drawTranslationGizmo(const TranslationGizmoConfig& config);
 
     [[nodiscard]] bool isTranslationGizmoHovered();

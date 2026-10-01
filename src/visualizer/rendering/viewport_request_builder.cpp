@@ -244,8 +244,7 @@ namespace lfs::vis {
             }
         }
         void applyGaussianViewVolume(lfs::rendering::GaussianFilterState& filters,
-                                     const FrameContext& ctx,
-                                     const std::optional<SplitViewPanelId> render_panel) {
+                                     const FrameContext& ctx) {
             // While GT comparison mode is active the depth filter's render effect
             // (dim/hide/containment, and the drag-preview lane with it) is fully
             // suspended. Settings are never mutated — dropping the filters from the
@@ -255,24 +254,12 @@ namespace lfs::vis {
                 return;
             }
 
-            const bool use_panel_slots =
-                splitViewUsesIndependentPanels(ctx.settings.split_view_mode) && render_panel;
             float depth_near = -ctx.settings.depth_filter_max.z;
             float depth_far = -ctx.settings.depth_filter_min.z;
             float scale_x = ctx.settings.depth_filter_scale_x;
             float scale_y = ctx.settings.depth_filter_scale_y;
             float offset_x = ctx.settings.depth_filter_offset_x;
             float offset_y = ctx.settings.depth_filter_offset_y;
-            if (use_panel_slots) {
-                const DepthWindowState& window =
-                    ctx.panel_depth_windows[splitViewPanelIndex(*render_panel)];
-                depth_near = window.near_plane;
-                depth_far = window.far_plane;
-                scale_x = window.scale_x;
-                scale_y = window.scale_y;
-                offset_x = window.offset_x;
-                offset_y = window.offset_y;
-            }
 
             filters.view_volume = lfs::rendering::BoundingBox{
                 .min = {ctx.settings.depth_filter_min.x,
@@ -405,7 +392,7 @@ namespace lfs::vis {
 
         applyGaussianCropBox(request.filters, ctx);
         applyGaussianEllipsoid(request.filters, ctx);
-        applyGaussianViewVolume(request.filters, ctx, render_panel);
+        applyGaussianViewVolume(request.filters, ctx);
         request.frame_view.subregion_origin = subregion_origin;
         request.frame_view.subregion_full_size = subregion_full_size;
         return request;

@@ -8,6 +8,7 @@
 #include "app/mcp_event_handlers.hpp"
 #include "app/mcp_operator_tools.hpp"
 #include "app/mcp_runtime_tools.hpp"
+#include "app/mcp_screen_tools.hpp"
 #include "app/mcp_sequencer_tools.hpp"
 #include "app/mcp_ui_registry_tools.hpp"
 #include "app/view_info_json.hpp"
@@ -37,6 +38,8 @@
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/render_constants.hpp"
+#include "screen/screen.hpp"
+#include "screen/view3d_space.hpp"
 #include "sequencer/keyframe.hpp"
 #include "visualizer/gui/html_viewer_export.hpp"
 #include "visualizer/gui/panels/python_console_panel.hpp"
@@ -2263,6 +2266,7 @@ namespace lfs::app {
         register_generic_gui_operator_tools(registry, viewer);
         register_generic_gui_runtime_tools(registry, viewer);
         register_generic_gui_ui_tools(registry, viewer);
+        register_gui_screen_tools(registry, viewer);
 
         auto* const viewer_impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
         assert(viewer_impl);
@@ -2724,6 +2728,37 @@ namespace lfs::app {
 
         registry.register_tool(
             McpTool{
+                .name = "render.view_states",
+                .description = "Inspect each visible 3D area's camera, projection, rectangle, render target and published frame generation",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .metadata = {.category = "render", .kind = "query", .runtime = "gui", .thread_affinity = "gui_thread"}},
+            [viewer_impl](const json&) -> json {
+                auto result = post_and_wait(viewer_impl, [viewer_impl]() -> std::expected<json, std::string> {
+                    auto* rendering = viewer_impl->getRenderingManager();
+                    if (!rendering)
+                        return std::unexpected("Rendering is not initialized");
+                    json views = json::array();
+                    for (const auto area : viewer_impl->screens().screen().views()) {
+                        const auto target = viewer_impl->findView(area.value);
+                        if (!target.valid() || target.size.x <= 0 || target.size.y <= 0 || !rendering->hasViewState(area.value))
+                            continue;
+                        const auto settings = rendering->settingsForView(area.value);
+                        const auto& state = rendering->viewState(area.value);
+                        const auto rotation = target.viewport->getRotationMatrix();
+                        const auto position = target.viewport->getTranslation();
+                        json orientation = json::array();
+                        for (int col = 0; col < 3; ++col)
+                            for (int row = 0; row < 3; ++row)
+                                orientation.push_back(rotation[col][row]);
+                        views.push_back({{"id", area.value}, {"active", area.value == rendering->activeViewId()}, {"rect", {target.pos.x, target.pos.y, target.size.x, target.size.y}}, {"position", {position.x, position.y, position.z}}, {"rotation", orientation}, {"orthographic", settings.orthographic}, {"point_cloud", settings.point_cloud_mode}, {"target", state.main_render_target_.value}, {"generation", state.vulkan_external_viewport_image_ != VK_NULL_HANDLE ? state.vulkan_external_viewport_image_generation_ : state.vulkan_viewport_image_generation_}, {"image_size", {state.vulkan_viewport_image_size_.x, state.vulkan_viewport_image_size_.y}}});
+                    }
+                    return json{{"views", views}};
+                });
+                return result ? *result : json{{"error", result.error()}};
+            });
+
+        registry.register_tool(
+            McpTool{
                 .name = "render.capture_window",
                 .description = "Capture the current composited app window. Unlike render_capture, which grabs the viewport region only, this includes the full window, including panels, toolbars, and GUI overlays.",
                 .input_schema = {
@@ -2758,10 +2793,40 @@ namespace lfs::app {
         registry.register_tool(
             McpTool{
                 .name = "camera.get",
-                .description = "Get the current interactive viewport camera state",
-                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
-            [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
+                .description = "Get the current interactive viewport camera state. Optional `view` selects a 3D view; defaults to the active view.",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{{"view", json{{"type", "integer"}, {"description", "3D view area id; defaults to the active view"}}}},
+                    .required = {}},
+                .metadata = mcp::McpToolMetadata{
+                    .category = "camera",
+                    .kind = "query",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                }},
+            [viewer_impl](const json& args) -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
+                    if (args.contains("view") && !args["view"].is_null()) {
+                        const auto id = vis::screen::AreaId{args["view"].get<std::uint32_t>()};
+                        const auto* space = viewer_impl->screens().view3D(id);
+                        if (!space)
+                            return json{{"error", "Not a 3D view"}};
+                        vis::ViewInfo info;
+                        const auto& cam = space->camera.camera;
+                        for (int c = 0; c < 3; ++c)
+                            for (int r = 0; r < 3; ++r)
+                                info.rotation[static_cast<std::size_t>(c * 3 + r)] = cam.R[c][r];
+                        info.translation = {cam.t.x, cam.t.y, cam.t.z};
+                        info.pivot = {cam.pivot.x, cam.pivot.y, cam.pivot.z};
+                        info.width = space->camera.windowSize.x;
+                        info.height = space->camera.windowSize.y;
+                        info.fov = lfs::rendering::focalLengthToVFov(space->settings.focal_length_mm);
+                        info.orthographic = space->settings.orthographic;
+                        info.ortho_scale = space->settings.ortho_scale;
+                        auto result = view_info_json(info);
+                        result["view"] = id.value;
+                        return result;
+                    }
                     const auto info = vis::get_current_view_info();
                     if (!info)
                         return json{{"error", "Viewport camera bridge is not available"}};
@@ -2772,22 +2837,47 @@ namespace lfs::app {
         registry.register_tool(
             McpTool{
                 .name = "camera.set_view",
-                .description = "Set the interactive viewport camera by eye/target/up, with optional FOV override",
+                .description = "Set the interactive viewport camera by eye/target/up, with optional FOV override. Optional `view` selects a 3D view.",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
+                        {"view", json{{"type", "integer"}, {"description", "3D view area id; defaults to the active view"}}},
                         {"eye", number_array_schema(3, "Camera eye position [x,y,z]")},
                         {"target", number_array_schema(3, "Camera target/pivot position [x,y,z]")},
                         {"up", number_array_schema(3, "Optional up vector [x,y,z], defaults to [0,1,0]")},
                         {"fov_degrees", json{{"type", "number"}, {"description", "Optional vertical field of view in degrees"}}}},
-                    .required = {"eye", "target"}}},
+                    .required = {"eye", "target"}},
+                .metadata = mcp::McpToolMetadata{
+                    .category = "camera",
+                    .kind = "command",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                }},
             [viewer_impl](const json& args) -> json {
                 auto view = parse_view_arguments(args);
                 if (!view)
                     return mcp::invalid_argument_result(view.error().message, view.error().parameter);
 
-                return post_and_wait(viewer_impl, [view = *view]() -> json {
-                    apply_view_arguments(view);
+                return post_and_wait(viewer_impl, [viewer_impl, args, view = *view]() -> json {
+                    if (args.contains("view") && !args["view"].is_null()) {
+                        const auto id = vis::screen::AreaId{args["view"].get<std::uint32_t>()};
+                        auto* space = viewer_impl->screens().view3D(id);
+                        if (!space)
+                            return json{{"error", "Not a 3D view"}};
+                        const auto rotation =
+                            lfs::rendering::tryMakeVisualizerLookAtRotation(view.eye, view.target, view.up);
+                        if (!rotation)
+                            return json{{"error", "eye, target and up must form a valid look-at"}};
+                        space->camera.setViewMatrix(*rotation, view.eye);
+                        space->camera.camera.setPivot(view.target);
+                        if (view.fov_degrees)
+                            space->settings.focal_length_mm =
+                                lfs::rendering::vFovToFocalLength(*view.fov_degrees);
+                        if (auto* rendering = viewer_impl->getRenderingManager())
+                            rendering->markDirty(vis::DirtyFlag::ALL);
+                    } else {
+                        apply_view_arguments(view);
+                    }
 
                     const auto info = vis::get_current_view_info();
                     if (!info)
@@ -2799,11 +2889,30 @@ namespace lfs::app {
         registry.register_tool(
             McpTool{
                 .name = "camera.reset",
-                .description = "Reset the interactive viewport camera to its saved home position",
-                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
-            [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
-                    core::events::cmd::ResetCamera{}.emit();
+                .description = "Reset the interactive viewport camera to its saved home position. Optional `view` selects a 3D view.",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{{"view", json{{"type", "integer"}, {"description", "3D view area id; defaults to the active view"}}}},
+                    .required = {}},
+                .metadata = mcp::McpToolMetadata{
+                    .category = "camera",
+                    .kind = "command",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                }},
+            [viewer_impl](const json& args) -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
+                    if (args.contains("view") && !args["view"].is_null()) {
+                        const auto id = vis::screen::AreaId{args["view"].get<std::uint32_t>()};
+                        auto* space = viewer_impl->screens().view3D(id);
+                        if (!space)
+                            return json{{"error", "Not a 3D view"}};
+                        space->camera.camera.resetToHome();
+                        if (auto* rendering = viewer_impl->getRenderingManager())
+                            rendering->markDirty(vis::DirtyFlag::ALL);
+                    } else {
+                        core::events::cmd::ResetCamera{}.emit();
+                    }
                     const auto info = vis::get_current_view_info();
                     if (!info)
                         return json{{"success", true}};
@@ -5591,6 +5700,7 @@ namespace lfs::app {
         register_generic_gui_operator_resources(registry, viewer);
         register_generic_gui_runtime_resources(registry, viewer);
         register_generic_gui_ui_resources(registry, viewer);
+        register_gui_screen_resources(registry, viewer);
 
         registry.register_resource(
             McpResource{

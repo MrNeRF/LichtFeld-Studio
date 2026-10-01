@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "input/view_targets.hpp"
+
 #include "input/input_controller.hpp"
 #include "rendering/rendering_manager.hpp"
 #include <string>
@@ -52,18 +54,19 @@ namespace lfs::vis {
     // Concrete context passed to tools for accessing visualizer resources
     class ToolContext {
     public:
-        ToolContext(RenderingManager* rm, SceneManager* sm, const Viewport* vp, SDL_Window* win,
+        ToolContext(RenderingManager* rm, SceneManager* sm, ViewTargets* views, SDL_Window* win,
                     gui::GuiManager* gm = nullptr)
             : rendering_manager(rm),
               scene_manager(sm),
-              viewport(vp),
+              views(views),
               window(win),
               gui_manager(gm) {}
 
         // Direct access to components
         RenderingManager* getRenderingManager() const { return rendering_manager; }
         SceneManager* getSceneManager() const { return scene_manager; }
-        const Viewport& getViewport() const { return *viewport; }
+        // The active 3D view's camera.
+        const Viewport& getViewport() const { return *views->activeView().viewport; }
         SDL_Window* getWindow() const { return window; }
         gui::GuiManager* getGuiManager() const { return gui_manager; }
         const ViewportBounds& getViewportBounds() const { return viewport_bounds_; }
@@ -85,7 +88,7 @@ namespace lfs::vis {
     private:
         RenderingManager* rendering_manager;
         SceneManager* scene_manager;
-        const Viewport* viewport;
+        ViewTargets* views;
         SDL_Window* window;
         gui::GuiManager* gui_manager;
         ViewportBounds viewport_bounds_;

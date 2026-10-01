@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "gui/panel_layout.hpp"
+#include "gui/gui_input.hpp"
 #include "input/frame_input_buffer.hpp"
 #include "sequencer/rml_sequencer_panel.hpp"
 

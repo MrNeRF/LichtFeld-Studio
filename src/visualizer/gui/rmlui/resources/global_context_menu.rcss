@@ -23,6 +23,48 @@ body {
     gap: 8dp;
 }
 
+/* Auto-width rows let the absolute menu shrink to its measured content. */
+.context-menu.has-shortcuts .context-menu-item {
+    position: relative;
+    width: auto;
+    white-space: nowrap;
+}
+
+.context-menu.has-shortcuts .context-menu-label {
+    white-space: nowrap;
+}
+
+.context-menu.has-shortcuts .context-menu-check {
+    position: absolute;
+    left: 2dp;
+}
+
+.context-menu-item.has-shortcut {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8dp;
+}
+
+.context-menu-item.has-shortcut .context-menu-text {
+    flex: 1 0 auto;
+    white-space: nowrap;
+}
+
+.context-menu-check {
+    display: block;
+    flex: 0 0 16dp;
+    width: 16dp;
+    text-align: center;
+}
+
+.context-menu-shortcut {
+    flex: 0 0 auto;
+    margin-left: 12dp;
+    font-size: 11dp;
+    white-space: nowrap;
+}
+
 .context-menu-icon {
     width: 16dp;
     height: 16dp;

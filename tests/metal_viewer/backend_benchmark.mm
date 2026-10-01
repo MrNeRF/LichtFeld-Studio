@@ -27,7 +27,7 @@ namespace {
     using namespace lfs;
     using Clock = std::chrono::steady_clock;
     using Json = nlohmann::json;
-    using Slot = vis::VksplatViewportRenderer::OutputSlot;
+    constexpr vis::RenderTargetId kTarget{1};
     struct Options {
         size_t count = 100000, fixture_count = 512;
         int width = 1280, height = 720, warmup = 12, samples = 40, tone = 0;
@@ -711,14 +711,14 @@ namespace {
                 reference_request.frame_view.subregion_full_size = reference_request.frame_view.subregion_origin = {0, 0};
             }
             auto frame = [&](bool native) {
-                auto result = native ? vis::legacyMetalResult(metal.render(context, model, request, Slot::Main))
-                                     : vulkan.render(context, reference_cut ? *reference_cut : model, reference_request, false, Slot::Main, false, o.deterministic_reference);
+                auto result = native ? vis::legacyMetalResult(metal.render(context, model, request, kTarget))
+                                     : vulkan.render(context, reference_cut ? *reference_cut : model, reference_request, false, kTarget, false, o.deterministic_reference);
                 if (!result)
                     throw std::runtime_error(result.error());
                 wait(context, *result);
             };
             auto complete = [&] {
-                const auto status = metal.outputComplete(Slot::Main);
+                const auto status = metal.outputComplete(kTarget);
                 if (!status)
                     throw std::runtime_error(lfs::format_for_developer(status.error()));
                 return *status;
@@ -730,7 +730,7 @@ namespace {
             if (!complete())
                 throw std::runtime_error("Native reservation did not converge during warmup");
             if (o.gpu_lod) {
-                const auto status = metal.gpuLodSelectionStatus(Slot::Main);
+                const auto status = metal.gpuLodSelectionStatus(kTarget);
                 const size_t expected = o.gpu_lod_budget ? 1 : o.count - 1 - (o.count + 59999) / 60000;
                 if (!status.active || status.selected != expected || status.overflow || status.resident_chunks != (o.count + core::SplatLodTree::kChunkSplats - 1) / core::SplatLodTree::kChunkSplats)
                     throw std::runtime_error("Native LOD diagnostics differ from the completed GPU cut");
@@ -750,7 +750,7 @@ namespace {
                         throw std::runtime_error("Partial native frame in measured sample");
                     (native ? native_times : vulkan_times).push_back(ms);
                     if (native && o.profile_gpu) {
-                        const auto diagnostics = metal.frameDiagnostics(Slot::Main);
+                        const auto diagnostics = metal.frameDiagnostics(kTarget);
                         if (!diagnostics)
                             throw std::runtime_error(lfs::format_for_developer(diagnostics.error()));
                         gpu_times[0].push_back(diagnostics->gpu_command_ms);
@@ -762,10 +762,10 @@ namespace {
             }
             // GPU synchronization is measured; CPU image transfers are deliberately separate.
             auto pixels = core::Tensor::empty({size_t(o.height), size_t(o.width), 3}, core::Device::CPU, core::DataType::Float32);
-            const auto read = metal.readColor(Slot::Main, pixels, 0, 0);
+            const auto read = metal.readColor(kTarget, pixels, 0, 0);
             if (!read)
                 throw std::runtime_error(lfs::format_for_developer(read.error()));
-            auto reference = vulkan.readOutputImage(context, Slot::Main);
+            auto reference = vulkan.readOutputImage(context, kTarget);
             if (!reference)
                 throw std::runtime_error(reference.error());
             if (o.equirect && o.subregion) {
@@ -826,10 +826,10 @@ namespace {
             }
             if (o.transparent) {
                 auto rgba = core::Tensor::empty({size_t(o.height), size_t(o.width), 4}, core::Device::CPU, core::DataType::Float32);
-                const auto native = metal.readColor(Slot::Main, rgba, 0, 0);
+                const auto native = metal.readColor(kTarget, rgba, 0, 0);
                 if (!native)
                     throw std::runtime_error(lfs::format_for_developer(native.error()));
-                auto ref = vulkan.readOutputImageRgba(context, Slot::Main);
+                auto ref = vulkan.readOutputImageRgba(context, kTarget);
                 if (!ref)
                     throw std::runtime_error(ref.error());
                 double maximum = 0, squares = 0, native_sum = 0, reference_sum = 0, worst_rgb = -1;
@@ -930,7 +930,7 @@ namespace {
                                     rms_error > 1. / 255))
                 throw std::runtime_error("Native image exceeds FP16-reference parity bounds (valid max 4/255, RMS 1/255, depth coverage 0.1%): SH" + std::to_string(degree) + " " + difference.dump());
             const auto native_stats = statistics(native_times), vulkan_stats = statistics(vulkan_times);
-            const auto diagnostics = metal.frameDiagnostics(Slot::Main);
+            const auto diagnostics = metal.frameDiagnostics(kTarget);
             if (!diagnostics)
                 throw std::runtime_error(lfs::format_for_developer(diagnostics.error()));
             Json gpu_diagnostics = {{"required_instances", diagnostics->required_instances},

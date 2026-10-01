@@ -5,6 +5,7 @@
 #include "core/logger.hpp"
 #include "py_rml.hpp"
 #include "py_ui.hpp"
+#include "py_viewer_dispatch.hpp"
 #include "python/python_runtime.hpp"
 #include "python_panel_adapter.hpp"
 #include "rml_im_mode_panel_adapter.hpp"
@@ -12,7 +13,6 @@
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/gui/rmlui/rml_theme.hpp"
-#include "visualizer/post_work_utils.hpp"
 
 #include <algorithm>
 #include <array>
@@ -30,43 +30,6 @@ namespace lfs::python {
     namespace gui = lfs::vis::gui;
 
     namespace {
-        template <typename F>
-            requires(!std::is_void_v<std::invoke_result_t<F>>)
-        auto invoke_on_viewer(F&& fn, std::invoke_result_t<F> fallback) {
-            auto* const viewer = get_visualizer();
-            if (!viewer || viewer->isOnViewerThread())
-                return std::invoke(std::forward<F>(fn));
-            if (!viewer->acceptsPostedWork())
-                return fallback;
-
-            nb::gil_scoped_release release;
-            return vis::post_work_and_wait(
-                [viewer](vis::Visualizer::WorkItem work) {
-                    return viewer->postWork(std::move(work));
-                },
-                std::forward<F>(fn),
-                [fallback]() { return fallback; });
-        }
-
-        template <typename F>
-            requires(std::is_void_v<std::invoke_result_t<F>>)
-        void invoke_on_viewer(F&& fn) {
-            auto* const viewer = get_visualizer();
-            if (!viewer || viewer->isOnViewerThread()) {
-                std::invoke(std::forward<F>(fn));
-                return;
-            }
-            if (!viewer->acceptsPostedWork())
-                return;
-
-            nb::gil_scoped_release release;
-            vis::post_work_and_wait(
-                [viewer](vis::Visualizer::WorkItem work) {
-                    return viewer->postWork(std::move(work));
-                },
-                std::forward<F>(fn), [] {});
-        }
-
         void throw_type_error(const std::string& message) {
             throw nb::type_error(message.c_str());
         }
@@ -602,8 +565,8 @@ namespace lfs::python {
             .value("VIEWPORT_OVERLAY", PanelSpace::ViewportOverlay)
             .value("MAIN_PANEL_TAB", PanelSpace::MainPanelTab)
             .value("SCENE_HEADER", PanelSpace::SceneHeader)
-            .value("BOTTOM_DOCK", PanelSpace::BottomDock)
-            .value("LEFT_DOCK", PanelSpace::LeftDock)
+            .value("BOTTOM_DOCK", PanelSpace::BottomArea)
+            .value("LEFT_DOCK", PanelSpace::LeftArea)
             .value("STATUS_BAR", PanelSpace::StatusBar);
         nb::enum_<PanelHeightMode>(m, "PanelHeightMode")
             .value("FILL", PanelHeightMode::Fill)
@@ -713,28 +676,6 @@ namespace lfs::python {
             nb::arg("panel_id"), "Check if a panel is enabled");
 
         m.def(
-            "get_left_dock_width", []() {
-                return invoke_on_viewer(
-                    [] {
-                        if (auto* const gui_manager = get_gui_manager())
-                            return gui_manager->panelLayout().getLeftDockPreferredWidth();
-                        return 0.0f;
-                    },
-                    0.0f);
-            },
-            "Get the left dock width the user chose, in logical pixels. The dock is "
-            "narrower while the window is too small to fit it.");
-
-        m.def(
-            "set_left_dock_width", [](const float width) {
-                invoke_on_viewer([width] {
-                    if (auto* const gui_manager = get_gui_manager())
-                        gui_manager->panelLayout().setLeftDockWidth(width);
-                });
-            },
-            nb::arg("width"), "Set the left dock width in logical pixels");
-
-        m.def(
             "get_main_panel_tabs", []() {
                 return invoke_on_viewer(
                     [] {
@@ -744,43 +685,6 @@ namespace lfs::python {
                     std::vector<gui::PanelSummary>{});
             },
             "Get all main panel tabs as typed panel summaries");
-
-        m.def(
-            "get_bottom_dock_tabs", []() {
-                return invoke_on_viewer(
-                    [] {
-                        std::vector<std::string> result;
-                        auto* const gui_manager = get_gui_manager();
-                        if (!gui_manager)
-                            return result;
-                        for (const auto& tab : gui_manager->panelLayout().bottomDockTabs())
-                            result.push_back(tab.id);
-                        return result;
-                    },
-                    std::vector<std::string>{});
-            },
-            "Get the currently visible bottom-dock panel ids in registry order");
-
-        m.def(
-            "get_bottom_dock_active_tab", []() {
-                return invoke_on_viewer(
-                    [] {
-                        auto* const gui_manager = get_gui_manager();
-                        return gui_manager ? gui_manager->panelLayout().getBottomDockActiveTab()
-                                           : std::string{};
-                    },
-                    std::string{});
-            },
-            "Get the active bottom-dock panel id");
-
-        m.def(
-            "set_bottom_dock_active_tab", [](const std::string& panel_id) {
-                invoke_on_viewer([panel_id] {
-                    if (auto* const gui_manager = get_gui_manager())
-                        gui_manager->panelLayout().setBottomDockActiveTab(panel_id);
-                });
-            },
-            nb::arg("panel_id"), "Set the active bottom-dock panel id");
 
         m.def(
             "get_panel", [](const std::string& panel_id) {

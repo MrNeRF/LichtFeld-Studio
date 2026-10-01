@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "screen/screen_service.hpp"
 #include "visualizer/ipc/render_settings_convert.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
@@ -163,7 +164,7 @@ TEST(RenderSettingsProxy, GutMirrorStillSwitchesViewerBackend) {
     EXPECT_FALSE(settings.gut);
 }
 
-TEST(RenderSettingsProxy, EquirectangularForcesGutBackend) {
+TEST(RenderSettingsProxy, EquirectangularPreservesSceneBackend) {
     using Backend = lfs::rendering::GaussianRasterBackend;
 
     lfs::vis::RenderSettings settings;
@@ -176,6 +177,9 @@ TEST(RenderSettingsProxy, EquirectangularForcesGutBackend) {
     lfs::vis::apply_proxy(settings, proxy);
 
     EXPECT_TRUE(settings.equirectangular);
+    EXPECT_EQ(settings.raster_backend, Backend::ThreeDgs);
+    EXPECT_FALSE(settings.gut);
+    lfs::vis::enforceProjectionBackend(settings);
     EXPECT_EQ(settings.raster_backend, Backend::ThreeDgut);
     EXPECT_TRUE(settings.gut);
 }
@@ -183,7 +187,9 @@ TEST(RenderSettingsProxy, EquirectangularForcesGutBackend) {
 TEST(RenderSettingsBackendNormalization, RenderingManagerCanSwitchBackFromGutTo3dgs) {
     using Backend = lfs::rendering::GaussianRasterBackend;
 
-    lfs::vis::RenderingManager manager;
+    lfs::vis::screen::ScreenService manager_views;
+
+    lfs::vis::RenderingManager manager{manager_views};
     auto settings = manager.getSettings();
     settings.raster_backend = Backend::ThreeDgut;
     settings.gut = true;
@@ -202,10 +208,12 @@ TEST(RenderSettingsBackendNormalization, RenderingManagerCanSwitchBackFromGutTo3
     EXPECT_FALSE(settings.gut);
 }
 
-TEST(RenderSettingsBackendNormalization, RenderingManagerEquirectangularUpdateForcesGutBackend) {
+TEST(RenderSettingsBackendNormalization, RenderingManagerEquirectangularUpdatePreservesSceneBackend) {
     using Backend = lfs::rendering::GaussianRasterBackend;
 
-    lfs::vis::RenderingManager manager;
+    lfs::vis::screen::ScreenService manager_views;
+
+    lfs::vis::RenderingManager manager{manager_views};
     auto settings = manager.getSettings();
     settings.raster_backend = Backend::ThreeDgs;
     settings.gut = false;
@@ -214,6 +222,9 @@ TEST(RenderSettingsBackendNormalization, RenderingManagerEquirectangularUpdateFo
 
     settings = manager.getSettings();
     EXPECT_TRUE(settings.equirectangular);
+    EXPECT_EQ(settings.raster_backend, Backend::ThreeDgs);
+    EXPECT_FALSE(settings.gut);
+    lfs::vis::enforceProjectionBackend(settings);
     EXPECT_EQ(settings.raster_backend, Backend::ThreeDgut);
     EXPECT_TRUE(settings.gut);
 }
@@ -221,7 +232,9 @@ TEST(RenderSettingsBackendNormalization, RenderingManagerEquirectangularUpdateFo
 TEST(RenderSettingsBackendNormalization, RenderingManagerKeepsGutToggleWorking) {
     using Backend = lfs::rendering::GaussianRasterBackend;
 
-    lfs::vis::RenderingManager manager;
+    lfs::vis::screen::ScreenService manager_views;
+
+    lfs::vis::RenderingManager manager{manager_views};
     auto settings = manager.getSettings();
     ASSERT_EQ(settings.raster_backend, Backend::ThreeDgs);
     ASSERT_FALSE(settings.gut);

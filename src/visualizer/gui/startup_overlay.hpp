@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "gui/panel_layout.hpp"
+#include "gui/gui_input.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/startup_overlay_geometry.hpp"
 

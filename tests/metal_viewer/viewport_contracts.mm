@@ -46,10 +46,10 @@ static void transparent_threshold_contract(vis::VulkanContext& context) {
         const double opacity = pixel_alpha * std::exp(power);
         require(opacity > 0 && opacity < 1, "Invalid transparent threshold oracle");
         model.opacity_raw() = Tensor::from_vector(std::vector<float>{float(std::log(opacity / (1 - opacity)))}, {1, 1}, Device::GPU);
-        const auto frame = renderer.render(context, model, request, vis::VksplatViewportRenderer::OutputSlot::Main);
+        const auto frame = renderer.render(context, model, request, vis::RenderTargetId{1});
         require(bool(frame), "Transparent threshold render failed");
         auto pixels = Tensor::empty({97, 97, 4}, Device::CPU);
-        require(bool(renderer.readColor(vis::VksplatViewportRenderer::OutputSlot::Main, pixels, 0, 0)), "Transparent threshold readback failed");
+        require(bool(renderer.readColor(vis::RenderTargetId{1}, pixels, 0, 0)), "Transparent threshold readback failed");
         const auto pixel = pixels.ptr<float>() + (y * 97 + x) * 4;
         if (visible)
             require(pixel[3] > 0 && pixel[0] > .7f, "FP16 storage erased valid FP32 threshold coverage");
@@ -77,10 +77,10 @@ static void partial_selection_mask_contract(vis::VulkanContext& context) {
         request.sh_degree = 0;
         const auto capture = [&] {
             require(vis::MetalViewportRenderer::supports(model, request), "Partial native selection mask unnecessarily rejected Metal");
-            const auto frame = adapter.render(context, model, request, true, vis::VksplatViewportRenderer::OutputSlot::Main, false, true);
+            const auto frame = adapter.render(context, model, request, true, vis::RenderTargetId{1}, false, true);
             require(frame.has_value() && (frame->generation >> 63) != 0, "Partial selection mask fell back to Vulkan");
             auto rgb = Tensor::empty({64, 96, 3}, Device::CPU);
-            const auto ticket = adapter.submitReadOutputImageIntoCpuHwcTicket(context, vis::VksplatViewportRenderer::OutputSlot::Main, rgb, 0, 0);
+            const auto ticket = adapter.submitReadOutputImageIntoCpuHwcTicket(context, vis::RenderTargetId{1}, rgb, 0, 0);
             require(ticket.has_value() && adapter.waitReadbackTicket(*ticket).has_value(), "Partial selection readback failed");
             return rgb;
         };
@@ -125,7 +125,95 @@ static void partial_selection_mask_contract(vis::VulkanContext& context) {
     }
     vis::UserPreferences::instance().setViewerBackend(rendering::ViewerBackend::Vulkan);
 }
-static void run() {
+static void multi_target_auto_contract(vis::VulkanContext& context, bool compare_vulkan) {
+    using core::Device;
+    using core::Tensor;
+    const auto previous = vis::UserPreferences::instance().viewerBackend();
+    struct Restore {
+        rendering::ViewerBackend value;
+        ~Restore() { vis::UserPreferences::instance().setViewerBackend(value); }
+    } restore{previous};
+    vis::UserPreferences::instance().setViewerBackend(rendering::ViewerBackend::Automatic);
+    constexpr std::array<vis::RenderTargetId, 8> ids{{{5}, {37}, {1024}, {90001}, {17}, {700}, {0xFFFFFFFEu}, {23}}};
+    for (const auto backend : {core::GpuBackend::Metal, core::GpuBackend::Vulkan}) {
+        core::GpuBackendScope scope(backend);
+        core::SplatData model(0,
+            Tensor::from_vector(std::vector<float>{0, 0, -3}, {1, 3}, Device::GPU),
+            Tensor::from_vector(std::vector<float>{1, 0, 0}, {1, 1, 3}, Device::GPU), {},
+            Tensor::full({1, 3}, -2.f, Device::GPU),
+            Tensor::from_vector(std::vector<float>{1, 0, 0, 0}, {1, 4}, Device::GPU),
+            Tensor::full({1, 1}, 4.f, Device::GPU), 1.f);
+        vis::VksplatViewportRenderer adapter;
+        std::array<Tensor, ids.size()> snapshots;
+        const auto request_for = [](size_t index) {
+            rendering::ViewportRenderRequest request;
+            request.frame_view.size = {int(49 + index * 2), int(33 + index * 2)};
+            request.sh_degree = 0;
+            request.gut = (index & 1) != 0;
+            request.frame_view.translation.x = float(index) * .01f;
+            return request;
+        };
+        const auto capture = [&](size_t index) {
+            const auto request = request_for(index);
+            const auto size = request.frame_view.size;
+            auto rgb = Tensor::empty({size_t(size.y), size_t(size.x), 3}, Device::CPU);
+            const auto ticket = adapter.submitReadOutputImageIntoCpuHwcTicket(context, ids[index], rgb, 0, 0);
+            require(ticket && vis::MetalViewportRenderer::nativeTicket(*ticket), "Dynamic view capture lost native identity");
+            require(adapter.waitReadbackTicket(*ticket).has_value(), "Dynamic view capture failed");
+            require(rgb.ptr<float>()[((size.y / 2) * size.x + size.x / 2) * 3] > .5f, "Dynamic view produced no visible splat");
+            return rgb;
+        };
+        for (size_t index = 0; index < ids.size(); ++index) {
+            const auto request = request_for(index);
+            const auto frame = adapter.render(context, model, request, true, ids[index], false, true);
+            require(frame && frame->viewer_backend == rendering::ViewerBackend::Metal && (frame->generation >> 63),
+                    "Auto did not select native Metal for a compatible dynamic target");
+            require(frame->size == request.frame_view.size && adapter.hasRenderTarget(ids[index]), "Dynamic target extent/ownership differs");
+            snapshots[index] = capture(index);
+        }
+        for (size_t index = 0; index < ids.size(); ++index) {
+            const auto current = capture(index);
+            require(std::memcmp(current.data_ptr(), snapshots[index].data_ptr(), current.bytes()) == 0,
+                    "Rendering another target changed a cached native view");
+        }
+        require(!adapter.render(context, model, request_for(0), true, {}).has_value(), "Invalid target zero was accepted");
+        auto cancelled = Tensor::full({33, 49, 3}, -99.f, Device::CPU);
+        auto survivor = Tensor::empty({35, 51, 3}, Device::CPU);
+        const auto cancelled_ticket = adapter.submitReadOutputImageIntoCpuHwcTicket(context, ids[0], cancelled, 0, 0);
+        const auto survivor_ticket = adapter.submitReadOutputImageIntoCpuHwcTicket(context, ids[1], survivor, 0, 0);
+        require(cancelled_ticket && survivor_ticket, "Pending target tickets failed");
+        require(adapter.releaseRenderTarget(ids[0]) && !adapter.hasRenderTarget(ids[0]), "Closed native target retained ownership");
+        const auto cancelled_status = adapter.pollReadbackTicket(*cancelled_ticket);
+        require(cancelled_status && *cancelled_status == vis::VksplatViewportRenderer::ReadbackTicketStatus::Failed,
+                "Closed target did not fail its pending readback");
+        require(!adapter.render(context, model, request_for(0), true, ids[0]).has_value(), "A retired target ID was reused");
+        require(adapter.waitReadbackTicket(*survivor_ticket).has_value(), "Closing one target failed a different target's ticket");
+        require(std::memcmp(survivor.data_ptr(), snapshots[1].data_ptr(), survivor.bytes()) == 0,
+                "A ticket delivered pixels from a different view");
+        for (size_t i = 0; i < cancelled.numel(); ++i)
+            require(cancelled.ptr<float>()[i] == -99.f, "Closed target wrote to its abandoned host destination");
+        for (size_t index = 1; index < ids.size(); ++index) {
+            const auto current = capture(index);
+            require(std::memcmp(current.data_ptr(), snapshots[index].data_ptr(), current.bytes()) == 0,
+                    "Closing another target changed this native view");
+        }
+        if (!compare_vulkan)
+            continue;
+        // Auto must retain Vulkan for a frame whose overlay is not resident.
+        auto fallback_request = request_for(1);
+        fallback_request.overlay.has_selection = true;
+        fallback_request.overlay.emphasis.mask = std::make_shared<Tensor>(Tensor::full({1}, 1.f, Device::CPU).to(core::DataType::UInt8));
+        const auto fallback = adapter.render(context, model, fallback_request, true, ids[1], false, true);
+        require(fallback && fallback->viewer_backend == rendering::ViewerBackend::Vulkan, "Unsupported Auto frame did not use Vulkan");
+        const auto returned = adapter.render(context, model, request_for(1), true, ids[1], false, true);
+        require(returned && returned->viewer_backend == rendering::ViewerBackend::Metal, "Compatible Auto frame did not return to Metal");
+        vis::UserPreferences::instance().setViewerBackend(rendering::ViewerBackend::Vulkan);
+        const auto explicit_vk = adapter.render(context, model, request_for(1), true, ids[1], false, true);
+        require(explicit_vk && explicit_vk->viewer_backend == rendering::ViewerBackend::Vulkan, "Explicit Vulkan was overridden by Auto policy");
+        vis::UserPreferences::instance().setViewerBackend(rendering::ViewerBackend::Automatic);
+    }
+}
+static void run(bool compare_vulkan) {
     core::GpuBackendScope scope(core::GpuBackend::Metal);
     vis::VulkanContext context;
     require(context.initHeadless(), context.lastError().c_str());
@@ -144,7 +232,7 @@ static void run() {
     std::vector<glm::mat4> transforms(2, glm::mat4(1));
     request.scene.model_transforms = &transforms;
     require(!vis::MetalViewportRenderer::supports(model, request), "Multiple objects accepted without indices");
-    const auto malformed = renderer.render(context, model, request, vis::VksplatViewportRenderer::OutputSlot::Main);
+    const auto malformed = renderer.render(context, model, request, vis::RenderTargetId{1});
     require(!malformed && malformed.error().code() == lfs::ErrorCode::InvalidArgument &&
                 malformed.error().domain() == lfs::ErrorDomain::Rendering,
             "Malformed scene lost its typed argument error");
@@ -152,7 +240,7 @@ static void run() {
     require(!unknown && unknown.error().code() == lfs::ErrorCode::NotFound,
             "Unknown ticket lost its typed lookup error");
     auto empty_destination = Tensor::empty({64, 96, 3}, Device::CPU);
-    const auto empty_read = renderer.readColor(vis::VksplatViewportRenderer::OutputSlot::Main,
+    const auto empty_read = renderer.readColor(vis::RenderTargetId{1},
                                                empty_destination, 0, 0);
     require(!empty_read && empty_read.error().code() == lfs::ErrorCode::FailedPrecondition,
             "Empty output lost its typed precondition error");
@@ -168,25 +256,25 @@ static void run() {
         require(vis::MetalViewportRenderer::supports(model, lod_request), "Resident LOD cut incorrectly fell back");
         for (size_t count : {size_t(1), size_t(0)}) {
             lod_request.lod_count = count;
-            const auto result = renderer.render(context, model, lod_request, vis::VksplatViewportRenderer::OutputSlot::Main);
+            const auto result = renderer.render(context, model, lod_request, vis::RenderTargetId{1});
             require(bool(result), "Invalid/empty LOD cut failed instead of publishing empty coverage");
             auto pixels = Tensor::empty({64, 96, 4}, Device::CPU);
-            require(bool(renderer.readColor(vis::VksplatViewportRenderer::OutputSlot::Main, pixels, 0, 0)), "Empty LOD readback failed");
+            require(bool(renderer.readColor(vis::RenderTargetId{1}, pixels, 0, 0)), "Empty LOD readback failed");
             require(pixels.ptr<float>()[((32 * 96 + 48) * 4) + 3] == 0, "Invalid/empty LOD cut retained old visible coverage");
         }
     }
     for (int frame = 0; frame < 12; ++frame) {
-        const auto output = renderer.render(context, model, request, vis::VksplatViewportRenderer::OutputSlot::Main);
+        const auto output = renderer.render(context, model, request, vis::RenderTargetId{1});
         if (!output)
             throw std::runtime_error(lfs::format_for_developer(output.error()));
         require(output->image && output->image_view && output->completion_semaphore, "Missing native presentation handles");
         const auto size = request.frame_view.size;
         auto pixels = Tensor::empty({size_t(size.y), size_t(size.x), 4}, Device::CPU, core::DataType::Float32);
-        auto read = renderer.readColor(vis::VksplatViewportRenderer::OutputSlot::Main, pixels, 0, 0);
+        auto read = renderer.readColor(vis::RenderTargetId{1}, pixels, 0, 0);
         if (!read)
             throw std::runtime_error(lfs::format_for_developer(read.error()));
         if (frame == 0) {
-            const auto invalid = renderer.readColor(vis::VksplatViewportRenderer::OutputSlot::Main,
+            const auto invalid = renderer.readColor(vis::RenderTargetId{1},
                                                     pixels, -1, 0);
             require(!invalid && invalid.error().code() == lfs::ErrorCode::InvalidArgument,
                     "Invalid readback destination lost its typed argument error");
@@ -194,12 +282,12 @@ static void run() {
         const size_t center = ((size.y / 2) * size.x + size.x / 2) * 4;
         require(pixels.ptr<float>()[center] > .5f, "Native camera or color transfer differs");
         require(pixels.ptr<float>()[center] > pixels.ptr<float>()[center + 1], "SH0 channels differ");
-        const auto depth = renderer.readDepth({.pixel = size / 2, .source_size = size});
+        const auto depth = renderer.readDepth({.pixel = size / 2, .source_size = size, .target = vis::RenderTargetId{1}});
         if (!depth)
             throw std::runtime_error(lfs::format_for_developer(depth.error()));
         require(std::abs(*depth - 3.f) < 1e-4f, "Native desktop depth differs");
         auto asynchronous = Tensor::full({size_t(size.y) + 2, size_t(size.x) + 2, 3}, -1.f, Device::CPU);
-        const auto ticket = renderer.submitReadback(vis::VksplatViewportRenderer::OutputSlot::Main, asynchronous, 1, 1, false);
+        const auto ticket = renderer.submitReadback(vis::RenderTargetId{1}, asynchronous, 1, 1, false);
         require(ticket.has_value(), "Native asynchronous color submit failed");
         require(renderer.outstandingReadbacks() == 1, "Native ticket not tracked");
         const auto ready = renderer.pollReadback(*ticket, true);
@@ -209,10 +297,10 @@ static void run() {
         const size_t async_center = (((size.y / 2) + 1) * (size.x + 2) + (size.x / 2) + 1) * 3;
         require(asynchronous.ptr<float>()[async_center] == pixels.ptr<float>()[center], "Asynchronous color differs");
         auto plane = Tensor::full({size_t(size.y), size_t(size.x)}, -1.f, Device::CPU);
-        const auto depth_ticket = renderer.submitReadback(vis::VksplatViewportRenderer::OutputSlot::Main, plane, 0, 0, true);
+        const auto depth_ticket = renderer.submitReadback(vis::RenderTargetId{1}, plane, 0, 0, true);
         require(depth_ticket.has_value() && renderer.pollReadback(*depth_ticket, true).has_value(), "Depth plane ticket failed");
         require(std::abs(plane.ptr<float>()[(size.y / 2) * size.x + size.x / 2] - 3.f) < 1e-4f, "Asynchronous depth differs");
-        const auto abandoned = renderer.submitReadback(vis::VksplatViewportRenderer::OutputSlot::Main, plane, 0, 0, true);
+        const auto abandoned = renderer.submitReadback(vis::RenderTargetId{1}, plane, 0, 0, true);
         require(abandoned.has_value(), "Abandoned ticket submit failed");
         renderer.abandonReadback(*abandoned);
         plane.fill_(-7.f);
@@ -237,11 +325,11 @@ static void run() {
     request.overlay.markers.show_rings = false;
     request.frame_view.orthographic = false;
     const auto snapshot = [&](rendering::ViewportRenderRequest& r) {
-        const auto frame = renderer.render(context, model, r, vis::VksplatViewportRenderer::OutputSlot::Main);
+        const auto frame = renderer.render(context, model, r, vis::RenderTargetId{1});
         if (!frame)
             throw std::runtime_error(lfs::format_for_developer(frame.error()));
         auto pixels = Tensor::empty({64, 96, 3}, Device::CPU, core::DataType::Float32);
-        const auto read = renderer.readColor(vis::VksplatViewportRenderer::OutputSlot::Main, pixels, 0, 0);
+        const auto read = renderer.readColor(vis::RenderTargetId{1}, pixels, 0, 0);
         if (!read)
             throw std::runtime_error(lfs::format_for_developer(read.error()));
         return pixels;
@@ -272,7 +360,7 @@ static void run() {
     request.overlay.markers.show_center_markers = false;
     const auto gut_pixels = snapshot(request);
     require(gut_pixels.ptr<float>()[center] > .5f, "Native 3DGUT ray contribution missing");
-    const auto gut_depth = renderer.readDepth({.pixel = {48, 32}, .source_size = {96, 64}});
+    const auto gut_depth = renderer.readDepth({.pixel = {48, 32}, .source_size = {96, 64}, .target = vis::RenderTargetId{1}});
     const auto k = request.frame_view.getCameraIntrinsics();
     const float x = (48.5f - k.center_x) / k.focal_x, y = (32.5f - k.center_y) / k.focal_y;
     const float analytic_depth = 3.f / (1.f + x * x + y * y);
@@ -284,7 +372,7 @@ static void run() {
     const float azimuth = float(2 * M_PI) * (48.5f / 96.f - .5f);
     const float elevation = float(M_PI) * (32.5f / 64.f - .5f);
     const float ray_z = std::cos(azimuth) * std::cos(elevation);
-    const auto panorama_depth = renderer.readDepth({.pixel = {48, 32}, .source_size = {96, 64}});
+    const auto panorama_depth = renderer.readDepth({.pixel = {48, 32}, .source_size = {96, 64}, .target = vis::RenderTargetId{1}});
     require(panorama_depth.has_value() && std::abs(*panorama_depth - 3.f * ray_z * ray_z) < 1e-4f,
             "Panorama depth did not use its spherical pixel ray");
     model.means_raw() = Tensor::from_vector(std::vector<float>{0, 0, 3}, {1, 3}, Device::GPU);
@@ -297,8 +385,8 @@ static void run() {
     request.frame_view.subregion_full_size = {96, 64};
     request.frame_view.subregion_origin = {65, 15};
     auto tile = Tensor::empty({33, 31, 3}, Device::CPU, core::DataType::Float32);
-    require(renderer.render(context, model, request, vis::VksplatViewportRenderer::OutputSlot::Main).has_value(), "Panorama subregion failed");
-    require(renderer.readColor(vis::VksplatViewportRenderer::OutputSlot::Main, tile, 0, 0).has_value(), "Panorama subregion readback failed");
+    require(renderer.render(context, model, request, vis::RenderTargetId{1}).has_value(), "Panorama subregion failed");
+    require(renderer.readColor(vis::RenderTargetId{1}, tile, 0, 0).has_value(), "Panorama subregion readback failed");
     for (size_t y = 0; y < 33; ++y)
         for (size_t x = 0; x < 31; ++x)
             for (size_t c = 0; c < 3; ++c)
@@ -311,8 +399,8 @@ static void run() {
     require(!vis::MetalViewportRenderer::supports(model, request), "Panorama accepted a rasterizer without spherical rays");
     request.gut = true;
     request.equirectangular = false;
-    require(renderer.release(vis::VksplatViewportRenderer::OutputSlot::Main).has_value(), "Native release failed");
-    require(renderer.size(vis::VksplatViewportRenderer::OutputSlot::Main) == glm::ivec2(0), "Released slot retained output");
+    require(renderer.releaseAll().has_value(), "Native scene release failed");
+    require(renderer.size(vis::RenderTargetId{1}) == glm::ivec2(0), "Released slot retained output");
     request.gut = false;
     request.overlay.markers.show_center_markers = false;
     // Jitter changes the projection, but must not perpetually request a
@@ -320,11 +408,11 @@ static void run() {
     const auto calibrated = request.frame_view.getCameraIntrinsics();
     request.frame_view.containment_intrinsics = calibrated;
     request.frame_view.intrinsics_override = calibrated;
-    const auto stable = renderer.render(context, model, request, vis::VksplatViewportRenderer::OutputSlot::Main);
-    require(stable.has_value() && renderer.outputComplete(vis::VksplatViewportRenderer::OutputSlot::Main).has_value(), "Stable jitter fixture failed");
+    const auto stable = renderer.render(context, model, request, vis::RenderTargetId{1});
+    require(stable.has_value() && renderer.outputComplete(vis::RenderTargetId{1}).has_value(), "Stable jitter fixture failed");
     request.frame_view.intrinsics_override->center_x += .25f;
     request.frame_view.intrinsics_override->center_y -= .125f;
-    const auto jittered = renderer.render(context, model, request, vis::VksplatViewportRenderer::OutputSlot::Main);
+    const auto jittered = renderer.render(context, model, request, vis::RenderTargetId{1});
     require(jittered.has_value() && !jittered->lod_streaming_active, "Temporal jitter requested perpetual refinement");
     request.frame_view.containment_intrinsics.reset();
     request.frame_view.intrinsics_override.reset();
@@ -332,10 +420,10 @@ static void run() {
     {
         vis::VksplatViewportRenderer adapter;
         uint64_t first_ticket = 0;
-        for (const auto slot : {vis::VksplatViewportRenderer::OutputSlot::Main,
-                                vis::VksplatViewportRenderer::OutputSlot::SplitLeft,
-                                vis::VksplatViewportRenderer::OutputSlot::SplitRight,
-                                vis::VksplatViewportRenderer::OutputSlot::Preview}) {
+        for (const auto slot : {vis::RenderTargetId{1},
+                                vis::RenderTargetId{2},
+                                vis::RenderTargetId{3},
+                                vis::RenderTargetId{4}}) {
             const auto frame = adapter.render(context, model, request, true, slot, false, true);
             if (!frame)
                 throw std::runtime_error(frame.error());
@@ -352,24 +440,25 @@ static void run() {
         }
         model.opacity_raw() = Tensor::full({1, 1}, -4.f, Device::GPU).to(core::DataType::Float16);
         adapter.setDepthCaptureMode(true, true);
-        const auto expected_frame = adapter.render(context, model, request, true, vis::VksplatViewportRenderer::OutputSlot::Preview, false, true);
+        const auto expected_frame = adapter.render(context, model, request, true, vis::RenderTargetId{4}, false, true);
         require(expected_frame.has_value() && (expected_frame->generation >> 63) != 0, "Expected-depth capture lost native backend");
-        const auto expected = adapter.readPreviewDepth(context);
+        const auto expected = adapter.readPreviewDepth(context, vis::RenderTargetId{4});
         require(expected.has_value() && std::abs((*expected)->ptr<float>()[32 * 96 + 48] - 3.f) < 1e-3f, "Expected-depth capture differs");
         require((*expected)->ptr<float>()[0] >= 1e9f, "Empty expected depth lost sentinel");
         adapter.setDepthCaptureMode(true, false);
-        require(adapter.render(context, model, request, true, vis::VksplatViewportRenderer::OutputSlot::Preview, false, true).has_value(), "Median capture failed");
-        const auto median = adapter.readPreviewDepth(context);
+        require(adapter.render(context, model, request, true, vis::RenderTargetId{4}, false, true).has_value(), "Median capture failed");
+        const auto median = adapter.readPreviewDepth(context, vis::RenderTargetId{4});
         require(median.has_value() && (*median)->ptr<float>()[32 * 96 + 48] >= 1e9f, "Low-opacity median differs");
-        adapter.releasePreviewResources();
-        adapter.releaseSplitOutputResources();
+        require(adapter.releaseRenderTarget(vis::RenderTargetId{4}), "Preview release failed");
+        require(adapter.releaseRenderTarget(vis::RenderTargetId{2}), "Left view release failed");
+        require(adapter.releaseRenderTarget(vis::RenderTargetId{3}), "Right view release failed");
         adapter.reset();
         model.opacity_raw() = Tensor::full({1, 1}, 4.f, Device::GPU).to(core::DataType::Float16);
         adapter.setDepthCaptureMode(false);
-        require(adapter.render(context, model, request, true).has_value(), "Native adapter restart failed");
+        require(adapter.render(context, model, request, true, vis::RenderTargetId{1}).has_value(), "Native adapter restart failed");
         auto restart_rgb = Tensor::empty({64, 96, 3}, Device::CPU, core::DataType::Float32);
         const auto restart_ticket = adapter.submitReadOutputImageIntoCpuHwcTicket(context,
-                                                                                  vis::VksplatViewportRenderer::OutputSlot::Main, restart_rgb, 0, 0);
+                                                                                  vis::RenderTargetId{1}, restart_rgb, 0, 0);
         require(restart_ticket.has_value() && *restart_ticket != first_ticket, "Reset reused a stale native ticket identity");
         require(!adapter.pollReadbackTicket(first_ticket).has_value(), "Stale native ticket aliased a new destination");
         require(adapter.waitReadbackTicket(*restart_ticket).has_value(), "Restart ticket delivery failed");
@@ -391,32 +480,49 @@ static void run() {
     points.view_projection[2][2] = -1.002002f;
     points.view_projection[2][3] = -1;
     points.view_projection[3][2] = -.2002002f;
-    const auto point_frame = renderer.renderPoints(context, points, vis::PointCloudVulkanRenderer::OutputSlot::Main);
+    const auto point_frame = renderer.renderPoints(context, points, vis::RenderTargetId{1});
     require(point_frame.has_value(), "Native point raster failed");
     auto point_pixels = Tensor::empty({64, 96, 3}, Device::CPU, core::DataType::Float32);
-    require(renderer.readColor(vis::VksplatViewportRenderer::OutputSlot::Main, point_pixels, 0, 0).has_value(), "Point readback failed");
+    require(renderer.readColor(vis::RenderTargetId{1}, point_pixels, 0, 0).has_value(), "Point readback failed");
     require(point_pixels.ptr<float>()[center + 1] > .9f && point_pixels.ptr<float>()[center] < .1f,
             "Point depth test did not keep nearest color");
-    const auto point_depth = renderer.readDepth({.pixel = {48, 32}, .source_size = {96, 64}});
+    const auto point_depth = renderer.readDepth({.pixel = {48, 32}, .source_size = {96, 64}, .target = vis::RenderTargetId{1}});
     require(point_depth.has_value() && std::abs(*point_depth - 3.f) < 1e-4f, "Point linear depth differs");
-    vis::PointCloudVulkanRenderer point_reference;
-    const auto reference_frame = point_reference.render(context, points);
-    require(reference_frame.has_value(), "Point Vulkan reference failed");
-    const auto reference_pixels = point_reference.readOutputImage(context);
-    require(reference_pixels.has_value(), "Point Vulkan reference readback failed");
-    size_t coverage_difference = 0;
-    for (size_t pixel = 0; pixel < 64 * 96; ++pixel) {
-        const bool native_visible = point_pixels.ptr<float>()[pixel * 3 + 1] > .5f;
-        const bool reference_visible = (*reference_pixels)->ptr<float>()[pixel * 3 + 1] > .5f;
-        if (native_visible != reference_visible)
-            ++coverage_difference;
+    if (compare_vulkan) {
+        vis::PointCloudVulkanRenderer point_reference;
+        const auto reference_frame = point_reference.render(context, points, vis::RenderTargetId{1});
+        require(reference_frame.has_value(), "Point Vulkan reference failed");
+        const auto reference_pixels = point_reference.readOutputImage(context, vis::RenderTargetId{1});
+        require(reference_pixels.has_value(), "Point Vulkan reference readback failed");
+        size_t coverage_difference = 0;
+        for (size_t pixel = 0; pixel < 64 * 96; ++pixel) {
+            const bool native_visible = point_pixels.ptr<float>()[pixel * 3 + 1] > .5f;
+            const bool reference_visible = (*reference_pixels)->ptr<float>()[pixel * 3 + 1] > .5f;
+            if (native_visible != reference_visible)
+                ++coverage_difference;
+        }
+        require(coverage_difference == 0, "Native point coverage differs from desktop Vulkan");
     }
-    require(coverage_difference == 0, "Native point coverage differs from desktop Vulkan");
+    vis::UserPreferences::instance().setViewerBackend(rendering::ViewerBackend::Automatic);
+    vis::PointCloudVulkanRenderer point_auto;
+    for (const auto target : {vis::RenderTargetId{19}, vis::RenderTargetId{45}, vis::RenderTargetId{903},
+                             vis::RenderTargetId{701}, vis::RenderTargetId{300003}}) {
+        const auto output = point_auto.render(context, points, target);
+        require(output && output->viewer_backend == rendering::ViewerBackend::Metal && point_auto.hasRenderTarget(target),
+                "Auto point view lost native target ownership");
+        const auto pixels = point_auto.readOutputImage(context, target);
+        require(pixels && (*pixels)->ptr<float>()[center + 1] > .9f, "Auto point view lost its nearest point");
+    }
+    require(point_auto.releaseRenderTarget(vis::RenderTargetId{19}), "Auto point target release failed");
+    require(!point_auto.render(context, points, vis::RenderTargetId{19}).has_value(), "Closed point target ID was reused");
+    require(point_auto.readOutputImage(context, vis::RenderTargetId{300003}).has_value(), "Closing one point view damaged another");
+    vis::UserPreferences::instance().setViewerBackend(rendering::ViewerBackend::Vulkan);
+    multi_target_auto_contract(context, compare_vulkan);
     transparent_threshold_contract(context);
     partial_selection_mask_contract(context);
     std::puts("Native viewport texture, resident storage, camera, depth, resize and slot reuse contracts passed.");
 }
-int main() {
+int main(int argc, char** argv) {
     @autoreleasepool {
         if (!core::gpu_backend_available(core::GpuBackend::Metal))
             return 77;
@@ -427,7 +533,8 @@ int main() {
         unsetenv("LFS_SAFE_MODE");
         Py_Initialize();
         try {
-            run();
+            const bool native_only = argc == 2 && std::string_view(argv[1]) == "--native-only";
+            run(!native_only);
             return 0;
         } catch (const std::exception& e) {
             std::fprintf(stderr, "%s\n", e.what());

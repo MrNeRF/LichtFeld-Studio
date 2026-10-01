@@ -12,6 +12,8 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "screen/screen_service.hpp"
+#include "test_view_targets.hpp"
 #include "tools/tool_base.hpp"
 
 #include <filesystem>
@@ -52,7 +54,8 @@ namespace lfs::vis {
     // scene (b8f9d6b8 "revert cam to home pos at dataloading").
     TEST_F(InputControllerDatasetLoadTest, DatasetLoadResetsCameraToHome) {
         Viewport viewport(200, 200);
-        InputController controller(nullptr, viewport);
+        lfs::vis::TestViewTargets controller_views{viewport};
+        InputController controller{nullptr, controller_views};
         SceneManager scene_manager;
         scene_manager.getScene().addPointCloud(
             "points",
@@ -65,7 +68,9 @@ namespace lfs::vis {
                 4.0f,
             }));
 
-        ToolContext tool_context(nullptr, &scene_manager, &viewport, nullptr);
+        lfs::vis::TestViewTargets tool_context_views{viewport};
+
+        ToolContext tool_context(nullptr, &scene_manager, &tool_context_views, nullptr);
         controller.setToolContext(&tool_context);
 
         viewport.camera.home_t = glm::vec3(123.0f, 456.0f, 789.0f);
@@ -92,8 +97,10 @@ namespace lfs::vis {
 
     TEST_F(InputControllerDatasetLoadTest, DroppedHdrUpdatesEnvironmentRenderSettings) {
         Viewport viewport(200, 200);
-        InputController controller(nullptr, viewport);
-        RenderingManager rendering_manager;
+        lfs::vis::TestViewTargets controller_views{viewport};
+        InputController controller{nullptr, controller_views};
+        lfs::vis::screen::ScreenService rendering_manager_views;
+        RenderingManager rendering_manager{rendering_manager_views};
         services().set(&rendering_manager);
 
         const auto drop_path = std::filesystem::temp_directory_path() / "drag_drop_environment.hdr";
@@ -106,7 +113,8 @@ namespace lfs::vis {
 
     TEST_F(InputControllerDatasetLoadTest, SingleDroppedVideoShowsVideoExtractor) {
         Viewport viewport(200, 200);
-        InputController controller(nullptr, viewport);
+        lfs::vis::TestViewTargets controller_views{viewport};
+        InputController controller{nullptr, controller_views};
 
         std::optional<std::filesystem::path> requested_video_path;
         core::events::cmd::ShowVideoExtractor::when([&](const auto& e) {
@@ -122,7 +130,8 @@ namespace lfs::vis {
 
     TEST_F(InputControllerDatasetLoadTest, SingleDroppedVideoExtensionIsCaseInsensitive) {
         Viewport viewport(200, 200);
-        InputController controller(nullptr, viewport);
+        lfs::vis::TestViewTargets controller_views{viewport};
+        InputController controller{nullptr, controller_views};
 
         std::optional<std::filesystem::path> requested_video_path;
         core::events::cmd::ShowVideoExtractor::when([&](const auto& e) {
@@ -138,8 +147,10 @@ namespace lfs::vis {
 
     TEST_F(InputControllerDatasetLoadTest, VideoMixedWithOtherDropDoesNotShowVideoExtractor) {
         Viewport viewport(200, 200);
-        InputController controller(nullptr, viewport);
-        RenderingManager rendering_manager;
+        lfs::vis::TestViewTargets controller_views{viewport};
+        InputController controller{nullptr, controller_views};
+        lfs::vis::screen::ScreenService rendering_manager_views;
+        RenderingManager rendering_manager{rendering_manager_views};
         services().set(&rendering_manager);
 
         bool video_extractor_requested = false;
@@ -162,7 +173,8 @@ namespace lfs::vis {
 
     TEST_F(InputControllerDatasetLoadTest, SingleDroppedPlyStillUsesSplatLoader) {
         Viewport viewport(200, 200);
-        InputController controller(nullptr, viewport);
+        lfs::vis::TestViewTargets controller_views{viewport};
+        InputController controller{nullptr, controller_views};
 
         std::optional<core::events::cmd::LoadFile> load_file;
         bool video_extractor_requested = false;
@@ -184,7 +196,8 @@ namespace lfs::vis {
 
     TEST_F(InputControllerDatasetLoadTest, UnrecognizedSingleDropStillReportsFailure) {
         Viewport viewport(200, 200);
-        InputController controller(nullptr, viewport);
+        lfs::vis::TestViewTargets controller_views{viewport};
+        InputController controller{nullptr, controller_views};
 
         std::optional<core::events::state::FileDropFailed> failure;
         core::events::state::FileDropFailed::when([&](const auto& e) {

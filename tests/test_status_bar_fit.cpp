@@ -4,7 +4,7 @@
  */
 
 #include "core/tensor_backend.hpp"
-#include "gui/panel_layout.hpp"
+#include "gui/gui_input.hpp"
 #include "gui/rml_status_bar.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "rendering/viewport_artifact_service.hpp"
@@ -49,7 +49,9 @@ namespace lfs::vis::gui {
         static void setModelHandle(RmlStatusBar& status_bar, Rml::DataModelHandle handle) {
             status_bar.model_handle_ = handle;
         }
-        static void updateBackends(RmlStatusBar& status_bar) { status_bar.updateBackendContent(); }
+        static void updateBackends(RmlStatusBar& status_bar, std::optional<uint32_t> active_view_mask = std::nullopt) {
+            status_bar.updateBackendContent(active_view_mask);
+        }
         static bool applyTooltip(RmlStatusBar& status_bar, int width = 2400, int bar_height = 22) {
             return status_bar.applyHoverTooltip(width, bar_height, 700);
         }
@@ -456,6 +458,23 @@ namespace {
         EXPECT_EQ(renderer->GetAttribute<Rml::String>("title", ""), model_.renderer_tooltip);
         assertNoVerticalOverflow(document_);
         assertFlexSiblingsDoNotOverlap(document_);
+    }
+
+    TEST_F(StatusBarFitTest, BackendBadgeFollowsActiveViewInsteadOfLastPublishedView) {
+        auto& store = lfs::vis::app_store();
+        const auto previous = store.viewer_backend_mask.get();
+        struct Restore {
+            uint32_t value;
+            ~Restore() { lfs::vis::app_store().viewer_backend_mask.set(value); }
+        } restore{previous};
+        store.viewer_backend_mask.set(lfs::rendering::viewerBackendBit(lfs::rendering::ViewerBackend::Vulkan));
+        lfs::vis::gui::RmlStatusBarTestAccess::updateBackends(
+            status_bar_, lfs::rendering::viewerBackendBit(lfs::rendering::ViewerBackend::Metal));
+        EXPECT_EQ(lfs::vis::gui::RmlStatusBarTestAccess::model(status_bar_).renderer_value, "Metal");
+        store.viewer_backend_mask.set(lfs::rendering::viewerBackendBit(lfs::rendering::ViewerBackend::Metal));
+        lfs::vis::gui::RmlStatusBarTestAccess::updateBackends(
+            status_bar_, lfs::rendering::viewerBackendBit(lfs::rendering::ViewerBackend::Vulkan));
+        EXPECT_EQ(lfs::vis::gui::RmlStatusBarTestAccess::model(status_bar_).renderer_value, "Vulkan");
     }
 
     TEST_F(StatusBarFitTest, BackendTooltipRevealsAboveBarAndClearsOnPointerLeave) {

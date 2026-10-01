@@ -9,6 +9,7 @@
 #include "gui/rotation_gizmo.hpp"
 #include "gui/scale_gizmo.hpp"
 #include "gui/translation_gizmo.hpp"
+#include "input/frame_input_buffer.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
@@ -36,20 +37,7 @@ namespace lfs::python {
 
         std::atomic<int> g_next_transform_gizmo_id{100000};
 
-        [[nodiscard]] vis::gui::NativeGizmoInput native_gizmo_input_from_sdl() {
-            static bool previous_left_down = false;
-            float mouse_x = 0.0f;
-            float mouse_y = 0.0f;
-            const SDL_MouseButtonFlags buttons = lfs::vis::input::mouseStateInPixels(SDL_GetMouseFocus(), &mouse_x, &mouse_y);
-            const bool left_down = (buttons & SDL_BUTTON_LMASK) != 0;
-            const bool left_clicked = left_down && !previous_left_down;
-            previous_left_down = left_down;
-            return {
-                .mouse_pos = {mouse_x, mouse_y},
-                .mouse_left_down = left_down,
-                .mouse_left_clicked = left_clicked,
-            };
-        }
+        std::atomic<int> g_next_transform_view_gizmo_id{-1};
 
         [[nodiscard]] TransformGizmoOperation parse_transform_gizmo_operation(const std::string& operation) {
             if (operation == "translate" || operation == "translation" || operation == "move")
@@ -605,11 +593,23 @@ namespace lfs::python {
                                       const glm::vec2& viewport_pos,
                                       const glm::vec2& viewport_size,
                                       vis::gui::NativeOverlayDrawList* draw_list) {
-        state_->changed = false;
-        state_->hovered = false;
+        const auto context = get_overlay_draw_context();
+        const auto* frame = context.frame_input;
+        if (!frame)
+            return;
+        if (state_->input_frame != frame->serial) {
+            state_->input_frame = frame->serial;
+            state_->changed = false;
+            state_->hovered = false;
+        }
+        const bool owning_view = !state_->active || state_->drag_view == context.view;
+        auto [instance, inserted] = state_->view_instances.try_emplace(context.view, 0);
+        if (inserted)
+            instance->second = g_next_transform_view_gizmo_id.fetch_sub(1, std::memory_order_relaxed);
+        const int view_instance = instance->second;
 
         if (!state_->visible || !state_->enabled || !draw_list || viewport_size.x <= 1.0f || viewport_size.y <= 1.0f) {
-            if (state_->active) {
+            if (state_->active && owning_view) {
                 state_->active = false;
                 call_lifecycle_callback(state_->on_end);
             }
@@ -622,11 +622,14 @@ namespace lfs::python {
         bool active_now = false;
         bool changed_now = false;
         bool hovered_now = false;
-        const vis::gui::NativeGizmoInput gizmo_input = native_gizmo_input_from_sdl();
+        const vis::gui::NativeGizmoInput gizmo_input{
+            .mouse_pos = {frame->mouse_x, frame->mouse_y},
+            .mouse_left_down = owning_view && frame->mouse_down[0],
+            .mouse_left_clicked = owning_view && frame->mouse_clicked[0]};
 
         if (state_->operation == TransformGizmoOperation::Translate) {
             vis::gui::TranslationGizmoConfig config;
-            config.id = state_->instance_id;
+            config.id = view_instance;
             config.viewport_pos = viewport_pos;
             config.viewport_size = viewport_size;
             config.view = view;
@@ -635,7 +638,7 @@ namespace lfs::python {
             config.orientation_world = orientation_for_operation();
             config.draw_list = draw_list;
             config.input = gizmo_input;
-            config.input_enabled = state_->input_enabled;
+            config.input_enabled = state_->input_enabled && owning_view;
             config.snap = state_->snap;
             config.snap_units = state_->translate_snap;
 
@@ -648,7 +651,7 @@ namespace lfs::python {
             }
         } else if (state_->operation == TransformGizmoOperation::Rotate) {
             vis::gui::RotationGizmoConfig config;
-            config.id = state_->instance_id;
+            config.id = view_instance;
             config.viewport_pos = viewport_pos;
             config.viewport_size = viewport_size;
             config.view = view;
@@ -657,7 +660,7 @@ namespace lfs::python {
             config.orientation_world = orientation_for_operation();
             config.draw_list = draw_list;
             config.input = gizmo_input;
-            config.input_enabled = state_->input_enabled;
+            config.input_enabled = state_->input_enabled && owning_view;
             config.snap = state_->snap;
             config.snap_degrees = state_->rotate_snap_degrees;
 
@@ -674,7 +677,7 @@ namespace lfs::python {
             }
         } else {
             vis::gui::ScaleGizmoConfig config;
-            config.id = state_->instance_id;
+            config.id = view_instance;
             config.viewport_pos = viewport_pos;
             config.viewport_size = viewport_size;
             config.view = view;
@@ -683,7 +686,7 @@ namespace lfs::python {
             config.orientation_world = orientation_for_operation();
             config.draw_list = draw_list;
             config.input = gizmo_input;
-            config.input_enabled = state_->input_enabled;
+            config.input_enabled = state_->input_enabled && owning_view;
             config.snap = state_->snap;
             config.snap_ratio = state_->scale_snap_ratio;
 
@@ -706,17 +709,21 @@ namespace lfs::python {
             }
         }
 
+        state_->hovered |= hovered_now;
+        if (!owning_view)
+            return;
+
         if ((hovered_now || active_now) && state_->input_enabled) {
             vis::gui::guiFocusState().want_capture_mouse = true;
         }
 
         if (active_now && !was_active) {
             state_->active = true;
+            state_->drag_view = context.view;
             call_lifecycle_callback(state_->on_begin);
         }
 
-        state_->hovered = hovered_now;
-        state_->changed = changed_now;
+        state_->changed |= changed_now;
 
         if (changed_now) {
             apply_to_target();

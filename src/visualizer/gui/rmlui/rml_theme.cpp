@@ -576,35 +576,8 @@ namespace lfs::vis::gui::rml_theme {
             const auto panel_host_body_decor = enhanced_panel_chrome
                                                    ? "decorator: none; background-color: transparent"
                                                    : panel_body_decor;
-            const int enhanced_tab_rounding =
-                std::max(4, static_cast<int>(std::round(t.sizes.tab_rounding)));
             const int enhanced_header_rounding =
                 std::max(4, static_cast<int>(std::round(t.sizes.frame_rounding)));
-            const auto right_panel_tab_shape = enhanced_panel_chrome
-                                                   ? std::format(
-                                                         "margin: 3dp 2dp; padding: 0 8dp; min-height: 22dp; "
-                                                         "border-bottom-width: 1dp; border-radius: {}dp",
-                                                         enhanced_tab_rounding)
-                                                   : "margin: 0; padding: 0 14dp; min-height: 28dp; "
-                                                     "border-top-left-radius: 4dp; border-top-right-radius: 4dp";
-            const auto right_panel_tab_label_shape =
-                enhanced_panel_chrome ? "line-height: 20dp" : "line-height: 28dp";
-            const auto right_panel_tab_hover_decor = enhanced_panel_chrome
-                                                         ? std::format(
-                                                               "decorator: vertical-gradient({} {}); background-color: transparent",
-                                                               colorToRml(blend(p.surface_bright, p.primary, 0.12f)),
-                                                               colorToRml(blend(p.surface, p.primary, 0.07f)))
-                                                         : std::format(
-                                                               "background-color: {}",
-                                                               colorToRmlAlpha(p.surface_bright, 0.5f));
-            const auto right_panel_tab_active_decor = enhanced_panel_chrome
-                                                          ? std::format(
-                                                                "decorator: vertical-gradient({} {}); background-color: transparent",
-                                                                colorToRml(blend(p.surface_bright, p.primary, 0.24f)),
-                                                                colorToRml(blend(p.surface, p.primary, 0.15f)))
-                                                          : std::format(
-                                                                "background-color: {}",
-                                                                colorToRmlAlpha(p.surface_bright, 0.4f));
             const auto title_surface_col = is_light ? darken(p.surface, 0.02f) : lighten(p.surface, 0.045f);
             const ThemeGradient title_gradient = t.gradients.window_title.value_or(
                 ThemeGradient{lighten(title_surface_col, 0.12f), title_surface_col});
@@ -750,29 +723,6 @@ namespace lfs::vis::gui::rml_theme {
                                                        colorToRml(t.gradients.panel_body->end), surface)
                                                  : std::format("decorator: none; background-color: {}",
                                                                colorToRml(t.menu_background()));
-            const auto right_panel_chrome_decor = t.gradients.section_header
-                                                      ? std::format(
-                                                            "decorator: vertical-gradient({} {}); background-color: {}",
-                                                            colorToRml(t.gradients.section_header->start),
-                                                            colorToRml(t.gradients.section_header->end), surface)
-                                                      : "decorator: none; background-color: transparent";
-            const auto right_panel_edge_shape = t.gradients.progress
-                                                    ? std::format(
-                                                          "display: block; position: absolute; left: 0; top: 0; "
-                                                          "width: 1dp; height: 100%; z-index: 5; pointer-events: none; "
-                                                          "decorator: vertical-gradient({} {}); background-color: {}",
-                                                          colorToRml(blend(p.border, progress_gradient.start, 0.42f)),
-                                                          colorToRml(blend(p.border, progress_gradient.end, 0.42f)),
-                                                          colorToRmlAlpha(p.border, 0.62f))
-                                                    : "display: none";
-            const auto right_panel_separator_decor = t.gradients.progress
-                                                         ? std::format(
-                                                               "decorator: horizontal-gradient({} {}); background-color: {}",
-                                                               colorToRml(blend(p.border, progress_gradient.start, 0.36f)),
-                                                               colorToRml(blend(p.border, progress_gradient.end, 0.36f)),
-                                                               colorToRmlAlpha(p.border, 0.55f))
-                                                         : std::format("decorator: none; background-color: {}",
-                                                                       colorToRmlAlpha(p.border, 0.4f));
             const auto toolbar_decor = t.gradients.panel_body
                                            ? std::format(
                                                  "decorator: vertical-gradient({} {}); background-color: {}",
@@ -885,9 +835,6 @@ namespace lfs::vis::gui::rml_theme {
                 {"menu.toolbar_selected_icon", colorToRml(selected_control_icon)},
                 {"chrome.menu_decor", menu_chrome_decor},
                 {"chrome.status_decor", status_chrome_decor},
-                {"chrome.right_panel_decor", right_panel_chrome_decor},
-                {"chrome.right_panel_edge_shape", right_panel_edge_shape},
-                {"chrome.right_panel_separator_decor", right_panel_separator_decor},
                 {"chrome.toolbar_decor", toolbar_decor},
                 {"controls.selected_decor", selected_control_decor},
                 {"controls.selected_icon", colorToRml(selected_control_icon)},
@@ -938,29 +885,13 @@ namespace lfs::vis::gui::rml_theme {
                 {"panel.primary_border_soft", colorToRmlAlpha(p.primary, 0.33f)},
                 {"panel.primary_border_faint", colorToRmlAlpha(p.primary, 0.13f)},
                 {"panel.primary_accent", colorToRmlAlpha(p.primary, 0.22f)},
-                {"right_panel.tab_hover", colorToRmlAlpha(p.surface_bright, 0.5f)},
-                {"right_panel.tab_active_bg", colorToRmlAlpha(p.surface_bright, 0.4f)},
-                {"right_panel.tab_shape", right_panel_tab_shape},
-                {"right_panel.tab_label_shape", right_panel_tab_label_shape},
-                {"right_panel.tab_hover_decor", right_panel_tab_hover_decor},
-                {"right_panel.tab_active_decor", right_panel_tab_active_decor},
-                {"right_panel.tab_border", colorToRmlAlpha(p.border, enhanced_panel_chrome ? 0.46f : 0.42f)},
-                {"right_panel.tab_bottom_border", colorToRmlAlpha(p.border, enhanced_panel_chrome ? 0.58f : 0.62f)},
-                {"right_panel.tab_active_border",
-                 enhanced_panel_chrome ? colorToRmlAlpha(p.primary, 0.78f)
-                                       : colorToRmlAlpha(p.border, 0.42f)},
-                {"right_panel.tab_active_bottom_border",
-                 enhanced_panel_chrome ? colorToRmlAlpha(p.primary, 0.95f) : primary},
-                {"right_panel.tab_nav_bg", colorToRmlAlpha(p.surface_bright, 0.2f)},
-                {"right_panel.tab_nav_hover", colorToRmlAlpha(p.surface_bright, 0.55f)},
-                {"right_panel.tab_nav_disabled", colorToRmlAlpha(p.text_dim, 0.35f)},
-                {"right_panel.splitter_bg", colorToRmlAlpha(p.border, 0.4f)},
-                {"right_panel.splitter_hover", colorToRmlAlpha(p.info, 0.6f)},
-                {"right_panel.splitter_active", colorToRmlAlpha(p.info, 0.8f)},
-                {"right_panel.border", colorToRmlAlpha(p.border, 0.6f)},
-                {"right_panel.separator", colorToRmlAlpha(p.border, 0.4f)},
-                {"right_panel.resize_hover", colorToRmlAlpha(p.info, 0.3f)},
-                {"right_panel.resize_active", colorToRmlAlpha(p.info, 0.5f)},
+                {"panel_tabs.hover", colorToRmlAlpha(p.surface_bright, 0.5f)},
+                {"panel_tabs.active_bg", colorToRmlAlpha(p.surface_bright, 0.4f)},
+                {"panel_tabs.nav_bg", colorToRmlAlpha(p.surface_bright, 0.2f)},
+                {"panel_tabs.nav_hover", colorToRmlAlpha(p.surface_bright, 0.55f)},
+                {"panel_tabs.nav_disabled", colorToRmlAlpha(p.text_dim, 0.35f)},
+                {"panel.border", colorToRmlAlpha(p.border, 0.6f)},
+                {"panel.separator", colorToRmlAlpha(p.border, 0.4f)},
                 {"modal.surface", colorToRmlAlpha(p.surface, 0.98f)},
                 {"modal.border", colorToRmlAlpha(p.border, 0.4f)},
                 {"modal.backdrop", colorToRmlAlpha(is_light ? ThemeColor{0.12f, 0.14f, 0.18f, 1.0f} : p.background,

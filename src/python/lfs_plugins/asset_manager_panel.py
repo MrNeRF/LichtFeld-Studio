@@ -336,7 +336,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         self._verify_results: Dict[str, str] = {}
         self._observed_outer_panel_width = None
         self._outer_panel_width_save_deadline = 0.0
-        self._remembered_left_dock_width: Optional[float] = None
         self._init_gallery()
         self._restore_project_manager_preferences()
         self._start_catalog_preview_prefetch()
@@ -418,8 +417,7 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
                     and math.isfinite(panel_width)
                     and panel_width > 0.0
                 ):
-                    self._remembered_left_dock_width = float(panel_width)
-                    self._restore_remembered_left_dock_width()
+                    self._observed_outer_panel_width = float(panel_width)
             view_mode = payload.get("view_mode")
             if preferences["defaultView"] == "remember" and view_mode in {"gallery", "list"}:
                 self._view_mode = view_mode
@@ -496,31 +494,9 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             self._handle.dirty_all()
 
     def _restore_project_manager_preferences(self) -> None:
-        self._remembered_left_dock_width = None
         preferences = read_project_manager_preferences()
         payload = read_project_manager_state() if preferences["rememberState"] else {}
         self._apply_chrome_payload(payload, preferences, device_state=bool(payload))
-
-    def _restore_remembered_left_dock_width(self, panel_space=None) -> None:
-        width = self._remembered_left_dock_width
-        if width is None:
-            return
-        if panel_space is None:
-            get_panel = getattr(lf.ui, "get_panel", None)
-            try:
-                info = get_panel(self.id) if callable(get_panel) else None
-            except Exception:
-                info = None
-            if info is None:
-                return
-            panel_space = getattr(info, "space", None)
-        if panel_space != lf.ui.PanelSpace.LEFT_DOCK:
-            return
-        set_left_dock_width = getattr(lf.ui, "set_left_dock_width", None)
-        if not callable(set_left_dock_width):
-            return
-        set_left_dock_width(width)
-        self._remembered_left_dock_width = None
 
     def reload_project_manager_preferences(self) -> None:
         self._restore_project_manager_preferences()
@@ -545,11 +521,6 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
             state.pop("panel_open", None)
             if self._panel_space == lf.ui.PanelSpace.LEFT_DOCK:
                 panel_width = self._observed_outer_panel_width
-                get_left_dock_width = getattr(lf.ui, "get_left_dock_width", None)
-                if callable(get_left_dock_width):
-                    current_width = float(get_left_dock_width())
-                    if math.isfinite(current_width) and current_width > 0.0:
-                        panel_width = current_width
                 if (isinstance(panel_width, (int, float))
                         and math.isfinite(panel_width) and panel_width > 0.0):
                     state["panel_width"] = float(panel_width)
@@ -5072,34 +5043,13 @@ class AssetManagerPanel(GalleryAssetMixin, Panel):
         changed = panel_space != self._panel_space or is_floating != self._is_floating
         self._panel_space = panel_space
         self._is_floating = is_floating
-        if info is not None:
-            self._restore_remembered_left_dock_width(panel_space)
         if changed:
             self._layout_signature = None
             self._dirty_layout_fields()
         return changed
 
     def _sync_outer_panel_width_preference(self) -> None:
-        if self._is_floating or not read_project_manager_preferences()["rememberState"]:
-            self._outer_panel_width_save_deadline = 0.0
-            return
-        getter = getattr(lf.ui, "get_left_dock_width", None)
-        if not callable(getter):
-            return
-        width = float(getter())
-        if not math.isfinite(width) or width <= 0.0:
-            return
-        now = time.monotonic()
-        if self._observed_outer_panel_width is None:
-            self._observed_outer_panel_width = width
-            return
-        if abs(width - self._observed_outer_panel_width) > 0.5:
-            self._observed_outer_panel_width = width
-            self._outer_panel_width_save_deadline = now + 0.25
-            return
-        if self._outer_panel_width_save_deadline and now >= self._outer_panel_width_save_deadline:
-            self._outer_panel_width_save_deadline = 0.0
-            self._persist_project_manager_state()
+        self._outer_panel_width_save_deadline = 0.0
 
     def _refresh_after_project_write(self) -> bool:
         poll_write = getattr(lf, "project_poll_write", None)

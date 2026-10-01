@@ -23,6 +23,7 @@ namespace lfs::vis {
         float y = 0.0f;
         uint64_t timestamp = 0;
         uint8_t clicks = 0;
+        bool ctrl = false;
         // GUI ownership from GuiManager::hitTestMouseButton, recorded by the window
         // layer at the SDL event through notePressOwner(). Keep it with event coordinates:
         // later bounds checks cannot recover ownership after DPI, resize or dock changes.
@@ -68,6 +69,10 @@ namespace lfs::vis {
             // Keep press_open_ / press_owner_ across frames so UP retains its DOWN's verdict.
             // Reset only the index into the event vector being cleared.
             pending_owner_index_ = -1;
+            if (!event_mods_initialized_) {
+                event_mods_ = SDL_GetModState();
+                event_mods_initialized_ = true;
+            }
             mouse_wheel = 0;
             mouse_wheel_x = 0;
             mouse_button_events.clear();
@@ -114,6 +119,7 @@ namespace lfs::vis {
                         .y = event.button.y,
                         .timestamp = event.button.timestamp,
                         .clicks = event.button.clicks,
+                        .ctrl = (event_mods_ & SDL_KMOD_CTRL) != 0,
                         .gui_owned = released_owner,
                     });
                     if (down) {
@@ -137,12 +143,14 @@ namespace lfs::vis {
                 mouse_wheel_x += event.wheel.x;
                 break;
             case SDL_EVENT_KEY_DOWN:
+                event_mods_ = event.key.mod;
                 if (event.key.repeat)
                     keys_repeated.push_back(event.key.scancode);
                 else
                     keys_pressed.push_back(event.key.scancode);
                 break;
             case SDL_EVENT_KEY_UP:
+                event_mods_ = event.key.mod;
                 keys_released.push_back(event.key.scancode);
                 break;
             case SDL_EVENT_TEXT_INPUT:
@@ -203,6 +211,8 @@ namespace lfs::vis {
         // or -1 if none. beginFrame() clears it with the vector; notePressOwner()
         // consumes it.
         int pending_owner_index_ = -1;
+        SDL_Keymod event_mods_ = SDL_KMOD_NONE;
+        bool event_mods_initialized_ = false;
 
         // Per-button open DOWN and ownership verdict. Preserve across beginFrame()
         // so the matching UP inherits its press's verdict, even in a later frame.

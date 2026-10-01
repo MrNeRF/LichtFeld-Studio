@@ -122,17 +122,17 @@ static void run() {
     bool native_cut = false;
     bool settled = false;
     for (int frame = 0; frame < 80; ++frame) {
-        const auto output = renderer.render(context, model, request, vis::VksplatViewportRenderer::OutputSlot::Main);
+        const auto output = renderer.render(context, model, request, vis::RenderTargetId{1});
         if (!output)
             throw std::runtime_error(format_for_developer(output.error()));
         auto pixels = core::Tensor::empty({64, 96, 4}, core::Device::CPU);
-        const auto read = renderer.readColor(vis::VksplatViewportRenderer::OutputSlot::Main, pixels, 0, 0);
+        const auto read = renderer.readColor(vis::RenderTargetId{1}, pixels, 0, 0);
         require(bool(read), "Native RAD color readback failed");
         float max_color = 0;
         for (size_t p = 0; p < 64 * 96; ++p)
             max_color = std::max(max_color, pixels.ptr<float>()[p * 4]);
         require(max_color > .1f, "RAD streaming lost all visible coverage");
-        const auto status = renderer.gpuLodSelectionStatus(vis::VksplatViewportRenderer::OutputSlot::Main);
+        const auto status = renderer.gpuLodSelectionStatus(vis::RenderTargetId{1});
         if (status.active) {
             require(status.pool_pages == 3 && status.chunk_count > status.pool_pages && status.selected > 0 && status.overflow == 0,
                     "Native RAD cut/diagnostics are not backed by the actual pool");
@@ -142,20 +142,20 @@ static void run() {
     }
     require(native_cut, "Native RAD never switched from preview to GPU selection");
     require(settled, "A stable native RAD cut keeps requesting redraws after paging settles");
-    require(bool(renderer.release(vis::VksplatViewportRenderer::OutputSlot::Main)), "Native RAD release failed");
+    require(bool(renderer.release(vis::RenderTargetId{1})), "Native RAD release failed");
     request.gut = true;
     require(vis::MetalViewportRenderer::supports(model, request), "Native Spark GUT RAD frame fell back");
-    const auto captured = renderer.render(context, model, request, vis::VksplatViewportRenderer::OutputSlot::Preview, false, true);
+    const auto captured = renderer.render(context, model, request, vis::RenderTargetId{4}, false, true);
     require(bool(captured), "Native RAD capture did not wait for its pinned root");
-    const auto complete = renderer.outputComplete(vis::VksplatViewportRenderer::OutputSlot::Preview);
+    const auto complete = renderer.outputComplete(vis::RenderTargetId{4});
     require(bool(complete) && *complete, "Native RAD capture published the provisional CPU preview");
     auto gut_pixels = core::Tensor::empty({64, 96, 4}, core::Device::CPU);
-    require(bool(renderer.readColor(vis::VksplatViewportRenderer::OutputSlot::Preview, gut_pixels, 0, 0)), "Native Spark GUT RAD readback failed");
+    require(bool(renderer.readColor(vis::RenderTargetId{4}, gut_pixels, 0, 0)), "Native Spark GUT RAD readback failed");
     float gut_red = 0;
     for (size_t pixel = 0; pixel < 64 * 96; ++pixel)
         gut_red = std::max(gut_red, gut_pixels.ptr<float>()[pixel * 4]);
     require(gut_red > .1f, "Native Spark GUT RAD has no visible coverage");
-    require(bool(renderer.release(vis::VksplatViewportRenderer::OutputSlot::Preview)), "Native RAD capture release failed");
+    require(bool(renderer.release(vis::RenderTargetId{4})), "Native RAD capture release failed");
     // Legacy file blocks contain many native pages. Sidecar metadata and
     // physical pools must still use 2048-node pages, including a partial tail.
     const auto legacy = directory / "legacy.rad";

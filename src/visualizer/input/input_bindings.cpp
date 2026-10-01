@@ -23,9 +23,26 @@ namespace lfs::vis::input {
 
         std::atomic<bool> g_persistence_enabled{true};
 
-        constexpr int PROFILE_VERSION = 30; // Depth-window + grouping (dev 28) plus gallery shortcuts (master 29).
-        constexpr Action LAST_ACTION = Action::ASSET_REFRESH;
+        constexpr int PROFILE_VERSION = 32; // Maximize area shortcut.
+        constexpr Action LAST_ACTION = Action::TOGGLE_MAXIMIZE_AREA;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
+
+        bool isViewNavigationAction(const Action action) {
+            switch (action) {
+            case Action::VIEW_AXIS_TOP:
+            case Action::VIEW_AXIS_BOTTOM:
+            case Action::VIEW_AXIS_FRONT:
+            case Action::VIEW_AXIS_BACK:
+            case Action::VIEW_AXIS_RIGHT:
+            case Action::VIEW_AXIS_LEFT:
+            case Action::VIEW_TOGGLE_PERSPECTIVE:
+            case Action::VIEW_FRAME_ALL:
+            case Action::TOGGLE_QUAD_VIEW:
+                return true;
+            default:
+                return false;
+            }
+        }
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
         constexpr std::array<ToolMode, 4> NODE_PICK_MODES = {
@@ -584,7 +601,9 @@ namespace lfs::vis::input {
                 ((version < 27 || version == 28) &&
                  (def.action == Action::ASSET_GALLERY_PRIMARY ||
                   def.action == Action::ASSET_GALLERY_COPY_LINK ||
-                  def.action == Action::ASSET_REFRESH));
+                  def.action == Action::ASSET_REFRESH)) ||
+                (version < 31 && isViewNavigationAction(def.action)) ||
+                (version < 32 && def.action == Action::TOGGLE_MAXIMIZE_AREA);
             if (!should_add) {
                 continue;
             }
@@ -1065,7 +1084,7 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_KP_SUBTRACT, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::ZOOM_SPEED_DOWN, "Zoom speed down"},
             // View
             {KeyTrigger{KEY_V, MODIFIER_NONE}, Action::TOGGLE_SPLIT_VIEW, "Split view"},
-            {KeyTrigger{KEY_V, MODIFIER_SHIFT}, Action::TOGGLE_INDEPENDENT_SPLIT_VIEW, "Independent split"},
+            {KeyTrigger{KEY_V, MODIFIER_SHIFT}, Action::TOGGLE_SPLIT_VIEWPORT, "Split viewport"},
             {KeyTrigger{KEY_G, MODIFIER_NONE}, Action::TOGGLE_GT_COMPARISON, "GT comparison"},
             {KeyTrigger{KEY_C, MODIFIER_ALT}, Action::TOGGLE_CAMERA_FRUSTUMS, "Camera frustums"},
             {KeyTrigger{KEY_G, MODIFIER_ALT}, Action::TOGGLE_GRID, "Grid"},
@@ -1082,6 +1101,17 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_ENTER, MODIFIER_CTRL}, Action::ASSET_GALLERY_PRIMARY, "Gallery Primary Action"},
             {KeyTrigger{KEY_C, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::ASSET_GALLERY_COPY_LINK, "Copy Gallery Link"},
             {KeyTrigger{KEY_F5, MODIFIER_NONE}, Action::ASSET_REFRESH, "Refresh Assets"},
+            // 3D view: axis and projection shortcuts
+            {KeyTrigger{KEY_KP_7, MODIFIER_NONE}, Action::VIEW_AXIS_TOP, "Top view"},
+            {KeyTrigger{KEY_KP_7, MODIFIER_CTRL}, Action::VIEW_AXIS_BOTTOM, "Bottom view"},
+            {KeyTrigger{KEY_KP_1, MODIFIER_NONE}, Action::VIEW_AXIS_FRONT, "Front view"},
+            {KeyTrigger{KEY_KP_1, MODIFIER_CTRL}, Action::VIEW_AXIS_BACK, "Back view"},
+            {KeyTrigger{KEY_KP_3, MODIFIER_NONE}, Action::VIEW_AXIS_RIGHT, "Right view"},
+            {KeyTrigger{KEY_KP_3, MODIFIER_CTRL}, Action::VIEW_AXIS_LEFT, "Left view"},
+            {KeyTrigger{KEY_KP_5, MODIFIER_NONE}, Action::VIEW_TOGGLE_PERSPECTIVE, "Perspective/Orthographic"},
+            {KeyTrigger{KEY_HOME, MODIFIER_NONE}, Action::VIEW_FRAME_ALL, "Frame all"},
+            {KeyTrigger{KEY_Q, MODIFIER_CTRL | MODIFIER_ALT}, Action::TOGGLE_QUAD_VIEW, "Four views"},
+            {KeyTrigger{KEY_SPACE, MODIFIER_CTRL}, Action::TOGGLE_MAXIMIZE_AREA, "Maximize Area"},
             // Selection mode shortcuts
             {KeyTrigger{KEY_T, MODIFIER_CTRL}, Action::CYCLE_SELECTION_VIS, "Sel vis"},
             {KeyTrigger{KEY_1, MODIFIER_CTRL}, Action::SELECT_MODE_CENTERS, "Centers"},
@@ -1232,7 +1262,7 @@ namespace lfs::vis::input {
         case Action::ZOOM_SPEED_UP: return "Increase Zoom Speed";
         case Action::ZOOM_SPEED_DOWN: return "Decrease Zoom Speed";
         case Action::TOGGLE_SPLIT_VIEW: return "Toggle Split View";
-        case Action::TOGGLE_INDEPENDENT_SPLIT_VIEW: return "Toggle Independent Split View";
+        case Action::TOGGLE_SPLIT_VIEWPORT: return "Toggle Split Viewport";
         case Action::TOGGLE_GT_COMPARISON: return "Toggle GT Comparison";
         case Action::TOGGLE_DEPTH_MODE: return "Toggle Depth Box";
         case Action::CYCLE_PLY: return "Cycle PLY";
@@ -1298,6 +1328,16 @@ namespace lfs::vis::input {
         case Action::ASSET_GALLERY_PRIMARY: return "Gallery Primary Action";
         case Action::ASSET_GALLERY_COPY_LINK: return "Copy Gallery Link";
         case Action::ASSET_REFRESH: return "Refresh Assets";
+        case Action::VIEW_AXIS_TOP: return "View Top";
+        case Action::VIEW_AXIS_BOTTOM: return "View Bottom";
+        case Action::VIEW_AXIS_FRONT: return "View Front";
+        case Action::VIEW_AXIS_BACK: return "View Back";
+        case Action::VIEW_AXIS_RIGHT: return "View Right";
+        case Action::VIEW_AXIS_LEFT: return "View Left";
+        case Action::VIEW_TOGGLE_PERSPECTIVE: return "Toggle Perspective/Orthographic";
+        case Action::VIEW_FRAME_ALL: return "Frame All";
+        case Action::TOGGLE_QUAD_VIEW: return "Toggle Four Views";
+        case Action::TOGGLE_MAXIMIZE_AREA: return "Maximize Area";
         case Action::UNGROUP_SELECTED_SCENE_NODE: return "Ungroup Selected Scene Node";
         default: return "Unknown";
         }
@@ -1327,7 +1367,7 @@ namespace lfs::vis::input {
         case Action::ZOOM_SPEED_UP: return "zoom_speed_up";
         case Action::ZOOM_SPEED_DOWN: return "zoom_speed_down";
         case Action::TOGGLE_SPLIT_VIEW: return "toggle_split_view";
-        case Action::TOGGLE_INDEPENDENT_SPLIT_VIEW: return "toggle_independent_split_view";
+        case Action::TOGGLE_SPLIT_VIEWPORT: return "toggle_split_viewport";
         case Action::TOGGLE_GT_COMPARISON: return "toggle_gt_comparison";
         case Action::TOGGLE_DEPTH_MODE: return "toggle_depth_mode";
         case Action::CYCLE_PLY: return "cycle_ply";
@@ -1394,6 +1434,16 @@ namespace lfs::vis::input {
         case Action::ASSET_GALLERY_PRIMARY: return "asset_gallery_primary";
         case Action::ASSET_GALLERY_COPY_LINK: return "asset_gallery_copy_link";
         case Action::ASSET_REFRESH: return "asset_refresh";
+        case Action::VIEW_AXIS_TOP: return "view_axis_top";
+        case Action::VIEW_AXIS_BOTTOM: return "view_axis_bottom";
+        case Action::VIEW_AXIS_FRONT: return "view_axis_front";
+        case Action::VIEW_AXIS_BACK: return "view_axis_back";
+        case Action::VIEW_AXIS_RIGHT: return "view_axis_right";
+        case Action::VIEW_AXIS_LEFT: return "view_axis_left";
+        case Action::VIEW_TOGGLE_PERSPECTIVE: return "view_toggle_perspective";
+        case Action::VIEW_FRAME_ALL: return "view_frame_all";
+        case Action::TOGGLE_QUAD_VIEW: return "toggle_quad_view";
+        case Action::TOGGLE_MAXIMIZE_AREA: return "toggle_maximize_area";
         case Action::UNGROUP_SELECTED_SCENE_NODE: return "ungroup_selected_scene_node";
         default: return {};
         }
@@ -2030,6 +2080,14 @@ namespace lfs::vis::input {
         case Action::CAMERA_FOCUS_SELECTION:
         case Action::CAMERA_NEXT_VIEW:
         case Action::CAMERA_PREV_VIEW:
+        case Action::VIEW_AXIS_TOP:
+        case Action::VIEW_AXIS_BOTTOM:
+        case Action::VIEW_AXIS_FRONT:
+        case Action::VIEW_AXIS_BACK:
+        case Action::VIEW_AXIS_RIGHT:
+        case Action::VIEW_AXIS_LEFT:
+        case Action::VIEW_TOGGLE_PERSPECTIVE:
+        case Action::VIEW_FRAME_ALL:
             return d_camera_global_key;
         case Action::CAMERA_SPEED_UP:
         case Action::CAMERA_SPEED_DOWN:
@@ -2038,7 +2096,9 @@ namespace lfs::vis::input {
             return d_camera_key;
 
         case Action::TOGGLE_SPLIT_VIEW:
-        case Action::TOGGLE_INDEPENDENT_SPLIT_VIEW:
+        case Action::TOGGLE_SPLIT_VIEWPORT:
+        case Action::TOGGLE_QUAD_VIEW:
+        case Action::TOGGLE_MAXIMIZE_AREA:
         case Action::TOGGLE_GT_COMPARISON:
         case Action::TOGGLE_CAMERA_FRUSTUMS:
         case Action::TOGGLE_GRID:
@@ -2164,6 +2224,14 @@ namespace lfs::vis::input {
         case Action::ZOOM_SPEED_UP:
         case Action::ZOOM_SPEED_DOWN:
         case Action::PIE_MENU:
+        case Action::VIEW_AXIS_TOP:
+        case Action::VIEW_AXIS_BOTTOM:
+        case Action::VIEW_AXIS_FRONT:
+        case Action::VIEW_AXIS_BACK:
+        case Action::VIEW_AXIS_RIGHT:
+        case Action::VIEW_AXIS_LEFT:
+        case Action::VIEW_TOGGLE_PERSPECTIVE:
+        case Action::VIEW_FRAME_ALL:
             return ShortcutScope::Viewport;
 
         default:

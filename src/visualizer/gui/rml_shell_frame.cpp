@@ -47,7 +47,6 @@ namespace lfs::vis::gui {
         }
 
         menu_region_ = document_->GetElementById("menu-region");
-        right_panel_region_ = document_->GetElementById("right-panel-region");
         status_region_ = document_->GetElementById("status-region");
 
         updateTheme();
@@ -61,7 +60,6 @@ namespace lfs::vis::gui {
         rml_context_ = nullptr;
         document_ = nullptr;
         menu_region_ = nullptr;
-        right_panel_region_ = nullptr;
         status_region_ = nullptr;
         has_layout_signature_ = false;
         render_needed_ = true;
@@ -81,7 +79,6 @@ namespace lfs::vis::gui {
 
         document_ = nullptr;
         menu_region_ = nullptr;
-        right_panel_region_ = nullptr;
         status_region_ = nullptr;
         base_rcss_.clear();
         has_theme_signature_ = false;
@@ -102,7 +99,6 @@ namespace lfs::vis::gui {
         }
 
         menu_region_ = document_->GetElementById("menu-region");
-        right_panel_region_ = document_->GetElementById("right-panel-region");
         status_region_ = document_->GetElementById("status-region");
         updateTheme();
     }
@@ -141,9 +137,6 @@ namespace lfs::vis::gui {
             .height = px(full_h),
             .menu_top = px(regions.menu.y - regions.screen.y),
             .menu_height = px(regions.menu.h),
-            .work_top = px(regions.menu.y + regions.menu.h - regions.screen.y),
-            .right_width = px(regions.right_panel.w),
-            .right_height = px(regions.right_panel.h),
             .status_height = px(regions.status.h),
         };
         const bool layout_changed = !has_layout_signature_ || !(layout == last_layout_signature_);
@@ -153,12 +146,6 @@ namespace lfs::vis::gui {
             if (menu_region_) {
                 menu_region_->SetProperty("top", std::format("{}px", layout.menu_top));
                 menu_region_->SetProperty("height", std::format("{}px", layout.menu_height));
-            }
-            if (right_panel_region_) {
-                right_panel_region_->SetProperty("top", std::format("{}px", layout.work_top));
-                right_panel_region_->SetProperty("right", "0px");
-                right_panel_region_->SetProperty("width", std::format("{}px", layout.right_width));
-                right_panel_region_->SetProperty("height", std::format("{}px", layout.right_height));
             }
             if (status_region_) {
                 status_region_->SetProperty("height", std::format("{}px", layout.status_height));

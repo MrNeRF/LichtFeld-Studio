@@ -87,12 +87,9 @@ def test_menubar_submenus_are_stacked_above_overlay_and_hit_testable():
     assert 'id="menu-window-toggle-ui"' in rml
     assert 'data-action="window_toggle_ui"' in rml
     assert rml.count('data-for="button : menu_camera_buttons"') == 1
-    assert rml.count('data-for="button : menu_render_buttons"') == 1
+    assert rml.count('data-for="button : menu_snap_buttons"') == 1
     assert rml.index('data-for="button : menu_camera_buttons"') < rml.index(
-        'data-for="button : menu_render_buttons"'
-    )
-    assert rml.index('data-for="button : menu_render_buttons"') < rml.index(
-        'data-for="button : menu_projection_buttons"'
+        'data-for="button : menu_snap_buttons"'
     )
     toolbar_button_rule = _rule_body(rcss, ".menu-toolbar-btn")
     assert "transition: none;" in toolbar_button_rule
@@ -178,9 +175,6 @@ def test_optional_gradients_style_the_primary_application_chrome():
     consumers = {
         "chrome.menu_decor": ("shell.theme.rcss", "menubar.theme.rcss"),
         "chrome.status_decor": ("shell.theme.rcss", "statusbar.theme.rcss"),
-        "chrome.right_panel_decor": ("right_panel.theme.rcss",),
-        "chrome.right_panel_edge_shape": ("right_panel.theme.rcss",),
-        "chrome.right_panel_separator_decor": ("right_panel.theme.rcss",),
         "chrome.toolbar_decor": ("viewport_overlay.theme.rcss",),
         "controls.selected_decor": ("viewport_overlay.theme.rcss",),
         "controls.selected_icon": ("viewport_overlay.theme.rcss",),
@@ -197,7 +191,6 @@ def test_optional_gradients_style_the_primary_application_chrome():
     assert '{"panel.host_body_decor"' in rml_theme_cpp
     assert '"decorator: none; background-color: transparent"' in rml_theme_cpp
     assert "@{panel.host_body_decor}" in panel_host_theme
-    assert '"width: 1dp; height: 100%' in rml_theme_cpp
 
 
 def test_rml_tooltips_request_only_pending_animation_frames():
@@ -369,7 +362,7 @@ def test_all_optional_theme_gradients_reach_rml_consumers():
 
     gradient_tokens = {
         "window_body": ("window.body_decor", "components.theme.rcss"),
-        "panel_body": ("panel.body_decor", "shell.theme.rcss"),
+        "panel_body": ("panel.body_decor", "screen_chrome.theme.rcss"),
         "window_title": ("window.title_decor", "components.theme.rcss"),
         "section_header": ("components.header_decor", "components.theme.rcss"),
         "section_header_hover": (
@@ -643,19 +636,6 @@ def test_menu_pointer_input_is_not_replayed_into_underlay_panels():
     assert "input.keys_pressed" not in pointer_mask
     assert "input.text_inputs" not in pointer_mask
 
-
-def test_viewport_overlay_toolbar_origin_tracks_viewport_content_offset():
-    gui_manager_cpp = (
-        PROJECT_ROOT
-        / "src"
-        / "visualizer"
-        / "gui"
-        / "gui_manager.cpp"
-    ).read_text(encoding="utf-8")
-
-    assert "const float viewport_content_offset = viewport_layout_.pos.x - screen.work_pos.x;" in gui_manager_cpp
-    assert "float primary_toolbar_x = viewport_content_offset;" in gui_manager_cpp
-    assert "rml_viewport_overlay_.setViewportContentOffset(viewport_content_offset);" in gui_manager_cpp
 
 
 def test_asset_manager_launcher_is_not_duplicated_in_scene_header():

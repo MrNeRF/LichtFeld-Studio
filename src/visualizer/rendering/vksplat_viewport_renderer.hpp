@@ -9,6 +9,7 @@
 #include "core/exportable_storage.hpp"
 #include "core/rad_pool_quant.hpp"
 #include "core/splat_data.hpp"
+#include "gpu_lod_target_feedback.hpp"
 #include "lod_page_cache.hpp"
 #include "lod_upload_engine.hpp"
 #include "output_image_pool.hpp"
@@ -114,13 +115,6 @@ namespace lfs::vis {
             Ring = 3,
         };
 
-        enum class OutputSlot : std::size_t {
-            Main = 0,
-            SplitLeft = 1,
-            SplitRight = 2,
-            Preview = 3,
-        };
-
         struct SelectionMaskRequest {
             lfs::rendering::FrameView frame_view;
             lfs::rendering::GaussianSceneState scene;
@@ -139,7 +133,7 @@ namespace lfs::vis {
             // Coordinate space of `pixel`. When positive, the renderer maps the
             // sample into the actual output image size for the selected slot.
             glm::ivec2 source_size{0, 0};
-            OutputSlot output_slot = OutputSlot::Main;
+            RenderTargetId target{};
         };
 
         LFS_VIS_API VksplatViewportRenderer();
@@ -156,14 +150,14 @@ namespace lfs::vis {
             const lfs::core::SplatData& splat_data,
             const lfs::rendering::ViewportRenderRequest& request,
             bool force_input_upload,
-            OutputSlot output_slot = OutputSlot::Main,
+            RenderTargetId target,
             bool synchronize_input_upload = false,
             bool deterministic_export = false);
         [[nodiscard]] std::expected<RenderResult, std::string> rerenderSelectionOverlay(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
             const lfs::rendering::ViewportRenderRequest& request,
-            OutputSlot output_slot = OutputSlot::Main,
+            RenderTargetId target,
             bool synchronize_input_read = false);
 #if LFS_BUILD_TRAINER && LFS_HAS_CUDA
         [[nodiscard]] cudaExternalSemaphore_t renderCompleteFence() const {
@@ -210,26 +204,26 @@ namespace lfs::vis {
 
         [[nodiscard]] bool nextOutputImagesNeedResize(
             glm::ivec2 size,
-            OutputSlot output_slot = OutputSlot::Main) const;
+            RenderTargetId target) const;
         [[nodiscard]] LFS_VIS_API std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
             VulkanContext& context,
-            OutputSlot output_slot = OutputSlot::Main) const;
+            RenderTargetId target) const;
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgba(
             VulkanContext& context,
-            OutputSlot output_slot = OutputSlot::Main) const;
+            RenderTargetId target) const;
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgb8(
             VulkanContext& context,
-            OutputSlot output_slot = OutputSlot::Main) const;
+            RenderTargetId target) const;
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgba8(
             VulkanContext& context,
-            OutputSlot output_slot = OutputSlot::Main) const;
+            RenderTargetId target) const;
         // Reads the most recent render's raw per-pixel linear depth (the
         // final_pixel_depth buffer every chain writes) into an [H,W] CPU float32
         // tensor. Valid only directly after a render into this slot, before the
         // next render reuses the pixel_depth scratch.
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readPreviewDepth(
             VulkanContext& context,
-            OutputSlot output_slot = OutputSlot::Preview) const;
+            RenderTargetId target) const;
         // Forces the non-batched per-pixel rasterizer chain (not the macro-tile
         // HiGS chain, whose depth is one median per macro-tile, nor the batched
         // compose, which covers only a subset of pixels) so readPreviewDepth gets
@@ -242,7 +236,7 @@ namespace lfs::vis {
         }
         [[nodiscard]] std::expected<void, std::string> readOutputImageIntoCpuHwc(
             VulkanContext& context,
-            OutputSlot output_slot,
+            RenderTargetId target,
             lfs::core::Tensor& destination,
             int destination_x,
             int destination_y) const;
@@ -259,13 +253,13 @@ namespace lfs::vis {
         };
         [[nodiscard]] std::expected<std::uint64_t, std::string> submitReadOutputImageIntoCpuHwcTicket(
             VulkanContext& context,
-            OutputSlot output_slot,
+            RenderTargetId target,
             lfs::core::Tensor& destination,
             int destination_x,
             int destination_y) const;
         [[nodiscard]] std::expected<std::uint64_t, std::string> submitReadOutputDepthImageTicket(
             VulkanContext& context,
-            OutputSlot output_slot,
+            RenderTargetId target,
             lfs::core::Tensor& destination) const;
         [[nodiscard]] std::expected<ReadbackTicketStatus, std::string> pollReadbackTicket(
             std::uint64_t ticket) const;
@@ -285,8 +279,15 @@ namespace lfs::vis {
             const SelectionMaskRequest& request,
             bool force_input_upload);
 
-        void releasePreviewResources();
-        void releaseSplitOutputResources();
+        [[nodiscard]] bool hasRenderTarget(RenderTargetId target) const {
+            std::lock_guard lock(target_mutex_);
+#ifdef __APPLE__
+            if (metal_output_.contains(target))
+                return true;
+#endif
+            return ring_.contains(target);
+        }
+        [[nodiscard]] LFS_VIS_API bool releaseRenderTarget(RenderTargetId target);
         void releaseSceneResources();
         void reset();
         [[nodiscard]] std::optional<LodPageCache::Snapshot> ensureLodPageCacheSnapshot(
@@ -321,14 +322,43 @@ namespace lfs::vis {
             std::size_t pool_pages = 0;
             std::size_t streaming_jobs = 0;
         };
-        [[nodiscard]] GpuLodSelectionStatus gpuLodSelectionStatus() const;
+        [[nodiscard]] GpuLodSelectionStatus gpuLodSelectionStatus(RenderTargetId target) const;
 
     private:
 #ifdef __APPLE__
         std::unique_ptr<MetalViewportRenderer> metal_viewport_;
-        std::array<bool, 4> metal_output_{};
-        std::array<int, 4> metal_route_{-1, -1, -1, -1};
+        std::unordered_set<RenderTargetId, RenderTargetIdHash> metal_output_;
+        std::unordered_map<RenderTargetId, int, RenderTargetIdHash> metal_route_;
 #endif
+        struct ResidentRasterScratchProvenance {
+            RenderTargetId target{};
+            glm::ivec2 size{0, 0};
+            glm::ivec2 camera_size{0, 0};
+            glm::ivec2 subregion_origin{0, 0};
+            glm::mat3 rotation{1.0f};
+            glm::vec3 translation{0.0f};
+            float focal_length_mm = 0.0f;
+            bool orthographic = false;
+            float ortho_scale = 0.0f;
+            lfs::rendering::CameraIntrinsics intrinsics{};
+            float scaling_modifier = 1.0f;
+            int sh_degree = 0;
+            std::vector<glm::mat4> model_transforms;
+            std::vector<bool> node_visibility;
+            const void* transform_indices = nullptr;
+            bool gut = false;
+            bool equirectangular = false;
+            bool mip_filter = false;
+            bool antialiasing = false;
+            std::size_t num_splats = 0;
+            bool valid = false;
+        };
+        ResidentRasterScratchProvenance resident_raster_scratch_{};
+        ModelInputSnapshot resident_model_snapshot_{};
+        [[nodiscard]] LFS_VIS_API ResidentRasterScratchProvenance makeResidentRasterScratchProvenance(
+            RenderTargetId target, const lfs::rendering::ViewportRenderRequest& request, std::size_t num_splats) const;
+        [[nodiscard]] LFS_VIS_API bool residentRasterScratchCompatible(const ResidentRasterScratchProvenance& published,
+                                                                       const ResidentRasterScratchProvenance& requested) const;
         struct ComposePipeline;
         struct InputBindingResult {
             bool model_snapshot_changed = false;
@@ -376,11 +406,11 @@ namespace lfs::vis {
             const lfs::rendering::ViewportRenderRequest& request,
             std::size_t num_splats,
             std::size_t ring_slot,
-            OutputSlot output_slot);
+            RenderTargetId target);
         [[nodiscard]] lfs::Status ensureOutputImages(
             VulkanContext& context,
             glm::ivec2 size,
-            OutputSlot output_slot,
+            RenderTargetId target,
             std::size_t ring_slot);
         [[nodiscard]] std::expected<void, std::string> ensureComposePipeline(VulkanContext& context);
         [[nodiscard]] lfs::Status composePixelState(
@@ -388,7 +418,7 @@ namespace lfs::vis {
             VkCommandBuffer cmd,
             const VulkanGSRendererUniforms& uniforms,
             const glm::vec3& background,
-            OutputSlot output_slot,
+            RenderTargetId target,
             std::size_t output_ring_slot,
             bool transparent_background,
             bool depth_view,
@@ -398,8 +428,7 @@ namespace lfs::vis {
         [[nodiscard]] lfs::Status waitForRingSlot(
             std::size_t ring_slot,
             std::string_view reason);
-        [[nodiscard]] std::size_t acquireRingSlot();
-        [[nodiscard]] std::size_t latestOutputRingSlot(OutputSlot output_slot) const;
+        [[nodiscard]] std::size_t acquireRingSlot(RenderTargetId target = {});
 
         static constexpr std::size_t kInputRegionCount = 7;
         static constexpr std::size_t kOverlayRegionCount = 7;
@@ -436,7 +465,7 @@ namespace lfs::vis {
             // Fingerprint of emphasized_node_mask currently staged in the
             // interop buffer.
             std::vector<bool> cached_emphasized_node_mask;
-            OutputSlot cached_node_mask_output_slot = OutputSlot::Main;
+            RenderTargetId cached_node_mask_target{};
             bool node_mask_uploaded = false;
             std::vector<float> overlay_params_upload_cpu;
             // Output-byte fingerprint of the overlay-params table currently
@@ -512,7 +541,7 @@ namespace lfs::vis {
         bool prepareSharedScratchForArenaShrink(
             const std::shared_ptr<lfs::core::ExportableBlock>& block);
         // evict=true: pool entries destroy on drain instead of free-list reuse.
-        void releaseOutputSlot(OutputSlot output_slot, bool evict = false);
+
         // Queues a no-longer-current shared-scratch import for destruction once
         // the GPU submission that last referenced it has retired. The old VkBuffer
         // may still be read by in-flight graphics/compute submissions (the resize
@@ -572,7 +601,7 @@ namespace lfs::vis {
             std::string_view fingerprint) const;
         // Ring-cell pin: block OutputSlotRing reuse until readbacks sourcing the cell retire.
         [[nodiscard]] lfs::Status waitReadbackPinsForFrameRingCell(std::size_t ring_slot) const;
-        [[nodiscard]] lfs::Result<glm::ivec2> latestOutputImageSize(OutputSlot output_slot) const;
+        [[nodiscard]] lfs::Result<glm::ivec2> latestOutputImageSize(RenderTargetId target) const;
 
         VulkanContext* context_ = nullptr;
         bool initialized_ = false;
@@ -609,21 +638,10 @@ namespace lfs::vis {
         bool lod_logical_indices_upload_pending_ = false;
         bool lod_levels_upload_pending_ = false;
         bool lod_weights_upload_pending_ = false;
-        float gpu_lod_pixel_scale_feedback_ = 1.0f;
-        // Consecutive readback frames with deferred wants but zero
-        // admissions and nothing in flight; gates the threshold descent and
-        // the keep-rendering liveness once it crosses the frozen window.
-        std::uint32_t gpu_lod_frozen_frames_ = 0;
-        std::size_t gpu_lod_last_candidate_count_ = 0;
-        std::size_t gpu_lod_last_overflow_count_ = 0;
-        std::size_t gpu_lod_last_miss_count_ = 0;
-        // GPU traversal misses from the deferred selector readback, sorted by
-        // descending pixel-scale priority for LodPageCache decode scheduling.
-        std::vector<LodPageCache::ChunkRequest> gpu_lod_prefetch_requests_;
-        std::vector<std::uint32_t> gpu_lod_protected_chunks_;
-        bool gpu_lod_prefetch_valid_ = false;
-        bool gpu_lod_selection_active_ = false;
-        std::size_t gpu_lod_render_capacity_last_ = 0;
+        GpuLodTargetFeedbackTable gpu_lod_feedback_;
+        const lfs::core::SplatData* lod_feedback_model_ = nullptr;
+        std::uint64_t lod_feedback_model_generation_ = 0;
+        std::uint64_t lod_feedback_tree_generation_ = 0;
         const lfs::core::SplatData* lod_page_cache_model_ = nullptr;
         LodPageCache lod_page_cache_;
         std::size_t lod_page_pool_splats_ = 0;
@@ -690,9 +708,15 @@ namespace lfs::vis {
         };
         LodPageInputStorage lod_page_inputs_;
         std::unique_ptr<ComposePipeline> compose_;
-        static constexpr std::size_t kOutputSlotCount = OutputSlotRing::kOutputSlotCount;
         static constexpr std::size_t kFrameRingSize = OutputSlotRing::kFrameRingSize;
         OutputSlotRing ring_{};
+        mutable std::recursive_mutex target_mutex_;
+        RenderTargetId rendering_target_{};
+        struct RetiredInputs {
+            std::size_t base;
+            std::uint64_t completion;
+        };
+        std::vector<RetiredInputs> retired_inputs_;
         OutputImagePool output_pool_{};
         // Completion counter shared by tensor producers and Vulkan consumers.
         VkSemaphore render_complete_timeline_ = VK_NULL_HANDLE;
@@ -718,11 +742,10 @@ namespace lfs::vis {
         // it uses the same fixed-K wave machinery as every other legacy frame.
         bool macro_chain_warmup_pending_ = true;
 
-        static constexpr std::size_t kInputRingSize = kFrameRingSize;
-        std::array<DeletedMaskSlot, kInputRingSize> deleted_mask_copies_{};
-        std::array<OverlaySlot, kInputRingSize> overlays_{};
+        std::vector<DeletedMaskSlot> deleted_mask_copies_{};
+        std::vector<OverlaySlot> overlays_{};
         SelectionQuerySlot selection_query_{};
-        std::array<ModelInputSnapshot, kInputRingSize> ring_uploaded_{};
+        std::vector<ModelInputSnapshot> ring_uploaded_{};
         int current_input_sh_degree_ = -1;
 #if LFS_HAS_CUDA
         lfs::core::GpuBackend active_tensor_backend_ = lfs::core::GpuBackend::CUDA;
@@ -782,6 +805,7 @@ namespace lfs::vis {
         // Async RAD page streaming: decoded pages are packed and copied on the
         // engine's own thread/stream; render frames only publish completions.
         LodUploadEngine lod_upload_engine_;
+        std::vector<std::pair<lfs::core::TensorCompletion, lfs::core::RadPageSources>> resident_page_uploads_;
         // Last completion value whose frame read the LOD pool; pool reuse waits on it GPU-side.
         std::uint64_t last_lod_page_borrow_value_ = 0;
         std::uint64_t lod_upload_log_batches_ = 0;

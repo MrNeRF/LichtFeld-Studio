@@ -52,7 +52,7 @@ namespace lfs::vis {
 
         struct TicketMeta {
             std::uint64_t ticket_value = 0;
-            std::size_t ring_cell = 0; // OutputSlotRing frame cell (0..2)
+            std::size_t ring_cell = 0; // Globally unique submission cell across target columns.
             // Source VkImage(s) for pool-pin matching (1:1 with acquisition while retired).
             VkImage source_image = VK_NULL_HANDLE;
             VkImage source_depth_image = VK_NULL_HANDLE;

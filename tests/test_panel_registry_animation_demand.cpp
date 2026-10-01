@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 
-#include <visualizer/gui/panel_layout.hpp>
+#include <visualizer/gui/gui_input.hpp>
 #include <visualizer/gui/panel_registry.hpp>
 
 #include <algorithm>
@@ -145,75 +145,75 @@ namespace {
 
 } // namespace
 
-TEST_F(PanelRegistryAnimationDemandTest, LeftDockDemandRespectsLeftDockVisibility) {
+TEST_F(PanelRegistryAnimationDemandTest, LeftAreaDemandRespectsLeftAreaVisibility) {
     using namespace lfs::vis::gui;
 
-    registerPanel("test.left", PanelSpace::LeftDock, true);
+    registerPanel("test.left", PanelSpace::LeftArea, true);
 
     const auto visible = PanelRegistry::instance().animationDemandForVisiblePanels({
         .active_main_tab = "test.main",
         .ui_visible = true,
-        .right_panel_visible = true,
-        .bottom_dock_visible = true,
-        .left_dock_visible = true,
+        .properties_or_scene_visible = true,
+        .bottom_editor_visible = true,
+        .left_editor_visible = true,
     });
-    EXPECT_TRUE(visible.left_dock);
+    EXPECT_TRUE(visible.left_editor);
     EXPECT_TRUE(visible.any());
     EXPECT_TRUE(PanelRegistry::instance().needsAnimationFrameForVisiblePanels({
         .active_main_tab = "test.main",
         .ui_visible = true,
-        .right_panel_visible = true,
-        .bottom_dock_visible = true,
-        .left_dock_visible = true,
+        .properties_or_scene_visible = true,
+        .bottom_editor_visible = true,
+        .left_editor_visible = true,
     }));
 
     const auto left_hidden = PanelRegistry::instance().animationDemandForVisiblePanels({
         .active_main_tab = "test.main",
         .ui_visible = true,
-        .right_panel_visible = true,
-        .bottom_dock_visible = true,
-        .left_dock_visible = false,
+        .properties_or_scene_visible = true,
+        .bottom_editor_visible = true,
+        .left_editor_visible = false,
     });
-    EXPECT_FALSE(left_hidden.left_dock);
+    EXPECT_FALSE(left_hidden.left_editor);
     EXPECT_FALSE(left_hidden.any());
     EXPECT_FALSE(PanelRegistry::instance().needsAnimationFrameForVisiblePanels({
         .active_main_tab = "test.main",
         .ui_visible = true,
-        .right_panel_visible = true,
-        .bottom_dock_visible = true,
-        .left_dock_visible = false,
+        .properties_or_scene_visible = true,
+        .bottom_editor_visible = true,
+        .left_editor_visible = false,
     }));
 
     const auto ui_hidden = PanelRegistry::instance().animationDemandForVisiblePanels({
         .active_main_tab = "test.main",
         .ui_visible = false,
-        .right_panel_visible = true,
-        .bottom_dock_visible = true,
-        .left_dock_visible = true,
+        .properties_or_scene_visible = true,
+        .bottom_editor_visible = true,
+        .left_editor_visible = true,
     });
-    EXPECT_FALSE(ui_hidden.left_dock);
+    EXPECT_FALSE(ui_hidden.left_editor);
     EXPECT_FALSE(ui_hidden.any());
     EXPECT_FALSE(PanelRegistry::instance().needsAnimationFrameForVisiblePanels({
         .active_main_tab = "test.main",
         .ui_visible = false,
-        .right_panel_visible = true,
-        .bottom_dock_visible = true,
-        .left_dock_visible = true,
+        .properties_or_scene_visible = true,
+        .bottom_editor_visible = true,
+        .left_editor_visible = true,
     }));
 }
 
-TEST_F(PanelRegistryAnimationDemandTest, ScheduledDelaySkipsHiddenLeftDock) {
+TEST_F(PanelRegistryAnimationDemandTest, ScheduledDelaySkipsHiddenLeftArea) {
     using namespace lfs::vis::gui;
 
-    registerPanel("test.left.scheduled", PanelSpace::LeftDock, false, {}, 0.25);
+    registerPanel("test.left.scheduled", PanelSpace::LeftArea, false, {}, 0.25);
 
     const auto visible_delay =
         PanelRegistry::instance().nextScheduledAnimationDelayForVisiblePanels({
             .active_main_tab = "test.main",
             .ui_visible = true,
-            .right_panel_visible = true,
-            .bottom_dock_visible = true,
-            .left_dock_visible = true,
+            .properties_or_scene_visible = true,
+            .bottom_editor_visible = true,
+            .left_editor_visible = true,
         });
     ASSERT_TRUE(visible_delay.has_value());
     EXPECT_NEAR(*visible_delay, 0.25, 1e-9);
@@ -222,27 +222,27 @@ TEST_F(PanelRegistryAnimationDemandTest, ScheduledDelaySkipsHiddenLeftDock) {
         PanelRegistry::instance().nextScheduledAnimationDelayForVisiblePanels({
             .active_main_tab = "test.main",
             .ui_visible = true,
-            .right_panel_visible = true,
-            .bottom_dock_visible = true,
-            .left_dock_visible = false,
+            .properties_or_scene_visible = true,
+            .bottom_editor_visible = true,
+            .left_editor_visible = false,
         });
     EXPECT_FALSE(hidden_delay.has_value());
 }
 
-TEST_F(PanelRegistryAnimationDemandTest, DefaultLeftDockVisibleTrue) {
+TEST_F(PanelRegistryAnimationDemandTest, DefaultLeftAreaVisibleTrue) {
     using namespace lfs::vis::gui;
 
-    // Callers must set left_dock_visible explicitly; the field defaults to true (#1597).
+    // Callers must set left_editor_visible explicitly; the field defaults to true (#1597).
     const PanelAnimationVisibility v{
         .active_main_tab = "test.main",
         .ui_visible = true,
-        .right_panel_visible = true,
-        .bottom_dock_visible = true,
+        .properties_or_scene_visible = true,
+        .bottom_editor_visible = true,
     };
-    EXPECT_TRUE(v.left_dock_visible);
+    EXPECT_TRUE(v.left_editor_visible);
 }
 
-TEST_F(PanelRegistryAnimationDemandTest, ViewportOverlayAnimationDoesNotMarkRightPanel) {
+TEST_F(PanelRegistryAnimationDemandTest, ViewportOverlayAnimationDoesNotMarkPropertiesAndScene) {
     using namespace lfs::vis::gui;
 
     registerPanel("test.viewport_overlay", PanelSpace::ViewportOverlay, true);
@@ -250,56 +250,52 @@ TEST_F(PanelRegistryAnimationDemandTest, ViewportOverlayAnimationDoesNotMarkRigh
     const auto demand = PanelRegistry::instance().animationDemandForVisiblePanels({
         .active_main_tab = "test.main",
         .ui_visible = true,
-        .right_panel_visible = true,
-        .bottom_dock_visible = true,
+        .properties_or_scene_visible = true,
+        .bottom_editor_visible = true,
     });
 
     EXPECT_TRUE(demand.any());
     EXPECT_TRUE(demand.viewport_overlay);
-    EXPECT_FALSE(demand.rightPanel());
     EXPECT_FALSE(demand.main_panel_tab);
     EXPECT_FALSE(demand.scene_header);
 }
 
-TEST_F(PanelRegistryAnimationDemandTest, RightPanelDemandOnlyTracksVisibleRightPanelPanels) {
+TEST_F(PanelRegistryAnimationDemandTest, PropertiesAndSceneDemandOnlyTracksVisiblePropertiesAndScenePanels) {
     using namespace lfs::vis::gui;
 
     registerPanel("test.scene_header", PanelSpace::SceneHeader, true);
     registerPanel("test.main.active", PanelSpace::MainPanelTab, true);
     registerPanel("test.main.inactive", PanelSpace::MainPanelTab, true);
     registerPanel("test.child.active", PanelSpace::MainPanelTab, true, "test.main.active");
-    registerPanel("test.bottom", PanelSpace::BottomDock, true);
+    registerPanel("test.bottom", PanelSpace::BottomArea, true);
 
     const auto visible = PanelRegistry::instance().animationDemandForVisiblePanels({
         .active_main_tab = "test.main.active",
         .ui_visible = true,
-        .right_panel_visible = true,
-        .bottom_dock_visible = true,
+        .properties_or_scene_visible = true,
+        .bottom_editor_visible = true,
     });
-    EXPECT_TRUE(visible.rightPanel());
     EXPECT_TRUE(visible.scene_header);
     EXPECT_TRUE(visible.main_panel_tab);
-    EXPECT_TRUE(visible.bottom_dock);
+    EXPECT_TRUE(visible.bottom_editor);
 
     const auto right_hidden = PanelRegistry::instance().animationDemandForVisiblePanels({
         .active_main_tab = "test.main.active",
         .ui_visible = true,
-        .right_panel_visible = false,
-        .bottom_dock_visible = true,
+        .properties_or_scene_visible = false,
+        .bottom_editor_visible = true,
     });
-    EXPECT_FALSE(right_hidden.rightPanel());
     EXPECT_FALSE(right_hidden.scene_header);
     EXPECT_FALSE(right_hidden.main_panel_tab);
-    EXPECT_TRUE(right_hidden.bottom_dock);
+    EXPECT_TRUE(right_hidden.bottom_editor);
 
     const auto bottom_hidden = PanelRegistry::instance().animationDemandForVisiblePanels({
         .active_main_tab = "test.main.active",
         .ui_visible = true,
-        .right_panel_visible = true,
-        .bottom_dock_visible = false,
+        .properties_or_scene_visible = true,
+        .bottom_editor_visible = false,
     });
-    EXPECT_TRUE(bottom_hidden.rightPanel());
-    EXPECT_FALSE(bottom_hidden.bottom_dock);
+    EXPECT_FALSE(bottom_hidden.bottom_editor);
 }
 
 TEST_F(PanelRegistryAnimationDemandTest, BringPanelToFrontRaisesEnabledFloatingPanel) {
@@ -724,7 +720,7 @@ TEST_F(PanelRegistryAnimationDemandTest, PanelPayloadRoundTripAndReset) {
     PanelInfo info;
     info.id = "lfs.histogram";
     info.label = info.id;
-    info.space = PanelSpace::BottomDock;
+    info.space = PanelSpace::BottomArea;
     info.is_native = false;
     info.panel = panel;
     ASSERT_TRUE(PanelRegistry::instance().register_panel(std::move(info)));
@@ -750,7 +746,7 @@ TEST_F(PanelRegistryAnimationDemandTest, DefaultClosedAppliesToDockedPanelsAndRe
     PanelInfo info;
     info.id = "lfs.asset_manager";
     info.label = info.id;
-    info.space = PanelSpace::LeftDock;
+    info.space = PanelSpace::LeftArea;
     info.options = static_cast<uint32_t>(PanelOption::DEFAULT_CLOSED);
     info.is_native = false;
     info.panel = std::make_shared<TestPanel>(false);
@@ -777,7 +773,7 @@ TEST_F(PanelRegistryAnimationDemandTest, LateRegisterAppliesPendingPanelPayload)
     PanelInfo info;
     info.id = "lfs.histogram";
     info.label = info.id;
-    info.space = PanelSpace::BottomDock;
+    info.space = PanelSpace::BottomArea;
     info.is_native = false;
     info.panel = panel;
     ASSERT_TRUE(PanelRegistry::instance().register_panel(std::move(info)));

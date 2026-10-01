@@ -53,6 +53,16 @@ namespace lfs::vis {
         constexpr unsigned kResizeTop = 1u << 2;
         constexpr unsigned kResizeBottom = 1u << 3;
 
+        bool screenCornerGestureAtWindowPoint(SDL_Window* const window, const int x, const int y) {
+            if (!window)
+                return false;
+            auto* const gui = services().guiOrNull();
+            if (!gui)
+                return false;
+            const auto position = glm::vec2(x, y) * input::windowPixelScale(window);
+            return gui->screenHost().cornerGestureAt(position.x, position.y);
+        }
+
         std::vector<WindowRectangle> availableDisplayRectangles() {
             int display_count = 0;
             SDL_DisplayID* displays = SDL_GetDisplays(&display_count);
@@ -359,6 +369,11 @@ namespace lfs::vis {
             glm::ivec2 size = self->getWindowSize();
             if (window)
                 SDL_GetWindowSize(window, &size.x, &size.y);
+
+            // Area corner gestures share the outermost pixels with borderless
+            // window resize hit testing. Deliver those presses to the app.
+            if (screenCornerGestureAtWindowPoint(window, area->x, area->y))
+                return SDL_HITTEST_NORMAL;
 
             const bool left = area->x >= 0 && area->x < kResizeBorder;
             const bool right = area->x >= size.x - kResizeBorder && area->x < size.x;
@@ -973,6 +988,8 @@ namespace lfs::vis {
 
         const int mouse_x = static_cast<int>(std::round(event.button.x));
         const int mouse_y = static_cast<int>(std::round(event.button.y));
+        if (screenCornerGestureAtWindowPoint(window_, mouse_x, mouse_y))
+            return false;
         return resizeEdgeAt(mouse_x, mouse_y) != ResizeEdge::NoEdge;
     }
 
@@ -1093,11 +1110,13 @@ namespace lfs::vis {
                 if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
                     const ResizeEdge resize_edge = resizeEdgeAt(mouse_x, mouse_y);
                     if (resize_edge != ResizeEdge::NoEdge) {
-                        if constexpr (kUseManualBorderlessResize) {
-                            beginManualResize(resize_edge);
+                        if (!screenCornerGestureAtWindowPoint(window_, mouse_x, mouse_y)) {
+                            if constexpr (kUseManualBorderlessResize) {
+                                beginManualResize(resize_edge);
+                                break;
+                            }
                             break;
                         }
-                        break;
                     }
                 }
 

@@ -6,7 +6,7 @@
 #include "core/logger.hpp"
 #include "gui/context_menu_placement.hpp"
 #include "gui/gui_focus_state.hpp"
-#include "gui/panel_layout.hpp"
+#include "gui/gui_input.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
@@ -61,6 +61,7 @@ namespace lfs::vis::gui {
             handle.RegisterMember("is_submenu_item", &ContextMenuItem::is_submenu_item);
             handle.RegisterMember("is_active", &ContextMenuItem::is_active);
             handle.RegisterMember("icon", &ContextMenuItem::icon);
+            handle.RegisterMember("shortcut", &ContextMenuItem::shortcut);
         }
         ctor.RegisterArray<std::vector<ContextMenuItem>>();
         ctor.Bind("items", &items_);
@@ -303,6 +304,9 @@ namespace lfs::vis::gui {
             if (el_ctx_menu_ && el_backdrop_) {
                 items_ = pending_items_;
                 menu_model_.DirtyVariable("items");
+                el_ctx_menu_->SetClass("has-shortcuts", std::ranges::any_of(items_, [](const auto& item) {
+                                           return !item.shortcut.empty();
+                                       }));
                 const float dp = std::max(mgr_ ? mgr_->getDpRatio() : 1.0f, 1.0f);
                 // Keep the initial layout near the pointer. Once RmlUi has
                 // measured the menu, the final position is clamped to the

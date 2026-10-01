@@ -13,8 +13,8 @@
 #include "core/tensor_backend.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/gpu_memory_query.hpp"
+#include "gui/gui_input.hpp"
 #include "gui/gui_manager.hpp"
-#include "gui/panel_layout.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
@@ -1693,7 +1693,8 @@ namespace lfs::vis::gui {
         setModelString("fps_label", model_.fps_label,
                        ui_only_fps ? std::format(" {}", LOC("status_bar.ui_fps"))
                                    : std::format(" {}", LOC(lichtfeld::Strings::Status::FPS)));
-        updateBackendContent();
+        const auto* backend_manager = ctx.ui && ctx.ui->viewer ? ctx.ui->viewer->getRenderingManager() : nullptr;
+        updateBackendContent(backend_manager ? std::optional<uint32_t>(backend_manager->activeViewerBackendMask()) : std::nullopt);
         setModelString("git_commit", model_.git_commit, GIT_COMMIT_HASH_SHORT);
 
         section_signature_ =
@@ -1723,10 +1724,10 @@ namespace lfs::vis::gui {
         return model_dirty_;
     }
 
-    void RmlStatusBar::updateBackendContent() {
+    void RmlStatusBar::updateBackendContent(const std::optional<uint32_t> active_view_mask) {
         // Read published frame metadata, never predict the API from a preference
         // or initialize a GPU just to paint the status bar.
-        const uint32_t backend_mask = lfs::vis::app_store().viewer_backend_mask.get();
+        const uint32_t backend_mask = active_view_mask.value_or(lfs::vis::app_store().viewer_backend_mask.get());
         const auto requested = UserPreferences::instance().viewerBackend();
         const auto tensor_backend = core::configured_gpu_backend();
         const BackendStatusStamp stamp{backend_mask, static_cast<int>(requested),
@@ -2003,7 +2004,8 @@ namespace lfs::vis::gui {
         if (w_px <= 0.0f || h_px <= 0.0f || screen_w <= 0 || screen_h <= 0)
             return;
 
-        updateBackendContent();
+        const auto* backend_manager = ctx.ui && ctx.ui->viewer ? ctx.ui->viewer->getRenderingManager() : nullptr;
+        updateBackendContent(backend_manager ? std::optional<uint32_t>(backend_manager->activeViewerBackendMask()) : std::nullopt);
         const float overlay_height = overlayHeight();
         const int render_w = static_cast<int>(w_px);
         const int render_h = static_cast<int>(std::ceil(h_px + overlay_height));
@@ -2056,7 +2058,8 @@ namespace lfs::vis::gui {
             return;
         }
 
-        updateBackendContent();
+        const auto* backend_manager = ctx.ui && ctx.ui->viewer ? ctx.ui->viewer->getRenderingManager() : nullptr;
+        updateBackendContent(backend_manager ? std::optional<uint32_t>(backend_manager->activeViewerBackendMask()) : std::nullopt);
         float overlay_height = overlayHeight();
         const int render_w = static_cast<int>(w_px);
         int render_h = static_cast<int>(std::ceil(h_px + overlay_height));

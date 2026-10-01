@@ -29,25 +29,6 @@ body {
     z-index: 1;
 }
 
-.viewport-frame-border {
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: 4dp;
-    pointer-events: none;
-    z-index: 1;
-}
-
-.left-dock-resize-indicator {
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    pointer-events: none;
-    z-index: 12;
-}
-
 /* Centered in the viewport; the side padding keeps the wrapped lines clear of
    the docked tool rail. */
 .empty-state-hint {
@@ -595,23 +576,6 @@ body {
     min-width: 50dp;
 }
 
-/* The chip labels the depth sliders' target panel in independent-dual only.
-   Keep it inside Near/Far to avoid an extra wrapped line with the sync toggle.
-   Keep this selector a descendant match so styling applies at every width. */
-#selection-block .viewport-selection-depth-panel-chip {
-    flex-grow: 0;
-    flex-shrink: 0;
-    width: 20dp;
-    height: 20dp;
-    line-height: 20dp;
-    text-align: center;
-    font-size: 12dp;
-    font-weight: bold;
-    border-radius: 4dp;
-    /* Palette fill belongs in viewport_overlay.theme.rcss; see
-       docs/docs/development/rmlui-styling.md, Theme Tokens. */
-}
-
 #selection-block .depth-axis-size > .number-input.viewport-selection-depth-input {
     /* Wide enough for the anisotropic "63x45%" Size readout at 1.5x UI scale. */
     width: 104dp;
@@ -637,7 +601,6 @@ body {
     /* Center Near/Far above Size/X/Y with equal slider lengths.
        Pin one action button to the right of each line; this RmlUi has no flex
        `order`, so flow would place both on the last line.
-       Sync shares the chip's independent-dual visibility and sits beside Near/Far.
        Viz stays beside Size/X/Y whenever the depth row is shown. */
     #selection-block .viewport-selection-depth-fields {
         flex-wrap: wrap;

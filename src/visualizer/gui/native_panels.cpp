@@ -4,9 +4,9 @@
 
 #include "gui/native_panels.hpp"
 #include "gui/gizmo_manager.hpp"
+#include "gui/gui_input.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/line_renderer.hpp"
-#include "gui/panel_layout.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/rml_status_bar.hpp"
 #include "gui/sequencer_ui_manager.hpp"
@@ -141,7 +141,7 @@ namespace lfs::vis::gui::native_panels {
         : gui_(gui) {}
 
     void SelectionOverlayPanel::draw(const PanelDrawContext& ctx) {
-        if (ctx.ui)
+        if (ctx.ui && ctx.viewport && ctx.viewport->view == ctx.ui->viewer->activeView().id)
             gui_->renderSelectionOverlays(*ctx.ui);
     }
 
@@ -153,9 +153,9 @@ namespace lfs::vis::gui::native_panels {
         (void)ctx;
     }
 
-    SequencerPanel::SequencerPanel(SequencerUIManager* seq, const PanelLayoutManager* layout)
+    SequencerPanel::SequencerPanel(SequencerUIManager* seq, const GuiManager* gui)
         : seq_(seq),
-          layout_(layout) {}
+          gui_(gui) {}
 
     void SequencerPanel::draw(const PanelDrawContext& ctx) {
         (void)ctx;
@@ -242,7 +242,7 @@ namespace lfs::vis::gui::native_panels {
         // having to switch to Edit mode (which tears the trainer down).
         const bool training_active = ctx.ui && ctx.ui->editor && ctx.ui->editor->isTraining();
         const bool is_enabled = !ctx.ui_hidden && ctx.ui && ctx.ui->editor &&
-                                !training_active && layout_->isShowSequencer();
+                                !training_active && gui_->isSequencerVisible();
         if (!is_enabled && seq_)
             seq_->setSequencerEnabled(false);
         return is_enabled;
@@ -292,8 +292,8 @@ namespace lfs::vis::gui::native_panels {
         gizmo_->renderPieMenu();
     }
 
-    bool PieMenuPanel::poll(const PanelDrawContext&) {
-        return gizmo_->isPieMenuOpen();
+    bool PieMenuPanel::poll(const PanelDrawContext& ctx) {
+        return ctx.ui && ctx.viewport && ctx.viewport->view == ctx.ui->viewer->activeView().id && gizmo_->isPieMenuOpen();
     }
 
     PythonOverlayPanel::PythonOverlayPanel(GuiManager* gui)
@@ -311,11 +311,14 @@ namespace lfs::vis::gui::native_panels {
         if (!ctx.ui || !ctx.ui->viewer || !ctx.viewport)
             return;
 
-        const auto& vp = ctx.ui->viewer->getViewport();
+        const auto target = ctx.ui->viewer->findView(ctx.viewport->view);
+        if (!target.valid())
+            return;
+        const auto& vp = *target.viewport;
         const auto view = vp.getViewMatrix();
         auto* rm = ctx.ui->viewer->getRenderingManager();
-        const float focal_mm = rm ? rm->getFocalLengthMm() : lfs::rendering::DEFAULT_FOCAL_LENGTH_MM;
-        const auto proj = vp.getProjectionMatrix(focal_mm);
+        const auto settings = rm->settingsForView(target.id);
+        const auto proj = lfs::rendering::createProjectionMatrixFromFocal(glm::ivec2(target.size), settings.focal_length_mm, settings.orthographic, settings.ortho_scale);
         const float vp_pos[] = {ctx.viewport->pos.x, ctx.viewport->pos.y};
         const float vp_size[] = {ctx.viewport->size.x, ctx.viewport->size.y};
         const float cam_pos[] = {vp.camera.t.x, vp.camera.t.y, vp.camera.t.z};
@@ -324,7 +327,7 @@ namespace lfs::vis::gui::native_panels {
 
         lfs::rendering::ScreenOverlayRenderer* overlay = nullptr;
         if (rm) {
-            overlay = rm->getScreenOverlayRenderer();
+            overlay = &rm->viewState(target.id).screen_overlay_renderer_;
         }
 
         NativeOverlayDrawList draw_list;

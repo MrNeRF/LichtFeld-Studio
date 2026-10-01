@@ -34,33 +34,34 @@ namespace lfs::vis {
             std::array<double, 5> gpu_stage_ms{}; // projection, instances, sort, blend, present
         };
         void setProfilingEnabled(bool);
-        lfs::Result<FrameDiagnostics> frameDiagnostics(VksplatViewportRenderer::OutputSlot) const;
+        lfs::Result<FrameDiagnostics> frameDiagnostics(RenderTargetId) const;
         void setLodSettings(size_t pool_splats, float vram_fraction, uint32_t fade_frames);
         static bool supportsSelection(const core::SplatData&, const VksplatViewportRenderer::SelectionMaskRequest&);
         lfs::Result<core::Tensor> buildSelectionMask(VulkanContext&, const core::SplatData&, const VksplatViewportRenderer::SelectionMaskRequest&);
         static bool supportsPoints(const PointCloudVulkanRenderer::RenderRequest&);
         lfs::Result<PointCloudVulkanRenderer::RenderResult> renderPoints(
-            VulkanContext&, const PointCloudVulkanRenderer::RenderRequest&, PointCloudVulkanRenderer::OutputSlot);
+            VulkanContext&, const PointCloudVulkanRenderer::RenderRequest&, RenderTargetId);
         lfs::Result<VksplatViewportRenderer::RenderResult> render(
             VulkanContext&, const core::SplatData&, const rendering::ViewportRenderRequest&,
-            VksplatViewportRenderer::OutputSlot, bool expected_depth = false, bool wait_for_pages = false);
-        glm::ivec2 size(VksplatViewportRenderer::OutputSlot) const;
+            RenderTargetId, bool expected_depth = false, bool wait_for_pages = false);
+        glm::ivec2 size(RenderTargetId) const;
         // Explicit validation/readback boundary: waits for the native command and
         // distinguishes a complete image from capacity-overflow fallback output.
-        lfs::Result<bool> outputComplete(VksplatViewportRenderer::OutputSlot) const;
+        lfs::Result<bool> outputComplete(RenderTargetId) const;
         // Deferred diagnostic readback: never waits for the live GPU cut.
-        VksplatViewportRenderer::GpuLodSelectionStatus gpuLodSelectionStatus(VksplatViewportRenderer::OutputSlot) const;
-        lfs::Status readColor(VksplatViewportRenderer::OutputSlot,
+        VksplatViewportRenderer::GpuLodSelectionStatus gpuLodSelectionStatus(RenderTargetId) const;
+        lfs::Status readColor(RenderTargetId,
                               core::Tensor&, int x, int y) const;
         lfs::Result<float> readDepth(const VksplatViewportRenderer::DepthSampleRequest&) const;
         // Ticket storage retains GPU staging, never a host destination after abandon.
         static bool nativeTicket(uint64_t ticket) { return (ticket >> 63) != 0; }
-        lfs::Result<uint64_t> submitReadback(VksplatViewportRenderer::OutputSlot,
+        lfs::Result<uint64_t> submitReadback(RenderTargetId,
                                              core::Tensor&, int x, int y, bool depth) const;
         lfs::Result<VksplatViewportRenderer::ReadbackTicketStatus> pollReadback(uint64_t, bool wait) const;
         void abandonReadback(uint64_t) const;
         size_t outstandingReadbacks() const;
-        lfs::Status release(VksplatViewportRenderer::OutputSlot);
+        lfs::Status release(RenderTargetId);
+        lfs::Status releaseAll();
 
     private:
         struct Impl;

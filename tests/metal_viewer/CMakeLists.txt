@@ -82,7 +82,7 @@ if(TARGET lfs_visualizer)
         set_tests_properties(MacViewerParity_selectionQuery PROPERTIES
             LABELS "metal;gpu;metal4;parity" TIMEOUT 120 SKIP_RETURN_CODE 77)
     endif()
-    lfs_add_metal_contract(metal_viewport_contracts viewport_contracts.mm MetalViewerViewportContracts)
+    lfs_add_metal_contract(metal_viewport_contracts viewport_contracts.mm MetalViewerViewportContracts --native-only)
     target_link_libraries(metal_viewport_contracts PRIVATE lfs_visualizer lfs_core Python::Python)
     target_include_directories(metal_viewport_contracts PRIVATE
         "${CMAKE_SOURCE_DIR}/src/visualizer/rendering"
@@ -92,6 +92,14 @@ if(TARGET lfs_visualizer)
         "${CMAKE_SOURCE_DIR}/src")
     set_target_properties(metal_viewport_contracts PROPERTIES OBJCXX_STANDARD 23)
     set_property(TEST MetalViewerViewportContracts APPEND PROPERTY LABELS metal4)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        # As with selection queries above, keep native validation independent
+        # of MoltenVK's legacy GUT threadgroup-memory requirement. This test
+        # additionally exercises real Auto fallback and explicit Vulkan routes.
+        add_test(NAME MacViewerParity_viewportTargets COMMAND metal_viewport_contracts)
+        set_tests_properties(MacViewerParity_viewportTargets PROPERTIES
+            LABELS "metal;gpu;metal4;parity" TIMEOUT 120 SKIP_RETURN_CODE 77)
+    endif()
     # The comparison uses the real desktop adapters and is never built on iOS,
     # Windows or Linux. CI checks completion/report generation, not speed ratios.
     if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")

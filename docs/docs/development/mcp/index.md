@@ -31,6 +31,7 @@ Read these first in most sessions:
 
 Then narrow further:
 
+- `lichtfeld://ui/screen` for editor areas, the active 3D view, and layout
 - `lichtfeld://ui/tools` for tool ids, active state, and availability
 - `lichtfeld://ui/menus` for menu trees and invokable actions
 - `lichtfeld://ui/panels` for panel ids and registry state
@@ -47,6 +48,7 @@ Then narrow further:
 | `training_*` | Training state, loss, and training control |
 | `runtime_*` | Normalized job and event tracking |
 | `ui_tool_*`, `ui_menu_*`, `ui_panel_*`, `ui_operator_*`, `ui_modal_*` | Drive the registered GUI surface, including confirm dialogs |
+| `screen_*`, `view_*` | Editor areas and 3D views: `screen.get`/`split`/`join`/`close`/`swap`/`set_editor`/`maximize`/`reset`, `view.command`/`get_camera`/`set_camera`/`get_settings`/`set_settings`. Resource: `lichtfeld://ui/screen`. `camera.get`/`set_view`/`reset` take optional `view`. |
 | `operator_*` | Introspect and invoke registered GUI operators, including modal flows |
 | `selection_*` | Screen-space Gaussian selection |
 | `transform_*` | Node transform inspection and edits |

@@ -49,8 +49,8 @@ divider remain aligned at reduced internal resolutions.
 
 ## Temporal path
 
-Temporal reconstruction owns independent history for the main viewport and
-both supported split-view panels. It derives motion from the current and
+Temporal reconstruction owns independent history for each 3D view and its
+comparison panels. It derives motion from the current and
 previous camera projections plus the VkSplat depth image, rejects disoccluded
 history with current and previous depth, and resolves into a full-resolution
 Vulkan image before presentation. Startup and explicit backend transitions may
@@ -68,9 +68,9 @@ SSIM against a high-resolution reference and exercise moving-history
 reprojection to detect blur and ghosting regressions.
 
 The temporal path is available for the regular and training viewports,
-including orthographic projection, Independent Dual split view, and PLY
-comparison. Orthographic frames explicitly declare that no perspective jitter
-was applied while retaining motion and depth history. Ground-truth comparisons
+including orthographic projection and PLY comparison. Orthographic frames
+explicitly declare that no perspective jitter was applied while retaining
+motion and depth history. Ground-truth comparisons
 deliberately preserve their reference image. Equirectangular projection and
 appearance-corrected readback currently remain native because their projection
 or ownership contracts are not equivalent to the Vulkan temporal path. A split

@@ -1065,13 +1065,13 @@ namespace {
                 4 + kLodCompactProtectedCap + 2 * kLodCompactMissCap;
             const VkDeviceSize readback_bytes =
                 (3 + kPayloadWords) * sizeof(std::uint32_t);
-            lod_selection_readback_buffer_ = makeBuffer(0xF001, readback_bytes);
-            lod_selection_readback_mapped_ = reinterpret_cast<std::uint32_t*>(
+            lod_selection_readbacks_[0].buffer = makeBuffer(0xF001, readback_bytes);
+            lod_selection_readbacks_[0].mapped = reinterpret_cast<std::uint32_t*>(
                 static_cast<std::uintptr_t>(0xBEEF0000));
-            lod_selection_readback_initialized_ = true;
-            lod_selection_readback_pending_ = false;
-            lod_selection_readback_chunk_capacity_ = kPayloadWords;
-            lod_selection_readback_capacity_ = 0;
+            lod_selection_readbacks_[0].initialized = true;
+            lod_selection_readbacks_[0].pending = false;
+            lod_selection_readbacks_[0].chunk_capacity = kPayloadWords;
+            lod_selection_readbacks_[0].capacity = 0;
 
             // Visible-count readback (two words) for sort-chain audits.
             visible_count_readback_buffer_ = makeBuffer(0xF002, 2 * sizeof(std::uint32_t));
@@ -1137,9 +1137,9 @@ namespace {
             current_vram = 0;
 
             // Skip vmaDestroy on forged readbacks.
-            lod_selection_readback_initialized_ = false;
-            lod_selection_readback_buffer_ = {};
-            lod_selection_readback_mapped_ = nullptr;
+            lod_selection_readbacks_[0].initialized = false;
+            lod_selection_readbacks_[0].buffer = {};
+            lod_selection_readbacks_[0].mapped = nullptr;
             visible_count_readback_initialized_ = false;
             visible_count_readback_buffer_ = {};
             instance_count_readback_initialized_ = false;
@@ -1163,8 +1163,31 @@ namespace {
             all_compute_pipelines.clear();
         }
 
+        void check_lod_identity_tags() {
+            const auto semaphore = fakeVkHandle<VkSemaphore>(0xAB10);
+            auto& a = lod_selection_readbacks_[0];
+            a.pending = true;
+            a.order = 1;
+            tagDeferredLodSelectionReadback(semaphore, 5, {17, 3, 8});
+            auto& b = lod_selection_readbacks_[1];
+            b.pending = true;
+            b.order = 2;
+            tagDeferredLodSelectionReadback(semaphore, 6, {9001, 4, 9});
+            EXPECT_EQ(a.value, 5u);
+            EXPECT_EQ(a.identity.target, 17u);
+            EXPECT_EQ(a.identity.model_generation, 3u);
+            EXPECT_EQ(a.identity.tree_generation, 8u);
+            EXPECT_EQ(b.value, 6u);
+            EXPECT_EQ(b.identity.target, 9001u);
+            // Counter is still zero: neither tagged copy can be consumed.
+            EXPECT_FALSE(pollDeferredLodSelectionStats());
+            EXPECT_TRUE(a.pending);
+            EXPECT_TRUE(b.pending);
+            b = {};
+        }
+
         [[nodiscard]] _VulkanBuffer& lod_readback() noexcept {
-            return lod_selection_readback_buffer_;
+            return lod_selection_readbacks_[0].buffer;
         }
 
         // Drop GPU timestamp bookkeeping so endCommandBatch does not call
@@ -2823,4 +2846,13 @@ TEST(VkSplatTaggedDispatch, LegacyDepthWavesConditionalReadPerWave) {
 
     renderer.discard_timestamps();
     renderer.endCommandBatch(/*use_fence=*/false);
+}
+
+TEST(VkSplatTaggedDispatch, LodReadbackKeepsInFlightTargetAndGenerationTags) {
+    DispatchScript script;
+    BindScript bind(script);
+    TestableRenderer renderer;
+    renderer.install_fake_handles();
+    renderer.setVulkanDispatch(make_scripted_dispatch());
+    renderer.check_lod_identity_tags();
 }

@@ -78,7 +78,7 @@ namespace lfs::vis::gui {
         }
 
         struct ViewportGizmoPanelTarget {
-            SplitViewPanelId panel = SplitViewPanelId::Left;
+            ViewId id = kNoView;
             Viewport* viewport = nullptr;
             glm::vec2 pos{0.0f};
             glm::vec2 size{0.0f};
@@ -92,8 +92,8 @@ namespace lfs::vis::gui {
         constexpr int CROPBOX_GIZMO_ID_BASE = 200;
         constexpr int ELLIPSOID_GIZMO_ID_BASE = 300;
 
-        [[nodiscard]] int panelGizmoId(const int base, const SplitViewPanelId panel) {
-            return base + (panel == SplitViewPanelId::Right ? 1 : 0);
+        [[nodiscard]] int viewGizmoId(int base, ViewId view) {
+            return base + static_cast<int>(view) * 16;
         }
 
         [[nodiscard]] NativeGizmoInput nativeGizmoInputFromFrame(const lfs::vis::FrameInputBuffer& frame_input) {
@@ -212,50 +212,13 @@ namespace lfs::vis::gui {
                 return panels;
             }
 
-            auto* const rendering_manager = viewer->getRenderingManager();
-            if (!rendering_manager || !rendering_manager->isIndependentSplitViewActive()) {
-                panels.push_back({
-                    .panel = SplitViewPanelId::Left,
-                    .viewport = &viewer->getViewport(),
-                    .pos = viewport_pos,
-                    .size = viewport_size,
-                });
+            const auto target = viewer->viewAt(viewport_pos.x + viewport_size.x * 0.5f, viewport_pos.y + viewport_size.y * 0.5f);
+            if (!target.valid())
                 return panels;
-            }
-
-            if (const auto left_panel = rendering_manager->resolveViewerPanel(
-                    viewer->getViewport(),
-                    viewport_pos, viewport_size, std::nullopt, SplitViewPanelId::Left);
-                left_panel && left_panel->valid()) {
-                panels.push_back(ViewportGizmoPanelTarget{
-                    .panel = SplitViewPanelId::Left,
-                    .viewport = left_panel->viewport,
-                    .pos = {left_panel->x, left_panel->y},
-                    .size = {left_panel->width, left_panel->height},
-                });
-            }
-
-            if (const auto right_panel = rendering_manager->resolveViewerPanel(
-                    viewer->getViewport(),
-                    viewport_pos, viewport_size, std::nullopt, SplitViewPanelId::Right);
-                right_panel && right_panel->valid()) {
-                panels.push_back(ViewportGizmoPanelTarget{
-                    .panel = SplitViewPanelId::Right,
-                    .viewport = right_panel->viewport,
-                    .pos = {right_panel->x, right_panel->y},
-                    .size = {right_panel->width, right_panel->height},
-                });
-            }
-
-            if (panels.empty()) {
-                panels.push_back({
-                    .panel = SplitViewPanelId::Left,
-                    .viewport = &viewer->getViewport(),
-                    .pos = viewport_pos,
-                    .size = viewport_size,
-                });
-            }
-
+            panels.push_back({.id = target.id,
+                              .viewport = target.viewport,
+                              .pos = viewport_pos,
+                              .size = viewport_size});
             return panels;
         }
 
@@ -268,18 +231,6 @@ namespace lfs::vis::gui {
                 {viewport.size.x, viewport.size.y});
             if (panels.empty()) {
                 return std::nullopt;
-            }
-
-            auto* const rendering_manager = viewer ? viewer->getRenderingManager() : nullptr;
-            if (!rendering_manager || !rendering_manager->isIndependentSplitViewActive()) {
-                return panels.front();
-            }
-
-            const auto focused_panel = rendering_manager->getFocusedSplitPanel();
-            for (const auto& panel : panels) {
-                if (panel.panel == focused_panel && panel.valid()) {
-                    return panel;
-                }
             }
 
             return panels.front();
@@ -1038,7 +989,7 @@ namespace lfs::vis::gui {
             // not mutate the live workspace.
             if (tool != ToolType::None) {
                 if (auto* gui = viewer_->getGuiManager()) {
-                    gui->panelLayout().setShowSequencer(false);
+                    gui->setSequencerVisible(false);
                 }
             }
         });
@@ -1194,6 +1145,16 @@ namespace lfs::vis::gui {
     }
 
     void GizmoManager::updateToolState(const UIContext& ctx, bool ui_hidden) {
+        if (viewport_gizmo_dragging_ &&
+            (viewer_->screens().screenEpoch() != viewport_gizmo_epoch_ ||
+             !viewer_->findView(viewport_gizmo_view_).viewport)) {
+            viewport_gizmo_dragging_ = false;
+            viewport_gizmo_view_ = kNoView;
+            if (SDL_Window* const window = viewer_->getWindow()) {
+                SDL_SetWindowRelativeMouseMode(window, false);
+                SDL_WarpMouseInWindow(window, gizmo_drag_start_cursor_.x, gizmo_drag_start_cursor_.y);
+            }
+        }
         auto* const scene_manager = ctx.viewer->getSceneManager();
         auto* const align_tool = ctx.viewer->getAlignTool();
         auto* const selection_tool = ctx.viewer->getSelectionTool();
@@ -1333,7 +1294,7 @@ namespace lfs::vis::gui {
         if (!render_manager)
             return;
 
-        const auto& settings = render_manager->getSettings();
+        const auto settings = render_manager->settingsForView(viewport.view);
         const bool is_multi_selection = (target_names.size() > 1);
         const bool use_selection_mode = !is_multi_selection || multi_transform_mode_ == MultiTransformMode::Selection;
         const bool use_individual_mode = is_multi_selection && multi_transform_mode_ == MultiTransformMode::Individual;
@@ -1538,7 +1499,14 @@ namespace lfs::vis::gui {
         const glm::vec2 clip_max(clip_min.x + active_panel->size.x, clip_min.y + active_panel->size.y);
         overlay_drawlist.PushClipRect(clip_min, clip_max, true);
         const auto& frame_input = viewer_->getWindowManager()->frameInput();
-        const NativeGizmoInput gizmo_input = nativeGizmoInputFromFrame(frame_input);
+        const bool interactive_view = transform_gizmo_view_ != kNoView
+                                          ? viewport.view == transform_gizmo_view_
+                                          : viewport.view == viewer_->activeView().id;
+        NativeGizmoInput gizmo_input = nativeGizmoInputFromFrame(frame_input);
+        if (!interactive_view) {
+            gizmo_input.mouse_left_clicked = false;
+            gizmo_input.mouse_left_down = false;
+        }
         const bool snap_modifier = nativeControlModifierDown(frame_input);
 
         const bool gizmo_uses_local_axes = actually_using_bounds || !use_world_space;
@@ -1561,7 +1529,7 @@ namespace lfs::vis::gui {
             const glm::vec3 safe_world_scale = glm::max(node_bounds_scale_active_ ? node_bounds_world_scale_ : world_scale,
                                                         glm::vec3(1e-6f));
             BoundsGizmoConfig bounds_config;
-            bounds_config.id = panelGizmoId(NODE_GIZMO_ID_BASE, active_panel->panel);
+            bounds_config.id = viewGizmoId(NODE_GIZMO_ID_BASE, viewport.view);
             bounds_config.viewport_pos = active_panel->pos;
             bounds_config.viewport_size = active_panel->size;
             bounds_config.view = view;
@@ -1600,7 +1568,8 @@ namespace lfs::vis::gui {
             }
         } else if (use_translation_gizmo) {
             TranslationGizmoConfig translation_config;
-            translation_config.id = panelGizmoId(NODE_GIZMO_ID_BASE, active_panel->panel);
+            translation_config.id =
+                viewGizmoId(NODE_GIZMO_ID_BASE, viewport.view);
             translation_config.viewport_pos = active_panel->pos;
             translation_config.viewport_size = active_panel->size;
             translation_config.view = view;
@@ -1626,7 +1595,7 @@ namespace lfs::vis::gui {
             }
         } else if (use_rotation_gizmo) {
             RotationGizmoConfig rotation_config;
-            rotation_config.id = panelGizmoId(NODE_GIZMO_ID_BASE, active_panel->panel);
+            rotation_config.id = viewGizmoId(NODE_GIZMO_ID_BASE, viewport.view);
             rotation_config.viewport_pos = active_panel->pos;
             rotation_config.viewport_size = active_panel->size;
             rotation_config.view = view;
@@ -1650,7 +1619,7 @@ namespace lfs::vis::gui {
 
         if (use_scale_gizmo) {
             ScaleGizmoConfig scale_config;
-            scale_config.id = panelGizmoId(NODE_GIZMO_ID_BASE, active_panel->panel);
+            scale_config.id = viewGizmoId(NODE_GIZMO_ID_BASE, viewport.view);
             scale_config.viewport_pos = active_panel->pos;
             scale_config.viewport_size = active_panel->size;
             scale_config.view = view;
@@ -1679,6 +1648,17 @@ namespace lfs::vis::gui {
             if (scale_result.hovered || scale_result.active) {
                 guiFocusState().want_capture_mouse = true;
             }
+        }
+
+        if (interactive_view) {
+            if (is_using)
+                transform_gizmo_view_ = viewport.view;
+            else if (!frame_input.mouse_down[0] && transform_gizmo_view_ == viewport.view)
+                transform_gizmo_view_ = kNoView;
+        }
+        if (!interactive_view) {
+            overlay_drawlist.PopClipRect();
+            return;
         }
 
         if (is_using && !node_gizmo_active_) {
@@ -1956,7 +1936,7 @@ namespace lfs::vis::gui {
         if (!active_panel || !active_panel->valid())
             return;
 
-        const auto& settings = render_manager->getSettings();
+        const auto settings = render_manager->settingsForView(viewport.view);
         auto& vp = *active_panel->viewport;
         const glm::mat4 view = vp.getViewMatrix();
         const glm::ivec2 vp_size(static_cast<int>(active_panel->size.x), static_cast<int>(active_panel->size.y));
@@ -1988,7 +1968,14 @@ namespace lfs::vis::gui {
         const glm::vec2 clip_max(clip_min.x + active_panel->size.x, clip_min.y + active_panel->size.y);
         overlay_drawlist.PushClipRect(clip_min, clip_max, true);
         const auto& frame_input = viewer_->getWindowManager()->frameInput();
-        const NativeGizmoInput gizmo_input = nativeGizmoInputFromFrame(frame_input);
+        const bool interactive_view = transform_gizmo_view_ != kNoView
+                                          ? viewport.view == transform_gizmo_view_
+                                          : viewport.view == viewer_->activeView().id;
+        NativeGizmoInput gizmo_input = nativeGizmoInputFromFrame(frame_input);
+        if (!interactive_view) {
+            gizmo_input.mouse_left_clicked = false;
+            gizmo_input.mouse_left_down = false;
+        }
         const bool snap_modifier = nativeControlModifierDown(frame_input);
 
         bool changed = false;
@@ -1998,7 +1985,7 @@ namespace lfs::vis::gui {
 
         if (use_bounds) {
             BoundsGizmoConfig bounds_config;
-            bounds_config.id = panelGizmoId(CROPBOX_GIZMO_ID_BASE, active_panel->panel);
+            bounds_config.id = viewGizmoId(CROPBOX_GIZMO_ID_BASE, viewport.view);
             bounds_config.viewport_pos = active_panel->pos;
             bounds_config.viewport_size = active_panel->size;
             bounds_config.view = view;
@@ -2027,7 +2014,8 @@ namespace lfs::vis::gui {
                 guiFocusState().want_capture_mouse = true;
         } else if (gizmo_op == GizmoOperation::Translate) {
             TranslationGizmoConfig translation_config;
-            translation_config.id = panelGizmoId(CROPBOX_GIZMO_ID_BASE, active_panel->panel);
+            translation_config.id =
+                viewGizmoId(CROPBOX_GIZMO_ID_BASE, viewport.view);
             translation_config.viewport_pos = active_panel->pos;
             translation_config.viewport_size = active_panel->size;
             translation_config.view = view;
@@ -2048,7 +2036,8 @@ namespace lfs::vis::gui {
                 guiFocusState().want_capture_mouse = true;
         } else if (gizmo_op == GizmoOperation::Rotate) {
             RotationGizmoConfig rotation_config;
-            rotation_config.id = panelGizmoId(CROPBOX_GIZMO_ID_BASE, active_panel->panel);
+            rotation_config.id =
+                viewGizmoId(CROPBOX_GIZMO_ID_BASE, viewport.view);
             rotation_config.viewport_pos = active_panel->pos;
             rotation_config.viewport_size = active_panel->size;
             rotation_config.view = view;
@@ -2076,7 +2065,7 @@ namespace lfs::vis::gui {
 
         if (use_bounds) {
             ScaleGizmoConfig scale_config;
-            scale_config.id = panelGizmoId(CROPBOX_GIZMO_ID_BASE, active_panel->panel);
+            scale_config.id = viewGizmoId(CROPBOX_GIZMO_ID_BASE, viewport.view);
             scale_config.viewport_pos = active_panel->pos;
             scale_config.viewport_size = active_panel->size;
             scale_config.view = view;
@@ -2098,6 +2087,17 @@ namespace lfs::vis::gui {
             }
             if (scale_result.hovered || scale_result.active)
                 guiFocusState().want_capture_mouse = true;
+        }
+
+        if (interactive_view) {
+            if (is_using)
+                transform_gizmo_view_ = viewport.view;
+            else if (!frame_input.mouse_down[0] && transform_gizmo_view_ == viewport.view)
+                transform_gizmo_view_ = kNoView;
+        }
+        if (!interactive_view) {
+            overlay_drawlist.PopClipRect();
+            return;
         }
 
         if (isSelectionVolumeMode() && is_using && !selection_volume_gizmo_active_)
@@ -2160,7 +2160,7 @@ namespace lfs::vis::gui {
         if (!render_manager || !scene_manager)
             return;
 
-        const auto& settings = render_manager->getSettings();
+        const auto settings = render_manager->settingsForView(viewport.view);
 
         core::NodeId cropbox_id = core::NULL_NODE;
         const core::SceneNode* cropbox_node = nullptr;
@@ -2233,7 +2233,14 @@ namespace lfs::vis::gui {
         const glm::vec2 clip_max(clip_min.x + active_panel->size.x, clip_min.y + active_panel->size.y);
         overlay_drawlist.PushClipRect(clip_min, clip_max, true);
         const auto& frame_input = viewer_->getWindowManager()->frameInput();
-        const NativeGizmoInput gizmo_input = nativeGizmoInputFromFrame(frame_input);
+        const bool interactive_view = transform_gizmo_view_ != kNoView
+                                          ? viewport.view == transform_gizmo_view_
+                                          : viewport.view == viewer_->activeView().id;
+        NativeGizmoInput gizmo_input = nativeGizmoInputFromFrame(frame_input);
+        if (!interactive_view) {
+            gizmo_input.mouse_left_clicked = false;
+            gizmo_input.mouse_left_down = false;
+        }
         const bool snap_modifier = nativeControlModifierDown(frame_input);
 
         bool gizmo_changed = false;
@@ -2248,7 +2255,7 @@ namespace lfs::vis::gui {
         if (use_bounds) {
             const glm::vec3 safe_world_scale = glm::max(world_scale, glm::vec3(1e-6f));
             BoundsGizmoConfig bounds_config;
-            bounds_config.id = panelGizmoId(CROPBOX_GIZMO_ID_BASE, active_panel->panel);
+            bounds_config.id = viewGizmoId(CROPBOX_GIZMO_ID_BASE, viewport.view);
             bounds_config.viewport_pos = active_panel->pos;
             bounds_config.viewport_size = active_panel->size;
             bounds_config.view = view;
@@ -2286,7 +2293,8 @@ namespace lfs::vis::gui {
             }
         } else if (gizmo_op == GizmoOperation::Translate) {
             TranslationGizmoConfig translation_config;
-            translation_config.id = panelGizmoId(CROPBOX_GIZMO_ID_BASE, active_panel->panel);
+            translation_config.id =
+                viewGizmoId(CROPBOX_GIZMO_ID_BASE, viewport.view);
             translation_config.viewport_pos = active_panel->pos;
             translation_config.viewport_size = active_panel->size;
             translation_config.view = view;
@@ -2312,7 +2320,8 @@ namespace lfs::vis::gui {
             }
         } else if (gizmo_op == GizmoOperation::Rotate) {
             RotationGizmoConfig rotation_config;
-            rotation_config.id = panelGizmoId(CROPBOX_GIZMO_ID_BASE, active_panel->panel);
+            rotation_config.id =
+                viewGizmoId(CROPBOX_GIZMO_ID_BASE, viewport.view);
             rotation_config.viewport_pos = active_panel->pos;
             rotation_config.viewport_size = active_panel->size;
             rotation_config.view = view;
@@ -2336,7 +2345,7 @@ namespace lfs::vis::gui {
 
         if (use_bounds) {
             ScaleGizmoConfig scale_config;
-            scale_config.id = panelGizmoId(CROPBOX_GIZMO_ID_BASE, active_panel->panel);
+            scale_config.id = viewGizmoId(CROPBOX_GIZMO_ID_BASE, viewport.view);
             scale_config.viewport_pos = active_panel->pos;
             scale_config.viewport_size = active_panel->size;
             scale_config.view = view;
@@ -2361,6 +2370,17 @@ namespace lfs::vis::gui {
             if (scale_result.hovered || scale_result.active) {
                 guiFocusState().want_capture_mouse = true;
             }
+        }
+
+        if (interactive_view) {
+            if (is_using)
+                transform_gizmo_view_ = viewport.view;
+            else if (!frame_input.mouse_down[0] && transform_gizmo_view_ == viewport.view)
+                transform_gizmo_view_ = kNoView;
+        }
+        if (!interactive_view) {
+            overlay_drawlist.PopClipRect();
+            return;
         }
 
         if (is_using && !cropbox_gizmo_active_) {
@@ -2455,7 +2475,7 @@ namespace lfs::vis::gui {
         if (!active_panel || !active_panel->valid())
             return;
 
-        const auto& settings = render_manager->getSettings();
+        const auto settings = render_manager->settingsForView(viewport.view);
         auto& vp = *active_panel->viewport;
         const glm::mat4 view = vp.getViewMatrix();
         const glm::ivec2 vp_size(static_cast<int>(active_panel->size.x), static_cast<int>(active_panel->size.y));
@@ -2484,7 +2504,14 @@ namespace lfs::vis::gui {
         const glm::vec2 clip_max(clip_min.x + active_panel->size.x, clip_min.y + active_panel->size.y);
         overlay_drawlist.PushClipRect(clip_min, clip_max, true);
         const auto& frame_input = viewer_->getWindowManager()->frameInput();
-        const NativeGizmoInput gizmo_input = nativeGizmoInputFromFrame(frame_input);
+        const bool interactive_view = transform_gizmo_view_ != kNoView
+                                          ? viewport.view == transform_gizmo_view_
+                                          : viewport.view == viewer_->activeView().id;
+        NativeGizmoInput gizmo_input = nativeGizmoInputFromFrame(frame_input);
+        if (!interactive_view) {
+            gizmo_input.mouse_left_clicked = false;
+            gizmo_input.mouse_left_down = false;
+        }
         const bool snap_modifier = nativeControlModifierDown(frame_input);
 
         bool changed = false;
@@ -2494,7 +2521,8 @@ namespace lfs::vis::gui {
 
         if (use_bounds) {
             BoundsGizmoConfig bounds_config;
-            bounds_config.id = panelGizmoId(ELLIPSOID_GIZMO_ID_BASE, active_panel->panel);
+            bounds_config.id =
+                viewGizmoId(ELLIPSOID_GIZMO_ID_BASE, viewport.view);
             bounds_config.viewport_pos = active_panel->pos;
             bounds_config.viewport_size = active_panel->size;
             bounds_config.view = view;
@@ -2521,7 +2549,8 @@ namespace lfs::vis::gui {
                 guiFocusState().want_capture_mouse = true;
         } else if (gizmo_op == GizmoOperation::Translate) {
             TranslationGizmoConfig translation_config;
-            translation_config.id = panelGizmoId(ELLIPSOID_GIZMO_ID_BASE, active_panel->panel);
+            translation_config.id =
+                viewGizmoId(ELLIPSOID_GIZMO_ID_BASE, viewport.view);
             translation_config.viewport_pos = active_panel->pos;
             translation_config.viewport_size = active_panel->size;
             translation_config.view = view;
@@ -2542,7 +2571,8 @@ namespace lfs::vis::gui {
                 guiFocusState().want_capture_mouse = true;
         } else if (gizmo_op == GizmoOperation::Rotate) {
             RotationGizmoConfig rotation_config;
-            rotation_config.id = panelGizmoId(ELLIPSOID_GIZMO_ID_BASE, active_panel->panel);
+            rotation_config.id =
+                viewGizmoId(ELLIPSOID_GIZMO_ID_BASE, viewport.view);
             rotation_config.viewport_pos = active_panel->pos;
             rotation_config.viewport_size = active_panel->size;
             rotation_config.view = view;
@@ -2570,7 +2600,8 @@ namespace lfs::vis::gui {
 
         if (use_bounds) {
             ScaleGizmoConfig scale_config;
-            scale_config.id = panelGizmoId(ELLIPSOID_GIZMO_ID_BASE, active_panel->panel);
+            scale_config.id =
+                viewGizmoId(ELLIPSOID_GIZMO_ID_BASE, viewport.view);
             scale_config.viewport_pos = active_panel->pos;
             scale_config.viewport_size = active_panel->size;
             scale_config.view = view;
@@ -2590,6 +2621,17 @@ namespace lfs::vis::gui {
                 crop_tool_ellipsoid_radii_ *= scale_result.delta_scale;
             if (scale_result.hovered || scale_result.active)
                 guiFocusState().want_capture_mouse = true;
+        }
+
+        if (interactive_view) {
+            if (is_using)
+                transform_gizmo_view_ = viewport.view;
+            else if (!frame_input.mouse_down[0] && transform_gizmo_view_ == viewport.view)
+                transform_gizmo_view_ = kNoView;
+        }
+        if (!interactive_view) {
+            overlay_drawlist.PopClipRect();
+            return;
         }
 
         if (isSelectionVolumeMode() && is_using && !selection_volume_gizmo_active_)
@@ -2652,7 +2694,7 @@ namespace lfs::vis::gui {
         if (!render_manager || !scene_manager)
             return;
 
-        const auto& settings = render_manager->getSettings();
+        const auto settings = render_manager->settingsForView(viewport.view);
 
         core::NodeId ellipsoid_id = core::NULL_NODE;
         const core::SceneNode* ellipsoid_node = nullptr;
@@ -2722,7 +2764,14 @@ namespace lfs::vis::gui {
         const glm::vec2 clip_max(clip_min.x + active_panel->size.x, clip_min.y + active_panel->size.y);
         overlay_drawlist.PushClipRect(clip_min, clip_max, true);
         const auto& frame_input = viewer_->getWindowManager()->frameInput();
-        const NativeGizmoInput gizmo_input = nativeGizmoInputFromFrame(frame_input);
+        const bool interactive_view = transform_gizmo_view_ != kNoView
+                                          ? viewport.view == transform_gizmo_view_
+                                          : viewport.view == viewer_->activeView().id;
+        NativeGizmoInput gizmo_input = nativeGizmoInputFromFrame(frame_input);
+        if (!interactive_view) {
+            gizmo_input.mouse_left_clicked = false;
+            gizmo_input.mouse_left_down = false;
+        }
         const bool snap_modifier = nativeControlModifierDown(frame_input);
 
         bool gizmo_changed = false;
@@ -2737,7 +2786,8 @@ namespace lfs::vis::gui {
         if (use_bounds) {
             const glm::vec3 safe_world_scale = glm::max(world_scale, glm::vec3(1e-6f));
             BoundsGizmoConfig bounds_config;
-            bounds_config.id = panelGizmoId(ELLIPSOID_GIZMO_ID_BASE, active_panel->panel);
+            bounds_config.id =
+                viewGizmoId(ELLIPSOID_GIZMO_ID_BASE, viewport.view);
             bounds_config.viewport_pos = active_panel->pos;
             bounds_config.viewport_size = active_panel->size;
             bounds_config.view = view;
@@ -2773,7 +2823,8 @@ namespace lfs::vis::gui {
             }
         } else if (gizmo_op == GizmoOperation::Translate) {
             TranslationGizmoConfig translation_config;
-            translation_config.id = panelGizmoId(ELLIPSOID_GIZMO_ID_BASE, active_panel->panel);
+            translation_config.id =
+                viewGizmoId(ELLIPSOID_GIZMO_ID_BASE, viewport.view);
             translation_config.viewport_pos = active_panel->pos;
             translation_config.viewport_size = active_panel->size;
             translation_config.view = view;
@@ -2799,7 +2850,8 @@ namespace lfs::vis::gui {
             }
         } else if (gizmo_op == GizmoOperation::Rotate) {
             RotationGizmoConfig rotation_config;
-            rotation_config.id = panelGizmoId(ELLIPSOID_GIZMO_ID_BASE, active_panel->panel);
+            rotation_config.id =
+                viewGizmoId(ELLIPSOID_GIZMO_ID_BASE, viewport.view);
             rotation_config.viewport_pos = active_panel->pos;
             rotation_config.viewport_size = active_panel->size;
             rotation_config.view = view;
@@ -2823,7 +2875,8 @@ namespace lfs::vis::gui {
 
         if (use_bounds) {
             ScaleGizmoConfig scale_config;
-            scale_config.id = panelGizmoId(ELLIPSOID_GIZMO_ID_BASE, active_panel->panel);
+            scale_config.id =
+                viewGizmoId(ELLIPSOID_GIZMO_ID_BASE, viewport.view);
             scale_config.viewport_pos = active_panel->pos;
             scale_config.viewport_size = active_panel->size;
             scale_config.view = view;
@@ -2848,6 +2901,17 @@ namespace lfs::vis::gui {
             if (scale_result.hovered || scale_result.active) {
                 guiFocusState().want_capture_mouse = true;
             }
+        }
+
+        if (interactive_view) {
+            if (is_using)
+                transform_gizmo_view_ = viewport.view;
+            else if (!frame_input.mouse_down[0] && transform_gizmo_view_ == viewport.view)
+                transform_gizmo_view_ = kNoView;
+        }
+        if (!interactive_view) {
+            overlay_drawlist.PopClipRect();
+            return;
         }
 
         if (is_using && !ellipsoid_gizmo_active_) {
@@ -2949,9 +3013,9 @@ namespace lfs::vis::gui {
             return;
         }
 
-        const auto find_panel = [&](const SplitViewPanelId panel_id) -> ViewportGizmoPanelTarget* {
+        const auto find_panel = [&](const ViewId view_id) -> ViewportGizmoPanelTarget* {
             for (auto& panel : panels) {
-                if (panel.panel == panel_id) {
+                if (panel.id == view_id) {
                     return &panel;
                 }
             }
@@ -2965,6 +3029,39 @@ namespace lfs::vis::gui {
         const float gizmo_size = VIEWPORT_GIZMO_SIZE * ui_scale;
         const float gizmo_margin_x = VIEWPORT_GIZMO_MARGIN_X * ui_scale;
         const float gizmo_margin_y = VIEWPORT_GIZMO_MARGIN_Y * ui_scale;
+
+        NativeOverlayDrawList buttons;
+        buttons.PushClipRect(viewport.pos, viewport.pos + viewport.size);
+        const float button_size = 24.0f * ui_scale;
+        for (int index = 0; index < 2; ++index) {
+            const glm::vec2 pos{viewport.pos.x + viewport.size.x - gizmo_margin_x -
+                                    (2 - index) * (button_size + 4.0f * ui_scale),
+                                viewport.pos.y + gizmo_margin_y + gizmo_size + 4.0f * ui_scale};
+            const bool hovered = mouse_x >= pos.x && mouse_x < pos.x + button_size &&
+                                 mouse_y >= pos.y && mouse_y < pos.y + button_size;
+            buttons.AddRectFilled(pos, pos + glm::vec2(button_size),
+                                  hovered ? overlayColor(75, 80, 90, 220) : overlayColor(35, 38, 44, 180));
+            const auto point = [&](float x, float y) { return pos + glm::vec2(x, y) * button_size; };
+            const auto color = overlayColor(220, 224, 232, 255);
+            if (index == 0) {
+                buttons.AddLine(point(.2f, .48f), point(.5f, .2f), color, 1.5f);
+                buttons.AddLine(point(.5f, .2f), point(.8f, .48f), color, 1.5f);
+                buttons.AddLine(point(.3f, .42f), point(.3f, .78f), color, 1.5f);
+                buttons.AddLine(point(.3f, .78f), point(.7f, .78f), color, 1.5f);
+                buttons.AddLine(point(.7f, .78f), point(.7f, .42f), color, 1.5f);
+            } else {
+                buttons.AddCircle(point(.5f, .5f), button_size * .22f, color, 16, 1.5f);
+                buttons.AddLine(point(.5f, .12f), point(.5f, .34f), color, 1.5f);
+                buttons.AddLine(point(.5f, .66f), point(.5f, .88f), color, 1.5f);
+                buttons.AddLine(point(.12f, .5f), point(.34f, .5f), color, 1.5f);
+                buttons.AddLine(point(.66f, .5f), point(.88f, .5f), color, 1.5f);
+            }
+            if (hovered && frame_input.mouse_clicked[0] && !guiFocusState().want_capture_mouse)
+                viewer_->runViewCommand(viewport.view, index == 0 ? "home" : "frame_selected");
+        }
+        buttons.PopClipRect();
+        if (viewport_gizmo_dragging_ ? viewport.view != viewport_gizmo_view_ : viewport.view != viewer_->activeView().id)
+            return;
 
         const bool ui_wants_mouse = guiFocusState().want_capture_mouse;
         int hovered_axis = -1;
@@ -2994,22 +3091,17 @@ namespace lfs::vis::gui {
             const float time = static_cast<float>(SDL_GetTicks()) / 1000.0f;
 
             if (frame_input.mouse_clicked[0] && hovered_panel) {
-                if (auto* const input_controller = viewer_->getInputController()) {
-                    input_controller->setFocusedSplitPanel(hovered_panel->panel);
-                } else {
-                    rendering_manager->setFocusedSplitPanel(hovered_panel->panel);
-                }
-
                 auto& active_viewport = *hovered_panel->viewport;
                 if (hovered_axis >= 0 && hovered_axis <= 5) {
                     const int axis = hovered_axis % 3;
                     const bool negative = hovered_axis >= 3;
                     active_viewport.camera.setAxisAlignedView(axis, negative);
-                    rendering_manager->setGridPlaneForPanel(hovered_panel->panel, axis);
-                    rendering_manager->markCameraPoseChanged();
+                    rendering_manager->editViewSettings(viewport.view, [&](ViewSettings& settings) { settings.grid_plane = axis; });
+                    rendering_manager->markCameraPoseChanged(viewport.view);
                 } else {
                     viewport_gizmo_dragging_ = true;
-                    viewport_gizmo_active_panel_ = hovered_panel->panel;
+                    viewport_gizmo_epoch_ = viewer_->screens().screenEpoch();
+                    viewport_gizmo_view_ = hovered_panel->id;
                     active_viewport.camera.startRotateAroundCenter(capture_mouse_pos, time);
                     if (SDL_Window* const window = viewer_->getWindow()) {
                         float fx, fy;
@@ -3021,7 +3113,7 @@ namespace lfs::vis::gui {
             }
 
             if (viewport_gizmo_dragging_) {
-                if (auto* const active_panel = find_panel(viewport_gizmo_active_panel_);
+                if (auto* const active_panel = find_panel(viewport_gizmo_view_);
                     active_panel && frame_input.mouse_down[0]) {
                     if (const auto* const input_controller = viewer_->getInputController();
                         input_controller &&
@@ -3031,9 +3123,9 @@ namespace lfs::vis::gui {
                     } else {
                         active_panel->viewport->camera.updateRotateAroundCenter(capture_mouse_pos, time);
                     }
-                    rendering_manager->markCameraPoseChanged();
+                    rendering_manager->markCameraPoseChanged(viewport.view);
                 } else {
-                    if (auto* const released_panel = find_panel(viewport_gizmo_active_panel_)) {
+                    if (auto* const released_panel = find_panel(viewport_gizmo_view_)) {
                         released_panel->viewport->camera.endRotateAroundCenter();
                         if (const auto* const input_controller = viewer_->getInputController();
                             input_controller && input_controller->cameraViewSnapEnabled()) {
@@ -3041,11 +3133,11 @@ namespace lfs::vis::gui {
                             int snapped_axis = -1;
                             if (released_panel->viewport->camera.snapToNearestAxisView(
                                     kAxisSnapAngleDegrees, &snapped_axis, nullptr)) {
-                                rendering_manager->setGridPlaneForPanel(released_panel->panel, snapped_axis);
-                                rendering_manager->markCameraCut();
+                                rendering_manager->editViewSettings(viewport.view, [&](ViewSettings& settings) { settings.grid_plane = snapped_axis; });
+                                rendering_manager->markCameraCut(viewport.view);
                             }
                         }
-                        rendering_manager->markCameraPoseChanged();
+                        rendering_manager->markCameraPoseChanged(viewport.view);
                     }
                     viewport_gizmo_dragging_ = false;
 
@@ -3107,6 +3199,7 @@ namespace lfs::vis::gui {
     }
 
     void GizmoManager::deactivateAllTools() {
+        transform_gizmo_view_ = kNoView;
         python::cancel_active_operator();
         if (auto* const t = viewer_->getAlignTool())
             t->setEnabled(false);
@@ -3199,8 +3292,11 @@ namespace lfs::vis::gui {
         if (!show_viewport_gizmo_)
             return false;
 
-        const auto vp_pos = viewer_->getGuiManager()->getViewportPos();
-        const auto vp_size = viewer_->getGuiManager()->getViewportSize();
+        const auto target = viewer_->viewAt(static_cast<float>(x), static_cast<float>(y));
+        if (!target.valid())
+            return false;
+        const auto vp_pos = target.pos;
+        const auto vp_size = target.size;
         const auto panels = collectViewportGizmoPanels(viewer_, vp_pos, vp_size);
         const float ui_scale = viewportGizmoUiScale();
         const float gizmo_size = VIEWPORT_GIZMO_SIZE * ui_scale;
@@ -3210,7 +3306,7 @@ namespace lfs::vis::gui {
             const float gizmo_x = panel.pos.x + panel.size.x - gizmo_size - gizmo_margin_x;
             const float gizmo_y = panel.pos.y + gizmo_margin_y;
             if (x >= gizmo_x && x <= gizmo_x + gizmo_size &&
-                y >= gizmo_y && y <= gizmo_y + gizmo_size) {
+                y >= gizmo_y && y <= gizmo_y + gizmo_size + 28.0f * ui_scale) {
                 return true;
             }
         }

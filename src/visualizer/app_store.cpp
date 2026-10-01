@@ -73,13 +73,15 @@ namespace lfs::vis {
         signal.set(signal.get() + 1);
     }
 
-    void publish_depth_window_draw_commit(const SplitViewPanelId panel) {
+    void publish_depth_window_draw_commit(ViewId view, float scale_x, float scale_y) {
         auto& generation = app_store().depth_window_draw_generation;
         const auto next_generation = generation.get() + 1;
         generation.set(next_generation);
         app_store().depth_window_draw_commit.set(AppStore::DepthWindowDrawCommit{
             .generation = next_generation,
-            .panel = panel,
+            .view = view,
+            .scale_x = scale_x,
+            .scale_y = scale_y,
         });
     }
 

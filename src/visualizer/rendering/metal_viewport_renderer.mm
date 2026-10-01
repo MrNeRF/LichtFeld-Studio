@@ -21,12 +21,14 @@
 #include <mutex>
 #include <new>
 #include <stdexcept>
+#include <unordered_map>
+#include <unordered_set>
 #include <vulkan/vulkan_metal.h>
 
 namespace lfs::vis {
     namespace {
         using namespace rendering::metal;
-        using Slot = VksplatViewportRenderer::OutputSlot;
+        using Slot = RenderTargetId;
         bool nativeStorage(const core::Tensor& tensor) {
             const auto backend = core::gpu_backend_of(tensor);
             return backend == core::GpuBackend::Metal || backend == core::GpuBackend::Vulkan;
@@ -161,7 +163,9 @@ namespace lfs::vis {
         std::map<const core::SplatLodTree*, NativeLodTree> lod_trees;
         std::unique_ptr<LodSelector> lod_selector;
         std::unique_ptr<SelectionQuery> selection_query;
-        std::array<std::unique_ptr<MetalRadPager>, 4> rad_pagers;
+        // Selection requests carry their own camera, not a render-target ID.
+        // A dedicated pager avoids borrowing another view's RAD/model workspace.
+        std::unique_ptr<MetalRadPager> selection_pager;
         MetalRadPager::Settings rad_settings;
         core::MetalTensorReader reader;
         SplatPreprocessor preprocessor{reader.device()};
@@ -173,10 +177,68 @@ namespace lfs::vis {
         id<MTLSharedEvent> event;
         VkSemaphore completion = VK_NULL_HANDLE;
         uint64_t serial = 0;
-        std::array<std::array<std::unique_ptr<Frame>, 3>, 4> frames;
-        std::array<Frame*, 4> latest{};
-        std::array<size_t, 4> next{};
-        std::array<uint32_t, 4> needed_capacity{};
+        struct TargetState {
+            std::array<std::unique_ptr<Frame>, 3> frames;
+            Frame* latest = nullptr;
+            size_t next = 0;
+            uint32_t needed_capacity = 0;
+            std::unique_ptr<MetalRadPager> pager;
+        };
+        std::unordered_map<RenderTargetId, TargetState, RenderTargetIdHash> targets;
+        std::unordered_set<RenderTargetId, RenderTargetIdHash> released_targets;
+        struct RetiredTarget {
+            TargetState state;
+            uint64_t consumer = 0;
+        };
+        std::vector<RetiredTarget> retired_targets;
+        TargetState& target(Slot id) {
+            if (!id.valid() || released_targets.contains(id))
+                throw std::invalid_argument("Invalid or released Metal render target");
+            return targets[id];
+        }
+        Frame* latestFrame(Slot id) const {
+            const auto found = targets.find(id);
+            return found == targets.end() ? nullptr : found->second.latest;
+        }
+        void stampConsumers() {
+            const auto consumer = context->lastFrameSubmitSerial();
+            for (auto& [id, state] : targets)
+                if (state.latest)
+                    state.latest->consumer_serial = std::max(state.latest->consumer_serial, consumer);
+        }
+        void drainRetiredTargets() {
+            const auto consumer = context->retiredFrameSubmitSerial();
+            std::erase_if(retired_targets, [&](const auto& retired) {
+                if (retired.consumer > consumer)
+                    return false;
+                for (const auto& frame : retired.state.frames)
+                    if (frame && frame->command && frame->command.status != MTLCommandBufferStatusCompleted &&
+                        frame->command.status != MTLCommandBufferStatusError)
+                        return false;
+                return true;
+            });
+        }
+        void retireTarget(Slot id, bool permanent) {
+            if (!id.valid())
+                throw std::invalid_argument("Invalid Metal render target");
+            if (const auto found = targets.find(id); found != targets.end()) {
+                // Include the recording graphics frame: it may not have a
+                // submission serial yet, but still references these textures.
+                uint64_t consumer = context ? context->lastFrameSubmitSerial() + (context->hasActiveFrame() ? 1 : 0) : 0;
+                for (const auto& frame : found->second.frames)
+                    if (frame)
+                        consumer = std::max(consumer, frame->consumer_serial);
+                retired_targets.push_back({std::move(found->second), consumer});
+                targets.erase(found);
+            }
+            for (auto& [ticket, readback] : readbacks)
+                if (readback.target == id) {
+                    readback.destination = nullptr;
+                    readback.target_released = true;
+                }
+            if (permanent)
+                released_targets.insert(id);
+        }
         struct Readback {
             id<MTLBuffer> buffer;
             id<MTLCommandBuffer> command;
@@ -186,6 +248,8 @@ namespace lfs::vis {
             size_t width, channels;
             int x, y;
             bool depth, floating;
+            RenderTargetId target{};
+            bool target_released = false;
         };
         mutable std::mutex readback_mutex;
         mutable std::map<uint64_t, Readback> readbacks;
@@ -201,18 +265,19 @@ namespace lfs::vis {
                         throw std::runtime_error(context->lastError());
                 } catch (...) {
                     // Never destroy textures still referenced by an unretired device.
-                    for (auto& group : frames)
-                        for (auto& frame : group)
+                    for (auto& [id, state] : targets)
+                        for (auto& frame : state.frames)
+                            (void)frame.release();
+                    for (auto& retired : retired_targets)
+                        for (auto& frame : retired.state.frames)
                             (void)frame.release();
                     return;
                 }
-                for (auto& group : frames)
-                    for (auto& frame : group)
-                        frame.reset();
+                targets.clear();
+                retired_targets.clear();
                 // Upload queues import this consumer semaphore. Retire their decode
                 // jobs and queues before destroying the presentation event.
-                for (auto& pager : rad_pagers)
-                    pager.reset();
+                selection_pager.reset();
                 vkDestroySemaphore(context->device(), completion, nullptr);
             }
         }
@@ -369,7 +434,7 @@ namespace lfs::vis {
             };
             metadata.buffers = {upload(bounds.data(), bounds.size() * 4), upload(links.data(), links.size() * 4), upload(maps.data(), maps.size() * 4),
                                 upload(age.data(), age.size() * 4), upload(frames.data(), frames.size() * 16), upload(maps.data(), maps.size() * 4)};
-            // Four output slots can use independent models. Bound the metadata
+            // Views can use independent models. Bound the shared metadata
             // cache; command buffers retain evicted resources until GPU completion.
             if (!lod_trees.contains(&tree) && lod_trees.size() >= 4) {
                 auto oldest = std::min_element(lod_trees.begin(), lod_trees.end(), [](const auto& a, const auto& b) { return a.second.last_used < b.second.last_used; });
@@ -378,14 +443,14 @@ namespace lfs::vis {
             return lod_trees.insert_or_assign(&tree, std::move(metadata)).first->second;
         }
         Frame& acquire(Slot output, const rendering::ViewportRenderRequest& request, uint32_t count, bool points = false) {
-            const size_t slot = static_cast<size_t>(output);
-            auto& frame = frames[slot][next[slot]++ % 3];
-            uint32_t capacity = std::max(needed_capacity[slot], static_cast<uint32_t>(std::min<uint64_t>(uint64_t(count) * 16 + 4096, 16u * 1024u * 1024u)));
+            auto& state = target(output);
+            auto& frame = state.frames[state.next++ % 3];
+            uint32_t capacity = std::max(state.needed_capacity, static_cast<uint32_t>(std::min<uint64_t>(uint64_t(count) * 16 + 4096, 16u * 1024u * 1024u)));
             // A failed encode may leave a reservation without a submitted producer.
             // Such a frame has no readable GPU status and must be recreated.
             if (frame && !frame->command) {
-                if (latest[slot] == frame.get())
-                    latest[slot] = nullptr;
+                if (state.latest == frame.get())
+                    state.latest = nullptr;
                 frame.reset();
             }
             if (frame) {
@@ -404,8 +469,8 @@ namespace lfs::vis {
                 }
                 if (frame->points == points && frame->size == request.frame_view.size && frame->count >= count && frame->capacity >= capacity)
                     return *frame;
-                if (latest[slot] == frame.get())
-                    latest[slot] = nullptr;
+                if (state.latest == frame.get())
+                    state.latest = nullptr;
                 frame.reset();
             }
             // Account for all Metal allocations on the shared device, including
@@ -611,7 +676,7 @@ namespace lfs::vis {
                                                        geometry ? &model.rotation_raw() : nullptr, ring ? &model.opacity_raw() : nullptr,
                                                        &model.deleted(), indexed ? indices : nullptr};
             if (model.means_raw().device() == core::Device::CPU) {
-                auto& pager = i.rad_pagers[static_cast<size_t>(Slot::Main)];
+                auto& pager = i.selection_pager;
                 if (!pager)
                     pager = std::make_unique<MetalRadPager>(i.reader.device());
                 pager->configure(model, context, i.completion, i.rad_settings);
@@ -666,17 +731,17 @@ namespace lfs::vis {
         return count <= std::numeric_limits<uint32_t>::max() && r.size.x > 0 && r.size.y > 0;
     }
     lfs::Result<PointCloudVulkanRenderer::RenderResult> MetalViewportRenderer::renderPoints(
-        VulkanContext& context, const PointCloudVulkanRenderer::RenderRequest& r, PointCloudVulkanRenderer::OutputSlot output) {
+        VulkanContext& context, const PointCloudVulkanRenderer::RenderRequest& r, RenderTargetId output) {
         try {
             if (!supportsPoints(r))
                 throw std::invalid_argument("Unsupported native Metal point request");
             auto& i = *impl_;
             std::lock_guard lock(i.readback_mutex);
             i.initialize(context);
-            for (auto frame : i.latest)
-                if (frame)
-                    frame->consumer_serial = std::max(frame->consumer_serial, context.lastFrameSubmitSerial());
-            const auto slot = static_cast<Slot>(output);
+            i.drainRetiredTargets();
+            i.stampConsumers();
+            const auto slot = output;
+            (void)i.target(slot);
             rendering::ViewportRenderRequest request;
             request.frame_view.size = r.size;
             auto& f = i.acquire(slot, request, uint32_t(r.positions->size(0)), true);
@@ -762,8 +827,8 @@ namespace lfs::vis {
             });
             f.producer_value = serial;
             i.serial = serial;
-            f.consumer_serial = context.lastFrameSubmitSerial() + 1;
-            i.latest[static_cast<size_t>(slot)] = &f;
+            f.consumer_serial = context.lastFrameSubmitSerial() + (context.hasActiveFrame() ? 1 : 0);
+            i.target(slot).latest = &f;
             // Preserve the existing synchronous point-cloud presentation contract.
             // The Gaussian path continues to expose its asynchronous GPU timeline.
             i.wait(serial);
@@ -816,13 +881,12 @@ namespace lfs::vis {
             // Cached outputs may be sampled for many GUI frames without a new
             // raster submission. Stamp their most recent graphics consumer before
             // replacing latest, rather than retiring against the first consumer.
-            const auto graphics_serial = context.lastFrameSubmitSerial();
-            for (auto frame : i.latest)
-                if (frame)
-                    frame->consumer_serial = std::max(frame->consumer_serial, graphics_serial);
+            i.drainRetiredTargets();
+            i.stampConsumers();
+            (void)i.target(slot);
             if (model.size() > std::numeric_limits<uint32_t>::max())
                 throw std::runtime_error("Metal primitive count exceeds indexing capacity");
-            auto previous = i.latest[static_cast<size_t>(slot)];
+            auto previous = i.latestFrame(slot);
             if (previous && previous->points)
                 previous = nullptr;
             if (previous && !previous->raster->busy()) {
@@ -830,22 +894,22 @@ namespace lfs::vis {
                 if (status.required_instances > std::numeric_limits<uint32_t>::max())
                     throw std::runtime_error("Metal instance indexing overflow");
                 if (status.error != RasterError::None)
-                    i.needed_capacity[static_cast<size_t>(slot)] = static_cast<uint32_t>(status.required_instances);
+                    i.target(slot).needed_capacity = static_cast<uint32_t>(status.required_instances);
             }
-            if (i.frames[static_cast<size_t>(slot)][i.next[static_cast<size_t>(slot)] % 3].get() == previous)
+            if (i.target(slot).frames[i.target(slot).next % 3].get() == previous)
                 previous = nullptr;
             const bool rad = model.lod_tree && model.lod_tree->rad_source.valid() &&
                              (request.lod_gpu_traversal.enabled || model.lod_tree->total_nodes() > size_t(model.size()));
             MetalRadPager* pager = nullptr;
             Impl::NativeLodTree paged_tree;
             if (rad) {
-                auto& owner = i.rad_pagers[static_cast<size_t>(slot)];
+                auto& owner = i.target(slot).pager;
                 if (!owner)
                     owner = std::make_unique<MetalRadPager>(i.reader.device());
                 pager = owner.get();
                 pager->configure(model, context, i.completion, i.rad_settings);
                 const Frame* completed = nullptr;
-                for (const auto& candidate : i.frames[static_cast<size_t>(slot)])
+                for (const auto& candidate : i.target(slot).frames)
                     if (candidate && candidate->gpu_lod_active && candidate->gpu_lod && !candidate->gpu_lod->busy() &&
                         candidate->rad_signature == pager->signature() && candidate->command.status == MTLCommandBufferStatusCompleted &&
                         (!completed || candidate->producer_value > completed->producer_value))
@@ -1205,13 +1269,14 @@ namespace lfs::vis {
             f.producer_value = serial;
             f.request_key = key;
             i.serial = serial;
-            f.consumer_serial = slot == Slot::Preview ? 0 : context.lastFrameSubmitSerial() + 1;
-            i.latest[static_cast<size_t>(slot)] = &f;
+            f.consumer_serial = context.lastFrameSubmitSerial() + (context.hasActiveFrame() ? 1 : 0);
+            i.target(slot).latest = &f;
             return VksplatViewportRenderer::RenderResult{.image = f.color.image, .image_view = f.color.view, .image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .generation = f.generation, .depth_image = f.depth.image, .depth_image_view = f.depth.view, .depth_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, .depth_generation = f.generation, .size = f.size, .alloc_size = f.size, .flip_y = false, .completion_semaphore = i.completion, .completion_value = serial, .lod_streaming_active = refine, .viewer_backend = rendering::ViewerBackend::Metal};
         } catch (const std::exception& e) { return nativeError(e); }
     }
     glm::ivec2 MetalViewportRenderer::size(Slot slot) const {
-        auto f = impl_->latest[static_cast<size_t>(slot)];
+        std::lock_guard lock(impl_->readback_mutex);
+        auto f = impl_->latestFrame(slot);
         return f ? f->size : glm::ivec2{};
     }
     lfs::Result<uint64_t> MetalViewportRenderer::submitReadback(
@@ -1219,7 +1284,7 @@ namespace lfs::vis {
         try {
             auto& i = *impl_;
             std::lock_guard lock(i.readback_mutex);
-            auto f = i.latest[static_cast<size_t>(slot)];
+            auto f = i.latestFrame(slot);
             if (!f)
                 throw std::runtime_error("Metal readback slot is empty");
             // Abandoned commands retain staging until completion but no host pointer.
@@ -1260,7 +1325,7 @@ namespace lfs::vis {
             }];
             const uint64_t ticket = reserveNativeTicket();
             i.readbacks.emplace(ticket, Impl::Readback{buffer, command, f->command, destination.data_ptr(), f->size,
-                                                       destination.size(1), depth ? 1 : destination.size(2), x, y, depth, destination.dtype() == core::DataType::Float32});
+                                                       destination.size(1), depth ? 1 : destination.size(2), x, y, depth, destination.dtype() == core::DataType::Float32, slot});
             i.next_readback = serial;
             [command commit];
             return ticket;
@@ -1273,6 +1338,13 @@ namespace lfs::vis {
         if (it == i.readbacks.end())
             return nativeError("Unknown Metal readback ticket", lfs::ErrorCode::NotFound);
         auto& r = it->second;
+        if (r.target_released) {
+            if (wait)
+                [r.command waitUntilCompleted];
+            if (r.command.status == MTLCommandBufferStatusCompleted || r.command.status == MTLCommandBufferStatusError)
+                i.readbacks.erase(it);
+            return VksplatViewportRenderer::ReadbackTicketStatus::Failed;
+        }
         if (wait)
             [r.command waitUntilCompleted];
         if (r.command.status == MTLCommandBufferStatusError) {
@@ -1322,35 +1394,36 @@ namespace lfs::vis {
         try {
             auto& i = *impl_;
             std::lock_guard lock(i.readback_mutex);
-            if (!i.context)
-                return {};
-            i.wait(i.serial);
-            for (const auto& [ticket, r] : i.readbacks)
-                [r.command waitUntilCompleted];
-            // Includes cached outputs sampled after their initial producer frame.
-            if (!i.context->waitForRetiredFrameSubmitSerial(i.context->lastFrameSubmitSerial()))
-                throw std::runtime_error(i.context->lastError());
-            const size_t index = static_cast<size_t>(slot);
-            i.latest[index] = nullptr;
-            for (auto& frame : i.frames[index])
-                frame.reset();
-            i.rad_pagers[index].reset();
-            i.next[index] = 0;
-            i.needed_capacity[index] = 0;
+            i.retireTarget(slot, true);
+            // Native producers and the graphics consumer retire independently.
+            // Never wait for another view or destroy an active-frame texture.
+            if (i.context)
+                i.drainRetiredTargets();
             return {};
-        } catch (const std::exception& e) { return lfs::Status::failure(nativeError(e)); }
+        } catch (const std::exception& error) { return lfs::Status::failure(nativeError(error)); }
+    }
+    lfs::Status MetalViewportRenderer::releaseAll() {
+        try {
+            auto& i = *impl_;
+            std::lock_guard lock(i.readback_mutex);
+            while (!i.targets.empty())
+                i.retireTarget(i.targets.begin()->first, false);
+            if (i.context)
+                i.drainRetiredTargets();
+            return {};
+        } catch (const std::exception& error) { return lfs::Status::failure(nativeError(error)); }
     }
     VksplatViewportRenderer::GpuLodSelectionStatus MetalViewportRenderer::gpuLodSelectionStatus(Slot slot) const {
         auto& i = *impl_;
         std::lock_guard lock(i.readback_mutex);
         VksplatViewportRenderer::GpuLodSelectionStatus status;
-        const auto latest = i.latest[static_cast<size_t>(slot)];
+        const auto latest = i.latestFrame(slot);
         if (!latest || !latest->gpu_lod_active)
             return status;
         status.active = true;
         status.capacity = latest->gpu_capacity;
         const Frame* completed = nullptr;
-        for (const auto& candidate : i.frames[static_cast<size_t>(slot)]) {
+        for (const auto& candidate : i.target(slot).frames) {
             if (candidate && candidate->gpu_lod_active && candidate->gpu_lod && !candidate->gpu_lod->busy() &&
                 candidate->gpu_tree_signature == latest->gpu_tree_signature &&
                 candidate->command.status == MTLCommandBufferStatusCompleted &&
@@ -1366,7 +1439,7 @@ namespace lfs::vis {
         status.pixel_scale_feedback = cut.threshold_multiplier;
         const auto touches = completed->gpu_lod->touches();
         status.resident_chunks = status.chunk_count = status.pool_pages = completed->gpu_chunks;
-        const auto& pager = i.rad_pagers[static_cast<size_t>(slot)];
+        const auto& pager = i.target(slot).pager;
         if (pager && completed->rad_signature == pager->signature()) {
             status.resident_chunks = pager->cache().snapshot().resident_chunks;
             status.pool_pages = pager->cache().snapshot().physical_pages;
@@ -1391,7 +1464,7 @@ namespace lfs::vis {
                 throw lfs::Exception(complete.error());
             if (!*complete)
                 throw lfs::Exception(nativeError("Native diagnostics require a complete frame", lfs::ErrorCode::FailedPrecondition));
-            const auto* frame = impl_->latest[static_cast<size_t>(slot)];
+            const auto* frame = impl_->latestFrame(slot);
             FrameDiagnostics result;
             result.input_splats = frame->count;
             result.reserved_instances = frame->capacity;
@@ -1414,7 +1487,8 @@ namespace lfs::vis {
     }
     lfs::Result<bool> MetalViewportRenderer::outputComplete(Slot slot) const {
         try {
-            auto frame = impl_->latest[static_cast<size_t>(slot)];
+            std::lock_guard lock(impl_->readback_mutex);
+            auto frame = impl_->latestFrame(slot);
             if (!frame)
                 throw lfs::Exception(nativeError("Metal output slot is empty", lfs::ErrorCode::FailedPrecondition));
             impl_->wait(frame->producer_value);
@@ -1432,7 +1506,8 @@ namespace lfs::vis {
     }
     lfs::Status MetalViewportRenderer::readColor(Slot slot, core::Tensor& destination, int x, int y) const {
         try {
-            auto f = impl_->latest[static_cast<size_t>(slot)];
+            std::lock_guard lock(impl_->readback_mutex);
+            auto f = impl_->latestFrame(slot);
             if (!f)
                 throw lfs::Exception(nativeError("Metal output slot is empty", lfs::ErrorCode::FailedPrecondition));
             if (destination.device() != core::Device::CPU || !destination.is_contiguous() || destination.ndim() != 3 ||
@@ -1458,7 +1533,8 @@ namespace lfs::vis {
     }
     lfs::Result<float> MetalViewportRenderer::readDepth(const VksplatViewportRenderer::DepthSampleRequest& r) const {
         try {
-            auto f = impl_->latest[static_cast<size_t>(r.output_slot)];
+            std::lock_guard lock(impl_->readback_mutex);
+            auto f = impl_->latestFrame(r.target);
             if (!f)
                 throw lfs::Exception(nativeError("Metal depth slot is empty", lfs::ErrorCode::FailedPrecondition));
             auto p = r.pixel;

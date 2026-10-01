@@ -8,6 +8,8 @@
 #include "core/tensor_backend.hpp"
 #include "preferences.hpp"
 #endif
+#include <unordered_map>
+#include <unordered_set>
 
 #include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
@@ -35,7 +37,6 @@ namespace lfs::vis {
 
         constexpr VkFormat kColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
         constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
-        constexpr std::size_t kSlotCount = 3;
         constexpr std::size_t kPlaceholderSize = 16;
         constexpr std::uint32_t kBindingModelTransforms = 0;
         constexpr std::uint32_t kBindingTransformIndices = 1;
@@ -410,8 +411,8 @@ namespace lfs::vis {
     struct PointCloudVulkanRenderer::Impl {
 #ifdef __APPLE__
         std::unique_ptr<MetalViewportRenderer> metal;
-        std::array<bool, 3> metal_output{};
-        std::array<int, 3> metal_route{-1, -1, -1};
+        std::unordered_set<RenderTargetId, RenderTargetIdHash> metal_output;
+        std::unordered_map<RenderTargetId, int, RenderTargetIdHash> metal_route;
 #endif
         VulkanContext* context = nullptr;
         VkDevice device = VK_NULL_HANDLE;
@@ -497,7 +498,56 @@ namespace lfs::vis {
             // Resource identity for VulkanImageBarrierTracker (#1478).
             std::uint64_t image_generation = 0;
         };
-        std::array<OutputSlotResources, kSlotCount> slots{};
+        std::unordered_map<RenderTargetId, OutputSlotResources, RenderTargetIdHash> slots;
+        std::unordered_set<RenderTargetId, RenderTargetIdHash> released_targets;
+        struct RetiredOutput {
+            OutputSlotResources resources;
+            std::uint64_t producer = 0;
+            std::uint64_t consumer = 0;
+        };
+        std::vector<RetiredOutput> retired_outputs;
+        std::uint64_t submitted = 0;
+        std::uint64_t completed = 0;
+
+        void retireOutput(OutputSlotResources& slot) {
+            if (slot.color_image != VK_NULL_HANDLE || slot.depth_image != VK_NULL_HANDLE)
+                retired_outputs.push_back({std::move(slot), submitted, context->lastFrameSubmitSerial() + (context->hasActiveFrame() ? 1 : 0)});
+            slot = {};
+        }
+        void drainOutputs() {
+            if (fence != VK_NULL_HANDLE && vkGetFenceStatus(device, fence) == VK_SUCCESS)
+                completed = submitted;
+            std::erase_if(retired_outputs, [this](auto& output) {
+                if (output.producer > completed || output.consumer > context->retiredFrameSubmitSerial())
+                    return false;
+                destroySlot(output.resources);
+                return true;
+            });
+        }
+        bool releaseRenderTarget(RenderTargetId target) {
+            std::unique_lock lock(command_mutex, std::try_to_lock);
+            if (!lock || !target.valid() || released_targets.contains(target))
+                return false;
+#ifdef __APPLE__
+            if (metal) {
+                const auto result = legacyMetalResult(metal->release(target));
+                if (!result) {
+                    LOG_WARN("Metal point target {} release failed: {}", target.value, result.error());
+                    return false;
+                }
+            }
+            metal_output.erase(target);
+            metal_route.erase(target);
+#endif
+            if (auto it = slots.find(target); it != slots.end()) {
+                retireOutput(it->second);
+                slots.erase(it);
+            }
+            released_targets.insert(target);
+            if (initialized)
+                drainOutputs();
+            return true;
+        }
 
         // Transient command pool / fence reused across frames.
         VkCommandPool command_pool = VK_NULL_HANDLE;
@@ -994,9 +1044,9 @@ namespace lfs::vis {
         }
 
         std::expected<void, std::string> ensureOutputImages(OutputSlotResources& slot,
-                                                            glm::ivec2 size) {
-            const std::size_t slot_index = static_cast<std::size_t>(&slot - slots.data());
-            if (slot_index >= slots.size() || size.x <= 0 || size.y <= 0) {
+                                                            glm::ivec2 size, RenderTargetId target) {
+            const auto slot_index = target.value;
+            if (!target.valid() || size.x <= 0 || size.y <= 0) {
                 return std::unexpected<std::string>(std::format(
                     "Point-cloud output image request requires an in-range slot and positive dimensions (slot_index={}, slot_count={}, observed_width={}, observed_height={}) ({}:{})",
                     slot_index,
@@ -1010,7 +1060,7 @@ namespace lfs::vis {
                 slot.size == size) {
                 return {};
             }
-            destroySlot(slot);
+            retireOutput(slot);
 
             const VkExtent3D extent{static_cast<std::uint32_t>(size.x),
                                     static_cast<std::uint32_t>(size.y), 1u};
@@ -1239,9 +1289,13 @@ namespace lfs::vis {
                 command_pool = VK_NULL_HANDLE;
                 command_buffer = VK_NULL_HANDLE;
             }
-            for (auto& s : slots) {
-                destroySlot(s);
-            }
+            for (auto& [target, slot] : slots)
+                destroySlot(slot);
+            slots.clear();
+            for (auto& output : retired_outputs)
+                destroySlot(output.resources);
+            retired_outputs.clear();
+            submitted = completed = 0;
             destroyBuffer(allocator, cache.positions);
             destroyBuffer(allocator, cache.colors);
             destroyBuffer(allocator, cache.transforms);
@@ -1616,20 +1670,20 @@ namespace lfs::vis {
         }
 
         std::expected<RenderResult, std::string> doRender(const RenderRequest& req,
-                                                          OutputSlot output_slot) {
+                                                          RenderTargetId target) {
             std::lock_guard<std::mutex> command_lock(command_mutex);
-            const std::size_t slot_idx = static_cast<std::size_t>(output_slot);
-            if (slot_idx >= kSlotCount) {
+            const auto slot_idx = target.value;
+            if (!target.valid() || released_targets.contains(target)) {
                 return std::unexpected<std::string>(std::format(
-                    "Point-cloud render output slot is out of range (output_slot={}, slot_count={}) ({}:{})",
+                    "Point-cloud render output slot is out of range (target={}, slot_count={}) ({}:{})",
                     slot_idx,
-                    kSlotCount,
+                    slots.size(),
                     __FILE__,
                     __LINE__));
             }
             if (req.size.x <= 0 || req.size.y <= 0) {
                 return std::unexpected<std::string>(std::format(
-                    "Point-cloud render size must be positive (observed_width={}, observed_height={}, output_slot={}) ({}:{})",
+                    "Point-cloud render size must be positive (observed_width={}, observed_height={}, target={}) ({}:{})",
                     req.size.x,
                     req.size.y,
                     slot_idx,
@@ -1656,22 +1710,11 @@ namespace lfs::vis {
                 }
             }
 
-            auto& slot = slots[slot_idx];
-            const bool will_recreate = slot.color_image == VK_NULL_HANDLE ||
-                                       slot.depth_image == VK_NULL_HANDLE ||
-                                       slot.size != req.size;
-            if (will_recreate) {
-                // pcFence covers this renderer's CB only; the context's frame CB also
-                // samples slot.color_image and must finish before destroySlot frees it.
-                if (!context->waitForSubmittedFrames()) {
-                    return std::unexpected<std::string>(
-                        std::format("waitForSubmittedFrames failed before slot recreate: {}",
-                                    context->lastError()));
-                }
-            }
-            if (auto ensure = ensureOutputImages(slot, req.size); !ensure) {
+            auto& slot = slots[target];
+            completed = submitted;
+            drainOutputs();
+            if (auto ensure = ensureOutputImages(slot, req.size, target); !ensure)
                 return std::unexpected<std::string>(ensure.error());
-            }
             for (auto& s : pending_stagings) {
                 destroyBuffer(allocator, s);
             }
@@ -1957,6 +2000,7 @@ namespace lfs::vis {
                 }
             }
 
+            ++submitted;
             slot.color_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             slot.depth_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             ++slot.generation;
@@ -1977,7 +2021,7 @@ namespace lfs::vis {
 
         std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
             VulkanContext& ctx,
-            OutputSlot output_slot) {
+            RenderTargetId target) {
             std::lock_guard<std::mutex> command_lock(command_mutex);
             if (!initialized || context == nullptr) {
                 return std::unexpected<std::string>("Point-cloud output readback requested before renderer initialization");
@@ -1986,16 +2030,16 @@ namespace lfs::vis {
                 return std::unexpected<std::string>("Point-cloud output readback received a different Vulkan context");
             }
 
-            const std::size_t slot_idx = static_cast<std::size_t>(output_slot);
-            if (slot_idx >= kSlotCount) {
+            const auto slot_idx = target.value;
+            if (!target.valid() || released_targets.contains(target)) {
                 return std::unexpected<std::string>(std::format(
-                    "Point-cloud readback output slot is out of range (output_slot={}, slot_count={}) ({}:{})",
+                    "Point-cloud readback output slot is out of range (target={}, slot_count={}) ({}:{})",
                     slot_idx,
-                    kSlotCount,
+                    slots.size(),
                     __FILE__,
                     __LINE__));
             }
-            auto& slot = slots[slot_idx];
+            auto& slot = slots[target];
             if (slot.color_image == VK_NULL_HANDLE || slot.size.x <= 0 || slot.size.y <= 0) {
                 return std::unexpected<std::string>("Point-cloud output readback requested for an empty output slot");
             }
@@ -2018,6 +2062,7 @@ namespace lfs::vis {
                         formatFenceWaitUnexpected("readback prewait", wait_outcome));
                 }
             }
+            completed = submitted;
             for (auto& s : pending_stagings) {
                 destroyBuffer(allocator, s);
             }
@@ -2260,8 +2305,11 @@ namespace lfs::vis {
 
     std::expected<PointCloudVulkanRenderer::RenderResult, std::string>
     PointCloudVulkanRenderer::render(VulkanContext& context, const RenderRequest& request,
-                                     OutputSlot output_slot) {
+                                     RenderTargetId target) {
 #ifdef __APPLE__
+        std::unique_lock native_lock(impl_->command_mutex);
+        if (!target.valid() || impl_->released_targets.contains(target))
+            return std::unexpected("Invalid or released point render target");
         const auto preference = UserPreferences::instance().viewerBackend();
         const bool metal_available = core::gpu_backend_available(core::GpuBackend::Metal);
         const auto selection = rendering::selectDesktopViewerBackend(
@@ -2270,50 +2318,53 @@ namespace lfs::vis {
             try {
                 if (!impl_->metal)
                     impl_->metal = std::make_unique<MetalViewportRenderer>();
-                auto result = legacyMetalResult(impl_->metal->renderPoints(context, request, output_slot));
+                auto result = legacyMetalResult(impl_->metal->renderPoints(context, request, target));
                 if (result) {
-                    const auto slot = static_cast<size_t>(output_slot);
-                    impl_->metal_output[slot] = true;
+                    const auto slot = target;
+                    impl_->metal_output.insert(slot);
                     const int route = preference == rendering::ViewerBackend::Automatic ? 4 : 0;
-                    if (impl_->metal_route[slot] != route) {
+                    if (!impl_->metal_route.contains(slot) || impl_->metal_route[slot] != route) {
                         LOG_INFO("Point viewer GPU backend: requested={} effective=metal slot={}",
-                                 rendering::viewerBackendName(preference), slot);
+                                 rendering::viewerBackendName(preference), slot.value);
                         impl_->metal_route[slot] = route;
                     }
                 }
                 return result;
             } catch (const std::exception& e) { return std::unexpected(e.what()); }
         }
-        impl_->metal_output[static_cast<size_t>(output_slot)] = false;
+        impl_->metal_output.erase(target);
+        native_lock.unlock();
 #endif
         if (auto r = impl_->ensureInitialized(context); !r) {
             return std::unexpected<std::string>(r.error());
         }
 #ifdef __APPLE__
-        auto result = impl_->doRender(request, output_slot);
+        auto result = impl_->doRender(request, target);
         if (result) {
-            const auto slot = static_cast<size_t>(output_slot);
+            std::lock_guard route_lock(impl_->command_mutex);
+            const auto slot = target;
             const int route = preference == rendering::ViewerBackend::Metal       ? 1
                               : preference == rendering::ViewerBackend::Automatic ? 2
                                                                                   : 3;
-            if (impl_->metal_route[slot] != route) {
+            if (!impl_->metal_route.contains(slot) || impl_->metal_route[slot] != route) {
                 impl_->metal_route[slot] = route;
                 LOG_INFO("Point viewer GPU backend: requested={} effective=vulkan slot={} reason={}",
-                         rendering::viewerBackendName(preference), slot,
+                         rendering::viewerBackendName(preference), slot.value,
                          preference != rendering::ViewerBackend::Vulkan && metal_available ? "unsupported tensor storage" : "none");
             }
         }
         return result;
 #else
-        return impl_->doRender(request, output_slot);
+        return impl_->doRender(request, target);
 #endif
     }
 
     std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
-    PointCloudVulkanRenderer::readOutputImage(VulkanContext& context, OutputSlot output_slot) {
+    PointCloudVulkanRenderer::readOutputImage(VulkanContext& context, RenderTargetId target) {
 #ifdef __APPLE__
-        if (impl_->metal_output[static_cast<size_t>(output_slot)]) {
-            const auto slot = static_cast<VksplatViewportRenderer::OutputSlot>(output_slot);
+        std::unique_lock native_lock(impl_->command_mutex);
+        if (impl_->metal_output.contains(target)) {
+            const auto slot = target;
             const auto size = impl_->metal->size(slot);
             auto image = core::Tensor::empty({size_t(size.y), size_t(size.x), 3}, core::Device::CPU, core::DataType::Float32);
             const auto read = legacyMetalResult(impl_->metal->readColor(slot, image, 0, 0));
@@ -2322,16 +2373,42 @@ namespace lfs::vis {
             return std::make_shared<core::Tensor>(std::move(image));
         }
 #endif
-        return impl_->readOutputImage(context, output_slot);
+#ifdef __APPLE__
+        native_lock.unlock();
+#endif
+        return impl_->readOutputImage(context, target);
+    }
+
+    bool PointCloudVulkanRenderer::hasRenderTarget(RenderTargetId target) const {
+        std::lock_guard lock(impl_->command_mutex);
+#ifdef __APPLE__
+        if (impl_->metal_output.contains(target))
+            return true;
+#endif
+        return impl_->slots.contains(target);
+    }
+
+    bool PointCloudVulkanRenderer::releaseRenderTarget(RenderTargetId target) {
+        return impl_->releaseRenderTarget(target);
     }
 
     void PointCloudVulkanRenderer::reset() {
 #ifdef __APPLE__
         impl_->metal.reset();
-        impl_->metal_output.fill(false);
-        impl_->metal_route.fill(-1);
+        impl_->metal_output.clear();
+        impl_->metal_route.clear();
 #endif
         impl_->destroy();
+    }
+
+    const void* PointCloudOutputOwnershipTestAccess::createEmptyOutput(PointCloudVulkanRenderer& renderer, RenderTargetId target) {
+        if (!target.valid() || renderer.impl_->released_targets.contains(target))
+            return nullptr;
+        return &renderer.impl_->slots[target];
+    }
+    const void* PointCloudOutputOwnershipTestAccess::outputIdentity(const PointCloudVulkanRenderer& renderer, RenderTargetId target) {
+        const auto it = renderer.impl_->slots.find(target);
+        return it == renderer.impl_->slots.end() ? nullptr : &it->second;
     }
 
 } // namespace lfs::vis

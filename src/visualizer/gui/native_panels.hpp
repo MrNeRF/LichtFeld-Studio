@@ -13,7 +13,6 @@ namespace lfs::vis::gui {
     class GizmoManager;
     class GuiManager;
     class SequencerUIManager;
-    class PanelLayoutManager;
     class RmlStatusBar;
 
 } // namespace lfs::vis::gui
@@ -71,7 +70,7 @@ namespace lfs::vis::gui::native_panels {
 
     class SequencerPanel : public IPanel {
     public:
-        SequencerPanel(SequencerUIManager* seq, const PanelLayoutManager* layout);
+        SequencerPanel(SequencerUIManager* seq, const GuiManager* gui);
         void draw(const PanelDrawContext& ctx) override;
         bool poll(const PanelDrawContext& ctx) override;
         PanelRenderCapabilities renderCapabilities() const override {
@@ -86,7 +85,7 @@ namespace lfs::vis::gui::native_panels {
                            const PanelInputState* input);
         void drawDirect(float x, float y, float w, float h, const PanelDrawContext& ctx);
         SequencerUIManager* seq_;
-        const PanelLayoutManager* layout_;
+        const GuiManager* gui_;
         const PanelInputState* input_ = nullptr;
         float direct_draw_height_ = 0.0f;
         float forced_height_ = 0.0f;

@@ -3,15 +3,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "py_ui.hpp"
+#include "py_viewer_dispatch.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/app_store.hpp"
-#include "visualizer/post_work_utils.hpp"
 #include "visualizer/preferences.hpp"
 #include "visualizer/theme/theme.hpp"
-#include "visualizer/visualizer.hpp"
 
-#include <functional>
-#include <type_traits>
 #include <utility>
 
 namespace lfs::python {
@@ -21,23 +18,6 @@ namespace lfs::python {
             return {c.x, c.y, c.z, c.w};
         }
 
-        template <typename F>
-        void invoke_on_viewer_thread(F&& fn) {
-            static_assert(std::is_void_v<std::invoke_result_t<F>>);
-            auto* const viewer = get_visualizer();
-            if (!viewer || viewer->isOnViewerThread()) {
-                std::invoke(std::forward<F>(fn));
-                return;
-            }
-            if (!viewer->acceptsPostedWork())
-                return;
-
-            nb::gil_scoped_release release;
-            vis::post_work_and_wait(
-                [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
-                std::forward<F>(fn),
-                []() {});
-        }
     } // namespace
 
     PyTheme get_current_theme() {
@@ -164,7 +144,7 @@ namespace lfs::python {
         m.def(
             "set_viewport_chrome_style",
             [](std::string style) {
-                invoke_on_viewer_thread([style = std::move(style)]() {
+                invoke_on_viewer([style = std::move(style)]() {
                     lfs::vis::saveViewportChromeStylePreference(style);
                     lfs::vis::refreshThemePresentation();
                 });
@@ -175,7 +155,7 @@ namespace lfs::python {
         m.def(
             "set_viewport_toolbar_position",
             [](std::string position) {
-                invoke_on_viewer_thread([position = std::move(position)]() {
+                invoke_on_viewer([position = std::move(position)]() {
                     lfs::vis::saveViewportToolbarPositionPreference(position);
                     lfs::vis::publish_viewport_toolbar_generation();
                 });

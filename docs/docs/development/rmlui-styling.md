@@ -105,16 +105,5 @@ When in doubt, create a class in `.rml` or C++, put static layout in `.rcss`, an
 
 ## Viewport overlay geometry
 
-An independent split can only be activated when the scene contains content;
-the shared input command makes both `Shift+V` and the title-bar button a no-op
-for an empty scene. Closing an already active split remains possible. The GUI
-also defensively hides the secondary toolbar for an empty editor context, so an
-empty viewport keeps the normal primary toolbar without a second camera, gizmo,
-axes, orphan divider, or duplicated controls. When scene content is present,
-each toolbar root uses the resolved bounds of its own split panel; vertical
-toolbars stay centered and size to their controls instead of relying on fixed
-heights or cross-divider offsets.
-
-Keep geometry and appearance separate: C++ may update panel-relative bounds,
-visibility, and divider dimensions, while the base and themed RCSS files own
-alignment, spacing, tint, contrast, and disabled icon treatment.
+Each 3D editor area owns its camera and header. Viewport controls use the
+content rectangle of their area; comparison panels share that area's camera.

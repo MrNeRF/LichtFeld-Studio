@@ -1,0 +1,107 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* Area gesture previews drawn above everything in the work area (layout only). */
+
+body {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    pointer-events: none;
+}
+
+#active-outline,
+#divider-highlight,
+#corner-hint,
+#split-new,
+#split-line,
+#join-target,
+#swap-source,
+#swap-target {
+    display: none;
+    position: absolute;
+    box-sizing: border-box;
+    pointer-events: none;
+}
+
+#active-outline {
+    border-width: 1dp;
+    border-radius: 0;
+}
+
+#divider-highlight {
+    border-radius: 1dp;
+}
+
+#corner-hint {
+    border-width: 0;
+}
+
+#corner-hint.top-left {
+    border-top-left-radius: 6dp;
+    border-left-width: 2dp;
+    border-top-width: 2dp;
+}
+
+#corner-hint.top-right {
+    border-top-right-radius: 6dp;
+    border-right-width: 2dp;
+    border-top-width: 2dp;
+}
+
+#corner-hint.bottom-left {
+    border-bottom-left-radius: 6dp;
+    border-left-width: 2dp;
+    border-bottom-width: 2dp;
+}
+
+#corner-hint.bottom-right {
+    border-bottom-right-radius: 6dp;
+    border-right-width: 2dp;
+    border-bottom-width: 2dp;
+}
+
+#split-new {
+    border-width: 1dp;
+    border-radius: 6dp;
+}
+
+#join-target {
+    border-width: 2dp;
+    border-radius: 6dp;
+}
+
+#join-arrow {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 44dp;
+    height: 44dp;
+    margin-left: -22dp;
+    margin-top: -22dp;
+    border-top-width: 6dp;
+    border-right-width: 6dp;
+    transform: rotate(45deg);
+}
+
+#join-arrow.left {
+    transform: rotate(225deg);
+}
+
+#join-arrow.up {
+    transform: rotate(-45deg);
+}
+
+#join-arrow.down {
+    transform: rotate(135deg);
+}
+
+#swap-source,
+#swap-target {
+    border-width: 2dp;
+    border-radius: 6dp;
+}

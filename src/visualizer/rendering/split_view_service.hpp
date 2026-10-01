@@ -45,26 +45,14 @@ namespace lfs::vis {
         [[nodiscard]] std::optional<glm::ivec2> gtContentDimensions() const;
         [[nodiscard]] bool isActive(const RenderSettings& settings) const;
         [[nodiscard]] bool isGTComparisonActive(const RenderSettings& settings) const;
-        [[nodiscard]] bool isIndependentDualActive(const RenderSettings& settings) const;
-        [[nodiscard]] std::optional<std::array<SplitViewPanelLayout, 2>>
-        panelLayouts(const RenderSettings& settings, int total_width) const;
-
         [[nodiscard]] ModeChangeResult toggleMode(RenderSettings& settings,
-                                                  SplitViewMode target_mode,
-                                                  const Viewport* primary_viewport = nullptr);
+                                                  SplitViewMode target_mode);
         [[nodiscard]] ModeChangeResult handleSceneLoaded(RenderSettings& settings);
         [[nodiscard]] ModeChangeResult handleSceneCleared(RenderSettings& settings);
         [[nodiscard]] ModeChangeResult handlePLYRemoved(RenderSettings& settings, SceneManager* scene_manager);
         void advanceSplitOffset(RenderSettings& settings);
         [[nodiscard]] SplitViewInfo getInfo() const;
         [[nodiscard]] std::optional<SplitViewInfo> getInfoIfChanged(std::uint64_t& generation) const;
-        // Focused panel and the secondary viewport are main-thread-owned state used by
-        // input, frame planning, and rendering on the UI thread. Only current_info_ is
-        // mutex-protected because it is read from UI/status-bar code outside that path.
-        void setFocusedPanel(SplitViewPanelId panel) { focused_panel_ = panel; }
-        [[nodiscard]] SplitViewPanelId focusedPanel() const { return focused_panel_; }
-        [[nodiscard]] Viewport& secondaryViewport() { return secondary_viewport_; }
-        [[nodiscard]] const Viewport& secondaryViewport() const { return secondary_viewport_; }
         void updateInfo(const FrameResources& resources);
 
     private:
@@ -76,7 +64,6 @@ namespace lfs::vis {
         [[nodiscard]] bool hasValidGTContext() const;
         [[nodiscard]] ModeChangeResult transitionToMode(RenderSettings& settings,
                                                         SplitViewMode target_mode,
-                                                        const Viewport* primary_viewport,
                                                         GTExitBehavior gt_exit_behavior);
         void clear();
         void clearGTContext();
@@ -88,8 +75,6 @@ namespace lfs::vis {
         bool pre_gt_equirectangular_ = false;
         bool pre_gt_show_camera_frustums_ = false;
         bool gt_forced_camera_frustums_off_ = false;
-        SplitViewPanelId focused_panel_ = SplitViewPanelId::Left;
-        Viewport secondary_viewport_;
     };
 
 } // namespace lfs::vis

@@ -5,7 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
-#include "gui/panel_layout.hpp"
+#include "gui/gui_input.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 
@@ -182,8 +182,7 @@ namespace lfs::vis::gui {
         std::vector<MenuLabelView> menu_labels_;
         std::vector<MenuDropdownRootView> dropdown_items_;
         std::vector<MenuToolbarButtonView> camera_buttons_;
-        std::vector<MenuToolbarButtonView> render_buttons_;
-        std::vector<MenuToolbarButtonView> projection_buttons_;
+        std::vector<MenuToolbarButtonView> snap_buttons_;
         std::array<std::string, 4> navigation_tooltips_;
         std::uint64_t navigation_tooltip_language_generation_ = 0;
         bool has_navigation_tooltip_language_generation_ = false;
@@ -212,7 +211,6 @@ namespace lfs::vis::gui {
         Rml::Element* project_title_el_ = nullptr;
         Rml::Element* menu_toolbar_ = nullptr;
         Rml::Element* menu_window_controls_ = nullptr;
-        Rml::Element* menu_window_split_view_ = nullptr;
         Rml::Element* menu_window_toggle_ui_ = nullptr;
         Rml::Element* menu_window_maximize_ = nullptr;
         Rml::Element* body_el_ = nullptr;
@@ -224,7 +222,6 @@ namespace lfs::vis::gui {
         bool project_title_has_room_ = false;
         bool toolbar_fits_ = true;
         bool ui_hidden_ = false;
-        bool last_window_split_view_ = false;
         bool last_ui_hidden_ = false;
         bool last_window_maximized_ = false;
 

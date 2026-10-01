@@ -114,6 +114,8 @@ namespace lfs::core {
                 val = warp_reduce_sum(val);
             }
 
+            __syncthreads();
+
             return val;
         }
 
@@ -138,6 +140,8 @@ namespace lfs::core {
                 val = (threadIdx.x < (blockDim.x + 31) / 32) ? shared[lane] : -std::numeric_limits<T>::infinity();
                 val = warp_reduce_max(val);
             }
+
+            __syncthreads();
 
             return val;
         }
@@ -164,6 +168,8 @@ namespace lfs::core {
                 val = warp_reduce_min(val);
             }
 
+            __syncthreads();
+
             return val;
         }
 
@@ -188,6 +194,8 @@ namespace lfs::core {
                 val = (threadIdx.x < (blockDim.x + 31) / 32) ? shared[lane] : T(1);
                 val = warp_reduce_prod(val);
             }
+
+            __syncthreads();
 
             return val;
         }

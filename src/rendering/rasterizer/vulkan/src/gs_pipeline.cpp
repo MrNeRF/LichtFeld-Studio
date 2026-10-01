@@ -615,7 +615,7 @@ void VulkanGSPipeline::cleanup() {
             }
         }
 
-        std::array<VkCommandBuffer, kCommandBatchSlotCount> command_buffers{};
+        std::vector<VkCommandBuffer> command_buffers(command_batch_slots_.size());
         std::uint32_t command_buffer_count = 0;
         for (CommandBatchSlot& slot : command_batch_slots_) {
             if (slot.command_buffer != VK_NULL_HANDLE) {
@@ -785,12 +785,12 @@ void VulkanGSPipeline::createCommandPool() {
     }
     setDebugObjectName(VK_OBJECT_TYPE_COMMAND_POOL, command_pool, "vksplat.command_pool");
 
-    std::array<VkCommandBuffer, kCommandBatchSlotCount> command_buffers{};
+    std::vector<VkCommandBuffer> command_buffers(command_batch_slots_.size());
     VkCommandBufferAllocateInfo alloc_info = {};
     alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     alloc_info.commandPool = command_pool;
-    alloc_info.commandBufferCount = kCommandBatchSlotCount;
+    alloc_info.commandBufferCount = static_cast<std::uint32_t>(command_batch_slots_.size());
 
     const VkResult command_result = vkAllocateCommandBuffers(device, &alloc_info, command_buffers.data());
     if (command_result != VK_SUCCESS) {
@@ -806,7 +806,7 @@ void VulkanGSPipeline::createCommandPool() {
                 static_cast<int>(command_result)),
             LFS_SOURCE_SITE_CURRENT());
     }
-    for (std::uint32_t i = 0; i < kCommandBatchSlotCount; ++i) {
+    for (std::uint32_t i = 0; i < command_batch_slots_.size(); ++i) {
         command_batch_slots_[i].command_buffer = command_buffers[i];
         if (debug_name_writer_.enabled()) {
             setDebugObjectName(VK_OBJECT_TYPE_COMMAND_BUFFER,
@@ -815,6 +815,26 @@ void VulkanGSPipeline::createCommandPool() {
         }
     }
     command_buffer = command_batch_slots_[0].command_buffer;
+}
+
+void VulkanGSPipeline::appendCommandBatchSlot() {
+    CommandBatchSlot slot;
+    VkCommandBufferAllocateInfo allocation{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    allocation.commandPool = command_pool;
+    allocation.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocation.commandBufferCount = 1;
+    auto result = vkAllocateCommandBuffers(device, &allocation, &slot.command_buffer);
+    if (result != VK_SUCCESS)
+        lfs::rendering::throw_vk_result(result, "vkAllocateCommandBuffers", "Grow viewer submission ring", LFS_SOURCE_SITE_CURRENT());
+    VkQueryPoolCreateInfo queries{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+    queries.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    queries.queryCount = MAX_TIMESTAMP_QUERY_COUNT;
+    result = vkCreateQueryPool(device, &queries, nullptr, &slot.timestamp_query_pool);
+    if (result != VK_SUCCESS) {
+        vkFreeCommandBuffers(device, command_pool, 1, &slot.command_buffer);
+        lfs::rendering::throw_vk_result(result, "vkCreateQueryPool", "Grow viewer submission ring", LFS_SOURCE_SITE_CURRENT());
+    }
+    command_batch_slots_.push_back(std::move(slot));
 }
 
 void VulkanGSPipeline::createFence() {
@@ -924,8 +944,24 @@ void VulkanGSPipeline::beginCommandBatch() {
             LFS_SOURCE_SITE_CURRENT());
     }
 
+    if (grow_command_batch_ring_) {
+        bool available = false;
+        for (std::size_t offset = 0; offset < command_batch_slots_.size(); ++offset) {
+            const auto index = (next_command_batch_slot_ + offset) % command_batch_slots_.size();
+            const auto& candidate = command_batch_slots_[index];
+            if (timelineValueComplete(candidate.pending_signal, candidate.pending_signal_value)) {
+                next_command_batch_slot_ = static_cast<std::uint32_t>(index);
+                available = true;
+                break;
+            }
+        }
+        if (!available) {
+            appendCommandBatchSlot();
+            next_command_batch_slot_ = static_cast<std::uint32_t>(command_batch_slots_.size() - 1);
+        }
+    }
     active_command_batch_slot_ = next_command_batch_slot_;
-    next_command_batch_slot_ = (next_command_batch_slot_ + 1) % kCommandBatchSlotCount;
+    next_command_batch_slot_ = (next_command_batch_slot_ + 1) % command_batch_slots_.size();
     CommandBatchSlot& slot = command_batch_slots_[active_command_batch_slot_];
     waitForPendingBatchSlot(slot);
     command_buffer = slot.command_buffer;

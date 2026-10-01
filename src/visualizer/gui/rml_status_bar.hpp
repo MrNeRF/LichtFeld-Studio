@@ -103,7 +103,7 @@ namespace lfs::vis::gui {
         };
 
         bool updateContent(const PanelDrawContext& ctx, bool force_refresh);
-        LFS_VIS_API void updateBackendContent();
+        LFS_VIS_API void updateBackendContent(std::optional<uint32_t> active_view_mask = std::nullopt);
         LFS_VIS_API bool applyHoverTooltip(int doc_w, int bar_h, int maximum_overlay_height,
                                            bool force_position = false);
         void updateHoverTooltip();

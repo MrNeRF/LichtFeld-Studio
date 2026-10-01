@@ -140,7 +140,7 @@ namespace lfs::test::licht {
         "point_cloud_mode":true,"voxel_size":0.025,"show_rings":true,"ring_width":0.04,
         "show_center_markers":true,"show_camera_frustums":true,"camera_frustum_scale":0.9,
         "train_camera_color":[0.3,0.4,0.5],"eval_camera_color":[0.6,0.7,0.8],"show_pivot":true,
-        "split_view_mode":3,"gt_comparison_mode":2,"split_position":0.37,"split_view_offset":5,
+        "split_view_mode":1,"gt_comparison_mode":2,"split_position":0.37,"split_view_offset":5,
         "raster_backend":"3dgut","equirectangular":true,"orthographic":true,"ortho_scale":77.0,
         "depth_view":true,"depth_view_min":0.5,"depth_view_max":55.0,"depth_visualization_mode":0,
         "selection_color_committed":[0.11,0.22,0.33],
@@ -171,10 +171,6 @@ namespace lfs::test::licht {
 
         auto primary = panelCameraProjectStateToJson(
             "primary", rolled_panel_camera(1.0f));
-        auto secondary =
-            panelCameraProjectStateToJson(
-                "secondary",
-                rolled_panel_camera(20.0f));
         auto bookmark = panelCameraProjectStateToJson(
             "bookmark", rolled_panel_camera(40.0f));
         bookmark.erase("panel");
@@ -183,17 +179,13 @@ namespace lfs::test::licht {
 
         view["panel_cameras"] =
             Json::array(
-                {std::move(primary),
-                 std::move(secondary)});
+                {std::move(primary)});
         view["navigation"] = {
             {"mode", "drone"},
             {"view_snap", true},
         };
         view["split"] = {
-            {"focused_panel", "right"},
             {"gt_camera_id", 41},
-            {"panel_grid_planes",
-             Json::array({0, 2})},
         };
         view["camera_bookmarks"] =
             Json::array({std::move(bookmark)});
