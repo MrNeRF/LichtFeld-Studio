@@ -455,6 +455,8 @@ namespace lfs::core {
                 return std::format("steps_scaler must be finite (got {})", steps_scaler);
             if (!std::isfinite(max_screen_share))
                 return std::format("max_screen_share must be finite (got {})", max_screen_share);
+            if (ppisp_holdout_appearance != PPISPHoldoutAppearance::Mean && ppisp_holdout_appearance != PPISPHoldoutAppearance::Nearest)
+                return "ppisp_holdout_appearance must be mean or nearest";
             if (!std::isfinite(densify_structure_weight) || densify_structure_weight < 0.0f || densify_structure_weight > 4.0f)
                 return std::format("densify_structure_weight must be finite and within [0, 4] (got {})", densify_structure_weight);
             if (!std::isfinite(gradient_loss_weight) || gradient_loss_weight < 0.0f || gradient_loss_weight > 8.0f)

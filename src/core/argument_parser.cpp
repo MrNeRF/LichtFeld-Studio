@@ -86,6 +86,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--normal-flatten-weight", "normal_flatten_weight", Float},
             OptimizationCliBinding{"--normal-start-fraction", "normal_start_fraction", Float},
             OptimizationCliBinding{"--normal-end-fraction", "normal_end_fraction", Float},
+            OptimizationCliBinding{"--ppisp-holdout-appearance", "ppisp_holdout_appearance", Enum},
             OptimizationCliBinding{"--normal-loss-space", "normal_loss_space", Enum},
             OptimizationCliBinding{"--enable-sparsity", "enable_sparsity", Bool},
             OptimizationCliBinding{"--sparsify-steps", "sparsify_steps", Integer},
@@ -745,6 +746,7 @@ namespace {
             ::args::Flag use_bilateral_grid(rendering_group, "bilateral_grid", lfs::core::args::optimization_cli_help("--bilateral-grid"), {"bilateral-grid"});
             ::args::Flag use_exposure_correction(rendering_group, "exposure_correction", lfs::core::args::optimization_cli_help("--exposure-correction"), {"exposure-correction"});
             ::args::Flag no_exposure_correction(rendering_group, "no_exposure_correction", lfs::core::args::optimization_cli_help("--no-exposure-correction"), {"no-exposure-correction"});
+            ::args::ValueFlag<std::string> ppisp_holdout_appearance(rendering_group, "ppisp_holdout_appearance", lfs::core::args::optimization_cli_help("--ppisp-holdout-appearance"), {"ppisp-holdout-appearance"});
             ::args::Flag use_ppisp(rendering_group, "ppisp", lfs::core::args::optimization_cli_help("--ppisp"), {"ppisp"});
             ::args::Flag no_ppisp_exif_exposure(rendering_group, "no_ppisp_exif_exposure", lfs::core::args::optimization_cli_help("--no-ppisp-exif-exposure"), {"no-ppisp-exif-exposure"});
             ::args::Flag ppisp_controller(rendering_group, "ppisp_controller", lfs::core::args::optimization_cli_help("--ppisp-controller"), {"ppisp-controller"});
@@ -1213,6 +1215,10 @@ namespace {
                 }
             }
 
+            if (ppisp_holdout_appearance &&
+                !lfs::core::param::ppisp_holdout_appearance_from_string(::args::get(ppisp_holdout_appearance)))
+                return std::unexpected("ERROR: --ppisp-holdout-appearance must be mean or nearest");
+
             if (morton_reorder_interval) {
                 const int interval = ::args::get(morton_reorder_interval);
                 if (interval < 0) {
@@ -1342,6 +1348,7 @@ namespace {
                                         normal_flatten_weight_val = cli_option_present({"--normal-flatten-weight"}) ? std::optional<float>(::args::get(normal_flatten_weight)) : std::optional<float>(),
                                         normal_start_fraction_val = cli_option_present({"--normal-start-fraction"}) ? std::optional<float>(::args::get(normal_start_fraction)) : std::optional<float>(),
                                         normal_end_fraction_val = cli_option_present({"--normal-end-fraction"}) ? std::optional<float>(::args::get(normal_end_fraction)) : std::optional<float>(),
+                                        ppisp_holdout_appearance_val = cli_option_present({"--ppisp-holdout-appearance"}) ? std::optional<std::string>(::args::get(ppisp_holdout_appearance)) : std::optional<std::string>(),
                                         normal_loss_space_val = cli_option_present({"--normal-loss-space"}) ? std::optional<std::string>(::args::get(normal_loss_space)) : std::optional<std::string>(),
                                         // Python scripts
                                         python_scripts_val = cli_option_present({"--python-script"}) ? std::optional<std::vector<std::string>>(::args::get(python_scripts)) : std::optional<std::vector<std::string>>(),
@@ -1597,6 +1604,9 @@ namespace {
                 setVal(normal_flatten_weight_val, opt.normal_flatten_weight);
                 setVal(normal_start_fraction_val, opt.normal_start_fraction);
                 setVal(normal_end_fraction_val, opt.normal_end_fraction);
+                if (ppisp_holdout_appearance_val) {
+                    opt.ppisp_holdout_appearance = lfs::core::param::ppisp_holdout_appearance_from_string(*ppisp_holdout_appearance_val).value_or(static_cast<lfs::core::param::PPISPHoldoutAppearance>(-1));
+                }
                 if (normal_loss_space_val) {
                     if (const auto parsed = lfs::core::param::normal_loss_space_from_string(*normal_loss_space_val)) {
                         opt.normal_loss_space = *parsed;
@@ -1692,6 +1702,7 @@ namespace {
                 note_opt("normal_loss_weight", normal_loss_weight_val.has_value());
                 note_opt("normal_consistency_weight", normal_consistency_weight_val.has_value());
                 note_opt("normal_flatten_weight", normal_flatten_weight_val.has_value());
+                note_opt("ppisp_holdout_appearance", ppisp_holdout_appearance_val.has_value());
                 note_opt("normal_loss_space", normal_loss_space_val.has_value());
 
                 if (!opt_keys.empty()) {

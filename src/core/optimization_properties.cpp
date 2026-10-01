@@ -748,6 +748,14 @@ namespace lfs::core::param {
             .ui_step(100)
             .flags(PROP_ADVANCED)
             .all_strategies()
+            .enum_prop(&OptimizationParameters::ppisp_holdout_appearance,
+                       "ppisp_holdout_appearance", "PPISP Holdout Appearance", d.ppisp_holdout_appearance,
+                       {{"Mean", PPISPHoldoutAppearance::Mean, "training.options.ppisp_holdout_appearance.mean", "mean"},
+                        {"Nearest", PPISPHoldoutAppearance::Nearest, "training.options.ppisp_holdout_appearance.nearest", "nearest"}},
+                       "Held-out appearance: mean preserves the existing fallback; nearest interpolates adjacent training frames in capture order")
+            .locale("training_params.ppisp_holdout_appearance")
+            .tooltip("training.tooltip.ppisp_holdout_appearance")
+            .all_strategies()
             .bool_prop(&OptimizationParameters::ppisp_use_controller,
                        "ppisp_use_controller", "Controller", d.ppisp_use_controller,
                        "Enable PPISP controller for novel view synthesis")

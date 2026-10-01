@@ -78,6 +78,7 @@
   "ppisp_exposure_from_exif": true,
   "ppisp_freeze_from_sidecar": false,
   "ppisp_freeze_gaussians_on_distill": true,
+  "ppisp_holdout_appearance": "nearest",
   "ppisp_lr": 0.0020000000949949026,
   "ppisp_reg_weight": 0.0010000000474974513,
   "ppisp_sidecar_path": "",

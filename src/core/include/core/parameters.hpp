@@ -31,6 +31,17 @@ namespace lfs::core {
             AlphaConsistent   // Enforce exact alpha values from mask
         };
 
+        enum class PPISPHoldoutAppearance { Mean,
+                                            Nearest };
+
+        [[nodiscard]] inline constexpr std::optional<PPISPHoldoutAppearance> ppisp_holdout_appearance_from_string(std::string_view value) noexcept {
+            if (value == "mean")
+                return PPISPHoldoutAppearance::Mean;
+            if (value == "nearest")
+                return PPISPHoldoutAppearance::Nearest;
+            return std::nullopt;
+        }
+
         enum class DensifyErrorMap {
             Ssim,   // full SSIM (luminance × contrast × structure)
             SsimCs, // contrast × structure only (luminance excluded)
@@ -252,6 +263,7 @@ namespace lfs::core {
             int ppisp_warmup_steps = 500;
             bool ppisp_freeze_from_sidecar = false;
             std::filesystem::path ppisp_sidecar_path = {};
+            PPISPHoldoutAppearance ppisp_holdout_appearance = PPISPHoldoutAppearance::Nearest;
             bool ppisp_use_controller = false;
             bool ppisp_freeze_gaussians_on_distill = true;
             int ppisp_controller_activation_step = -1; // Negative values use the last-5000-steps default schedule

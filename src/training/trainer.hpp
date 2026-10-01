@@ -87,6 +87,7 @@ namespace lfs::vis::project {
 namespace lfs::training {
     class AdamOptimizer;
     struct TrainerBilateralGridTestAccess;
+    struct TrainerHoldoutAppearanceTestAccess;
     struct TrainerRetryTestAccess;
     struct TrainerCropboxMaskTestAccess;
     struct PPISPFileMetadata;
@@ -466,6 +467,7 @@ namespace lfs::training {
         friend class lfs::vis::VisualizerImplResetTest_FinishedTrainingStartReportsOverwriteConflict_Test;
         friend class lfs::vis::project::ProjectLifecycle;
         friend struct TrainerBilateralGridTestAccess;
+        friend struct TrainerHoldoutAppearanceTestAccess;
         friend struct TrainerRetryTestAccess;
         friend struct TrainerCropboxMaskTestAccess;
 
@@ -778,6 +780,8 @@ namespace lfs::training {
         std::optional<float> ppisp_exif_exposure_mean_;
         mutable std::atomic<int> eval_ppisp_applied_{0};
         mutable std::atomic<int> eval_ppisp_exif_{0};
+        mutable std::atomic<int> eval_ppisp_nearest_{0};
+        mutable std::atomic<int> eval_ppisp_known_camera_{0};
 
         // PPISP controller pool for novel-view distillation.
         // Shared CNN and per-camera FC weights for memory efficiency

@@ -5,6 +5,7 @@
 #include "trainer.hpp"
 #include "backward.h" // BWD-A T_eff hist arm/flush
 #include "components/bilateral_grid.hpp"
+#include "components/holdout_appearance.hpp"
 #include "components/ppisp.hpp"
 #include "components/ppisp_controller_pool.hpp"
 #include "components/ppisp_file.hpp"
@@ -1219,6 +1220,8 @@ namespace lfs::training {
         ppisp_exif_exposure_mean_.reset();
         eval_ppisp_applied_.store(0);
         eval_ppisp_exif_.store(0);
+        eval_ppisp_nearest_.store(0);
+        eval_ppisp_known_camera_.store(0);
         sparsity_optimizer_.reset();
         evaluator_.reset();
 
@@ -3621,6 +3624,8 @@ namespace lfs::training {
         ppisp_exif_exposure_mean_.reset();
         eval_ppisp_applied_.store(0);
         eval_ppisp_exif_.store(0);
+        eval_ppisp_nearest_.store(0);
+        eval_ppisp_known_camera_.store(0);
         sparsity_optimizer_.reset();
         evaluator_.reset();
         progress_.reset();
@@ -8246,16 +8251,15 @@ namespace lfs::training {
                         evaluator_->print_evaluation_header(iter);
                         eval_ppisp_applied_.store(0);
                         eval_ppisp_exif_.store(0);
+                        eval_ppisp_nearest_.store(0);
+                        eval_ppisp_known_camera_.store(0);
                         auto metrics = evaluator_->evaluate(iter,
                                                             strategy_->get_model(),
                                                             val_dataset_,
                                                             background_);
-                        if (evaluator_->has_appearance()) {
-                            const int n = eval_ppisp_applied_.load();
-                            const int k = eval_ppisp_exif_.load();
-                            LOG_INFO("Eval: PPISP applied to {} held-out frames ({} with EXIF exposure, {} at mean exposure)",
-                                     n, k, n - k);
-                        }
+                        LOG_INFO("Eval appearance: frames={} nearest={} known_camera={}",
+                                 val_dataset_ ? val_dataset_->get_cameras().size() : 0,
+                                 eval_ppisp_nearest_.load(), eval_ppisp_known_camera_.load());
                         LOG_INFO("{}", metrics.to_string());
                         if (strategy_) {
                             auto& splat = strategy_->get_model();
@@ -8999,10 +9003,15 @@ namespace lfs::training {
                 lfs::diagnostics::VramProfiler::instance().mark("evaluation");
                 eval_ppisp_applied_.store(0);
                 eval_ppisp_exif_.store(0);
+                eval_ppisp_nearest_.store(0);
+                eval_ppisp_known_camera_.store(0);
                 auto metrics = evaluator_->evaluate(eval_iteration,
                                                     strategy_->get_model(),
                                                     val_dataset_,
                                                     background_);
+                LOG_INFO("Eval appearance: frames={} nearest={} known_camera={}",
+                         val_dataset_ ? val_dataset_->get_cameras().size() : 0,
+                         eval_ppisp_nearest_.load(), eval_ppisp_known_camera_.load());
                 LOG_INFO("{}", metrics.to_string());
                 photometric_loss_.arena().shrink_to_required();
             }
@@ -9429,6 +9438,8 @@ namespace lfs::training {
             rgb_chw = rgb_chw.contiguous();
         }
 
+        if (ppisp_->is_known_camera(cam.camera_id()))
+            eval_ppisp_known_camera_.fetch_add(1, std::memory_order_relaxed);
         auto* const pool = controller_pool_for_save(get_current_iteration());
         if (pool && params.optimization.ppisp_use_controller) {
             const bool is_training_camera = ppisp_->is_known_frame(cam.uid());
@@ -9448,6 +9459,22 @@ namespace lfs::training {
 
         if (ppisp_->is_known_frame(cam.uid())) {
             return ppisp_->apply(rgb_chw, camera_id, cam.uid());
+        }
+
+        if (params.optimization.ppisp_holdout_appearance == core::param::PPISPHoldoutAppearance::Nearest &&
+            !ppisp_->is_known_frame(cam.uid()) && train_dataset_) {
+            std::vector<HoldoutAppearanceFrame> capture;
+            for (const auto& frame : train_dataset_->get_cameras())
+                if (ppisp_->is_known_frame(frame->uid()))
+                    capture.push_back({frame.get(), true});
+            if (val_dataset_)
+                for (const auto& frame : val_dataset_->get_cameras())
+                    capture.push_back({frame.get(), false});
+            if (const auto selection = select_holdout_appearance(std::move(capture), cam)) {
+                eval_ppisp_nearest_.fetch_add(1, std::memory_order_relaxed);
+                return ppisp_->apply_interpolated_frames(rgb_chw, selection->camera_id,
+                                                         selection->left_uid, selection->right_uid, selection->fraction);
+            }
         }
 
         float exposure = 0.0f;
