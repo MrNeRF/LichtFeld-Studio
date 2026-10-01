@@ -152,6 +152,21 @@ namespace {
         }
     };
 
+    TEST_P(ViewerAppearance, RegionalCorrectionMatchesFullFrameCrop) {
+        const auto loaded = AppearanceTensorModel::load(path, GetParam());
+        ASSERT_TRUE(loaded);
+        const auto input = picture(24, 32).gpu();
+        for (const bool manual : {false, true}) {
+            const auto ov = manual ? overrides() : PPISPOverrides{};
+            const auto full = (*loaded)->apply(input, 0, ov, false);
+            const PpispRegion region{.x_offset = 7, .y_offset = 5, .full_width = 32, .full_height = 24};
+            const auto crop = input.slice(1, 5, 16).slice(2, 7, 20).contiguous();
+            const auto actual = (*loaded)->apply(crop, 0, ov, false, region);
+            const auto expected = full.slice(1, 5, 16).slice(2, 7, 20).contiguous().to_vector();
+            expectClose(actual, expected);
+        }
+    }
+
 #if LFS_BUILD_TRAINER
     TEST_P(ViewerAppearance, MatchesCudaKnownFramesAndOverrides) {
         if (!gpu_backend_available(GpuBackend::CUDA))

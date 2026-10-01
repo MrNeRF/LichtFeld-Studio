@@ -218,12 +218,17 @@ namespace lfs::vis {
 
     lfs::core::Tensor AppearanceTensorModel::apply(const lfs::core::Tensor& rgb,
                                                    const int uid, const PPISPOverrides& ov,
-                                                   const bool use_controller) const {
+                                                   const bool use_controller, const lfs::core::PpispRegion& region) const {
         using namespace lfs::core;
         requireImage(rgb, backend_);
         const GpuBackendScope scope(backend_);
         const auto prediction = use_controller && hasController() ? predict(rgb) : Tensor{};
-        return ppisp_apply(rgb, parameters(uid, ov, prediction));
+        auto params = parameters(uid, ov, prediction);
+        params.x_offset = region.x_offset;
+        params.y_offset = region.y_offset;
+        params.full_width = region.full_width;
+        params.full_height = region.full_height;
+        return ppisp_apply(rgb, params);
     }
 
     lfs::core::PpispParams AppearanceTensorModel::parameters(

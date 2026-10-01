@@ -52,7 +52,7 @@ namespace lfs::vis {
         }
 
         struct SplitPush {
-            float split[4];               // x = position, y/z = flip_y, w = loss visualization
+            float split[4];               // x = position, y/z = flip_y, w = bit flags: loss visualization / exact texel sampling
             float rect[4];                // x, y, w, h
             float panel_norm[4];          // left_start, left_end, right_start, right_end
             float panel_flags[4];         // left_normalize, right_normalize, left_filter, right_filter
@@ -1183,7 +1183,7 @@ namespace lfs::vis {
             push.split[0] = std::clamp(params.split_position, 0.0f, 1.0f);
             push.split[1] = params.left.flip_y ? 1.0f : 0.0f;
             push.split[2] = params.right.flip_y ? 1.0f : 0.0f;
-            push.split[3] = params.loss_visualization ? 1.0f : 0.0f;
+            push.split[3] = float((params.loss_visualization ? 1 : 0) | (params.exact_texel_sampling ? 2 : 0));
 
             const float rect_x = static_cast<float>(params.content_rect.x);
             const float rect_y = static_cast<float>(params.content_rect.y);

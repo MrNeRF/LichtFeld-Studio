@@ -1335,6 +1335,10 @@
     "gt_compare_mode": "Choose RGB, normal, depth, or loss ground-truth visualization",
     "gt_loss_lower_error": "Lower error",
     "gt_loss_higher_error": "Higher error",
+    "gt_compare_actual_size": "Show RGB ground truth at one image pixel per physical display pixel. Requires a perspective camera and usable saved undistortion calibration for distorted images. Legacy projects may need dataset reimport and resave.",
+    "gt_compare_actual_size_active": "1:1 is active: one image pixel maps to one physical display pixel.",
+    "gt_compare_actual_size_fallback": "1:1 was requested, but a Fit preview is currently displayed while native-resolution content loads or recovers.",
+    "gt_compare_actual_size_unavailable": "1:1 is unavailable for this camera or comparison mode. Distorted images require usable saved undistortion calibration.",
     "depth_view_range": "Depth-map visualization range",
     "depth_view_near": "Near edge of the depth-map range",
     "depth_view_far": "Far edge of the depth-map range",
@@ -2422,6 +2426,9 @@
     "redo_named": "Redo: {name}"
   },
   "ui": {
+    "gt_compare_preparing": "Preparing 1:1…",
+    "gt_compare_retrying": "Couldn't prepare 1:1. Retrying…",
+    "gt_compare_retry": "Retry",
     "near": "Near",
     "far": "Far",
     "selection_depth_size": "Size",

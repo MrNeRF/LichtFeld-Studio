@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cmath>
 #if LFS_HAS_CUDA
 #include <cuda_runtime.h>
 #endif
@@ -379,7 +380,10 @@ namespace lfs::core {
           _image_size_loaded(other._image_size_loaded),
           _cam_position(other._cam_position),
           _FoVx(other._FoVx),
-          _FoVy(other._FoVy) {
+          _FoVy(other._FoVy),
+          _undistort_precomputed(other._undistort_precomputed),
+          _undistort_prepared(other._undistort_prepared),
+          _undistort_params(other._undistort_params) {
         _world_view_transform = transform;
         _sfm_observations = other._sfm_observations;
 
@@ -915,13 +919,11 @@ namespace lfs::core {
         if (!has_distortion())
             return;
 
-        _undistort_params = compute_undistort_params(
+        adopt_undistortion(compute_undistort_params(
             _focal_x, _focal_y, _center_x, _center_y,
             _camera_width, _camera_height,
             _radial_distortion, _tangential_distortion,
-            _camera_model_type, blank_pixels);
-
-        _undistort_precomputed = true;
+            _camera_model_type, blank_pixels));
     }
 
     void Camera::adopt_undistortion(const UndistortParams& params) noexcept {
@@ -946,6 +948,54 @@ namespace lfs::core {
         _FoVx = focal2fov(_focal_x, _camera_width);
         _FoVy = focal2fov(_focal_y, _camera_height);
         _undistort_prepared = true;
+    }
+
+    void Camera::restore_undistortion_state(
+        const CameraCalibration& source,
+        const CameraCalibration& destination,
+        const bool prepared,
+        const bool crop_solve_failed) {
+        const auto valid = [](const CameraCalibration& calibration) {
+            return std::isfinite(calibration.fx) && calibration.fx > 0.0f &&
+                   std::isfinite(calibration.fy) && calibration.fy > 0.0f &&
+                   std::isfinite(calibration.cx) && std::isfinite(calibration.cy) &&
+                   calibration.width > 0 && calibration.height > 0;
+        };
+        if (!valid(source) || !valid(destination)) {
+            throw std::invalid_argument("Invalid saved undistortion calibration");
+        }
+        if ((_camera_model_type != CameraModelType::PINHOLE &&
+             _camera_model_type != CameraModelType::FISHEYE &&
+             _camera_model_type != CameraModelType::THIN_PRISM_FISHEYE) ||
+            !has_distortion()) {
+            throw std::invalid_argument(
+                "Saved undistortion calibration is incompatible with the camera model");
+        }
+
+        auto params = detail::initialize_undistort_params(
+            source.fx, source.fy, source.cx, source.cy,
+            source.width, source.height,
+            _radial_distortion, _tangential_distortion,
+            _camera_model_type);
+        params.dst_fx = destination.fx;
+        params.dst_fy = destination.fy;
+        params.dst_cx = destination.cx;
+        params.dst_cy = destination.cy;
+        params.dst_width = destination.width;
+        params.dst_height = destination.height;
+        params.crop_solve_failed = crop_solve_failed;
+        adopt_undistortion(params);
+
+        const CameraCalibration& current = prepared ? destination : source;
+        _focal_x = current.fx;
+        _focal_y = current.fy;
+        _center_x = current.cx;
+        _center_y = current.cy;
+        _camera_width = current.width;
+        _camera_height = current.height;
+        _FoVx = focal2fov(_focal_x, _camera_width);
+        _FoVy = focal2fov(_focal_y, _camera_height);
+        _undistort_prepared = prepared;
     }
 
     void Camera::translate(const Tensor& trans) {

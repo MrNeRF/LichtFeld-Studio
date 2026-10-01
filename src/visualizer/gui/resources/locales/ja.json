@@ -1337,6 +1337,10 @@
     "gt_compare_mode": "RGB、法線、深度、または損失のグラウンドトゥルース表示を選択",
     "gt_loss_lower_error": "誤差小",
     "gt_loss_higher_error": "誤差大",
+    "gt_compare_actual_size": "RGB グラウンドトゥルースを画像 1 ピクセルにつき物理画面 1 ピクセルで表示します。透視投影カメラが必要で、歪みのある画像には使用可能な保存済み歪み補正キャリブレーションが必要です。古いプロジェクトではデータセットの再インポートと再保存が必要な場合があります。",
+    "gt_compare_actual_size_active": "1:1 が有効です。画像の 1 ピクセルが物理画面の 1 ピクセルに対応します。",
+    "gt_compare_actual_size_fallback": "1:1 が要求されていますが、ネイティブ解像度の内容を読み込み中または復旧中のため、現在はフィット表示のプレビューが表示されています。",
+    "gt_compare_actual_size_unavailable": "このカメラまたは比較モードでは 1:1 を使用できません。歪みのある画像には、使用可能な保存済み歪み補正キャリブレーションが必要です。",
     "depth_view_range": "深度マップの表示範囲",
     "depth_view_near": "深度範囲の近端",
     "depth_view_far": "深度範囲の遠端",
@@ -2423,6 +2427,9 @@
     "redo_named": "やり直す: {name}"
   },
   "ui": {
+    "gt_compare_preparing": "1:1 を準備中…",
+    "gt_compare_retrying": "1:1 を準備できませんでした。再試行中…",
+    "gt_compare_retry": "再試行",
     "near": "近距離",
     "far": "遠距離",
     "selection_depth_size": "サイズ",

@@ -1337,6 +1337,10 @@
     "gt_compare_mode": "RGB, 법선, 깊이 또는 손실 정답 시각화 선택",
     "gt_loss_lower_error": "낮은 오차",
     "gt_loss_higher_error": "높은 오차",
+    "gt_compare_actual_size": "RGB 정답 영상을 이미지 1픽셀당 실제 화면 1픽셀로 표시합니다. 원근 카메라가 필요하며 왜곡된 이미지에는 사용 가능한 저장된 왜곡 보정 캘리브레이션이 필요합니다. 이전 프로젝트는 데이터셋을 다시 가져와 저장해야 할 수 있습니다.",
+    "gt_compare_actual_size_active": "1:1이 활성화되었습니다. 이미지 1픽셀이 실제 화면 1픽셀에 대응합니다.",
+    "gt_compare_actual_size_fallback": "1:1이 요청되었지만 기본 해상도 콘텐츠를 불러오거나 복구하는 동안 현재는 맞춤 미리보기가 표시됩니다.",
+    "gt_compare_actual_size_unavailable": "이 카메라 또는 비교 모드에서는 1:1을 사용할 수 없습니다. 왜곡된 이미지에는 사용 가능한 저장된 왜곡 보정 캘리브레이션이 필요합니다.",
     "depth_view_range": "깊이 맵 시각화 범위",
     "depth_view_near": "깊이 범위의 가까운 경계",
     "depth_view_far": "깊이 범위의 먼 경계",
@@ -2423,6 +2427,9 @@
     "redo_named": "다시 실행: {name}"
   },
   "ui": {
+    "gt_compare_preparing": "1:1 준비 중…",
+    "gt_compare_retrying": "1:1을 준비하지 못했습니다. 다시 시도 중…",
+    "gt_compare_retry": "다시 시도",
     "near": "가까이",
     "far": "멀리",
     "selection_depth_size": "크기",

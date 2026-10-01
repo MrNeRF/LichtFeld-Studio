@@ -8,8 +8,35 @@
 #include "internal/image_resample.hpp"
 #include "internal/tensor_impl.hpp"
 #include <limits>
+#include <stdexcept>
 
 namespace lfs::core::internal {
+    Tensor undistort_image_region_tensor(
+        const Tensor& input, const UndistortParams& params,
+        const int destination_x, const int destination_y, const int width, const int height) {
+        if (!input.is_valid() || input.ndim() != 3 ||
+            (input.dtype() != DataType::UInt8 && input.dtype() != DataType::Float32) ||
+            params.src_width <= 0 || params.src_height <= 0 ||
+            input.size(1) != size_t(params.src_height) || input.size(2) != size_t(params.src_width)) {
+            throw std::invalid_argument("undistort_image requires a CHW UInt8 or Float32 tensor matching its parameters");
+        }
+        if (params.dst_width <= 0 || params.dst_height <= 0 ||
+            destination_x < 0 || destination_y < 0 || width <= 0 || height <= 0 ||
+            int64_t(destination_x) + width > params.dst_width ||
+            int64_t(destination_y) + height > params.dst_height) {
+            throw std::invalid_argument("undistort_image destination region is outside the full output");
+        }
+        auto region = params;
+        region.dst_cx -= destination_x;
+        region.dst_cy -= destination_y;
+        region.dst_width = width;
+        region.dst_height = height;
+        const auto source = input.dtype() == DataType::UInt8
+                                ? input.to(DataType::Float32).div(255.0f)
+                                : input;
+        return undistort_image_tensor(source, region, false);
+    }
+
     Tensor undistort_image_tensor(const Tensor& input, const UndistortParams& p, const bool mask) {
         LFS_ASSERT_MSG(input.is_valid() && input.dtype() == DataType::Float32 &&
                            input.ndim() == (mask ? 2u : 3u) && p.src_width > 0 && p.src_height > 0 &&
@@ -67,7 +94,13 @@ namespace lfs::core {
     }
 
     Tensor undistort_image(const Tensor& src, const UndistortParams& params, cudaStream_t) {
-        return internal::undistort_image_tensor(src, params, false);
+        return internal::undistort_image_region_tensor(src, params, 0, 0, params.dst_width, params.dst_height);
+    }
+
+    Tensor undistort_image_region(
+        const Tensor& source, const UndistortParams& params,
+        const int destination_x, const int destination_y, const int width, const int height, cudaStream_t) {
+        return internal::undistort_image_region_tensor(source, params, destination_x, destination_y, width, height);
     }
 
     Tensor undistort_mask(const Tensor& src, const UndistortParams& params, cudaStream_t) {

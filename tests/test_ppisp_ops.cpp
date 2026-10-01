@@ -62,7 +62,7 @@ namespace {
         for (int offset : {0, 3}) {
             ppisp().forward(p.inputs(), rgb, a, {offset, 8, 2, 3, 1, 2});
             kernels::launch_ppisp_forward_chw_region(p.e.ptr<float>(), p.v.ptr<float>(), p.c.ptr<float>(),
-                                                     p.r.ptr<float>(), rgb.ptr<float>(), b.ptr<float>(), 2, 7, offset, 8, 2, 3, 1, 2, nullptr);
+                                                     p.r.ptr<float>(), rgb.ptr<float>(), b.ptr<float>(), 2, 7, 0, offset, 7, 8, 2, 3, 1, 2, nullptr);
             same(a, b);
         }
     }

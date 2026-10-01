@@ -13,8 +13,9 @@
 namespace lfs::core::internal {
     LFS_PPISP_HD void ppisp_pixel(const float* src, float* dst, int width, int height, const PpispParams& p, int i) {
         const int full_height = p.full_height > 0 ? p.full_height : height;
-        const float resolution = float(width > full_height ? width : full_height);
-        const float x = (float(i % width) + 0.5f - width * 0.5f) / resolution;
+        const int full_width = p.full_width > 0 ? p.full_width : width;
+        const float resolution = float(full_width > full_height ? full_width : full_height);
+        const float x = (float(i % width + p.x_offset) + 0.5f - full_width * 0.5f) / resolution;
         const float y = (float(i / width + p.y_offset) + 0.5f - full_height * 0.5f) / resolution;
         const int plane = width * height;
         float rgb[3];

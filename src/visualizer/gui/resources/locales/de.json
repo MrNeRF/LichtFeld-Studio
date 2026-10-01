@@ -1337,6 +1337,10 @@
     "gt_compare_mode": "RGB-, Normalen-, Tiefen- oder Verlustvisualisierung auswählen",
     "gt_loss_lower_error": "Niedrigerer Fehler",
     "gt_loss_higher_error": "Höherer Fehler",
+    "gt_compare_actual_size": "RGB-Referenzdaten mit einem Bildpixel pro physischem Bildschirmpixel anzeigen. Erfordert eine perspektivische Kamera und bei verzerrten Bildern eine nutzbare gespeicherte Entzerrungskalibrierung. Ältere Projekte müssen möglicherweise den Datensatz neu importieren und erneut speichern.",
+    "gt_compare_actual_size_active": "1:1 ist aktiv: Ein Bildpixel entspricht einem physischen Bildschirmpixel.",
+    "gt_compare_actual_size_fallback": "1:1 wurde angefordert, aber während Inhalte in nativer Auflösung geladen oder wiederhergestellt werden, wird derzeit eine eingepasste Vorschau angezeigt.",
+    "gt_compare_actual_size_unavailable": "1:1 ist für diese Kamera oder diesen Vergleichsmodus nicht verfügbar. Verzerrte Bilder benötigen eine nutzbare gespeicherte Entzerrungskalibrierung.",
     "depth_view_range": "Visualisierungsbereich der Tiefenkarte",
     "depth_view_near": "Nahe Grenze des Tiefenkartenbereichs",
     "depth_view_far": "Ferne Grenze des Tiefenkartenbereichs",
@@ -2423,6 +2427,9 @@
     "redo_named": "Wiederholen: {name}"
   },
   "ui": {
+    "gt_compare_preparing": "1:1 wird vorbereitet…",
+    "gt_compare_retrying": "1:1 konnte nicht vorbereitet werden. Erneuter Versuch…",
+    "gt_compare_retry": "Erneut versuchen",
     "near": "Nah",
     "far": "Fern",
     "selection_depth_size": "Größe",

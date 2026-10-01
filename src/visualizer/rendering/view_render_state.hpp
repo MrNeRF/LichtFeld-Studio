@@ -7,6 +7,7 @@
 #include "depth_window_state.hpp"
 #include "dirty_flags.hpp"
 #include "framerate_controller.hpp"
+#include "gt_comparison_state.hpp"
 #include "internal/viewport.hpp"
 #include "passes/vulkan_depth_blit_pass.hpp"
 #include "passes/vulkan_environment_pass.hpp"
@@ -108,6 +109,8 @@ namespace lfs::vis {
         bool vulkan_viewport_image_flip_y_ = false;
         glm::ivec2 vulkan_gt_comparison_content_size_{0, 0};
         std::optional<GTPresentedView> vulkan_gt_comparison_selection_view_;
+        GTComparisonActualSizeState gt_comparison_actual_size_state_;
+        std::optional<GTComparisonActualFrameSnapshot> gt_comparison_published_actual_frame_;
         std::uint64_t gt_async_depth_ticket_ = 0;
         lfs::core::Tensor gt_async_depth_dest_{};
         GTComparisonMode gt_async_ticket_mode_ = GTComparisonMode::RGB;

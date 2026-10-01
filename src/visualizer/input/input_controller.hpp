@@ -136,7 +136,8 @@ namespace lfs::vis {
         [[nodiscard]] bool isContinuousInputActive() const {
             const bool movement_active = keys_movement_[0] || keys_movement_[1] || keys_movement_[2] ||
                                          keys_movement_[3] || keys_movement_[4] || keys_movement_[5];
-            const bool camera_drag = dragViewport() && (drag_mode_ == DragMode::Orbit ||
+            const bool camera_drag = dragViewport() && (drag_mode_ == DragMode::GTImagePan ||
+                                                        drag_mode_ == DragMode::Orbit ||
                                                         drag_mode_ == DragMode::Pan ||
                                                         drag_mode_ == DragMode::Rotate);
             auto& keyboard_camera = activeKeyboardViewport().camera;
@@ -277,7 +278,8 @@ namespace lfs::vis {
             Rotate,
             Orbit,
             Gizmo,
-            Splitter
+            Splitter,
+            GTImagePan
         };
         DragMode drag_mode_ = DragMode::None;
         CameraNavigationMode camera_navigation_mode_ = CameraNavigationMode::Orbit;
@@ -301,6 +303,9 @@ namespace lfs::vis {
         Viewport* panCoastViewport() const { return rememberedViewport(pan_coast_view_); }
         ViewId wasd_momentum_view_ = kNoView;
         Viewport* wasdMomentumViewport() const { return rememberedViewport(wasd_momentum_view_); }
+        glm::dvec2 gt_image_pan_start_mouse_{0.0, 0.0};
+        glm::ivec2 gt_image_pan_start_origin_{0, 0};
+        glm::dvec2 gt_image_pan_physical_scale_{1.0, 1.0};
 
         // Cached whole-scene radius (half the bounds diagonal) that scales WASD
         // speed and caps pan distance by splat size; 0 means "recompute" (after scene

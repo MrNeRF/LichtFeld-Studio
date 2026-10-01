@@ -987,6 +987,7 @@ namespace lfs::app {
                                  {"eval_camera_color", json::array({settings.eval_camera_color[0], settings.eval_camera_color[1], settings.eval_camera_color[2]})},
                                  {"show_pivot", settings.show_pivot},
                                  {"split_view_mode", settings.split_view_mode},
+                                 {"gt_comparison_actual_size", settings.gt_comparison_actual_size},
                                  {"split_position", settings.split_position},
                                  {"split_view_offset", settings.split_view_offset},
                                  {"raster_backend", std::string(lfs::rendering::gaussianRasterBackendId(static_cast<lfs::rendering::GaussianRasterBackend>(settings.raster_backend)))},
@@ -1177,6 +1178,7 @@ namespace lfs::app {
             set_float("camera_frustum_scale", settings.camera_frustum_scale);
             set_bool("show_pivot", settings.show_pivot);
             set_int("split_view_mode", settings.split_view_mode);
+            set_bool("gt_comparison_actual_size", settings.gt_comparison_actual_size);
             set_float("split_position", settings.split_position);
             if (args.contains("split_view_offset")) {
                 settings.split_view_offset = args["split_view_offset"].get<size_t>();
@@ -3295,6 +3297,7 @@ namespace lfs::app {
                         {"use_ellipsoid", json{{"type", "boolean"}}},
                         {"hide_outside_depth_box", json{{"type", "boolean"}}},
                         {"depth_filter_viz_mode", json{{"type", "integer"}, {"minimum", 0}, {"maximum", 2}}},
+                        {"gt_comparison_actual_size", json{{"type", "boolean"}}},
                         {"ppisp_exposure", json{{"type", "number"}}},
                         {"ppisp", json{{"type", "object"}}}},
                     .required = {}}},

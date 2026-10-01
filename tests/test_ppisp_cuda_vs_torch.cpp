@@ -204,7 +204,7 @@ const torch::Tensor COLOR_PINV_BLOCK_DIAG = torch::tensor({
         auto rgb_out = torch::empty_like(rgb_in);
         lfs::training::kernels::launch_ppisp_forward_chw_region(
             p.exposure.data_ptr<float>(), p.vignetting.data_ptr<float>(), p.color.data_ptr<float>(),
-            p.crf.data_ptr<float>(), rgb_in.data_ptr<float>(), rgb_out.data_ptr<float>(), height, width, 0, height,
+            p.crf.data_ptr<float>(), rgb_in.data_ptr<float>(), rgb_out.data_ptr<float>(), height, width, 0, 0, width, height,
             static_cast<int>(p.vignetting.size(0)), static_cast<int>(p.exposure.size(0)), camera_idx, frame_idx, nullptr);
         cudaDeviceSynchronize();
         return rgb_out;

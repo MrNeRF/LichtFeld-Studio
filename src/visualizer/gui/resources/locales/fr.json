@@ -1337,6 +1337,10 @@
     "gt_compare_mode": "Choisir la visualisation de référence RGB, normales, profondeur ou perte",
     "gt_loss_lower_error": "Erreur plus faible",
     "gt_loss_higher_error": "Erreur plus élevée",
+    "gt_compare_actual_size": "Afficher la référence RGB avec un pixel d’image par pixel physique de l’écran. Nécessite une caméra en perspective et, pour les images déformées, un étalonnage de correction enregistré et utilisable. Les anciens projets peuvent nécessiter de réimporter puis réenregistrer le jeu de données.",
+    "gt_compare_actual_size_active": "Le mode 1:1 est actif : un pixel de l’image correspond à un pixel physique de l’écran.",
+    "gt_compare_actual_size_fallback": "Le mode 1:1 a été demandé, mais un aperçu ajusté est actuellement affiché pendant le chargement ou la récupération du contenu en résolution native.",
+    "gt_compare_actual_size_unavailable": "Le mode 1:1 n’est pas disponible pour cette caméra ou ce mode de comparaison. Les images déformées nécessitent un étalonnage de correction enregistré et utilisable.",
     "depth_view_range": "Plage de visualisation de profondeur",
     "depth_view_near": "Limite proche de la plage de profondeur",
     "depth_view_far": "Limite éloignée de la plage de profondeur",
@@ -2423,6 +2427,9 @@
     "redo_named": "Rétablir : {name}"
   },
   "ui": {
+    "gt_compare_preparing": "Préparation du mode 1:1…",
+    "gt_compare_retrying": "Impossible de préparer le mode 1:1. Nouvelle tentative…",
+    "gt_compare_retry": "Réessayer",
     "near": "Proche",
     "far": "Éloigné",
     "selection_depth_size": "Taille",
