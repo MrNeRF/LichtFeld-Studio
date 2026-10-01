@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/camera.hpp"
 #include "core/editor_context.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
@@ -136,6 +137,47 @@ namespace lfs::vis {
         controller.handleKey(input::KEY_RIGHT, input::ACTION_PRESS, input::KEYMOD_NONE);
 
         EXPECT_EQ(goto_cam_view_count, 0);
+    }
+
+    TEST_F(InputControllerFocusTest, CameraViewKeysUseSceneUidsWithoutTrainerAndPreserveComparison) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+        router.focusViewportKeyboard();
+        SceneManager scene_manager;
+        RenderingManager rendering_manager;
+        services().set(&scene_manager);
+        services().set(&rendering_manager);
+        auto& scene = scene_manager.getScene();
+        const auto group = scene.addCameraGroup("Cameras", scene.addGroup("Dataset"), 3);
+        for (const int uid : {4, 17, 42}) {
+            auto camera = std::make_shared<core::Camera>(
+                core::Tensor::eye(3, core::Device::CPU),
+                core::Tensor::zeros({3}, core::Device::CPU),
+                100.0f, 100.0f, 32.0f, 32.0f,
+                core::Tensor(), core::Tensor(), core::CameraModelType::PINHOLE,
+                std::to_string(uid), std::filesystem::path{}, std::filesystem::path{},
+                64, 64, uid);
+            scene.addCamera(std::to_string(uid), group, std::move(camera));
+        }
+        ASSERT_EQ(services().trainerOrNull(), nullptr);
+        core::events::cmd::ToggleGTComparison{}.emit();
+        ASSERT_TRUE(rendering_manager.isGTComparisonActive());
+        const auto press = [&](const int key, const int expected_uid) {
+            controller.handleKey(key, input::ACTION_PRESS, input::KEYMOD_NONE);
+            controller.handleKey(key, input::ACTION_RELEASE, input::KEYMOD_NONE);
+            controller.update(0.016f);
+            EXPECT_EQ(rendering_manager.getCurrentCameraId(), expected_uid);
+            EXPECT_TRUE(rendering_manager.isGTComparisonActive());
+        };
+        press(input::KEY_LEFT, 42);
+        press(input::KEY_RIGHT, 4);
+        press(input::KEY_RIGHT, 17);
+        press(input::KEY_LEFT, 4);
+        core::events::cmd::GoToCamView{.cam_id = 17}.emit();
+        press(input::KEY_RIGHT, 42);
     }
 
     TEST_F(InputControllerFocusTest, RebindingKeyCaptureBypassesPythonKeyboardCapture) {

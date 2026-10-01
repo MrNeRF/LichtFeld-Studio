@@ -1836,15 +1836,20 @@ namespace lfs::vis {
 
             case input::Action::CAMERA_NEXT_VIEW:
             case input::Action::CAMERA_PREV_VIEW: {
-                const auto* trainer = services().trainerOrNull();
-                if (trainer) {
-                    const int num_cams = static_cast<int>(trainer->getAllCamList().size());
-                    if (num_cams > 0) {
+                if (const auto* scene_manager = services().sceneOrNull()) {
+                    const auto& cameras = scene_manager->getScene().getAllCamerasCached();
+                    if (!cameras.empty()) {
+                        const auto* rendering = services().renderingOrNull();
+                        const int current_uid = rendering ? rendering->getCurrentCameraId() : last_camview_;
+                        const auto current = std::ranges::find_if(cameras, [current_uid](const auto& camera) {
+                            return camera->uid() == current_uid;
+                        });
+                        const int count = static_cast<int>(cameras.size());
                         const int delta = (bound_action == input::Action::CAMERA_NEXT_VIEW) ? 1 : -1;
-                        last_camview_ = (last_camview_ < 0)
-                                            ? (delta > 0 ? 0 : num_cams - 1)
-                                            : (last_camview_ + delta + num_cams) % num_cams;
-                        cmd::GoToCamView{.cam_id = last_camview_}.emit();
+                        const int index = current == cameras.end()
+                                              ? (delta > 0 ? 0 : count - 1)
+                                              : (static_cast<int>(std::distance(cameras.begin(), current)) + delta + count) % count;
+                        cmd::GoToCamView{.cam_id = cameras[index]->uid()}.emit();
                     }
                 }
                 return;
